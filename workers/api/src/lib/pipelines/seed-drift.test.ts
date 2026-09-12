@@ -6,6 +6,10 @@
 // This test is the thing that stops them drifting. Without it, editing site-builder.json
 // would leave every NEW subscriber on the old definition while site-builder.test.ts stayed
 // green against the file — the worst kind of drift, invisible and only reproducible in prod.
+//
+// Since #805 the seed copy that must equal the reference is the one in 0151 (the param rename),
+// and 0057's copy is historical: it must differ from the reference in the three param names and
+// in nothing else, so the whole change stays visible from here.
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -32,13 +36,24 @@ function seededAgentConfig(): Record<string, unknown> {
 	return JSON.parse(literal) as Record<string, unknown>;
 }
 
+/** 0057's copy with the three #805 param names rewritten — the ONLY edit 0151 is allowed to be. */
+function withSnakeParams(def: unknown): unknown {
+	return JSON.parse(
+		JSON.stringify(def).replace(/"mcpUrl"/g, '"mcp_url"').replace(/"templateSlug"/g, '"template_slug"').replace(/"photoLimit"/g, '"photo_limit"'),
+	);
+}
+
 describe("migration 0057 — the seeded agent", () => {
 	const config = seededAgentConfig();
 	const pipelines = config.pipelines as Record<string, unknown>;
 
-	it("embeds the SAME pipeline definitions as the reference JSON", () => {
-		expect(pipelines["site-builder"]).toEqual(siteBuilder);
-		expect(pipelines["site-deploy"]).toEqual(siteDeploy);
+	it("embeds the reference definitions under the pre-#805 camelCase param names, and differs in nothing else", () => {
+		// 0057 has run in production and is frozen (scripts/check-migrations.mjs). The rename that
+		// makes the settings reach the params lives in 0151, so this copy is expected to be stale
+		// in exactly three names — and if it ever differs in anything else, that is drift 0151
+		// does not carry, and the next subscriber would get it.
+		expect(withSnakeParams(pipelines["site-builder"])).toEqual(siteBuilder);
+		expect(withSnakeParams(pipelines["site-deploy"])).toEqual(siteDeploy);
 	});
 
 	it("embeds definitions the runner will actually accept", () => {
@@ -69,6 +84,69 @@ describe("migration 0057 — the seeded agent", () => {
 		const caps = agentCapabilities({ slug: "site-builder", category: "Sales", config: JSON.stringify(config) });
 		expect(caps.runtime).toBeNull();
 		expect(caps.settingsSchema?.map((f) => f.id)).toEqual(["mcp_url", "template_slug", "photo_limit"]);
+	});
+});
+
+// ── #805 ────────────────────────────────────────────────────────────────────────
+// 0057's settings ids are snake_case and its params were camelCase, and `paramsWithDefaults`
+// matches by name exactly — so none of the three settings ever reached a run. 0151 renames the
+// params (not the settings: stored values are keyed by setting id) and, because `$.pipelines`
+// is instance-copied, also writes the existing instance copies, gated on the stale shape.
+const PARAM_CASE_MIGRATION = readdirSync(fileURLToPath(new URL("../../../migrations", import.meta.url).href))
+	.filter((f) => f.endsWith("site_builder_params_snake_case.sql"))
+	.map((f) => fileURLToPath(new URL(`../../../migrations/${f}`, import.meta.url).href));
+
+describe("migration 0151 — the params the settings actually address (#805)", () => {
+	it("exists exactly once", () => {
+		// By suffix so a renumbering does not need this edited; two matches would mean a copy.
+		expect(PARAM_CASE_MIGRATION).toHaveLength(1);
+	});
+
+	const literals = () => jsonLiterals(PARAM_CASE_MIGRATION[0]) as Array<Record<string, unknown>>;
+	const ddl = () =>
+		readFileSync(PARAM_CASE_MIGRATION[0], "utf8")
+			.split("\n")
+			.filter((l) => !l.trimStart().startsWith("--"))
+			.join("\n");
+
+	it("embeds the SAME pipeline definitions as the reference JSON", () => {
+		// This is now the seed copy `seed-drift` guards — 0057's is historical (above).
+		expect(literals().find((l) => l.name === "site-builder")).toEqual(siteBuilder);
+		expect(literals().find((l) => l.name === "site-deploy")).toEqual(siteDeploy);
+	});
+
+	it("declares every setting id as a param of the definition — the property #805 is about", () => {
+		// The bridge is an exact-name spread (`paramsWithDefaults`), so a setting whose id is not
+		// a param name is a knob the console renders and the run never sees.
+		const config = seededAgentConfig();
+		const ids = (config.settingsSchema as Array<{ id: string }>).map((f) => f.id);
+		expect(ids).toEqual(["mcp_url", "template_slug", "photo_limit"]);
+		for (const id of ids) expect(Object.keys(siteBuilder.params), `setting ${id} must address a param`).toContain(id);
+		// And the deploy pipeline reads the same endpoint under the same name — site-builder hands
+		// it across by that key.
+		expect(Object.keys(siteDeploy.params)).toContain("mcp_url");
+		expect(JSON.stringify(siteBuilder) + JSON.stringify(siteDeploy)).not.toMatch(/mcpUrl|templateSlug|photoLimit/);
+	});
+
+	it("writes both pipelines on the agents row and BOTH instance copies (#496)", () => {
+		expect(ddl()).toContain("'$.pipelines.site-builder'");
+		expect(ddl()).toContain("'$.pipelines.site-deploy'");
+		expect(ddl().match(/UPDATE\s+agent_instances/g)).toHaveLength(2);
+		// The instance copies are taken FROM the agents row — no third copy to drift.
+		expect(ddl().match(/FROM agents a/g)?.length).toBeGreaterThanOrEqual(2);
+	});
+
+	it("gates each instance write on the STALE shape, which the fixed definition can never match", () => {
+		// The gate is "the instance copy still declares `params.mcpUrl`". The reference has no such
+		// key, so a replaced (or hand-fixed) copy never matches again: idempotent, and the archive
+		// is never overwritten with the value the migration just wrote.
+		expect(ddl()).toContain("'$.pipelines.site-builder.params.mcpUrl'");
+		expect(ddl()).toContain("'$.pipelines.site-deploy.params.mcpUrl'");
+		expect(siteBuilder.params).not.toHaveProperty("mcpUrl");
+		expect(siteDeploy.params).not.toHaveProperty("mcpUrl");
+		// And what it replaces is archived, not destroyed.
+		expect(ddl()).toContain("'$.pipelinesReplaced.site-builder'");
+		expect(ddl()).toContain("'$.pipelinesReplaced.site-deploy'");
 	});
 });
 

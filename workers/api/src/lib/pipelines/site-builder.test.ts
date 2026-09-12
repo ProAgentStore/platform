@@ -165,9 +165,9 @@ const env = {} as Env;
 const ctx = { env, userId: "u1", instanceId: "i1" };
 const PARAMS = {
 	place_id: "ChIJ_kiosk",
-	mcpUrl: "https://builder.example.com/mcp",
-	templateSlug: "neon-ai",
-	photoLimit: 4,
+	mcp_url: "https://builder.example.com/mcp",
+	template_slug: "neon-ai",
+	photo_limit: 4,
 };
 
 beforeEach(() => {
@@ -201,9 +201,9 @@ describe("site-builder — shape", () => {
 		// Store independence: the platform must not hardcode a sibling/third-party service.
 		const json = JSON.stringify(siteBuilder) + JSON.stringify(siteDeploy);
 		expect(json).not.toMatch(/freewebstore|proagentstore|freeappstore|freegamestore/i);
-		expect((siteBuilder as unknown as PipelineDef).params?.mcpUrl).toBeTruthy();
+		expect((siteBuilder as unknown as PipelineDef).params?.mcp_url).toBeTruthy();
 		for (const step of (siteBuilder as unknown as PipelineDef).steps) {
-			if (step.tool === "mcp_call_tool") expect(step.inputs?.url).toEqual({ $param: "mcpUrl" });
+			if (step.tool === "mcp_call_tool") expect(step.inputs?.url).toEqual({ $param: "mcp_url" });
 		}
 	});
 
@@ -242,7 +242,7 @@ describe("site-builder — the run", () => {
 		expect(mcpCalls.find((c) => c.tool === "set_meta")!.args.noindex).toBe(true);
 	});
 
-	it("caps photos at photoLimit and resolves each to a public URL (no API key in the page)", async () => {
+	it("caps photos at photo_limit and resolves each to a public URL (no API key in the page)", async () => {
 		await drivePipeline(siteBuilder as unknown as PipelineDef, PARAMS);
 		// 6 photos available, limit 4 → 4 media lookups, none of them the raw redirect form.
 		expect(photoRequests).toHaveLength(4);
@@ -295,7 +295,7 @@ describe("site-builder — the run", () => {
 		expect(t.params).toMatchObject({
 			session_id: "sess-42",
 			place_id: "ChIJ_kiosk",
-			mcpUrl: "https://builder.example.com/mcp",
+			mcp_url: "https://builder.example.com/mcp",
 			slug: "palm-tree-kiosk-bondi",
 			category: "cafe",
 		});
@@ -335,7 +335,7 @@ describe("site-deploy — the approved half", () => {
 		const outputs = await drivePipeline(siteDeploy as unknown as PipelineDef, {
 			session_id: "sess-42",
 			place_id: "ChIJ_kiosk",
-			mcpUrl: "https://builder.example.com/mcp",
+			mcp_url: "https://builder.example.com/mcp",
 			slug: "palm-tree-kiosk-bondi",
 			name: "Palm Tree Kiosk",
 			category: "cafe",
@@ -387,7 +387,7 @@ describe("the agent chain — what the next agent is handed", () => {
 
 	it("the deploy announces site.live on UPDATE — the record already exists, so insert-only would never fire", async () => {
 		await drivePipeline(siteDeploy as unknown as PipelineDef, {
-			session_id: "sess-42", place_id: "ChIJ_kiosk", mcpUrl: "https://builder.example.com/mcp",
+			session_id: "sess-42", place_id: "ChIJ_kiosk", mcp_url: "https://builder.example.com/mcp",
 			slug: "palm-tree-kiosk-bondi", name: "Palm Tree Kiosk", category: "cafe",
 			description: "A casual beachfront cafe in Bondi.",
 			suburb: "Bondi", address: "12 Beach Rd, Bondi NSW 2026, Australia",

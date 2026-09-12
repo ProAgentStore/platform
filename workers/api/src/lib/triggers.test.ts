@@ -300,13 +300,13 @@ describe("trigger actions: run_pipeline + insert_record (#92)", () => {
 		(startPipelineRun as Mock).mockResolvedValue({ ok: true, runId: "run-child", workflowId: "wf-3" });
 		await dispatchTrigger(
 			env,
-			pipelineTrigger({ pipeline: "site-builder", params: { mcpUrl: "https://b.example/mcp", place_id: "from-config" } }),
+			pipelineTrigger({ pipeline: "site-builder", params: { mcp_url: "https://b.example/mcp", place_id: "from-config" } }),
 			"webhook",
 			{ place_id: "from-event" },
 		);
 		expect(startPipelineRun).toHaveBeenCalledWith(
 			env, "inst-1", "user-1", "site-builder",
-			{ mcpUrl: "https://b.example/mcp", place_id: "from-event" },
+			{ mcp_url: "https://b.example/mcp", place_id: "from-event" },
 			"trigger", null,
 		);
 	});

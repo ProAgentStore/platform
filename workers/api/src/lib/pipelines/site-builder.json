@@ -5,15 +5,15 @@
       "type": "string",
       "description": "Google Places id of the lead — the one required input; everything else is looked up."
     },
-    "mcpUrl": {
+    "mcp_url": {
       "type": "string",
       "description": "Website-builder MCP endpoint. Per-instance config: no server is hardcoded in the platform."
     },
-    "templateSlug": {
+    "template_slug": {
       "type": "string",
       "description": "Designer template to build from, e.g. \"neon-ai\"."
     },
-    "photoLimit": {
+    "photo_limit": {
       "type": "number",
       "description": "How many venue photos to pull into the gallery (default 4)."
     }
@@ -50,7 +50,7 @@
           "$ref": "details.data.photos"
         },
         "limit": {
-          "$param": "photoLimit"
+          "$param": "photo_limit"
         }
       }
     },
@@ -222,12 +222,12 @@
       "bind": "site",
       "inputs": {
         "url": {
-          "$param": "mcpUrl"
+          "$param": "mcp_url"
         },
         "tool": "create_site",
         "args": {
           "template_slug": {
-            "$param": "templateSlug"
+            "$param": "template_slug"
           }
         }
       }
@@ -237,7 +237,7 @@
       "bind": "meta",
       "inputs": {
         "url": {
-          "$param": "mcpUrl"
+          "$param": "mcp_url"
         },
         "tool": "set_meta",
         "args": {
@@ -259,7 +259,7 @@
       "bind": "contact",
       "inputs": {
         "url": {
-          "$param": "mcpUrl"
+          "$param": "mcp_url"
         },
         "tool": "set_contact",
         "args": {
@@ -286,7 +286,7 @@
       "bind": "social",
       "inputs": {
         "url": {
-          "$param": "mcpUrl"
+          "$param": "mcp_url"
         },
         "tool": "set_social",
         "args": {
@@ -307,7 +307,7 @@
       "bind": "aboutSection",
       "inputs": {
         "url": {
-          "$param": "mcpUrl"
+          "$param": "mcp_url"
         },
         "tool": "add_section",
         "args": {
@@ -327,7 +327,7 @@
       "bind": "servicesSection",
       "inputs": {
         "url": {
-          "$param": "mcpUrl"
+          "$param": "mcp_url"
         },
         "tool": "add_section",
         "args": {
@@ -347,7 +347,7 @@
       "bind": "gallerySection",
       "inputs": {
         "url": {
-          "$param": "mcpUrl"
+          "$param": "mcp_url"
         },
         "tool": "add_section",
         "args": {
@@ -367,7 +367,7 @@
       "bind": "preview",
       "inputs": {
         "url": {
-          "$param": "mcpUrl"
+          "$param": "mcp_url"
         },
         "tool": "get_preview",
         "args": {
@@ -393,8 +393,8 @@
           "place_id": {
             "$param": "place_id"
           },
-          "mcpUrl": {
-            "$param": "mcpUrl"
+          "mcp_url": {
+            "$param": "mcp_url"
           },
           "session_id": {
             "$ref": "site.data.session_id"

@@ -9,7 +9,7 @@
       "type": "string",
       "description": "Google Places id, so the outcome lands back on the right lead."
     },
-    "mcpUrl": {
+    "mcp_url": {
       "type": "string",
       "description": "Website-builder MCP endpoint (same one site-builder used)."
     },
@@ -52,7 +52,7 @@
       "bind": "deployed",
       "inputs": {
         "url": {
-          "$param": "mcpUrl"
+          "$param": "mcp_url"
         },
         "tool": "deploy",
         "args": {
@@ -79,7 +79,7 @@
       "bind": "status",
       "inputs": {
         "url": {
-          "$param": "mcpUrl"
+          "$param": "mcp_url"
         },
         "tool": "get_status",
         "args": {

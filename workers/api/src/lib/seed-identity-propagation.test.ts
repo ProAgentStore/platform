@@ -125,6 +125,13 @@ const PROPAGATION: Record<string, string> = {
 	// identity is what a subscriber may edit on their own copy, so resolving it live from the
 	// template would overwrite somebody's edit in order to fix wording.
 	"0140_tmux_coder_reads_without_the_shell.sql": "owner-initiated PUT /v1/instances/:id/state — the six tools reach the live instance through capabilitiesForInstance; only the sentence steering them does not",
+	// #805: site-builder's settings ids are snake_case and its pipeline params were camelCase, so
+	// the exact-name bridge (`paramsWithDefaults`) never delivered a single setting to a run. 0151
+	// renames the params on the agents row AND, in the same file (0132's shape), rewrites the two
+	// instance copies — gated on the stale `params.mcpUrl` shape so a replaced or hand-fixed copy
+	// never matches again, with the old copy archived under `$.pipelinesReplaced`. The route is
+	// the file itself: its second and third statements write `agent_instances`.
+	"0151_site_builder_params_snake_case.sql": "site_builder_params_snake_case.sql",
 };
 
 describe("seed config patches — each one records how it reaches an EXISTING instance (#496, #394)", () => {
