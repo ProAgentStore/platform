@@ -136,11 +136,11 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 	 *
 	 * ── Why this retries (#759)
 	 *
-	 * An empty set here is not a small failure. `init()` latches `toolsRegistered = true` before this
-	 * runs and the tools are registered ONCE per Durable Object, so a lookup that comes back empty
-	 * removes every surface-gated tool — the entire `coding`, `apply` and `repo` groups — from
-	 * `tools/list` for the whole life of that DO. The user sees the always-on tools working normally
-	 * while their coding tools have simply vanished, with nothing anywhere saying why.
+	 * An empty set here is not a small failure. Tools are registered ONCE per Durable Object (and at
+	 * the time of #759, `init()` latched `toolsRegistered = true` before this even ran), so a lookup
+	 * that comes back empty removes every surface-gated tool — the entire `coding`, `apply` and `repo`
+	 * groups — from `tools/list` for the whole life of that DO. The user sees the always-on tools
+	 * working normally while their coding tools have simply vanished, with nothing anywhere saying why.
 	 *
 	 * ── The failure the old shape could not see
 	 *
