@@ -639,7 +639,13 @@ const PINS = {
 	// shell through `onHeaderOverride` — is ./use-coding-tab-header. A hook, not a component, because
 	// the effect, its cleanup and its dep array are one mechanism: that dep list is what stops the
 	// header re-rendering its own parent forever, and it only guards JSX it sits beside.
-	"agents/coder/web/src/CodingTab.tsx": 1276,
+	// 1276 -> 1194: runner reachability and per-repo engine state are ./use-runner-status. It OWNS
+	// its five pieces of state rather than taking setters, which is the difference between a hook
+	// and a function: a second writer to `relayOnline` is how the header dot and the tab body came
+	// to disagree (#241/#537). The session-lifecycle half of this region did NOT move — measured at
+	// 48 values crossing that boundary, 15 of them setters, which is a bigger thing to hold than
+	// the lines it would remove.
+	"agents/coder/web/src/CodingTab.tsx": 1194,
 	// +18 for #425: two Chrome launch flags, the args array reformatted one-per-line to fit them,
 	// and the paragraph saying why they are a PAIR. `--use-fake-ui-for-media-stream` on its own
 	// auto-GRANTS the real microphone to any page the agent drives — strictly worse than the prompt
@@ -1682,7 +1688,7 @@ const PINS = {
 	// +7 on the CodingTab split: the entry above comes DOWN by 66, and a lowered pin costs this
 	// file the same lines a raised one does — four of why, plus these three. Same price and same
 	// reason as the #696/#703 notes above: SLACK would have let the reclaimed headroom go unrecorded.
-	"scripts/check-file-size.mjs": 1766,
+	"scripts/check-file-size.mjs": 1772,
 };
 
 /**

@@ -6,9 +6,8 @@ import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { useVoice } from "@proagentstore/sdk/hooks";
 import { useCodingLoop } from "./use-coding-loop";
 import { repoIssuesUnavailable, repoPullsUnavailable, repoTitle } from "./repo-title";
-import { resolveRunnerOnline } from "./runner-online";
-import { noticeSentence, runnerOfflineNotice, type AttachmentAnswer } from "./runner-offline-notice";
-import { isEngineBusy, anyEngineBusy } from "./engine-busy";
+import { noticeSentence, type AttachmentAnswer } from "./runner-offline-notice";
+import { isEngineBusy } from "./engine-busy";
 import { resolveRepoState, repoStatusLabel, terminalPollBusy, type RepoState } from "./repo-status";
 import { parseRepoInput } from "./repo-input";
 import { activeSessionFor, pickAutoOpenSession } from "./session-open";
@@ -17,6 +16,7 @@ import OpenNoticeBanners from "./OpenNoticeBanners";
 import { repoOpenAction, shouldAutoOpenSoloSession } from "./repo-open";
 import { chatMessagesFrom, timelineExcerpt, type TimelinePayload } from "./timeline-chat";
 import { useTerminalScrollback } from "./use-terminal-scrollback";
+import { useRunnerStatus } from "./use-runner-status";
 import { clearHistoryFailureNotice, sessionAttachFailureNotice, workModeSaveFailureNotice } from "./coding-write-failures";
 import RepoHistory from "./RepoHistory";
 import EngineTurnBanner from "./EngineTurnBanner";
@@ -86,28 +86,6 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const [sessions, setSessions] = useState<CodingSession[]>([]);
 	const [engines, setEngines] = useState<CodingEngine[]>([]);
 	const [defaultEngine, setDefaultEngine] = useState("claude");
-	/**
-	 * Runner connectivity — see ./runner-online.
-	 *
-	 * Two separate signals rather than one flag, because the flag was writable only from a live
-	 * session's capture: once the runner dropped and the session ended, `false` could never be
-	 * cleared (#241). `relayOnline` is polled independently of any session, so the tab recovers
-	 * on its own, and it is the SAME source the header dot reads — the two can no longer disagree.
-	 */
-	const [relayOnline, setRelayOnline] = useState<boolean | null>(null);
-	const [captureOnline, setCaptureOnline] = useState<boolean | null>(null);
-	/**
-	 * WHY the runner reads offline — the server's own sentence, rendered verbatim (#537).
-	 *
-	 * The boolean above cannot carry it. With one machine off and another running `pags up`, a
-	 * session stamped to the first is correctly unreachable while the second is correctly
-	 * connected, and the only remedy a boolean can express — "run `pags up`" — is being read by
-	 * someone who is already running it. Two diagnoses because they answer different questions:
-	 * `/capture` knows the SESSION's machine, `/runtime/status` knows the instance's. See
-	 * ./runner-offline-notice for which one wins.
-	 */
-	const [sessionAttachment, setSessionAttachment] = useState<AttachmentAnswer | null>(null);
-	const [relayAttachment, setRelayAttachment] = useState<AttachmentAnswer | null>(null);
 
 	// Session view state
 	const [openSession, setOpenSession] = useState<CodingSession | null>(null);
@@ -233,7 +211,6 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	 * resolved server-side) and are editable in Settings → Loop presets.
 	 */
 	const [loopPresets, setLoopPresets] = useState<LoopPreset[]>([]);
-	const [repoStatuses, setRepoStatuses] = useState<Record<string, string>>({});
 	const threadRef = useRef<HTMLDivElement>(null);
 	const termRef = useRef<HTMLPreElement>(null);
 	// The Terminal view's scrollback (#432): the persisted snapshots, paged by `seq` and stitched
@@ -311,75 +288,12 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		})();
 	}, [loadCoding]);
 
-	// Repo status polling (3s) — use ref for sessions to avoid interval restarts
-	const sessionsRef = useRef(sessions);
-	sessionsRef.current = sessions;
-	const hasActiveSessions = sessions.some((s) => s.status === "active");
-
-	// The one answer the whole tab reads. A capture's verdict is dropped as soon as the sessions
-	// that produced it are gone, so an offline state always clears itself once the runner is back.
-	const runnerOnline = resolveRunnerOnline({ relay: relayOnline, capture: captureOnline, hasActiveSessions });
-	// One sentence for every offline banner on this tab, so two of them cannot say different
-	// things about the same machine (#537).
-	const offlineNotice = runnerOfflineNotice({ runnerOnline, sessionAttachment, relayAttachment });
-
-	// Authoritative relay check, on a timer that does NOT require a session to exist — the missing
-	// piece that made the offline state unrecoverable (#241). Same route the header dot and the
-	// Settings tab use, so the header and this body cannot report different things.
-	const checkRelay = useCallback(async () => {
-		try {
-			const d = await api<{ relay?: { connected?: boolean }; attachment?: AttachmentAnswer }>(`/v1/instances/${instanceId}/runtime/status`);
-			setRelayOnline(d.relay?.connected === true);
-			// Already in this response and previously discarded — it is what names a stale "Runs on"
-			// pin, and the banner had no way to say that (#461/#537).
-			setRelayAttachment(d.attachment ?? null);
-		} catch {
-			setRelayOnline(false);
-			setRelayAttachment(null);
-		}
-	}, [instanceId]);
-	useEffect(() => { void checkRelay(); }, [checkRelay]);
-	// 10s while it matters, not the header's 4s: this exists to notice the runner COMING BACK.
-	//
-	// It is treated as "busy" whenever we believe the runner is OFFLINE, not only when an engine
-	// is running — offline is exactly the state a change is imminent from and worth watching for,
-	// and slowing it down would regress #241 (the unrecoverable offline state). A settled ONLINE
-	// runner is the opposite: a boolean that changes about twice a day, so once a minute while
-	// you are looking at it, and not at all while the tab is in the background.
-	const relayWatchBusy = anyEngineBusy(repoStatuses) || relayOnline === false;
-	useTieredPolling(checkRelay, { activeMs: 10000, passiveMs: 60000 }, relayWatchBusy);
-
-	const pollStatuses = useCallback(async () => {
-		const activeSessions = sessionsRef.current.filter((s) => s.status === "active");
-		if (!activeSessions.length) return;
-		const results = await Promise.allSettled(
-			activeSessions.map((s) =>
-				api<{ runState?: string; runnerConnected?: boolean; attachment?: AttachmentAnswer }>(
-					`/v1/instances/${instanceId}/coding/sessions/${s.id}/capture`,
-				).then((d) => ({ repoId: s.repoId, state: d.runState || "idle", connected: d.runnerConnected, attachment: d.attachment ?? null }))
-			),
-		);
-		const statuses: Record<string, string> = {};
-		for (let i = 0; i < results.length; i++) {
-			const r = results[i];
-			if (r.status === "fulfilled") {
-				statuses[r.value.repoId] = r.value.state;
-				if (r.value.connected !== undefined) setCaptureOnline(r.value.connected);
-				// Held only while the capture that produced it still says offline. A diagnosis that
-				// outlived its verdict would explain a banner that is no longer on screen.
-				if (r.value.connected === false) setSessionAttachment(r.value.attachment);
-				else if (r.value.connected === true) setSessionAttachment(null);
-			} else {
-				statuses[activeSessions[i].repoId] = "offline";
-			}
-		}
-		setRepoStatuses(statuses);
-	}, [instanceId]);
-
-	// One `/capture` per active session, per tick — so N idle sessions cost N relay round-trips
-	// to the user's laptop every 3s to re-learn "still idle". Full rate only while an engine is
-	// actually mid-turn.
-	useTieredPolling(pollStatuses, { activeMs: 3000, passiveMs: 12000 }, anyEngineBusy(repoStatuses), hasActiveSessions && !openSession);
+	// Runner reachability, the sentence explaining it, and each repo's engine state — ./use-runner-status
+	// owns all five of those pieces of state, so nothing else on this tab can write them and disagree.
+	// The three setters come back because the open-session terminal poll below reads the SAME
+	// `/capture` response on a different timer; a second copy is how #241 and #537 happened.
+	const { runnerOnline, offlineNotice, repoStatuses, setRepoStatuses, setCaptureOnline, setSessionAttachment, sessionsRef } =
+		useRunnerStatus({ instanceId, sessions, openSession });
 
 	// Terminal polling (1.5s when a session is open)
 	// Engine sign-in relay (#coding-auth): the CLI's OAuth uses a LOOPBACK redirect, so the
@@ -455,7 +369,11 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			// them — and the next tick either succeeds or the runner-offline banner explains the
 			// silence. An error state per failed tick would flash faster than it can be read.
 		}
-	}, [instanceId, openSession, applyCapture]);
+		// The three setters are ./use-runner-status's, so they are listed: they arrive through a
+		// return value rather than straight from `useState`, which is where the lint can prove a
+		// setter is stable. They still are — same setters, same identity — so this changes nothing
+		// at runtime and states the dependency truthfully rather than suppressing the question.
+	}, [instanceId, openSession, applyCapture, setCaptureOnline, setSessionAttachment, setRepoStatuses]);
 
 	// State of the currently-open session — the terminal poll's busy signal AND the header badge
 	// (CODER-005). Reconciled once, in ./repo-status, so the badge and the repo row cannot answer
