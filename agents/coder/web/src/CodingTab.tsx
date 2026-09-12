@@ -11,16 +11,16 @@ import { noticeSentence, runnerOfflineNotice, type AttachmentAnswer } from "./ru
 import { isEngineBusy, anyEngineBusy } from "./engine-busy";
 import { resolveRepoState, repoStatusLabel, terminalPollBusy, type RepoState } from "./repo-status";
 import { parseRepoInput } from "./repo-input";
-import { activeSessionFor, pickAutoOpenSession, repoForSession } from "./session-open";
+import { activeSessionFor, pickAutoOpenSession } from "./session-open";
 import { openNotices, type OpenNotice } from "./open-notice";
 import OpenNoticeBanners from "./OpenNoticeBanners";
 import { repoOpenAction, shouldAutoOpenSoloSession } from "./repo-open";
 import { chatMessagesFrom, timelineExcerpt, type TimelinePayload } from "./timeline-chat";
 import { useTerminalScrollback } from "./use-terminal-scrollback";
 import { clearHistoryFailureNotice, sessionAttachFailureNotice, workModeSaveFailureNotice } from "./coding-write-failures";
-import AgentStatusBadge from "./AgentStatusBadge";
 import RepoHistory from "./RepoHistory";
 import EngineTurnBanner from "./EngineTurnBanner";
+import { useCodingTabHeader } from "./use-coding-tab-header";
 import CopilotView from "./CopilotView";
 import TerminalView from "./TerminalView";
 import AddRepoForm from "./AddRepoForm";
@@ -34,7 +34,7 @@ import PullsPanel from "./PullsPanel";
 import { engineAuthBadge, isClaudeSignedOut, type EngineAuthReport } from "./engine-auth-view";
 import { engineInvocationBadge, type EngineInvocationReport } from "./engine-invocation-mode";
 import type { EngineTurnReport } from "./engine-turn-view";
-import { ArrowLeft, Copy, Settings, FolderCog, ChevronDown, Eye, Square, SquareTerminal, Plus, FolderGit2, Hammer, CircleDot, GitPullRequest, Cpu, RotateCw } from "lucide-react";
+import { Copy, FolderCog, Square, SquareTerminal, FolderGit2, Hammer, CircleDot, GitPullRequest, Cpu, RotateCw } from "lucide-react";
 import Button from "./Button";
 
 interface Props {
@@ -908,141 +908,16 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		openRepoSession(r.id);
 	};
 
-	// Push session header override to parent when session is open. The repo is looked up by the
-	// session's own `repoId` (./session-open) — asking which repo has this as its ACTIVE session
-	// answered "none" for an ENDED one, and the header then printed a raw UUID in place of the
-	// repo's name.
-	const openRepo = repoForSession(repos, openSession);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: event handlers intentionally read current component state; the header only needs to refresh when visible header state changes.
-	useEffect(() => {
-		// NOT for the single-repo surface. That view keeps the normal instance header and carries
-		// its own Terminal/Issues/Builds row, so taking the header over would replace the tab bar,
-		// stack two sets of chrome, and hide the very navigation the solo view exists to keep.
-		if (singleRepo || !openSession || !onHeaderOverride) return;
-		onHeaderOverride(
-			<div className="flex items-center gap-1 sm:gap-2 min-w-0 w-full">
-				<button type="button" onClick={closeTerminal} title={singleRepo ? "Back" : "All repos"} aria-label={singleRepo ? "Back" : "All repos"} className="flex items-center justify-center text-muted hover:text-ink shrink-0 -ml-1 w-7 h-8 sm:w-auto sm:h-auto sm:px-1 sm:py-1"><ArrowLeft size={16} /></button>
-				<div className="relative min-w-0 shrink">
-					{/* A one-repo agent has nothing to switch TO. The dropdown listed a single repo
-					    and offered "Add a repo" that ReposList then refuses to render — a button
-					    that closed your terminal and showed nothing. It is also the multi-repo
-					    mental model the Lead/Repo-Coder split exists to remove: you switch repos by
-					    switching AGENTS now. Plain label instead. */}
-					{singleRepo ? (
-						<span className="block truncate text-sm font-semibold max-w-[5.75rem] sm:max-w-[11rem]">{openRepo ? repoTitle(openRepo) : openSession.repoId}</span>
-					) : (
-					<button type="button" onClick={() => setRepoMenuOpen((v) => !v)} title="Switch repo" className="flex items-center gap-1 text-sm font-semibold hover:text-accent w-full max-w-[5.75rem] sm:max-w-[11rem] min-w-0">
-						<span className="truncate">{openRepo ? repoTitle(openRepo) : openSession.repoId}</span>
-						<ChevronDown size={14} className="shrink-0 text-muted" />
-					</button>
-					)}
-						{repoMenuOpen && (
-							<>
-								<button type="button" aria-label="Close menu" onClick={() => setRepoMenuOpen(false)} className="fixed inset-0 z-40 cursor-default">
-									<span className="sr-only">Close menu</span>
-								</button>
-								<div className="absolute top-full left-0 mt-1 z-50 min-w-52 max-h-72 overflow-auto bg-panel border border-line rounded-lg shadow-lg py-1">
-									<button
-										type="button"
-										onClick={() => { setRepoMenuOpen(false); closeTerminal(); }}
-										className="w-full text-left px-3 py-1.5 text-xs font-bold text-muted hover:bg-panel-hover flex items-center gap-1.5"
-									>
-										<ArrowLeft size={12} /> All repos
-									</button>
-									{/* Reach the Builds status view from inside a session (otherwise it's only on the
-									    landing view, which the auto-open-session flow skips past). */}
-									<button
-										type="button"
-										onClick={() => { setRepoMenuOpen(false); setLandingView("builds"); closeTerminal(); }}
-										className="w-full text-left px-3 py-1.5 text-xs font-bold text-muted hover:bg-panel-hover flex items-center gap-1.5"
-									>
-										<Hammer size={12} /> Build status
-									</button>
-									<div className="border-t border-line my-1" />
-									{reposRef.current.map((r) => {
-									const st = repoStatuses[r.id];
-									const current = r.id === openSession.repoId;
-									return (
-										<button key={r.id} type="button" onClick={() => switchToRepo(r)} className={`w-full text-left px-3 py-1.5 text-sm hover:bg-panel-hover flex items-center justify-between gap-2 ${current ? "text-accent font-bold" : ""}`}>
-											<span className="truncate">{repoTitle(r)}</span>
-											{current ? <span className="text-accent text-xs shrink-0">●</span> : (isEngineBusy(st)) ? <span className="text-amber-500 text-2xs shrink-0">working</span> : null}
-										</button>
-									);
-								})}
-									<div className="border-t border-line my-1" />
-									{/* One-tap path to the add-repo form from inside a session (esp. mobile,
-									    where the repos-list "+ Add" was hard to reach). */}
-									<button
-										type="button"
-										onClick={() => { setRepoMenuOpen(false); closeTerminal(); setShowAddRepo(true); }}
-										className="w-full text-left px-3 py-1.5 text-sm text-accent font-semibold hover:bg-panel-hover flex items-center gap-1.5"
-									>
-										<Plus size={13} /> Add a repo
-									</button>
-								</div>
-							</>
-						)}
-				</div>
-				<AgentStatusBadge state={openState} />
-				{/* Icon-only on mobile (saves space); icon + label from sm up. */}
-				{copilot && (
-				<div className="flex border border-line rounded-lg overflow-hidden shrink-0">
-					<button type="button" onClick={() => setView("summary")} title="Co-pilot" aria-label="Co-pilot" aria-pressed={view === "summary"} className={`flex items-center justify-center gap-1 w-8 sm:w-auto sm:px-2 py-1 text-xs font-bold ${view === "summary" ? "bg-accent-soft text-accent" : "text-muted"}`}><Eye size={14} /><span className="hidden sm:inline">Co-pilot</span></button>
-					<button type="button" onClick={() => setView("terminal")} title="Terminal" aria-label="Terminal" aria-pressed={view === "terminal"} className={`flex items-center justify-center gap-1 w-8 sm:w-auto sm:px-2 py-1 text-xs font-bold ${view === "terminal" ? "bg-accent-soft text-accent" : "text-muted"}`}><SquareTerminal size={14} /><span className="hidden sm:inline">Terminal</span></button>
-				</div>
-				)}
-				<div className="ml-auto flex gap-1 shrink-0">
-					{/* Agent settings = the instance-level Settings tab. While a coding session is
-					    open, CodingTab overrides the parent header (which holds the tab bar), so this
-					    is the way back to it. Labeled on desktop (primary), and in the mobile menu. */}
-					<button type="button" onClick={() => navigate(`/instances/${instanceId}/settings`)} title="Agent settings" aria-label="Agent settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent hidden sm:flex items-center gap-1"><Settings size={13} /><span>Settings</span></button>
-					<div className="relative">
-						<button type="button" onClick={() => setSessionMenuOpen((v) => !v)} title="Session settings" aria-label="Session settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent sm:hidden"><Settings size={13} /></button>
-						<button type="button" onClick={() => setSettingsRepoId(openRepo?.id || openSession.repoId)} title="Repo settings" aria-label="Repo settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent hidden sm:flex items-center gap-1"><FolderCog size={13} /><span>Repo</span></button>
-							{sessionMenuOpen && (
-								<>
-									<button type="button" aria-label="Close session menu" onClick={() => setSessionMenuOpen(false)} className="fixed inset-0 z-40 cursor-default sm:hidden">
-										<span className="sr-only">Close session menu</span>
-									</button>
-									<div className="absolute right-0 top-full mt-1 z-50 min-w-44 bg-panel border border-line rounded-lg shadow-lg py-1 sm:hidden">
-										<button
-											type="button"
-											onClick={() => { setSessionMenuOpen(false); navigate(`/instances/${instanceId}/settings`); }}
-											className="w-full text-left px-3 py-2 text-sm text-muted hover:bg-panel-hover flex items-center gap-2"
-										>
-											<Settings size={14} /> Agent settings
-										</button>
-										<button
-											type="button"
-											onClick={() => { setSessionMenuOpen(false); setSettingsRepoId(openRepo?.id || openSession.repoId); }}
-											className="w-full text-left px-3 py-2 text-sm text-muted hover:bg-panel-hover flex items-center gap-2"
-										>
-											<FolderCog size={14} /> Repo settings
-										</button>
-										<div className="border-t border-line my-1" />
-										<button
-											type="button"
-											onClick={() => { setSessionMenuOpen(false); endSession(); }}
-											className="w-full text-left px-3 py-2 text-sm text-danger hover:bg-danger-soft flex items-center gap-2"
-										>
-											<Square size={14} /> Stop session
-										</button>
-									</div>
-								</>
-							)}
-					</div>
-					<button type="button" onClick={copySummaryJson} title="Copy conversation as JSON" className="text-xs px-1.5 py-1 rounded-lg border border-line text-muted font-semibold hover:border-accent hover:text-accent hidden sm:flex items-center gap-1"><Copy size={12} /><span>Copy</span></button>
-					<button type="button" onClick={freshStart} title="Fresh start" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent hidden sm:block">Fresh</button>
-					<button type="button" onClick={restartSession} title="Restart CLI" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent hidden sm:block">Restart</button>
-					<button type="button" onClick={endSession} title="End session" aria-label="End session" className="text-xs px-1.5 py-1 rounded-md border border-danger text-danger font-semibold hidden sm:block"><Square size={13} /></button>
-				</div>
-			</div>
-		);
-		return () => onHeaderOverride(null);
-		// Deps so this only re-runs when the header's VISIBLE content changes. With no
-		// deps it was a render storm: each run handed setChildHeader a fresh element →
-		// re-rendered the parent → this child → effect again, continuously.
-	}, [openSession, onHeaderOverride, openRepo?.name, view, repoMenuOpen, sessionMenuOpen, openState, singleRepo]);
+	// The session header is the console shell's, not this tab's — ./use-coding-tab-header pushes it
+	// up through `onHeaderOverride` and owns the dep list that keeps that from being a render storm.
+	useCodingTabHeader({
+		instanceId, singleRepo, copilot, openSession, repos, openState, onHeaderOverride,
+		view, setView, reposRef, repoStatuses,
+		repoMenuOpen, setRepoMenuOpen, sessionMenuOpen, setSessionMenuOpen,
+		setLandingView, setShowAddRepo, setSettingsRepoId,
+		closeTerminal, switchToRepo,
+		copySummaryJson, freshStart, restartSession, endSession, navigate,
+	});
 
 	// All three render branches below end with this sheet; the id -> repo resolution it needs is
 	// ./SelectedRepoSettings's, so it is built once here rather than read past three times.

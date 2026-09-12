@@ -81,7 +81,14 @@ describe("a one-repo agent gets Terminal / Issues / Pulls / Builds, not a repo l
 		// The effect fires on `openSession` alone, so the solo view started a session and then had
 		// its page header replaced anyway: the instance tab bar vanished and two sets of chrome
 		// stacked. Rendering a different tree is not enough when an effect pushes the old one.
-		expect(tab).toContain("if (singleRepo || !openSession || !onHeaderOverride) return;");
+		//
+		// The effect now lives in ./use-coding-tab-header, so the guard is read there. The THREAD is
+		// read here as well, because a guard testing a `singleRepo` its caller quietly stopped
+		// passing is a guard that never fires — and the two halves are in different files now.
+		expect(src("use-coding-tab-header.tsx")).toContain("if (singleRepo || !openSession || !onHeaderOverride) return;");
+		const call = tab.indexOf("useCodingTabHeader({");
+		expect(call, "CodingTab no longer calls the header hook").toBeGreaterThan(-1);
+		expect(tab.slice(call, tab.indexOf("});", call))).toContain("singleRepo");
 	});
 
 	it("carries the session actions the takeover used to provide", () => {

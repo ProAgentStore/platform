@@ -635,7 +635,11 @@ const PINS = {
 	// component and then read past by its three render branches. Both are now components with the
 	// selection logic they needed (./EngineTurnBanner, ./SelectedRepoSettings), so the branches
 	// render them instead of a local the reader has to scroll back for.
-	"agents/coder/web/src/CodingTab.tsx": 1401,
+	// 1401 -> 1276: the multi-repo session header — 130 lines of JSX pushed UPWARDS into the console
+	// shell through `onHeaderOverride` — is ./use-coding-tab-header. A hook, not a component, because
+	// the effect, its cleanup and its dep array are one mechanism: that dep list is what stops the
+	// header re-rendering its own parent forever, and it only guards JSX it sits beside.
+	"agents/coder/web/src/CodingTab.tsx": 1276,
 	// +18 for #425: two Chrome launch flags, the args array reformatted one-per-line to fit them,
 	// and the paragraph saying why they are a PAIR. `--use-fake-ui-for-media-stream` on its own
 	// auto-GRANTS the real microphone to any page the agent drives — strictly worse than the prompt
@@ -1678,7 +1682,7 @@ const PINS = {
 	// +7 on the CodingTab split: the entry above comes DOWN by 66, and a lowered pin costs this
 	// file the same lines a raised one does — four of why, plus these three. Same price and same
 	// reason as the #696/#703 notes above: SLACK would have let the reclaimed headroom go unrecorded.
-	"scripts/check-file-size.mjs": 1762,
+	"scripts/check-file-size.mjs": 1766,
 };
 
 /**
