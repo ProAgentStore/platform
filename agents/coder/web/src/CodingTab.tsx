@@ -20,20 +20,21 @@ import { useTerminalScrollback } from "./use-terminal-scrollback";
 import { clearHistoryFailureNotice, sessionAttachFailureNotice, workModeSaveFailureNotice } from "./coding-write-failures";
 import AgentStatusBadge from "./AgentStatusBadge";
 import RepoHistory from "./RepoHistory";
+import EngineTurnBanner from "./EngineTurnBanner";
 import CopilotView from "./CopilotView";
 import TerminalView from "./TerminalView";
 import AddRepoForm from "./AddRepoForm";
 import ReposList from "./ReposList";
 import type { RecheckReport } from "./repo-freshness";
 import RepoIssues from "./RepoIssues";
-import RepoSettingsModal from "./RepoSettingsModal";
+import SelectedRepoSettings from "./SelectedRepoSettings";
 import EnginesModal from "./EnginesModal";
 import BuildsPanel from "./BuildsPanel";
 import PullsPanel from "./PullsPanel";
 import { engineAuthBadge, isClaudeSignedOut, type EngineAuthReport } from "./engine-auth-view";
 import { engineInvocationBadge, type EngineInvocationReport } from "./engine-invocation-mode";
-import { type EngineTurnReport, engineTurnNotice } from "./engine-turn-view";
-import { AlertTriangle, ArrowLeft, Copy, Settings, FolderCog, ChevronDown, Eye, Square, SquareTerminal, Plus, FolderGit2, Hammer, CircleDot, GitPullRequest, Cpu, RotateCw } from "lucide-react";
+import type { EngineTurnReport } from "./engine-turn-view";
+import { ArrowLeft, Copy, Settings, FolderCog, ChevronDown, Eye, Square, SquareTerminal, Plus, FolderGit2, Hammer, CircleDot, GitPullRequest, Cpu, RotateCw } from "lucide-react";
 import Button from "./Button";
 
 interface Props {
@@ -1043,42 +1044,18 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		// re-rendered the parent → this child → effect again, continuously.
 	}, [openSession, onHeaderOverride, openRepo?.name, view, repoMenuOpen, sessionMenuOpen, openState, singleRepo]);
 
-	const settingsModal = settingsRepoId
-		? (() => {
-				const repo = repos.find((r) => r.id === settingsRepoId);
-				return repo ? (
-					<RepoSettingsModal repo={repo} instanceId={instanceId} onClose={() => setSettingsRepoId(null)} onSaved={loadCoding} onDelete={() => deleteRepo(repo.id)} />
-				) : null;
-			})()
-		: null;
-
-	/**
-	 * The ENGINE refused its last turn (#545).
-	 *
-	 * Hoisted beside `<OpenNoticeBanners>` rather than written inline, because there are TWO
-	 * session views — the single-repo surface returns ~120 lines above the multi-repo one — and a
-	 * notice in only one of them is a notice most Coder subscribers never see. That is not
-	 * hypothetical: the first placement was inline in the multi-repo view alone, and the phone spec
-	 * for the solo surface found it missing.
-	 *
-	 * Above the pane in both, because the whole finding is that this fact WAS on the page — three
-	 * times, as `[codex exited with code 1]` — and read as ordinary output. A pane is something a
-	 * person has to parse; this is the sentence.
-	 */
-	const engineTurnBanner = (() => {
-		const turn = engineTurnNotice(lastTurn);
-		if (!turn) return null;
-		return (
-			<div id="inst-coding-engine-turn" className="rounded-lg border border-warning-line bg-warning-soft px-3 py-2 m-2">
-				<div className="flex items-center gap-1.5 text-sm font-semibold">
-					<AlertTriangle size={13} className="text-warning shrink-0" />
-					<span>{turn.label}</span>
-				</div>
-				<p className="text-xs text-muted mt-0.5">{turn.detail}</p>
-				{turn.evidence && <pre className="text-2xs text-muted mt-1 whitespace-pre-wrap break-all">{turn.evidence}</pre>}
-			</div>
-		);
-	})();
+	// All three render branches below end with this sheet; the id -> repo resolution it needs is
+	// ./SelectedRepoSettings's, so it is built once here rather than read past three times.
+	const settingsModal = (
+		<SelectedRepoSettings
+			repos={repos}
+			repoId={settingsRepoId}
+			instanceId={instanceId}
+			onClose={() => setSettingsRepoId(null)}
+			onSaved={loadCoding}
+			onDelete={deleteRepo}
+		/>
+	);
 
 	// Claude Code signed-out CTA — the headless engine surfaces a login error in its transcript
 	// when the runner machine has no (or expired) Claude credentials. The pattern (and the
@@ -1144,7 +1121,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				</div>
 
 				<OpenNoticeBanners notices={openNotice} />
-				{engineTurnBanner}
+				<EngineTurnBanner report={lastTurn} />
 
 				{claudeSignedOut && soloView === "terminal" && (
 					<div className="bg-warning-soft border border-warning-line text-warning rounded-lg p-2.5 m-2 text-sm">
@@ -1264,7 +1241,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					</div>
 				)}
 				<OpenNoticeBanners notices={openNotice} />
-				{engineTurnBanner}
+				<EngineTurnBanner report={lastTurn} />
 				{workModeMsg && (
 					<div data-testid="work-mode-error" className="bg-danger-soft border border-danger-line text-danger rounded-lg p-2.5 m-2 text-xs font-semibold">
 						{workModeMsg}

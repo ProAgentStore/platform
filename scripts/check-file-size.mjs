@@ -631,7 +631,11 @@ const PINS = {
 	// of this file, reachable only through it. Both are leaf renderers over a verdict some pure
 	// module already reached (`sessionBadge` in ./repo-status, `groupRepoHistory` in ./repo-history),
 	// so neither had a reason to live inside the 1400-line component that happened to render it.
-	"agents/coder/web/src/CodingTab.tsx": 1424,
+	// 1424 -> 1401: the engine-turn banner and the repo settings sheet were JSX built inside this
+	// component and then read past by its three render branches. Both are now components with the
+	// selection logic they needed (./EngineTurnBanner, ./SelectedRepoSettings), so the branches
+	// render them instead of a local the reader has to scroll back for.
+	"agents/coder/web/src/CodingTab.tsx": 1401,
 	// +18 for #425: two Chrome launch flags, the args array reformatted one-per-line to fit them,
 	// and the paragraph saying why they are a PAIR. `--use-fake-ui-for-media-stream` on its own
 	// auto-GRANTS the real microphone to any page the agent drives — strictly worse than the prompt
@@ -1674,7 +1678,7 @@ const PINS = {
 	// +7 on the CodingTab split: the entry above comes DOWN by 66, and a lowered pin costs this
 	// file the same lines a raised one does — four of why, plus these three. Same price and same
 	// reason as the #696/#703 notes above: SLACK would have let the reclaimed headroom go unrecorded.
-	"scripts/check-file-size.mjs": 1758,
+	"scripts/check-file-size.mjs": 1762,
 };
 
 /**
