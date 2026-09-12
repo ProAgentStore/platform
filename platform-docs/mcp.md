@@ -329,6 +329,11 @@ Those three mean the session is gone — a redeploy ends the Durable Object hold
 the fix is to run `initialize` again, not to change the call. Anything else is one of the
 two honest failure shapes above.
 
+One more refusal is possible at `initialize` itself: if the platform API cannot answer which
+agents the account runs (the lookup that decides which agent-specific tools you get), the
+server fails that `initialize` rather than publishing a `tools/list` that silently omits the
+coding, apply and repo groups. Run `initialize` again; the lookup is repeated from scratch.
+
 ## Correct Runtime Flows
 
 Public trial preview:

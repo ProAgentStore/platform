@@ -746,7 +746,13 @@ const PINS = {
 	// shape unreachable (`apiCall` RETURNS a non-2xx as `{error}` rather than throwing, so the
 	// `catch` never fired for the failure it was written for) and states what the retry does NOT
 	// fix — the latch — so the next reader does not mistake a narrowed window for a closed one.
-	"workers/mcp/src/index.ts": 1016,
+	// +23 at #803: the latch the #759 note above said was NOT fixed. `userGroups` now THROWS after
+	// its bounded retry instead of returning the empty set a user with no surfaced agents also
+	// gets, and `init()` resolves it BEFORE `toolsRegistered` and before the pipeline install, so a
+	// refused `initialize` leaves nothing latched or registered and the next request starts over.
+	// Seven of the lines are code (the error carried, the throw, the pinned branch's own latch);
+	// the rest say why the order latch → pipeline → registrations must not change.
+	"workers/mcp/src/index.ts": 1039,
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
@@ -1660,7 +1666,8 @@ const PINS = {
 	// one that refuses to) and these three.
 	// +11 at #804: the tools.ts and coding-session.ts raises above (five and four lines of why)
 	// and these three.
-	"scripts/check-file-size.mjs": 1744,
+	// +8 at #803: the `workers/mcp/src/index.ts` raise above plus this line.
+	"scripts/check-file-size.mjs": 1751,
 };
 
 /**

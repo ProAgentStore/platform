@@ -156,38 +156,47 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 	 * No token: an unauthenticated connection legitimately has no groups, and retrying would add
 	 * 200ms to every anonymous `initialize` to re-derive a certainty.
 	 *
-	 * ── What this does not fix
+	 * ── Why a second failure THROWS rather than returning empty (#803)
 	 *
-	 * The LATCH. If both attempts fail, the DO still registers with an empty set and stays that way
-	 * until it is evicted. Making registration re-runnable is a larger change — registering a tool
-	 * twice on the same server throws and cancels the MCP stream, which is the failure the latch exists
-	 * to prevent — and it is not what #759 asks for. This narrows the window; it does not close it.
+	 * "Resolved to no groups" and "could not resolve" are different answers, and only the first is
+	 * an empty set. Returning empty for both is what latched a truncated surface: `init()` could not
+	 * tell a blip from a user with no surfaced agents, registered without the gated groups, and the
+	 * latch kept it that way until the DO was evicted — silently, since nothing was thrown, logged or
+	 * recorded, and an identical retry does not recover it. So after the bounded retry this throws.
+	 * `init()` calls it BEFORE the latch and before anything is registered, so the throw fails that
+	 * one `initialize` honestly and leaves the DO able to try again on the next request: partyserver
+	 * resets its status when `onStart` throws and re-runs it on the next fetch. The no-token path is
+	 * untouched — an anonymous connection resolving to no groups is a certainty, not a failure.
 	 */
 	private async userGroups(): Promise<Set<string>> {
-	const groups = new Set<string>();
-	if (!this.userToken) return groups;
-	for (let attempt = 0; attempt < 2; attempt++) {
-		try {
-			const data = (await authedCall("/v1/instances/my/instances", this.userToken, {}, this.env)) as
-				| Array<{ capabilities?: { surfaces?: string[] } }>
-				| { instances?: Array<{ capabilities?: { surfaces?: string[] } }>; error?: string };
-			// The error object `apiCall` returns instead of throwing. Checked BEFORE the list is
-			// read, because `{error}` has no `instances` and would otherwise read as "no agents".
-			if (!Array.isArray(data) && data?.error) {
+		const groups = new Set<string>();
+		if (!this.userToken) return groups;
+		let lastError = "no response";
+		for (let attempt = 0; attempt < 2; attempt++) {
+			try {
+				const data = (await authedCall("/v1/instances/my/instances", this.userToken, {}, this.env)) as
+					| Array<{ capabilities?: { surfaces?: string[] } }>
+					| { instances?: Array<{ capabilities?: { surfaces?: string[] } }>; error?: string };
+				// The error object `apiCall` returns instead of throwing. Checked BEFORE the list is
+				// read, because `{error}` has no `instances` and would otherwise read as "no agents".
+				if (!Array.isArray(data) && data?.error) {
+					lastError = data.error;
+					if (attempt === 0) await new Promise((r) => setTimeout(r, USER_GROUPS_RETRY_MS));
+					continue;
+				}
+				const list = Array.isArray(data) ? data : (data?.instances ?? []);
+				for (const inst of list) for (const s of inst.capabilities?.surfaces ?? []) groups.add(s);
+				return groups;
+			} catch (e) {
+				// A network-level throw. Same treatment as the error object above: one more try.
+				lastError = e instanceof Error ? e.message : String(e);
 				if (attempt === 0) await new Promise((r) => setTimeout(r, USER_GROUPS_RETRY_MS));
-				continue;
 			}
-			const list = Array.isArray(data) ? data : (data?.instances ?? []);
-			for (const inst of list) for (const s of inst.capabilities?.surfaces ?? []) groups.add(s);
-			return groups;
-		} catch {
-			// A network-level throw. Same treatment as the error object above: one more try, then
-			// give up with an empty set — the pre-#759 behaviour, which is still the honest
-			// fallback once a second attempt has also failed.
-			if (attempt === 0) await new Promise((r) => setTimeout(r, USER_GROUPS_RETRY_MS));
 		}
-	}
-	return groups;
+		throw new Error(
+			`mcp: the account's agent roster could not be read after 2 attempts (${lastError}); ` +
+				"refusing to publish a tool surface missing every gated group — retry initialize (#803)",
+		);
 	}
 
 	async init() {
@@ -201,16 +210,30 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 		// same server throws "Tool ... is already registered", which cancels the
 		// MCP stream and makes clients hang until they time out. Register once.
 		if (this.toolsRegistered) return;
-		this.toolsRegistered = true;
 
 		// A `/mcp/i/<id>` session registers ONLY that instance's surface (#783) — nothing below.
-		if (this.props?.pinnedInstance) return this.initPinned(this.props.pinnedInstance);
+		// Latched BEFORE its lookup, unlike the platform-wide path: a pinned surface that cannot be
+		// read registers one tool that says so (`pinned.ts`), and "not your instance" is a permanent
+		// answer that must not refuse `initialize` forever.
+		if (this.props?.pinnedInstance) {
+			this.toolsRegistered = true;
+			return this.initPinned(this.props.pinnedInstance);
+		}
+
+		// Which agent-specific tool groups this user gets — scoped to their agents. Resolved BEFORE
+		// the latch and before the pipeline is installed (#803): this is the only network call
+		// registration depends on, and it throws when the roster cannot be read. Nothing is latched or
+		// registered at that point, so the failed `initialize` is retried from scratch on the next
+		// request instead of a surface missing every gated group being served for the DO's lifetime.
+		const groups = await this.userGroups();
+
+		// Latched HERE, not after the registrations: everything below is synchronous and
+		// deterministic, and the one thing a re-run could do is register a tool twice — the hang the
+		// latch exists to prevent. The pipeline install is also not re-runnable (it wraps `tool`).
+		this.toolsRegistered = true;
 
 		// Must precede every registration below — it wraps the registrar itself.
 		this.installRegistrationPipeline();
-
-		// Which agent-specific tool groups this user gets — scoped to their agents.
-		const groups = await this.userGroups();
 
 		this.server.tool(
 			"list_agents",

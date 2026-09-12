@@ -210,15 +210,18 @@ tells you exactly what you changed about it.
 - **Models send JSON strings for object params.** `create_agent` / `update_agent` accept
   `z.union([z.record(z.unknown()), z.string()])` and parse a string, because rejecting it
   turns a working call into a retry loop. Do the same for any new object-shaped argument.
-- **`userGroups()` gets ONE retry, then swallows (#759).** No token → empty set
+- **`userGroups()` gets ONE retry, then THROWS (#759, #803).** No token → empty set
   immediately, which is correct and costs nothing. A failed lookup is retried once after
-  200ms and only then yields empty, i.e. no agent-specific tools for the life of that DO.
-  The retry covers both a thrown fetch AND the `{error}` object `apiCall` returns for a
-  non-2xx — the second was the reachable one, and the original `catch` could not see it.
-  What it does not fix is the LATCH: two failures still register an empty surface until the
-  DO is evicted, because re-running registration would throw `already registered`. So "my
-  tool disappeared" is still usually an auth problem rather than a registration bug — just
-  no longer a single blip away.
+  200ms; a second failure throws out of `init()`. The retry covers both a thrown fetch AND
+  the `{error}` object `apiCall` returns for a non-2xx — the second was the reachable one,
+  and the original `catch` could not see it. The throw is what closed the LATCH: `init()`
+  resolves the roster BEFORE `toolsRegistered = true` and before the pipeline is installed,
+  so a refused `initialize` leaves nothing registered and the next request starts over
+  (partyserver resets its status when `onStart` throws). Before #803 two failures registered
+  the always-on set without the gated groups and kept it until DO eviction, with no error
+  anywhere. Keep that order: latch → pipeline → registrations, all after the one network
+  call, because none of them is re-runnable. So "my tool disappeared" is now an auth or
+  subscription fact, not a registration bug.
 - **`/health`'s `tools` count comes from `src/tool-count.ts`.** It answered a hardcoded
   `41` for months while 124 were registered — and `oauth-provider.test.ts` asserted the
   41, so the test locked the wrong number in rather than catching it. `index.test.ts` now

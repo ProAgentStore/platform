@@ -123,6 +123,8 @@ interface HarnessOpts {
 	 * the transient failure this retry exists for.
 	 */
 	rosterFailures?: number;
+	/** Build the instance but do not call `init()` — for tests that drive it themselves (#803). */
+	deferInit?: boolean;
 }
 
 async function setup(opts: HarnessOpts = {}) {
@@ -181,7 +183,7 @@ async function setup(opts: HarnessOpts = {}) {
 	};
 	inst.server = fakeServer; // replace the real McpServer with our capturing double
 
-	await inst.init();
+	if (!opts.deferInit) await inst.init();
 
 	return {
 		inst,
@@ -229,14 +231,16 @@ describe("PagsMcp.init — tool registration", () => {
 	});
 
 	/**
-	 * A transient roster lookup must not cost this connection every gated tool (#759).
+	 * A transient roster lookup must not cost this connection every gated tool (#759), and a
+	 * persistent one must not latch a truncated surface for the life of the DO (#803).
 	 *
-	 * `init()` latches `toolsRegistered = true` and registers ONCE per Durable Object, so an empty
-	 * group set is not a small failure: the whole `coding`, `apply` and `repo` surface disappears
-	 * from `tools/list` for the life of that DO, and the user sees the always-on tools working while
-	 * their coding tools have simply vanished.
+	 * `init()` registers ONCE per Durable Object, so an empty group set is not a small failure: the
+	 * whole `coding`, `apply` and `repo` surface disappears from `tools/list`, and the user sees the
+	 * always-on tools working while their coding tools have simply vanished. #759 gave the lookup
+	 * one retry. #803 made the second failure a refusal — `init()` throws before anything is latched
+	 * or registered — so the next request starts over instead of inheriting the truncation.
 	 */
-	describe("userGroups survives a transient roster failure (#759)", () => {
+	describe("userGroups survives a transient roster failure (#759) and refuses rather than latches (#803)", () => {
 		const rosterCalls = (h: Awaited<ReturnType<typeof setup>>) =>
 			h.fetchStub.calls.filter((c) => c.url.endsWith("/v1/instances/my/instances")).length;
 
@@ -258,15 +262,46 @@ describe("PagsMcp.init — tool registration", () => {
 			expect(h.tools.has("coding_session_capture")).toBe(true);
 		});
 
-		it("gives up after the one retry rather than looping", async () => {
+		it("gives up after the one retry rather than looping — and refuses, rather than publishing a truncated surface (#803)", async () => {
 			// The bound matters as much as the retry. An unbounded loop here would hold every new
 			// connection's `initialize` open against an API that is genuinely down.
-			const h = await setup({ groups: ["coding"], rosterFailures: 99 });
+			const h = await setup({ groups: ["coding"], rosterFailures: 99, deferInit: true });
+			await expect(h.inst.init()).rejects.toThrow(/roster could not be read after 2 attempts/);
 			expect(rosterCalls(h), "exactly two attempts, never more").toBe(2);
-			// And the fallback is the pre-#759 behaviour: no gated tools, but the always-on set is
-			// intact, so the connection still works for everything that does not need a surface.
-			expect(h.tools.has("coding_session_capture")).toBe(false);
+			// The pre-#803 fallback registered the always-on set without the gated groups and latched
+			// it. Now NOTHING is registered and nothing is latched: the DO can be initialised again.
+			expect(h.tools.size, "no tool may be published from a failed roster").toBe(0);
+			expect(h.inst.toolsRegistered).toBe(false);
+		});
+
+		it("a refused initialize is not latched: the next init registers the full surface (#803)", async () => {
+			// Two 500s spend the first init's two attempts; the third lookup succeeds. This is the
+			// whole ticket: an identical retry RECOVERS, where before only DO eviction did.
+			const h = await setup({ groups: ["coding"], rosterFailures: 2, deferInit: true });
+			await expect(h.inst.init()).rejects.toThrow();
+			expect(h.tools.size).toBe(0);
+
+			await h.inst.init();
+			expect(rosterCalls(h), "two failed attempts, then the one that succeeded").toBe(3);
+			expect(h.inst.toolsRegistered).toBe(true);
+			expect(h.tools.has("coding_session_capture")).toBe(true);
 			expect(h.tools.has("list_agents")).toBe(true);
+
+			// And now the latch does the job it exists for: a third init registers nothing twice.
+			const size = h.tools.size;
+			await h.inst.init();
+			expect(h.tools.size).toBe(size);
+		});
+
+		it("a network-level throw is refused the same way as a returned 500 (#803)", async () => {
+			// `apiCall` returns a non-2xx but a failed fetch THROWS; both give-up paths must refuse.
+			const h = await setup({ groups: ["coding"], deferInit: true });
+			vi.stubGlobal("fetch", async () => {
+				throw new TypeError("network down");
+			});
+			await expect(h.inst.init()).rejects.toThrow(/network down/);
+			expect(h.tools.size).toBe(0);
+			expect(h.inst.toolsRegistered).toBe(false);
 		});
 
 		it("does not retry when there is no token — an anonymous connection is legitimately empty", async () => {
