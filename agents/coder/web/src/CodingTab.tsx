@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useRef, type ReactNode } from "react"
 import { useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { CodingRepo, CodingSession, CodingEngine, LoopPreset, TimelineEntry } from "./types";
-import { entryText, groupRepoHistory, sessionLabel } from "./repo-history";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { useVoice } from "@proagentstore/sdk/hooks";
 import { useCodingLoop } from "./use-coding-loop";
@@ -10,7 +9,7 @@ import { repoIssuesUnavailable, repoPullsUnavailable, repoTitle } from "./repo-t
 import { resolveRunnerOnline } from "./runner-online";
 import { noticeSentence, runnerOfflineNotice, type AttachmentAnswer } from "./runner-offline-notice";
 import { isEngineBusy, anyEngineBusy } from "./engine-busy";
-import { resolveRepoState, repoStatusLabel, sessionBadge, terminalPollBusy, type RepoState } from "./repo-status";
+import { resolveRepoState, repoStatusLabel, terminalPollBusy, type RepoState } from "./repo-status";
 import { parseRepoInput } from "./repo-input";
 import { activeSessionFor, pickAutoOpenSession, repoForSession } from "./session-open";
 import { openNotices, type OpenNotice } from "./open-notice";
@@ -19,6 +18,8 @@ import { repoOpenAction, shouldAutoOpenSoloSession } from "./repo-open";
 import { chatMessagesFrom, timelineExcerpt, type TimelinePayload } from "./timeline-chat";
 import { useTerminalScrollback } from "./use-terminal-scrollback";
 import { clearHistoryFailureNotice, sessionAttachFailureNotice, workModeSaveFailureNotice } from "./coding-write-failures";
+import AgentStatusBadge from "./AgentStatusBadge";
+import RepoHistory from "./RepoHistory";
 import CopilotView from "./CopilotView";
 import TerminalView from "./TerminalView";
 import AddRepoForm from "./AddRepoForm";
@@ -1417,73 +1418,6 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					onSaved={loadCoding}
 				/>
 			)}
-		</div>
-	);
-}
-
-/**
- * Working / Idle / Error badge for the open session (CODER-005). The reconciliation of runState
- * and runner connectivity is ./repo-status's; this renders its verdict. Compact on mobile: the
- * coloured dot is always shown (with a tooltip); the text label appears from `sm` up so it fits
- * the 48px header.
- */
-function AgentStatusBadge({ state }: { state: RepoState }) {
-	const { label, tone } = sessionBadge(state);
-	const working = tone === "working";
-	const error = tone === "error";
-	const base = "inline-flex items-center gap-1 text-2xs font-bold px-1.5 py-0.5 rounded shrink-0";
-	if (working) {
-		return (
-			<span className={`${base} bg-amber-500/15 text-amber-600`} title={label}>
-				<span className="inline-block w-2 h-2 border-2 border-amber-500/40 border-t-amber-600 rounded-full animate-spin" />
-				<span className="hidden sm:inline">{label}</span>
-			</span>
-		);
-	}
-	return (
-		<span className={`${base} ${error ? "bg-danger-soft text-danger" : "bg-success-soft text-success"}`} title={label}>
-			<span className={`w-2 h-2 rounded-full ${error ? "bg-danger" : "bg-success"}`} />
-			<span className="hidden sm:inline">{label}</span>
-		</span>
-	);
-}
-
-/**
- * A repo's terminal transcript, across every session it has ever had (#257).
- *
- * Rendered where "No session running / Start a session" used to be the entire screen. The history
- * was never lost — `coding_timeline` is append-only and it was all still in D1 — but it was only
- * readable per session, and the platform ends sessions by itself: the Pilot closes one every time
- * a run finishes, the orphan reaper closes the rest on each `pags up`. So the act of FINISHING
- * WORK is what emptied the terminal, and one live instance had 13 ended sessions, 0 active, with a
- * healthy runner and nothing on screen.
- */
-function RepoHistory({ entries }: { entries: TimelineEntry[] | null }) {
-	if (entries === null) {
-		return <div className="flex-1 flex items-center justify-center p-6"><p className="text-sm text-muted-soft">Loading history…</p></div>;
-	}
-	const sections = groupRepoHistory(entries);
-	if (!sections.length) {
-		return (
-			<div className="flex-1 flex items-center justify-center p-6 text-center">
-				<p className="text-sm text-muted-soft">Nothing has run on this repo yet. Start a session and its output will be kept here.</p>
-			</div>
-		);
-	}
-	return (
-		<div className="flex-1 min-h-0 overflow-auto bg-black/90 px-3 py-2 font-mono text-xs leading-relaxed">
-			{sections.map((section, i) => (
-				<div key={`${section.sessionId}:${section.entries[0]?.seq ?? i}`}>
-					{/* The separator is the point of the inversion: a session is now a boundary in
-					    the history, not the way you ask for it. */}
-					<div className="sticky top-0 z-10 -mx-3 px-3 py-1 bg-panel/95 border-y border-line text-2xs text-muted font-sans">
-						{sessionLabel(section, i)}
-					</div>
-					{section.entries.map((e) => (
-						<pre key={e.seq} className="whitespace-pre-wrap break-words text-neutral-200">{entryText(e)}</pre>
-					))}
-				</div>
-			))}
 		</div>
 	);
 }

@@ -96,10 +96,22 @@ describe("a one-repo agent gets Terminal / Issues / Pulls / Builds, not a repo l
 		expect(solo).toContain("startOpen");
 	});
 
-	it("offers a way to START when nothing is running, rather than an empty pane", () => {
+	it("offers a way in when nothing is running, rather than an empty pane", () => {
+		// Asserted through the WIRING, not through a verb. This used to expect the strings "Start a
+		// session" and "pags up" — both of which #408 and #537 removed from the rendered branch, so
+		// by the time it was noticed the only thing satisfying it was the comment explaining their
+		// removal. `tab` is raw source, comments included, so a comment can satisfy a `toContain`;
+		// that is the trap, and naming the wiring is the way out of it.
 		const solo = tab.slice(tab.indexOf("if (singleRepo && repos.length <= 1)"), tab.indexOf("// ── Session open"));
-		expect(solo).toContain("Start a session");
-		expect(solo).toContain("pags up");
+		// One verb, owned and labelled by ./repo-open (#408) — a session is a cache the platform
+		// reaps and re-opens, so this button is the RECOVERY path, not the way in.
+		expect(solo).toContain("repoOpenAction({");
+		expect(solo).toContain("openRepoSession(solo.id)");
+		// The runner sentence goes BESIDE that action, never instead of it (#241), and it is the
+		// server's sentence rather than a boolean's (#537).
+		expect(solo).toContain("noticeSentence(offlineNotice)");
+		// And the pane below is the repo's transcript, not an empty screen (#257).
+		expect(solo).toContain("<RepoHistory entries={repoHistory} />");
 	});
 
 	it("ReposList no longer carries a dead single-repo branch", () => {
@@ -206,13 +218,19 @@ describe("the Terminal tab shows the terminal", () => {
 		expect(autoOpen).toContain("if (autoOpenedRef.current) return;");
 	});
 
-	it("offers Start — never Open — when nothing is running", () => {
-		// With auto-attach, being on this branch means there IS no session; an "Open" button here
-		// would point at nothing.
+	it("delegates its one verb rather than hardcoding one", () => {
+		// Was "offers Start — never Open". That inverted #408: `repoOpenAction` returns "Open" in
+		// every branch (repo-open.ts, asserted in repo-open.test.ts), because with auto-attach the
+		// button OPENS the repo and starts an engine if there isn't one. It passed anyway — the
+		// slice had no end index, so it ran to the foot of the file and matched the <RepoHistory/>
+		// empty state's "Start a session and its output will be kept here". Bounded now, so what it
+		// reads is this branch and nothing below it.
 		const src_ = code("CodingTab.tsx");
-		const solo = src_.slice(src_.indexOf("if (singleRepo && repos.length <= 1)"));
-		expect(solo).toContain("Start a session");
-		expect(solo).not.toContain("Open session");
+		const start = src_.indexOf("if (singleRepo && repos.length <= 1)");
+		const solo = src_.slice(start, src_.indexOf("if (openSession) {", start));
+		expect(solo).toContain("repoOpenAction({");
+		// Comments are stripped here, so this one is real: the removed verb must not creep back.
+		expect(solo).not.toContain("Start a session");
 	});
 });
 
