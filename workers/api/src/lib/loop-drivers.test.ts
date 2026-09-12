@@ -134,10 +134,10 @@ describe("every driver opens an agent_loop_runs row — the fact that makes ONE 
 			});
 		const a = stub();
 		await loopDriverFor(caps("CODING_SESSION")).start({ env: a.env, ...base, repairCheckout: true });
-		expect(a.created[0].params.goal.repairCheckout).toBe(true);
+		expect((a.created[0].params.goal as { repairCheckout?: boolean }).repairCheckout).toBe(true);
 		const b = stub();
 		await loopDriverFor(caps("CODING_SESSION")).start({ env: b.env, ...base });
-		expect(b.created[0].params.goal.repairCheckout).toBeUndefined();
+		expect((b.created[0].params.goal as { repairCheckout?: boolean }).repairCheckout).toBeUndefined();
 	});
 
 	it("the coding driver does, and threads the SAME run id into the Pilot", async () => {
