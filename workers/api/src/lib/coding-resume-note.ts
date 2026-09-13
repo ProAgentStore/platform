@@ -48,7 +48,7 @@
 // reports one) is counted but not asserted: it gets a separate clause telling the run to VERIFY.
 // Collapsing the third into either of the others is exactly the inversion #594 was filed about.
 
-import { lastUnfinishedRunForSession, type ResumableStopReason } from "./agent-loop-store.js";
+import { lastUnfinishedRunForRepo, type ResumableStopReason } from "./agent-loop-store.js";
 import { type ActItem, actsInWindow } from "./instance-work.js";
 import type { Env } from "../types.js";
 
@@ -72,14 +72,16 @@ export const MAX_ACT_CHARS = 120;
  * run did NOT finish, and it did NOT fail — so its landed work is to be kept, and the objective is
  * still open. What differs is only the cause, and the cause must be the true one: telling a run that
  * spent its step budget it was "interrupted by the platform" would put a false claim in the platform's
- * voice, which is the exact thing #523 was filed against. The `interrupted` row is the pre-#806 text,
- * byte for byte.
+ * voice, which is the exact thing #523 was filed against. The `interrupted` row is the pre-#806 text
+ * except for one word: "on this session" became "on this repository" when the lookup was re-keyed
+ * (#806). The predecessor is usually on an EARLIER session of the repo, so the old word told the run
+ * to look for history in a session that does not have it.
  */
 const PREDECESSOR_ENDING: Record<ResumableStopReason, string> = {
-	interrupted: "a previous run on this session was interrupted by the platform before it could report. It was not your objective failing, and it did not finish",
-	max_iterations: "a previous run on this session used up its step limit before it could report. It was not your objective failing, and it did not finish",
-	engine_limit: "a previous run on this session stopped because the coding CLI's own usage limit had not reset in time. It was not your objective failing, and it did not finish",
-	provider_credit: "a previous run on this session stopped because the owner's AI provider account ran out of credit. It was not your objective failing, and it did not finish",
+	interrupted: "a previous run on this repository was interrupted by the platform before it could report. It was not your objective failing, and it did not finish",
+	max_iterations: "a previous run on this repository used up its step limit before it could report. It was not your objective failing, and it did not finish",
+	engine_limit: "a previous run on this repository stopped because the coding CLI's own usage limit had not reset in time. It was not your objective failing, and it did not finish",
+	provider_credit: "a previous run on this repository stopped because the owner's AI provider account ran out of credit. It was not your objective failing, and it did not finish",
 };
 
 const truncate = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
@@ -145,7 +147,9 @@ export function codingResumeNote(acts: ReadonlyArray<ActItem>, endedBy: Resumabl
 // file and an interface for a ten-line read would be ceremony, not a seam.
 
 /**
- * The note the next run on this session should be told, or `null` when there is none.
+ * The note the next run on this session's REPO should be told, or `null` when there is none. Keyed on
+ * the repo, not the session: a run-opened session is closed when its run ends, so its successor runs
+ * on a new one (#806, see {@link lastUnfinishedRunForRepo}).
  *
  * Never throws: this sits on the start path of every coding run, and a resume note is an
  * IMPROVEMENT to a run that is otherwise fine. A failed read here must cost the briefing, not the
@@ -157,9 +161,9 @@ export async function pendingCodingResumeNote(
 	now: number = Date.now(),
 ): Promise<string | null> {
 	try {
-		const prev = await lastUnfinishedRunForSession(env, params.userId, params.instanceId, params.sessionId, now);
+		const prev = await lastUnfinishedRunForRepo(env, params.userId, params.instanceId, params.sessionId, now);
 		if (!prev) return null;
-		// The window is the interval during which that run was the one driving the session.
+		// The window is the interval during which that run was the one driving its session.
 		const acts = await actsInWindow(env, params.userId, params.instanceId, prev.startedAt, prev.finishedAt ?? now, 100);
 		return codingResumeNote(acts, prev.stopReason);
 	} catch {

@@ -283,25 +283,42 @@ export function isResumableStopReason(reason: string | null | undefined): reason
 }
 
 /**
- * The last run on THIS session that ended without a verdict on its objective (#523, item 4; #806).
+ * The last run on the same REPO as this session that ended without a verdict on its objective
+ * (#523, item 4; #806).
  *
  * Which endings qualify, and why the others do not, is {@link RESUMABLE_STOP_REASONS}.
  *
- * IMMEDIATE successor only, which is why the query takes the most recent finished run and THEN asks
- * what ended it, rather than asking SQL for the most recent interrupted one. Those differ, and the
- * difference is a bug: after run A is cut off and run B picks the note up and finishes the work, a
- * later run C would find A again and be briefed on a checkpoint that has already been consumed. A
- * normal ending in between means the note's job is done.
+ * ── Why the repo and not the session (#806)
+ *
+ * This asked `session_id = ?` until #806 traced the path a successor actually takes, and the answer
+ * was that for most runs it never matched. A run started by an agent — `delegate_goal`, `start_work`,
+ * the Loop button, `coding_loop_start` — opens its own session when none is active
+ * (`ensureSession` → `opened: true`, `coding-session-open.ts`), and a session a run opened is CLOSED
+ * when that run ends (`shouldEndSessionAfterRun` → `endSession`, `workflows/coding-session.ts`), as
+ * `error` for exactly the `failed`/`max_steps` endings this note exists for. The next run then finds
+ * no `active` session (`getActiveSessionForRepo`), opens a NEW one, and asked this query about a
+ * session with no history — so #523's own incident, a delegated run cut off after fifteen pushes,
+ * was the case the note could not reach. Only a session a human opened, which outlives its runs,
+ * ever produced one. The work a successor must not redo lives in the repository, not in a session
+ * row, so the repository is the key: the caller's session is used only to find which repo it is on.
+ *
+ * IMMEDIATE predecessor only, which is why the query takes the most recent finished run and THEN
+ * asks what ended it, rather than asking SQL for the most recent interrupted one. Those differ, and
+ * the difference is a bug: after run A is cut off and run B picks the note up and finishes the work,
+ * a later run C would find A again and be briefed on a checkpoint that has already been consumed. A
+ * normal ending in between — on any session of that repo — means the note's job is done.
  *
  * `finished_at IS NOT NULL` because an unfinished row is a run still going: its acts are not a
  * record of something to skip, they are a live session's, and #790 is what makes "reached a
  * terminal state" a reliable trigger point at all. It also excludes the CALLER — a run asking this
- * question has not finished, so it can never be briefed on itself.
+ * question has not finished, so it can never be briefed on itself. A run with no session (a chat
+ * loop) has no repo and is never matched.
  *
  * Ordered and bounded on `started_at` so it rides `idx_agent_loop_runs_instance` directly; see
- * {@link RESUME_NOTE_LOOKBACK_MS} for why the floor is not optional.
+ * {@link RESUME_NOTE_LOOKBACK_MS} for why the floor is not optional. `r.*`, not `*`: the join
+ * brings `coding_sessions`' own `status` and `started_at`, which would overwrite the run's.
  */
-export async function lastUnfinishedRunForSession(
+export async function lastUnfinishedRunForRepo(
 	env: Env,
 	userId: string,
 	instanceId: string,
@@ -309,11 +326,13 @@ export async function lastUnfinishedRunForSession(
 	now: number = Date.now(),
 ): Promise<(LoopRunView & { stopReason: ResumableStopReason }) | null> {
 	const row = await env.DB.prepare(
-		`SELECT * FROM agent_loop_runs
-		  WHERE instance_id = ?2 AND user_id = ?1 AND session_id = ?3
-		    AND finished_at IS NOT NULL
-		    AND started_at >= ?4
-		  ORDER BY started_at DESC LIMIT 1`,
+		`SELECT r.* FROM agent_loop_runs r
+		   JOIN coding_sessions s ON s.id = r.session_id
+		  WHERE r.instance_id = ?2 AND r.user_id = ?1
+		    AND s.repo_id = (SELECT repo_id FROM coding_sessions WHERE id = ?3 AND instance_id = ?2 AND user_id = ?1)
+		    AND r.finished_at IS NOT NULL
+		    AND r.started_at >= ?4
+		  ORDER BY r.started_at DESC LIMIT 1`,
 	)
 		.bind(userId, instanceId, sessionId, now - RESUME_NOTE_LOOKBACK_MS)
 		.first<LoopRunRow>();

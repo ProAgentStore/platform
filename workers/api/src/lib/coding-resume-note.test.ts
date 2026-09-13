@@ -2,9 +2,10 @@
  * What a run started after a platform interruption is told (#523, item 4).
  *
  * The decision under test is "given what the last run was observed to do, what should the next one
- * be told" — a value, so it is tested as one. The two D1 reads that feed it are a thin
- * read-and-delegate (`pendingCodingResumeNote`) with no ordering to get wrong; the judgement worth
- * pinning is all here.
+ * be told" — a value, so it is tested as one. WHICH run it is about is not a value, and a stub
+ * cannot test it: the lookup once asked `session_id = ?` and this file's stub answered regardless,
+ * while the real successor was on a new session and was briefed about nothing (#806). That half is
+ * pinned against the real schema in `coding-resume-note-repo.test.ts`.
  *
  * The dangerous output is a note asserting "this is already done" about something that is NOT, so
  * most of this file is about the three states of `ok` (#594).
@@ -13,7 +14,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { lastUnfinishedRunForSession, RESUMABLE_STOP_REASONS, type LoopRunRow } from "./agent-loop-store.js";
+import { lastUnfinishedRunForRepo, RESUMABLE_STOP_REASONS, type LoopRunRow } from "./agent-loop-store.js";
 import { MAX_ACT_CHARS, MAX_LISTED_ACTS, codingResumeNote } from "./coding-resume-note.js";
 import type { ActItem } from "./instance-work.js";
 import type { LoopStopReason } from "./agent-loop.js";
@@ -153,9 +154,10 @@ describe("it stays bounded — this text is prepended to every prompt of the res
 
 describe("#806 — the other endings that leave work half-done without a verdict", () => {
 	it("keeps the interrupted note's opening byte for byte", () => {
-		// The pre-#806 sentence. Widening the gate must not quietly reword what #523 shipped.
+		// The pre-#806 sentence. Widening the gate must not quietly reword what #523 shipped. One word
+		// moved on purpose — "session" → "repository" — when the lookup was re-keyed on the repo.
 		expect((interruptedNote([act()]) ?? "").split("\n")[0]).toBe(
-			"PLATFORM NOTE (not from the human): a previous run on this session was interrupted by the platform before it could report. It was not your objective failing, and it did not finish — but the work below had ALREADY landed and is on the record.",
+			"PLATFORM NOTE (not from the human): a previous run on this repository was interrupted by the platform before it could report. It was not your objective failing, and it did not finish — but the work below had ALREADY landed and is on the record.",
 		);
 	});
 
@@ -198,7 +200,7 @@ describe("the gate — which predecessor a run is briefed about", () => {
 
 	it.each(["interrupted", "max_iterations", "engine_limit", "provider_credit"] as const)("briefs the successor of a run that ended %s", async (reason) => {
 		const { env } = envWith({ stop_reason: reason });
-		const prev = await lastUnfinishedRunForSession(env, "u1", "inst-1", "sess-1");
+		const prev = await lastUnfinishedRunForRepo(env, "u1", "inst-1", "sess-1");
 		expect(prev?.stopReason).toBe(reason);
 		expect(prev?.runId).toBe("run-a");
 	});
@@ -207,22 +209,22 @@ describe("the gate — which predecessor a run is briefed about", () => {
 		"does NOT brief the successor of a run that ended %s — a verdict or a human's choice",
 		async (reason) => {
 			const { env } = envWith({ stop_reason: reason });
-			expect(await lastUnfinishedRunForSession(env, "u1", "inst-1", "sess-1")).toBeNull();
+			expect(await lastUnfinishedRunForRepo(env, "u1", "inst-1", "sess-1")).toBeNull();
 		},
 	);
 
 	it("briefs nobody when the session has no finished run in the window", async () => {
 		const { env } = envWith(null);
-		expect(await lastUnfinishedRunForSession(env, "u1", "inst-1", "sess-1")).toBeNull();
+		expect(await lastUnfinishedRunForRepo(env, "u1", "inst-1", "sess-1")).toBeNull();
 	});
 
 	it("still reads only the IMMEDIATE predecessor — a verdict in between ends the note's job", async () => {
 		// The query takes the newest finished run and THEN judges it; it never asks SQL for the newest
 		// resumable one, which would re-brief run C on run A's already-consumed checkpoint.
 		const { env } = envWith({ stop_reason: "done" });
-		expect(await lastUnfinishedRunForSession(env, "u1", "inst-1", "sess-1")).toBeNull();
+		expect(await lastUnfinishedRunForRepo(env, "u1", "inst-1", "sess-1")).toBeNull();
 		const source = readFileSync(join(__dirname, "agent-loop-store.ts"), "utf8");
-		const fn = source.slice(source.indexOf("export async function lastUnfinishedRunForSession"));
+		const fn = source.slice(source.indexOf("export async function lastUnfinishedRunForRepo"));
 		expect(fn.slice(0, fn.indexOf("\n}\n"))).not.toMatch(/stop_reason\s*(=|IN)/i);
 	});
 });
