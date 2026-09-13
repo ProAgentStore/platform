@@ -254,6 +254,14 @@ const READBACK: Record<string, string | null> = {
 
 	// ── feedback ──
 	"resolve_feedback.issue_url": "list_feedback",
+	// #613: every field record_instance_feedback files is a column list_feedback returns.
+	"record_instance_feedback.body": "list_feedback",
+	"record_instance_feedback.sentiment": "list_feedback",
+	"record_instance_feedback.surface": "list_feedback",
+	"record_instance_feedback.trace_id": "list_feedback",
+	"record_instance_feedback.message_id": "list_feedback",
+	"record_instance_feedback.session_id": "list_feedback",
+	"record_instance_feedback.target_text": "list_feedback",
 
 	// ── budget ──
 	"set_budget_limits.token_ceiling": "usage_summary",

@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**164 tool registrations.** 140 are always registered; 24 are gated to the console
+**166 tool registrations.** 142 are always registered; 24 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -426,6 +426,8 @@ immediately instead of a whole transcript.
 | `list_errors` | Persisted platform failures (`scope: "all"` is admin-only) | — | | |
 | `list_feedback` | What the owner said went wrong, anchored to the turn — pair the `trace_id` with `agent_trace` | — | | |
 | `resolve_feedback` | Triage one row: status + the `issue_url` it became | write | yes | |
+| `record_instance_feedback` | File what the owner said went wrong, in their words — marked as filed over MCP; the body is never editable (#613) | write | yes | |
+| `delete_feedback` | Permanently delete one row ("delete my data") — `resolve_feedback` `dismissed` keeps it instead | destructive | yes | `delete_feedback` |
 | `instance_activity` | Append-only instance activity log | — | | |
 | `list_pipeline_runs` | Declarative-pipeline runs with counts | — | | |
 | `get_instance_pipeline` | Read back a single stored pipeline definition (with validity) | — | | |

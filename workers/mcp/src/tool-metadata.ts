@@ -223,6 +223,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	insert_record: "write",
 	mark_all_notifications_read: "write",
 	mark_notification_read: "write",
+	record_instance_feedback: "write",
 	rename_instance: "write",
 	resolve_feedback: "write",
 	scaffold_agent: "write",
@@ -316,6 +317,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	delete_instance_file: "destructive",
 	delete_instance_knowledge: "destructive",
 	delete_instance_memory: "destructive",
+	delete_feedback: "destructive",
 	delete_instance_trigger: "destructive",
 	delete_supervision: "destructive",
 	unregister_instance_runtime: "destructive",
@@ -379,10 +381,14 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// not `runtime`: saving an objective starts nothing — `start_instance_loop` is the call that does.
 	// Not `destructive` either, though it replaces a list: the prior list is readable first with the
 	// get tool or `dry_run`, and writable back, as with the other instance-config setters.
+	// +1 write, +1 destructive at #613 (product feedback): `record_instance_feedback` files a row
+	// (`write` — additive, and dismissable with `resolve_feedback`), `delete_feedback` hard-deletes
+	// one. `destructive` for the delete: no undo, and the row's snapshot outlives the transcript and
+	// the trace, so it may be the only record of what the owner said.
 	read: 80,
-	write: 53,
+	write: 54,
 	runtime: 16,
-	destructive: 15,
+	destructive: 16,
 };
 
 /** The subset of MCP's `ToolAnnotations` this server can state honestly.

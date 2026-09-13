@@ -198,11 +198,6 @@ const KNOWN_GAPS = [
 	},
 	{
 		why:
-			"Product feedback — file, list and dismiss. `list_feedback` does not exist; an agent that hits a platform defect can only tell the user to open the console. #613.",
-		match: /^[A-Z]+ \/v1\/feedback(\/\{\})?$/,
-	},
-	{
-		why:
 			"Trigger and connector metadata the console uses to BUILD a trigger: the action catalogue (`/triggers/actions`), a dry-run preview (`/triggers/preview`), the account connector list, the per-instance connector list and its write-consent toggle. `create_instance_trigger` can write one blind; nothing lets a caller check it first. #613.",
 		match:
 			/^[A-Z]+ \/v1\/(connectors|triggers\/(actions|preview)|instances\/\{\}\/connectors(\/\{\}\/consent)?)$/,

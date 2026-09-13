@@ -290,6 +290,7 @@ const TABLE: Record<string, Row> = {
 	create_instance_trigger: ["triggers", "write", null, "envelope", "action,config,dry_run,instance_id,name,schedule,token,type"],
 	create_supervision: ["composition", "write", null, "envelope", "dry_run,subordinate_instance_id,supervisor_instance_id,token"],
 	delete_instance_connector_grant: ["connectors", "destructive", "delete_instance_connector_grant", "envelope", "confirm,dry_run,grant_id,instance_id,provider,token"],
+	delete_feedback: ["observability", "destructive", "delete_feedback", "envelope", "confirm,dry_run,feedback_id,token"],
 	delete_instance_file: ["knowledge", "destructive", "delete_instance_file", "envelope", "confirm,dry_run,file_id,instance_id,token"],
 	delete_instance_knowledge: ["knowledge", "destructive", "delete_instance_knowledge", "envelope", "confirm,document_id,dry_run,instance_id,token"],
 	delete_instance_memory: ["knowledge", "destructive", "delete_instance_memory", "envelope", "confirm,dry_run,instance_id,key,token"],
@@ -351,6 +352,7 @@ const TABLE: Record<string, Row> = {
 	// rather than a bare proxy, so MCP_READ_ONLY and a suspended account both see the call.
 	recent_instances: ["recent", "read", null, null, "token"],
 	register_instance_runtime: ["runtime", "runtime", null, "envelope", "capabilities,dry_run,endpoint_url,instance_id,placement,runner_token,runner_version,token"],
+	record_instance_feedback: ["observability", "write", null, "envelope", "body,dry_run,instance_id,message_id,sentiment,session_id,surface,target_text,token,trace_id"],
 	resolve_feedback: ["observability", "write", null, "envelope", "dry_run,feedback_id,issue_url,status,token"],
 	remove_repo: ["repo", "write", null, "envelope", "confirm,dry_run,instance_id,repo_url,token"],
 	rename_instance: ["settings", "write", null, "envelope", "dry_run,instance_id,name,token"],

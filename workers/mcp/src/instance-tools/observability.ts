@@ -11,7 +11,9 @@ import type { InstanceToolsCtx } from "./shared.js";
  *
  * Everything here is a read except `clear_instance_messages`, which is grouped with the
  * messages it clears rather than with the other destructive tools: the pairing is the
- * point (`instance_messages` is how you check what you are about to destroy).
+ * point (`instance_messages` is how you check what you are about to destroy). The feedback
+ * writers follow the same rule — `resolve_feedback`, `record_instance_feedback` and
+ * `delete_feedback` sit beside `list_feedback`, which is how each is checked.
  */
 export function registerObservabilityTools(server: McpServer, ctx: InstanceToolsCtx): void {
 	const { env, tokenFor, safetyFor } = ctx;
@@ -223,6 +225,95 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 			// Only a SUCCESS is audited as completed — `apiCall` returns `{error}` rather than
 			// throwing, so an unchecked audit here would record a filing that never happened (#325).
 			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "resolve_feedback", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	// ── Filing and deleting feedback (#613) ─────────────────────────────────────
+	//
+	// The console files a complaint and hard-deletes one; MCP could only read and triage. A caller
+	// that watched an agent get something wrong had to send the owner to the console to record it.
+	//
+	// WHO WROTE IT. `agent_feedback.author` is `user` (the console button) or `agent` (the instance's
+	// own `record_feedback`), and the row is valued as evidence of what the OWNER said. A caller here
+	// is usually a model acting for the owner, so the tool sends `author: "user"` only under a
+	// description that requires the owner's words, and stamps `context.via = "mcp"` on every row it
+	// files — so a reader can always tell an MCP-filed complaint from one typed into the console.
+	server.tool(
+		"record_instance_feedback",
+		"Record something the OWNER says one of their agents got wrong (or did well) — the same row the console's feedback button files, read back with list_feedback. `body` must be the owner's complaint in THEIR words (max 4000 chars), not your summary or diagnosis of it: the row is kept as evidence of what the owner said, and its body can never be edited afterwards. Anchor it when you can — `trace_id` (from agent_trace) or `message_id` (from instance_messages) point at the turn it is about, and `target_text` keeps a copy of the reply that outlives the transcript. Every row filed here is marked as filed over MCP. Not a memory (write_instance_memory) and not board work (create_instance_ticket).",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("The agent instance the feedback is about, from my_instances."),
+			body: z.string().describe("The owner's own words — what went wrong, or what worked."),
+			sentiment: z.enum(["bad", "good"]).optional().describe('"bad" (a complaint) or "good". Omit when neither was stated.'),
+			surface: z.enum(["chat", "coding", "board", "apply", "other"]).optional().describe('Where it happened. The server defaults to "chat".'),
+			trace_id: z.string().optional().describe("The turn's trace id, from agent_trace."),
+			message_id: z.string().optional().describe("The message it is about, from instance_messages."),
+			session_id: z.string().optional().describe("The coding session it is about, from coding_sessions_list."),
+			target_text: z.string().optional().describe("A copy of the reply or output being complained about (max 2000 chars)."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, body, sentiment, surface, trace_id, message_id, session_id, target_text, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, sentiment, surface, trace_id, message_id, session_id };
+			const denied = await requirePermission(safetyFor(token), "write", "record_instance_feedback", input);
+			if (denied) return denied;
+			if (!body.trim()) return text("Error: body is required — the owner's words, not empty.");
+			// Only what was supplied: the route defaults an absent `surface` and leaves an absent
+			// pointer NULL, and a manufactured one would anchor the row to a turn nobody named.
+			const payload: Record<string, unknown> = { instanceId: instance_id, body, author: "user", context: { via: "mcp" } };
+			if (sentiment !== undefined) payload.sentiment = sentiment;
+			if (surface !== undefined) payload.surface = surface;
+			if (trace_id !== undefined) payload.traceId = trace_id;
+			if (message_id !== undefined) payload.messageId = message_id;
+			if (session_id !== undefined) payload.sessionId = session_id;
+			if (target_text !== undefined) payload.targetText = target_text;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "record_instance_feedback", "file owner feedback about an agent", input, {
+					endpoint: "/v1/feedback",
+					method: "POST",
+					effect: `A feedback row about ${instance_id} would be filed as the owner's words, marked as filed over MCP. Its body cannot be edited afterwards.`,
+					fields: Object.keys(payload).filter((k) => k !== "context"),
+				});
+			}
+			const data = await authedCall("/v1/feedback", sessionToken, { method: "POST", body: JSON.stringify(payload) }, env);
+			if (!(data as { error?: string }).error) {
+				await audit(safetyFor(token), { tool: "record_instance_feedback", action: "completed", input, result: { id: (data as { feedback?: { id?: string } }).feedback?.id } });
+			}
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"delete_feedback",
+		"Permanently delete one feedback row — the owner's \"delete my data\" path. Irreversible, and it removes evidence: to take a complaint off the open backlog without destroying it, use resolve_feedback with status \"dismissed\" instead. Dry-run it first to check the id against list_feedback, then pass confirm.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			feedback_id: z.string().describe("The row id from list_feedback."),
+			confirm: z.string().optional().describe('Must be "delete_feedback" to delete the row.'),
+			dry_run: z.boolean().optional().describe("Describe the deletion without doing it. Does not require confirm."),
+		},
+		async ({ token, feedback_id, confirm, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { feedback_id };
+			const denied = await requirePermission(safetyFor(token), "destructive", "delete_feedback", input);
+			if (denied) return denied;
+			const endpoint = `/v1/feedback/${encodeURIComponent(feedback_id)}`;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "delete_feedback", "permanently delete a feedback row", input, {
+					endpoint,
+					method: "DELETE",
+					effect: `Feedback ${feedback_id} would be deleted. There is no undo, and the snapshot it holds outlives the transcript and trace — so this may be the only record of what was said.`,
+					alternative: 'resolve_feedback with status "dismissed" keeps the row but takes it off the open backlog.',
+				});
+			}
+			const unconfirmed = await requireConfirmation(safetyFor(token), "delete_feedback", confirm, "delete_feedback", input);
+			if (unconfirmed) return unconfirmed;
+			const data = await authedCall(endpoint, sessionToken, { method: "DELETE" }, env);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "delete_feedback", action: "completed", input, result: { ok: true } });
 			return jsonText(data);
 		},
 	);

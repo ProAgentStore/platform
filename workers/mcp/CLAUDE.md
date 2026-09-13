@@ -76,7 +76,7 @@ src/
     ├── base.ts           7 tools — the connector-tool gate, subscribe/cancel, chat
     ├── runtime.ts        10 tools — the `pags up` runtime + its task queue
     ├── knowledge.ts      12 tools — documents (incl. in-place edit + URL ingest, #613), files, vectors, memory
-    ├── observability.ts  9 tools — messages, activity, errors, trace, pipeline runs, feedback
+    ├── observability.ts  11 tools — messages, activity, errors, trace, pipeline runs, feedback (incl. file + delete, #613)
     ├── board.ts          9 tools — the board, its columns, the per-ticket thread (#150)
     ├── settings.ts       13 tools — settings, name, instructions, operator manual, model, translation, state
     ├── triggers.ts       5 tools — webhook / cron / connector-sync triggers
@@ -94,13 +94,13 @@ src/
                           surfaces:["coding"]) + 5 loop tools (3 run + 2 objective queue)
 ```
 
-**164 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
+**166 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
 `coding-tools.ts` — all of them behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 116 across `instance-tools/`. 140 are always registered; 24 are
+`storage-tools.ts`, and 118 across `instance-tools/`. 142 are always registered; 24 are
 surface-gated (apply=4, repo=3, coding=17).
 
 Those four numbers ADD UP to the headline, and that is the point of stating them: 21 + 13
-+ 14 + 116 = 164. They said 88 until #602, which made the paragraph sum to 132 — a total the
++ 14 + 118 = 166. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added
@@ -113,7 +113,9 @@ added five always-on notification and account-preference tools to `instance-tool
 and said 21 + 13 + 13 + 112 = 159 until #613's knowledge-writes group added `update_instance_record`
 to `storage-tools.ts` and `update_instance_knowledge` + `ingest_instance_knowledge_url` to
 `instance-tools/knowledge.ts`; and said 21 + 13 + 14 + 114 = 162 until #613's loop-presets group
-added `get_instance_loop_presets` + `set_instance_loop_presets` to `instance-tools/composition.ts`. The per-file rows in the tree above are
+added `get_instance_loop_presets` + `set_instance_loop_presets` to `instance-tools/composition.ts`; and said
+21 + 13 + 14 + 116 = 164 until #613's product-feedback group added `record_instance_feedback` +
+`delete_feedback` to `instance-tools/observability.ts`. The per-file rows in the tree above are
 machine-checked against `.tool(` counts; this prose sum is not, so it is the half that rots.
 
 `base.ts` was 1871 lines and 67 of the 86 instance tools THEN REGISTERED until #305 — the

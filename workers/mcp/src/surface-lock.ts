@@ -438,4 +438,18 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.29 is published.
 	"0.1.30": "sha256:47d1cafcfb5baa6e3377e75fd43cb31c30352d58ec98becb4d1a89a712389a18",
+	// 0.1.31 (#613, the product-feedback group): two new tool NAMES, both ALWAYS-ON — 164
+	// registrations become 166, `MCP_TOOL_ALWAYS_ON` 140 → 142, `MCP_TOOL_GATED` stays 24.
+	//
+	//   * `record_instance_feedback` (write, dry_run) — POST /v1/feedback in
+	//     `instance-tools/observability.ts`, beside `list_feedback`; `author: "user"` under a
+	//     description requiring the owner's words, every row stamped `context.via = "mcp"`.
+	//   * `delete_feedback` (destructive, dry_run + confirm) — DELETE /v1/feedback/:id.
+	//
+	// Closes that group's `KNOWN_GAPS` entry (2 routes; parity 95 → 97 reachable, 61 → 59 gaps),
+	// and with it the entry's stale claim that `list_feedback` did not exist.
+	// `SERVER_INSTRUCTIONS` did not move.
+	//
+	// Appended, never edited in place: 0.1.30 is published.
+	"0.1.31": "sha256:e38a1fa93e8eb15e4c1b010692e6166c5cd9d505102076b05f4b3f0c43c9823e",
 };
