@@ -3,11 +3,14 @@ import { hitOutputCap } from "./reply-truncation.js";
 import { authorityInstruction, screenInstruction, type MergePolicy } from "./coding-authority.js";
 import {
 	instructionKey,
+	readTarget,
 	renderPaneForPilot,
 	repeatCaution,
 	repeatNote,
 	repeatStopDetail,
 	repetitionVerdict,
+	rereadNote,
+	rereadVerdict,
 	PILOT_PANE_CHARS,
 } from "./coding-repetition.js";
 import { clockLine } from "./coding-wait.js";
@@ -216,6 +219,11 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 	let emptyInstructions = 0;
 	/** Normalised key of every instruction actually driven into the engine, in order (#522). */
 	const sentKeys: string[] = [];
+	/**
+	 * Parallel to `sentKeys` (#807): the file a sent instruction READ, or `""` when it read nothing.
+	 * One entry per sent instruction so an index is an instruction ordinal, not a read ordinal.
+	 */
+	const sentReads: string[] = [];
 	/** The instruction this run was warned about repeating, if any — read by the `finish` branch. */
 	let repeatedInstruction: string | null = null;
 	/** Consecutive failed engine turns, deduped by the turn's own end-instant (#545). */
@@ -388,6 +396,25 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 				await deps.onEvent?.("repeated", note);
 			}
 			sentKeys.push(key);
+
+			// RE-READING ONE FILE (#807). The bound above keys on the payload, and "quote lines 1-80
+			// of x.ts" and "quote lines 80-200 of x.ts" are two payloads — run 6bc4dbf3 sent nine of
+			// them and reached its first edit on step nine of ten. Keyed on the file PATH instead, and
+			// a NOTE only, never a stop: a re-read after an edit is real work, and the brain reacts to
+			// its own step log (the merge refusal and the repeat note above are the evidence). The
+			// note carries the path and the steps because `describe()`'s 120-character label is
+			// exactly what dropped the range list and left the Pilot unable to see it had the file.
+			const target = readTarget(decision.action.text);
+			if (target) {
+				const r = rereadVerdict(sentReads, target);
+				if (r.verdict === "note") {
+					const note = rereadNote(target, r.count, r.steps);
+					actionLog.push(note);
+					transcript.push(note);
+					await deps.onEvent?.("repeated", note);
+				}
+			}
+			sentReads.push(target ?? "");
 		}
 
 		// SPEAKING FOR THE OWNER IS STAMPED WHERE IT IS SAID (#505), not only in the report.

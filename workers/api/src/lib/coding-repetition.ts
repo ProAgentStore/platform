@@ -53,6 +53,19 @@
  * prose unifies "read the full contents of X and Y" with "show me the full contents of X — all 366
  * lines". B is addressed at its cause instead: {@link renderPaneForPilot} states the measurement,
  * and the prompt states the bound that actually binds.
+ *
+ * ── CAUSE C — over-verification (#807). Run 6bc4dbf3 diagnosed its fix early, then spent most of a
+ * ten-step budget asking for the same or overlapping line ranges of ONE file ("quote lines X to Y
+ * verbatim") and began editing on step nine. Not A: the ranges differed, so no key recurred. Not
+ * quite B either: the engine answered every time and the answers were in the reply channel. The
+ * Pilot simply could not see that it had already read the file — `describe()` keeps 120 characters
+ * of each step, which is the verb and the path but rarely the range list.
+ *
+ * {@link rereadVerdict} covers it by keying on the FILE PATH of a read-shaped instruction rather
+ * than on its prose, which is the one normalisation that does not collide two pieces of real work:
+ * "quote lines 1-80 of x.ts" and "quote lines 80-200 of x.ts" are one path; x.ts and y.ts are two.
+ * It only ever NOTES — a re-read after an edit is legitimate, so unlike A it never stops the run —
+ * and the note names the path and the steps, which is exactly the fact the 120-character label lost.
  */
 
 /**
@@ -225,5 +238,77 @@ export function renderPaneForPilot(pane: string, limit = PILOT_PANE_CHARS): stri
 		// channel that does work keeps this banner from contradicting the system prompt above it.
 		"and re-sending the instruction that produced it only pushes it further away. Ask the engine to put what you need in its REPLY instead.]\n" +
 		pane.slice(-limit)
+	);
+}
+
+// ── Re-reading one file (#807) ────────────────────────────────────────────────
+
+/**
+ * The verbs that make an instruction a READ of a file rather than an edit of it.
+ *
+ * Deliberately narrow. An instruction that merely NAMES a path ("edit `x.ts` so that…") is not a
+ * read, and counting it would make the first legitimate read-after-edit look like a repeat.
+ */
+const READ_VERB = /\b(?:read|re-read|reread|quote|show|print|display|view|open|cat|head|tail|sed\s+-n|contents?\s+of|look\s+at)\b/i;
+
+/** A path: at least one directory separator OR an extension, no spaces. */
+const PATH_SHAPE = /^[\w.@~-][\w./@~-]*$/;
+const HAS_PATH_SHAPE = (t: string): boolean => PATH_SHAPE.test(t) && (t.includes("/") || /\.[a-z0-9]{1,8}$/i.test(t));
+
+/** A bare path with at least one directory component and an extension, e.g. `src/x.ts`. */
+const BARE_PATH = /(?:^|[\s(,])((?:[\w.@~-]+\/)+[\w.-]+\.[a-z0-9]{1,8})(?=$|[\s),.:;])/;
+
+/** Trim, and strip a leading `./` — the two spellings the Pilot alternates between. */
+export function normalisePath(path: string): string {
+	return path.trim().replace(/^\.\//, "");
+}
+
+/**
+ * The file a read-shaped instruction is about, or null when the instruction is not a read of a
+ * file the Pilot could already have.
+ *
+ * Prefers the first backtick-quoted path, because that is how the Pilot writes them; falls back to
+ * a bare `dir/file.ext` token. One path only: a multi-file read is keyed on its first file, which
+ * is enough to catch the observed shape (one file, many ranges) without inventing a set key.
+ */
+export function readTarget(text: string): string | null {
+	if (!READ_VERB.test(text)) return null;
+	for (const m of text.matchAll(/`([^`\n]+)`/g)) {
+		const candidate = normalisePath(m[1] ?? "");
+		if (candidate && HAS_PATH_SHAPE(candidate)) return candidate;
+	}
+	const bare = text.match(BARE_PATH);
+	return bare ? normalisePath(bare[1] ?? "") : null;
+}
+
+export type RereadVerdict = { verdict: "ok" } | { verdict: "note"; count: number; steps: number[] };
+
+/**
+ * Has this run already read `path`?
+ *
+ * `sentReads` is one entry per instruction actually driven into the engine, in order — the read
+ * target for a read, `""` for anything else — so an index here is the same 1-based instruction
+ * ordinal {@link repetitionVerdict} reports, and "at step 3" means step 3. Whole run, not a window:
+ * the second read of a file is worth a sentence whenever it happens, and a sentence is all this is.
+ */
+export function rereadVerdict(sentReads: readonly string[], path: string): RereadVerdict {
+	const key = normalisePath(path);
+	if (!key) return { verdict: "ok" };
+	const steps: number[] = [];
+	for (let i = 0; i < sentReads.length; i++) if (normalisePath(sentReads[i] ?? "") === key) steps.push(i + 1);
+	return steps.length ? { verdict: "note", count: steps.length, steps } : { verdict: "ok" };
+}
+
+/**
+ * What the brain is told about a re-read, in the step log it already reads back.
+ *
+ * Names the path and the steps — the fact `describe()`'s 120-character label lost — and the move
+ * that is available: the content already arrived, so the next instruction is the edit.
+ */
+export function rereadNote(path: string, count: number, steps: number[]): string {
+	const where = steps.length === 1 ? `step ${steps[0]}` : `steps ${steps.join(", ")}`;
+	return (
+		`[pilot note] file \`${normalisePath(path)}\` already read ${count} time(s) at ${where} — ` +
+		"commit to edits instead of re-reading; trust the content that already arrived in the terminal and your step log."
 	);
 }

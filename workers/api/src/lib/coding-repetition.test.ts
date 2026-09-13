@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
 	instructionKey,
+	normalisePath,
+	readTarget,
 	renderPaneForPilot,
 	repeatCaution,
 	repeatNote,
 	repeatStopDetail,
 	repetitionVerdict,
+	rereadNote,
+	rereadVerdict,
 	PILOT_PANE_CHARS,
 	REPEAT_STOP_AT,
 	REPEAT_WINDOW,
@@ -148,5 +152,103 @@ describe("renderPaneForPilot — the Pilot is told the size of its own blind spo
 		const out = renderPaneForPilot("B".repeat(PILOT_PANE_CHARS + 10));
 		expect(out).toMatch(/put what you need in its REPLY/);
 		expect(out).not.toMatch(/bounded slice/);
+	});
+});
+
+describe("readTarget — which file a read-shaped instruction is about (#807)", () => {
+	it("takes the backtick-quoted path of a quote-lines instruction, the observed shape", () => {
+		expect(readTarget("Read `agents/coder/web/src/CodingTab.tsx` and quote lines 1-80 verbatim in your reply.")).toBe(
+			"agents/coder/web/src/CodingTab.tsx",
+		);
+		expect(readTarget("Quote lines 540 to 680 of `workers/api/src/lib/coding-loop.ts` verbatim.")).toBe("workers/api/src/lib/coding-loop.ts");
+	});
+
+	it("falls back to a bare dir/file.ext token when nothing is backtick-quoted", () => {
+		expect(readTarget("Run: sed -n '1,100p' workers/api/src/lib/coding-loop.ts")).toBe("workers/api/src/lib/coding-loop.ts");
+		expect(readTarget("cat src/index.ts and tell me the exports")).toBe("src/index.ts");
+	});
+
+	it("is null for an instruction that names a file but does not read it", () => {
+		expect(readTarget("Edit `src/x.ts` so that foo returns bar, then run the tests.")).toBeNull();
+		expect(readTarget("Now implement the fix in `workers/api/src/lib/coding-loop.ts` and commit.")).toBeNull();
+	});
+
+	it("is null for a read with no path, and ignores backticks that are not paths", () => {
+		expect(readTarget("Read the error and tell me what it says.")).toBeNull();
+		expect(readTarget("Read `git status` output and quote it.")).toBeNull();
+	});
+
+	it("normalises the path it returns", () => {
+		expect(readTarget("Show me `./src/x.ts` in full.")).toBe("src/x.ts");
+	});
+});
+
+describe("rereadVerdict — the same file, keyed on its path, not on the prose (#807)", () => {
+	it("passes the first read of a file", () => {
+		expect(rereadVerdict([], "src/x.ts")).toEqual({ verdict: "ok" });
+		expect(rereadVerdict(["", ""], "src/x.ts")).toEqual({ verdict: "ok" });
+	});
+
+	it("notes the second read with count 1 and the step of the first", () => {
+		expect(rereadVerdict(["src/x.ts"], "src/x.ts")).toEqual({ verdict: "note", count: 1, steps: [1] });
+	});
+
+	it("notes the third read with count 2 and both earlier steps", () => {
+		expect(rereadVerdict(["src/x.ts", "", "src/x.ts"], "src/x.ts")).toEqual({ verdict: "note", count: 2, steps: [1, 3] });
+	});
+
+	it("keeps two different files apart — both are first reads", () => {
+		expect(rereadVerdict(["src/a.ts"], "src/b.ts")).toEqual({ verdict: "ok" });
+		expect(rereadVerdict(["src/b.ts"], "src/a.ts")).toEqual({ verdict: "ok" });
+	});
+
+	it("reports instruction ordinals, not read ordinals — an empty entry is a sent instruction that read nothing", () => {
+		// Step 1 read the file, step 2 edited it (no read), step 3 read it again.
+		expect(rereadVerdict(["src/x.ts", ""], "src/x.ts")).toEqual({ verdict: "note", count: 1, steps: [1] });
+		expect(rereadVerdict(["", "src/x.ts"], "src/x.ts")).toEqual({ verdict: "note", count: 1, steps: [2] });
+	});
+
+	it("normalises a leading ./ and whitespace on both sides of the comparison", () => {
+		expect(normalisePath(" ./src/x.ts ")).toBe("src/x.ts");
+		expect(rereadVerdict(["./src/x.ts"], "src/x.ts")).toEqual({ verdict: "note", count: 1, steps: [1] });
+		expect(rereadVerdict(["src/x.ts"], "  ./src/x.ts")).toEqual({ verdict: "note", count: 1, steps: [1] });
+	});
+
+	it("never matches an empty path against the empty entries", () => {
+		expect(rereadVerdict(["", ""], "")).toEqual({ verdict: "ok" });
+		expect(rereadVerdict(["", ""], " ./ ")).toEqual({ verdict: "ok" });
+	});
+
+	it("catches the #807 shape: overlapping ranges of one file are one path", () => {
+		const reads = [
+			"Read `agents/coder/web/src/CodingTab.tsx` and quote lines 1-100 verbatim.",
+			"Quote lines 1-50 of `agents/coder/web/src/CodingTab.tsx` verbatim.",
+			"Show me lines 80-200 of `agents/coder/web/src/CodingTab.tsx`.",
+		];
+		const sent: string[] = [];
+		const verdicts = reads.map((text) => {
+			const t = readTarget(text);
+			const v = rereadVerdict(sent, t ?? "");
+			sent.push(t ?? "");
+			return v;
+		});
+		// The payload key sees three different instructions; the path key sees one file three times.
+		expect(new Set(reads.map(instructionKey)).size).toBe(3);
+		expect(verdicts).toEqual([{ verdict: "ok" }, { verdict: "note", count: 1, steps: [1] }, { verdict: "note", count: 2, steps: [1, 2] }]);
+	});
+});
+
+describe("rereadNote — what the brain is told about a re-read (#807)", () => {
+	it("names the file, the count, the step, and the move", () => {
+		const note = rereadNote("src/x.ts", 1, [1]);
+		expect(note).toBe(
+			"[pilot note] file `src/x.ts` already read 1 time(s) at step 1 — commit to edits instead of re-reading; trust the content that already arrived in the terminal and your step log.",
+		);
+	});
+
+	it("pluralises the steps and normalises the path", () => {
+		const note = rereadNote("./src/x.ts", 2, [1, 3]);
+		expect(note).toContain("file `src/x.ts` already read 2 time(s) at steps 1, 3");
+		expect(note).toContain("commit to edits instead of re-reading");
 	});
 });
