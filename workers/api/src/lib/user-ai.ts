@@ -169,6 +169,76 @@ function normalizeForAnthropic(
 	return merged;
 }
 
+/**
+ * One ordered part of a system prompt (#768).
+ *
+ * A system message's `content` is either a string — one block, cached whole, which is what every
+ * caller sent before this — or an array of these. The array exists because the provider's cache
+ * matches an identical PREFIX: a chat prompt that interleaves per-turn facts (the clock, retrieved
+ * documents, the terminal tail) with fixed instructions changes early, so everything after the
+ * first changing byte is re-written to the cache on every turn. Splitting it lets the fixed part
+ * be read back instead.
+ *
+ * `cache` places a breakpoint at the END of the block. `label` names the block in prompt-section
+ * traces and is never sent.
+ */
+export interface SystemPromptBlock {
+	text: string;
+	cache?: boolean;
+	label?: string;
+}
+
+/** Anthropic accepts at most four cache breakpoints per request. */
+const MAX_CACHE_BREAKPOINTS = 4;
+
+export function isSystemPromptBlocks(content: unknown): content is SystemPromptBlock[] {
+	return Array.isArray(content) && content.every((b) => b !== null && typeof b === "object" && typeof (b as SystemPromptBlock).text === "string");
+}
+
+/**
+ * The system prompt as ONE string, for a provider with no notion of blocks.
+ *
+ * Joined with nothing, because the builders already open each section with its own newlines: the
+ * flattened text is byte-identical to what a single string builder would have produced.
+ */
+export function systemPromptText(content: unknown): string {
+	return isSystemPromptBlocks(content) ? content.map((b) => b.text).join("") : String(content ?? "");
+}
+
+/**
+ * Prompt-section trace entries for a system message: one per block (#768), so a run's trace shows
+ * the cached half and the per-turn half separately — the split is only worth what that difference
+ * measures. A string stays one section under `label`, as it was traced before.
+ */
+export function systemPromptSections(label: string, content: unknown): Array<{ label: string; value: unknown }> {
+	return isSystemPromptBlocks(content) ? content.map((b) => ({ label: `${label}.${b.label ?? "block"}`, value: b.text })) : [{ label, value: content }];
+}
+
+/**
+ * The Anthropic `system` field for a system message's content.
+ *
+ * A string becomes one cached block, as it always has. Blocks keep their order; empty ones are
+ * dropped (the API rejects an empty text block, and an absent section is simply absent); a
+ * breakpoint goes on each block marked `cache`, keeping the LAST four when more are asked for —
+ * a later breakpoint already covers the prefix before it, so it is the earlier ones that are
+ * redundant. Returns undefined when nothing is left to send.
+ */
+type AnthropicSystemBlock = { type: "text"; text: string; cache_control?: { type: "ephemeral" } };
+
+export function anthropicSystemBlocks(content: unknown): AnthropicSystemBlock[] | undefined {
+	if (!isSystemPromptBlocks(content)) {
+		const text = String(content ?? "");
+		return text ? [{ type: "text", text, cache_control: { type: "ephemeral" } }] : undefined;
+	}
+	const kept = content.filter((b) => b.text.length > 0);
+	if (!kept.length) return undefined;
+	const cached = kept.filter((b) => b.cache);
+	const breakpoints = new Set(cached.slice(-MAX_CACHE_BREAKPOINTS));
+	return kept.map((b): AnthropicSystemBlock =>
+		breakpoints.has(b) ? { type: "text", text: b.text, cache_control: { type: "ephemeral" } } : { type: "text", text: b.text },
+	);
+}
+
 async function runAnthropic(
 	env: Env,
 	userId: string | undefined,
@@ -191,7 +261,11 @@ async function runAnthropic(
 	// Prompt-cache the (large, stable) system prompt so repeated calls within a run
 	// — the apply loop fires one per step — reprocess it from cache instead of
 	// re-paying for it each time. Makes the per-step cost flat instead of growing.
-	if (systemMsg) anthropicBody.system = [{ type: "text", text: String(systemMsg.content), cache_control: { type: "ephemeral" } }];
+	// A caller whose prompt mixes stable text with per-turn facts sends BLOCKS instead (#768).
+	if (systemMsg) {
+		const system = anthropicSystemBlocks(systemMsg.content);
+		if (system) anthropicBody.system = system;
+	}
 
 	// Convert tools to Anthropic format (deduplicate by name)
 	if (body.tools && Array.isArray(body.tools) && body.tools.length > 0) {
@@ -470,6 +544,20 @@ async function readAnthropicStream(
 	return assembler.finish();
 }
 
+/**
+ * Workers AI takes the system prompt as a plain string, so blocks (#768) are joined back into
+ * exactly the text a single-string builder would have sent. Anything else passes through untouched.
+ */
+function withFlatSystemPrompt(body: unknown): unknown {
+	const messages = (body as { messages?: unknown })?.messages;
+	if (!Array.isArray(messages)) return body;
+	if (!messages.some((m) => m?.role === "system" && isSystemPromptBlocks(m.content))) return body;
+	return {
+		...(body as Record<string, unknown>),
+		messages: messages.map((m) => (m?.role === "system" && isSystemPromptBlocks(m.content) ? { ...m, content: systemPromptText(m.content) } : m)),
+	};
+}
+
 async function runCloudflareAi(
 	env: Env,
 	userId: string | undefined,
@@ -496,7 +584,7 @@ async function runCloudflareAi(
 					Authorization: `Bearer ${credentials.token}`,
 					"Content-Type": "application/json",
 				},
-				body: JSON.stringify(body),
+				body: JSON.stringify(withFlatSystemPrompt(body)),
 				signal: controller.signal,
 			},
 		);

@@ -25,7 +25,7 @@ import { executeTool, type ToolCallRequest, type ToolCallResult } from "./lib/to
 import { normalizeToolCalls, parseToolCallsFromText } from "./lib/parse-tool-calls.js";
 import { honestReply, toolLogWithNotices, type ParsedReply } from "./lib/invented-results.js";
 import { logEvent, logToolFailure } from "./lib/events.js";
-import { runUserWorkersAi } from "./lib/user-ai.js";
+import { runUserWorkersAi, systemPromptSections } from "./lib/user-ai.js";
 import { CHAT_MAX_TOKENS, hitOutputCap, truncationNotice } from "./lib/reply-truncation.js";
 import { withholdConstrainedConnectorTools, type TemplatePreviewCapabilities } from "./lib/template-preview-tools.js";
 import { capToolResult, toolLogLine } from "./lib/tool-result-cap.js";
@@ -208,6 +208,7 @@ export async function runAgentThink(opts: {
 	const behaviour = resolveBehaviour(agentCfg.behaviour, instanceCfg.behaviour);
 
 	let systemPrompt = state.systemPrompt;
+	let turnContext = ""; // What is true THIS turn, kept out of the cached half (#768): "Three halves", agent-think-prompt.ts.
 
 	// Placed BEFORE the honesty/safety text below, not after. `persona` is free subscriber text;
 	// it configures manner, and must not be positioned to outrank "never claim an action
@@ -288,18 +289,18 @@ export async function runAgentThink(opts: {
 	// ragContextOrNotice applies that fence AND turns a retrieval OUTAGE into an explicit notice
 	// rather than omitting the block (#628), an omission the model reads as "there are no docs".
 	const ragContext = await ragContextOrNotice(engine, lastUserMessage, { env, agentId: state.agentId, userId });
-	if (ragContext) systemPrompt += `\n\n${ragContext}`;
+	if (ragContext) turnContext += `\n\n${ragContext}`;
 
 	if (memory.length > 0) {
 		// Provenance and AGE for every summary-derived entry (#495): one instance carried a false
 		// "write access is not enabled" in the same prompt as "[write — consent GRANTED]", with no
 		// date on either to break the tie. Why, and the wording, in lib/memory-prompt.ts.
-		systemPrompt += memoryPrompt(memory, { now: turnStartedAt, timeZone: ownerTimeZone });
+		turnContext += memoryPrompt(memory, { now: turnStartedAt, timeZone: ownerTimeZone });
 		// Self-heal the entries written before there was anywhere else to put them (#226). These
 		// exist on live agents and can't be reached by a D1 migration — memory lives in the DO — so
 		// the agent moves its own, once, the next time it is asked about them. A user-set stray is
 		// migrated but never marked for deletion (#230) — see behaviourStrayPrompt.
-		systemPrompt += behaviourStrayPrompt(memory);
+		turnContext += behaviourStrayPrompt(memory);
 	}
 
 	// Emitted unconditionally, NOT inside the memory block above — an agent with no memory yet is
@@ -329,7 +330,7 @@ export async function runAgentThink(opts: {
 	// Provenance, the staleness cutoff and the injection cap live in lib/agent-tasks.ts (#337) —
 	// this block is agent-WRITABLE durable state on the instruction path, so what reaches the
 	// prompt is a decision worth testing rather than an inline filter.
-	systemPrompt += renderActiveTasks(tasks);
+	turnContext += renderActiveTasks(tasks);
 
 	// ## Your Agents (#330) — the standing DIRECTION this supervisor holds for each subordinate.
 	//
@@ -346,16 +347,16 @@ export async function runAgentThink(opts: {
 	const supervisionTools = toolNamesFor(capabilities);
 	if (userId && (supervisionTools.has("delegate_goal") || supervisionTools.has("list_subordinates"))) {
 		const roster = await directionRosterFor(env, userId, state.agentId).catch(() => []);
-		systemPrompt += renderDirections(roster);
+		turnContext += renderDirections(roster);
 	}
 
 	if (userId) {
 		const userCtx = await engine.getUserContext(userId);
 		await engine.touchUserContext(userId);
 		if (Object.keys(userCtx.preferences).length > 0) {
-			systemPrompt += "\n\n## User Preferences\n";
+			turnContext += "\n\n## User Preferences\n";
 			for (const [key, value] of Object.entries(userCtx.preferences)) {
-				systemPrompt += `- ${key}: ${value}\n`;
+				turnContext += `- ${key}: ${value}\n`;
 			}
 		}
 	}
@@ -383,7 +384,7 @@ export async function runAgentThink(opts: {
 	// from the owner's account preferences, already in hand from the join above; UNSET is honest and
 	// keeps the block in UTC rather than inventing a locale. See `lib/agent-clock.ts`.
 	// (`ownerTimeZone` is resolved with the config read above — earlier blocks need it too.)
-	systemPrompt += clockPrompt(turnStartedAt, ownerTimeZone);
+	turnContext += clockPrompt(turnStartedAt, ownerTimeZone);
 
 	// The voice channel the agent is heard through and does not own (#340). Unconditional: voice is a
 	// client feature of every agent's chat, so the denial is true for all of them. The wording lives
@@ -392,8 +393,8 @@ export async function runAgentThink(opts: {
 
 	// The middle of the turn — gather what this agent IS and what it can SEE, and fold it into the
 	// messages (#777). Extracted to `agent-think-prompt.ts`: 371 lines and eleven live lookups, and
-	// the only seam in this function wide enough to be worth cutting. `systemPrompt` goes IN
-	// partially built (seventeen append sites above) and comes back only inside `aiMessages`.
+	// the only seam in this function wide enough to be worth cutting. `systemPrompt` and `turnContext`
+	// go IN partially built and come back only inside `aiMessages`.
 	const { aiMessages, styleReminder, effectiveModel, useTools } = await buildPromptBlock({
 		state,
 		messages,
@@ -410,7 +411,7 @@ export async function runAgentThink(opts: {
 		subscriberRules,
 		settingsSchema,
 		settingsValues,
-		systemPrompt,
+		systemPrompt, turnContext,
 	});
 
 	/**
@@ -439,7 +440,7 @@ export async function runAgentThink(opts: {
 				promptSource: "chat",
 				promptPhase: body.tools?.length ? "tool_round" : body.toolChoice === "none" ? "prose_only" : "reply",
 				promptSections: [
-					{ label: "chat.system", value: system },
+					...systemPromptSections("chat.system", system),
 					{ label: "chat.messages", value: nonSystem },
 					{ label: "chat.tools", value: body.tools },
 				],

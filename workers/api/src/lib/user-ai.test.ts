@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { classifyCodingFailure } from "./coding-failure.js";
 import { encryptKey } from "./crypto.js";
 import {
+	anthropicSystemBlocks,
 	encodeCloudflareAiCredentials,
+	systemPromptSections,
+	systemPromptText,
 	parseCloudflareAiCredentials,
 	runUserWorkersAi,
 	UserAiCredentialsError,
@@ -227,6 +230,90 @@ function sseResponse(text: string, chunkSize = 0): Response {
 	});
 	return new Response(stream, { headers: { "Content-Type": "text/event-stream" } });
 }
+
+describe("system prompt blocks — the cacheable half and the per-turn half (#768)", () => {
+	const BLOCKS = [
+		{ label: "stable", text: "You are the Coder.\n\nHONESTY rules.", cache: true },
+		{ label: "turn", text: "\n\nThe time is 14:02." },
+		{ label: "closing", text: "\n\nSTYLE: be brief.", cache: true },
+	];
+
+	it("a plain string is still ONE cached block, exactly as every existing caller sends it", () => {
+		expect(anthropicSystemBlocks("sys")).toEqual([{ type: "text", text: "sys", cache_control: { type: "ephemeral" } }]);
+	});
+
+	it("keeps block order and puts a breakpoint only where one was asked for", () => {
+		expect(anthropicSystemBlocks(BLOCKS)).toEqual([
+			{ type: "text", text: BLOCKS[0].text, cache_control: { type: "ephemeral" } },
+			// No breakpoint on the per-turn block: one here would write a fresh cache entry every turn.
+			{ type: "text", text: BLOCKS[1].text },
+			{ type: "text", text: BLOCKS[2].text, cache_control: { type: "ephemeral" } },
+		]);
+	});
+
+	it("never sends a label — it names the block in traces, it is not part of the provider's schema", () => {
+		expect(JSON.stringify(anthropicSystemBlocks(BLOCKS))).not.toContain("label");
+	});
+
+	it("drops an empty block rather than sending one the API rejects, and sends nothing when all are empty", () => {
+		// A turn with no memory, no tasks and no repos has an empty per-turn half — that is common.
+		expect(anthropicSystemBlocks([BLOCKS[0], { label: "turn", text: "" }, BLOCKS[2]])?.map((b) => b.text)).toEqual([BLOCKS[0].text, BLOCKS[2].text]);
+		expect(anthropicSystemBlocks([{ text: "" }, { text: "", cache: true }])).toBeUndefined();
+		expect(anthropicSystemBlocks("")).toBeUndefined();
+	});
+
+	it("keeps the LAST four breakpoints when more are asked for — the provider allows four", () => {
+		const many = Array.from({ length: 6 }, (_, i) => ({ text: `block ${i}`, cache: true }));
+		const marked = (anthropicSystemBlocks(many) ?? []).map((b) => Boolean(b.cache_control));
+		expect(marked).toEqual([false, false, true, true, true, true]);
+	});
+
+	it("traces one prompt section per block, and a string as the single section it always was", () => {
+		expect(systemPromptSections("chat.system", BLOCKS).map((s) => s.label)).toEqual(["chat.system.stable", "chat.system.turn", "chat.system.closing"]);
+		expect(systemPromptSections("chat.system", "sys")).toEqual([{ label: "chat.system", value: "sys" }]);
+	});
+
+	it("flattens to exactly the string a single builder would have produced", () => {
+		expect(systemPromptText(BLOCKS)).toBe(BLOCKS.map((b) => b.text).join(""));
+		expect(systemPromptText("sys")).toBe("sys");
+	});
+
+	it("reaches the Anthropic request body as separate blocks", async () => {
+		const env = await envWithAnthropicKey();
+		let sentBody: { system?: unknown; messages: unknown[] } = { messages: [] };
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: string, init: RequestInit) => {
+				sentBody = JSON.parse(init.body as string);
+				return anthropicSse({ content: [{ type: "text", text: "ok" }], usage: { input_tokens: 1, output_tokens: 1 } });
+			}),
+		);
+		await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", {
+			messages: [{ role: "system", content: BLOCKS }, { role: "user", content: "hi" }],
+		});
+		expect(sentBody.system).toEqual(anthropicSystemBlocks(BLOCKS));
+		expect(sentBody.messages).toEqual([{ role: "user", content: "hi" }]);
+	});
+
+	it("reaches Workers AI as one plain string — that API has no blocks", async () => {
+		const { env } = envWithCloudflareKey(await encryptedCloudflareRow());
+		let sentBody: { messages: Array<{ role: string; content: unknown }> } = { messages: [] };
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: string, init: RequestInit) => {
+				sentBody = JSON.parse(init.body as string);
+				return Response.json({ success: true, result: { response: "ok" } });
+			}),
+		);
+		await runUserWorkersAi(env, "user-1", "@cf/meta/llama-3.2-3b-instruct", {
+			messages: [{ role: "system", content: BLOCKS }, { role: "user", content: "hi" }],
+		});
+		expect(sentBody.messages).toEqual([
+			{ role: "system", content: systemPromptText(BLOCKS) },
+			{ role: "user", content: "hi" },
+		]);
+	});
+});
 
 describe("runAnthropic message normalization", () => {
 	it("drops leading assistant messages and merges consecutive same-role turns", async () => {

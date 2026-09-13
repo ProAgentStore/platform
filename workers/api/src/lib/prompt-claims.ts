@@ -519,7 +519,7 @@ export function findSourceClaims(source: string): SourceClaim[] {
 export interface PromptReach {
 	/** Module paths relative to `workers/api/src`, e.g. `lib/memory-prompt.ts`. Sorted, unique. */
 	modules: string[];
-	/** `systemPrompt +=` statements parsed. */
+	/** `systemPrompt +=` / `turnContext +=` / `closingRules +=` statements parsed. */
 	appendSites: number;
 	/** Names the import map resolved to a relative module. */
 	importedNames: number;
@@ -561,7 +561,9 @@ export function promptModulesReachedBy(source: string): PromptReach {
 
 	const modules = new Set<string>();
 	const unresolved = new Set<string>();
-	const sites = statementsAfter(code, /systemPrompt\s*\+=/g);
+	// Three names since #768: the chat prompt is assembled as a cached stable half, a per-turn half and
+	// the closing rules. A section is prompt text whichever half it lands in, so all three are read.
+	const sites = statementsAfter(code, /\b(?:systemPrompt|turnContext|closingRules)\s*\+=/g);
 	for (const site of sites) {
 		for (const id of identifiersIn(site)) {
 			const direct = imports.get(id);

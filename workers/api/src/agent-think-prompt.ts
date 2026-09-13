@@ -20,14 +20,23 @@
  * are the incidents: an agent describing a console tab it does not have, and one denying it could
  * do work its own executor performs.
  *
- * It also does not START the prompt. `systemPrompt` arrives PARTIALLY BUILT — seventeen append
- * sites precede this in `runAgentThink` — so the contract is "continue appending", which is why it
- * is an input as well as being folded into the returned `aiMessages`.
+ * It also does not START the prompt. `systemPrompt` and `turnContext` arrive PARTIALLY BUILT — append
+ * sites precede this in `runAgentThink` — so the contract is "continue appending", which is why they
+ * are inputs as well as being folded into the returned `aiMessages`.
+ *
+ * ── Three halves, not one string (#768)
+ *
+ * Every section lands in exactly one of: `systemPrompt` (what the agent IS — fixed across turns,
+ * cached), `turnContext` (what is true THIS turn — clock, retrieval, memory, tasks, runs, repo and
+ * session state, deployment), or `closingRules` (honesty and style, kept LAST because end position
+ * carries weight). Order within each is the order it always had. A new section goes in the half that
+ * matches how often it changes: a per-turn fact appended to `systemPrompt` silently turns the cache
+ * back off, and `agent-think-prompt-cache.test.ts` is what notices.
  *
  * ── The guard that moved with it
  *
  * `prompt-claims.test.ts` DERIVES the set of prompt-contributing modules by scanning for
- * `systemPrompt +=` statements rather than listing them, because (its own words) "a hand-typed
+ * `systemPrompt +=` / `turnContext +=` / `closingRules +=` statements rather than listing them, because (its own words) "a hand-typed
  * denominator cannot fail — it can only be short, and a short one prints the same green tick as a
  * complete one". Twenty-six of the file's forty-three append sites are in here, reaching six
  * modules that appear nowhere else. That test now scans BOTH files and asserts that dropping either
@@ -57,6 +66,7 @@ import { describeFacts } from "./lib/runner-availability.js";
 import { callRunner, READ_TIMEOUT_MS } from "./lib/runner-client.js";
 import { templatePreviewNote, type TemplatePreviewCapabilities } from "./lib/template-preview-tools.js";
 import { describeTerminal, renderTerminalLine } from "./lib/terminal-label.js";
+import type { SystemPromptBlock } from "./lib/user-ai.js";
 import { recentWorkPrompt } from "./lib/work-report.js";
 import type { Env } from "./types.js";
 
@@ -120,12 +130,14 @@ export interface PromptBlockContext {
 	settingsValues: ReturnType<typeof resolveSettingsValues>;
 	/** The prompt SO FAR. This continues it; it does not start it. */
 	systemPrompt: string;
+	/** The per-turn facts SO FAR (#768) — the half of the prompt that is not cacheable across turns. */
+	turnContext: string;
 }
 
 /**
  * What the rest of the turn needs back.
  *
- * `systemPrompt` is deliberately NOT here: it has no reader after this stretch — it is folded into
+ * `systemPrompt` / `turnContext` / `closingRules` are deliberately NOT here: none has a reader after this stretch — they are folded into
  * `aiMessages[0]` and never touched again. Returning it anyway would invite a caller to append to a
  * string the model will never see, which is the quietest possible bug on a prompt path.
  */
@@ -166,6 +178,12 @@ export async function buildPromptBlock(ctx: PromptBlockContext): Promise<PromptB
 		settingsValues,
 	} = ctx;
 	let systemPrompt = ctx.systemPrompt;
+	let turnContext = ctx.turnContext;
+	// The closing rules (#768): honesty, style, and the translation FINAL RULE. They were the end of
+	// the prompt on purpose — end position carries the most weight — and moving the per-turn facts
+	// out of the middle must not change that. Without this half, retrieved documents and terminal
+	// output (attacker-writable, fenced) would become the LAST thing the model reads, after every rule.
+	let closingRules = "";
 
 	// ── What this agent IS (#255) ────────────────────────────────────────────────────────────
 	//
@@ -215,7 +233,7 @@ export async function buildPromptBlock(ctx: PromptBlockContext): Promise<PromptB
 		]);
 		// The zone rides along so a run's absolute time is FORMATTED here rather than converted by the
 		// model (#329) — the reported symptom was a Lead narrating run times in UTC.
-		systemPrompt += recentWorkPrompt(recentRuns, turnStartedAt, { delegated, timeZone: ownerTimeZone });
+		turnContext += recentWorkPrompt(recentRuns, turnStartedAt, { delegated, timeZone: ownerTimeZone });
 	}
 
 	// Under-message translation is on → the PLATFORM displays translations (and, when
@@ -268,10 +286,10 @@ export async function buildPromptBlock(ctx: PromptBlockContext): Promise<PromptB
 				else if (job.status !== "error") pending.push(key);
 			}
 			if (ready.length > 0 || pending.length > 0) {
-				systemPrompt += "\n\n## Indexed repositories";
-				if (ready.length) systemPrompt += `\nReady: ${ready.join("; ")}.`;
-				if (pending.length) systemPrompt += `\nStill indexing (ask again shortly): ${pending.join(", ")}.`;
-				systemPrompt += indexedReposPrompt(selfModel, plainSpeech);
+				turnContext += "\n\n## Indexed repositories";
+				if (ready.length) turnContext += `\nReady: ${ready.join("; ")}.`;
+				if (pending.length) turnContext += `\nStill indexing (ask again shortly): ${pending.join(", ")}.`;
+				turnContext += indexedReposPrompt(selfModel, plainSpeech);
 			}
 		}
 	} catch {
@@ -280,7 +298,7 @@ export async function buildPromptBlock(ctx: PromptBlockContext): Promise<PromptB
 		// any repositories" — a confident claim about the account, manufactured from a DO read
 		// that failed. Said in the same vocabulary the terminal block below uses for exactly this
 		// problem: an unreadable thing is reported as unreadable, never as absent.
-		systemPrompt +=
+		turnContext +=
 			"\n\n## Indexed repositories\nUNAVAILABLE this turn — the repository index could not be read. Do NOT conclude that nothing is indexed, and do NOT answer from memory: say plainly that you could not check.";
 	}
 
@@ -296,7 +314,7 @@ export async function buildPromptBlock(ctx: PromptBlockContext): Promise<PromptB
 				// in `agent-style-prompt.ts`; the conn rides along, so the fan-out below re-probes nothing.
 				const { facts, conn: boundConn } = await runtimeConnectivityWithConn(env, state.agentId, userId).catch(() => ({ facts: null, conn: null }));
 				const runnerOnline = facts?.relayConnected ?? false;
-				systemPrompt += runnerStatusPrompt(selfModel, facts ? describeFacts(facts) : null);
+				turnContext += runnerStatusPrompt(selfModel, facts ? describeFacts(facts) : null);
 				// #416: the block is a pure function now, not a ternary chain. The chain read
 				// `cloneError` on exactly ONE branch and printed the raw enum token for every status it
 				// did not enumerate — so #405's relayable diagnosis ("the configured checkout … exists
@@ -308,7 +326,7 @@ export async function buildPromptBlock(ctx: PromptBlockContext): Promise<PromptB
 				// states OWNERSHIP (which repository is mine, and where), this one states HEALTH
 				// (whether there is code at that path). Verified before wiring it — neither
 				// `agent-self-description.ts` nor `agent-style-prompt.ts` reads `cloneStatus` at all.
-				systemPrompt += attachedReposPrompt(repos);
+				turnContext += attachedReposPrompt(repos);
 				const sessions = await listSessions(env, state.agentId, userId);
 				const active = sessions.filter((s) => s.status === "active");
 				if (active.length > 0) {
@@ -334,17 +352,17 @@ export async function buildPromptBlock(ctx: PromptBlockContext): Promise<PromptB
 							updatedAt: s.updatedAt ?? null,
 						});
 					}));
-					systemPrompt += "\n## Active Coding Sessions\n";
+					turnContext += "\n## Active Coding Sessions\n";
 					active.forEach((s, idx) => {
 						const repo = repos.find((r) => r.id === s.repoId);
-						systemPrompt += `- ${repo?.name || s.repoId} — engine: ${s.launchCommand || s.clientType || "claude"}\n`;
+						turnContext += `- ${repo?.name || s.repoId} — engine: ${s.launchCommand || s.clientType || "claude"}\n`;
 						const line = renderTerminalLine(terminals[idx], ownerTimeZone);
-						if (line) systemPrompt += `${line}\n`;
+						if (line) turnContext += `${line}\n`;
 					});
 				} else {
-					systemPrompt += noActiveSessionPrompt(selfModel);
+					turnContext += noActiveSessionPrompt(selfModel);
 				}
-				systemPrompt +=
+				turnContext +=
 					"\nTrust each terminal line's label literally: 'CURRENT terminal … actively running' is live; 'session IDLE … existing scrollback' means the text on screen may be OLD and does NOT prove anything just happened; 'UNAVAILABLE this turn' means you could not read it — do NOT guess what it says; 'Runner OFFLINE' means nothing is running. Never upgrade a stale, idle, or unavailable terminal into a claim about the current code." +
 					// The "you do not drive the engine or run shell commands" NEVER that used to close
 					// this string is gone (#254) — it contradicted `start_work`. What this agent may
@@ -359,7 +377,7 @@ export async function buildPromptBlock(ctx: PromptBlockContext): Promise<PromptB
 			// Coder answer "I don't see any repos" about repositories it is attached to. The block
 			// three lines up already tells the model how to treat an unreadable terminal; a failure
 			// to read the registry at all deserves the same sentence rather than silence (#291).
-			systemPrompt +=
+			turnContext +=
 				"\n\n## Attached repositories\nUNAVAILABLE this turn — the repo and session registry could not be read. You ARE attached to repositories; their names and live state simply could not be fetched. Do NOT say you have no repos, and do NOT describe any session state.";
 		}
 	}
@@ -369,7 +387,7 @@ export async function buildPromptBlock(ctx: PromptBlockContext): Promise<PromptB
 	// an Operator answered "which repo?" from memory and "was it deployed?" from a scraped pane
 	// while the platform held both. Wording, timeout and the three lookup outcomes are in the
 	// module, which never throws.
-	systemPrompt += await deploymentContext(env, userId, instanceCfg, { now: turnStartedAt, timeZone: ownerTimeZone });
+	turnContext += await deploymentContext(env, userId, instanceCfg, { now: turnStartedAt, timeZone: ownerTimeZone });
 
 	// #100: a non-tool-capable model silently drops ALL tools (memory, collections, fetch_url,
 	// …). If this agent has tools available, upgrade to a tool-capable model for THIS turn
@@ -444,14 +462,14 @@ export async function buildPromptBlock(ctx: PromptBlockContext): Promise<PromptB
 	// `showWorking` carries this same rule (see the field's `offPrompt`), so leaving it here too
 	// would contradict a subscriber who turned it on.
 	if (behaviour.showWorking === undefined) {
-		systemPrompt += "\n\nIMPORTANT: Never output step-by-step thinking. Never say 'Step 1' or 'Step 2'.";
+		closingRules += "\n\nIMPORTANT: Never output step-by-step thinking. Never say 'Step 1' or 'Step 2'.";
 	}
 
 	// HONESTY / grounding. Real chats showed an agent tell the user a post was
 	// "successfully queued" when the tool had returned a 500, and another address the
 	// user by an invented name. Ground every claim in actual results — a false success
 	// is worse than a reported failure.
-	systemPrompt +=
+	closingRules +=
 		"\n\nHONESTY: Ground every statement in what actually happened. If a tool call returned an" +
 		" error or did not complete, say so plainly — NEVER claim an action succeeded (posted, queued," +
 		" sent, saved, filed, created) when its tool result was an error. Never invent results, statuses," +
@@ -482,7 +500,7 @@ export async function buildPromptBlock(ctx: PromptBlockContext): Promise<PromptB
 	// Length is DECLARED here, defaulted there: `undefined` means no `verbosity` was set, and only
 	// `styleGuidance` knows what silence means for this kind of agent. Passing the 2-sentence cap from
 	// here made it every agent's fallback, so it was emitted only inside plain speech (#430).
-	systemPrompt += styleGuidance({
+	closingRules += styleGuidance({
 		model: selfModel,
 		codingContext,
 		hasCodingContext,
@@ -495,7 +513,7 @@ export async function buildPromptBlock(ctx: PromptBlockContext): Promise<PromptB
 	// conversational momentum — an English "explain that again" still flipped the whole
 	// reply to English on a live run.
 	if (translationCfg?.enabled) {
-		systemPrompt +=
+		closingRules +=
 			`\n\nFINAL RULE: write your reply ONLY in the conversation language — no ${translationCfg.target || "English"} ` +
 			`sentences, no mixed-language explanations, even if the user writes in another language or recent replies ` +
 			`switched. The platform translates every reply for the user. This is the last instruction; it wins.`;
@@ -511,7 +529,17 @@ export async function buildPromptBlock(ctx: PromptBlockContext): Promise<PromptB
 	// fetched" — with no tool execution at all. The stored row is untouched and still served to the
 	// console; what is withheld is the model's reading of it. See lib/fabricated-history.ts.
 	const aiMessages: { role: string; content: unknown }[] = [
-		{ role: "system", content: systemPrompt },
+		{
+			role: "system",
+			// Two breakpoints (#768). The first is the point of the split: the fixed instructions are
+			// read back from cache on the next turn. The second keeps what the single cached block
+			// already gave the tool rounds WITHIN a turn, where the whole prompt repeats verbatim.
+			content: [
+				{ label: "stable", text: systemPrompt, cache: true },
+				{ label: "turn", text: turnContext },
+				{ label: "closing", text: closingRules, cache: true },
+			] satisfies SystemPromptBlock[],
+		},
 		...redactFabricatedHistory(messages).map((m) => ({ role: m.role, content: m.content as unknown })),
 	];
 
