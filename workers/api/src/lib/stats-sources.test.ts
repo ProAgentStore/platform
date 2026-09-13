@@ -1,7 +1,8 @@
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { STATS_SOURCES, type StatsCard } from "./stats-schema.js";
 import { COLLECTION_SCAN_CAP } from "./stats-schema.js";
-import { dayPeriod, readDaily, readPointInTime, statsPeriod, statsSourceDrift, STATS_EXECUTORS, type StatsCtx } from "./stats-sources.js";
+import { dayPeriod, readDaily, readPointInTime, RUN_STEP_BUCKETS, statsPeriod, statsSourceDrift, STATS_EXECUTORS, type StatsCtx } from "./stats-sources.js";
 import type { Env } from "../types.js";
 
 /** A D1 stub that records the SQL and the bound values, so a test can prove the scoping is in the
@@ -236,5 +237,134 @@ describe("triggers.fires (#663 — intermediate rows must not inflate the count)
 		await readPointInTime(ctx(env), card({ source: "triggers.fires", kind: "bar", params: { limit: 5 } }), statsPeriod("2026-08-06", 7));
 		expect(calls).toHaveLength(1);
 		expect(calls[0].sql).toContain("NOT IN ('running', 'received')");
+	});
+});
+
+describe("run outcome and step stats (#789) — executed against real SQLite, not text-matched", () => {
+	// The claim under test is WHICH ROWS land in WHICH BAR, which a SQL-string assertion cannot see:
+	// a CASE with an off-by-one boundary reads as correct. So the executor's own SQL runs here on the
+	// real engine, through a D1-shaped adapter (`?1`-style parameters are native to SQLite).
+	const DAY = 86_400_000;
+	const period = statsPeriod("2026-08-06", 7);
+	const inWindow = period.startMs + DAY;
+
+	function seeded(rows: Array<{ id: string; stop: string | null; steps: number; finished?: boolean; user?: string; instance?: string; startedAt?: number }>): Env {
+		const db = new DatabaseSync(":memory:");
+		db.exec(`CREATE TABLE agent_loop_runs (
+			run_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, instance_id TEXT NOT NULL, objective TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'running', stop_reason TEXT, iteration INTEGER NOT NULL DEFAULT 0,
+			max_iterations INTEGER NOT NULL, started_at INTEGER NOT NULL, finished_at INTEGER)`);
+		const insert = db.prepare("INSERT INTO agent_loop_runs VALUES (?, ?, ?, 'o', 'x', ?, ?, 50, ?, ?)");
+		for (const r of rows) {
+			const startedAt = r.startedAt ?? inWindow;
+			insert.run(r.id, r.user ?? "user-1", r.instance ?? "inst-1", r.stop, r.steps, startedAt, r.finished === false ? null : startedAt + 1000);
+		}
+		return {
+			DB: {
+				prepare: (sql: string) => ({
+					bind: (...binds: unknown[]) => ({
+						all: async () => ({ results: db.prepare(sql).all(...(binds as never[])) }),
+					}),
+				}),
+			},
+		} as unknown as Env;
+	}
+
+	const read = async (env: Env, source: string) => {
+		const v = await readPointInTime(ctx(env), card({ source, kind: "table", params: { limit: 25 } }), period);
+		if (v.type !== "groups") throw new Error("expected groups");
+		return v.rows;
+	};
+
+	describe("runs.stop_reason", () => {
+		it("splits what `runs.outcome` merges: max_iterations apart from failed, each needs-you reason apart", async () => {
+			const env = seeded([
+				{ id: "a", stop: "done", steps: 4 },
+				{ id: "b", stop: "done", steps: 6 },
+				{ id: "c", stop: "max_iterations", steps: 50 },
+				{ id: "d", stop: "failed", steps: 2 },
+				{ id: "e", stop: "engine_limit", steps: 9 },
+				{ id: "f", stop: "escalated", steps: 3 },
+			]);
+			const rows = await read(env, "runs.stop_reason");
+			// Largest first; ties have no defined order in SQL, so the rest is compared as a set.
+			expect(rows[0]).toEqual({ label: "done", value: 2 });
+			expect([...rows.slice(1)].sort((x, y) => x.label.localeCompare(y.label))).toEqual([
+				{ label: "engine_limit", value: 1 },
+				{ label: "escalated", value: 1 },
+				{ label: "failed", value: 1 },
+				{ label: "max_iterations", value: 1 },
+			]);
+		});
+
+		it("counts only FINISHED runs — a live run is not a stop reason yet", async () => {
+			const env = seeded([
+				{ id: "a", stop: "done", steps: 4 },
+				{ id: "live", stop: null, steps: 3, finished: false },
+			]);
+			expect(await read(env, "runs.stop_reason")).toEqual([{ label: "done", value: 1 }]);
+		});
+
+		it("is scoped to this instance, this user and this window", async () => {
+			const env = seeded([
+				{ id: "mine", stop: "done", steps: 1 },
+				{ id: "other-user", stop: "failed", steps: 1, user: "user-2" },
+				{ id: "other-instance", stop: "failed", steps: 1, instance: "inst-2" },
+				{ id: "before", stop: "failed", steps: 1, startedAt: period.startMs - 1 },
+				{ id: "after", stop: "failed", steps: 1, startedAt: period.endMs },
+			]);
+			expect(await read(env, "runs.stop_reason")).toEqual([{ label: "done", value: 1 }]);
+		});
+	});
+
+	describe("runs.steps", () => {
+		it("puts every boundary value in the bucket its label names", async () => {
+			const steps = [0, 1, 2, 3, 4, 6, 7, 10, 11, 20, 21, 50, 51, 1000];
+			const env = seeded(steps.map((n) => ({ id: `r${n}`, stop: "done", steps: n })));
+			expect(await read(env, "runs.steps")).toEqual([
+				{ label: "0 steps", value: 1 },
+				{ label: "1 step", value: 1 },
+				{ label: "2–3 steps", value: 2 },
+				{ label: "4–6 steps", value: 2 },
+				{ label: "7–10 steps", value: 2 },
+				{ label: "11–20 steps", value: 2 },
+				{ label: "21–50 steps", value: 2 },
+				{ label: "51+ steps", value: 2 },
+			]);
+		});
+
+		it("orders by bucket, never by count — a distribution sorted by size is not a distribution", async () => {
+			const env = seeded([
+				{ id: "a", stop: "max_iterations", steps: 40 },
+				{ id: "b", stop: "max_iterations", steps: 45 },
+				{ id: "c", stop: "max_iterations", steps: 30 },
+				{ id: "d", stop: "done", steps: 2 },
+			]);
+			expect((await read(env, "runs.steps")).map((r) => r.label)).toEqual(["2–3 steps", "21–50 steps"]);
+		});
+
+		it("omits empty buckets and live runs, and returns no rows rather than a zero when nothing finished", async () => {
+			expect(await read(seeded([{ id: "live", stop: null, steps: 7, finished: false }]), "runs.steps")).toEqual([]);
+		});
+
+		it("can return every bucket — its row cap is the bucket count, not a card limit that could cut the tail", async () => {
+			const env = seeded(RUN_STEP_BUCKETS.map((b, i) => ({ id: `r${i}`, stop: "done", steps: b.max ?? 999 })));
+			const rows = await read(env, "runs.steps");
+			expect(rows.map((r) => r.label)).toEqual(RUN_STEP_BUCKETS.map((b) => b.label));
+		});
+	});
+
+	it("declares both as bar/table only — neither can back a trend or a bare number", () => {
+		for (const id of ["runs.stop_reason", "runs.steps"]) {
+			const s = STATS_SOURCES.find((x) => x.id === id);
+			expect(s?.kinds, id).toEqual(["bar", "table"]);
+			expect(STATS_EXECUTORS[id]?.daily, id).toBeUndefined();
+		}
+	});
+
+	it("leaves `runs.outcome` grouping by status, so cards already stored keep their meaning", async () => {
+		const { env, calls } = fakeEnv({ rows: [] });
+		await readPointInTime(ctx(env), card({ source: "runs.outcome", kind: "bar", params: { limit: 5 } }), period);
+		expect(calls[0].sql).toContain("GROUP BY status");
 	});
 });

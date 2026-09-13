@@ -139,6 +139,28 @@ async function groups(ctx: StatsCtx, sql: string, limit: number, extra: unknown[
 	};
 }
 
+/**
+ * The step-count buckets for `runs.steps` (#789), smallest first. `max` is inclusive; the last
+ * bucket is open-ended. Steps are recorded as a non-negative integer (`agent_loop_runs.iteration`,
+ * `NOT NULL DEFAULT 0`), so every finished run lands in exactly one bucket.
+ */
+export const RUN_STEP_BUCKETS: ReadonlyArray<{ label: string; max: number | null }> = [
+	{ label: "0 steps", max: 0 },
+	{ label: "1 step", max: 1 },
+	{ label: "2–3 steps", max: 3 },
+	{ label: "4–6 steps", max: 6 },
+	{ label: "7–10 steps", max: 10 },
+	{ label: "11–20 steps", max: 20 },
+	{ label: "21–50 steps", max: 50 },
+	{ label: "51+ steps", max: null },
+];
+
+/** The CASE expression built from {@link RUN_STEP_BUCKETS}. Labels are constants from this file,
+ *  never input, so inlining them is not an injection path. */
+const RUN_STEP_BUCKET_SQL = `CASE ${RUN_STEP_BUCKETS.filter((b) => b.max !== null)
+	.map((b) => `WHEN iteration <= ${b.max} THEN '${b.label}'`)
+	.join(" ")} ELSE '${RUN_STEP_BUCKETS[RUN_STEP_BUCKETS.length - 1].label}' END`;
+
 function limitOf(params: Params): number {
 	const n = Number(params.limit);
 	return Number.isFinite(n) && n >= 1 ? Math.min(Math.floor(n), MAX_CARD_LIMIT) : MAX_CARD_LIMIT;
@@ -206,6 +228,42 @@ export const STATS_EXECUTORS: Record<string, Executor> = {
 				  WHERE instance_id = ?1 AND user_id = ?2 AND started_at >= ?3 AND started_at < ?4
 				  GROUP BY status ORDER BY v DESC LIMIT ?5`,
 				limitOf(params),
+				[period.startMs, period.endMs],
+			);
+		},
+	},
+
+	// #789. Finished runs only: `stop_reason` is NULL while a run is going, and grouping those as
+	// "(not set)" would put a live run in the same bar as a legacy row that never recorded one.
+	"runs.stop_reason": {
+		point(ctx, params, period) {
+			return groups(
+				ctx,
+				`SELECT stop_reason AS label, COUNT(*) AS v FROM agent_loop_runs
+				  WHERE instance_id = ?1 AND user_id = ?2 AND started_at >= ?3 AND started_at < ?4
+				    AND finished_at IS NOT NULL
+				  GROUP BY stop_reason ORDER BY v DESC LIMIT ?5`,
+				limitOf(params),
+				[period.startMs, period.endMs],
+			);
+		},
+	},
+
+	// #789. A DISTRIBUTION, so it is ordered by bucket, never by count: sorted by size, "21–50" could
+	// sit above "1" and the shape the card exists to show would be scrambled. Fixed buckets rather
+	// than one row per exact count, because a cap can be as high as 1,000 and 25 rows of exact
+	// values would silently drop the long tail — the partial-breakdown failure `groups` warns about.
+	// No median scalar either: with no finished runs it would read as "0 steps", a confident wrong
+	// number, and the buckets already show where the middle is.
+	"runs.steps": {
+		point(ctx, _params, period) {
+			return groups(
+				ctx,
+				`SELECT ${RUN_STEP_BUCKET_SQL} AS label, COUNT(*) AS v FROM agent_loop_runs
+				  WHERE instance_id = ?1 AND user_id = ?2 AND started_at >= ?3 AND started_at < ?4
+				    AND finished_at IS NOT NULL
+				  GROUP BY label ORDER BY MIN(iteration) LIMIT ?5`,
+				RUN_STEP_BUCKETS.length,
 				[period.startMs, period.endMs],
 			);
 		},

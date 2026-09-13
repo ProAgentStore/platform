@@ -178,6 +178,31 @@ export const STATS_SOURCES: readonly StatsSource[] = [
 		unit: "count",
 		params: [LIMIT_PARAM],
 	},
+	// #789. `runs.outcome` groups by STATUS, which `statusFor` deliberately coarsens for a board
+	// column: `max_iterations` files as `failed`, and `escalated` / `engine_limit` / `interrupted` /
+	// `provider_credit` all file as `needs_human`. "Does this agent finish, or burn to its cap?" is
+	// the stop reason, so it is its own source rather than a silent change to what stored
+	// `runs.outcome` cards mean.
+	{
+		id: "runs.stop_reason",
+		label: "Runs by how they ended",
+		kinds: ["bar", "table"],
+		describes: "Finished agent-loop runs grouped by why they stopped: done, max iterations, failed, cancelled, needs you, …",
+		caveat:
+			"Counts runs STARTED in the period that have since FINISHED; a run still going is not counted until it ends. The reason is the one recorded when the run stopped, not a judgement of whether its work was good.",
+		unit: "count",
+		params: [LIMIT_PARAM],
+	},
+	{
+		id: "runs.steps",
+		label: "Runs by steps taken",
+		kinds: ["bar", "table"],
+		describes: "Finished agent-loop runs grouped by how many steps they took, smallest first.",
+		caveat:
+			"Counts runs STARTED in the period that have since FINISHED, bucketed by the step count recorded at the end, whatever ended them — pair it with “Runs by how they ended” to tell a quick finish from a quick failure. A coding run counts its Pilot steps; a chat loop counts its iterations.",
+		unit: "count",
+		params: [],
+	},
 	{
 		id: "pipeline.runs",
 		label: "Pipeline runs",
