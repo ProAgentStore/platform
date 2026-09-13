@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**159 tool registrations.** 135 are always registered; 24 are gated to the console
+**162 tool registrations.** 138 are always registered; 24 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -254,6 +254,8 @@ Agent-scoped (the creator's template), not instance-scoped.
 |---|---|---|---|---|
 | `add_instance_knowledge` | Add a document to your instance's KB | write | yes | |
 | `list_instance_knowledge` | List KB documents | — | | |
+| `update_instance_knowledge` | Edit one document in place — same id; omitted fields kept; re-indexed (#613) | write | yes | |
+| `ingest_instance_knowledge_url` | Fetch a public https page into a new document (SSRF-guarded server-side, 50KB, counts toward the 20-doc cap) | write | yes | |
 | `delete_instance_knowledge` | Delete one document | destructive | yes | `delete_instance_knowledge` |
 | `search_instance_knowledge` | Vector search — what is actually retrievable | — | | |
 | `vector_stats` | Vector-store inventory grouped by source | — | | |
@@ -286,6 +288,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `list_instance_collections` | List collections on a subscribed instance | read | | |
 | `query_instance_records` | Query records | read | | |
 | `insert_instance_record` | Insert a record (respects unique/dedup constraints) | write | | |
+| `update_instance_record` | Merge fields into one existing record — omitted fields kept; schema and unique constraints enforced (#613) | write | yes | |
 | `create_instance_ticket` | Put a ticket on the board without a runner | write | | |
 
 ### Board and runtime tasks

@@ -6,6 +6,7 @@ import { z } from "zod";
 import { authedCall, authRequired, type McpEnv, jsonText, text } from "./http.js";
 import {
 	audit,
+	dryRun,
 	requirePermission,
 	type SafetyContext,
 } from "./safety.js";
@@ -209,6 +210,50 @@ export function registerStorageTools(
 				body: JSON.stringify({ data: parsed }),
 			}, env);
 			await audit(safetyFor(token), { tool: "insert_instance_record", action: "write", input: { instance_id, collection } });
+			return jsonText(result);
+		},
+	);
+
+	// #613 (knowledge writes): the console edits one record in place; MCP could insert and query but
+	// not correct, so a fix meant a new record beside the wrong one.
+	server.tool(
+		"update_instance_record",
+		"Change fields on ONE existing record in a collection on one of your subscribed instances. The fields you pass are MERGED into the record — fields you omit keep their values; this never replaces the whole record and cannot remove a field. The result is validated against the collection schema, and a value that would duplicate another record's `unique` field is refused. Returns the updated record, or `Not found` when the collection or record id does not exist. Get `record_id` from query_instance_records.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances"),
+			collection: z.string().describe("Collection name"),
+			record_id: z.string().describe("Record `id` from query_instance_records — copy it exactly."),
+			data: z.string().describe('JSON object of ONLY the fields to change, e.g. {"status":"submitted"}'),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, collection, record_id, data: dataStr, dry_run }) => {
+			const t = tokenFor(token);
+			if (!t) return authRequired();
+			const input = { instance_id, collection, record_id };
+			const denied = await requirePermission(safetyFor(token), "write", "update_instance_record", input);
+			if (denied) return denied;
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(dataStr);
+			} catch {
+				return text("Invalid data JSON");
+			}
+			// The route reads `data` as the fields to merge; an array or a scalar would reach the storage
+			// engine as something it spreads into the record, so refuse it here with a reason.
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return text("data must be a JSON object of the fields to change");
+			const endpoint = `/v1/instances/${instance_id}/collections/${encodeURIComponent(collection)}/records/${encodeURIComponent(record_id)}`;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "update_instance_record", "merge fields into one instance collection record", input, {
+					endpoint,
+					method: "PUT",
+					fields: Object.keys(parsed),
+				});
+			}
+			const result = (await authedCall(endpoint, t, { method: "PUT", body: JSON.stringify({ data: parsed }) }, env)) as { error?: string };
+			if (!result.error) {
+				await audit(safetyFor(token), { tool: "update_instance_record", action: "completed", input: { ...input, fields: Object.keys(parsed) } });
+			}
 			return jsonText(result);
 		},
 	);

@@ -410,4 +410,19 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.27 is published.
 	"0.1.28": "sha256:5104784d5f734fd2efb24f0bbe701d60ef2c4999213adb4faa0d916cb57ecaea",
+	// 0.1.29 (#613, the knowledge-writes group): three new tool NAMES, all ALWAYS-ON — 159
+	// registrations become 162, `MCP_TOOL_ALWAYS_ON` 135 → 138, `MCP_TOOL_GATED` stays 24.
+	//
+	//   * `update_instance_knowledge` (write, dry_run) — PUT /v1/instances/:id/knowledge/:docId in
+	//     `instance-tools/knowledge.ts`; sends only `title` / `content` as supplied, keeps the id.
+	//   * `ingest_instance_knowledge_url` (write, dry_run) — POST /v1/instances/:id/knowledge/ingest-url
+	//     in the same file; the DO fetches (SSRF-guarded), the dry run fetches nothing.
+	//   * `update_instance_record` (write, dry_run) — PUT /v1/instances/:id/collections/:name/records/:id
+	//     in `storage-tools.ts`, beside `insert_instance_record`; `data` is merged, never a replace.
+	//
+	// Closes that group's `KNOWN_GAPS` entry (3 routes; parity 90 → 93 reachable, 66 → 63 gaps).
+	// `SERVER_INSTRUCTIONS` did not move.
+	//
+	// Appended, never edited in place: 0.1.28 is published.
+	"0.1.29": "sha256:471c265d4651b476b45ffaf857c92dfe18eaaf8209bf83e1d044515ab77f0944",
 };

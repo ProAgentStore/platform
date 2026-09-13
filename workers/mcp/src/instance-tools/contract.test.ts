@@ -254,6 +254,7 @@ const TABLE: Record<string, Row> = {
 	billing_status: ["account", "none", null, null, "token"],
 	get_account_preferences: ["account", "none", null, null, "token"],
 	get_budget_limits: ["account", "none", null, null, "token"],
+	ingest_instance_knowledge_url: ["knowledge", "write", null, "envelope", "dry_run,instance_id,title,token,url"],
 	set_budget_limits: [
 		"account",
 		"write",
@@ -384,6 +385,7 @@ const TABLE: Record<string, Row> = {
 	system_status: ["coding", "none", null, null, "instance_id,token"],
 	ticket_thread: ["board", "none", null, null, "instance_id,task_id,token"],
 	unregister_instance_runtime: ["runtime", "destructive", "unregister_instance_runtime", "envelope", "confirm,dry_run,instance_id,token"],
+	update_instance_knowledge: ["knowledge", "write", null, "envelope", "content,document_id,dry_run,instance_id,title,token"],
 	update_profile: ["account", "write", null, "envelope", "dry_run,fields,token"],
 	upload_resume: ["apply", "write", null, "envelope", "content_base64,dry_run,filename,instance_id,token,url"],
 	usage_summary: ["account", "none", null, null, "range,token"],

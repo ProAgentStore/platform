@@ -65,7 +65,7 @@ src/
 │                         `SERVER_INSTRUCTIONS` and `PLATFORM_GUIDE` render — one copy, two channels
 ├── safety.ts             scopes, requirePermission, requireConfirmation, dryRun, audit, redact
 ├── http.ts               McpEnv, text/jsonText/authRequired, apiCall, authedCall
-├── storage-tools.ts      13 tools — collections, records, agent files, KB search, activity
+├── storage-tools.ts      14 tools — collections, records, agent files, KB search, activity
 ├── coding-tools.ts       13 tools — the coding surface: open/capture/message/restart/end a
 │                         repo's conversation, repos, overseer, diagnostics, deploy status (#683)
 ├── repo-tools.ts         GitHub helpers + starter templates (no tool registrations)
@@ -75,7 +75,7 @@ src/
     │   ── ungated: every subscriber gets these ──
     ├── base.ts           7 tools — the connector-tool gate, subscribe/cancel, chat
     ├── runtime.ts        10 tools — the `pags up` runtime + its task queue
-    ├── knowledge.ts      10 tools — documents, files, vectors, memory
+    ├── knowledge.ts      12 tools — documents (incl. in-place edit + URL ingest, #613), files, vectors, memory
     ├── observability.ts  9 tools — messages, activity, errors, trace, pipeline runs, feedback
     ├── board.ts          9 tools — the board, its columns, the per-ticket thread (#150)
     ├── settings.ts       13 tools — settings, name, instructions, operator manual, model, translation, state
@@ -94,13 +94,13 @@ src/
                           surfaces:["coding"]) + 5 loop tools (3 run + 2 objective queue)
 ```
 
-**159 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
-`coding-tools.ts` — all of them behind the `groups.has("coding")` gate — 13 in
-`storage-tools.ts`, and 112 across `instance-tools/`. 135 are always registered; 24 are
+**162 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
+`coding-tools.ts` — all of them behind the `groups.has("coding")` gate — 14 in
+`storage-tools.ts`, and 114 across `instance-tools/`. 138 are always registered; 24 are
 surface-gated (apply=4, repo=3, coding=17).
 
 Those four numbers ADD UP to the headline, and that is the point of stating them: 21 + 13
-+ 13 + 112 = 159. They said 88 until #602, which made the paragraph sum to 132 — a total the
++ 14 + 114 = 162. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added
@@ -109,7 +109,10 @@ the always-on `get_instance_connection_guide` in its own `instance-tools/guide.t
 `instance-tools/recent.ts`; and said 21 + 12 + 13 + 105 = 151 until #788 added the two
 always-on objective-queue tools (`coding_loop_queue`, `coding_loop_queue_cancel`) beside the
 three loop tools in `instance-tools/coding.ts`; and said 21 + 13 + 13 + 107 = 154 until #613
-added five always-on notification and account-preference tools to `instance-tools/account.ts`. The per-file rows in the tree above are
+added five always-on notification and account-preference tools to `instance-tools/account.ts`;
+and said 21 + 13 + 13 + 112 = 159 until #613's knowledge-writes group added `update_instance_record`
+to `storage-tools.ts` and `update_instance_knowledge` + `ingest_instance_knowledge_url` to
+`instance-tools/knowledge.ts`. The per-file rows in the tree above are
 machine-checked against `.tool(` counts; this prose sum is not, so it is the half that rots.
 
 `base.ts` was 1871 lines and 67 of the 86 instance tools THEN REGISTERED until #305 — the

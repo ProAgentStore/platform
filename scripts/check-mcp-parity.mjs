@@ -198,12 +198,6 @@ const KNOWN_GAPS = [
 	},
 	{
 		why:
-			"Knowledge writes the console has and MCP does not: edit an existing document in place, ingest a URL, and edit one record of a collection. `add_knowledge` only appends, so a correction over MCP means delete-then-add under a new id. #613.",
-		match:
-			/^[A-Z]+ \/v1\/instances\/\{\}\/(knowledge\/\{\}|knowledge\/ingest-url|collections\/\{\}\/records\/\{\})$/,
-	},
-	{
-		why:
 			"Product feedback — file, list and dismiss. `list_feedback` does not exist; an agent that hits a platform defect can only tell the user to open the console. #613.",
 		match: /^[A-Z]+ \/v1\/feedback(\/\{\})?$/,
 	},

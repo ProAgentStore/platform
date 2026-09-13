@@ -159,6 +159,12 @@ const READBACK: Record<string, string | null> = {
 	"add_instance_knowledge.title": "list_instance_knowledge",
 	"add_instance_knowledge.content": "search_instance_knowledge",
 	"add_instance_knowledge.source_url": "list_instance_knowledge",
+	// #613 knowledge writes: the same readers as the add path — an edit lands in the same document,
+	// and an ingested page is a document whose `sourceUrl` is the URL.
+	"update_instance_knowledge.title": "list_instance_knowledge",
+	"update_instance_knowledge.content": "search_instance_knowledge",
+	"ingest_instance_knowledge_url.url": "list_instance_knowledge",
+	"ingest_instance_knowledge_url.title": "list_instance_knowledge",
 	"add_knowledge.title": "list_knowledge",
 	"add_knowledge.content": "search_agent_knowledge",
 	"upload_agent_file.name": "list_agent_files",
@@ -174,6 +180,8 @@ const READBACK: Record<string, string | null> = {
 	"update_record.data": "query_records",
 	"insert_instance_record.collection": "query_instance_records",
 	"insert_instance_record.data": "query_instance_records",
+	"update_instance_record.collection": "query_instance_records",
+	"update_instance_record.data": "query_instance_records",
 
 	// ── settings / identity / behaviour ──
 	"rename_instance.name": "my_instances",

@@ -218,6 +218,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	hint_instance_task: "write",
 	ingest_repo: "write",
 	insert_instance_record: "write",
+	ingest_instance_knowledge_url: "write",
 	insert_record: "write",
 	mark_all_notifications_read: "write",
 	mark_notification_read: "write",
@@ -242,6 +243,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	set_translation_config: "write",
 	stop_instance_loop: "write",
 	update_board_ticket: "write",
+	update_instance_knowledge: "write",
+	update_instance_record: "write",
 	subscribe_agent: "write",
 	update_agent: "write",
 	update_agent_board_config: "write",
@@ -364,8 +367,13 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// `mark_notification_read`, `mark_all_notifications_read` and `set_account_preferences` write.
 	// `write` and not `destructive` for mark-all, though it has no undo: it flips read-state on rows
 	// that stay in the feed, and deletes or answers nothing — an `alert` it marks read still needs you.
+	// +3 write at #613 (knowledge writes): `update_instance_knowledge` edits a document in place,
+	// `ingest_instance_knowledge_url` adds one from a fetched page, `update_instance_record` merges
+	// fields into one record. `write` and not `destructive` for both edits: each keeps the object and
+	// its id, and an edit can be edited back — the destructive pair (`delete_instance_knowledge`, and
+	// deleting a record) stays console-only or confirm-gated as before.
 	read: 79,
-	write: 49,
+	write: 52,
 	runtime: 16,
 	destructive: 15,
 };

@@ -138,6 +138,91 @@ export function registerKnowledgeTools(server: McpServer, ctx: InstanceToolsCtx)
 		},
 	);
 
+	// ── Knowledge writes the console had and MCP did not (#613) ──────────────────
+	//
+	// `add_instance_knowledge` only APPENDS, so a correction over MCP was delete-then-add: a new id,
+	// a confirm-gated destructive call, and a window with the document gone. Editing in place keeps
+	// the id and re-indexes; ingesting a URL uses the DO's own SSRF-guarded fetch rather than asking
+	// the caller to fetch and paste.
+
+	server.tool(
+		"update_instance_knowledge",
+		"Edit one knowledge document on your private subscribed instance IN PLACE — same `document_id`, no delete-and-re-add. Pass `title`, `content`, or both; whatever you omit is left as it is. `content` REPLACES the document body (max 100KB), it is not appended. The document is re-indexed for search, and the result carries `vectorized: false` if that did not happen (indexing off, or it failed) — the edit is still saved. Get `document_id` from list_instance_knowledge.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances"),
+			document_id: z.string().describe("Knowledge document `id` from list_instance_knowledge — copy it exactly."),
+			title: z.string().optional().describe("New title. Omit to keep the current one."),
+			content: z.string().optional().describe("New full body — replaces the old one. Omit to keep the current body."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, document_id, title, content, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			// Only the fields supplied: the route keeps an absent field, so a manufactured one would be
+			// an edit the caller never asked for.
+			const body: { title?: string; content?: string } = {};
+			if (title !== undefined) body.title = title;
+			if (content !== undefined) body.content = content;
+			const input = { instance_id, document_id, fields: Object.keys(body) };
+			const denied = await requirePermission(safetyFor(token), "write", "update_instance_knowledge", input);
+			if (denied) return denied;
+			if (!Object.keys(body).length) return text("Error: pass title, content, or both — nothing to update.");
+			const endpoint = `/v1/instances/${instance_id}/knowledge/${encodeURIComponent(document_id)}`;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "update_instance_knowledge", "edit a private instance knowledge document in place", input, {
+					endpoint,
+					method: "PUT",
+					fields: Object.keys(body),
+					...(content !== undefined ? { bytes: new TextEncoder().encode(content).length } : {}),
+				});
+			}
+			const data = (await authedCall(endpoint, sessionToken, { method: "PUT", body: JSON.stringify(body) }, env)) as { id?: string; error?: string; vectorized?: boolean };
+			if (!data.error) {
+				await audit(safetyFor(token), { tool: "update_instance_knowledge", action: "completed", input, result: { id: data.id, vectorized: data.vectorized } });
+			}
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"ingest_instance_knowledge_url",
+		"Fetch a public web page into your private subscribed instance's knowledge base as a new document — the platform does the fetch, so do not fetch and paste it yourself. https only, and non-public hosts are refused (checked on every redirect). HTML is reduced to text and the document is capped at 50KB. Counts toward the instance's 20-document limit and is refused when that is full. Returns the new document, including its `id`; `title` defaults to the host name.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances"),
+			url: z.string().describe("https:// URL of a public page."),
+			title: z.string().optional().describe("Document title. Defaults to the URL's host name."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, url, title, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, url, title };
+			const denied = await requirePermission(safetyFor(token), "write", "ingest_instance_knowledge_url", input);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${instance_id}/knowledge/ingest-url`;
+			if (dry_run) {
+				// The preview does NOT fetch the page: a dry run touches no network, and "is this URL
+				// reachable and public" is decided by the fetch itself, on the server.
+				return dryRun(safetyFor(token), "ingest_instance_knowledge_url", "fetch a URL into private instance knowledge", input, {
+					endpoint,
+					method: "POST",
+					url,
+					title: title ?? "(the URL's host name)",
+				});
+			}
+			const data = (await authedCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify(title !== undefined ? { url, title } : { url }) }, env)) as {
+				id?: string;
+				error?: string;
+			};
+			if (!data.error) {
+				await audit(safetyFor(token), { tool: "ingest_instance_knowledge_url", action: "completed", input, result: { id: data.id } });
+			}
+			return jsonText(data);
+		},
+	);
+
 	server.tool(
 		"list_instance_files",
 		"List files uploaded to a private subscribed instance (PDFs, documents — the console's Knowledge → Files tab). Shows name, size, mime type, and extraction status (extracted files are vectorized and searchable via search_instance_knowledge).",
