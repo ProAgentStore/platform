@@ -163,8 +163,9 @@ export async function pendingCodingResumeNote(
 	try {
 		const prev = await lastUnfinishedRunForRepo(env, params.userId, params.instanceId, params.sessionId, now);
 		if (!prev) return null;
-		// The window is the interval during which that run was the one driving its session.
-		const acts = await actsInWindow(env, params.userId, params.instanceId, prev.startedAt, prev.finishedAt ?? now, 100);
+		// That run's OWN session over the interval it drove it (#809) — not `params.sessionId`, which since
+		// #806 is usually a different, later session of the same repo.
+		const acts = await actsInWindow(env, params.userId, params.instanceId, prev.sessionId, prev.startedAt, prev.finishedAt ?? now, 100);
 		return codingResumeNote(acts, prev.stopReason);
 	} catch {
 		// The briefing is lost, the run is not. `api()`-side errors are already filed durably by the

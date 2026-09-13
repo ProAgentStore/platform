@@ -280,7 +280,7 @@ describe("recentActsForInstances — what each subordinate actually DID (#294)",
 
 		it("is on the window read too, so `check_delegation` and `subordinate_status` agree", async () => {
 			const { env } = stubEnv([actRow({ context: JSON.stringify({ act: "pr.merge", ok: false }) })]);
-			expect((await actsInWindow(env, "u1", "i1", 0, 1000))[0]?.ok).toBe(false);
+			expect((await actsInWindow(env, "u1", "i1", "s1", 0, 1000))[0]?.ok).toBe(false);
 		});
 	});
 
@@ -297,20 +297,29 @@ describe("actsInWindow — one run's acts", () => {
 		// session id when it does. Keying on trace_id would return a run's acts only when nobody had
 		// the terminal open — arbitrary, and backwards: the unwatched run is the one that matters.
 		const { env, sqls, binds } = stubEnv([actRow()]);
-		await actsInWindow(env, "u1", "i1", 100, 900);
+		await actsInWindow(env, "u1", "i1", "s1", 100, 900);
 		expect(sqls[0]).toContain("ts >= ?3 AND ts <= ?4");
-		expect(binds[0]).toEqual(["i1", "u1", 100, 900, "act.consequential", 25]);
+		expect(binds[0]).toEqual(["i1", "u1", 100, 900, "act.consequential", 25, "s1"]);
 	});
 
 	it("returns the window CHRONOLOGICALLY, so the run reads as a sequence", async () => {
 		const { env, sqls } = stubEnv([actRow()]);
-		await actsInWindow(env, "u1", "i1", 0, 1);
+		await actsInWindow(env, "u1", "i1", "s1", 0, 1);
 		expect(sqls[0]).toContain("ORDER BY ts ASC");
 	});
 
 	it("clamps the row cap so a long run cannot return an unbounded read", async () => {
 		const { env, binds } = stubEnv();
-		await actsInWindow(env, "u1", "i1", 0, 1, 100_000);
+		await actsInWindow(env, "u1", "i1", "s1", 0, 1, 100_000);
 		expect(binds[0][5]).toBe(100);
+	});
+
+	it("a run with no session has no acts of its own, and costs no query (#809)", async () => {
+		// Only the chat driver opens a run row without a session, and a chat run drives no engine: any
+		// act inside its window belongs to some other session. Reading the instance-wide window here
+		// is exactly the defect #809 removed from the runs that do have one.
+		const { env, sqls } = stubEnv([actRow()]);
+		await expect(actsInWindow(env, "u1", "i1", null, 0, 1000)).resolves.toEqual([]);
+		expect(sqls).toHaveLength(0);
 	});
 });

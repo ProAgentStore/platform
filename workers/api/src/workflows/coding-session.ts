@@ -200,11 +200,11 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			// opening the repo. Folded into the SAME strings both surfaces already carry, so nothing
 			// new has to be taught to read it.
 			//
-			// Read by time window rather than by trace id: a console terminal poll can drain a run's
-			// acts before the Pilot does, and stamps the session id when it does — see
-			// `actsInWindow`.
+			// Read by THIS session over the run's window, not by trace id: a console terminal poll can
+			// drain a run's acts before the Pilot does, and another repo's run on this instance can
+			// overlap the window (#809) — see `actsInWindow`.
 			const acts = event.payload.loopRunId || event.payload.boardTaskId
-				? await actsInWindow(env, userId, instanceId, runStartedAt, Date.now()).catch(() => [])
+				? await actsInWindow(env, userId, instanceId, sessionId, runStartedAt, Date.now()).catch(() => [])
 				: [];
 			const actLine = summarizeActs(acts);
 			// #505: the report is the Pilot's own account of the run, and it reaches the owner

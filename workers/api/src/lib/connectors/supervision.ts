@@ -737,8 +737,8 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 					ctx.env,
 					userId,
 					run.instanceId,
-					run.startedAt,
-					run.finishedAt ?? Date.now(),
+					run.sessionId,
+					run.startedAt, run.finishedAt ?? Date.now(),
 				).catch(() => [] as ActItem[]);
 				// #339: the objective is a ONE-OFF ask, and this tool used to return it alone. Asked what
 				// an agent's instructions were, the Lead read the objective, called it the configuration,

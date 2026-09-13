@@ -42,8 +42,9 @@ function run(id: string, sessionId: string, opts: { startedAt: number; finishedA
 	);
 }
 
-function pushAct(id: string, ts: number, user = "u1") {
-	const context = JSON.stringify({ act: "push.trunk", ok: true, irreversible: true, command: "git push origin main" });
+function pushAct(id: string, ts: number, sessionId: string, user = "u1") {
+	// `sessionId` is on every real act (`engine-acts.ts`), and the window is read by it (#809).
+	const context = JSON.stringify({ act: "push.trunk", ok: true, irreversible: true, command: "git push origin main", sessionId });
 	d1.exec(
 		`INSERT INTO agent_events (id, ts, user_id, instance_id, trace_id, source, event, message, context)
 		  VALUES (${q(id)}, ${ts}, ${q(user)}, 'inst-1', 'sess', 'coding', 'act.consequential', 'pushed directly to the trunk origin main', ${q(context)})`,
@@ -60,7 +61,7 @@ beforeEach(() => {
 	// S1 closed behind it. This is the #523 shape: a delegated run, `status: error`.
 	session("s1", "repo-r", "error");
 	run("run-a", "s1", { startedAt: NOW - 90 * MIN, finishedAt: NOW - 30 * MIN, stopReason: "max_iterations" });
-	pushAct("act-1", NOW - 60 * MIN);
+	pushAct("act-1", NOW - 60 * MIN, "s1");
 });
 
 afterEach(() => d1.close());
@@ -102,6 +103,22 @@ describe("the successor of a run-opened session is on a NEW session (#806)", () 
 		seedTenant(d1, { userId: "u2", instanceIds: [] });
 		session("s-foreign", "repo-r", "active", "u2");
 		expect(await pendingCodingResumeNote(env, { userId: "u1", instanceId: "inst-1", sessionId: "s-foreign" }, NOW)).toBeNull();
+	});
+
+	it("is not told about ANOTHER repo's push that landed inside run A's window (#809)", async () => {
+		// Repo O's run pushed on this same instance while run A was working on R. The note used to read
+		// the whole instance over A's window and hand that push to R's successor as A's own work —
+		// "already done, do NOT do these again", about a repository it never touched.
+		session("s-other", "repo-other", "active");
+		d1.exec(
+			`INSERT INTO agent_events (id, ts, user_id, instance_id, trace_id, source, event, message, context)
+			  VALUES ('act-o', ${NOW - 45 * MIN}, 'u1', 'inst-1', 's-other', 'coding', 'act.consequential',
+			          'deleted a repository other/repo', ${q(JSON.stringify({ act: "repo.delete", ok: true, irreversible: true, command: "gh repo delete other/repo", sessionId: "s-other" }))})`,
+		);
+		session("s2", "repo-r", "active");
+		const note = await pendingCodingResumeNote(env, { userId: "u1", instanceId: "inst-1", sessionId: "s2" }, NOW);
+		expect(note).toContain("pushed directly to the trunk origin main");
+		expect(note, "repo O's act reached repo R's resume note — the window is not scoped to run A's session").not.toContain("deleted a repository");
 	});
 
 	it("keeps the 6-hour floor — a run A older than the lookback is not a checkpoint", async () => {

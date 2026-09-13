@@ -744,10 +744,12 @@ describe("check_delegation without a runId — the model reaches for the tool it
 	it("names the acts the run took, not only how it ended (#294)", async () => {
 		// The issue, exactly: run 73ffc073's `detail` said the objective completed while it had
 		// merged its own PRs to `main`. A supervisor drilling into a run must see the merge here.
+		// `session_id` as every coding driver writes it — acts are read by the run's session (#809).
 		const env = buildEnv({
 			run: { run_id: "r1", user_id: "u1", instance_id: "sub", objective: "fix the build", status: "completed",
 			       stop_reason: "done", detail: "outcome: done", iteration: 7, max_iterations: 10,
-			       cancel_requested: 0, budget_id: null, started_at: 1000, finished_at: 9000, last_progress_at: 8000 },
+			       cancel_requested: 0, budget_id: null, started_at: 1000, finished_at: 9000, last_progress_at: 8000,
+			       session_id: "csess-1" },
 			acts: [ACT_ROW],
 		});
 		const out = JSON.parse((await tool("check_delegation").handler(ctx(env) as never, { runId: "r1" })).content);

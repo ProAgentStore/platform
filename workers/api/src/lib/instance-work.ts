@@ -388,22 +388,32 @@ export async function recentActsForInstances(
  * happened to have the terminal open, which is both arbitrary and exactly backwards: an unwatched
  * run is the one whose record matters most. The window is precise enough — it is the interval
  * during which this run was the one driving the session.
+ *
+ * The window is only half the key; the SESSION is the other half (#809). A Coder instance holds
+ * several repos, each with its own session, and runs on them overlap — so a window over the whole
+ * instance handed each run the OTHER repo's pushes, on its card, its successor's resume note and
+ * `check_delegation`. Every act already records its session (`engine-acts.ts`, `context.sessionId`,
+ * since acts were first written), so this filters on it. A run with no session — only the chat
+ * driver makes one — drives no engine, so every act in its window is somebody else's: none.
  */
 export async function actsInWindow(
 	env: Env,
 	userId: string,
 	instanceId: string,
+	sessionId: string | null,
 	fromMs: number,
 	toMs: number,
 	limit = 25,
 ): Promise<ActItem[]> {
+	if (!sessionId) return [];
 	const res = await env.DB.prepare(
 		`SELECT ${ACT_COLUMNS}
 		   FROM agent_events
 		  WHERE instance_id = ?1 AND user_id = ?2 AND event = ?5 AND ts >= ?3 AND ts <= ?4
+		    AND json_valid(context) AND json_extract(context, '$.sessionId') = ?7
 		  ORDER BY ts ASC LIMIT ?6`,
 	)
-		.bind(instanceId, userId, fromMs, toMs, ACT_EVENT, Math.max(1, Math.min(100, Math.floor(limit))))
+		.bind(instanceId, userId, fromMs, toMs, ACT_EVENT, Math.max(1, Math.min(100, Math.floor(limit))), sessionId)
 		.all<ActRow>();
 	return (res.results ?? []).map(toActItem);
 }
