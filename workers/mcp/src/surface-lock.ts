@@ -378,4 +378,19 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.25 is published.
 	"0.1.26": "sha256:6bf384ce80d5a273d0ba907e65169d5b7e5a4aaaafb389ad35ca6b62b6dab083",
+	// 0.1.27 (#774): `SERVER_INSTRUCTIONS` only — the last bullet of `MCP_SERVER_VERSION`'s bump list.
+	// No tool name, schema or annotation moved: 154 registrations, `MCP_TOOL_ALWAYS_ON` 130,
+	// `MCP_TOOL_GATED` 24, all unchanged.
+	//
+	// Two sentences after the #743 one (both from `instance-tool-guidance.ts`, which `PLATFORM_GUIDE`
+	// also renders):
+	//   * NESTED_TOOL_SEQUENCE — `list_instance_tools` with `schemas:true`, then `call_instance_tool`
+	//     with the field names that schema declares, only for a row whose `invocableBy` lists it.
+	//     #743 named the pattern; an orchestrator still guessed `issue_number` for `number`.
+	//   * DIRECT_BEFORE_RUN — a job needing no code change is one such call, not a `coding_loop_start`.
+	//
+	// `my_instances` still sits in the first sentence, inside the 512-character cut.
+	//
+	// Appended, never edited in place: 0.1.26 is published.
+	"0.1.27": "sha256:17fa7a94d3f9fbfb33177a8d02f1c1a89b8187abc4428d7f841ab61c91f3787d",
 };

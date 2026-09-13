@@ -7,6 +7,7 @@
  * fails the build if it is.
  */
 import { z } from "zod";
+import { DIRECT_BEFORE_RUN, NESTED_TOOL_SEQUENCE } from "./instance-tool-guidance.js";
 import type { McpScope } from "./safety.js";
 
 /**
@@ -38,6 +39,8 @@ export const SERVER_INSTRUCTIONS = [
 	"ProAgentStore hosts server-side AI agents. Almost every tool acts on ONE agent instance, so start by getting an id: my_instances lists the ones the connected user already runs, recent_instances the few they drove most recently with each one's live run health; list_agents is the public catalogue and subscribe_agent creates an instance from it.",
 	"Before calling a tool, read its input schema from tools/list and send exactly those snake_case parameter names. IDs, task IDs, session IDs, job keys, node names and cursors are opaque: copy them exactly from the tool that returned them, do not derive, shorten, pluralize or rename them.",
 	"An instance's OWN tools are one level down from this surface and are usually the direct path: list_instance_tools names what one instance may actually run — its GitHub, HTTP and search connectors as well as its own memory, files and knowledge — and call_instance_tool invokes one. Check there BEFORE reaching for coding_session_message: driving a terminal to shell out for something an instance tool already does returns a truncated pane instead of structured data, and is the fallback rather than the first path.",
+	NESTED_TOOL_SEQUENCE,
+	DIRECT_BEFORE_RUN,
 	"To debug what an agent did, call agent_trace first (chat turns, steps and errors on one timeline), then instance_messages or list_errors for detail. usage_summary reports spend.",
 	"Tool annotations are accurate: readOnlyHint true means the tool only reads. A tool that changes state takes dry_run — call it that way first to see what would happen. The most consequential tools also require an exact confirm string and a connection holding the destructive scope; those refusals are real and cannot be argued past.",
 	"If you already know the one instance you will drive for this whole session, connect to /mcp/i/<instance_id> instead: that session publishes only that instance's own tools under their real names with no instance_id argument, plus chat, guide and messages, and none of the platform-wide tools above.",

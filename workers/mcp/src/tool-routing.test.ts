@@ -1,6 +1,10 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerCodingSessionTools, repoToolRoutingHint, reposToolRoutingHint } from "./coding-tools.js";
 import type { McpEnv } from "./http.js";
+import { DIRECT_BEFORE_RUN, NESTED_TOOL_SEQUENCE } from "./instance-tool-guidance.js";
 import { PLATFORM_GUIDE } from "./platform-guide.js";
 import type { SafetyContext } from "./safety.js";
 import { SERVER_INSTRUCTIONS } from "./tool-metadata.js";
@@ -47,6 +51,8 @@ import { SERVER_INSTRUCTIONS } from "./tool-metadata.js";
  * walked (ADR 0002; #740 refused the same thing). What is checkable is that the four strings say
  * it, and that is exactly and only what is asserted below.
  */
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const env: McpEnv = { API_BASE: "https://api.test" };
 
@@ -101,6 +107,55 @@ describe("the meta-tool pattern is discoverable on every channel (#743)", () => 
 		// a caller that does not know that reads a partial issue list as a complete one.
 		expect(d, "it must say what the terminal route costs, not merely that another one exists").toMatch(/truncat/);
 		console.log(`✓ #743 ch.3: coding_session_message description is ${d.length} chars and leads with the fallback rule`);
+	});
+});
+
+describe("HOW to call a nested tool, and when a call beats a run — on both channels (#774)", () => {
+	// #743 made the pattern discoverable. #774 is what still went wrong after it: the orchestrator
+	// guessed `issue_number` for a field the schema calls `number`, and routed "file an issue" through
+	// a coding run. As above, this certifies the STRINGS, not a model's choice.
+	const channels = { SERVER_INSTRUCTIONS, PLATFORM_GUIDE };
+
+	it.each(Object.entries(channels))("%s carries both sentences verbatim, from the one shared module", (_name, text) => {
+		// Verbatim, not paraphrased: the two channels reach different populations, and a rule that
+		// says one thing at `initialize` and another in the guide teaches whichever was read last.
+		expect(text).toContain(NESTED_TOOL_SEQUENCE);
+		expect(text).toContain(DIRECT_BEFORE_RUN);
+	});
+
+	it("names the schemas flag, because list_instance_tools omits schemas by default", () => {
+		// The claim the sentence rests on, checked against the registration rather than restated: if
+		// schemas ever became the default, "with schemas:true" would be noise; if the flag were renamed,
+		// the sentence would send callers a parameter that does not exist.
+		const base = readFileSync(join(__dirname, "instance-tools", "base.ts"), "utf8");
+		expect(base).toMatch(/schemas: z\.boolean\(\)\.optional\(\)/);
+		expect(base).toContain("Input schemas are NOT included by default: pass schemas:true");
+		expect(NESTED_TOOL_SEQUENCE).toContain("list_instance_tools with schemas:true");
+		expect(NESTED_TOOL_SEQUENCE).toMatch(/never guessed/);
+		expect(NESTED_TOOL_SEQUENCE).toContain("invocableBy lists call_instance_tool");
+	});
+
+	it("contrasts the direct call with the coding RUN, not only with the terminal", () => {
+		expect(DIRECT_BEFORE_RUN).toContain("coding_loop_start");
+		expect(DIRECT_BEFORE_RUN).toMatch(/not a coding run/);
+	});
+
+	it("illustrates with nested tools that really exist on the platform", () => {
+		// An invented example teaches a guess — the very failure this sentence is about. The names are
+		// read out of the API's connector registry, which this worker cannot import but can read.
+		const connectors = join(__dirname, "..", "..", "api", "src", "lib", "connectors");
+		for (const [tool, file] of [
+			["github_create_issue", "github.ts"],
+			["repo_read_file", "repo-local.ts"],
+		] as const) {
+			expect(DIRECT_BEFORE_RUN).toContain(tool);
+			expect(readFileSync(join(connectors, file), "utf8"), `${tool} is not declared in ${file}`).toContain(`name: "${tool}"`);
+		}
+	});
+
+	it("keeps the id-first sequence inside the 512-character cut", () => {
+		expect(SERVER_INSTRUCTIONS.slice(0, 512)).toContain("my_instances");
+		expect(SERVER_INSTRUCTIONS.indexOf(NESTED_TOOL_SEQUENCE)).toBeGreaterThan(SERVER_INSTRUCTIONS.indexOf("BEFORE reaching for coding_session_message"));
 	});
 });
 

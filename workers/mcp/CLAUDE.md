@@ -61,6 +61,8 @@ src/
 ├── json-schema-zod.ts    the connectors' JSON Schema subset → zod shape, so a pinned tool
 │                         publishes its real field names
 ├── tool-metadata.ts      annotations, titles, output schemas (advisory, never a check)
+├── instance-tool-guidance.ts  the nested-tool routing sentences (#774) that BOTH
+│                         `SERVER_INSTRUCTIONS` and `PLATFORM_GUIDE` render — one copy, two channels
 ├── safety.ts             scopes, requirePermission, requireConfirmation, dryRun, audit, redact
 ├── http.ts               McpEnv, text/jsonText/authRequired, apiCall, authedCall
 ├── storage-tools.ts      13 tools — collections, records, agent files, KB search, activity
