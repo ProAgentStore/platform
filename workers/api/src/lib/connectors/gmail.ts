@@ -686,7 +686,7 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 			untrustedOutput: false,
 			scope: "write",
 			description:
-				"Send a NEW Gmail message as the owner, to an address you name explicitly, optionally with attachments from this agent's file store. This really sends: there is no draft step and no undo. To save the message for the owner to review first, use gmail_draft_new instead. To answer a message you received, prefer gmail_reply so it threads.",
+				"Send a NEW Gmail message as the owner, to an address you name explicitly, optionally with attachments from this agent's file store. This really sends: there is no draft step and no undo, and no tool drafts a NEW message (gmail_draft_reply drafts replies only). To answer a message you received, prefer gmail_reply so it threads.",
 			handler: "gmail_send",
 			params: {
 				to: { type: "string", required: true, description: "Recipient address.", maxLength: 500 },

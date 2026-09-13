@@ -438,3 +438,31 @@ describe("capability-constraint gate (#404)", () => {
 		});
 	});
 });
+
+describe("tool descriptions name only tools that exist (#808)", () => {
+	// A description is the model's only manual. `gmail_send` told it to "use gmail_draft_new instead"
+	// — the one review route on a tool with no undo, pointing at a tool nobody built — and nothing
+	// caught it, because no check reads the prose. This reads it: every tool-shaped name a
+	// description mentions must be a tool, one of that tool's own params, or a ticket action (which
+	// `create_ticket` legitimately lists by name). A token counts as "tool-shaped" only when its
+	// prefix is some real tool's prefix, so ordinary snake_case (`draft_id`, `reply_all`) is not read
+	// as a claim about a tool.
+	it("mentions no tool name that is not a registered tool, a param, or a ticket action", async () => {
+		const { TOOL_CATALOG } = await import("../agent-do-tools.js");
+		const { TICKET_ACTIONS } = await import("./actionable-ticket.js");
+		const known = new Set<string>([...registryToolNameSet(), ...TOOL_CATALOG.flatMap((g) => g.tools), ...TICKET_ACTIONS]);
+		const prefixes = new Set([...known].map((n) => n.split("_")[0]));
+		const checked: string[] = [];
+		const unknown: string[] = [];
+		for (const tool of registryTools()) {
+			const params = new Set(Object.keys(tool.jsonSchema.properties));
+			for (const [token] of tool.description.matchAll(/\b[a-z]+(?:_[a-z0-9]+)+\b/g)) {
+				if (params.has(token) || !prefixes.has(token.split("_")[0])) continue;
+				checked.push(token);
+				if (!known.has(token)) unknown.push(`${tool.name} → ${token}`);
+			}
+		}
+		expect(checked).toContain("gmail_draft_reply"); // not vacuous: gmail_reply names its draft alternative
+		expect(unknown).toEqual([]);
+	});
+});
