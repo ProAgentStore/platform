@@ -144,6 +144,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	get_budget_limits: "read",
 	get_instance_board_config: "read",
 	get_instance_instructions: "read",
+	get_instance_connector_account: "read",
 	get_instance_loop_presets: "read",
 	get_instance_operator_manual: "read",
 	get_instance_memory: "read",
@@ -235,6 +236,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	set_connection_enabled: "write",
 	set_instance_board_config: "write",
 	set_instance_instructions: "write",
+	set_instance_connector_account: "write",
 	set_instance_loop_presets: "write",
 	set_instance_model: "write",
 	set_instance_operator_manual: "write",
@@ -385,8 +387,13 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// (`write` — additive, and dismissable with `resolve_feedback`), `delete_feedback` hard-deletes
 	// one. `destructive` for the delete: no undo, and the row's snapshot outlives the transcript and
 	// the trace, so it may be the only record of what the owner said.
-	read: 80,
-	write: 54,
+	// +1 read, +1 write at #736 (item b): `get_instance_connector_account` reads which of the owner's
+	// accounts an instance resolves to on a multi-account connector, and `set_instance_connector_account`
+	// pins it to one. `write` and not `destructive`: it only chooses among credentials already connected
+	// (it can never connect or disconnect one, #355), the prior pin is readable first, and it refuses to
+	// clear a pin — the one move that would leave the instance refusing every call.
+	read: 81,
+	write: 55,
 	runtime: 16,
 	destructive: 16,
 };

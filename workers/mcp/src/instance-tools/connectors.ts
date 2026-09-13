@@ -136,3 +136,109 @@ export function registerConnectorGrantTools(server: McpServer, ctx: InstanceTool
 		},
 	);
 }
+
+// ── Which account an instance uses (#736) ───────────────────────────────────
+//
+// When the owner holds more than one account on a connector (two Gmail mailboxes), every call
+// through it refuses with `ambiguous` until the instance is pinned to one — the server never picks,
+// because reading the wrong mailbox answers from the wrong life (#715). The console picker shipped in
+// #736; over MCP the state was unreadable and unresolvable, so `list_instance_tools` could report a
+// Gmail tool as allowed while every call to it refused.
+//
+// Thin proxies over `GET`/`PUT /v1/instances/:id/connector-accounts`. The server's refusal text says
+// "choose … in its Settings"; that string is shared with the console and is left alone — these tool
+// descriptions name the MCP route to the same choice instead.
+
+/** One row of `GET /v1/instances/:id/connector-accounts`, as far as these tools read it. */
+interface ConnectorAccountsRow {
+	connector?: string;
+	pinned?: string | null;
+	resolves?: string | null;
+	blocked?: { reason: string; message: string } | null;
+}
+
+export function registerConnectorAccountTools(server: McpServer, ctx: InstanceToolsCtx): void {
+	const { env, tokenFor, safetyFor } = ctx;
+
+	server.tool(
+		"get_instance_connector_account",
+		"Which of your accounts an instance uses, per connector you hold an account on (e.g. Gmail). Each row carries the `accounts` connected, the one this instance is `pinned` to, the account a call would use right now (`resolves`), and `blocked` — the server's own reason when it would use none. `resolves: null` means EVERY call through that connector refuses: with two or more accounts and no pin the reason is `ambiguous`, and a pin to an account that has since been disconnected is `pinned_account_gone` — neither falls back to another account. Fix either with set_instance_connector_account. A connector with no account connected is not listed at all.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances"),
+			connector: z.string().optional().describe('Connector id, e.g. "gmail". Omit to list every connector you hold an account on.'),
+		},
+		async ({ token, instance_id, connector }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "get_instance_connector_account", { instance_id, connector });
+			if (denied) return denied;
+			const data = await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/connector-accounts`, sessionToken, {}, env);
+			// An `{error}` body carries no `connectors` and passes through untouched, rather than being
+			// reshaped into an empty list — "nothing connected" and "unreadable" are different answers.
+			const rows = (data as { connectors?: ConnectorAccountsRow[] }).connectors;
+			const wanted = connector?.trim();
+			if (!Array.isArray(rows) || !wanted) return jsonText(data);
+			const match = rows.filter((r) => r.connector === wanted);
+			if (match.length) return jsonText({ connectors: match });
+			const held = rows.map((r) => r.connector).filter(Boolean);
+			return jsonText({
+				connectors: [],
+				note: `No "${wanted}" row: you hold no account on that connector, or it is not a connector id. ${held.length ? `Connectors you hold an account on: ${held.join(", ")}.` : "You hold no connector accounts."}`,
+			});
+		},
+	);
+
+	server.tool(
+		"set_instance_connector_account",
+		"Pin an instance to ONE of your accounts on a connector, so its calls through that connector stop refusing with `ambiguous` (or `pinned_account_gone`). `account_id` must be an `accountId` from get_instance_connector_account — the server refuses an account you have not connected. This only CHOOSES among accounts already connected; it cannot connect, disconnect or add one (that is the console's account page). Returns the connector's row read back after saving, so `resolves` and `blocked` show whether calls will now succeed. It cannot clear a pin: with two or more accounts, an unpinned instance refuses every call — clear it in the console if that is what you want. WRITE.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances"),
+			connector: z.string().describe('Connector id from get_instance_connector_account, e.g. "gmail".'),
+			account_id: z.string().describe("The `accountId` to pin, copied exactly from get_instance_connector_account's `accounts`. Required and non-blank."),
+			dry_run: z.boolean().optional().describe("Report the pin that would be saved, without saving it."),
+		},
+		async ({ token, instance_id, connector, account_id, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const connectorId = connector.trim();
+			const accountId = account_id.trim();
+			const input = { instance_id, connector: connectorId, account_id: accountId };
+			const denied = await requirePermission(safetyFor(token), "write", "set_instance_connector_account", input);
+			if (denied) return denied;
+			// The route treats a blank `accountId` as CLEAR, and with two or more accounts a cleared pin
+			// makes every call refuse. A blank argument from a model is far likelier to be a mistake than a
+			// request for that, so it is refused here, before any request.
+			if (!connectorId || !accountId) {
+				return text(
+					`Error: nothing changed — ${!connectorId ? "`connector`" : "`account_id`"} is blank. Both are required; take them from get_instance_connector_account. This tool never clears a pin.`,
+				);
+			}
+			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/connector-accounts`;
+			const body = { connector: connectorId, accountId };
+			if (dry_run) {
+				return dryRun(safetyFor(token), "set_instance_connector_account", `pin an instance to one ${connectorId} account`, input, {
+					endpoint,
+					method: "PUT",
+					body,
+					effect: `Calls through ${connectorId} on this instance would use "${accountId}". Refused at save time if that account is not connected.`,
+				});
+			}
+			const saved = await authedCall(endpoint, sessionToken, { method: "PUT", body: JSON.stringify(body) }, env);
+			// Only a SUCCESS is audited as completed — `apiCall` returns `{error}` rather than throwing (#325).
+			if ((saved as { error?: string }).error) return jsonText(saved);
+			await audit(safetyFor(token), { tool: "set_instance_connector_account", action: "completed", input, result: saved });
+			// The PUT answers `{success, connector, pinned}` and nothing about what a call now does. The
+			// read-back is what shows `resolves`/`blocked`, which is the thing the caller needs to know.
+			const after = await authedCall(endpoint, sessionToken, {}, env);
+			const rows = (after as { connectors?: ConnectorAccountsRow[] }).connectors;
+			const row = Array.isArray(rows) ? rows.find((r) => r.connector === connectorId) : undefined;
+			if (row) return jsonText(row);
+			return jsonText({
+				...(saved as Record<string, unknown>),
+				note: `Saved, but reading it back did not return the ${connectorId} row${(after as { error?: string }).error ? ` (${(after as { error?: string }).error})` : ""}. Check with get_instance_connector_account.`,
+			});
+		},
+	);
+}

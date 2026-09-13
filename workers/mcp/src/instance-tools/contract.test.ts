@@ -8,7 +8,7 @@ import { registerBaseTools } from "./base.js";
 import { registerBoardTools } from "./board.js";
 import { registerCodingTools } from "./coding.js";
 import { registerCompositionTools } from "./composition.js";
-import { registerConnectorGrantTools } from "./connectors.js";
+import { registerConnectorAccountTools, registerConnectorGrantTools } from "./connectors.js";
 import { registerGuideTools } from "./guide.js";
 import { registerInstanceTools } from "./index.js";
 import { registerKnowledgeTools } from "./knowledge.js";
@@ -269,6 +269,7 @@ const TABLE: Record<string, Row> = {
 	cancel_instance_task: ["runtime", "destructive", "cancel_instance_task", "envelope", "confirm,dry_run,instance_id,task_id,token"],
 	chat_with_instance: ["base", "runtime", null, "envelope", "dry_run,instance_id,message,token"],
 	check_instance_loop: ["composition", "read", null, null, "instance_id,run_id,token"],
+	get_instance_connector_account: ["connectorAccounts", "read", null, null, "connector,instance_id,token"],
 	get_instance_loop_presets: ["composition", "read", null, null, "instance_id,token"],
 	// `before` added by #674 — the backward arm, so a caller can walk a run's history after the
 	// default page stopped being the oldest one.
@@ -382,6 +383,7 @@ const TABLE: Record<string, Row> = {
 	set_instance_tool: ["base", "write", null, "text", "dry_run,enabled,instance_id,token,tool"],
 	set_supervision_enabled: ["composition", "write", null, null, "enabled,supervision_id,supervisor_instance_id,token"],
 	set_translation_config: ["settings", "write", null, "envelope", "dry_run,enabled,font_size,instance_id,target,token,transliterate,word_tap"],
+	set_instance_connector_account: ["connectorAccounts", "write", null, "envelope", "account_id,connector,dry_run,instance_id,token"],
 	set_instance_loop_presets: ["composition", "write", null, "envelope", "dry_run,instance_id,presets,token"],
 	start_instance_loop: ["composition", "write", null, "envelope", "dry_run,instance_id,max_iterations,objective,token"],
 	stop_instance_loop: ["composition", "write", null, null, "instance_id,run_id,token"],
@@ -412,6 +414,7 @@ const REGISTRARS: Record<string, (s: unknown, c: InstanceToolsCtx) => void> = {
 	coding: registerCodingTools as any,
 	composition: registerCompositionTools as any,
 	connectors: registerConnectorGrantTools as any,
+	connectorAccounts: registerConnectorAccountTools as any,
 	guide: registerGuideTools as any,
 	knowledge: registerKnowledgeTools as any,
 	observability: registerObservabilityTools as any,

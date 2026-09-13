@@ -15,7 +15,7 @@ import { registerBaseTools } from "./base.js";
 import { registerBoardTools } from "./board.js";
 import { registerCodingTools } from "./coding.js";
 import { registerCompositionTools } from "./composition.js";
-import { registerConnectorGrantTools } from "./connectors.js";
+import { registerConnectorAccountTools, registerConnectorGrantTools } from "./connectors.js";
 import { registerGuideTools } from "./guide.js";
 import { registerKnowledgeTools } from "./knowledge.js";
 import { registerObservabilityTools } from "./observability.js";
@@ -55,6 +55,8 @@ export function registerInstanceTools(
 	registerCompositionTools(server, ctx);
 	registerAccountTools(server, ctx);
 	registerConnectorGrantTools(server, ctx);
+	// Which of the owner's accounts an instance uses on a multi-account connector (#736).
+	registerConnectorAccountTools(server, ctx);
 	registerApplyTools(server, ctx);
 	registerRepoTools(server, ctx);
 	registerCodingTools(server, ctx);

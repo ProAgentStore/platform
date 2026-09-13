@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**166 tool registrations.** 142 are always registered; 24 are gated to the console
+**168 tool registrations.** 144 are always registered; 24 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -387,6 +387,8 @@ immediately instead of a whole transcript.
 | `list_instance_connector_grants` | Folders granted to this instance — the grant *is* the permission | — | | |
 | `grant_instance_connector_folder` | Grant a folder (folders only; files refused server-side) | write | yes | |
 | `delete_instance_connector_grant` | Revoke a grant | destructive | yes | `delete_instance_connector_grant` |
+| `get_instance_connector_account` | Which of your accounts the instance uses per connector (e.g. Gmail): `pinned`, what a call `resolves` to, and `blocked` when it would use none | read | | |
+| `set_instance_connector_account` | Pin the instance to one connected account; answers with the row read back. A blank `account_id` is refused — it never clears a pin | write | yes | |
 
 ### Agent-to-agent
 

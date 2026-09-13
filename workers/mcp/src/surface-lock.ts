@@ -452,4 +452,16 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.30 is published.
 	"0.1.31": "sha256:e38a1fa93e8eb15e4c1b010692e6166c5cd9d505102076b05f4b3f0c43c9823e",
+	// 0.1.32 (#736 item b, which account an instance uses): two new tool NAMES, both ALWAYS-ON —
+	// 166 registrations become 168, `MCP_TOOL_ALWAYS_ON` 142 → 144, `MCP_TOOL_GATED` stays 24.
+	//
+	//   * `get_instance_connector_account` (read) — GET /v1/instances/:id/connector-accounts in
+	//     `instance-tools/connectors.ts`, optionally narrowed to one connector.
+	//   * `set_instance_connector_account` (write, dry_run) — PUT to the same route; refuses a blank
+	//     `account_id` (the route reads it as clear) and answers with the connector's row read back.
+	//
+	// Closes that route's `KNOWN_GAPS` entry. `SERVER_INSTRUCTIONS` did not move.
+	//
+	// Appended, never edited in place: 0.1.31 is published.
+	"0.1.32": "sha256:b025eca1789666c42c0b2f002b548a0cb511c14b1f8edbb775324af7fe19bddd",
 };

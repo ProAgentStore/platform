@@ -282,6 +282,9 @@ const READBACK: Record<string, string | null> = {
 	"grant_instance_connector_folder.resource_id": "list_instance_connector_grants",
 	"grant_instance_connector_folder.name": "list_instance_connector_grants",
 	"delete_instance_connector_grant.provider": "list_instance_connector_grants",
+	// #736: the pin set_instance_connector_account saves is the `pinned` get_instance_connector_account returns.
+	"set_instance_connector_account.connector": "get_instance_connector_account",
+	"set_instance_connector_account.account_id": "get_instance_connector_account",
 
 	// ── stats ──
 	"set_agent_stats_schema.cards": "get_agent_stats_schema",
