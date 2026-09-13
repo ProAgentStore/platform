@@ -132,6 +132,15 @@ const PROPAGATION: Record<string, string> = {
 	// never matches again, with the old copy archived under `$.pipelinesReplaced`. The route is
 	// the file itself: its second and third statements write `agent_instances`.
 	"0151_site_builder_params_snake_case.sql": "site_builder_params_snake_case.sql",
+	// #722: 0152 is 0138's correction on the sibling agent — Email Assistant's welcomeMessage and
+	// goal promised a reply would be shown "before anything is sent" and sent only "once the user
+	// has approved", over a `gmail_send` that dispatches the moment it is called. Both are
+	// `$.identity`, the DO snapshot, so no migration can reach an existing instance: a live Email
+	// Assistant keeps the old copy until its owner resets state. No code route, for 0138's reason —
+	// identity is what a subscriber may edit on their copy, and resolving it live from the template
+	// would overwrite that edit to fix wording. Every future subscriber gets the corrected copy; the
+	// count of live instances holding the stale one is NOT measured here.
+	"0152_email_assistant_honest_welcome.sql": "owner-initiated PUT /v1/instances/:id/state — only future subscribers get the corrected copy; the DO copy is the owner's",
 };
 
 describe("seed config patches — each one records how it reaches an EXISTING instance (#496, #394)", () => {

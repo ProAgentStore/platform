@@ -51,6 +51,7 @@ const SQL_0134 = readMigration("0134_seed_email_assistant.sql");
 const SQL_0136 = readMigration("0136_seed_inbox_chat.sql");
 const SQL_0137 = readMigration("0137_inbox_chat_handles_attachments.sql");
 const SQL_0138 = readMigration("0138_inbox_chat_honest_safety_copy.sql");
+const SQL_0152 = readMigration("0152_email_assistant_honest_welcome.sql");
 
 /** The `json('…')` config a seed INSERTs, with SQL's doubled quotes undone. */
 function seededConfig(sql: string): Record<string, unknown> {
@@ -206,20 +207,39 @@ describe("IRREVERSIBLE_WRITE_TOOLS", () => {
 });
 
 /**
- * A finding this ticket records rather than fixes.
- *
- * Email Assistant's DESCRIPTION is the honest example #722 holds up, and it passes. Its welcome
- * message makes the same per-action promise Inbox Chat's did — "…show you the reply before
- * anything is sent" — over the same `gmail_send`, with the same nothing behind it. It is left
- * alone deliberately: #722 is about the Inbox Chat row, and quietly narrowing this family so the
- * sentence slipped through would be tuning the rule around a row rather than judging it.
- *
- * When that copy is corrected, this test should be inverted, not deleted.
+ * The Email Assistant's welcome message made the same per-action promise Inbox Chat's did — "…show
+ * you the reply before anything is sent" — over the same `gmail_send`, with the same nothing behind
+ * it. It was pinned here as known-unfixed rather than narrowing the family to let it through, and
+ * the owner's #722 decision shipped the copy ahead of Step 2's gate (0152). Inverted, not deleted:
+ * the old sentence must stay flagged, so the rule cannot be loosened into passing it later.
  */
-describe("known, unfixed: the Email Assistant welcome message makes the same promise", () => {
-	it("is flagged by the same rule", () => {
-		const welcome = (seededConfig(SQL_0134).identity as Record<string, string>).welcomeMessage;
-		expect(welcome).toMatch(/show you the reply before anything is sent/);
-		expect(lintAgentClaims({ description: EMAIL_ASSISTANT_DESCRIPTION, welcomeMessage: welcome, capabilities: SENDS })).not.toHaveLength(0);
+describe("the Email Assistant welcome message (0134 flagged, 0152 corrected)", () => {
+	const OLD_WELCOME = identityOf(SQL_0134).welcomeMessage;
+	const FIXED_WELCOME = updatedIdentity(SQL_0152, "welcomeMessage");
+	const FIXED_GOAL = updatedIdentity(SQL_0152, "goal");
+	/** Its declared send reach after 0142, draft tools included. */
+	const EMAIL_ASSISTANT_SENDS = { runtime: null, workflow: null, tools: ["gmail_search", "gmail_read_message", "gmail_reply", "gmail_send", "gmail_draft_reply", "gmail_draft_send"] };
+
+	it("flags the seeded welcome message by the same rule", () => {
+		expect(OLD_WELCOME).toMatch(/show you the reply before anything is sent/);
+		expect(lintAgentClaims({ description: EMAIL_ASSISTANT_DESCRIPTION, welcomeMessage: OLD_WELCOME, capabilities: EMAIL_ASSISTANT_SENDS })).not.toHaveLength(0);
+	});
+
+	it("passes the corrected welcome message", () => {
+		expect(lintAgentClaims({ description: EMAIL_ASSISTANT_DESCRIPTION, welcomeMessage: FIXED_WELCOME, capabilities: EMAIL_ASSISTANT_SENDS })).toEqual([]);
+	});
+
+	it("still answers what stops it mailing someone, and says a send is immediate", () => {
+		expect(FIXED_WELCOME).toMatch(/email permission/i); // per-agent permission
+		expect(FIXED_WELCOME).toMatch(/write access for Gmail/i); // per-instance consent (#90)
+		expect(FIXED_WELCOME).toMatch(/goes out straight away/i); // gmail_reply / gmail_send
+		expect(FIXED_WELCOME).toMatch(/draft/i); // gmail_draft_reply, offered rather than promised
+	});
+
+	it("stops the goal asserting an approval step the platform does not perform", () => {
+		expect(identityOf(SQL_0134).goal).toMatch(/once the user has approved/);
+		expect(FIXED_GOAL).not.toMatch(/approved/i);
+		expect(FIXED_GOAL).toMatch(/no undo|nobody reviews/i);
+		expect(FIXED_GOAL).toMatch(/gmail_draft_reply/);
 	});
 });
