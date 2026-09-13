@@ -81,7 +81,8 @@ src/
     ├── settings.ts       13 tools — settings, name, instructions, operator manual, model, translation, state
     ├── triggers.ts       5 tools — webhook / cron / connector-sync triggers
     ├── composition.ts   10 tools — supervision (#183), connections (#182), loops
-    ├── account.ts        8 tools — whoami, billing, usage, keys, email, profile, budget limits
+    ├── account.ts        13 tools — whoami, billing, usage, keys, email, profile, budget limits,
+    │                     notifications, account preferences (#613)
     ├── connectors.ts     4 tools — connector status and folder grants
     ├── stats.ts          4 tools — declarative stats cards (creator schema + subscriber override)
     ├── guide.ts          1 tool — the per-instance connection guide (#772)
@@ -93,13 +94,13 @@ src/
                           surfaces:["coding"]) + 5 loop tools (3 run + 2 objective queue)
 ```
 
-**154 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
+**159 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
 `coding-tools.ts` — all of them behind the `groups.has("coding")` gate — 13 in
-`storage-tools.ts`, and 107 across `instance-tools/`. 130 are always registered; 24 are
+`storage-tools.ts`, and 112 across `instance-tools/`. 135 are always registered; 24 are
 surface-gated (apply=4, repo=3, coding=17).
 
 Those four numbers ADD UP to the headline, and that is the point of stating them: 21 + 13
-+ 13 + 107 = 154. They said 88 until #602, which made the paragraph sum to 132 — a total the
++ 13 + 112 = 159. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added
@@ -107,7 +108,8 @@ the always-on `get_instance_connection_guide` in its own `instance-tools/guide.t
 21 + 12 + 13 + 104 = 150 until #787 added the always-on `recent_instances` in
 `instance-tools/recent.ts`; and said 21 + 12 + 13 + 105 = 151 until #788 added the two
 always-on objective-queue tools (`coding_loop_queue`, `coding_loop_queue_cancel`) beside the
-three loop tools in `instance-tools/coding.ts`. The per-file rows in the tree above are
+three loop tools in `instance-tools/coding.ts`; and said 21 + 13 + 13 + 107 = 154 until #613
+added five always-on notification and account-preference tools to `instance-tools/account.ts`. The per-file rows in the tree above are
 machine-checked against `.tool(` counts; this prose sum is not, so it is the half that rots.
 
 `base.ts` was 1871 lines and 67 of the 86 instance tools THEN REGISTERED until #305 — the

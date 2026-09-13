@@ -118,6 +118,9 @@ const CONTROL_ARGS: ReadonlySet<string> = new Set([
 	// about, for a caller holding the owner's words rather than an id. Nothing stores it: the
 	// tool resolves it to an id and the id is what goes on the wire.
 	"repo_name",
+	// #613: addressing — WHICH notification `mark_notification_read` flips. Taken from
+	// `list_notifications`, never composed; the read-state it changes reads back there too.
+	"notification_id",
 ]);
 
 /**
@@ -250,6 +253,11 @@ const READBACK: Record<string, string | null> = {
 	"set_budget_limits.per_tree_delegations": "usage_summary",
 	"set_budget_limits.per_tree_max_depth": "usage_summary",
 	"set_budget_limits.loop_max_iterations": "usage_summary",
+	// #613: every section `set_account_preferences` writes comes back from the one GET it patches.
+	"set_account_preferences.timezone": "get_account_preferences",
+	"set_account_preferences.notifications": "get_account_preferences",
+	"set_account_preferences.voice": "get_account_preferences",
+	"set_account_preferences.translation": "get_account_preferences",
 
 	// ── connector grants ──
 	"grant_instance_connector_folder.provider": "list_instance_connector_grants",

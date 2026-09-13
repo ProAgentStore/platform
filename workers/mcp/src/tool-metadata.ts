@@ -137,6 +137,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	connector_status: "read",
 	email_status: "read",
 	get_agent_board_config: "read",
+	get_account_preferences: "read",
 	get_agent_settings_schema: "read",
 	get_agent_stats_schema: "read",
 	get_apply_tips: "read",
@@ -166,6 +167,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	list_connections: "read",
 	list_errors: "read",
 	list_feedback: "read",
+	list_notifications: "read",
 	list_instance_collections: "read",
 	list_instance_connector_grants: "read",
 	list_instance_files: "read",
@@ -217,9 +219,12 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	ingest_repo: "write",
 	insert_instance_record: "write",
 	insert_record: "write",
+	mark_all_notifications_read: "write",
+	mark_notification_read: "write",
 	rename_instance: "write",
 	resolve_feedback: "write",
 	scaffold_agent: "write",
+	set_account_preferences: "write",
 	set_agent_settings_schema: "write",
 	set_agent_stats_schema: "write",
 	set_board_item_status: "write",
@@ -354,8 +359,13 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// error — a GitHub org the owner does not own, a local workdir that no longer exists — could only
 	// be cleaned up in the console. `destructive` rather than `write` because the removal ends any
 	// active engine on that repo; see its entry above.
-	read: 77,
-	write: 46,
+	// +2 read, +3 write at #613 (notifications and account preferences): `list_notifications` and
+	// `get_account_preferences` read the account's bell feed and preferences blob;
+	// `mark_notification_read`, `mark_all_notifications_read` and `set_account_preferences` write.
+	// `write` and not `destructive` for mark-all, though it has no undo: it flips read-state on rows
+	// that stay in the feed, and deletes or answers nothing — an `alert` it marks read still needs you.
+	read: 79,
+	write: 49,
 	runtime: 16,
 	destructive: 15,
 };

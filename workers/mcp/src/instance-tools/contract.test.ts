@@ -252,6 +252,7 @@ const TABLE: Record<string, Row> = {
 	approve_instance_task: ["runtime", "runtime", null, "envelope", "dry_run,instance_id,task_id,token"],
 	ask_ticket: ["board", "write", null, "envelope", "dry_run,instance_id,question,task_id,token"],
 	billing_status: ["account", "none", null, null, "token"],
+	get_account_preferences: ["account", "none", null, null, "token"],
 	get_budget_limits: ["account", "none", null, null, "token"],
 	set_budget_limits: [
 		"account",
@@ -336,6 +337,9 @@ const TABLE: Record<string, Row> = {
 	list_instance_triggers: ["triggers", "read", null, null, "instance_id,token"],
 	get_instance_pipeline: ["observability", "none", null, null, "instance_id,pipeline,token"],
 	list_feedback: ["observability", "none", null, null, "instance_id,limit,status,token"],
+	list_notifications: ["account", "none", null, null, "limit,token,unread_only"],
+	mark_all_notifications_read: ["account", "write", null, "envelope", "dry_run,token"],
+	mark_notification_read: ["account", "write", null, "envelope", "dry_run,notification_id,token"],
 	list_pipeline_runs: ["observability", "none", null, null, "instance_id,limit,pipeline,token"],
 	// #671: the PLATFORM view — every machine across every agent. No instance_id, by design.
 	list_runner_nodes: ["runtime", "none", null, null, "token"],
@@ -351,6 +355,7 @@ const TABLE: Record<string, Row> = {
 	run_instance_task: ["runtime", "runtime", null, "envelope", "approval_prompt,dry_run,input,instance_id,requires_approval,token,type"],
 	run_instance_trigger: ["triggers", "runtime", null, "envelope", "dry_run,payload,token,trigger_id"],
 	search_instance_knowledge: ["knowledge", "none", null, null, "instance_id,query,token,top_k"],
+	set_account_preferences: ["account", "write", null, "envelope", "dry_run,notifications,timezone,token,translation,voice"],
 	set_agent_settings_schema: ["settings", "write", null, "envelope", "agent_id,dry_run,settings_schema,token"],
 	set_agent_stats_schema: ["stats", "write", null, "envelope", "agent_id,cards,dry_run,token"],
 	set_board_item_status: ["board", "write", null, "envelope", "dry_run,instance_id,job_key,status,token"],

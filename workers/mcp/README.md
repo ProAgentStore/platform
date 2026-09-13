@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**154 tool registrations.** 130 are always registered; 24 are gated to the console
+**159 tool registrations.** 135 are always registered; 24 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -432,6 +432,11 @@ immediately instead of a whole transcript.
 | `email_status` | Gmail configured/connected | — | | |
 | `get_budget_limits` | Effective daily AI-spend ceilings, which tier each came from, 24h consumption, and distance to limit | — | | |
 | `set_budget_limits` | Patch per-account budget limits — the two daily ceilings plus the four per-tree/loop knobs; omitted fields keep their stored value, null clears an override; returns re-resolved effective limits | write | yes | |
+| `list_notifications` | The account notification feed, newest first, with `unreadCount` — what your agents and runs have been telling you (#613) | — | | |
+| `mark_notification_read` | Mark one notification read by id; fails for an id that is not yours rather than reporting success | write | yes | |
+| `mark_all_notifications_read` | Mark every unread notification read, account-wide | write | yes | |
+| `get_account_preferences` | Account-wide timezone, notification mutes/instance scope, voice and translation defaults, plus the type and language vocabularies a write needs | — | | |
+| `set_account_preferences` | Patch preferences by section — omitted sections keep their stored value; `notifications` replaces its section; an invalid timezone or unknown type is rejected | write | yes | |
 
 ### Tools with no dry run
 

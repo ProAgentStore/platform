@@ -24,12 +24,22 @@ notificationRoutes.get("/", async (c) => {
 	return c.json({ notifications: results, unreadCount: unreadCount?.count || 0 });
 });
 
-/** Mark notification as read. */
+/**
+ * Mark notification as read.
+ *
+ * 404 when nothing matched (#613). This answered `{success:true}` for ANY id — a typo, a stale id, or
+ * one belonging to someone else — which the console never noticed because it only marks ids it just
+ * listed. An MCP caller (`mark_notification_read`) takes ids from a model, and a success for an id
+ * that matched nothing is a claim that something was cleared when nothing was. SQLite counts a
+ * matched row as changed even when `read` was already 1, so re-marking a read notification is still
+ * a 200 and only a genuine miss is refused.
+ */
 notificationRoutes.post("/:id/read", async (c) => {
 	const session = await requireUser(c);
-	await c.env.DB.prepare(
+	const res = await c.env.DB.prepare(
 		"UPDATE notifications SET read = 1 WHERE id = ?1 AND user_id = ?2",
 	).bind(c.req.param("id"), session.uid).run();
+	if (!res.meta?.changes) return c.json({ error: "Notification not found" }, 404);
 	return c.json({ success: true });
 });
 

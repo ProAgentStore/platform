@@ -166,11 +166,6 @@ const KNOWN_GAPS = [
 	},
 	{
 		why:
-			"Notifications and account preferences. The console reads a notification feed, marks items read, and edits per-account preferences (timezone, notification channels); MCP has neither. A caller cannot tell an owner what their agents have been trying to tell them. #613.",
-		match: /^[A-Z]+ \/v1\/(notifications|preferences)/,
-	},
-	{
-		why:
 			"Voice settings — STT mode, TTS provider/voice/speed, language, `commandsEnabled`. `get_instance_settings` reads typed agent settings, which is a different table; the voice block has no tool at all. #613.",
 		match: /^[A-Z]+ \/v1\/instances\/\{\}\/voice-settings$/,
 	},

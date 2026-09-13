@@ -393,4 +393,21 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.26 is published.
 	"0.1.27": "sha256:17fa7a94d3f9fbfb33177a8d02f1c1a89b8187abc4428d7f841ab61c91f3787d",
+	// 0.1.28 (#613, the notifications and account-preferences group): five new tool NAMES, all
+	// ALWAYS-ON in `instance-tools/account.ts` — 154 registrations become 159, `MCP_TOOL_ALWAYS_ON`
+	// 130 → 135, `MCP_TOOL_GATED` stays 24.
+	//
+	//   * `list_notifications` (read) — GET /v1/notifications, `unread_only` + `limit`.
+	//   * `mark_notification_read` (write, dry_run) — POST /v1/notifications/:id/read. The route now
+	//     answers 404 for an id that matched nothing instead of `{success:true}`.
+	//   * `mark_all_notifications_read` (write, dry_run) — POST /v1/notifications/read-all.
+	//   * `get_account_preferences` (read) — GET /v1/preferences.
+	//   * `set_account_preferences` (write, dry_run) — PUT /v1/preferences, sending only the sections
+	//     supplied: `timezone`, `notifications`, `voice`, `translation`.
+	//
+	// Closes that group's `KNOWN_GAPS` entry (5 routes; parity 85 → 90 reachable, 71 → 66 gaps).
+	// `SERVER_INSTRUCTIONS` did not move.
+	//
+	// Appended, never edited in place: 0.1.27 is published.
+	"0.1.28": "sha256:5104784d5f734fd2efb24f0bbe701d60ef2c4999213adb4faa0d916cb57ecaea",
 };
