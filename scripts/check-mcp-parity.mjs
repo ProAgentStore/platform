@@ -203,11 +203,6 @@ const KNOWN_GAPS = [
 	},
 	{
 		why:
-			"Loop presets — the saved objectives the console offers when starting a loop. `start_instance_loop` takes a free-text objective, so the presets an owner curated are invisible to it. #613.",
-		match: /^[A-Z]+ \/v1\/instances\/\{\}\/loop-presets$/,
-	},
-	{
-		why:
 			"Trigger and connector metadata the console uses to BUILD a trigger: the action catalogue (`/triggers/actions`), a dry-run preview (`/triggers/preview`), the account connector list, the per-instance connector list and its write-consent toggle. `create_instance_trigger` can write one blind; nothing lets a caller check it first. #613.",
 		match:
 			/^[A-Z]+ \/v1\/(connectors|triggers\/(actions|preview)|instances\/\{\}\/connectors(\/\{\}\/consent)?)$/,

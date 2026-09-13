@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { authRequired, authedCall, jsonText } from "../http.js";
+import { authRequired, authedCall, jsonText, text } from "../http.js";
 import { audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
 import { runHealthSentence } from "../state-vocabulary.js";
 import type { InstanceToolsCtx } from "./shared.js";
@@ -298,6 +298,70 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 		},
 	);
 
+	// ── Loop presets (#613) ─────────────────────────────────────────────────────
+	//
+	// The objectives an owner curated for the loop form (#234). Without these, a caller starting a
+	// loop over MCP could not see them and retyped an objective the owner had already written down.
+	server.tool(
+		"get_instance_loop_presets",
+		"Read the saved objectives an instance offers when a loop starts — each `{id, label, objective}`. `source` says whose list it is: `instance` (the owner saved their own), `agent` (inherited from the agent's creator) or `default` (built-in; coding agents get five, chat agents none). `driver` is what this instance's loop drives. To run one, pass its `objective` to start_instance_loop.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "get_instance_loop_presets", { instance_id });
+			if (denied) return denied;
+			return jsonText(await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/loop-presets`, sessionToken, {}, env));
+		},
+	);
+
+	server.tool(
+		"set_instance_loop_presets",
+		`Save an instance's own loop presets. REPLACES the whole list — nothing is merged — so to add one, read get_instance_loop_presets and send the full list back. An EMPTY list removes the instance's own list, and the instance goes back to inheriting the agent's or the built-in presets. At most ${MAX_LOOP_PRESETS} presets; each needs a non-blank \`label\` (max ${MAX_PRESET_LABEL} chars) and \`objective\` (max ${MAX_PRESET_OBJECTIVE} chars). A list outside those limits is refused here, whole, rather than silently trimmed by the server. \`id\` is optional and is stored as a lowercase slug (derived from the label when omitted). Returns the saved list with its \`source\`.`,
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			presets: z
+				.array(
+					z.object({
+						id: z.string().optional().describe("Stable slug. Omit to derive it from the label."),
+						label: z.string().describe("The button text."),
+						objective: z.string().describe("The objective a loop is started with."),
+					}),
+				)
+				.describe("The complete list, in display order. [] clears the instance's own list."),
+			dry_run: z.boolean().optional().describe("Report the list that would be saved, without saving it."),
+		},
+		async ({ token, instance_id, presets, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, count: presets.length };
+			const denied = await requirePermission(safetyFor(token), "write", "set_instance_loop_presets", input);
+			if (denied) return denied;
+			const problems = loopPresetProblems(presets);
+			if (problems.length) return text(`Error: nothing saved — ${problems.join("; ")}.`);
+			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/loop-presets`;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "set_instance_loop_presets", "replace an instance's loop presets", input, {
+					endpoint,
+					method: "PUT",
+					effect: presets.length
+						? `${instance_id}'s own list would become these ${presets.length} preset(s), replacing whatever it offers now.`
+						: `${instance_id}'s own list would be removed; it would inherit the agent's or the built-in presets.`,
+					labels: presets.map((p) => p.label),
+				});
+			}
+			const data = await authedCall(endpoint, sessionToken, { method: "PUT", body: JSON.stringify({ presets }) }, env);
+			if (!(data as { error?: string }).error) {
+				await audit(safetyFor(token), { tool: "set_instance_loop_presets", action: "completed", input, result: { source: (data as { source?: string }).source } });
+			}
+			return jsonText(data);
+		},
+	);
+
 	// WHAT THIS TOOL DOES NOT SPEAK FOR (#580 AC3).
 	//
 	// `status:"running"` hid three states, and until migration 0127 the record could not tell them
@@ -395,4 +459,33 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 			));
 		},
 	);
+}
+
+/**
+ * A COPY of the limits in `workers/api/src/lib/loop-presets.ts` — this worker cannot import the API
+ * worker. `loop-presets.test.ts` reads that file's source and fails when the two disagree.
+ *
+ * The route's `sanitizeLoopPresets` enforces them by DROPPING an entry with a blank label or
+ * objective, truncating an over-long one and cutting the list at the cap, and answers 200 either
+ * way. Its caller is the console editor, which never sends such a list. A calling model does, and
+ * would read a success for a list that is not the one it sent — so this tool refuses it instead.
+ */
+export const MAX_LOOP_PRESETS = 12;
+export const MAX_PRESET_LABEL = 60;
+export const MAX_PRESET_OBJECTIVE = 1000;
+
+/** Every way `presets` would be altered by the route, in words; empty when it would be saved as sent. */
+export function loopPresetProblems(presets: ReadonlyArray<{ label: string; objective: string }>): string[] {
+	const problems: string[] = [];
+	if (presets.length > MAX_LOOP_PRESETS) problems.push(`${presets.length} presets sent, at most ${MAX_LOOP_PRESETS} are kept`);
+	presets.forEach((p, i) => {
+		const n = `preset ${i + 1}`;
+		const label = p.label.trim();
+		const objective = p.objective.trim();
+		if (!label) problems.push(`${n} has a blank label`);
+		else if (label.length > MAX_PRESET_LABEL) problems.push(`${n}'s label is ${label.length} chars (max ${MAX_PRESET_LABEL})`);
+		if (!objective) problems.push(`${n} has a blank objective`);
+		else if (objective.length > MAX_PRESET_OBJECTIVE) problems.push(`${n}'s objective is ${objective.length} chars (max ${MAX_PRESET_OBJECTIVE})`);
+	});
+	return problems;
 }

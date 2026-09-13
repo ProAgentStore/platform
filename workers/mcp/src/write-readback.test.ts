@@ -242,6 +242,7 @@ const READBACK: Record<string, string | null> = {
 	// ── loops ──
 	"start_instance_loop.objective": "check_instance_loop",
 	"start_instance_loop.max_iterations": "check_instance_loop",
+	"set_instance_loop_presets.presets": "get_instance_loop_presets",
 	// When `queue_if_busy` parks it instead of starting it, the SAME objective reads back through
 	// `coding_loop_queue` until it becomes a run — at which point this reader is the right one
 	// again. One entry per argument, so the reader named is the one for the started case (#788).

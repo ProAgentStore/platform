@@ -144,6 +144,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	get_budget_limits: "read",
 	get_instance_board_config: "read",
 	get_instance_instructions: "read",
+	get_instance_loop_presets: "read",
 	get_instance_operator_manual: "read",
 	get_instance_memory: "read",
 	get_instance_pipeline: "read",
@@ -233,6 +234,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	set_connection_enabled: "write",
 	set_instance_board_config: "write",
 	set_instance_instructions: "write",
+	set_instance_loop_presets: "write",
 	set_instance_model: "write",
 	set_instance_operator_manual: "write",
 	set_instance_runner_node: "write",
@@ -372,8 +374,13 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// fields into one record. `write` and not `destructive` for both edits: each keeps the object and
 	// its id, and an edit can be edited back — the destructive pair (`delete_instance_knowledge`, and
 	// deleting a record) stays console-only or confirm-gated as before.
-	read: 79,
-	write: 52,
+	// +1 read, +1 write at #613 (loop presets): `get_instance_loop_presets` reads the objectives the
+	// loop form offers and `set_instance_loop_presets` replaces the instance's own list. `write` and
+	// not `runtime`: saving an objective starts nothing — `start_instance_loop` is the call that does.
+	// Not `destructive` either, though it replaces a list: the prior list is readable first with the
+	// get tool or `dry_run`, and writable back, as with the other instance-config setters.
+	read: 80,
+	write: 53,
 	runtime: 16,
 	destructive: 15,
 };

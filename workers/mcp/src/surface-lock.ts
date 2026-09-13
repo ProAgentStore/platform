@@ -425,4 +425,17 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.28 is published.
 	"0.1.29": "sha256:471c265d4651b476b45ffaf857c92dfe18eaaf8209bf83e1d044515ab77f0944",
+	// 0.1.30 (#613, the loop-presets group): two new tool NAMES, both ALWAYS-ON — 162
+	// registrations become 164, `MCP_TOOL_ALWAYS_ON` 138 → 140, `MCP_TOOL_GATED` stays 24.
+	//
+	//   * `get_instance_loop_presets` (read) — GET /v1/instances/:id/loop-presets in
+	//     `instance-tools/composition.ts`, beside `start_instance_loop`.
+	//   * `set_instance_loop_presets` (write, dry_run) — PUT to the same route; replaces the list,
+	//     `[]` clears the instance's own; a list the route would trim or drop is refused first.
+	//
+	// Closes that group's `KNOWN_GAPS` entry (2 routes; parity 93 → 95 reachable, 63 → 61 gaps).
+	// `SERVER_INSTRUCTIONS` did not move.
+	//
+	// Appended, never edited in place: 0.1.29 is published.
+	"0.1.30": "sha256:47d1cafcfb5baa6e3377e75fd43cb31c30352d58ec98becb4d1a89a712389a18",
 };
