@@ -6,6 +6,9 @@
 //
 // The parse lives in the pure `loop-decide.ts`; this adds the prompt and the BYOK call.
 
+import { agentFailureOf } from "./agent-loop.js";
+import { classifyCodingFailure, DRIVER_RESUME_POLICY } from "./coding-failure.js";
+import { logEvent } from "./events.js";
 import { parseLoopDecision, type LoopDecisionResult } from "./loop-decide.js";
 import { runUserWorkersAi } from "./user-ai.js";
 import type { Env } from "../types.js";
@@ -66,6 +69,46 @@ export function isCredentialsError(err: unknown): boolean {
 }
 
 /**
+ * The AI call's OWN framing of its failure: `Anthropic (<status>): …`, `Cloudflare Workers AI request
+ * failed with HTTP <status>`, or a `UserAiCredentialsError` sentence. Required on top of the class,
+ * because `classifyCodingFailure` also reads a bare `(403)` anywhere in a message as a rejected key,
+ * and a chat turn can die on a TOOL's 403 that says nothing about the owner's provider account.
+ */
+const PROVIDER_FRAMED = /^(anthropic\b|cloudflare workers ai\b|add an api key\b|add your cloudflare workers ai account id\b)/i;
+
+/**
+ * A decision the transcript has already made, so no model is asked for it (#768, MVP item 3).
+ *
+ * One case only: the agent's last turn was refused by the owner's AI provider ACCOUNT — no credit,
+ * or no/rejected key. Every further `act` hits the same account and fails identically, so no
+ * decision the orchestrator could return makes the next iteration succeed. The orchestrator's own
+ * call, meanwhile, goes to that same account: at best a request that fails into "could not reach
+ * the model" (misnaming the cause), at worst — an agent on a Workers AI key that is broken while
+ * the Anthropic one works — a PAID decision that may say "continue" into another doomed turn.
+ *
+ * Deliberately NOT extended to prose ("done", "I'm stuck"). Judging what an agent SAID is what the
+ * orchestrator is for; a regex that pre-empts it would report runs finished that were not. The
+ * input here is platform-authored (`AGENT_FAILED_PREFIX`) and classified by the same table the
+ * Pilot and the account-health read use, so this rule and those surfaces cannot disagree.
+ *
+ * Returns `escalate`, the decision the enum already has for "a human must act": `nextStep` maps it
+ * to `escalated`, and `statusFor` files that as `needs_human` — the same column `provider_credit` is.
+ */
+export function settledDecision(input: Pick<LoopDecideInput, "messages">): LoopDecisionResult | null {
+	const last = input.messages[input.messages.length - 1];
+	if (last?.role !== "assistant") return null;
+	const failure = agentFailureOf(String(last.content ?? ""));
+	if (!failure || !PROVIDER_FRAMED.test(failure.trim())) return null;
+	const cls = classifyCodingFailure(new Error(failure)).class;
+	if (cls !== "provider_credit" && cls !== "provider_credentials") return null;
+	return {
+		decision: "escalate",
+		nextInstruction: "",
+		reason: `The agent's AI provider refused its turn — ${DRIVER_RESUME_POLICY[cls].why}. Every further step would fail the same way, so the loop stopped without asking the orchestrator. (${failure.slice(0, 200)})`,
+	};
+}
+
+/**
  * Ask the orchestrator what to do next.
  *
  * Swallows transient model failures into an escalation a human can see, rather than throwing
@@ -79,7 +122,22 @@ export async function runLoopDecide(
 	raw: Partial<LoopDecideInput>,
 ): Promise<LoopDecisionResult> {
 	const input = sanitizeDecideInput(raw);
-	const system = buildLoopSystemPrompt(input.iteration, input.maxIterations);
+	const settled = settledDecision(input);
+	if (settled) {
+		// Recorded, because a decision nobody paid for leaves no `llm.prompt_sections` row behind —
+		// without this the trace would show a turn and then a stop with nothing between them.
+		await logEvent(env, {
+			source: "loop",
+			event: "loop.decide_skipped",
+			message: settled.reason.slice(0, 500),
+			userId,
+			instanceId,
+			traceId: input.traceId,
+			level: "warn",
+		});
+		return settled;
+	}
+	const system =buildLoopSystemPrompt(input.iteration, input.maxIterations);
 	const user = buildLoopUserContent(input);
 	try {
 		const res = (await runUserWorkersAi(

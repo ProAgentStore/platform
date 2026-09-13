@@ -251,7 +251,7 @@ export function readAgentReply(body: unknown): string {
 		response?: unknown;
 		error?: unknown;
 	};
-	if (typeof b.error === "string" && b.error) return `(the agent failed: ${b.error.slice(0, 500)})`;
+	if (typeof b.error === "string" && b.error) return `${AGENT_FAILED_PREFIX}${b.error.slice(0, 500)})`;
 	const textOf = (v: unknown): string => {
 		if (typeof v === "string") return v;
 		const c = (v as { content?: unknown } | null)?.content;
@@ -259,4 +259,18 @@ export function readAgentReply(body: unknown): string {
 	};
 	const parts = [textOf(b.toolMessage), textOf(b.message) || (typeof b.response === "string" ? b.response : "")].filter(Boolean);
 	return parts.join("\n\n").slice(0, 8000) || "(the agent returned nothing)";
+}
+
+/**
+ * How `readAgentReply` frames a turn the AgentDO refused with `{ error }`. The platform writes it,
+ * so it is the one part of a transcript a rule may read without guessing what the agent meant. It is
+ * a string, not a type: a reply that reproduced this exact framing would read the same. The only rule
+ * reading it (`settledDecision`) can at worst STOP a run early, never spend or continue one.
+ */
+export const AGENT_FAILED_PREFIX = "(the agent failed: ";
+
+/** The DO's own error sentence, when `reply` is a failed turn; null for anything the agent said. */
+export function agentFailureOf(reply: string): string | null {
+	if (!reply.startsWith(AGENT_FAILED_PREFIX)) return null;
+	return reply.slice(AGENT_FAILED_PREFIX.length).replace(/\)$/, "");
 }

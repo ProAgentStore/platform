@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	agentFailureOf,
 	BLOCKED_CAPABILITY_REPEATS,
 	instructionKey,
 	isCapabilityBlocked,
@@ -288,6 +289,11 @@ describe("readAgentReply — the AgentDO response shape", () => {
 
 	it("surfaces the DO's error instead of a blank turn", () => {
 		expect(readAgentReply({ error: "No API key configured." })).toContain("No API key configured.");
+	});
+
+	it("frames a failed turn so agentFailureOf can recover the DO's sentence — and nothing else", () => {
+		expect(agentFailureOf(readAgentReply({ error: "Anthropic (400): credit balance (low)" }))).toBe("Anthropic (400): credit balance (low)");
+		expect(agentFailureOf("I failed to find the file.")).toBeNull();
 	});
 
 	it("accepts a plain-string message and a legacy `response` field", () => {
