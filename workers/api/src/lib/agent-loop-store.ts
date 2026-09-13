@@ -250,19 +250,42 @@ export async function listLoopRuns(env: Env, userId: string, instanceId: string,
  * How far back a resume note will look for the run it is about (#523).
  *
  * A bound, not a policy: without one this query walks `idx_agent_loop_runs_instance` to the
- * beginning of the instance's history every time there is NO interrupted run, which is the normal
+ * beginning of the instance's history every time there is NO resumable run, which is the normal
  * case on every ordinary start. Six hours is also the semantic answer — a note about work a run did
  * last week is not a checkpoint, it is archaeology, and the repository has moved since.
  */
 export const RESUME_NOTE_LOOKBACK_MS = 6 * 60 * 60 * 1000;
 
 /**
- * The last run on THIS session that the platform cut off (#523, item 4).
+ * The stop reasons after which a successor is told what already landed (#523 item 4, #806).
  *
- * `interrupted` is the one stop reason that means "the objective never reported" rather than "the
- * objective failed" (#546), so it is the only one whose work a successor should be told to preserve.
- * A `failed` run's acts are not a checkpoint — the run got to say what happened, and repeating its
- * steps may be exactly right.
+ * The test is "did the run reach a verdict on its objective". These four did not — something else
+ * ended the run while the work was still going, and a new run started from the bare objective
+ * re-does what is already pushed:
+ *
+ *   * `interrupted`     — the platform cut the invocation off (#546).
+ *   * `max_iterations`  — the Pilot used up its step budget mid-work (#806's own case).
+ *   * `engine_limit`    — the coding CLI's usage window outlasted the run's wait (#541).
+ *   * `provider_credit` — the owner's Anthropic account ran dry; its own sentence says "start the
+ *                         run again" after topping up (#773), and that restart is this successor.
+ *
+ * The rest are verdicts or choices and stay out. A `failed` run got to say what happened, and
+ * repeating its steps may be exactly right. `escalated` is the run asking a human, answered through
+ * its own handoff rather than a successor. `cancelled` is a human stopping it, and a restart after
+ * that may well be the "start clean" #806 lists as an option in its own right. `done` needs nothing.
+ */
+export const RESUMABLE_STOP_REASONS = ["interrupted", "max_iterations", "engine_limit", "provider_credit"] as const satisfies readonly LoopStopReason[];
+
+export type ResumableStopReason = (typeof RESUMABLE_STOP_REASONS)[number];
+
+export function isResumableStopReason(reason: string | null | undefined): reason is ResumableStopReason {
+	return (RESUMABLE_STOP_REASONS as readonly string[]).includes(reason ?? "");
+}
+
+/**
+ * The last run on THIS session that ended without a verdict on its objective (#523, item 4; #806).
+ *
+ * Which endings qualify, and why the others do not, is {@link RESUMABLE_STOP_REASONS}.
  *
  * IMMEDIATE successor only, which is why the query takes the most recent finished run and THEN asks
  * what ended it, rather than asking SQL for the most recent interrupted one. Those differ, and the
@@ -278,13 +301,13 @@ export const RESUME_NOTE_LOOKBACK_MS = 6 * 60 * 60 * 1000;
  * Ordered and bounded on `started_at` so it rides `idx_agent_loop_runs_instance` directly; see
  * {@link RESUME_NOTE_LOOKBACK_MS} for why the floor is not optional.
  */
-export async function lastInterruptedRunForSession(
+export async function lastUnfinishedRunForSession(
 	env: Env,
 	userId: string,
 	instanceId: string,
 	sessionId: string,
 	now: number = Date.now(),
-): Promise<LoopRunView | null> {
+): Promise<(LoopRunView & { stopReason: ResumableStopReason }) | null> {
 	const row = await env.DB.prepare(
 		`SELECT * FROM agent_loop_runs
 		  WHERE instance_id = ?2 AND user_id = ?1 AND session_id = ?3
@@ -294,9 +317,9 @@ export async function lastInterruptedRunForSession(
 	)
 		.bind(userId, instanceId, sessionId, now - RESUME_NOTE_LOOKBACK_MS)
 		.first<LoopRunRow>();
-	// The predecessor exists but ended normally — nothing to hand forward. See the header.
-	if (row?.stop_reason !== "interrupted") return null;
-	return toLoopRunView(row);
+	// The predecessor exists but reached a verdict — nothing to hand forward. See the header.
+	if (!row || !isResumableStopReason(row.stop_reason)) return null;
+	return { ...toLoopRunView(row), stopReason: row.stop_reason };
 }
 
 export async function listActiveRuns(env: Env, userId: string, instanceId: string): Promise<LoopRunView[]> {

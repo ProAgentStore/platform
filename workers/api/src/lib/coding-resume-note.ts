@@ -1,4 +1,9 @@
-// What a NEW run is told about the one the platform cut off before it (#523, item 4).
+// What a NEW run is told about the one before it that ended without a verdict (#523 item 4, #806).
+//
+// Written for the platform cutting a run off; #806 widened it to the other endings that leave work
+// half-done without the run having judged it — a spent step budget, an engine usage window, an empty
+// provider balance. Which endings those are is `RESUMABLE_STOP_REASONS` in `agent-loop-store.ts`.
+// Everything below about what the note may and may not claim holds for all of them unchanged.
 //
 // ── The defect
 //
@@ -43,7 +48,7 @@
 // reports one) is counted but not asserted: it gets a separate clause telling the run to VERIFY.
 // Collapsing the third into either of the others is exactly the inversion #594 was filed about.
 
-import { lastInterruptedRunForSession } from "./agent-loop-store.js";
+import { lastUnfinishedRunForSession, type ResumableStopReason } from "./agent-loop-store.js";
 import { type ActItem, actsInWindow } from "./instance-work.js";
 import type { Env } from "../types.js";
 
@@ -60,6 +65,23 @@ export const MAX_LISTED_ACTS = 8;
 /** Per-act cap. `toActItem` already clamps a summary to 200; this is the prompt's own budget. */
 export const MAX_ACT_CHARS = 120;
 
+/**
+ * How the note opens, per the way the predecessor ended.
+ *
+ * Every row says the same two things, because they are what the successor must not get wrong: the
+ * run did NOT finish, and it did NOT fail — so its landed work is to be kept, and the objective is
+ * still open. What differs is only the cause, and the cause must be the true one: telling a run that
+ * spent its step budget it was "interrupted by the platform" would put a false claim in the platform's
+ * voice, which is the exact thing #523 was filed against. The `interrupted` row is the pre-#806 text,
+ * byte for byte.
+ */
+const PREDECESSOR_ENDING: Record<ResumableStopReason, string> = {
+	interrupted: "a previous run on this session was interrupted by the platform before it could report. It was not your objective failing, and it did not finish",
+	max_iterations: "a previous run on this session used up its step limit before it could report. It was not your objective failing, and it did not finish",
+	engine_limit: "a previous run on this session stopped because the coding CLI's own usage limit had not reset in time. It was not your objective failing, and it did not finish",
+	provider_credit: "a previous run on this session stopped because the owner's AI provider account ran out of credit. It was not your objective failing, and it did not finish",
+};
+
 const truncate = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
 
 /**
@@ -71,25 +93,24 @@ const truncate = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).
  * where that gate lives.
  */
 /**
- * Deliberately takes ONLY the acts.
+ * Deliberately takes ONLY the acts and the stop reason.
  *
- * The interrupted run's objective is not an input: the new run already carries its own, and they
+ * The earlier run's objective is not an input: the new run already carries its own, and they
  * can legitimately differ — an owner who restarts with a narrower objective after a cut-off would
  * be told the old one in the platform's voice and plan against it. Its terminal `detail` is not an
  * input either; that string is composed for a HUMAN reading a board card, vendor advice and all
- * (`coding-run-report.ts`), and the one fact from it worth carrying — that the platform interrupted
- * the run — is stated below in this file's own words.
+ * (`coding-run-report.ts`), and the one fact from it worth carrying — WHY the run ended without a
+ * verdict — comes from the recorded stop reason and is stated in this file's own words
+ * ({@link PREDECESSOR_ENDING}).
  */
-export function codingResumeNote(acts: ReadonlyArray<ActItem>): string | null {
+export function codingResumeNote(acts: ReadonlyArray<ActItem>, endedBy: ResumableStopReason): string | null {
 	// FAILED acts are dropped here and never counted below: "attempted and failed" is not progress
 	// to preserve, and a run told to skip it would skip the retry that fixes it.
 	const landed = acts.filter((a) => a.ok === true);
 	const unobserved = acts.filter((a) => a.ok === null);
 	if (!landed.length && !unobserved.length) return null;
 
-	const lines: string[] = [
-		"PLATFORM NOTE (not from the human): a previous run on this session was interrupted by the platform before it could report. It was not your objective failing, and it did not finish — but the work below had ALREADY landed and is on the record.",
-	];
+	const lines: string[] = [`PLATFORM NOTE (not from the human): ${PREDECESSOR_ENDING[endedBy]} — but the work below had ALREADY landed and is on the record.`];
 
 	if (landed.length) {
 		const shown = landed.slice(0, MAX_LISTED_ACTS);
@@ -136,11 +157,11 @@ export async function pendingCodingResumeNote(
 	now: number = Date.now(),
 ): Promise<string | null> {
 	try {
-		const prev = await lastInterruptedRunForSession(env, params.userId, params.instanceId, params.sessionId, now);
+		const prev = await lastUnfinishedRunForSession(env, params.userId, params.instanceId, params.sessionId, now);
 		if (!prev) return null;
 		// The window is the interval during which that run was the one driving the session.
 		const acts = await actsInWindow(env, params.userId, params.instanceId, prev.startedAt, prev.finishedAt ?? now, 100);
-		return codingResumeNote(acts);
+		return codingResumeNote(acts, prev.stopReason);
 	} catch {
 		// The briefing is lost, the run is not. `api()`-side errors are already filed durably by the
 		// readers themselves; swallowing here would hide nothing that is not recorded elsewhere.
