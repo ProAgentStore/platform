@@ -248,6 +248,25 @@ describe("cloudflareAccessGate — enforce", () => {
 		expect(passed).toBe(false);
 	});
 
+	// #108 C2 — required, not checked-if-present. Cloudflare always sets both, so an assertion
+	// without one is not Cloudflare's; "no expiry" must never read as "never expires".
+	it("rejects a correctly signed token with NO exp", async () => {
+		const { exp: _exp, ...claims } = validClaims();
+		const { passed } = await run(ENFORCING, await signJwt(claims));
+		expect(passed).toBe(false);
+	});
+
+	it("rejects a correctly signed token whose exp is not a number", async () => {
+		const { passed } = await run(ENFORCING, await signJwt({ ...validClaims(), exp: "never" }));
+		expect(passed).toBe(false);
+	});
+
+	it("rejects a correctly signed token with NO iss", async () => {
+		const { iss: _iss, ...claims } = validClaims();
+		const { passed } = await run(ENFORCING, await signJwt(claims));
+		expect(passed).toBe(false);
+	});
+
 	/** Fail CLOSED: if the team JWKS is unreachable we must not admit the request.
 	 *  A DISTINCT team domain, because the JWKS cache is module-level and keyed by domain —
 	 *  reusing the usual one would silently serve a cached key and test nothing. */
@@ -274,5 +293,97 @@ describe("cloudflareAccessGate — enforce", () => {
 		vi.mocked(logError).mockRejectedValueOnce(new Error("D1 down"));
 		const { passed } = await run(CONFIGURED);
 		expect(passed).toBe(true);
+	});
+});
+
+// ── #108 C1: a service token verifies exactly like a person ─────────────────
+// Same aud, same iss, same JWKS. Without classification, one Service Auth policy added in the
+// dashboard widens the gate to a bearer credential that never met the IdP — with no deploy.
+describe("cloudflareAccessGate — service-token assertions", () => {
+	const ENFORCING = { ...CONFIGURED, CF_ACCESS_ENFORCE: "true" };
+	const { email: _email, ...base } = validClaims();
+	/** What Cloudflare mints for a service token: a Client ID as `common_name`, and no `email`. */
+	const serviceClaims = () => ({ ...base, exp: Math.floor(Date.now() / 1000) + 600, type: "service_auth", common_name: "abc123.access" });
+
+	it("BLOCKS a correctly signed service assertion by default, under its own outcome", async () => {
+		const { passed, thrown } = await run(ENFORCING, await signJwt(serviceClaims()));
+		expect(passed).toBe(false);
+		expect((thrown as { status: number }).status).toBe(403);
+		const arg = vi.mocked(logError).mock.calls[0][1];
+		// NOT "invalid": that would send the reader to check an aud and a JWKS that are both fine.
+		expect(arg.context).toMatchObject({ mode: "enforce", outcome: "service", kind: "service", commonName: "abc123.access" });
+		expect(arg.message).toContain("CF_ACCESS_ALLOW_SERVICE");
+	});
+
+	it("classifies on EITHER signal — `type` alone, or a common_name with no email", async () => {
+		const typeOnly = await run(ENFORCING, await signJwt({ ...base, type: "service_auth" }));
+		expect(typeOnly.passed).toBe(false);
+		const nameOnly = await run(ENFORCING, await signJwt({ ...base, common_name: "abc123.access" }));
+		expect(nameOnly.passed).toBe(false);
+	});
+
+	it("does NOT mistake a person for a machine because their token also carries a common_name", async () => {
+		const { passed } = await run(ENFORCING, await signJwt({ ...validClaims(), common_name: "" }));
+		expect(passed).toBe(true);
+		const both = await run(ENFORCING, await signJwt({ ...validClaims(), common_name: "abc123.access" }));
+		expect(both.passed).toBe(true);
+	});
+
+	it("audit ALLOWS it and records it — the soak must surface a stray Service Auth policy", async () => {
+		const { passed } = await run(CONFIGURED, await signJwt(serviceClaims()));
+		expect(passed).toBe(true);
+		expect(vi.mocked(logError).mock.calls[0][1].context).toMatchObject({ mode: "audit", outcome: "service" });
+	});
+
+	it("admits it, silently, only on an explicit CF_ACCESS_ALLOW_SERVICE affirmative", async () => {
+		for (const v of ["1", "true", "yes", "on"]) {
+			const { passed } = await run({ ...ENFORCING, CF_ACCESS_ALLOW_SERVICE: v }, await signJwt(serviceClaims()));
+			expect(passed, v).toBe(true);
+		}
+		expect(logError).not.toHaveBeenCalled();
+		// The lockout rule inverted: here a typo must degrade to REFUSING, never to admitting.
+		for (const v of ["", "false", "0", "undefined", "maybe"]) {
+			const { passed } = await run({ ...ENFORCING, CF_ACCESS_ALLOW_SERVICE: v }, await signJwt(serviceClaims()));
+			expect(passed, v).toBe(false);
+		}
+	});
+
+	it("the flag admits a VERIFIED service token only — a forged one is still invalid", async () => {
+		const token = await signJwt({ ...serviceClaims(), aud: ["someone-elses-aud"] });
+		const { passed } = await run({ ...ENFORCING, CF_ACCESS_ALLOW_SERVICE: "true" }, token);
+		expect(passed).toBe(false);
+		expect(vi.mocked(logError).mock.calls[0][1].context).toMatchObject({ outcome: "invalid" });
+	});
+});
+
+// ── #108 C3: an `invalid` burst has to be diagnosable from the log alone ─────
+describe("cloudflareAccessGate — what the log says about a refused token", () => {
+	it("names the kid and the email of an invalid user token", async () => {
+		await run(CONFIGURED, await signJwt({ ...validClaims(), aud: ["someone-elses-aud"] }));
+		expect(vi.mocked(logError).mock.calls[0][1].context).toMatchObject({
+			outcome: "invalid",
+			kid: KID,
+			kind: "user",
+			email: "operator@example.com",
+		});
+	});
+
+	it("names a kid the JWKS does not have — what a key rotation looks like", async () => {
+		await run(CONFIGURED, await signJwt(validClaims(), { kid: "rotated-away" }));
+		expect(vi.mocked(logError).mock.calls[0][1].context).toMatchObject({ outcome: "invalid", kid: "rotated-away" });
+	});
+
+	it("bounds what an attacker-supplied claim can write into the log", async () => {
+		await run(CONFIGURED, await signJwt({ ...validClaims(), aud: ["x"], email: "a".repeat(5000) }));
+		const ctxArg = vi.mocked(logError).mock.calls[0][1].context as { email: string };
+		expect(ctxArg.email.length).toBe(128);
+	});
+
+	it("a missing or unparseable token carries no identity, and does not throw building the context", async () => {
+		await run(CONFIGURED);
+		expect(vi.mocked(logError).mock.calls[0][1].context).toMatchObject({ outcome: "missing" });
+		vi.mocked(logError).mockClear();
+		await run(CONFIGURED, "not.a.jwt");
+		expect(vi.mocked(logError).mock.calls[0][1].context).toMatchObject({ outcome: "invalid" });
 	});
 });

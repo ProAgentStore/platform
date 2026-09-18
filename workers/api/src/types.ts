@@ -106,6 +106,8 @@ export interface Env {
 	CF_ACCESS_TEAM_DOMAIN?: string;
 	CF_ACCESS_AUD?: string;
 	CF_ACCESS_ENFORCE?: string;
+	/** Same affirmatives as CF_ACCESS_ENFORCE. Unset = a service-token assertion is refused (#108 C1). */
+	CF_ACCESS_ALLOW_SERVICE?: string;
 	/**
 	 * Meta connector (WhatsApp Business Cloud + Instagram Messaging). Platform-level
 	 * business credentials; inert until set (after Meta app + business setup + review).

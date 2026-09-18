@@ -216,6 +216,20 @@ code change or a redeploy of anything else.
 - **`requireAdmin` still runs behind the perimeter** and remains the authorisation decision. Access
   answers "may you reach the origin", not "are you an admin" — the same two-credential split
   documented for the Rocket Lab CRM. Do not delete the role check because Access is on.
+- **Service tokens are refused by default.** A Cloudflare service token that passes a Service Auth
+  policy yields an assertion with the same `aud`, `iss` and signing keys as a person's, so the gate
+  classifies every verified assertion (`type: "service_auth"`, or a `common_name` with no `email`)
+  and treats a service one as its own outcome — `service` in the `cf-access` log, 403 under
+  `enforce` — unless the `CF_ACCESS_ALLOW_SERVICE` secret is an affirmative (`1`/`true`/`yes`/`on`).
+  The point is that adding a Service Auth policy in the dashboard must not widen the admin API by
+  itself. **Today there is no non-browser admin caller and no service token; do not create one.**
+  If one is ever needed: (1) it still sends a PAGS admin bearer — a service token alone never
+  passes `requireAdmin`; (2) it calls `https://proagentstore.online/admin/api/v1/admin/...`, never
+  `api.` directly; (3) one named token per caller, Client ID in `inventory.yaml`, secret in SOPS;
+  (4) only then set `CF_ACCESS_ALLOW_SERVICE`. Rollback is deleting that secret.
+- **Drift.** The API deploy's smoke test asserts `/health`'s `adminPerimeter` against the repo
+  variable `EXPECTED_ADMIN_PERIMETER` (default `off`). Move it by hand with each rollout step;
+  see `cloudflare-access-setup.md` §4.2.
 - **Service-binding callers.** Nothing calls `/v1/admin/*` over the host worker's `API` binding
   today (that binding is used for the sitemap's agent list). If one is ever added, note that a
   service-binding subrequest carries no Access JWT and would be refused under `enforce` — the

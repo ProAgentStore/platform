@@ -79,11 +79,33 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Smoke test
+        # The admin perimeter's mode is asserted, not just the 200 (#108 C4). `/health` reports
+        # `adminPerimeter` = off | audit | enforce, derived from Worker SECRETS — which live outside
+        # this repo, so a `wrangler secret delete`, a typo'd value or a deploy that lost them turns
+        # the Cloudflare Access gate back to `off` with every automated signal still green. `off`
+        # is indistinguishable from healthy unless something says what it is SUPPOSED to be.
+        #
+        # EXPECTED_ADMIN_PERIMETER is a repo VARIABLE (Settings → Secrets and variables → Actions →
+        # Variables), defaulting to `off`, which is what production runs today. It is moved by
+        # hand, in step with the rollout in docs/admin-access-perimeter.md: set it to `audit` when
+        # CF_ACCESS_TEAM_DOMAIN + CF_ACCESS_AUD go in, and to `enforce` with CF_ACCESS_ENFORCE.
+        # The worker is ALREADY deployed when this runs, so a mismatch does not roll anything
+        # back — it makes the drift a red deploy instead of a silently re-opened admin surface.
+        env:
+          EXPECTED_ADMIN_PERIMETER: ${{ vars.EXPECTED_ADMIN_PERIMETER || 'off' }}
         run: |
           for i in 1 2 3 4 5; do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://api.proagentstore.online/health)
+            STATUS=$(curl -s -o /tmp/health.json -w "%{http_code}" https://api.proagentstore.online/health)
             if [ "$STATUS" = "200" ]; then
               echo "Health check passed"
+              ACTUAL=$(jq -r '.adminPerimeter // "absent"' /tmp/health.json)
+              if [ "$ACTUAL" != "$EXPECTED_ADMIN_PERIMETER" ]; then
+                echo "::error::Admin perimeter is '$ACTUAL' but EXPECTED_ADMIN_PERIMETER is '$EXPECTED_ADMIN_PERIMETER'."
+                echo "If the CF_ACCESS_* secrets were changed on purpose, update the EXPECTED_ADMIN_PERIMETER repo variable to match."
+                echo "If they were not, the Cloudflare Access gate on /v1/admin/* has drifted — see docs/admin-access-perimeter.md."
+                exit 1
+              fi
+              echo "Admin perimeter is '$ACTUAL', as expected"
               exit 0
             fi
             echo "Attempt $i: got $STATUS, retrying..."

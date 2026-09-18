@@ -212,6 +212,13 @@ Value shapes, because the gate checks them literally:
 
 *Verify:* `pnpm exec wrangler secret list` in `workers/api` names both. Then go to §5.
 
+**Then set the repo variable `EXPECTED_ADMIN_PERIMETER` to `audit`** (GitHub → Settings → Secrets
+and variables → Actions → Variables). The API deploy's smoke test asserts that `/health` reports
+the mode this variable names — default `off` — so that a deleted or typo'd secret becomes a red
+deploy instead of a silently re-opened admin surface. It does not move by itself: leave it at
+`off` and the next API deploy fails with a message saying exactly this. Move it to `enforce` in
+§5.4, and back again on any §5.5 rollback.
+
 ### 4.3 Local development: `.dev.vars` (optional)
 
 Locally the gate should normally stay `off`: there is no Cloudflare edge in front of `wrangler dev`,
@@ -301,6 +308,8 @@ The second line is the negative test the issue asks for: a request with no Acces
 at the gate, before session auth (it was `401` while the gate was off or auditing). Then, in a
 private window, confirm the portal still loads through the login and a non-allowlisted identity is
 still refused.
+
+Set the repo variable `EXPECTED_ADMIN_PERIMETER` to `enforce` (see §4.2).
 
 ### 5.5 Rollback, at any point
 

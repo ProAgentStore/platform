@@ -20,6 +20,27 @@ export class ApiError extends Error {
 	}
 }
 
+/**
+ * The two 403s the Cloudflare Access gate answers with under `enforce` (#108 C5), word for word
+ * from `workers/api/src/lib/cf-access.ts` — api.test.ts reads that file so they cannot drift.
+ * This app is dependency-free by design (see the header), so the strings are matched, not imported.
+ */
+const ACCESS_GATE_403 = ["Cloudflare Access required", "Invalid Cloudflare Access token"];
+
+/**
+ * A gate 403 is an expired Access session, not a permission wall, and must not read like one.
+ *
+ * The Access session (24h) is separate from the PAGS sign-in (30d) and lapses on its own. Only a
+ * TOP-LEVEL navigation renews it — Cloudflare cannot redirect an XHR to a login page — so a tab
+ * left open overnight starts failing every request with "Cloudflare Access required", which tells
+ * the operator nothing about what to do. Signing out would not help either: the PAGS session is
+ * fine. Returns null for every other error, which is then shown as the server wrote it.
+ */
+export function accessGateNotice(status: number, error: string | undefined): string | null {
+	if (status !== 403 || !error || !ACCESS_GATE_403.includes(error)) return null;
+	return "Your Cloudflare Access session has expired. Open /admin/ in a new tab to renew it, then retry here.";
+}
+
 export async function api<T = unknown>(path: string, opts: RequestInit = {}): Promise<T> {
 	const token = getToken();
 	const headers: Record<string, string> = {
@@ -34,7 +55,7 @@ export async function api<T = unknown>(path: string, opts: RequestInit = {}): Pr
 	}
 	if (!res.ok) {
 		const body = (await res.json().catch(() => ({}))) as { error?: string };
-		throw new ApiError(res.status, body.error || `HTTP ${res.status}`);
+		throw new ApiError(res.status, accessGateNotice(res.status, body.error) || body.error || `HTTP ${res.status}`);
 	}
 	return res.json() as Promise<T>;
 }

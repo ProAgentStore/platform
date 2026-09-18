@@ -33,6 +33,16 @@ import { logError } from "./error-log.js";
  * only then set `CF_ACCESS_ENFORCE`. Default stays `off`, and `audit` is the default the
  * moment the vars appear, so a half-finished rollout degrades to observation rather than
  * to a lockout.
+ *
+ * ── A service token is not a person, and is refused unless asked for (#108 C1) ──
+ *
+ * A Cloudflare SERVICE TOKEN that passes a Service Auth policy yields an assertion with the
+ * same `aud`, the same `iss` and a signature from the same JWKS as a human's. Verified on
+ * those alone it is indistinguishable, so adding a Service Auth policy in the dashboard — one
+ * click, no deploy, no review — would silently widen this gate to a bearer credential that
+ * skips the IdP entirely. The assertion is therefore CLASSIFIED after it verifies, and a
+ * service one is refused unless `CF_ACCESS_ALLOW_SERVICE` is an affirmative: its existence has
+ * to be a decision visible in `wrangler secret list`, not a side-effect of the dashboard.
  */
 
 interface Jwk {
@@ -83,40 +93,79 @@ function b64urlToUint8(b64url: string): Uint8Array {
 	return out;
 }
 
-async function verifyAccessJwt(token: string, teamDomain: string, aud: string): Promise<boolean> {
+/** Who the assertion says it is for. Both fields are absent only on a token too broken to parse. */
+type AccessPrincipal = { kind: "user"; email?: string } | { kind: "service"; commonName?: string };
+
+/**
+ * What one assertion turned out to be. `kid` and `principal` are reported even when `valid` is
+ * false — they are then UNVERIFIED claims, which is exactly what diagnosing an `invalid` burst
+ * needs (a `kid` the JWKS no longer has is a key rotation; a foreign `email` is a sibling app's
+ * token). They are evidence for the log and never an input to the decision.
+ */
+interface Assertion {
+	valid: boolean;
+	kid?: string;
+	principal?: AccessPrincipal;
+}
+
+/** Claims come off the wire; keep what reaches the log a bounded string. */
+const clip = (v: unknown): string | undefined => (typeof v === "string" && v ? v.slice(0, 128) : undefined);
+
+/**
+ * User or service token (#108 C1). Cloudflare marks a service assertion with
+ * `type: "service_auth"` and gives it a `common_name` (the token's Client ID) and no `email`;
+ * either signal is enough, so a change to one of them cannot reclassify a machine as a person.
+ */
+function principalOf(payload: { type?: unknown; email?: unknown; common_name?: unknown }): AccessPrincipal {
+	const email = clip(payload.email);
+	const commonName = clip(payload.common_name);
+	if (payload.type === "service_auth" || (commonName && !email)) return { kind: "service", commonName };
+	return { kind: "user", email };
+}
+
+async function verifyAccessJwt(token: string, teamDomain: string, aud: string): Promise<Assertion> {
 	const parts = token.split(".");
-	if (parts.length !== 3) return false;
+	if (parts.length !== 3) return { valid: false };
 	const [headerB64, payloadB64, sigB64] = parts;
 
 	let header: { kid?: string; alg?: string };
-	let payload: { aud?: string | string[]; exp?: number; iss?: string };
+	let payload: { aud?: string | string[]; exp?: number; iss?: string; type?: unknown; email?: unknown; common_name?: unknown };
 	try {
 		header = JSON.parse(new TextDecoder().decode(b64urlToUint8(headerB64)));
 		payload = JSON.parse(new TextDecoder().decode(b64urlToUint8(payloadB64)));
 	} catch {
-		return false;
+		return { valid: false };
 	}
-	if (header.alg !== "RS256" || !header.kid) return false;
+	const found = { kid: clip(header.kid), principal: principalOf(payload) };
+	if (header.alg !== "RS256" || !header.kid) return { valid: false, ...found };
 
 	// Claims: audience must include our AUD; must not be expired; issuer is the team.
+	// `exp` and `iss` are REQUIRED, not checked-if-present (#108 C2): Cloudflare always sets both,
+	// so an assertion without them is not Cloudflare's — and "no expiry" must never read as "never
+	// expires", nor "no issuer" as "any team".
 	const auds = Array.isArray(payload.aud) ? payload.aud : payload.aud ? [payload.aud] : [];
-	if (!auds.includes(aud)) return false;
-	if (payload.exp && payload.exp * 1000 < Date.now()) return false;
-	if (payload.iss && payload.iss !== `https://${teamDomain}`) return false;
+	if (!auds.includes(aud)) return { valid: false, ...found };
+	if (typeof payload.exp !== "number" || payload.exp * 1000 < Date.now()) return { valid: false, ...found };
+	if (payload.iss !== `https://${teamDomain}`) return { valid: false, ...found };
 
-	const keys = await getJwks(teamDomain);
-	const jwk = keys.find((k) => k.kid === header.kid);
-	if (!jwk) return false;
+	try {
+		const keys = await getJwks(teamDomain);
+		const jwk = keys.find((k) => k.kid === header.kid);
+		if (!jwk) return { valid: false, ...found };
 
-	const key = await crypto.subtle.importKey(
-		"jwk",
-		{ kty: jwk.kty, n: jwk.n, e: jwk.e, alg: "RS256", ext: true },
-		{ name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-		false,
-		["verify"],
-	);
-	const data = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
-	return crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, b64urlToUint8(sigB64), data);
+		const key = await crypto.subtle.importKey(
+			"jwk",
+			{ kty: jwk.kty, n: jwk.n, e: jwk.e, alg: "RS256", ext: true },
+			{ name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+			false,
+			["verify"],
+		);
+		const data = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
+		return { valid: await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, b64urlToUint8(sigB64), data), ...found };
+	} catch {
+		// Fail CLOSED: an unreachable JWKS or an unimportable key is not a valid signature.
+		return { valid: false, ...found };
+	}
 }
 
 /** Is the CF Access perimeter configured for this environment? */
@@ -150,7 +199,7 @@ export function cloudflareAccessMode(env: Env): CfAccessMode {
  * healthy perimeter must produce NO log volume, or the signal that it is healthy would be
  * buried in the evidence of it (the #423 lesson: a row per request is a log nobody reads).
  */
-type AccessOutcome = "valid" | "missing" | "invalid";
+type AccessOutcome = "valid" | "missing" | "invalid" | "service";
 
 /**
  * One fixed string per (mode, outcome), because `logError` collapses repeats only on a
@@ -166,6 +215,18 @@ const OUTCOME_MESSAGE: Record<Exclude<AccessOutcome, "valid">, Record<"audit" | 
 		audit: "Cloudflare Access (audit): an admin request carried an invalid Access token — do NOT enforce yet",
 		enforce: "Cloudflare Access (enforce): blocked an admin request carrying an invalid Access token",
 	},
+	// Correctly signed, for this application — and a machine. Its own outcome, because "invalid"
+	// would send the reader to check the aud and the JWKS, which are both fine.
+	service: {
+		audit: "Cloudflare Access (audit): an admin request carried a SERVICE-TOKEN assertion and CF_ACCESS_ALLOW_SERVICE is not set — do NOT enforce yet",
+		enforce: "Cloudflare Access (enforce): blocked an admin request carrying a service-token assertion (CF_ACCESS_ALLOW_SERVICE is not set)",
+	},
+};
+
+const BLOCKED_REPLY: Record<Exclude<AccessOutcome, "valid">, string> = {
+	missing: "Cloudflare Access required",
+	invalid: "Invalid Cloudflare Access token",
+	service: "Cloudflare Access service tokens are not enabled for the admin API",
 };
 
 /**
@@ -190,15 +251,27 @@ export function cloudflareAccessGate() {
 		}
 
 		const token = c.req.header("Cf-Access-Jwt-Assertion");
-		const outcome: AccessOutcome = !token
+		const assertion = token
+			? await verifyAccessJwt(token, c.env.CF_ACCESS_TEAM_DOMAIN as string, c.env.CF_ACCESS_AUD as string)
+			: null;
+		const outcome: AccessOutcome = !assertion
 			? "missing"
-			: (await verifyAccessJwt(token, c.env.CF_ACCESS_TEAM_DOMAIN as string, c.env.CF_ACCESS_AUD as string).catch(
-						() => false,
-					))
-				? "valid"
-				: "invalid";
+			: !assertion.valid
+				? "invalid"
+				: assertion.principal?.kind === "service" && !truthy(c.env.CF_ACCESS_ALLOW_SERVICE)
+					? "service"
+					: "valid";
 
 		if (outcome === "valid") return next();
+
+		// Whose token it was, and which key it named (#108 C3). Unverified when the outcome is
+		// `invalid` — see `Assertion`.
+		const who = assertion?.principal;
+		const seen = {
+			kid: assertion?.kid,
+			kind: who?.kind,
+			...(who?.kind === "service" ? { commonName: who.commonName } : { email: who?.email }),
+		};
 
 		// Best-effort and never fatal: the perimeter's decision must not depend on the log
 		// being writable, in either direction.
@@ -207,11 +280,11 @@ export function cloudflareAccessGate() {
 			level: "warn",
 			status: mode === "enforce" ? 403 : undefined,
 			message: OUTCOME_MESSAGE[outcome][mode],
-			context: { mode, outcome, path: c.req.path, method: c.req.method },
+			context: { mode, outcome, path: c.req.path, method: c.req.method, ...seen },
 		}).catch(() => undefined);
 
 		// Audit observes and stands aside — this is the whole point of the mode.
 		if (mode === "audit") return next();
-		throw new HttpError(403, outcome === "missing" ? "Cloudflare Access required" : "Invalid Cloudflare Access token");
+		throw new HttpError(403, BLOCKED_REPLY[outcome]);
 	};
 }
