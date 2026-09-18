@@ -645,7 +645,12 @@ const PINS = {
 	// to disagree (#241/#537). The session-lifecycle half of this region did NOT move — measured at
 	// 48 values crossing that boundary, 15 of them setters, which is a bigger thing to hold than
 	// the lines it would remove.
-	"agents/coder/web/src/CodingTab.tsx": 1194,
+	// 1194 -> 1136 (refs #776): three leaf slices of the multi-repo session view — the signed-out
+	// CTA (written out twice, once per session view), the credential strip and the sign-in prompt —
+	// are ./ClaudeSignedOutBanner, ./EngineCredentialStrip and ./EngineSigninPrompt: 2, 2 and 3 props,
+	// no setters. The two render branches themselves did NOT move: counted at ~39 and ~36 values
+	// read, and ten assertions in repos-list.test.ts slice the solo branch out of this file by name.
+	"agents/coder/web/src/CodingTab.tsx": 1136,
 	// +18 for #425: two Chrome launch flags, the args array reformatted one-per-line to fit them,
 	// and the paragraph saying why they are a PAIR. `--use-fake-ui-for-media-stream` on its own
 	// auto-GRANTS the real microphone to any page the agent drives — strictly worse than the prompt
@@ -1688,7 +1693,10 @@ const PINS = {
 	// +7 on the CodingTab split: the entry above comes DOWN by 66, and a lowered pin costs this
 	// file the same lines a raised one does — four of why, plus these three. Same price and same
 	// reason as the #696/#703 notes above: SLACK would have let the reclaimed headroom go unrecorded.
-	"scripts/check-file-size.mjs": 1772,
+	// +8 on the second CodingTab split (refs #776): the entry above comes DOWN by 58; five lines of
+	// why — most of it the boundary that was measured and left alone — plus these three. Same price
+	// as the first split's note directly above.
+	"scripts/check-file-size.mjs": 1780,
 };
 
 /**

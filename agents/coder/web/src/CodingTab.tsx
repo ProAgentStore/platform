@@ -31,9 +31,12 @@ import SelectedRepoSettings from "./SelectedRepoSettings";
 import EnginesModal from "./EnginesModal";
 import BuildsPanel from "./BuildsPanel";
 import PullsPanel from "./PullsPanel";
-import { engineAuthBadge, isClaudeSignedOut, type EngineAuthReport } from "./engine-auth-view";
-import { engineInvocationBadge, type EngineInvocationReport } from "./engine-invocation-mode";
+import { isClaudeSignedOut, type EngineAuthReport } from "./engine-auth-view";
+import type { EngineInvocationReport } from "./engine-invocation-mode";
 import type { EngineTurnReport } from "./engine-turn-view";
+import ClaudeSignedOutBanner from "./ClaudeSignedOutBanner";
+import EngineCredentialStrip from "./EngineCredentialStrip";
+import EngineSigninPrompt, { type AuthPrompt } from "./EngineSigninPrompt";
 import { Copy, FolderCog, Square, SquareTerminal, FolderGit2, Hammer, CircleDot, GitPullRequest, Cpu, RotateCw } from "lucide-react";
 import Button from "./Button";
 
@@ -74,9 +77,6 @@ function saveLastRepo(instanceId: string, repoId: string) {
 function loadLastRepo(instanceId: string): string | null {
 	try { return localStorage.getItem(lastRepoKey(instanceId)); } catch { return null; }
 }
-
-/** Returned by /capture when the engine is waiting for a human to sign in. */
-type AuthPrompt = { kind: "oauth-url" | "menu" | "unknown"; url: string | null; evidence: string; guidance: string };
 
 export default function CodingTab({ instanceId, initialSessionId, onHeaderOverride, singleRepo = false, copilot = true, initialBuildsRepoId }: Props) {
 	const navigate = useNavigate();
@@ -916,13 +916,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				<OpenNoticeBanners notices={openNotice} />
 				<EngineTurnBanner report={lastTurn} />
 
-				{claudeSignedOut && soloView === "terminal" && (
-					<div className="bg-warning-soft border border-warning-line text-warning rounded-lg p-2.5 m-2 text-sm">
-						<b>Claude Code is signed out on your runner.</b> Run <code>claude setup-token</code> on any machine (it opens a browser),
-						save the token under <button type="button" onClick={() => navigate("/profile")} className="underline font-semibold">Profile → API keys → Claude Code</button>,
-						then <button type="button" onClick={restartSession} className="underline font-semibold">Restart</button> this session.
-					</div>
-				)}
+				{claudeSignedOut && soloView === "terminal" && <ClaudeSignedOutBanner onOpenProfile={() => navigate("/profile")} onRestart={restartSession} />}
 
 				{soloView === "terminal" && (
 					openSession ? (
@@ -1026,13 +1020,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	if (openSession) {
 		return (
 			<div className="flex flex-col h-full">
-				{claudeSignedOut && (
-					<div className="bg-warning-soft border border-warning-line text-warning rounded-lg p-2.5 m-2 text-sm">
-						<b>Claude Code is signed out on your runner.</b> Run <code>claude setup-token</code> on any machine (it opens a browser),
-						save the token under <button type="button" onClick={() => navigate("/profile")} className="underline font-semibold">Profile → API keys → Claude Code</button>,
-						then <button type="button" onClick={restartSession} className="underline font-semibold">Restart</button> this session.
-					</div>
-				)}
+				{claudeSignedOut && <ClaudeSignedOutBanner onOpenProfile={() => navigate("/profile")} onRestart={restartSession} />}
 				<OpenNoticeBanners notices={openNotice} />
 				<EngineTurnBanner report={lastTurn} />
 				{workModeMsg && (
@@ -1057,55 +1045,9 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 						onClearChat={clearChat}
 					/>
 				)}
-				{/* Which credential this session actually used, and what the engine actually is
-				    (#248). Shown in BOTH views because the question it answers — "am I burning
-				    API credits or using the subscription I already pay for?" — had no answer
-				    anywhere in the product, and the one documented way it goes wrong is silent. */}
-				{(() => {
-					const badge = engineAuthBadge(engineAuth);
-					const invocation = engineInvocationBadge(engineInvocation);
-					if (!badge && !invocation) return null;
-					const warn = badge?.tone === "warn" || invocation?.tone === "warn";
-					return (
-						<div className={`mb-2 rounded-lg border px-3 py-2 ${warn ? "border-warning-line bg-warning-soft" : "border-line"}`}>
-							{badge && <div className="flex items-center gap-1.5 text-xs font-bold">
-								<Cpu size={12} className={warn ? "text-warning" : "text-muted"} />
-								<span>{badge.label}</span>
-							</div>}
-							{badge && <p className="text-2xs text-muted mt-0.5">{badge.detail}</p>}
-							{/* The ordinary case, stated (#343). `warning` only fires on a mismatch, so
-							    the most common resolution — this machine's own login — showed nothing
-							    at all, which is precisely the configuration where the owner cannot
-							    tell which account is paying. */}
-							{badge?.note && <p className="text-2xs text-muted-soft mt-1">{badge.note}</p>}
-							{engineAuth?.warning && <p className="text-xs text-warning mt-1">{engineAuth.warning}</p>}
-							{invocation && (
-								<p className="text-2xs text-muted mt-1">
-									<b>{invocation.label}.</b> {invocation.detail}
-								</p>
-							)}
-							{engineInvocation?.warning && <p className="text-xs text-warning mt-1">{engineInvocation.warning}</p>}
-						</div>
-					);
-				})()}
-				{/* Sign-in relay (#coding-auth). Shown in BOTH views: a blocked engine looks like a
-				    dead session, and the owner is as likely to be on the co-pilot view as the
-				    terminal when they notice nothing is happening. */}
-				{authPrompt && (
-					<div className="mb-2 rounded-lg border border-warning-line bg-warning-soft px-3 py-2">
-						<div className="text-sm font-semibold">This engine is waiting for you to sign in</div>
-						<p className="text-xs text-muted mt-0.5">{authPrompt.guidance}</p>
-						{authPrompt.evidence && (
-							<pre className="text-2xs text-muted mt-1 whitespace-pre-wrap break-all">{authPrompt.evidence}</pre>
-						)}
-						{authPrompt.kind === "oauth-url" && (
-							<Button variant="primary" size="md" className="mt-2" onClick={startSignin}>
-								Open sign-in on my runner
-							</Button>
-						)}
-						{signinMsg && <div className="text-xs text-muted mt-1.5">{signinMsg}</div>}
-					</div>
-				)}
+				{/* Both shown in BOTH views — the reasons are in the components (#248, #coding-auth). */}
+				<EngineCredentialStrip auth={engineAuth} invocation={engineInvocation} />
+				<EngineSigninPrompt prompt={authPrompt} message={signinMsg} onStartSignin={startSignin} />
 				{view === "terminal" && (
 					<TerminalView
 						termInput={termInput}
