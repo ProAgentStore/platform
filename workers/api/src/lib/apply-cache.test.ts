@@ -53,7 +53,12 @@ describe("ats apply cache", () => {
 				},
 				run: async () => {
 					const [userId, host, notes, steps, outcome] = args as [string, string, string, number, string];
-					store.set(`${userId}:${host}`, { notes, steps, outcome, updated_at: "2026-08-15 10:00:00" });
+					// Stamped NOW, the way D1's `datetime('now')` does — a fixed date here was a time bomb:
+					// `shouldReplaceCache` measures staleness against the real clock, so 30 days after
+					// the literal, a cancelled run was allowed to replace the "submitted" fixture and the
+					// suite went red with nothing changed (2026-09-14). The stale case below passes an
+					// explicit `now`, and is the only test that should ever depend on a date.
+					store.set(`${userId}:${host}`, { notes, steps, outcome, updated_at: new Date().toISOString().slice(0, 19).replace("T", " ") });
 					return { success: true };
 				},
 				all: async () => ({ results: [...store.entries()].map(([k, v]) => ({ host: k.split(":")[1], ...v })) }),
