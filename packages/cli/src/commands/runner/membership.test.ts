@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { diffMembership, instanceLabel, isEligible, pendingRegistrations, shouldRegisterOnOpen, type DiscoverableInstance } from "./membership.js";
+import { diffMembership, instanceLabel, isEligible, partitionByPin, pendingRegistrations, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance } from "./membership.js";
 
 const NODE = "my-laptop";
 const inst = (over: Partial<DiscoverableInstance> & { id: string }): DiscoverableInstance => ({
@@ -174,5 +174,51 @@ describe("the discovery poll actually performs the retry (#497)", () => {
 
 	it("reports the new state to the pane, so the ✗ can clear without a restart", () => {
 		expect(discovery).toContain("reportRegistration()");
+	});
+});
+
+// #810. The Mac mini started with every runtime agent on the account — 15 of them pinned to the
+// Air — attached and force-registered them all, watched discovery detach the 15 twenty seconds
+// later, and then reported "registered 16/31" for ten minutes while the screen said "Still
+// connecting". The split is the discovery rule applied at the start; the status is measured
+// against what is actually attached.
+describe("partitionByPin — the pin rule at the START, not twenty seconds in (#810)", () => {
+	it("keeps the unpinned and the pinned-here; sets aside what is pinned elsewhere", () => {
+		const here1 = inst({ id: "a" });
+		const here2 = inst({ id: "b", config: { runnerNode: NODE } });
+		const away = inst({ id: "c", config: { runnerNode: "RLs-MacBook-Air.local" } });
+		const split = partitionByPin([here1, away, here2], NODE);
+		expect(split.here.map((i) => i.id)).toEqual(["a", "b"]);
+		expect(split.elsewhere.map((i) => i.id)).toEqual(["c"]);
+	});
+
+	it("counts a pin to a name this machine used to wear as HERE — the same history discovery honours", () => {
+		const old = inst({ id: "a", config: { runnerNode: "Sergeys-Mac-mini.local" } });
+		expect(partitionByPin([old], NODE).elsewhere).toHaveLength(1);
+		expect(partitionByPin([old], NODE, ["Sergeys-Mac-mini.local"]).here).toHaveLength(1);
+	});
+
+	it("is exactly isEligible, element by element — one rule, two call sites", () => {
+		const all = [inst({ id: "a" }), inst({ id: "b", config: { runnerNode: "elsewhere" } }), inst({ id: "c", status: "cancelled" })];
+		const split = partitionByPin(all, NODE);
+		for (const i of all) expect(split.here.includes(i)).toBe(isEligible(i, NODE));
+	});
+});
+
+describe("registrationStatus — measured against the LIVE attached set (#810)", () => {
+	it("is ok when everything attached is registered, whatever the startup list was", () => {
+		expect(registrationStatus(["a", "b"], new Set(["a", "b", "zombie-from-startup"]))).toEqual({ agents: "2/2", state: "ok" });
+	});
+
+	it("is partial while some attached agent is unregistered, and fail when none is", () => {
+		expect(registrationStatus(["a", "b"], new Set(["a"]))).toEqual({ agents: "1/2", state: "partial" });
+		expect(registrationStatus(["a", "b"], new Set())).toEqual({ agents: "0/2", state: "fail" });
+	});
+
+	it("does not count a detached agent against the machine — the defect in one line", () => {
+		// 31 started, 15 detached by discovery, all 16 remaining registered: that is "ok", not
+		// "16/31 partial" forever.
+		const attached = Array.from({ length: 16 }, (_, i) => `here-${i}`);
+		expect(registrationStatus(attached, new Set(attached)).state).toBe("ok");
 	});
 });

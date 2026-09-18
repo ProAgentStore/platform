@@ -2,6 +2,9 @@ import { createRequire } from "node:module";
 import { Command } from "commander";
 import { requireSession } from "./login.js";
 import { maybeClaimMachineNames } from "../machine-claim.js";
+import { loadMachineIdentity } from "../machine.js";
+import { partitionByPin, type DiscoverableInstance } from "./runner/membership.js";
+import { hostname } from "node:os";
 import { writeLine } from "../output.js";
 import { clearScreen, printLogo, printStatus, printStep, waitForKey, type TuiState } from "../tui.js";
 import { parseStatusLine } from "./runner/status-line.js";
@@ -74,9 +77,11 @@ export const upCommand = new Command("up")
 			printStep("Failed to fetch instances: " + res.status, "fail");
 			process.exit(1);
 		}
-		const data = await res.json() as { instances?: Array<{ id: string; agent_id: string; status: string; name?: string; slug?: string; capabilities?: { runtime?: string | null } }> };
+		const data = await res.json() as { instances?: Array<DiscoverableInstance & { agent_id: string; slug?: string }> };
 		const active = (data.instances || []).filter((i) => i.status === "active");
 		let instances = active;
+		/** Runtime agents pinned to ANOTHER machine — served there, listed here, never attached (#810). */
+		let elsewhere: typeof active = [];
 
 		if (opts.instance) {
 			// Explicit pin: honor it as-is (the user knows what they're debugging).
@@ -102,16 +107,11 @@ export const upCommand = new Command("up")
 			process.exit(1);
 		}
 
-		state.instances = instances.map((i) => ({ id: i.id, name: i.name || i.slug || i.id.slice(0, 8) }));
-		printStep(`Found ${instances.length} instance${instances.length === 1 ? "" : "s"}`, "ok");
-		for (const inst of state.instances) {
-			writeLine(`    ${inst.name} (${inst.id.slice(0, 8)}...)`);
-		}
-
 		// Before the runner registers: offer the account's UNCLAIMED machine names (#460), so a
 		// laptop the network has renamed can say so and reconnect the pins stranded on its old
 		// names. Must happen here, ahead of the spawn — the child reads `machine.json` when it
-		// registers, and that register is what stamps the claim onto the rows.
+		// registers, and that register is what stamps the claim onto the rows — and ahead of the
+		// pin split below, so a name claimed just now counts as this machine's.
 		//
 		// Wrapped, gated and time-bounded: `pags up` is the entry point for every runtime agent, so
 		// nothing about a convenience prompt may keep it from starting. `--headless`, a non-TTY
@@ -121,6 +121,38 @@ export const upCommand = new Command("up")
 			apiBase: API_BASE,
 			headless: opts.headless,
 		}).catch(() => undefined);
+
+		// The pin rule, applied at the START (#810). It is the same rule discovery applies 20
+		// seconds in; applying it only there meant every runtime agent on the account was
+		// attached and force-registered first — suspending the OTHER machine's coding sessions on
+		// agents this one would then detach — and counted for the life of the process, so the
+		// screen never left "Still connecting". `--instance X` is exempt: it names exactly that
+		// agent, and the user debugging it knows where it is pinned.
+		if (!opts.instance) {
+			const split = partitionByPin(instances, hostname(), loadMachineIdentity(hostname()).names);
+			instances = split.here;
+			elsewhere = split.elsewhere;
+		}
+
+		if (instances.length === 0) {
+			// Every runtime agent is pinned to some other machine. Not an error — those machines
+			// serve them — but nothing for this one to do, said plainly rather than as a screen
+			// that never finishes connecting.
+			printStep(`All ${elsewhere.length} of your runtime agents are pinned to other machines`, "ok");
+			for (const inst of elsewhere) writeLine(`    ${inst.name || inst.slug || inst.id.slice(0, 8)} → ${inst.config?.runnerNode}`);
+			writeLine("  They are served there. To run one from this machine, change its \"Runs on\" pin in the console, then `pags up` again.");
+			process.exit(0);
+		}
+
+		state.instances = instances.map((i) => ({ id: i.id, name: i.name || i.slug || i.id.slice(0, 8) }));
+		printStep(`Found ${instances.length} instance${instances.length === 1 ? "" : "s"}`, "ok");
+		for (const inst of state.instances) {
+			writeLine(`    ${inst.name} (${inst.id.slice(0, 8)}...)`);
+		}
+		if (elsewhere.length) {
+			printStep(`${elsewhere.length} more pinned to other machines — served there, not attached here`, "ok");
+			for (const inst of elsewhere) writeLine(`    ${inst.name || inst.slug || inst.id.slice(0, 8)} → ${inst.config?.runnerNode}`);
+		}
 
 		state.activeInstance =
 			instances.length === 1

@@ -105,6 +105,41 @@ export function pendingRegistrations(attached: Iterable<string>, registered: Rea
 	return [...attached].filter((id) => !registered.has(id));
 }
 
+/**
+ * Split what `pags up` fetched into what THIS machine serves and what is pinned elsewhere (#810).
+ *
+ * The same rule discovery applies 20 seconds later, applied at the start — so an agent pinned to
+ * another machine is never attached, never force-registered (which would suspend that machine's
+ * coding sessions), and never counted against this machine's "registered N/M". Before this the
+ * startup list was every runtime agent on the account, discovery detached the pinned-elsewhere
+ * ones on its first pass, and the denominator kept the original count — so the screen read
+ * "Still connecting" for the life of the process on any account with two machines.
+ */
+export function partitionByPin<T extends DiscoverableInstance>(
+	instances: readonly T[],
+	thisNode: string,
+	alsoKnownAs: readonly string[] = [],
+): { here: T[]; elsewhere: T[] } {
+	const here: T[] = [];
+	const elsewhere: T[] = [];
+	for (const inst of instances) (isEligible(inst, thisNode, alsoKnownAs) ? here : elsewhere).push(inst);
+	return { here, elsewhere };
+}
+
+/**
+ * What the registration light should say, from the LIVE attached set (#810).
+ *
+ * The denominator is what this machine currently serves — not the list it was started with.
+ * Detaching an agent (a pin moved, an unsubscribe) must not leave the light "partial" forever
+ * for an agent nobody expects this machine to hold.
+ */
+export function registrationStatus(attached: Iterable<string>, registered: ReadonlySet<string>): { agents: string; state: "ok" | "partial" | "fail" } {
+	const ids = [...attached];
+	const have = ids.filter((id) => registered.has(id)).length;
+	const total = ids.length;
+	return { agents: `${have}/${total}`, state: have === total ? "ok" : have === 0 ? "fail" : "partial" };
+}
+
 /** A short, stable label for log lines: enough to recognise, short enough to scan. */
 export function instanceLabel(inst: { id: string; name?: string }): string {
 	const short = `${inst.id.slice(0, 8)}…`;

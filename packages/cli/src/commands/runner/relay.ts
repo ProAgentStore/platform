@@ -4,7 +4,7 @@ import { loadMachineIdentity } from "../../machine.js";
 import { writeError, writeLine } from "../../output.js";
 import { apiPathSegment, clean, pagsApiBase, requestPags, requestRunner } from "./http.js";
 import { CLI_VERSION } from "./process.js";
-import { diffMembership, instanceLabel, pendingRegistrations, shouldRegisterOnOpen, type DiscoverableInstance } from "./membership.js";
+import { diffMembership, instanceLabel, pendingRegistrations, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance } from "./membership.js";
 import { formatStatusLine } from "./status-line.js";
 import type { PagsRequestOptions } from "./types.js";
 
@@ -63,19 +63,23 @@ export async function connectViaRelay(
 			return false;
 		}
 	};
-	/** Tell the parent TUI what registration actually stands at — see status-line.ts. */
-	const reportRegistration = () => {
-		const agents = `${registered.size}/${instanceIds.length}`;
-		const state = registered.size === instanceIds.length ? "ok" : registered.size === 0 ? "fail" : "partial";
-		writeLine(formatStatusLine({ registration: state, agents, reason: state === "ok" ? undefined : lastRegisterError }));
-	};
-	for (const id of instanceIds) await registerRuntime(id);
-
 	// The live membership set. A captured array is what made a newly subscribed agent
 	// unreachable until restart (#229); sockets are now added and removed while running.
 	const attached = new Map<string, RelaySocketHandle>();
 	// Instances another live runner owns (4409). Kept out of re-attach until the block clears.
 	const blocked = new Set<string>();
+	/**
+	 * Tell the parent TUI what registration actually stands at — see status-line.ts.
+	 *
+	 * Measured against the LIVE attached set, not `instanceIds` (#810): an agent discovery
+	 * detached — a pin moved, an unsubscribe — is not this machine's to register, and counting it
+	 * held the light on "partial", and the screen on "Still connecting", for the life of the process.
+	 */
+	const reportRegistration = () => {
+		const { agents, state } = registrationStatus(attached.keys(), registered);
+		writeLine(formatStatusLine({ registration: state, agents, reason: state === "ok" ? undefined : lastRegisterError }));
+	};
+	for (const id of instanceIds) await registerRuntime(id);
 
 	const attach = (id: string, label = `${id.slice(0, 8)}…`) => {
 		if (attached.has(id)) return;
@@ -133,9 +137,10 @@ export async function connectViaRelay(
 	// Was "Runtime registered with PAGS ✓", printed after the register loop whether or not a
 	// single register had succeeded — and the TUI turned that string into the green light (#497).
 	reportRegistration();
-	writeLine(registered.size === instanceIds.length
-		? `Runtime registered with PAGS ✓ (${registered.size}/${instanceIds.length} agents)`
-		: `Runtime registration incomplete: ${registered.size}/${instanceIds.length} agents — retried on each relay (re)connect${watchInstances ? " and every 20s while this runs" : ""}.`);
+	const startup = registrationStatus(attached.keys(), registered);
+	writeLine(startup.state === "ok"
+		? `Runtime registered with PAGS ✓ (${startup.agents} agents)`
+		: `Runtime registration incomplete: ${startup.agents} agents — retried on each relay (re)connect${watchInstances ? " and every 20s while this runs" : ""}.`);
 	writeLine("");
 	writeLine("═══════════════════════════════════════════════");
 	writeLine(`  ✅ CONNECTED — WebSocket relay · ${hostname()}`);
