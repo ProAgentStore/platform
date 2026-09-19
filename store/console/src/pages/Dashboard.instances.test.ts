@@ -117,12 +117,13 @@ describe("#795 — the type-to-filter box", () => {
 		expect(instancesTab).not.toContain("instances.map(");
 	});
 
-	it("filters through lib/instanceSearch, not an inline predicate", () => {
-		// The matching rules and their edges are tested as values in instanceSearch.test.ts. An
-		// inline `.filter(...)` in JSX would put them back somewhere no unit test can reach.
+	it("filters through lib/instanceList, not an inline predicate", () => {
+		// The matching rules and their edges are tested as values in instanceSearch.test.ts, and
+		// instanceList.test.ts proves `listInstances` searches through them (#815). An inline
+		// `.filter(...)` in JSX would put them back somewhere no unit test can reach.
 		const src2 = readFileSync(new URL("./Dashboard.tsx", import.meta.url).pathname, "utf8");
-		expect(src2).toContain('from "../lib/instanceSearch"');
-		expect(src2).toContain("filterInstances(instances, instanceQuery)");
+		expect(src2).toContain('from "../lib/instanceList"');
+		expect(src2).toContain("listInstances(instances, { query: instanceQuery, sort: instanceSort, agentId: instanceAgent })");
 	});
 
 	it("hides the box when there is nothing to filter", () => {
@@ -157,5 +158,31 @@ describe("#795 — the type-to-filter box", () => {
 		expect(empty).toContain('navigate("/browse")');
 		expect(empty).not.toContain("Clear the filter");
 	});
-})
-;
+});
+
+describe("#815 — sort and agent filter", () => {
+	it("offers both controls, each labelled for a screen reader", () => {
+		expect(instancesTab).toContain('aria-label="Sort instances"');
+		expect(instancesTab).toContain('aria-label="Filter instances by agent"');
+	});
+
+	it("offers every sort the module declares, rather than a hand-copied list", () => {
+		expect(instancesTab).toContain("INSTANCE_SORTS.map(");
+	});
+
+	it("persists the sort and ONLY the sort — a filter that survived a reload is a list missing rows", () => {
+		expect(instancesTab).toContain("rememberSort(");
+		const src2 = readFileSync(new URL("./Dashboard.tsx", import.meta.url).pathname, "utf8");
+		expect(src2).toContain("useState<InstanceSort>(rememberedSort)");
+		expect(src2).toContain('const [instanceAgent, setInstanceAgent] = useState("")');
+	});
+
+	it("hides the agent filter when there is only one agent to pick", () => {
+		expect(instancesTab).toContain("instanceAgents.length > 1");
+	});
+
+	it("'Clear the filter' clears the agent filter too, or it would not see 'all N'", () => {
+		const noMatch = instancesTab.slice(instancesTab.indexOf("visibleInstances.length === 0"), instancesTab.indexOf("grid grid-cols-"));
+		expect(noMatch).toContain('setInstanceAgent("")');
+	});
+});

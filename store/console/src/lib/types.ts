@@ -62,6 +62,12 @@ export interface Instance {
 	agent_id: string;
 	slug: string;
 	name: string;
+	/**
+	 * The agent's own name — sent ONLY when the instance has a display name, in which case `name`
+	 * is that display name (`routes/instances.ts` `/my/instances`). Absent means `name` already IS
+	 * the agent's name. Read both through `agentLabel` (lib/instanceList.ts), never this alone.
+	 */
+	agentName?: string;
 	description?: string;
 	icon?: string;
 	icon_bg?: string;

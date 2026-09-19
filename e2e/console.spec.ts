@@ -1695,6 +1695,60 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page.getByRole("searchbox", { name: "Filter instances by name" })).toHaveCount(0);
 	});
 
+	// ── #815: sort and agent filter. In the SERVER's order (most recently used first), which is
+	// deliberately not alphabetical; two are renamed instances of one agent, so `agentName` is sent.
+	const SORT_FIXTURE = [
+		{ id: "inst-1", agent_id: "a-coder", name: "pws platform", agentName: "Repo Coder", slug: "coder", description: "Writes code", capabilities: { surfaces: ["coding"] } },
+		{ id: "inst-2", agent_id: "a-jobs", name: "Job Application Assistant", slug: "job-application-assistant", description: "Applies for jobs", capabilities: { surfaces: ["apply"] } },
+		{ id: "inst-3", agent_id: "a-coder", name: "FAS platform", agentName: "Repo Coder", slug: "coder", description: "Writes code", capabilities: { surfaces: ["coding"] } },
+	];
+	const SORT_CARDS = /pws platform|Job Application Assistant|FAS platform/;
+
+	test("the Instances tab sorts by name, and remembers the sort across a reload (#815)", async ({ page }) => {
+		await mockSignedInConsole(page, { instances: SORT_FIXTURE });
+		await page.goto("/console/instances");
+
+		const titles = page.getByRole("button", { name: SORT_CARDS }).locator("h3");
+		await expect(titles).toHaveText(["pws platform", "Job Application Assistant", "FAS platform"]);
+
+		await page.getByRole("combobox", { name: "Sort instances" }).selectOption({ label: "Name A–Z" });
+		await expect(titles).toHaveText(["FAS platform", "Job Application Assistant", "pws platform"]);
+
+		// A sort is a preference and hides nothing, so it survives.
+		await page.reload();
+		await expect(titles).toHaveText(["FAS platform", "Job Application Assistant", "pws platform"]);
+	});
+
+	test("the Instances tab filters by agent, and does NOT remember that across a reload (#815)", async ({ page }) => {
+		await mockSignedInConsole(page, { instances: SORT_FIXTURE });
+		await page.goto("/console/instances");
+
+		const cards = page.getByRole("button", { name: SORT_CARDS });
+		await page.getByRole("combobox", { name: "Filter instances by agent" }).selectOption({ label: "Repo Coder (2)" });
+		await expect(cards).toHaveCount(2);
+
+		// A filter that survived a reload would be a list silently missing rows.
+		await page.reload();
+		await expect(cards).toHaveCount(3);
+	});
+
+	test("a renamed instance is still found by its agent's name (#815)", async ({ page }) => {
+		await mockSignedInConsole(page, { instances: SORT_FIXTURE });
+		await page.goto("/console/instances");
+
+		// "repo coder" is in neither display name and neither slug — only in `agentName`.
+		await page.getByRole("searchbox", { name: "Filter instances by name" }).fill("repo coder");
+		await expect(page.getByRole("button", { name: SORT_CARDS })).toHaveCount(2);
+	});
+
+	test("an account with one agent gets no agent filter (#815)", async ({ page }) => {
+		await mockSignedInConsole(page, { instances: [SORT_FIXTURE[0], SORT_FIXTURE[2]] });
+		await page.goto("/console/instances");
+
+		await expect(page.getByRole("combobox", { name: "Sort instances" })).toBeVisible();
+		await expect(page.getByRole("combobox", { name: "Filter instances by agent" })).toHaveCount(0);
+	});
+
 	test("instance indexing page shows indexed, pending, and sync status", async ({ page }) => {
 		await mockSignedInConsole(page);
 

@@ -6,7 +6,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { Agent, Instance } from "../lib/types";
 import { capabilityBadges, identityFor } from "../lib/identity";
-import { filterInstances } from "../lib/instanceSearch";
+import { INSTANCE_SORTS, INSTANCE_SORT_LABEL, type InstanceSort, agentOptions, listInstances, parseSort, rememberSort, rememberedSort } from "../lib/instanceList";
 import { platformToolGroups } from "../lib/platformTools";
 
 type SurfaceDoc = {
@@ -32,7 +32,12 @@ export default function Dashboard() {
 	// persisted: a filter that survived a reload would be a list silently missing rows, with the
 	// reason parked in a box the user has long stopped looking at.
 	const [instanceQuery, setInstanceQuery] = useState("");
-	const visibleInstances = filterInstances(instances, instanceQuery);
+	// Sort and agent filter (#815) — lib/instanceList.ts holds the rules. The agent filter follows
+	// the search box and is not persisted; the sort hides nothing, so it is.
+	const [instanceSort, setInstanceSort] = useState<InstanceSort>(rememberedSort);
+	const [instanceAgent, setInstanceAgent] = useState("");
+	const instanceAgents = agentOptions(instances);
+	const visibleInstances = listInstances(instances, { query: instanceQuery, sort: instanceSort, agentId: instanceAgent });
 	const navigate = useNavigate();
 
 	const loadAgents = useCallback(async () => {
@@ -158,15 +163,16 @@ export default function Dashboard() {
 						<h2 className="text-lg font-semibold">Agents you've subscribed to</h2>
 						<Button variant="primary" size="lg" onClick={() => navigate("/browse")} className="active:scale-[0.97]">+ New instance</Button>
 					</div>
-					{/* Type-to-filter (#795). Substring over name and slug — lib/instanceSearch.ts
-					    holds the matching and the reasons for its edges.
+					{/* Type-to-filter (#795), sort and agent filter (#815). lib/instanceSearch.ts holds
+					    the matching and the reasons for its edges; lib/instanceList.ts composes it
+					    with the other two.
 
 					    Rendered only when there is something to filter. A box above "No instances
 					    yet" offers to narrow an empty list, which is noise on precisely the account
 					    that needs the create action instead — and it is the one account for which
 					    the two empty states below would be indistinguishable. */}
 					{!loading && instances.length > 0 && (
-						<div className="mb-4">
+						<div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2">
 							<input
 								type="search"
 								value={instanceQuery}
@@ -175,6 +181,36 @@ export default function Dashboard() {
 								placeholder="Filter by name..."
 								className="w-full sm:max-w-xs bg-paper border border-line rounded-lg px-3 py-2 text-sm"
 							/>
+							<label className="text-xs text-muted flex items-center gap-1.5">
+								Sort
+								<select
+									value={instanceSort}
+									onChange={(e) => {
+										const next = parseSort(e.target.value);
+										setInstanceSort(next);
+										rememberSort(next);
+									}}
+									aria-label="Sort instances"
+									className="bg-paper border border-line rounded-lg px-2 py-2 text-sm text-ink"
+								>
+									{INSTANCE_SORTS.map((s) => <option key={s} value={s}>{INSTANCE_SORT_LABEL[s]}</option>)}
+								</select>
+							</label>
+							{/* One agent is nothing to choose between — the control would only ever say "All". */}
+							{instanceAgents.length > 1 && (
+								<label className="text-xs text-muted flex items-center gap-1.5 min-w-0">
+									Agent
+									<select
+										value={instanceAgent}
+										onChange={(e) => setInstanceAgent(e.target.value)}
+										aria-label="Filter instances by agent"
+										className="bg-paper border border-line rounded-lg px-2 py-2 text-sm text-ink min-w-0 max-w-[12rem]"
+									>
+										<option value="">All agents</option>
+										{instanceAgents.map((a) => <option key={a.agentId} value={a.agentId}>{a.label} ({a.count})</option>)}
+									</select>
+								</label>
+							)}
 						</div>
 					)}
 					{loading ? (
@@ -188,7 +224,7 @@ export default function Dashboard() {
 						   another. The way out of THIS state is to clear the filter, so that is what
 						   it offers — and it names the count being hidden, because the number is the
 						   part that says the rows are still there. */
-						<p className="text-center py-8 text-muted-soft">No instances match "{instanceQuery.trim()}". <button type="button" onClick={() => setInstanceQuery("")} className="text-accent underline">Clear the filter</button> to see all {instances.length}.</p>
+						<p className="text-center py-8 text-muted-soft">No instances match "{instanceQuery.trim()}"{instanceAgent ? " for that agent" : ""}. <button type="button" onClick={() => { setInstanceQuery(""); setInstanceAgent(""); }} className="text-accent underline">Clear the filter</button> to see all {instances.length}.</p>
 					) : (
 						<div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,300px),1fr))] gap-3">
 							{visibleInstances.map((inst) => {

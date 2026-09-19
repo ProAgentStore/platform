@@ -65,6 +65,14 @@ describe("instanceMatches", () => {
 		expect(instanceMatches(JOBS, "application-assist")).toBe(true);
 	});
 
+	it("matches the agent's name behind a renamed instance (#815)", () => {
+		// The server sends `agentName` only once an instance has a display name. Neither the new
+		// name nor the slug below contains "coder", so this passes on `agentName` or not at all.
+		const renamed = inst({ id: "i4", name: "FAS platform", slug: "fas-platform", agentName: "Repo Coder" });
+		expect(instanceMatches(renamed, "coder")).toBe(true);
+		expect(instanceMatches(FAS, "coder")).toBe(false);
+	});
+
 	it("normalizes the CALLER's query too, so raw input never silently matches nothing", () => {
 		// The trap this guards: a contract of "pass me something lowercased" reads fine and
 		// returns an empty list the first time someone forgets.
