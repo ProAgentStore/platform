@@ -498,6 +498,87 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 		},
 	);
 
+	// ── Loop limits (#820) ──────────────────────────────────────────────────────
+	//
+	// The owner's standing answer to "how long may a run on this agent be". It exists because the
+	// per-call number was chronically too low: runs on the Coder instance were started at
+	// `start_instance_loop`'s default of 10 over and over and died at `max_iterations` 10/10 with
+	// the work on track (#815, #813, #613, #806). A calling model is one of the callers that keeps
+	// getting it wrong, which is exactly why it must not be the one deciding.
+	server.tool(
+		"get_instance_loop_limits",
+		"Read the iteration floor and ceiling configured on an instance — the bounds the platform applies to EVERY run it starts, whatever `max_iterations` the caller passes. `limits.minIterations` clamps a request up, `limits.maxIterations` clamps it down; either may be absent, and `{}` means none are configured (a run then gets whatever the caller asked for, defaulting to 10). `accountCeiling` is the account-wide maximum these sit under and can only narrow — read it before judging a floor, since 30 means one thing under a ceiling of 50 and nothing under a ceiling of 20.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "get_instance_loop_limits", { instance_id });
+			if (denied) return denied;
+			return jsonText(await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/loop-limits`, sessionToken, {}, env));
+		},
+	);
+
+	server.tool(
+		"set_instance_loop_limits",
+		`Set the iteration floor and ceiling for an instance's runs. A run started below \`min_iterations\` is silently raised to it — including a run that named no number at all — and one above \`max_iterations\` is lowered. This is a property of the INSTANCE, not of the call: it binds runs started from the console, from chat, from the objective queue, from a continue, and from another agent's delegation alike. Each bound is a whole number from 1 to ${MAX_CONFIGURABLE_ITERATIONS}; send neither to clear the configuration. The account-wide ceiling still wins — these can only narrow it, never widen it, so a floor above it is stored but capped at run time. Returns the stored bounds plus that ceiling.`,
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			min_iterations: z
+				.number()
+				.int()
+				.min(1)
+				.max(MAX_CONFIGURABLE_ITERATIONS)
+				.optional()
+				.describe("Clamp every run UP to at least this. Omit to leave no floor."),
+			max_iterations: z
+				.number()
+				.int()
+				.min(1)
+				.max(MAX_CONFIGURABLE_ITERATIONS)
+				.optional()
+				.describe("Clamp every run DOWN to at most this. Omit to leave the account ceiling alone in charge."),
+			dry_run: z.boolean().optional().describe("Report the bounds that would be saved, without saving them."),
+		},
+		async ({ token, instance_id, min_iterations, max_iterations, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, min_iterations, max_iterations };
+			const denied = await requirePermission(safetyFor(token), "write", "set_instance_loop_limits", input);
+			if (denied) return denied;
+			// Refused here rather than repaired by the route. The route is total on purpose — it also
+			// parses a stored blob, where throwing would take the instance's Loop button down — so it
+			// normalises an inverted pair by lowering the floor and answers 200. A calling model would
+			// read that success as "saved what I sent". It did not.
+			if (min_iterations !== undefined && max_iterations !== undefined && min_iterations > max_iterations) {
+				return text(
+					`Error: nothing saved — min_iterations (${min_iterations}) is above max_iterations (${max_iterations}), so no run could satisfy both.`,
+				);
+			}
+			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/loop-limits`;
+			const body = JSON.stringify({ minIterations: min_iterations, maxIterations: max_iterations });
+			const describe =
+				min_iterations === undefined && max_iterations === undefined
+					? `${instance_id} would go back to having no iteration bounds; a run would get whatever the caller asks for, defaulting to 10.`
+					: `Every run on ${instance_id} would be clamped into ${min_iterations ?? 1}–${max_iterations ?? "the account ceiling"} iterations, whatever the caller passes.`;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "set_instance_loop_limits", "set an instance's iteration bounds", input, {
+					endpoint,
+					method: "PUT",
+					effect: describe,
+				});
+			}
+			const data = await authedCall(endpoint, sessionToken, { method: "PUT", body }, env);
+			if (!(data as { error?: string }).error) {
+				await audit(safetyFor(token), { tool: "set_instance_loop_limits", action: "completed", input, result: { limits: (data as { limits?: unknown }).limits } });
+			}
+			return jsonText(data);
+		},
+	);
+
 	// WHAT THIS TOOL DOES NOT SPEAK FOR (#580 AC3).
 	//
 	// `status:"running"` hid three states, and until migration 0127 the record could not tell them
@@ -606,6 +687,12 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
  * way. Its caller is the console editor, which never sends such a list. A calling model does, and
  * would read a success for a list that is not the one it sent — so this tool refuses it instead.
  */
+/**
+ * A COPY of `MAX_CONFIGURABLE_ITERATIONS` in `workers/api/src/lib/loop-limits.ts`, duplicated for
+ * the same reason as the preset limits above: this worker cannot import the API worker.
+ */
+export const MAX_CONFIGURABLE_ITERATIONS = 1_000;
+
 export const MAX_LOOP_PRESETS = 12;
 export const MAX_PRESET_LABEL = 60;
 export const MAX_PRESET_OBJECTIVE = 1000;

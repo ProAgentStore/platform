@@ -43,6 +43,8 @@ import type { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { CONTINUE_RESUME_LOOKBACK_MS, getLoopRun, isResumableStopReason } from "../lib/agent-loop-store.js";
 import { sanitizeMaxIterations } from "../lib/agent-loop.js";
+import { clampIterations } from "../lib/loop-limits.js";
+import { readLoopLimits } from "../lib/loop-limits-store.js";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { getSession } from "../lib/coding-store.js";
 import { loopDriverFor } from "../lib/loop-drivers.js";
@@ -106,7 +108,17 @@ export function registerLoopContinueRoutes(router: Hono<{ Bindings: Env }>): voi
 		// empty body asks for another run of the same size, which is the conservative reading and
 		// the one that cannot surprise an account's spend. Clamped by the same per-account ceiling
 		// `POST /:id/loop` uses (#477) — a continue must not be a way around it.
-		const maxIterations = sanitizeMaxIterations(body.maxIterations ?? run.maxIterations, (await resolveAccountCeilings(c.env, session.uid)).loopMaxIterations);
+		// …and the instance's floor and ceiling (#820). A continue is the path most likely to be
+		// pressed with an empty body, which inherits the stopped run's own ceiling — and if that run
+		// was one of the 10-iteration runs the floor exists to prevent, continuing it without the
+		// clamp would grant another 10 and reproduce exactly the stall being continued past.
+		const accountCeiling = (await resolveAccountCeilings(c.env, session.uid)).loopMaxIterations;
+		const limits = await readLoopLimits(c.env, instanceId, session.uid).catch(() => ({}));
+		const maxIterations = clampIterations(
+			sanitizeMaxIterations(body.maxIterations ?? run.maxIterations, accountCeiling),
+			limits,
+			accountCeiling,
+		);
 
 		// The repo the stopped run was on, so a multi-repo Coder continues the right checkout
 		// rather than `repos[0]` (#374). Null for a chat run, which has no session and no repo —

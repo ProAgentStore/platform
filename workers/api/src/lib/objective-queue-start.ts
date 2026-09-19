@@ -21,6 +21,8 @@
 
 import { capabilitiesForInstance } from "./agent-capabilities.js";
 import { sanitizeMaxIterations } from "./agent-loop.js";
+import { clampIterations } from "./loop-limits.js";
+import { readLoopLimits } from "./loop-limits-store.js";
 import { openBudget, resolveAccountCeilings } from "./delegation-budget-store.js";
 import { logError } from "./error-log.js";
 import { loopDriverFor } from "./loop-drivers.js";
@@ -68,7 +70,15 @@ export async function tryDequeueAndStart(env: Env, instanceId: string, repoId: s
 		let maxIterations: number;
 		try {
 			const ceilings = await resolveAccountCeilings(env, owner);
-			maxIterations = sanitizeMaxIterations(entry.maxIterations ?? undefined, ceilings.loopMaxIterations);
+			// …and the instance's own bounds on top (#820), resolved at START time for the same
+			// reason: an entry that was parked before a floor was configured runs under the floor
+			// in force when it actually starts, not the one that applied when it was queued.
+			const limits = await readLoopLimits(env, instanceId, owner).catch(() => ({}));
+			maxIterations = clampIterations(
+				sanitizeMaxIterations(entry.maxIterations ?? undefined, ceilings.loopMaxIterations),
+				limits,
+				ceilings.loopMaxIterations,
+			);
 			const budget = await openBudget(env, owner, instanceId);
 			budgetId = budget.id;
 		} catch (e) {

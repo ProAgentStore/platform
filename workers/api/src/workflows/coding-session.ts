@@ -53,6 +53,7 @@ import { tryDequeueAndStart } from "../lib/objective-queue-start.js";
 import { traceCodingRun } from "../lib/coding-run-trace.js";
 import { codingCrashReport, outcomeWord, resumeNotice, runOutcomeNote } from "../lib/coding-run-report.js";
 import { statusFor, type LoopStopReason } from "../lib/agent-loop.js";
+import { PILOT_DEFAULT_MAX_STEPS } from "../lib/loop-limits.js";
 import { classifyCodingFailure, driverResumePlan, CodingRunProbe, MAX_PLATFORM_RESUMES, recordCodingFailure } from "../lib/coding-failure.js";
 import { postSystemMessage } from "../lib/instance-system-message.js";
 import type { Env } from "../types.js";
@@ -751,7 +752,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				// A repair run's objective is the platform's multi-line brief; the record carries the
 				// label and the brief's verdict line, not the whole brief (#804).
 				const objectiveLabel = repair ? REPAIR_RUN_OBJECTIVE : goal.objective;
-				await traceCodingRun(env, traceCtx, "coding.run.start", `objective: ${objectiveLabel}`, { maxSteps: event.payload.maxSteps ?? 40, repair: repair || undefined });
+				await traceCodingRun(env, traceCtx, "coding.run.start", `objective: ${objectiveLabel}`, { maxSteps: event.payload.maxSteps ?? PILOT_DEFAULT_MAX_STEPS, repair: repair || undefined });
 				await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: `AI run started — objective: ${objectiveLabel}` });
 				if (repair && syncGate.message) await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: syncGate.message });
 				if (stateNote) await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: stateNote });
@@ -798,7 +799,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 
 			for (let round = 0; round < 12 && !syncGate.blocked; round++) {
 				// The caller's cap when it named one, the historical 40 when it did not (#374).
-				result = await runCodingLoop(deps, goal, { maxSteps: event.payload.maxSteps ?? 40 });
+				result = await runCodingLoop(deps, goal, { maxSteps: event.payload.maxSteps ?? PILOT_DEFAULT_MAX_STEPS });
 				// Both are consumed by the round above — cleared so a stale handoff value or a stale platform note isn't re-injected into a later round.
 				goal.userHint = undefined;
 				goal.resumeNote = undefined;

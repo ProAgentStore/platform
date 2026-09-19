@@ -145,6 +145,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	get_instance_board_config: "read",
 	get_instance_instructions: "read",
 	get_instance_connector_account: "read",
+	get_instance_loop_limits: "read",
 	get_instance_loop_presets: "read",
 	get_instance_operator_manual: "read",
 	get_instance_memory: "read",
@@ -248,6 +249,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	set_instance_board_config: "write",
 	set_instance_instructions: "write",
 	set_instance_connector_account: "write",
+	set_instance_loop_limits: "write",
 	set_instance_loop_presets: "write",
 	set_instance_model: "write",
 	set_instance_operator_manual: "write",
@@ -469,8 +471,14 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// the same footing as `delete_instance_memory` — durable DO state that shapes the prompt and
 	// cannot be recovered by re-reading; the retiring-without-losing form is an update to
 	// `status: complete`.
-	read: 92,
-	write: 61,
+	// +1 read, +1 write at #820 (per-instance iteration bounds): `get_instance_loop_limits` reads
+	// the floor and ceiling a run is clamped into and `set_instance_loop_limits` configures them.
+	// `write` and not `runtime`, on the same reading as the loop presets above: setting a bound
+	// starts nothing — `start_instance_loop` is still the call that spends anything. Not
+	// `destructive` either, though clearing both bounds discards a configuration: the prior values
+	// are readable first with the get tool or `dry_run`, and writable straight back.
+	read: 93,
+	write: 62,
 	// +1 runtime at #806: `continue_instance_run`. `runtime` rather than `write` for the reason
 	// `start_instance_loop` is — it starts an autonomous run that spends on its own — and the
 	// two must agree, because a caller holding the scope to start one holding a narrower one to

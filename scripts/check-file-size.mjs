@@ -1300,7 +1300,13 @@ const PINS = {
 	// /:id/loop/:runId/continue`, which carries a stopped run's objective onto a fresh run with a
 	// new ceiling. The handler is NOT here: it is `routes/loop-continue-routes.ts`, for the same
 	// reason the queue's is not, which is what keeps this at +1 rather than +100.
-	"workers/api/src/routes/tools.ts": 1261,
+	// +43 at #820: the per-instance iteration bounds. Two are the clamp the loop-start handler
+	// applies before it REPORTS a number (the driver clamps again; this one exists so the value
+	// returned is the value that will run), and the rest are the `GET`/`PUT /:id/loop-limits`
+	// pair. They sit here rather than in their own routes file because they are four lines of
+	// handler each over `lib/loop-limits-store.ts` — the arithmetic and the D1 access are both
+	// already out of this file, which is what keeps the raise at +43 and not +150.
+	"workers/api/src/routes/tools.ts": 1304,
 	// First entry at #477: Usage.tsx crossed 800 lines as BudgetPanel expanded to cover per-tree
 	// run knobs (perTreeCostMicros, perTreeDelegations, perTreeMaxDepth, loopMaxIterations) and
 	// their edit fields. The page is one coherent screen — usage data + the limits that bound it —
@@ -1483,7 +1489,11 @@ const PINS = {
 	// (both arms used to spell the counter-incrementing label for themselves, which was correct only by
 	// coincidence). Two lines of structure for a whole class of replay bug; the argument lives in
 	// the wiring test, not here, which is why this is +2 and not +10.
-	"workers/api/src/workflows/coding-session.ts": 1067,
+	// +1 at #820: the Pilot's per-round default stopped being the literal `40` written twice here
+	// and became `PILOT_DEFAULT_MAX_STEPS`, which the coding driver has to clamp by name — an
+	// unnamed delegation is the one path where a configured ceiling would otherwise be ignored.
+	// The import is the whole line; both use sites are unchanged in length.
+	"workers/api/src/workflows/coding-session.ts": 1068,
 	// This file, crossing its own LIMIT at #456 — and it is not an oddity, it is the guard working.
 	// A pin entry is REQUIRED to carry the reason its file grew, so this list is an append-only
 	// ledger of decisions: it can only get longer, and the one thing it must never do is get shorter
@@ -1714,7 +1724,9 @@ const PINS = {
 	// +5 at #814: the coding-session raise above (four lines of why) and this one.
 	// +6 at #806: the tools.ts raise above (four lines of why, naming where the handler went)
 	// and these two.
-	"scripts/check-file-size.mjs": 1798,
+	// +10 at #820: the two raises above (routes/tools.ts and workflows/coding-session.ts) and the
+	// reasons they are each required to carry.
+	"scripts/check-file-size.mjs": 1810,
 };
 
 /**

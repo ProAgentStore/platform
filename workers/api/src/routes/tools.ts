@@ -47,6 +47,8 @@ import { registerLoopContinueRoutes } from "./loop-continue-routes.js";
 import { readLoopPresets, writeLoopPresets } from "../lib/loop-presets-store.js";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { sanitizeMaxIterations } from "../lib/agent-loop.js";
+import { clampIterations, MAX_CONFIGURABLE_ITERATIONS } from "../lib/loop-limits.js";
+import { readLoopLimits, writeLoopLimits } from "../lib/loop-limits-store.js";
 import { openBudget, resolveAccountCeilings } from "../lib/delegation-budget-store.js";
 import { delegateToInstance } from "../lib/delegate-instance.js";
 import type { TriggerAction } from "../lib/triggers.js";
@@ -1093,9 +1095,18 @@ toolRoutes.post("/:id/loop", async (c) => {
 	// already scoped to this caller and instance.
 	const repoId = typeof body.repoId === "string" && body.repoId.trim() ? body.repoId.trim() : undefined;
 
-	// Resolve the per-account loop-iterations ceiling before clamping the caller's request (#477).
+	// Resolve the per-account loop-iterations ceiling before clamping the caller's request (#477),
+	// then the instance's own floor and ceiling on top (#820). The driver clamps again with the
+	// same function over the same inputs; it is repeated here so the number RETURNED below is the
+	// number that will actually run — a caller told "10" while a floor of 30 was applied would be
+	// left wondering why the run went longer than it asked for, which is AC4.
 	const ceilings = await resolveAccountCeilings(c.env, session.uid);
-	const maxIterations = sanitizeMaxIterations(body.maxIterations, ceilings.loopMaxIterations);
+	const loopLimits = await readLoopLimits(c.env, instanceId, session.uid).catch(() => ({}));
+	const maxIterations = clampIterations(
+		sanitizeMaxIterations(body.maxIterations, ceilings.loopMaxIterations),
+		loopLimits,
+		ceilings.loopMaxIterations,
+	);
 	// Every server-driven loop gets a budget, even an unconfigured one — an autonomous run with
 	// no spend bound is the failure #184 exists to prevent, and "we'll set a limit later" is how
 	// the first runaway happens. sanitizeLimits clamps a request to the ceiling.
@@ -1164,6 +1175,38 @@ toolRoutes.get("/:id/loop-presets", async (c) => {
 	const instanceId = c.req.param("id");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	return c.json(await readLoopPresets(c.env, instanceId, session.uid));
+});
+
+/**
+ * Per-instance iteration bounds (#820) — how long a run on THIS agent may be, whatever the caller
+ * asked for.
+ *
+ * GET answers with the configured bounds and the account ceiling they sit under, because a floor
+ * read on its own cannot be judged: 30 means one thing beneath a ceiling of 50 and nothing at all
+ * beneath a ceiling of 20. PUT stores them; sending neither field clears the configuration, the
+ * same "remove the last one" gesture the presets editor uses. The stored result is handed back
+ * rather than the request echoed, so a value the server normalised is visible rather than assumed.
+ */
+toolRoutes.get("/:id/loop-limits", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const [limits, ceilings] = await Promise.all([
+		readLoopLimits(c.env, instanceId, session.uid),
+		resolveAccountCeilings(c.env, session.uid),
+	]);
+	return c.json({ limits, accountCeiling: ceilings.loopMaxIterations, maxConfigurable: MAX_CONFIGURABLE_ITERATIONS });
+});
+
+toolRoutes.put("/:id/loop-limits", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as { minIterations?: unknown; maxIterations?: unknown };
+	const saved = await writeLoopLimits(c.env, instanceId, session.uid, body);
+	if (!saved) throw new HttpError(404, "instance not found");
+	const ceilings = await resolveAccountCeilings(c.env, session.uid);
+	return c.json({ limits: saved, accountCeiling: ceilings.loopMaxIterations, maxConfigurable: MAX_CONFIGURABLE_ITERATIONS });
 });
 
 toolRoutes.put("/:id/loop-presets", async (c) => {

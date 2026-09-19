@@ -629,4 +629,19 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.38 is published.
 	"0.1.39": "sha256:aa427b83ad091801d567616620814e37f95b9be48dde4a6f19f459c138113360",
+	// 0.1.40 (#820, per-instance iteration bounds): two new tool NAMES, both ALWAYS-ON — 197
+	// registrations become 199, `MCP_TOOL_ALWAYS_ON` 173 → 175, `MCP_TOOL_GATED` stays 24.
+	//
+	//   * `get_instance_loop_limits` (read) — GET /v1/instances/:id/loop-limits in
+	//     `instance-tools/composition.ts`, beside the loop presets pair. Answers with the account
+	//     ceiling alongside the bounds, because a floor cannot be judged without it.
+	//   * `set_instance_loop_limits` (write, dry_run) — PUT to the same route; omitting both bounds
+	//     clears the configuration, and an inverted pair is refused here rather than repaired,
+	//     since the route is total by design and would answer 200 for bounds it had normalised.
+	//
+	// NOT part of #613's parity sweep: the route is new in the same change, so shipping the bounds
+	// without the tools would have ADDED a gap to the ratchet #613 is driving to zero.
+	//
+	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.39 is published.
+	"0.1.40": "sha256:287bc6f14e3720b6882012337e9a907a77165df9ae01c335a38edd12a210f00a",
 };

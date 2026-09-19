@@ -899,6 +899,21 @@ components:
         label: { type: string, maxLength: 60, description: The button text. }
         objective: { type: string, description: What gets put in the objective box when it is pressed. }
 
+    LoopLimits:
+      type: object
+      properties:
+        limits:
+          type: object
+          description: The configured bounds. Absent fields mean that bound is not set; `{}` means none are.
+          properties:
+            minIterations: { type: integer, minimum: 1, maximum: 1000 }
+            maxIterations: { type: integer, minimum: 1, maximum: 1000 }
+        accountCeiling:
+          type: integer
+          description: The account-wide maximum. An instance bound may narrow it, never widen it.
+        maxConfigurable:
+          type: integer
+          description: The widest either bound may be set to.
     LoopPresets:
       type: object
       properties:
@@ -8089,6 +8104,69 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/instances/{instanceId}/loop-limits:
+    get:
+      summary: Read this instance's iteration bounds
+      description: |
+        The floor and ceiling every run on this instance is clamped into, whatever
+        `maxIterations` the caller passes. Either half of `limits` may be absent, and `{}`
+        means none are configured. `accountCeiling` is the account-wide maximum these sit
+        under and can only narrow — it is returned alongside because a floor cannot be
+        judged without it: 30 means one thing beneath a ceiling of 50 and nothing at all
+        beneath a ceiling of 20.
+      operationId: getLoopLimits
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200":
+          description: Configured bounds and the ceiling they sit under
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoopLimits" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Set this instance's iteration bounds
+      description: |
+        A run started below `minIterations` is raised to it — including one that named no
+        number at all, which is the case this exists for — and one above `maxIterations` is
+        lowered. The bounds belong to the INSTANCE, not the call, so they bind runs started
+        from the console, from chat, from the objective queue, from a continue and from
+        another agent's delegation alike. Sending NEITHER field clears the configuration.
+        An inverted pair is normalised by lowering the floor to the ceiling rather than
+        raising the ceiling, since only the lower of the two numbers was one the owner
+        actually wrote. The stored result is returned, not the request echoed.
+      operationId: setLoopLimits
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                minIterations:
+                  type: integer
+                  minimum: 1
+                  maximum: 1000
+                  description: Clamp every run up to at least this. Omit to leave no floor.
+                maxIterations:
+                  type: integer
+                  minimum: 1
+                  maximum: 1000
+                  description: Clamp every run down to at most this. Omit to leave the account ceiling alone in charge.
+      responses:
+        "200":
+          description: The bounds as stored, and the account ceiling
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoopLimits" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /v1/instances/{instanceId}/loop-presets:
     get:

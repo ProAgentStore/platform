@@ -19,7 +19,10 @@
 // console. And when `capabilities.workflow` is finally retired in favour of composed steps
 // (docs/agent-platform-strategy.md), this is the single place that has to learn the new form.
 import { createLoopRun } from "./agent-loop-store.js";
-import { sanitizeMaxIterations } from "./agent-loop.js";
+import { MAX_ITERATIONS_CAP, sanitizeMaxIterations } from "./agent-loop.js";
+import { resolveAccountCeilings } from "./delegation-budget-store.js";
+import { clampIterations, hasLoopLimits, PILOT_DEFAULT_MAX_STEPS, type LoopLimitsConfig } from "./loop-limits.js";
+import { readLoopLimits } from "./loop-limits-store.js";
 import { delegationTaskRecord } from "./delegation.js";
 import { claimSessionDriver, endSession, listRepos, releaseSessionDriver } from "./coding-store.js";
 import { ensureActiveSession } from "./coding-session-open.js";
@@ -30,6 +33,35 @@ import { classifySubordinateConnectivity } from "./subordinate-connectivity.js";
 import { EMPTY_RUNTIME_FACTS, runtimeConnectivity } from "./instance-connectivity.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
 import type { Env } from "../types.js";
+
+/**
+ * How many iterations this run actually gets: the caller's request, the account's ceiling (#477)
+ * and the instance's own bounds (#820), in that order of authority.
+ *
+ * Resolved HERE and not only at the routes, because the routes are not the only way in. A
+ * supervisor's `delegate_goal` reaches `start()` having named no number at all, and #820's whole
+ * premise is that the floor must not depend on whoever is calling — an owner who sets 30 on their
+ * Coder means 30 whether the run was started from the console, from chat, from the objective
+ * queue, or by another agent. The routes clamp too, so that the number they REPORT back is the
+ * number that will run; both clamps are the same function over the same inputs, so the second is
+ * idempotent rather than a second opinion.
+ */
+async function boundedIterations(input: LoopStartInput): Promise<{
+	maxIterations: number;
+	limits: LoopLimitsConfig;
+	ceiling: number;
+}> {
+	const [limits, ceilings] = await Promise.all([
+		readLoopLimits(input.env, input.instanceId, input.userId).catch(() => ({}) as LoopLimitsConfig),
+		resolveAccountCeilings(input.env, input.userId).catch(() => ({ loopMaxIterations: MAX_ITERATIONS_CAP })),
+	]);
+	const ceiling = ceilings.loopMaxIterations;
+	return {
+		limits,
+		ceiling,
+		maxIterations: clampIterations(sanitizeMaxIterations(input.maxIterations, ceiling), limits, ceiling),
+	};
+}
 
 export interface LoopStartInput {
 	env: Env;
@@ -118,7 +150,7 @@ const chatDriver: LoopDriver = {
 	label: "its own chat and tools",
 	async start(input) {
 		const runId = crypto.randomUUID();
-		const maxIterations = sanitizeMaxIterations(input.maxIterations);
+		const { maxIterations } = await boundedIterations(input);
 		await createLoopRun(input.env, {
 			runId,
 			userId: input.userId,
@@ -264,7 +296,7 @@ const codingDriver: LoopDriver = {
 		}
 
 		const runId = crypto.randomUUID();
-		const maxIterations = sanitizeMaxIterations(input.maxIterations);
+		const { maxIterations, limits, ceiling } = await boundedIterations(input);
 		// NOT best-effort — this is the invariant at the top of this file: EVERY driver opens an
 		// `agent_loop_runs` row, because that row is what `check_delegation`, `subordinate_status`
 		// and the console's `/loop/:runId` poll read. Swallowed, the Pilot workflow still started
@@ -331,7 +363,20 @@ const codingDriver: LoopDriver = {
 				// `delegate_goal` usually does not, and that path keeps the Pilot's default rather
 				// than inheriting `sanitizeMaxIterations`'s fallback of 10 and getting shorter runs
 				// than it asked for.
-				maxSteps: input.maxIterations === undefined ? undefined : maxIterations,
+				// #820 widened this by exactly one case. When the caller named a number it is still
+				// honoured, now clamped by the instance's bounds as well. When the caller named
+				// NOTHING the Pilot's own default still applies — unless the owner configured
+				// bounds, in which case the number that gets clamped is the PILOT's default and not
+				// `sanitizeMaxIterations`'s fallback of 10. That distinction is load-bearing both
+				// ways: clamping 10 would CUT an unnamed delegation from 40 steps to a floor of 30,
+				// turning a minimum into a maximum, while leaving it undefined would let a
+				// configured CEILING of 20 be ignored on the one path that never names a number.
+				maxSteps:
+					input.maxIterations === undefined
+						? hasLoopLimits(limits)
+							? clampIterations(PILOT_DEFAULT_MAX_STEPS, limits, ceiling)
+							: undefined
+						: maxIterations,
 				boardTaskId,
 				budgetId: input.budgetId,
 				depth: input.depth,
