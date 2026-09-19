@@ -198,6 +198,21 @@ const READBACK: Record<string, string | null> = {
 	"set_translation_config.transliterate": "get_translation_config",
 	"set_translation_config.word_tap": "get_translation_config",
 	"set_translation_config.font_size": "get_translation_config",
+	// #613, the voice-settings group. Every field is readable through the one reader added
+	// beside the writer — the group had no tool at all, so the reader had to land with it.
+	"set_instance_voice_settings.provider": "get_instance_voice_settings",
+	"set_instance_voice_settings.speed": "get_instance_voice_settings",
+	"set_instance_voice_settings.stt_mode": "get_instance_voice_settings",
+	"set_instance_voice_settings.stt_model": "get_instance_voice_settings",
+	"set_instance_voice_settings.language": "get_instance_voice_settings",
+	"set_instance_voice_settings.commands_enabled": "get_instance_voice_settings",
+	"set_instance_voice_settings.disabled_commands": "get_instance_voice_settings",
+	"set_instance_voice_settings.sensitivity": "get_instance_voice_settings",
+	"set_instance_voice_settings.silence_ms": "get_instance_voice_settings",
+	"set_instance_voice_settings.max_dictation_ms": "get_instance_voice_settings",
+	"set_instance_voice_settings.tts_max_chars": "get_instance_voice_settings",
+	"set_instance_voice_settings.keep_awake": "get_instance_voice_settings",
+	"set_instance_voice_settings.vocabulary": "get_instance_voice_settings",
 	"update_profile.fields": "get_profile",
 
 	// ── board ──

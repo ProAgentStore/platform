@@ -78,7 +78,8 @@ src/
     ├── knowledge.ts      12 tools — documents (incl. in-place edit + URL ingest, #613), files, vectors, memory
     ├── observability.ts  11 tools — messages, activity, errors, trace, pipeline runs, feedback (incl. file + delete, #613)
     ├── board.ts          9 tools — the board, its columns, the per-ticket thread (#150)
-    ├── settings.ts       13 tools — settings, name, instructions, operator manual, model, translation, state
+    ├── settings.ts       16 tools — settings, name, instructions, operator manual, model, translation, state,
+│                     voice settings (read / customise / use-my-defaults, #613)
     ├── triggers.ts       5 tools — webhook / cron / connector-sync triggers
     ├── composition.ts   12 tools — supervision (#183), connections (#182), loops, loop presets (#613)
     ├── account.ts        13 tools — whoami, billing, usage, keys, email, profile, budget limits,
@@ -94,13 +95,13 @@ src/
                           surfaces:["coding"]) + 5 loop tools (3 run + 2 objective queue)
 ```
 
-**168 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
+**171 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
 `coding-tools.ts` — all of them behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 120 across `instance-tools/`. 144 are always registered; 24 are
+`storage-tools.ts`, and 123 across `instance-tools/`. 147 are always registered; 24 are
 surface-gated (apply=4, repo=3, coding=17).
 
 Those four numbers ADD UP to the headline, and that is the point of stating them: 21 + 13
-+ 14 + 120 = 168. They said 88 until #602, which made the paragraph sum to 132 — a total the
++ 14 + 123 = 171. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added

@@ -151,6 +151,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	get_instance_pipeline: "read",
 	get_instance_settings: "read",
 	get_instance_state: "read",
+	get_instance_voice_settings: "read",
 	get_instance_stats: "read",
 	get_profile: "read",
 	get_translation_config: "read",
@@ -246,6 +247,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	set_instance_tool: "write",
 	set_supervision_enabled: "write",
 	set_translation_config: "write",
+	set_instance_voice_settings: "write",
+	clear_instance_voice_settings: "write",
 	stop_instance_loop: "write",
 	update_board_ticket: "write",
 	update_instance_knowledge: "write",
@@ -392,8 +395,14 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// pins it to one. `write` and not `destructive`: it only chooses among credentials already connected
 	// (it can never connect or disconnect one, #355), the prior pin is readable first, and it refuses to
 	// clear a pin — the one move that would leave the instance refusing every call.
-	read: 81,
-	write: 55,
+	// +1 read, +2 write at #613 (voice settings): `get_instance_voice_settings` reads the resolved
+	// voice block, `set_instance_voice_settings` customises it for one agent and
+	// `clear_instance_voice_settings` drops that customisation so the account default applies again.
+	// `write` and not `destructive` for the clear, on the same reasoning as the other "use my
+	// defaults" setters: it removes a per-agent override, never the account preferences underneath,
+	// and the values it drops are readable first with the get tool or `dry_run`.
+	read: 82,
+	write: 57,
 	runtime: 16,
 	destructive: 16,
 };

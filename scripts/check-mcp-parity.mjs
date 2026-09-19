@@ -166,11 +166,6 @@ const KNOWN_GAPS = [
 	},
 	{
 		why:
-			"Voice settings — STT mode, TTS provider/voice/speed, language, `commandsEnabled`. `get_instance_settings` reads typed agent settings, which is a different table; the voice block has no tool at all. #613.",
-		match: /^[A-Z]+ \/v1\/instances\/\{\}\/voice-settings$/,
-	},
-	{
-		why:
 			"Outbound MCP connections — the console lists presets, tests a server, reads and writes per-server consent, and answers an elicitation (`mcp/input-requests`). None of it is reachable over MCP, which is the loop this platform is most likely to want closed. #613.",
 		match: /^[A-Z]+ \/v1\/(mcp\/presets|instances\/\{\}\/mcp\/(consent|test|input-requests))/,
 	},

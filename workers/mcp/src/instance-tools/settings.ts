@@ -342,4 +342,166 @@ export function registerSettingsTools(server: McpServer, ctx: InstanceToolsCtx):
 			return jsonText(data);
 		},
 	);
+	// ── Voice settings (#613, the voice-settings group) ────────────────────────
+	//
+	// The per-agent voice override: TTS transport and speed, STT mode and model, language,
+	// the end-of-turn knobs, and the voice-command switch. A different table from
+	// `get_instance_settings`, which reads the agent's DECLARED typed settings.
+	//
+	// Three things about the route shape the tools below have to absorb, all verified in
+	// `workers/api/src/routes/instances.ts` and `lib/preferences.ts`:
+	//
+	//  1. GET/PUT/DELETE all answer the same body — `{voiceSettings, hasOverride}` — where
+	//     `voiceSettings` is the RESOLVED object (account defaults, then this instance's
+	//     override, then a declared `voiceLanguage` setting on top of the language), not the
+	//     stored override. `hasOverride` is presence, not difference.
+	//  2. PUT is NOT a patch. It sanitizes the body against `overrideVoiceBase(account, current)`
+	//     (`lib/preferences.ts:389`), which supplies the ACCOUNT value for every field — so a
+	//     field the caller leaves out snaps back to the account default and the rest of the
+	//     instance's override is silently discarded. Hence the read-merge-write below; the
+	//     console does the same thing for the same reason (`SettingsTab.tsx` `saveVoice`).
+	//  3. `vocabulary` UNIONS across scopes instead of overriding (#373), so the GET's value is
+	//     account words + this agent's words. Echoing that back would write the account's words
+	//     into the agent's own list — the snapshot `overrideVoiceBase`'s docstring exists to
+	//     prevent, and it is permanent and invisible once made. So the merge DROPS it, which
+	//     makes the route keep the agent's own list untouched.
+
+	server.tool(
+		"get_instance_voice_settings",
+		"Read a subscribed instance's voice configuration — TTS provider/speed, STT mode/model, language, voice commands, and the end-of-turn knobs. Returns {voiceSettings, hasOverride}: `voiceSettings` is what this agent ACTUALLY uses (your account defaults, then this agent's override, then a declared voiceLanguage setting), and `hasOverride` says whether this agent has its own customisation at all rather than inheriting yours. Inside `voiceSettings`, `inheritedVocabulary` (your account words, which apply here as well) and `derivedVocabulary` (words the platform inferred, e.g. from attached repos) are read-only companions to `vocabulary`, not settings.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall(`/v1/instances/${instance_id}/voice-settings`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"set_instance_voice_settings",
+		"Customise a subscribed instance's voice configuration. Only the fields you name change — the tool reads the current settings first and sends them back merged, because the route itself re-seeds any unnamed field from your ACCOUNT default rather than keeping this agent's. Writing at all creates the override (hasOverride becomes true); use clear_instance_voice_settings to go back to your account defaults. Numeric fields are clamped by the server to the ranges named below, and the response reports what was actually stored.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			provider: z.enum(["browser", "openai-realtime", "gemini-live"]).optional().describe("TTS transport that reads replies aloud"),
+			speed: z.coerce.number().optional().describe("Speech rate, percent (50-200; 100 = normal)"),
+			stt_mode: z.enum(["browser", "openai"]).optional().describe("Speech recognition: browser dictation, or OpenAI transcription (needs an OpenAI key in the vault)"),
+			stt_model: z.enum(["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "whisper-1"]).optional().describe("Transcription model when stt_mode is openai; gpt-4o-transcribe streams partials, whisper-1 does not"),
+			language: z.string().optional().describe("BCP-47 tag for both STT and TTS, e.g. en-US, de-DE, zh-CN. An agent with a declared voiceLanguage setting overrides this at resolve time."),
+			commands_enabled: z.boolean().optional().describe("Whether spoken commands (repeat, mute, …) are matched at all"),
+			disabled_commands: z.array(z.enum(["repeat", "mute", "unmute", "exit", "next", "back", "scrap"])).optional().describe("Individual voice commands switched OFF; [] means every command is on"),
+			sensitivity: z.coerce.number().optional().describe("Mic end-of-turn sensitivity (0.4-2; lower is less likely to hear background noise as speech)"),
+			silence_ms: z.coerce.number().optional().describe("Silence that ends a spoken turn, ms (500-6000)"),
+			max_dictation_ms: z.coerce.number().optional().describe("Longest single dictation, ms (10000-300000)"),
+			tts_max_chars: z.coerce.number().optional().describe("How much of a reply is read aloud, characters (200-4096)"),
+			keep_awake: z.boolean().optional().describe("Hold a screen wake lock while voice mode is on"),
+			vocabulary: z
+				.array(z.string())
+				.optional()
+				.describe(
+					"Words THIS agent's owner says that a recogniser gets wrong (repo names, product names). Replaces this agent's own list; it is ADDED to your account vocabulary rather than replacing it, so leaving it out here never disturbs either list.",
+				),
+			dry_run: z.boolean().optional(),
+		},
+		async ({
+			token,
+			instance_id,
+			provider,
+			speed,
+			stt_mode,
+			stt_model,
+			language,
+			commands_enabled,
+			disabled_commands,
+			sensitivity,
+			silence_ms,
+			max_dictation_ms,
+			tts_max_chars,
+			keep_awake,
+			vocabulary,
+			dry_run,
+		}) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const patch: Record<string, unknown> = {};
+			if (provider !== undefined) patch.provider = provider;
+			if (speed !== undefined) patch.speed = speed;
+			if (stt_mode !== undefined) patch.sttMode = stt_mode;
+			if (stt_model !== undefined) patch.sttModel = stt_model;
+			if (language !== undefined) patch.language = language;
+			if (commands_enabled !== undefined) patch.commandsEnabled = commands_enabled;
+			if (disabled_commands !== undefined) patch.disabledCommands = disabled_commands;
+			if (sensitivity !== undefined) patch.sensitivity = sensitivity;
+			if (silence_ms !== undefined) patch.silenceMs = silence_ms;
+			if (max_dictation_ms !== undefined) patch.maxDictationMs = max_dictation_ms;
+			if (tts_max_chars !== undefined) patch.ttsMaxChars = tts_max_chars;
+			if (keep_awake !== undefined) patch.keepAwake = keep_awake;
+			if (vocabulary !== undefined) patch.vocabulary = vocabulary;
+			const fields = Object.keys(patch);
+			// Refuse rather than send: an empty body through this route is not a no-op, it is
+			// "replace the override with your account defaults" — which is what the clear tool is
+			// for, and is never what a caller who named no field meant.
+			if (fields.length === 0) {
+				return jsonText({
+					error: "nothing to update — name at least one voice field, or use clear_instance_voice_settings to go back to your account defaults",
+				});
+			}
+			const input = { instance_id, fields };
+			const denied = await requirePermission(safetyFor(token), "write", "set_instance_voice_settings", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "set_instance_voice_settings", "update instance voice settings", input, {
+					endpoint: `/v1/instances/${instance_id}/voice-settings`,
+					method: "PUT",
+					fields,
+				});
+			}
+			// Read first. The PUT rebuilds the whole override from the account defaults, so sending
+			// the patch alone would reset every field the caller did not name.
+			const current = await authedCall(`/v1/instances/${instance_id}/voice-settings`, sessionToken, {}, env);
+			if ((current as { error?: string }).error) return jsonText(current);
+			const existing = (current as { voiceSettings?: Record<string, unknown> }).voiceSettings ?? {};
+			// `vocabulary` and its two read-only companions are removed before the merge — see the
+			// header comment. Dropping `vocabulary` is what keeps the union a union.
+			const { vocabulary: _resolvedVocabulary, inheritedVocabulary: _inherited, derivedVocabulary: _derived, ...carried } = existing;
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/voice-settings`,
+				sessionToken,
+				{ method: "PUT", body: JSON.stringify({ ...carried, ...patch }) },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_instance_voice_settings", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"clear_instance_voice_settings",
+		"Drop a subscribed instance's voice override so it inherits your account voice preferences again (the console's \"Use my defaults\"). Answers the same shape as get_instance_voice_settings, now resolved from your account, with hasOverride false. Your account preferences are untouched — set those with set_account_preferences.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id };
+			const denied = await requirePermission(safetyFor(token), "write", "clear_instance_voice_settings", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "clear_instance_voice_settings", "drop instance voice override", input, {
+					endpoint: `/v1/instances/${instance_id}/voice-settings`,
+					method: "DELETE",
+				});
+			}
+			const data = await authedCall(`/v1/instances/${instance_id}/voice-settings`, sessionToken, { method: "DELETE" }, env);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "clear_instance_voice_settings", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
 }

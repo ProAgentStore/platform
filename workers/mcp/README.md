@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**168 tool registrations.** 144 are always registered; 24 are gated to the console
+**171 tool registrations.** 147 are always registered; 24 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -280,6 +280,9 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `set_instance_operator_manual` | Replace the operator manual (max 16000 chars) | write | yes | |
 | `get_translation_config` | Read the translation display config | — | | |
 | `set_translation_config` | Patch it | write | yes | |
+| `get_instance_voice_settings` | Read the resolved voice config (TTS, STT, language, commands) + `hasOverride` | — | | |
+| `set_instance_voice_settings` | Customise it for this agent (reads first, so an unnamed field keeps its value) | write | yes | |
+| `clear_instance_voice_settings` | Drop the override — inherit your account voice preferences again | write | yes | |
 
 ### Instance collections and tickets
 

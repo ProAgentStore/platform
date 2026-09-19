@@ -278,6 +278,7 @@ const TABLE: Record<string, Row> = {
 	coding_timeline: ["coding", "read", null, null, "before,instance_id,limit,session_id,since_seq,token"],
 	clear_finished_tasks: ["board", "write", null, "envelope", "dry_run,instance_id,token"],
 	clear_instance_messages: ["observability", "destructive", "clear_instance_messages", "envelope", "confirm,dry_run,instance_id,token"],
+	clear_instance_voice_settings: ["settings", "write", null, "envelope", "dry_run,instance_id,token"],
 	coding_loop_start: ["coding", "runtime", null, "envelope", "dry_run,instance_id,max_iterations,objective,queue_if_busy,repair_checkout,token"],
 	// Both were ungated ("none") while they read and mutated MCP-DO memory, which nothing else
 	// could see. Now they read and cancel the SERVER's run record, so they are scoped like every
@@ -308,6 +309,7 @@ const TABLE: Record<string, Row> = {
 	get_instance_memory: ["knowledge", "none", null, null, "instance_id,token"],
 	get_instance_settings: ["settings", "none", null, null, "instance_id,token"],
 	get_instance_state: ["settings", "none", null, null, "instance_id,token"],
+	get_instance_voice_settings: ["settings", "none", null, null, "instance_id,token"],
 	get_instance_stats: ["stats", "none", null, null, "instance_id,schema_only,token,window"],
 	get_profile: ["apply", "none", null, null, "token"],
 	get_translation_config: ["settings", "none", null, null, "instance_id,token"],
@@ -385,6 +387,13 @@ const TABLE: Record<string, Row> = {
 	set_translation_config: ["settings", "write", null, "envelope", "dry_run,enabled,font_size,instance_id,target,token,transliterate,word_tap"],
 	set_instance_connector_account: ["connectorAccounts", "write", null, "envelope", "account_id,connector,dry_run,instance_id,token"],
 	set_instance_loop_presets: ["composition", "write", null, "envelope", "dry_run,instance_id,presets,token"],
+	set_instance_voice_settings: [
+		"settings",
+		"write",
+		null,
+		"envelope",
+		"commands_enabled,disabled_commands,dry_run,instance_id,keep_awake,language,max_dictation_ms,provider,sensitivity,silence_ms,speed,stt_mode,stt_model,token,tts_max_chars,vocabulary",
+	],
 	start_instance_loop: ["composition", "write", null, "envelope", "dry_run,instance_id,max_iterations,objective,token"],
 	stop_instance_loop: ["composition", "write", null, null, "instance_id,run_id,token"],
 	subscribe_agent: ["base", "write", null, "envelope", "agent_id,dry_run,idempotency_key,token"],

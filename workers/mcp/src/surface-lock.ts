@@ -464,4 +464,24 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.31 is published.
 	"0.1.32": "sha256:b025eca1789666c42c0b2f002b548a0cb511c14b1f8edbb775324af7fe19bddd",
+	// 0.1.33 (#613, the voice-settings group): three new tool NAMES, all ALWAYS-ON — 168
+	// registrations become 171, `MCP_TOOL_ALWAYS_ON` 144 → 147, `MCP_TOOL_GATED` stays 24.
+	//
+	//   * `get_instance_voice_settings` (read) — GET /v1/instances/:id/voice-settings in
+	//     `instance-tools/settings.ts`, beside `get_translation_config`; returns the RESOLVED
+	//     block plus `hasOverride`, not the stored override.
+	//   * `set_instance_voice_settings` (write, dry_run) — PUT to the same route. It READS first
+	//     and sends the current settings back merged, because that PUT is not a patch: the route
+	//     sanitizes the body against `overrideVoiceBase`, which supplies the ACCOUNT value for
+	//     every unnamed field, so a bare patch would reset the rest of the agent's override.
+	//     `vocabulary` is deliberately NOT echoed — it unions across scopes (#373), so echoing
+	//     the resolved value would snapshot the account's words into this agent permanently.
+	//   * `clear_instance_voice_settings` (write, dry_run) — DELETE to the same route: the
+	//     console's "Use my defaults". The account preferences underneath are untouched.
+	//
+	// Closes that group's `KNOWN_GAPS` entry (3 routes; parity 99 → 102 reachable, 57 → 54 gaps).
+	// `SERVER_INSTRUCTIONS` did not move.
+	//
+	// Appended, never edited in place: 0.1.32 is published.
+	"0.1.33": "sha256:f679765019a0f34a55c9a8d0234f58d055eb7700b459b1c636ac4200c4d8ca96",
 };
