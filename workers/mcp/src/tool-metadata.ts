@@ -137,6 +137,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	connector_status: "read",
 	email_status: "read",
 	get_agent_board_config: "read",
+	account_activity: "read",
 	get_account_preferences: "read",
 	get_agent_settings_schema: "read",
 	get_agent_stats_schema: "read",
@@ -486,7 +487,10 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// not `runtime`: the fetch happens server-side inside a grant the owner already made, and
 	// drives no machine. Not `destructive` either — an import ADDS a document, and the document it
 	// adds is removable with `delete_instance_knowledge`.
-	read: 94,
+	// +1 read at #815: `account_activity` — the whole account's health in one call, where
+	// `recent_instances` fans out per instance and is capped for it. Read, and ungated beyond that:
+	// it answers only about instances the caller owns, and both its queries are `user_id`-scoped.
+	read: 95,
 	write: 64,
 	// +1 runtime at #806: `continue_instance_run`. `runtime` rather than `write` for the reason
 	// `start_instance_loop` is — it starts an autonomous run that spends on its own — and the

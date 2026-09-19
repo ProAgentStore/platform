@@ -155,7 +155,12 @@ const PINS = {
 	// +2 for #496 AC2: the owner-initiated resync-identity route is mounted from a new sub-module
 	// (instances-identity.ts) to keep this file's size honest; the two new lines are the import
 	// and the register call. Raised rather than split: the whole change is a mount and an import.
-	"workers/api/src/routes/instances.ts": 1031, // +4 (#772): the connection-guide mount — an import and a registrar call, plus the two-line reason. Every route module this file composes costs the same two lines; the work itself went into routes/instances-guide.ts and lib/connection-guide.ts, which is what the pin is asking for.
+	// +82 at #815: `GET /my/activity`, the dashboard's one call for what every instance is doing.
+	// It sits HERE rather than in its own routes file because Hono matches in order and the literal
+	// has to precede `/:instanceId/...`, which lives in this file — the same ordering constraint
+	// `/loop/queue` paid for in #788. What is NOT here is the composition: `lib/instance-activity.ts`
+	// folds the two query results and maps `runHealth`, so the handler is a fetch and a shape.
+	"workers/api/src/routes/instances.ts": 1113, // +4 (#772): the connection-guide mount — an import and a registrar call, plus the two-line reason. Every route module this file composes costs the same two lines; the work itself went into routes/instances-guide.ts and lib/connection-guide.ts, which is what the pin is asking for.
 	// +5 for #319: the send path now hands the live capture to the consumer alongside the audio
 	// key, so the two readings of a turn can be compared on the message. Raised rather than
 	// split — the whole change is one `storedDictation` call and the two `onSend` sites that
@@ -1726,7 +1731,7 @@ const PINS = {
 	// and these two.
 	// +10 at #820: the two raises above (routes/tools.ts and workflows/coding-session.ts) and the
 	// reasons they are each required to carry.
-	"scripts/check-file-size.mjs": 1810,
+	"scripts/check-file-size.mjs": 1815,
 };
 
 /**

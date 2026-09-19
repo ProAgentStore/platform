@@ -249,6 +249,7 @@ async function dryRunOf(name: string): Promise<string | null> {
 type Row = [string, string, string | null, string | null, string];
 const TABLE: Record<string, Row> = {
 	add_instance_knowledge: ["knowledge", "write", null, "envelope", "content,dry_run,instance_id,source,source_url,title,token"],
+	account_activity: ["recent", "read", null, null, "token"],
 	agent_trace: ["observability", "none", null, null, "instance_id,level,limit,offset,source,token,trace_id"],
 	apply_to_job: ["apply", "runtime", null, "envelope", "dry_run,instance_id,submit,token,url"],
 	approve_instance_task: ["runtime", "runtime", null, "envelope", "dry_run,instance_id,task_id,token"],

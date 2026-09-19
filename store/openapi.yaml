@@ -2387,6 +2387,53 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /v1/instances/my/activity:
+    get:
+      summary: What every one of my instances is doing
+      description: |
+        One call for the whole account, in two queries — the dashboard could otherwise only learn
+        this by calling `/v1/instances/:id/loop` once per card.
+
+        `health` is the platform's own verdict, computed by `runHealth`, not re-derived from
+        timestamps: `working` (ticking), `waiting` (deliberately parked, usually needs nothing),
+        `stalled` (an OPEN run that has stopped ticking — the one to act on), `idle` (the latest
+        run ended, or there has never been one). An open run row is NOT the same as `working`.
+
+        An instance with no run and no queued objective is OMITTED rather than listed as idle:
+        including it would need a third query for the roster, which every caller already holds.
+        So an empty list means the account is quiet.
+      operationId: getMyInstanceActivity
+      tags: [Instances]
+      responses:
+        "200":
+          description: Activity per instance, plus the instant it was read
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  asOf:
+                    type: integer
+                    description: ms epoch the verdicts were computed at. Every value here is time-relative.
+                  instances:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        instanceId: { type: string }
+                        health: { type: string, enum: [working, waiting, stalled, idle] }
+                        queueDepth: { type: integer, description: Objectives parked behind this instance. }
+                        lastOutcome:
+                          nullable: true
+                          type: object
+                          description: The latest run's verdict — present even while that run is still open.
+                          properties:
+                            runId: { type: string }
+                            status: { type: string }
+                            stopReason: { type: string, nullable: true }
+                            finishedAt: { type: integer, nullable: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /v1/instances/my/instances:
     get:
       summary: List my instances

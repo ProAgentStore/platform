@@ -50,6 +50,28 @@ export const OBJECTIVE_PREVIEW_CHARS = 160;
 export function registerRecentTools(server: McpServer, ctx: InstanceToolsCtx): void {
 	const { env, tokenFor, safetyFor } = ctx;
 
+	// ── The whole account, in one call (#815) ─────────────────────────────────
+	//
+	// NOT `instance_activity` — that name is taken by the per-instance append-only LOG
+	// (`observability.ts`), which is a different question about a different scope.
+	//
+	// `recent_instances` above answers "what was I working on" by FANNING OUT: the roster, then one
+	// `/loop` per instance. That is why it is capped. `GET /my/activity` answers the same question
+	// for EVERY instance in two queries, so this tool is the one to reach for when the question is
+	// "is anything wrong anywhere" rather than "where was I".
+	server.tool(
+		"account_activity",
+		"What every instance on this account is doing right now, in one call — `health` (`working` | `waiting` | `stalled` | `idle`), `queueDepth`, and the latest run's `lastOutcome`. Computed by the platform's own `runHealth`, so it agrees with the console and with coding_loop_status rather than being a second opinion. `stalled` is the one to act on: the run is open but has stopped ticking. `waiting` is a deliberate park and usually needs nothing. An instance with no run and no queued objective is OMITTED — absence means idle — so an empty list means the account is quiet, not that the call failed. Unlike recent_instances this does not fan out per instance and is not capped.",
+		{ token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in.") },
+		async ({ token }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "account_activity", {});
+			if (denied) return denied;
+			return jsonText(await authedCall("/v1/instances/my/activity", sessionToken, {}, env));
+		},
+	);
+
 	server.tool(
 		"recent_instances",
 		`The ${RECENT_INSTANCES_LIMIT} instances THIS account drove most recently over MCP, newest first, each with its latest run's live verdict — the answer to "what was I working on?" for a fresh conversation that does not yet know an id. An interaction is a tool call that named an instance_id (coding_loop_start, coding_loop_status, coding_session_message, call_instance_tool, chat_with_instance and the rest) or any call on a session pinned to /mcp/i/<instance_id>; an instance's OWN scheduled activity does not count, and nothing is recorded before the first such call, so a new account answers an empty list — my_instances is the full roster. Each entry: instanceId, name (the display name when one is set), slug, status (the SUBSCRIPTION's), lastInteractionAt, lastTool, and run — the most recent autonomous run as coding_loop_status reports it (runId, health, status, stopReason, waitingReason, waitingUntil, waitNote, objective preview) or null when the instance has never run one. ${runHealthSentence()} For a parked run quote waitNote rather than reading waitingUntil yourself: under waitingReason human that instant is when the run GIVES UP, not when it resumes. Instances are capped at ${RECENT_INSTANCES_LIMIT}; pass the instanceId you want to coding_loop_status or coding_timeline for the rest.`,

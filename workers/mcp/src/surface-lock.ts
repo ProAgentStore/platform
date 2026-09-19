@@ -665,4 +665,21 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.40 is published.
 	"0.1.41": "sha256:f13c4e1be1626575c4a83a5bc3f624d2db0a3b55801a919b5882057c5016124a",
+	// 0.1.42 (#815 slice 1): one new tool NAME, ALWAYS-ON — 202 registrations become 203,
+	// `MCP_TOOL_ALWAYS_ON` 178 → 179, `MCP_TOOL_GATED` stays 24.
+	//
+	//   * `account_activity` (read) — GET /v1/instances/my/activity in `instance-tools/recent.ts`,
+	//     beside `recent_instances`. The whole account's health in TWO queries, where its
+	//     neighbour fans out one `/loop` per instance and is capped for it.
+	//
+	// NOT `instance_activity`: that name belongs to the per-instance append-only LOG in
+	// `observability.ts`, a different question about a different scope. The collision was caught by
+	// the compiler rather than by review, which is the argument for the duplicate-key table.
+	//
+	// Shipped WITH the route in one commit, deliberately: a console-reachable route with no tool
+	// would have forced the first NEW `KNOWN_GAPS` entry since #613 began driving that list to
+	// zero. `SERVER_INSTRUCTIONS` did not move.
+	//
+	// Appended, never edited in place: 0.1.41 is published.
+	"0.1.42": "sha256:8f14999af7cea973bcb13f56ce403df7e767d72f1825e33291670ec958881532",
 };

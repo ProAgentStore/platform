@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
+import { composeInstanceActivity, type ActivityRunRow } from "../lib/instance-activity.js";
 import { applySettingsPatch, resolveSettingsValues } from "../lib/instance-settings.js";
 import { overrideVoiceBase, parseAccountPreferences, resolveVoice, sanitizeVoiceSettings, unknownVoiceField, type VoiceSettings } from "../lib/preferences.js";
 import { deriveVoiceVocabulary } from "../lib/voice-vocabulary.js";
@@ -355,6 +356,87 @@ instanceRoutes.get("/my/instances", async (c) => {
 		};
 	});
 	return c.json({ instances });
+});
+
+/**
+ * How far back a CLOSED run may be and still be worth reporting on the dashboard (#815).
+ *
+ * Thirty days, and it bounds only the closed half — an open run is matched by `status` regardless
+ * of age. A card saying "last run: failed" about something from six weeks ago is noise on a screen
+ * whose job is "what is happening now"; the run itself stays readable through `/loop`.
+ */
+const ACTIVITY_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * What every one of my instances is DOING, in one call (#815 slice 1).
+ *
+ * Registered here, directly after `/my/instances` and before the first `/:instanceId/...`, for the
+ * reason `/loop/queue` had to be (#788): Hono matches in order, and a literal that arrives after a
+ * parameter is read as a value for it.
+ *
+ * TWO queries, whatever the instance count. The console previously had to call
+ * `GET /v1/instances/:id/loop` per card to learn this, which is why `recent_instances` is capped at
+ * a handful — at 43 instances a per-card fan-out is not a slow feature, it is a reason not to ship
+ * one. The composition is pure in `lib/instance-activity.ts`; this handler only fetches.
+ *
+ * An instance with NO run and NO queued objective is absent from the response rather than listed
+ * as idle. Including it would need a third query for the roster, which the console already holds —
+ * so absence means idle, and the cost stays flat in the number of instances never used.
+ */
+instanceRoutes.get("/my/activity", async (c) => {
+	const session = await requireUser(c);
+	const now = Date.now();
+
+	// Bounded on `started_at` so a long-dormant instance costs nothing, but `status = 'running'` is
+	// OR'd in rather than AND'd: an open run is never missed however old it is, which is exactly
+	// the run an owner most needs to see on this screen.
+	const since = now - ACTIVITY_LOOKBACK_MS;
+	const [runRows, queueRows] = await Promise.all([
+		c.env.DB.prepare(
+			`SELECT run_id, instance_id, status, stop_reason, started_at, finished_at,
+			        last_alive_at, last_progress_at, waiting_reason, waiting_until, parked_since
+			   FROM (
+			     SELECT r.*, ROW_NUMBER() OVER (
+			              PARTITION BY r.instance_id ORDER BY r.started_at DESC
+			            ) AS rn
+			       FROM agent_loop_runs r
+			      WHERE r.user_id = ?1
+			        AND (r.status = 'running' OR r.started_at >= ?2)
+			   )
+			  WHERE rn = 1`,
+		)
+			.bind(session.uid, since)
+			.all<Record<string, unknown>>(),
+		c.env.DB.prepare(
+			`SELECT instance_id, COUNT(*) AS depth
+			   FROM instance_objective_queue
+			  WHERE user_id = ?1 AND status = 'pending'
+			  GROUP BY instance_id`,
+		)
+			.bind(session.uid)
+			.all<Record<string, unknown>>(),
+	]);
+
+	const runs: ActivityRunRow[] = (runRows.results ?? []).map((r) => ({
+		instanceId: String(r.instance_id),
+		runId: String(r.run_id),
+		status: String(r.status),
+		stopReason: (r.stop_reason as string | null) ?? null,
+		finishedAt: (r.finished_at as number | null) ?? null,
+		startedAt: Number(r.started_at),
+		lastAliveAt: (r.last_alive_at as number | null) ?? null,
+		lastProgressAt: (r.last_progress_at as number | null) ?? null,
+		waitingReason: (r.waiting_reason as string | null) ?? null,
+		waitingUntil: (r.waiting_until as number | null) ?? null,
+		parkedSince: (r.parked_since as number | null) ?? null,
+	}));
+	const queueDepths = new Map<string, number>(
+		(queueRows.results ?? []).map((r) => [String(r.instance_id), Number(r.depth) || 0] as const),
+	);
+
+	// `asOf` is not decoration: every value here is time-relative, so a poll that failed and left
+	// the last response on screen is indistinguishable from a fresh one without it (#291).
+	return c.json({ asOf: now, instances: composeInstanceActivity(runs, queueDepths, now) });
 });
 
 /** Register or update the local/managed runtime for my instance. */

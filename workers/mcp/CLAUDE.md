@@ -97,7 +97,7 @@ src/
     ├── mcp-connections.ts 6 tools — PAGS as an MCP CLIENT: presets, per-(endpoint,tool) grants,
 │                     the connection test, and the paused-elicitation inbox (#613)
 ├── guide.ts          1 tool — the per-instance connection guide (#772)
-    ├── recent.ts         1 tool — the instances this account drove most recently, with run health (#787)
+    ├── recent.ts         2 tools — the instances this account drove most recently, with run health (#787)
     │   ── surface-gated ──
     ├── apply.ts          4 tools, gated to surfaces:["apply"]
     ├── repo.ts           3 tools, gated to surfaces:["repo"]
@@ -105,9 +105,9 @@ src/
                           surfaces:["coding"]) + 5 loop tools (3 run + 2 objective queue)
 ```
 
-**202 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
+**203 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
 `coding-tools.ts` — all of them behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 154 across `instance-tools/`. 178 are always registered; 24 are
+`storage-tools.ts`, and 155 across `instance-tools/`. 179 are always registered; 24 are
 surface-gated (apply=4, repo=3, coding=17).
 
 Those four numbers ADD UP to the headline, and that is the point of stating them: 21 + 13

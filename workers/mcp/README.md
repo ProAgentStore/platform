@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**202 tool registrations.** 178 are always registered; 24 are gated to the console
+**203 tool registrations.** 179 are always registered; 24 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -239,6 +239,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 |---|---|---|---|---|
 | `subscribe_agent` | Subscribe to a published agent, creating your private instance | write | yes | |
 | `my_instances` | List your subscribed instances | — | | |
+| `account_activity` | Every instance's live health (`working`/`waiting`/`stalled`/`idle`), queue depth and last outcome, in one call — two queries, uncapped, unlike `recent_instances` (#815) | read | | |
 | `recent_instances` | The 5 instances you drove most recently over MCP, newest first, each with its latest run's `health` / `stopReason` / `waitNote` (#787) | read | | |
 | `chat_with_instance` | The real runtime chat path (your state, your credentials) | runtime | yes | |
 | `instance_messages` | Recent messages, newest page first — page older ones with `before` = the previous call's `nextCursor` (#566) | — | | |
