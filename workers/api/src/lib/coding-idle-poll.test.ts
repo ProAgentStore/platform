@@ -18,6 +18,7 @@ import {
 	idleSubrequestsForRun,
 	shouldTouchActivity,
 } from "./coding-idle-poll.js";
+import { stripCommentsAndLiterals } from "./source-guard.js";
 import { ACTIVITY_TOUCH_MS } from "./coding-store.js";
 
 /**
@@ -247,13 +248,22 @@ describe("the durable idle wait (#814)", () => {
 		return { names, slept, deps };
 	}
 
-	it("is OFF unless asked for — unset, empty and a typo all mean today's one-step wait", () => {
-		for (const v of [undefined, "", "0", "false", "on", "yes", "TRUE"]) {
-			expect(idleWaitIsDurable({ CODING_IDLE_DURABLE: v }), String(v)).toBe(false);
+	it("is ON by default — an unset var, an empty string and a typo all leave the durable wait in force", () => {
+		// The direction flipped with the default (#814). Anything that is not an explicit disable
+		// reads as enabled, which is the safe direction now that enabled is the intended state: a
+		// mistyped opt-out leaves the eviction-surviving path running rather than silently removing it.
+		for (const v of [undefined, "", "1", "true", "on", "yes", "TRUE", "FALSE", "no"]) {
+			expect(idleWaitIsDurable({ CODING_IDLE_DURABLE: v }), String(v)).toBe(true);
 		}
-		expect(idleWaitIsDurable(undefined)).toBe(false);
-		expect(idleWaitIsDurable({ CODING_IDLE_DURABLE: "1" })).toBe(true);
-		expect(idleWaitIsDurable({ CODING_IDLE_DURABLE: "true" })).toBe(true);
+		expect(idleWaitIsDurable(undefined)).toBe(true);
+		expect(idleWaitIsDurable({})).toBe(true);
+	});
+
+	it("can still be turned OFF — the lever survives being made the default", () => {
+		// Kept rather than deleted: this multiplies every run's step count by ~51 against a ceiling
+		// nobody has measured under load, and a default with no lever is a commitment, not a default.
+		expect(idleWaitIsDurable({ CODING_IDLE_DURABLE: "0" })).toBe(false);
+		expect(idleWaitIsDurable({ CODING_IDLE_DURABLE: "false" })).toBe(false);
 	});
 
 	it("an engine that NEVER goes idle stops at the SAME boundary with the SAME snapshot — the issue's own acceptance test", async () => {
@@ -314,9 +324,36 @@ describe("the durable idle wait (#814)", () => {
 
 		it("reads the flag, and keeps the one-step wait as the other branch", () => {
 			expect(workflow).toContain("idleWaitIsDurable(env)");
-			// In two halves: the step name between them is a template literal, which a plain string cannot quote.
-			expect(workflow).toContain(": guard(runIdle, `s");
-			expect(workflow).toContain("-waitidle`, () => awaitEngineIdle({ capture, sleep })),");
+			expect(workflow).toContain(": guard(runIdle, label, () => awaitEngineIdle({ capture, sleep })),");
+		});
+
+		it("derives the step label ONCE, outside the branch — the counter cannot depend on which wait ran", () => {
+			// Both arms used to spell `s${n++}-waitidle` for themselves. That advanced `n` by one
+			// either way only because the two happened to match; a replay taking the other arm after
+			// the flag moved would look up a journal that no longer lines up, and every LATER step
+			// name would shift with it. One increment, above the ternary, removes the whole class.
+			const wiring = workflow.slice(workflow.indexOf("waitIdle: () => {"), workflow.indexOf("onEvent: (type, message, data)"));
+			// In two halves, the idiom this block already used: the label is a template literal, and a
+			// plain string cannot quote its placeholder without tripping `noTemplateCurlyInString`.
+			expect(wiring).toContain("const label = `s");
+			expect(wiring).toContain("-waitidle`;");
+			// Counted over CODE, not prose — the comment above the line quotes the old spelling, and a
+			// raw text count would read that as a second increment. `stripCommentsAndLiterals` is the
+			// same lexer `fetch-deadline.test.ts` scans with, so this counts what the engine sees.
+			expect(stripCommentsAndLiterals(wiring).match(/n\+\+/g) ?? []).toHaveLength(1);
+			// …and both arms consume that label rather than building their own.
+			expect(wiring).toContain("durableIdleDeps({ label,");
+			expect(wiring).toContain("guard(runIdle, label,");
+		});
+
+		it("says the chunking is for eviction survival, not for subrequests", () => {
+			// The one claim #814 made that is still unmeasured must not be restated as fact at the
+			// call site — `scratch/subrequest-reset-probe` has never been run. Matched over
+			// whitespace-collapsed text, because a comment rewraps and a phrase that spans two lines
+			// is the same statement; pinning the line breaks would fail on an edit that changed nothing.
+			const prose = workflow.replace(/^\s*\/\/\s?/gm, " ").replace(/\s+/g, " ");
+			expect(prose).toContain("NOT known to save subrequests");
+			expect(prose).toContain("survives an eviction rather than restarting");
 		});
 
 		it("routes every durable capture through the runner guard — a disconnect mid-wait must still pause, not end, the run (#341)", () => {

@@ -56,11 +56,14 @@ ADMIN_ALLOWLIST = "serge.the.dev@gmail.com,serge-ivo"
 # never blocked. Uncomment to re-enable the daily $ + token account ceilings. See #485.
 # BUDGET_ENFORCE = "1"
 # The Pilot's idle wait as DURABLE steps (#814): one step per capture and a `step.sleep` per sleep,
-# instead of one 10-minute step. Unset = inert. It makes a long engine turn survive an eviction.
+# instead of one 10-minute step. **ON by default since #814** — this var is now an OPT-OUT, and only
+# the exact values "0" and "false" disable it. What it buys is that a long engine turn survives an
+# eviction instead of restarting its whole 480-second window.
 # It is NOT known to save subrequests — the [limits] comment above says a sleep does not reset the
 # count, which is an inference `scratch/subrequest-reset-probe` exists to measure and nobody has
-# run. Do not turn this on for the subrequest reason unless that probe reports RESETS.
-# CODING_IDLE_DURABLE = "1"
+# run. That claim is unchanged by this default: do not cite the durable wait as a subrequest fix
+# unless that probe reports RESETS. Uncomment to go back to the single-step wait.
+# CODING_IDLE_DURABLE = "0"
 # Experimental (#103): browser connector registry tools (browser_navigate/snapshot/act).
 # Unset = inert (fail-closed). First-party/self-use ONLY — do NOT enable for third-party
 # creators until the browser trust model (#75). Uncomment to turn on.

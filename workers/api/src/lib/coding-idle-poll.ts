@@ -176,43 +176,59 @@ export async function awaitEngineIdle<S extends IdlePollSnapshot>(deps: {
 // ── The durable variant, behind a flag (#814) ────────────────────────────────
 
 /**
- * Should the idle wait be built from DURABLE steps rather than one long one? Unset = no.
+ * Should the idle wait be built from DURABLE steps rather than one long one? **Default: yes** (#814).
  *
- * ── What is being switched, and what is not known
+ * ── Why it is on
  *
- * Today the whole wait is ONE `step.do`: up to 480 seconds of `setTimeout` sleeps and up to 70
- * captures inside a single 10-minute step. With this on, every capture is its own durable step and
- * every sleep is a `step.sleep` — the shape the handoff wait in `coding-pause.ts` and the runner
- * guard already use. The LOOP is the same function either way ({@link awaitEngineIdle}); only the
- * two effects handed to it differ, which is why the boundary tests hold for both.
+ * **Surviving an eviction mid-turn**, which is the benefit that holds whatever else is true.
  *
- * #814 asked for this to stop the wait "burning subrequest budget in one invocation". The header
- * of this file rejects that reasoning: the ceiling is documented per Workflow INSTANCE, so a sleep
- * should not reset it. That is an INFERENCE — the limits page does not say what a sleep does to the
- * count — and `scratch/subrequest-reset-probe` exists to measure it. It has not been run. So this
- * flag must NOT be turned on in the belief that it saves subrequests: per poll it spends exactly
- * what the other path spends. Turn it on for that reason only if the probe reports `RESETS`.
+ * The other shape puts the whole wait in ONE `step.do`: up to 480 seconds of `setTimeout` sleeps
+ * and up to 70 captures inside a single 10-minute step. A `setTimeout` inside a step does not
+ * survive the instance being evicted — the step is retried from its first line, so the wait starts
+ * over with a fresh settle and a fresh 480-second window, and `idleRetry` allows that exactly once.
+ * An engine turn interrupted twice therefore ends a run that was working. With durable steps a
+ * replay returns every completed capture from the journal and resumes at the poll that was in
+ * flight, which is the same property `coding-pause.ts` relies on for its handoff and usage-limit
+ * parks — both of which chunk for their own reasons (out-ticking the driver claim, staying
+ * cancellable) and neither of which is about subrequests.
  *
- * ── What it buys whatever the probe says
+ * The LOOP is the same function either way ({@link awaitEngineIdle}); only the two effects handed
+ * to it differ, which is why every boundary test holds for both paths.
  *
- * An eviction mid-turn. A `setTimeout` inside a step does not survive the instance being evicted:
- * the step is retried from its first line, so the wait starts again — a fresh settle, a fresh
- * 480-second window — and `idleRetry` allows that once. With durable steps a replay returns every
- * completed capture from the journal and resumes at the poll that was in flight.
+ * ── What is still NOT known, and must not be claimed
+ *
+ * #814 also argued this would stop the wait "burning subrequest budget in one invocation". **That
+ * is unmeasured and this module does not assert it either way.** Cloudflare documents the ceiling
+ * as per Workflow INSTANCE (`workflows/reference/limits`), which would mean a sleep does not reset
+ * the count and chunking buys nothing there — but the limits page does not say what a sleep or a
+ * step boundary does to it, so that reading is an INFERENCE, not a fact. `scratch/
+ * subrequest-reset-probe` was written to settle it and has not been run.
+ *
+ * So: per poll this path spends exactly what the other path spends, as far as anyone here knows.
+ * Nobody should cite this flag as a subrequest fix until the probe reports `RESETS`. The file
+ * header's arithmetic — which is about the POLL SCHEDULE backing off, not about chunking — is what
+ * actually took #523's run under the ceiling, and it is unaffected by this choice.
  *
  * ── What it costs
  *
  * One durable step per capture: 51 for the 4.7-minute turn this file is sized against, 70 for a
  * full window, where there was 1. Cloudflare allows 10,000 steps per Workflow by default
- * (`step.sleep` is documented as not counting), so #523's 26-turn run spends 1,326 of them. At the
- * slow cadence that ceiling is ~27 hours of waiting — the same order as the 100,000-subrequest one
- * — so it is a second budget to watch, not one this change exhausts. It also adds a durable
- * round trip to every poll, so a turn ends a little later than the schedule alone implies.
+ * (`step.sleep` is documented as not counting), so #523's 26-turn run spends 1,326 of them — at the
+ * slow cadence that ceiling is ~27 hours of waiting. It is a second finite budget to watch, not one
+ * this change exhausts. It also adds a durable round trip to every poll, so a turn ends a little
+ * later than the schedule alone implies.
  *
- * Same `"1"` / `"true"` convention as `BUDGET_ENFORCE` and `CUSTOM_SURFACES_ENABLED`.
+ * ── The opt-out, and why it survives being made the default
+ *
+ * `CODING_IDLE_DURABLE=0` / `false` restores the one-step wait. The flag is kept — inverted rather
+ * than deleted — because this multiplies the step count of every coding run by ~51, against a
+ * ceiling nobody here has hit but nobody here has measured under load either. A default that can
+ * only be changed by editing and deploying code is not a default, it is a commitment; this one has
+ * a lever. Anything that is not an explicit disable reads as enabled, so an unset var, an empty
+ * string and a typo all leave it ON — the safe direction now that ON is the intended state.
  */
 export function idleWaitIsDurable(env: { CODING_IDLE_DURABLE?: string } | undefined): boolean {
-	return env?.CODING_IDLE_DURABLE === "1" || env?.CODING_IDLE_DURABLE === "true";
+	return !(env?.CODING_IDLE_DURABLE === "0" || env?.CODING_IDLE_DURABLE === "false");
 }
 
 /**

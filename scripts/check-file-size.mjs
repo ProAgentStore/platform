@@ -1475,7 +1475,11 @@ const PINS = {
 	// of wiring and four saying what the flag is NOT known to do (save subrequests). The branch has
 	// to be HERE because its two effects are `step.sleep` and the runner guard, which only exist
 	// inside the Workflow; the naming, the flag and the cost are `lib/coding-idle-poll.ts`, tested.
-	"workers/api/src/workflows/coding-session.ts": 1064,
+	// +2 at #814: `waitIdle` became a block so the step label is derived ONCE above the branch
+	// (both arms used to spell the counter-incrementing label for themselves, which was correct only by
+	// coincidence). Two lines of structure for a whole class of replay bug; the argument lives in
+	// the wiring test, not here, which is why this is +2 and not +10.
+	"workers/api/src/workflows/coding-session.ts": 1067,
 	// This file, crossing its own LIMIT at #456 — and it is not an oddity, it is the guard working.
 	// A pin entry is REQUIRED to carry the reason its file grew, so this list is an append-only
 	// ledger of decisions: it can only get longer, and the one thing it must never do is get shorter
@@ -1694,6 +1698,9 @@ const PINS = {
 	// +11 at #804: the tools.ts and coding-session.ts raises above (five and four lines of why)
 	// and these three.
 	// +8 at #803: the `workers/mcp/src/index.ts` raise above plus this line.
+	// +6 at #814: the coding-session.ts raise above (four lines of why for two lines of structure)
+	// and these two. Short on purpose — the argument for deriving the step label once lives in the
+	// wiring test, which can assert it; a comment can only claim it.
 	// +7 on the CodingTab split: the entry above comes DOWN by 66, and a lowered pin costs this
 	// file the same lines a raised one does — four of why, plus these three. Same price and same
 	// reason as the #696/#703 notes above: SLACK would have let the reclaimed headroom go unrecorded.
@@ -1701,7 +1708,7 @@ const PINS = {
 	// why — most of it the boundary that was measured and left alone — plus these three. Same price
 	// as the first split's note directly above.
 	// +5 at #814: the coding-session raise above (four lines of why) and this one.
-	"scripts/check-file-size.mjs": 1785,
+	"scripts/check-file-size.mjs": 1792,
 };
 
 /**

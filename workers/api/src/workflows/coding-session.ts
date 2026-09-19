@@ -513,19 +513,22 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				) as Promise<CodingDecision>,
 			// Poll capture until the CLI goes idle, BACKING OFF as the turn proves long (#523). A
 			// flat 2-second poll spent 2 subrequests per second of Engine work against a ceiling
-			// Cloudflare applies per WORKFLOW INSTANCE — never reset by a step or a sleep — so three
-			// runs exhausted it at ~2 hours and reported their pushed work as `failed`. The
-			// schedule, the arithmetic and the boundary it preserves are `lib/coding-idle-poll.ts`.
+			// Cloudflare applies per WORKFLOW INSTANCE, so three runs exhausted it at ~2 hours and
+			// reported their pushed work as `failed`. The schedule, the arithmetic and the boundary
+			// it preserves are `lib/coding-idle-poll.ts` — that BACKOFF is what took the run under it.
 			//
-			// Behind `CODING_IDLE_DURABLE` (#814, unset = the one-step wait below) the SAME loop runs over
-			// durable effects: each capture its own guarded step, each sleep a `step.sleep`, so a turn
-			// survives an eviction. It is NOT known to save subrequests — see `idleWaitIsDurable`.
-			waitIdle: () =>
-				measured(
+			// DURABLE BY DEFAULT since #814: each capture its own guarded step, each sleep a `step.sleep`,
+			// so a turn survives an eviction rather than restarting its whole 480-second window. NOT known
+			// to save subrequests (`idleWaitIsDurable`); `CODING_IDLE_DURABLE=0` restores the one-step wait.
+			waitIdle: () => {
+				// ONE increment, above the branch — the counter must not depend on which wait ran. Why: the wiring test.
+				const label = `s${n++}-waitidle`;
+				return measured(
 					idleWaitIsDurable(env)
-						? awaitEngineIdle(durableIdleDeps({ label: `s${n++}-waitidle`, capture: (name) => guard(runRetry, name, capture), sleep: (name, ms) => step.sleep(name, ms) }))
-						: guard(runIdle, `s${n++}-waitidle`, () => awaitEngineIdle({ capture, sleep })),
-				),
+						? awaitEngineIdle(durableIdleDeps({ label, capture: (name) => guard(runRetry, name, capture), sleep: (name, ms) => step.sleep(name, ms) }))
+						: guard(runIdle, label, () => awaitEngineIdle({ capture, sleep })),
+				);
+			},
 			onEvent: (type, message, data) => {
 				// Incremented OUTSIDE step.do: a step that exhausts its retries re-runs its body,
 				// and `++` inside would double-count every retry into the progress figure.
