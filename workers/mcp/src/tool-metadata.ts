@@ -176,7 +176,11 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	list_instance_connector_grants: "read",
 	list_instance_files: "read",
 	list_instance_knowledge: "read",
+	list_connectors: "read",
+	list_instance_connectors: "read",
 	list_instance_tools: "read",
+	list_trigger_actions: "read",
+	preview_instance_trigger: "read",
 	list_instance_trigger_events: "read",
 	list_instance_triggers: "read",
 	list_knowledge: "read",
@@ -245,6 +249,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	set_instance_runner_node: "write",
 	set_instance_settings: "write",
 	set_instance_stats: "write",
+	set_instance_connector_consent: "write",
 	set_instance_tool: "write",
 	set_supervision_enabled: "write",
 	set_translation_config: "write",
@@ -416,8 +421,18 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// `start_instance_browser_task` is annotated `destructive` for the same reason `apply_to_job`
 	// is: the annotation describes the tool a host caches, and the tool CAN commit. Its runtime
 	// gate is the lighter one when `commit` is false, decided per call.
-	read: 83,
-	write: 57,
+	// +4 read, +1 write at #613 (trigger and connector metadata): `list_connectors` and
+	// `list_instance_connectors` answer what exists and what THIS agent may use;
+	// `list_trigger_actions` and `preview_instance_trigger` are what the console's trigger form
+	// is built from, so `create_instance_trigger` stops being a blind write.
+	// `preview_instance_trigger` is `read` although its route is a POST — the verb carries a
+	// draft config, and the route computes and returns without writing. The annotation describes
+	// the EFFECT a host should expect, not the HTTP method, and calling it a write would tell a
+	// read-only session it cannot check a trigger it is allowed to read.
+	// `set_instance_connector_consent` is `write` on the same reasoning as `set_instance_tool`:
+	// it changes what an agent is PERMITTED to do, so a read-only session must not widen it.
+	read: 87,
+	write: 58,
 	runtime: 20,
 	destructive: 18,
 };

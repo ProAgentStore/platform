@@ -166,4 +166,54 @@ export function registerTriggerTools(server: McpServer, ctx: InstanceToolsCtx): 
 			return jsonText(data);
 		},
 	);
+	// ── Building a trigger, rather than writing one blind (#613) ───────────────
+	//
+	// `create_instance_trigger` could always WRITE a trigger; nothing could check one first.
+	// These two are what the console's trigger form is built from: the action vocabulary
+	// judged against THIS agent, and a preview that says what would actually be stored.
+	// Both are reads — `preview_instance_trigger` is a POST because its input is a whole
+	// draft config, not because it changes anything: the route computes and returns, and is
+	// deliberately non-throwing so a caller sees ALL the problems at once.
+
+	server.tool(
+		"list_trigger_actions",
+		"The trigger action vocabulary, annotated for ONE instance: every action with `available` and, when false, the reason this agent would refuse it. Read this before create_instance_trigger — an action the agent cannot perform is stored happily and then never works, and this is the call that says so in advance. The reason sentence is the same one the save path and the console picker use.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Private instance ID or slug from my_instances — required; the vocabulary is judged per agent. Copy it exactly."),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall(`/v1/triggers/actions?instanceId=${encodeURIComponent(instance_id)}`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"preview_instance_trigger",
+		"Check a trigger BEFORE creating it. Returns `{schedule, timezone, jitterMinutes, runs, issues, error}`: `runs` is the next few fire times in the trigger's own timezone, `issues` lists every part of the config that would be stored and then ignored (in the words the save path uses), and `error` is set when the schedule itself will not parse. Name `instance_id` and it also checks the action against that agent, so \"it would be stored and never work\" is caught here too. Changes nothing — this is a computation, and it reports every problem rather than stopping at the first.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().optional().describe("Check the action against this agent as well. Omit to validate the schedule and config alone."),
+			type: z.enum(["cron", "webhook"]).optional().describe("Trigger type. Omit for webhook; `runs` is only computed for cron."),
+			action: z.string().optional().describe("Action the trigger would run, e.g. create_task (see list_trigger_actions). Omit for create_task."),
+			schedule: z.string().optional().describe("Cron expression to preview, e.g. `0 9 * * 1-5`."),
+			config: triggerConfigSchema.optional().describe("The trigger config as it would be saved (timezone, jitterMinutes, and the action's own fields)."),
+			count: z.coerce.number().int().min(1).max(5).optional().describe("How many upcoming run times to return, 1-5. Omit for 3."),
+		},
+		async ({ token, instance_id, type, action, schedule, config, count }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const body: Record<string, unknown> = {};
+			if (instance_id !== undefined) body.instanceId = instance_id;
+			if (type !== undefined) body.type = type;
+			if (action !== undefined) body.action = action;
+			if (schedule !== undefined) body.schedule = schedule;
+			if (config !== undefined) body.config = normalizeTriggerConfig(config);
+			if (count !== undefined) body.count = count;
+			const data = await authedCall("/v1/triggers/preview", sessionToken, { method: "POST", body: JSON.stringify(body) }, env);
+			return jsonText(data);
+		},
+	);
 }

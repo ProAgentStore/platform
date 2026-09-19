@@ -510,4 +510,23 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.33 is published.
 	"0.1.34": "sha256:081d4b4b6b475b00c1736f3107e434bdce6aab2cd6b7e3984de2257aa4fba79b",
+	// 0.1.35 (#613, trigger and connector metadata): five new tool NAMES, all ALWAYS-ON — 178
+	// registrations become 183, `MCP_TOOL_ALWAYS_ON` 154 → 159, `MCP_TOOL_GATED` stays 24.
+	//
+	//   * `list_connectors` (read) — GET /v1/connectors, the account-level catalogue.
+	//   * `list_instance_connectors` (read) — GET /v1/instances/:id/connectors, this agent's
+	//     verdict on each, carrying the same refusal sentence the grant routes use.
+	//   * `set_instance_connector_consent` (write, dry_run) — PUT …/connectors/:connector/consent.
+	//     All three in `instance-tools/connectors.ts`.
+	//   * `list_trigger_actions` (read) — GET /v1/triggers/actions, which REQUIRES `instanceId`.
+	//   * `preview_instance_trigger` (read) — POST /v1/triggers/preview. Annotated read although
+	//     the route is a POST: the verb carries a draft config and the route computes without
+	//     writing. Both in `instance-tools/triggers.ts`, beside `create_instance_trigger`, which
+	//     was the blind write this pair exists to stop being necessary.
+	//
+	// Closes that group's `KNOWN_GAPS` entry (5 routes; parity 109 → 114 reachable of 166,
+	// 46 → 41 gaps across 8 groups). `SERVER_INSTRUCTIONS` did not move.
+	//
+	// Appended, never edited in place: 0.1.34 is published.
+	"0.1.35": "sha256:4bb1e1d1782c17dfaf23d2232084330a771440ac356a899976ca87d4fd62963c",
 };

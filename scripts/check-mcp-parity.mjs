@@ -187,12 +187,6 @@ const KNOWN_GAPS = [
 	},
 	{
 		why:
-			"Trigger and connector metadata the console uses to BUILD a trigger: the action catalogue (`/triggers/actions`), a dry-run preview (`/triggers/preview`), the account connector list, the per-instance connector list and its write-consent toggle. `create_instance_trigger` can write one blind; nothing lets a caller check it first. #613.",
-		match:
-			/^[A-Z]+ \/v1\/(connectors|triggers\/(actions|preview)|instances\/\{\}\/connectors(\/\{\}\/consent)?)$/,
-	},
-	{
-		why:
 			"File-connector reads and imports: list a granted Drive folder's files, and import from Drive or WorkDrive into an instance. The grants themselves ARE reachable (`list_instance_connector_grants`), which is what makes the missing import conspicuous. #613.",
 		match: /^[A-Z]+ \/v1\/(drive|workdrive)\/instances\/\{\}\/(files|import)$/,
 	},

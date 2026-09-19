@@ -121,6 +121,10 @@ const CONTROL_ARGS: ReadonlySet<string> = new Set([
 	// #613: addressing — WHICH notification `mark_notification_read` flips. Taken from
 	// `list_notifications`, never composed; the read-state it changes reads back there too.
 	"notification_id",
+	// #613: addressing — WHICH connector `set_instance_connector_consent` grants or revokes on.
+	// A registry id taken from `list_connectors` / `list_instance_connectors`, never composed;
+	// the route validates it and 404s an unknown one rather than storing it.
+	"connector",
 ]);
 
 /**

@@ -135,6 +135,82 @@ export function registerConnectorGrantTools(server: McpServer, ctx: InstanceTool
 			return text(data.success ? "Grant revoked." : `Error: ${data.error || "revoke failed"}`);
 		},
 	);
+
+	// ── Connector catalogue + per-instance verdict + write consent (#613) ──────
+	//
+	// `connector_status` above answers "is Drive connected" for the two file connectors.
+	// These answer the general questions the console's Settings tab asks: what connectors
+	// exist at all, what THIS agent's verdict on each is, and whether an agent may WRITE
+	// through one. Without them a caller could create a trigger or call a connector tool
+	// and only learn from the refusal that the agent was never offered that connector.
+
+	server.tool(
+		"list_connectors",
+		"List every connector this deployment knows, resolved for the signed-in account: id, label, auth kind, scopes, grant model, the tools it contributes, whether the deployment is `configured` for it, and whether the account has `connected` one. `connected: null` means the connector holds no credential (a relay or no-auth one), which is not the same answer as false. Connecting is an OAuth flow and must be done once in a browser; everything after that is reachable from here. For one agent's verdict on these, use list_instance_connectors.",
+		{ token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in.") },
+		async ({ token }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall("/v1/connectors", sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"list_instance_connectors",
+		"What THIS instance may do with each connector — the per-agent verdict, not the account-level connection. An account connects Drive once, but an agent is only offered a connector when it declares one of that connector's tools, so the same connection is available on one agent and refused on another. Each entry carries the refusal sentence when there is one, in the same words the grant routes refuse with. Read this before creating a grant, a sync trigger, or a call_instance_tool that depends on a connector.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall(`/v1/instances/${instance_id}/connectors`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"set_instance_connector_consent",
+		"Grant or revoke WRITE consent for one connector on one instance — the owner's separate yes to an agent changing things through it, on top of the connector being connected at all. Reads never need consent; without it, a connector's write tools are refused by call_instance_tool and by the agent itself. Granting is validated against the registry first, so an unknown connector 404s and a read-only one is refused rather than stored as consent that could never do anything. Revoking always works, including for a connector that has since become read-only.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),
+			connector: z.string().describe("Connector id from list_connectors or list_instance_connectors, e.g. github. Copy it exactly."),
+			enabled: z.boolean().describe("true to grant write consent, false to revoke it."),
+			dry_run: z.boolean().optional().describe("Preview without changing the consent."),
+		},
+		async ({ token, instance_id, connector, enabled, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, connector, enabled };
+			// `write`, on the same reasoning as `set_instance_tool`: this changes what an agent is
+			// PERMITTED to do, so a read-only MCP session must not be able to widen its reach. Not
+			// `destructive`, because it is the reversible half of a pair whose other half (revoke)
+			// must stay easy — classing the grant as destructive would leave revocation behind a
+			// scope a caller may not hold, which is the wrong failure for a safety toggle.
+			const denied = await requirePermission(safetyFor(token), "write", "set_instance_connector_consent", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(
+					safetyFor(token),
+					"set_instance_connector_consent",
+					enabled ? "grant a connector write consent on this instance" : "revoke a connector's write consent on this instance",
+					input,
+					{ endpoint: `/v1/instances/${instance_id}/connectors/${connector}/consent`, method: "PUT" },
+				);
+			}
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/connectors/${encodeURIComponent(connector)}/consent`,
+				sessionToken,
+				{ method: "PUT", body: JSON.stringify({ enabled }) },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_instance_connector_consent", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
 }
 
 // ── Which account an instance uses (#736) ───────────────────────────────────

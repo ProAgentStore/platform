@@ -1129,9 +1129,11 @@ describe("tool annotations", () => {
 		// claim. `chat_with_agent` is ungated and POSTs, which is exactly why it is not
 		// announced read-only.
 		//
-		// Two exemptions, because the API expresses a vector query as a request BODY. Each
-		// is asserted to still be necessary, so it cannot outlive the POST that justified it.
-		const QUERY_BY_POST = ["search_agent_knowledge", "search_instance_knowledge"];
+		// Three exemptions, because the API expresses these queries as a request BODY: two
+		// vector searches, and (#613) a trigger preview whose input is a whole draft config —
+		// the route computes `runs`/`issues` and writes nothing. Each is asserted to still be
+		// necessary, so an exemption cannot outlive the POST that justified it.
+		const QUERY_BY_POST = ["search_agent_knowledge", "search_instance_knowledge", "preview_instance_trigger"];
 		const writers: string[] = [];
 		for (const [name, probe] of probes) {
 			if (annotationsFor(name)?.readOnlyHint !== true) continue;

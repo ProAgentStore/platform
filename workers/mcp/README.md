@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**178 tool registrations.** 154 are always registered; 24 are gated to the console
+**183 tool registrations.** 159 are always registered; 24 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -381,6 +381,8 @@ immediately instead of a whole transcript.
 | Tool | Purpose | Scope | Dry | Confirm |
 |---|---|---|---|---|
 | `list_instance_triggers` | List webhook/cron/connector-sync triggers | read | | |
+| `list_trigger_actions` | The action vocabulary judged against ONE agent (`available` + why not) | — | | |
+| `preview_instance_trigger` | Check a draft trigger before creating it: next run times, and what would be ignored | — | | |
 | `create_instance_trigger` | Create one | write | yes | |
 | `run_instance_trigger` | Fire one now | runtime | yes | |
 | `list_instance_trigger_events` | Event history for a trigger | read | | |
@@ -395,6 +397,9 @@ immediately instead of a whole transcript.
 | `call_instance_tool` | Invoke a connector tool directly (`tool` + `input`) | write | no ([why](#tools-with-no-dry-run)) | |
 | `connector_status` | Is a file connector connected, and is this deployment configured for it? | — | | |
 | `list_instance_connector_grants` | Folders granted to this instance — the grant *is* the permission | — | | |
+| `list_connectors` | Every connector this deployment knows, resolved for your account (configured / connected) | — | | |
+| `list_instance_connectors` | What THIS agent may do with each connector, with the refusal sentence when it may not | — | | |
+| `set_instance_connector_consent` | Grant or revoke a connector's WRITE consent on one instance | write | yes | |
 | `grant_instance_connector_folder` | Grant a folder (folders only; files refused server-side) | write | yes | |
 | `delete_instance_connector_grant` | Revoke a grant | destructive | yes | `delete_instance_connector_grant` |
 | `get_instance_connector_account` | Which of your accounts the instance uses per connector (e.g. Gmail): `pinned`, what a call `resolves` to, and `blocked` when it would use none | read | | |
