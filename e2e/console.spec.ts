@@ -1825,7 +1825,7 @@ test.describe("ProAgentStore Console smoke", () => {
 	});
 
 	for (const width of [320, 390]) {
-		test(`the live status controls fit at ${width}px with real-length names (#815)`, async ({ page }) => {
+		test(`mobile — the live status controls fit at ${width}px with real-length names (#815)`, async ({ page }) => {
 			await page.setViewportSize({ width, height: 800 });
 			await mockSignedInConsole(page, { instances: SORT_FIXTURE, activity: ACTIVITY_FIXTURE });
 			await page.goto("/console/instances");
