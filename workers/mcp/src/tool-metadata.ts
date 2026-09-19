@@ -165,6 +165,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	instance_task_events: "read",
 	keys_status: "read",
 	list_agent_files: "read",
+	list_agent_tasks: "read",
 	list_agent_repo_files: "read",
 	list_agents: "read",
 	list_collections: "read",
@@ -255,6 +256,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	set_instance_stats: "write",
 	set_instance_connector_consent: "write",
 	set_instance_mcp_grant: "write",
+	create_agent_task: "write",
+	update_agent_task: "write",
 	set_instance_tool: "write",
 	set_supervision_enabled: "write",
 	set_translation_config: "write",
@@ -342,6 +345,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	delete_instance_file: "destructive",
 	delete_instance_knowledge: "destructive",
 	delete_instance_memory: "destructive",
+	delete_agent_task: "destructive",
 	delete_connection: "destructive",
 	delete_feedback: "destructive",
 	delete_instance_trigger: "destructive",
@@ -456,10 +460,17 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// is `destructive` and confirm-gated because it takes the edge's routing filter and target
 	// pipeline with it and orphans the outbox rows that record what was stuck; the reversible
 	// form of the same intent is `set_connection_enabled`, which stays `write`.
-	read: 91,
-	write: 59,
+	// +1 read, +2 write, +1 destructive at #613 (standing agent tasks): the agent's OWN task
+	// store — DO state rendered into its prompt, not the runtime board. `create_agent_task` and
+	// `update_agent_task` are `write` and not `runtime` because nothing RUNS: they change what
+	// the agent carries into its next turn. `delete_agent_task` is `destructive` + confirm on
+	// the same footing as `delete_instance_memory` — durable DO state that shapes the prompt and
+	// cannot be recovered by re-reading; the retiring-without-losing form is an update to
+	// `status: complete`.
+	read: 92,
+	write: 61,
 	runtime: 23,
-	destructive: 19,
+	destructive: 20,
 };
 
 /** The subset of MCP's `ToolAnnotations` this server can state honestly.

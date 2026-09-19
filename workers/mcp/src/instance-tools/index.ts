@@ -10,6 +10,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { McpEnv } from "../http.js";
 import { registerAccountTools } from "./account.js";
+import { registerAgentTaskTools } from "./agent-tasks.js";
 import { registerApplyTools } from "./apply.js";
 import { registerBaseTools } from "./base.js";
 import { registerBoardTools } from "./board.js";
@@ -51,6 +52,9 @@ export function registerInstanceTools(
 	// belongs to every agent type, and the run lookup answers for every instance.
 	registerRecentTools(server, ctx);
 	registerBoardTools(server, ctx);
+	// The agent's OWN standing tasks — DO state rendered into its prompt, deliberately a
+	// separate registrar from the runtime board above so the two task stores stay told apart.
+	registerAgentTaskTools(server, ctx);
 	registerSettingsTools(server, ctx);
 	registerTriggerTools(server, ctx);
 	registerCompositionTools(server, ctx);

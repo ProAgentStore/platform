@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**192 tool registrations.** 168 are always registered; 24 are gated to the console
+**196 tool registrations.** 172 are always registered; 24 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -315,6 +315,10 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `start_instance_browser_task` | Drive the owner's browser at an objective; rehearses unless `commit` | destructive | yes | |
 | `hint_instance_task` | Attach guidance the agent reads on its next step | write | yes | |
 | `clear_finished_tasks` | Clear cancelled/completed/failed tasks from the board (`blocked` is kept — it means the agent needs you) | write | yes | |
+| `list_agent_tasks` | The agent's OWN standing tasks (prompt-injected), with the store's limits — not the board | — | | |
+| `create_agent_task` | Add a standing task as the owner | write | yes | |
+| `update_agent_task` | Edit one — title, description or status; re-stamps it as the owner's | write | yes | |
+| `delete_agent_task` | Remove a standing task for good (`status: complete` retires it instead) | destructive | yes | `delete_agent_task` |
 | `instance_task_events` | Recent runtime events | — | | |
 | `ticket_thread` | Read one ticket's question-and-answer thread | — | | |
 | `ask_ticket` | Ask one ticket about its own record — explains, never acts | write | yes | |

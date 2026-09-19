@@ -225,6 +225,16 @@ const READBACK: Record<string, string | null> = {
 	"set_instance_voice_settings.vocabulary": "get_instance_voice_settings",
 	"update_profile.fields": "get_profile",
 
+	// ── #613: the agent's OWN standing tasks (not the runtime board) ──
+	// All three fields are stored on the task and come back from the reader added beside them.
+	// Title and description are TRUNCATED at ingest (200 / 2000 chars), so what reads back may
+	// be shorter than what was sent — the readback is of the stored task, which is the thing
+	// the prompt renders.
+	"create_agent_task.title": "list_agent_tasks",
+	"create_agent_task.description": "list_agent_tasks",
+	"update_agent_task.title": "list_agent_tasks",
+	"update_agent_task.description": "list_agent_tasks",
+
 	// ── #613: outbound MCP connections (PAGS as an MCP client) ──
 	// A grant is stored as an (endpoint, tool) pair and both come back from the reader beside it.
 	// The url is NORMALIZED before storage, so what reads back is the canonical form, not the

@@ -177,11 +177,6 @@ const KNOWN_GAPS = [
 	},
 	{
 		why:
-			"Standing agent tasks (`agent-tasks`) — the recurring instructions an agent carries, created, edited and deleted in the console's Tasks section. Distinct from runtime tasks, which `run_instance_task` covers. #613.",
-		match: /^[A-Z]+ \/v1\/instances\/\{\}\/agent-tasks(\/\{\})?$/,
-	},
-	{
-		why:
 			"File-connector reads and imports: list a granted Drive folder's files, and import from Drive or WorkDrive into an instance. The grants themselves ARE reachable (`list_instance_connector_grants`), which is what makes the missing import conspicuous. #613.",
 		match: /^[A-Z]+ \/v1\/(drive|workdrive)\/instances\/\{\}\/(files|import)$/,
 	},

@@ -582,4 +582,31 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.36 is published.
 	"0.1.37": "sha256:0a54ea7c44d237315a96cc05a124715bc415182478340b66d849a553d1baf13f",
+	// 0.1.38 (#613, standing agent tasks): four new tool NAMES, all ALWAYS-ON, in a NEW registrar
+	// `instance-tools/agent-tasks.ts` (group `agentTasks`) — 192 registrations become 196,
+	// `MCP_TOOL_ALWAYS_ON` 168 → 172, `MCP_TOOL_GATED` stays 24.
+	//
+	//   * `list_agent_tasks` (read) — GET /v1/instances/:id/agent-tasks, with the store's
+	//     `limits` (max, injected-per-prompt, staleDays).
+	//   * `create_agent_task` (write, dry_run) — POST the same route.
+	//   * `update_agent_task` (write, dry_run) — PUT …/agent-tasks/:taskId, named fields only.
+	//   * `delete_agent_task` (destructive, dry_run + confirm) — DELETE the same route.
+	//
+	// A SEPARATE registrar from `board.ts` on purpose: `/agent-tasks` is not `/tasks`, and the
+	// API paid for that distinction in its route naming. A board ticket is a unit of work a
+	// runner finishes; a task here is a standing instruction rendered into the prompt every
+	// turn. Keeping them in one group would put `delete_agent_task` and `delete_instance_task`
+	// side by side in the contract table as if they were variants of one thing.
+	//
+	// FOUR tools for a three-route group: the read is missing from the parity inventory, not
+	// from the console — `scripts/lib/api-calls.mjs` still drops a call whose path sits on its
+	// own line (TasksSection.tsx:45), the defect reported on the voice-settings and outbound-MCP
+	// groups. Shipping create/update/delete without the list would have meant editing tasks
+	// whose ids nothing could read.
+	//
+	// Closes that group's `KNOWN_GAPS` entry (3 routes; parity 122 → 125 reachable of 165,
+	// 32 → 29 gaps across 5 groups). `SERVER_INSTRUCTIONS` did not move.
+	//
+	// Appended, never edited in place: 0.1.37 is published.
+	"0.1.38": "sha256:f774e627cf44e400a8e56348ac77296fb5099bcb45fd3f671f8742d7f7e29956",
 };

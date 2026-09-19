@@ -3,6 +3,7 @@ import type { z } from "zod";
 import type { McpEnv } from "../http.js";
 import type { SafetyContext } from "../safety.js";
 import { registerAccountTools } from "./account.js";
+import { registerAgentTaskTools } from "./agent-tasks.js";
 import { registerApplyTools } from "./apply.js";
 import { registerBaseTools } from "./base.js";
 import { registerBoardTools } from "./board.js";
@@ -299,10 +300,12 @@ const TABLE: Record<string, Row> = {
 	coding_loop_queue: ["coding", "read", null, null, "instance_id,repo_id,token"],
 	coding_loop_queue_cancel: ["coding", "write", null, null, "entry_id,instance_id,token"],
 	connector_status: ["connectors", "none", null, null, "provider,token"],
+	create_agent_task: ["agentTasks", "write", null, "envelope", "description,dry_run,instance_id,title,token"],
 	create_connection: ["composition", "write", null, "envelope", "action,config,dry_run,event_type,instance_id,target_instance_id,token"],
 	create_instance_trigger: ["triggers", "write", null, "envelope", "action,config,dry_run,instance_id,name,schedule,token,type"],
 	create_supervision: ["composition", "write", null, "envelope", "dry_run,subordinate_instance_id,supervisor_instance_id,token"],
 	delete_instance_connector_grant: ["connectors", "destructive", "delete_instance_connector_grant", "envelope", "confirm,dry_run,grant_id,instance_id,provider,token"],
+	delete_agent_task: ["agentTasks", "destructive", "delete_agent_task", "envelope", "confirm,dry_run,instance_id,task_id,token"],
 	delete_connection: ["composition", "destructive", "delete_connection", "envelope", "confirm,connection_id,dry_run,instance_id,token"],
 	delete_feedback: ["observability", "destructive", "delete_feedback", "envelope", "confirm,dry_run,feedback_id,token"],
 	delete_instance_file: ["knowledge", "destructive", "delete_instance_file", "envelope", "confirm,dry_run,file_id,instance_id,token"],
@@ -346,6 +349,7 @@ const TABLE: Record<string, Row> = {
 	instance_task_events: ["runtime", "none", null, null, "instance_id,limit,token"],
 	keys_status: ["account", "none", null, null, "token"],
 	list_connections: ["composition", "read", null, null, "instance_id,token"],
+	list_agent_tasks: ["agentTasks", "none", null, null, "instance_id,token"],
 	list_connection_deliveries: ["composition", "none", null, null, "instance_id,limit,status,token"],
 	list_errors: ["observability", "none", null, null, "limit,scope,source,token"],
 	list_instance_connector_grants: ["connectors", "none", null, null, "instance_id,provider,token"],
@@ -399,6 +403,13 @@ const TABLE: Record<string, Row> = {
 	// rather than `destructive` because this IS the reversible form of `delete_supervision` above
 	// — putting it behind a scope a default connection never holds would leave the gap open.
 	set_connection_enabled: ["composition", "write", null, null, "connection_id,enabled,instance_id,token"],
+	update_agent_task: [
+		"agentTasks",
+		"write",
+		null,
+		"envelope",
+		"description,dry_run,instance_id,status,task_id,title,token",
+	],
 	update_board_ticket: ["board", "write", null, "envelope", "description,dry_run,instance_id,job_key,reasoning,title,token"],
 	set_instance_board_config: ["board", "write", null, "envelope", "columns,dry_run,instance_id,reset,token,view"],
 	set_instance_instructions: ["settings", "write", null, "envelope", "dry_run,instance_id,instructions,token"],
@@ -457,6 +468,7 @@ const TABLE: Record<string, Row> = {
 const REGISTRARS: Record<string, (s: unknown, c: InstanceToolsCtx) => void> = {
 	// biome-ignore-start lint/suspicious/noExplicitAny: minimal fake MCP server
 	account: registerAccountTools as any,
+	agentTasks: registerAgentTaskTools as any,
 	apply: registerApplyTools as any,
 	base: registerBaseTools as any,
 	board: registerBoardTools as any,
