@@ -15,6 +15,7 @@ nav = [
   { "Voice" = "voice.md" },
   { "Browser Runtime" = "browser-runtime.md" },
   { "Coder Multi-Machine" = "coder-multi-machine.md" },
+  { "Git Identity" = "git-identity.md" },
   { "Architecture" = "architecture.md" },
   { "Run Lifecycle" = "run-lifecycle.md" },
   { "Skill Publishing" = "skill-publishing.md" }
