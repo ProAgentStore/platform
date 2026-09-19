@@ -211,8 +211,22 @@ export function extractCalls(src, fnNames) {
 			while (k < src.length && /\s/.test(src[k])) k++;
 			const lit = readLiteral(src, k);
 			const body = src.slice(open, stop);
-			const method = (body.match(/method:\s*["'`](\w+)["'`]/)?.[1] ?? "GET").toUpperCase();
+			// A method that is not a string LITERAL is unknown, not GET (#613). The default was
+			// unconditional, so `method: text === null ? "DELETE" : "PUT"` — the console's
+			// save-or-clear control for a supervisor's direction — was recorded as
+			// `GET /v1/instances/{}/supervision/{}/direction`: a call nothing makes, against a
+			// route the API does not serve, which then sat in KNOWN_GAPS as a capability to
+			// close. A default that INVENTS a measurement is worse than one that declines to
+			// take it, because the invented one is indistinguishable from a real finding.
+			const literalMethod = body.match(/\bmethod\s*:\s*["'`](\w+)["'`]/)?.[1];
+			const computedMethod = literalMethod === undefined && /\bmethod\s*:/.test(body);
+			const method = (literalMethod ?? "GET").toUpperCase();
 			if (lit) {
+				const known = lit.text.startsWith("/v1/") || lit.text.startsWith("{}/");
+				if (known && computedMethod) {
+					unresolved.push(`${normalisePath(lit.text)} (method is computed)`);
+					continue;
+				}
 				if (lit.text.startsWith("/v1/")) calls.push({ method, path: normalisePath(lit.text), raw: lit.text });
 				else if (lit.text.startsWith("{}/")) {
 					for (const p of expandTablePrefix(lit.text, lit.parts[0] ?? "", src)) {
@@ -224,6 +238,10 @@ export function extractCalls(src, fnNames) {
 			const ident = src.slice(k).match(/^([A-Za-z_$][\w$]*)\s*[,)]/)?.[1];
 			const bound = ident ? resolveBinding(src, ident, open) : [];
 			if (bound.length) {
+				if (computedMethod) {
+					for (const p of bound) unresolved.push(`${normalisePath(p)} (method is computed)`);
+					continue;
+				}
 				for (const p of bound) calls.push({ method, path: normalisePath(p), raw: p });
 				continue;
 			}

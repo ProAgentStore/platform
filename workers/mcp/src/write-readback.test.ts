@@ -128,6 +128,9 @@ const CONTROL_ARGS: ReadonlySet<string> = new Set([
 	// #613: addressing — WHICH paused outbound-MCP ask `answer_instance_mcp_input_request`
 	// resolves. Taken from `list_instance_mcp_input_requests`, never composed.
 	"request_id",
+	// #613: addressing — WHICH dead delivery `replay_connection_delivery` re-arms. Taken from
+	// `list_connection_deliveries`, never composed; the row's status reads back there too.
+	"delivery_id",
 ]);
 
 /**

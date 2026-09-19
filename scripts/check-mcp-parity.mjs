@@ -138,6 +138,12 @@ const EXCLUSIONS = [
 		match: /^GET \/v1\/mcp-audit$/,
 	},
 	{
+		label: "Writing a supervisor's DIRECTION",
+		why:
+			"`PUT /v1/instances/:id/supervision/:sid/direction` is the only path that stamps `setBy: \"user\"`, and that is a security boundary rather than a detail of the URL: a direction is durable and reaches the supervisor's prompt on every later turn, so something able to write its own would turn one prompt injection — in a repo file, an issue body, a remote MCP resource — into a standing instruction. Provenance may only move agent → owner: the agent proposes through its own `set_direction` (recorded as `setBy: \"agent\"`, surfaced as `proposedDirection`) and the OWNER confirms by re-sending the text in the console. A tool here would be the injection path that route exists to close. `list_supervision` reads the direction and the proposal; nothing writes either.",
+		match: null,
+	},
+	{
 		label: "User deletion",
 		why: "Not modelled.",
 		match: null,
@@ -173,12 +179,6 @@ const KNOWN_GAPS = [
 		why:
 			"Standing agent tasks (`agent-tasks`) — the recurring instructions an agent carries, created, edited and deleted in the console's Tasks section. Distinct from runtime tasks, which `run_instance_task` covers. #613.",
 		match: /^[A-Z]+ \/v1\/instances\/\{\}\/agent-tasks(\/\{\})?$/,
-	},
-	{
-		why:
-			"Teamwork plumbing: delete a connection, read the delivery outbox, replay a dead delivery, and read a supervisor's direction. `list_instance_connections` and the supervision tools cover the happy path; the failure path — which is what an outbox is for — does not. #613.",
-		match:
-			/^[A-Z]+ \/v1\/instances\/\{\}\/(connections\/(\{\}|deliveries)|connections\/deliveries\/\{\}\/replay|supervision\/\{\}\/direction)$/,
 	},
 	{
 		why:

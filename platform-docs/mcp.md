@@ -136,7 +136,7 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
-- `serverInfo.version`: `0.1.36`
+- `serverInfo.version`: `0.1.37`
 
 That is the same value the published MCP-registry manifest (`server.json`) carries, and both
 are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —
@@ -218,6 +218,7 @@ Destructive or overwrite-style tools require an exact `confirm` value. By conven
 - `unregister_instance_runtime`: `confirm: "unregister_instance_runtime"`
 - `cancel_instance_task`: `confirm: "cancel_instance_task"`
 - `delete_instance_task`: `confirm: "delete_instance_task"`
+- `delete_connection`: `confirm: "delete_connection"`
 - `cancel_instance`: `confirm: "cancel_instance"`
 - `delete_instance_knowledge`: `confirm: "delete_instance_knowledge"`
 - `delete_instance_memory`: `confirm: "delete_instance_memory"`
@@ -247,7 +248,7 @@ The two published hints are **derived, not hand-maintained per tool**.
 `workers/mcp/src/tool-metadata.ts` classifies every tool `read` / `write` / `runtime` /
 `destructive` in one table, and `annotationsFor()` maps that classification onto the two
 hints. The classification is then derived **back out of the handlers** by `index.test.ts`,
-which drives all 189 tools under two different scope sets and reads the required scope out
+which drives all 192 tools under two different scope sets and reads the required scope out
 of each refusal — so a tool announced read-only that enforces a write gate fails the build
 rather than reaching a host. `conformance.test.ts` asserts the same thing against a real
 `tools/list` response.
@@ -410,7 +411,7 @@ More recipes, with real argument names, are in
 
 ## Tool Surface
 
-The server registers **189 tools**. 165 are always present. The remaining 24 are gated to
+The server registers **192 tools**. 168 are always present. The remaining 24 are gated to
 the console surfaces of the connected user's own subscribed agents, so the surface is
 per-connection:
 
@@ -472,6 +473,7 @@ looking and tells the user which console screen to use instead.
 | Binary routes — voice-audio, R2 multipart upload parts, file byte download | MCP results are text. `list_instance_files` and `delete_instance_file` exist; reading the bytes does not. `upload_agent_file` takes text only; `upload_resume` is the single binary path, and is apply-scoped. | — |
 | Arbitrary shell execution, or a generic API proxy | No shell tool, no open proxy. `call_instance_tool` reaches only the connector tools an instance declares and its owner has left enabled. | — |
 | The MCP audit log over HTTP | MCP already reads these events, through `mcp_audit_log`. `GET /v1/mcp-audit` (#704) is the console's path to the SAME KV, and its whole reason to exist is that it needs no MCP connection — when the MCP connection is what broke, a tool that wraps it answers nothing. A second tool over the same bytes would add a surface, not a capability. | `check-mcp-parity.mjs` |
+| Writing a supervisor's DIRECTION | `PUT /v1/instances/:id/supervision/:sid/direction` is the only path that stamps `setBy: "user"`, and that is a security boundary rather than a detail of the URL: a direction is durable and reaches the supervisor's prompt on every later turn, so something able to write its own would turn one prompt injection — in a repo file, an issue body, a remote MCP resource — into a standing instruction. Provenance may only move agent → owner: the agent proposes through its own `set_direction` (recorded as `setBy: "agent"`, surfaced as `proposedDirection`) and the OWNER confirms by re-sending the text in the console. A tool here would be the injection path that route exists to close. `list_supervision` reads the direction and the proposal; nothing writes either. | — |
 | User deletion | Not modelled. | — |
 | Another user's data | Every instance route is owner-scoped server-side. `list_errors` with `scope: "all"` is the only cross-user read and is admin-only. | — |
 

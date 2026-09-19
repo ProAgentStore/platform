@@ -168,6 +168,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	list_agent_repo_files: "read",
 	list_agents: "read",
 	list_collections: "read",
+	list_connection_deliveries: "read",
 	list_connections: "read",
 	list_errors: "read",
 	list_feedback: "read",
@@ -280,6 +281,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	//    difference in the GATE (scope + confirm), not in what a host should ask a user. ──
 	answer_instance_mcp_input_request: "runtime",
 	approve_instance_task: "runtime",
+	replay_connection_delivery: "runtime",
 	test_instance_mcp_server: "runtime",
 	answer_instance_input: "runtime",
 	end_instance_takeover: "runtime",
@@ -340,6 +342,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	delete_instance_file: "destructive",
 	delete_instance_knowledge: "destructive",
 	delete_instance_memory: "destructive",
+	delete_connection: "destructive",
 	delete_feedback: "destructive",
 	delete_instance_trigger: "destructive",
 	delete_supervision: "destructive",
@@ -445,10 +448,18 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// reason its route documents), and `answer_instance_mcp_input_request` retries the paused
 	// remote call with the owner's values — sending data off this platform is exactly what
 	// `runtime` is for, and neither belongs in a read-only session.
-	read: 90,
+	// +1 read, +1 runtime, +1 destructive at #613 (the pump's failure path):
+	// `list_connection_deliveries` reads the outbox, `replay_connection_delivery` re-arms a dead
+	// one and `delete_connection` ends an edge. The replay is `runtime` and not `write` because
+	// re-arming makes the CONSUMER run — idempotency stops a replay duplicating work already
+	// done, but work that never happened now happens, out there, on someone's quota. The delete
+	// is `destructive` and confirm-gated because it takes the edge's routing filter and target
+	// pipeline with it and orphans the outbox rows that record what was stuck; the reversible
+	// form of the same intent is `set_connection_enabled`, which stays `write`.
+	read: 91,
 	write: 59,
-	runtime: 22,
-	destructive: 18,
+	runtime: 23,
+	destructive: 19,
 };
 
 /** The subset of MCP's `ToolAnnotations` this server can state honestly.

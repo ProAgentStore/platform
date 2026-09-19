@@ -559,4 +559,27 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.35 is published.
 	"0.1.36": "sha256:c61a8ba0de559e33f7097df56d3a743d51c30500aaf060f6737e37c70ad1c618",
+	// 0.1.37 (#613, teamwork plumbing — the pump's FAILURE path): three new tool NAMES, all
+	// ALWAYS-ON, in `instance-tools/composition.ts` beside the connection family they complete —
+	// 189 registrations become 192, `MCP_TOOL_ALWAYS_ON` 165 → 168, `MCP_TOOL_GATED` stays 24.
+	//
+	//   * `list_connection_deliveries` (read) — GET /v1/instances/:id/connections/deliveries.
+	//     Account-wide, filterable by `status`; the rows are the only trace a broken chain leaves.
+	//   * `replay_connection_delivery` (runtime, dry_run) — POST …/deliveries/:did/replay.
+	//     `runtime`, not `write`: re-arming makes the CONSUMER run.
+	//   * `delete_connection` (destructive, dry_run + confirm) — DELETE …/connections/:cid. The
+	//     reversible form of the same intent is `set_connection_enabled`, which stays `write`.
+	//
+	// Closes that group's `KNOWN_GAPS` entry. The group's fourth route,
+	// `GET …/supervision/:sid/direction`, was NEVER REAL: `scripts/lib/api-calls.mjs` defaulted an
+	// unreadable `method:` to GET, so the console's `method: text === null ? "DELETE" : "PUT"`
+	// was recorded as a GET against a route the API does not serve. The extractor now declines to
+	// measure a computed method instead of inventing one, and writing a supervisor's DIRECTION is
+	// recorded in `EXCLUSIONS` as a statement — that route is the only path that stamps
+	// `setBy:"user"`, which is the boundary that keeps one prompt injection from becoming a
+	// standing instruction. Parity 119 → 122 reachable of 165 (the denominator drops with the
+	// phantom), 41 → 32 gaps across 6 groups.
+	//
+	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.36 is published.
+	"0.1.37": "sha256:0a54ea7c44d237315a96cc05a124715bc415182478340b66d849a553d1baf13f",
 };

@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**189 tool registrations.** 165 are always registered; 24 are gated to the console
+**192 tool registrations.** 168 are always registered; 24 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -422,6 +422,9 @@ immediately instead of a whole transcript.
 | `list_connections` | Event connections leaving an instance | read | | |
 | `create_connection` | Route an emitted fact to another agent (the pump) | write | yes | |
 | `set_connection_enabled` | Pause or resume a connection, keeping its routing filter, target pipeline and delivery history | write | | |
+| `list_connection_deliveries` | The pump's outbox: what delivered, what is queued for retry, what died (account-wide) | — | | |
+| `replay_connection_delivery` | Re-arm one dead delivery so the consumer runs | runtime | yes | |
+| `delete_connection` | Delete an edge for good — its filter and delivery history go with it | destructive | yes | `delete_connection` |
 
 ### Repo Chat (gated to `surfaces: ["repo"]`)
 

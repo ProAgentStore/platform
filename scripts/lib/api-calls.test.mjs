@@ -101,6 +101,26 @@ describe("extractCalls", () => {
 		expect(unresolved).toEqual(["entry.flow.start"]);
 	});
 
+	it("declines to measure a call whose METHOD is computed, instead of recording it as a GET", () => {
+		// #613. The default was unconditional, so the console's save-or-clear control —
+		// `method: text === null ? "DELETE" : "PUT"` — was recorded as a GET on a route the API
+		// does not serve, and that phantom then sat in KNOWN_GAPS as a capability to close.
+		// An invented measurement is worse than a declined one: it is indistinguishable from a
+		// real finding, and it sends someone to wrap a route that does not exist.
+		const src = 'await api(`/v1/instances/${id}/supervision/${sid}/direction`, { method: text === null ? "DELETE" : "PUT" });';
+		const { calls, unresolved } = extractCalls(src, ["api"]);
+		expect(calls).toEqual([]);
+		expect(unresolved).toEqual(["/v1/instances/{}/supervision/{}/direction (method is computed)"]);
+	});
+
+	it("still reads a method that IS a literal, and still defaults a call with no method to GET", () => {
+		const put = extractCalls('await api(`/v1/x`, { method: "PUT", body: "{}" });', ["api"]);
+		expect(put.calls).toEqual([{ method: "PUT", path: "/v1/x", raw: "/v1/x" }]);
+		expect(put.unresolved).toEqual([]);
+		const get = extractCalls("await api(`/v1/x`);", ["api"]);
+		expect(get.calls).toEqual([{ method: "GET", path: "/v1/x", raw: "/v1/x" }]);
+	});
+
 	it("ignores a call to a DIFFERENT function that ends in the same letters", () => {
 		// `useApi(` must not be read as `api(`, and `thing.api(` is a method on something else.
 		const src = 'await other.api(`/v1/nope`); await myapi(`/v1/also-nope`);';

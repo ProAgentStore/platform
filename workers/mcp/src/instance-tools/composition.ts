@@ -259,6 +259,104 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 		},
 	);
 
+	// ── The pump's failure path (#613) ────────────────────────────────────────
+	//
+	// The three tools above wire an edge and pause it. What was missing is everything that
+	// happens when a delivery does NOT arrive: the outbox that records it, the replay that
+	// re-arms it, and the delete that ends the edge for good. A chain fails invisibly without
+	// them — the emitting agent looks fine, the consuming agent simply never ran, and nothing
+	// over MCP could say why.
+
+	server.tool(
+		"list_connection_deliveries",
+		"The pump's delivery log: what each connection actually delivered, what is queued for retry, and what died after exhausting its attempts. Read this FIRST when a chain looks broken — a producer that looks healthy and a consumer that never ran leave their only trace here. ACCOUNT-WIDE, not per-connection, because \"what is stuck anywhere\" is the real question; `instance_id` only says which agent you are asking as. Rows carry `source` and `sourceInstanceId` because the outbox is shared with triggers, so a stuck trigger and a stuck connection are told apart by those two fields and not by the id. `lastError` is why it failed; `nextAttemptAt` is when it will try again; `traceId` joins it to the emitting run.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Any instance you own — the listing is account-wide."),
+			status: z.enum(["pending", "delivered", "dead"]).optional().describe("Narrow to one state. `dead` is the one worth acting on: attempts exhausted, and it will not retry itself."),
+			limit: z.coerce.number().int().min(1).max(200).optional().describe("How many rows, 1-200. Omit for 50."),
+		},
+		async ({ token, instance_id, status, limit }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const query = [status ? `status=${encodeURIComponent(status)}` : "", limit ? `limit=${limit}` : ""].filter(Boolean).join("&");
+			const data = await authedCall(
+				`/v1/instances/${encodeURIComponent(instance_id)}/connections/deliveries${query ? `?${query}` : ""}`,
+				sessionToken,
+				{},
+				env,
+			);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"replay_connection_delivery",
+		"Re-arm ONE dead delivery so the pump tries it again — the escape hatch for \"the dependency is back up now\". Only a delivery whose attempts are exhausted can be replayed; anything else answers 404, so this cannot be used to re-send a delivery that already succeeded. The retry runs the consumer's work for real, which is why it is gated as runtime rather than as a write: idempotency is keyed on (connection, emitting run, payload), so a replay of the SAME event will not duplicate work the consumer already did, but work it never did will now happen.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Any instance you own — deliveries are account-scoped."),
+			delivery_id: z.string().describe("Delivery id from list_connection_deliveries. Copy it exactly."),
+			dry_run: z.boolean().optional().describe("Preview without re-arming it."),
+		},
+		async ({ token, instance_id, delivery_id, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, delivery_id };
+			const denied = await requirePermission(safetyFor(token), "runtime", "replay_connection_delivery", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "replay_connection_delivery", "re-arm a dead delivery so the consumer runs", input, {
+					endpoint: `/v1/instances/${instance_id}/connections/deliveries/${delivery_id}/replay`,
+					method: "POST",
+				});
+			}
+			const data = await authedCall(
+				`/v1/instances/${encodeURIComponent(instance_id)}/connections/deliveries/${encodeURIComponent(delivery_id)}/replay`,
+				sessionToken,
+				{ method: "POST" },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "replay_connection_delivery", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"delete_connection",
+		"Delete an event connection for good. This destroys the edge's routing filter and its target pipeline, and orphans the outbox rows that record what was stuck on it — so if the intent is only to STOP deliveries, use set_connection_enabled, which keeps all three and is reversible. Deleting is the right call when the edge itself was a mistake.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Source instance — the one that emits the event."),
+			connection_id: z.string().describe("Connection id from list_connections."),
+			confirm: z.string().optional().describe('Exact confirmation string required for a real deletion: "delete_connection". Omit on dry_run.'),
+			dry_run: z.boolean().optional().describe("Preview without deleting the connection."),
+		},
+		async ({ token, instance_id, connection_id, confirm, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, connection_id };
+			const denied = await requirePermission(safetyFor(token), "destructive", "delete_connection", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "delete_connection", "delete an event connection, with its filter and delivery history", input, {
+					endpoint: `/v1/instances/${instance_id}/connections/${connection_id}`,
+					method: "DELETE",
+				});
+			}
+			const unconfirmed = await requireConfirmation(safetyFor(token), "delete_connection", confirm, "delete_connection", input);
+			if (unconfirmed) return unconfirmed;
+			const data = await authedCall(
+				`/v1/instances/${encodeURIComponent(instance_id)}/connections/${encodeURIComponent(connection_id)}`,
+				sessionToken,
+				{ method: "DELETE" },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "delete_connection", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
 	server.tool(
 		"start_instance_loop",
 		"Give an agent an objective and let it work autonomously on the server. Durable: it survives you closing the browser, and its spend is bounded by a budget. Returns a run id — poll it with check_instance_loop.",

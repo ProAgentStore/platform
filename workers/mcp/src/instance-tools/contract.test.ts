@@ -303,6 +303,7 @@ const TABLE: Record<string, Row> = {
 	create_instance_trigger: ["triggers", "write", null, "envelope", "action,config,dry_run,instance_id,name,schedule,token,type"],
 	create_supervision: ["composition", "write", null, "envelope", "dry_run,subordinate_instance_id,supervisor_instance_id,token"],
 	delete_instance_connector_grant: ["connectors", "destructive", "delete_instance_connector_grant", "envelope", "confirm,dry_run,grant_id,instance_id,provider,token"],
+	delete_connection: ["composition", "destructive", "delete_connection", "envelope", "confirm,connection_id,dry_run,instance_id,token"],
 	delete_feedback: ["observability", "destructive", "delete_feedback", "envelope", "confirm,dry_run,feedback_id,token"],
 	delete_instance_file: ["knowledge", "destructive", "delete_instance_file", "envelope", "confirm,dry_run,file_id,instance_id,token"],
 	delete_instance_knowledge: ["knowledge", "destructive", "delete_instance_knowledge", "envelope", "confirm,document_id,dry_run,instance_id,token"],
@@ -345,6 +346,7 @@ const TABLE: Record<string, Row> = {
 	instance_task_events: ["runtime", "none", null, null, "instance_id,limit,token"],
 	keys_status: ["account", "none", null, null, "token"],
 	list_connections: ["composition", "read", null, null, "instance_id,token"],
+	list_connection_deliveries: ["composition", "none", null, null, "instance_id,limit,status,token"],
 	list_errors: ["observability", "none", null, null, "limit,scope,source,token"],
 	list_instance_connector_grants: ["connectors", "none", null, null, "instance_id,provider,token"],
 	list_instance_files: ["knowledge", "none", null, null, "instance_id,token"],
@@ -414,6 +416,7 @@ const TABLE: Record<string, Row> = {
 	set_translation_config: ["settings", "write", null, "envelope", "dry_run,enabled,font_size,instance_id,target,token,transliterate,word_tap"],
 	set_instance_connector_account: ["connectorAccounts", "write", null, "envelope", "account_id,connector,dry_run,instance_id,token"],
 	set_instance_loop_presets: ["composition", "write", null, "envelope", "dry_run,instance_id,presets,token"],
+	replay_connection_delivery: ["composition", "runtime", null, "envelope", "delivery_id,dry_run,instance_id,token"],
 	end_instance_takeover: ["runtime", "runtime", null, "envelope", "dry_run,instance_id,task_id,token"],
 	resume_instance_takeover: ["runtime", "runtime", null, "envelope", "dry_run,instance_id,task_id,token"],
 	send_instance_takeover_input: [
