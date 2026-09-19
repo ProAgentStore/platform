@@ -55,6 +55,12 @@ ADMIN_ALLOWLIST = "serge.the.dev@gmail.com,serge-ivo"
 # AI budget circuit breakers are OFF (observe-only) until paid launch — usage is metered but
 # never blocked. Uncomment to re-enable the daily $ + token account ceilings. See #485.
 # BUDGET_ENFORCE = "1"
+# The Pilot's idle wait as DURABLE steps (#814): one step per capture and a `step.sleep` per sleep,
+# instead of one 10-minute step. Unset = inert. It makes a long engine turn survive an eviction.
+# It is NOT known to save subrequests — the [limits] comment above says a sleep does not reset the
+# count, which is an inference `scratch/subrequest-reset-probe` exists to measure and nobody has
+# run. Do not turn this on for the subrequest reason unless that probe reports RESETS.
+# CODING_IDLE_DURABLE = "1"
 # Experimental (#103): browser connector registry tools (browser_navigate/snapshot/act).
 # Unset = inert (fail-closed). First-party/self-use ONLY — do NOT enable for third-party
 # creators until the browser trust model (#75). Uncomment to turn on.

@@ -172,3 +172,72 @@ export async function awaitEngineIdle<S extends IdlePollSnapshot>(deps: {
 	}
 	return snap;
 }
+
+// ── The durable variant, behind a flag (#814) ────────────────────────────────
+
+/**
+ * Should the idle wait be built from DURABLE steps rather than one long one? Unset = no.
+ *
+ * ── What is being switched, and what is not known
+ *
+ * Today the whole wait is ONE `step.do`: up to 480 seconds of `setTimeout` sleeps and up to 70
+ * captures inside a single 10-minute step. With this on, every capture is its own durable step and
+ * every sleep is a `step.sleep` — the shape the handoff wait in `coding-pause.ts` and the runner
+ * guard already use. The LOOP is the same function either way ({@link awaitEngineIdle}); only the
+ * two effects handed to it differ, which is why the boundary tests hold for both.
+ *
+ * #814 asked for this to stop the wait "burning subrequest budget in one invocation". The header
+ * of this file rejects that reasoning: the ceiling is documented per Workflow INSTANCE, so a sleep
+ * should not reset it. That is an INFERENCE — the limits page does not say what a sleep does to the
+ * count — and `scratch/subrequest-reset-probe` exists to measure it. It has not been run. So this
+ * flag must NOT be turned on in the belief that it saves subrequests: per poll it spends exactly
+ * what the other path spends. Turn it on for that reason only if the probe reports `RESETS`.
+ *
+ * ── What it buys whatever the probe says
+ *
+ * An eviction mid-turn. A `setTimeout` inside a step does not survive the instance being evicted:
+ * the step is retried from its first line, so the wait starts again — a fresh settle, a fresh
+ * 480-second window — and `idleRetry` allows that once. With durable steps a replay returns every
+ * completed capture from the journal and resumes at the poll that was in flight.
+ *
+ * ── What it costs
+ *
+ * One durable step per capture: 51 for the 4.7-minute turn this file is sized against, 70 for a
+ * full window, where there was 1. Cloudflare allows 10,000 steps per Workflow by default
+ * (`step.sleep` is documented as not counting), so #523's 26-turn run spends 1,326 of them. At the
+ * slow cadence that ceiling is ~27 hours of waiting — the same order as the 100,000-subrequest one
+ * — so it is a second budget to watch, not one this change exhausts. It also adds a durable
+ * round trip to every poll, so a turn ends a little later than the schedule alone implies.
+ *
+ * Same `"1"` / `"true"` convention as `BUDGET_ENFORCE` and `CUSTOM_SURFACES_ENABLED`.
+ */
+export function idleWaitIsDurable(env: { CODING_IDLE_DURABLE?: string } | undefined): boolean {
+	return env?.CODING_IDLE_DURABLE === "1" || env?.CODING_IDLE_DURABLE === "true";
+}
+
+/**
+ * {@link awaitEngineIdle}'s two effects, as durable steps with names that are unique and stable.
+ *
+ * A Workflow step name must be unique within its instance AND identical on a replay, or the
+ * journal does not line up. Both follow from the counter living HERE, outside any step body: a
+ * replay re-runs this closure and re-derives the same names in the same order, exactly as the
+ * workflow's own `s${n++}` does. The sequence is `z0` (the settle sleep), `c0`, `z1`, `c1`, … — a
+ * sleep and the capture after it share an index, so a name read off a failed instance says which
+ * poll it was.
+ *
+ * Pure over its two callbacks, so the naming and the boundary are tested without a Workflow.
+ */
+export function durableIdleDeps<S>(cfg: {
+	/** Unique within the instance — the workflow's step counter, e.g. `s12-waitidle`. */
+	label: string;
+	/** Run ONE capture as its own durable step under `stepName`. */
+	capture: (stepName: string) => Promise<S>;
+	/** `step.sleep`. */
+	sleep: (stepName: string, ms: number) => Promise<void>;
+}): { capture: () => Promise<S>; sleep: (ms: number) => Promise<void> } {
+	let poll = 0;
+	return {
+		sleep: (ms) => cfg.sleep(`${cfg.label}-z${poll}`, ms),
+		capture: () => cfg.capture(`${cfg.label}-c${poll++}`),
+	};
+}

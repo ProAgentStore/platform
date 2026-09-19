@@ -63,6 +63,12 @@ export interface Env {
 	 *  at paid launch, when subscription-pool token spend becomes real platform cost. */
 	BUDGET_ENFORCE?: string;
 	/**
+	 * "1"/"true" builds the Pilot's idle wait from durable steps — one step per capture, a
+	 * `step.sleep` per sleep — instead of one long step (#814). Unset = today's behaviour. Buys
+	 * eviction-survival; NOT known to save subrequests. See `idleWaitIsDurable`.
+	 */
+	CODING_IDLE_DURABLE?: string;
+	/**
 	 * "off"/"0"/"false" = a coding run may start on a base it could not confirm. Unset (default) =
 	 * the gate is ARMED and such a run is stopped before its first instruction — see #801 and
 	 * `lib/repo-sync-gate.ts`, which explains why this one defaults the opposite way to the two

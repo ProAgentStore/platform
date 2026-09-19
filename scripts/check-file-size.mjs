@@ -1471,7 +1471,11 @@ const PINS = {
 	// swapped in for the objective, the advisory notes withheld from a run they would tell to stop,
 	// `repair` handed to the gate) and the trace/timeline label so the record does not carry the
 	// whole brief. Eligibility, the brief and the hint live in `lib/repo-sync-gate.ts`.
-	"workers/api/src/workflows/coding-session.ts": 1055,
+	// +9 at #814: `waitIdle` becomes a two-branch expression behind `CODING_IDLE_DURABLE` — five lines
+	// of wiring and four saying what the flag is NOT known to do (save subrequests). The branch has
+	// to be HERE because its two effects are `step.sleep` and the runner guard, which only exist
+	// inside the Workflow; the naming, the flag and the cost are `lib/coding-idle-poll.ts`, tested.
+	"workers/api/src/workflows/coding-session.ts": 1064,
 	// This file, crossing its own LIMIT at #456 — and it is not an oddity, it is the guard working.
 	// A pin entry is REQUIRED to carry the reason its file grew, so this list is an append-only
 	// ledger of decisions: it can only get longer, and the one thing it must never do is get shorter
@@ -1696,7 +1700,8 @@ const PINS = {
 	// +8 on the second CodingTab split (refs #776): the entry above comes DOWN by 58; five lines of
 	// why — most of it the boundary that was measured and left alone — plus these three. Same price
 	// as the first split's note directly above.
-	"scripts/check-file-size.mjs": 1780,
+	// +5 at #814: the coding-session raise above (four lines of why) and this one.
+	"scripts/check-file-size.mjs": 1785,
 };
 
 /**

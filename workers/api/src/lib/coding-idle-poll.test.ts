@@ -1,7 +1,11 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	IDLE_SETTLE_MS,
 	awaitEngineIdle,
+	durableIdleDeps,
+	idleWaitIsDurable,
 	type IdlePollSnapshot,
 	IDLE_POLL_FAST_MS,
 	IDLE_POLL_MEDIUM_MS,
@@ -217,5 +221,110 @@ describe("the activity heartbeat is asked before it is paid for", () => {
 
 	it("takes a poll from four subrequests to three", () => {
 		expect(SUBREQUESTS_PER_IDLE_POLL).toBe(SUBREQUESTS_PER_IDLE_POLL_BEFORE - 1);
+	});
+});
+
+
+// ── #814: the same wait, built from durable steps, behind a flag ─────────────
+describe("the durable idle wait (#814)", () => {
+	/** Records every step and sleep NAME, over the same synthetic-Engine clock the block above uses. */
+	function durableEngine(busyMs: number, overrides: Partial<IdlePollSnapshot> = {}) {
+		const names: string[] = [];
+		const slept: number[] = [];
+		let elapsed = 0;
+		const deps = durableIdleDeps<IdlePollSnapshot>({
+			label: "s12-waitidle",
+			sleep: async (name, ms) => {
+				names.push(name);
+				slept.push(ms);
+				if (slept.length > 1) elapsed += ms;
+			},
+			capture: async (name) => {
+				names.push(name);
+				return { runState: elapsed >= busyMs ? "idle" : "thinking", alive: true, ...overrides };
+			},
+		});
+		return { names, slept, deps };
+	}
+
+	it("is OFF unless asked for — unset, empty and a typo all mean today's one-step wait", () => {
+		for (const v of [undefined, "", "0", "false", "on", "yes", "TRUE"]) {
+			expect(idleWaitIsDurable({ CODING_IDLE_DURABLE: v }), String(v)).toBe(false);
+		}
+		expect(idleWaitIsDurable(undefined)).toBe(false);
+		expect(idleWaitIsDurable({ CODING_IDLE_DURABLE: "1" })).toBe(true);
+		expect(idleWaitIsDurable({ CODING_IDLE_DURABLE: "true" })).toBe(true);
+	});
+
+	it("an engine that NEVER goes idle stops at the SAME boundary with the SAME snapshot — the issue's own acceptance test", async () => {
+		const e = durableEngine(Number.MAX_SAFE_INTEGER);
+		const snap = await awaitEngineIdle(e.deps);
+		expect(snap.runState).toBe("thinking");
+		// 70 captures and 8 minutes of sleeping: identical to the one-step path, because it IS the same loop.
+		expect(e.names.filter((n) => n.includes("-c"))).toHaveLength(70);
+		expect(e.slept[0]).toBe(IDLE_SETTLE_MS);
+		const sleeping = e.slept.slice(1).reduce((a, b) => a + b, 0);
+		expect(sleeping).toBeGreaterThanOrEqual(IDLE_WAIT_MAX_MS);
+		expect(sleeping).toBeLessThan(IDLE_WAIT_MAX_MS + IDLE_POLL_SLOW_MS);
+	});
+
+	it("names every step uniquely — a Workflow refuses a repeated step name inside one instance", async () => {
+		const e = durableEngine(Number.MAX_SAFE_INTEGER);
+		await awaitEngineIdle(e.deps);
+		expect(new Set(e.names).size).toBe(e.names.length);
+		// Sleep first, then the capture that shares its index; the index then advances.
+		expect(e.names.slice(0, 5)).toEqual(["s12-waitidle-z0", "s12-waitidle-c0", "s12-waitidle-z1", "s12-waitidle-c1", "s12-waitidle-z2"]);
+	});
+
+	it("derives the SAME names on a second pass — what a replay needs for the journal to line up", async () => {
+		const first = durableEngine(TURN_MS);
+		const second = durableEngine(TURN_MS);
+		await awaitEngineIdle(first.deps);
+		await awaitEngineIdle(second.deps);
+		expect(second.names).toEqual(first.names);
+	});
+
+	it("still stops within one poll of a cancel or a dead engine", async () => {
+		const cancelled = durableEngine(Number.MAX_SAFE_INTEGER, { cancelled: true });
+		await awaitEngineIdle(cancelled.deps);
+		expect(cancelled.names).toEqual(["s12-waitidle-z0", "s12-waitidle-c0"]);
+		const dead = durableEngine(Number.MAX_SAFE_INTEGER, { alive: false });
+		await awaitEngineIdle(dead.deps);
+		expect(dead.names.filter((n) => n.includes("-c"))).toHaveLength(1);
+	});
+
+	/**
+	 * The cost, stated — it is a SECOND finite budget. Cloudflare allows 10,000 steps per Workflow
+	 * by default ("step.sleep does not count towards the maximum steps limit", limits page, read
+	 * 2026-09-19), and this path spends one per capture where the other spends one per turn.
+	 */
+	it("spends one durable step per capture: 1,326 on the run #523 is sized against, under the 10,000 default", () => {
+		const CF_DEFAULT_STEP_CEILING = 10_000;
+		expect(idlePollsForTurn(TURN_MS)).toBe(51);
+		expect(DIED_AFTER_STEPS * idlePollsForTurn(TURN_MS)).toBe(1_326);
+		expect(DIED_AFTER_STEPS * idlePollsForTurn(TURN_MS)).toBeLessThan(CF_DEFAULT_STEP_CEILING);
+		// …and it does NOT change what a poll costs in subrequests, which is the claim #814 made for it.
+		expect(idleSubrequestsForRun(Array(DIED_AFTER_STEPS).fill(TURN_MS))).toBe(3_978);
+	});
+
+	// Source assertions, in this package's established style: the wiring is one expression inside a
+	// Workflow that cannot be run here, and what matters is that each half of it EXISTS.
+	describe("the workflow's wiring", () => {
+		const workflow = readFileSync(join(__dirname, "../workflows/coding-session.ts"), "utf-8");
+
+		it("reads the flag, and keeps the one-step wait as the other branch", () => {
+			expect(workflow).toContain("idleWaitIsDurable(env)");
+			// In two halves: the step name between them is a template literal, which a plain string cannot quote.
+			expect(workflow).toContain(": guard(runIdle, `s");
+			expect(workflow).toContain("-waitidle`, () => awaitEngineIdle({ capture, sleep })),");
+		});
+
+		it("routes every durable capture through the runner guard — a disconnect mid-wait must still pause, not end, the run (#341)", () => {
+			expect(workflow).toContain("capture: (name) => guard(runRetry, name, capture)");
+		});
+
+		it("sleeps durably, not on a setTimeout", () => {
+			expect(workflow).toContain("sleep: (name, ms) => step.sleep(name, ms)");
+		});
 	});
 });

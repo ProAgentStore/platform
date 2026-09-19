@@ -18,7 +18,7 @@ import { pilotStopSignal, shouldEndSessionAfterRun } from "../lib/coding-session
 import { setCodingSessionCardStatus } from "../lib/coding-board.js";
 import { startSessionOnRunnerConn } from "../lib/coding-session-relaunch.js";
 import { resolvePause, runSucceeded, stopReasonFor, type PauseDeps } from "../lib/coding-pause.js";
-import { awaitEngineIdle, shouldTouchActivity } from "../lib/coding-idle-poll.js";
+import { awaitEngineIdle, durableIdleDeps, idleWaitIsDurable, shouldTouchActivity } from "../lib/coding-idle-poll.js";
 import { pendingCodingResumeNote } from "../lib/coding-resume-note.js";
 import { accountTimeZone } from "../lib/account-timezone.js";
 import type { EngineWaitState } from "../lib/coding-wait.js";
@@ -516,7 +516,16 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			// Cloudflare applies per WORKFLOW INSTANCE — never reset by a step or a sleep — so three
 			// runs exhausted it at ~2 hours and reported their pushed work as `failed`. The
 			// schedule, the arithmetic and the boundary it preserves are `lib/coding-idle-poll.ts`.
-			waitIdle: () => measured(guard(runIdle, `s${n++}-waitidle`, () => awaitEngineIdle({ capture, sleep }))),
+			//
+			// Behind `CODING_IDLE_DURABLE` (#814, unset = the one-step wait below) the SAME loop runs over
+			// durable effects: each capture its own guarded step, each sleep a `step.sleep`, so a turn
+			// survives an eviction. It is NOT known to save subrequests — see `idleWaitIsDurable`.
+			waitIdle: () =>
+				measured(
+					idleWaitIsDurable(env)
+						? awaitEngineIdle(durableIdleDeps({ label: `s${n++}-waitidle`, capture: (name) => guard(runRetry, name, capture), sleep: (name, ms) => step.sleep(name, ms) }))
+						: guard(runIdle, `s${n++}-waitidle`, () => awaitEngineIdle({ capture, sleep })),
+				),
 			onEvent: (type, message, data) => {
 				// Incremented OUTSIDE step.do: a step that exhausts its retries re-runs its body,
 				// and `++` inside would double-count every retry into the progress figure.
