@@ -172,9 +172,14 @@ tags:
 
       **Merge authority.** `PUT …/coding/repos/{repoId}` accepts `mergePolicy`:
       `merge` (may merge to the trunk — the default, and today's behaviour), `pr` (may open a
-      pull request, never merge or push to `main`), `none` (commit only). `""` clears the repo
-      override so the agent-wide `merge_policy` setting applies. Enforced on the autonomous
-      Pilot: the orchestrator will not relay a merge instruction, and an observed merge the
+      pull request, never merge or push to `main`), `none` (commit only), `direct` (push
+      straight to the default branch, never open a pull request). `""` clears the repo
+      override so the agent-wide `merge_policy` setting applies. Three of the four are a ladder
+      of decreasing trunk permission; `direct` is the MIRROR of `pr` rather than a rung on it —
+      it permits the trunk and forbids the pull request, for a repository whose workflow has no
+      pull requests in it. Enforced on the autonomous
+      Pilot: the orchestrator will not relay a merge instruction (nor, under `direct`, an
+      instruction to open a pull request), and an observed act the
       policy forbids halts the run and is recorded as `act.unauthorized` (`level: error`) in
       `GET …/trace`, plus a `needs_human` board card. Only a stream-json engine (Claude Code)
       reports what it ran — on a raw Codex/Grok session the observed-act half sees nothing, and

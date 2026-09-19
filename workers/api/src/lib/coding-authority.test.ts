@@ -82,6 +82,82 @@ describe("resolveMergePolicy", () => {
 	});
 });
 
+describe("direct — the mirror policy (#821)", () => {
+	// The incident: run cda38e26 opened PR #819 on a repository that has no pull requests in its
+	// workflow at all. Every assertion here is one of the issue's acceptance criteria.
+
+	it("blocks the act that opened #819, and only that act", () => {
+		expect([...forbiddenActKinds("direct")]).toEqual(["pr.open"]);
+		expect(unauthorizedActs("direct", [{ kind: "pr.open" }, { kind: "push.trunk" }, { kind: "push" }]).map((a) => a.kind)).toEqual(["pr.open"]);
+	});
+
+	it("PERMITS the trunk — it is not a stricter `pr`", () => {
+		// The whole point of the policy. A ladder reading of the union ("later means stricter")
+		// would forbid these, and would forbid the only route this policy leaves open.
+		const forbidden = forbiddenActKinds("direct");
+		for (const kind of ["push.trunk", "push", "push.force", "pr.merge", "branch.delete"]) {
+			expect(forbidden.has(kind)).toBe(false);
+		}
+		expect(screenInstruction("direct", "commit and push to main once CI is green")).toBeNull();
+		expect(screenInstruction("direct", "git push origin main")).toBeNull();
+		expect(screenInstruction("direct", "merge PR #150 with --squash")).toBeNull();
+	});
+
+	it.each([
+		"Open a PR for the fix and report the number",
+		"push the branch then run gh pr create --fill",
+		"raise a pull request against main",
+		"Open the pull request once the tests pass",
+	])("refuses to relay %j to the Engine", (text) => {
+		// Layer 2, and the layer that sits in front of the actual incident: #819 was opened by an
+		// Engine the Pilot had instructed.
+		expect(screenInstruction("direct", text)).toMatch(/not used on this repository/i);
+	});
+
+	it("tells the Engine what to do INSTEAD, not only what is forbidden", () => {
+		// AC 3. A refusal with no permitted route to finishing is how a run invents one.
+		const text = authorityInstruction("direct") ?? "";
+		expect(text).toContain("OVERRIDES the objective");
+		expect(text).toContain("push directly to it");
+		expect(text).toContain("must NOT open a pull request");
+		expect(text).toContain("SAY PLAINLY");
+	});
+
+	it("names the act honestly in the violation, the label and the run note", () => {
+		expect(describeViolation("direct", { kind: "pr.open", target: "#819", ok: true })).toBe(
+			"Not permitted by this repository's merge policy (direct): the agent opened a pull request #819.",
+		);
+		expect(policyLabel("direct")).toMatch(/no pull requests/i);
+		expect(describeAuthority("direct", "claude")).toContain("Merge policy: direct");
+		expect(describeAuthority("direct", "codex")).toContain("does not report what it ran");
+	});
+
+	it("is settable per repo and per agent, and is still not the default", () => {
+		// AC 1 at the API boundary; AC 4 on the last line.
+		expect(mergePolicyPatch("direct")).toEqual({ ok: true, value: "direct" });
+		expect(resolveMergePolicy({ repo: "direct", agent: "pr" })).toBe("direct");
+		expect(resolveMergePolicy({ agent: "direct" })).toBe("direct");
+		expect(resolveMergePolicy({})).toBe("merge");
+	});
+});
+
+describe("merge — unflagged repos are unaffected by #821", () => {
+	// AC 5's second half, and the assertion that keeps this change a no-op for everyone who did
+	// not ask for it: opening a pull request under the default policy is ordinary work.
+	it("permits opening a pull request and says nothing about it", () => {
+		expect(forbiddenActKinds("merge").has("pr.open")).toBe(false);
+		expect(unauthorizedActs("merge", [{ kind: "pr.open" }])).toEqual([]);
+		expect(screenInstruction("merge", "gh pr create --fill")).toBeNull();
+		expect(screenInstruction("merge", "open a pull request for the change")).toBeNull();
+		expect(authorityInstruction("merge")).toBeNull();
+	});
+
+	it("pr still permits it too — `direct` did not leak into the neighbouring policy", () => {
+		expect(forbiddenActKinds("pr").has("pr.open")).toBe(false);
+		expect(screenInstruction("pr", "gh pr create --fill")).toBeNull();
+	});
+});
+
 describe("forbiddenActKinds", () => {
 	it("pr forbids exactly the two acts that put code on the trunk", () => {
 		expect([...forbiddenActKinds("pr")].sort()).toEqual(["pr.merge", "push.trunk"]);
@@ -209,6 +285,9 @@ describe("mergePolicyPatch", () => {
 		const r = mergePolicyPatch("block");
 		expect(r.ok).toBe(false);
 		expect(r.ok === false && r.error).toMatch(/must be one of/);
+		// The refusal names every value a caller may actually use, `direct` included — an error
+		// that lists a stale vocabulary sends them to the docs to find out what it left out.
+		expect(r.ok === false && r.error).toContain("direct");
 	});
 });
 

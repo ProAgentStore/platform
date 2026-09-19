@@ -160,6 +160,14 @@ function applyInsert(stmt: string, state: Map<string, AgentState>, file: string)
  */
 function applyUpdate(stmt: string, state: Map<string, AgentState>, file: string): void {
 	const touchesSchema = stmt.includes("$.settingsSchema");
+	// 0154's shape (#821): append an OPTION to an existing select field, at a path ending
+	// `.options[#]`. It changes which VALUES one field offers and provably cannot add or remove a
+	// FIELD, which is the only thing this walk resolves — so it is a no-op here rather than a shape
+	// the parser has to model. Recognised BEFORE the target resolution below because it selects
+	// agents by the field they already carry, so there is no slug and no surface to match on.
+	// Guarded on the absence of the two shapes that DO change the field set, so a statement that
+	// did both could not slip through behind this one.
+	if (touchesSchema && /\.options\[#\]'/.test(stmt) && !/'\$\.settingsSchema'\s*,/.test(stmt) && !stmt.includes("'$.settingsSchema[#]'")) return;
 	const slugMatch = stmt.match(/slug\s*=\s*'([^']+)'/);
 	const codingScoped = /\$\.capabilities\.surfaces'?\s*\)?[^;]*LIKE\s*'%coding%'/.test(stmt);
 	const targets: string[] = slugMatch

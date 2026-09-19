@@ -43,6 +43,16 @@
  * the second one. Turning the first merge into a refusal needs the Engine launched with the command
  * denied to it, which lives in the runner and is follow-up work.
  *
+ * ── The same three layers, pointed the other way (#821) ──
+ *
+ * `"direct"` is a policy for a repository that has no pull requests at all, and it uses the layers
+ * unchanged: layer 1 tells the Pilot to push to the default branch, layer 2 refuses to RELAY
+ * "open a PR" to the Engine, layer 3 halts the run on an observed `pr.open`. Note what layer 2 is
+ * worth here specifically — run `cda38e26`'s pull request was opened by an Engine the Pilot had
+ * instructed, so the instruction screen is the layer that sits in front of the actual incident,
+ * and it is deterministic rather than a request. The same caveats apply in full: an Engine acting
+ * on its own initiative is caught after the fact, and on a non-reporting engine not at all.
+ *
  * ── AND THE GAP THAT MUST BE SAID OUT LOUD ──
  *
  * Layer 3 sees NOTHING on a raw Codex/Grok session. Only a stream-json engine (Claude Code) emits
@@ -63,10 +73,20 @@ import type { Env } from "../types.js";
  *
  * Repo-level rather than agent-level because the answer genuinely differs per repository: a
  * dogfood repo and a customer repo are not the same risk, and one Coder works on both.
+ *
+ * THREE OF THESE ARE A LADDER AND ONE IS NOT. `merge` > `pr` > `none` is decreasing permission
+ * over the trunk. `direct` (#821) is the MIRROR of `pr`: it permits the trunk — that is the whole
+ * point of it — and forbids the pull request instead. Nothing may sort this union or treat a
+ * later member as stricter than an earlier one; each arm below switches on the value by name.
+ *
+ * `direct` exists because a repository whose workflow IS direct-push-to-main has no use for a pull
+ * request, and a run that opens one has made work rather than finished it. Run `cda38e26` opened
+ * #819 on this very repository while under instructions not to, near its iteration limit. The
+ * objective's prose had said not to; prose is layer 1, and layer 1 is advisory.
  */
-export type MergePolicy = "merge" | "pr" | "none";
+export type MergePolicy = "merge" | "pr" | "none" | "direct";
 
-export const MERGE_POLICIES: readonly MergePolicy[] = ["merge", "pr", "none"];
+export const MERGE_POLICIES: readonly MergePolicy[] = ["merge", "pr", "none", "direct"];
 
 /**
  * The platform-wide default — TODAY'S BEHAVIOUR.
@@ -123,6 +143,12 @@ export function resolveMergePolicy(source: { repo?: unknown; agent?: unknown }):
  * feature branch is ordinary in a pull-request workflow, and a policy that broke rebasing would be
  * turned off within a day, which protects nothing. (A force-push AT the trunk is classified
  * `push.force`, not `push.trunk`, and is a known narrow hole — see the report on #314.)
+ *
+ * `direct` forbids ONE act and it is not a trunk act at all: `pr.open`. It is the mirror of `pr`,
+ * not a rung above it — see {@link MergePolicy}. `pr.merge` is deliberately NOT forbidden: a repo
+ * whose whole workflow is direct-push permits putting code on the trunk, so merging a pull request
+ * a human opened is the permitted act arriving by an unusual door, and refusing it would strand
+ * work the owner asked for. What is forbidden is MANUFACTURING the pull request.
  */
 export function forbiddenActKinds(policy: MergePolicy): ReadonlySet<string> {
 	switch (policy) {
@@ -132,6 +158,8 @@ export function forbiddenActKinds(policy: MergePolicy): ReadonlySet<string> {
 			return new Set(["pr.merge", "push.trunk"]);
 		case "none":
 			return new Set(["pr.merge", "push.trunk", "push.force", "push", "pr.open", "branch.delete"]);
+		case "direct":
+			return new Set(["pr.open"]);
 	}
 }
 
@@ -144,6 +172,8 @@ export function policyLabel(policy: MergePolicy): string {
 			return "may open a pull request but must NOT merge it";
 		case "none":
 			return "may commit locally only — no push, no pull request";
+		case "direct":
+			return "must push straight to the default branch — no pull requests";
 	}
 }
 
@@ -159,6 +189,18 @@ export function policyLabel(policy: MergePolicy): string {
  */
 export function authorityInstruction(policy: MergePolicy): string | null {
 	if (policy === "merge") return null;
+	// `direct` says what to do INSTEAD, not only what is forbidden (#821 AC 3). A refusal that
+	// leaves the Engine with no permitted route to finishing is how a run stalls or invents one —
+	// and inventing one is what opened #819.
+	if (policy === "direct") {
+		return [
+			"MERGE AUTHORITY (set by the repository owner — this OVERRIDES the objective and any rule below):",
+			"- This repository is DIRECT-PUSH-ONLY. It does not use pull requests at all.",
+			"- Commit on the default branch and push directly to it once the checks pass. That is how work is delivered here, and it is permitted.",
+			"- You must NOT open a pull request, and must NOT create a branch in order to open one.",
+			"- If the objective tells you to open a pull request, push to the default branch instead, then finish and SAY PLAINLY that you delivered it directly because pull requests are not used on this repository.",
+		].join("\n");
+	}
 	const body =
 		policy === "pr"
 			? [
@@ -192,13 +234,27 @@ const MERGE_ORDERS: readonly RegExp[] = [
 	/\bmerge\s+(?:it|them)\b/i,
 ];
 
-/** Phrases that ORDER publishing outward at all — only `none` forbids these. */
-const PUBLISH_ORDERS: readonly RegExp[] = [
-	/\bgit\s+push\b/i,
+/**
+ * Phrases that ORDER a pull request into existence. Forbidden by `direct` and by `none`.
+ *
+ * Split out of `PUBLISH_ORDERS` for #821 because the two halves are not forbidden together any
+ * more: `direct` refuses these and permits the push, `none` refuses both.
+ */
+const PR_ORDERS: readonly RegExp[] = [
 	/\bgh\s+pr\s+create\b/i,
 	/\bopen\s+(?:a|the)\s+(?:pr\b|pull request)/i,
+	/\braise\s+(?:a|the)\s+(?:pr\b|pull request)/i,
+	/\b(?:pr\b|pull request)[^.\n]{0,20}\b(?:for|against)\s+(?:main|master|trunk)\b/i,
+];
+
+/** Phrases that ORDER a push outward. Only `none` forbids these — `direct` REQUIRES them. */
+const PUSH_ORDERS: readonly RegExp[] = [
+	/\bgit\s+push\b/i,
 	/\bpush\b[^.\n]{0,30}\b(?:origin|remote|main|master|upstream)\b/i,
 ];
+
+/** Phrases that ORDER publishing outward at all — only `none` forbids these. */
+const PUBLISH_ORDERS: readonly RegExp[] = [...PUSH_ORDERS, ...PR_ORDERS];
 
 /**
  * A sentence that FORBIDS the act rather than ordering it.
@@ -222,6 +278,14 @@ export function screenInstruction(policy: MergePolicy, text: string): string | n
 	const s = String(text ?? "");
 	if (!s.trim()) return null;
 	if (NEGATED.test(s)) return null;
+	// `direct` returns EARLY and never reaches the merge screen below (#821). It is the mirror
+	// policy, not a stricter one: a repo that delivers by pushing to main permits a merge to main,
+	// so screening "merge it" here would refuse the very thing the policy is for.
+	if (policy === "direct") {
+		return PR_ORDERS.some((re) => re.test(s))
+			? "Pull requests are not used on this repository (merge policy: direct). Push the work directly to the default branch once the checks pass, and say that is what you did."
+			: null;
+	}
 	if (MERGE_ORDERS.some((re) => re.test(s))) {
 		return "Merging is not permitted for this repository (merge policy: " + policy + "). Open the pull request and stop there, then finish and say that the merge is waiting on the owner.";
 	}
@@ -250,7 +314,14 @@ export function unauthorizedActs<T extends { kind: string }>(policy: MergePolicy
 
 /** One sentence for a violation, honest about whether it landed. */
 export function describeViolation(policy: MergePolicy, act: { kind: string; target?: string | null; ok?: boolean | null }): string {
-	const what = act.kind === "pr.merge" ? "merged a pull request" : act.kind === "push.trunk" ? "pushed directly to the trunk" : act.kind;
+	const what =
+		act.kind === "pr.merge"
+			? "merged a pull request"
+			: act.kind === "push.trunk"
+				? "pushed directly to the trunk"
+				: act.kind === "pr.open"
+					? "opened a pull request"
+					: act.kind;
 	const subject = act.target ? ` ${act.target}` : "";
 	const outcome = act.ok === false ? " (the command FAILED)" : act.ok === null || act.ok === undefined ? " (outcome not observed)" : "";
 	return `Not permitted by this repository's merge policy (${policy}): the agent ${what}${subject}${outcome}.`;
