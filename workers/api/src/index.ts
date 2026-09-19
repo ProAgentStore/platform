@@ -54,6 +54,7 @@ import { mcpRoutes } from "./routes/mcp.js";
 import { cloudflareAccessGate, cloudflareAccessMode } from "./lib/cf-access.js";
 import { runDueTriggers } from "./lib/triggers.js";
 import { runDueDeliveries } from "./lib/connections.js";
+import { runCommitCloseWatch } from "./lib/commit-close-watch.js";
 import { runDeployWatch } from "./lib/deploy-watch.js";
 import { runStaleRunSweep } from "./lib/run-sweeper.js";
 import { runCodingSessionSweep } from "./lib/coding-session-sweeper.js";
@@ -279,6 +280,15 @@ export default {
 		// and it must not be able to stop the trigger sweep or the pump from draining.
 		ctx.waitUntil(
 			runDeployWatch(env).catch((err) => logUnhandled(env, err, { path: "scheduled:deploy-watch", method: "CRON" })),
+		);
+		// Close an issue a default-branch commit named with a closing keyword (#816). A seventh
+		// independent failure domain, and the one with the weakest claim on the tick: GitHub already
+		// performs this close natively on a direct push, so the expected yield is zero and a missed
+		// tick costs nothing at all. See `lib/commit-close-watch.ts` for the verification behind
+		// that sentence. It reaches GitHub and WRITES, so it must not be able to stop the trigger
+		// sweep, the pump or the deploy watcher.
+		ctx.waitUntil(
+			runCommitCloseWatch(env).catch((err) => logUnhandled(env, err, { path: "scheduled:commit-close-watch", method: "CRON" })),
 		);
 	},
 };
