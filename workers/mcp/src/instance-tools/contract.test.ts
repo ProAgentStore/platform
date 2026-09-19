@@ -250,6 +250,7 @@ const TABLE: Record<string, Row> = {
 	agent_trace: ["observability", "none", null, null, "instance_id,level,limit,offset,source,token,trace_id"],
 	apply_to_job: ["apply", "runtime", null, "envelope", "dry_run,instance_id,submit,token,url"],
 	approve_instance_task: ["runtime", "runtime", null, "envelope", "dry_run,instance_id,task_id,token"],
+	answer_instance_input: ["runtime", "runtime", null, "envelope", "dry_run,instance_id,task_id,token,value"],
 	ask_ticket: ["board", "write", null, "envelope", "dry_run,instance_id,question,task_id,token"],
 	billing_status: ["account", "none", null, null, "token"],
 	get_account_preferences: ["account", "none", null, null, "token"],
@@ -279,6 +280,7 @@ const TABLE: Record<string, Row> = {
 	clear_finished_tasks: ["board", "write", null, "envelope", "dry_run,instance_id,token"],
 	clear_instance_messages: ["observability", "destructive", "clear_instance_messages", "envelope", "confirm,dry_run,instance_id,token"],
 	clear_instance_voice_settings: ["settings", "write", null, "envelope", "dry_run,instance_id,token"],
+	delete_instance_task: ["runtime", "destructive", "delete_instance_task", "envelope", "confirm,dry_run,instance_id,task_id,token"],
 	coding_loop_start: ["coding", "runtime", null, "envelope", "dry_run,instance_id,max_iterations,objective,queue_if_busy,repair_checkout,token"],
 	// Both were ungated ("none") while they read and mutated MCP-DO memory, which nothing else
 	// could see. Now they read and cancel the SERVER's run record, so they are scoped like every
@@ -309,6 +311,7 @@ const TABLE: Record<string, Row> = {
 	get_instance_memory: ["knowledge", "none", null, null, "instance_id,token"],
 	get_instance_settings: ["settings", "none", null, null, "instance_id,token"],
 	get_instance_state: ["settings", "none", null, null, "instance_id,token"],
+	get_instance_task: ["runtime", "none", null, null, "instance_id,task_id,token"],
 	get_instance_voice_settings: ["settings", "none", null, null, "instance_id,token"],
 	get_instance_stats: ["stats", "none", null, null, "instance_id,schema_only,token,window"],
 	get_profile: ["apply", "none", null, null, "token"],
@@ -387,6 +390,16 @@ const TABLE: Record<string, Row> = {
 	set_translation_config: ["settings", "write", null, "envelope", "dry_run,enabled,font_size,instance_id,target,token,transliterate,word_tap"],
 	set_instance_connector_account: ["connectorAccounts", "write", null, "envelope", "account_id,connector,dry_run,instance_id,token"],
 	set_instance_loop_presets: ["composition", "write", null, "envelope", "dry_run,instance_id,presets,token"],
+	end_instance_takeover: ["runtime", "runtime", null, "envelope", "dry_run,instance_id,task_id,token"],
+	resume_instance_takeover: ["runtime", "runtime", null, "envelope", "dry_run,instance_id,task_id,token"],
+	send_instance_takeover_input: [
+		"runtime",
+		"runtime",
+		null,
+		"envelope",
+		"delta_x,delta_y,dry_run,instance_id,key,task_id,text,token,type,x,y",
+	],
+	start_instance_browser_task: ["runtime", "runtime", null, "envelope", "commit,dry_run,instance_id,objective,token,url"],
 	set_instance_voice_settings: [
 		"settings",
 		"write",

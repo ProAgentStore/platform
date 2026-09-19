@@ -151,6 +151,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	get_instance_pipeline: "read",
 	get_instance_settings: "read",
 	get_instance_state: "read",
+	get_instance_task: "read",
 	get_instance_voice_settings: "read",
 	get_instance_stats: "read",
 	get_profile: "read",
@@ -269,6 +270,10 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	//    annotation as `destructive` deliberately — the difference between those two is a
 	//    difference in the GATE (scope + confirm), not in what a host should ask a user. ──
 	approve_instance_task: "runtime",
+	answer_instance_input: "runtime",
+	end_instance_takeover: "runtime",
+	resume_instance_takeover: "runtime",
+	send_instance_takeover_input: "runtime",
 	// STRICTER than its gate (it has none): the trial-chat surface is public, so nothing
 	// gates it — but a trial chat runs inference and opens a session, and "ungated" is not
 	// "read-only". This is the tool a scope-shaped derivation would have got wrong.
@@ -311,6 +316,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	write_agent_file: "destructive",
 	cancel_instance: "destructive",
 	cancel_instance_task: "destructive",
+	delete_instance_task: "destructive",
+	start_instance_browser_task: "destructive",
 	// #692: detaching a repo from a coding instance. The BINDING is cheap to recreate with
 	// `coding_repo_add`, which on its own would argue for `write` — but removing it asks the runner
 	// to end any active session on that repo first, so the call reaches out and stops engine
@@ -401,10 +408,18 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// `write` and not `destructive` for the clear, on the same reasoning as the other "use my
 	// defaults" setters: it removes a per-agent override, never the account preferences underneath,
 	// and the values it drops are readable first with the get tool or `dry_run`.
-	read: 82,
+	// +1 read, +4 runtime, +2 destructive at #613 (a run's detail view and its handoffs):
+	// `get_instance_task` reads one ticket; `answer_instance_input`, `resume_instance_takeover`,
+	// `end_instance_takeover` and `send_instance_takeover_input` each drive a live run on
+	// somebody's machine, which is what `runtime` means; `delete_instance_task` removes the card
+	// AND stops the task, and `start_instance_browser_task` can be allowed to commit.
+	// `start_instance_browser_task` is annotated `destructive` for the same reason `apply_to_job`
+	// is: the annotation describes the tool a host caches, and the tool CAN commit. Its runtime
+	// gate is the lighter one when `commit` is false, decided per call.
+	read: 83,
 	write: 57,
-	runtime: 16,
-	destructive: 16,
+	runtime: 20,
+	destructive: 18,
 };
 
 /** The subset of MCP's `ToolAnnotations` this server can state honestly.

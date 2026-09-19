@@ -215,6 +215,29 @@ const READBACK: Record<string, string | null> = {
 	"set_instance_voice_settings.vocabulary": "get_instance_voice_settings",
 	"update_profile.fields": "get_profile",
 
+	// ── #613: a run's detail view and its human handoffs ──
+	// The value the owner supplies to a paused run is saved to their Profile, which is where
+	// the apply agent reads it from next time — so it reads back through `get_profile`.
+	"answer_instance_input.value": "get_profile",
+	// A browser task's url and objective are written onto the ticket it creates
+	// (`createBrowserRuntimeTask(… input: {url, objective})`, `routes/instances-browse.ts`),
+	// so `get_instance_task` returns them; the objective is truncated to 500 chars there.
+	"start_instance_browser_task.url": "get_instance_task",
+	"start_instance_browser_task.objective": "get_instance_task",
+	// NOT readable, and worth stating rather than hiding: `commit` becomes the job's `dryRun`,
+	// which goes to the workflow and is never written to the ticket. So nothing over MCP can
+	// answer "was this run allowed to commit?" after the fact — only whether it did something.
+	"start_instance_browser_task.commit": null,
+	// A takeover event is a CDP mouse/key dispatch against a live page. Nothing stores it — the
+	// readback is the page itself, via the takeover frame, which is not an MCP reader.
+	"send_instance_takeover_input.type": null,
+	"send_instance_takeover_input.x": null,
+	"send_instance_takeover_input.y": null,
+	"send_instance_takeover_input.delta_x": null,
+	"send_instance_takeover_input.delta_y": null,
+	"send_instance_takeover_input.text": null,
+	"send_instance_takeover_input.key": null,
+
 	// ── board ──
 	"set_board_item_status.status": "instance_board",
 	"set_instance_board_config.columns": "get_instance_board_config",

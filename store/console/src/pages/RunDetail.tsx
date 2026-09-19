@@ -425,7 +425,14 @@ export default function RunDetail() {
 		await api(`/v1/instances/${instanceId}/input`, { method: "POST", body: JSON.stringify({ taskId, value: t }) }).catch((e) => alert(e instanceof Error ? e.message : String(e)));
 		setInputVal(""); load();
 	};
-	const resume = async () => { await api(`/v1/instances/${instanceId}/takeover/${taskId}/resume`, { method: "POST" }).catch(() => api(`/v1/instances/${instanceId}/tasks/${taskId}/resume`, { method: "POST" })); load(); };
+	/**
+	 * Resume after a handoff. This USED to fall back to `POST /tasks/:taskId/resume` when the
+	 * takeover resume failed — a route the API has never registered (`instances.contract.test.ts`
+	 * compares its list against the real router, and there is no such entry). So the fallback
+	 * could only ever turn one failure into two, the second a 404, and the `.catch` hid the real
+	 * error on the way. Removed: one request, and its failure is the one reported.
+	 */
+	const resume = async () => { await api(`/v1/instances/${instanceId}/takeover/${taskId}/resume`, { method: "POST" }); load(); };
 	const remove = async () => {
 		if (!isFinished && !confirm("Delete this ticket? If it's still running it will be stopped first.")) return;
 		await api(`/v1/instances/${instanceId}/tasks/${taskId}`, { method: "DELETE" }).catch((e) => alert(e instanceof Error ? e.message : String(e)));

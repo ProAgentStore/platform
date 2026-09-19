@@ -484,4 +484,30 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.32 is published.
 	"0.1.33": "sha256:f679765019a0f34a55c9a8d0234f58d055eb7700b459b1c636ac4200c4d8ca96",
+	// 0.1.34 (#613, a run's detail view and its handoffs): seven new tool NAMES, all ALWAYS-ON —
+	// 171 registrations become 178, `MCP_TOOL_ALWAYS_ON` 147 → 154, `MCP_TOOL_GATED` stays 24.
+	// All seven are in `instance-tools/runtime.ts`, which is where the `runtime` scope lives.
+	//
+	//   * `get_instance_task` (read) — GET /v1/instances/:id/tasks/:taskId.
+	//   * `delete_instance_task` (destructive, dry_run + confirm) — DELETE the same route.
+	//   * `answer_instance_input` (runtime, dry_run) — POST /v1/instances/:id/input, the
+	//     needs_input handoff; the route reads `taskId`, not `task_id`.
+	//   * `resume_instance_takeover` / `end_instance_takeover` (runtime, dry_run) — POST
+	//     /v1/instances/:id/takeover/:taskId/{resume,end}.
+	//   * `send_instance_takeover_input` (runtime, dry_run) — POST …/takeover/:taskId/input, one
+	//     CDP mouse/key event, aimed by page pixel coordinate.
+	//   * `start_instance_browser_task` (destructive annotation, dry_run) — POST
+	//     /v1/instances/:id/browse. `commit` is the INVERSE of the route's `dryRun`, and gates the
+	//     scope per call: a rehearsal is `runtime`, a run allowed to commit is `destructive` —
+	//     the same split `apply_to_job` makes with `submit`.
+	//
+	// Closes that group's `KNOWN_GAPS` entry. The eighth route in the group,
+	// `POST /tasks/:taskId/resume`, was NOT wrapped: the API has never registered it, and the
+	// console called it only as a dead `.catch` fallback — removed in the same commit, so the
+	// capability leaves the inventory rather than becoming an exclusion for a route that does
+	// not exist. Parity 99 → 109 reachable of 166 (the denominator drops with it), 57 → 46 gaps.
+	// `SERVER_INSTRUCTIONS` did not move.
+	//
+	// Appended, never edited in place: 0.1.33 is published.
+	"0.1.34": "sha256:081d4b4b6b475b00c1736f3107e434bdce6aab2cd6b7e3984de2257aa4fba79b",
 };

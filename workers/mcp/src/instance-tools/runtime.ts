@@ -351,4 +351,244 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 			return jsonText(data);
 		},
 	);
+	// ── A run's detail view and its human handoffs (#613) ──────────────────────
+	//
+	// `instance_board` lists the cards and `instance_task_events` narrates them, but everything
+	// a stuck run actually needs — read this one ticket, delete it, answer the value it is
+	// waiting for, drive or end the live takeover — was console-only.
+	//
+	// All of these except the read reach a real browser on a real machine, so they are `runtime`
+	// (or `destructive` for the delete), not `write`.
+
+	server.tool(
+		"get_instance_task",
+		"Read ONE task/ticket on a private instance in full — status, title, description, and whatever the runtime holds for it. Use this after instance_board or instance_task_events names a task you need the detail of. The route prefers the live runner and falls back to the platform's mirrored copy, so a runner-less agent (a pipeline, a config agent) still answers; a reply carrying `runtimeUnavailable: true` is the MIRROR, which can lag the machine.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),
+			task_id: z.string().describe("Task ID from instance_board, instance_task_events or run_instance_task. Copy it exactly."),
+		},
+		async ({ token, instance_id, task_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall(`/v1/instances/${instance_id}/tasks/${encodeURIComponent(task_id)}`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"delete_instance_task",
+		"Delete a ticket from a private instance's board. If it is still running it is stopped on the machine FIRST, and the whole call fails if that stop fails — a card removed while its task kept running would leave a live process with nothing pointing at it. Harsher than cancel_instance_task, which stops the work and leaves the card as a record; use that one unless the card itself should go.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),
+			task_id: z.string().describe("Task ID from instance_board or instance_task_events. Copy it exactly."),
+			confirm: z.string().optional().describe('Exact confirmation string required for a real deletion: "delete_instance_task". Omit on dry_run.'),
+			dry_run: z.boolean().optional().describe("Preview the deletion without deleting the ticket."),
+		},
+		async ({ token, instance_id, task_id, confirm, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, task_id };
+			const denied = await requirePermission(safetyFor(token), "destructive", "delete_instance_task", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "delete_instance_task", "delete a board ticket (stopping it first if it is running)", input, {
+					endpoint: `/v1/instances/${instance_id}/tasks/${task_id}`,
+					method: "DELETE",
+				});
+			}
+			const unconfirmed = await requireConfirmation(safetyFor(token), "delete_instance_task", confirm, "delete_instance_task", input);
+			if (unconfirmed) return unconfirmed;
+			const data = await authedCall(`/v1/instances/${instance_id}/tasks/${encodeURIComponent(task_id)}`, sessionToken, { method: "DELETE" }, env);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "delete_instance_task", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"answer_instance_input",
+		"Answer a needs_input handoff: an agent paused mid-run because it needs a value it must not invent (work authorization, a notice period, an account detail), and is holding the run open waiting for it. Supply the value and the run continues. The value is saved to the owner's Profile, so this is the owner's own answer and nothing else — never a guess. Find the waiting task with instance_board (a needs_human card) or get_instance_task. A 409 means the takeover session is gone (the runner restarted) and the answer was NOT delivered.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),
+			task_id: z.string().describe("The paused task's ID, from instance_board or get_instance_task. Copy it exactly."),
+			value: z.string().describe("The value the agent asked for, in the owner's own words. Never fabricate one — if the owner has not said it, ask them."),
+			dry_run: z.boolean().optional().describe("Preview without delivering the value."),
+		},
+		async ({ token, instance_id, task_id, value, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, task_id, chars: value.length };
+			const denied = await requirePermission(safetyFor(token), "runtime", "answer_instance_input", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "answer_instance_input", "answer a needs_input handoff and let the run continue", input, {
+					endpoint: `/v1/instances/${instance_id}/input`,
+					method: "POST",
+				});
+			}
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/input`,
+				sessionToken,
+				{ method: "POST", body: JSON.stringify({ taskId: task_id, value }) },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "answer_instance_input", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"resume_instance_takeover",
+		"Resume a run after a human dealt with what it handed off — a captcha solved, a widget operated, a page signed into. The agent re-checks the page and carries on. Answering a needs_input question is a different call (answer_instance_input); this one supplies no value, it just says \"go\".",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),
+			task_id: z.string().describe("The paused task's ID, from instance_board or get_instance_task. Copy it exactly."),
+			dry_run: z.boolean().optional().describe("Preview without resuming the run."),
+		},
+		async ({ token, instance_id, task_id, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, task_id };
+			const denied = await requirePermission(safetyFor(token), "runtime", "resume_instance_takeover", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "resume_instance_takeover", "resume a paused run after a human takeover", input, {
+					endpoint: `/v1/instances/${instance_id}/takeover/${task_id}/resume`,
+					method: "POST",
+				});
+			}
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/takeover/${encodeURIComponent(task_id)}/resume`,
+				sessionToken,
+				{ method: "POST" },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "resume_instance_takeover", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"end_instance_takeover",
+		"End a human-takeover session, handing the browser back. This does NOT resume the run — use resume_instance_takeover for that. Ending is the one takeover control whose failure is invisible from outside: if it fails the agent still holds the browser and the run is still blocked, so check the result rather than assuming.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),
+			task_id: z.string().describe("The task whose takeover session should end. Copy it exactly."),
+			dry_run: z.boolean().optional().describe("Preview without ending the takeover."),
+		},
+		async ({ token, instance_id, task_id, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, task_id };
+			const denied = await requirePermission(safetyFor(token), "runtime", "end_instance_takeover", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "end_instance_takeover", "end a human-takeover session", input, {
+					endpoint: `/v1/instances/${instance_id}/takeover/${task_id}/end`,
+					method: "POST",
+				});
+			}
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/takeover/${encodeURIComponent(task_id)}/end`,
+				sessionToken,
+				{ method: "POST" },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "end_instance_takeover", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"send_instance_takeover_input",
+		"Send ONE mouse or keyboard event into a taken-over page (relayed to the real browser over CDP). This is the raw remote-control primitive the console's takeover overlay is built from, and it aims by PIXEL COORDINATE in the page's own space — so it is only usable by a caller that is also reading GET /v1/instances/:id/takeover/:taskId/frame and can see where it is clicking. A caller that cannot see the page should resume_instance_takeover or answer_instance_input instead, or ask the owner to open the console.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),
+			task_id: z.string().describe("The task whose takeover session receives the event. Copy it exactly."),
+			type: z.enum(["move", "down", "up", "click", "scroll", "key", "text"]).describe("Event kind. move/down/up/click/scroll take x and y; text takes text; key takes key."),
+			x: z.coerce.number().optional().describe("Page x coordinate in pixels (mouse events)"),
+			y: z.coerce.number().optional().describe("Page y coordinate in pixels (mouse events)"),
+			delta_x: z.coerce.number().optional().describe("Horizontal wheel delta (scroll)"),
+			delta_y: z.coerce.number().optional().describe("Vertical wheel delta (scroll)"),
+			text: z.string().optional().describe("Text to insert at the caret (type: text)"),
+			key: z.string().optional().describe('Key name for a special key (type: key), e.g. "Enter", "Tab", "Escape", "Backspace", "ArrowDown"'),
+			dry_run: z.boolean().optional().describe("Preview without sending the event."),
+		},
+		async ({ token, instance_id, task_id, type, x, y, delta_x, delta_y, text: insertText, key, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const event: Record<string, unknown> = { type };
+			if (x !== undefined) event.x = x;
+			if (y !== undefined) event.y = y;
+			if (delta_x !== undefined) event.deltaX = delta_x;
+			if (delta_y !== undefined) event.deltaY = delta_y;
+			if (insertText !== undefined) event.text = insertText;
+			if (key !== undefined) event.key = key;
+			const input = { instance_id, task_id, type };
+			const denied = await requirePermission(safetyFor(token), "runtime", "send_instance_takeover_input", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "send_instance_takeover_input", `send a ${type} event into a taken-over page`, input, {
+					endpoint: `/v1/instances/${instance_id}/takeover/${task_id}/input`,
+					method: "POST",
+				});
+			}
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/takeover/${encodeURIComponent(task_id)}/input`,
+				sessionToken,
+				{ method: "POST", body: JSON.stringify(event) },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "send_instance_takeover_input", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"start_instance_browser_task",
+		"Start a browser task on a private instance: the agent drives the owner's real browser towards an objective, pausing with a needs_human ticket when it hits something it cannot do (a captcha, a sign-in, a value it must not invent). Pro, and it needs a machine running `pags up`. Answers {workflowId, taskId} — follow it with get_instance_task or instance_task_events. Default is a safe rehearsal that walks the flow and stops at the committing action; pass commit=true to let it go through with it.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),
+			url: z.string().optional().describe("Page to start from. Omit only if the objective names where to go."),
+			objective: z.string().optional().describe("What the agent should accomplish, in plain words."),
+			commit: z
+				.boolean()
+				.optional()
+				.describe("false (default) = walk the flow but BLOCK the committing action (the purchase, the submit, the send) — a safe rehearsal. true = let it commit for real."),
+			dry_run: z.boolean().optional().describe("Preview without starting the task at all."),
+		},
+		async ({ token, instance_id, url, objective, commit, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const real = commit === true;
+			const input = { instance_id, url: url ?? "", objective: objective ?? "", commit: real };
+			// Same split as apply_to_job: a rehearsal spends someone's machine (`runtime`), a run
+			// allowed to commit does something outward and hard to undo (`destructive`).
+			const denied = await requirePermission(safetyFor(token), real ? "destructive" : "runtime", "start_instance_browser_task", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(
+					safetyFor(token),
+					"start_instance_browser_task",
+					real ? "run a browser task that is allowed to COMMIT" : "rehearse a browser task (stops before the committing action)",
+					input,
+					{ endpoint: `/v1/instances/${instance_id}/browse`, method: "POST" },
+				);
+			}
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/browse`,
+				sessionToken,
+				{ method: "POST", body: JSON.stringify({ url, objective, dryRun: !real }) },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "start_instance_browser_task", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
 }

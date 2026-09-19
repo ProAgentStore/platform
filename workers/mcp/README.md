@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**171 tool registrations.** 147 are always registered; 24 are gated to the console
+**178 tool registrations.** 154 are always registered; 24 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -306,6 +306,13 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `run_instance_task` | Create a task on the registered runtime | runtime | yes | |
 | `approve_instance_task` | Approve a task waiting for human approval | runtime | yes | |
 | `cancel_instance_task` | Cancel a runtime task | destructive | yes | `cancel_instance_task` |
+| `get_instance_task` | Read ONE ticket in full (live runner, else the mirrored copy) | — | | |
+| `delete_instance_task` | Delete a ticket; stops it on the machine first, and fails if that stop fails | destructive | yes | `delete_instance_task` |
+| `answer_instance_input` | Answer a needs_input handoff so the paused run continues | runtime | yes | |
+| `resume_instance_takeover` | Resume after a human dealt with the handoff (captcha, sign-in) | runtime | yes | |
+| `end_instance_takeover` | End the takeover session, handing the browser back | runtime | yes | |
+| `send_instance_takeover_input` | One CDP mouse/key event into the taken-over page (needs the frame to aim) | runtime | yes | |
+| `start_instance_browser_task` | Drive the owner's browser at an objective; rehearses unless `commit` | destructive | yes | |
 | `hint_instance_task` | Attach guidance the agent reads on its next step | write | yes | |
 | `clear_finished_tasks` | Clear cancelled/completed/failed tasks from the board (`blocked` is kept — it means the agent needs you) | write | yes | |
 | `instance_task_events` | Recent runtime events | — | | |

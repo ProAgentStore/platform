@@ -176,12 +176,6 @@ const KNOWN_GAPS = [
 	},
 	{
 		why:
-			"A run's detail view: read one task, delete it, resume it, and drive a live human takeover (end/input/resume) or answer a needs_input handoff. `instance_board` lists cards and `coding_timeline` narrates a coding session, but the per-run controls a stuck agent actually needs are console-only. #613.",
-		match:
-			/^[A-Z]+ \/v1\/instances\/\{\}\/(tasks\/\{\}(\/resume)?|takeover\/\{\}\/(end|input|resume)|input|browse)$/,
-	},
-	{
-		why:
 			"Standing agent tasks (`agent-tasks`) — the recurring instructions an agent carries, created, edited and deleted in the console's Tasks section. Distinct from runtime tasks, which `run_instance_task` covers. #613.",
 		match: /^[A-Z]+ \/v1\/instances\/\{\}\/agent-tasks(\/\{\})?$/,
 	},
