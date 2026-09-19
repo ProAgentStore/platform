@@ -742,7 +742,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			// already pushed. This composes the briefing from what IS durable. Null on every
 			// ordinary start, and on any failed read: the briefing is an improvement to a run that
 			// is otherwise fine, so it must never be the thing that stops one.
-			const resumeNote = (await step.do("resume-note", async () => (await pendingCodingResumeNote(env, { userId, instanceId, sessionId })) ?? null)) as string | null;
+			const resumeNote = (await step.do("resume-note", async () => (await pendingCodingResumeNote(env, { userId, instanceId, sessionId, uncommittedFiles: repair ? 0 : (repoState?.changedFiles ?? 0) })) ?? null)) as string | null;
 			if (resumeNote) goal.resumeNote = resumeNote;
 			await step.do("tl-start", async () => {
 				// …and in the UNIFIED trace, which is the surface `agent_trace` and every MCP debug

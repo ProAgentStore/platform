@@ -182,6 +182,56 @@ describe("#806 — the other endings that leave work half-done without a verdict
 	});
 });
 
+describe("#806 — work the predecessor left uncommitted is not an act, and is still worth a note", () => {
+	it("briefs a successor whose predecessor pushed NOTHING but left files in the tree", () => {
+		// #806's own incident: cut off at step 4 of 20, a good partial fix on disk, no act on record.
+		const note = codingResumeNote([], "max_iterations", 3) ?? "";
+		expect(note).toContain("a previous run on this repository used up its step limit");
+		expect(note).toContain("The working tree holds 3 uncommitted files right now.");
+		expect(note).toContain("READ the diff before you write anything");
+	});
+
+	it("claims NOTHING landed when nothing did — the 'already landed' opening would be false", () => {
+		const note = codingResumeNote([act({ ok: false })], "interrupted", 2) ?? "";
+		expect(note.split("\n")[0]).toContain("and nothing it did is on the record as landed.");
+		expect(note).not.toContain("ALREADY landed");
+		expect(note).not.toContain("Already done");
+		expect(note).not.toContain("treat the listed work as done");
+		expect(note).toContain("continue from what is there rather than starting the objective over");
+	});
+
+	it("never says the previous run WROTE the files — the platform saw the tree, not the author", () => {
+		const note = codingResumeNote([], "interrupted", 1) ?? "";
+		expect(note).toContain("The platform did not see who wrote it, but it may be that run's unfinished work");
+		expect(note).not.toMatch(/(that|previous) run (wrote|left|made)/);
+	});
+
+	it("agrees with the REPOSITORY STATE instruction beside it: build on it, never discard it", () => {
+		// `interrupted`, because `engine_limit`'s own opening says the usage limit "had not reset".
+		const note = codingResumeNote([], "interrupted", 4) ?? "";
+		expect(note).toContain("Do NOT discard it.");
+		expect(note).not.toMatch(/\b(stash|reset|revert|clean)\b/i);
+	});
+
+	it("reads correctly for exactly one file", () => {
+		expect(codingResumeNote([], "interrupted", 1)).toContain("holds 1 uncommitted file right now");
+	});
+
+	it("adds the clause to a note that ALSO has landed acts, and leaves the rest of it alone", () => {
+		const clean = codingResumeNote([act()], "interrupted") ?? "";
+		const dirty = codingResumeNote([act()], "interrupted", 2) ?? "";
+		expect(dirty.split("\n")[0]).toBe(clean.split("\n")[0]);
+		expect(dirty).toContain("Already done — do NOT do these again:");
+		expect(dirty).toContain("The working tree holds 2 uncommitted files right now.");
+		expect(dirty).toContain("treat the listed work as done");
+	});
+
+	it("says nothing about a clean tree — the note is byte-identical to the one before #806", () => {
+		expect(codingResumeNote([act()], "interrupted", 0)).toBe(codingResumeNote([act()], "interrupted"));
+		expect(codingResumeNote([], "interrupted", 0)).toBeNull();
+	});
+});
+
 describe("the gate — which predecessor a run is briefed about", () => {
 	function envWith(row: Partial<LoopRunRow> | null) {
 		const binds: unknown[][] = [];
@@ -241,7 +291,13 @@ describe("the wiring — the defect a unit test of this module cannot see", () =
 
 	it("asks for the note, in its own durable step", () => {
 		expect(source).toContain('step.do("resume-note"');
-		expect(source).toContain("pendingCodingResumeNote(env, { userId, instanceId, sessionId })");
+		expect(source).toContain("pendingCodingResumeNote(env, { userId, instanceId, sessionId, uncommittedFiles: repair ? 0 : (repoState?.changedFiles ?? 0) })");
+	});
+
+	it("hands it the start-of-run tree count — and none to a repair run, whose brief already carries it (#806, #804)", () => {
+		expect(source).toContain("uncommittedFiles: repair ? 0 : (repoState?.changedFiles ?? 0)");
+		// Read BEFORE the note is asked for: the count is `repo-state-start`'s, not a second read.
+		expect(source.indexOf('step.do("repo-state-start"')).toBeLessThan(source.indexOf('step.do("resume-note"'));
 	});
 
 	it("injects it through goal.resumeNote — the existing platform-voice channel", () => {

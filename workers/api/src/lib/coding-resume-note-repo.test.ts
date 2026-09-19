@@ -75,6 +75,22 @@ describe("the successor of a run-opened session is on a NEW session (#806)", () 
 		expect(note).toContain("pushed directly to the trunk origin main");
 	});
 
+	it("briefs run B about a predecessor that pushed NOTHING, when the tree it starts on is dirty (#806)", async () => {
+		// #806's own shape: the run was cut off with a partial fix on disk and no act on the record.
+		d1.exec("DELETE FROM agent_events");
+		session("s2", "repo-r", "active");
+		const params = { userId: "u1", instanceId: "inst-1", sessionId: "s2" };
+		expect(await pendingCodingResumeNote(env, params, NOW), "a clean tree and no acts is still nothing to say").toBeNull();
+		const note = await pendingCodingResumeNote(env, { ...params, uncommittedFiles: 3 }, NOW);
+		expect(note).toContain("a previous run on this repository used up its step limit");
+		expect(note).toContain("The working tree holds 3 uncommitted files right now.");
+	});
+
+	it("a dirty tree alone briefs nobody — without an unfinished predecessor it is just REPOSITORY STATE's job", async () => {
+		session("s3", "repo-other", "active");
+		expect(await pendingCodingResumeNote(env, { userId: "u1", instanceId: "inst-1", sessionId: "s3", uncommittedFiles: 5 }, NOW)).toBeNull();
+	});
+
 	it("a session on a DIFFERENT repo is briefed about nothing, though run A is in the window", async () => {
 		session("s3", "repo-other", "active");
 		expect(await pendingCodingResumeNote(env, { userId: "u1", instanceId: "inst-1", sessionId: "s3" }, NOW)).toBeNull();

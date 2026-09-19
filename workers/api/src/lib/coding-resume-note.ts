@@ -40,6 +40,18 @@
 // brain would plan against it. So the note states what landed, names it as already done, and tells
 // the run to continue from there — the inference is left where the evidence is.
 //
+// ── Uncommitted work is not an act (#806)
+//
+// The note was built from `agent_events`, and an edit that was never committed is not an event. So
+// the run #806 was filed about — cut off at step 4 of 20 with a good partial fix on disk and nothing
+// pushed — briefed its successor about nothing, and the successor found the diff by luck. The count
+// comes from the start-of-run `git status` the workflow has ALREADY read (`repo-state-start`), so
+// nothing new is captured or stored. What the platform knows is that the tree is dirty NOW and that
+// an unfinished run ended on this repo inside the lookback; it did not see who wrote the files, and says so. It
+// agrees with the REPOSITORY STATE instruction beside it on the one thing that matters: read it,
+// build on it, never discard it. A REPAIR run (#804) is handed zero by the workflow: its brief
+// already carries the tree's state in its own words, and exists to deal with exactly that tree.
+//
 // ── ok:true / ok:false / ok:null are three different claims (#594)
 //
 // The dangerous sentence here is "this is already done" about something that is not. So only acts
@@ -95,7 +107,8 @@ const truncate = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).
  * where that gate lives.
  */
 /**
- * Deliberately takes ONLY the acts and the stop reason.
+ * Deliberately takes ONLY the acts, the stop reason and how many files sit uncommitted at the
+ * successor's start (#806 — see the header; zero, the default, is a clean tree or an unknown one).
  *
  * The earlier run's objective is not an input: the new run already carries its own, and they
  * can legitimately differ — an owner who restarts with a narrower objective after a cut-off would
@@ -105,14 +118,19 @@ const truncate = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).
  * verdict — comes from the recorded stop reason and is stated in this file's own words
  * ({@link PREDECESSOR_ENDING}).
  */
-export function codingResumeNote(acts: ReadonlyArray<ActItem>, endedBy: ResumableStopReason): string | null {
+export function codingResumeNote(acts: ReadonlyArray<ActItem>, endedBy: ResumableStopReason, uncommittedFiles = 0): string | null {
 	// FAILED acts are dropped here and never counted below: "attempted and failed" is not progress
 	// to preserve, and a run told to skip it would skip the retry that fixes it.
 	const landed = acts.filter((a) => a.ok === true);
 	const unobserved = acts.filter((a) => a.ok === null);
-	if (!landed.length && !unobserved.length) return null;
+	const onRecord = landed.length > 0 || unobserved.length > 0;
+	if (!onRecord && uncommittedFiles <= 0) return null;
 
-	const lines: string[] = [`PLATFORM NOTE (not from the human): ${PREDECESSOR_ENDING[endedBy]} — but the work below had ALREADY landed and is on the record.`];
+	const lines: string[] = [
+		onRecord
+			? `PLATFORM NOTE (not from the human): ${PREDECESSOR_ENDING[endedBy]} — but the work below had ALREADY landed and is on the record.`
+			: `PLATFORM NOTE (not from the human): ${PREDECESSOR_ENDING[endedBy]} — and nothing it did is on the record as landed.`,
+	];
 
 	if (landed.length) {
 		const shown = landed.slice(0, MAX_LISTED_ACTS);
@@ -130,8 +148,18 @@ export function codingResumeNote(acts: ReadonlyArray<ActItem>, endedBy: Resumabl
 		);
 	}
 
+	if (uncommittedFiles > 0) {
+		// "May be", never "is": the platform saw the tree, not the author (#806). A human's own
+		// half-finished edit looks identical from here, and the instruction is the same either way.
+		lines.push(
+			`The working tree holds ${uncommittedFiles} uncommitted file${uncommittedFiles === 1 ? "" : "s"} right now. The platform did not see who wrote ${uncommittedFiles === 1 ? "it" : "them"}, but ${uncommittedFiles === 1 ? "it" : "they"} may be that run's unfinished work: READ the diff before you write anything, and build on it if it serves your objective rather than writing the same change again. Do NOT discard it.`,
+		);
+	}
+
 	lines.push(
-		"Check the repository and the issue tracker FIRST, treat the listed work as done, and continue from there rather than starting the objective over.",
+		onRecord
+			? "Check the repository and the issue tracker FIRST, treat the listed work as done, and continue from there rather than starting the objective over."
+			: "Check the repository and the issue tracker FIRST, and continue from what is there rather than starting the objective over.",
 	);
 
 	return lines.join("\n");
@@ -157,7 +185,7 @@ export function codingResumeNote(acts: ReadonlyArray<ActItem>, endedBy: Resumabl
  */
 export async function pendingCodingResumeNote(
 	env: Env,
-	params: { userId: string; instanceId: string; sessionId: string },
+	params: { userId: string; instanceId: string; sessionId: string; uncommittedFiles?: number },
 	now: number = Date.now(),
 ): Promise<string | null> {
 	try {
@@ -166,7 +194,7 @@ export async function pendingCodingResumeNote(
 		// That run's OWN session over the interval it drove it (#809) — not `params.sessionId`, which since
 		// #806 is usually a different, later session of the same repo.
 		const acts = await actsInWindow(env, params.userId, params.instanceId, prev.sessionId, prev.startedAt, prev.finishedAt ?? now, 100);
-		return codingResumeNote(acts, prev.stopReason);
+		return codingResumeNote(acts, prev.stopReason, params.uncommittedFiles ?? 0);
 	} catch {
 		// The briefing is lost, the run is not. `api()`-side errors are already filed durably by the
 		// readers themselves; swallowing here would hide nothing that is not recorded elsewhere.
