@@ -111,14 +111,16 @@ export function describeRecurrence(sig: Pick<ErrorSignature, "count" | "rows" | 
 	return `${span} — ${f.active ? "still happening" : "unaddressed"}, last ${ago}.`;
 }
 
-/** Error signatures first, then persistent ones, then by occurrences. */
+/** Persistent signatures first, errors before warnings within each, then by occurrences. */
 export function triageOrder(a: ErrorSignature, b: ErrorSignature, nowMs: number): number {
 	const rank = (s: ErrorSignature) => {
 		const f = recurrenceOf(s, nowMs);
 		// A persistent ERROR outranks a persistent warn, and both outrank a loud one-off — the
 		// ordering the issue asked for, where a thing repeating for days is not buried under
-		// whatever happened most recently.
-		return (s.level === "warn" ? 0 : 2) + (f.kind === "persistent" ? 1 : 0);
+		// whatever happened most recently. PERSISTENCE is the major key: this used to weight the
+		// level 2 and persistence 1, which put a fresh error burst above a warning firing for three
+		// days — #823's own incident was a WARN, and the e2e that pins this never ran in CI.
+		return (f.kind === "persistent" ? 2 : 0) + (s.level === "warn" ? 0 : 1);
 	};
 	return rank(b) - rank(a) || b.count - a.count || (a.lastSeen < b.lastSeen ? 1 : -1);
 }

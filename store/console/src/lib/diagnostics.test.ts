@@ -125,14 +125,15 @@ describe("humanDuration — one unit, never two", () => {
 });
 
 describe("triageOrder — a thing recurring for days is not buried under what happened last", () => {
-	it("ranks persistent errors above loud one-offs", () => {
+	it("ranks anything persistent above a loud one-off, and errors first within each", () => {
 		const persistentWarn = sig({ key: "a", level: "warn", count: 72, firstSeen: at(3 * DAY), lastSeen: at(60_000) });
 		const loudError = sig({ key: "b", level: "error", count: 900, firstSeen: at(120_000), lastSeen: at(0) });
 		const persistentError = sig({ key: "c", level: "error", count: 30, firstSeen: at(4 * DAY), lastSeen: at(60_000) });
 		const order = [persistentWarn, loudError, persistentError].sort((x, y) => triageOrder(x, y, NOW)).map((s) => s.key);
-		// persistent error > loud error > persistent warn. The 900-occurrence burst does not take
-		// the top slot from something that has been broken for four days.
-		expect(order).toEqual(["c", "b", "a"]);
+		// persistent error > persistent warn > loud error. The 900-occurrence burst does not take a
+		// slot from ANYTHING that has been broken for days — #823's own incident was a warn, and
+		// ranking level above persistence buried exactly that under a nine-minute burst.
+		expect(order).toEqual(["c", "a", "b"]);
 	});
 });
 
