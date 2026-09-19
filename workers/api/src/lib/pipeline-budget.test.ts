@@ -91,6 +91,12 @@ describe("BUDGET_OPENING_TOOLS", () => {
 			// `startJobApply` — every application is a root and every application is unattended,
 			// so unlike the Pilot there is no human-is-watching path to leave unpooled (#516).
 			"routes/instances-apply.ts",
+			// `POST …/loop/:runId/continue` (#806) — carrying a stopped run's objective onto a new
+			// run. A NEW pool, deliberately: the stopped run's is spent, and inheriting an unspent
+			// one would let a single admission fund an unbounded chain of continues — the same
+			// argument the objective queue's drain makes above. A root, so depth 0; the button is
+			// the owner's.
+			"routes/loop-continue-routes.ts",
 		].sort());
 	});
 });

@@ -86,7 +86,7 @@ src/
 │                     voice settings (read / customise / use-my-defaults, #613)
     ├── triggers.ts       7 tools — webhook / cron / connector-sync triggers, plus the action
 │                     vocabulary and the draft preview the console's form is built from (#613)
-    ├── composition.ts   15 tools — supervision (#183), connections (#182) with the delivery outbox,
+    ├── composition.ts   16 tools — supervision (#183), connections (#182) with the delivery outbox,
 │                     replay and delete that complete them (#613), loops, loop presets
     ├── account.ts        13 tools — whoami, billing, usage, keys, email, profile, budget limits,
     │                     notifications, account preferences (#613)
@@ -104,13 +104,13 @@ src/
                           surfaces:["coding"]) + 5 loop tools (3 run + 2 objective queue)
 ```
 
-**196 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
+**197 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
 `coding-tools.ts` — all of them behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 148 across `instance-tools/`. 172 are always registered; 24 are
+`storage-tools.ts`, and 149 across `instance-tools/`. 173 are always registered; 24 are
 surface-gated (apply=4, repo=3, coding=17).
 
 Those four numbers ADD UP to the headline, and that is the point of stating them: 21 + 13
-+ 14 + 148 = 196. They said 88 until #602, which made the paragraph sum to 132 — a total the
++ 14 + 149 = 197. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added

@@ -182,14 +182,19 @@ export function codingResumeNote(acts: ReadonlyArray<ActItem>, endedBy: Resumabl
  * Never throws: this sits on the start path of every coding run, and a resume note is an
  * IMPROVEMENT to a run that is otherwise fine. A failed read here must cost the briefing, not the
  * run — so the caller gets `null` and the run starts exactly as it did before #523.
+ *
+ * `lookbackMs` is how far back the predecessor may be, and is passed only by a CONTINUE (#806 item
+ * 4): the owner named one stopped run, possibly the morning after it stopped, and the default
+ * six-hour floor would have briefed that run's successor on nothing. It widens the SEARCH and
+ * nothing else — every rule about what the note may claim is downstream of it and untouched.
  */
 export async function pendingCodingResumeNote(
 	env: Env,
-	params: { userId: string; instanceId: string; sessionId: string; uncommittedFiles?: number },
+	params: { userId: string; instanceId: string; sessionId: string; uncommittedFiles?: number; lookbackMs?: number },
 	now: number = Date.now(),
 ): Promise<string | null> {
 	try {
-		const prev = await lastUnfinishedRunForRepo(env, params.userId, params.instanceId, params.sessionId, now);
+		const prev = await lastUnfinishedRunForRepo(env, params.userId, params.instanceId, params.sessionId, now, params.lookbackMs);
 		if (!prev) return null;
 		// That run's OWN session over the interval it drove it (#809) — not `params.sessionId`, which since
 		// #806 is usually a different, later session of the same repo.

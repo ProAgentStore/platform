@@ -43,6 +43,7 @@ import { loopDriverFor } from "../lib/loop-drivers.js";
 import { REPAIR_RUN_OBJECTIVE } from "../lib/repo-sync-gate.js";
 import { enqueueObjective } from "../lib/objective-queue.js";
 import { registerLoopQueueRoutes } from "./loop-queue-routes.js";
+import { registerLoopContinueRoutes } from "./loop-continue-routes.js";
 import { readLoopPresets, writeLoopPresets } from "../lib/loop-presets-store.js";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { sanitizeMaxIterations } from "../lib/agent-loop.js";
@@ -1149,6 +1150,7 @@ toolRoutes.post("/:id/loop", async (c) => {
 // Registered HERE, above `GET /:id/loop/:runId` — Hono matches in order, and `/loop/queue` would
 // otherwise be read as a run id (#788). See `routes/loop-queue-routes.ts`.
 registerLoopQueueRoutes(toolRoutes);
+registerLoopContinueRoutes(toolRoutes);
 
 /**
  * Loop presets (#234) — the named objectives the loop form offers, per instance.

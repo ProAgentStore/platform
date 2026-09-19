@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**196 tool registrations.** 172 are always registered; 24 are gated to the console
+**197 tool registrations.** 173 are always registered; 24 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -371,6 +371,7 @@ immediately instead of a whole transcript.
 |---|---|---|---|---|
 | `start_instance_loop` | Give an agent an objective and let it run on the server, budget-bounded | write | yes | |
 | `check_instance_loop` | Status, steps taken, stop reason (omit `run_id` to list runs) | read | | |
+| `continue_instance_run` | Carry a STOPPED run's objective onto a fresh run, briefed on what it already landed. Only after an ending with no verdict; reuses its repo and step cap, opens its own budget (#806) | write | yes | |
 | `get_instance_loop_presets` | The saved objectives the loop form offers, and whose list it is (`instance` / `agent` / `default`) (#613) | read | | |
 | `set_instance_loop_presets` | Replace the instance's own presets — the whole list; `[]` goes back to inheriting. An out-of-limit list is refused, not trimmed | write | yes | |
 | `stop_instance_loop` | Cooperative stop — the in-flight step finishes | write | no ([why](#tools-with-no-dry-run)) | |

@@ -257,6 +257,24 @@ export async function listLoopRuns(env: Env, userId: string, instanceId: string,
 export const RESUME_NOTE_LOOKBACK_MS = 6 * 60 * 60 * 1000;
 
 /**
+ * The same bound, widened, for a run the owner asked to CONTINUE (#806 item 4).
+ *
+ * Six hours is the right default because an ordinary start has no reason to think the last run is
+ * related to it, and archaeology is the likelier read. A continue is the opposite case: a human
+ * looked at one specific stopped run and said "carry on with that one", which is exactly the
+ * evidence the default has to do without. #806's fourth requirement is that this works "even hours
+ * later — the point is a human can check back on a stalled run on their own schedule", and under
+ * the default a Continue pressed the next morning starts a run briefed on nothing at all, which is
+ * the whole thing the button was for.
+ *
+ * Widening is safe because it does NOT widen what may be said. The predecessor is still the single
+ * most recent FINISHED run on the repo and is still judged afterwards, so a run that reached a
+ * verdict in between still ends the note's job ({@link lastUnfinishedRunForRepo}) — thirty days
+ * buys reach back to the run the owner is pointing at, and no additional claim.
+ */
+export const CONTINUE_RESUME_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
  * The stop reasons after which a successor is told what already landed (#523 item 4, #806).
  *
  * The test is "did the run reach a verdict on its objective". These four did not — something else
@@ -317,6 +335,12 @@ export function isResumableStopReason(reason: string | null | undefined): reason
  * Ordered and bounded on `started_at` so it rides `idx_agent_loop_runs_instance` directly; see
  * {@link RESUME_NOTE_LOOKBACK_MS} for why the floor is not optional. `r.*`, not `*`: the join
  * brings `coding_sessions`' own `status` and `started_at`, which would overwrite the run's.
+ *
+ * `lookbackMs` overrides that floor for the one caller who has evidence the default cannot have —
+ * a human pointing at a specific stopped run and pressing Continue ({@link
+ * CONTINUE_RESUME_LOOKBACK_MS}). It moves the FLOOR only. Which run is chosen, and whether it may
+ * be spoken about at all, are decided below and are unaffected by how far back we were willing to
+ * look for it.
  */
 export async function lastUnfinishedRunForRepo(
 	env: Env,
@@ -324,6 +348,7 @@ export async function lastUnfinishedRunForRepo(
 	instanceId: string,
 	sessionId: string,
 	now: number = Date.now(),
+	lookbackMs: number = RESUME_NOTE_LOOKBACK_MS,
 ): Promise<(LoopRunView & { stopReason: ResumableStopReason }) | null> {
 	const row = await env.DB.prepare(
 		`SELECT r.* FROM agent_loop_runs r
@@ -334,7 +359,7 @@ export async function lastUnfinishedRunForRepo(
 		    AND r.started_at >= ?4
 		  ORDER BY r.started_at DESC LIMIT 1`,
 	)
-		.bind(userId, instanceId, sessionId, now - RESUME_NOTE_LOOKBACK_MS)
+		.bind(userId, instanceId, sessionId, now - lookbackMs)
 		.first<LoopRunRow>();
 	// The predecessor exists but reached a verdict — nothing to hand forward. See the header.
 	if (!row || !isResumableStopReason(row.stop_reason)) return null;

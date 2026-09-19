@@ -314,6 +314,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	// STRICTER than its gate (`write`): starting a loop hands the agent an objective and
 	// lets it act unattended until it stops.
 	start_instance_loop: "runtime",
+	// A continue STARTS a run, so it carries the same scope as starting one (#806).
+	continue_instance_run: "runtime",
 	trigger_agent_deploy: "runtime",
 
 	// ── destructive: deletes, overwrites, or commits an irreversible external action.
@@ -469,7 +471,11 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// `status: complete`.
 	read: 92,
 	write: 61,
-	runtime: 23,
+	// +1 runtime at #806: `continue_instance_run`. `runtime` rather than `write` for the reason
+	// `start_instance_loop` is — it starts an autonomous run that spends on its own — and the
+	// two must agree, because a caller holding the scope to start one holding a narrower one to
+	// continue it would be a distinction the route itself does not make.
+	runtime: 24,
 	destructive: 20,
 };
 

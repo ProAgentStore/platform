@@ -1296,7 +1296,11 @@ const PINS = {
 	// which has no checkout to repair. The brief the flag stands for, and every sentence about it,
 	// live in `lib/repo-sync-gate.ts`; what is here is the one fact only this route knows, which is
 	// that an objective is required EXCEPT on a repair run.
-	"workers/api/src/routes/tools.ts": 1259,
+	// +1 at #806: `registerLoopContinueRoutes(toolRoutes)` and its import — `POST
+	// /:id/loop/:runId/continue`, which carries a stopped run's objective onto a fresh run with a
+	// new ceiling. The handler is NOT here: it is `routes/loop-continue-routes.ts`, for the same
+	// reason the queue's is not, which is what keeps this at +1 rather than +100.
+	"workers/api/src/routes/tools.ts": 1261,
 	// First entry at #477: Usage.tsx crossed 800 lines as BudgetPanel expanded to cover per-tree
 	// run knobs (perTreeCostMicros, perTreeDelegations, perTreeMaxDepth, loopMaxIterations) and
 	// their edit fields. The page is one coherent screen — usage data + the limits that bound it —
@@ -1708,7 +1712,9 @@ const PINS = {
 	// why — most of it the boundary that was measured and left alone — plus these three. Same price
 	// as the first split's note directly above.
 	// +5 at #814: the coding-session raise above (four lines of why) and this one.
-	"scripts/check-file-size.mjs": 1792,
+	// +6 at #806: the tools.ts raise above (four lines of why, naming where the handler went)
+	// and these two.
+	"scripts/check-file-size.mjs": 1798,
 };
 
 /**

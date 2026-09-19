@@ -83,4 +83,14 @@ export interface CodingSessionParams {
 	 * is not recoverable.
 	 */
 	sessionOpenedByRun?: boolean;
+	/**
+	 * How far back this run's resume note may look for the run it is about (#806 item 4).
+	 *
+	 * Absent keeps `RESUME_NOTE_LOOKBACK_MS`, which is every ordinary start. Present only on a
+	 * CONTINUE, where the owner pointed at one stopped run and the default floor would have found
+	 * nothing to brief the successor with — see `CONTINUE_RESUME_LOOKBACK_MS`. It is a parameter of
+	 * the run rather than of the route because the note is composed HERE, at the start of the run,
+	 * and a value the route held would never reach the only code that reads it.
+	 */
+	resumeLookbackMs?: number;
 }

@@ -396,6 +396,44 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 		},
 	);
 
+	server.tool(
+		"continue_instance_run",
+		"Carry a STOPPED run's objective onto a fresh run, briefed on what the stopped one already landed. Only for a run that ended WITHOUT a verdict — `interrupted`, `max_iterations`, `engine_limit`, `provider_credit`; anything else is refused, naming what to do instead. It reuses the stopped run's repository and step cap (pass `max_iterations` to grant more), opens its own budget, and reaches further back for its predecessor than an ordinary start, so continuing the next morning still works. Read a run first with check_instance_loop.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			run_id: z.string().describe("The stopped run to continue, from check_instance_loop."),
+			max_iterations: z.coerce.number().optional().describe("Steps the new run may take. Omit to reuse the stopped run's own cap (max 50)."),
+			dry_run: z.boolean().optional().describe("Report the run that would be started, without starting it."),
+		},
+		async ({ token, instance_id, run_id, max_iterations, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, run_id, max_iterations };
+			const denied = await requirePermission(safetyFor(token), "write", "continue_instance_run", input);
+			if (denied) return denied;
+			if (dry_run) {
+				// Same reasoning as `start_instance_loop`'s preview, and one fact more: a continue
+				// SPENDS AGAIN. A caller that thought it was resuming a paid-for run rather than
+				// starting another one has no other way to find out before the money goes.
+				return dryRun(safetyFor(token), "continue_instance_run", "start a fresh run on a stopped run's objective", input, {
+					endpoint: `/v1/instances/${instance_id}/loop/${run_id}/continue`,
+					method: "POST",
+					effect: `${instance_id} would start a NEW run on ${run_id}'s objective${max_iterations === undefined ? ", with that run's own step cap" : `, for up to ${max_iterations} steps`}. The stopped run is not reanimated.`,
+					spend: "A new budget is opened — the stopped run's is not inherited. Each step spends the instance's own AI budget.",
+				});
+			}
+			const data = await authedCall(
+				`/v1/instances/${encodeURIComponent(instance_id)}/loop/${encodeURIComponent(run_id)}/continue`,
+				sessionToken,
+				{ method: "POST", body: JSON.stringify({ maxIterations: max_iterations }) },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "continue_instance_run", action: "completed", input, result: { ok: true } });
+			return jsonText(data);
+		},
+	);
+
 	// ── Loop presets (#613) ─────────────────────────────────────────────────────
 	//
 	// The objectives an owner curated for the loop form (#234). Without these, a caller starting a

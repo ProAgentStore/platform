@@ -67,6 +67,15 @@ export interface LoopStartInput {
 	 * Only the coding driver knows what a checkout is; the route refuses it for any other.
 	 */
 	repairCheckout?: boolean;
+	/**
+	 * How far back this run's resume note may look for the run it continues (#806 item 4).
+	 *
+	 * Set only by `POST /:id/loop/:runId/continue`, where a human named one stopped run and the
+	 * default six-hour floor would brief the successor on nothing. Threaded rather than decided
+	 * here because only the workflow composes the note, and only the route knows a human chose.
+	 * The chat driver ignores it: a chat loop has no repository and no resume note to widen.
+	 */
+	resumeLookbackMs?: number;
 }
 
 export type LoopStartResult =
@@ -332,6 +341,8 @@ const codingDriver: LoopDriver = {
 				// licenses the Pilot to close it. A session the user opened by hand outlives the
 				// run — taking it away is what made delegation single-use.
 				sessionOpenedByRun: opened,
+				// #806: a CONTINUE reaches further back for its predecessor than an ordinary start.
+				resumeLookbackMs: input.resumeLookbackMs,
 			},
 		});
 		// The last of the Pilot's entry points (#556). Everything the Workflow subsequently drives

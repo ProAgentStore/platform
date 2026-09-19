@@ -609,4 +609,24 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.37 is published.
 	"0.1.38": "sha256:f774e627cf44e400a8e56348ac77296fb5099bcb45fd3f671f8742d7f7e29956",
+	// 0.1.39 (#806, continue a stopped run): one new tool NAME, ALWAYS-ON — 196 registrations
+	// become 197, `MCP_TOOL_ALWAYS_ON` 172 → 173, `MCP_TOOL_GATED` stays 24.
+	//
+	//   * `continue_instance_run` (annotated `runtime`, asserts `write`, dry_run) — POST
+	//     /v1/instances/:id/loop/:runId/continue in `instance-tools/composition.ts`, beside
+	//     `start_instance_loop`, whose two classes split the same way for the same reason: the
+	//     annotation says this spends something out there, the gate is the one a default grant
+	//     holds. A caller able to START a run must be able to continue one, or the narrower scope
+	//     would be a distinction the route itself does not make.
+	//
+	// NOT part of #613's parity sweep: the route is new in the same change, and shipping the
+	// console button without the tool would have ADDED a gap to the ratchet #613 is driving to
+	// zero.
+	//
+	// The `dry_run` preview names the SPEND twice over, because the word "continue" invites the
+	// wrong model: this opens a NEW budget and does not reanimate the stopped run's.
+	// `SERVER_INSTRUCTIONS` did not move.
+	//
+	// Appended, never edited in place: 0.1.38 is published.
+	"0.1.39": "sha256:aa427b83ad091801d567616620814e37f95b9be48dde4a6f19f459c138113360",
 };

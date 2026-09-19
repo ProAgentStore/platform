@@ -291,7 +291,16 @@ describe("the wiring — the defect a unit test of this module cannot see", () =
 
 	it("asks for the note, in its own durable step", () => {
 		expect(source).toContain('step.do("resume-note"');
-		expect(source).toContain("pendingCodingResumeNote(env, { userId, instanceId, sessionId, uncommittedFiles: repair ? 0 : (repoState?.changedFiles ?? 0) })");
+		expect(source).toContain("pendingCodingResumeNote(env, { userId, instanceId, sessionId, uncommittedFiles: repair ? 0 : (repoState?.changedFiles ?? 0), lookbackMs: event.payload.resumeLookbackMs })");
+	});
+
+	it("passes the run's own lookback through, so a CONTINUE reaches its predecessor (#806)", () => {
+		// The last link in the chain, and the only one no unit test can reach: the route widens the
+		// lookback, the driver puts it on the workflow params, and if this call drops it the
+		// continue is silently an ordinary restart — briefing nothing, with nothing going red.
+		// `event.payload`, because the workflow destructures only some of its params and
+		// `resumeLookbackMs` is not among them.
+		expect(source).toContain("lookbackMs: event.payload.resumeLookbackMs");
 	});
 
 	it("hands it the start-of-run tree count — and none to a repair run, whose brief already carries it (#806, #804)", () => {

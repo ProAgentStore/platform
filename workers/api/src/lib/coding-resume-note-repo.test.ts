@@ -12,6 +12,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
+import { CONTINUE_RESUME_LOOKBACK_MS } from "./agent-loop-store.js";
 import { pendingCodingResumeNote } from "./coding-resume-note.js";
 import type { Env } from "../types.js";
 
@@ -140,5 +141,47 @@ describe("the successor of a run-opened session is on a NEW session (#806)", () 
 	it("keeps the 6-hour floor — a run A older than the lookback is not a checkpoint", async () => {
 		session("s2", "repo-r", "active");
 		expect(await pendingCodingResumeNote(env, { userId: "u1", instanceId: "inst-1", sessionId: "s2" }, NOW + 7 * 60 * MIN)).toBeNull();
+	});
+});
+
+/**
+ * The floor a CONTINUE moves, and the rule it does not (#806 item 3(c), item 4).
+ *
+ * The default six hours is right for an ordinary start, which has no reason to think the last run
+ * is related to it. A continue has the one thing that default cannot have: a human looked at a
+ * specific stopped run and asked for it. #806 item 4 is explicit that this must work "even hours
+ * later", and the test above is what that requirement fails against today.
+ */
+describe("a CONTINUE reaches further back for its predecessor", () => {
+	const NEXT_MORNING = NOW + 14 * 60 * MIN;
+
+	it("briefs a run continued the next morning, which the default floor would not", async () => {
+		session("s2", "repo-r", "active");
+		const params = { userId: "u1", instanceId: "inst-1", sessionId: "s2" };
+		expect(await pendingCodingResumeNote(env, params, NEXT_MORNING), "the default floor should still refuse this").toBeNull();
+		const note = await pendingCodingResumeNote(env, { ...params, lookbackMs: CONTINUE_RESUME_LOOKBACK_MS }, NEXT_MORNING);
+		expect(note, "the widened lookback never reached the query").not.toBeNull();
+		expect(note).toContain("a previous run on this repository used up its step limit");
+		expect(note).toContain("pushed directly to the trunk origin main");
+	});
+
+	it("widens the SEARCH and nothing else — a verdict in between still ends the note's job", async () => {
+		// The rule that makes pinning-to-a-run-id wrong (see `loop-continue-routes.ts`). Run B
+		// consumed A's checkpoint and finished; a continue pressed the next morning must not be
+		// re-briefed on work that is already on the trunk, however far back it is willing to look.
+		session("s2", "repo-r", "ended");
+		run("run-b", "s2", { startedAt: NOW - 20 * MIN, finishedAt: NOW - 5 * MIN, stopReason: "done" });
+		session("s4", "repo-r", "active");
+		const note = await pendingCodingResumeNote(env, { userId: "u1", instanceId: "inst-1", sessionId: "s4", lookbackMs: CONTINUE_RESUME_LOOKBACK_MS }, NEXT_MORNING);
+		expect(note).toBeNull();
+	});
+
+	it("does not widen it for anyone who did not ask — the default is unchanged", async () => {
+		// Byte-for-byte the pre-#806-slice-(ii) behaviour for every ordinary start: the note exists
+		// inside six hours and does not exist outside it, with no `lookbackMs` passed at all.
+		session("s2", "repo-r", "active");
+		const params = { userId: "u1", instanceId: "inst-1", sessionId: "s2" };
+		expect(await pendingCodingResumeNote(env, params, NOW)).toContain("used up its step limit");
+		expect(await pendingCodingResumeNote(env, params, NOW + 7 * 60 * MIN)).toBeNull();
 	});
 });

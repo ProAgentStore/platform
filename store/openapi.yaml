@@ -8019,6 +8019,77 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /v1/instances/{instanceId}/loop/{runId}/continue:
+    post:
+      summary: Continue a stopped loop run
+      description: |
+        Carries a STOPPED run's objective onto a NEW run, briefed on what the stopped one
+        already landed. It is not a resumed invocation: a finished run has no live workflow to
+        grant steps to, and the platform checkpoints the OBJECTIVE rather than the transcript.
+        The continuity is the resume note, composed at the start of the new run from the acts
+        the old one left on the record and the state of the working tree.
+
+        Only for a run that ended WITHOUT reaching a verdict on its objective — `interrupted`,
+        `max_iterations`, `engine_limit`, `provider_credit`. Anything else is a 409 naming what
+        to do instead, because each is a different next step: a finished run wants a new
+        objective, a failed one wants its outcome read first, and a cancelled one was a human's
+        own decision that continuing would quietly undo.
+
+        The new run reuses the stopped run's repository and, unless `maxIterations` says
+        otherwise, its step cap. It opens its OWN budget — the stopped run's is not inherited,
+        so a single admission cannot fund an unbounded chain of continues — and it reaches
+        further back for its predecessor than an ordinary start does, so continuing the next
+        morning still produces a briefing.
+      operationId: continueLoopRun
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string }, description: The stopped run to continue. }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                maxIterations:
+                  type: integer
+                  description: >
+                    Steps the new run may take. Omit to reuse the stopped run's own cap. Clamped
+                    to the account ceiling, so a continue is not a way around it.
+                budget:
+                  type: object
+                  properties:
+                    costMicros: { type: integer }
+                    delegations: { type: integer }
+                    maxDepth: { type: integer }
+      responses:
+        "201":
+          description: The new run
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runId: { type: string }
+                  driver: { type: string }
+                  budgetId: { type: string }
+                  maxIterations: { type: integer }
+                  status: { type: string, example: running }
+                  continuedFromRunId:
+                    type: string
+                    description: The stopped run this one carries the objective of.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >
+            The run is still going, or it reached a verdict and is not continuable — the message
+            names which, and what to do instead. Also the driver's own refusals (no runner, an
+            unusable checkout, the repo already being worked on).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /v1/instances/{instanceId}/loop-presets:
     get:
       summary: Read this instance's loop presets

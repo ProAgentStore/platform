@@ -446,6 +446,7 @@ const TABLE: Record<string, Row> = {
 		"commands_enabled,disabled_commands,dry_run,instance_id,keep_awake,language,max_dictation_ms,provider,sensitivity,silence_ms,speed,stt_mode,stt_model,token,tts_max_chars,vocabulary",
 	],
 	start_instance_loop: ["composition", "write", null, "envelope", "dry_run,instance_id,max_iterations,objective,token"],
+	continue_instance_run: ["composition", "write", null, "envelope", "dry_run,instance_id,max_iterations,run_id,token"],
 	stop_instance_loop: ["composition", "write", null, null, "instance_id,run_id,token"],
 	subscribe_agent: ["base", "write", null, "envelope", "agent_id,dry_run,idempotency_key,token"],
 	system_status: ["coding", "none", null, null, "instance_id,token"],

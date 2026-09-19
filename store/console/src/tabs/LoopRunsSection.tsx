@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { loopStopControl, type LoopPhase } from "../lib/loopStopState";
+import { canContinueRun } from "../lib/loopContinue";
 import { activityLabel, isOpen, runActivity, type RunHealth } from "../lib/workInFlight";
 import Button from "../components/Button";
 import Card from "../components/Card";
@@ -140,6 +141,28 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 		setBusy(false);
 	};
 
+	/**
+	 * Carry a stopped run's objective onto a fresh run (#806 item 3(c)).
+	 *
+	 * No "how many more iterations" prompt here on purpose: the server defaults to the stopped
+	 * run's own ceiling, so an empty body means "another run of the same size", which is the
+	 * reading that cannot surprise an account's spend. A number belongs with the other loop
+	 * controls, not behind a button whose whole appeal is that it takes one click.
+	 */
+	const resume = async (runId: string) => {
+		setBusy(true);
+		setMsg("");
+		try {
+			await api(`/v1/instances/${instanceId}/loop/${runId}/continue`, { method: "POST", body: "{}" });
+			await load();
+		} catch (e) {
+			// The server's refusals NAME what to do instead ("read its outcome first", "run `pags
+			// up`"), so they are shown verbatim rather than replaced with a generic failure.
+			setMsg(e instanceof Error ? e.message : String(e));
+		}
+		setBusy(false);
+	};
+
 	if (runs.length === 0) return null;
 
 	return (
@@ -166,8 +189,25 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 									{ctl.actionLabel}
 								</Button>
 							) : (
-								<span className={`text-xs font-semibold whitespace-nowrap ${TONE[r.status] ?? "text-muted"}`}>
-									{REASON_LABEL[r.stopReason ?? ""] ?? r.status}
+								<span className="flex items-center gap-2 whitespace-nowrap">
+									<span className={`text-xs font-semibold ${TONE[r.status] ?? "text-muted"}`}>
+										{REASON_LABEL[r.stopReason ?? ""] ?? r.status}
+									</span>
+									{/*
+									  * Offered only after an ending with no verdict (#806). The reason label stays
+									  * beside it: "Hit the step limit · Continue" is the sentence the owner needs,
+									  * and a button alone would not say what it is continuing FROM.
+									  */}
+									{canContinueRun(r) && (
+										<Button
+											size="sm"
+											disabled={busy}
+											onClick={() => resume(r.runId)}
+											title="Start a new run on this objective. It is told what the stopped run already landed."
+										>
+											Continue
+										</Button>
+									)}
 								</span>
 							)}
 						</div>
