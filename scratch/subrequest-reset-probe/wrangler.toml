@@ -1,0 +1,25 @@
+# THROWAWAY. A measurement, not a service — see README.md. Delete it after one use (refs #814).
+#
+# Deliberately NOT in pnpm-workspace.yaml, not built, not typechecked, not deployed by any
+# workflow in .github/. Nothing in the platform imports it and nothing here imports the platform.
+name = "subrequest-reset-probe"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+# No public surface at all: no workers.dev hostname, no preview URLs, no route. The only way in is
+# `wrangler workflows trigger`, which needs the account's own credentials.
+workers_dev = false
+preview_urls = false
+
+# THE NUMBER THE PROBE IS BUILT AROUND. Production runs at 100_000 (workers/api/wrangler.toml);
+# this is set low on purpose so the question costs ~120 fetches instead of ~12,000.
+#
+# Whether Cloudflare HONOURS a value this far below its 10,000 default is itself unknown — the
+# docs only say "configurable up to 10 million". That is what the `control` run settles, and why
+# the `sleep` run means nothing without it: see README.md.
+[limits]
+subrequests = 100
+
+[[workflows]]
+name = "subrequest-reset-probe"
+binding = "PROBE"
+class_name = "SubrequestResetProbe"
