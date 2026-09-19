@@ -23,8 +23,8 @@
 // The producer's own declaration rather than a hand-copied twin (#608) — the same import direction
 // `usageFigures.ts` uses for `PayerCoverage`, and for the same reason: a structural copy drifts
 // silently, and the copy is always the one that is wrong.
-import type { ErrorSignature, ErrorSummaryResponse } from "../../../../workers/api/src/lib/admin-errors";
-export type { ErrorSignature, ErrorSummaryResponse };
+import type { ErrorFacets, ErrorSignature, ErrorSummaryResponse } from "../../../../workers/api/src/lib/admin-errors";
+export type { ErrorFacets, ErrorSignature, ErrorSummaryResponse };
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
@@ -128,6 +128,15 @@ export interface DiagnosticsFilter {
 	source?: string;
 	/** Only signatures that have been recurring for a day or more. */
 	persistentOnly?: boolean;
+	/**
+	 * One instance — #823's "look at one agent's health at a glance".
+	 *
+	 * Applied SERVER-side (`instance_id` on the read), not here. A client-side filter over a page
+	 * of signatures would silently answer a different question: the window is 2000 rows of the
+	 * whole account, so a quiet instance's failures can fall outside it entirely while the page
+	 * shows "nothing wrong with this agent". The field is carried for the controls' benefit.
+	 */
+	instanceId?: string;
 }
 
 export function filterSignatures(sigs: readonly ErrorSignature[], f: DiagnosticsFilter, nowMs: number): ErrorSignature[] {
@@ -181,4 +190,36 @@ export function headline(t: DiagnosticsTotals): string | null {
 		return `${t.persistent} ${t.persistent === 1 ? "problem has" : "problems have"} been recurring for a day or more.`;
 	}
 	return null;
+}
+
+/**
+ * "inst-1, inst-2" — with the honesty the data requires.
+ *
+ * A collapsed row keeps only two context samples, so the instance list is a LOWER BOUND
+ * ({@link ErrorFacets}). When a signature covers more rows than it can name instances for, the
+ * label says "seen on" rather than listing them as though the list were complete. Two names look
+ * like a list, which is exactly why this has to be said rather than left to the reader.
+ */
+export function describeFacets(sig: Pick<ErrorSignature, "facets" | "rows">, resolveName: (id: string) => string = (id) => id): string | null {
+	const { instances, repos, failureClasses, resumed, ended } = sig.facets;
+	const parts: string[] = [];
+	if (instances.length) {
+		const names = instances.map(resolveName).join(", ");
+		// More rows than retained samples means we cannot have seen every instance in the bucket.
+		parts.push(sig.rows > 2 && instances.length < sig.rows ? `seen on ${names}` : names);
+	}
+	if (repos.length) parts.push(repos.join(", "));
+	if (failureClasses.length) parts.push(failureClasses.join(", "));
+	// The #823 bullet in one word. Both true is a real state, and it is the informative one.
+	if (resumed && ended) parts.push("some resumed, some ended");
+	else if (resumed) parts.push("resumed");
+	else if (ended) parts.push("ended");
+	return parts.length ? parts.join(" · ") : null;
+}
+
+/** Every instance id any signature touched, for the instance picker. */
+export function instancesIn(sigs: readonly ErrorSignature[]): string[] {
+	const out = new Set<string>();
+	for (const s of sigs) for (const i of s.facets.instances) out.add(i);
+	return [...out].sort();
 }

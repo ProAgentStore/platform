@@ -6,8 +6,10 @@ import Card from "../components/Card";
 import Button from "../components/Button";
 import LoadFailed from "../components/LoadFailed";
 import {
+	describeFacets,
 	describeRecurrence,
 	filterSignatures,
+	instancesIn,
 	headline,
 	recurrenceOf,
 	sourcesOf,
@@ -44,11 +46,18 @@ export default function Diagnostics() {
 	// Captured once per load, not read per render: `Date.now()` inside the render would make every
 	// span and every "N minutes ago" shift underneath the reader between paints.
 	const [now, setNow] = useState(() => Date.now());
+	const [names, setNames] = useState<Record<string, string>>({});
+	// The instance lives in the REQUEST, not in `filter`: the window is 2000 rows of the whole
+	// account, so filtering a fetched page client-side would let a quiet agent's failures fall
+	// outside it and render as "nothing wrong with this agent" (#823's per-agent bullet).
+	const [instanceId, setInstanceId] = useState<string>("");
 
 	const load = useCallback(async () => {
 		setBusy(true);
 		try {
-			const d = await api<ErrorSummaryResponse>(`/v1/errors/summary?days=${days}`);
+			const qs = new URLSearchParams({ days: String(days) });
+			if (instanceId) qs.set("instance_id", instanceId);
+			const d = await api<ErrorSummaryResponse>(`/v1/errors/summary?${qs.toString()}`);
 			setSignatures(d.signatures ?? []);
 			setTruncated(Boolean(d.truncated));
 			setNow(Date.now());
@@ -60,11 +69,23 @@ export default function Diagnostics() {
 		} finally {
 			setBusy(false);
 		}
-	}, [days]);
+	}, [days, instanceId]);
 
 	useEffect(() => {
 		void load();
 	}, [load]);
+
+	useEffect(() => {
+		void (async () => {
+			try {
+				const d = await api<{ instances?: Array<{ id: string; name?: string; agent_name?: string }> }>("/v1/instances/my/instances");
+				setNames(Object.fromEntries((d.instances || []).map((i) => [i.id, i.name || i.agent_name || i.id])));
+			} catch {
+				// IGNORABLE: these are LABELS on rows that render fine without them, and the list
+				// reports its own read failure. An error here would claim the diagnostics failed.
+			}
+		})();
+	}, []);
 
 	const totals = useMemo(() => totalsOf(signatures ?? [], now), [signatures, now]);
 	const sources = useMemo(() => sourcesOf(signatures ?? []), [signatures]);
@@ -73,6 +94,8 @@ export default function Diagnostics() {
 		[signatures, filter, now],
 	);
 	const lead = headline(totals);
+	const instanceOptions = useMemo(() => instancesIn(signatures ?? []), [signatures]);
+	const nameOf = useCallback((id: string) => names[id] ?? `${id.slice(0, 8)}…`, [names]);
 
 	if (failed) return <Page><LoadFailed what="diagnostics" onRetry={load} /></Page>;
 
@@ -152,6 +175,36 @@ export default function Diagnostics() {
 				)}
 			</div>
 
+			{/* One agent's health at a glance (#823). A <select> rather than chips: the account has
+			    thirty-odd instances and a chip row of that length is a filter nobody uses. Kept
+			    visible even when the current answer names none, so the control does not appear and
+			    vanish as the data changes underneath it. */}
+			{(instanceOptions.length > 0 || instanceId) && (
+				<div className="flex items-center gap-2 mb-4">
+					<label htmlFor="diag-instance" className="text-xs text-muted">Agent</label>
+					<select
+						id="diag-instance"
+						value={instanceId}
+						onChange={(e) => setInstanceId(e.target.value)}
+						data-testid="diagnostics-instance"
+						className="bg-panel border border-line rounded-lg px-2 py-1 text-xs text-ink"
+					>
+						<option value="">Every agent</option>
+						{/* The selected one is kept in the list even if the filtered answer no longer
+						    names it — otherwise choosing an agent with one quiet failure removes its
+						    own option and the control resets itself. */}
+						{[...new Set([...instanceOptions, ...(instanceId ? [instanceId] : [])])].sort().map((id) => (
+							<option key={id} value={id}>{nameOf(id)}</option>
+						))}
+					</select>
+					{instanceId && (
+						<span className="text-2xs text-muted-soft">
+							Only failures whose retained sample names this agent — a lower bound.
+						</span>
+					)}
+				</div>
+			)}
+
 			{sources.length > 1 && (
 				<fieldset className="flex flex-wrap items-center border border-line rounded-lg overflow-hidden mb-4" aria-label="Filter by source">
 					<button
@@ -182,11 +235,18 @@ export default function Diagnostics() {
 				<Card className="text-center py-8">
 					<p className="text-sm text-muted">
 						{signatures.length === 0
-							? `Nothing recorded in the last ${days === 1 ? "24 hours" : `${days} days`}.`
+							? `Nothing recorded${instanceId ? ` for ${nameOf(instanceId)}` : ""} in the last ${days === 1 ? "24 hours" : `${days} days`}.`
 							: "Nothing matches these filters."}
 					</p>
-					{signatures.length > 0 && (
-						<button type="button" onClick={() => setFilter({})} className="mt-2 text-xs text-accent hover:underline">
+					{(signatures.length > 0 || instanceId) && (
+						<button
+							type="button"
+							onClick={() => {
+								setFilter({});
+								setInstanceId("");
+							}}
+							className="mt-2 text-xs text-accent hover:underline"
+						>
 							Clear filters
 						</button>
 					)}
@@ -216,6 +276,11 @@ export default function Diagnostics() {
 									{s.lastStatus != null && <span className="text-2xs text-muted-soft shrink-0">HTTP {s.lastStatus}</span>}
 								</div>
 								<p className="text-sm text-ink break-words">{s.sample}</p>
+								{/* What it touched: instance, repo, failure class, resumed-vs-ended — #823's
+								    coding-crash bullet, which turned out to live in this same feed. */}
+								{describeFacets(s, nameOf) && (
+									<p className="text-2xs text-muted-soft" data-testid="diagnostics-facets">{describeFacets(s, nameOf)}</p>
+								)}
 								<p className="text-xs text-muted">
 									{describeRecurrence(s, now)}
 									{/* `rows` beside `count` is the collapse working, stated rather than implied:

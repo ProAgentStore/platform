@@ -5,7 +5,9 @@ import {
 	describeRecurrence,
 	filterSignatures,
 	headline,
+	describeFacets,
 	humanDuration,
+	instancesIn,
 	recurrenceOf,
 	sourcesOf,
 	totalsOf,
@@ -32,6 +34,7 @@ function sig(over: Partial<ErrorSignature> = {}): ErrorSignature {
 		lastSeen: at(0),
 		lastStatus: null,
 		lastId: "e1",
+		facets: { instances: [], repos: [], failureClasses: [], resumed: false, ended: false },
 		...over,
 	};
 }
@@ -195,5 +198,58 @@ describe("totalsOf and headline", () => {
 			sig({ key: "b", count: 9, firstSeen: at(4 * DAY), lastSeen: at(0) }),
 		];
 		expect(headline(totalsOf(two, NOW))).toBe("2 problems have been recurring for a day or more.");
+	});
+});
+
+describe("describeFacets — what it touched, said as a lower bound (#823)", () => {
+	const facets = (over: Partial<ErrorSignature["facets"]> = {}) => ({
+		instances: [],
+		repos: [],
+		failureClasses: [],
+		resumed: false,
+		ended: false,
+		...over,
+	});
+
+	it("names the coding-failure facts the issue asked for", () => {
+		expect(
+			describeFacets({ rows: 1, facets: facets({ instances: ["inst-1"], repos: ["acme/api"], failureClasses: ["infra_transient"], resumed: true }) }),
+		).toBe("inst-1 · acme/api · infra_transient · resumed");
+	});
+
+	it("resolves instance ids to names when it can", () => {
+		expect(describeFacets({ rows: 1, facets: facets({ instances: ["inst-1"] }) }, (id) => (id === "inst-1" ? "Heartfull Coder" : id)))
+			.toBe("Heartfull Coder");
+	});
+
+	it('says "seen on" once the bucket is wider than the samples it retained', () => {
+		// A collapsed row keeps TWO context samples. Listing them as though they were the complete
+		// set is the confident-wrong-answer this whole feature is meant to avoid — and two names
+		// look like a list, which is why it has to be said rather than left to the reader.
+		expect(describeFacets({ rows: 72, facets: facets({ instances: ["inst-1", "inst-2"] }) }))
+			.toBe("seen on inst-1, inst-2");
+		// One row cannot have hidden anything, so it states them plainly.
+		expect(describeFacets({ rows: 1, facets: facets({ instances: ["inst-1"] }) })).toBe("inst-1");
+	});
+
+	it("reports both dispositions when a bucket saw both", () => {
+		expect(describeFacets({ rows: 9, facets: facets({ resumed: true, ended: true }) })).toBe("some resumed, some ended");
+		expect(describeFacets({ rows: 9, facets: facets({ ended: true }) })).toBe("ended");
+	});
+
+	it("is null when there is nothing to say", () => {
+		// Most sources carry no instance, repo or class. An empty separator line is noise.
+		expect(describeFacets({ rows: 1, facets: facets() })).toBeNull();
+	});
+});
+
+describe("instancesIn", () => {
+	it("collects every instance any signature touched, sorted and deduped", () => {
+		expect(
+			instancesIn([
+				sig({ key: "a", facets: { instances: ["zz", "aa"], repos: [], failureClasses: [], resumed: false, ended: false } }),
+				sig({ key: "b", facets: { instances: ["aa"], repos: [], failureClasses: [], resumed: false, ended: false } }),
+			]),
+		).toEqual(["aa", "zz"]);
 	});
 });

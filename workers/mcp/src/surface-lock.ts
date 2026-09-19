@@ -696,4 +696,20 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.42 is published.
 	"0.1.43": "sha256:e236f2744b3526d5de51d722be80e8f319a619730419d90c4cbb46b9f0f006dc",
+	// 0.1.44 (#823 slices 2+3): NO new tool — 204 registrations, `MCP_TOOL_ALWAYS_ON` 180 and
+	// `MCP_TOOL_GATED` 24 all unchanged. One INPUT SCHEMA moved, which is a surface change even
+	// though the tool list did not:
+	//
+	//   * `error_summary` gains `instance_id` — one agent's failures. The instance rides in the
+	//     error's free-form `context` rather than a column, so the filter matches either retained
+	//     sample and is a LOWER BOUND; the description says so, because a filter that silently
+	//     under-reports is worse than none.
+	//
+	// The same read also gained a `facets` object per signature (instances, repos, failureClasses,
+	// resumed/ended). That is a RESULT shape, not an inputSchema or an outputSchema, so it does not
+	// enter the fingerprint — recorded here because a reader comparing the two versions will see it
+	// in the diff and should not conclude the hash missed it.
+	//
+	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.43 is published.
+	"0.1.44": "sha256:326b6f2ffec617d137b56aff521c8dbe3811fa260634561251f45f2722593804",
 };

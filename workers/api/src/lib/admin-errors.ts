@@ -17,6 +17,8 @@ export interface RawError {
 	repeat_count?: number | null;
 	/** Most recent occurrence. Falls back to `created_at`. */
 	last_seen_at?: string | null;
+	/** The MOST RECENT occurrence's context (#538). Absent on a row collapsed before 0124. */
+	last_context?: string | null;
 }
 
 /** Occurrences a row accounts for. A pre-0103 row has no column and stands for exactly itself. */
@@ -24,6 +26,40 @@ export const occurrencesOf = (r: RawError): number => Math.max(1, Math.floor(Num
 
 /** When a row was last hit. Pre-0103 rows were never collapsed, so they were hit once. */
 export const lastSeenOf = (r: RawError): string => r.last_seen_at || r.created_at;
+
+/**
+ * What the retained context samples say a signature TOUCHED (#823).
+ *
+ * ── Why this is "seen on", not "affecting" ──
+ *
+ * A collapsed row keeps exactly TWO context samples — the first occurrence's and the latest
+ * (`context` and `last_context`, #538) — and `instanceId` is deliberately NOT part of the collapse
+ * identity, because for the sources that actually repeat the context is a per-occurrence
+ * measurement and keying on it would mean never collapsing anything.
+ *
+ * So a row standing for sixty occurrences across four instances can only ever show two of them.
+ * These fields are therefore a LOWER BOUND on what a signature touched, and every name that
+ * renders them has to say so. Presenting them as the complete set would be a confident wrong
+ * answer of exactly the kind the payer work (#551) and the SSH-identity work (#684) were both
+ * filed about — and the temptation is real, because two names look like a list.
+ */
+export interface ErrorFacets {
+	/** Instance ids observed in a retained sample. A lower bound — see above. */
+	instances: string[];
+	/** `owner/repo` values observed. Coding failures carry one; most sources carry none. */
+	repos: string[];
+	/** `failureClass` values observed — `infra_transient`, `runner_gone`, … (#823's bullet 2). */
+	failureClasses: string[];
+	/**
+	 * Did a retained sample say the platform RESUMED past this, or that the run ended?
+	 *
+	 * Both can be true of one signature: the first attempt resumed and the last one did not. Two
+	 * independent booleans rather than one verdict, because collapsing them would have to pick a
+	 * winner and either choice misreports half the buckets.
+	 */
+	resumed: boolean;
+	ended: boolean;
+}
 
 export interface ErrorSignature {
 	key: string;
@@ -43,6 +79,8 @@ export interface ErrorSignature {
 	lastSeen: string;
 	lastStatus: number | null;
 	lastId: string; // id of the most-recent occurrence (to open detail)
+	/** What the retained samples say this touched. A LOWER BOUND — see {@link ErrorFacets}. */
+	facets: ErrorFacets;
 }
 
 /**
@@ -84,10 +122,46 @@ export interface ErrorSummaryResponse {
 	signatures: ErrorSignature[];
 }
 
+/**
+ * The well-known context keys, read off ONE retained sample.
+ *
+ * Tolerant by construction: the context is free-form JSON written by ~25 call sites, so a missing
+ * key, a null, a number where a string was expected, or text that is not JSON at all are all
+ * ordinary rather than exceptional. Anything unreadable contributes nothing and never throws —
+ * a facet that could break the grouping would make the page fail on exactly the malformed row it
+ * exists to show you.
+ */
+function readFacetSample(raw: string | null | undefined, into: { instances: Set<string>; repos: Set<string>; classes: Set<string>; dispositions: Set<string> }): void {
+	if (!raw) return;
+	let ctx: Record<string, unknown>;
+	try {
+		const v = JSON.parse(raw) as unknown;
+		if (!v || typeof v !== "object" || Array.isArray(v)) return;
+		ctx = v as Record<string, unknown>;
+	} catch {
+		return;
+	}
+	const str = (k: string): string | null => {
+		const v = ctx[k];
+		return typeof v === "string" && v.trim() ? v.trim() : null;
+	};
+	// `instance_id` as well as `instanceId`: the trace bridge in error-log.ts reads both, because
+	// both spellings are written by real call sites.
+	const instance = str("instanceId") ?? str("instance_id");
+	if (instance) into.instances.add(instance);
+	const repo = str("repo") ?? str("githubRepo");
+	if (repo) into.repos.add(repo);
+	const cls = str("failureClass");
+	if (cls) into.classes.add(cls);
+	const disposition = str("disposition");
+	if (disposition) into.dispositions.add(disposition);
+}
+
 /** Group raw errors into signatures, sorted by count (desc) then most-recent. */
 export function summarizeErrors(rows: RawError[]): ErrorSignature[] {
 	const map = new Map<string, ErrorSignature>();
 	const seenUsers = new Map<string, Set<string>>();
+	const facetSets = new Map<string, { instances: Set<string>; repos: Set<string>; classes: Set<string>; dispositions: Set<string> }>();
 	for (const r of rows) {
 		const pattern = normalizeMessage(r.message);
 		const key = `${r.source}::${pattern}`;
@@ -107,10 +181,17 @@ export function summarizeErrors(rows: RawError[]): ErrorSignature[] {
 				lastSeen: seen,
 				lastStatus: r.status,
 				lastId: r.id,
+				facets: { instances: [], repos: [], failureClasses: [], resumed: false, ended: false },
 			};
 			map.set(key, sig);
 			seenUsers.set(key, new Set());
+			facetSets.set(key, { instances: new Set(), repos: new Set(), classes: new Set(), dispositions: new Set() });
 		}
+		// BOTH retained samples, not just the first: #538 keeps the latest one precisely so a
+		// collapsed bucket is not represented by whichever occurrence happened to open it.
+		const facets = facetSets.get(key)!;
+		readFacetSample(r.context, facets);
+		readFacetSample(r.last_context, facets);
 		// OCCURRENCES, not rows. The write side collapses an identical repeat into a counter
 		// (#424), so counting rows would report "3" for a failure that happened 1809 times —
 		// understating exactly the runaway the counter exists to make visible.
@@ -122,6 +203,18 @@ export function summarizeErrors(rows: RawError[]): ErrorSignature[] {
 		if (seen > sig.lastSeen) { sig.lastSeen = seen; sig.lastStatus = r.status; sig.lastId = r.id; sig.sample = r.message; }
 		if (r.created_at < sig.firstSeen) sig.firstSeen = r.created_at;
 	}
-	for (const [key, sig] of map) sig.users = seenUsers.get(key)!.size;
+	for (const [key, sig] of map) {
+		sig.users = seenUsers.get(key)!.size;
+		const f = facetSets.get(key)!;
+		// Sorted so the rendered order is a property of the data rather than of insertion — a list
+		// that reshuffles between polls reads as a change nobody made.
+		sig.facets = {
+			instances: [...f.instances].sort(),
+			repos: [...f.repos].sort(),
+			failureClasses: [...f.classes].sort(),
+			resumed: f.dispositions.has("resumed"),
+			ended: f.dispositions.has("ended"),
+		};
+	}
 	return [...map.values()].sort((a, b) => b.count - a.count || (a.lastSeen < b.lastSeen ? 1 : -1));
 }

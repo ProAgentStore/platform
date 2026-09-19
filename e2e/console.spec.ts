@@ -6795,6 +6795,7 @@ test.describe("ProAgentStore Console — Diagnostics (#823)", () => {
 		lastSeen: hoursAgo(0.1),
 		lastStatus: null,
 		lastId: "err-ccw",
+		facets: { instances: ["inst-1"], repos: ["acme/api"], failureClasses: [], resumed: false, ended: false },
 	};
 	const LOUD_RECENT_ERROR = {
 		key: "coding::durable object reset",
@@ -6809,6 +6810,9 @@ test.describe("ProAgentStore Console — Diagnostics (#823)", () => {
 		lastSeen: hoursAgo(0.05),
 		lastStatus: 503,
 		lastId: "err-do",
+		// A real coding crash as `recordCodingFailure` writes it — #823's second bullet, which
+		// lives in this same feed rather than in a store of its own.
+		facets: { instances: ["inst-2"], repos: ["acme/web"], failureClasses: ["infra_transient"], resumed: true, ended: true },
 	};
 
 	test("a warning recurring for days is flagged and led with, not buried under a louder burst", async ({ page }) => {
@@ -6829,6 +6833,50 @@ test.describe("ProAgentStore Console — Diagnostics (#823)", () => {
 
 		// And the collapse is stated rather than implied: 900 occurrences across 3 log entries.
 		await expect(rows.nth(1)).toContainText("3 log entries");
+	});
+
+	test("a coding crash shows its class, repo and whether the platform resumed past it", async ({ page }) => {
+		await mockSignedInConsole(page, { errorSignatures: [LOUD_RECENT_ERROR] });
+		await page.goto("/console/diagnostics");
+		// The bullet asked for "infra_transient Durable Object resets, failureClass, resumed vs
+		// not, per instance/repo". All four, on one line.
+		const facets = page.getByTestId("diagnostics-facets").first();
+		await expect(facets).toContainText("acme/web");
+		await expect(facets).toContainText("infra_transient");
+		await expect(facets).toContainText("some resumed, some ended");
+	});
+
+	test("choosing an agent asks the SERVER for that agent, not the fetched page", async ({ page }) => {
+		// The window is 2000 rows of the whole account. Filtering client-side would let a quiet
+		// agent's failures fall outside it and render as "nothing wrong with this agent".
+		const asked: string[] = [];
+		// mockSignedInConsole FIRST: Playwright gives the most recently registered matching route
+		// precedence, so registering ours before it would mean the harness handled every call and
+		// this test would assert nothing.
+		await mockSignedInConsole(page, { errorSignatures: [PERSISTENT_WARN] });
+		await page.route("**/v1/errors/summary*", async (route) => {
+			const wanted = new URL(route.request().url()).searchParams.get("instance_id") ?? "";
+			asked.push(wanted);
+			// The unfiltered answer carries the signature, so the picker HAS an option to choose;
+			// the filtered one is empty, which is the interesting case — an agent whose failures
+			// are outside the window must read as "nothing recorded for this agent", not as the
+			// account's list with rows removed.
+			const signatures = wanted ? [] : [PERSISTENT_WARN];
+			await route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify({ days: 7, total: signatures.length, rows: signatures.length, truncated: false, signatures }),
+			});
+		});
+		await page.goto("/console/diagnostics");
+		await expect.poll(() => asked.length).toBeGreaterThan(0);
+		await expect(page.getByTestId("diagnostics-row")).toHaveCount(1);
+
+		await page.getByTestId("diagnostics-instance").selectOption("inst-1");
+		await expect.poll(() => asked.at(-1), { message: "the instance must ride on the request" }).toBe("inst-1");
+		// And the chosen agent stays selectable even though the filtered answer names nobody —
+		// otherwise the control would reset itself the moment it was used.
+		await expect(page.getByTestId("diagnostics-instance")).toHaveValue("inst-1");
 	});
 
 	test("says nothing at all on a clean account", async ({ page }) => {

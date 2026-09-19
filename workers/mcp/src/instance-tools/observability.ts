@@ -131,15 +131,17 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 			days: z.coerce.number().int().min(1).max(30).optional().describe("Window to group over. Default 7."),
 			source: z.string().optional().describe("Filter by source, e.g. commit-close-watch | coding | keys-proxy."),
 			level: z.enum(["error", "warn"]).optional().describe("`error` is a bug; `warn` is recorded but not counted as one. Unfiltered returns both."),
+			instance_id: z.string().optional().describe("One agent's failures. The instance rides in the error's free-form context rather than a column, so this is a LOWER BOUND — a collapsed row keeps only two samples and cannot name every agent it covered."),
 			limit: z.coerce.number().int().min(1).max(5000).optional().describe("Rows READ, not signatures returned — the width of the window being grouped. Default 2000."),
 		},
-		async ({ token, days, source, level, limit }) => {
+		async ({ token, days, source, level, limit, instance_id }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const qs = new URLSearchParams();
 			if (days) qs.set("days", String(days));
 			if (source) qs.set("source", source);
 			if (level) qs.set("level", level);
+			if (instance_id) qs.set("instance_id", instance_id);
 			if (limit) qs.set("limit", String(limit));
 			const data = await authedCall(`/v1/errors/summary${qs.toString() ? `?${qs.toString()}` : ""}`, sessionToken, {}, env);
 			return jsonText(data);

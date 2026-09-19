@@ -114,6 +114,7 @@ errorRoutes.get("/summary", async (c) => {
 	const limit = Math.max(1, Math.min(Number(c.req.query("limit")) || 2000, 5000));
 	const source = c.req.query("source") || undefined;
 	const level = c.req.query("level") === "warn" ? "warn" : c.req.query("level") === "error" ? "error" : undefined;
+	const instanceId = c.req.query("instance_id") || undefined;
 
 	// Always user-scoped — there is no `scope=all` here. The flat feed offers one to admins; a
 	// grouped cross-account view already exists on the admin route, and quietly widening this one
@@ -127,6 +128,33 @@ errorRoutes.get("/summary", async (c) => {
 	if (level) {
 		binds.push(level);
 		where.push(`level = ?${binds.length}`);
+	}
+	if (instanceId) {
+		// The instance rides in the free-form `context` JSON, not in a column — ~25 call sites put
+		// it there and nothing ever indexed it. `json_extract` over a user-scoped window of at most
+		// a few thousand rows is the right cost for this; a generated column would be the answer if
+		// this ever had to run unscoped.
+		//
+		// BOTH retained samples are checked. A collapsed bucket keeps the first occurrence's
+		// context and the latest one's (#538), and `instanceId` is not part of the collapse
+		// identity — so a row whose FIRST sample names another instance can still be a row this
+		// instance is in, and matching only `context` would hide it.
+		//
+		// Each extract is wrapped in a CASE on `json_valid`, and that is not belt-and-braces.
+		// `json_extract` ERRORS on malformed text rather than returning null, and SQLite does not
+		// guarantee it will evaluate a `json_valid(...) AND json_extract(...)` conjunction in the
+		// written order — so a sibling guard in the same WHERE does not protect it. Measured: one
+		// row whose context read `not json at all` failed the ENTIRE query, on precisely the page
+		// whose job is to show you malformed rows. CASE fixes the evaluation order by definition.
+		binds.push(instanceId);
+		const n = binds.length;
+		where.push(
+			`?${n} IN (` +
+				`CASE WHEN json_valid(context) THEN json_extract(context, '$.instanceId') END, ` +
+				`CASE WHEN json_valid(context) THEN json_extract(context, '$.instance_id') END, ` +
+				`CASE WHEN json_valid(last_context) THEN json_extract(last_context, '$.instanceId') END, ` +
+				`CASE WHEN json_valid(last_context) THEN json_extract(last_context, '$.instance_id') END)`,
+		);
 	}
 	const sql = `SELECT ${ERROR_COLUMNS} FROM error_log WHERE ${where.join(" AND ")} ORDER BY ${ERROR_RECENCY} DESC LIMIT ${limit}`;
 	const rows = (await c.env.DB.prepare(sql).bind(...binds).all<RawError>()).results ?? [];

@@ -9697,6 +9697,7 @@ paths:
         - { name: limit, in: query, description: "Rows READ (not signatures returned), 1–5000. Default 2000 — this is the width of the window being grouped, not a page size.", schema: { type: integer, default: 2000 } }
         - { name: source, in: query, schema: { type: string } }
         - { name: level, in: query, schema: { type: string, enum: [error, warn] } }
+        - { name: instance_id, in: query, description: "One agent's failures. The instance rides in the free-form `context` JSON rather than a column, so this matches either retained sample (first and latest) and is a LOWER BOUND on what the signature touched.", schema: { type: string } }
       responses:
         "200":
           description: Signatures, most consequential first
@@ -9726,6 +9727,20 @@ paths:
                         lastSeen: { type: string }
                         lastStatus: { type: integer, nullable: true }
                         lastId: { type: string }
+                        facets:
+                          type: object
+                          description: |
+                            What the RETAINED context samples say this signature touched — a LOWER
+                            BOUND, never the complete set. A collapsed row keeps only the first
+                            occurrence's context and the latest one's, and the instance is not part
+                            of the collapse identity, so a row standing for sixty occurrences across
+                            four agents can name at most two of them.
+                          properties:
+                            instances: { type: array, items: { type: string } }
+                            repos: { type: array, items: { type: string } }
+                            failureClasses: { type: array, items: { type: string }, description: "`infra_transient`, `runner_gone`, … from a coding run's death row." }
+                            resumed: { type: boolean, description: "A retained sample said the platform resumed past this." }
+                            ended: { type: boolean, description: "A retained sample said the run ended. Both can be true of one signature." }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /v1/errors/client:
