@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	closeIssueForCommit,
+	repoDirectPushes,
 	COMMIT_CLOSE_MAX_CLOSURES_PER_REPO,
 	COMMIT_CLOSE_MAX_UNORDERED_AGE_MS,
 	type CommitScanState,
@@ -337,6 +338,9 @@ describe("runCommitCloseWatch", () => {
 		instance_id: "i1",
 		user_id: "u1",
 		github_repo: "acme/app",
+		// '' + no instance setting resolves to the platform default, `merge` — today's behaviour.
+		merge_policy: "",
+		instance_config: null,
 		last_scanned_commit_sha: "old",
 		last_scanned_commit_at: "2026-09-19T10:00:00Z",
 		...over,
@@ -414,6 +418,36 @@ describe("runCommitCloseWatch", () => {
 		expect(bound.some((b) => b[0] === "c0")).toBe(true);
 	});
 
+	it("does not touch GitHub at all for a `pr` repo, and still rotates", async () => {
+		rows.push(row({ merge_policy: "pr" }));
+		await runCommitCloseWatch(env);
+		expect(installationTokenForOwner).not.toHaveBeenCalled();
+		expect(githubConditionalJson).not.toHaveBeenCalled();
+		// The rotation key moves; the watermark does not, so a later switch to `merge` seeds silently.
+		expect(statements.some((q) => q.includes("last_commit_scan_at = datetime('now')") && !q.includes("last_scanned_commit_sha"))).toBe(true);
+	});
+
+	it("does not touch GitHub at all for a `none` repo", async () => {
+		rows.push(row({ merge_policy: "none" }));
+		await runCommitCloseWatch(env);
+		expect(githubConditionalJson).not.toHaveBeenCalled();
+	});
+
+	it("skips a repo whose AGENT chose pr, with no repo override", async () => {
+		rows.push(row({ merge_policy: "", instance_config: JSON.stringify({ settings: { merge_policy: "pr" } }) }));
+		await runCommitCloseWatch(env);
+		expect(githubConditionalJson).not.toHaveBeenCalled();
+	});
+
+	it("still sweeps a `merge` repo sitting beside a skipped one", async () => {
+		rows.push(row({ id: "r1", github_repo: "acme/skipme", merge_policy: "pr" }), row({ id: "r2", github_repo: "acme/app" }));
+		page([{ sha: "new", message: "fix: thing (closes #7)" }]);
+		vi.mocked(readIssue).mockResolvedValue({ number: 7, state: "open" } as never);
+		await runCommitCloseWatch(env);
+		expect(githubConditionalJson).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(githubConditionalJson).mock.calls[0][1].repo).toBe("acme/app");
+	});
+
 	it("survives a repo that throws, and keeps sweeping the rest", async () => {
 		rows.push(row({ id: "r1", github_repo: "acme/one" }), row({ id: "r2", github_repo: "acme/two" }));
 		vi.mocked(githubConditionalJson)
@@ -438,5 +472,50 @@ describe("runCommitCloseWatch", () => {
 		} as unknown as Env;
 		await runCommitCloseWatch(broken);
 		expect(vi.mocked(logError).mock.calls[0][1]).toMatchObject({ level: "warn" });
+	});
+});
+
+describe("repoDirectPushes — merge authority gate (#817)", () => {
+	const cfg = (policy: string) => JSON.stringify({ settings: { merge_policy: policy } });
+
+	it("runs under the platform default, so #816's behaviour is unchanged where nothing was chosen", () => {
+		expect(repoDirectPushes({ merge_policy: "", instance_config: null })).toBe(true);
+		expect(repoDirectPushes({})).toBe(true);
+	});
+
+	it("runs on an explicit `merge` repo", () => {
+		expect(repoDirectPushes({ merge_policy: "merge", instance_config: null })).toBe(true);
+	});
+
+	it("skips `pr` — GitHub's merged-PR auto-close already covers it", () => {
+		expect(repoDirectPushes({ merge_policy: "pr", instance_config: null })).toBe(false);
+	});
+
+	it("skips `none` — nothing is ever pushed to a shared branch", () => {
+		expect(repoDirectPushes({ merge_policy: "none", instance_config: null })).toBe(false);
+	});
+
+	it("falls back to the agent setting when the repo does not override", () => {
+		expect(repoDirectPushes({ merge_policy: "", instance_config: cfg("pr") })).toBe(false);
+		expect(repoDirectPushes({ merge_policy: "", instance_config: cfg("none") })).toBe(false);
+		expect(repoDirectPushes({ merge_policy: "", instance_config: cfg("merge") })).toBe(true);
+	});
+
+	it("lets the repo override the agent, in BOTH directions", () => {
+		// "unless a repo sets its own" — the precedence #817 asks for, and it has to cut both ways
+		// or a repo could only ever be more restrictive than its agent.
+		expect(repoDirectPushes({ merge_policy: "merge", instance_config: cfg("pr") })).toBe(true);
+		expect(repoDirectPushes({ merge_policy: "pr", instance_config: cfg("merge") })).toBe(false);
+	});
+
+	it("treats an unrecognised value as unset rather than inventing a policy", () => {
+		expect(repoDirectPushes({ merge_policy: "MERGE_ALL_THE_THINGS", instance_config: cfg("pr") })).toBe(false);
+		expect(repoDirectPushes({ merge_policy: "nonsense", instance_config: null })).toBe(true);
+	});
+
+	it("treats a malformed instance config as unset, not as a restriction", () => {
+		// Failing closed here would switch the feature off for an owner who chose `merge`, with no
+		// error anywhere — the silent-nothing-happens failure this codebase keeps paying for.
+		expect(repoDirectPushes({ merge_policy: "", instance_config: "{not json" })).toBe(true);
 	});
 });

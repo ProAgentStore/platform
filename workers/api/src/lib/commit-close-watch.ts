@@ -1,3 +1,4 @@
+import { MERGE_POLICY_SETTING, resolveMergePolicy } from "./coding-authority.js";
 import { logError } from "./error-log.js";
 import { installationTokenForOwner } from "./github-app.js";
 import { githubAuthContext, githubConditionalJson, invalidateGithubCache } from "./github-cache.js";
@@ -342,8 +343,55 @@ interface RepoRow {
 	instance_id: string;
 	user_id: string;
 	github_repo: string;
+	/** The repo-level override (#314). `''` means inherit — see {@link repoDirectPushes}. */
+	merge_policy: string | null;
+	/** The owning instance's `config` JSON, joined in so the policy costs no extra round trip. */
+	instance_config: string | null;
 	last_scanned_commit_sha: string | null;
 	last_scanned_commit_at: string | null;
+}
+
+/**
+ * Is this repo one where the agent puts code on the trunk directly (#817)?
+ *
+ * #816 was scoped on the assumption that every coder pushes straight to `main`. That was already
+ * untrue at the settings level: merge authority (#314) is a three-valued policy per repo, with a
+ * per-agent default underneath it — `merge` (may push to trunk), `pr` (open a pull request, never
+ * merge), `none` (commit only). This sweep is the direct-push mechanism, so it runs only under
+ * `merge`.
+ *
+ * The precedence — repo override > agent setting > platform default — is NOT re-implemented here.
+ * `resolveMergePolicy` is the one place that decision lives (`lib/coding-authority.ts`), and a
+ * second copy is how the two would drift into disagreeing about the same repo. It also already
+ * handles the case that matters most: an unrecognised stored value falls THROUGH to the next level
+ * rather than inventing a policy nobody chose.
+ *
+ * ── What this does NOT fix, stated plainly
+ *
+ * #817's stated harm is that without this gate the sweep would "double-close (or misfire against)"
+ * issues on a `pr` repo, because GitHub already closes those when the PR merges. That was not
+ * reachable: `closeIssueForCommit` reads the issue and returns `already-closed` without any write
+ * whenever the state is not `open`, so a second close was impossible under every policy, and the
+ * sweep never sends `state: "open"` at all. A `pr` repo's squash-merge commit does land on the
+ * default branch carrying the PR body, so the sweep really would have READ it — and then done
+ * nothing.
+ *
+ * What the gate actually buys is cost and boundary, which is worth having on its own: a `pr` or
+ * `none` repo now costs zero GitHub requests per tick instead of an installation token plus a
+ * commits page, and "this mechanism is for direct-push repos" becomes a property of the code
+ * rather than an assumption in a ticket.
+ */
+export function repoDirectPushes(row: { merge_policy?: unknown; instance_config?: string | null }): boolean {
+	let agent: unknown;
+	try {
+		agent = (JSON.parse(row.instance_config || "{}") as { settings?: Record<string, unknown> }).settings?.[MERGE_POLICY_SETTING];
+	} catch {
+		// A malformed instance config is "unset", not "restricted". Failing closed here would let a
+		// bad JSON blob silently switch the feature off for a repo whose owner chose `merge`, and
+		// the symptom — nothing happens, no error — is the one this codebase keeps paying for.
+		agent = undefined;
+	}
+	return resolveMergePolicy({ repo: row.merge_policy, agent }) === "merge";
 }
 
 /** GitHub's commit list shape, reduced to the two fields this sweep reads. */
@@ -395,6 +443,18 @@ async function recordDeclined(env: Env, repo: RepoRow, why: string): Promise<voi
 
 /** Scan one repo's unscanned default-branch commits. Extracted so the sweep's loop stays readable. */
 async function sweepRepo(env: Env, repo: RepoRow): Promise<void> {
+	if (!repoDirectPushes(repo)) {
+		// Not a fault, so not an error row: a `pr`/`none` repo declining this sweep every minute is
+		// the setting working, and logging it would bury the real declines under one line per repo
+		// per tick. The rotation key still moves — a skipped repo must not pin the batch to itself —
+		// and the watermark is deliberately left untouched, so a repo later switched to `merge`
+		// arrives at first sight and seeds silently rather than scanning back through history.
+		await env.DB.prepare("UPDATE coding_repos SET last_commit_scan_at = datetime('now') WHERE id = ?1")
+			.bind(repo.id)
+			.run()
+			.catch(() => undefined);
+		return;
+	}
 	const owner = repo.github_repo.split("/")[0] ?? "";
 	// A WRITE token, not a read one. `deploy-watch` can fall back to unauthenticated reads because
 	// it only ever reads; this sweep exists to close issues, and without an installation token it
@@ -494,10 +554,18 @@ export async function runCommitCloseWatch(env: Env): Promise<void> {
 		// Oldest-checked first, so a bounded batch still rotates over every repo instead of
 		// starving the tail.
 		const { results } = await env.DB.prepare(
-			`SELECT id, instance_id, user_id, github_repo, last_scanned_commit_sha, last_scanned_commit_at
-			   FROM coding_repos
-			  WHERE github_repo IS NOT NULL AND github_repo <> ''
-			  ORDER BY COALESCE(last_commit_scan_at, '') ASC
+			// The instance is LEFT JOINed rather than read per repo: merge authority needs the agent's
+			// typed setting as well as the repo override, and two extra statements per repo per
+			// minute to answer a question that is usually "skip" is the wrong shape. LEFT, not INNER,
+			// so a repo whose instance row is missing still resolves — to the permissive default,
+			// matching `readMergePolicyForRun`, which also declines to manufacture a restriction.
+			`SELECT r.id, r.instance_id, r.user_id, r.github_repo, r.merge_policy,
+			        r.last_scanned_commit_sha, r.last_scanned_commit_at,
+			        i.config AS instance_config
+			   FROM coding_repos r
+			   LEFT JOIN agent_instances i ON i.id = r.instance_id AND i.user_id = r.user_id
+			  WHERE r.github_repo IS NOT NULL AND r.github_repo <> ''
+			  ORDER BY COALESCE(r.last_commit_scan_at, '') ASC
 			  LIMIT ?1`,
 		)
 			.bind(COMMIT_CLOSE_BATCH)
