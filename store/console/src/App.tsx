@@ -15,6 +15,7 @@ import Notifications from "./pages/Notifications";
 import Terminals from "./pages/Terminals";
 import Usage from "./pages/Usage";
 import Feedback from "./pages/Feedback";
+import Diagnostics from "./pages/Diagnostics";
 import Preferences from "./pages/Preferences";
 import RunDetail from "./pages/RunDetail";
 import { landingRoute, landingRouteFromMemory, type TopLevelRoute } from "./lib/lastRoute";
@@ -88,6 +89,7 @@ function AuthGate() {
 				<Route path="terminals" element={<Terminals />} />
 				<Route path="usage" element={<Usage />} />
 				<Route path="feedback" element={<Feedback />} />
+				<Route path="diagnostics" element={<Diagnostics />} />
 				<Route path="preferences" element={<Preferences />} />
 				<Route path="profile" element={<Profile />} />
 				<Route path="notifications" element={<Notifications />} />

@@ -7,7 +7,7 @@ import ConversationPill from "./ConversationPill";
 import Button from "./Button";
 import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
-import { Zap, Bell, Menu, BellRing, X, Bot, Library, Server, BarChart3, Wrench, Terminal, Gauge, SlidersHorizontal, Flag } from "lucide-react";
+import { Zap, Bell, Menu, BellRing, X, Bot, Library, Server, BarChart3, Wrench, Terminal, Gauge, SlidersHorizontal, Flag, Stethoscope } from "lucide-react";
 import { pushPermission, pushSupported, ensurePushSubscribed, enablePush } from "../lib/push";
 import { isSuppressedPush } from "../lib/pushMessages";
 import { rememberRoute } from "../lib/lastRoute";
@@ -22,6 +22,10 @@ const navItems = [
 	// question — "what is this costing me" / "what is still wrong with it" — asked of the whole
 	// account rather than of one agent, which is what the per-instance Feedback tab is for.
 	{ to: "/feedback", label: "Feedback", icon: Flag },
+	// What is BROKEN, across every agent (#823). Beside Feedback because it is the same shape of
+	// account-wide question — Feedback is what a human reported, this is what the platform
+	// recorded about itself, and neither had a surface before its ticket.
+	{ to: "/diagnostics", label: "Diagnostics", icon: Stethoscope },
 	{ to: "/dashboard", label: "Stats", icon: BarChart3 },
 	{ to: "/tools", label: "Tools", icon: Wrench },
 	// How YOU speak, hear and read — across every agent (#211). Deliberately NOT on Profile:

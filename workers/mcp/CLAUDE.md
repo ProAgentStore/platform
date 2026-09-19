@@ -78,7 +78,7 @@ src/
 │                     view: one ticket, its deletion, the needs_input answer and the live
 │                     takeover controls (#613)
     ├── knowledge.ts      12 tools — documents (incl. in-place edit + URL ingest, #613), files, vectors, memory
-    ├── observability.ts  11 tools — messages, activity, errors, trace, pipeline runs, feedback (incl. file + delete, #613)
+    ├── observability.ts  12 tools — messages, activity, errors (flat + grouped), trace, pipeline runs, feedback (incl. file + delete, #613)
     ├── board.ts          9 tools — the board, its columns, the per-ticket thread (#150)
 ├── agent-tasks.ts    4 tools — the agent's OWN standing tasks: DO state rendered into its
 │                     prompt, deliberately not the board above (#613)
@@ -105,9 +105,9 @@ src/
                           surfaces:["coding"]) + 5 loop tools (3 run + 2 objective queue)
 ```
 
-**203 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
+**204 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
 `coding-tools.ts` — all of them behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 155 across `instance-tools/`. 179 are always registered; 24 are
+`storage-tools.ts`, and 156 across `instance-tools/`. 180 are always registered; 24 are
 surface-gated (apply=4, repo=3, coding=17).
 
 Those four numbers ADD UP to the headline, and that is the point of stating them: 21 + 13

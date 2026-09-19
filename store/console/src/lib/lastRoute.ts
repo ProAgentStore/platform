@@ -18,7 +18,7 @@
 const LAST_ROUTE_KEY = "console:lastRoute";
 
 /** The top-level nav sections we remember + restore. Deep routes normalize to their section. */
-export const TOP_LEVEL_ROUTES = ["instances", "agents", "browse", "terminals", "usage", "profile", "notifications"] as const;
+export const TOP_LEVEL_ROUTES = ["instances", "agents", "browse", "terminals", "usage", "diagnostics", "profile", "notifications"] as const;
 export type TopLevelRoute = (typeof TOP_LEVEL_ROUTES)[number];
 
 /** Where a landing decision lands when it cannot be made on evidence. Never `browse`. */

@@ -37,6 +37,7 @@ export const CONSOLE_ROUTES = [
 	"terminals",
 	"usage",
 	"feedback",
+	"diagnostics",
 	"preferences",
 	"profile",
 	"notifications",

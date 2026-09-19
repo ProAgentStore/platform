@@ -124,6 +124,29 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 	);
 
 	server.tool(
+		"error_summary",
+		"What is RECURRING in the platform error log, rather than what happened last — ask this before list_errors when the question is \"what is wrong with my account\". The write side folds an identical repeat into a counter, but only within a ONE-HOUR bucket, so a warning firing for three days is ~72 separate rows in the flat feed and reads as 72 fresh incidents. This groups them by normalized signature and returns one entry each with `count` (OCCURRENCES, not rows — a row standing for 60 collapsed repeats counts 60), `rows`, `firstSeen` and `lastSeen`. The span between those two is the thing worth acting on: a signature seen 200 times in ten minutes is an incident, and one seen 200 times over four days is something nobody is looking at, and both show the same big number. Always your own errors; the cross-account grouped view is an admin route.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			days: z.coerce.number().int().min(1).max(30).optional().describe("Window to group over. Default 7."),
+			source: z.string().optional().describe("Filter by source, e.g. commit-close-watch | coding | keys-proxy."),
+			level: z.enum(["error", "warn"]).optional().describe("`error` is a bug; `warn` is recorded but not counted as one. Unfiltered returns both."),
+			limit: z.coerce.number().int().min(1).max(5000).optional().describe("Rows READ, not signatures returned — the width of the window being grouped. Default 2000."),
+		},
+		async ({ token, days, source, level, limit }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const qs = new URLSearchParams();
+			if (days) qs.set("days", String(days));
+			if (source) qs.set("source", source);
+			if (level) qs.set("level", level);
+			if (limit) qs.set("limit", String(limit));
+			const data = await authedCall(`/v1/errors/summary${qs.toString() ? `?${qs.toString()}` : ""}`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
 		"agent_trace",
 		"Reconstruct the complete, time-ordered timeline of what an agent instance DID — chat turns (chat.in/tool.call/chat.out), apply steps/handoffs/outcomes (apply.*), and failures, interleaved. This is the primary tool for debugging or improving an agent: see exactly what happened, in order, not just errors. Failures sit in two bands: a tool call that FAILED is level=warn (one row per failed tool, carrying the tool name in `context` and its full refusal text), while level=error means the turn or run could not complete at all. Since level is a floor, level=\"warn\" is the read that shows both — use it, not \"error\", when the question is \"what went wrong\". Filter by trace_id (one run/turn), source (chat|apply|coding|voice), or level. `count` always describes the WHOLE window `limit` selected and is never reduced; `events` is a PAGE of it, so read `page.hasMore` and call again with `offset: page.nextOffset` to continue. A busy instance's default 200-event window measured 163,437 bytes, 2.5x a calling host's 64 KiB limit, so one reply cannot carry them all and never could — narrow with trace_id or source when you know what you are looking for.",
 		{

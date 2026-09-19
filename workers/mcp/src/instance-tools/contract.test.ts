@@ -355,6 +355,7 @@ const TABLE: Record<string, Row> = {
 	list_connections: ["composition", "read", null, null, "instance_id,token"],
 	list_agent_tasks: ["agentTasks", "none", null, null, "instance_id,token"],
 	list_connection_deliveries: ["composition", "none", null, null, "instance_id,limit,status,token"],
+	error_summary: ["observability", "none", null, null, "days,level,limit,source,token"],
 	list_errors: ["observability", "none", null, null, "limit,scope,source,token"],
 	list_instance_connector_grants: ["connectors", "none", null, null, "instance_id,provider,token"],
 	list_instance_drive_files: ["connectors", "none", null, null, "folder,grant_id,instance_id,limit,q,token"],

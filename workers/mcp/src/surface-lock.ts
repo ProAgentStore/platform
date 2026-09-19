@@ -682,4 +682,18 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.41 is published.
 	"0.1.42": "sha256:8f14999af7cea973bcb13f56ce403df7e767d72f1825e33291670ec958881532",
+	// 0.1.43 (#823 slice 1): one new tool NAME, ALWAYS-ON — 203 registrations become 204,
+	// `MCP_TOOL_ALWAYS_ON` 179 → 180, `MCP_TOOL_GATED` stays 24.
+	//
+	//   * `error_summary` (read) — GET /v1/errors/summary in `instance-tools/observability.ts`,
+	//     beside `list_errors`. The same rows GROUPED by signature, because the write-side
+	//     collapse bucket is capped at one hour: a warning firing for three days is ~72 rows in
+	//     the flat feed and reads as 72 fresh incidents.
+	//
+	// Shipped WITH the route and the console page in one commit, for the reason 0.1.42 gives: a
+	// console-reachable route with no tool would open a new `KNOWN_GAPS` entry against a list
+	// #613 is driving to zero. `SERVER_INSTRUCTIONS` did not move.
+	//
+	// Appended, never edited in place: 0.1.42 is published.
+	"0.1.43": "sha256:e236f2744b3526d5de51d722be80e8f319a619730419d90c4cbb46b9f0f006dc",
 };

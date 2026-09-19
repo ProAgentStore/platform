@@ -66,6 +66,24 @@ export function signatureKey(source: string, message: string): string {
 	return `${source}::${normalizeMessage(message)}`;
 }
 
+/**
+ * What a grouped-errors read returns, owner-scoped (`GET /v1/errors/summary`, #823) or
+ * cross-account (the admin route). Declared here rather than in either route because both shapes
+ * are the same question answered over a different `WHERE`, and the console imports it directly —
+ * a mirrored copy is the drift `check-console-types` exists to prevent.
+ */
+export interface ErrorSummaryResponse {
+	/** The window grouped over. Absent on the admin route, which bounds by rows only. */
+	days?: number;
+	/** OCCURRENCES across every signature — not rows. */
+	total: number;
+	/** Rows read to produce it. Far below `total` means the write-side collapse is working. */
+	rows: number;
+	/** The window was FULL: `total` is a floor, not a total. Absent on a route that cannot say. */
+	truncated?: boolean;
+	signatures: ErrorSignature[];
+}
+
 /** Group raw errors into signatures, sorted by count (desc) then most-recent. */
 export function summarizeErrors(rows: RawError[]): ErrorSignature[] {
 	const map = new Map<string, ErrorSignature>();

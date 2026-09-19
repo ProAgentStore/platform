@@ -52,6 +52,8 @@ interface OpsMockOptions {
 	failPaths?: string[];
 	/** `GET /v1/feedback` — the owner's recorded complaints (#514). */
 	feedback?: Array<Record<string, unknown>>;
+	/** `GET /v1/errors/summary` — the grouped failure signatures behind Diagnostics (#823). */
+	errorSignatures?: Array<Record<string, unknown>>;
 	/** `GET /v1/usage` — see DEFAULT_USAGE for why the default is production-shaped. */
 	usage?: Record<string, unknown>;
 	/** `GET /v1/budget/limits` — the ceilings panel under the usage data. */
@@ -835,6 +837,18 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 		if (path === "/v1/instances/inst-1/translation") return json({ translation: { enabled: false, target: "English" }, languages: [], hasOverride: false });
 		// In-session feedback (#514). POST is the capture path the console must reach with NO
 		// model involved; the recorded bodies are what a spec asserts the anchors on.
+		// Grouped failure signatures (#823). Only the SUMMARY is mocked: the flat `/v1/errors` feed
+		// is a different question and the page does not read it.
+		if (path === "/v1/errors/summary") {
+			const signatures = options.errorSignatures ?? [];
+			return json({
+				days: Number(url.searchParams.get("days")) || 7,
+				total: signatures.reduce((n, sg) => n + Number((sg as { count?: number }).count ?? 0), 0),
+				rows: signatures.reduce((n, sg) => n + Number((sg as { rows?: number }).rows ?? 0), 0),
+				truncated: false,
+				signatures,
+			});
+		}
 		if (path === "/v1/feedback") {
 			if (method === "POST") {
 				feedbackPosts.push(route.request().postDataJSON());
@@ -6753,4 +6767,92 @@ test.describe("Settings — which account this agent uses (#736)", () => {
 			expect(escapes, `a box past its own container at ${width}w: ${escapes.join(", ")}`).toEqual([]);
 		});
 	}
+});
+
+/**
+ * Diagnostics (#823) — the page that makes a warning repeating for days visible.
+ *
+ * Three tests, and each covers something the 25 unit tests in `lib/diagnostics.test.ts`
+ * structurally cannot: that the pure verdicts are WIRED to what renders, that triage order
+ * survives the component, and that the narrowest phone still shows the badge the page exists for.
+ * The thresholds, wording and ordering themselves are pure and tested there, not re-driven here.
+ */
+test.describe("ProAgentStore Console — Diagnostics (#823)", () => {
+	// The literal incident: commit-close-watch failing hourly for days across two repos. At a
+	// one-hour write-side collapse bucket that is ~72 rows, which is the "buried as one row per
+	// hour" the issue describes.
+	const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString().slice(0, 19).replace("T", " ");
+	const PERSISTENT_WARN = {
+		key: "commit-close-watch::no github app installation token for owner",
+		source: "commit-close-watch",
+		sample: "no GitHub App installation token for owner",
+		pattern: "no github app installation token for owner",
+		count: 72,
+		rows: 72,
+		users: 1,
+		level: "warn",
+		firstSeen: hoursAgo(74),
+		lastSeen: hoursAgo(0.1),
+		lastStatus: null,
+		lastId: "err-ccw",
+	};
+	const LOUD_RECENT_ERROR = {
+		key: "coding::durable object reset",
+		source: "coding",
+		sample: "Durable Object reset mid-run",
+		pattern: "durable object reset mid-run",
+		count: 900,
+		rows: 3,
+		users: 1,
+		level: "error",
+		firstSeen: hoursAgo(0.2),
+		lastSeen: hoursAgo(0.05),
+		lastStatus: 503,
+		lastId: "err-do",
+	};
+
+	test("a warning recurring for days is flagged and led with, not buried under a louder burst", async ({ page }) => {
+		await mockSignedInConsole(page, { errorSignatures: [LOUD_RECENT_ERROR, PERSISTENT_WARN] });
+		await page.goto("/console/diagnostics");
+
+		// The lead states the thing nobody was told: something has been broken for a day+.
+		await expect(page.getByTestId("diagnostics-headline")).toContainText("recurring for a day or more");
+
+		// Triage order, through the component: the 900-occurrence burst does NOT take the top slot
+		// from a warning that has been firing for three days. That is the inversion of the flat
+		// feed, which is ordered by recency and is how #823's warning stayed invisible.
+		const rows = page.getByTestId("diagnostics-row");
+		await expect(rows).toHaveCount(2);
+		await expect(rows.first()).toContainText("no GitHub App installation token");
+		await expect(rows.first()).toContainText("72 times over 3 days");
+		await expect(rows.first().getByTestId("diagnostics-persistent-badge")).toBeVisible();
+
+		// And the collapse is stated rather than implied: 900 occurrences across 3 log entries.
+		await expect(rows.nth(1)).toContainText("3 log entries");
+	});
+
+	test("says nothing at all on a clean account", async ({ page }) => {
+		// A page that always announces something teaches people its announcements mean nothing —
+		// which is the failure this page exists to fix, one level up.
+		await mockSignedInConsole(page, { errorSignatures: [] });
+		await page.goto("/console/diagnostics");
+		await expect(page.getByRole("heading", { name: "Diagnostics" })).toBeVisible();
+		await expect(page.getByText(/Nothing recorded in the last 7 days/)).toBeVisible();
+		await expect(page.getByTestId("diagnostics-headline")).toHaveCount(0);
+	});
+
+	test("mobile — the recurring badge and its sentence survive a phone at 320px and at 390px (#823)", async ({ page }) => {
+		await mockSignedInConsole(page, { errorSignatures: [PERSISTENT_WARN, LOUD_RECENT_ERROR] });
+		await page.goto("/console/diagnostics");
+		for (const width of [320, 390]) {
+			await page.setViewportSize({ width, height: 800 });
+			// The badge is the whole point of the page; if it is what gets dropped at the narrowest
+			// supported width then the page does not do its job on the device it is read on.
+			await expect(page.getByTestId("diagnostics-persistent-badge").first()).toBeVisible();
+			await expect(page.getByTestId("diagnostics-row").first()).toContainText("still happening");
+			// No sideways pan: the sample messages are long and untruncated by design.
+			const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+			expect(overflow, `no horizontal overflow at ${width}px`).toBeLessThanOrEqual(1);
+		}
+	});
 });

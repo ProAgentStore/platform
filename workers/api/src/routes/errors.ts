@@ -1,7 +1,8 @@
 /** GET /v1/errors — read back the durable error log (see lib/error-log.ts). */
 import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
-import { deriveClientLevel, listErrors, logError, sanitizeBuildId } from "../lib/error-log.js";
+import { ERROR_COLUMNS, ERROR_RECENCY, deriveClientLevel, listErrors, logError, sanitizeBuildId } from "../lib/error-log.js";
+import { summarizeErrors, type RawError } from "../lib/admin-errors.js";
 import type { Env } from "../types.js";
 
 export const errorRoutes = new Hono<{ Bindings: Env }>();
@@ -74,4 +75,71 @@ errorRoutes.get("/", async (c) => {
 	const level = c.req.query("level") === "warn" ? "warn" : c.req.query("level") === "error" ? "error" : undefined;
 	const errors = await listErrors(c.env, { userId: session.uid, all, source, limit, level });
 	return c.json({ scope: all ? "all" : "me", count: errors.length, errors });
+});
+
+/**
+ * The same failures, GROUPED BY SIGNATURE — what is recurring, rather than what happened last
+ * (#823).
+ *
+ * ## Why the flat feed could not answer this
+ *
+ * The write side collapses an identical repeat into a counter, but its bucket is capped at one
+ * hour (`COLLAPSE_WINDOW_MS`, and `collapseRepeat` matches on `created_at >= now - 1h`). That is
+ * the right bound for a write-side dedupe — a bucket that never closes could not be aged out, and
+ * its `context` sample would be arbitrarily stale — but it means a warning that has been firing
+ * for three days is ~72 rows, not one. #823 was filed after exactly that: a commit-close-watch
+ * warning repeating for days across two repos, described as "buried as one row per hour".
+ *
+ * So the cross-hour question is a READ-side one, and it already had an answer —
+ * `summarizeErrors` — which only admins could reach (`routes/admin.ts`). This is that grouping,
+ * scoped to the caller's own rows. Reused rather than reimplemented deliberately: a second
+ * normalizer would be a second set of rules for which failures are "the same", and the two would
+ * drift the first time either was tuned.
+ *
+ * ## `limit` is 2000 rows, not 100
+ *
+ * It bounds the ROWS READ, and a signature's `count` sums the occurrences inside them. The flat
+ * feed's 100 is a page size; here it is the width of the window being grouped, and at ~24 rows a
+ * day per recurring signature a 100-row window would show four days of one warning and call it
+ * the whole picture. 2000 matches what the admin view reads, and it is bounded per account
+ * because every row here is the caller's own.
+ *
+ * `days` bounds it in TIME as well, because rows-read and days-covered are different questions and
+ * a caller asking "what has been wrong this week" should not get an answer whose horizon depends
+ * on how noisy the account was.
+ */
+errorRoutes.get("/summary", async (c) => {
+	const session = await requireUser(c);
+	const days = Math.max(1, Math.min(Number(c.req.query("days")) || 7, 30));
+	const limit = Math.max(1, Math.min(Number(c.req.query("limit")) || 2000, 5000));
+	const source = c.req.query("source") || undefined;
+	const level = c.req.query("level") === "warn" ? "warn" : c.req.query("level") === "error" ? "error" : undefined;
+
+	// Always user-scoped — there is no `scope=all` here. The flat feed offers one to admins; a
+	// grouped cross-account view already exists on the admin route, and quietly widening this one
+	// would mean an owner's page changing meaning based on who is signed in.
+	const where = ["user_id = ?1", `${ERROR_RECENCY} >= ?2`];
+	const binds: unknown[] = [session.uid, new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 19).replace("T", " ")];
+	if (source) {
+		binds.push(source);
+		where.push(`source = ?${binds.length}`);
+	}
+	if (level) {
+		binds.push(level);
+		where.push(`level = ?${binds.length}`);
+	}
+	const sql = `SELECT ${ERROR_COLUMNS} FROM error_log WHERE ${where.join(" AND ")} ORDER BY ${ERROR_RECENCY} DESC LIMIT ${limit}`;
+	const rows = (await c.env.DB.prepare(sql).bind(...binds).all<RawError>()).results ?? [];
+	const signatures = summarizeErrors(rows);
+	return c.json({
+		days,
+		// OCCURRENCES, not rows — a row standing for 60 collapsed repeats counts 60. Reporting the
+		// row count would understate a runaway by exactly the factor the collapse achieved.
+		total: signatures.reduce((n, s) => n + s.count, 0),
+		rows: rows.length,
+		// True when the window was filled: the answer is a floor, not a total, and a page that
+		// did not say so would present a truncated week as a complete one.
+		truncated: rows.length >= limit,
+		signatures,
+	});
 });

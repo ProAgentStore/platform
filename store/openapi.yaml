@@ -9674,6 +9674,60 @@ paths:
                     items: { type: object, additionalProperties: true }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /v1/errors/summary:
+    get:
+      summary: The same failures, grouped by signature
+      description: |
+        What is RECURRING, rather than what happened last — the read behind the console's
+        Diagnostics page.
+
+        The write side collapses an identical repeat into a counter, but its bucket is capped at
+        one hour, so a warning firing for three days is roughly seventy-two rows rather than one.
+        This groups them by normalized signature (ids, numbers and quoted strings redacted), and
+        `count` sums OCCURRENCES across the rows a signature covers — not the row count, which
+        would understate a collapsed runaway by exactly the factor the collapse achieved.
+
+        Always scoped to the caller. There is no `scope=all` here: a cross-account grouped view
+        already exists on the admin route, and widening this one would mean the page changing
+        meaning based on who is signed in.
+      operationId: summarizeErrors
+      tags: [Errors]
+      parameters:
+        - { name: days, in: query, description: "Window to group over, 1–30. Default 7.", schema: { type: integer, default: 7, minimum: 1, maximum: 30 } }
+        - { name: limit, in: query, description: "Rows READ (not signatures returned), 1–5000. Default 2000 — this is the width of the window being grouped, not a page size.", schema: { type: integer, default: 2000 } }
+        - { name: source, in: query, schema: { type: string } }
+        - { name: level, in: query, schema: { type: string, enum: [error, warn] } }
+      responses:
+        "200":
+          description: Signatures, most consequential first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  days: { type: integer }
+                  total: { type: integer, description: "Occurrences across every signature." }
+                  rows: { type: integer, description: "Rows read. Far below `total` means the write-side collapse is working." }
+                  truncated: { type: boolean, description: "The window was full — `total` is a floor, not a total." }
+                  signatures:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        key: { type: string }
+                        source: { type: string }
+                        sample: { type: string, description: "A representative raw message." }
+                        pattern: { type: string, description: "The normalized message this signature groups on." }
+                        count: { type: integer, description: "Occurrences, not rows." }
+                        rows: { type: integer }
+                        users: { type: integer }
+                        level: { type: string, enum: [error, warn], description: "`error` unless EVERY occurrence is a warn." }
+                        firstSeen: { type: string }
+                        lastSeen: { type: string }
+                        lastStatus: { type: integer, nullable: true }
+                        lastId: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /v1/errors/client:
     post:
       summary: Report a client-side failure
