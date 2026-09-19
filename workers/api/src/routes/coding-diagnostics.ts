@@ -26,7 +26,7 @@ import { readProviderAccountHealth } from "../lib/provider-account-health.js";
 import { relayNameForInstance } from "../lib/runtime-nodes.js";
 import { getLiveRuntime } from "./instances-runtime.js";
 import { getDefaultRunnerConn, requireOwned } from "./coding-shared.js";
-import { MAX_SSH_HOSTS, sshHostGroups, sshIdentityIssues } from "../lib/ssh-identity.js";
+import { MAX_SSH_HOSTS, httpsLoginFrom, sshHostGroups, sshIdentityIssues } from "../lib/ssh-identity.js";
 import type { Env } from "../types.js";
 
 /**
@@ -420,9 +420,15 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		// makes no probe at all (the latency claim the original made but did not implement), and
 		// they run CONCURRENTLY so two hosts cost one handshake's wall-clock rather than two.
 		const sshHosts = sshHostGroups(dbRepos.map((r) => ({ name: r.name, cloneUrl: r.cloneUrl })));
-		if (conn && runnerReachable && sshHosts.length) {
-			await Promise.all(
-				sshHosts.slice(0, MAX_SSH_HOSTS).map(async ({ host }) => {
+		// The HTTPS half of the same question (#684's "Consequence"), fetched with the SSH half
+		// rather than left on its own route. The issue is not "SSH is misconfigured" — it is that
+		// ONE machine answers to two different GitHub identities depending on the transport, and a
+		// report that shows one of them cannot say that. `gh` is machine-wide, so it is one call
+		// regardless of how many hosts the repos use.
+		let githubCredentials: GithubCredentialScopeResult | null = null;
+		if (conn && runnerReachable && dbRepos.length) {
+			await Promise.all([
+				...sshHosts.slice(0, MAX_SSH_HOSTS).map(async ({ host }) => {
 					try {
 						// The `host` nothing ever sent. The endpoint has accepted it since #684.
 						const raw = await callRunner<unknown>(conn, "/coding/git-identity", { host }, { timeoutMs: 15_000 });
@@ -433,8 +439,16 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 						// findings, and only one of them is a warning.
 					}
 				}),
-			);
+				(async () => {
+					try {
+						githubCredentials = await callRunner<GithubCredentialScopeResult>(conn, "/coding/github-credentials", undefined, { timeoutMs: READ_TIMEOUT_MS });
+					} catch {
+						// Runner older than #688, or `gh` unavailable. Unverified, not "no login".
+					}
+				})(),
+			]);
 		}
+		const httpsLogin = httpsLoginFrom(githubCredentials);
 
 		// 3b. What the RUNS behind those sessions are doing (#593). The runner can only report that
 		// a process is alive; whether it is WORKING is the run's own record, and `engine_limit` is
@@ -636,7 +650,7 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		// using SSH host aliases warned about a working setup and stayed silent about a broken one.
 		// Grouping is `sshHostGroups`, the outcomes are `sshIdentityIssues`, and both are pure — the
 		// bug this replaces was unreachable by a test precisely because it was not.
-		issues.push(...sshIdentityIssues(sshHosts, gitIdentityByHost));
+		issues.push(...sshIdentityIssues(sshHosts, gitIdentityByHost, httpsLogin));
 
 		const activeSessions = sessions.filter((s) => s.status === "active");
 		// "Healthy" has to mean able to work, not merely running (#593). A session whose run is
@@ -677,6 +691,10 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			// never "no problem".
 			gitIdentity: sshHosts.map((g) => gitIdentityByHost.get(g.host)).find((r) => r) ?? null,
 			gitIdentities: sshHosts.map((g) => ({ host: g.host, repos: g.repos, identity: gitIdentityByHost.get(g.host) ?? null })),
+			// The HTTPS transport's identity (#684, via #688's endpoint). Reported BESIDE the SSH
+			// one, because "which identity does this machine use" has two answers and the whole
+			// point of the issue is that they can differ. `null` = unverified, not "no login".
+			githubCredentials,
 			// The owner's provider account, as last observed (#773). `no_failure_recorded` is not
 			// "healthy" — it is "nothing on record"; `verify` is how to get a live answer.
 			providerAccount,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	MAX_SSH_HOSTS,
+	httpsLoginFrom,
 	isSshCloneUrl,
 	sshHostFor,
 	sshHostGroups,
@@ -134,5 +135,64 @@ describe("sshIdentityIssues — the two errors the machine-wide verdict produced
 
 	it("caps the hosts a single call will probe", () => {
 		expect(MAX_SSH_HOSTS).toBe(4);
+	});
+});
+
+describe("both transports, reported together (#684's actual complaint)", () => {
+	const onWork = [{ host: "github-work", repos: ["api"] }];
+	const probed = (over: Partial<GitIdentityProbe>) =>
+		new Map<string, GitIdentityProbe | null>([["github-work", { checked: true, host: "github-work", ...over }]]);
+
+	it("reads the gh login only from a real answer", () => {
+		expect(httpsLoginFrom({ checked: true, login: "serge-ivo" })).toBe("serge-ivo");
+		// An older runner, an empty login, or an error is NOT a login — treating any of them as one
+		// would put a fabricated account name into a remedy the owner is asked to act on.
+		expect(httpsLoginFrom({ login: "serge-ivo" })).toBeNull();
+		expect(httpsLoginFrom({ checked: true, login: "   " })).toBeNull();
+		expect(httpsLoginFrom({ checked: true, error: "gh: not authenticated" })).toBeNull();
+		expect(httpsLoginFrom(null)).toBeNull();
+	});
+
+	it("reports two identities as INFO, not a warning — the alias setup is deliberate", () => {
+		// Routing two accounts through two ~/.ssh/config aliases necessarily disagrees with the one
+		// `gh` login. Warning about it would be the false-positive class this module removed, one
+		// layer up. `info` is excluded from summary.issueCount.
+		const [issue] = sshIdentityIssues(onWork, probed({ identity: "work-bot", isDeployKey: false }), "serge-ivo");
+		expect(issue.severity).toBe("info");
+		expect(issue.message).toContain("SSH to github-work authenticates as work-bot");
+		expect(issue.message).toContain("HTTPS (`gh`) authenticates as serge-ivo");
+		expect(issue.fix).toContain("If that is deliberate");
+	});
+
+	it("says nothing when the two transports agree", () => {
+		expect(sshIdentityIssues(onWork, probed({ identity: "serge-ivo", isDeployKey: false }), "serge-ivo")).toEqual([]);
+		// Case is not identity: GitHub logins are case-insensitive.
+		expect(sshIdentityIssues(onWork, probed({ identity: "Serge-Ivo", isDeployKey: false }), "serge-ivo")).toEqual([]);
+	});
+
+	it("says nothing about a difference it could not measure", () => {
+		expect(sshIdentityIssues(onWork, probed({ identity: "work-bot", isDeployKey: false }), null)).toEqual([]);
+	});
+
+	it("names the HTTPS account in the deploy-key remedy — the fix #684 watched succeed", () => {
+		// The issue's own observation: `gh repo clone` over HTTPS cloned the repo SSH had just
+		// refused. Naming the account turns generic advice into that remedy.
+		const [issue] = sshIdentityIssues(onWork, probed({ identity: "jobsearch-works/shared", isDeployKey: true }), "serge-ivo");
+		expect(issue.severity).toBe("warn");
+		expect(issue.fix).toContain("authenticates as serge-ivo on this machine");
+	});
+
+	it("falls back to generic advice when no gh login was established", () => {
+		const [issue] = sshIdentityIssues(onWork, probed({ identity: "jobsearch-works/shared", isDeployKey: true }), null);
+		expect(issue.fix).toContain("so the platform can inject a token");
+		expect(issue.fix).not.toContain("authenticates as");
+	});
+
+	it("treats a slash as a deploy key even from a runner that omits the flag", () => {
+		// The flag is the runner's; the slash is what it derives it from. A runner reporting the
+		// identity but not the flag must not be read as a healthy user account.
+		const [issue] = sshIdentityIssues(onWork, probed({ identity: "org/repo" }), "serge-ivo");
+		expect(issue.severity).toBe("warn");
+		expect(issue.message).toContain("is a deploy key");
 	});
 });

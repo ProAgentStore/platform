@@ -59,9 +59,35 @@ export interface GitIdentityProbe {
 
 /** One line on the diagnostics report. */
 export interface SshIdentityIssue {
-	severity: "warn";
+	severity: "warn" | "info";
 	message: string;
 	fix: string;
+}
+
+/**
+ * The HTTPS half of the same question (#684, #688) — the runner's `gh` login.
+ *
+ * `checked: true` is the version marker; an older runner has no such endpoint.
+ */
+export interface HttpsIdentityProbe {
+	checked?: boolean;
+	login?: string;
+	orgs?: string[];
+	error?: string;
+}
+
+/** The `gh` account name, or null when it was not established. */
+export function httpsLoginFrom(probe: HttpsIdentityProbe | null | undefined): string | null {
+	if (probe?.checked !== true) return null;
+	const login = String(probe.login ?? "").trim();
+	return login || null;
+}
+
+/** Is this SSH identity a repository deploy key rather than an account? */
+function isDeployKeyIdentity(identity: string, flag: boolean | null | undefined): boolean {
+	// The runner sets the flag; the slash is the structural marker it derives it from. Both are
+	// checked so a runner that reports the identity but not the flag is still read correctly.
+	return flag === true || identity.includes("/");
 }
 
 /**
@@ -125,13 +151,22 @@ const list = (names: readonly string[]) => names.map((n) => `"${n}"`).join(", ")
 /**
  * The issues for one machine, one group per host.
  *
- * Four outcomes per host, and the difference between the last two is the point of the module:
+ * Five outcomes per host, and the differences between them are the point of the module:
  *
- *   1. **Deploy key** → `warn`, naming the host and ONLY the repos on it.
+ *   1. **Deploy key** → `warn`, naming the host and ONLY the repos on it. When the machine's `gh`
+ *      login is known, the remedy NAMES the account HTTPS would use instead — that is #684's own
+ *      observation, where `gh repo clone` over HTTPS succeeded on the clone SSH had just refused.
  *   2. **Authentication failed** → `warn`, naming the host that failed. Not "github.com" unless
  *      github.com is the host that failed.
- *   3. **A user account** → nothing. SSH works; silence is the correct report.
- *   4. **Not probed** (older runner, a network hiccup, or past {@link MAX_SSH_HOSTS}) → nothing.
+ *   3. **A user account that is NOT the `gh` login** → `info`. This is the two-identities-per-
+ *      transport condition #684 was filed about, and it is reported rather than warned about
+ *      BECAUSE IT IS USUALLY DELIBERATE: routing two GitHub accounts through two `~/.ssh/config`
+ *      aliases is the ordinary way to hold both on one machine, and that setup necessarily
+ *      disagrees with the single `gh` login. A `warn` here would be the same false-positive class
+ *      this module was written to remove, one layer up. `info` is excluded from `issueCount`, so
+ *      it informs without claiming something is broken.
+ *   4. **A user account matching the `gh` login, or no `gh` answer** → nothing.
+ *   5. **Not probed** (older runner, a network hiccup, or past {@link MAX_SSH_HOSTS}) → nothing.
  *      Unverified is not a finding. Inventing a warning from an absent measurement is how the
  *      previous version produced its false positive, and it would be the same mistake with a
  *      different trigger.
@@ -139,13 +174,14 @@ const list = (names: readonly string[]) => names.map((n) => `"${n}"`).join(", ")
 export function sshIdentityIssues(
 	groups: readonly SshHostGroup[],
 	byHost: ReadonlyMap<string, GitIdentityProbe | null>,
+	httpsLogin: string | null = null,
 ): SshIdentityIssue[] {
 	const issues: SshIdentityIssue[] = [];
 	for (const group of groups) {
 		const probe = byHost.get(group.host);
 		if (probe?.checked !== true) continue; // unverified (absent, null, or an older runner) — say nothing
 		const identity = probe.identity ?? null;
-		if (identity !== null && probe.isDeployKey === true) {
+		if (identity !== null && isDeployKeyIdentity(identity, probe.isDeployKey)) {
 			issues.push({
 				severity: "warn",
 				message:
@@ -154,7 +190,11 @@ export function sshIdentityIssues(
 					'A deploy key authenticates to exactly one repository; private repos outside that one will fail with "Repository not found".',
 				fix:
 					`Update ~/.ssh/config on this machine so \`Host ${group.host}\` uses a user key rather than a deploy key ` +
-					"(or give the deploy key its own Host alias), or re-add these repos with an HTTPS clone URL so the platform can inject a token.",
+					"(or give the deploy key its own Host alias), or re-add these repos with an HTTPS clone URL" +
+					// Naming the account is the difference between generic advice and the remedy that
+					// was already OBSERVED to work: #684 watched `gh repo clone` over HTTPS succeed on
+					// the very repo SSH had just refused.
+					(httpsLogin ? `, which authenticates as ${httpsLogin} on this machine.` : " so the platform can inject a token."),
 			});
 		} else if (identity === null) {
 			issues.push({
@@ -166,7 +206,21 @@ export function sshIdentityIssues(
 					`Check that a GitHub-authorised key is offered for this host — \`ssh -T git@${group.host}\` on the machine — ` +
 					"or re-add these repos with an HTTPS clone URL.",
 			});
+		} else if (httpsLogin && identity.toLowerCase() !== httpsLogin.toLowerCase()) {
+			// Two identities on one machine, split by transport — the condition named in #684's
+			// "Consequence". Informational, not a warning: see outcome 3 in the doc above.
+			issues.push({
+				severity: "info",
+				message:
+					`Two GitHub identities are active on this machine: SSH to ${group.host} authenticates as ${identity}, ` +
+					`while HTTPS (\`gh\`) authenticates as ${httpsLogin}. Repos cloning over SSH from ${group.host}: ${list(group.repos)}. ` +
+					"Which one a repo gets depends on its clone URL, not on which is broader.",
+				fix:
+					"If that is deliberate (two accounts behind two ~/.ssh/config aliases), nothing needs doing. " +
+					`If a private repo on ${group.host} fails with "Repository not found", re-add it with an HTTPS clone URL to use ${httpsLogin} instead.`,
+			});
 		}
+		// A user account matching the gh login, or no gh answer → nothing to report.
 	}
 	return issues;
 }
