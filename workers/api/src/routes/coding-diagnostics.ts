@@ -26,6 +26,7 @@ import { readProviderAccountHealth } from "../lib/provider-account-health.js";
 import { relayNameForInstance } from "../lib/runtime-nodes.js";
 import { getLiveRuntime } from "./instances-runtime.js";
 import { getDefaultRunnerConn, requireOwned } from "./coding-shared.js";
+import { MAX_SSH_HOSTS, sshHostGroups, sshIdentityIssues } from "../lib/ssh-identity.js";
 import type { Env } from "../types.js";
 
 /**
@@ -378,7 +379,9 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 
 		let runnerHealth: unknown = null;
 		let runnerDiag: unknown = null;
-		let runnerGitIdentity: GitIdentityResult | null = null;
+		// SSH identity, per host (#684). Populated AFTER the repos are read, because which hosts are
+		// worth asking about is a fact about the repos — see the probe block below.
+		const gitIdentityByHost = new Map<string, GitIdentityResult | null>();
 		let runnerReachable = false;
 		if (conn) {
 			try {
@@ -391,17 +394,6 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 				runnerDiag = await callRunner<unknown>(conn, "/coding/diagnostics", undefined, { timeoutMs: READ_TIMEOUT_MS });
 			} catch (e) {
 				runnerDiag = { error: e instanceof Error ? e.message : String(e) };
-			}
-			// SSH identity probe (#684): run only when the runner is reachable, because a machine
-			// without a connected runner cannot tell us what its SSH key resolves to. Capped at a short
-			// timeout — the probe opens a real SSH connection to github.com, and a firewall that drops
-			// packets must not stall the whole diagnostics response. An older runner 404s and the result
-			// stays null, which is treated as unverified, not as "no problem".
-			try {
-				const raw = await callRunner<unknown>(conn, "/coding/git-identity", undefined, { timeoutMs: 15_000 });
-				runnerGitIdentity = raw as GitIdentityResult;
-			} catch {
-				// Older runner without the endpoint, or network hiccup — treat as unverified.
 			}
 		}
 		const effectivelyReachable = runnerReachable;
@@ -416,6 +408,33 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			listRepos(env, instanceId, uid),
 			readEngines(env, instanceId, uid),
 		]);
+
+		// SSH identity probe (#684), and it runs HERE rather than beside /health because the
+		// question "which host?" is answered by the repos, not by the machine. The cloud used to
+		// call this endpoint with no body; the runner then defaulted to `github.com` and the answer
+		// was applied to every repo whose URL merely began with `git@`. On a machine using SSH host
+		// aliases — the ordinary two-account setup — that verdict was about a host none of the repos
+		// use, which produced a warning on a working machine AND silence on a broken one.
+		//
+		// Probes run only for hosts a repo actually clones from, so an instance with no SSH repos
+		// makes no probe at all (the latency claim the original made but did not implement), and
+		// they run CONCURRENTLY so two hosts cost one handshake's wall-clock rather than two.
+		const sshHosts = sshHostGroups(dbRepos.map((r) => ({ name: r.name, cloneUrl: r.cloneUrl })));
+		if (conn && runnerReachable && sshHosts.length) {
+			await Promise.all(
+				sshHosts.slice(0, MAX_SSH_HOSTS).map(async ({ host }) => {
+					try {
+						// The `host` nothing ever sent. The endpoint has accepted it since #684.
+						const raw = await callRunner<unknown>(conn, "/coding/git-identity", { host }, { timeoutMs: 15_000 });
+						gitIdentityByHost.set(host, raw as GitIdentityResult);
+					} catch {
+						// Older runner without the endpoint, or a network hiccup. Left ABSENT rather
+						// than set to a null result: unverified and "no identity" are different
+						// findings, and only one of them is a warning.
+					}
+				}),
+			);
+		}
 
 		// 3b. What the RUNS behind those sessions are doing (#593). The runner can only report that
 		// a process is alive; whether it is WORKING is the run's own record, and `engine_limit` is
@@ -605,51 +624,19 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 				});
 		}
 
-		// 6b. SSH identity issues (#684).
+		// 6b. SSH identity issues (#684), one verdict per HOST rather than one for the machine.
 		//
-		// A deploy key authenticates to exactly ONE repository. Any SSH clone for a DIFFERENT private
-		// repo will silently fail with "Repository not found" — GitHub's generic message for "wrong
-		// identity", which looks like the repo is missing when it is actually an auth problem. The
-		// runner's `/coding/git-identity` probe makes the identity visible before a clone is attempted.
+		// A deploy key authenticates to exactly ONE repository, so an SSH clone of any OTHER private
+		// repo fails with "Repository not found" — GitHub's generic message for "wrong identity",
+		// which reads as a missing repo. Making that visible before a clone is attempted is the whole
+		// point of the probe.
 		//
-		// Three distinct cases, treated differently:
-		//   1. Deploy key detected + SSH repos → `warn` (the clone works for the keyed repo but fails
-		//      for everything else; the owner needs to decide whether SSH is intentional).
-		//   2. SSH repos + runner reachable + probe succeeded with a user account → `info` (everything
-		//      fine; SSH is working and the identity is a real account).
-		//   3. SSH repos + runner reachable + probe could not authenticate → `warn` (the SSH key may
-		//      not be known to GitHub at all, which will break every private clone).
-		//
-		// Nothing is emitted when there are no SSH repos: a runner with a deploy key but no SSH clone
-		// URLs is not broken for the repos registered here.
-		const sshRepos = dbRepos.filter((r) => {
-			const u = r.cloneUrl ?? "";
-			return /^git@/i.test(u) || /^ssh:\/\//i.test(u);
-		});
-		if (sshRepos.length > 0 && runnerGitIdentity?.checked === true) {
-			const { identity, isDeployKey } = runnerGitIdentity;
-			if (isDeployKey) {
-				// A deploy key is scoped to one repository. The clone URL in D1 may be for that exact
-				// repo, in which case it works — but the owner cannot see that without this report, and
-				// a second repo on the same machine will silently fail.
-				const affectedNames = sshRepos.map((r) => `"${r.name}"`).join(", ");
-				issues.push({
-					severity: "warn",
-					message: `SSH identity on this machine is a deploy key (${identity}) — not a user account. Repos cloning over SSH: ${affectedNames}. A deploy key authenticates to exactly one repository; private repos outside that one will fail with "Repository not found".`,
-					fix: `Re-add the repo using an HTTPS URL (e.g. https://github.com/${identity}.git) so the platform can inject a token, or update ~/.ssh/config on this machine so github.com resolves to a user key rather than a deploy key.`,
-				});
-			} else if (identity === null) {
-				// The probe could not authenticate at all. Could be a missing key, a firewall, or no
-				// network — but if it is a key problem, every SSH private repo clone will break the
-				// same way and the error will look like "Repository not found".
-				issues.push({
-					severity: "warn",
-					message: `SSH handshake to github.com did not authenticate on this machine (probe returned no identity). Repos using SSH clone URLs: ${sshRepos.map((r) => `"${r.name}"`).join(", ")}. Private repo clones will fail until SSH is working.`,
-					fix: "Confirm that a GitHub-authorised SSH key is registered on this machine (ssh -T git@github.com), or re-add these repos using HTTPS URLs.",
-				});
-			}
-			// identity is non-null and isDeployKey is false → user account, SSH is fine, no issue.
-		}
+		// What changed: the verdict is attributed to the repos on the host it was MEASURED on. It used
+		// to be measured on `github.com` always and applied to every `git@…` repo, which on a machine
+		// using SSH host aliases warned about a working setup and stayed silent about a broken one.
+		// Grouping is `sshHostGroups`, the outcomes are `sshIdentityIssues`, and both are pure — the
+		// bug this replaces was unreachable by a test precisely because it was not.
+		issues.push(...sshIdentityIssues(sshHosts, gitIdentityByHost));
 
 		const activeSessions = sessions.filter((s) => s.status === "active");
 		// "Healthy" has to mean able to work, not merely running (#593). A session whose run is
@@ -682,9 +669,14 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			sessions,
 			repos,
 			githubApp,
-			// SSH identity transparency (#684). `null` when the runner is offline or predates the
-			// `/coding/git-identity` endpoint — treat as unverified, not as "no problem".
-			gitIdentity: runnerGitIdentity,
+			// SSH identity transparency (#684). `gitIdentities` is the honest shape: one entry per
+			// host a repo actually clones from. `gitIdentity` is kept as the FIRST of them so an
+			// existing reader still sees a real probe rather than a removed field — it is simply no
+			// longer a claim about the whole machine, which is what made it wrong.
+			// Null/empty means UNVERIFIED (runner offline, older runner, or no SSH repos at all) —
+			// never "no problem".
+			gitIdentity: sshHosts.map((g) => gitIdentityByHost.get(g.host)).find((r) => r) ?? null,
+			gitIdentities: sshHosts.map((g) => ({ host: g.host, repos: g.repos, identity: gitIdentityByHost.get(g.host) ?? null })),
 			// The owner's provider account, as last observed (#773). `no_failure_recorded` is not
 			// "healthy" — it is "nothing on record"; `verify` is how to get a live answer.
 			providerAccount,
