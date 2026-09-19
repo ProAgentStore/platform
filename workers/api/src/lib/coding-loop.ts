@@ -67,8 +67,10 @@ export interface CodingGoal {
 	 * A fact the PLATFORM is telling the brain at the start of this round (#541).
 	 *
 	 * Deliberately not `userHint`, which renders as "The user just told you:" — attributing a
-	 * platform action to the human is exactly what #505 stamps reports for. Today its only writer is
-	 * the resume note after a usage-limit park (`engineResumeNote`).
+	 * platform action to the human is exactly what #505 stamps reports for. Two writers, both in
+	 * `workflows/coding-session.ts`: at the START of a run, what a cut-off predecessor on this repo
+	 * already landed (`pendingCodingResumeNote`, #523/#806), and after a usage-limit park, that the
+	 * window has reset (`engineResumeNote`). One round reads it and the workflow then clears it.
 	 */
 	resumeNote?: string;
 	/**
