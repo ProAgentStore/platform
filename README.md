@@ -455,3 +455,4 @@ you reach for are already covered. The guard rejects a pattern that can never fi
 ## License
 
 MIT
+<!-- Verification timestamp: 2026-09-19T06:53:16Z — throwaway comment for issue #818 auto-close test -->
