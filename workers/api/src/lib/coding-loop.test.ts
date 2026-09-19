@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	CODING_TOOLS,
+	LEARNED_MAX,
 	runCodingLoop,
 	systemPrompt,
 	toDecision,
@@ -839,5 +840,113 @@ describe("runCodingLoop — a failing engine turn is a signal, not prose (#545)"
 		// Four instructions went out and the run finished on the brain's own verdict — the pane says
 		// "exited with code 1" and is deliberately NOT parsed for it.
 		expect(r.outcome).toBe("done");
+	});
+});
+
+describe("the Pilot keeps what it learned, because nothing else survives a decision (#822)", () => {
+	/** Run scripted decisions; record the step log each decision was SHOWN, the events, and what reached the engine. */
+	function replay(decisions: CodingDecision[]) {
+		const idle: CodingPaneSnapshot = { pane: "❯ ", runState: "idle", ready: true, alive: true };
+		const logs: string[][] = [];
+		const events: Array<[string, string]> = [];
+		const acted: unknown[] = [];
+		let i = 0;
+		const deps: CodingDeps = {
+			snapshot: async () => idle,
+			waitIdle: async () => idle,
+			act: async (a) => {
+				acted.push(a);
+				return idle;
+			},
+			decide: async ({ actionLog }) => {
+				logs.push([...actionLog]);
+				return decisions[Math.min(i++, decisions.length - 1)];
+			},
+			onEvent: (type, message) => void events.push([type, message]),
+		};
+		return { deps, logs, events, acted };
+	}
+	const FINISH: CodingDecision = { finish: { status: "done", detail: "landed" } };
+
+	it("shows `learned` to the NEXT decision, ahead of the instruction it was decided with", async () => {
+		const { deps, logs, events } = replay([
+			{ action: { kind: "message", text: "Read issue #815 and report what it asks for." } },
+			{ action: { kind: "message", text: "Implement it, run the suite, push." }, learned: "#815 wants client-side sort + filter on My Instances; no new backend." },
+			FINISH,
+		]);
+		const res = await runCodingLoop(deps, GOAL);
+		expect(logs[2]).toEqual([
+			"message: Read issue #815 and report what it asks for.",
+			"[learned] #815 wants client-side sort + filter on My Instances; no new backend.",
+			"message: Implement it, run the suite, push.",
+		]);
+		expect(events).toContainEqual(["learned", "[learned] #815 wants client-side sort + filter on My Instances; no new backend."]);
+		expect(res.transcript).toContain("[learned] #815 wants client-side sort + filter on My Instances; no new backend.");
+	});
+
+	it("never sends `learned` to the engine — it is the Pilot's note to itself", async () => {
+		const { deps, acted } = replay([{ action: { kind: "message", text: "Run the tests." }, learned: "suite is `pnpm test`" }, FINISH]);
+		await runCodingLoop(deps, GOAL);
+		expect(acted).toEqual([{ kind: "message", text: "Run the tests." }]);
+	});
+
+	it("adds nothing to the log when nothing was learned", async () => {
+		const { deps, logs } = replay([{ action: { kind: "message", text: "Run the tests." } }, FINISH]);
+		await runCodingLoop(deps, GOAL);
+		expect(logs[1]).toEqual(["message: Run the tests."]);
+	});
+
+	it("reads `learned` off send_message, trimmed and capped, and absent when empty", () => {
+		expect(toDecision({ name: "send_message", arguments: { text: "go", learned: "  the fix is in x.ts  " } }).learned).toBe("the fix is in x.ts");
+		expect(toDecision({ name: "send_message", arguments: { text: "go", learned: "x".repeat(LEARNED_MAX + 50) } }).learned).toHaveLength(LEARNED_MAX);
+		expect(toDecision({ name: "send_message", arguments: { text: "go", learned: "   " } }).learned).toBeUndefined();
+		expect(toDecision({ name: "send_message", arguments: { text: "go" } }).learned).toBeUndefined();
+		expect(toDecision({ name: "send_message", arguments: { text: "go", learned: 7 } }).learned).toBeUndefined();
+	});
+
+	it("offers `learned` on send_message as OPTIONAL, and states its bound", () => {
+		const tool = CODING_TOOLS.find((t) => t.name === "send_message");
+		const params = tool?.parameters as { properties: Record<string, { description?: string }>; required: string[] };
+		expect(params.required).toEqual(["text"]);
+		expect(params.properties.learned?.description).toContain(`${LEARNED_MAX} characters`);
+		expect(params.properties.learned?.description).toMatch(/ONLY thing you keep between decisions/);
+	});
+
+	it("notes a re-read of an ISSUE and of a file that was not first in its list — the two shapes the old guard missed", async () => {
+		const { deps, logs, events } = replay([
+			{ action: { kind: "message", text: "Run: gh issue view 815 --repo ProAgentStore/platform --comments" } },
+			{ action: { kind: "message", text: "Quote lines 1-100 of src/pages/Dashboard.tsx and lines 1-63 of src/lib/instanceSearch.ts" } },
+			{ action: { kind: "message", text: "Let's read the full issue. Run: gh issue view 815 --repo ProAgentStore/platform --comments | tail -100" } },
+			{ action: { kind: "message", text: "Quote the full contents of src/lib/types.ts and src/lib/instanceSearch.ts" } },
+			FINISH,
+		]);
+		await runCodingLoop(deps, GOAL);
+		const notes = events.filter(([t]) => t === "repeated").map(([, m]) => m);
+		expect(notes).toHaveLength(2);
+		expect(notes[0]).toContain("issue #815 (already asked for at step 1)");
+		expect(notes[1]).toContain("file `src/lib/instanceSearch.ts` (already asked for at step 2)");
+		expect(notes[1]).not.toContain("types.ts");
+		// …and the brain reads it back at its next decision.
+		expect(logs[3]?.some((l) => l.includes("issue #815 (already asked for at step 1)"))).toBe(true);
+	});
+});
+
+describe("systemPrompt — who remembers what (#822)", () => {
+	it("states the asymmetry: the CLI remembers the session, the Pilot keeps only its step log", () => {
+		const p = systemPrompt(GOAL);
+		expect(p).toMatch(/the CLI remembers everything it has read and done this session\. YOU DO NOT/);
+		expect(p).toMatch(/you keep only the step log below, not what the CLI answered/);
+	});
+
+	it("tells it to hand over whole tasks, and not to ask for something merely in order to plan", () => {
+		const p = systemPrompt(GOAL);
+		expect(p).toMatch(/hand the CLI WHOLE TASKS/);
+		expect(p).toMatch(/never ask it to show you an issue or a file merely so that you can plan/);
+	});
+
+	it("names `learned` as the one thing that carries to the next decision, and forbids asking again", () => {
+		const p = systemPrompt(GOAL);
+		expect(p).toMatch(/put it in send_message's `learned`/);
+		expect(p).toMatch(/Never ask again for something the step log shows you already asked for; the CLI still has it/);
 	});
 });

@@ -256,7 +256,13 @@ const PATH_SHAPE = /^[\w.@~-][\w./@~-]*$/;
 const HAS_PATH_SHAPE = (t: string): boolean => PATH_SHAPE.test(t) && (t.includes("/") || /\.[a-z0-9]{1,8}$/i.test(t));
 
 /** A bare path with at least one directory component and an extension, e.g. `src/x.ts`. */
-const BARE_PATH = /(?:^|[\s(,])((?:[\w.@~-]+\/)+[\w.-]+\.[a-z0-9]{1,8})(?=$|[\s),.:;])/;
+const BARE_PATH = /(?:^|[\s(,])((?:[\w.@~-]+\/)+[\w.-]+\.[a-z0-9]{1,8})(?=$|[\s),.:;])/g;
+
+/** `gh issue view 815`, in any spelling of the command — a read whatever the prose around it says. */
+const ISSUE_COMMAND = /\bgh\s+issue\s+view\s+#?(\d+)/gi;
+
+/** "read issue #613 in full" — the prose form, only when a read verb is what governs the issue. */
+const ISSUE_PROSE = /\b(?:re-?read|read|view|show)\b[^.\n]{0,40}?\bissue\s+#(\d+)/gi;
 
 /** Trim, and strip a leading `./` — the two spellings the Pilot alternates between. */
 export function normalisePath(path: string): string {
@@ -264,51 +270,83 @@ export function normalisePath(path: string): string {
 }
 
 /**
- * The file a read-shaped instruction is about, or null when the instruction is not a read of a
- * file the Pilot could already have.
+ * Everything a read-shaped instruction asks to be shown, or `[]` when it is not a read of
+ * something the Pilot could already have asked for.
  *
- * Prefers the first backtick-quoted path, because that is how the Pilot writes them; falls back to
- * a bare `dir/file.ext` token. One path only: a multi-file read is keyed on its first file, which
- * is enough to catch the observed shape (one file, many ranges) without inventing a set key.
+ * EVERY path, and issues too (#822). This used to return the first path only, "enough to catch the
+ * observed shape (one file, many ranges)". Measured over the real instructions of runs 45660130 and
+ * 0d14e23e, that caught 1 re-read in 11: a multi-file read leads with a different file each time
+ * (`Dashboard.tsx` was quoted three times and never first twice), and the commonest re-read of all
+ * is not a file — `gh issue view 813` went out in seven of one run's ten steps. An issue is keyed
+ * `issue:N`, which no path can collide with.
  */
-export function readTarget(text: string): string | null {
-	if (!READ_VERB.test(text)) return null;
-	for (const m of text.matchAll(/`([^`\n]+)`/g)) {
-		const candidate = normalisePath(m[1] ?? "");
-		if (candidate && HAS_PATH_SHAPE(candidate)) return candidate;
+export function readTargets(text: string): string[] {
+	const targets = new Set<string>();
+	for (const m of text.matchAll(ISSUE_COMMAND)) targets.add(`issue:${m[1]}`);
+	for (const m of text.matchAll(ISSUE_PROSE)) targets.add(`issue:${m[1]}`);
+	if (READ_VERB.test(text)) {
+		for (const m of text.matchAll(/`([^`\n]+)`/g)) {
+			const candidate = normalisePath(m[1] ?? "");
+			if (candidate && HAS_PATH_SHAPE(candidate)) targets.add(candidate);
+		}
+		for (const m of text.matchAll(BARE_PATH)) targets.add(normalisePath(m[1] ?? ""));
 	}
-	const bare = text.match(BARE_PATH);
-	return bare ? normalisePath(bare[1] ?? "") : null;
+	return [...targets];
 }
 
 export type RereadVerdict = { verdict: "ok" } | { verdict: "note"; count: number; steps: number[] };
 
 /**
- * Has this run already read `path`?
+ * Has this run already read `target`?
  *
- * `sentReads` is one entry per instruction actually driven into the engine, in order — the read
- * target for a read, `""` for anything else — so an index here is the same 1-based instruction
- * ordinal {@link repetitionVerdict} reports, and "at step 3" means step 3. Whole run, not a window:
- * the second read of a file is worth a sentence whenever it happens, and a sentence is all this is.
+ * `sentReads` is one entry per instruction actually driven into the engine, in order — its
+ * {@link readTargets}, `[]` for anything that read nothing — so an index here is the same 1-based
+ * instruction ordinal {@link repetitionVerdict} reports, and "at step 3" means step 3. Whole run,
+ * not a window: the second read of a file is worth a sentence whenever it happens, and a sentence
+ * is all this is.
  */
-export function rereadVerdict(sentReads: readonly string[], path: string): RereadVerdict {
-	const key = normalisePath(path);
+export function rereadVerdict(sentReads: readonly (readonly string[])[], target: string): RereadVerdict {
+	const key = normalisePath(target);
 	if (!key) return { verdict: "ok" };
 	const steps: number[] = [];
-	for (let i = 0; i < sentReads.length; i++) if (normalisePath(sentReads[i] ?? "") === key) steps.push(i + 1);
+	for (let i = 0; i < sentReads.length; i++) if (sentReads[i]?.some((t) => normalisePath(t) === key)) steps.push(i + 1);
 	return steps.length ? { verdict: "note", count: steps.length, steps } : { verdict: "ok" };
+}
+
+/** One thing this instruction asks for again, and the steps that already asked for it. */
+export interface Reread {
+	target: string;
+	steps: number[];
+}
+
+/** The subset of `targets` this run has already read, each with where. */
+export function rereads(sentReads: readonly (readonly string[])[], targets: readonly string[]): Reread[] {
+	const out: Reread[] = [];
+	for (const target of targets) {
+		const v = rereadVerdict(sentReads, target);
+		if (v.verdict === "note") out.push({ target: normalisePath(target), steps: v.steps });
+	}
+	return out;
 }
 
 /**
  * What the brain is told about a re-read, in the step log it already reads back.
  *
- * Names the path and the steps — the fact `describe()`'s 120-character label lost — and the move
- * that is available: the content already arrived, so the next instruction is the edit.
+ * REWORDED at #822. This used to end "trust the content that already arrived in the terminal and
+ * your step log" — and it is in neither: the step log holds 120 characters of the Pilot's own
+ * instruction, the terminal its last {@link PILOT_PANE_CHARS}. The Pilot was re-reading BECAUSE
+ * the content was gone, so the advice could not be followed. This names where the content still
+ * is (the engine, which forgets nothing) and the two moves that do not need it back.
  */
-export function rereadNote(path: string, count: number, steps: number[]): string {
-	const where = steps.length === 1 ? `step ${steps[0]}` : `steps ${steps.join(", ")}`;
+export function rereadNote(hits: readonly Reread[]): string {
+	const what = hits
+		.map((h) => {
+			const name = h.target.startsWith("issue:") ? `issue #${h.target.slice(6)}` : `file \`${h.target}\``;
+			return `${name} (already asked for at ${h.steps.length === 1 ? "step" : "steps"} ${h.steps.join(", ")})`;
+		})
+		.join("; ");
 	return (
-		`[pilot note] file \`${normalisePath(path)}\` already read ${count} time(s) at ${where} — ` +
-		"commit to edits instead of re-reading; trust the content that already arrived in the terminal and your step log."
+		`[pilot note] re-read: ${what}. You can no longer see what came back, and asking again costs a step each time — ` +
+		"but the CLI still has all of it. Act on what you recorded as `learned`, or hand the CLI the whole task that needs this content instead of another read."
 	);
 }

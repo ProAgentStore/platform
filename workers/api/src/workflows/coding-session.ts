@@ -578,8 +578,8 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					// Pilot, every instruction it sent went through the `/message` route and landed
 					// here; driving the engine directly would have made the repo's own record of an
 					// autonomous run silently empty. Ungated by `loopRunId` for the same reason the
-					// refusal above is: it records what was driven, not who asked.
-					if (driven) await appendTimeline(env, { sessionId, instanceId, userId, type: "command", content: driven }).catch(() => undefined);
+					// refusal above is: it records what was driven, not who asked. A `learned` note (#822) lands beside it as a `brain` row.
+					if (driven || type === "learned") await appendTimeline(env, { sessionId, instanceId, userId, type: driven ? "command" : "brain", content: driven || message }).catch(() => undefined);
 					// Heartbeat the single-flight claim. Without it a run longer than
 					// STALE_DRIVER_MS would expire its OWN claim and a second Pilot could take the
 					// session out from under it — the exact collision the claim exists to prevent.

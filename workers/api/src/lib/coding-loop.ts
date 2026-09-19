@@ -3,14 +3,14 @@ import { hitOutputCap } from "./reply-truncation.js";
 import { authorityInstruction, screenInstruction, type MergePolicy } from "./coding-authority.js";
 import {
 	instructionKey,
-	readTarget,
+	readTargets,
 	renderPaneForPilot,
 	repeatCaution,
 	repeatNote,
 	repeatStopDetail,
 	repetitionVerdict,
 	rereadNote,
-	rereadVerdict,
+	rereads,
 	PILOT_PANE_CHARS,
 } from "./coding-repetition.js";
 import { clockLine } from "./coding-wait.js";
@@ -149,6 +149,8 @@ export type CodingOutcome = "done" | "stuck" | "needs_input" | "failed" | "max_s
 export interface CodingDecision {
 	thought?: string;
 	action?: CodingActionKind;
+	/** What the Pilot wants to still know at its next decision (#822) — see {@link LEARNED_MAX}. */
+	learned?: string;
 	finish?: { status: "done" | "failed"; detail: string };
 	/** The orchestrator can't proceed without a human (stuck handoff). */
 	stuck?: { why: string };
@@ -225,7 +227,7 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 	 * Parallel to `sentKeys` (#807): the file a sent instruction READ, or `""` when it read nothing.
 	 * One entry per sent instruction so an index is an instruction ordinal, not a read ordinal.
 	 */
-	const sentReads: string[] = [];
+	const sentReads: string[][] = [];
 	/** The instruction this run was warned about repeating, if any — read by the `finish` branch. */
 	let repeatedInstruction: string | null = null;
 	/** Consecutive failed engine turns, deduped by the turn's own end-instant (#545). */
@@ -399,24 +401,20 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 			}
 			sentKeys.push(key);
 
-			// RE-READING ONE FILE (#807). The bound above keys on the payload, and "quote lines 1-80
-			// of x.ts" and "quote lines 80-200 of x.ts" are two payloads — run 6bc4dbf3 sent nine of
-			// them and reached its first edit on step nine of ten. Keyed on the file PATH instead, and
-			// a NOTE only, never a stop: a re-read after an edit is real work, and the brain reacts to
-			// its own step log (the merge refusal and the repeat note above are the evidence). The
-			// note carries the path and the steps because `describe()`'s 120-character label is
-			// exactly what dropped the range list and left the Pilot unable to see it had the file.
-			const target = readTarget(decision.action.text);
-			if (target) {
-				const r = rereadVerdict(sentReads, target);
-				if (r.verdict === "note") {
-					const note = rereadNote(target, r.count, r.steps);
-					actionLog.push(note);
-					transcript.push(note);
-					await deps.onEvent?.("repeated", note);
-				}
+			// RE-READING (#807, widened at #822). The bound above keys on the payload, and "quote lines
+			// 1-80 of x.ts" and "quote lines 80-200 of x.ts" are two payloads — run 6bc4dbf3 sent nine
+			// of them and reached its first edit on step nine of ten. Keyed on WHAT is read instead —
+			// every path, and `gh issue view N` — and a NOTE only, never a stop: a re-read after an
+			// edit is real work, and the brain reacts to its own step log.
+			const targets = readTargets(decision.action.text);
+			const again = rereads(sentReads, targets);
+			if (again.length) {
+				const note = rereadNote(again);
+				actionLog.push(note);
+				transcript.push(note);
+				await deps.onEvent?.("repeated", note);
 			}
-			sentReads.push(target ?? "");
+			sentReads.push(targets);
 		}
 
 		// SPEAKING FOR THE OWNER IS STAMPED WHERE IT IS SAID (#505), not only in the report.
@@ -442,6 +440,16 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 		const ownerSpoke = (goal.ownerTurns ?? 0) > 0 || !!goal.userHint;
 		const attribution = decision.action.kind === "message" ? instructionAttributionNote(decision.action.text, ownerSpoke) : null;
 		const label = attribution ? `${describe(decision.action)}\n${attribution}` : describe(decision.action);
+		// THE PILOT'S ONLY MEMORY (#822). Each decision is a fresh model call that sees this log and
+		// the last few thousand characters of terminal — so what an engine reply SAID was gone two
+		// steps later, and 13 of 40 sampled steps were the Pilot asking for it again. `learned` is
+		// what it chose to keep, logged BEFORE the instruction it was decided alongside.
+		if (decision.learned) {
+			const learned = `[learned] ${decision.learned}`;
+			actionLog.push(learned);
+			transcript.push(learned);
+			await deps.onEvent?.("learned", learned);
+		}
 		actionLog.push(label);
 		transcript.push(label);
 		// The ACTION rides along with its label. `describe` truncates to 120 characters and
@@ -487,12 +495,25 @@ function describe(a: CodingActionKind): string {
  */
 const PILOT_MAX_TOKENS = 2048;
 
+/** Ceiling on one `learned` entry: ten steps of them still cost less than one terminal window. */
+export const LEARNED_MAX = 300;
+
 /** Exported for the contract test below: every advertised tool must have a `toDecision` case. */
 export const CODING_TOOLS = [
 	{
 		name: "send_message",
-		description: "Send a natural-language instruction to the coding CLI (the next single step toward the objective).",
-		parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
+		description: "Send a natural-language instruction to the coding CLI — a whole task where you can; it keeps its own memory of the session and you do not.",
+		parameters: {
+			type: "object",
+			properties: {
+				text: { type: "string" },
+				learned: {
+					type: "string",
+					description: `Optional, at most ${LEARNED_MAX} characters: what the terminal just told you that you will still need at a later decision (what an issue asks for, which file holds what, what already landed). It is added to your step log, which is the ONLY thing you keep between decisions.`,
+				},
+			},
+			required: ["text"],
+		},
 	},
 	// NO press_keys. `HeadlessSession.key()` is an unconditional no-op — correct, because a
 	// headless engine has no TTY to receive keystrokes — but the tool was still advertised, mapped
@@ -581,6 +602,12 @@ export function systemPrompt(goal: CodingGoal): string {
 		// that reading suggests is to ask again, which pushes it further out. This states the
 		// measurement; renderPaneForPilot states the per-decision number on the pane itself.
 		`- You see only the LAST ~${PILOT_PANE_CHARS} characters of the terminal, never all of it, and re-sending an instruction hoping earlier output will come back does not work — it will not come back.`,
+		// WHO REMEMBERS WHAT (#822). Runs 45660130 and 0d14e23e spent 11 of 20 steps asking for an
+		// issue or a file they had already been shown, because nothing of an engine reply survives to
+		// the next decision. The engine is the opposite: it implemented a whole feature in the one
+		// step that merely let it. So the rule is the asymmetry, and the two moves it implies.
+		"- MEMORY: the CLI remembers everything it has read and done this session. YOU DO NOT — between decisions you keep only the step log below, not what the CLI answered. So hand the CLI WHOLE TASKS (\"read issue #N, implement it, run the full suite, push, comment on the issue, then report what landed\") rather than one read at a time, and never ask it to show you an issue or a file merely so that you can plan: it plans better from what it already holds.",
+		"- When the terminal tells you something you will need later, put it in send_message's `learned` — that is the only thing that carries it to your next decision. Never ask again for something the step log shows you already asked for; the CLI still has it.",
 		// WHAT A TOOL RESULT COSTS (#700). The bullet above used to end "ask for a bounded slice (a
 		// line range, a grep, head/tail) rather than a full dump", and on the runner of the day that
 		// advice could not work: EVERY tool_result was cut to 240 characters with all whitespace
@@ -632,7 +659,7 @@ export async function decideCodingAction(
 		`\nTERMINAL (run-state: ${params.snapshot.runState}):`,
 		// Not a bare `slice(-6000)`: the tail is labelled with what it is a tail OF (#522, cause B).
 		terminal,
-		"\nDo the single next step toward the objective. Call exactly one tool.",
+		"\nDecide the next move toward the objective. Call exactly one tool.",
 	].join("\n");
 
 	const res = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", {
@@ -688,7 +715,7 @@ export function toDecision(call: { name: string; arguments: Record<string, unkno
 			// he was never asked about. The other doors into `/coding/act` (the console's manual
 			// `/message`, MCP, the Overseer) declare nothing, and the runner renders that as
 			// nothing rather than as a claim; see `packages/browser-runner/src/coding/turn-author.ts`.
-			return { action: { kind: "message", text: str(a.text), author: "pilot" } };
+			return { action: { kind: "message", text: str(a.text), author: "pilot" }, learned: str(a.learned).trim().slice(0, LEARNED_MAX) || undefined };
 		case "press_keys":
 			// No longer offered; if an older/cached tool list produces one, say so honestly rather
 			// than routing it into a no-op that reads as success.
