@@ -178,6 +178,9 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	list_instance_knowledge: "read",
 	list_connectors: "read",
 	list_instance_connectors: "read",
+	list_instance_mcp_grants: "read",
+	list_instance_mcp_input_requests: "read",
+	list_mcp_presets: "read",
 	list_instance_tools: "read",
 	list_trigger_actions: "read",
 	preview_instance_trigger: "read",
@@ -250,6 +253,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	set_instance_settings: "write",
 	set_instance_stats: "write",
 	set_instance_connector_consent: "write",
+	set_instance_mcp_grant: "write",
 	set_instance_tool: "write",
 	set_supervision_enabled: "write",
 	set_translation_config: "write",
@@ -274,7 +278,9 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	//    the pessimistic one, stated rather than left to the default. It lands on the same
 	//    annotation as `destructive` deliberately — the difference between those two is a
 	//    difference in the GATE (scope + confirm), not in what a host should ask a user. ──
+	answer_instance_mcp_input_request: "runtime",
 	approve_instance_task: "runtime",
+	test_instance_mcp_server: "runtime",
 	answer_instance_input: "runtime",
 	end_instance_takeover: "runtime",
 	resume_instance_takeover: "runtime",
@@ -431,9 +437,17 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// read-only session it cannot check a trigger it is allowed to read.
 	// `set_instance_connector_consent` is `write` on the same reasoning as `set_instance_tool`:
 	// it changes what an agent is PERMITTED to do, so a read-only session must not widen it.
-	read: 87,
-	write: 58,
-	runtime: 20,
+	// +3 read, +1 write, +2 runtime at #613 (outbound MCP connections — PAGS as an MCP client):
+	// `list_mcp_presets`, `list_instance_mcp_grants` and `list_instance_mcp_input_requests` read;
+	// `set_instance_mcp_grant` grants one remote tool on one endpoint (`write`, the same class as
+	// the connector consent beside it). The two `runtime` ones each reach a THIRD PARTY:
+	// `test_instance_mcp_server` contacts the endpoint (and is strictly rate-limited for the SSRF
+	// reason its route documents), and `answer_instance_mcp_input_request` retries the paused
+	// remote call with the owner's values — sending data off this platform is exactly what
+	// `runtime` is for, and neither belongs in a read-only session.
+	read: 90,
+	write: 59,
+	runtime: 22,
 	destructive: 18,
 };
 

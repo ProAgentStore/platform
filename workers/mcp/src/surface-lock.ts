@@ -529,4 +529,34 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.34 is published.
 	"0.1.35": "sha256:4bb1e1d1782c17dfaf23d2232084330a771440ac356a899976ca87d4fd62963c",
+	// 0.1.36 (#613, outbound MCP connections — PAGS as an MCP CLIENT): six new tool NAMES, all
+	// ALWAYS-ON, in a NEW registrar `instance-tools/mcp-connections.ts` (group `mcpConnections`
+	// in the contract table) — 183 registrations become 189, `MCP_TOOL_ALWAYS_ON` 159 → 165,
+	// `MCP_TOOL_GATED` stays 24.
+	//
+	//   * `list_mcp_presets` (read) — GET /v1/mcp/presets.
+	//   * `list_instance_mcp_grants` (read) — GET /v1/instances/:id/mcp/consent.
+	//   * `set_instance_mcp_grant` (write, dry_run) — PUT the same route; one (endpoint, tool)
+	//     pair, and granting also switches on the connector-level MCP write consent, as the route
+	//     does for the console.
+	//   * `test_instance_mcp_server` (runtime, dry_run) — POST /v1/instances/:id/mcp/test.
+	//   * `list_instance_mcp_input_requests` (read) — GET …/mcp/input-requests.
+	//   * `answer_instance_mcp_input_request` (runtime, dry_run) — POST …/mcp/input-requests/:id.
+	//
+	// The last two are `runtime` and not `write` because each reaches a THIRD PARTY: the test
+	// contacts the endpoint, and answering retries the paused remote call with the owner's
+	// values. `runtime` is the scope that means "this spends or drives something outside the
+	// platform", and neither belongs in a read-only session.
+	//
+	// SIX tools for a five-route group: the sixth, POST …/mcp/input-requests/:requestId, is the
+	// ANSWER half of the elicitation loop the group's own description names. It is missing from
+	// the parity inventory because `scripts/lib/api-calls.mjs` silently drops the console's
+	// multi-line call shape (verified against McpInputRequests.tsx:78) — a measurement defect
+	// recorded on #613, not a reason to ship a tool that can list a paused ask and never resolve it.
+	//
+	// Closes that group's `KNOWN_GAPS` entry (5 routes; parity 114 → 119 reachable of 166,
+	// 41 → 36 gaps across 7 groups). `SERVER_INSTRUCTIONS` did not move.
+	//
+	// Appended, never edited in place: 0.1.35 is published.
+	"0.1.36": "sha256:c61a8ba0de559e33f7097df56d3a743d51c30500aaf060f6737e37c70ad1c618",
 };

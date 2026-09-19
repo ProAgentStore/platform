@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**183 tool registrations.** 159 are always registered; 24 are gated to the console
+**189 tool registrations.** 165 are always registered; 24 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -400,6 +400,12 @@ immediately instead of a whole transcript.
 | `list_connectors` | Every connector this deployment knows, resolved for your account (configured / connected) | — | | |
 | `list_instance_connectors` | What THIS agent may do with each connector, with the refusal sentence when it may not | — | | |
 | `set_instance_connector_consent` | Grant or revoke a connector's WRITE consent on one instance | write | yes | |
+| `list_mcp_presets` | First-party MCP servers this deployment knows, as prefilled URLs | — | | |
+| `list_instance_mcp_grants` | Which remote MCP tools, on which endpoints, this agent may call | — | | |
+| `set_instance_mcp_grant` | Grant or revoke one remote tool on one endpoint (`*` = every non-destructive one) | write | yes | |
+| `test_instance_mcp_server` | Contact a remote MCP endpoint and report what this agent could actually call | runtime | yes | |
+| `list_instance_mcp_input_requests` | Outbound MCP calls paused because the server asked the person for more | — | | |
+| `answer_instance_mcp_input_request` | Answer (retrying the remote call) or cancel a paused ask | runtime | yes | |
 | `grant_instance_connector_folder` | Grant a folder (folders only; files refused server-side) | write | yes | |
 | `delete_instance_connector_grant` | Revoke a grant | destructive | yes | `delete_instance_connector_grant` |
 | `get_instance_connector_account` | Which of your accounts the instance uses per connector (e.g. Gmail): `pinned`, what a call `resolves` to, and `blocked` when it would use none | read | | |

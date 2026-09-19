@@ -18,6 +18,7 @@ import { registerCompositionTools } from "./composition.js";
 import { registerConnectorAccountTools, registerConnectorGrantTools } from "./connectors.js";
 import { registerGuideTools } from "./guide.js";
 import { registerKnowledgeTools } from "./knowledge.js";
+import { registerMcpConnectionTools } from "./mcp-connections.js";
 import { registerObservabilityTools } from "./observability.js";
 import { registerRecentTools } from "./recent.js";
 import { registerRepoTools } from "./repo.js";
@@ -57,6 +58,9 @@ export function registerInstanceTools(
 	registerConnectorGrantTools(server, ctx);
 	// Which of the owner's accounts an instance uses on a multi-account connector (#736).
 	registerConnectorAccountTools(server, ctx);
+	// PAGS as an MCP CLIENT — the outbound connections an instance makes to someone else's
+	// server. Ungated: an outbound connection is config on any instance, not a console surface.
+	registerMcpConnectionTools(server, ctx);
 	registerApplyTools(server, ctx);
 	registerRepoTools(server, ctx);
 	registerCodingTools(server, ctx);

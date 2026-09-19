@@ -125,6 +125,9 @@ const CONTROL_ARGS: ReadonlySet<string> = new Set([
 	// A registry id taken from `list_connectors` / `list_instance_connectors`, never composed;
 	// the route validates it and 404s an unknown one rather than storing it.
 	"connector",
+	// #613: addressing — WHICH paused outbound-MCP ask `answer_instance_mcp_input_request`
+	// resolves. Taken from `list_instance_mcp_input_requests`, never composed.
+	"request_id",
 ]);
 
 /**
@@ -218,6 +221,29 @@ const READBACK: Record<string, string | null> = {
 	"set_instance_voice_settings.keep_awake": "get_instance_voice_settings",
 	"set_instance_voice_settings.vocabulary": "get_instance_voice_settings",
 	"update_profile.fields": "get_profile",
+
+	// ── #613: outbound MCP connections (PAGS as an MCP client) ──
+	// A grant is stored as an (endpoint, tool) pair and both come back from the reader beside it.
+	// The url is NORMALIZED before storage, so what reads back is the canonical form, not the
+	// string sent — which is the point of normalizing: consent, credentials and the trace all key
+	// on one spelling.
+	"set_instance_mcp_grant.url": "list_instance_mcp_grants",
+	"set_instance_mcp_grant.tool": "list_instance_mcp_grants",
+	// Which way the ask was resolved shows up as the request's status.
+	"answer_instance_mcp_input_request.action": "list_instance_mcp_input_requests",
+	// NOT readable, and deliberately so rather than by omission:
+	// · the probe target is config for ONE call. It does refresh a per-endpoint tool catalog
+	//   server-side, but no MCP reader returns that catalog — the endpoint comes back in the
+	//   tool's own response, which is an answer, not a reader.
+	"test_instance_mcp_server.url": null,
+	// · whether to use the stored credential is a per-call choice; nothing stores it.
+	"test_instance_mcp_server.auth": null,
+	// · the elicited values are sent to the REMOTE server and are never written down here. The
+	//   route logs field names and a byte count precisely so the values are not persisted —
+	//   an elicited value is likelier than an ordinary argument to be a secret. A reader that
+	//   returned them would undo that decision, so this null is the correct answer rather than
+	//   a gap to close.
+	"answer_instance_mcp_input_request.values": null,
 
 	// ── #613: a run's detail view and its human handoffs ──
 	// The value the owner supplies to a paused run is saved to their Profile, which is where

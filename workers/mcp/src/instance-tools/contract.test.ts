@@ -12,6 +12,7 @@ import { registerConnectorAccountTools, registerConnectorGrantTools } from "./co
 import { registerGuideTools } from "./guide.js";
 import { registerInstanceTools } from "./index.js";
 import { registerKnowledgeTools } from "./knowledge.js";
+import { registerMcpConnectionTools } from "./mcp-connections.js";
 import { registerObservabilityTools } from "./observability.js";
 import { registerRecentTools } from "./recent.js";
 import { registerRepoTools } from "./repo.js";
@@ -250,6 +251,14 @@ const TABLE: Record<string, Row> = {
 	agent_trace: ["observability", "none", null, null, "instance_id,level,limit,offset,source,token,trace_id"],
 	apply_to_job: ["apply", "runtime", null, "envelope", "dry_run,instance_id,submit,token,url"],
 	approve_instance_task: ["runtime", "runtime", null, "envelope", "dry_run,instance_id,task_id,token"],
+	answer_instance_mcp_input_request: [
+		"mcpConnections",
+		"runtime",
+		null,
+		"envelope",
+		"action,dry_run,instance_id,request_id,token,values",
+	],
+	test_instance_mcp_server: ["mcpConnections", "runtime", null, "envelope", "auth,dry_run,instance_id,token,url"],
 	answer_instance_input: ["runtime", "runtime", null, "envelope", "dry_run,instance_id,task_id,token,value"],
 	ask_ticket: ["board", "write", null, "envelope", "dry_run,instance_id,question,task_id,token"],
 	billing_status: ["account", "none", null, null, "token"],
@@ -344,6 +353,9 @@ const TABLE: Record<string, Row> = {
 	list_instance_tools: ["base", "none", null, null, "allowed_only,instance_id,schemas,token"],
 	list_connectors: ["connectors", "none", null, null, "token"],
 	list_instance_connectors: ["connectors", "none", null, null, "instance_id,token"],
+	list_instance_mcp_grants: ["mcpConnections", "none", null, null, "instance_id,token"],
+	list_instance_mcp_input_requests: ["mcpConnections", "none", null, null, "instance_id,token"],
+	list_mcp_presets: ["mcpConnections", "none", null, null, "token"],
 	list_trigger_actions: ["triggers", "none", null, null, "instance_id,token"],
 	preview_instance_trigger: [
 		"triggers",
@@ -397,6 +409,7 @@ const TABLE: Record<string, Row> = {
 	set_instance_stats: ["stats", "write", null, "envelope", "dry_run,instance_id,ops,token"],
 	set_instance_tool: ["base", "write", null, "text", "dry_run,enabled,instance_id,token,tool"],
 	set_instance_connector_consent: ["connectors", "write", null, "envelope", "connector,dry_run,enabled,instance_id,token"],
+	set_instance_mcp_grant: ["mcpConnections", "write", null, "envelope", "dry_run,enabled,instance_id,token,tool,url"],
 	set_supervision_enabled: ["composition", "write", null, null, "enabled,supervision_id,supervisor_instance_id,token"],
 	set_translation_config: ["settings", "write", null, "envelope", "dry_run,enabled,font_size,instance_id,target,token,transliterate,word_tap"],
 	set_instance_connector_account: ["connectorAccounts", "write", null, "envelope", "account_id,connector,dry_run,instance_id,token"],
@@ -450,6 +463,7 @@ const REGISTRARS: Record<string, (s: unknown, c: InstanceToolsCtx) => void> = {
 	connectorAccounts: registerConnectorAccountTools as any,
 	guide: registerGuideTools as any,
 	knowledge: registerKnowledgeTools as any,
+	mcpConnections: registerMcpConnectionTools as any,
 	observability: registerObservabilityTools as any,
 	recent: registerRecentTools as any,
 	repo: registerRepoTools as any,
