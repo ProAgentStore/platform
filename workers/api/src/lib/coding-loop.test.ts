@@ -906,7 +906,7 @@ describe("the Pilot keeps what it learned, because nothing else survives a decis
 
 	it("offers `learned` on send_message as OPTIONAL, and states its bound", () => {
 		const tool = CODING_TOOLS.find((t) => t.name === "send_message");
-		const params = tool?.parameters as { properties: Record<string, { description?: string }>; required: string[] };
+		const params = tool?.parameters as unknown as { properties: Record<string, { description?: string }>; required: string[] };
 		expect(params.required).toEqual(["text"]);
 		expect(params.properties.learned?.description).toContain(`${LEARNED_MAX} characters`);
 		expect(params.properties.learned?.description).toMatch(/ONLY thing you keep between decisions/);
