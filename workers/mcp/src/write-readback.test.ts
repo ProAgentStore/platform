@@ -368,6 +368,20 @@ const READBACK: Record<string, string | null> = {
 	"grant_instance_connector_folder.resource_id": "list_instance_connector_grants",
 	"grant_instance_connector_folder.name": "list_instance_connector_grants",
 	"delete_instance_connector_grant.provider": "list_instance_connector_grants",
+
+	// ── file-connector imports (#613) ──
+	// `title` is the one argument that becomes stored content: it lands as the knowledge
+	// document's title, so the document list reads it back.
+	"import_instance_drive_file.title": "list_instance_knowledge",
+	"import_instance_workdrive_file.title": "list_instance_knowledge",
+	// The rest ADDRESS a file at the provider and are never stored. `null` rather than
+	// `list_instance_knowledge` on purpose: the imported document keeps `sourceUrl`, which is the
+	// provider's own canonical link read off the file — NOT an echo of the `url` the caller sent,
+	// and nothing at all when the caller sent an id. Declaring a reader here would claim a
+	// round-trip that does not hold.
+	"import_instance_drive_file.url": null,
+	"import_instance_workdrive_file.url": null,
+	"import_instance_workdrive_file.resource_id": null,
 	// #736: the pin set_instance_connector_account saves is the `pinned` get_instance_connector_account returns.
 	"set_instance_connector_account.connector": "get_instance_connector_account",
 	"set_instance_connector_account.account_id": "get_instance_connector_account",

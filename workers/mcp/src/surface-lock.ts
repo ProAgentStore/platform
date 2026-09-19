@@ -644,4 +644,25 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.39 is published.
 	"0.1.40": "sha256:287bc6f14e3720b6882012337e9a907a77165df9ae01c335a38edd12a210f00a",
+	// 0.1.41 (#613, the file-connector group): three new tool NAMES, all ALWAYS-ON — 199
+	// registrations become 202, `MCP_TOOL_ALWAYS_ON` 175 → 178, `MCP_TOOL_GATED` stays 24.
+	//
+	//   * `list_instance_drive_files` (read) — GET /v1/drive/instances/:id/files in
+	//     `instance-tools/connectors.ts`, beside the grant tools whose `grant_id` it requires.
+	//   * `import_instance_drive_file` (write, dry_run) — POST /v1/drive/instances/:id/import.
+	//   * `import_instance_workdrive_file` (write, dry_run) — POST /v1/workdrive/instances/:id/import.
+	//
+	// THREE tools and not one switching on `provider`, unlike every other tool in that file. The
+	// two import routes are not symmetrical — Drive takes `fileId` and answers `driveFile`/
+	// `webViewLink`, WorkDrive takes `resourceId` and answers `workdriveFile`/`permalink` — so a
+	// single tool would have to silently re-key the caller's file argument, and sending Drive's
+	// key to WorkDrive is a 400 the caller cannot see coming. Browsing is asymmetrical too:
+	// WorkDrive's folder listing is a different route that is ALREADY reachable, which is why
+	// only Drive gets a list tool.
+	//
+	// Closes that group's `KNOWN_GAPS` entry (3 routes; parity 126 → 129 reachable of 166,
+	// 29 → 26 gaps across 4 groups). `SERVER_INSTRUCTIONS` did not move.
+	//
+	// Appended, never edited in place: 0.1.40 is published.
+	"0.1.41": "sha256:f13c4e1be1626575c4a83a5bc3f624d2db0a3b55801a919b5882057c5016124a",
 };

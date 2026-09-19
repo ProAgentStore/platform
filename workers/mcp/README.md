@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**199 tool registrations.** 175 are always registered; 24 are gated to the console
+**202 tool registrations.** 178 are always registered; 24 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -403,6 +403,9 @@ immediately instead of a whole transcript.
 | `set_instance_tool` | Switch one tool on or off for this instance | write | yes | |
 | `call_instance_tool` | Invoke a connector tool directly (`tool` + `input`) | write | no ([why](#tools-with-no-dry-run)) | |
 | `connector_status` | Is a file connector connected, and is this deployment configured for it? | — | | |
+| `list_instance_drive_files` | Files inside a granted Google Drive folder; `grant_id` required, a folder outside the grant is refused (#613) | read | | |
+| `import_instance_drive_file` | Copy ONE Drive file into the instance knowledge base. Adds, never syncs (#613) | write | yes | |
+| `import_instance_workdrive_file` | The same for Zoho WorkDrive — takes `resource_id`, not `file_id` (#613) | write | yes | |
 | `list_instance_connector_grants` | Folders granted to this instance — the grant *is* the permission | — | | |
 | `list_connectors` | Every connector this deployment knows, resolved for your account (configured / connected) | — | | |
 | `list_instance_connectors` | What THIS agent may do with each connector, with the refusal sentence when it may not | — | | |

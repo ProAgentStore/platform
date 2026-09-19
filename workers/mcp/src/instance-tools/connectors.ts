@@ -211,6 +211,137 @@ export function registerConnectorGrantTools(server: McpServer, ctx: InstanceTool
 			return jsonText(data);
 		},
 	);
+
+	// ── Browsing and importing a granted folder's files (#613) ─────────────────
+	//
+	// The grant routes above hand out folder access; these are what that access is FOR. Until now
+	// an MCP caller could grant an instance a Drive folder and then neither see inside it nor pull
+	// anything out of it, which is the half of the capability that does something.
+	//
+	// NO `providerSchema` here, deliberately — unlike every tool above, these are per-provider.
+	// The two import routes are NOT symmetrical: Drive takes `fileId` and answers `driveFile`
+	// with a `webViewLink`, WorkDrive takes `resourceId` and answers `workdriveFile` with a
+	// `permalink`. One tool switching on `provider` would have to silently re-key the caller's
+	// file argument, and sending Drive's key to WorkDrive is a 400 the caller cannot see coming.
+	// Browsing is asymmetrical too: Drive's file list is `GET …/instances/:id/files`, while
+	// WorkDrive's is `GET …/instances/:id/folder`, which is ALREADY reachable over MCP and so is
+	// not duplicated here. Keep them separate.
+
+	server.tool(
+		"list_instance_drive_files",
+		"List the files inside a Google Drive folder one of your instances has been granted. `grant_id` is required and comes from list_instance_connector_grants — the grant IS the permission, and a folder outside its subtree is refused (403) rather than listed. Omit `folder` to list the granted folder itself; pass a subfolder id from a previous call to walk down. Returns `{files, grant, folder}`. For Zoho WorkDrive use the workdrive folder endpoint instead — this tool is Drive-only, because the two providers do not share a browse route. Import a file you find here with import_instance_drive_file.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances"),
+			grant_id: z.string().describe("Grant id from list_instance_connector_grants. Required — the route refuses without it."),
+			folder: z.string().optional().describe("A folder id inside the grant. Defaults to the granted folder itself."),
+			q: z.string().optional().describe("Google Drive search query, to narrow the listing."),
+			limit: z.coerce.number().optional().describe("How many files to return. Defaults to 50."),
+		},
+		async ({ token, instance_id, grant_id, folder, q, limit }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const params = new URLSearchParams({ grantId: grant_id });
+			if (folder) params.set("folder", folder);
+			if (q) params.set("q", q);
+			if (limit !== undefined) params.set("limit", String(limit));
+			const data = await authedCall(
+				`${PROVIDERS.google_drive.base}/instances/${encodeURIComponent(instance_id)}/files?${params.toString()}`,
+				sessionToken,
+				{},
+				env,
+			);
+			return jsonText({ provider: "google_drive", ...(data as Record<string, unknown>) });
+		},
+	);
+
+	server.tool(
+		"import_instance_drive_file",
+		"Copy one Google Drive file into an instance's knowledge base, where it is vectorized like any other document. Identify the file by `file_id` (from list_instance_drive_files) or by its share `url`; `grant_id` is required either way, and a file outside that grant's folder is refused (403) — the grant is the permission, not the id you hold. `title` defaults to the file's own name. This ADDS a document: it does not sync, and importing the same file twice creates two. An instance whose agent cannot read a knowledge base is refused (403), since that is the only place an import lands. WRITE.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances"),
+			grant_id: z.string().describe("Grant id from list_instance_connector_grants. Required — the route refuses without it."),
+			file_id: z.string().optional().describe("Google Drive file id, from list_instance_drive_files. Either this or url is required."),
+			url: z.string().optional().describe("The file's Drive share URL, if you do not have its id."),
+			title: z.string().optional().describe("Override the document title (defaults to the file's own name, max 500 chars)."),
+			dry_run: z.boolean().optional().describe("Report the import that would happen, without importing."),
+		},
+		async ({ token, instance_id, grant_id, file_id, url, title, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, grant_id, file_id, url, title };
+			// `write`, matching `grant_instance_connector_folder` beside it: this adds a document to
+			// the knowledge base — additive, and removable with delete_instance_knowledge — rather
+			// than destroying anything. Not `runtime` either: the fetch happens server-side inside
+			// the owner's own already-granted scope, and drives no machine.
+			const denied = await requirePermission(safetyFor(token), "write", "import_instance_drive_file", input);
+			if (denied) return denied;
+			// Refused here rather than at the route, which answers the same 400 for both halves of
+			// this either/or — a caller that sent neither reads "fileId or url required" and cannot
+			// tell which name this tool actually takes.
+			if (!file_id && !url) return text("Provide either `file_id` or `url` for the Drive file to import.");
+			const endpoint = `${PROVIDERS.google_drive.base}/instances/${encodeURIComponent(instance_id)}/import`;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "import_instance_drive_file", "copy a Google Drive file into an instance's knowledge base", input, {
+					endpoint,
+					method: "POST",
+					effect: `${instance_id} would gain ONE knowledge document copied from ${file_id ?? url}. Nothing is synced afterwards, and a second import of the same file would add a second document.`,
+				});
+			}
+			const data = await authedCall(
+				endpoint,
+				sessionToken,
+				{ method: "POST", body: JSON.stringify({ fileId: file_id, url, title, grantId: grant_id }) },
+				env,
+			);
+			if (!(data as { error?: string }).error) {
+				await audit(safetyFor(token), { tool: "import_instance_drive_file", action: "completed", input, result: data });
+			}
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"import_instance_workdrive_file",
+		"Copy one Zoho WorkDrive file into an instance's knowledge base, where it is vectorized like any other document. Identify the file by `resource_id` — WorkDrive's own name for it, NOT Drive's `file_id` — or by its share `url`; `grant_id` is required either way, and a file outside that grant's folder is refused (403). `title` defaults to the file's own name. This ADDS a document: it does not sync, and importing the same file twice creates two. Browse a granted WorkDrive folder with the workdrive folder endpoint; list_instance_drive_files is Google Drive only. WRITE.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances"),
+			grant_id: z.string().describe("Grant id from list_instance_connector_grants. Required — the route refuses without it."),
+			resource_id: z.string().optional().describe("Zoho WorkDrive resource id. Either this or url is required."),
+			url: z.string().optional().describe("The file's WorkDrive share URL, if you do not have its resource id."),
+			title: z.string().optional().describe("Override the document title (defaults to the file's own name, max 500 chars)."),
+			dry_run: z.boolean().optional().describe("Report the import that would happen, without importing."),
+		},
+		async ({ token, instance_id, grant_id, resource_id, url, title, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, grant_id, resource_id, url, title };
+			const denied = await requirePermission(safetyFor(token), "write", "import_instance_workdrive_file", input);
+			if (denied) return denied;
+			if (!resource_id && !url) return text("Provide either `resource_id` or `url` for the WorkDrive file to import.");
+			const endpoint = `${PROVIDERS.zoho_workdrive.base}/instances/${encodeURIComponent(instance_id)}/import`;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "import_instance_workdrive_file", "copy a Zoho WorkDrive file into an instance's knowledge base", input, {
+					endpoint,
+					method: "POST",
+					effect: `${instance_id} would gain ONE knowledge document copied from ${resource_id ?? url}. Nothing is synced afterwards, and a second import of the same file would add a second document.`,
+				});
+			}
+			const data = await authedCall(
+				endpoint,
+				sessionToken,
+				{ method: "POST", body: JSON.stringify({ resourceId: resource_id, url, title, grantId: grant_id }) },
+				env,
+			);
+			if (!(data as { error?: string }).error) {
+				await audit(safetyFor(token), { tool: "import_instance_workdrive_file", action: "completed", input, result: data });
+			}
+			return jsonText(data);
+		},
+	);
+
 }
 
 // ── Which account an instance uses (#736) ───────────────────────────────────

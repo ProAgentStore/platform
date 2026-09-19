@@ -146,6 +146,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	get_instance_instructions: "read",
 	get_instance_connector_account: "read",
 	get_instance_loop_limits: "read",
+	list_instance_drive_files: "read",
 	get_instance_loop_presets: "read",
 	get_instance_operator_manual: "read",
 	get_instance_memory: "read",
@@ -249,6 +250,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	set_instance_board_config: "write",
 	set_instance_instructions: "write",
 	set_instance_connector_account: "write",
+	import_instance_drive_file: "write",
+	import_instance_workdrive_file: "write",
 	set_instance_loop_limits: "write",
 	set_instance_loop_presets: "write",
 	set_instance_model: "write",
@@ -477,8 +480,14 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// starts nothing — `start_instance_loop` is still the call that spends anything. Not
 	// `destructive` either, though clearing both bounds discards a configuration: the prior values
 	// are readable first with the get tool or `dry_run`, and writable straight back.
-	read: 93,
-	write: 62,
+	// +1 read, +2 write at #613 (file-connector reads and imports): `list_instance_drive_files`
+	// browses a granted Drive folder; `import_instance_drive_file` and
+	// `import_instance_workdrive_file` copy ONE file into the instance knowledge base. `write` and
+	// not `runtime`: the fetch happens server-side inside a grant the owner already made, and
+	// drives no machine. Not `destructive` either — an import ADDS a document, and the document it
+	// adds is removable with `delete_instance_knowledge`.
+	read: 94,
+	write: 64,
 	// +1 runtime at #806: `continue_instance_run`. `runtime` rather than `write` for the reason
 	// `start_instance_loop` is — it starts an autonomous run that spends on its own — and the
 	// two must agree, because a caller holding the scope to start one holding a narrower one to

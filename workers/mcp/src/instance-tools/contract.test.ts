@@ -331,6 +331,8 @@ const TABLE: Record<string, Row> = {
 	get_profile: ["apply", "none", null, null, "token"],
 	get_translation_config: ["settings", "none", null, null, "instance_id,token"],
 	grant_instance_connector_folder: ["connectors", "write", null, "envelope", "dry_run,instance_id,name,provider,resource_id,token,url"],
+	import_instance_drive_file: ["connectors", "write", null, "envelope", "dry_run,file_id,grant_id,instance_id,title,token,url"],
+	import_instance_workdrive_file: ["connectors", "write", null, "envelope", "dry_run,grant_id,instance_id,resource_id,title,token,url"],
 	hint_instance_task: ["board", "write", null, "envelope", "dry_run,hint,instance_id,task_id,token"],
 	ingest_repo: ["repo", "write", null, "envelope", "branch,dry_run,instance_id,repo_url,token"],
 	ingest_repo_status: ["repo", "none", null, null, "instance_id,token"],
@@ -354,6 +356,7 @@ const TABLE: Record<string, Row> = {
 	list_connection_deliveries: ["composition", "none", null, null, "instance_id,limit,status,token"],
 	list_errors: ["observability", "none", null, null, "limit,scope,source,token"],
 	list_instance_connector_grants: ["connectors", "none", null, null, "instance_id,provider,token"],
+	list_instance_drive_files: ["connectors", "none", null, null, "folder,grant_id,instance_id,limit,q,token"],
 	list_instance_files: ["knowledge", "none", null, null, "instance_id,token"],
 	list_instance_knowledge: ["knowledge", "none", null, null, "instance_id,token"],
 	// +schemas at #569: the input schemas are opt-in now, because the default response was 89 KB.

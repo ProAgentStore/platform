@@ -177,11 +177,6 @@ const KNOWN_GAPS = [
 	},
 	{
 		why:
-			"File-connector reads and imports: list a granted Drive folder's files, and import from Drive or WorkDrive into an instance. The grants themselves ARE reachable (`list_instance_connector_grants`), which is what makes the missing import conspicuous. #613.",
-		match: /^[A-Z]+ \/v1\/(drive|workdrive)\/instances\/\{\}\/(files|import)$/,
-	},
-	{
-		why:
 			"Assorted single routes with no group: the creator dashboard tallies, the stats source catalogue, the behaviour SCHEMA (`get_instance_behaviour` reads the values but not the field table the console renders), deleting one chat turn, posting a system message into a conversation, and the translation endpoint the gloss layer calls. #613.",
 		match:
 			/^[A-Z]+ \/v1\/(dashboard\/(creator|usage)|stats\/sources|instances\/behaviour-schema|instances\/\{\}\/(messages\/\{\}|system-message|translate))$/,

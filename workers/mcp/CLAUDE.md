@@ -90,7 +90,8 @@ src/
 │                     replay and delete that complete them (#613), loops, loop presets
     ├── account.ts        13 tools — whoami, billing, usage, keys, email, profile, budget limits,
     │                     notifications, account preferences (#613)
-    ├── connectors.ts     9 tools — connector status, folder grants, which account an instance uses
+    ├── connectors.ts    12 tools — connector status, folder grants, browsing and importing a
+    │                             granted folder's files, which account an instance uses
 │                     (#736), the catalogue, this agent's verdict, and write consent (#613)
     ├── stats.ts          4 tools — declarative stats cards (creator schema + subscriber override)
     ├── mcp-connections.ts 6 tools — PAGS as an MCP CLIENT: presets, per-(endpoint,tool) grants,
@@ -104,9 +105,9 @@ src/
                           surfaces:["coding"]) + 5 loop tools (3 run + 2 objective queue)
 ```
 
-**199 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
+**202 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
 `coding-tools.ts` — all of them behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 151 across `instance-tools/`. 175 are always registered; 24 are
+`storage-tools.ts`, and 154 across `instance-tools/`. 178 are always registered; 24 are
 surface-gated (apply=4, repo=3, coding=17).
 
 Those four numbers ADD UP to the headline, and that is the point of stating them: 21 + 13
