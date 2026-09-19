@@ -75,7 +75,23 @@ describe("composeInstanceActivity", () => {
 	it("carries lastOutcome while the run is STILL OPEN, not only after it ends", () => {
 		const [rec] = composeInstanceActivity([run({ instanceId: "a", runId: "open-1" })], new Map(), NOW);
 		expect(rec.health).toBe("working");
-		expect(rec.lastOutcome).toEqual({ runId: "open-1", status: "running", stopReason: null, finishedAt: null });
+		expect(rec.lastOutcome).toEqual({
+			runId: "open-1",
+			status: "running",
+			stopReason: null,
+			finishedAt: null,
+			startedAt: NOW - MIN,
+			lastAliveAt: NOW - 1000,
+		});
+	});
+
+	it("carries the run's own timestamps, which is what 'last active' is computed from", () => {
+		// `last_activity_at` moves only on owner-driven events, so a Pilot working unattended for
+		// two hours would sort below an instance the owner merely opened. These are the other two
+		// terms of max(lastActivityAt, lastAliveAt, startedAt).
+		const [rec] = composeInstanceActivity([run({ instanceId: "a", startedAt: NOW - 2 * MIN, lastAliveAt: NOW - 5000 })], new Map(), NOW);
+		expect(rec.lastOutcome?.startedAt).toBe(NOW - 2 * MIN);
+		expect(rec.lastOutcome?.lastAliveAt).toBe(NOW - 5000);
 	});
 
 	it("carries the stop reason, which is what separates 'raise the cap' from 'the objective is wrong'", () => {

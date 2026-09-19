@@ -74,6 +74,12 @@ export interface Instance {
 	category?: string;
 	status: string;
 	created_at: string;
+	/**
+	 * When the OWNER last used this instance — chat, task create, apply start, session open. It is
+	 * NOT when the instance was last doing something: a run working unattended never moves it
+	 * (#815). `lib/instanceActivity.ts` combines it with the run's own heartbeat for that.
+	 */
+	lastActivityAt?: string | null;
 	capabilities?: {
 		surfaces: string[];
 		runtime?: string;

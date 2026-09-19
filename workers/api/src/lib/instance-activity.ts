@@ -50,6 +50,17 @@ export interface LastOutcome {
 	status: string;
 	stopReason: string | null;
 	finishedAt: number | null;
+	/**
+	 * When the run began, and when it last showed a sign of life.
+	 *
+	 * Here because "last active" cannot be answered without them. `agent_instances.last_activity_at`
+	 * moves only on OWNER-driven events, so an instance whose Pilot has been working unattended for
+	 * two hours sorts below one the owner merely opened — which is why the list's default sort is
+	 * still labelled "Recently used". A caller ordering by real activity needs
+	 * `max(lastActivityAt, lastAliveAt, startedAt)`, and only these two come from the run.
+	 */
+	startedAt: number;
+	lastAliveAt: number | null;
 }
 
 export interface InstanceActivity {
@@ -100,7 +111,14 @@ export function composeInstanceActivity(
 			health: instanceHealthFor(run, now),
 			queueDepth: queueDepths.get(instanceId) ?? 0,
 			lastOutcome: run
-				? { runId: run.runId, status: run.status, stopReason: run.stopReason, finishedAt: run.finishedAt }
+				? {
+						runId: run.runId,
+						status: run.status,
+						stopReason: run.stopReason,
+						finishedAt: run.finishedAt,
+						startedAt: run.startedAt,
+						lastAliveAt: run.lastAliveAt ?? null,
+					}
 				: null,
 		});
 	}

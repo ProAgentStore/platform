@@ -7,6 +7,8 @@ import { api } from "@proagentstore/sdk/client";
 import type { Agent, Instance } from "../lib/types";
 import { capabilityBadges, identityFor } from "../lib/identity";
 import { INSTANCE_SORTS, INSTANCE_SORT_LABEL, type InstanceSort, agentOptions, listInstances, parseSort, rememberSort, rememberedSort } from "../lib/instanceList";
+import { HEALTH_DOT, HEALTH_LABEL, HEALTH_TEXT, INSTANCE_HEALTHS, activityFor, healthCounts, outcomeLine, type InstanceHealth } from "../lib/instanceActivity";
+import { useActivity } from "../hooks/useActivity";
 import { platformToolGroups } from "../lib/platformTools";
 
 type SurfaceDoc = {
@@ -36,8 +38,25 @@ export default function Dashboard() {
 	// the search box and is not persisted; the sort hides nothing, so it is.
 	const [instanceSort, setInstanceSort] = useState<InstanceSort>(rememberedSort);
 	const [instanceAgent, setInstanceAgent] = useState("");
+	// Status is a FILTER, so like the agent filter and the search box it is not persisted: a filter
+	// that survived a reload is a list silently missing rows.
+	const [instanceHealth, setInstanceHealth] = useState<InstanceHealth | "">("");
+	// One call for the whole account, polled only while this tab is the one on screen (#815).
+	const activity = useActivity(tab === "instances");
 	const instanceAgents = agentOptions(instances);
-	const visibleInstances = listInstances(instances, { query: instanceQuery, sort: instanceSort, agentId: instanceAgent });
+	const healthTotals = healthCounts(instances, activity.byInstance);
+	const visibleInstances = listInstances(instances, {
+		query: instanceQuery,
+		sort: instanceSort,
+		agentId: instanceAgent,
+		health: instanceHealth,
+		activity: activity.byInstance,
+	});
+	const clearInstanceFilters = () => {
+		setInstanceQuery("");
+		setInstanceAgent("");
+		setInstanceHealth("");
+	};
 	const navigate = useNavigate();
 
 	const loadAgents = useCallback(async () => {
@@ -211,6 +230,58 @@ export default function Dashboard() {
 									</select>
 								</label>
 							)}
+							{/* Status — a segmented control rather than a third select, matching BoardTab's
+							    view toggle: four fixed choices are worth one tap, and the counts are the
+							    part that makes the control readable before you use it.
+
+							    Rendered only once the first poll has landed. Before that every instance
+							    reads idle, so the control would offer three segments that match nothing
+							    and blame the filter for it.
+
+							    A zero-count segment stays VISIBLE but muted. Hiding it would reflow the
+							    control every time a run starts or stops, which is a moving target on the
+							    one screen whose job is to be glanced at. */}
+							{activity.asOf > 0 && (
+								<fieldset className="flex border border-line rounded-lg overflow-hidden min-w-0" aria-label="Filter instances by status">
+									<button
+										type="button"
+										onClick={() => setInstanceHealth("")}
+										aria-pressed={instanceHealth === ""}
+										className={`px-2 py-1.5 text-xs font-bold ${instanceHealth === "" ? "bg-accent-soft text-accent" : "text-muted hover:bg-panel-hover"}`}
+									>
+										All
+									</button>
+									{INSTANCE_HEALTHS.map((h) => (
+										<button
+											key={h}
+											type="button"
+											onClick={() => setInstanceHealth(h)}
+											aria-pressed={instanceHealth === h}
+											title={`${HEALTH_LABEL[h]} (${healthTotals[h]})`}
+											className={`px-2 py-1.5 text-xs font-bold whitespace-nowrap ${
+												instanceHealth === h
+													? "bg-accent-soft text-accent"
+													: healthTotals[h] === 0
+														? "text-muted-soft hover:bg-panel-hover"
+														: "text-muted hover:bg-panel-hover"
+											}`}
+										>
+											<span className="hidden sm:inline">{HEALTH_LABEL[h]} </span>
+											<span className="sm:hidden">{HEALTH_LABEL[h].slice(0, 1)}</span>
+											{healthTotals[h]}
+										</button>
+									))}
+								</fieldset>
+							)}
+							{/* A poll that failed keeps the dots on screen — they are still the best answer
+							    anyone has — but says so, because a stale verdict presented as fresh is the
+							    failure #291 is about. */}
+							{activity.stale && (
+								<span className="text-2xs text-muted-soft">
+									Status may be out of date.{" "}
+									<button type="button" onClick={activity.refresh} className="text-accent underline">Retry</button>
+								</span>
+							)}
 						</div>
 					)}
 					{loading ? (
@@ -224,7 +295,15 @@ export default function Dashboard() {
 						   another. The way out of THIS state is to clear the filter, so that is what
 						   it offers — and it names the count being hidden, because the number is the
 						   part that says the rows are still there. */
-						<p className="text-center py-8 text-muted-soft">No instances match "{instanceQuery.trim()}"{instanceAgent ? " for that agent" : ""}. <button type="button" onClick={() => { setInstanceQuery(""); setInstanceAgent(""); }} className="text-accent underline">Clear the filter</button> to see all {instances.length}.</p>
+						<p className="text-center py-8 text-muted-soft" data-testid="instances-no-match">
+							{instanceQuery.trim()
+								? `No instances match "${instanceQuery.trim()}"`
+								: instanceHealth
+									? `Nothing is ${HEALTH_LABEL[instanceHealth].toLowerCase()} right now`
+									: "No instances match"}
+							{instanceAgent ? " for that agent" : ""}.{" "}
+							<button type="button" onClick={clearInstanceFilters} className="text-accent underline">Clear the filter</button> to see all {instances.length}.
+						</p>
 					) : (
 						<div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,300px),1fr))] gap-3">
 							{visibleInstances.map((inst) => {
@@ -232,6 +311,8 @@ export default function Dashboard() {
 								// three Repo Coders (one per repo) never share a colour. See lib/identity.ts.
 								const id = identityFor(inst);
 								const badges = capabilityBadges(inst);
+								const act = activityFor(activity.byInstance, inst.id);
+								const outcome = outcomeLine(act, activity.asOf || Date.now());
 								return (
 									<button key={inst.id} type="button" onClick={() => navigate(`/instances/${inst.id}`)}
 										className="text-left bg-panel border border-line rounded-xl p-3 sm:p-4 cursor-pointer transition-all hover:border-accent hover:-translate-y-px hover:shadow-lg">
@@ -252,16 +333,31 @@ export default function Dashboard() {
 											</div>
 										</div>
 										<p className="text-sm text-muted mb-2 leading-relaxed line-clamp-2">{inst.description || "No description"}</p>
+										{/* What it is DOING (#815). This replaced a hardcoded "active" pill that every
+										    card wore and which therefore said nothing — and it is deliberately the
+										    server's verdict, not "has an open run": a park has nothing ticking by
+										    design and a wedged run has nothing ticking because it is dead. Only
+										    `working` pulses; only `stalled` is danger. */}
+										<div className="flex items-center gap-1.5 mb-1.5 text-xs" data-testid="instance-status">
+											<span className={`w-2 h-2 rounded-full shrink-0 ${HEALTH_DOT[act.health]}`} aria-hidden="true" />
+											<span className={`font-semibold ${HEALTH_TEXT[act.health]}`}>{HEALTH_LABEL[act.health]}</span>
+											{act.queueDepth > 0 && (
+												<span
+													className="px-1.5 py-0.5 rounded font-medium bg-line text-muted"
+													title={`${act.queueDepth} objective${act.queueDepth === 1 ? "" : "s"} waiting behind this instance`}
+												>
+													+{act.queueDepth} queued
+												</span>
+											)}
+										</div>
+										{outcome && <p className="text-2xs text-muted-soft mb-1.5 truncate">{outcome}</p>}
 										<div className="flex gap-1.5 text-xs flex-wrap">
 											{/* Real capabilities instead of a constant "subscribed" that every card showed
-											    and which therefore distinguished nothing. */}
-											{badges.length === 0 ? (
-												<span className="px-1.5 py-0.5 rounded font-medium bg-success-soft text-success">active</span>
-											) : (
-												badges.map((b) => (
-													<span key={b} className="px-1.5 py-0.5 rounded font-medium bg-accent-soft text-accent">{b}</span>
-												))
-											)}
+											    and which therefore distinguished nothing. The status above is the live
+											    half; these are what the instance CAN do. */}
+											{badges.map((b) => (
+												<span key={b} className="px-1.5 py-0.5 rounded font-medium bg-accent-soft text-accent">{b}</span>
+											))}
 										</div>
 									</button>
 								);

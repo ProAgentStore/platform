@@ -123,7 +123,13 @@ describe("#795 — the type-to-filter box", () => {
 		// `.filter(...)` in JSX would put them back somewhere no unit test can reach.
 		const src2 = readFileSync(new URL("./Dashboard.tsx", import.meta.url).pathname, "utf8");
 		expect(src2).toContain('from "../lib/instanceList"');
-		expect(src2).toContain("listInstances(instances, { query: instanceQuery, sort: instanceSort, agentId: instanceAgent })");
+		expect(src2).toContain("listInstances(instances, {");
+		// The arguments rather than one formatted line: slice 4 added `health` and `activity`, and a
+		// guard pinned to the old single-line call would have failed on a reformat while still
+		// passing on a genuinely inlined predicate.
+		for (const arg of ["query: instanceQuery", "sort: instanceSort", "agentId: instanceAgent"]) {
+			expect(src2).toContain(arg);
+		}
 	});
 
 	it("hides the box when there is nothing to filter", () => {
@@ -143,7 +149,8 @@ describe("#795 — the type-to-filter box", () => {
 		expect(noMatch).toContain("No instances match");
 		// The way out of THIS state is clearing the filter, not subscribing to something new.
 		expect(noMatch).toContain("Clear the filter");
-		expect(noMatch).toContain('setInstanceQuery("")');
+		// Cleared through the named clearer since slice 4 — see the guard on it below.
+		expect(noMatch).toContain("clearInstanceFilters");
 		expect(noMatch).not.toContain('navigate("/browse")');
 	});
 
@@ -181,8 +188,58 @@ describe("#815 — sort and agent filter", () => {
 		expect(instancesTab).toContain("instanceAgents.length > 1");
 	});
 
-	it("'Clear the filter' clears the agent filter too, or it would not see 'all N'", () => {
+	it("'Clear the filter' clears EVERY filter, or it would not see 'all N'", () => {
+		// It clears through one named function since slice 4 added a third filter — three call sites
+		// that must be kept in step is how one gets forgotten. So the guard follows it: the button
+		// calls the clearer, and the clearer resets all three.
 		const noMatch = instancesTab.slice(instancesTab.indexOf("visibleInstances.length === 0"), instancesTab.indexOf("grid grid-cols-"));
-		expect(noMatch).toContain('setInstanceAgent("")');
+		expect(noMatch).toContain("clearInstanceFilters");
+		const src3 = readFileSync(new URL("./Dashboard.tsx", import.meta.url).pathname, "utf8");
+		const clearer = src3.slice(src3.indexOf("const clearInstanceFilters"), src3.indexOf("const navigate"));
+		for (const setter of ['setInstanceQuery("")', 'setInstanceAgent("")', 'setInstanceHealth("")']) {
+			expect(clearer).toContain(setter);
+		}
+	});
+});
+
+/**
+ * The live half (#815 slice 4).
+ *
+ * Same defect class as the search box above, one step further on: `lib/instanceActivity.ts` is
+ * unit-tested as values, and every one of those rules can be right while the poll is never called,
+ * the dot never rendered, or the filter never passed to `listInstances`. A card showing a correct
+ * status for data nobody fetched typechecks and renders.
+ */
+describe("the live status half is wired (#815 slice 4)", () => {
+	it("polls the one account-wide endpoint, not one call per card", () => {
+		// The per-card fan-out is the thing this slice exists to avoid: at 43 instances it is not a
+		// slow screen, it is a reason not to ship the feature.
+		expect(src).toContain("useActivity(tab === \"instances\")");
+		expect(src).not.toMatch(/instances\/\$\{[^}]+\}\/loop/);
+	});
+
+	it("renders the server's verdict on the card, rather than deriving one", () => {
+		expect(instancesTab).toContain("HEALTH_DOT");
+		expect(instancesTab).toContain("HEALTH_LABEL");
+		expect(instancesTab).toContain("activityFor");
+	});
+
+	it("passes the status filter and the activity map INTO listInstances", () => {
+		// A filter held in state and never handed to the pure module is a control that does nothing.
+		expect(src).toMatch(/health:\s*instanceHealth/);
+		expect(src).toMatch(/activity:\s*activity\.byInstance/);
+	});
+
+	it("shows the queue badge only when something is queued", () => {
+		expect(instancesTab).toMatch(/queueDepth\s*>\s*0/);
+	});
+
+	it("no longer wears the hardcoded `active` pill every card used to show", () => {
+		// It distinguished nothing; the status line replaced it.
+		expect(instancesTab).not.toMatch(/bg-success-soft text-success">active</);
+	});
+
+	it("says when the status on screen is stale rather than presenting it as fresh", () => {
+		expect(instancesTab).toContain("activity.stale");
 	});
 });

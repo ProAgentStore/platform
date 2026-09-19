@@ -2432,6 +2432,13 @@ paths:
                             status: { type: string }
                             stopReason: { type: string, nullable: true }
                             finishedAt: { type: integer, nullable: true }
+                            startedAt: { type: integer }
+                            lastAliveAt:
+                              type: integer
+                              nullable: true
+                              description: >
+                                With startedAt, what "last active" is computed from. The instance's own
+                                last_activity_at moves only on owner-driven events, so it cannot answer it alone.
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /v1/instances/my/instances:

@@ -8,24 +8,28 @@
 // decision is tested as a value and the wiring is source-guarded (`Dashboard.instances.test.ts`).
 // Matching stays in `instanceSearch.ts`; this module composes it and never re-implements it.
 
+import { activityFor, lastActiveAt, statusRank, type InstanceActivity, type InstanceHealth } from "./instanceActivity";
 import { filterInstances } from "./instanceSearch";
 import type { Instance } from "./types";
 
 /**
  * The sorts on offer.
  *
- *   recent  the server's own order, `COALESCE(last_activity_at, updated_at) DESC`. That is when
- *           the OWNER last used the instance (chat, task, apply, session open) — a run working
- *           unattended does not move it. Hence the label "Recently used", not "Last active": the
- *           second is a claim this list cannot back until it reads run activity.
+ *   recent  when the instance was last REALLY active — `max(last_activity_at, the run's heartbeat,
+ *           the run's start)`. It was labelled "Recently used" while this list could only see the
+ *           first term, because `last_activity_at` moves on OWNER-driven events alone and a Pilot
+ *           working unattended for two hours does not move it. #815 slice 4 wired the other two
+ *           terms, so the label is now "Last active" and the claim is true.
  *   name    by the card's title.
+ *   status  whatever needs the owner first: stalled, waiting, working, idle (`statusRank`).
  */
-export const INSTANCE_SORTS = ["recent", "name"] as const;
+export const INSTANCE_SORTS = ["recent", "name", "status"] as const;
 export type InstanceSort = (typeof INSTANCE_SORTS)[number];
 
 export const INSTANCE_SORT_LABEL: Record<InstanceSort, string> = {
-	recent: "Recently used",
+	recent: "Last active",
 	name: "Name A–Z",
+	status: "Status",
 };
 
 const SORT_KEY = "console:instanceSort";
@@ -95,6 +99,10 @@ export interface InstanceListView {
 	sort: InstanceSort;
 	/** An `agent_id`, or "" for every agent. */
 	agentId: string;
+	/** One of the four states, or "" for every status. */
+	health?: InstanceHealth | "";
+	/** What the activity poll last said. Empty before the first response — see `activityFor`. */
+	activity?: Map<string, InstanceActivity>;
 }
 
 /**
@@ -105,9 +113,31 @@ export interface InstanceListView {
  * it is React state and "recent" has to be able to get the server's order back.
  */
 export function listInstances(instances: Instance[], view: InstanceListView): Instance[] {
+	const activity = view.activity ?? new Map<string, InstanceActivity>();
 	let out = filterInstances(instances, view.query);
 	if (view.agentId) out = out.filter((inst) => inst.agent_id === view.agentId);
+	// Before the first poll every instance reads idle, so filtering on any other status would show
+	// an empty list and blame the filter. The caller renders the control only once `asOf` is set.
+	if (view.health) out = out.filter((inst) => activityFor(activity, inst.id).health === view.health);
 	// The id tie-break keeps two same-named siblings from swapping places between renders.
 	if (view.sort === "name") out = [...out].sort((a, b) => compareText(a.name, b.name) || compareText(a.id, b.id));
+	if (view.sort === "status") {
+		out = [...out].sort(
+			(a, b) =>
+				statusRank(activityFor(activity, a.id).health) - statusRank(activityFor(activity, b.id).health) ||
+				compareText(a.name, b.name) ||
+				compareText(a.id, b.id),
+		);
+	}
+	// `recent` is the server's order until the poll lands. Once it has, the list re-sorts on the
+	// CORRECTED definition — which is what licenses the "Last active" label.
+	if (view.sort === "recent" && activity.size) {
+		out = [...out].sort(
+			(a, b) =>
+				lastActiveAt(b, activityFor(activity, b.id)) - lastActiveAt(a, activityFor(activity, a.id)) ||
+				compareText(a.name, b.name) ||
+				compareText(a.id, b.id),
+		);
+	}
 	return out;
 }

@@ -6,6 +6,7 @@
  * Playwright (the page).
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { InstanceActivity } from "./instanceActivity";
 import { INSTANCE_SORT_LABEL, INSTANCE_SORTS, agentLabel, agentOptions, listInstances, parseSort, rememberSort, rememberedSort } from "./instanceList.js";
 import type { Instance } from "./types";
 
@@ -38,8 +39,10 @@ describe("parseSort", () => {
 		}
 	});
 
-	it("falls back to the server's order for anything else — a stale key must not select nothing", () => {
-		expect(parseSort("status")).toBe("recent");
+	it("falls back to the default for anything else — a stale key must not select nothing", () => {
+		// "status" was in this list until #815 slice 4 made it a real sort. A value leaving the
+		// rejected set is the one direction this test cannot notice on its own, hence the note.
+		expect(parseSort("health")).toBe("recent");
 		expect(parseSort(null)).toBe("recent");
 		expect(parseSort(undefined)).toBe("recent");
 	});
@@ -145,5 +148,44 @@ describe("listInstances", () => {
 
 	it("returns empty when the search and the agent filter disagree — the caller owns that state", () => {
 		expect(listInstances(LIST, { ...ALL, query: "fas", agentId: "jobs" })).toEqual([]);
+	});
+});
+
+describe("listInstances with activity (#815 slice 4)", () => {
+	const map = new Map<string, InstanceActivity>([
+		["a", { instanceId: "a", health: "idle", queueDepth: 0, lastOutcome: null }],
+		["b", { instanceId: "b", health: "stalled", queueDepth: 0, lastOutcome: null }],
+		["c", { instanceId: "c", health: "working", queueDepth: 0, lastOutcome: null }],
+	]);
+	const rows = [inst({ id: "a", name: "Alpha" }), inst({ id: "b", name: "Bravo" }), inst({ id: "c", name: "Charlie" })];
+
+	it("filters by status", () => {
+		expect(listInstances(rows, { query: "", sort: "name", agentId: "", health: "stalled", activity: map }).map((r) => r.id)).toEqual(["b"]);
+	});
+
+	it("treats an instance the response OMITTED as idle, not as unmatched", () => {
+		const rowsPlus = [...rows, inst({ id: "d", name: "Delta" })];
+		expect(listInstances(rowsPlus, { query: "", sort: "name", agentId: "", health: "idle", activity: map }).map((r) => r.id)).toEqual(["a", "d"]);
+	});
+
+	it("sorts by status with whatever needs the owner first", () => {
+		expect(listInstances(rows, { query: "", sort: "status", agentId: "", activity: map }).map((r) => r.id)).toEqual(["b", "c", "a"]);
+	});
+
+	it("leaves the server's order alone until the poll has landed", () => {
+		// Before the first response every instance reads idle, and re-sorting on that would shuffle
+		// the list for no reason and then shuffle it back.
+		expect(listInstances(rows, { query: "", sort: "recent", agentId: "", activity: new Map() })).toBe(rows);
+	});
+
+	it("re-sorts `recent` on the CORRECTED definition once activity is known", () => {
+		const now = Date.now();
+		const active = new Map<string, InstanceActivity>([
+			["a", { instanceId: "a", health: "idle", queueDepth: 0, lastOutcome: null }],
+			["c", { instanceId: "c", health: "working", queueDepth: 0, lastOutcome: { runId: "r", status: "running", stopReason: null, finishedAt: null, startedAt: now - 60_000, lastAliveAt: now } }],
+		]);
+		// Charlie's Pilot is working right now; nobody has touched Alpha. `last_activity_at` alone
+		// would not move Charlie — this is the whole reason the label said "Recently used".
+		expect(listInstances(rows, { query: "", sort: "recent", agentId: "", activity: active })[0].id).toBe("c");
 	});
 });

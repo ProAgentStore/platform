@@ -7,6 +7,9 @@ const TEST_TOKEN = "test-pags-token";
 interface OpsMockOptions {
 	agents?: Array<Record<string, unknown>>;
 	instances?: Array<Record<string, unknown>>;
+	/** `GET /v1/instances/my/activity` (#815). Omit for a quiet account — the endpoint OMITS
+	 *  instances with no run and no queue, so `[]` is the real shape of 'nothing is happening'. */
+	activity?: Array<Record<string, unknown>>;
 	runtime?: Record<string, unknown> | null;
 	runtimeTasks?: Array<Record<string, unknown>>;
 	runtimeEvents?: Array<Record<string, unknown>>;
@@ -379,6 +382,9 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 				options.deployBody ?? { queued: true, repo: "ops-agent", org: "ProAgentStore" },
 				options.deployStatus ?? 200,
 			);
+		}
+		if (path === "/v1/instances/my/activity") {
+			return json({ asOf: Date.now(), instances: options.activity ?? [] });
 		}
 		if (path === "/v1/instances/my/instances") {
 			return json({
@@ -1748,6 +1754,78 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page.getByRole("combobox", { name: "Sort instances" })).toBeVisible();
 		await expect(page.getByRole("combobox", { name: "Filter instances by agent" })).toHaveCount(0);
 	});
+
+	// ── #815 slice 4: the live half. The server's verdict, not "has an open run" — inst-1 is
+	// STALLED (open, but its orchestrator stopped ticking), which an open-row test would paint as
+	// working. inst-3 is absent from the response on purpose: the endpoint omits an instance with
+	// no run and no queue, and the console must read that as idle rather than as a fifth state.
+	const ACTIVITY_FIXTURE = [
+		{ instanceId: "inst-1", health: "stalled", queueDepth: 2, lastOutcome: { runId: "r1", status: "running", stopReason: null, finishedAt: null, startedAt: Date.now() - 5_400_000, lastAliveAt: Date.now() - 4_800_000 } },
+		{ instanceId: "inst-2", health: "working", queueDepth: 0, lastOutcome: { runId: "r2", status: "running", stopReason: null, finishedAt: null, startedAt: Date.now() - 60_000, lastAliveAt: Date.now() - 5_000 } },
+	];
+
+	test("each card shows what its instance is doing, and the queue behind it (#815)", async ({ page }) => {
+		await mockSignedInConsole(page, { instances: SORT_FIXTURE, activity: ACTIVITY_FIXTURE });
+		await page.goto("/console/instances");
+
+		const stalled = page.getByRole("button", { name: /pws platform/ });
+		await expect(stalled.getByTestId("instance-status")).toContainText("Stalled");
+		// The queue badge appears ONLY when something is queued.
+		await expect(stalled.getByTestId("instance-status")).toContainText("+2 queued");
+
+		const working = page.getByRole("button", { name: /Job Application Assistant/ });
+		await expect(working.getByTestId("instance-status")).toContainText("Working");
+		await expect(working.getByTestId("instance-status")).not.toContainText("queued");
+
+		// Omitted from the response ⇒ idle, not unknown and not an error.
+		const idle = page.getByRole("button", { name: /FAS platform/ });
+		await expect(idle.getByTestId("instance-status")).toContainText("Idle");
+	});
+
+	test("the status filter narrows the list and says so when nothing matches (#815)", async ({ page }) => {
+		await mockSignedInConsole(page, { instances: SORT_FIXTURE, activity: ACTIVITY_FIXTURE });
+		await page.goto("/console/instances");
+
+		const cards = page.getByRole("button", { name: SORT_CARDS });
+		await page.getByRole("button", { name: /^Stalled 1$/ }).click();
+		await expect(cards).toHaveCount(1);
+
+		// A status nothing is in must not read as an empty account, and the way out is the filter.
+		await page.getByRole("button", { name: /^Waiting 0$/ }).click();
+		await expect(page.getByTestId("instances-no-match")).toContainText("Nothing is waiting right now");
+		await page.getByRole("button", { name: "Clear the filter" }).click();
+		await expect(cards).toHaveCount(3);
+	});
+
+	test("the Status sort floats whatever needs the owner to the top (#815)", async ({ page }) => {
+		await mockSignedInConsole(page, { instances: SORT_FIXTURE, activity: ACTIVITY_FIXTURE });
+		await page.goto("/console/instances");
+
+		await page.getByRole("combobox", { name: "Sort instances" }).selectOption({ label: "Status" });
+		// Stalled, then working, then idle — not alphabetical and not the server's order.
+		await expect(page.getByRole("button", { name: SORT_CARDS }).locator("h3")).toHaveText([
+			"pws platform",
+			"Job Application Assistant",
+			"FAS platform",
+		]);
+	});
+
+	for (const width of [320, 390]) {
+		test(`the live status controls fit at ${width}px with real-length names (#815)`, async ({ page }) => {
+			await page.setViewportSize({ width, height: 800 });
+			await mockSignedInConsole(page, { instances: SORT_FIXTURE, activity: ACTIVITY_FIXTURE });
+			await page.goto("/console/instances");
+
+			// The segmented control keeps all five segments at the narrowest supported width; below
+			// `sm` the labels are initials, which is what makes that possible.
+			await expect(page.getByRole("group", { name: "Filter instances by status" })).toBeVisible();
+			await expect(page.getByRole("button", { name: /pws platform/ }).getByTestId("instance-status")).toContainText("Stalled");
+
+			// Nothing may push the page sideways — the guard the rest of this file applies.
+			const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+			expect(overflow).toBeLessThanOrEqual(0);
+		});
+	}
 
 	test("instance indexing page shows indexed, pending, and sync status", async ({ page }) => {
 		await mockSignedInConsole(page);
