@@ -798,4 +798,22 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.47 is published.
 	"0.1.48": "sha256:db11b200d9aed39745d4ce5754f23b4de0c1d07bd4628010082d3d7f8984f33e",
+	// 0.1.49 (#792, choose the coding engine and model): two new tool NAMES, both GATED to the
+	// `coding` surface — 213 registrations become 215, `MCP_TOOL_GATED` 24 → 26, always-on stays 189.
+	//
+	//   * `coding_engine_get` (read) — GET /v1/instances/:id/coding/engine-choice.
+	//   * `coding_engine_set` (write, dry_run) — PUT the same route.
+	//
+	// `write`, not `runtime`: the set starts nothing and spends nothing. It edits which command the
+	// NEXT session launches — `defaultEngineId`, and the model as `--model` in the preset's own
+	// command — which is the state the console's CLI engines panel already writes. No new setting,
+	// for the reason migration 0126 records.
+	//
+	// One existing inputSchema moved with them: `coding_session_fresh.engine_id` no longer describes
+	// itself as "(default: claude)", because it no longer is — the handler sent that constant, so the
+	// one tool that starts an engine clean ignored the engine the owner had just chosen (#549's
+	// defect, surviving one tool over). Omitted now means the instance's own default.
+	//
+	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.48 is published.
+	"0.1.49": "sha256:b5008db008bf75cf5b6299e9621ef7cf23ab2a12557fc69be9fe7c7f11c0138d",
 };

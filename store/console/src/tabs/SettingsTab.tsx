@@ -17,6 +17,7 @@ import { showsConnector, showsFileConnector, type ConnectorReach, type InstanceC
 import { voiceSummary } from "../lib/voiceSummary";
 import { unsubscribeScope, type RosterInstance } from "../lib/unsubscribeScope";
 import PauseCard from "../components/PauseCard";
+import CodingEngineCard from "../components/CodingEngineCard";
 import { FileConnectorPanel } from "../components/FileConnectorPanel";
 import RepoConnectPanel from "../components/RepoConnectPanel";
 import Button from "../components/Button";
@@ -549,6 +550,10 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 					{settingsMsg && <div className="text-sm text-muted mt-1">{settingsMsg}</div>}
 				</Card>
 			)}
+
+			{/* Which coding CLI + model (#792) — beside the agent's own settings, because to an owner
+			    it IS one; it is a separate card because it is not settingsSchema state (migration 0126). */}
+			{isCoding && <CodingEngineCard instanceId={instanceId} />}
 
 			{/* Board maintenance */}
 			<Card className="mb-3 sm:mb-4">

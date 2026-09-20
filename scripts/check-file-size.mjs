@@ -816,7 +816,9 @@ const PINS = {
 	// because it is an APPEND-ONLY ledger — one hash per published version plus why the surface
 	// moved — and `check-surface-lock.mjs --require-history` reads THIS path's git history to prove
 	// no published entry was edited; moving old entries to a second file would read as deleting them.
-	"workers/mcp/src/surface-lock.ts": 802,
+	// +18 at #792: the 0.1.49 record — two new tools and one moved inputSchema, with why. This pin
+	// moves with every published version by construction; that is the ledger working, not drift.
+	"workers/mcp/src/surface-lock.ts": 820,
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
@@ -1779,7 +1781,8 @@ const PINS = {
 	// nobody can audit later.
 	// +7 at #806: the first `workers/mcp/src/surface-lock.ts` entry above (four lines of why an
 	// append-only ledger is pinned and not split) and these two.
-	"scripts/check-file-size.mjs": 1863,
+	// +3 at #792: the surface-lock raise above (two lines of why) and these two.
+	"scripts/check-file-size.mjs": 1866,
 };
 
 /**

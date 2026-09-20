@@ -237,6 +237,42 @@ saved list to fall back.
 A session persists the **command**, not the preset id, so an edited preset applies on the next
 session start or **Restart** — the process gets its argv and credentials at spawn.
 
+### Choosing the engine and its model, without editing a command (#792)
+
+The CLI engines panel edits a preset. **Settings → Coding engine** *chooses*: an **Engine**
+dropdown and a **Model** dropdown, for the owner who wants to move off a model whose usage window
+is spent and should not have to know an argv to do it. Same state, second door:
+
+- **Engine** writes `defaultEngineId` — the same key the panel's default writes.
+- **Model** writes `--model <id>` **into that preset's own command** (`coding-engine-model.ts`). All
+  four shipped CLIs take `--model` (verified against the installed binaries, 2026-09-20), and the
+  prefix contract above already carries it to the engine. It is inserted after the binary (after
+  `exec` for Codex), **never appended** — the Gemini and Grok presets end in the flag that takes the
+  turn text as its value.
+- "The CLI's own default" removes the flag. "Another model…" takes any id the CLI accepts.
+- API: `GET`/`PUT /v1/instances/:id/coding/engine-choice`, body `{ engineId, model? }`. `model` is
+  tri-state: **absent** leaves the command alone (switching engines never rewrites one), `null`
+  clears the pin, a string sets it. MCP: `coding_engine_get` / `coding_engine_set`.
+
+There is deliberately **no `model` field**. Migration 0126 deleted an `engine` dropdown that nothing
+read while the agent asserted it back to its owner; a model setting beside the command would be
+that defect again. Because the choice lives in the command, it cannot disagree with what launches.
+
+The only suggestions offered are Claude Code's `fable` / `opus` / `sonnet` — the aliases its own
+`--help` documents as tracking the latest model of each tier. The platform does not list "all
+available models": that is a property of the CLI version and account on the owner's machine, and
+a hardcoded catalogue is wrong the day a vendor ships. A model the CLI rejects fails on the first
+turn, in the engine's own words.
+
+The card also states the model the **last measured engine turn actually ran**, read from the
+`ai_usage` ledger (`engine:` rows) rather than from the setting — so "which model is driving my
+runs" has an observed answer, and a pin that has not taken effect yet (a session not restarted)
+is visible as a disagreement. Engines that report no usage (see above) have none.
+
+Choosing a model changes the preset's command, and a **running** session is matched back to its
+preset by command. `engineAuthFor` therefore matches model-insensitively as a fallback, so a
+running `api-key` engine does not lose its sign-in because its owner picked a model mid-session.
+
 ## Sign-in is a separate axis
 
 `auth` decides whose credentials the engine launches with, independently of what it may do:

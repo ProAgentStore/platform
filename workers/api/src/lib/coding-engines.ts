@@ -9,6 +9,8 @@
 //
 // Pure move — no behaviour changed.
 
+import { commandEngineParts } from "./coding-command.js";
+import { writeEngineModel } from "./coding-engine-model.js";
 import { getUserProviderKey } from "./user-ai.js";
 import { reusedSessionEngineNotice } from "./coding-session-lifecycle.js";
 import { payerForEngineAuth, type EngineAuthResolved, type PayerOrUnknown } from "./usage-payer.js";
@@ -64,21 +66,6 @@ export async function resolveEngineEnv(
 const CLIENTS: CodingClientType[] = ["claude", "gemini", "codex", "grok"];
 export function asClient(v: unknown): CodingClientType {
 	return CLIENTS.includes(v as CodingClientType) ? (v as CodingClientType) : "claude";
-}
-
-/** Command wrappers to skip when finding the real engine binary in a launch command. */
-const COMMAND_LAUNCHERS = new Set(["npx", "bunx", "pnpm", "yarn", "npm", "bun", "env", "exec", "dlx", "run", "sudo", "time"]);
-
-function commandEngineParts(command: string): { bin: string; args: string[] } {
-	const tokens = command.trim().split(/\s+/).filter(Boolean);
-	for (let i = 0; i < tokens.length; i++) {
-		const t = tokens[i];
-		if (!t || t.includes("=") || t.startsWith("-")) continue;
-		const base = (t.split("/").pop() || "").toLowerCase();
-		if (COMMAND_LAUNCHERS.has(base)) continue;
-		return { bin: base, args: tokens.slice(i + 1) };
-	}
-	return { bin: "", args: [] };
 }
 
 /**
@@ -178,7 +165,13 @@ const ENGINE_API_KEYS: Record<CodingClientType, { envVar: string; provider: stri
  * start/Restart; a command with no matching preset falls back to "auto".
  */
 export function engineAuthFor(engines: CodingEngine[], launchCommand: string | null | undefined): EngineAuth {
-	const eng = launchCommand ? engines.find((e) => e.command === launchCommand) : undefined;
+	// Exact first; then the same command with a different MODEL (#792). Choosing a model rewrites
+	// the preset's command, and a session already running on the old one must not lose its preset's
+	// sign-in over it — for an `api-key` engine that would strip its key mid-session.
+	const sansModel = (c: string) => writeEngineModel(c, null);
+	const eng = launchCommand
+		? (engines.find((e) => e.command === launchCommand) ?? engines.find((e) => sansModel(e.command) === sansModel(launchCommand)))
+		: undefined;
 	return eng?.auth && ENGINE_AUTHS.has(eng.auth) ? eng.auth : "auto";
 }
 

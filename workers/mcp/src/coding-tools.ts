@@ -26,6 +26,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authedCall, authRequired, type McpEnv, jsonText, text } from "./http.js";
+import { registerCodingEngineTools } from "./coding-engine-tools.js";
 import { github } from "./repo-tools.js";
 import { audit, dryRun, requireConfirmation, requirePermission, type SafetyContext } from "./safety.js";
 import { runStateSentence } from "./state-vocabulary.js";
@@ -422,6 +423,10 @@ export function registerCodingSessionTools(
 		},
 	);
 
+	// The instance's standing engine + model choice (#792) — its own file, registered HERE so the
+	// published order is unchanged.
+	registerCodingEngineTools(server, env, tokenFor, safetyFor);
+
 	server.tool(
 		"coding_repo_add",
 		"Add a repo to a coding instance. Accepts a local path (~/dev/...), GitHub owner/repo, or clone URL.",
@@ -599,7 +604,7 @@ export function registerCodingSessionTools(
 		{
 			instance_id: z.string().describe("Instance ID"),
 			repo_id: z.string().optional().describe("Repo ID. If omitted, uses the repo of the first active session."),
-			engine_id: z.string().optional().describe("Engine preset ID (default: claude)"),
+			engine_id: z.string().optional().describe("Engine preset ID. Omit to use the instance's own default engine — the one coding_engine_set chooses."),
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 		},
 		async ({ instance_id, repo_id, engine_id, token }) => {
@@ -615,7 +620,11 @@ export function registerCodingSessionTools(
 			// `fresh: true` (#408): a new session now CONTINUES the repo's recent conversation by
 			// default, and the one this tool just ended is the most recent there is — so without the
 			// flag, "clean state, no --resume" hands back the very state it was called to escape.
-			const d = await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, { method: "POST", body: JSON.stringify({ repoId, engineId: engine_id || "claude", fresh: true }) }, env);
+			// `engineId` OMITTED when not named, so the API resolves the INSTANCE default (#792). This
+			// sent `"claude"` — the constant `openConversation` above records burning an owner's Claude
+			// limit after he switched to Codex (#549) — which made the one tool that STARTS an engine
+			// clean also the one that ignored which engine the owner had chosen.
+			const d = await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, { method: "POST", body: JSON.stringify(engine_id ? { repoId, engineId: engine_id, fresh: true } : { repoId, fresh: true }) }, env);
 			await audit(safetyFor(token), { tool: "coding_session_fresh", action: "completed", input: { instance_id, repoId } });
 			return jsonText(d);
 		},

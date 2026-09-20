@@ -245,6 +245,7 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 	const feedbackPatches: Array<{ id: string; body: unknown }> = [];
 	/** Every pin the console wrote (#736) — the evidence that a choice reached the server. */
 	const connectorAccountPins: Array<{ connector: string; accountId: string | null }> = [];
+	const engineChoiceWrites: Array<{ engineId: string; model?: string | null }> = [];
 	/**
 	 * The picker's rows, MUTATED by a PUT so the re-read after a save reflects it.
 	 *
@@ -253,6 +254,17 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 	 * screen shows the server's verdict. A mock that ignores the write would defeat that.
 	 */
 	let accountRowsState = (options.connectorAccounts ?? []).map((r) => ({ ...r }));
+	/** What `GET …/coding/engine-choice` answers (#792) — the server's shipped engines, nothing pinned. */
+	let engineChoiceState = {
+		defaultEngineId: "claude",
+		engines: [
+			{ id: "claude", label: "Claude Code", command: "claude --dangerously-skip-permissions", clientType: "claude", model: null as string | null, modelSelectable: true, suggestions: [{ value: "fable", label: "Fable (latest)" }, { value: "opus", label: "Opus (latest)" }, { value: "sonnet", label: "Sonnet (latest)" }] },
+			{ id: "codex", label: "Codex", command: "codex exec --json --sandbox danger-full-access", clientType: "codex", model: null as string | null, modelSelectable: true, suggestions: [] },
+			{ id: "local", label: "Local model (Ollama)", command: "ollama run llama3", clientType: "codex", model: null as string | null, modelSelectable: false, suggestions: [] },
+		],
+		lastObserved: { model: "claude-fable-5-1", at: "2026-09-19 10:00:00" } as { model: string; at: string } | null,
+		appliesTo: "Applies to the next coding session this agent opens. A session that is already running keeps the engine it was started with — restart it, or start a fresh one, to switch.",
+	};
 
 	await page.route(`${API}/**`, async (route) => {
 		const url = new URL(route.request().url());
@@ -802,6 +814,26 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 		// The default is EMPTY, which is the one-account world almost every owner is in and the
 		// state in which this panel must render nothing at all. A block that wants the ambiguous
 		// case supplies it.
+		// The Settings "Coding engine" card (#792). In the shared fixture for #736's reason just
+		// above: every CODING instance's Settings tab reads it, and unmocked it is a 500 inside a card
+		// on each of those tests. The PUT answers the way the server does — the model becomes a flag
+		// in the chosen engine's own command — so the spec asserts what an owner would see.
+		if (path.endsWith("/coding/engine-choice")) {
+			if (method === "PUT") {
+				const write = route.request().postDataJSON() as { engineId: string; model?: string | null };
+				engineChoiceWrites.push(write);
+				engineChoiceState = {
+					...engineChoiceState,
+					defaultEngineId: write.engineId,
+					engines: engineChoiceState.engines.map((e) =>
+						e.id !== write.engineId || write.model === undefined
+							? e
+							: { ...e, model: write.model, command: write.model ? e.command.replace(/^(\S+)/, `$1 --model ${write.model}`) : e.command },
+					),
+				};
+			}
+			return json(engineChoiceState);
+		}
 		if (path === "/v1/instances/inst-1/connector-accounts") {
 			if (method === "PUT") {
 				const pin = route.request().postDataJSON() as { connector: string; accountId: string | null };
@@ -889,6 +921,9 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 	return {
 		get connectorAccountPins() {
 			return connectorAccountPins;
+		},
+		get engineChoiceWrites() {
+			return engineChoiceWrites;
 		},
 		get verifyCalls() {
 			return verifyCalls;
@@ -6839,6 +6874,87 @@ test.describe("Settings — which account this agent uses (#736)", () => {
 		test(`mobile — the account picker fits at ${width}px`, async ({ page }) => {
 			await openSettings(page, { width });
 			await expect(picker(page)).toBeVisible();
+
+			const { mainOv, docOv, navOv, wide, escapes } = await measureOverflow(page);
+			expect(mainOv, `<main> pans by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(navOv, `primary nav pans by ${navOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+			expect(escapes, `a box past its own container at ${width}w: ${escapes.join(", ")}`).toEqual([]);
+		});
+	}
+});
+
+/**
+ * Settings — choose the coding engine and its model (#792).
+ *
+ * `lib/engineChoice.test.ts` holds what the card computes; these hold that it is WIRED: that the
+ * card is there for a coding agent and absent for any other, that a choice reaches the server as
+ * the body the route expects, and that what the owner then sees is the server's answer — the
+ * command that will actually launch — rather than the card's own idea of it.
+ */
+test.describe("Settings — which coding engine and model this agent runs (#792)", () => {
+	const CODER = [{ id: "inst-1", agent_id: "a-coder", name: "pags platform", agentName: "Repo Coder", slug: "coder", description: "Writes code", capabilities: { surfaces: ["coding"] } }];
+	const card = (page: Page) => page.locator("div", { has: page.getByRole("heading", { name: "Coding engine", exact: true }) }).last();
+
+	async function openSettings(page: Page, opts: { width?: number; instances?: Array<Record<string, unknown>> } = {}) {
+		if (opts.width) await page.setViewportSize({ width: opts.width, height: 800 });
+		const mock = await mockSignedInConsole(page, { instances: opts.instances ?? CODER });
+		await page.goto("/console/instances/inst-1/settings");
+		return mock;
+	}
+
+	test("shows the engine, that no model is pinned, and the model the last turn really ran", async ({ page }) => {
+		await openSettings(page);
+		await expect(page.getByLabel("Engine", { exact: true })).toHaveValue("claude");
+		await expect(page.getByLabel("Model", { exact: true })).toHaveValue("");
+		await expect(card(page)).toContainText("Launches: claude --dangerously-skip-permissions");
+		await expect(card(page)).toContainText("The last measured engine turn on this agent ran claude-fable-5-1.");
+		await expect(card(page)).toContainText("A session that is already running keeps the engine it was started with");
+	});
+
+	test("pinning a model sends it, and the card shows the command the SERVER says will launch", async ({ page }) => {
+		const mock = await openSettings(page);
+		await page.getByLabel("Model", { exact: true }).selectOption("sonnet");
+		await expect.poll(() => mock.engineChoiceWrites.at(-1)).toEqual({ engineId: "claude", model: "sonnet" });
+		await expect(card(page)).toContainText("Launches: claude --model sonnet --dangerously-skip-permissions");
+		await expect(page.getByLabel("Model", { exact: true })).toHaveValue("sonnet");
+	});
+
+	test("switching engine sends NO model key — it must not rewrite the other engine's command", async ({ page }) => {
+		const mock = await openSettings(page);
+		await page.getByLabel("Engine", { exact: true }).selectOption("codex");
+		await expect.poll(() => mock.engineChoiceWrites.at(-1)).toEqual({ engineId: "codex" });
+		await expect(card(page)).toContainText("Launches: codex exec --json --sandbox danger-full-access");
+	});
+
+	test("'Another model…' takes any id the CLI accepts", async ({ page }) => {
+		const mock = await openSettings(page);
+		await page.getByLabel("Model", { exact: true }).selectOption({ label: "Another model…" });
+		await page.getByLabel("Model id").fill("claude-opus-5");
+		await card(page).getByRole("button", { name: "Use" }).click();
+		await expect.poll(() => mock.engineChoiceWrites.at(-1)).toEqual({ engineId: "claude", model: "claude-opus-5" });
+		await expect(page.getByLabel("Model", { exact: true })).toHaveValue("claude-opus-5");
+	});
+
+	test("an engine with no known model flag offers no dropdown, and says where its model lives", async ({ page }) => {
+		await openSettings(page);
+		await page.getByLabel("Engine", { exact: true }).selectOption("local");
+		await expect(card(page)).toContainText("This engine's model is part of its command");
+		await expect(card(page).locator("select")).toHaveCount(1);
+	});
+
+	test("is not shown for an agent that does not code", async ({ page }) => {
+		await mockSignedInConsole(page);
+		await page.goto("/console/instances/inst-1/settings");
+		await expect(page.getByRole("heading", { name: "Instance name" })).toBeVisible();
+		await expect(page.getByRole("heading", { name: "Coding engine", exact: true })).toHaveCount(0);
+	});
+
+	for (const width of [320, 390]) {
+		test(`mobile — the engine card fits at ${width}px`, async ({ page }) => {
+			await openSettings(page, { width });
+			await expect(card(page)).toContainText("Launches:");
 
 			const { mainOv, docOv, navOv, wide, escapes } = await measureOverflow(page);
 			expect(mainOv, `<main> pans by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);

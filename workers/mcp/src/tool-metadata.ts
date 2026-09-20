@@ -129,6 +129,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	coding_loop_queue: "read",
 	coding_loop_status: "read",
 	coding_repos_list: "read",
+	coding_engine_get: "read",
 	coding_session_capture: "read",
 	coding_terminal: "read",
 	coding_timeline: "read",
@@ -232,6 +233,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	coding_loop_queue_cancel: "write",
 	coding_loop_stop: "write",
 	coding_repo_add: "write",
+	coding_engine_set: "write",
 	create_agent: "write",
 	create_collection: "write",
 	create_connection: "write",
@@ -513,13 +515,17 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// of them writes. `export_agent` is a read in particular: it composes a backup blob out of
 	// state + knowledge + memory and stores nothing, so the word "export" is about the SHAPE of
 	// the answer rather than about an effect.
-	read: 103,
+	// +1 read, +1 write at #792: `coding_engine_get` / `coding_engine_set` — the instance's standing
+	// choice of coding CLI and model. `write` for the set, not `runtime`: it starts nothing and spends
+	// nothing — it edits which command the NEXT session launches, the same state the console's CLI
+	// engines panel writes — and a session already running is untouched.
+	read: 104,
 	// +2 write at #825: `pause_instance` / `resume_instance`. `write` rather than `destructive` —
 	// nothing is deleted and nothing is unsubscribed, and classing the OFF switch as destructive
 	// would put RESUME behind a scope the caller may not hold, which is the wrong failure mode for
 	// a safety toggle (the reasoning `set_instance_connector_consent` already records). Not `read`
 	// either: switching an agent off is a real change.
-	write: 66,
+	write: 67,
 	// +1 runtime at #806: `continue_instance_run`. `runtime` rather than `write` for the reason
 	// `start_instance_loop` is — it starts an autonomous run that spends on its own — and the
 	// two must agree, because a caller holding the scope to start one holding a narrower one to

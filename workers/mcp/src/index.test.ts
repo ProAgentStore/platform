@@ -773,6 +773,73 @@ describe("coding_session_fresh", () => {
 		const post = h.fetchStub.calls.find((c) => c.url.endsWith("/coding/sessions") && c.method === "POST")!;
 		expect(JSON.parse(post.body!)).toMatchObject({ repoId: "repo-1", fresh: true });
 	});
+
+	it("names NO engine unless the caller does — so the instance's own choice launches, not a hardcoded claude (#792)", async () => {
+		const h = await setup({ groups: ["coding"] });
+		h.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "GET", { body: { sessions: [] } });
+		h.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "POST", { body: { session: { id: "sess-2" } } });
+		await h.tools.get("coding_session_fresh")!.handler({ instance_id: "i1", repo_id: "repo-1" });
+		await h.tools.get("coding_session_fresh")!.handler({ instance_id: "i1", repo_id: "repo-1", engine_id: "codex" });
+		const posts = h.fetchStub.calls.filter((c) => c.url.endsWith("/coding/sessions") && c.method === "POST").map((c) => JSON.parse(c.body!));
+		expect(posts[0]).toEqual({ repoId: "repo-1", fresh: true });
+		expect(posts[1]).toEqual({ repoId: "repo-1", engineId: "codex", fresh: true });
+	});
+});
+
+// ── coding_engine_get / coding_engine_set (#792) ────────────────────────────
+
+describe("the instance's engine + model choice (coding surface, #792)", () => {
+	const isChoice = (u: string) => u.endsWith("/v1/instances/i1/coding/engine-choice");
+
+	it("is not registered for a user with no coding agent", async () => {
+		const h = await setup({ groups: [] });
+		expect(h.tools.has("coding_engine_get")).toBe(false);
+		expect(h.tools.has("coding_engine_set")).toBe(false);
+	});
+
+	it("reads the choice from the same route the console's card reads", async () => {
+		const h = await setup({ groups: ["coding"] });
+		h.fetchStub.respond((u, m) => isChoice(u) && m === "GET", { body: { defaultEngineId: "claude", engines: [], lastObserved: null } });
+		const res = await h.tools.get("coding_engine_get")!.handler({ instance_id: "i1" });
+		expect(JSON.parse(res.content[0].text).defaultEngineId).toBe("claude");
+	});
+
+	it("OMITS `model` when the caller does — switching engines must not rewrite a command", async () => {
+		const h = await setup({ groups: ["coding"] });
+		h.fetchStub.respond((u, m) => isChoice(u) && m === "PUT", { body: { defaultEngineId: "codex" } });
+		await h.tools.get("coding_engine_set")!.handler({ instance_id: "i1", engine_id: "codex" });
+		expect(JSON.parse(h.fetchStub.calls.find((c) => isChoice(c.url) && c.method === "PUT")!.body!)).toEqual({ engineId: "codex" });
+	});
+
+	it("sends a pin as the id, and an empty string as null — the CLI's own default", async () => {
+		const h = await setup({ groups: ["coding"] });
+		h.fetchStub.respond((u, m) => isChoice(u) && m === "PUT", { body: { defaultEngineId: "claude" } });
+		await h.tools.get("coding_engine_set")!.handler({ instance_id: "i1", engine_id: "claude", model: "sonnet" });
+		await h.tools.get("coding_engine_set")!.handler({ instance_id: "i1", engine_id: "claude", model: "" });
+		const bodies = h.fetchStub.calls.filter((c) => isChoice(c.url) && c.method === "PUT").map((c) => JSON.parse(c.body!));
+		expect(bodies).toEqual([{ engineId: "claude", model: "sonnet" }, { engineId: "claude", model: null }]);
+	});
+
+	it("a dry run says what would change and touches nothing", async () => {
+		const h = await setup({ groups: ["coding"] });
+		const res = await h.tools.get("coding_engine_set")!.handler({ instance_id: "i1", engine_id: "claude", model: "opus", dry_run: true });
+		expect(JSON.parse(res.content[0].text).wouldDo.effect).toContain('pinned to model "opus"');
+		expect(h.fetchStub.calls.some((c) => isChoice(c.url))).toBe(false);
+	});
+
+	it("is blocked in read-only mode, while the read is not", async () => {
+		const h = await setup({ groups: ["coding"], env: { MCP_READ_ONLY: "1" } });
+		const res = await h.tools.get("coding_engine_set")!.handler({ instance_id: "i1", engine_id: "codex" });
+		expect(res.content[0].text).toContain("read-only mode");
+		expect(h.fetchStub.calls.some((c) => isChoice(c.url) && c.method === "PUT")).toBe(false);
+	});
+
+	it("passes the API's refusal through rather than reporting a write that did not happen", async () => {
+		const h = await setup({ groups: ["coding"] });
+		h.fetchStub.respond((u, m) => isChoice(u) && m === "PUT", { status: 400, body: { error: 'No engine "cursor" on this agent' } });
+		const res = await h.tools.get("coding_engine_set")!.handler({ instance_id: "i1", engine_id: "cursor" });
+		expect(res.content[0].text).toContain("error");
+	});
 });
 
 // ── coding_instance_deploy_status (#683) ────────────────────────────────────

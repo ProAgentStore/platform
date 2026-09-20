@@ -136,7 +136,7 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
-- `serverInfo.version`: `0.1.48`
+- `serverInfo.version`: `0.1.49`
 
 That is the same value the published MCP-registry manifest (`server.json`) carries, and both
 are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —
@@ -249,7 +249,7 @@ The two published hints are **derived, not hand-maintained per tool**.
 `workers/mcp/src/tool-metadata.ts` classifies every tool `read` / `write` / `runtime` /
 `destructive` in one table, and `annotationsFor()` maps that classification onto the two
 hints. The classification is then derived **back out of the handlers** by `index.test.ts`,
-which drives all 213 tools under two different scope sets and reads the required scope out
+which drives all 215 tools under two different scope sets and reads the required scope out
 of each refusal — so a tool announced read-only that enforces a write gate fails the build
 rather than reaching a host. `conformance.test.ts` asserts the same thing against a real
 `tools/list` response.
@@ -412,7 +412,7 @@ More recipes, with real argument names, are in
 
 ## Tool Surface
 
-The server registers **213 tools**. 189 are always present. The remaining 24 are gated to
+The server registers **215 tools**. 189 are always present. The remaining 26 are gated to
 the console surfaces of the connected user's own subscribed agents, so the surface is
 per-connection:
 
@@ -420,7 +420,7 @@ per-connection:
 |---|---|
 | `apply` | `upload_resume`, `apply_to_job`, `get_profile`, `get_apply_tips` |
 | `repo` | `ingest_repo`, `ingest_repo_status`, `remove_repo` |
-| `coding` | `system_status`, `coding_diagnostics`, `coding_repos_list`, `coding_repo_add`, `coding_repo_remove`, `coding_sessions_list`, `coding_session_open`, `coding_session_capture`, `coding_session_message`, `coding_session_restart`, `coding_session_end`, `coding_session_fresh`, `coding_overseer`, `coding_timeline`, `coding_loop_trace`, `coding_terminal`, `coding_instance_deploy_status` |
+| `coding` | `system_status`, `coding_diagnostics`, `coding_repos_list`, `coding_engine_get`, `coding_engine_set`, `coding_repo_add`, `coding_repo_remove`, `coding_sessions_list`, `coding_session_open`, `coding_session_capture`, `coding_session_message`, `coding_session_restart`, `coding_session_end`, `coding_session_fresh`, `coding_overseer`, `coding_timeline`, `coding_loop_trace`, `coding_terminal`, `coding_instance_deploy_status` |
 
 A Repo Chat user therefore never sees `apply_to_job`. Call `tools/list` and read what is
 actually there rather than assuming a tool exists; the surface is versioned and will

@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import { HttpError } from "../lib/auth.js";
 import { requirePro } from "../lib/billing.js";
 import { ENGINE_AUTHS, engineAuthFor, engineAuthReport, engineInvocationReport, readEngines, resolveEngine, reusedEngineNotice, type CodingEngine, type EngineAuth, type EngineAuthResolved } from "../lib/coding-engines.js";
+import { readEngineChoice, writeEngineChoice } from "../lib/coding-engine-choice.js";
 import { resolveRunState } from "../lib/coding-run-state.js";
 import { continuityForNewSession, startSessionOnRunner } from "../lib/coding-session-open.js";
 import { createSession, getActiveSessionForRepo, getRepo, getSession, listSessions, touchSessionActivity } from "../lib/coding-store.js";
@@ -74,6 +75,22 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		await patchInstanceConfig(c.env, instanceId, uid, "codingEngines", engines);
 		await patchInstanceConfig(c.env, instanceId, uid, "defaultEngineId", defaultEngineId);
 		return c.json({ engines, defaultEngineId });
+	});
+
+	/**
+	 * Which engine this instance opens sessions with, and which model it runs (#792) — the Settings
+	 * dropdown's view of the SAME state the presets above hold, never a second copy of it
+	 * (`lib/coding-engine-choice.ts`, and migration 0126 for why that matters).
+	 */
+	codingRoutes.get("/:instanceId/coding/engine-choice", async (c) => {
+		const { uid, instanceId } = await requireOwned(c);
+		return c.json(await readEngineChoice(c.env, instanceId, uid));
+	});
+
+	codingRoutes.put("/:instanceId/coding/engine-choice", async (c) => {
+		const { uid, instanceId } = await requireOwned(c);
+		const body = (await c.req.json().catch(() => ({}))) as { engineId?: unknown; model?: unknown };
+		return c.json(await writeEngineChoice(c.env, instanceId, uid, body));
 	});
 
 	/** Create a coding session against a repo and start it on the runner (best-effort). */

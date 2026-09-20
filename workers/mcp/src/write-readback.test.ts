@@ -397,6 +397,8 @@ const READBACK: Record<string, string | null> = {
 	"ingest_repo.branch": "ingest_repo_status",
 	"remove_repo.repo_url": "ingest_repo_status",
 	"coding_repo_add.path": "coding_repos_list",
+	"coding_engine_set.engine_id": "coding_engine_get",
+	"coding_engine_set.model": "coding_engine_get",
 	"coding_session_fresh.engine_id": "coding_sessions_list",
 	"coding_session_open.engine_id": "coding_sessions_list",
 

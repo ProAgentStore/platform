@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**213 tool registrations.** 189 are always registered; 24 are gated to the console
+**215 tool registrations.** 189 are always registered; 26 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -350,6 +350,8 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `system_status` | Runner connectivity, node, tmux sessions, repos, issues | — | | |
 | `coding_diagnostics` | Same picture, for debugging offline/stuck sessions | — | | |
 | `coding_repos_list` | Repos registered on the instance + their sessions | — | | |
+| `coding_engine_get` | Which coding CLI the instance opens sessions with and which model it runs; plus the model the last measured engine turn actually ran (#792) | read | | |
+| `coding_engine_set` | Choose the instance's coding CLI and optionally pin its model (`--model` in the preset's own command). Next session only; a running one keeps its engine (#792) | write | yes | |
 | `coding_repo_add` | Add a repo by local path, `owner/repo`, or clone URL | write | | |
 | `coding_repo_remove` | Detach a repo from a coding instance — the counterpart to `coding_repo_add`; stops any active engine on it first, and deletes no code | destructive | yes | `coding_repo_remove` |
 | `coding_sessions_list` | All sessions, active and ended | — | | |

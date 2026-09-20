@@ -68,6 +68,8 @@ src/
 ├── storage-tools.ts      14 tools — collections, records, agent files, KB search, activity
 ├── coding-tools.ts       13 tools — the coding surface: open/capture/message/restart/end a
 │                         repo's conversation, repos, overseer, diagnostics, deploy status (#683)
+├── coding-engine-tools.ts 2 tools — which coding CLI an instance runs and which model (#792);
+│                         registered from inside coding-tools.ts, so behind the same gate
 ├── repo-tools.ts         GitHub helpers + starter templates (no tool registrations)
 └── instance-tools/
     ├── index.ts          builds the ctx, calls the fifteen group registrars
@@ -108,10 +110,10 @@ src/
                           surfaces:["coding"]) + 5 loop tools (3 run + 2 objective queue)
 ```
 
-**213 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
-`coding-tools.ts` — all of them behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 164 across `instance-tools/`. 189 are always registered; 24 are
-surface-gated (apply=4, repo=3, coding=17).
+**215 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
+`coding-tools.ts` and 2 in `coding-engine-tools.ts` — all fifteen behind the `groups.has("coding")` gate — 14 in
+`storage-tools.ts`, and 165 across `instance-tools/`. 189 are always registered; 26 are
+surface-gated (apply=4, repo=3, coding=19).
 
 Those four numbers ADD UP to the headline, and that is the point of stating them: 21 + 13
 + 14 + 149 = 197. They said 88 until #602, which made the paragraph sum to 132 — a total the
@@ -254,7 +256,7 @@ tells you exactly what you changed about it.
   holds `MCP_TOOL_COUNT` / `MCP_TOOL_ALWAYS_ON` to a REAL registration run, and
   `scripts/docs-drift.mjs` holds every prose claim to the constants. Adding a tool fails
   the test until the constant moves. `tools/list` is still the authoritative surface for a
-  given connection, because 24 tools are surface-gated.
+  given connection, because 26 tools are surface-gated.
 
 ## Bindings and secrets
 
