@@ -6,17 +6,19 @@ import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { useVoice } from "@proagentstore/sdk/hooks";
 import { useCodingLoop } from "./use-coding-loop";
 import { repoIssuesUnavailable, repoPullsUnavailable, repoTitle } from "./repo-title";
-import { noticeSentence, type AttachmentAnswer } from "./runner-offline-notice";
-import { isEngineBusy } from "./engine-busy";
+import { noticeSentence } from "./runner-offline-notice";
 import { resolveRepoState, repoStatusLabel, terminalPollBusy, type RepoState } from "./repo-status";
 import { parseRepoInput } from "./repo-input";
 import { activeSessionFor, pickAutoOpenSession } from "./session-open";
 import { openNotices, type OpenNotice } from "./open-notice";
 import OpenNoticeBanners from "./OpenNoticeBanners";
 import { repoOpenAction, shouldAutoOpenSoloSession } from "./repo-open";
-import { chatMessagesFrom, timelineExcerpt, type TimelinePayload } from "./timeline-chat";
+import { chatMessagesFrom, type TimelinePayload } from "./timeline-chat";
 import { useTerminalScrollback } from "./use-terminal-scrollback";
 import { useRunnerStatus } from "./use-runner-status";
+import { useEngineCapture } from "./use-engine-capture";
+import { useEngineFinishWatcher, type CopilotMessage } from "./use-engine-finish-watcher";
+import { useSessionCommands } from "./use-session-commands";
 import { clearHistoryFailureNotice, sessionAttachFailureNotice, workModeSaveFailureNotice } from "./coding-write-failures";
 import RepoHistory from "./RepoHistory";
 import EngineTurnBanner from "./EngineTurnBanner";
@@ -31,12 +33,10 @@ import SelectedRepoSettings from "./SelectedRepoSettings";
 import EnginesModal from "./EnginesModal";
 import BuildsPanel from "./BuildsPanel";
 import PullsPanel from "./PullsPanel";
-import { isClaudeSignedOut, type EngineAuthReport } from "./engine-auth-view";
-import type { EngineInvocationReport } from "./engine-invocation-mode";
-import type { EngineTurnReport } from "./engine-turn-view";
+import { isClaudeSignedOut } from "./engine-auth-view";
 import ClaudeSignedOutBanner from "./ClaudeSignedOutBanner";
 import EngineCredentialStrip from "./EngineCredentialStrip";
-import EngineSigninPrompt, { type AuthPrompt } from "./EngineSigninPrompt";
+import EngineSigninPrompt from "./EngineSigninPrompt";
 import { Copy, FolderCog, Square, SquareTerminal, FolderGit2, Hammer, CircleDot, GitPullRequest, Cpu, RotateCw } from "lucide-react";
 import Button from "./Button";
 
@@ -124,7 +124,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	// by repo instead, so a completed run leaves its transcript behind.
 	const [repoHistory, setRepoHistory] = useState<TimelineEntry[] | null>(null);
 	const [termAutoScroll, setTermAutoScroll] = useState(true);
-	const [summaryHistory, setSummaryHistory] = useState<{ role: string; content: string; time?: string; audioKey?: string }[]>([]);
+	const [summaryHistory, setSummaryHistory] = useState<CopilotMessage[]>([]);
 
 	// Work mode (instance-wide): "direct" (type each Loop objective) or "issues" (source it
 	// from the next open GitHub issue, approve-per-issue). Persisted server-side.
@@ -295,85 +295,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const { runnerOnline, offlineNotice, repoStatuses, setRepoStatuses, setCaptureOnline, setSessionAttachment, sessionsRef } =
 		useRunnerStatus({ instanceId, sessions, openSession });
 
-	// Terminal polling (1.5s when a session is open)
-	// Engine sign-in relay (#coding-auth): the CLI's OAuth uses a LOOPBACK redirect, so the
-	// browser must be on the runner machine — opening the link here would redirect to this
-	// laptop's localhost, where nothing is listening.
-	const [authPrompt, setAuthPrompt] = useState<AuthPrompt | null>(null);
-	/** Which credential the engine actually ran on, straight from /capture (#248). */
-	const [engineAuth, setEngineAuth] = useState<EngineAuthReport | null>(null);
-	/** Whether the runner is parsing structured events or forwarding raw stdout (#731). */
-	const [engineInvocation, setEngineInvocation] = useState<EngineInvocationReport | null>(null);
-	/** How the engine's LAST TURN ended, straight from /capture (#545). Null on an older runner. */
-	const [lastTurn, setLastTurn] = useState<EngineTurnReport | null>(null);
-	const [signinMsg, setSigninMsg] = useState("");
-	const startSignin = useCallback(async () => {
-		if (!openSession) return;
-		setSigninMsg("Opening the sign-in page on your runner machine…");
-		try {
-			const r = await api<{ ok: boolean; guidance?: string }>(
-				`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/signin`,
-				{ method: "POST" },
-			);
-			setSigninMsg(r.ok ? "Opened — take over the browser to finish signing in." : (r.guidance ?? "Use the terminal below to choose an option."));
-		} catch (e) {
-			setSigninMsg(e instanceof Error ? e.message : String(e));
-		}
-	}, [instanceId, openSession]);
-
-	const applyCapture = term.applyCapture;
 	const openTerm = term.open;
-	const pollTerminal = useCallback(async () => {
-		if (!openSession) return;
-		try {
-			const d = await api<{
-				pane?: string;
-				runState?: string;
-				alive?: boolean;
-				authPrompt?: AuthPrompt;
-				runnerConnected?: boolean;
-				attachment?: AttachmentAnswer;
-				auth?: EngineAuthReport;
-				invocation?: EngineInvocationReport;
-				lastTurn?: EngineTurnReport;
-			}>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/capture`);
-			// An engine blocked on sign-in is otherwise indistinguishable from a dead session:
-			// idle state, a pane that stops changing, no error anywhere.
-			setAuthPrompt(d.authPrompt ?? null);
-			// Which credential this engine actually ran on (#248). MUST be set before the
-			// unchanged-pane early return below, or an idle session would never report it.
-			setEngineAuth(d.auth ?? null);
-			setEngineInvocation(d.invocation ?? null);
-			// How the last turn ended (#545). BEFORE the unchanged-pane early return for the same
-			// reason: a refusing engine's pane stops changing the moment it starts refusing, which
-			// is precisely when this has something to say.
-			setLastTurn(d.lastTurn ?? null);
-			// The header badge reads `repoStatuses[repoId]`, and the only other writer
-			// (`pollStatuses`) is DISABLED while a session is open — so the badge added to say
-			// Working/Idle sat on "Idle" for the whole session while the pane visibly scrolled.
-			// This response already carries runState; write it. Must be BEFORE the
-			// unchanged-text early return below, or a stable pane re-freezes the badge.
-			setRepoStatuses((s) => (s[openSession.repoId] === (d.runState || "idle") ? s : { ...s, [openSession.repoId]: d.runState || "idle" }));
-			if (typeof d.runnerConnected === "boolean") setCaptureOnline(d.runnerConnected);
-			// Same pairing as `pollStatuses`: the diagnosis lives exactly as long as the verdict it
-			// explains (#537).
-			if (d.runnerConnected === false) setSessionAttachment(d.attachment ?? null);
-			else if (d.runnerConnected === true) setSessionAttachment(null);
-			// Fold the live pane into the stored scrollback (#432). It is not a REPLACEMENT for
-			// the history — it is the same growing transcript — so it is stitched on, and when
-			// there is neither the empty state says WHICH of the four causes applies.
-			applyCapture(d);
-		} catch {
-			// IGNORABLE (#291): a 1.5s poll. Keeping the last good pane is the CORRECT response to
-			// one dropped read — the terminal contents did not change because we failed to fetch
-			// them — and the next tick either succeeds or the runner-offline banner explains the
-			// silence. An error state per failed tick would flash faster than it can be read.
-		}
-		// The three setters are ./use-runner-status's, so they are listed: they arrive through a
-		// return value rather than straight from `useState`, which is where the lint can prove a
-		// setter is stable. They still are — same setters, same identity — so this changes nothing
-		// at runtime and states the dependency truthfully rather than suppressing the question.
-	}, [instanceId, openSession, applyCapture, setCaptureOnline, setSessionAttachment, setRepoStatuses]);
 
 	// State of the currently-open session — the terminal poll's busy signal AND the header badge
 	// (CODER-005). Reconciled once, in ./repo-status, so the badge and the repo row cannot answer
@@ -389,7 +311,20 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			})
 		: "ready";
 	const terminalBusy = terminalPollBusy({ state: openState, sending: summaryBusy, looping: loop.loopOn });
-	useTieredPolling(pollTerminal, { activeMs: 1500, passiveMs: 6000 }, terminalBusy, !!openSession);
+
+	// The open session's 1.5s `/capture` poll, the four engine reports it carries and the sign-in
+	// relay that answers the first of them — ./use-engine-capture. The three setters go IN rather
+	// than the state coming back out: they belong to ./use-runner-status, and that poll reads the
+	// same `/capture` response on a different timer, so a second copy is how #241 and #537 happened.
+	const { authPrompt, engineAuth, engineInvocation, lastTurn, signinMsg, startSignin } = useEngineCapture({
+		instanceId,
+		openSession,
+		applyCapture: term.applyCapture,
+		terminalBusy,
+		setRepoStatuses,
+		setCaptureOnline,
+		setSessionAttachment,
+	});
 
 	// Summary polling (4.5s)
 	const pollSummary = useCallback(async () => {
@@ -494,61 +429,10 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		navigate(`/instances/${instanceId}/coding`, { replace: true });
 	}, [instanceId, navigate]);
 
-	// Watch the Engine after delegation — poll until idle, then auto-summarize
-	const watcherRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const voiceRef = useRef(voice);
-	voiceRef.current = voice;
-	// Track the open session so a watcher started for one session can't dump its completion
-	// summary (or speak it) into a DIFFERENT session's Co-pilot thread after the user switches
-	// repos/sessions. The durable server-side watch still persists the summary to the right
-	// session's timeline, so bailing here loses nothing.
-	const openSessionRef = useRef<string | null>(null);
-	openSessionRef.current = openSession?.id ?? null;
-	const watchForFinish = useCallback((sid: string) => {
-		if (watcherRef.current) clearTimeout(watcherRef.current);
-		let attempts = 0;
-		const MAX_ATTEMPTS = 60; // ~3 min max watch time
-		const poll = async () => {
-			if (openSessionRef.current !== sid) return; // user switched away — stop watching this one
-			attempts++;
-			if (attempts > MAX_ATTEMPTS) {
-				setSummaryHistory((prev) => [...prev, { role: "system", content: "Stopped watching — Engine is taking too long. Check the Terminal view." }]);
-				return;
-			}
-			try {
-				const d = await api<{ pane?: string; runState?: string }>(`/v1/instances/${instanceId}/coding/sessions/${sid}/capture`);
-				const state = d.runState || "idle";
-				if (isEngineBusy(state)) {
-					watcherRef.current = setTimeout(poll, 3000);
-					return;
-				}
-				// Engine finished — get a completion summary
-				const summary = await api<{ reply?: string }>(`/v1/instances/${instanceId}/coding/sessions/${sid}/explain`, {
-					method: "POST",
-					// persist:false — the durable server watch workflow already saves this
-					// summary; we only need it here to show + speak (avoids a duplicate bubble).
-					body: JSON.stringify({ finished: true, persist: false }),
-				});
-				// Always surface a closing message when the engine goes idle. Previously, if
-				// /explain returned an empty reply the session ended SILENTLY (no bubble) — the
-				// "session-end message sometimes not shown" bug (#122). Fall back to a clear
-				// system note so the user never just sees the agent go quiet.
-				const reply = summary.reply?.trim();
-				if (reply) {
-					setSummaryHistory((prev) => [...prev, { role: "assistant", content: reply }]);
-					voiceRef.current.maybeSpeakResponse(reply);
-				} else {
-					setSummaryHistory((prev) => [...prev, { role: "system", content: "The engine finished and is now idle. Open the Terminal view for the full output." }]);
-				}
-			} catch {
-				setSummaryHistory((prev) => [...prev, { role: "system", content: "Lost connection to the Engine — check your runner." }]);
-			}
-		};
-		watcherRef.current = setTimeout(poll, 4000);
-	}, [instanceId]);
-
-	// Cleanup watcher on unmount
-	useEffect(() => () => { if (watcherRef.current) clearTimeout(watcherRef.current); }, []);
+	// Watch the Engine after delegation — poll until idle, then say what it did. The timer, the
+	// voice handle and the session-id guard are one mechanism, so they live together in
+	// ./use-engine-finish-watcher rather than as three loose refs on this component.
+	const watchForFinish = useEngineFinishWatcher({ instanceId, openSession, voice, setSummaryHistory });
 
 	const doSendInstruction = async (msg: string, audioKey?: string) => {
 		if (!msg.trim() || !openSession) return;
@@ -711,56 +595,20 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		openRepoSession(only.id);
 	}, [singleRepo, repos, sessions, openSession, runnerOnline, openingRepoId]);
 
-	const endSession = async () => {
-		if (!openSession) return;
-		await api(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/end`, { method: "POST" });
-		closeTerminal();
-		loadCoding();
-	};
-
-	const restartSession = async () => {
-		if (!openSession) return;
-		try {
-			await api(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/restart`, { method: "POST" });
-			term.setText("(restarting CLI...)");
-			setSummaryHistory([]);
-		} catch (e) {
-			alert("Restart failed: " + (e instanceof Error ? e.message : String(e)));
-		}
-	};
-
-	// End current session + start a brand new one (clean state). `fresh: true` is load-bearing
-	// since #408: a new session continues the repo's recent conversation by default, and the one
-	// this just ended is the most recent there is — without the flag this hands back the exact
-	// state the user pressed it to escape.
-	const freshStart = async () => {
-		if (!openSession) return;
-		const repoId = openSession.repoId;
-		try {
-			await api(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/end`, { method: "POST" });
-			const d = await api<{ session: CodingSession }>(`/v1/instances/${instanceId}/coding/sessions`, {
-				method: "POST",
-				body: JSON.stringify({ repoId, engineId: defaultEngine, fresh: true }),
-			});
-			if (d.session) {
-				await loadCoding();
-				openTerminal(d.session);
-			}
-		} catch (e) {
-			alert("Fresh start failed: " + (e instanceof Error ? e.message : String(e)));
-		}
-	};
-
-	const copySummaryJson = async () => {
-		if (!openSession) return;
-		try {
-			const d = await api<TimelinePayload>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/timeline?full=1`);
-			const entries = timelineExcerpt(d);
-			await navigator.clipboard.writeText(JSON.stringify({ sessionId: openSession.id, count: entries.length, timeline: entries }, null, 2));
-		} catch (e) {
-			alert("Copy failed: " + (e instanceof Error ? e.message : String(e)));
-		}
-	};
+	// End it, restart the CLI inside it, abandon it for a clean one, copy its conversation out —
+	// ./use-session-commands. One control group (the header menu renders all four, the solo strip
+	// three), and the `fresh: true` that separates `freshStart` from `endSession` is only readable
+	// with the two side by side.
+	const { endSession, restartSession, freshStart, copySummaryJson } = useSessionCommands({
+		instanceId,
+		openSession,
+		defaultEngine,
+		closeTerminal,
+		loadCoding,
+		openTerminal,
+		setTerminalText: term.setText,
+		setSummaryHistory,
+	});
 
 	const getActiveSession = (repoId: string) => activeSessionFor(sessions, repoId);
 
@@ -850,6 +698,38 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		/>
 	);
 
+	// Same reason as `settingsModal`, for the two other trees that were written out TWICE: the
+	// terminal pane is the solo branch's Terminal view AND the multi-repo session's (eleven props,
+	// identical in both), and the engines sheet closes the solo branch AND the repos list. This
+	// file has two session views, and a prop list maintained twice across them is exactly how the
+	// engine-turn banner shipped into one of them and not the other (#545). Building a JSX element
+	// costs nothing until React renders it, so the branch that does not use one never reads it.
+	const terminalPane = (
+		<TerminalView
+			termInput={termInput}
+			setTermInput={setTermInput}
+			sendTerminalMessage={sendTerminalMessage}
+			terminalText={terminalText}
+			termRef={termRef}
+			termAutoScroll={termAutoScroll}
+			setTermAutoScroll={setTermAutoScroll}
+			stale={!term.live && !!term.saved}
+			hasOlder={term.hasOlder}
+			loadingOlder={term.loadingOlder}
+			onLoadOlder={() => { if (openSession) term.loadOlder(openSession.id); }}
+		/>
+	);
+
+	const enginesModal = showEngines && (
+		<EnginesModal
+			instanceId={instanceId}
+			engines={engines}
+			defaultEngineId={defaultEngine}
+			onClose={() => setShowEngines(false)}
+			onSaved={loadCoding}
+		/>
+	);
+
 	// Claude Code signed-out CTA — the headless engine surfaces a login error in its transcript
 	// when the runner machine has no (or expired) Claude credentials. The pattern (and the
 	// engine gate that keeps a Codex user from being told to run `claude setup-token`) is in
@@ -919,21 +799,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				{claudeSignedOut && soloView === "terminal" && <ClaudeSignedOutBanner onOpenProfile={() => navigate("/profile")} onRestart={restartSession} />}
 
 				{soloView === "terminal" && (
-					openSession ? (
-						<TerminalView
-							termInput={termInput}
-							setTermInput={setTermInput}
-							sendTerminalMessage={sendTerminalMessage}
-							terminalText={terminalText}
-							termRef={termRef}
-							termAutoScroll={termAutoScroll}
-							setTermAutoScroll={setTermAutoScroll}
-							stale={!term.live && !!term.saved}
-							hasOlder={term.hasOlder}
-							loadingOlder={term.loadingOlder}
-							onLoadOlder={() => { if (openSession) term.loadOlder(openSession.id); }}
-						/>
-					) : (
+					openSession ? terminalPane : (
 						<div className="flex-1 min-h-0 flex flex-col">
 							{!solo ? (
 								// This agent's ONLY surface: its empty state IS the add form, not a sign pointing at the settings field 0101 deletes (#411).
@@ -1003,15 +869,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				)}
 				{soloView === "builds" && <BuildsPanel instanceId={instanceId} initialRepoId={initialBuildsRepoId} />}
 				{settingsModal}
-				{showEngines && (
-					<EnginesModal
-						instanceId={instanceId}
-						engines={engines}
-						defaultEngineId={defaultEngine}
-						onClose={() => setShowEngines(false)}
-						onSaved={loadCoding}
-					/>
-				)}
+				{enginesModal}
 			</div>
 		);
 	}
@@ -1048,21 +906,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				{/* Both shown in BOTH views — the reasons are in the components (#248, #coding-auth). */}
 				<EngineCredentialStrip auth={engineAuth} invocation={engineInvocation} />
 				<EngineSigninPrompt prompt={authPrompt} message={signinMsg} onStartSignin={startSignin} />
-				{view === "terminal" && (
-					<TerminalView
-						termInput={termInput}
-						setTermInput={setTermInput}
-						sendTerminalMessage={sendTerminalMessage}
-						terminalText={terminalText}
-						termRef={termRef}
-						termAutoScroll={termAutoScroll}
-						setTermAutoScroll={setTermAutoScroll}
-						stale={!term.live && !!term.saved}
-						hasOlder={term.hasOlder}
-						loadingOlder={term.loadingOlder}
-						onLoadOlder={() => { if (openSession) term.loadOlder(openSession.id); }}
-					/>
-				)}
+				{view === "terminal" && terminalPane}
 				{settingsModal}
 			</div>
 		);
@@ -1121,15 +965,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				<BuildsPanel instanceId={instanceId} initialRepoId={initialBuildsRepoId} />
 			)}
 			{settingsModal}
-			{showEngines && (
-				<EnginesModal
-					instanceId={instanceId}
-					engines={engines}
-					defaultEngineId={defaultEngine}
-					onClose={() => setShowEngines(false)}
-					onSaved={loadCoding}
-				/>
-			)}
+			{enginesModal}
 		</div>
 	);
 }

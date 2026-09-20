@@ -655,7 +655,30 @@ const PINS = {
 	// are ./ClaudeSignedOutBanner, ./EngineCredentialStrip and ./EngineSigninPrompt: 2, 2 and 3 props,
 	// no setters. The two render branches themselves did NOT move: counted at ~39 and ~36 values
 	// read, and ten assertions in repos-list.test.ts slice the solo branch out of this file by name.
-	"agents/coder/web/src/CodingTab.tsx": 1136,
+	// 1136 -> 972 (closes #776): three EFFECT-side seams, each one a mechanism rather than a slice
+	// of a render. ./use-engine-capture is the open session's `/capture` poll and the four engine
+	// reports it carries (auth, invocation, last turn, sign-in prompt) — one response read once,
+	// whose ORDER is the load-bearing part: all four are written before `applyCapture`'s
+	// unchanged-pane early return, which is a property of the sequence and unreviewable when the
+	// sequence is buried in a 1100-line component. It takes ./use-runner-status's three setters
+	// rather than owning that state, for the reason that hook's own comment gives.
+	// ./use-engine-finish-watcher is the post-delegation watch: a timer to cancel, a voice handle
+	// to speak with and the session id the summary belongs to, three refs that only ever run
+	// together and each of which exists for a bug this has already had (#122, and a summary spoken
+	// into the wrong session's thread). ./use-session-commands is end / restart / fresh / copy —
+	// one control group, and `freshStart`'s `fresh: true` is only readable beside the `endSession`
+	// it otherwise duplicates. The four functions stay UNMEMOISED, as they were: memoising them in
+	// passing would be a behaviour change smuggled into a move.
+	// The last 21 lines are two more `settingsModal`s — the terminal pane and the engines sheet
+	// were each written out twice, eleven props and five props, identical in both places. Two
+	// copies of eleven props is exactly how the engine-turn banner came to render in one session
+	// view and not the other (#545).
+	// Still NOT moved, and measured again rather than assumed: the two render branches (~39 and
+	// ~36 values read, with ten repos-list.test.ts assertions slicing the solo one out of this file
+	// by name) and the Co-pilot thread — `setSummaryHistory` has four writers outside its own
+	// region and the hook would have to sit between `voice` and `useCodingLoop`, which each need
+	// the other. That is a deferred-binding ref, not a seam.
+	"agents/coder/web/src/CodingTab.tsx": 972,
 	// +18 for #425: two Chrome launch flags, the args array reformatted one-per-line to fit them,
 	// and the paragraph saying why they are a PAIR. `--use-fake-ui-for-media-stream` on its own
 	// auto-GRANTS the real microphone to any page the agent drives — strictly worse than the prompt
@@ -1731,7 +1754,13 @@ const PINS = {
 	// and these two.
 	// +10 at #820: the two raises above (routes/tools.ts and workflows/coding-session.ts) and the
 	// reasons they are each required to carry.
-	"scripts/check-file-size.mjs": 1815,
+	// +29 on the third CodingTab split (closes #776): the entry above comes DOWN by 164, and a
+	// lowered pin costs this file the same lines a raised one does — twenty-three of why, plus
+	// these six. Long because three seams were taken and two were measured and REJECTED, and the
+	// rejections are the half a later reader cannot reconstruct: without them the next person
+	// re-measures the Co-pilot thread and the two render branches from scratch, which is what the
+	// two notes directly above this one were written to prevent and did.
+	"scripts/check-file-size.mjs": 1844,
 };
 
 /**
