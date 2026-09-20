@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { api } from "@proagentstore/sdk/client";
 import type { CodingRepo } from "./types";
 import { repoProviderLabel } from "./repo-title";
+import { repoRepairNotice } from "./repo-repair";
 import { Settings, Trash2, Lock } from "lucide-react";
 import Button from "./Button";
 
@@ -38,6 +39,15 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved, 
 	 * a refusal (blank, or a session still running in the old directory).
 	 */
 	const [folderNote, setFolderNote] = useState<{ kind: "warn" | "error"; text: string } | null>(null);
+	/**
+	 * The verdict the machine had ALREADY reached about this path, as of the row we were handed.
+	 *
+	 * Different from `folderNote`, which is about the save this sheet is making. This is why the
+	 * owner is here at all — ./repo-repair's notice is what opened the sheet — and it is the
+	 * sentence that says WHICH part of a plausible-looking path is wrong. Cleared as soon as the
+	 * field is edited, because from that moment it describes a path that is no longer in the box.
+	 */
+	const [standingVerdict, setStandingVerdict] = useState(() => repoRepairNotice(repo)?.sentence ?? "");
 
 	const del = async () => {
 		if (!confirm(`Delete repo "${repo.name}"? This removes it from the agent.`)) return;
@@ -125,10 +135,18 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved, 
 				    follow it (#410/#411). The repo's IDENTITY stays fixed: sessions and the timeline
 				    hang off this row, which is why correcting a path must not mean deleting it. */}
 				<label htmlFor="repo-settings-workdir" className="block text-xs font-bold text-muted mb-1">Folder on your machine</label>
+				{/* What the machine ALREADY said about this path, above the field that answers it (#67).
+				    `folderNote` below reports the save we are about to make; this reports the standing
+				    verdict that brought the owner here, and without it the sheet opened on a blank-looking
+				    correct-seeming path with no clue which part was wrong. Only the sentence — the
+				    remedy is this field, and it is directly underneath. */}
+				{standingVerdict && (
+					<p data-testid="repo-settings-clone-error" className="text-xs text-danger mb-1 break-words">{standingVerdict}</p>
+				)}
 				<input
 					id="repo-settings-workdir"
 					value={workdir}
-					onChange={(e) => { setWorkdir(e.target.value); setFolderNote(null); }}
+					onChange={(e) => { setWorkdir(e.target.value); setFolderNote(null); setStandingVerdict(""); }}
 					placeholder="~/dev/my-repo"
 					spellCheck={false}
 					autoCapitalize="off"

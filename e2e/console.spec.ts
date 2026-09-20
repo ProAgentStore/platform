@@ -4610,7 +4610,11 @@ test.describe("mobile — a repo whose path is unusable says so (#405)", () => {
 			// The server's own sentence, verbatim — the console and the chat must not describe one
 			// directory two different ways.
 			await expect(banner).toContainText(LONG_PATH);
-			await expect(banner).toContainText("Repo settings");
+			// The REMEDY, which was the words "Repo settings" in prose until #67 and is now the
+			// control itself. Asserted as a button because that is the difference the ticket is
+			// about: an owner who could not reach the folder field subscribed a second instance
+			// instead, 3m40s after creating the first.
+			await expect(banner.getByRole("button", { name: "Fix the folder" })).toBeVisible();
 
 			// The word the row must NOT be saying about this repo, which is the whole defect.
 			await expect(page.getByText("Path unusable")).toBeVisible();
@@ -4632,6 +4636,83 @@ test.describe("mobile — a repo whose path is unusable says so (#405)", () => {
 		await page.waitForLoadState("networkidle");
 		await expect(page.getByTestId("repo-unusable-repo-1")).toHaveCount(0);
 		await expect(page.getByText("Ready", { exact: true })).toBeVisible();
+	});
+
+	/**
+	 * The SINGLE-repo surface, which is the one that reported nothing at all (#67).
+	 *
+	 * The block above mocks a bare `surfaces:["coding"]` agent, so it renders the multi-repo list —
+	 * and that is the surface that already had a banner. A `coder-repo` declares
+	 * `surfaceOptions.coding.repos: "single"` and returns from a different branch of `CodingTab`
+	 * entirely, where an unusable checkout was the two truncated words "Path unusable" in a header
+	 * caption beside an Open button that would fail. It is also the agent the duplicate-instance
+	 * incident this ticket is about actually happened on, so the surface with no diagnosis was the
+	 * surface where the mistake was made.
+	 */
+	async function mockSoloCoder(page: Page) {
+		await mockSignedInConsole(page, {
+			instances: [{
+				id: "inst-1",
+				name: "Chess coder",
+				slug: "coder-repo",
+				category: "code",
+				capabilities: {
+					surfaces: ["coding"],
+					runtime: "coding",
+					workflow: "CODING_SESSION",
+					surfaceOptions: { coding: { repos: "single", copilot: false } },
+				},
+			}],
+		});
+		await page.route("**/v1/instances/inst-1/coding/**", async (route) => {
+			const url = route.request().url();
+			const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+			if (url.includes("/repos")) return json({ repos: [brokenRepo] });
+			if (url.includes("/engines")) return json({ engines: [], defaultEngineId: "claude" });
+			if (url.includes("/sessions")) return json({ sessions: [] });
+			return json({});
+		});
+	}
+
+	for (const width of [320, 390]) {
+		test(`the one-repo surface states the diagnosis and offers the fix at ${width}px`, async ({ page }) => {
+			await page.setViewportSize({ width, height: 812 });
+			await mockSoloCoder(page);
+			await page.goto("/console/instances/inst-1/coding");
+			await page.waitForLoadState("networkidle");
+
+			// Proves we are on the solo branch and not the list: these four tabs are only rendered
+			// there. Without this the assertions below could pass against the wrong surface.
+			await expect(page.locator("#coding-solo-tabs")).toBeVisible();
+
+			const banner = page.getByTestId("repo-unusable");
+			await expect(banner).toBeVisible();
+			await expect(banner).toContainText(LONG_PATH);
+			await expect(banner.getByRole("button", { name: "Fix the folder" })).toBeVisible();
+
+			// The same 58-character path, now in a surface whose header caption already truncates
+			// first at 320px (#454) — so this is the width where a new block pans the page.
+			const { mainOv, docOv, wide, escapes } = await measureOverflow(page);
+			expect(mainOv, `<main> overflows by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+			expect(escapes, `a box past its own container at ${width}w: ${escapes.join(", ")}`).toEqual([]);
+		});
+	}
+
+	test("mobile — the fix opens the folder field, with the machine's verdict above it", async ({ page }) => {
+		// The whole point of the ticket: the failure and its remedy have to MEET. Clicking through
+		// is what proves the button reaches the one field that can correct the path — and that the
+		// sheet repeats the verdict, so the owner can see which segment is wrong while they type.
+		await page.setViewportSize({ width: 390, height: 812 });
+		await mockSoloCoder(page);
+		await page.goto("/console/instances/inst-1/coding");
+		await page.waitForLoadState("networkidle");
+
+		await page.getByTestId("repo-unusable").getByRole("button", { name: "Fix the folder" }).click();
+		await expect(page.locator("#repo-settings-workdir")).toBeVisible();
+		await expect(page.locator("#repo-settings-workdir")).toHaveValue(brokenRepo.workdir);
+		await expect(page.getByTestId("repo-settings-clone-error")).toContainText(LONG_PATH);
 	});
 });
 

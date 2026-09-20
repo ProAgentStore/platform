@@ -27,6 +27,7 @@ import CopilotView from "./CopilotView";
 import TerminalView from "./TerminalView";
 import AddRepoForm from "./AddRepoForm";
 import ReposList from "./ReposList";
+import RepoUnusableNotice from "./RepoUnusableNotice";
 import type { RecheckReport } from "./repo-freshness";
 import RepoIssues from "./RepoIssues";
 import SelectedRepoSettings from "./SelectedRepoSettings";
@@ -797,6 +798,13 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				<EngineTurnBanner report={lastTurn} />
 
 				{claudeSignedOut && soloView === "terminal" && <ClaudeSignedOutBanner onOpenProfile={() => navigate("/profile")} onRestart={restartSession} />}
+
+				{/* The checkout is unusable, and the field that fixes it (#67). This surface reported it
+				    as the two truncated words "Path unusable" in the caption above and nothing else —
+				    no sentence, no remedy — beside an Open button that would fail. A `coder-repo`
+				    owner has no repo LIST to fall back on, so this was the one surface where the
+				    server's verdict reached nobody, and it is the surface the incident happened on. */}
+				{solo && soloView === "terminal" && <RepoUnusableNotice repo={solo} onFix={() => setSettingsRepoId(solo.id)} />}
 
 				{soloView === "terminal" && (
 					openSession ? terminalPane : (

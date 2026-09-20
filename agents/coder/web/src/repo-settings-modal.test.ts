@@ -37,7 +37,11 @@ const code = src
 describe("the folder is a real field", () => {
 	it("renders an input, not a Detail row", () => {
 		expect(code).toContain('id="repo-settings-workdir"');
-		expect(code).toContain("onChange={(e) => { setWorkdir(e.target.value); setFolderNote(null); }}");
+		// Asserted as "the handler writes the field's own state", not as a literal: this used to pin
+		// the whole `onChange` string and went red when #67 added a third clearer to it, which is a
+		// test failing for a change that could not possibly be the defect it guards. What must stay
+		// true is that typing reaches `setWorkdir` — a read-only `Detail` has no handler at all.
+		expect(code).toMatch(/onChange=\{\(e\) => \{[^}]*setWorkdir\(e\.target\.value\)/);
 		// The old read-only row is gone from the details grid.
 		expect(code).not.toContain('<Detail label="Folder"');
 	});
@@ -82,5 +86,33 @@ describe("a read-only value does not wear an input's costume", () => {
 		expect(detail).toContain("text-muted");
 		expect(detail).toContain("<Lock");
 		expect(detail).not.toContain("text-ink");
+	});
+});
+
+/**
+ * #67 — the sheet says WHICH part of a plausible-looking path is wrong.
+ *
+ * The incident: an owner created a Repo Coder against a path with one extra segment, and three
+ * minutes forty seconds later subscribed a SECOND instance against the same repository rather
+ * than correcting it. The machine's verdict existed the whole time, on the repo row. It reached
+ * this sheet — the one place the path can actually be edited — nowhere.
+ */
+describe("the standing verdict is shown above the field that answers it (#67)", () => {
+	it("reads the verdict from the shared decision rather than re-testing the status here", () => {
+		// One module decides what `needs_attention` means and what to say about it, so the sheet,
+		// the list banner and the solo surface cannot describe one directory three ways.
+		expect(code).toContain('import { repoRepairNotice } from "./repo-repair"');
+		expect(code).toContain("repoRepairNotice(repo)?.sentence");
+	});
+
+	it("renders it, and distinguishably from the note about the save in flight", () => {
+		expect(code).toContain('data-testid="repo-settings-clone-error"');
+		// Two different facts, two different test ids: one is the verdict that brought you here,
+		// the other is what the server said about the save you just made.
+		expect(code).toContain('data-testid="repo-settings-folder-note"');
+	});
+
+	it("clears the moment the field is edited — it describes a path no longer in the box", () => {
+		expect(code).toMatch(/onChange=\{\(e\) => \{[^}]*setStandingVerdict\(""\)/);
 	});
 });

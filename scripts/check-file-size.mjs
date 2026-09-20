@@ -678,7 +678,15 @@ const PINS = {
 	// by name) and the Co-pilot thread — `setSummaryHistory` has four writers outside its own
 	// region and the hook would have to sit between `voice` and `useCodingLoop`, which each need
 	// the other. That is a deferred-binding ref, not a seam.
-	"agents/coder/web/src/CodingTab.tsx": 972,
+	// +8 at #67: the unusable-checkout notice, which this surface did not render AT ALL — a
+	// `coder-repo` owner saw the two truncated words "Path unusable" in a header caption beside an
+	// Open button that would fail, and no way to reach the folder field that fixes it. One line of
+	// JSX; the other seven are the comment saying which surface was blind and why that is the one
+	// that mattered (it is the surface the duplicate-instance incident happened on). The decision,
+	// the wording and the control are ./repo-repair + ./RepoUnusableNotice, shared with ReposList
+	// so the two surfaces cannot report one directory differently — which is why this is +8 and
+	// not the +30 an inline banner would have cost.
+	"agents/coder/web/src/CodingTab.tsx": 980,
 	// +18 for #425: two Chrome launch flags, the args array reformatted one-per-line to fit them,
 	// and the paragraph saying why they are a PAIR. `--use-fake-ui-for-media-stream` on its own
 	// auto-GRANTS the real microphone to any page the agent drives — strictly worse than the prompt
@@ -1760,7 +1768,11 @@ const PINS = {
 	// rejections are the half a later reader cannot reconstruct: without them the next person
 	// re-measures the Co-pilot thread and the two render branches from scratch, which is what the
 	// two notes directly above this one were written to prevent and did.
-	"scripts/check-file-size.mjs": 1844,
+	// +12 at #67: the CodingTab raise above (seven lines of why for one line of JSX, because the
+	// argument is about which surface was BLIND rather than about the code) and these three. The
+	// self-reference is the usual price and is the record: a pin moved without one is a number
+	// nobody can audit later.
+	"scripts/check-file-size.mjs": 1856,
 };
 
 /**

@@ -12,6 +12,7 @@ import { repoOpenAction } from "./repo-open";
 import { repoFreshnessLabel, staleListNotice, type RecheckReport } from "./repo-freshness";
 import { noticeSentence, type RunnerNotice } from "./runner-offline-notice";
 import Button from "./Button";
+import RepoUnusableNotice from "./RepoUnusableNotice";
 
 type TimelineEntry = { type?: string; content?: string; text?: string };
 
@@ -210,18 +211,10 @@ export default function ReposList({
 				{playErr?.id === r.id && (
 					<p data-testid={`repo-play-failed-${r.id}`} className="mt-2 text-xs text-danger break-words">{playErr.text}</p>
 				)}
-				{unusable && (
-					<div data-testid={`repo-unusable-${r.id}`} className="mt-2 bg-danger-soft border border-danger-line text-danger rounded-lg p-2 text-xs">
-						{/* The server's own sentence — it names the path and the condition, and it is the
-						    same one the agent is given to relay, so the console and the chat cannot say
-						    two different things about one directory. `break-words` because a checkout
-						    path is long and this card is 320px wide on a phone. */}
-						<p className="break-words">{r.cloneError || "This path could not be used on your machine."}</p>
-						<p className="mt-1 text-muted break-words">
-							Point it at the real checkout (⚙ Repo settings) or remove it. The agent cannot read code that isn't there.
-						</p>
-					</div>
-				)}
+				{/* The server's verdict AND the control that answers it — ./RepoUnusableNotice, shared
+				    with the single-repo surface so the two cannot report this differently (#67). The
+				    second paragraph used to name the settings sheet in prose; it opens it now. */}
+				<RepoUnusableNotice repo={r} onFix={() => setSettingsRepoId(r.id)} testId={`repo-unusable-${r.id}`} />
 				{/* HOW OLD the verdict above is, and the way to replace it (#440). Only for a repo
 				    that has a folder on a machine — a cloned repo has no checkout to look at.
 				    `flex-wrap` because "never checked" plus the button is wider than a 320px card. */}
