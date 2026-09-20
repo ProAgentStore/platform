@@ -25,8 +25,11 @@ import { runRegistryTool } from "./tool-registry.js";
 import { TRIGGER_ACTIONS } from "./trigger-types.js";
 import type { Env } from "../types.js";
 
+// `.href` — a STRING — not the URL object. Under `tsconfig.test.json` the Workers `URL` global and
+// Node's `url.URL` are different types, so passing the object fails a typecheck that
+// `pnpm -r typecheck` does not run. Same form as `portal-watch-seed.test.ts:19`, for the same reason.
 const migration = () =>
-	readFileSync(fileURLToPath(new URL("../../migrations/0155_connector_consent_mode.sql", import.meta.url)), "utf8");
+	readFileSync(fileURLToPath(new URL("../../migrations/0155_connector_consent_mode.sql", import.meta.url).href), "utf8");
 
 interface Written { sql: string; args: unknown[] }
 
