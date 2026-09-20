@@ -135,26 +135,20 @@ export const STATUS_DOMAINS: Record<string, StatusDomain> = {
 		},
 	},
 	"agent_instances.status": {
-		values: { active: "app", paused: "none", canceled: "app" },
-		note: "'paused' is declared and displayed but no route writes it; cancel writes 'canceled'.",
-		decisions: {
-			paused:
-				"MISSING CAPABILITY, not a dead word — and deliberately not built under #598, which is " +
-				"a vocabulary ticket. What was checked for a design record: docs/ and docs/adr/ have " +
-				"nothing on pausing an instance, and no closed issue does either. What DOES exist is a " +
-				"read side already built for it: lib/trigger-eligibility.ts chose an ALLOWLIST over " +
-				"`status != 'canceled'` precisely so that 'if pause ever acquires a writer, a paused " +
-				"instance must not be running cron work, and with an allowlist it silently already does " +
-				"not' (#649), and lib/subscription-standing.ts plus migration 0131 make the same " +
-				"conservative choice from the other side. So the safety is in place and the FEATURE is " +
-				"not: a writer, a console control, a resume path, and an admin instance filter. " +
-				"Shipping the writer alone is what makes a half-working control, which is the failure " +
-				"#664 named. The one piece that DID exist was the admin filter — `store/admin` offered " +
-				"'paused' and could only ever return zero rows — and it was deleted rather than kept " +
-				"as a placeholder: the owner's rule (#598) is that an unwritable value stays in a " +
-				"shipped migration and is recorded here, but a UI control for it always goes, because " +
-				"a control advertises a capability to a human that a schema comment does not.",
-		},
+		values: { active: "app", paused: "app", canceled: "app" },
+		note:
+			"All three are written by application code. 'active' by the subscribe INSERT and by " +
+			"`POST /:id/resume`; 'paused' by `POST /:id/pause`; 'canceled' by the owner's cancel and by " +
+			"the two admin-moderation writes. 'paused' was `none` until #825 — declared by " +
+			"0002_instances.sql and displayed, with no route writing it — and this entry's previous " +
+			"`decisions.paused` said what that needed: a writer, a resume path, a console control and " +
+			"the run-admission gate, all four together, because shipping the writer alone is what makes " +
+			"a half-working control (#664). They landed together in routes/instances-lifecycle.ts, " +
+			"lib/instance-pause.ts, the `withPauseGate` wrapper in lib/loop-drivers.ts and the console " +
+			"Settings control. The read side needed no change: lib/trigger-eligibility.ts chose an " +
+			"ALLOWLIST over `status != 'canceled'` in #649 precisely so that a paused instance would " +
+			"already be excluded from cron, the pump, delivery retries and webhooks the moment pause " +
+			"acquired a writer — which is what that comment predicted and what this change confirms.",
 	},
 	"subscriptions.status": {
 		values: { active: "app", canceled: "app", past_due: "none" },

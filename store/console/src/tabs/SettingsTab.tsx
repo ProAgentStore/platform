@@ -16,6 +16,7 @@ import AgentAccountChoice from "../components/AgentAccountChoice";
 import { showsConnector, showsFileConnector, type ConnectorReach, type InstanceConnectorPolicy } from "../lib/connectorState";
 import { voiceSummary } from "../lib/voiceSummary";
 import { unsubscribeScope, type RosterInstance } from "../lib/unsubscribeScope";
+import PauseCard from "../components/PauseCard";
 import { FileConnectorPanel } from "../components/FileConnectorPanel";
 import RepoConnectPanel from "../components/RepoConnectPanel";
 import Button from "../components/Button";
@@ -128,6 +129,7 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 	 *  stored: the roster is the only input, so the panel and the confirm dialog cannot drift
 	 *  apart the way the old copy and its shorter dialog restatement had. */
 	const scope = unsubscribeScope(roster, instanceId);
+	const [instStatus, setInstStatus] = useState<string | null>(null);
 	const loadAll = useCallback(() => {
 		(async () => {
 			const failed: string[] = [];
@@ -141,6 +143,9 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 				const mine = (d.instances || []).find((i) => i.id === instanceId);
 				if (mine?.name) setInstName(mine.name);
 				setRoster(d.instances || []);
+				// The per-instance lifecycle state, from the same read (#825) — `my/instances` has
+				// always projected `i.status`; nothing rendered it until pause acquired a writer.
+				setInstStatus(mine?.status ?? null);
 			} catch { failed.push("your instance name"); }
 			try {
 				const d = await api<{ settings?: Record<string, string | number | boolean>; fields?: SettingsField[] }>(`/v1/instances/${instanceId}/settings`);
@@ -768,6 +773,10 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 				<Button onClick={resyncIdentity}>Resync personality</Button>
 				{resyncMsg && <p className="text-xs text-muted mt-2">{resyncMsg}</p>}
 			</Card>
+
+			{/* Pause / resume (#825) — the REVERSIBLE lifecycle, deliberately above the Danger zone
+			    so the irreversible control is not the first one an owner meets. */}
+			<PauseCard instanceId={instanceId} initialStatus={instStatus} />
 
 			{/* Danger zone — the control names the instance it cancels, not the agent (#742). */}
 			<Card>

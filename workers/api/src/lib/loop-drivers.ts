@@ -27,6 +27,7 @@ import { delegationTaskRecord } from "./delegation.js";
 import { claimSessionDriver, endSession, listRepos, releaseSessionDriver } from "./coding-store.js";
 import { ensureActiveSession } from "./coding-session-open.js";
 import { admitRepoForRun } from "./coding-repo-admission.js";
+import { pausedStartRefusal } from "./instance-pause.js";
 import { noSessionMessage } from "./coding-session-lifecycle.js";
 import { noteUnmeteredHeadlessDrive } from "./engine-metering.js";
 import { classifySubordinateConnectivity } from "./subordinate-connectivity.js";
@@ -409,9 +410,55 @@ const DRIVERS: Record<string, LoopDriver> = {
 
 export const DEFAULT_LOOP_DRIVER = chatDriver;
 
+/**
+ * Refuse a run on a PAUSED instance, before any driver does anything (#825).
+ *
+ * ── Why the gate is here and not at the five call sites
+ *
+ * Every `driver.start()` in the tree gets its driver from {@link loopDriverFor} — `POST /:id/loop`,
+ * the continue route, `delegate_goal`/`start_work` through the tool registry, the delegation
+ * helper, and the objective-queue drainer. Wrapping the driver is therefore ONE gate that covers
+ * all five and, more to the point, covers the sixth that has not been written yet. Gating at the
+ * call sites is how `lib/trigger-eligibility.ts`'s own header says the background version of this
+ * bug happened: a fix applied at one writer covers only that writer, and a later one forgets.
+ *
+ * ── Why it wraps rather than living inside each driver
+ *
+ * A driver's job is to decide whether the WORK can run — is there a repo, a machine, a usable
+ * checkout. Whether the agent is switched on at all is a question about the instance, asked once,
+ * and answering it twice in two drivers is how two answers start disagreeing.
+ *
+ * It runs BEFORE the driver's own checks deliberately. A paused coding agent with its laptop shut
+ * should be told it is paused — that is the fact the owner can act on and the one they created —
+ * rather than being sent to go and run `pags up` for a run that would be refused anyway.
+ *
+ * The extra read is one indexed lookup by primary key on a path that already makes several, and it
+ * is skipped entirely for the overwhelmingly common case only in the sense that the row is almost
+ * always `active` — it is always READ, because a gate that trusts a cached status is a gate that
+ * admits a run onto an instance paused a second ago.
+ */
+function withPauseGate(driver: LoopDriver): LoopDriver {
+	return {
+		id: driver.id,
+		label: driver.label,
+		async start(input) {
+			const row = await input.env.DB.prepare("SELECT status FROM agent_instances WHERE id = ?1 AND user_id = ?2")
+				.bind(input.instanceId, input.userId)
+				.first<{ status: string | null }>()
+				.catch(() => null);
+			// A failed read does NOT refuse. This gate exists to stop work on an agent the owner
+			// switched off, not to make a dropped D1 read look like one — and the run is about to
+			// make several more reads that will fail honestly if D1 is genuinely down.
+			const refusal = row ? pausedStartRefusal(row.status) : null;
+			if (refusal) return { ok: false, status: 409, error: refusal };
+			return driver.start(input);
+		},
+	};
+}
+
 export function loopDriverFor(capabilities: AgentCapabilities | null | undefined): LoopDriver {
 	const wf = capabilities?.workflow;
-	return (wf && DRIVERS[wf]) || DEFAULT_LOOP_DRIVER;
+	return withPauseGate((wf && DRIVERS[wf]) || DEFAULT_LOOP_DRIVER);
 }
 
 /** Every driver id, for tests and diagnostics. */

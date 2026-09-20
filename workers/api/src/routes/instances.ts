@@ -15,6 +15,7 @@ import { registerBehaviourRoutes } from "./instances-behaviour.js";
 import { registerBrowseRoutes } from "./instances-browse.js";
 import { registerChatRoutes } from "./instances-chat.js";
 import { registerGuideRoutes } from "./instances-guide.js";
+import { registerInstanceLifecycleRoutes } from "./instances-lifecycle.js";
 import { registerKnowledgeRoutes } from "./instances-knowledge.js";
 import { registerTaskRoutes } from "./instances-tasks.js";
 import { registerTranslationRoutes } from "./instances-translation.js";
@@ -1083,6 +1084,8 @@ instanceRoutes.delete("/:instanceId/runtime", async (c) => {
 registerTaskRoutes(instanceRoutes);
 registerChatRoutes(instanceRoutes);
 registerKnowledgeRoutes(instanceRoutes);
+// Pause / resume (#825) — the reversible lifecycle beside the cancel below.
+registerInstanceLifecycleRoutes(instanceRoutes);
 
 /**
  * Cancel subscription / deactivate instance. Two writes answering DIFFERENT questions (#669):

@@ -24,21 +24,26 @@ interface Instance {
 
 const PAGE = LIST_PAGE;
 /**
- * The statuses an operator may filter by — the ones a row can actually hold (#598).
+ * The statuses an operator may filter by — the ones a row can actually hold (#598, #825).
  *
- * `paused` is declared on `agent_instances.status` and written by nothing: subscribing inserts
- * `active` and cancelling writes `canceled`, and there is no pause writer, console control or
- * resume path (the reasoning is recorded against the value itself in
- * `workers/api/src/lib/status-domain.ts`). It was offered here anyway, so an operator could select
- * it and get an empty list that reads as "nobody has paused an instance" rather than as "this
- * product has no such thing".
+ * `paused` is back, and the round trip is the point. It was declared on `agent_instances.status`
+ * and written by nothing, yet offered here anyway — so an operator could select it and get an
+ * empty list that reads as "nobody has paused an instance" rather than as "this product has no
+ * such thing". #598 deleted the option and left the value in the schema, on the rule that a dead
+ * enum in a migration is a word nobody sees while a dead option in a filter is a capability
+ * advertised to a human.
  *
- * A dead enum in a migration is a word nobody sees; a dead option in a filter is a capability
- * advertised to a human. That is why the value stays in the schema and this option does not —
- * the owner's rule for this class of defect, recorded on #598.
+ * #825 built the capability: a writer (`POST /:id/pause`), a resume path, a console control and
+ * the run-admission gate, all four together. So the option is not a placeholder any more and the
+ * rule puts it back. `list-query.test.ts` is what makes that automatic rather than remembered —
+ * it derives this list from the server's own provenance table, in BOTH directions, so a value
+ * that gains a writer starts demanding its option and one that loses a writer starts demanding
+ * its removal.
  */
-const STATUSES = ["active", "canceled"];
-const badge = (v: string) => <span className={v === "active" ? "text-success" : v === "canceled" ? "text-muted-soft" : "text-muted"}>{v}</span>;
+const STATUSES = ["active", "paused", "canceled"];
+// `paused` takes the warn token: it is a state an operator may need to act on, unlike `canceled`
+// (settled) or `active` (fine). The fallback stays for a status this build has not been taught.
+const badge = (v: string) => <span className={v === "active" ? "text-success" : v === "paused" ? "text-warning" : v === "canceled" ? "text-muted-soft" : "text-muted"}>{v}</span>;
 
 /**
  * Every subscription across every tenant (issue #38). Filterable by agent, owner and

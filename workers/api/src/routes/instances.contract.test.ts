@@ -297,6 +297,9 @@ const ROUTES = [
 	"PUT /:instanceId/knowledge/:docId",
 	"POST /:instanceId/knowledge/ingest-url",
 	"GET /:instanceId/knowledge",
+	// Pause / resume (#825) — registered by `instances-lifecycle.ts` right after the knowledge group.
+	"POST /:instanceId/pause",
+	"POST /:instanceId/resume",
 	"POST /:instanceId/cancel",
 ];
 
@@ -374,6 +377,7 @@ const OWNERSHIP: Record<string, string[]> = {
 		"DELETE /:instanceId/behaviour",
 	],
 	"instances-guide.ts": ["GET /:instanceId/connection-guide"],
+	"instances-lifecycle.ts": ["POST /:instanceId/pause", "POST /:instanceId/resume"],
 	"instances-browse.ts": ["POST /:instanceId/browse"],
 	"instances-chat.ts": [
 		"POST /:instanceId/chat",
@@ -613,6 +617,8 @@ const GATES: Record<string, [number, number]> = {
 	"GET /:instanceId/task-events": [401, 404],
 	"POST /:instanceId/chat": [401, 404],
 	"POST /:instanceId/loop-decide": [401, 404],
+	"POST /:instanceId/pause": [401, 404],
+	"POST /:instanceId/resume": [401, 404],
 	"POST /:instanceId/system-message": [401, 404],
 	"GET /:instanceId/messages": [401, 404],
 	"POST /:instanceId/knowledge": [401, 404],

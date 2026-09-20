@@ -160,7 +160,7 @@ const PINS = {
 	// has to precede `/:instanceId/...`, which lives in this file — the same ordering constraint
 	// `/loop/queue` paid for in #788. What is NOT here is the composition: `lib/instance-activity.ts`
 	// folds the two query results and maps `runHealth`, so the handler is a fetch and a shape.
-	"workers/api/src/routes/instances.ts": 1113, // +4 (#772): the connection-guide mount — an import and a registrar call, plus the two-line reason. Every route module this file composes costs the same two lines; the work itself went into routes/instances-guide.ts and lib/connection-guide.ts, which is what the pin is asking for.
+	"workers/api/src/routes/instances.ts": 1116, // +3 (#825): the pause/resume mount — an import, a registrar call and the one-line reason, which is exactly the shape this pin asks for; the routes themselves are routes/instances-lifecycle.ts. // +4 (#772): the connection-guide mount — an import and a registrar call, plus the two-line reason. Every route module this file composes costs the same two lines; the work itself went into routes/instances-guide.ts and lib/connection-guide.ts, which is what the pin is asking for.
 	// +5 for #319: the send path now hands the live capture to the consumer alongside the audio
 	// key, so the two readings of a turn can be compared on the message. Raised rather than
 	// split — the whole change is one `storedDictation` call and the two `onSend` sites that

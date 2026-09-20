@@ -761,4 +761,26 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// comparing the two versions will see it in the diff and should not conclude the hash missed it.
 	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.45 is published.
 	"0.1.46": "sha256:fef569e0acd5e38b5c960555685aaddf4041c03ea04d771d5754cadafaac620d",
+	// 0.1.47 (#825, pause/resume an instance): two new tool NAMES, both ALWAYS-ON — 211
+	// registrations become 213, `MCP_TOOL_ALWAYS_ON` 187 → 189, `MCP_TOOL_GATED` stays 24. Both in
+	// `instance-tools/base.ts`, the lifecycle group, registered BEFORE `cancel_instance` so a reader
+	// meeting the destructive control has already met the reversible one.
+	//
+	//   * `pause_instance` (write, dry_run) — POST /v1/instances/:id/pause.
+	//   * `resume_instance` (write, dry_run) — POST /v1/instances/:id/resume.
+	//
+	// `write`, NOT `destructive`, and the reasoning is `set_instance_connector_consent`'s: nothing is
+	// deleted and nothing is unsubscribed, and classing the OFF switch as destructive would put
+	// RESUME behind a scope the caller may not hold — the wrong failure mode for a safety toggle.
+	// Not `read` either; switching an agent off is a real change. The closest existing analogues are
+	// `stop_instance_loop` and `set_connection_enabled`, both `write`.
+	//
+	// `agent_instances.status = 'paused'` had been in the schema's declared domain since
+	// 0002_instances.sql with NO writer, recorded in `lib/status-domain.ts` as a missing capability
+	// rather than dead vocabulary. Its entry named the four pieces required together — a writer, a
+	// resume path, a console control and the run-admission gate — and that table now marks the value
+	// `app`, which is what forced all four to land in one change.
+	//
+	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.46 is published.
+	"0.1.47": "sha256:6a87a86a34668cbb16c1ae7469c7b1a90159bbd0e36e393e0b5a018ce7c60edd",
 };

@@ -278,6 +278,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	set_instance_voice_settings: "write",
 	clear_instance_voice_settings: "write",
 	stop_instance_loop: "write",
+	pause_instance: "write",
+	resume_instance: "write",
 	update_board_ticket: "write",
 	update_instance_knowledge: "write",
 	update_instance_record: "write",
@@ -512,7 +514,12 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// state + knowledge + memory and stores nothing, so the word "export" is about the SHAPE of
 	// the answer rather than about an effect.
 	read: 103,
-	write: 64,
+	// +2 write at #825: `pause_instance` / `resume_instance`. `write` rather than `destructive` —
+	// nothing is deleted and nothing is unsubscribed, and classing the OFF switch as destructive
+	// would put RESUME behind a scope the caller may not hold, which is the wrong failure mode for
+	// a safety toggle (the reasoning `set_instance_connector_consent` already records). Not `read`
+	// either: switching an agent off is a real change.
+	write: 66,
 	// +1 runtime at #806: `continue_instance_run`. `runtime` rather than `write` for the reason
 	// `start_instance_loop` is — it starts an autonomous run that spends on its own — and the
 	// two must agree, because a caller holding the scope to start one holding a narrower one to

@@ -156,12 +156,14 @@ describe("the instance status filter offers only statuses a row can hold (#598)"
 		expect(offeredStatuses().sort()).toEqual(writable.sort());
 	});
 
-	it("still knows about a value nothing writes, rather than having quietly lost the record", () => {
-		// The value itself stays in the schema — `check-migrations --require-history` forbids editing
-		// the migration that declared it, deliberately. So this asserts the two halves of the rule
-		// hold together: the server still records `paused` as unwritten, and the UI still does not
-		// offer it. If pause ever acquires a writer, the test above starts demanding the option back.
-		expect(instanceStatusWriters().paused).toBe("none");
-		expect(offeredStatuses()).not.toContain("paused");
+	it("offers `paused` now that it has a writer — the round trip this pair was built for", () => {
+		// This test used to assert the OPPOSITE: `paused` unwritable, and absent from the dropdown.
+		// That was never a permanent fact, it was half of a pair held together on purpose, and its
+		// own comment said what would happen — "if pause ever acquires a writer, the test above
+		// starts demanding the option back". #825 gave it one, so this is that sentence coming
+		// true rather than a guard being relaxed. The test above still derives the whole list from
+		// the provenance table, so neither half can drift without the other.
+		expect(instanceStatusWriters().paused).toBe("app");
+		expect(offeredStatuses()).toContain("paused");
 	});
 });

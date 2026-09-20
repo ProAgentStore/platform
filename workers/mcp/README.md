@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**211 tool registrations.** 187 are always registered; 24 are gated to the console
+**213 tool registrations.** 189 are always registered; 24 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -253,6 +253,8 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `rename_instance` | Set or clear the display name | write | yes | |
 | `set_instance_model` | Change the instance's chat model | write | yes | |
 | `get_instance_state` | Read DO state (identity, guardrails, permissions) — read-only | — | | |
+| `pause_instance` | Temporarily stop an instance without unsubscribing — blocks new runs, asks live ones to stop; everything is kept (#825) | write | yes | |
+| `resume_instance` | Put a paused instance back to work. Does not restart the runs the pause stopped (#825) | write | yes | |
 | `cancel_instance` | Cancel the subscription, deactivating the instance | destructive | yes | `cancel_instance` |
 
 ### Instance knowledge, vectors, files

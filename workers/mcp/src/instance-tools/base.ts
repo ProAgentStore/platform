@@ -416,6 +416,76 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 		},
 	);
 
+	/**
+	 * Pause / resume (#825) — the reversible lifecycle, registered BEFORE cancel so a reader
+	 * meeting the destructive one has already met the option that is not.
+	 *
+	 * `write`, not `destructive`: nothing is deleted and nothing is unsubscribed, and the same
+	 * reasoning `set_instance_connector_consent` records applies — classing the OFF switch as
+	 * destructive would put `resume_instance` behind a scope the caller may not hold, which is the
+	 * wrong failure mode for a safety toggle. Not `read` either: switching an agent off is a real
+	 * change, and a read-only session must not be able to make it.
+	 */
+	server.tool(
+		"pause_instance",
+		"Temporarily stop one private instance WITHOUT unsubscribing: blocks new runs from starting, and asks any run in flight to stop. Everything is kept — the subscription, config, repos, documents, memory, timeline and run history — and resume_instance puts it straight back. This is the reversible alternative to cancel_instance, which gives the agent up. Background work is stopped too (cron triggers, the agent-to-agent pump, delivery retries, inbound webhooks). Chat still works, deliberately, so you can ask a paused agent what went wrong. `runs_asked_to_stop` counts runs ASKED to stop, not runs that have stopped — each ends at the top of its next iteration; watch them with check_instance_loop. Pausing an already-paused instance succeeds with `changed:false`.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Private instance ID from my_instances. Not the public agent_id from list_agents."),
+			dry_run: z.boolean().optional().describe("Report what pausing would do, without pausing."),
+		},
+		async ({ token, instance_id, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id };
+			const denied = await requirePermission(safetyFor(token), "write", "pause_instance", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "pause_instance", "pause a private instance", input, {
+					endpoint: `/v1/instances/${instance_id}/pause`,
+					method: "POST",
+					effect: `${instance_id} would stop starting new runs and any run in flight would be asked to stop. Nothing is unsubscribed or deleted, and resume_instance reverses it.`,
+				});
+			}
+			const data = (await authedCall(`/v1/instances/${instance_id}/pause`, sessionToken, { method: "POST" }, env)) as {
+				success?: boolean;
+				error?: string;
+			};
+			if (data.success) await audit(safetyFor(token), { tool: "pause_instance", action: "completed", input });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"resume_instance",
+		"Put a PAUSED instance back to work: new runs may start again, and background work (cron, the pump, delivery retries, webhooks) resumes. It does NOT restart runs the pause stopped — those have terminal rows and re-running an objective whose partial work is already on the record is the mistake to avoid; carry one forward with continue_instance_run instead. Resuming an already-active instance succeeds with `changed:false`. A CANCELLED instance cannot be resumed — subscribing to the agent again creates a new instance rather than reviving that one.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Private instance ID from my_instances. Not the public agent_id from list_agents."),
+			dry_run: z.boolean().optional().describe("Report what resuming would do, without resuming."),
+		},
+		async ({ token, instance_id, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id };
+			const denied = await requirePermission(safetyFor(token), "write", "resume_instance", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "resume_instance", "resume a paused instance", input, {
+					endpoint: `/v1/instances/${instance_id}/resume`,
+					method: "POST",
+					effect: `${instance_id} would be able to start runs again. Runs the pause stopped are NOT restarted.`,
+				});
+			}
+			const data = (await authedCall(`/v1/instances/${instance_id}/resume`, sessionToken, { method: "POST" }, env)) as {
+				success?: boolean;
+				error?: string;
+			};
+			if (data.success) await audit(safetyFor(token), { tool: "resume_instance", action: "completed", input });
+			return jsonText(data);
+		},
+	);
+
 	server.tool(
 		"cancel_instance",
 		"Cancel your subscription and deactivate one private subscribed instance.",

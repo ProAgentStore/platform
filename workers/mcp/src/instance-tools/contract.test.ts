@@ -279,6 +279,8 @@ const TABLE: Record<string, Row> = {
 	],
 	call_instance_tool: ["base", "write", null, null, "input,instance_id,token,tool"],
 	cancel_instance: ["base", "destructive", "cancel_instance", "envelope", "confirm,dry_run,instance_id,token"],
+	pause_instance: ["base", "write", null, "envelope", "dry_run,instance_id,token"],
+	resume_instance: ["base", "write", null, "envelope", "dry_run,instance_id,token"],
 	cancel_instance_task: ["runtime", "destructive", "cancel_instance_task", "envelope", "confirm,dry_run,instance_id,task_id,token"],
 	chat_with_instance: ["base", "runtime", null, "envelope", "dry_run,instance_id,message,token"],
 	check_instance_loop: ["composition", "read", null, null, "instance_id,run_id,token"],

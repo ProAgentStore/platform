@@ -2792,6 +2792,95 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /v1/instances/{instanceId}/pause:
+    post:
+      summary: Pause an instance (reversible)
+      description: |
+        Stop an instance for now WITHOUT unsubscribing: new runs are refused, and any run in
+        flight is asked to stop. The subscription, config, repos, documents, memory, timeline and
+        run history are all kept — this is the reversible counterpart to `POST /cancel`.
+
+        Background work stops with it, through machinery that already existed: every dispatch path
+        gates on `agent_instances.status = 'active'` (`lib/trigger-eligibility.ts`), so a paused
+        instance is excluded from the cron sweep, the agent-to-agent pump, delivery retries, the
+        public webhook and the manual trigger run.
+
+        Interactive chat still works, deliberately. Pause exists to stop work the platform starts
+        on its own or that the owner starts as a run; a paused agent you cannot ask "what went
+        wrong" is one you have to un-pause to diagnose.
+
+        `runsAskedToStop` counts runs ASKED to stop, NOT runs that have stopped. There is no way to
+        kill a Workflow mid-step: each ends at the top of its next iteration, and the run sweeper
+        enforces the ones that never read the request.
+
+        Idempotent — pausing an already-paused instance answers 200 with `changed: false`.
+      operationId: pauseInstance
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200":
+          description: The instance is paused
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  status: { type: string, example: paused }
+                  changed:
+                    type: boolean
+                    description: False when it was already paused — a retry or a double-click, not a failure.
+                  runsAskedToStop:
+                    type: integer
+                    description: Runs asked to stop. Not a count of runs that have stopped.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >
+            The instance is cancelled, so there is nothing to pause — subscribing to the agent
+            again creates a NEW instance rather than reviving this one.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/instances/{instanceId}/resume:
+    post:
+      summary: Resume a paused instance
+      description: |
+        Put a paused instance back to work: runs may start again and background work resumes.
+
+        It does NOT restart the runs the pause stopped. Those have terminal rows and an ending;
+        re-running an objective whose partial work is already on the record is the mistake to
+        avoid, so carrying one forward is a deliberate per-run act —
+        `POST /v1/instances/{instanceId}/loop/{runId}/continue`.
+
+        Idempotent — resuming an already-active instance answers 200 with `changed: false`. A
+        CANCELLED instance cannot be resumed.
+      operationId: resumeInstance
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200":
+          description: The instance is active again
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  status: { type: string, example: active }
+                  changed: { type: boolean }
+                  note: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The instance is cancelled, not paused — there is nothing to resume.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /v1/instances/{instanceId}/cancel:
     post:
       summary: Cancel subscription

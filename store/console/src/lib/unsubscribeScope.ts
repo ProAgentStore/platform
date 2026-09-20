@@ -48,6 +48,10 @@ export interface RosterInstance {
 	/** Present ONLY when a per-instance display name is set — then `name` is that name. */
 	agentName?: string | null;
 	agent_id?: string | null;
+	/** `active` | `paused` | `canceled` — the per-instance authority (#825). Read by the
+	 *  Pause control; `unsubscribeScope` itself does not use it, because the list it is handed
+	 *  already excludes cancelled rows. */
+	status?: string | null;
 }
 
 export interface UnsubscribeScope {
