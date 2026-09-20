@@ -6554,15 +6554,22 @@ test.describe("Settings — the Gmail permission is its own group (#721)", () =>
 		await expect(page.locator("[data-testid=settings-gmail-group]")).toBeVisible();
 	}
 
-	/** The write-consent checkbox for `gmail` — the row the permission was being read as part of. */
-	const consentBox = (page: Page) => page.locator("label", { hasText: "write access" }).locator("input[type=checkbox]").first();
+	/**
+	 * The write-consent control for `gmail` — the block the permission was being read as part of.
+	 *
+	 * It became a three-position radio group at #722 (Off · Ask each time · Always allow), so the
+	 * bottom edge this test measures from is the LAST radio rather than a lone checkbox. The
+	 * geometry claim is unchanged and so is what it protects: the per-agent Gmail permission must
+	 * not read as one more row of the write-consent list.
+	 */
+	const consentBox = (page: Page) => page.locator("[data-testid=consent-gmail] input[type=radio]").last();
 	const permissionBox = (page: Page) => page.locator("[data-testid=settings-gmail-group] input[type=checkbox]");
 
 	test("a labelled group separates it from the write-consent checkboxes", async ({ page }) => {
 		await openSettings(page);
 
 		const group = page.locator("[data-testid=settings-gmail-group]");
-		// The permission lives inside the group; the consent checkbox does not. That is the
+		// The permission lives inside the group; the consent control does not. That is the
 		// structural half — the two are no longer siblings in one undifferentiated list.
 		await expect(permissionBox(page)).toHaveCount(1);
 		await expect(group.locator("input[type=checkbox]")).toHaveCount(1);
@@ -6575,12 +6582,12 @@ test.describe("Settings — the Gmail permission is its own group (#721)", () =>
 		if (!consent || !permission || !heading) throw new Error("a control the fixture renders had no box");
 
 		// The heading sits BETWEEN them — the separator, and the thing that names what follows.
-		expect(heading.y, "the group heading is below the write-consent checkbox").toBeGreaterThan(consent.y + consent.height);
+		expect(heading.y, "the group heading is below the write-consent control").toBeGreaterThan(consent.y + consent.height);
 		expect(heading.y + heading.height, "the group heading is above the permission checkbox").toBeLessThanOrEqual(permission.y + 1);
 
 		// The measurement the report was: 31px, one heading, no label. Floor, not a pin.
 		const gap = permission.y - (consent.y + consent.height);
-		expect(gap, `the Gmail permission is only ${Math.round(gap)}px below the write-consent checkbox`).toBeGreaterThanOrEqual(48);
+		expect(gap, `the Gmail permission is only ${Math.round(gap)}px below the write-consent control`).toBeGreaterThanOrEqual(48);
 	});
 
 	/**

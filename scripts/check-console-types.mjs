@@ -240,7 +240,11 @@ const KNOWN_ANONYMOUS = {
 	// (covered above — 4ea04dcd)
 
 	// ── ToolPermissions ───────────────────────────────────────────────────────
-	"807aa970": "{ consents?: Array<{ connector: string; scope: string }> }",
+	// (#722) The consent response became `ConnectorConsentsResponse`, a named type checked against
+	// the Worker's `ConsentRow` in types.test.ts — so its entry is gone rather than updated. The
+	// field that forced it is `mode`: a console that cannot see it renders "Always allow" for a
+	// connector the owner set to "Ask each time", which is a UI claiming there is no gate where
+	// there is one. That is exactly the divergence class this ratchet exists to retire.
 	"3ac5ad62": "{ connectors?: ConnectorPolicyEntry[] }",
 
 	// ── VectorsSection ────────────────────────────────────────────────────────

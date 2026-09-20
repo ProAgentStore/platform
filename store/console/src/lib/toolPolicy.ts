@@ -324,3 +324,30 @@ export function consentChip(t: ToolPolicyEntry): string | null {
 	}
 	return null;
 }
+
+/**
+ * A connector's write-consent MODE, as the owner sets it (#722).
+ *
+ * "Off" is the absence of a grant rather than a third value here, mirroring the server, where off
+ * is the absence of the row. The control below offers three positions; only two of them are modes.
+ */
+export type ConnectorConsentMode = "ask" | "always";
+
+/** The three positions of the write-access control, in the order they are offered. Ordered
+ *  least-reach first, so the strongest grant is the one you travel furthest to pick. */
+export const CONSENT_MODE_OPTIONS: ReadonlyArray<{ value: ConnectorConsentMode | "off"; label: string; blurb: string }> = [
+	{ value: "off", label: "Off", blurb: "Every write through this connector is refused." },
+	{
+		value: "ask",
+		label: "Ask each time",
+		blurb: "Each write waits on the board until you approve that specific call. Nothing is sent before you do.",
+	},
+	{ value: "always", label: "Always allow", blurb: "The agent writes without asking, whenever it decides to." },
+];
+
+/** What the panel says after a change lands — the owner's own words for what they just did. */
+export const CONSENT_CONFIRMATION: Record<ConnectorConsentMode | "off", string> = {
+	off: "revoked",
+	ask: "set to ask each time",
+	always: "granted",
+};

@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { KnowledgeDoc as WorkerKnowledgeDoc } from "../../../../workers/api/src/agent-types";
 import type { ConnectionGuideResponse as WorkerConnectionGuideResponse } from "../../../../workers/api/src/lib/connection-guide";
+import type { ConsentRow as WorkerConsentRow } from "../../../../workers/api/src/agent-types";
 import type { RunnerEvent, RunnerTask } from "../../../../packages/browser-runner/src/types";
-import type { ConnectionGuideResponse, Credential, KnowledgeDoc, Notification, RuntimeEvent, RuntimeTask, TriggerAction } from "./types";
+import type { ConnectionGuideResponse, ConnectorConsent, Credential, KnowledgeDoc, Notification, RuntimeEvent, RuntimeTask, TriggerAction } from "./types";
 
 /**
  * The console's API-response types, checked against the Worker declarations they copy (#617).
@@ -56,6 +57,19 @@ const _knowledgeDocHasNoInventedFields: Extra<KnowledgeDoc, WorkerKnowledgeDoc> 
 // producer is `lib/connection-guide.ts`, which is import-safe here for the same reason
 // `agent-types.ts` is: it imports nothing, so no `Env`/`D1Database` global follows it in.
 const _connectionGuideHasNoInventedFields: Extra<ConnectionGuideResponse, WorkerConnectionGuideResponse> extends never
+	? true
+	: never = true;
+
+// ── ConnectorConsent ─────────────────────────────────────────────────────────────────────────
+//
+// #722's `mode` field, named on both sides. The producer is `agent-types.ts`, which is why the
+// row is declared THERE and not beside its queries: `lib/connector-consent.ts` imports `Env`, and
+// `Env` names `D1Database`/`R2Bucket`/`Workflow`, none of which exist in this DOM tsconfig.
+//
+// The field this guards is `mode`, and getting it wrong has a direction: a console that cannot see
+// it renders "Always allow" for a connector the owner set to "Ask each time", which is a UI
+// claiming there is no gate where there is one.
+const _connectorConsentHasNoInventedFields: Extra<ConnectorConsent, WorkerConsentRow> extends never
 	? true
 	: never = true;
 

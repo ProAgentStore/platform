@@ -955,7 +955,16 @@ const PINS = {
 	// earlier extractions from this same file.
 	// +34 for #739: `read_operator_manual` ToolDef (BASE tier, mutates:false, untrustedOutput:true)
 	// + its handler, + comments explaining the fence/no-write-path decisions.
-	"workers/api/src/lib/tool-registry.ts": 870,
+	// +20 for #722: the write-consent gate gains its `ask` branch — a connector write the owner set
+	// to "Ask each time" goes to the board instead of out. It is TWENTY lines rather than a hundred
+	// because everything that could leave did: the card's wording is in `tool-approval.ts` (pure),
+	// writing it is in `tool-approval-queue.ts`, and approving one is in `tool-approval-run.ts`,
+	// which lives on the route's side of the import graph so this file does not close a cycle
+	// through the tool policy. What stayed is the branch itself, and it stayed for the same reason
+	// the fence rule above did: this function is the single point every surface passes through —
+	// chat, the /tools invoker, MCP and the pipeline runner — and a gate anywhere else is a gate on
+	// one surface, which is the same as no gate.
+	"workers/api/src/lib/tool-registry.ts": 890,
 	// +8 for the #312 stats prompt block. Deliberately not split: the block is two statements
 	// and its comment, and it must sit inside the existing config read (`instanceCfg`/`agentCfg`
 	// are already in hand) or the prompt costs an extra query per turn. Everything else about
@@ -1349,7 +1358,25 @@ const PINS = {
 	// pair. They sit here rather than in their own routes file because they are four lines of
 	// handler each over `lib/loop-limits-store.ts` — the arithmetic and the D1 access are both
 	// already out of this file, which is what keeps the raise at +43 and not +150.
-	"workers/api/src/routes/tools.ts": 1304,
+	// +55 at #722: the write-consent PUT gains a third position (off · ask · always). Most of the
+	// raise is prose on two decisions that are each a way the gate could be lost. One: an
+	// unrecognised mode is a 400 rather than a coercion to `always` — a typo'd "Ask" stored as
+	// "dispatch everything" leaves the owner believing in a gate that is not there. Two: the legacy
+	// `{ enabled: true }` body creates a missing row and does NOT reset an existing one's mode,
+	// because MCP's `set_instance_connector_consent` sends exactly that body and the alternative
+	// lets an agent restore dispatch-without-asking on a connector its owner put behind approval.
+	// The storage is in `lib/connector-consent.ts` and the gate in `lib/tool-registry.ts`, so this
+	// file took the route and none of the mechanism.
+	"workers/api/src/routes/tools.ts": 1359,
+	// New entry at #722, crossing LIMIT from 799 to 810. The addition is the approval-time re-check
+	// on `runActionableTicket`: a `call_tool` ticket is re-validated against LIVE permissions before
+	// it is claimed, because the gate was evaluated when the card was written and the human clicks
+	// later — a ticket that outlives its consent would be a stored, approvable, un-gated write.
+	// Nine of the eleven lines are the comment saying so, and the check itself is one call into
+	// `lib/tool-approval-run.ts`; the dispatch it guards is there too. Splitting this file is worth
+	// doing on its own terms (it is the board/ticket surface AND the runtime-task surface), but
+	// doing it inside a security fix would bury the fix in a move diff.
+	"workers/api/src/routes/instances-tasks.ts": 810,
 	// First entry at #477: Usage.tsx crossed 800 lines as BudgetPanel expanded to cover per-tree
 	// run knobs (perTreeCostMicros, perTreeDelegations, perTreeMaxDepth, loopMaxIterations) and
 	// their edit fields. The page is one coherent screen — usage data + the limits that bound it —
@@ -1782,7 +1809,9 @@ const PINS = {
 	// +7 at #806: the first `workers/mcp/src/surface-lock.ts` entry above (four lines of why an
 	// append-only ledger is pinned and not split) and these two.
 	// +3 at #792: the surface-lock raise above (two lines of why) and these two.
-	"scripts/check-file-size.mjs": 1866,
+	// +24 at #722: two raised pins and one new entry, each with the reasoning that justifies it.
+	// This file grows by prose about other files, which is what it is for.
+	"scripts/check-file-size.mjs": 1895,
 };
 
 /**

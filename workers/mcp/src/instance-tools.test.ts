@@ -748,6 +748,52 @@ describe("ticket_thread / ask_ticket (#150 — a ticket a supervisor can questio
 		expect(h.auditEvents()).toMatchObject([{ tool: "ask_ticket", action: "completed" }]);
 	});
 
+	// ── The per-call approval gate is not approvable from here (#722) ────────────────────────
+	//
+	// The gate's entire value is that a PERSON saw the call before it went out. MCP is a model
+	// talking to the platform: if an agent could approve a held-back send, the pause bought
+	// nothing — another agent's refused call becomes one tool call away from going out.
+	describe("approve_instance_task and the ask-gate", () => {
+		const heldBack = {
+			id: "t9",
+			status: "needs_approval",
+			type: "tool_approval",
+			action: { action: "call_tool", config: {}, params: { tool: "gmail_send", args: { to: "x@y.z" } } },
+		};
+
+		it("refuses a call_tool ticket, names the tool, and never reaches the approve route", async () => {
+			const h = setup();
+			h.fetchStub.respond((u, m) => u.endsWith("/tasks/t9") && m !== "POST", { body: heldBack });
+			const out = await h.tools.get("approve_instance_task")!.handler({ instance_id: "i1", task_id: "t9" });
+			expect(JSON.stringify(out)).toContain("gmail_send");
+			expect(JSON.stringify(out)).toContain("cannot be approved over MCP");
+			expect(h.fetchStub.calls.some((c) => c.url.endsWith("/approve"))).toBe(false);
+			// Recorded as a denial, not a completion — a refusal that audits as success is how a
+			// gate stops being visible in the record it is supposed to leave.
+			expect(h.auditEvents()).toMatchObject([{ tool: "approve_instance_task", action: "denied" }]);
+		});
+
+		it("still approves every OTHER kind of ticket — this is not a blanket block", async () => {
+			// run_pipeline and friends are internal work, and they are not what the gate exists for.
+			const h = setup();
+			h.fetchStub.respond((u, m) => u.endsWith("/tasks/t1") && m !== "POST", {
+				body: { id: "t1", status: "needs_approval", action: { action: "run_pipeline", config: { pipeline: "p" } } },
+			});
+			h.fetchStub.respond((u, m) => u.endsWith("/tasks/t1/approve") && m === "POST", { body: { ok: true } });
+			await h.tools.get("approve_instance_task")!.handler({ instance_id: "i1", task_id: "t1" });
+			expect(h.fetchStub.calls.some((c) => c.url.endsWith("/tasks/t1/approve"))).toBe(true);
+		});
+
+		it("fails CLOSED when the ticket cannot be read", async () => {
+			// "Unknown whether this is a held-back send" must not resolve to "approve it".
+			const h = setup();
+			h.fetchStub.respond((u, m) => u.endsWith("/tasks/t9") && m !== "POST", { status: 500, body: { error: "boom" } });
+			const out = await h.tools.get("approve_instance_task")!.handler({ instance_id: "i1", task_id: "t9" });
+			expect(JSON.stringify(out)).toContain("could not be read");
+			expect(h.fetchStub.calls.some((c) => c.url.endsWith("/approve"))).toBe(false);
+		});
+	});
+
 	it("ask_ticket takes NO argument that could act on the ticket", () => {
 		// The no-action rule has to be structural, not a promise in prose: a thread that could
 		// run a ticket's declared work would hand the approval gate a free-text bypass. Approving

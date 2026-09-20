@@ -21,6 +21,29 @@ export type TriggerAction = "create_task" | "add_knowledge" | "log_event" | "syn
 export type TriggerEventType = TriggerType | "manual";
 
 /**
+ * A ticket's action vocabulary: every trigger action, PLUS `call_tool` (#722).
+ *
+ * `call_tool` is the one thing a ticket can carry that an automatic edge cannot, and keeping it
+ * OUT of `TriggerAction` is the enforcement, not a list someone has to remember:
+ *
+ *  • A trigger, a cron and a connection all store a `TriggerAction`. `call_tool` is not one, so
+ *    none of them can be created carrying it — the compiler refuses it, and `assertTriggerAction`
+ *    / `CONNECTION_ACTIONS` refuse it again at runtime for a caller that casts.
+ *  • `executeTriggerAction` takes a `TriggerAction`, so the approval path CANNOT hand it a
+ *    `call_tool` ticket by accident. That matters more than it looks: that function's dispatch is
+ *    an if/else chain with no final `else`, so an action it does not know returns the payload
+ *    unchanged and reports success — a gated send would have "run" while nothing was sent.
+ *  • The three exhaustive `Record<TriggerAction, …>` tables (labels, config keys, mapping targets)
+ *    and the console's own copy of the union stay exactly as they are, rather than gaining an
+ *    entry describing `call_tool` to users as something they can wire a cron to.
+ *
+ * The call itself rides in the ticket's `params` (`{ tool, args }`) rather than in `TriggerConfig`,
+ * for the same reason: `TriggerConfig`'s keys are compiler-checked against `TRIGGER_CONFIG_KEYS`
+ * and `parseConfig`, so a `tool` field there would have to become settable on a stored trigger.
+ */
+export type TicketActionName = TriggerAction | "call_tool";
+
+/**
  * The action vocabulary, as DATA (#358).
  *
  * There were three copies of it: the validator's `ACTIONS` set, the sentence in its own error

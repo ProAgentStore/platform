@@ -160,10 +160,69 @@ describe("consent routes (integration, cross-boundary write + read)", () => {
 		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]] });
 		const res = await put(app, env, "/v1/instances/inst-1/connectors/github/consent", { enabled: true }, await tokenFor("u1"));
 		expect(res.status).toBe(200);
-		expect(await res.json()).toEqual({ ok: true, connector: "github", scope: "write", enabled: true });
+		// `enabled` keeps its exact pre-#722 meaning and value; `mode` is additive, so a client that
+		// has never heard of modes reads the same answer it always did.
+		expect(await res.json()).toEqual({ ok: true, connector: "github", scope: "write", enabled: true, mode: "always" });
 		const insert = writes.find((w) => w.sql.includes("INSERT INTO instance_connector_consent"));
 		expect(insert).toBeTruthy();
+		// Four bound values, not five: the legacy body creates a missing row at the SQL literal
+		// `always` and leaves an existing row's mode alone (see the widening test below).
 		expect(insert!.args).toEqual(["inst-1", "u1", "github", "write"]);
+	});
+
+	// ── The three positions (#722) ────────────────────────────────────────────────────────────
+	it("PUT { mode: 'ask' } grants the connector and stores the ask mode", async () => {
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]] });
+		const res = await put(app, env, "/v1/instances/inst-1/connectors/github/consent", { mode: "ask" }, await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		// `enabled: true` alongside `mode: "ask"` is the point: the connector IS granted, and each
+		// individual call is what waits. Reporting it as not-granted would tell the owner the agent
+		// cannot act at all, which is not what they chose.
+		expect(await res.json()).toEqual({ ok: true, connector: "github", scope: "write", enabled: true, mode: "ask" });
+		expect(writes.find((w) => w.sql.includes("INSERT INTO instance_connector_consent"))!.args).toEqual([
+			"inst-1", "u1", "github", "write", "ask",
+		]);
+	});
+
+	it("PUT { mode: 'off' } revokes, exactly as enabled:false does", async () => {
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]] });
+		const res = await put(app, env, "/v1/instances/inst-1/connectors/github/consent", { mode: "off" }, await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ ok: true, connector: "github", scope: "write", enabled: false, mode: "off" });
+		expect(writes.some((w) => w.sql.includes("DELETE FROM instance_connector_consent"))).toBe(true);
+	});
+
+	it("{ enabled: true } does NOT widen a connector already set to ask", async () => {
+		// The gate's other door (#722). MCP's `set_instance_connector_consent` sends exactly this
+		// body, so if `enabled: true` meant "set mode = always", an agent could take a connector its
+		// owner had deliberately put behind per-call approval and restore dispatch-without-asking —
+		// obtaining, in one write-scoped tool call, the sends the gate exists to hold back.
+		//
+		// The legacy body creates a MISSING row as `always` and never touches an existing one, so
+		// `ON CONFLICT DO NOTHING` is the assertion: widening a grant stays the owner's explicit act.
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]] });
+		const res = await put(app, env, "/v1/instances/inst-1/connectors/github/consent", { enabled: true }, await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		const insert = writes.find((w) => w.sql.includes("INSERT INTO instance_connector_consent"))!;
+		expect(insert.sql).toContain("DO NOTHING");
+		expect(insert.sql).not.toContain("DO UPDATE");
+	});
+
+	it("an explicit { mode: 'always' } DOES widen it — that is the owner saying so", async () => {
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]] });
+		await put(app, env, "/v1/instances/inst-1/connectors/github/consent", { mode: "always" }, await tokenFor("u1"));
+		const insert = writes.find((w) => w.sql.includes("INSERT INTO instance_connector_consent"))!;
+		expect(insert.sql).toContain("DO UPDATE SET mode = excluded.mode");
+	});
+
+	it("an unrecognised mode is a 400, not a silent fallback to always", async () => {
+		// The failure this refuses to have: a typo'd "Ask" stored as "dispatch everything", leaving
+		// the owner believing there is a per-call gate when there is none. A consent store may fail
+		// loudly; it may not quietly grant more than was asked for.
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]] });
+		const res = await put(app, env, "/v1/instances/inst-1/connectors/github/consent", { mode: "Ask" }, await tokenFor("u1"));
+		expect(res.status).toBe(400);
+		expect(writes.filter((w) => w.sql.includes("instance_connector_consent"))).toHaveLength(0);
 	});
 
 	it("PUT with enabled:false issues a DELETE (revoke)", async () => {
@@ -175,7 +234,7 @@ describe("consent routes (integration, cross-boundary write + read)", () => {
 	});
 
 	it("GET lists the instance's consents (owner-scoped)", async () => {
-		const rows = [{ instance_id: "inst-1", user_id: "u1", connector: "github", scope: "write", created_at: "2026-08-01" }];
+		const rows = [{ instance_id: "inst-1", user_id: "u1", connector: "github", scope: "write", mode: "always", created_at: "2026-08-01" }];
 		const { app, env } = buildApp({ owns: [["inst-1", "u1"]], consents: rows });
 		const res = await get(app, env, "/v1/instances/inst-1/connectors/consent", await tokenFor("u1"));
 		expect(res.status).toBe(200);

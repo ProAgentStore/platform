@@ -6,7 +6,7 @@ import { getRegistryTool, runRegistryTool } from "../lib/tool-registry.js";
 import { agentLacksTool, DISABLED_TOOLS_KEY, explainRefusal, instanceToolPolicy, projectToolListing, readDisabledTools } from "../lib/instance-tool-policy.js";
 import { builtinToolRouteRefusal } from "../lib/builtin-tool-policy.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
-import { hasConsent, listConsents, revokeConsent, setConsent } from "../lib/connector-consent.js";
+import { type ConsentMode, consentModeFor, ensureConsent, hasConsent, listConsents, revokeConsent, setConsent } from "../lib/connector-consent.js";
 import { ALL_TOOLS, isDestructiveToolName, listMcpConsents, normalizeMcpEndpoint, revokeMcpConsent, setMcpConsent } from "../lib/mcp-consent.js";
 import { CONNECTORS, getConnector } from "../lib/connectors/registry.js";
 import { instanceConnectorPolicy } from "../lib/instance-connector-access.js";
@@ -536,16 +536,42 @@ toolRoutes.get("/:id/connectors/consent", async (c) => {
 });
 
 /**
- * PUT /v1/instances/:id/connectors/:connector/consent { enabled } — grant/revoke
- * write consent for a connector (issue #90). Owner-scoped. Scope is "write" (reads
- * never need consent).
+ * PUT /v1/instances/:id/connectors/:connector/consent { enabled } | { mode } — grant, revoke, or
+ * change the MODE of write consent for a connector (#90, #722). Owner-scoped. Scope is "write"
+ * (reads never need consent).
+ *
+ * Three positions, and they are two different facts rather than one scale:
+ *   off    — no consent row. Every write through this connector is refused.
+ *   ask    — a row, mode `ask`. A write is not dispatched; it goes to the board and runs only if
+ *            the owner approves that specific call.
+ *   always — a row, mode `always`. Today's behaviour, and still the default for a new grant.
+ *
+ * `{ enabled: true|false }` is the pre-#722 body and keeps its exact meaning (`true` → always,
+ * `false` → off), because the console is not the only caller of this route and a body that changed
+ * meaning would silently re-grant or re-mode a connector for anything that still sent it.
  */
 toolRoutes.put("/:id/connectors/:connector/consent", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("id");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	const connector = c.req.param("connector");
-	const body = (await c.req.json().catch(() => ({}))) as { enabled?: boolean };
+	const body = (await c.req.json().catch(() => ({}))) as { enabled?: boolean; mode?: string };
+
+	// `mode` wins when present; otherwise fall back to the boolean. An UNRECOGNISED mode is a 400,
+	// not a silent coercion to `always`: a typo'd "Ask" that stored "dispatch everything" is the
+	// exact class of bug where the owner believes there is a gate and there is not.
+	let mode: ConsentMode | null = null; // null = off (no row)
+	let explicit = false;
+	if (typeof body.mode === "string") {
+		if (body.mode !== "off" && body.mode !== "ask" && body.mode !== "always") {
+			throw new HttpError(400, "mode must be one of: off, ask, always.");
+		}
+		mode = body.mode === "off" ? null : body.mode;
+		explicit = true;
+	} else if (body.enabled) {
+		mode = "always"; // only the mode a MISSING row is created with — see below
+	}
+	const enabled = mode !== null;
 
 	// Validate against the registry before writing (#216). runRegistryTool would refuse an
 	// unknown or read-only connector's write tools anyway, so this is not a live bypass — but
@@ -556,17 +582,43 @@ toolRoutes.put("/:id/connectors/:connector/consent", async (c) => {
 	//
 	// Revocation is deliberately NOT validated: a row written before this check existed, or one
 	// whose connector has since gone read-only, must remain removable.
-	if (body.enabled) {
+	let effective: ConsentMode | null = mode;
+	if (enabled && mode) {
 		const def = getConnector(connector);
 		if (!def) throw new HttpError(404, `Unknown connector: ${connector}`);
 		if (!def.scopes.write) {
 			throw new HttpError(400, `The ${def.id} connector is read-only — write access cannot be granted to it.`);
 		}
-		await setConsent(c.env, instanceId, session.uid, connector, "write");
+		if (explicit) {
+			await setConsent(c.env, instanceId, session.uid, connector, "write", mode);
+		} else {
+			// `{ enabled: true }` MEANS "grant", and it has never meant "and dispatch every call
+			// without asking" — there was nothing else it could mean before #722. So it creates a
+			// missing row as `always` and leaves an existing row's mode ALONE.
+			//
+			// This is a security boundary, not tidiness. MCP's `set_instance_connector_consent`
+			// sends exactly this body, so treating it as "set mode = always" would let an agent take
+			// a connector its owner had deliberately set to "Ask each time" and quietly restore
+			// dispatch-without-asking — obtaining, in one write-scoped tool call, the sends the
+			// per-call gate exists to hold back. Widening a grant is the owner's act, and saying so
+			// HERE covers every caller rather than the one we happened to think of.
+			await ensureConsent(c.env, instanceId, session.uid, connector, "write");
+			// Read BACK rather than echo, so the answer is the stored mode and not the one implied by
+			// the request — on this path the caller did not choose a mode, and if a row already
+			// existed the stored value is whatever the owner set. An unreadable read-back falls back
+			// to `always`, the same direction `normalizeConsentMode` takes and for the same reason:
+			// the row is known to exist (ensureConsent just ran), so the only question is which mode,
+			// and `always` is what a row that predates modes means. This value is a REPORT — the gate
+			// itself re-reads the row on every call and never trusts this.
+			effective = (await consentModeFor(c.env, instanceId, connector, "write")) ?? "always";
+		}
 	} else {
 		await revokeConsent(c.env, instanceId, connector, "write");
 	}
-	return c.json({ ok: true, connector, scope: "write", enabled: !!body.enabled });
+	// `enabled` still reports whether a row exists, unchanged, so a pre-#722 caller reading it gets
+	// the same answer it always did; `mode` is additive, and it is read BACK on the implicit path
+	// rather than echoed, so the answer is what is stored and not what was asked for.
+	return c.json({ ok: true, connector, scope: "write", enabled, mode: effective ?? "off" });
 });
 
 /**
@@ -604,8 +656,11 @@ toolRoutes.put("/:id/mcp/consent", async (c) => {
 		// Granting reach to a specific server IS a decision to let this agent write via MCP, so
 		// the outer connector gate is satisfied in the same explicit action rather than left as a
 		// second checkbox the user has to discover after the first one silently does nothing.
-		// The implication runs one way only: granting the connector still names no server.
-		await setConsent(c.env, instanceId, session.uid, "mcp", "write");
+		// The implication runs one way only: granting the connector still names no server. And it
+		// only ever CREATES the outer grant — `ensureConsent`, not `setConsent` — so an owner who
+		// set `mcp` to "Ask each time" (#722) does not have that quietly undone by approving a
+		// server: a gate must not be removed as a side effect of an unrelated click.
+		await ensureConsent(c.env, instanceId, session.uid, "mcp", "write");
 	} else {
 		await revokeMcpConsent(c.env, instanceId, endpoint, tool);
 	}

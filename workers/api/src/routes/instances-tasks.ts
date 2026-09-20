@@ -14,7 +14,8 @@ import {
 	setInstanceBoardConfig,
 } from "../lib/board.js";
 import type { BoardColumn } from "../lib/agent-capabilities.js";
-import { buildTicketAction, isRunnableStatus, readTicketAction, validateTicketAction } from "../lib/actionable-ticket.js";
+import { buildTicketAction, isRunnableStatus, readCallToolTicket, readTicketAction, validateTicketAction } from "../lib/actionable-ticket.js";
+import { dispatchApprovedToolCall, recheckCallToolTicket } from "../lib/tool-approval-run.js";
 import { logEvent } from "../lib/events.js";
 import { heartbeatFresh } from "../lib/runtime-attachment.js";
 import {
@@ -320,6 +321,29 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 			return { body: { error: `Ticket is ${String(stored.status)} — nothing left to approve.`, task: stored }, status: 409 };
 		}
 
+		// #722 — a connector write the ask-gate held back. Two things happen here that do NOT happen
+		// for the other five actions, and both are about the gap between filing and clicking.
+		//
+		//  1. RE-CHECK, because the gate was evaluated when the card was written and the owner
+		//     clicks later. A revoked write consent, a tool switched off, or an agent version that
+		//     no longer declares the tool must all stop the call — otherwise a stored ticket is an
+		//     approvable, un-gated write that outlived the consent it was granted under. It runs
+		//     BEFORE the claim below, so a refusal leaves the ticket exactly as it was: the owner
+		//     can restore the permission and approve the same card, rather than finding it burnt.
+		//  2. It is dispatched through `runRegistryTool`, NOT `executeTriggerAction`. That function
+		//     takes a `TriggerAction` and `call_tool` deliberately is not one (trigger-types.ts), so
+		//     the compiler enforces this; the reason is that its dispatch is an if/else chain with no
+		//     final `else`, and an action it does not know returns the payload unchanged and reports
+		//     success. A gated send would have "run" while nothing was sent.
+		const call = readCallToolTicket(ticket);
+		if (ticket.action === "call_tool" && !call) {
+			return { body: { error: "This approval carries a call that could not be read, so nothing was run.", task: stored }, status: 400 };
+		}
+		if (call) {
+			const refusal = await recheckCallToolTicket(env, instanceId, userId, call);
+			if (refusal) return { body: { error: refusal, task: stored }, status: 409 };
+		}
+
 		// Claim it first so a double-click (or two console tabs) can't run the work twice.
 		const claimed = await env.DB.prepare(
 			`UPDATE instance_runtime_tasks SET status = 'running', updated_at = ?1
@@ -335,19 +359,29 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 		await mirrorRuntimeTask(env, instanceId, userId, { ...stored, status: "running", updatedAt: new Date().toISOString() });
 
 		try {
-			const result = await executeTriggerAction(
-				env,
-				{ action: ticket.action, name: `ticket:${taskId}`, instance_id: instanceId, user_id: userId },
-				ticket.config,
-				"manual",
-				ticket.params,
-			);
+			let result: unknown;
+			if (call) {
+				const ran = await dispatchApprovedToolCall(env, instanceId, userId, call, taskId);
+				// A send that was approved and then failed is a FAILED ticket, not a completed one.
+				// Throwing routes it into the catch below, which records the reason on the card and
+				// logs `ticket.failed` — the same treatment every other action's failure gets.
+				if (!ran.success) throw new Error(ran.content);
+				result = ran;
+			} else if (ticket.action !== "call_tool") {
+				result = await executeTriggerAction(
+					env,
+					{ action: ticket.action, name: `ticket:${taskId}`, instance_id: instanceId, user_id: userId },
+					ticket.config,
+					"manual",
+					ticket.params,
+				);
+			}
 			const done = { ...stored, status: "completed", result, updatedAt: new Date().toISOString() };
 			await mirrorRuntimeTask(env, instanceId, userId, done);
 			await logEvent(env, {
 				source: "ticket",
 				event: "ticket.approved",
-				message: `approved ${ticket.action}${ticket.config.pipeline ? ` (${ticket.config.pipeline})` : ""}`,
+				message: `approved ${ticket.action}${call ? ` (${call.tool})` : ticket.config.pipeline ? ` (${ticket.config.pipeline})` : ""}`,
 				userId,
 				instanceId,
 				context: { taskId, action: ticket.action },

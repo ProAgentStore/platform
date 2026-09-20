@@ -75,6 +75,9 @@ export const RUNTIME_TASK_OWNERS: Readonly<Record<string, RuntimeTaskOwner>> = {
 	escalation: "cloud", // workflows/agent-loop.ts — parked for a human, by a durable workflow
 	"pipeline.run": "cloud", // lib/pipeline-board.ts
 	ticket: "cloud", // lib/tool-registry.ts create_ticket
+	// #722: a connector write held back by the ask-gate. Cloud-owned — it is a card waiting on a
+	// PERSON, not work a runner is doing, so a reconnect sweep must leave it exactly where it is.
+	tool_approval: "cloud", // lib/tool-approval-queue.ts
 	"coding.uncommitted": "cloud", // lib/repo-policies.ts — a standing-policy observation
 	"coding.off_branch": "cloud", // lib/repo-policies.ts — ditto
 	"coding.unauthorized_act": "cloud", // lib/coding-authority.ts

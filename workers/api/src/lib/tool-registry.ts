@@ -8,7 +8,7 @@ import { logEvent } from "./events.js";
 import { connectorTools, getConnector } from "./connectors/registry.js";
 import { connectorClient } from "./connectors/client.js";
 import type { JsonSchema, RegistryTool, RegistryToolCtx, RegistryToolResult, ToolDef } from "./connectors/types.js";
-import { hasConsent } from "./connector-consent.js";
+import { consentModeFor } from "./connector-consent.js";
 import { undeclaredToolRefusal } from "./tool-refusal.js";
 import { STEP_TOOLS } from "./steps.js";
 import { DEFAULT_LOOP_DRIVER, loopDriverFor } from "./loop-drivers.js";
@@ -747,17 +747,37 @@ export async function runRegistryTool(
 	// for its connector. Fail-closed — no connector, no instance context, or no consent
 	// → refused. (A write-scoped tool without a connector can't be consented to, so it's
 	// unreachable rather than silently ungated.)
+	//
+	// A granted consent now carries a MODE (#722, migration 0155). `always` is everything this
+	// gate did before. `ask` is the per-call human gate #90's second acceptance criterion asked
+	// for and never got: the call does NOT dispatch — it goes to the board as a `call_tool`
+	// ticket carrying these exact arguments, and approving it runs that one call.
+	//
+	// The branch is HERE, in this function, because this is the single point every surface passes
+	// through — chat, `POST /v1/instances/:id/tools/:name`, MCP and the pipeline runner all reach
+	// it. A gate anywhere else would be a gate on one surface, which is the same as no gate.
 	if (tool.scope === "write") {
 		// #185: resolve the authority through the named helper rather than reading a field, so
 		// the "executor, never the asker" rule has one reviewable, tested place to live.
 		const authority = consentInstanceOf({ instanceId: ctx.instanceId ?? "", userId: ctx.userId ?? "", onBehalfOf: ctx.onBehalfOf });
-		if (!tool.connector || !(await hasConsent(ctx.env, authority || undefined, tool.connector, "write"))) {
+		const mode = tool.connector ? await consentModeFor(ctx.env, authority || undefined, tool.connector, "write") : null;
+		if (!tool.connector || !mode) {
 			const label = tool.connector ?? "this";
 			return {
 				name,
 				content: `Writing via the ${label} connector isn't permitted for this agent. Enable write access for ${label} in the instance's Connections settings, then try again.`,
 				success: false,
 			};
+		}
+		// `preApprovedTicketId` is the owner's click, already made; the consent row above is still
+		// required, so a revocation since then has already refused three lines up.
+		if (mode === "ask" && !ctx.preApprovedTicketId) {
+			// Composed in `tool-approval-queue.ts`, not here: cannot-queue must be a REFUSAL rather
+			// than a fall-through to dispatch, and that decision belongs next to the thing that can
+			// fail to queue. Deferred import keeps this module out of the routes/board graph, the
+			// same way `create_ticket` does.
+			const { queueToolCallForApproval } = await import("./tool-approval-queue.js");
+			return { name, ...(await queueToolCallForApproval(ctx.env, tool, ctx, authority, input || {})) };
 		}
 	}
 	// Capability-CONSTRAINT gate (#404). Everything above refuses a call for a reason about the

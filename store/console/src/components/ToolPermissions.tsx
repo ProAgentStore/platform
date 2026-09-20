@@ -3,7 +3,8 @@ import { api } from "@proagentstore/sdk/client";
 import LoadFailed from "./LoadFailed";
 import McpConnections from "./McpConnections";
 import { hasMcpCapability, type McpGrant } from "../lib/mcpConnections";
-import { type ConnectorPolicyEntry, consentChip, listedTools, type ToolPolicyEntry, toolScopeSummary, writeConnectors, writeConsentCopy } from "../lib/toolPolicy";
+import type { ConnectorConsentsResponse } from "../lib/types";
+import { CONSENT_CONFIRMATION, CONSENT_MODE_OPTIONS, type ConnectorConsentMode, type ConnectorPolicyEntry, consentChip, listedTools, type ToolPolicyEntry, toolScopeSummary, writeConnectors, writeConsentCopy } from "../lib/toolPolicy";
 
 /**
  * "What can this agent actually do?" — the tool switches, the connector write-consent checkboxes
@@ -28,10 +29,15 @@ export default function ToolPermissions({ instanceId }: ToolPermissionsProps) {
 	// not something you can trust.
 	const [toolPolicy, setToolPolicy] = useState<ToolPolicyEntry[]>([]);
 	const [toolMsg, setToolMsg] = useState("");
-	// Connector write-consent (#90): which connectors the owner has granted. A write tool (e.g.
-	// browser_navigate/act) refuses until its connector is granted here — the human gate for an
-	// agent acting AS the user.
-	const [granted, setGranted] = useState<string[]>([]);
+	// Connector write-consent (#90, #722): what the owner has granted each connector, as one of
+	// three positions rather than a checkbox. A write tool (e.g. browser_navigate/act) refuses
+	// until its connector is granted here — the human gate for an agent acting AS the user — and
+	// "Ask each time" is the finer gate: granted, but each individual call waits on the board.
+	//
+	// A connector ABSENT from this map is off. That keeps one meaning for "no grant" on the client
+	// exactly as the server keeps one for "no row", instead of a second way to say no that can
+	// drift from the first.
+	const [modes, setModes] = useState<Record<string, ConnectorConsentMode>>({});
 	const [consentMsg, setConsentMsg] = useState("");
 	// Outbound-MCP grants (#262). The connector checkbox cannot name a server — the endpoint is
 	// config supplied at call time — so `mcp` write is granted per (server, tool). The panel that
@@ -64,10 +70,19 @@ export default function ToolPermissions({ instanceId }: ToolPermissionsProps) {
 		try {
 			const [toolsRes, consentRes] = await Promise.all([
 				api<{ tools?: ToolPolicyEntry[] }>(`/v1/instances/${instanceId}/tools`),
-				api<{ consents?: Array<{ connector: string; scope: string }> }>(`/v1/instances/${instanceId}/connectors/consent`),
+				api<ConnectorConsentsResponse>(`/v1/instances/${instanceId}/connectors/consent`),
 			]);
 			setToolPolicy(toolsRes.tools || []);
-			setGranted((consentRes.consents || []).filter((x) => x.scope === "write").map((x) => x.connector));
+			setModes(
+				Object.fromEntries(
+					(consentRes.consents || [])
+						.filter((x) => x.scope === "write")
+						// A row written before migration 0155, or by a caller that sent no mode, IS
+						// `always` — the server defaults the column, and reading it as anything else
+						// here would show a gate on the panel that the gate itself does not apply.
+						.map((x) => [x.connector, x.mode === "ask" ? "ask" : "always"] as const),
+				),
+			);
 		} catch (e) {
 			fail(e);
 		}
@@ -100,15 +115,26 @@ export default function ToolPermissions({ instanceId }: ToolPermissionsProps) {
 		}
 	};
 
-	// Toggle a connector's write consent (optimistic; reverts on failure).
-	const toggleConsent = async (connector: string, enabled: boolean) => {
-		setGranted((g) => (enabled ? [...new Set([...g, connector])] : g.filter((c) => c !== connector)));
+	// Set a connector's write-consent mode (optimistic; reverts on failure).
+	const setConsentMode = async (connector: string, mode: ConnectorConsentMode | "off") => {
+		const before = modes[connector];
+		setModes((m) => {
+			const next = { ...m };
+			if (mode === "off") delete next[connector];
+			else next[connector] = mode;
+			return next;
+		});
 		try {
-			await api(`/v1/instances/${instanceId}/connectors/${connector}/consent`, { method: "PUT", body: JSON.stringify({ enabled }) });
-			setConsentMsg(`${connector} write access ${enabled ? "granted" : "revoked"}`);
+			await api(`/v1/instances/${instanceId}/connectors/${connector}/consent`, { method: "PUT", body: JSON.stringify({ mode }) });
+			setConsentMsg(`${connector} write access ${CONSENT_CONFIRMATION[mode]}`);
 			setTimeout(() => setConsentMsg(""), 2500);
 		} catch (e) {
-			setGranted((g) => (enabled ? g.filter((c) => c !== connector) : [...new Set([...g, connector])]));
+			setModes((m) => {
+				const next = { ...m };
+				if (before) next[connector] = before;
+				else delete next[connector];
+				return next;
+			});
 			setConsentMsg(e instanceof Error ? e.message : "Failed");
 		}
 	};
@@ -174,26 +200,43 @@ export default function ToolPermissions({ instanceId }: ToolPermissionsProps) {
 					    each connector — `Connector.writeMeaning` — which is what stopped a second
 					    hardcoded `connectors.includes(...)` branch from being the fix. */}
 					<p className="text-2xs text-muted-soft mb-2">
-						Each of these lets the agent act with a credential of yours. Off by default; read what each one permits before enabling it.
+						Each of these lets the agent act with a credential of yours. Off by default; read what each one permits before
+						enabling it. <b>Ask each time</b> keeps the grant but holds every individual call on the board until you approve it.
 					</p>
 					{connectors.map((connector) => {
 						const { label, meaning } = writeConsentCopy(connector, connectorInfo);
+						const mode: ConnectorConsentMode | "off" = modes[connector] ?? "off";
 						return (
-							<label key={connector} className="flex items-start gap-2 text-sm cursor-pointer mb-2">
-								<input
-									type="checkbox"
-									className="mt-0.5"
-									checked={granted.includes(connector)}
-									onChange={(e) => toggleConsent(connector, e.target.checked)}
-								/>
+							<div key={connector} className="mb-2.5" data-testid={`consent-${connector}`}>
 								{/* min-w-0 so a long meaning wraps inside the row instead of widening the
 								    card — the same shape the tool rows above use. */}
-								<span className="min-w-0">
+								<div className="min-w-0 text-sm">
 									<span className="font-semibold">{label}</span>
 									<span className="text-muted"> — write access</span>
 									{meaning && <span className="block text-2xs text-muted-soft leading-snug">{meaning}</span>}
-								</span>
-							</label>
+								</div>
+								{/* Three radios rather than a select: the positions differ in what they PERMIT,
+								    so each one carries its own sentence and all three are readable at once.
+								    Collapsed into a dropdown, "Ask each time" is a thing you have to already
+								    know exists in order to find it. */}
+								<div className="mt-1 flex flex-col gap-0.5">
+									{CONSENT_MODE_OPTIONS.map((opt) => (
+										<label key={opt.value} className="flex items-start gap-2 text-2xs cursor-pointer">
+											<input
+												type="radio"
+												className="mt-0.5"
+												name={`consent-${connector}`}
+												checked={mode === opt.value}
+												onChange={() => setConsentMode(connector, opt.value)}
+											/>
+											<span className="min-w-0">
+												<span className="font-semibold">{opt.label}</span>
+												<span className="text-muted-soft"> — {opt.blurb}</span>
+											</span>
+										</label>
+									))}
+								</div>
+							</div>
 						);
 					})}
 					{consentMsg && <p className="text-xs text-success mt-1">{consentMsg}</p>}
@@ -213,10 +256,11 @@ export default function ToolPermissions({ instanceId }: ToolPermissionsProps) {
 					grants={mcpGrants}
 					onGrantsChanged={(g) => {
 						setMcpGrants(g);
-						// Granting a server implies the connector-level write gate (the PUT sets it
-						// server-side); reflect what actually happened rather than leaving the checkbox
-						// above looking off.
-						if (g.length) setGranted((c) => [...new Set([...c, "mcp"])]);
+						// Granting a server implies the connector-level write gate (the PUT creates it
+						// server-side); reflect what actually happened rather than leaving the control
+						// above looking off. It only CREATES — an `mcp` grant already set to "Ask each
+						// time" keeps that position, so this must not overwrite one either (#722).
+						if (g.length) setModes((m) => (m.mcp ? m : { ...m, mcp: "always" }));
 					}}
 				/>
 			)}

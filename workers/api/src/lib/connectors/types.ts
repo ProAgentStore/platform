@@ -78,6 +78,20 @@ export interface RegistryToolCtx {
 	 */
 	stepTool?: string;
 	/**
+	 * The approval ticket this call is the CARRYING-OUT of (#722).
+	 *
+	 * Set by `dispatchApprovedToolCall` and by nothing else. It tells the ask-gate in
+	 * `runRegistryTool` that a human has already seen this exact call on the board and approved
+	 * it, so the call dispatches instead of being queued — without it, approving a card would
+	 * produce another card, forever.
+	 *
+	 * It is NOT a consent bypass and must never become one: the write-consent row is still
+	 * required, so a grant revoked between the approval click and the dispatch still refuses. It
+	 * only answers "has the per-call pause already happened", which is a question the gate cannot
+	 * answer for itself.
+	 */
+	preApprovedTicketId?: string;
+	/**
 	 * The connector client factory (issue #86) — handlers call
 	 * `ctx.connectorClient(provider)` to mint the provider's token and enforce
 	 * grant/scope, instead of importing token-minting fns directly. Injected by

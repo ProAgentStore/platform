@@ -387,3 +387,23 @@ export interface ConnectionGuideResponse {
 	/** The rendered Markdown document. */
 	guide: string;
 }
+
+/**
+ * A connector write-consent row, as `GET /v1/instances/:id/connectors/consent` returns it (#90,
+ * #722). Named on both sides rather than added to KNOWN_ANONYMOUS, because the field that matters
+ * here is `mode`: reading it wrong is the difference between showing an owner a per-call gate and
+ * showing them none. The producer is `workers/api/src/lib/connector-consent.ts` (`ConsentRow`).
+ *
+ * A subset of the producer's row — `Extra<>` in `types.test.ts` forbids inventing a field, not
+ * omitting one, and the console has no use for the ids it already knows.
+ */
+export interface ConnectorConsent {
+	connector: string;
+	scope: string;
+	/** "always" | "ask". Absent on a body from a Worker predating #722, which means `always`. */
+	mode?: string;
+}
+
+export interface ConnectorConsentsResponse {
+	consents?: ConnectorConsent[];
+}

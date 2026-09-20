@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authRequired, authedCall, jsonText, text } from "../http.js";
 import { audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
-import type { InstanceToolsCtx } from "./shared.js";
+import { isRec, type InstanceToolsCtx } from "./shared.js";
 
 /**
  * The local browser runtime + its task queue: registering the machine running `pags up`,
@@ -264,9 +264,52 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 		},
 	);
 
+	/**
+	 * A connector call the ask-gate held back (#722) is NOT approvable from here.
+	 *
+	 * The gate's entire value is that a HUMAN saw the call before it went out. MCP is a model
+	 * talking to the platform: an agent holding a token could approve the very send another agent
+	 * was stopped from making, and the pause would have bought nothing. Every other ticket action
+	 * stays approvable — those are internal work (run a pipeline, insert a record), and they are
+	 * not what the gate exists for.
+	 *
+	 * Being honest about what this is: a guard on the MCP SURFACE, not a boundary. The API route is
+	 * owner-authenticated and this worker adds no authority of its own, so a caller holding the
+	 * session token can still POST `/approve` directly. What it buys is that the platform's own
+	 * agent-facing surface does not OFFER the bypass — an agent cannot reach it by using a tool as
+	 * documented, only by going outside the tool surface entirely. `mcp_audit_log` records the
+	 * refusal either way.
+	 */
+	async function refuseIfAwaitingHumanApproval(
+		instanceId: string,
+		taskId: string,
+		sessionToken: string,
+	): Promise<string | null> {
+		// Fail CLOSED, and note WHERE the closing happens. `apiCall` does not throw on a non-2xx —
+		// it returns `{ error: "API 500", … }` — so a catch alone reads a failed lookup as "no
+		// action found" and approves. That is the exact fail-open this guard exists to prevent, and
+		// it was live until the test below caught it: an unreadable ticket must not resolve to yes.
+		let task: unknown;
+		try {
+			task = await authedCall(`/v1/instances/${instanceId}/tasks/${encodeURIComponent(taskId)}`, sessionToken, {}, env);
+		} catch (e) {
+			task = { error: e instanceof Error ? e.message : String(e) };
+		}
+		if (!isRec(task) || task.error) {
+			return "This ticket could not be read, so it was not approved — nothing was run. Try again, or approve it in the console.";
+		}
+		const action = isRec(task.action) ? task.action : null;
+		if (action?.action !== "call_tool") return null;
+		const tool = isRec(action.params) && typeof action.params.tool === "string" ? action.params.tool : "a connector call";
+		return (
+			`Refused: this ticket is ${tool} held back by the per-call approval gate (#722), and that gate exists so a PERSON sees the ` +
+			"call before it goes out. It cannot be approved over MCP. Tell the owner it is on the board and let them approve it in the console."
+		);
+	}
+
 	server.tool(
 		"approve_instance_task",
-		"Approve a browser runtime task waiting for human approval.",
+		"Approve a browser runtime task waiting for human approval. Cannot approve a connector call held back by the per-call approval gate — those are approved by a person in the console, which is the whole point of that gate.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),
@@ -284,6 +327,11 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 					endpoint: `/v1/instances/${instance_id}/tasks/${task_id}/approve`,
 					method: "POST",
 				});
+			}
+			const refusal = await refuseIfAwaitingHumanApproval(instance_id, task_id, sessionToken);
+			if (refusal) {
+				await audit(safetyFor(token), { tool: "approve_instance_task", action: "denied", input, result: { error: refusal } });
+				return jsonText({ error: refusal });
 			}
 			const data = await authedCall(
 				`/v1/instances/${instance_id}/tasks/${task_id}/approve`,

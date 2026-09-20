@@ -1,0 +1,28 @@
+-- Per-call approval for connector writes — #722 Step 2, and #90's unmet acceptance criterion
+-- ("Write/destructive calls require approval by default"). #75 carries the same requirement from
+-- the browser side.
+--
+-- WHAT WAS WRONG. Consent (0051) is once per (instance, connector, write) and nothing per call.
+-- For most writes that is the right granularity: an unwanted `github_create_issue` is closed in a
+-- second. For a mail send it is not, and `gmail_reply` says so in its own description to the model
+-- — "This really sends: there is no draft step and no undo." A model that decides it has been
+-- approved is approved; a model reading an injected instruction in the mail it was asked to
+-- summarise is also approved.
+--
+-- WHAT THIS COLUMN ADDS. A consent row gains a MODE. `always` is today's behaviour — the row
+-- exists, the call dispatches. `ask` means the call does not dispatch: it is written to the board
+-- as an actionable ticket carrying `{tool, args}`, and approving the ticket runs exactly that.
+-- Off is still the absence of the row, so the gate stays fail-closed and keeps ONE meaning for
+-- "no row" rather than gaining a second way to say no.
+--
+-- WHY THE DEFAULT IS `always`, AND WHY THAT IS THE WHOLE SAFETY PROPERTY OF THIS MIGRATION.
+-- Every existing row keeps its behaviour byte-for-byte. Measured at the time the decision was
+-- taken (#722, 2026-08-22): 32 of 43 instances on the owner's account render write-consent
+-- controls, and a default of `ask` would have put 23 Coder instances behind an approval queue on
+-- day one. Opting an instance into Ask is the owner's act, never a migration's.
+--
+-- WHICH CONNECTORS SHOULD *DEFAULT* TO ASK is deliberately NOT decided here (#722 Step 3). It
+-- needs a `reversible` fact the connector registry does not carry — `mutates` and `reach` both
+-- exist and neither answers it — and inventing one here would smuggle a second decision into this
+-- one.
+ALTER TABLE instance_connector_consent ADD COLUMN mode TEXT NOT NULL DEFAULT 'always';

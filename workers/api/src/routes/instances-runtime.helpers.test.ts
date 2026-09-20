@@ -756,6 +756,64 @@ describe("Actionable tickets — the runner-less approval gate", () => {
 		expect(mirrors.some((w) => w.args.some((a) => typeof a === "string" && a.includes('"status":"completed"')))).toBe(true);
 	});
 
+	// ── call_tool: the per-call approval gate's ticket (#722) ────────────────────────────────
+	describe("a held-back connector call", () => {
+		const held = (over: Record<string, unknown> = {}) => ({
+			id: "t1",
+			title: "Approve: gmail_send",
+			status: "needs_approval",
+			type: "tool_approval",
+			action: { action: "call_tool", config: {}, params: { tool: "gmail_send", args: { to: "x@y.z" } } },
+			...over,
+		});
+
+		it("cannot be REQUESTED by an agent through /tasks/direct", async () => {
+			// The boundary the whole design rests on. If an agent could file its own call_tool
+			// ticket, a refused write would become "raise the approval yourself and wait for a
+			// click", and the gate would be a formality.
+			const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]] });
+			const res = await post(
+				app,
+				env,
+				"/v1/instances/inst-1/tasks/direct",
+				{ title: "please", action: "call_tool", params: { tool: "gmail_send", args: { to: "x@y.z" } } },
+				await tokenFor("u1"),
+			);
+			expect(res.status).toBe(400);
+			expect(((await res.json()) as { error: string }).error).toContain("approval gate");
+			expect(writes.some((w) => w.sql.includes("INSERT INTO instance_runtime_tasks"))).toBe(false);
+		});
+
+		it("is re-checked at APPROVAL time, and a revoked grant blocks it WITHOUT burning the card", async () => {
+			// The gate was evaluated when the card was written; the human clicks later. `consents: []`
+			// is the owner having revoked Gmail write in between — the call must not go out, and the
+			// ticket must survive so they can re-grant and approve the same card.
+			const { app, env, writes } = buildApp({
+				owns: [["inst-1", "u1"]],
+				noRuntime: true,
+				mirroredTask: held(),
+				instanceConfig: JSON.stringify({}),
+			});
+			const res = await post(app, env, "/v1/instances/inst-1/tasks/t1/approve", {}, await tokenFor("u1"));
+			expect(res.status).toBe(409);
+			expect(((await res.json()) as { error: string }).error).toMatch(/revoked|no longer|switched off/);
+			// Not claimed: a refused approval leaves the ticket exactly where it was.
+			expect(writes.some((w) => w.sql.includes("UPDATE instance_runtime_tasks SET status = 'running'"))).toBe(false);
+		});
+
+		it("refuses a ticket whose call cannot be read, rather than guessing the arguments", async () => {
+			const { app, env } = buildApp({
+				owns: [["inst-1", "u1"]],
+				noRuntime: true,
+				mirroredTask: held({ action: { action: "call_tool", config: {}, params: {} } }),
+			});
+			const res = await post(app, env, "/v1/instances/inst-1/tasks/t1/approve", {}, await tokenFor("u1"));
+			// An unreadable call reads as "not actionable" (readTicketAction → null), so it lands on
+			// the existing "carries no action" refusal. Either way nothing is dispatched.
+			expect([400, 409]).toContain(res.status);
+		});
+	});
+
 	it("409s a ticket that was already decided", async () => {
 		const pipelineRuns: Array<Record<string, unknown>> = [];
 		const { app, env } = buildApp({ owns: [["inst-1", "u1"]], noRuntime: true, mirroredTask: actionable({ status: "completed" }), instanceConfig: PIPELINE_CFG, pipelineRuns });

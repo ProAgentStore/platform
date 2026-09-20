@@ -166,6 +166,11 @@ const EXCLUSIONS = [
 const KNOWN_GAPS = [
 	{
 		why:
+			"READING a connector's write consent. MCP can already WRITE one (`set_instance_connector_consent`) and cannot read what is stored, which is the wrong way round and became worth stating at #722: a consent now carries a MODE (always · ask), so \"is this connector behind per-call approval\" is a real question with no MCP answer, while `list_instance_connectors` reports only whether a tool is available. Recorded rather than closed because the read wants to land with the mode in its payload and a tool that can SET the mode — today's write tool takes a boolean, which deliberately cannot widen an ask grant (routes/tools.ts) and therefore cannot express one either. #613.",
+		match: /^GET \/v1\/instances\/\{\}\/connectors\/consent$/,
+	},
+	{
+		why:
 			"Agent TEMPLATE authoring, the WRITE half (the creator side of AgentDetail). #613. The READ half closed at 0.1.46: `my_agent` reads the owner view of `/v1/agents/{}` — including a draft, which `agent_info`'s public projection 404s — alongside `get_agent_capabilities`, `get_agent_state`, `get_agent_memory`, `agent_messages` and `export_agent`. What is left all MUTATES a template other people may be subscribed to: delete the agent or one of its documents, write capabilities or state, chat as the creator, cut a version, roll one back, and the two agent-builder calls. Each needs a confirm gate and a dry-run story rather than a proxy, which is why it was not shipped in a slice justified as read-only.",
 		match:
 			/^(DELETE \/v1\/agents\/\{\}(\/knowledge\/\{\})?|POST \/v1\/agents\/\{\}\/(chat|versions\/\{\}\/rollback|versions)|PUT \/v1\/agents\/\{\}\/(capabilities|state)|POST \/v1\/agent-builder\/(plan|execute))$/,

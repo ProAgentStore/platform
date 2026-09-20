@@ -125,3 +125,33 @@ export interface AgentPermissions {
 	/** Allow the agent to read the owner's connected Gmail (read-only, scoped). */
 	email?: boolean;
 }
+
+/**
+ * What a granted connector write-consent MEANS for each call (#722, migration 0155).
+ *
+ *   always — dispatch. What every row written before 0155 does, and the column's default.
+ *   ask    — do NOT dispatch: the call goes to the board as a ticket and runs only once the
+ *            owner approves that specific call.
+ *
+ * "Off" is deliberately not a value — off is the ABSENCE of the row, so the gate keeps one way
+ * to say no. See `lib/connector-consent.ts` for the store and `lib/tool-registry.ts` for the gate.
+ */
+export type ConsentMode = "always" | "ask";
+
+/**
+ * One connector write-consent row, as `GET /v1/instances/:id/connectors/consent` returns it.
+ *
+ * It lives HERE, in the import-free types module, rather than beside its queries in
+ * `lib/connector-consent.ts` — that file imports `type { Env }`, and `Env` names `D1Database`,
+ * `R2Bucket` and friends, so importing it from the console to compare the two declarations drags
+ * the whole Workers global namespace into a DOM tsconfig. `types.test.ts` compares console types
+ * against their producer by importing the producer, so the producer has to be importable.
+ */
+export interface ConsentRow {
+	instance_id: string;
+	user_id: string;
+	connector: string;
+	scope: string;
+	mode: string;
+	created_at: string;
+}
