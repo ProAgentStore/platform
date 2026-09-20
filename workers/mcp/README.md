@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**205 tool registrations.** 181 are always registered; 24 are gated to the console
+**211 tool registrations.** 187 are always registered; 24 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -188,7 +188,7 @@ call_instance_tool { instance_id, tool: "<exact nested tool name>", input: { ...
 | Tool | Purpose | Scope | Dry | Confirm |
 |---|---|---|---|---|
 | `list_agents` | List all published agents | — | | |
-| `agent_info` | Detail for one published agent | — | | |
+| `agent_info` | Detail for one **published** agent — the public catalogue projection. For one you own (incl. drafts) use `my_agent` | — | | |
 | `chat_with_agent` | Trial chat against a published agent (preview only, 20-message cap) | — | | |
 | `platform_guide` | Static platform guide text | — | | |
 | `sdk_reference` | Static SDK usage examples | — | | |
@@ -198,6 +198,12 @@ call_instance_tool { instance_id, tool: "<exact nested tool name>", input: { ...
 | Tool | Purpose | Scope | Dry | Confirm |
 |---|---|---|---|---|
 | `my_agents` | List agents you own | — | | |
+| `my_agent` | Read ONE agent you own in full, including a **draft** — the owner view `agent_info`'s public projection cannot serve (#613) | — | | |
+| `get_agent_capabilities` | An agent's declared surfaces, runtime, workflow, tools and custom surfaces, plus the workflow vocabulary (#613) | — | | |
+| `get_agent_state` | The TEMPLATE's DO state — the seed a new instance is copied from, not a running instance's (#613) | — | | |
+| `get_agent_memory` | The TEMPLATE's seed memory; does not sync with any instance's (#613) | — | | |
+| `agent_messages` | The TEMPLATE's own test conversation, paged with `before` (#613) | — | | |
+| `export_agent` | Whole JSON backup: config + state + every document and memory entry (#613) | — | | |
 | `create_agent` | Create an agent, including declarative `capabilities` + `settings_schema` | write | yes | |
 | `update_agent` | Patch an agent's settings and capabilities | write | yes | |
 | `scaffold_agent` | Create an agent *and* its GitHub repo from a starter template | write | yes | |

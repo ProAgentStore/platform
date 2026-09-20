@@ -250,7 +250,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"agent_info",
-			"Get detailed info about an agent",
+			"Get an agent's PUBLIC catalogue entry — the same projection a visitor to the store sees. It therefore 404s an unpublished agent and omits `visibility`, `status`, `cron_schedule` and `owner_id`. To read an agent YOU own, including a draft and everything update_agent stored, use my_agent instead.",
 			{ agent_id: z.string().describe("Agent ID or slug") },
 			async ({ agent_id }) => {
 				const data = await apiCall(`/v1/public/agents/${agent_id}`, {}, this.env);

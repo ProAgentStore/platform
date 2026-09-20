@@ -3,6 +3,7 @@ import type { z } from "zod";
 import type { McpEnv } from "../http.js";
 import type { SafetyContext } from "../safety.js";
 import { registerAccountTools } from "./account.js";
+import { registerAgentAuthoringTools } from "./agent-authoring.js";
 import { registerAgentTaskTools } from "./agent-tasks.js";
 import { registerApplyTools } from "./apply.js";
 import { registerBaseTools } from "./base.js";
@@ -354,6 +355,7 @@ const TABLE: Record<string, Row> = {
 	keys_status: ["account", "none", null, null, "token"],
 	list_connections: ["composition", "read", null, null, "instance_id,token"],
 	list_agent_tasks: ["agentTasks", "none", null, null, "instance_id,token"],
+	agent_messages: ["agentAuthoring", "none", null, null, "agent_id,before,limit,token"],
 	list_connection_deliveries: ["composition", "none", null, null, "instance_id,limit,status,token"],
 	error_summary: ["observability", "none", null, null, "days,instance_id,level,limit,source,token"],
 	list_errors: ["observability", "none", null, null, "limit,scope,source,token"],
@@ -455,6 +457,11 @@ const TABLE: Record<string, Row> = {
 	start_instance_loop: ["composition", "write", null, "envelope", "dry_run,instance_id,max_iterations,objective,token"],
 	continue_instance_run: ["composition", "write", null, "envelope", "dry_run,instance_id,max_iterations,run_id,token"],
 	preview_instance_run_continue: ["composition", "read", null, null, "instance_id,run_id,token"],
+	my_agent: ["agentAuthoring", "none", null, null, "agent_id,token"],
+	get_agent_capabilities: ["agentAuthoring", "none", null, null, "agent_id,token"],
+	get_agent_state: ["agentAuthoring", "none", null, null, "agent_id,token"],
+	get_agent_memory: ["agentAuthoring", "none", null, null, "agent_id,token"],
+	export_agent: ["agentAuthoring", "none", null, null, "agent_id,token"],
 	stop_instance_loop: ["composition", "write", null, null, "instance_id,run_id,token"],
 	subscribe_agent: ["base", "write", null, "envelope", "agent_id,dry_run,idempotency_key,token"],
 	system_status: ["coding", "none", null, null, "instance_id,token"],
@@ -477,6 +484,7 @@ const TABLE: Record<string, Row> = {
 const REGISTRARS: Record<string, (s: unknown, c: InstanceToolsCtx) => void> = {
 	// biome-ignore-start lint/suspicious/noExplicitAny: minimal fake MCP server
 	account: registerAccountTools as any,
+	agentAuthoring: registerAgentAuthoringTools as any,
 	agentTasks: registerAgentTaskTools as any,
 	apply: registerApplyTools as any,
 	base: registerBaseTools as any,

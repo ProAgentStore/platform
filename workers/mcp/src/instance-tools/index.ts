@@ -10,6 +10,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { McpEnv } from "../http.js";
 import { registerAccountTools } from "./account.js";
+import { registerAgentAuthoringTools } from "./agent-authoring.js";
 import { registerAgentTaskTools } from "./agent-tasks.js";
 import { registerApplyTools } from "./apply.js";
 import { registerBaseTools } from "./base.js";
@@ -55,6 +56,11 @@ export function registerInstanceTools(
 	// The agent's OWN standing tasks — DO state rendered into its prompt, deliberately a
 	// separate registrar from the runtime board above so the two task stores stay told apart.
 	registerAgentTaskTools(server, ctx);
+	// The creator side of an agent TEMPLATE, read as its owner (#613). Its own registrar rather
+	// than joining `create_agent`/`update_agent` in index.ts: that file is the server bootstrap
+	// and is pinned, and these six are one topic — what a creator authored, as opposed to what
+	// the catalogue advertises. The contract table's group column is what keeps that seam visible.
+	registerAgentAuthoringTools(server, ctx);
 	registerSettingsTools(server, ctx);
 	registerTriggerTools(server, ctx);
 	registerCompositionTools(server, ctx);

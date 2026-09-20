@@ -730,4 +730,35 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// Appended, never edited in place: 0.1.44 is published.
 	"0.1.45": "sha256:f73a9644daba4819571a19cd2c8d6e2fe8c91cda392f1b9dd1750925f9561f61",
+	// 0.1.46 (#613, agent-template authoring — the READ half): six new tool NAMES, ALL ALWAYS-ON —
+	// 205 registrations become 211, `MCP_TOOL_ALWAYS_ON` 181 → 187, `MCP_TOOL_GATED` stays 24.
+	// New registrar `instance-tools/agent-authoring.ts`, so `contract.test.ts` gains the group
+	// `agentAuthoring`.
+	//
+	//   * `my_agent` (read) — GET /v1/agents/:id WITH the owner's bearer.
+	//   * `get_agent_capabilities` (read) — GET /v1/agents/:id/capabilities.
+	//   * `get_agent_state` (read) — GET /v1/agents/:id/state.
+	//   * `get_agent_memory` (read) — GET /v1/agents/:id/memory.
+	//   * `agent_messages` (read) — GET /v1/agents/:id/messages, with `limit`/`before`.
+	//   * `export_agent` (read) — GET /v1/agents/:id/export.
+	//
+	// The one worth reading twice is `my_agent`. `agent_info` calls `/v1/public/agents/:id`, the
+	// CATALOGUE projection, so before this a creator's own DRAFT did not exist over MCP — the tool
+	// 404d it exactly as it does for a stranger — and `visibility`, `status`, `cron_schedule` and
+	// `owner_id` were unreachable even on a published agent. That is a wrong answer rather than a
+	// missing one, which is why this half of the group went first.
+	//
+	// All six are READS and none is gated beyond auth: every route refuses a non-owner server-side.
+	// `/:id` is the exception and degrades to the published view rather than refusing, because it
+	// must still answer an anonymous caller — said in the tool's own description.
+	//
+	// The WRITE half of the group (delete, versions/rollback, PUT state + capabilities, chat,
+	// agent-builder) is deliberately NOT here: it needs `confirm` gates and a dry-run story, and
+	// mixing it in would have put a destructive surface behind a slice justified as read-only.
+	//
+	// `agent_info`'s DESCRIPTION was reworded to point at `my_agent`. Descriptions are excluded
+	// from this fingerprint, so that change does not move the hash — recorded here because a reader
+	// comparing the two versions will see it in the diff and should not conclude the hash missed it.
+	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.45 is published.
+	"0.1.46": "sha256:fef569e0acd5e38b5c960555685aaddf4041c03ea04d771d5754cadafaac620d",
 };

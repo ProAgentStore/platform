@@ -166,9 +166,9 @@ const EXCLUSIONS = [
 const KNOWN_GAPS = [
 	{
 		why:
-			"Agent TEMPLATE authoring (the creator side of AgentDetail). `create_agent`/`update_agent` exist, but reading an agent as its OWNER does not — `agent_info` serves `/v1/public/agents/{}`, the published projection, which omits drafts and config. Nor is there delete, export, version history, rollback, the template's own memory/state/chat, or the AI agent-builder. #613.",
+			"Agent TEMPLATE authoring, the WRITE half (the creator side of AgentDetail). #613. The READ half closed at 0.1.46: `my_agent` reads the owner view of `/v1/agents/{}` — including a draft, which `agent_info`'s public projection 404s — alongside `get_agent_capabilities`, `get_agent_state`, `get_agent_memory`, `agent_messages` and `export_agent`. What is left all MUTATES a template other people may be subscribed to: delete the agent or one of its documents, write capabilities or state, chat as the creator, cut a version, roll one back, and the two agent-builder calls. Each needs a confirm gate and a dry-run story rather than a proxy, which is why it was not shipped in a slice justified as read-only.",
 		match:
-			/^([A-Z]+ \/v1\/agents\/\{\}(\/(capabilities|export|memory|messages|state|chat|versions|knowledge\/\{\}|versions\/\{\}\/rollback))?|POST \/v1\/agent-builder\/(plan|execute))$/,
+			/^(DELETE \/v1\/agents\/\{\}(\/knowledge\/\{\})?|POST \/v1\/agents\/\{\}\/(chat|versions\/\{\}\/rollback|versions)|PUT \/v1\/agents\/\{\}\/(capabilities|state)|POST \/v1\/agent-builder\/(plan|execute))$/,
 	},
 	{
 		why:

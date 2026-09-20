@@ -176,6 +176,12 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	list_connections: "read",
 	error_summary: "read",
 	preview_instance_run_continue: "read",
+	my_agent: "read",
+	get_agent_capabilities: "read",
+	get_agent_state: "read",
+	get_agent_memory: "read",
+	agent_messages: "read",
+	export_agent: "read",
 	list_errors: "read",
 	list_feedback: "read",
 	list_notifications: "read",
@@ -499,7 +505,13 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// rather than `runtime` even though it sits beside `continue_instance_run`: it starts nothing
 	// and opens no budget, and classing it with the tool it describes would make reading before
 	// acting cost the scope of acting — which is the opposite of what a review surface is for.
-	read: 97,
+	// +6 read at #613 (agent-template authoring, read half): `my_agent`,
+	// `get_agent_capabilities`, `get_agent_state`, `get_agent_memory`, `agent_messages`,
+	// `export_agent`. All READ — every one of the six routes is owner-scoped server-side and none
+	// of them writes. `export_agent` is a read in particular: it composes a backup blob out of
+	// state + knowledge + memory and stores nothing, so the word "export" is about the SHAPE of
+	// the answer rather than about an effect.
+	read: 103,
 	write: 64,
 	// +1 runtime at #806: `continue_instance_run`. `runtime` rather than `write` for the reason
 	// `start_instance_loop` is — it starts an autonomous run that spends on its own — and the

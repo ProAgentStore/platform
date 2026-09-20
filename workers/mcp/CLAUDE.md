@@ -82,6 +82,9 @@ src/
     ├── board.ts          9 tools — the board, its columns, the per-ticket thread (#150)
 ├── agent-tasks.ts    4 tools — the agent's OWN standing tasks: DO state rendered into its
 │                     prompt, deliberately not the board above (#613)
+├── agent-authoring.ts 6 tools — an agent TEMPLATE read as its OWNER: the row `agent_info`'s
+│                     public projection cannot serve (drafts, visibility, config), its
+│                     capabilities, seed state and memory, creator chat, and the export (#613)
     ├── settings.ts       16 tools — settings, name, instructions, operator manual, model, translation, state,
 │                     voice settings (read / customise / use-my-defaults, #613)
     ├── triggers.ts       7 tools — webhook / cron / connector-sync triggers, plus the action
@@ -105,9 +108,9 @@ src/
                           surfaces:["coding"]) + 5 loop tools (3 run + 2 objective queue)
 ```
 
-**205 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
+**211 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
 `coding-tools.ts` — all of them behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 156 across `instance-tools/`. 181 are always registered; 24 are
+`storage-tools.ts`, and 162 across `instance-tools/`. 187 are always registered; 24 are
 surface-gated (apply=4, repo=3, coding=17).
 
 Those four numbers ADD UP to the headline, and that is the point of stating them: 21 + 13
@@ -145,7 +148,7 @@ Tests sit beside their modules: `index.test.ts`, `index-auth.test.ts`,
 do not see — its names are an instance's data.
 
 `instance-tools/contract.test.ts` is the one to know about. It holds every tool registered
-under `instance-tools/` — 99 of them — to a table of **group, scope, confirmation string,
+under `instance-tools/` — 105 of them — to a table of **group, scope, confirmation string,
 dry-run behaviour and input fields** —
 and every value in that table is DERIVED by driving the registered handler (call it holding
 only `read`, then holding everything but `read`, and read the required scope out of the
