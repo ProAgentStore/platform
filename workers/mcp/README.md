@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**204 tool registrations.** 180 are always registered; 24 are gated to the console
+**205 tool registrations.** 181 are always registered; 24 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -373,6 +373,7 @@ immediately instead of a whole transcript.
 | `start_instance_loop` | Give an agent an objective and let it run on the server, budget-bounded | write | yes | |
 | `check_instance_loop` | Status, steps taken, stop reason (omit `run_id` to list runs) | read | | |
 | `continue_instance_run` | Carry a STOPPED run's objective onto a fresh run, briefed on what it already landed. Only after an ending with no verdict; reuses its repo and step cap, opens its own budget (#806) | write | yes | |
+| `preview_instance_run_continue` | What a continue would CARRY FORWARD, before spending on it: whether the briefing is this run's, another run's or none at all, the note the new run would get, and the step cap it would be given. A run that cannot be continued still answers, with the refusal (#806) | read | | |
 | `get_instance_loop_limits` | The iteration floor and ceiling every run on this instance is clamped into, plus the account ceiling they sit under (#820) | read | | |
 | `set_instance_loop_limits` | Set that floor and ceiling — they bind whatever `max_iterations` a caller passes; omit both to clear. An inverted pair is refused, not repaired | write | yes | |
 | `get_instance_loop_presets` | The saved objectives the loop form offers, and whose list it is (`instance` / `agent` / `default`) (#613) | read | | |

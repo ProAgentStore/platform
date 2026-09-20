@@ -434,6 +434,34 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 		},
 	);
 
+	server.tool(
+		"preview_instance_run_continue",
+		"What continuing a STOPPED run would actually carry forward, before spending anything on it (#806). Answers with `briefing.kind`: `this-run` (the new run is told what THIS run landed), `other-run` (a more recent stopped run on the same repo is the predecessor, so the briefing is that one's), or `none` (nothing carries forward — a later run reached a verdict, or nothing landed and the tree is clean — so continuing is a restart on the bare objective with a fresh budget). Also gives the exact `briefing.note` the new run would be handed, the landed actions, how many files sit uncommitted, and the step ceiling the continue would grant. `briefing.uncommittedFiles` is null when the runner is offline: that is 'we could not look', never 'the tree is clean'. A run that CANNOT be continued still answers 200, with `canContinue:false` and `refusal` naming what to do instead. Read this before continue_instance_run.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			run_id: z.string().describe("The stopped run to preview, from check_instance_loop."),
+		},
+		async ({ token, instance_id, run_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			// Read, and no `dry_run`: it starts nothing and spends nothing, so a preview OF a
+			// preview would be ceremony. That is also why it is not a flag on
+			// `continue_instance_run` — a dry run there answers "would this be refused and how big
+			// would it be", which is a different question from "what would the new run KNOW".
+			const denied = await requirePermission(safetyFor(token), "read", "preview_instance_run_continue", { instance_id, run_id });
+			if (denied) return denied;
+			return jsonText(
+				await authedCall(
+					`/v1/instances/${encodeURIComponent(instance_id)}/loop/${encodeURIComponent(run_id)}/continue-preview`,
+					sessionToken,
+					{},
+					env,
+				),
+			);
+		},
+	);
+
 	// ── Loop presets (#613) ─────────────────────────────────────────────────────
 	//
 	// The objectives an owner curated for the loop form (#234). Without these, a caller starting a

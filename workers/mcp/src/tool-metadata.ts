@@ -175,6 +175,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	list_connection_deliveries: "read",
 	list_connections: "read",
 	error_summary: "read",
+	preview_instance_run_continue: "read",
 	list_errors: "read",
 	list_feedback: "read",
 	list_notifications: "read",
@@ -494,7 +495,11 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// +1 read at #823: `error_summary` — the durable error log GROUPED by signature, beside
 	// `list_errors`. Read for the same reasons: the query is `user_id`-scoped, there is no
 	// `scope=all` on it, and grouping rows the caller can already fetch one by one adds no reach.
-	read: 96,
+	// +1 read at #806: `preview_instance_run_continue` — what a continue would carry forward. READ
+	// rather than `runtime` even though it sits beside `continue_instance_run`: it starts nothing
+	// and opens no budget, and classing it with the tool it describes would make reading before
+	// acting cost the scope of acting — which is the opposite of what a review surface is for.
+	read: 97,
 	write: 64,
 	// +1 runtime at #806: `continue_instance_run`. `runtime` rather than `write` for the reason
 	// `start_instance_loop` is — it starts an autonomous run that spends on its own — and the

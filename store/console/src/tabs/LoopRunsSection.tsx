@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { loopStopControl, type LoopPhase } from "../lib/loopStopState";
-import { canContinueRun } from "../lib/loopContinue";
+import { canContinueRun, previewLines, type ContinuePreview } from "../lib/loopContinue";
 import { activityLabel, isOpen, runActivity, type RunHealth } from "../lib/workInFlight";
 import Button from "../components/Button";
 import Card from "../components/Card";
@@ -163,6 +163,41 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 		setBusy(false);
 	};
 
+	/**
+	 * What Continue would carry forward, asked for one run at a time (#806 item 2).
+	 *
+	 * ON DEMAND, not with the list. The answer costs a relay round trip to the owner's machine to
+	 * read the checkout, and this section polls every 5s while anything is open — fetching it per
+	 * row per tick would put a `git status` on someone's laptop on a timer to answer a question
+	 * nobody asked. The click is the question.
+	 *
+	 * A failure here shows the server's message and nothing else — but note how rarely that path
+	 * fires: a refusal and an unreachable runner are both ANSWERS to this question, so the route
+	 * returns 200 for them and they render as content rather than as an error.
+	 */
+	const [preview, setPreview] = useState<Record<string, ContinuePreview>>({});
+	const [previewing, setPreviewing] = useState<string | null>(null);
+	const showPreview = async (runId: string) => {
+		if (preview[runId]) {
+			// Second click closes it. A disclosure that could only ever open would leave the row
+			// permanently taller for a question the owner has finished with.
+			setPreview((p) => {
+				const { [runId]: _drop, ...rest } = p;
+				return rest;
+			});
+			return;
+		}
+		setPreviewing(runId);
+		setMsg("");
+		try {
+			const p = await api<ContinuePreview>(`/v1/instances/${instanceId}/loop/${runId}/continue-preview`);
+			setPreview((prev) => ({ ...prev, [runId]: p }));
+		} catch (e) {
+			setMsg(e instanceof Error ? e.message : String(e));
+		}
+		setPreviewing(null);
+	};
+
 	if (runs.length === 0) return null;
 
 	return (
@@ -199,14 +234,33 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 									  * and a button alone would not say what it is continuing FROM.
 									  */}
 									{canContinueRun(r) && (
-										<Button
-											size="sm"
-											disabled={busy}
-											onClick={() => resume(r.runId)}
-											title="Start a new run on this objective. It is told what the stopped run already landed."
-										>
-											Continue
-										</Button>
+										<>
+											{/*
+											  * Review BEFORE deciding (#806 item 2). A Continue is a fresh budget, and
+											  * whether it inherits anything depends on a rule nothing on this page could
+											  * show: the briefing goes to the newest stopped run on the repo, so a later
+											  * run reaching a verdict turns this button into a plain restart. A text
+											  * link, not a second box — the decision belongs to Continue, and this is
+											  * the thing you read first, not a rival action.
+											  */}
+											<button
+												type="button"
+												onClick={() => showPreview(r.runId)}
+												disabled={previewing === r.runId}
+												aria-expanded={!!preview[r.runId]}
+												className="text-xs underline text-muted hover:text-accent"
+											>
+												{previewing === r.runId ? "Checking…" : preview[r.runId] ? "Hide" : "What carries over?"}
+											</button>
+											<Button
+												size="sm"
+												disabled={busy}
+												onClick={() => resume(r.runId)}
+												title="Start a new run on this objective. It is told what the stopped run already landed."
+											>
+												Continue
+											</Button>
+										</>
 									)}
 								</span>
 							)}
@@ -227,6 +281,18 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 						{ctl.hint && <div className="text-xs text-muted mt-1">{ctl.hint}</div>}
 						{r.detail && ctl.phase === "ended" && (
 							<div className="text-xs text-muted mt-1 line-clamp-2">{r.detail}</div>
+						)}
+						{/*
+						  * The checkpoint itself. Every line comes from the server — including the
+						  * headline sentence — so this panel and the briefing the run receives cannot
+						  * describe different work (`previewLines`).
+						  */}
+						{preview[r.runId] && (
+							<div data-testid="continue-preview" className="text-xs text-muted mt-1.5 border-t border-line pt-1.5 space-y-0.5">
+								{previewLines(preview[r.runId]).map((line) => (
+									<div key={line}>{line}</div>
+								))}
+							</div>
 						)}
 					</div>
 				);

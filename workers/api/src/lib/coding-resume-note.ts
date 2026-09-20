@@ -99,6 +99,21 @@ const PREDECESSOR_ENDING: Record<ResumableStopReason, string> = {
 const truncate = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
 
 /**
+ * The three-way split {@link codingResumeNote} composes from, and the preview reports (#806 item 2).
+ *
+ * Exported so the two cannot drift. The owner's review surface shows what a Continue would carry
+ * forward, and if it recomputed "landed" with its own filter, the day the two disagreed the page
+ * would be describing a briefing the run does not get — which is worse than showing nothing, and
+ * is the failure the whole review surface exists to prevent.
+ *
+ * FAILED acts (`ok === false`) are in neither list. "Attempted and failed" is not progress to
+ * preserve, and a run told to skip it would skip the retry that fixes it (#594).
+ */
+export function splitActs(acts: ReadonlyArray<ActItem>): { landed: ActItem[]; unobserved: ActItem[] } {
+	return { landed: acts.filter((a) => a.ok === true), unobserved: acts.filter((a) => a.ok === null) };
+}
+
+/**
  * The note, or `null` when there is nothing worth saying.
  *
  * Null is the common case and the important one: a run that was cut off having done nothing
@@ -119,10 +134,7 @@ const truncate = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).
  * ({@link PREDECESSOR_ENDING}).
  */
 export function codingResumeNote(acts: ReadonlyArray<ActItem>, endedBy: ResumableStopReason, uncommittedFiles = 0): string | null {
-	// FAILED acts are dropped here and never counted below: "attempted and failed" is not progress
-	// to preserve, and a run told to skip it would skip the retry that fixes it.
-	const landed = acts.filter((a) => a.ok === true);
-	const unobserved = acts.filter((a) => a.ok === null);
+	const { landed, unobserved } = splitActs(acts);
 	const onRecord = landed.length > 0 || unobserved.length > 0;
 	if (!onRecord && uncommittedFiles <= 0) return null;
 
@@ -193,13 +205,74 @@ export async function pendingCodingResumeNote(
 	params: { userId: string; instanceId: string; sessionId: string; uncommittedFiles?: number; lookbackMs?: number },
 	now: number = Date.now(),
 ): Promise<string | null> {
+	return (await pendingCodingResumeCheckpoint(env, params, now))?.note ?? null;
+}
+
+/**
+ * What the next run on this repo WOULD be told, with the facts it was composed from (#806 item 2).
+ *
+ * The same computation as {@link pendingCodingResumeNote} — that function is now a projection of
+ * this one — for a reason that is the whole point of the review surface: the owner deciding
+ * whether to press Continue needs to see the briefing the run will ACTUALLY receive, not a second
+ * estimate of it. Two code paths answering "what carries forward" is how a page comes to promise
+ * work that the run then re-does.
+ *
+ * The structure is what the note cannot carry. A note is prose for a model; an owner deciding
+ * needs to know WHICH run it is about, because the immediate-predecessor rule
+ * ({@link lastUnfinishedRunForRepo}) means the answer is sometimes "a different run than the one
+ * you are looking at", and sometimes "none at all — a verdict in between ended the note's job".
+ * In that case Continue is a plain restart, and that is exactly the fact worth knowing BEFORE
+ * spending a budget on it. `note: null` with a non-null checkpoint is a real and distinct state:
+ * there IS an unfinished predecessor, and it left nothing worth saying.
+ *
+ * Never throws, for the same reason as its projection: this sits on the start path of every coding
+ * run, and a failed read must cost the briefing, not the run.
+ */
+export interface ResumeCheckpoint {
+	/** The run the note is about. Not necessarily the run a caller asked about — see above. */
+	predecessorRunId: string;
+	/**
+	 * That run's session, which is the window the acts were read over (#809).
+	 *
+	 * Nullable because `LoopRunView` is. In practice the `JOIN coding_sessions` in
+	 * {@link lastUnfinishedRunForRepo} cannot match a row whose `session_id` is null, so a matched
+	 * predecessor always has one — but that is a fact about the query, not one the type can see,
+	 * and asserting it here would be a claim with nothing holding it up.
+	 */
+	predecessorSessionId: string | null;
+	endedBy: ResumableStopReason;
+	/** Acts OBSERVED to have landed, in the order the note lists them. */
+	landed: ActItem[];
+	/** Acts attempted whose outcome was never observed. Counted, never asserted as done (#594). */
+	unobserved: ActItem[];
+	/** What the caller told us was sitting uncommitted; zero is a clean tree or an unknown one. */
+	uncommittedFiles: number;
+	/** Exactly the text the successor is given, or null when there is nothing worth saying. */
+	note: string | null;
+}
+
+export async function pendingCodingResumeCheckpoint(
+	env: Env,
+	params: { userId: string; instanceId: string; sessionId: string; uncommittedFiles?: number; lookbackMs?: number },
+	now: number = Date.now(),
+): Promise<ResumeCheckpoint | null> {
 	try {
 		const prev = await lastUnfinishedRunForRepo(env, params.userId, params.instanceId, params.sessionId, now, params.lookbackMs);
 		if (!prev) return null;
 		// That run's OWN session over the interval it drove it (#809) — not `params.sessionId`, which since
 		// #806 is usually a different, later session of the same repo.
 		const acts = await actsInWindow(env, params.userId, params.instanceId, prev.sessionId, prev.startedAt, prev.finishedAt ?? now, 100);
-		return codingResumeNote(acts, prev.stopReason, params.uncommittedFiles ?? 0);
+		const uncommittedFiles = params.uncommittedFiles ?? 0;
+		const { landed, unobserved } = splitActs(acts);
+		return {
+			predecessorRunId: prev.runId,
+			predecessorSessionId: prev.sessionId,
+			endedBy: prev.stopReason,
+			landed,
+			unobserved,
+			uncommittedFiles,
+			note: codingResumeNote(acts, prev.stopReason, uncommittedFiles),
+		};
 	} catch {
 		// The briefing is lost, the run is not. `api()`-side errors are already filed durably by the
 		// readers themselves; swallowing here would hide nothing that is not recorded elsewhere.

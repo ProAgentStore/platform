@@ -712,4 +712,22 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.43 is published.
 	"0.1.44": "sha256:326b6f2ffec617d137b56aff521c8dbe3811fa260634561251f45f2722593804",
+	// 0.1.45 (#806 item 2, review before you continue): one new tool NAME, ALWAYS-ON — 204
+	// registrations become 205, `MCP_TOOL_ALWAYS_ON` 180 → 181, `MCP_TOOL_GATED` stays 24.
+	//
+	//   * `preview_instance_run_continue` (READ, no dry_run) — GET
+	//     /v1/instances/:id/loop/:runId/continue-preview in `instance-tools/composition.ts`, beside
+	//     `continue_instance_run`. It answers what a continue would CARRY FORWARD, which is not the
+	//     question that tool's `dry_run` answers ("would this be refused, and how big would it be").
+	//
+	// `read` and not `runtime`, even though it sits beside a tool annotated `runtime`: it starts
+	// nothing and opens no budget, and classing a review surface with the action it describes would
+	// make reading before acting cost the scope of acting.
+	//
+	// Shipped WITH the route and the console disclosure in one commit, for the reason 0.1.42 and
+	// 0.1.43 give: a console-reachable route with no tool opens a new `KNOWN_GAPS` entry against a
+	// list #613 is driving to zero. `SERVER_INSTRUCTIONS` did not move.
+	//
+	// Appended, never edited in place: 0.1.44 is published.
+	"0.1.45": "sha256:f73a9644daba4819571a19cd2c8d6e2fe8c91cda392f1b9dd1750925f9561f61",
 };

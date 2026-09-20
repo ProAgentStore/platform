@@ -8164,6 +8164,90 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /v1/instances/{instanceId}/loop/{runId}/continue-preview:
+    get:
+      summary: What continuing a stopped run would carry forward
+      description: |
+        The review surface behind Continue: what the new run would be TOLD, read before any
+        budget is spent on it. It starts nothing.
+
+        `briefing.kind` is the fact that changes the decision and that nothing else on the page
+        can show. The briefing always goes to the most recent stopped run on the repository, so:
+
+          * `this-run` — the new run is briefed on what THIS run landed.
+          * `other-run` — a more recent stopped run on the same repository is the predecessor,
+            so the briefing is that one's. The objective still carries; the checkpoint does not.
+          * `none` — nothing carries forward. Either a later run reached a verdict (which ends
+            the note's job), or nothing landed and the tree is clean, or the predecessor is
+            outside the lookback. Continuing is a restart on the bare objective, with a fresh
+            budget.
+
+        `briefing.note` is the exact text the new run would be handed, taken from the same
+        composition the run itself uses rather than rebuilt here — so this cannot describe a
+        briefing the run does not get.
+
+        `briefing.uncommittedFiles` is `null` when `workingTree` is `unavailable`. That is "the
+        runner is not connected, so we could not look", never "the tree is clean" — the common
+        case for this route, since its whole purpose is checking back on a stalled run hours
+        later. When the tree is unreadable the note shown omits the uncommitted clause the real
+        briefing may carry, and `briefing.caveat` says so.
+
+        A run that CANNOT be continued still answers 200, with `canContinue: false` and
+        `refusal` naming what to do instead: the refusal is the answer to "what would happen if
+        I pressed this", and an owner reading why the button is absent is who this route is for.
+      operationId: previewLoopRunContinue
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string }, description: The stopped run to preview. }
+      responses:
+        "200":
+          description: What a continue would carry forward
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runId: { type: string }
+                  objective: { type: string }
+                  status: { type: string }
+                  stopReason: { type: string, nullable: true }
+                  detail: { type: string, nullable: true }
+                  iteration: { type: integer }
+                  canContinue: { type: boolean }
+                  refusal:
+                    type: string
+                    nullable: true
+                    description: Why it cannot be continued, in the same words the POST refuses with. Null when it can.
+                  maxIterations:
+                    type: integer
+                    description: >
+                      Steps a continue would grant with no body, after the account ceiling and
+                      the instance's own bounds — the number the button actually spends.
+                  repoId: { type: string, nullable: true }
+                  summary:
+                    type: string
+                    description: One sentence for the owner, composed server-side so the page and the run agree.
+                  briefing:
+                    type: object
+                    properties:
+                      kind: { type: string, enum: [this-run, other-run, none] }
+                      predecessorRunId: { type: string, nullable: true }
+                      landed:
+                        type: array
+                        items: { type: string }
+                        description: Acts OBSERVED to have landed. An act that failed is in neither this nor unobserved.
+                      landedOverflow: { type: integer }
+                      unobserved:
+                        type: integer
+                        description: Attempted, outcome never observed. Counted, never asserted as done.
+                      uncommittedFiles: { type: integer, nullable: true }
+                      workingTree: { type: string, enum: [read, unavailable] }
+                      caveat: { type: string, nullable: true }
+                      note: { type: string, nullable: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/instances/{instanceId}/loop-limits:
     get:
       summary: Read this instance's iteration bounds

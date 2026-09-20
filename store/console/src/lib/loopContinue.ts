@@ -43,3 +43,63 @@ export function canContinueRun(run: LoopRunContinueLike | null | undefined): boo
 	if (!run || run.status === "running") return false;
 	return (CONTINUABLE_STOP_REASONS as readonly string[]).includes(run.stopReason ?? "");
 }
+
+/**
+ * What the server says a Continue would carry forward (#806 item 2).
+ *
+ * A NAMED shape rather than an inline object literal on the call: `check-console-types.mjs`
+ * ratchets every anonymous shape a console API call declares, and naming one is the only
+ * direction that ratchet moves. It is also the honest shape — the fields below are what
+ * `GET …/continue-preview` returns, and a reader can compare them to the route.
+ *
+ * Do not write the generic-call form out in a comment here. That guard's scanner skips a `//`
+ * line but reads a block comment, so a doc comment demonstrating the pattern it forbids IS a
+ * finding — the same "explaining it regenerates it" trap `check-design-tokens.mjs` records for
+ * Tailwind class names, found the same way: by tripping it.
+ */
+export interface ContinuePreview {
+	runId: string;
+	canContinue: boolean;
+	/** Why not, in the server's words. Null when it can be continued. */
+	refusal: string | null;
+	maxIterations: number;
+	briefing: {
+		kind: "this-run" | "other-run" | "none";
+		predecessorRunId: string | null;
+		landed: string[];
+		landedOverflow: number;
+		unobserved: number;
+		uncommittedFiles: number | null;
+		workingTree: "read" | "unavailable";
+		caveat: string | null;
+		note: string | null;
+	};
+	/** One sentence, composed SERVER-SIDE. Rendered verbatim — see {@link previewLines}. */
+	summary: string;
+}
+
+/**
+ * The lines the panel renders, in order.
+ *
+ * The headline is the server's `summary` and is never rebuilt here. That is the whole point of the
+ * field: this page and the run's own briefing have to agree about what carries forward, and a
+ * console that phrased it locally would be a second voice for one fact — free to drift the day
+ * either side changes, with nothing failing when it did.
+ *
+ * What IS decided here is layout: which of the server's facts earn a line of their own. The landed
+ * list does, because "3 actions already landed" is a claim an owner should be able to check rather
+ * than take; the caveat does, because an unreadable tree is the difference between a promise and a
+ * guess; the ceiling does, because it is the one number the button spends.
+ */
+export function previewLines(p: ContinuePreview): string[] {
+	const lines = [p.summary];
+	for (const act of p.briefing.landed) lines.push(`· ${act}`);
+	if (p.briefing.landedOverflow > 0) {
+		lines.push(`· …and ${p.briefing.landedOverflow} more`);
+	}
+	if (p.briefing.caveat) lines.push(p.briefing.caveat);
+	// Only when it can actually be pressed: on a refused run the number describes nothing.
+	if (p.canContinue) lines.push(`Continuing would give the new run up to ${p.maxIterations} steps.`);
+	if (p.refusal) lines.push(`This run cannot be continued: ${p.refusal}`);
+	return lines;
+}

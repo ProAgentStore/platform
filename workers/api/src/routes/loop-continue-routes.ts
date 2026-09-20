@@ -41,14 +41,18 @@
 
 import type { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
-import { CONTINUE_RESUME_LOOKBACK_MS, getLoopRun, isResumableStopReason } from "../lib/agent-loop-store.js";
+import { CONTINUE_RESUME_LOOKBACK_MS, getLoopRun, isResumableStopReason, type LoopRunView } from "../lib/agent-loop-store.js";
 import { sanitizeMaxIterations } from "../lib/agent-loop.js";
 import { clampIterations } from "../lib/loop-limits.js";
 import { readLoopLimits } from "../lib/loop-limits-store.js";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
-import { getSession } from "../lib/coding-store.js";
+import { getRepo, getSession } from "../lib/coding-store.js";
 import { loopDriverFor } from "../lib/loop-drivers.js";
 import { openBudget, resolveAccountCeilings } from "../lib/delegation-budget-store.js";
+import { pendingCodingResumeCheckpoint } from "../lib/coding-resume-note.js";
+import { continueBriefingPreview, continueBriefingSentence, type WorkingTreeRead } from "../lib/loop-continue-preview.js";
+import { readRepoWorkingState } from "../lib/repo-state.js";
+import { getBoundRunnerConn } from "../lib/runner-client.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import type { Env } from "../types.js";
 
@@ -68,6 +72,52 @@ const REFUSAL: Record<string, string> = {
 	no_progress: "that run was repeating itself; continuing it would repeat it again — change the objective instead",
 	budget: "that run hit its spend limit; raise the limit before starting more work on it",
 };
+
+/**
+ * Why this run may not be continued, or null when it may.
+ *
+ * One function so the POST's refusal and the preview's `canContinue` are the same decision rather
+ * than two readings of it. A preview that offered a run the POST would refuse would be a button
+ * that always errors — the thing `loopContinue.ts` on the console already exists to prevent, and
+ * a second place to get it wrong is not an improvement.
+ *
+ * STILL GOING is kept distinct from "cannot be continued" because it sends the owner to a
+ * different control (Stop, then Continue). `finishedAt`, not `status`: a run with `cancelRequested`
+ * set is still running until it reaches the top of its next iteration, and starting a second run
+ * against the same session in that window is the single-flight collision #208 is about.
+ */
+export function continueRefusal(run: LoopRunView): string | null {
+	if (run.finishedAt === null) return "that run is still going — stop it first, then continue it";
+	if (isResumableStopReason(run.stopReason)) return null;
+	return REFUSAL[run.stopReason ?? ""] ?? "that run reached a verdict on its objective and cannot be continued";
+}
+
+/**
+ * How many steps a continue would grant — the stopped run's own ceiling unless the owner names one.
+ *
+ * Shared with the preview so the number shown is the number granted. Both clamps apply for the
+ * reasons the POST records below: the per-account ceiling (#477) because a continue must not be a
+ * way around it, and the instance's own floor and ceiling (#820) because the empty-body default
+ * inherits the stopped run's cap — and if that run was one of the short runs the floor exists to
+ * prevent, granting it again reproduces the stall being continued past.
+ */
+async function continueCeiling(env: Env, userId: string, instanceId: string, run: LoopRunView, requested?: number): Promise<number> {
+	const accountCeiling = (await resolveAccountCeilings(env, userId)).loopMaxIterations;
+	const limits = await readLoopLimits(env, instanceId, userId).catch(() => ({}));
+	return clampIterations(sanitizeMaxIterations(requested ?? run.maxIterations, accountCeiling), limits, accountCeiling);
+}
+
+/**
+ * The repo the stopped run was on, so a multi-repo Coder continues the right checkout rather than
+ * `repos[0]` (#374). Undefined for a chat run, which has no session and no repo — the chat driver
+ * ignores `repoId`, so a chat loop continues correctly by doing nothing special. A session that
+ * has since been deleted also lands on undefined, which degrades to "you pick" rather than to a
+ * failure.
+ */
+async function continueRepoId(env: Env, instanceId: string, userId: string, run: LoopRunView): Promise<string | undefined> {
+	if (!run.sessionId) return undefined;
+	return (await getSession(env, instanceId, userId, run.sessionId).catch(() => null))?.repoId;
+}
 
 export function registerLoopContinueRoutes(router: Hono<{ Bindings: Env }>): void {
 	/**
@@ -89,14 +139,8 @@ export function registerLoopContinueRoutes(router: Hono<{ Bindings: Env }>): voi
 		const run = await getLoopRun(c.env, session.uid, runId);
 		if (!run || run.instanceId !== instanceId) throw new HttpError(404, "loop run not found");
 
-		// STILL GOING is a different fact from "cannot be continued", and conflating them sends the
-		// owner to the wrong control. `finishedAt`, not `status`: a run with `cancelRequested` set
-		// is still running until it reaches the top of its next iteration, and starting a second
-		// run against the same session in that window is the single-flight collision #208 is about.
-		if (run.finishedAt === null) throw new HttpError(409, "that run is still going — stop it first, then continue it");
-		if (!isResumableStopReason(run.stopReason)) {
-			throw new HttpError(409, REFUSAL[run.stopReason ?? ""] ?? "that run reached a verdict on its objective and cannot be continued");
-		}
+		const refusal = continueRefusal(run);
+		if (refusal) throw new HttpError(409, refusal);
 
 		const body = (await c.req.json().catch(() => ({}))) as {
 			maxIterations?: number;
@@ -106,26 +150,11 @@ export function registerLoopContinueRoutes(router: Hono<{ Bindings: Env }>): voi
 		// The stopped run's own ceiling is the DEFAULT, not a floor to add to. "Grant more
 		// iterations" is what the owner asks for by naming a number; pressing Continue with an
 		// empty body asks for another run of the same size, which is the conservative reading and
-		// the one that cannot surprise an account's spend. Clamped by the same per-account ceiling
-		// `POST /:id/loop` uses (#477) — a continue must not be a way around it.
-		// …and the instance's floor and ceiling (#820). A continue is the path most likely to be
-		// pressed with an empty body, which inherits the stopped run's own ceiling — and if that run
-		// was one of the 10-iteration runs the floor exists to prevent, continuing it without the
-		// clamp would grant another 10 and reproduce exactly the stall being continued past.
-		const accountCeiling = (await resolveAccountCeilings(c.env, session.uid)).loopMaxIterations;
-		const limits = await readLoopLimits(c.env, instanceId, session.uid).catch(() => ({}));
-		const maxIterations = clampIterations(
-			sanitizeMaxIterations(body.maxIterations ?? run.maxIterations, accountCeiling),
-			limits,
-			accountCeiling,
-		);
-
-		// The repo the stopped run was on, so a multi-repo Coder continues the right checkout
-		// rather than `repos[0]` (#374). Null for a chat run, which has no session and no repo —
-		// the chat driver ignores `repoId`, so a chat loop continues correctly by doing nothing
-		// special here. A session that has since been deleted also lands on undefined, which
-		// degrades to "you pick" rather than to a failure.
-		const repoId = run.sessionId ? (await getSession(c.env, instanceId, session.uid, run.sessionId).catch(() => null))?.repoId : undefined;
+		// the one that cannot surprise an account's spend. The two clamps, and why each is there,
+		// are on {@link continueCeiling} — which the preview calls too, so the number the owner is
+		// shown is the number they get.
+		const maxIterations = await continueCeiling(c.env, session.uid, instanceId, run, body.maxIterations);
+		const repoId = await continueRepoId(c.env, instanceId, session.uid, run);
 
 		const budget = await openBudget(c.env, session.uid, instanceId, body.budget);
 		const caps = await capabilitiesForInstance(c.env, instanceId, session.uid).catch(() => null);
@@ -150,5 +179,80 @@ export function registerLoopContinueRoutes(router: Hono<{ Bindings: Env }>): voi
 			{ runId: started.runId, driver: started.driver, budgetId: budget.id, maxIterations, status: "running", continuedFromRunId: run.runId },
 			201,
 		);
+	});
+
+	/**
+	 * What a Continue on this run would carry forward — read-only, spends nothing (#806 item 2).
+	 *
+	 * A GET beside the POST rather than a `dryRun` flag on it. The POST's preview question is
+	 * "would this be refused, and how big would it be", which a dry run answers; this one is "what
+	 * would the new run KNOW", which needs two reads the POST does not make (the resume checkpoint
+	 * and the checkout) and which an owner wants repeatedly while deciding. A read with no body is
+	 * also the shape a console can poll and a cache can hold, and neither is true of a POST.
+	 *
+	 * 200 even when the run cannot be continued. The refusal is the ANSWER to "what would happen",
+	 * not a failure of the question — and an owner reading why Continue is not offered is exactly
+	 * the person this surface is for. The POST still refuses with 409; the two agree because they
+	 * call the same {@link continueRefusal}.
+	 */
+	router.get("/:id/loop/:runId/continue-preview", async (c) => {
+		const session = await requireUser(c);
+		const instanceId = c.req.param("id");
+		await requireOwnedInstance(c.env, instanceId, session.uid);
+		const runId = c.req.param("runId");
+
+		// Same instance guard as the POST, for the same reason: `getLoopRun` is user-scoped but not
+		// instance-scoped, and one agent's run must not be readable through another agent's URL.
+		const run = await getLoopRun(c.env, session.uid, runId);
+		if (!run || run.instanceId !== instanceId) throw new HttpError(404, "loop run not found");
+
+		const refusal = continueRefusal(run);
+		const maxIterations = await continueCeiling(c.env, session.uid, instanceId, run);
+		const repoId = await continueRepoId(c.env, instanceId, session.uid, run);
+
+		// The checkout, best effort. `getBoundRunnerConn` honours the instance's "Runs on" pin, so
+		// the machine probed is the one a continue would actually run on (#691). A missing runner
+		// is the EXPECTED case for this surface — item 4 is an owner checking back the next
+		// morning — so it is reported as unknown rather than swallowed into a zero.
+		const repo = repoId ? await getRepo(c.env, instanceId, session.uid, repoId).catch(() => null) : null;
+		const conn = repo ? await getBoundRunnerConn(c.env, instanceId, session.uid).catch(() => null) : null;
+		const state = conn && repo ? await readRepoWorkingState(conn, { repo, sessionId: run.sessionId }).catch(() => null) : null;
+		const tree: { files: number | null; read: WorkingTreeRead } = state
+			? { files: state.changedFiles, read: "read" }
+			: { files: null, read: "unavailable" };
+
+		// THE SAME CALL THE RUN MAKES. `pendingCodingResumeNote` is a projection of this, so the
+		// `note` below is the text the successor would be handed, not a reconstruction of it — and
+		// the lookback is the continue's, or the preview would report "nothing carries forward" for
+		// every run older than six hours while the button it describes would have found one.
+		//
+		// `uncommittedFiles` is the count we just read, or 0 when we could not read it — which is
+		// exactly what the workflow passes on its own failed read (`repoState?.changedFiles ?? 0`),
+		// so an unreadable tree produces the same note in both places rather than two different ones.
+		const checkpoint = run.sessionId
+			? await pendingCodingResumeCheckpoint(c.env, {
+					userId: session.uid,
+					instanceId,
+					sessionId: run.sessionId,
+					uncommittedFiles: state?.changedFiles ?? 0,
+					lookbackMs: CONTINUE_RESUME_LOOKBACK_MS,
+				})
+			: null;
+
+		const briefing = continueBriefingPreview(run.runId, checkpoint, tree);
+		return c.json({
+			runId: run.runId,
+			objective: run.objective,
+			status: run.status,
+			stopReason: run.stopReason,
+			detail: run.detail,
+			iteration: run.iteration,
+			canContinue: refusal === null,
+			refusal,
+			maxIterations,
+			repoId: repoId ?? null,
+			briefing,
+			summary: continueBriefingSentence(briefing),
+		});
 	});
 }

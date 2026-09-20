@@ -13,7 +13,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import { CONTINUE_RESUME_LOOKBACK_MS } from "./agent-loop-store.js";
-import { pendingCodingResumeNote } from "./coding-resume-note.js";
+import { pendingCodingResumeCheckpoint, pendingCodingResumeNote } from "./coding-resume-note.js";
 import type { Env } from "../types.js";
 
 const NOW = 1_800_000_000_000;
@@ -183,5 +183,76 @@ describe("a CONTINUE reaches further back for its predecessor", () => {
 		const params = { userId: "u1", instanceId: "inst-1", sessionId: "s2" };
 		expect(await pendingCodingResumeNote(env, params, NOW)).toContain("used up its step limit");
 		expect(await pendingCodingResumeNote(env, params, NOW + 7 * 60 * MIN)).toBeNull();
+	});
+});
+
+/**
+ * The checkpoint the REVIEW surface reads (#806 item 2), against the same real schema.
+ *
+ * `pendingCodingResumeNote` is now a projection of `pendingCodingResumeCheckpoint`, and that is
+ * the property worth holding: the page an owner reads before pressing Continue must describe the
+ * briefing the run will actually receive, not a second estimate of it. Two computations of "what
+ * carries forward" is how a surface comes to promise work the run then re-does — which is #806's
+ * opening complaint, arrived at from the other direction.
+ */
+describe("the checkpoint behind the note (#806 item 2)", () => {
+	it("reports WHICH run the briefing is about, not just the prose", async () => {
+		// The fact the note cannot carry and the console cannot derive: an owner looking at run A
+		// needs to know whether the briefing is A's.
+		session("s2", "repo-r", "active");
+		const cp = await pendingCodingResumeCheckpoint(env, { userId: "u1", instanceId: "inst-1", sessionId: "s2" }, NOW);
+		expect(cp?.predecessorRunId).toBe("run-a");
+		expect(cp?.predecessorSessionId).toBe("s1");
+		expect(cp?.endedBy).toBe("max_iterations");
+		expect(cp?.landed.map((a) => a.summary)).toEqual(["pushed directly to the trunk origin main"]);
+	});
+
+	it("its note is EXACTLY what the projection returns — one computation, not two", async () => {
+		session("s2", "repo-r", "active");
+		const params = { userId: "u1", instanceId: "inst-1", sessionId: "s2" };
+		const cp = await pendingCodingResumeCheckpoint(env, params, NOW);
+		expect(cp?.note).toBe(await pendingCodingResumeNote(env, params, NOW));
+	});
+
+	it("carries the uncommitted count into its note, the same as the run would be given", async () => {
+		// Slice (iii): a dirty tree changes what the note says. The preview reads the tree itself
+		// and passes the count here, so the text it shows is the text the run gets.
+		session("s2", "repo-r", "active");
+		const cp = await pendingCodingResumeCheckpoint(env, { userId: "u1", instanceId: "inst-1", sessionId: "s2", uncommittedFiles: 4 }, NOW);
+		expect(cp?.uncommittedFiles).toBe(4);
+		expect(cp?.note).toContain("4 uncommitted files");
+	});
+
+	it("returns a checkpoint with a NULL note when the predecessor left nothing worth saying", async () => {
+		// The state the projection cannot express. Run C is unfinished and resumable but landed
+		// nothing, and the tree is clean — so there is no briefing, yet there IS a predecessor.
+		// "No predecessor" and "a predecessor that had not done anything yet" are different things
+		// for an owner to read, and only the checkpoint can tell them apart.
+		repo("repo-quiet");
+		session("s-quiet", "repo-quiet", "error");
+		run("run-c", "s-quiet", { startedAt: NOW - 50 * MIN, finishedAt: NOW - 40 * MIN, stopReason: "max_iterations" });
+		session("s-quiet-2", "repo-quiet", "active");
+		const params = { userId: "u1", instanceId: "inst-1", sessionId: "s-quiet-2" };
+		const cp = await pendingCodingResumeCheckpoint(env, params, NOW);
+		expect(cp, "the row is real — only its note is empty").not.toBeNull();
+		expect(cp?.predecessorRunId).toBe("run-c");
+		expect(cp?.note).toBeNull();
+		expect(await pendingCodingResumeNote(env, params, NOW), "the projection collapses both to null").toBeNull();
+	});
+
+	it("is null outright when a verdict run ended the note's job", async () => {
+		session("s2", "repo-r", "ended");
+		run("run-b", "s2", { startedAt: NOW - 20 * MIN, finishedAt: NOW - 5 * MIN, stopReason: "done" });
+		session("s4", "repo-r", "active");
+		expect(await pendingCodingResumeCheckpoint(env, { userId: "u1", instanceId: "inst-1", sessionId: "s4" }, NOW)).toBeNull();
+	});
+
+	it("honours the continue lookback, so the review surface and the button agree", async () => {
+		session("s2", "repo-r", "active");
+		const params = { userId: "u1", instanceId: "inst-1", sessionId: "s2" };
+		const nextMorning = NOW + 14 * 60 * MIN;
+		expect(await pendingCodingResumeCheckpoint(env, params, nextMorning)).toBeNull();
+		const cp = await pendingCodingResumeCheckpoint(env, { ...params, lookbackMs: CONTINUE_RESUME_LOOKBACK_MS }, nextMorning);
+		expect(cp?.predecessorRunId).toBe("run-a");
 	});
 });

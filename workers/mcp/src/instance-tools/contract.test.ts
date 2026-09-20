@@ -454,6 +454,7 @@ const TABLE: Record<string, Row> = {
 	],
 	start_instance_loop: ["composition", "write", null, "envelope", "dry_run,instance_id,max_iterations,objective,token"],
 	continue_instance_run: ["composition", "write", null, "envelope", "dry_run,instance_id,max_iterations,run_id,token"],
+	preview_instance_run_continue: ["composition", "read", null, null, "instance_id,run_id,token"],
 	stop_instance_loop: ["composition", "write", null, null, "instance_id,run_id,token"],
 	subscribe_agent: ["base", "write", null, "envelope", "agent_id,dry_run,idempotency_key,token"],
 	system_status: ["coding", "none", null, null, "instance_id,token"],
