@@ -8190,7 +8190,8 @@ paths:
         already landed. It is not a resumed invocation: a finished run has no live workflow to
         grant steps to, and the platform checkpoints the OBJECTIVE rather than the transcript.
         The continuity is the resume note, composed at the start of the new run from the acts
-        the old one left on the record and the state of the working tree.
+        the old one left on the record, the state of the working tree, and the notes the stopped
+        run's Pilot wrote to itself as it worked — quoted as its words, not asserted as facts.
 
         Only for a run that ended WITHOUT reaching a verdict on its objective — `interrupted`,
         `max_iterations`, `engine_limit`, `provider_credit`. Anything else is a 409 naming what
@@ -8220,6 +8221,14 @@ paths:
                   description: >
                     Steps the new run may take. Omit to reuse the stopped run's own cap. Clamped
                     to the account ceiling, so a continue is not a way around it.
+                note:
+                  type: string
+                  description: >
+                    What the owner knows now that the stopped run did not — a course correction,
+                    new information, a ticket update. Appended to the objective, labelled as the
+                    owner's later addition, so it holds for the whole run and is inherited by a
+                    further continue. The objective and the note share 2000 characters; a note
+                    that does not fit is a 400, never truncated.
                 budget:
                   type: object
                   properties:
@@ -8242,6 +8251,14 @@ paths:
                   continuedFromRunId:
                     type: string
                     description: The stopped run this one carries the objective of.
+                  noteAdded:
+                    type: boolean
+                    description: Whether a `note` was appended to the objective.
+        "400":
+          description: The `note` does not fit beside the objective; the message says how much room there is.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
@@ -8332,6 +8349,14 @@ paths:
                         description: Attempted, outcome never observed. Counted, never asserted as done.
                       uncommittedFiles: { type: integer, nullable: true }
                       workingTree: { type: string, enum: [read, unavailable] }
+                      learned:
+                        type: array
+                        items: { type: string }
+                        description: >
+                          What the stopped run's Pilot recorded as it worked, oldest first, in its
+                          own words — what it had worked out and where it had got to. Its claims at
+                          the time, not facts the platform checked. The new run is handed the newest
+                          of them; this lists all. Empty when the run recorded none.
                       caveat: { type: string, nullable: true }
                       note: { type: string, nullable: true }
         "401": { $ref: "#/components/responses/Unauthorized" }

@@ -92,6 +92,7 @@ const checkpoint = {
 	landed: [{ instanceId: "i1", kind: "push.trunk", summary: "pushed 3 commits to main", ok: true }],
 	unobserved: [],
 	uncommittedFiles: 0,
+	learned: [] as string[],
 	note: "PLATFORM NOTE (not from the human): a previous run …",
 };
 
@@ -143,6 +144,13 @@ describe("the two reads that make the preview the truth rather than an estimate"
 			expect.anything(),
 			expect.objectContaining({ sessionId: "csess_a", lookbackMs: CONTINUE_RESUME_LOOKBACK_MS }),
 		);
+	});
+
+	it("shows the stopped Pilot's own notes from the SAME checkpoint the run is briefed from (#822, #806)", async () => {
+		pendingCodingResumeCheckpoint.mockResolvedValue({ ...checkpoint, learned: ["Fix written, tests green. Next: rebase and push."] });
+		const body = (await (await get("/i1/loop/run-1/continue-preview")).json()) as { summary: string; briefing: { learned: string[] } };
+		expect(body.briefing.learned).toEqual(["Fix written, tests green. Next: rebase and push."]);
+		expect(body.summary).toContain("the note its Pilot wrote to itself as it worked");
 	});
 
 	it("threads the uncommitted count INTO the checkpoint, so the previewed note is the real note", async () => {

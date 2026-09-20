@@ -47,7 +47,7 @@ vi.mock("../lib/agent-capabilities.js", () => ({ capabilitiesForInstance: (...a:
 vi.mock("../lib/loop-drivers.js", () => ({ loopDriverFor: () => ({ id: "coding", label: "x", start }) }));
 vi.mock("./instances-runtime.js", () => ({ requireOwnedInstance: (...a: unknown[]) => requireOwnedInstance(...a) }));
 
-const { registerLoopContinueRoutes } = await import("./loop-continue-routes.js");
+const { registerLoopContinueRoutes, continueObjective, OWNER_NOTE_LEAD } = await import("./loop-continue-routes.js");
 
 function app() {
 	const router = new Hono<{ Bindings: Env }>();
@@ -96,6 +96,7 @@ describe("the happy path", () => {
 			status: "running",
 			// The lineage is reported so a caller can tell a continue's run from a fresh one.
 			continuedFromRunId: "run-1",
+			noteAdded: false,
 		});
 		expect(start.mock.calls[0][0]).toMatchObject({ instanceId: "i1", userId: "u1", objective: "finish the migration", depth: 0 });
 	});
@@ -125,6 +126,53 @@ describe("the happy path", () => {
 		await post("/i1/loop/run-1/continue", {});
 		expect(getSession).not.toHaveBeenCalled();
 		expect(start.mock.calls[0][0].repoId).toBeUndefined();
+	});
+});
+
+describe("resuming WITH what the owner knows now (#806 item 3(b))", () => {
+	it("appends the owner's note to the objective — verbatim objective first, the addition labelled as theirs and as later", async () => {
+		const res = await post("/i1/loop/run-1/continue", { note: "  The schema moved to 0052 — rebase first.  " });
+		expect(res.status).toBe(201);
+		expect(((await res.json()) as { noteAdded: boolean }).noteAdded).toBe(true);
+		expect(start.mock.calls[0][0].objective).toBe(`finish the migration\n\n${OWNER_NOTE_LEAD} The schema moved to 0052 — rebase first.`);
+	});
+
+	it("rides in the OBJECTIVE, so a continue of the continue inherits it and can add another", async () => {
+		const first = continueObjective("finish the migration", "rebase first");
+		const second = continueObjective(first, "and skip the seed step");
+		expect(second.startsWith(first)).toBe(true);
+		expect(second.split(OWNER_NOTE_LEAD)).toHaveLength(3);
+	});
+
+	it.each([undefined, "", "   \n ", 42, null])("leaves the objective byte-identical for a note of %j", (note) => {
+		expect(continueObjective("finish the migration", note)).toBe("finish the migration");
+	});
+
+	it("REFUSES a note that does not fit rather than cutting it — and opens no budget for the refusal", async () => {
+		getLoopRun.mockResolvedValue({ ...stoppedRun, objective: "x".repeat(1900) });
+		const res = await post("/i1/loop/run-1/continue", { note: "y".repeat(200) });
+		expect(res.status).toBe(400);
+		expect(((await res.json()) as { error: string }).error).toMatch(/note too long .* leaves \d+ for the note/);
+		expect(openBudget).not.toHaveBeenCalled();
+		expect(start).not.toHaveBeenCalled();
+	});
+
+	it("tells the owner the room that is actually there — a note of exactly that size fits", () => {
+		const objective = "x".repeat(1900);
+		let room = 0;
+		try {
+			continueObjective(objective, "y".repeat(500));
+		} catch (e) {
+			room = Number(/leaves (\d+)/.exec((e as Error).message)?.[1]);
+		}
+		expect(room).toBeGreaterThan(0);
+		expect(continueObjective(objective, "y".repeat(room))).toHaveLength(2000);
+		expect(() => continueObjective(objective, "y".repeat(room + 1))).toThrow(/note too long/);
+	});
+
+	it("still refuses a run that reached a verdict, note or no note", async () => {
+		getLoopRun.mockResolvedValue({ ...stoppedRun, stopReason: "done", status: "done" });
+		expect((await post("/i1/loop/run-1/continue", { note: "try again" })).status).toBe(409);
 	});
 });
 

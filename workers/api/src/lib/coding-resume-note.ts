@@ -52,6 +52,23 @@
 // build on it, never discard it. A REPAIR run (#804) is handed zero by the workflow: its brief
 // already carries the tree's state in its own words, and exists to deal with exactly that tree.
 //
+// ── The Pilot's own notes ARE on the record now (#822 → #806 items 1, 2 and 3(b))
+//
+// Everything above about the plan dying with the invocation was true when it was written, and
+// #822 changed one fact under it: a Pilot now records what it `learned` as it goes, and each of
+// those is a `brain` row on the session's timeline (`LEARNED_PREFIX`). They were added so the
+// Pilot could remember across its OWN steps; they are also, exactly, the part of a stopped run's
+// reasoning that survives it — what it had worked out, where it had got to, and very often what it
+// meant to do next, in its own words. So the successor is handed them. This is still option (b):
+// nothing new is written, no transcript is kept, and the checkpoint is still COMPOSED at the next
+// start from rows that already exist.
+//
+// They are QUOTED, never adopted. "What remains" is still not a claim the platform makes — a note
+// that says "next: rebase and push" is the stopped Pilot's intention at the moment it wrote it, not
+// a fact about the repository now, and the note says so in as many words. Read by the predecessor's
+// own session and run window, the same way its acts are (#809), so a human-opened session shared by
+// several runs hands over only the stopped run's notes.
+//
 // ── ok:true / ok:false / ok:null are three different claims (#594)
 //
 // The dangerous sentence here is "this is already done" about something that is not. So only acts
@@ -61,6 +78,7 @@
 // Collapsing the third into either of the others is exactly the inversion #594 was filed about.
 
 import { lastUnfinishedRunForRepo, type ResumableStopReason } from "./agent-loop-store.js";
+import { LEARNED_MAX, LEARNED_PREFIX } from "./coding-loop.js";
 import { type ActItem, actsInWindow } from "./instance-work.js";
 import type { Env } from "../types.js";
 
@@ -76,6 +94,16 @@ export const MAX_LISTED_ACTS = 8;
 
 /** Per-act cap. `toActItem` already clamps a summary to 200; this is the prompt's own budget. */
 export const MAX_ACT_CHARS = 120;
+
+/**
+ * How many of the stopped Pilot's own notes are handed over — the NEWEST ones (#806).
+ *
+ * Newest, because a Pilot's notes converge on where it had got to: the last few are the state it
+ * stopped in, and the first few are what it learned while still finding its feet. Bounded for the
+ * same reason as {@link MAX_LISTED_ACTS} — at `LEARNED_MAX` characters each this is at most ~3,600
+ * characters in a prompt that is re-sent on every step of the round.
+ */
+export const MAX_LEARNED_NOTES = 12;
 
 /**
  * How the note opens, per the way the predecessor ended.
@@ -133,10 +161,15 @@ export function splitActs(acts: ReadonlyArray<ActItem>): { landed: ActItem[]; un
  * verdict — comes from the recorded stop reason and is stated in this file's own words
  * ({@link PREDECESSOR_ENDING}).
  */
-export function codingResumeNote(acts: ReadonlyArray<ActItem>, endedBy: ResumableStopReason, uncommittedFiles = 0): string | null {
+export function codingResumeNote(
+	acts: ReadonlyArray<ActItem>,
+	endedBy: ResumableStopReason,
+	uncommittedFiles = 0,
+	learned: ReadonlyArray<string> = [],
+): string | null {
 	const { landed, unobserved } = splitActs(acts);
 	const onRecord = landed.length > 0 || unobserved.length > 0;
-	if (!onRecord && uncommittedFiles <= 0) return null;
+	if (!onRecord && uncommittedFiles <= 0 && learned.length === 0) return null;
 
 	const lines: string[] = [
 		onRecord
@@ -166,6 +199,18 @@ export function codingResumeNote(acts: ReadonlyArray<ActItem>, endedBy: Resumabl
 		lines.push(
 			`The working tree holds ${uncommittedFiles} uncommitted file${uncommittedFiles === 1 ? "" : "s"} right now. The platform did not see who wrote ${uncommittedFiles === 1 ? "it" : "them"}, but ${uncommittedFiles === 1 ? "it" : "they"} may be that run's unfinished work: READ the diff before you write anything, and build on it if it serves your objective rather than writing the same change again. Do NOT discard it.`,
 		);
+	}
+
+	if (learned.length) {
+		// QUOTED, in the stopped Pilot's voice, and dated to when they were written (#806). The one
+		// thing this must not become is the platform asserting a plan: an intention recorded before
+		// the run stopped is not a fact about the repository the successor is standing in.
+		const shown = learned.slice(-MAX_LEARNED_NOTES);
+		const earlier = learned.length - shown.length;
+		lines.push(
+			`That run's Pilot wrote these notes to itself as it worked, oldest first${earlier > 0 ? ` (the last ${shown.length} of ${learned.length})` : ""}. They are ITS words, not something the platform checked: each was true when it was written, and the repository may have moved since. Use them so you do not re-derive what it had already worked out, and verify any one you are about to rely on:`,
+		);
+		for (const note of shown) lines.push(`- ${truncate(note, LEARNED_MAX)}`);
 	}
 
 	lines.push(
@@ -247,8 +292,40 @@ export interface ResumeCheckpoint {
 	unobserved: ActItem[];
 	/** What the caller told us was sitting uncommitted; zero is a clean tree or an unknown one. */
 	uncommittedFiles: number;
+	/**
+	 * Everything the stopped run's Pilot recorded as `learned`, oldest first, without the prefix (#806).
+	 * All of them: the note carries only the newest {@link MAX_LEARNED_NOTES}, the review surface may show more.
+	 */
+	learned: string[];
 	/** Exactly the text the successor is given, or null when there is nothing worth saying. */
 	note: string | null;
+}
+
+/** Read cap for one run's notes. A 50-step run writing one per step fits; nothing sane exceeds it. */
+const LEARNED_READ_LIMIT = 100;
+
+/**
+ * What one run's Pilot recorded as `learned`, oldest first, prefix stripped (#822, #806).
+ *
+ * By SESSION and by the run's own interval, like its acts (#809): a session a human opened outlives
+ * its runs, so the session alone would hand run B the notes of a run A that reached its verdict.
+ * `coding_timeline.created_at` is SQLite's `datetime('now')` — UTC, whole seconds — while a run's
+ * bounds are milliseconds, so a note written in the run's first second is stamped BEFORE its start.
+ * The window is therefore widened to the second on both sides: losing a note to a rounding edge is
+ * the failure, and one extra from a neighbouring second is not one.
+ */
+export async function learnedInWindow(env: Env, sessionId: string | null, fromMs: number, toMs: number): Promise<string[]> {
+	if (!sessionId) return [];
+	const res = await env.DB.prepare(
+		`SELECT content FROM coding_timeline
+		  WHERE session_id = ?1 AND type = 'brain' AND substr(content, 1, ?5) = ?4
+		    AND created_at >= datetime(?2, 'unixepoch') AND created_at <= datetime(?3, 'unixepoch')
+		  ORDER BY seq DESC LIMIT ?6`,
+	)
+		.bind(sessionId, Math.floor(fromMs / 1000), Math.ceil(toMs / 1000), LEARNED_PREFIX, LEARNED_PREFIX.length, LEARNED_READ_LIMIT)
+		.all<{ content: string }>();
+	// Newest-first from the query so the cap drops the OLDEST; handed back oldest-first, as written.
+	return (res.results ?? []).reverse().map((r) => r.content.slice(LEARNED_PREFIX.length).trim()).filter(Boolean);
 }
 
 export async function pendingCodingResumeCheckpoint(
@@ -262,6 +339,9 @@ export async function pendingCodingResumeCheckpoint(
 		// That run's OWN session over the interval it drove it (#809) — not `params.sessionId`, which since
 		// #806 is usually a different, later session of the same repo.
 		const acts = await actsInWindow(env, params.userId, params.instanceId, prev.sessionId, prev.startedAt, prev.finishedAt ?? now, 100);
+		// Its own failure costs the notes, not the acts: what LANDED is the half a successor must not
+		// lose, and the notes are an improvement to a briefing that is otherwise whole.
+		const learned = await learnedInWindow(env, prev.sessionId, prev.startedAt, prev.finishedAt ?? now).catch(() => []);
 		const uncommittedFiles = params.uncommittedFiles ?? 0;
 		const { landed, unobserved } = splitActs(acts);
 		return {
@@ -271,7 +351,8 @@ export async function pendingCodingResumeCheckpoint(
 			landed,
 			unobserved,
 			uncommittedFiles,
-			note: codingResumeNote(acts, prev.stopReason, uncommittedFiles),
+			learned,
+			note: codingResumeNote(acts, prev.stopReason, uncommittedFiles, learned),
 		};
 	} catch {
 		// The briefing is lost, the run is not. `api()`-side errors are already filed durably by the

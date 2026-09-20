@@ -398,18 +398,19 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 
 	server.tool(
 		"continue_instance_run",
-		"Carry a STOPPED run's objective onto a fresh run, briefed on what the stopped one already landed. Only for a run that ended WITHOUT a verdict — `interrupted`, `max_iterations`, `engine_limit`, `provider_credit`; anything else is refused, naming what to do instead. It reuses the stopped run's repository and step cap (pass `max_iterations` to grant more), opens its own budget, and reaches further back for its predecessor than an ordinary start, so continuing the next morning still works. Read a run first with check_instance_loop.",
+		"Carry a STOPPED run's objective onto a fresh run, briefed on what the stopped one already landed and on the notes its Pilot wrote to itself as it worked. Only for a run that ended WITHOUT a verdict — `interrupted`, `max_iterations`, `engine_limit`, `provider_credit`; anything else is refused, naming what to do instead. It reuses the stopped run's repository and step cap (pass `max_iterations` to grant more), opens its own budget, and reaches further back for its predecessor than an ordinary start, so continuing the next morning still works. Pass `note` to add what you know now that the run did not — a course correction, new information, a ticket update — without retyping the objective. Read a run first with check_instance_loop, and what would carry over with preview_instance_run_continue.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
 			run_id: z.string().describe("The stopped run to continue, from check_instance_loop."),
 			max_iterations: z.coerce.number().optional().describe("Steps the new run may take. Omit to reuse the stopped run's own cap (max 50)."),
+			note: z.string().optional().describe("Added to the objective as the owner's later instruction, so it holds for the whole run. The objective and the note share 2000 characters; one that does not fit is refused, not cut."),
 			dry_run: z.boolean().optional().describe("Report the run that would be started, without starting it."),
 		},
-		async ({ token, instance_id, run_id, max_iterations, dry_run }) => {
+		async ({ token, instance_id, run_id, max_iterations, note, dry_run }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const input = { instance_id, run_id, max_iterations };
+			const input = { instance_id, run_id, max_iterations, note };
 			const denied = await requirePermission(safetyFor(token), "write", "continue_instance_run", input);
 			if (denied) return denied;
 			if (dry_run) {
@@ -419,14 +420,14 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 				return dryRun(safetyFor(token), "continue_instance_run", "start a fresh run on a stopped run's objective", input, {
 					endpoint: `/v1/instances/${instance_id}/loop/${run_id}/continue`,
 					method: "POST",
-					effect: `${instance_id} would start a NEW run on ${run_id}'s objective${max_iterations === undefined ? ", with that run's own step cap" : `, for up to ${max_iterations} steps`}. The stopped run is not reanimated.`,
+					effect: `${instance_id} would start a NEW run on ${run_id}'s objective${max_iterations === undefined ? ", with that run's own step cap" : `, for up to ${max_iterations} steps`}${note?.trim() ? ", with your note appended to the objective" : ""}. The stopped run is not reanimated.`,
 					spend: "A new budget is opened — the stopped run's is not inherited. Each step spends the instance's own AI budget.",
 				});
 			}
 			const data = await authedCall(
 				`/v1/instances/${encodeURIComponent(instance_id)}/loop/${encodeURIComponent(run_id)}/continue`,
 				sessionToken,
-				{ method: "POST", body: JSON.stringify({ maxIterations: max_iterations }) },
+				{ method: "POST", body: JSON.stringify({ maxIterations: max_iterations, note }) },
 				env,
 			);
 			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "continue_instance_run", action: "completed", input, result: { ok: true } });
@@ -436,7 +437,7 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 
 	server.tool(
 		"preview_instance_run_continue",
-		"What continuing a STOPPED run would actually carry forward, before spending anything on it (#806). Answers with `briefing.kind`: `this-run` (the new run is told what THIS run landed), `other-run` (a more recent stopped run on the same repo is the predecessor, so the briefing is that one's), or `none` (nothing carries forward — a later run reached a verdict, or nothing landed and the tree is clean — so continuing is a restart on the bare objective with a fresh budget). Also gives the exact `briefing.note` the new run would be handed, the landed actions, how many files sit uncommitted, and the step ceiling the continue would grant. `briefing.uncommittedFiles` is null when the runner is offline: that is 'we could not look', never 'the tree is clean'. A run that CANNOT be continued still answers 200, with `canContinue:false` and `refusal` naming what to do instead. Read this before continue_instance_run.",
+		"What continuing a STOPPED run would actually carry forward, before spending anything on it (#806). Answers with `briefing.kind`: `this-run` (the new run is told what THIS run landed), `other-run` (a more recent stopped run on the same repo is the predecessor, so the briefing is that one's), or `none` (nothing carries forward — a later run reached a verdict, or nothing landed and the tree is clean — so continuing is a restart on the bare objective with a fresh budget). Also gives the exact `briefing.note` the new run would be handed, the landed actions, `briefing.learned` (what the stopped run's Pilot recorded as it worked, in its own words — what it had worked out and where it had got to; its claims at the time, not checked facts), how many files sit uncommitted, and the step ceiling the continue would grant. `briefing.uncommittedFiles` is null when the runner is offline: that is 'we could not look', never 'the tree is clean'. A run that CANNOT be continued still answers 200, with `canContinue:false` and `refusal` naming what to do instead. Read this before continue_instance_run.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),

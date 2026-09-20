@@ -71,6 +71,8 @@ export interface ContinuePreview {
 		unobserved: number;
 		uncommittedFiles: number | null;
 		workingTree: "read" | "unavailable";
+		/** The stopped Pilot's own notes, oldest first. Optional: an API older than #806's last slice omits it. */
+		learned?: string[];
 		caveat: string | null;
 		note: string | null;
 	};
@@ -97,9 +99,29 @@ export function previewLines(p: ContinuePreview): string[] {
 	if (p.briefing.landedOverflow > 0) {
 		lines.push(`· …and ${p.briefing.landedOverflow} more`);
 	}
+	// The stopped run's own account of where it had got to (#806 item 2's "what it was mid-way
+	// through"). Quoted and attributed: these are the Pilot's claims at the time, and a panel that
+	// listed them bare beside the landed acts would present an intention as a fact on the record.
+	const learned = p.briefing.learned ?? [];
+	if (learned.length > 0) {
+		lines.push("What the run noted to itself as it worked — its own words, not checked:");
+		for (const note of learned) lines.push(`“${note}”`);
+	}
 	if (p.briefing.caveat) lines.push(p.briefing.caveat);
 	// Only when it can actually be pressed: on a refused run the number describes nothing.
 	if (p.canContinue) lines.push(`Continuing would give the new run up to ${p.maxIterations} steps.`);
 	if (p.refusal) lines.push(`This run cannot be continued: ${p.refusal}`);
 	return lines;
+}
+
+/**
+ * The body a Continue sends (#806 item 3(b)).
+ *
+ * Empty unless the owner typed something: an empty body is "another run of the same size on the
+ * same objective", and a blank `note` key would be a second spelling of that for the server to
+ * agree with. Trimmed here so a textarea holding only a newline is not an instruction.
+ */
+export function continueBody(note: string | undefined): { note?: string } {
+	const text = (note ?? "").trim();
+	return text ? { note: text } : {};
 }

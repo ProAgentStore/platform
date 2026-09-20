@@ -812,6 +812,11 @@ const PINS = {
 	// Seven of the lines are code (the error carried, the throw, the pinned branch's own latch);
 	// the rest say why the order latch → pipeline → registrations must not change.
 	"workers/mcp/src/index.ts": 1039,
+	// First entry, at #806: the 0.1.48 record took it from 786 to 802. Pinned rather than split
+	// because it is an APPEND-ONLY ledger — one hash per published version plus why the surface
+	// moved — and `check-surface-lock.mjs --require-history` reads THIS path's git history to prove
+	// no published entry was edited; moving old entries to a second file would read as deleting them.
+	"workers/mcp/src/surface-lock.ts": 802,
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
@@ -1772,7 +1777,9 @@ const PINS = {
 	// argument is about which surface was BLIND rather than about the code) and these three. The
 	// self-reference is the usual price and is the record: a pin moved without one is a number
 	// nobody can audit later.
-	"scripts/check-file-size.mjs": 1856,
+	// +7 at #806: the first `workers/mcp/src/surface-lock.ts` entry above (four lines of why an
+	// append-only ledger is pinned and not split) and these two.
+	"scripts/check-file-size.mjs": 1863,
 };
 
 /**

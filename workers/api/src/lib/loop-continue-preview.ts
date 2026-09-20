@@ -88,6 +88,15 @@ export interface ContinueBriefingPreview {
 	/** Files uncommitted in the checkout, or null when the tree could not be read. */
 	uncommittedFiles: number | null;
 	workingTree: WorkingTreeRead;
+	/**
+	 * What the stopped run's Pilot recorded as it worked, oldest first, in its own words (#822, #806).
+	 *
+	 * ALL of them, not the newest dozen the note carries: this is the owner's view of what the run
+	 * had worked out and where it had got to — the "why did it stop, what was it mid-way through"
+	 * half of the review — and a page is not a prompt budget. Empty for a run older than #822, or
+	 * one that never recorded anything.
+	 */
+	learned: string[];
 	/** Stated only when {@link workingTree} is `unavailable`. */
 	caveat: string | null;
 	/** The exact text the run would be given, or null when it would be given none. */
@@ -119,6 +128,7 @@ export function continueBriefingPreview(
 			unobserved: 0,
 			uncommittedFiles: tree.files,
 			workingTree: tree.read,
+			learned: [],
 			caveat,
 			note: null,
 		};
@@ -135,6 +145,7 @@ export function continueBriefingPreview(
 		unobserved: checkpoint.unobserved.length,
 		uncommittedFiles: tree.files,
 		workingTree: tree.read,
+		learned: checkpoint.learned,
 		caveat,
 		note: checkpoint.note,
 	};
@@ -162,5 +173,7 @@ export function continueBriefingSentence(p: ContinueBriefingPreview): string {
 	const acts = landed > 0 ? `${landed} action${landed === 1 ? "" : "s"} already landed` : "no landed action";
 	const unobserved = p.unobserved > 0 ? `, plus ${p.unobserved} whose outcome was never observed and which it is told to verify` : "";
 	const whose = p.kind === "this-run" ? "this run" : "a more recent stopped run on the same repository";
-	return `The new run would be told what ${whose} left behind — ${acts}${unobserved}.${dirty}`;
+	// Said only when there are some, so every preview of a run with no notes reads as it did (#806).
+	const notes = p.learned.length > 0 ? `, and the ${p.learned.length === 1 ? "note" : `${p.learned.length} notes`} its Pilot wrote to itself as it worked` : "";
+	return `The new run would be told what ${whose} left behind — ${acts}${unobserved}${notes}.${dirty}`;
 }

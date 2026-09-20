@@ -783,4 +783,19 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.46 is published.
 	"0.1.47": "sha256:6a87a86a34668cbb16c1ae7469c7b1a90159bbd0e36e393e0b5a018ce7c60edd",
+	// 0.1.48 (#806, a continue carries the owner's note): no new tool NAME — 213 registrations,
+	// 189 always-on and 24 gated all stand. One inputSchema moved:
+	//
+	//   * `continue_instance_run` gains optional `note` — what the owner knows now that the stopped
+	//     run did not. The API appends it to the new run's objective (labelled as the owner's later
+	//     addition) rather than delivering it as a one-round hint, so it holds for the whole run and
+	//     a further continue inherits it. Optional, so every existing caller is unaffected.
+	//
+	// `preview_instance_run_continue`'s RESULT gains `briefing.learned` (the stopped Pilot's own
+	// notes, #822). It declares no outputSchema, so that is not part of this fingerprint — recorded
+	// here because it is the half of this change a caller will actually notice. Both tools'
+	// DESCRIPTIONS were reworded for it; descriptions are excluded from the hash.
+	//
+	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.47 is published.
+	"0.1.48": "sha256:db11b200d9aed39745d4ce5754f23b4de0c1d07bd4628010082d3d7f8984f33e",
 };

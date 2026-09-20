@@ -13,6 +13,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import { CONTINUE_RESUME_LOOKBACK_MS } from "./agent-loop-store.js";
+import { LEARNED_PREFIX } from "./coding-loop.js";
 import { pendingCodingResumeCheckpoint, pendingCodingResumeNote } from "./coding-resume-note.js";
 import type { Env } from "../types.js";
 
@@ -49,6 +50,14 @@ function pushAct(id: string, ts: number, sessionId: string, user = "u1") {
 	d1.exec(
 		`INSERT INTO agent_events (id, ts, user_id, instance_id, trace_id, source, event, message, context)
 		  VALUES (${q(id)}, ${ts}, ${q(user)}, 'inst-1', 'sess', 'coding', 'act.consequential', 'pushed directly to the trunk origin main', ${q(context)})`,
+	);
+}
+
+/** A timeline row at a given instant — `created_at` is SQLite's own `datetime`, as `appendTimeline` leaves it. */
+function timeline(sessionId: string, type: string, content: string, atMs: number) {
+	d1.exec(
+		`INSERT INTO coding_timeline (session_id, instance_id, user_id, type, content, created_at)
+		  VALUES (${q(sessionId)}, 'inst-1', 'u1', ${q(type)}, ${q(content)}, datetime(${Math.floor(atMs / 1000)}, 'unixepoch'))`,
 	);
 }
 
@@ -254,5 +263,61 @@ describe("the checkpoint behind the note (#806 item 2)", () => {
 		expect(await pendingCodingResumeCheckpoint(env, params, nextMorning)).toBeNull();
 		const cp = await pendingCodingResumeCheckpoint(env, { ...params, lookbackMs: CONTINUE_RESUME_LOOKBACK_MS }, nextMorning);
 		expect(cp?.predecessorRunId).toBe("run-a");
+	});
+});
+
+describe("the stopped Pilot's own notes carry to its successor (#822 → #806)", () => {
+	const params = { userId: "u1", instanceId: "inst-1", sessionId: "s2" };
+
+	it("run B is handed what run A's Pilot recorded — read from rows that already exist, oldest first", async () => {
+		timeline("s1", "brain", `${LEARNED_PREFIX}Issue wants the retry in relay-client.ts`, NOW - 80 * MIN);
+		timeline("s1", "brain", `${LEARNED_PREFIX}Fix written, tests green. Next: rebase and push.`, NOW - 35 * MIN);
+		session("s2", "repo-r", "active");
+		const cp = await pendingCodingResumeCheckpoint(env, params, NOW);
+		expect(cp?.learned).toEqual(["Issue wants the retry in relay-client.ts", "Fix written, tests green. Next: rebase and push."]);
+		expect(cp?.note).toContain("- Fix written, tests green. Next: rebase and push.");
+		expect(cp?.note).toContain("They are ITS words, not something the platform checked");
+	});
+
+	it("a run that landed NOTHING on a clean tree still briefs its successor when it had worked something out", async () => {
+		d1.exec("DELETE FROM agent_events");
+		session("s2", "repo-r", "active");
+		expect(await pendingCodingResumeNote(env, params, NOW)).toBeNull();
+		timeline("s1", "brain", `${LEARNED_PREFIX}The flaky test is order-dependent, not a race.`, NOW - 40 * MIN);
+		expect(await pendingCodingResumeNote(env, params, NOW)).toContain("- The flaky test is order-dependent, not a race.");
+	});
+
+	it("takes only `learned` rows — not the run's other brain rows, and not the engine's output", async () => {
+		timeline("s1", "brain", "AI run started — objective: Work through the open issues", NOW - 90 * MIN);
+		timeline("s1", "command", `${LEARNED_PREFIX}an instruction that happens to start the same way`, NOW - 50 * MIN);
+		timeline("s1", "terminal", `${LEARNED_PREFIX}terminal text`, NOW - 50 * MIN);
+		session("s2", "repo-r", "active");
+		expect((await pendingCodingResumeCheckpoint(env, params, NOW))?.learned).toEqual([]);
+	});
+
+	it("takes only the STOPPED RUN's notes off a session that outlived several runs", async () => {
+		// A human-opened session: an earlier run on it reached its verdict, and its notes are not
+		// run A's to hand on. Nor is anything written after A stopped.
+		timeline("s1", "brain", `${LEARNED_PREFIX}from an earlier run that finished`, NOW - 200 * MIN);
+		timeline("s1", "brain", `${LEARNED_PREFIX}run A's own`, NOW - 45 * MIN);
+		timeline("s1", "brain", `${LEARNED_PREFIX}written after run A stopped`, NOW - 10 * MIN);
+		session("s2", "repo-r", "active");
+		expect((await pendingCodingResumeCheckpoint(env, params, NOW))?.learned).toEqual(["run A's own"]);
+	});
+
+	it("keeps a note written in the run's FIRST second — the window opens at the second, not after it", async () => {
+		// `created_at` has whole-second resolution and the run's start is in milliseconds: a run that
+		// started at :00.600 and noted something at :00.800 has a row stamped :00, BEFORE its own start.
+		d1.exec(`UPDATE agent_loop_runs SET started_at = ${NOW - 90 * MIN + 600} WHERE run_id = 'run-a'`);
+		timeline("s1", "brain", `${LEARNED_PREFIX}the first thing it worked out`, NOW - 90 * MIN + 800);
+		session("s2", "repo-r", "active");
+		expect((await pendingCodingResumeCheckpoint(env, params, NOW))?.learned).toEqual(["the first thing it worked out"]);
+	});
+
+	it("another session's notes are not this predecessor's", async () => {
+		session("s9", "repo-other", "error");
+		timeline("s9", "brain", `${LEARNED_PREFIX}about a different repository`, NOW - 45 * MIN);
+		session("s2", "repo-r", "active");
+		expect((await pendingCodingResumeCheckpoint(env, params, NOW))?.learned).toEqual([]);
 	});
 });

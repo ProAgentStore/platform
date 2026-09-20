@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { loopStopControl, type LoopPhase } from "../lib/loopStopState";
-import { canContinueRun, previewLines, type ContinuePreview } from "../lib/loopContinue";
+import { canContinueRun, continueBody, previewLines, type ContinuePreview } from "../lib/loopContinue";
 import { activityLabel, isOpen, runActivity, type RunHealth } from "../lib/workInFlight";
 import Button from "../components/Button";
 import Card from "../components/Card";
@@ -153,7 +153,8 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 		setBusy(true);
 		setMsg("");
 		try {
-			await api(`/v1/instances/${instanceId}/loop/${runId}/continue`, { method: "POST", body: "{}" });
+			await api(`/v1/instances/${instanceId}/loop/${runId}/continue`, { method: "POST", body: JSON.stringify(continueBody(notes[runId])) });
+			setNotes(({ [runId]: _sent, ...rest }) => rest);
 			await load();
 		} catch (e) {
 			// The server's refusals NAME what to do instead ("read its outcome first", "run `pags
@@ -176,6 +177,10 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 	 * returns 200 for them and they render as content rather than as an error.
 	 */
 	const [preview, setPreview] = useState<Record<string, ContinuePreview>>({});
+	// What the owner knows now that the stopped run did not (#806 item 3(b)), per run. It lives in
+	// the review panel on purpose: you add a course correction after reading where the run had got
+	// to, and the one-click Continue beside the label stays one click.
+	const [notes, setNotes] = useState<Record<string, string>>({});
 	const [previewing, setPreviewing] = useState<string | null>(null);
 	const showPreview = async (runId: string) => {
 		if (preview[runId]) {
@@ -292,6 +297,17 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 								{previewLines(preview[r.runId]).map((line) => (
 									<div key={line}>{line}</div>
 								))}
+								{preview[r.runId].canContinue && (
+									<textarea
+										aria-label="Add instructions for the continued run"
+										placeholder="Anything it should know now? A correction, new information, a ticket update — added to the objective when you press Continue. Optional."
+										value={notes[r.runId] ?? ""}
+										onChange={(e) => setNotes((n) => ({ ...n, [r.runId]: e.target.value }))}
+										rows={2}
+										maxLength={1500}
+										className="w-full mt-1.5 text-xs bg-paper border border-line rounded-lg px-2.5 py-1.5 resize-none"
+									/>
+								)}
 							</div>
 						)}
 					</div>

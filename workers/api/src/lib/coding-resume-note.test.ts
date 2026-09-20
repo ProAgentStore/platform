@@ -15,7 +15,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { lastUnfinishedRunForRepo, RESUMABLE_STOP_REASONS, type LoopRunRow } from "./agent-loop-store.js";
-import { MAX_ACT_CHARS, MAX_LISTED_ACTS, codingResumeNote } from "./coding-resume-note.js";
+import { MAX_ACT_CHARS, MAX_LEARNED_NOTES, MAX_LISTED_ACTS, codingResumeNote } from "./coding-resume-note.js";
 import type { ActItem } from "./instance-work.js";
 import type { LoopStopReason } from "./agent-loop.js";
 import type { Env } from "../types.js";
@@ -229,6 +229,53 @@ describe("#806 — work the predecessor left uncommitted is not an act, and is s
 	it("says nothing about a clean tree — the note is byte-identical to the one before #806", () => {
 		expect(codingResumeNote([act()], "interrupted", 0)).toBe(codingResumeNote([act()], "interrupted"));
 		expect(codingResumeNote([], "interrupted", 0)).toBeNull();
+	});
+});
+
+describe("#806 — the stopped Pilot's own notes are on the record (#822), so the successor is handed them", () => {
+	const NOTES = ["Issue #150 wants the retry inside relay-client.ts, not the route.", "Fix written in relay-client.ts, tests green. Next: rebase, commit, push."];
+
+	it("briefs a successor whose predecessor landed NOTHING and left a clean tree, but had worked things out", () => {
+		// The run #822 was filed about: steps spent reading, nothing pushed yet. Before this it briefed nobody.
+		expect(codingResumeNote([], "max_iterations")).toBeNull();
+		const note = codingResumeNote([], "max_iterations", 0, NOTES);
+		expect(note).toContain("used up its step limit");
+		expect(note).toContain("nothing it did is on the record as landed");
+		for (const n of NOTES) expect(note).toContain(`- ${n}`);
+	});
+
+	it("QUOTES them as the Pilot's words — never as something the platform checked", () => {
+		const note = codingResumeNote([], "interrupted", 0, NOTES) ?? "";
+		expect(note).toContain("They are ITS words, not something the platform checked");
+		expect(note).toContain("the repository may have moved since");
+		expect(note).toContain("verify any one you are about to rely on");
+		// An intention the run recorded is not work the platform saw land.
+		expect(note).not.toContain("ALREADY landed");
+		expect(note).not.toContain("treat the listed work as done");
+	});
+
+	it("keeps them apart from the landed acts, which ARE asserted", () => {
+		const note = codingResumeNote([act()], "max_iterations", 0, NOTES) ?? "";
+		const lines = note.split("\n");
+		const done = lines.findIndex((l) => l.startsWith("Already done"));
+		const quoted = lines.findIndex((l) => l.startsWith("That run's Pilot wrote these notes"));
+		expect(done).toBeGreaterThan(0);
+		expect(quoted).toBeGreaterThan(done);
+		expect(lines.at(-1)).toContain("treat the listed work as done");
+	});
+
+	it("hands over the NEWEST notes when there are too many — where it had got to, not how it started — and says so", () => {
+		const many = Array.from({ length: MAX_LEARNED_NOTES + 5 }, (_, i) => `note ${i + 1}`);
+		const note = codingResumeNote([], "max_iterations", 0, many) ?? "";
+		expect(note).toContain(`(the last ${MAX_LEARNED_NOTES} of ${many.length})`);
+		expect(note).not.toContain("- note 5\n");
+		expect(note).toContain("- note 6\n");
+		expect(note).toContain(`- note ${many.length}`);
+	});
+
+	it("says nothing about notes when there are none — every earlier note is byte-identical", () => {
+		expect(codingResumeNote([act()], "max_iterations", 2, [])).toBe(codingResumeNote([act()], "max_iterations", 2));
+		expect(codingResumeNote([act()], "max_iterations", 2)).not.toContain("Pilot wrote");
 	});
 });
 

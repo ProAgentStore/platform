@@ -31,6 +31,7 @@ const checkpoint = (over: Partial<ResumeCheckpoint> = {}): ResumeCheckpoint => (
 	landed: [act("pushed 3 commits to main")],
 	unobserved: [],
 	uncommittedFiles: 0,
+	learned: [],
 	note: "PLATFORM NOTE (not from the human): …",
 	...over,
 });
@@ -177,5 +178,36 @@ describe("the sentence the owner reads", () => {
 		expect(p.kind).toBe("this-run");
 		expect(s).toContain("no landed action");
 		expect(s).toContain("3 uncommitted files");
+	});
+});
+
+describe("what the stopped run had worked out (#822 → #806 items 1 and 2)", () => {
+	const NOTES = ["The retry belongs in relay-client.ts.", "Fix written, tests green. Next: rebase and push."];
+
+	it("shows the owner ALL of the Pilot's own notes, oldest first — the page is not a prompt budget", () => {
+		const many = Array.from({ length: 30 }, (_, i) => `note ${i + 1}`);
+		expect(continueBriefingPreview("run-1", checkpoint({ learned: many }), READ).learned).toEqual(many);
+	});
+
+	it("counts them in the headline, as the run's own notes and not as landed work", () => {
+		const s = continueBriefingSentence(continueBriefingPreview("run-1", checkpoint({ learned: NOTES }), READ));
+		expect(s).toContain("1 action already landed, and the 2 notes its Pilot wrote to itself as it worked.");
+		expect(continueBriefingSentence(continueBriefingPreview("run-1", checkpoint({ learned: NOTES.slice(0, 1) }), READ))).toContain("and the note its Pilot wrote");
+	});
+
+	it("a run that landed nothing but had worked things out is NOT `none` — its notes carry", () => {
+		const p = continueBriefingPreview("run-1", checkpoint({ landed: [], learned: NOTES, note: "PLATFORM NOTE …" }), READ);
+		expect(p.kind).toBe("this-run");
+		expect(continueBriefingSentence(p)).toContain("no landed action, and the 2 notes");
+	});
+
+	it("leaves the headline of a run with no notes exactly as it was", () => {
+		expect(continueBriefingSentence(continueBriefingPreview("run-1", checkpoint(), READ))).toBe(
+			"The new run would be told what this run left behind — 1 action already landed.",
+		);
+	});
+
+	it("has no notes to show when there is no checkpoint", () => {
+		expect(continueBriefingPreview("run-1", null, READ).learned).toEqual([]);
 	});
 });

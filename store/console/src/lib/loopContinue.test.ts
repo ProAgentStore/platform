@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { canContinueRun, CONTINUABLE_STOP_REASONS, previewLines, type ContinuePreview } from "./loopContinue";
+import { canContinueRun, CONTINUABLE_STOP_REASONS, continueBody, previewLines, type ContinuePreview } from "./loopContinue";
 
 describe("canContinueRun", () => {
 	it.each(["interrupted", "max_iterations", "engine_limit", "provider_credit"])("offers Continue after %s", (stopReason) => {
@@ -53,28 +53,28 @@ describe("the copy of the server's list", () => {
  * page comes to promise work the run then re-does — #806's own complaint, arrived at from the
  * other direction.
  */
-describe("previewLines — the panel behind the Continue button", () => {
-	const preview = (over: Partial<ContinuePreview> = {}, briefing: Partial<ContinuePreview["briefing"]> = {}): ContinuePreview => ({
-		runId: "run-1",
-		canContinue: true,
-		refusal: null,
-		maxIterations: 20,
-		summary: "The new run would be told what this run left behind — 2 actions already landed.",
-		...over,
-		briefing: {
-			kind: "this-run",
-			predecessorRunId: "run-1",
-			landed: ["pushed 3 commits to main", "opened PR #12"],
-			landedOverflow: 0,
-			unobserved: 0,
-			uncommittedFiles: 0,
-			workingTree: "read",
-			caveat: null,
-			note: "PLATFORM NOTE …",
-			...briefing,
-		},
-	});
+const preview = (over: Partial<ContinuePreview> = {}, briefing: Partial<ContinuePreview["briefing"]> = {}): ContinuePreview => ({
+	runId: "run-1",
+	canContinue: true,
+	refusal: null,
+	maxIterations: 20,
+	summary: "The new run would be told what this run left behind — 2 actions already landed.",
+	...over,
+	briefing: {
+		kind: "this-run",
+		predecessorRunId: "run-1",
+		landed: ["pushed 3 commits to main", "opened PR #12"],
+		landedOverflow: 0,
+		unobserved: 0,
+		uncommittedFiles: 0,
+		workingTree: "read",
+		caveat: null,
+		note: "PLATFORM NOTE …",
+		...briefing,
+	},
+});
 
+describe("previewLines — the panel behind the Continue button", () => {
 	it("leads with the SERVER's sentence, verbatim", () => {
 		const p = preview();
 		expect(previewLines(p)[0]).toBe(p.summary);
@@ -124,5 +124,26 @@ describe("previewLines — the panel behind the Continue button", () => {
 		for (const summary of ["anything at all", "Nothing carries forward: …", ""]) {
 			expect(previewLines(preview({ summary }))[0]).toBe(summary);
 		}
+	});
+});
+
+describe("what the stopped run had worked out, and what the owner adds (#806 items 2 and 3(b))", () => {
+	it("quotes the run's own notes, attributed — never listed bare beside the landed acts", () => {
+		const lines = previewLines(preview({}, { learned: ["Fix written. Next: rebase and push."] }));
+		const at = lines.indexOf("What the run noted to itself as it worked — its own words, not checked:");
+		expect(at).toBeGreaterThan(0);
+		expect(lines[at + 1]).toBe("“Fix written. Next: rebase and push.”");
+		expect(lines).not.toContain("· Fix written. Next: rebase and push.");
+	});
+
+	it("says nothing about notes when there are none, or when an older API omits the field", () => {
+		expect(previewLines(preview({}, { learned: [] })).join("\n")).not.toContain("noted to itself");
+		expect(previewLines(preview()).join("\n")).not.toContain("noted to itself");
+	});
+
+	it("sends an EMPTY body unless the owner actually typed something", () => {
+		expect(continueBody(undefined)).toEqual({});
+		expect(continueBody("  \n ")).toEqual({});
+		expect(continueBody("  rebase first \n")).toEqual({ note: "rebase first" });
 	});
 });

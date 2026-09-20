@@ -445,7 +445,7 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 		// steps later, and 13 of 40 sampled steps were the Pilot asking for it again. `learned` is
 		// what it chose to keep, logged BEFORE the instruction it was decided alongside.
 		if (decision.learned) {
-			const learned = `[learned] ${decision.learned}`;
+			const learned = `${LEARNED_PREFIX}${decision.learned}`;
 			actionLog.push(learned);
 			transcript.push(learned);
 			await deps.onEvent?.("learned", learned);
@@ -497,6 +497,13 @@ const PILOT_MAX_TOKENS = 2048;
 
 /** Ceiling on one `learned` entry: ten steps of them still cost less than one terminal window. */
 export const LEARNED_MAX = 300;
+
+/**
+ * How a `learned` entry is marked in the step log AND on its `brain` timeline row. Exported because
+ * the row outlives the run: the resume note (#806) finds a stopped run's notes by this prefix, and
+ * a second spelling of it there would silently find nothing the day this one changed.
+ */
+export const LEARNED_PREFIX = "[learned] ";
 
 /** Exported for the contract test below: every advertised tool must have a `toDecision` case. */
 export const CODING_TOOLS = [

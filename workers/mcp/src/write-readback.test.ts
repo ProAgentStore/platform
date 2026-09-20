@@ -326,6 +326,8 @@ const READBACK: Record<string, string | null> = {
 	// The NEW run's cap, read back on the run the call returns — not on the stopped one it
 	// continues, whose own row is unchanged by a continue (#806).
 	"continue_instance_run.max_iterations": "check_instance_loop",
+	// Appended to the new run's OBJECTIVE, which is what `check_instance_loop` returns for it.
+	"continue_instance_run.note": "check_instance_loop",
 	"set_instance_loop_limits.min_iterations": "get_instance_loop_limits",
 	"set_instance_loop_limits.max_iterations": "get_instance_loop_limits",
 	"set_instance_loop_presets.presets": "get_instance_loop_presets",

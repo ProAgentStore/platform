@@ -32,6 +32,17 @@
 // In the ordinary case the run the owner pressed the button on IS the most recent finished run on
 // its repo, and it is the one that gets quoted.
 //
+// ── What "with its prior context intact" means here (#806 items 1 and 3(b))
+//
+// Two things carry, and neither is a transcript. The stopped Pilot's own `learned` notes (#822)
+// are already rows on its session's timeline, so the briefing quotes them — what it had worked out
+// and where it had got to, in its words; `coding-resume-note.ts` records why that is still option
+// (b). And the ENGINE's conversation is the platform's to restore already: a new session on the
+// repo adopts the previous one's CLI conversation inside its four-day window, and is seeded from the
+// timeline's record when it cannot (`coding-session-continuity.ts`, `coding-seed-brief.ts`). So the
+// owner's half is the one thing nothing else could supply: what THEY know now that the run did
+// not — `note` below.
+//
 // ── The budget is new
 //
 // Not the stopped run's. #184's rule is that every autonomous entry point admits separately, and
@@ -107,6 +118,39 @@ async function continueCeiling(env: Env, userId: string, instanceId: string, run
 	return clampIterations(sanitizeMaxIterations(requested ?? run.maxIterations, accountCeiling), limits, accountCeiling);
 }
 
+/** The objective column's own bound (`createLoopRun` slices to it; `POST /:id/loop` refuses past it). */
+const OBJECTIVE_MAX = 2000;
+
+/** How the owner's addition is introduced. Exported so the tests quote it rather than restate it. */
+export const OWNER_NOTE_LEAD = "Added by the owner when continuing this run:";
+
+/**
+ * The objective the new run carries: the stopped run's, plus whatever the owner added (#806 3(b)).
+ *
+ * IN the objective rather than beside it, for durability. A hint is one round's message and the
+ * workflow clears it; the objective is in every decision the Pilot makes, on the run's row, in the
+ * timeline's "AI run started" line — and therefore in the objective a LATER continue of this run
+ * inherits. A course correction that lasted one round, or that the next continue dropped, would be
+ * the owner re-typing what they had already said, which is the re-deriving this issue is about.
+ *
+ * Attributed in the text itself: the stopped run's words stay verbatim and first, and the addition
+ * is labelled as the owner's and as later, so a Pilot reading "merge each" followed by "do not
+ * merge, open PRs" can tell which one is the correction.
+ *
+ * Refused, not truncated, past the column's bound. A note cut mid-sentence is an instruction the
+ * owner did not give, and `createLoopRun` would cut it silently.
+ */
+export function continueObjective(objective: string, note: unknown): string {
+	const added = typeof note === "string" ? note.trim() : "";
+	if (!added) return objective;
+	const combined = `${objective}\n\n${OWNER_NOTE_LEAD} ${added}`;
+	if (combined.length > OBJECTIVE_MAX) {
+		const room = Math.max(0, OBJECTIVE_MAX - objective.length - OWNER_NOTE_LEAD.length - 3);
+		throw new HttpError(400, `note too long — the objective and your note share ${OBJECTIVE_MAX} characters, which leaves ${room} for the note`);
+	}
+	return combined;
+}
+
 /**
  * The repo the stopped run was on, so a multi-repo Coder continues the right checkout rather than
  * `repos[0]` (#374). Undefined for a chat run, which has no session and no repo — the chat driver
@@ -144,8 +188,11 @@ export function registerLoopContinueRoutes(router: Hono<{ Bindings: Env }>): voi
 
 		const body = (await c.req.json().catch(() => ({}))) as {
 			maxIterations?: number;
+			note?: string;
 			budget?: { costMicros?: number; delegations?: number; maxDepth?: number };
 		};
+		// Before anything is opened: a refused note must not leave a budget behind it.
+		const objective = continueObjective(run.objective, body.note);
 
 		// The stopped run's own ceiling is the DEFAULT, not a floor to add to. "Grant more
 		// iterations" is what the owner asks for by naming a number; pressing Continue with an
@@ -163,7 +210,7 @@ export function registerLoopContinueRoutes(router: Hono<{ Bindings: Env }>): voi
 			env: c.env,
 			instanceId,
 			userId: session.uid,
-			objective: run.objective,
+			objective,
 			maxIterations,
 			repoId,
 			budgetId: budget.id,
@@ -176,7 +223,7 @@ export function registerLoopContinueRoutes(router: Hono<{ Bindings: Env }>): voi
 		// column claiming a lineage the resume note may not have honoured (see the header on why
 		// the note is not pinned) would be a stored fact that can be false.
 		return c.json(
-			{ runId: started.runId, driver: started.driver, budgetId: budget.id, maxIterations, status: "running", continuedFromRunId: run.runId },
+			{ runId: started.runId, driver: started.driver, budgetId: budget.id, maxIterations, status: "running", continuedFromRunId: run.runId, noteAdded: objective !== run.objective },
 			201,
 		);
 	});
