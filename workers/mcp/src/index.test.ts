@@ -393,6 +393,16 @@ describe("public catalog tools", () => {
 		expect((res as { structuredContent?: unknown }).structuredContent).toEqual({ agents: [{ id: "a1" }, { id: "a2" }] });
 	});
 
+	it("list_agents surfaces an API failure instead of presenting an empty catalogue (#830)", async () => {
+		const h = await setup();
+		h.fetchStub.respond((u) => u.endsWith("/v1/agents"), { status: 500, body: { message: "catalogue query failed" } });
+		const res = await h.tools.get("list_agents")!.handler({});
+
+		// This tool's output schema requires structured content even on a failure.
+		expect(JSON.parse(res.content[0].text)).toEqual({ error: "API 500" });
+		expect((res as { structuredContent?: unknown }).structuredContent).toEqual({ error: "API 500" });
+	});
+
 	it("chat_with_agent posts to the public try endpoint and surfaces the session id", async () => {
 		const h = await setup();
 		h.fetchStub.respond((u, m) => u.includes("/public/agents/") && u.endsWith("/try") && m === "POST", {

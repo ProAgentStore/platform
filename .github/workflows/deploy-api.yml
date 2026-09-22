@@ -91,11 +91,15 @@ jobs:
         # CF_ACCESS_TEAM_DOMAIN + CF_ACCESS_AUD go in, and to `enforce` with CF_ACCESS_ENFORCE.
         # The worker is ALREADY deployed when this runs, so a mismatch does not roll anything
         # back — it makes the drift a red deploy instead of a silently re-opened admin surface.
+        #
+        # The public catalogue is checked separately from `/health` (#830). A Worker can be
+        # reachable while its D1-backed catalogue query is broken; MCP's `list_agents` depends
+        # on this endpoint, and a coding template must remain subscribable through it.
         env:
           EXPECTED_ADMIN_PERIMETER: ${{ vars.EXPECTED_ADMIN_PERIMETER || 'off' }}
         run: |
           for i in 1 2 3 4 5; do
-            STATUS=$(curl -s -o /tmp/health.json -w "%{http_code}" https://api.proagentstore.online/health)
+            STATUS=$(curl -sS -o /tmp/health.json -w "%{http_code}" https://api.proagentstore.online/health)
             if [ "$STATUS" = "200" ]; then
               echo "Health check passed"
               ACTUAL=$(jq -r '.adminPerimeter // "absent"' /tmp/health.json)
@@ -106,10 +110,18 @@ jobs:
                 exit 1
               fi
               echo "Admin perimeter is '$ACTUAL', as expected"
-              exit 0
+
+              CATALOGUE_STATUS=$(curl -sS -o /tmp/agents.json -w "%{http_code}" "https://api.proagentstore.online/v1/agents?limit=500")
+              if [ "$CATALOGUE_STATUS" = "200" ] && jq -e '(.agents | type == "array") and any(.agents[]?; .slug == "coder" or .slug == "coder-repo" or .slug == "tmux-coder")' /tmp/agents.json > /dev/null; then
+                echo "Public catalogue contains a coding agent"
+                exit 0
+              fi
+
+              echo "Attempt $i: public catalogue returned $CATALOGUE_STATUS or no coding agent, retrying..."
+            else
+              echo "Attempt $i: health check got $STATUS, retrying..."
             fi
-            echo "Attempt $i: got $STATUS, retrying..."
             sleep 5
           done
-          echo "Health check failed after 5 attempts"
+          echo "Smoke test failed after 5 attempts: /health must return 200 with the expected admin perimeter, and /v1/agents must return a coding agent."
           exit 1

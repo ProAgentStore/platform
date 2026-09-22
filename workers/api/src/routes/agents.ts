@@ -266,7 +266,10 @@ agentRoutes.get("/", async (c) => {
              WHERE ${baseWhere} ${orderBy} LIMIT ${limit + 1} OFFSET ${offset}`,
 		).bind(...baseParams).all<AgentRow>(),
 		c.env.DB.prepare(
-			`SELECT COUNT(*) AS n FROM agents WHERE ${baseWhere}`,
+			// `baseWhere` deliberately qualifies fields with `a` so it is shared with
+			// the page query. Keep that alias here too: without it D1 rejects every
+			// catalogue read with "no such column: a.visibility" (#830).
+			`SELECT COUNT(*) AS n FROM agents a WHERE ${baseWhere}`,
 		).bind(...baseParams).first<{ n: number }>(),
 	]);
 

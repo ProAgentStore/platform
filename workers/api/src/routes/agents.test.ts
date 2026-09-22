@@ -2,7 +2,9 @@ import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { sanitizeDeclaredCapabilities } from "../lib/agent-capabilities.js";
 import { HttpError } from "../lib/auth.js";
+import { realSchemaD1 } from "../lib/d1-sqlite.js";
 import { signSession } from "../lib/session.js";
+import type { Env } from "../types.js";
 import { agentRoutes } from "./agents.js";
 
 const TEST_SECRET = "test-secret";
@@ -413,6 +415,25 @@ function catalogueApp(totalInDb: number, pageRows: Record<string, unknown>[]) {
 }
 
 describe("GET /v1/agents — pagination (#661)", () => {
+	it("executes both catalogue queries against the migrated schema (#830)", async () => {
+		// The pagination tests below use recording stubs. This one executes the
+		// shared `a.visibility` predicate in both queries, so an alias mismatch
+		// becomes the production 500 it was rather than a passing mock test.
+		const d1 = realSchemaD1();
+		try {
+			const app = new Hono<{ Bindings: Env }>();
+			app.route("/v1/agents", agentRoutes);
+			const env = { DB: d1.DB, SESSION_SIGNING_KEY: TEST_SECRET } as unknown as Env;
+			const res = await app.request("/v1/agents", {}, env);
+			expect(res.status).toBe(200);
+			const data = await res.json<{ agents: Array<{ slug: string }>; total: number }>();
+			expect(data.agents.some((agent) => agent.slug === "coder")).toBe(true);
+			expect(data.total).toBeGreaterThan(0);
+		} finally {
+			d1.close();
+		}
+	});
+
 	it("returns total and has_more:false when all agents fit in one page", async () => {
 		const rows = [{ id: "a1", slug: "alpha", name: "Alpha", description: "", category: "general", store_type: "agent", icon: "", icon_bg: "#000", model: "", creator_login: null, creator_name: "Creator", creator_avatar: null, subscriber_count: 0 }];
 		const { app, env } = catalogueApp(1, rows);

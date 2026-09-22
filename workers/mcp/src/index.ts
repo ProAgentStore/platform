@@ -240,7 +240,11 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 			"List all published agents on ProAgentStore",
 			{},
 			async () => {
-				const data = (await apiCall("/v1/agents", {}, this.env)) as { agents: unknown[] };
+				const data = (await apiCall("/v1/agents", {}, this.env)) as { agents?: unknown[]; error?: string };
+				// apiCall represents a non-2xx response as `{error: ...}`. Do not turn that
+				// into a valid-looking empty catalogue: callers would conclude there are no
+				// subscribable agents when the catalogue is unavailable (#830).
+				if (data.error) return jsonResult({ error: data.error });
 				// `{agents: […]}` rather than the bare array it used to answer with: this tool
 				// declares an outputSchema, and `structuredContent` must be an object (#561).
 				// The text block carries the same JSON, as the spec asks.
