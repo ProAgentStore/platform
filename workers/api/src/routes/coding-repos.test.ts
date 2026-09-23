@@ -1057,7 +1057,7 @@ describe("POST /coding/repos — one binding per repository (#829)", () => {
  * Replayed here on the shapes measured on 2026-09-23 plus the one it must NOT resolve by itself.
  */
 describe("migration 0156 — clearing existing duplicate bindings (#829)", () => {
-	const migration = readFileSync(new URL("../../migrations/0156_coding_repos_unique_binding.sql", import.meta.url).pathname, "utf8");
+	const migration = readFileSync(new URL("../../migrations/0157_coding_repos_unique_binding.sql", import.meta.url).pathname, "utf8");
 	const deletes = migration.match(/DELETE FROM coding_repos[\s\S]*?\n {2}\);/g) ?? [];
 	const indexes = migration.match(/CREATE UNIQUE INDEX[\s\S]*?;/g) ?? [];
 
