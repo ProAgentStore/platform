@@ -23,7 +23,7 @@ import { CONNECTOR_CONSTRAINTS, enforceConstraints } from "./surface-options.js"
 import { openBudget } from "./delegation-budget-store.js";
 import { SELF_WRITABLE_FIELDS, behaviourToolSchema, describeBehaviour } from "./agent-behaviour.js";
 import { patchBehaviour, readBehaviour } from "./behaviour-store.js";
-import { createWebsiteBuilderJob, createWebsiteBuilderToken, findWebsiteBuilderJobByKey } from "./website-builder-jobs.js";
+import { attachWebsiteBuilderRuntimeTask, createWebsiteBuilderJob, createWebsiteBuilderToken, findWebsiteBuilderJobByKey, markWebsiteBuilderJob } from "./website-builder-jobs.js";
 // The caller's own timezone, for rendering run times as wall-clock (#329).
 //
 // `work-report.ts` states that `check_work` and the automatic "recent work" prompt block must never
@@ -37,6 +37,7 @@ import { createWebsiteBuilderJob, createWebsiteBuilderToken, findWebsiteBuilderJ
 import { accountTimeZone } from "./account-timezone.js";
 import { fenceUntrusted, withFraming } from "./untrusted-fence.js";
 import type { ConversationTransfer } from "./conversation-transfer.js";
+import { hasMcpConsent, normalizeMcpEndpoint } from "./mcp-consent.js";
 
 /**
  * The tool contract now lives in `connectors/types.ts` — a leaf module with no imports
@@ -157,7 +158,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 		mutates: true,
 		untrustedOutput: false,
 		tier: "runtime",
-		description: "Start a bounded, draft-only Website Builder job on the subscriber's local Claude Code or Codex subscription through `pags up`. The worker receives a job-scoped FWS broker capability: it can build, inspect and capture previews, but cannot deploy, publish, push updates or delete. PAGS records evidence and creates the separate deployment approval ticket only after QA passes.",
+		description: "Start a bounded, draft-only Website Builder job on the subscriber's local Claude Code or Codex subscription through `pags up`. The worker receives a job-scoped FWS broker capability: it can build, inspect and request preview captures, but cannot deploy, publish, push updates or delete. PAGS records FWS static QA and capture-confirmed metadata; capture JPEGs are not yet forwarded to the local CLI, so a human must review the trusted rendered preview before deployment.",
 		jsonSchema: {
 			type: "object",
 			properties: {
@@ -170,9 +171,10 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 		handler: async (ctx, input) => {
 			if (!ctx.instanceId || !ctx.userId) return { content: "start_website_builder needs an owned instance context.", success: false };
 			const lead = input.lead && typeof input.lead === "object" && !Array.isArray(input.lead) ? input.lead as Record<string, unknown> : null;
-			const mcpUrl = typeof input.mcp_url === "string" ? input.mcp_url.trim() : "";
+			const requestedMcpUrl = typeof input.mcp_url === "string" ? input.mcp_url.trim() : "";
+			const mcpUrl = normalizeMcpEndpoint(requestedMcpUrl);
 			const engine = input.engine === "codex" ? "codex" : "claude";
-			if (!lead || !mcpUrl) return { content: "start_website_builder needs lead facts and the configured FWS mcp_url.", success: false };
+			if (!lead || !mcpUrl) return { content: "start_website_builder needs lead facts and an https FWS MCP endpoint already connected to this instance.", success: false };
 			const source = typeof lead.place_id === "string" && lead.place_id.trim() ? `place:${lead.place_id.trim()}` : `lead:${JSON.stringify(lead)}`;
 			const idempotencyKey = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(source)).then((b) => Array.from(new Uint8Array(b), (v) => v.toString(16).padStart(2, "0")).join(""));
 			const existing = await findWebsiteBuilderJobByKey(ctx.env, ctx.instanceId, idempotencyKey);
@@ -181,19 +183,52 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 			if (!publicBase) return { content: "Website Builder broker is not configured on this deployment (API_PUBLIC_URL missing).", success: false };
 			const conn = await getBoundRunnerConn(ctx.env, ctx.instanceId, ctx.userId);
 			if (!conn) return { content: "No local pags up runtime is connected to this Website Builder instance.", success: false };
-			const task = await callRunner<{ id?: string }>(conn, "/tasks", {
-				type: "website.build", input: { lead }, title: `Build draft website for ${typeof lead.name === "string" ? lead.name : "lead"}`,
-				description: "Draft-only subscription worker. FWS deploy is not available to this task.",
-			});
-			if (!task.id) return { content: "The local runtime did not return a Website Builder task id.", success: false };
+			// A valid URL alone is not a connection. Refuse before creating a local task
+			// unless the owner has consented the endpoint's essential draft tools.
+			const requiredFwsTools = ["list_templates", "create_site", "set_meta", "get_quality_report", "capture_preview"];
+			const missingConsent = (await Promise.all(requiredFwsTools.map(async (tool) => (await hasMcpConsent(ctx.env, ctx.instanceId, mcpUrl, tool)) ? null : tool))).filter((tool): tool is string => !!tool);
+			if (missingConsent.length) return { content: `The FWS endpoint ${mcpUrl} is not fully consented for this draft job. Grant: ${missingConsent.join(", ")}.`, success: false };
+
+			// Reserve the idempotency key before touching the runner. Two simultaneous
+			// starts must yield one reservation, not two local tasks and two FWS drafts.
 			const token = createWebsiteBuilderToken();
-			await createWebsiteBuilderJob(ctx.env, { id: task.id, instanceId: ctx.instanceId, userId: ctx.userId, mcpUrl, token, idempotencyKey });
-			await ctx.env.WEBSITE_BUILDER_SESSION.create({ params: {
+			const reservationId = `website-builder-reservation-${crypto.randomUUID()}`;
+			const reserved = await createWebsiteBuilderJob(ctx.env, { id: reservationId, instanceId: ctx.instanceId, userId: ctx.userId, mcpUrl, token, idempotencyKey });
+			if (!reserved) {
+				const winner = await findWebsiteBuilderJobByKey(ctx.env, ctx.instanceId, idempotencyKey);
+				return { content: winner ? `Website Builder job ${winner.id} already exists for this lead (${winner.status}); no duplicate draft was started.` : "A Website Builder job reservation already exists for this lead; no duplicate draft was started.", success: true };
+			}
+			let task: { id?: string };
+			try {
+				task = await callRunner<{ id?: string }>(conn, "/tasks", {
+					type: "website.build", input: { lead }, title: `Build draft website for ${typeof lead.name === "string" ? lead.name : "lead"}`,
+					description: "Draft-only subscription worker. FWS deploy is not available to this task.",
+				});
+			} catch (error) {
+				await markWebsiteBuilderJob(ctx.env, reservationId, "failed", { error: error instanceof Error ? error.message : String(error) });
+				return { content: "The local runtime did not accept the Website Builder task; the reserved broker capability was revoked.", success: false };
+			}
+			if (!task.id) {
+				await markWebsiteBuilderJob(ctx.env, reservationId, "failed", { error: "Runner returned no task id" });
+				return { content: "The local runtime did not return a Website Builder task id; the reserved broker capability was revoked.", success: false };
+			}
+			if (!(await attachWebsiteBuilderRuntimeTask(ctx.env, reservationId, task.id))) {
+				await callRunner(conn, `/tasks/${encodeURIComponent(task.id)}/cancel`, {}).catch(() => undefined);
+				await markWebsiteBuilderJob(ctx.env, reservationId, "failed", { error: "Could not attach runner task to reserved Website Builder job" });
+				return { content: "Website Builder could not safely attach its local task; it was cancelled and no draft will be created.", success: false };
+			}
+			try {
+				await ctx.env.WEBSITE_BUILDER_SESSION.create({ params: {
 				instanceId: ctx.instanceId, userId: ctx.userId, taskId: task.id, engine, lead,
 				brokerUrl: `${publicBase}/v1/website-builder/jobs/${encodeURIComponent(task.id)}/call`, jobToken: token,
 				mcpUrl, maxRefinements: typeof input.max_refinements === "number" ? input.max_refinements : 1,
-			} });
-			return { content: `Started draft-only Website Builder job ${task.id} on your local ${engine} subscription. It cannot deploy; PAGS will create a separate approval ticket only after desktop/mobile QA evidence passes.`, success: true };
+				} });
+			} catch (error) {
+				await callRunner(conn, `/tasks/${encodeURIComponent(task.id)}/cancel`, {}).catch(() => undefined);
+				await markWebsiteBuilderJob(ctx.env, task.id, "failed", { error: error instanceof Error ? error.message : String(error) });
+				return { content: "Website Builder could not start its durable workflow; the local task was cancelled and its broker token revoked.", success: false };
+			}
+			return { content: `Started draft-only Website Builder job ${task.id} on your local ${engine} subscription. It cannot deploy; PAGS will create a separate approval ticket only after FWS static QA and desktop/mobile capture metadata pass, with human review of the trusted rendered preview required before deployment.`, success: true };
 		},
 	},
 	{
