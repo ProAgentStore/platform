@@ -78,3 +78,14 @@ export interface PauseResponse {
 	/** False when the state already held — a retry or a double-click, not a failure. */
 	changed?: boolean;
 }
+
+/**
+ * The instance roster INCLUDING paused instances (#826).
+ *
+ * `GET /v1/instances/my/instances` omits paused instances by default, because they clutter the
+ * working views (dashboard, nav, voice roster). A paused instance is still the owner's, though, so
+ * every caller that looks up ONE instance, counts what the owner has, or decides "Open" vs
+ * "Subscribe" must use this — otherwise a paused instance's page reads as missing and its Resume
+ * control becomes unreachable.
+ */
+export const MY_INSTANCES_WITH_PAUSED = "/v1/instances/my/instances?includePaused=1";

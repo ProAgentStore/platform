@@ -50,8 +50,10 @@ export async function findInstanceForAgent(
 	token: string,
 	agentId: string,
 ): Promise<InstanceSummary | null> {
+	// includePaused (#826): this resolves ONE instance by id/slug, and a paused instance is still
+	// the caller's — hiding it here would make every tool refuse it, resume_instance's aftermath included.
 	const data = (await authedCall(
-		"/v1/instances/my/instances",
+		"/v1/instances/my/instances?includePaused=1",
 		token,
 		{},
 		env,

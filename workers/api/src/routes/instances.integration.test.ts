@@ -103,7 +103,12 @@ function buildApp(opts: Opts = {}) {
 						},
 						async all() {
 							reads.push(sql);
-							if (sql.includes("FROM agent_instances i")) return { results: opts.myInstances ?? [] };
+							// Honour the list's status exclusions the way D1 would, so a test can assert on
+							// which rows come BACK, not only on the SQL text (#826).
+							if (sql.includes("FROM agent_instances i")) {
+								const excluded = [...sql.matchAll(/i\.status != '(\w+)'/g)].map((m) => m[1]);
+								return { results: (opts.myInstances ?? []).filter((r) => !excluded.includes(String(r.status))) };
+							}
 							// The per-USER ATS tips cache. Non-empty so an ALLOWED read is
 							// distinguishable from a refusal — both return `{tips: […]}`, so a test
 							// asserting only the shape passes even when the gate refuses everything.
@@ -423,6 +428,40 @@ describe("GET /v1/instances/my/instances (integration)", () => {
 		await get(app, env, "/v1/instances/my/instances?includeCanceled=1", await tokenFor("u1"));
 		const listSql = reads.find((s) => s.includes("FROM agent_instances i"));
 		expect(listSql).not.toContain("canceled");
+	});
+
+	// #826: a paused instance is parked, not gone — hidden from the default working list, returned
+	// on request, and back in the default list the moment it is resumed.
+	const row = (id: string, status: string) => ({
+		id, agent_id: "a1", status, created_at: "", instance_config: "{}",
+		name: "Coder", slug: "coder", description: "", category: "code", icon: "", icon_bg: "", config: "{}",
+	});
+	const listIds = async (rows: Array<Record<string, unknown>>, query = "") => {
+		const { app, env } = buildApp({ myInstances: rows });
+		const res = await get(app, env, `/v1/instances/my/instances${query}`, await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		return ((await res.json()) as { instances: Array<{ id: string }> }).instances.map((i) => i.id);
+	};
+
+	it("excludes paused instances by default", async () => {
+		expect(await listIds([row("active-1", "active"), row("paused-1", "paused")])).toEqual(["active-1"]);
+	});
+
+	it("?includePaused=true returns paused instances alongside active ones", async () => {
+		expect(await listIds([row("active-1", "active"), row("paused-1", "paused")], "?includePaused=true")).toEqual(["active-1", "paused-1"]);
+	});
+
+	it("always includes active instances in the default listing", async () => {
+		expect(await listIds([row("active-1", "active"), row("active-2", "active")])).toEqual(["active-1", "active-2"]);
+	});
+
+	it("a resumed instance (status back to 'active') is back in the default listing", async () => {
+		expect(await listIds([row("inst-1", "paused")])).toEqual([]);
+		expect(await listIds([row("inst-1", "active")])).toEqual(["inst-1"]);
+	});
+
+	it("includePaused does not bring canceled instances back", async () => {
+		expect(await listIds([row("paused-1", "paused"), row("gone-1", "canceled")], "?includePaused=1")).toEqual(["paused-1"]);
 	});
 });
 

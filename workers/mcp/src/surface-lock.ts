@@ -816,4 +816,12 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.48 is published.
 	"0.1.49": "sha256:b5008db008bf75cf5b6299e9621ef7cf23ab2a12557fc69be9fe7c7f11c0138d",
+	// 0.1.50 (#826, hide paused instances from default listings): no new tool. One inputSchema
+	// moved — `my_instances` gains an optional `include_paused` boolean, because
+	// GET /v1/instances/my/instances now omits paused instances unless asked. Tool resolution
+	// (`findInstanceForAgent`, `recent_instances`, the surface gating in `userGroups`) always asks,
+	// so a paused instance stays reachable by id/slug and resume_instance keeps working.
+	//
+	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.49 is published.
+	"0.1.50": "sha256:3ace939ed575e1cad8d556937cd77c1691fb228143a8b7eecba37b20c4a140fc",
 };

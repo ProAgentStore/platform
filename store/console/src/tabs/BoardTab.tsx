@@ -9,6 +9,7 @@ import { statusBadgeClass } from "../lib/statusBadge";
 import { LayoutGrid, List, SlidersHorizontal, Plus, Trash2, ArrowUp, ArrowDown, MessageCircleQuestion } from "lucide-react";
 import Button from "../components/Button";
 import Card from "../components/Card";
+import { MY_INSTANCES_WITH_PAUSED } from "../lib/instancePause";
 
 type BoardView = "kanban" | "list";
 
@@ -101,7 +102,7 @@ export default function BoardTab({ instanceId, apply }: { instanceId: string; ap
 		let alive = true;
 		(async () => {
 			try {
-				const d = await api<{ instances?: Array<{ id: string; capabilities?: { workflow?: string } }> }>("/v1/instances/my/instances");
+				const d = await api<{ instances?: Array<{ id: string; capabilities?: { workflow?: string } }> }>(MY_INSTANCES_WITH_PAUSED);
 				const mine = (d.instances || []).find((i) => i.id === instanceId);
 				if (alive && mine?.capabilities?.workflow === "BROWSER_TASK") {
 					setIsBrowseAgent(true);

@@ -174,7 +174,9 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 		let lastError = "no response";
 		for (let attempt = 0; attempt < 2; attempt++) {
 			try {
-				const data = (await authedCall("/v1/instances/my/instances", this.userToken, {}, this.env)) as
+				// includePaused (#826): a paused instance's surfaces still count, or a user whose only
+				// coding agent is paused would lose the very tools that inspect it.
+				const data = (await authedCall("/v1/instances/my/instances?includePaused=1", this.userToken, {}, this.env)) as
 					| Array<{ capabilities?: { surfaces?: string[] } }>
 					| { instances?: Array<{ capabilities?: { surfaces?: string[] } }>; error?: string };
 				// The error object `apiCall` returns instead of throwing. Checked BEFORE the list is

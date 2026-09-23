@@ -1,8 +1,9 @@
 // Type-to-filter over the instances you already have (#795).
 //
 // Client-side and nothing else. The array this filters is the one `GET /v1/instances/my/instances`
-// already returned IN FULL — that endpoint has no pagination and no query parameter — so there is
-// no round trip to spend and no server state to reconcile. Filtering is a pure function over that
+// already returned IN FULL — that endpoint has no pagination, and its only query parameters are the
+// `includeCanceled` / `includePaused` status opt-ins (#67, #826) — so there is no round trip to
+// spend and no server state to reconcile. Filtering is a pure function over that
 // array precisely so it can be tested as a value: this console has no component harness, and the
 // matching is the part worth proving. Same seam `lastRoute.ts` draws for #794.
 //

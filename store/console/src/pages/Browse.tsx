@@ -5,6 +5,7 @@ import { api } from "@proagentstore/sdk/client";
 import type { Instance } from "../lib/types";
 import Card from "../components/Card";
 import Button from "../components/Button";
+import { MY_INSTANCES_WITH_PAUSED } from "../lib/instancePause";
 
 /** Published-catalog agent (shape from GET /v1/agents). */
 interface CatalogAgent {
@@ -36,7 +37,7 @@ export default function Browse() {
 		try {
 			const [cat, mine] = await Promise.all([
 				api<{ agents: CatalogAgent[] }>("/v1/agents"),
-				api<{ instances: Instance[] }>("/v1/instances/my/instances"),
+				api<{ instances: Instance[] }>(MY_INSTANCES_WITH_PAUSED),
 			]);
 			setAgents(cat.agents || []);
 			setInstances(mine.instances || []);

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import type { Instance } from "../lib/types";
+import { MY_INSTANCES_WITH_PAUSED } from "../lib/instancePause";
 
 /**
  * The instance record behind `/instances/:id/*`, and whether it exists at all (#784).
@@ -29,7 +30,7 @@ export function useInstanceRecord(id: string | undefined): { instance: Instance 
 		setMissing(false);
 		(async () => {
 			try {
-				const data = await api<{ instances: Instance[] }>("/v1/instances/my/instances");
+				const data = await api<{ instances: Instance[] }>(MY_INSTANCES_WITH_PAUSED);
 				const inst = (data.instances || []).find((i) => i.id === id || i.slug === id);
 				if (!live) return;
 				if (inst) setInstance(inst);
