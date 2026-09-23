@@ -536,12 +536,17 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		// and nothing on this path can unstick it. The ceiling ENDS the turn rather than relabelling
 		// a live process as idle — relabelling is the original defect, just slower, because the next
 		// instruction would then land on a repo another engine is still editing.
-		const s = new HeadlessSession({ id: "raw-wedged", workDir: dir, clientType: "codex", command: "codex", bin: wedgedBin, maxTurnMs: 700 });
+		//
+		// The ceiling timer starts at SPAWN and kills the process when it fires, so it must outlast a
+		// slow spawn: at 700ms a loaded machine (the full suite) killed the fake engine before its
+		// first write, and the output this test waits for never came. 3s is still a ceiling this
+		// test watches fire — that is the behaviour #391 pins — just not one a node startup can beat.
+		const s = new HeadlessSession({ id: "raw-wedged", workDir: dir, clientType: "codex", command: "codex", bin: wedgedBin, maxTurnMs: 3000 });
 		s.start();
 		s.input("hang");
 		await until(() => s.snapshot().includes("wedged: hang"), 6000, "the wedged engine's output");
 		expect(s.runState()).toBe("thinking");
-		await until(() => s.runState() === "idle", 6000, "the turn ceiling to end the turn");
+		await until(() => s.runState() === "idle", 10_000, "the turn ceiling to end the turn");
 		expect(s.snapshot()).toMatch(/turn ended after .* the engine never exited/);
 		expect(s.alive).toBe(true); // the SESSION survives; only the turn was ended
 		s.stop();

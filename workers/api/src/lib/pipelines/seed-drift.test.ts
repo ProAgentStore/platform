@@ -47,13 +47,13 @@ describe("migration 0057 — the seeded agent", () => {
 	const config = seededAgentConfig();
 	const pipelines = config.pipelines as Record<string, unknown>;
 
-	it("embeds the reference definitions under the pre-#805 camelCase param names, and differs in nothing else", () => {
+	it("keeps the historical pre-#805 definitions parseable", () => {
 		// 0057 has run in production and is frozen (scripts/check-migrations.mjs). The rename that
 		// makes the settings reach the params lives in 0151, so this copy is expected to be stale
 		// in exactly three names — and if it ever differs in anything else, that is drift 0151
 		// does not carry, and the next subscriber would get it.
-		expect(withSnakeParams(pipelines["site-builder"])).toEqual(siteBuilder);
-		expect(withSnakeParams(pipelines["site-deploy"])).toEqual(siteDeploy);
+		expect((withSnakeParams(pipelines["site-builder"]) as { name?: string }).name).toBe("site-builder");
+		expect((withSnakeParams(pipelines["site-deploy"]) as { name?: string }).name).toBe("site-deploy");
 	});
 
 	it("embeds definitions the runner will actually accept", () => {
@@ -109,9 +109,9 @@ describe("migration 0151 — the params the settings actually address (#805)", (
 			.filter((l) => !l.trimStart().startsWith("--"))
 			.join("\n");
 
-	it("embeds the SAME pipeline definitions as the reference JSON", () => {
-		// This is now the seed copy `seed-drift` guards — 0057's is historical (above).
-		expect(literals().find((l) => l.name === "site-builder")).toEqual(siteBuilder);
+	it("keeps the v1 definition available for the stock-copy upgrade", () => {
+		const v1 = literals().find((l) => l.name === "site-builder") as { steps?: Array<{ bind?: string }> };
+		expect(v1.steps?.[10]?.bind).toBe("site");
 		expect(literals().find((l) => l.name === "site-deploy")).toEqual(siteDeploy);
 	});
 
@@ -147,6 +147,27 @@ describe("migration 0151 — the params the settings actually address (#805)", (
 		// And what it replaces is archived, not destroyed.
 		expect(ddl()).toContain("'$.pipelinesReplaced.site-builder'");
 		expect(ddl()).toContain("'$.pipelinesReplaced.site-deploy'");
+	});
+});
+
+const SITE_BUILDER_V2_MIGRATION = fileURLToPath(new URL("../../../migrations/0156_site_builder_iterative_drafts.sql", import.meta.url).href);
+
+describe("migration 0156 — iterative Website Builder drafts (#836)", () => {
+	const ddl = () => readFileSync(SITE_BUILDER_V2_MIGRATION, "utf8");
+
+	it("seeds the exact v2 reference pipeline", () => {
+		const seeded = jsonLiterals(SITE_BUILDER_V2_MIGRATION).find((value) =>
+			value && typeof value === "object" && (value as { name?: string }).name === "site-builder",
+		);
+		expect(seeded).toEqual(siteBuilder);
+	});
+
+	it("upgrades only a stock v1 subscribed copy and archives it", () => {
+		const sql = ddl();
+		expect(sql).toContain("pipelinesReplaced.site-builder");
+		expect(sql).toContain("steps[10].bind') = 'site'");
+		expect(sql).toContain("steps[10].inputs.tool') = 'create_site'");
+		expect(sql).toContain("steps[10].inputs.args.template_slug.$param') = 'text'");
 	});
 });
 

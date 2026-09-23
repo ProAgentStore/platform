@@ -2,7 +2,7 @@
  * Collections (structured storage) — schema-defined "tables" with indexes,
  * unique constraints, a dedup guard, and CRUD/query over records.
  */
-import type { ActivityEvent, CollectionField, CollectionRecord, CollectionSchema, VectorMeta } from "../agent-storage-types.js";
+import type { ActivityEvent, CollectionField, CollectionRecord, CollectionSchema, RecordQueryResult, VectorMeta } from "../agent-storage-types.js";
 import { encodeIndexValue, inferCollectionFields, validateRecord } from "../agent-storage-utils.js";
 import { type AgentStorageBaseCtor, MAX_COLLECTION_RECORDS, MAX_COLLECTIONS } from "./base.js";
 
@@ -303,7 +303,7 @@ export function withCollections<TBase extends AgentStorageBaseCtor & GConstructo
 				orderBy?: string;
 				orderDir?: "asc" | "desc";
 			},
-		): Promise<{ records: CollectionRecord[]; total: number }> {
+		): Promise<RecordQueryResult> {
 			const schema = await this.collectionGet(collection);
 			if (!schema) throw new Error(`Collection "${collection}" not found`);
 
