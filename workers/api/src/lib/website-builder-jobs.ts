@@ -1,4 +1,5 @@
 import type { Env } from "../types.js";
+import { decryptKey, encryptKey } from "./crypto.js";
 
 export const WEBSITE_BUILDER_DRAFT_TOOLS = new Set([
 	"list_templates", "create_site", "list_sections", "read_section", "add_section",
@@ -73,14 +74,35 @@ export async function createWebsiteBuilderJob(
 	env: Env,
 	input: { id: string; instanceId: string; userId: string; mcpUrl: string; token: string; idempotencyKey: string },
 ): Promise<boolean> {
+	if (!env.KEY_ENCRYPTION_KEY) throw new Error("Website Builder job encryption is not configured.");
+	const sealed = await encryptKey(input.token, env.KEY_ENCRYPTION_KEY);
 	await env.DB.prepare(
-		`INSERT OR IGNORE INTO website_builder_jobs (id, instance_id, user_id, mcp_url, idempotency_key, token_hash, token_expires_at, status, created_at, updated_at)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now', '+30 minutes'), 'queued', datetime('now'), datetime('now'))`,
-	).bind(input.id, input.instanceId, input.userId, input.mcpUrl, input.idempotencyKey, await websiteBuilderTokenHash(input.token)).run();
+		`INSERT OR IGNORE INTO website_builder_jobs (id, instance_id, user_id, mcp_url, idempotency_key, token_hash, token_ciphertext, token_dek_wrapped, token_iv, token_expires_at, status, created_at, updated_at)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now', '+30 minutes'), 'queued', datetime('now'), datetime('now'))`,
+	).bind(input.id, input.instanceId, input.userId, input.mcpUrl, input.idempotencyKey, await websiteBuilderTokenHash(input.token), sealed.ciphertext, sealed.dekWrapped, sealed.iv).run();
 	// Do not trust D1's affected-row metadata here: several test adapters deliberately
 	// omit it. The id is random, so seeing our own id is an unambiguous reservation.
 	const reserved = await findWebsiteBuilderJobByKey(env, input.instanceId, input.idempotencyKey);
 	return reserved?.id === input.id;
+}
+
+/**
+ * Unseal a job token only while the job is active, immediately before it is sent
+ * through the authenticated runner relay. It is deliberately not put in durable
+ * workflow payloads, board cards, logs or evidence.
+ */
+export async function revealWebsiteBuilderJobToken(env: Env, id: string): Promise<string | null> {
+	const job = await getWebsiteBuilderJob(env, id);
+	if (!job || job.status !== "running" || !websiteBuilderTokenActive(job) || !env.KEY_ENCRYPTION_KEY) return null;
+	try {
+		const row = await env.DB.prepare(
+			"SELECT token_ciphertext, token_dek_wrapped, token_iv FROM website_builder_jobs WHERE id = ?1",
+		).bind(id).first<{ token_ciphertext: ArrayBuffer | null; token_dek_wrapped: ArrayBuffer | null; token_iv: ArrayBuffer | null }>();
+		if (!row?.token_ciphertext || !row.token_dek_wrapped || !row.token_iv) return null;
+		return await decryptKey(new Uint8Array(row.token_ciphertext), new Uint8Array(row.token_dek_wrapped), new Uint8Array(row.token_iv), env.KEY_ENCRYPTION_KEY);
+	} catch {
+		return null;
+	}
 }
 
 export async function findWebsiteBuilderJobByKey(env: Env, instanceId: string, idempotencyKey: string): Promise<WebsiteBuilderJob | null> {
@@ -144,7 +166,10 @@ export async function markWebsiteBuilderJob(
 		`UPDATE website_builder_jobs
 		 SET status = ?2, evidence = COALESCE(?3, evidence), updated_at = datetime('now'),
 		     completed_at = CASE WHEN ?2 IN ('completed', 'failed') THEN datetime('now') ELSE completed_at END,
-		     token_revoked_at = CASE WHEN ?2 IN ('completed', 'failed') THEN datetime('now') ELSE token_revoked_at END
+		     token_revoked_at = CASE WHEN ?2 IN ('completed', 'failed') THEN datetime('now') ELSE token_revoked_at END,
+		     token_ciphertext = CASE WHEN ?2 IN ('completed', 'failed') THEN NULL ELSE token_ciphertext END,
+		     token_dek_wrapped = CASE WHEN ?2 IN ('completed', 'failed') THEN NULL ELSE token_dek_wrapped END,
+		     token_iv = CASE WHEN ?2 IN ('completed', 'failed') THEN NULL ELSE token_iv END
 		 WHERE id = ?1`,
 	).bind(id, status, evidence === undefined ? null : JSON.stringify(evidence)).run();
 }

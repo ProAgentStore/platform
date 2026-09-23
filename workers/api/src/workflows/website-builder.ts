@@ -1,6 +1,6 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS } from "../lib/runner-client.js";
-import { getWebsiteBuilderJob, listWebsiteBuilderJobCalls, markWebsiteBuilderJob, type WebsiteBuilderJobCall } from "../lib/website-builder-jobs.js";
+import { getWebsiteBuilderJob, listWebsiteBuilderJobCalls, markWebsiteBuilderJob, revealWebsiteBuilderJobToken, type WebsiteBuilderJobCall } from "../lib/website-builder-jobs.js";
 import { trustedWebsiteBuilderEvidence, type WebsiteBuilderWorkerClaim } from "../lib/website-builder-evidence.js";
 import { mirrorRuntimeEvent, mirrorRuntimeTask } from "../routes/instances-runtime.js";
 import { buildTicketAction } from "../lib/actionable-ticket.js";
@@ -14,7 +14,6 @@ export interface WebsiteBuilderWorkflowParams {
 	engine: "claude" | "codex";
 	lead: Record<string, unknown>;
 	brokerUrl: string;
-	jobToken: string;
 	mcpUrl: string;
 	maxRefinements?: number;
 }
@@ -33,10 +32,10 @@ function parseWorkerClaim(pane: string): WebsiteBuilderWorkerClaim | null {
 	} catch { return null; }
 }
 
-function runnerInput(p: WebsiteBuilderWorkflowParams, existingSessionId?: string) {
+function runnerInput(p: WebsiteBuilderWorkflowParams, jobToken: string, existingSessionId?: string) {
 	return {
 		taskId: p.taskId, instanceId: p.instanceId, engine: p.engine, lead: p.lead,
-		brokerUrl: p.brokerUrl, jobToken: p.jobToken, maxRefinements: p.maxRefinements,
+		brokerUrl: p.brokerUrl, jobToken, maxRefinements: p.maxRefinements,
 		...(existingSessionId ? { existingSessionId } : {}),
 	};
 }
@@ -70,7 +69,13 @@ export class WebsiteBuilderWorkflow extends WorkflowEntrypoint<Env, WebsiteBuild
 			}
 			if (!conn) throw new Error("No local pags up runtime connected within ten minutes; the Website Builder job was not run.");
 			await step.do("mark-job-running", () => markWebsiteBuilderJob(this.env, p.taskId, "running"));
-			await step.do("start-subscription-worker", () => callRunner(conn!, "/website-builder/start", runnerInput(p)) as Promise<never>);
+			await step.do("start-subscription-worker", async () => {
+				// The bearer is encrypted in D1 and intentionally absent from durable
+				// Workflow params. Reveal it only for this authenticated relay call.
+				const jobToken = await revealWebsiteBuilderJobToken(this.env, p.taskId);
+				if (!jobToken) throw new Error("Website Builder job capability is unavailable or expired before the subscription worker could start.");
+				return callRunner(conn!, "/website-builder/start", runnerInput(p, jobToken)) as Promise<never>;
+			});
 
 			let snapshot: Snapshot | null = null;
 			let claim: WebsiteBuilderWorkerClaim | null = null;
@@ -80,7 +85,11 @@ export class WebsiteBuilderWorkflow extends WorkflowEntrypoint<Env, WebsiteBuild
 				// missing in-memory session, and the runner does not persist the job token.
 				const job = await getWebsiteBuilderJob(this.env, p.taskId);
 				if (!job) throw new Error("Website Builder job record disappeared before the local worker could be resumed.");
-				snapshot = await step.do(`capture-${i}`, () => callRunner<Snapshot>(conn!, "/website-builder/capture", { taskId: p.taskId, resume: runnerInput(p, job.fwsSessionId ?? undefined) }, { timeoutMs: READ_TIMEOUT_MS }).catch(() => null));
+				snapshot = await step.do(`capture-${i}`, async () => {
+					const jobToken = await revealWebsiteBuilderJobToken(this.env, p.taskId);
+					if (!jobToken) throw new Error("Website Builder job capability expired before the local runner could resume.");
+					return callRunner<Snapshot>(conn!, "/website-builder/capture", { taskId: p.taskId, resume: runnerInput(p, jobToken, job.fwsSessionId ?? undefined) }, { timeoutMs: READ_TIMEOUT_MS }).catch(() => null) as Promise<never>;
+				}) as unknown as Snapshot | null;
 				if (!snapshot) {
 					// A relay loss parks this durable job rather than turning a closed laptop into a
 					// failed site build. The next capture resolves the pin-aware live runner again.

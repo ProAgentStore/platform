@@ -175,6 +175,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 			const mcpUrl = normalizeMcpEndpoint(requestedMcpUrl);
 			const engine = input.engine === "codex" ? "codex" : "claude";
 			if (!lead || !mcpUrl) return { content: "start_website_builder needs lead facts and an https FWS MCP endpoint already connected to this instance.", success: false };
+			if (!ctx.env.KEY_ENCRYPTION_KEY) return { content: "Website Builder cannot start because encrypted job-token storage is not configured on this deployment.", success: false };
 			const source = typeof lead.place_id === "string" && lead.place_id.trim() ? `place:${lead.place_id.trim()}` : `lead:${JSON.stringify(lead)}`;
 			const idempotencyKey = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(source)).then((b) => Array.from(new Uint8Array(b), (v) => v.toString(16).padStart(2, "0")).join(""));
 			const existing = await findWebsiteBuilderJobByKey(ctx.env, ctx.instanceId, idempotencyKey);
@@ -220,7 +221,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 			try {
 				await ctx.env.WEBSITE_BUILDER_SESSION.create({ params: {
 				instanceId: ctx.instanceId, userId: ctx.userId, taskId: task.id, engine, lead,
-				brokerUrl: `${publicBase}/v1/website-builder/jobs/${encodeURIComponent(task.id)}/call`, jobToken: token,
+				brokerUrl: `${publicBase}/v1/website-builder/jobs/${encodeURIComponent(task.id)}/call`,
 				mcpUrl, maxRefinements: typeof input.max_refinements === "number" ? input.max_refinements : 1,
 				} });
 			} catch (error) {
