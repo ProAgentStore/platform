@@ -92,7 +92,8 @@ export function registerRecentTools(server: McpServer, ctx: InstanceToolsCtx): v
 				});
 			}
 
-			const roster = (await authedCall("/v1/instances/my/instances", sessionToken, {}, env)) as {
+			// includePaused (#826): the roster resolves touched ids; a paused one is still the caller's.
+			const roster = (await authedCall("/v1/instances/my/instances?includePaused=1", sessionToken, {}, env)) as {
 				instances?: InstanceSummary[];
 				error?: string;
 			};

@@ -160,7 +160,7 @@ const PINS = {
 	// has to precede `/:instanceId/...`, which lives in this file — the same ordering constraint
 	// `/loop/queue` paid for in #788. What is NOT here is the composition: `lib/instance-activity.ts`
 	// folds the two query results and maps `runHealth`, so the handler is a fetch and a shape.
-	"workers/api/src/routes/instances.ts": 1116, // +3 (#825): the pause/resume mount — an import, a registrar call and the one-line reason, which is exactly the shape this pin asks for; the routes themselves are routes/instances-lifecycle.ts. // +4 (#772): the connection-guide mount — an import and a registrar call, plus the two-line reason. Every route module this file composes costs the same two lines; the work itself went into routes/instances-guide.ts and lib/connection-guide.ts, which is what the pin is asking for.
+	"workers/api/src/routes/instances.ts": 1122, // +6 (#826): `includePaused` on GET /my/instances — the flag parse beside `includeCanceled`, one SQL clause, and the three-line reason every lookup caller must opt in; it has to live on this route, so there is nothing to split out. // +3 (#825): the pause/resume mount — an import, a registrar call and the one-line reason, which is exactly the shape this pin asks for; the routes themselves are routes/instances-lifecycle.ts. // +4 (#772): the connection-guide mount — an import and a registrar call, plus the two-line reason. Every route module this file composes costs the same two lines; the work itself went into routes/instances-guide.ts and lib/connection-guide.ts, which is what the pin is asking for.
 	// +5 for #319: the send path now hands the live capture to the consumer alongside the audio
 	// key, so the two readings of a turn can be compared on the message. Raised rather than
 	// split — the whole change is one `storedDictation` call and the two `onSend` sites that
@@ -818,7 +818,7 @@ const PINS = {
 	// no published entry was edited; moving old entries to a second file would read as deleting them.
 	// +18 at #792: the 0.1.49 record — two new tools and one moved inputSchema, with why. This pin
 	// moves with every published version by construction; that is the ledger working, not drift.
-	"workers/mcp/src/surface-lock.ts": 820,
+	"workers/mcp/src/surface-lock.ts": 828, // +8 at #826: the 0.1.50 record — `my_instances` gained `include_paused`.
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
@@ -1445,7 +1445,7 @@ const PINS = {
 	// bug presented as two. The decision is a pure `subscribeActionFor` with its own tests rather
 	// than a condition in JSX, because this console has no component harness and a verdict embedded
 	// in markup is a verdict nothing checks.
-	"store/console/src/pages/AgentDetail.tsx": 962,
+	"store/console/src/pages/AgentDetail.tsx": 963, // +1 (#826): the MY_INSTANCES_WITH_PAUSED import — "Open" vs "Use this agent" must see a paused instance, or the page offers a duplicate subscribe.
 	// First entry at #477: supervision.ts crossed 800 lines before this PR — the ratchet did not
 	// catch it because it was not tracked. Adding the entry to record the current state; the right
 	// split is the connector-level supervision vs. the agent-direction store, when this file grows

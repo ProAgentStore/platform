@@ -60,7 +60,7 @@ async function registeredTools(): Promise<Registered[]> {
 
 	vi.stubGlobal("fetch", async (input: string | URL | Request) => {
 		const url = typeof input === "string" ? input : input.toString();
-		const body = url.endsWith("/v1/instances/my/instances")
+		const body = url.includes("/v1/instances/my/instances")
 			? { instances: ["apply", "repo", "coding"].map((s) => ({ capabilities: { surfaces: [s] } })) }
 			: {};
 		return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });

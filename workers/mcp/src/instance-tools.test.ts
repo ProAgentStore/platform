@@ -218,7 +218,7 @@ describe("read proxies", () => {
 		// and what keeps every existing caller reading the same thing.
 		const h = setup();
 		const instances = [{ id: "i1", agent_id: "a1", status: "active" }];
-		h.fetchStub.respond((u) => u.endsWith("/v1/instances/my/instances"), { body: { instances } });
+		h.fetchStub.respond((u) => u.includes("/v1/instances/my/instances"), { body: { instances } });
 		const res = (await h.tools.get("my_instances")!.handler({})) as { content: { text: string }[]; structuredContent?: unknown };
 		expect(h.fetchStub.calls[0].url).toBe("https://api.test/v1/instances/my/instances");
 		expect(h.fetchStub.calls[0].method).toBe("GET");
@@ -232,7 +232,7 @@ describe("read proxies", () => {
 		// for a reader, `{instances: []}` is the useful answer for a caller, and a schema'd
 		// tool must supply the second on every path or the SDK rejects the call.
 		const h = setup();
-		h.fetchStub.respond((u) => u.endsWith("/v1/instances/my/instances"), { body: { instances: [] } });
+		h.fetchStub.respond((u) => u.includes("/v1/instances/my/instances"), { body: { instances: [] } });
 		const res = (await h.tools.get("my_instances")!.handler({})) as { content: { text: string }[]; structuredContent?: unknown };
 		expect(res.content[0].text).toContain("subscribe_agent");
 		expect(res.structuredContent).toEqual({ instances: [] });
@@ -240,15 +240,26 @@ describe("read proxies", () => {
 
 	it("my_instances reports a friendly message when there are no instances", async () => {
 		const h = setup();
-		h.fetchStub.respond((u) => u.endsWith("/my/instances"), { body: { instances: [] } });
+		h.fetchStub.respond((u) => u.includes("/my/instances"), { body: { instances: [] } });
 		const res = await h.tools.get("my_instances")!.handler({});
-		expect(res.content[0].text).toContain("No subscribed instances");
+		// Default omits paused instances (#826), so "subscribe first" would be wrong advice here.
+		expect(res.content[0].text).toContain("No active instances");
+		expect(res.content[0].text).toContain("include_paused");
 		expect(h.fetchStub.calls).toHaveLength(1);
+		expect(h.fetchStub.calls[0].url).toBe("https://api.test/v1/instances/my/instances");
+	});
+
+	it("my_instances include_paused asks the API for paused instances too (#826)", async () => {
+		const h = setup();
+		h.fetchStub.respond((u) => u.includes("/my/instances"), { body: { instances: [] } });
+		const res = await h.tools.get("my_instances")!.handler({ include_paused: true });
+		expect(h.fetchStub.calls[0].url).toBe("https://api.test/v1/instances/my/instances?includePaused=1");
+		expect(res.content[0].text).toContain("No subscribed instances");
 	});
 
 	it("my_instances surfaces an upstream error string", async () => {
 		const h = setup();
-		h.fetchStub.respond((u) => u.endsWith("/my/instances"), { status: 500, body: { error: "boom" } });
+		h.fetchStub.respond((u) => u.includes("/my/instances"), { status: 500, body: { error: "boom" } });
 		const res = await h.tools.get("my_instances")!.handler({});
 		expect(res.content[0].text).toContain("Error");
 		expect(res.content[0].text).toContain("boom");
@@ -561,7 +572,7 @@ describe("subscribe_agent", () => {
 			status: 409,
 			body: { error: "Already subscribed to this agent" },
 		});
-		h.fetchStub.respond((u) => u.endsWith("/my/instances"), {
+		h.fetchStub.respond((u) => u.includes("/my/instances"), {
 			body: { instances: [{ id: "inst-existing", agent_id: "a1", status: "active" }] },
 		});
 		const res = await h.tools.get("subscribe_agent")!.handler({ agent_id: "a1" });
@@ -853,7 +864,7 @@ describe("coding loop tools drive the server's durable, budgeted run (#502)", ()
 	// account-ceiling check — and the "running" state lived in a Map in this Worker, so nothing
 	// could cancel it and nothing else could see it. The escape #374 closed for the browser Loop.
 	const withInstance = (h: Harness) => {
-		h.fetchStub.respond((u) => u.endsWith("/my/instances"), {
+		h.fetchStub.respond((u) => u.includes("/my/instances"), {
 			body: { instances: [{ id: "i1", agent_id: "coder", status: "active" }] },
 		});
 	};
@@ -1521,7 +1532,7 @@ describe("recent_instances", () => {
 		touch(h, "user-1", "i-gone", "coding_loop_status", "2026-09-09T11:00:00.000Z");
 		touch(h, "user-1", "coder", "coding_loop_status", "2026-09-09T09:30:00.000Z");
 		touch(h, "user-2", "theirs", "coding_loop_status", "2026-09-09T12:00:00.000Z");
-		h.fetchStub.respond((u) => u.endsWith("/v1/instances/my/instances"), {
+		h.fetchStub.respond((u) => u.includes("/v1/instances/my/instances"), {
 			body: {
 				instances: [
 					{ id: "i1", agent_id: "a1", slug: "coder", name: "platform coder", status: "active" },
@@ -1631,7 +1642,7 @@ describe("recent_instances", () => {
 
 		const h = setup();
 		touch(h, "user-1", "i1", "coding_loop_status", "2026-09-09T10:00:00.000Z");
-		h.fetchStub.respond((u) => u.endsWith("/my/instances"), { status: 500, body: { error: "boom" } });
+		h.fetchStub.respond((u) => u.includes("/my/instances"), { status: 500, body: { error: "boom" } });
 		expect((await h.tools.get("recent_instances")!.handler({})).content[0].text).toBe("Error: boom");
 	});
 });

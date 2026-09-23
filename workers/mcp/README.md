@@ -244,7 +244,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | Tool | Purpose | Scope | Dry | Confirm |
 |---|---|---|---|---|
 | `subscribe_agent` | Subscribe to a published agent, creating your private instance | write | yes | |
-| `my_instances` | List your subscribed instances | — | | |
+| `my_instances` | List your subscribed instances (paused ones only with `include_paused`) | — | | |
 | `account_activity` | Every instance's live health (`working`/`waiting`/`stalled`/`idle`), queue depth and last outcome, in one call — two queries, uncapped, unlike `recent_instances` (#815) | read | | |
 | `recent_instances` | The 5 instances you drove most recently over MCP, newest first, each with its latest run's `health` / `stopReason` / `waitNote` (#787) | read | | |
 | `chat_with_instance` | The real runtime chat path (your state, your credentials) | runtime | yes | |

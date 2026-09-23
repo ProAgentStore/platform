@@ -139,7 +139,7 @@ async function setup(opts: HarnessOpts = {}) {
 
 	// The user's surfaces are resolved via /v1/instances/my/instances in userGroups().
 	fetchStub.respond(
-		(u) => u.endsWith("/v1/instances/my/instances"),
+		(u) => u.includes("/v1/instances/my/instances"),
 		{ body: { instances: (opts.groups ?? []).map((s) => ({ capabilities: { surfaces: [s] } })) } },
 	);
 	// Registered AFTER the success rule so it is matched FIRST (`respond` unshifts), and stateful so
@@ -148,7 +148,7 @@ async function setup(opts: HarnessOpts = {}) {
 	if (opts.rosterFailures) {
 		let remaining = opts.rosterFailures;
 		fetchStub.respond(
-			(u) => u.endsWith("/v1/instances/my/instances") && remaining-- > 0,
+			(u) => u.includes("/v1/instances/my/instances") && remaining-- > 0,
 			{ status: 500, body: { error: "API 500" } },
 		);
 	}
@@ -242,7 +242,7 @@ describe("PagsMcp.init — tool registration", () => {
 	 */
 	describe("userGroups survives a transient roster failure (#759) and refuses rather than latches (#803)", () => {
 		const rosterCalls = (h: Awaited<ReturnType<typeof setup>>) =>
-			h.fetchStub.calls.filter((c) => c.url.endsWith("/v1/instances/my/instances")).length;
+			h.fetchStub.calls.filter((c) => c.url.includes("/v1/instances/my/instances")).length;
 
 		it("retries once, and the gated tools survive", async () => {
 			// The whole ticket, as one case: the first lookup 500s and the coding surface is still
@@ -1456,7 +1456,7 @@ describe("the registration pipeline records which instance a call touched (#787)
 		const h = await setup({ groups: [] });
 		expect(h.tools.has("recent_instances")).toBe(true);
 		expect(h.tools.get("recent_instances")!.config.annotations).toEqual({ readOnlyHint: true, destructiveHint: false });
-		h.fetchStub.respond((u) => u.endsWith("/v1/instances/my/instances"), {
+		h.fetchStub.respond((u) => u.includes("/v1/instances/my/instances"), {
 			body: { instances: [{ id: "i1", agent_id: "a1", slug: "coder", name: "Coder", status: "active" }] },
 		});
 		h.fetchStub.respond((u) => u.includes("/v1/instances/i1/loop"), {

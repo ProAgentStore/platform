@@ -24,7 +24,8 @@
  *
  * ── Why a roster count is the right evidence, and not an approximation of one
  *
- * `GET /v1/instances/my/instances` excludes `status = 'canceled'` by default (#67), and the
+ * `GET /v1/instances/my/instances?includePaused=1` excludes only `status = 'canceled'` (#67, #826 —
+ * without the flag paused instances are hidden too, which is why SettingsTab sends it), and the
  * server's retire predicate keeps the subscription alive when any OTHER sibling is in a status
  * other than `'canceled'` — `'paused'` included, deliberately (`lib/subscription-standing.ts`).
  * Those two sets are the same set. So a sibling count taken from that roster answers exactly the

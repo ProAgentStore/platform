@@ -12,10 +12,11 @@
 import { api } from "@proagentstore/sdk/client";
 import type { LandingCounts } from "./lastRoute";
 import type { Agent, Instance } from "./types";
+import { MY_INSTANCES_WITH_PAUSED } from "./instancePause";
 
 async function instanceCount(): Promise<number | null> {
 	try {
-		const d = await api<{ instances: Instance[] }>("/v1/instances/my/instances");
+		const d = await api<{ instances: Instance[] }>(MY_INSTANCES_WITH_PAUSED);
 		return (d.instances || []).length;
 	} catch {
 		// NULL, never 0 — see the header. `api()` has already filed the durable error row.

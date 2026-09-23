@@ -24,6 +24,7 @@ import Button from "../components/Button";
 import Card from "../components/Card";
 import ConnectionGuide from "../components/ConnectionGuide";
 import HomeScreenShortcut from "../components/HomeScreenShortcut";
+import { MY_INSTANCES_WITH_PAUSED } from "../lib/instancePause";
 
 interface Props {
 	instanceId: string;
@@ -138,9 +139,10 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 				// Current display name — my/instances resolves displayName over the agent name.
 				// The whole roster is kept, not just this row: the Danger zone states how many
 				// SIBLING instances of the same agent survive a cancel, and this is the response
-				// that already knows (#742). It excludes canceled instances, which is exactly the
-				// set the server's retire predicate asks about — see lib/unsubscribeScope.ts.
-				const d = await api<{ instances?: RosterInstance[] }>("/v1/instances/my/instances");
+				// that already knows (#742). It excludes canceled instances but KEEPS paused ones
+				// (#826), which is exactly the set the server's retire predicate asks about — see
+				// lib/unsubscribeScope.ts. Paused is also what this page's own Resume card needs to see.
+				const d = await api<{ instances?: RosterInstance[] }>(MY_INSTANCES_WITH_PAUSED);
 				const mine = (d.instances || []).find((i) => i.id === instanceId);
 				if (mine?.name) setInstName(mine.name);
 				setRoster(d.instances || []);

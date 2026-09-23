@@ -9,6 +9,7 @@ import { type WorkflowChoice, workflowPickerRows } from "../lib/workflow-picker"
 import { renderMd } from "@proagentstore/sdk/ui";
 import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import { Zap, ArrowLeft } from "lucide-react";
+import { MY_INSTANCES_WITH_PAUSED } from "../lib/instancePause";
 
 type Tab = "chat" | "knowledge" | "memory" | "tasks" | "settings" | "analytics" | "ops";
 
@@ -278,7 +279,7 @@ export default function AgentDetail() {
 	const [myInstances, setMyInstances] = useState<Instance[]>([]);
 	const loadMyInstances = useCallback(async () => {
 		try {
-			const r = await api<MyInstances>("/v1/instances/my/instances");
+			const r = await api<MyInstances>(MY_INSTANCES_WITH_PAUSED);
 			setMyInstances(r.instances || []);
 		} catch {
 			// Non-fatal, and NOT silent in effect: an empty roster makes the control offer a

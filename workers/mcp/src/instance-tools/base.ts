@@ -337,13 +337,16 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 
 	server.tool(
 		"my_instances",
-		"List your subscribed runnable agent instances. These are the correct targets for real agent chats.",
-		{ token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in.") },
-		async ({ token }) => {
+		"List your subscribed runnable agent instances. These are the correct targets for real agent chats. Paused instances are omitted unless include_paused is true.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			include_paused: z.boolean().optional().describe("Also list paused instances (hidden by default; resume_instance brings one back)."),
+		},
+		async ({ token, include_paused }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const data = (await authedCall(
-				"/v1/instances/my/instances",
+				include_paused ? "/v1/instances/my/instances?includePaused=1" : "/v1/instances/my/instances",
 				sessionToken,
 				{},
 				env,
@@ -356,7 +359,13 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 			if (data.error) return structuredText(`Error: ${data.error}`, { error: data.error });
 			const instances = data.instances || [];
 			if (instances.length === 0) {
-				return structuredText("No subscribed instances yet. Use subscribe_agent with a published agent first.", { instances: [] });
+				// "Subscribe first" is wrong advice when the caller's instances are merely paused (#826).
+				return structuredText(
+					include_paused
+						? "No subscribed instances yet. Use subscribe_agent with a published agent first."
+						: "No active instances. Paused instances are hidden — call my_instances with include_paused: true to see them, or subscribe_agent to start a new one.",
+					{ instances: [] },
+				);
 			}
 			return jsonResult({ instances });
 		},

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { isPaused, pausePanel } from "./instancePause";
+import { isPaused, MY_INSTANCES_WITH_PAUSED, pausePanel } from "./instancePause";
 
 /**
  * The Pause control's words and its one comparison (#825).
@@ -103,5 +103,29 @@ describe("the control is wired in", () => {
 		const heading = 'text-danger">Danger zone';
 		expect(tab).toContain("<PauseCard instanceId={instanceId}");
 		expect(tab.indexOf("<PauseCard")).toBeLessThan(tab.indexOf(heading));
+	});
+});
+
+// #826: the default roster hides paused instances, so every caller that looks up ONE instance,
+// counts what the owner has, or chooses "Open" vs "Subscribe" must ask for them explicitly —
+// otherwise a paused instance's page reads as missing and its Resume control is unreachable.
+describe("MY_INSTANCES_WITH_PAUSED (#826)", () => {
+	it("asks the roster for paused instances", () => {
+		expect(MY_INSTANCES_WITH_PAUSED).toBe("/v1/instances/my/instances?includePaused=1");
+	});
+
+	it.each([
+		"hooks/useInstanceRecord.ts",
+		"lib/landing.ts",
+		"tabs/SettingsTab.tsx",
+		"tabs/BoardTab.tsx",
+		"pages/AgentDetail.tsx",
+		"pages/Browse.tsx",
+		"pages/Diagnostics.tsx",
+		"pages/Feedback.tsx",
+	])("%s reads the roster with paused instances included", (file) => {
+		const src = readFileSync(join(__dirname, "..", file), "utf8");
+		expect(src).toContain("MY_INSTANCES_WITH_PAUSED");
+		expect(src).not.toContain('"/v1/instances/my/instances"');
 	});
 });

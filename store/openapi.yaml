@@ -2449,9 +2449,23 @@ paths:
   /v1/instances/my/instances:
     get:
       summary: List my instances
-      description: List all agent instances the authenticated user is subscribed to.
+      description: >-
+        List the agent instances the authenticated user is subscribed to. Canceled and paused
+        instances are omitted by default; opt back in with `includeCanceled` / `includePaused`.
+        A paused instance is kept in full and returns to the default list as soon as it is resumed.
       operationId: listMyInstances
       tags: [Instances]
+      parameters:
+        - name: includePaused
+          in: query
+          schema:
+            type: boolean
+          description: Also return paused instances (`1`, `true` or `yes`).
+        - name: includeCanceled
+          in: query
+          schema:
+            type: boolean
+          description: Also return canceled instances (`1`, `true` or `yes`).
       responses:
         "200":
           description: Subscribed instances
