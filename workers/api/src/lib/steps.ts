@@ -1053,6 +1053,36 @@ export const STEP_TOOLS: ToolDef[] = [
 		},
 	},
 
+	// 7d ─ stringify_json — safely hand structured connector output to a later text-only step.
+	// A pipeline binder keeps JSON structured (correctly), while an `ai_generate` placeholder
+	// renders an object as `[object Object]`. This deliberately small inverse lets a workflow
+	// ask a model to choose from an MCP catalogue or critique a diagnostic report without losing
+	// the actual rows that informed the decision.
+	{
+		name: "stringify_json",
+		tier: "standard",
+		scope: "read",
+		mutates: false,
+		untrustedOutput: false,
+		description:
+			"Serialize a value as JSON for a later text-only step such as ai_generate. Returns {text}; unlike direct template interpolation, objects and arrays are preserved instead of becoming [object Object].",
+		jsonSchema: {
+			type: "object",
+			properties: {
+				value: { type: ["object", "array", "string", "number", "boolean", "null"], description: "Any JSON-compatible value to serialize." },
+				pretty: { type: "boolean", description: "Pretty-print with indentation (default false)." },
+			},
+			required: ["value"],
+		},
+		handler: async (_ctx, input) => {
+			try {
+				return ok(JSON.stringify({ text: JSON.stringify(input.value, null, input.pretty === true ? 2 : undefined) }));
+			} catch {
+				return fail("value is not JSON-serializable.");
+			}
+		},
+	},
+
 	// 8 ─ ai_generate — the pipeline's LLM step. Draft text per record with the owner's BYOK
 	// model (Anthropic Claude, else their CF Workers AI) — no platform spend. For each item,
 	// render `prompt` ({{field}} from the item) and write the reply to `as`. The Outreach agent's
