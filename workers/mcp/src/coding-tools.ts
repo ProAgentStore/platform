@@ -220,9 +220,10 @@ export function registerCodingSessionTools(
 	// path literals across the MCP worker EXACTLY, so that nothing here can construct the per-repo
 	// promotion route. A second spelling of the same collection path is a change to that set, and
 	// the guard is worth more than the camelCase.
-	const listRepos = async (instance_id: string, sessionToken: string): Promise<CodingRepoRow[]> => {
-		const r = (await authedCall(`/v1/instances/${instance_id}/coding/repos`, sessionToken, {}, env)) as { repos?: CodingRepoRow[] };
-		return r.repos || [];
+	const listRepos = async (instance_id: string, sessionToken: string): Promise<{ repos: CodingRepoRow[] } | { error: string; [key: string]: unknown }> => {
+		const r = (await authedCall(`/v1/instances/${instance_id}/coding/repos`, sessionToken, {}, env)) as { repos?: CodingRepoRow[]; error?: string; [key: string]: unknown };
+		if (r.error) return { ...r, error: r.error };
+		return { repos: r.repos || [] };
 	};
 
 	server.tool(
@@ -240,7 +241,9 @@ export function registerCodingSessionTools(
 			// Same gate as every other opener: this starts a CLI process on the user's machine.
 			const denied = await requirePermission(safetyFor(token), "runtime", "coding_session_open", { instance_id, repo_id });
 			if (denied) return denied;
-			const resolved = resolveRepoForOpen(await listRepos(instance_id, sessionToken), repo_id);
+			const repos = await listRepos(instance_id, sessionToken);
+			if ("error" in repos) return jsonText(repos);
+			const resolved = resolveRepoForOpen(repos.repos, repo_id);
 			if ("ask" in resolved) return text(resolved.ask);
 			const d = await openConversation(instance_id, sessionToken, resolved.repo.id, engine_id);
 			if (d?.error) return text(`Error opening the conversation on ${repoLabel(resolved.repo)}: ${d.error}`);
@@ -277,7 +280,8 @@ export function registerCodingSessionTools(
 		async ({ instance_id, session_id, token }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, env)) as { sessions?: Array<{ id: string; status: string }> };
+			const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, env)) as { sessions?: Array<{ id: string; status: string }>; error?: string };
+			if (r.error) return jsonText(r);
 			const sessions = r.sessions || [];
 			const sid = session_id || sessions.find((s) => s.status === "active")?.id;
 			if (!sid) return text("No active coding session found.");
@@ -288,7 +292,9 @@ export function registerCodingSessionTools(
 				alive?: boolean;
 				ready?: boolean;
 				authPrompt?: unknown;
+				error?: string;
 			};
+			if (d.error) return jsonText(d);
 			// The siblings that make `runState` falsifiable (#593). The API answers `idle` on three
 			// paths and disambiguates with exactly these, so a projection without them turns "the
 			// engine is idle", "the machine is gone" and "the probe failed" into one answer.
@@ -339,7 +345,8 @@ export function registerCodingSessionTools(
 			// The same gate covers the wake below: opening a conversation launches that process.
 			const denied = await requirePermission(safetyFor(token), "runtime", "coding_session_message", { instance_id, session_id });
 			if (denied) return denied;
-			const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, env)) as { sessions?: Array<{ id: string; status: string }> };
+			const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, env)) as { sessions?: Array<{ id: string; status: string }>; error?: string };
+			if (r.error) return jsonText(r);
 			const sessions = r.sessions || [];
 			let sid = session_id || sessions.find((s) => s.status === "active")?.id;
 			// WAKE THE REPO RATHER THAN REFUSE (#696). "No active coding session found." answered a
@@ -349,7 +356,9 @@ export function registerCodingSessionTools(
 			// conversation is the one the caller was in yesterday, not a cold start.
 			let woke = "";
 			if (!sid) {
-				const resolved = resolveRepoForOpen(await listRepos(instance_id, sessionToken));
+				const repos = await listRepos(instance_id, sessionToken);
+				if ("error" in repos) return jsonText(repos);
+				const resolved = resolveRepoForOpen(repos.repos);
 				// Several idle repos: the caller named a message, not a repo, and there is nothing
 				// running to infer one from. Ask — opening the wrong repo would type someone's
 				// instruction into the wrong checkout and report success.
@@ -382,7 +391,8 @@ export function registerCodingSessionTools(
 			if (!sessionToken) return authRequired();
 			const denied = await requirePermission(safetyFor(token), "runtime", "coding_session_restart", { instance_id, session_id });
 			if (denied) return denied;
-			const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, env)) as { sessions?: Array<{ id: string; status: string }> };
+			const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, env)) as { sessions?: Array<{ id: string; status: string }>; error?: string };
+			if (r.error) return jsonText(r);
 			const sessions = r.sessions || [];
 			const sid = session_id || sessions.find((s) => s.status === "active")?.id;
 			if (!sid) return text("No active coding session found.");
@@ -570,7 +580,8 @@ export function registerCodingSessionTools(
 		async ({ instance_id, token }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, env)) as { sessions?: unknown[] };
+			const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, env)) as { sessions?: unknown[]; error?: string };
+			if (r.error) return jsonText(r);
 			return jsonText(r.sessions || []);
 		},
 	);
@@ -588,7 +599,8 @@ export function registerCodingSessionTools(
 			if (!sessionToken) return authRequired();
 			const denied = await requirePermission(safetyFor(token), "runtime", "coding_session_end", { instance_id, session_id });
 			if (denied) return denied;
-			const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, env)) as { sessions?: Array<{ id: string; status: string }> };
+			const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, env)) as { sessions?: Array<{ id: string; status: string }>; error?: string };
+			if (r.error) return jsonText(r);
 			const sid = session_id || (r.sessions || []).find((s) => s.status === "active")?.id;
 			if (!sid) return text("No active coding session found.");
 			const ended = (await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/end`, sessionToken, { method: "POST" }, env)) as { error?: string };
@@ -612,11 +624,15 @@ export function registerCodingSessionTools(
 			if (!sessionToken) return authRequired();
 			const denied = await requirePermission(safetyFor(token), "runtime", "coding_session_fresh", { instance_id, repo_id });
 			if (denied) return denied;
-			const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, env)) as { sessions?: Array<{ id: string; status: string; repoId: string }> };
+			const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, env)) as { sessions?: Array<{ id: string; status: string; repoId: string }>; error?: string };
+			if (r.error) return jsonText(r);
 			const active = (r.sessions || []).find((s) => s.status === "active");
 			const repoId = repo_id || active?.repoId;
 			if (!repoId) return text("No repo specified and no active session to infer from.");
-			if (active) await authedCall(`/v1/instances/${instance_id}/coding/sessions/${active.id}/end`, sessionToken, { method: "POST" }, env);
+			if (active) {
+				const ended = (await authedCall(`/v1/instances/${instance_id}/coding/sessions/${active.id}/end`, sessionToken, { method: "POST" }, env)) as { error?: string };
+				if (ended.error) return jsonText(ended);
+			}
 			// `fresh: true` (#408): a new session now CONTINUES the repo's recent conversation by
 			// default, and the one this tool just ended is the most recent there is — so without the
 			// flag, "clean state, no --resume" hands back the very state it was called to escape.
@@ -624,7 +640,8 @@ export function registerCodingSessionTools(
 			// sent `"claude"` — the constant `openConversation` above records burning an owner's Claude
 			// limit after he switched to Codex (#549) — which made the one tool that STARTS an engine
 			// clean also the one that ignored which engine the owner had chosen.
-			const d = await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, { method: "POST", body: JSON.stringify(engine_id ? { repoId, engineId: engine_id, fresh: true } : { repoId, fresh: true }) }, env);
+			const d = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, { method: "POST", body: JSON.stringify(engine_id ? { repoId, engineId: engine_id, fresh: true } : { repoId, fresh: true }) }, env)) as { error?: string };
+			if (d.error) return jsonText(d);
 			await audit(safetyFor(token), { tool: "coding_session_fresh", action: "completed", input: { instance_id, repoId } });
 			return jsonText(d);
 		},

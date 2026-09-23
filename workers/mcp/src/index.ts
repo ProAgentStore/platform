@@ -22,7 +22,7 @@ import {
 	deployStatus,
 	getRepoFile,
 	listRepoFiles,
-	ownsAgent,
+	agentOwnershipError,
 	putRepoFile,
 	repoNameFor,
 	triggerDeploy,
@@ -700,9 +700,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 			async ({ token, agent_id, path }) => {
 				const sessionToken = this.token(token);
 				if (!sessionToken) return text("Error: authentication required. Connect with browser sign-in or pass a PAGS session token.");
-				if (!(await ownsAgent(this.env, sessionToken, agent_id))) {
-					return text(`Error: you do not own agent "${agent_id}" or it does not exist.`);
-				}
+				const ownershipError = await agentOwnershipError(this.env, sessionToken, agent_id); if (ownershipError) return ownershipError;
 				const org = this.env.GITHUB_ORG || "ProAgentStore";
 				return text(await listRepoFiles(this.env, org, repoNameFor(agent_id), path));
 			},
@@ -719,9 +717,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 			async ({ token, agent_id, path }) => {
 				const sessionToken = this.token(token);
 				if (!sessionToken) return text("Error: authentication required. Connect with browser sign-in or pass a PAGS session token.");
-				if (!(await ownsAgent(this.env, sessionToken, agent_id))) {
-					return text(`Error: you do not own agent "${agent_id}" or it does not exist.`);
-				}
+				const ownershipError = await agentOwnershipError(this.env, sessionToken, agent_id); if (ownershipError) return ownershipError;
 				const org = this.env.GITHUB_ORG || "ProAgentStore";
 				const file = await getRepoFile(this.env, org, repoNameFor(agent_id), path);
 				if (file.error) return text(`Error reading ${path}: ${file.error}`);
@@ -757,9 +753,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				}
 				const unconfirmed = await requireConfirmation(this.safety(token), "write_agent_file", confirm, "write_agent_file", input);
 				if (unconfirmed) return unconfirmed;
-				if (!(await ownsAgent(this.env, sessionToken, agent_id))) {
-					return text(`Error: you do not own agent "${agent_id}" or it does not exist.`);
-				}
+				const ownershipError = await agentOwnershipError(this.env, sessionToken, agent_id); if (ownershipError) return ownershipError;
 				const org = this.env.GITHUB_ORG || "ProAgentStore";
 				const result = await putRepoFile(
 					this.env,
@@ -812,9 +806,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				}
 				const unconfirmed = await requireConfirmation(this.safety(token), "batch_write_agent_files", confirm, "batch_write_agent_files", input);
 				if (unconfirmed) return unconfirmed;
-				if (!(await ownsAgent(this.env, sessionToken, agent_id))) {
-					return text(`Error: you do not own agent "${agent_id}" or it does not exist.`);
-				}
+				const ownershipError = await agentOwnershipError(this.env, sessionToken, agent_id); if (ownershipError) return ownershipError;
 				const org = this.env.GITHUB_ORG || "ProAgentStore";
 				const lines: string[] = [];
 				for (const file of files) {
@@ -847,9 +839,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				const input = { agent_id };
 				const denied = await requirePermission(this.safety(token), "read", "agent_deploy_status", input);
 				if (denied) return denied;
-				if (!(await ownsAgent(this.env, sessionToken, agent_id))) {
-					return text(`Error: you do not own agent "${agent_id}" or it does not exist.`);
-				}
+				const ownershipError = await agentOwnershipError(this.env, sessionToken, agent_id); if (ownershipError) return ownershipError;
 				const org = this.env.GITHUB_ORG || "ProAgentStore";
 				return text(await deployStatus(this.env, org, repoNameFor(agent_id)));
 			},
@@ -876,9 +866,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 						ref: "main",
 					});
 				}
-				if (!(await ownsAgent(this.env, sessionToken, agent_id))) {
-					return text(`Error: you do not own agent "${agent_id}" or it does not exist.`);
-				}
+				const ownershipError = await agentOwnershipError(this.env, sessionToken, agent_id); if (ownershipError) return ownershipError;
 				const org = this.env.GITHUB_ORG || "ProAgentStore";
 				const result = await triggerDeploy(this.env, org, repoNameFor(agent_id));
 				await audit(this.safety(token), { tool: "trigger_agent_deploy", action: "completed", input, result });
@@ -944,7 +932,8 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 					sessionToken,
 					{},
 					this.env,
-				)) as { documents?: unknown[] };
+				)) as { documents?: unknown[]; error?: string };
+				if (data.error) return jsonText(data);
 				return jsonText(data.documents || []);
 			},
 		);

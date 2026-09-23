@@ -22,9 +22,11 @@ dashboardRoutes.get("/usage", async (c) => {
 		.bind(session.uid)
 		.first<{ count: number }>();
 
-	// Total executions
+	// Total AI calls. `agent_executions` is a legacy direct-inference table; every
+	// current runtime records the user-facing call in the append-only `ai_usage`
+	// ledger instead (see routes/analytics.ts for the per-agent equivalent).
 	const execs = await c.env.DB.prepare(
-		"SELECT COUNT(*) as count FROM agent_executions WHERE user_id = ?1",
+		"SELECT COUNT(*) as count FROM ai_usage WHERE user_id = ?1",
 	)
 		.bind(session.uid)
 		.first<{ count: number }>();

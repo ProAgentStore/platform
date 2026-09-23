@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { apiBase, authedCall, type McpEnv } from "./http.js";
+import { apiBase, authedCall, jsonText, text, type McpEnv } from "./http.js";
 
 type Env = McpEnv;
 
@@ -23,19 +23,34 @@ export interface AgentSummary {
 	category?: string;
 }
 
+/**
+ * `authedCall` deliberately returns the API's non-2xx payload rather than throwing.
+ * Keep that payload distinct from an actual ownership answer: callers must not turn an
+ * unavailable roster into a claim that the user owns no agents (#831).
+ */
+export type AgentOwnership = boolean | { error: string; [key: string]: unknown };
+
 export async function ownsAgent(
 	env: Env,
 	token: string,
 	agentId: string,
-): Promise<boolean> {
+): Promise<AgentOwnership> {
 	const data = (await authedCall("/v1/agents/my/agents", token, {}, env)) as {
 		agents?: AgentSummary[];
 		error?: string;
+		[key: string]: unknown;
 	};
-	if (data.error) return false;
+	if (data.error) return { ...data, error: data.error };
 	return (data.agents || []).some(
 		(a) => a.id === agentId || a.slug === agentId,
 	);
+}
+
+/** Return an MCP result only when ownership could not be established. */
+export async function agentOwnershipError(env: Env, token: string, agentId: string) {
+	const ownership = await ownsAgent(env, token, agentId);
+	if (typeof ownership !== "boolean") return jsonText(ownership);
+	return ownership ? null : text(`Error: you do not own agent "${agentId}" or it does not exist.`);
 }
 
 export function repoNameFor(agentId: string): string {
@@ -370,5 +385,3 @@ export async function triggerDeploy(
 	}
 	return `Deploy trigger failed for ${repo}: ${res.text}`;
 }
-
-

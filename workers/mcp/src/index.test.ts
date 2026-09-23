@@ -794,6 +794,119 @@ describe("coding_session_fresh", () => {
 		expect(posts[0]).toEqual({ repoId: "repo-1", fresh: true });
 		expect(posts[1]).toEqual({ repoId: "repo-1", engineId: "codex", fresh: true });
 	});
+
+	it("does not create or audit a fresh session when ending the current one fails (#831)", async () => {
+		const h = await setup({ groups: ["coding"] });
+		h.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "GET", {
+			body: { sessions: [{ id: "sess-1", status: "active", repoId: "repo-1" }] },
+		});
+		h.fetchStub.respond((u, m) => u.endsWith("/sess-1/end") && m === "POST", {
+			status: 502,
+			body: { error: "runner offline" },
+		});
+
+		const res = await h.tools.get("coding_session_fresh")!.handler({ instance_id: "i1" });
+		expect(JSON.parse(res.content[0].text)).toMatchObject({ error: "runner offline" });
+		expect(h.fetchStub.calls.some((c) => c.url.endsWith("/coding/sessions") && c.method === "POST")).toBe(false);
+		expect(h.auditEvents().some((e) => e.tool === "coding_session_fresh")).toBe(false);
+	});
+
+	it("does not audit a fresh session when creation fails (#831)", async () => {
+		const h = await setup({ groups: ["coding"] });
+		h.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "GET", { body: { sessions: [] } });
+		h.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "POST", {
+			status: 503,
+			body: { error: "coding service unavailable" },
+		});
+
+		const res = await h.tools.get("coding_session_fresh")!.handler({ instance_id: "i1", repo_id: "repo-1" });
+		expect(JSON.parse(res.content[0].text)).toMatchObject({ error: "coding service unavailable" });
+		expect(h.auditEvents().some((e) => e.tool === "coding_session_fresh")).toBe(false);
+	});
+});
+
+describe("#831 — MCP preserves upstream API failures", () => {
+	it("does not represent a failed knowledge listing as an empty collection", async () => {
+		const h = await setup();
+		h.fetchStub.respond((u, m) => u.endsWith("/v1/agents/ag-1/knowledge") && m === "GET", {
+			status: 500,
+			body: { error: "knowledge store unavailable" },
+		});
+
+		const res = await h.tools.get("list_knowledge")!.handler({ agent_id: "ag-1" });
+		expect(JSON.parse(res.content[0].text)).toMatchObject({ error: "knowledge store unavailable" });
+	});
+
+	it("does not turn an unavailable owned-agent roster into an ownership denial", async () => {
+		const h = await setup();
+		h.fetchStub.respond((u, m) => u.endsWith("/v1/agents/my/agents") && m === "GET", {
+			status: 503,
+			body: { error: "roster unavailable" },
+		});
+
+		const res = await h.tools.get("list_agent_repo_files")!.handler({ agent_id: "ag-1" });
+		expect(JSON.parse(res.content[0].text)).toMatchObject({ error: "roster unavailable" });
+		expect(h.fetchStub.calls.some((c) => c.url.includes("api.github.com"))).toBe(false);
+	});
+
+	it("does not represent a failed coding-session listing as an empty collection", async () => {
+		const h = await setup({ groups: ["coding"] });
+		h.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "GET", {
+			status: 500,
+			body: { error: "sessions unavailable" },
+		});
+
+		const res = await h.tools.get("coding_sessions_list")!.handler({ instance_id: "i1" });
+		expect(JSON.parse(res.content[0].text)).toMatchObject({ error: "sessions unavailable" });
+	});
+
+	it("does not turn a failed session lookup or capture into a missing/empty session", async () => {
+		const h = await setup({ groups: ["coding"] });
+		h.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "GET", {
+			status: 404,
+			body: { error: "instance not found" },
+		});
+
+		const listed = await h.tools.get("coding_session_capture")!.handler({ instance_id: "i1" });
+		expect(JSON.parse(listed.content[0].text)).toMatchObject({ error: "instance not found" });
+		expect(h.fetchStub.calls.some((c) => c.url.endsWith("/capture"))).toBe(false);
+
+		const h2 = await setup({ groups: ["coding"] });
+		h2.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "GET", {
+			body: { sessions: [{ id: "sess-1", status: "active" }] },
+		});
+		h2.fetchStub.respond((u, m) => u.endsWith("/sess-1/capture") && m === "GET", {
+			status: 502,
+			body: { error: "runner offline" },
+		});
+
+		const captured = await h2.tools.get("coding_session_capture")!.handler({ instance_id: "i1" });
+		expect(JSON.parse(captured.content[0].text)).toMatchObject({ error: "runner offline" });
+		expect(JSON.parse(captured.content[0].text)).not.toHaveProperty("sessionId");
+	});
+
+	it("does not report no attached repo when the repo lookup fails", async () => {
+		const h = await setup({ groups: ["coding"] });
+		h.fetchStub.respond((u, m) => u.endsWith("/coding/repos") && m === "GET", {
+			status: 503,
+			body: { error: "repos unavailable" },
+		});
+
+		const opened = await h.tools.get("coding_session_open")!.handler({ instance_id: "i1" });
+		expect(JSON.parse(opened.content[0].text)).toMatchObject({ error: "repos unavailable" });
+		expect(h.fetchStub.calls.some((c) => c.url.endsWith("/coding/sessions") && c.method === "POST")).toBe(false);
+
+		const h2 = await setup({ groups: ["coding"] });
+		h2.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "GET", { body: { sessions: [] } });
+		h2.fetchStub.respond((u, m) => u.endsWith("/coding/repos") && m === "GET", {
+			status: 503,
+			body: { error: "repos unavailable" },
+		});
+
+		const messaged = await h2.tools.get("coding_session_message")!.handler({ instance_id: "i1", message: "continue" });
+		expect(JSON.parse(messaged.content[0].text)).toMatchObject({ error: "repos unavailable" });
+		expect(h2.fetchStub.calls.some((c) => c.url.endsWith("/coding/sessions") && c.method === "POST")).toBe(false);
+	});
 });
 
 // ── coding_engine_get / coding_engine_set (#792) ────────────────────────────
