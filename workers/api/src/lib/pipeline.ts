@@ -34,6 +34,17 @@ export interface PipelineStep {
 	/** Name this step's output so later steps can `$ref` it. Defaults to the step index. */
 	bind?: string;
 	/**
+	 * An optional, fail-closed step guard. The step runs only when this value resolves to the
+	 * boolean `true`; false, missing, malformed, and non-boolean values all skip it. This is
+	 * deliberately stricter than JavaScript truthiness: a missing QA field must never turn into an
+	 * accidental external write.
+	 *
+	 * It makes a bounded sequence of draft → inspect → refine stages declarative. Each stage is
+	 * still a normal, individually durable workflow step, while a later refinement can be guarded
+	 * by a prior review such as `{ "$ref": "review_1.needs_refinement" }`.
+	 */
+	when?: PipelineInputValue;
+	/**
 	 * Trivial fan-out seam (#96 owns the rich version): when set to a reference that
 	 * resolves to an array, the step runs ONCE PER item — the item is exposed to `inputs`
 	 * as `$param: "item"` — and this step's bound output is the array of per-item results.
@@ -103,6 +114,8 @@ export interface StepResult {
 	success: boolean;
 	content: string;
 	output: unknown;
+	/** The step's `when` guard was not explicitly true, so no registry tool was dispatched. */
+	skipped?: boolean;
 	/**
 	 * The registry tool this step actually dispatched from its own inputs (#396), when its handler
 	 * takes one there — today `enrich`.
@@ -141,6 +154,7 @@ export function capStepOutput(result: StepResult, tool: string, index: number): 
 	return {
 		tool,
 		bind: result.bind,
+		...(result.skipped ? { skipped: true } : {}),
 		// Carried through the rewrite: the trace line for an over-large step is exactly the one a
 		// reader needs "what actually ran" for, and dropping it here would blank it on failure only.
 		...(result.dispatched ? { dispatched: result.dispatched } : {}),
@@ -324,8 +338,8 @@ function outputCount(output: unknown): number {
  */
 export function auditStepEntry(step: PipelineStep, index: number, result: StepResult): AuditEntry {
 	const bind = stepBind(step, index);
-	const verb = result.success ? "→" : "failed";
-	const count = result.success ? ` ${outputCount(result.output)} record(s)` : `: ${result.content.slice(0, 160)}`;
+	const verb = result.skipped ? "skipped" : result.success ? "→" : "failed";
+	const count = result.skipped ? `: ${result.content}` : result.success ? ` ${outputCount(result.output)} record(s)` : `: ${result.content.slice(0, 160)}`;
 	// The inner tool when the step dispatched one (#396) — a record's own trail said `enrich` and
 	// left the reader to guess which tool produced the field sitting right next to it.
 	const ran = result.dispatched ? `${step.tool} → ${result.dispatched}` : step.tool;
@@ -420,7 +434,7 @@ export function stepReferenceError(
 	declaredParams: ReadonlySet<string> | null,
 ): string | null {
 	// `forEach` resolves against the same scope as the inputs, so it is checked identically.
-	const refs = [...collectReferences(step.inputs ?? {}), ...collectReferences(step.forEach ?? null)];
+	const refs = [...collectReferences(step.inputs ?? {}), ...collectReferences(step.when ?? null), ...collectReferences(step.forEach ?? null)];
 	for (const r of refs) {
 		if (r.kind === "ref") {
 			if (!knownBinds.has(r.root)) {
@@ -610,6 +624,19 @@ export async function executePipelineStep(
 	params: Record<string, unknown>,
 ): Promise<StepResult> {
 	const bind = stepBind(step, index);
+	// A guard is a safety boundary, especially for connector writes: only an explicit boolean
+	// true reaches the tool. `undefined`, a typo'd reference, a string returned by an AI, or an
+	// object such as `{ passed: true }` are all skips rather than truthy surprises.
+	if (step.when !== undefined && resolveInputValue(step.when, { outputs, params }) !== true) {
+		return {
+			tool: step.tool,
+			bind,
+			success: true,
+			skipped: true,
+			content: "skipped: when guard was not explicitly true",
+			output: null,
+		};
+	}
 	const def = getRegistryTool(step.tool);
 	// The declared-tools gate (#381), refused BEFORE any input is resolved. `runRegistryTool` would
 	// refuse it too — that is where the rule is enforced, including for a tool `enrich` names in
