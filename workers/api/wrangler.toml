@@ -38,6 +38,7 @@ custom_domain = true
 # `wrangler deploy --var API_BUILD:<sha>` so server-side error_log rows carry the build that
 # wrote them. "dev" is the local default — distinguishable from a real build and from NULL.
 API_BUILD = "dev"
+API_PUBLIC_URL = "https://api.proagentstore.online"
 GITHUB_CLIENT_ID = "Ov23lihFW7hnEXYHNmvK"  # ProAgentStore OAuth app (own — no FAS dependency)
 GITHUB_ORG = "ProAgentStore"
 # Master switch for platform-paid internal AI (knowledge embeddings + conversation
@@ -137,6 +138,11 @@ class_name = "JobApplyWorkflow"
 name = "pags-coding-session"
 binding = "CODING_SESSION"
 class_name = "CodingSessionWorkflow"
+
+[[workflows]]
+name = "pags-website-builder-session"
+binding = "WEBSITE_BUILDER_SESSION"
+class_name = "WebsiteBuilderWorkflow"
 
 # Durable runner for declarative data pipelines (issue #97).
 [[workflows]]

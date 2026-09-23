@@ -14,6 +14,7 @@ import { resolveHandoffStatus } from "./handoff-status.js";
 import { RunnerStore } from "./store.js";
 import { CodingRuntime } from "./coding/runtime.js";
 import { WORKFLOW_DRIVEN_TASKS } from "./task-types.js";
+import { websiteBuilderClient, websiteBuilderPrompt, websiteBuilderSessionId, type WebsiteBuilderTaskInput } from "./website-builder.js";
 
 /** True for a plain object. */
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -91,6 +92,8 @@ export class LocalRunner {
 	readonly store: RunnerStore;
 	/** Local tmux coding sessions (the second runtime — AgentCoder port). */
 	readonly coding: CodingRuntime;
+	/** Website-builder task id → local subscription CLI session id. */
+	private websiteBuilderSessions = new Map<string, string>();
 	/** Live human-takeover sessions, keyed by task id (the page is kept alive). */
 	private takeovers = new Map<
 		string,
@@ -115,9 +118,48 @@ export class LocalRunner {
 			runtimePlane: "pags",
 			runnerRole: "tool-executor",
 			capabilities: [...CAPABILITIES, ...CodingRuntime.capabilities()],
-			taskTypes: ["echo", "browser.open", "job.apply_agent", ...CodingRuntime.taskTypes()],
+			taskTypes: ["echo", "browser.open", "job.apply_agent", "website.build", ...CodingRuntime.taskTypes()],
 			approvalRequiredFor: [...APPROVAL_REQUIRED_TASKS],
 		};
+	}
+
+	/** Start the bounded Website Builder turn on the owner machine. */
+	websiteBuilderStart(input: WebsiteBuilderTaskInput) {
+		if (!input.taskId || !input.instanceId || !input.brokerUrl || !input.jobToken || !input.lead || typeof input.lead !== "object") {
+			throw new RunnerInputError("website builder needs taskId, instanceId, lead, brokerUrl, and jobToken");
+		}
+		if (input.engine !== "claude" && input.engine !== "codex") throw new RunnerInputError("website builder engine must be claude or codex");
+		const sessionId = this.websiteBuilderSessions.get(input.taskId) ?? websiteBuilderSessionId(input.taskId);
+		this.websiteBuilderSessions.set(input.taskId, sessionId);
+		this.coding.start({
+			sessionId,
+			repoId: `website-builder-${input.taskId}`,
+			workDir: join(this.config.dataDir, "website-builder", input.taskId),
+			clientType: websiteBuilderClient(input.engine),
+			env: { PAGS_WEBSITE_BUILDER_TOKEN: input.jobToken },
+		});
+		this.coding.act(sessionId, { kind: "message", text: websiteBuilderPrompt(input), author: "pilot" });
+		return this.coding.snapshot(sessionId);
+	}
+
+	websiteBuilderCapture(taskId: string) {
+		const sessionId = this.websiteBuilderSessions.get(taskId) ?? websiteBuilderSessionId(taskId);
+		return this.coding.snapshot(sessionId, { drainUsage: true });
+	}
+
+	websiteBuilderComplete(taskId: string, result: { status: "completed" | "failed"; output?: unknown; error?: string }) {
+		const sessionId = this.websiteBuilderSessions.get(taskId) ?? websiteBuilderSessionId(taskId);
+		try { this.coding.end(sessionId); } catch { /* already ended is fine */ }
+		this.websiteBuilderSessions.delete(taskId);
+		const task = this.requireTask(taskId);
+		task.status = result.status;
+		task.output = result.output;
+		task.error = result.error;
+		task.updatedAt = new Date().toISOString();
+		task.completedAt = task.updatedAt;
+		this.store.putTask(task);
+		this.addTaskEvent(task, `website-builder.${result.status}`, result.status === "completed" ? "Website Builder returned review evidence" : (result.error || "Website Builder failed"));
+		return task;
 	}
 
 	createTask(request: CreateTaskRequest): RunnerTask {
