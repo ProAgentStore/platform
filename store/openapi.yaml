@@ -6920,7 +6920,7 @@ paths:
                         connector: { type: string, description: "The connector that provides it — and the one whose write consent applies. Not always the agent's surface name: a `tmux`-surface agent's tools come from the `terminal` connector." }
                         scope: { type: string, enum: [read, write] }
                         allowed: { type: boolean, description: "Is this tool part of this agent at all (declared, and not switched off by the owner)? Deliberately NOT folded with write consent — see `writeConsent`." }
-                        disabled: { type: boolean }
+                        disabled: { type: boolean, description: "Sent only when `true` (the owner switched the tool off). A missing value means `false`." }
                         reason: { type: string, enum: [ok, not_declared, disabled_by_owner, needs_permission], description: "Why `allowed` is what it is. `needs_permission` is a tool an OWNER PERMISSION grants rather than the agent's declaration (`find_confirmation_link`, on `permissions.email`): it is this agent's the moment the permission is on, so `not_declared` would be false (#721)." }
                         writeConsent:
                           type: string
@@ -6930,7 +6930,8 @@ paths:
                             but every call is refused until write access for `connector` is granted. `per_call`
                             means the answer is decided per call: a caller-chosen HTTP method (`http_request`,
                             #307 — reads run, a mutating verb is refused), or outbound MCP (#262 — each call also
-                            needs a grant for that endpoint and remote tool).
+                            needs a grant for that endpoint and remote tool). Omitted when `n/a` (no consent
+                            gate applies), so a missing value means `n/a`.
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 

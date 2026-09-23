@@ -19,7 +19,7 @@ import { STEP_TOOLS } from "../steps.js";
 // Every tool the two JSONs name — getRegistryTool must know them all or validatePipeline fails.
 const KNOWN = new Set([
 	"http_request", "slice", "flatten", "map", "web_search", "extract_contacts",
-	"ai_generate", "parse_json", "mcp_call_tool", "create_ticket", "dedupe_upsert",
+	"ai_generate", "parse_json", "stringify_json", "mcp_call_tool", "create_ticket", "dedupe_upsert",
 ]);
 
 const realHandler = (name: string) => STEP_TOOLS.find((t) => t.name === name)!.handler;
@@ -75,6 +75,7 @@ let upserted: Array<Record<string, unknown>> = [];
 let photoRequests: string[] = [];
 let searchQueries: string[] = [];
 let aiPrompts: string[] = [];
+let qualityResponses: boolean[] = [];
 /** What a MODEL reads: the fences are boundaries, not content. Strips the inline wrappers so the
  *  grounding assertions below still read as prose, while the fence itself is asserted separately. */
 const readable = (t: string) =>
@@ -83,7 +84,7 @@ let emits: Array<{ event: string; emitOn: string; payloads: Array<Record<string,
 
 const runRegistryTool = vi.fn(async (name: string, ctx: unknown, input: Record<string, unknown>) => {
 	// ── real pure transforms (the logic under test) ───────────────────────
-	if (name === "map" || name === "slice" || name === "flatten" || name === "parse_json" || name === "extract_contacts") {
+	if (name === "map" || name === "slice" || name === "flatten" || name === "parse_json" || name === "stringify_json" || name === "extract_contacts") {
 		const r = await realHandler(name)(ctx as never, input);
 		return { name, content: r.content, success: r.success };
 	}
@@ -129,12 +130,25 @@ const runRegistryTool = vi.fn(async (name: string, ctx: unknown, input: Record<s
 			k.split(".").reduce<unknown>((acc, part) => (acc && typeof acc === "object" ? (acc as Record<string, unknown>)[part] : undefined), items[0]),
 		);
 		aiPrompts[aiPrompts.length - 1] = rendered;
-		return { name, content: JSON.stringify({ items: items.map((it) => ({ ...it, [as]: MODEL_REPLY })), count: items.length, generated: items.length }), success: true };
+		const reply = as === "template_json"
+			? JSON.stringify({ template_slug: "neon-ai", reason: "Warm hospitality layout for a Bondi cafe." })
+			: as === "plan_json" || as === "refinement_json"
+				? JSON.stringify({ sections: [{ id: "hero", content: "<h1>Palm Tree Kiosk</h1>" }] })
+				: MODEL_REPLY;
+		return { name, content: JSON.stringify({ items: items.map((it) => ({ ...it, [as]: reply })), count: items.length, generated: items.length }), success: true };
 	}
 	if (name === "mcp_call_tool") {
 		const tool = String(input.tool ?? "");
 		mcpCalls.push({ url: String(input.url ?? ""), tool, args: (input.args ?? {}) as Record<string, unknown> });
 		if (tool === "create_site") return { name, content: JSON.stringify({ tool, ok: true, data: { session_id: "sess-42", template_slug: "neon-ai" } }), success: true };
+		if (tool === "list_templates") return { name, content: JSON.stringify({ tool, ok: true, data: { templates: [{ slug: "neon-ai", category: "cafe" }] } }), success: true };
+		if (tool === "list_sections") return { name, content: JSON.stringify({ tool, ok: true, data: { sections: [{ id: "hero" }, { id: "about" }] } }), success: true };
+		if (tool === "read_section") return { name, content: JSON.stringify({ tool, ok: true, data: { id: input.args && (input.args as Record<string, unknown>).section_id, content: "<p>Template</p>" } }), success: true };
+		if (tool === "get_quality_report") {
+			const ready = qualityResponses.shift() ?? true;
+			return { name, content: JSON.stringify({ tool, ok: true, data: { ready_for_human_review: ready, compliance: { failures: ready ? 0 : 1 } } }), success: true };
+		}
+		if (tool === "get_rendered_preview") return { name, content: JSON.stringify({ tool, ok: true, data: { preview_url: "https://preview.example/sess-42" } }), success: true };
 		if (tool === "get_preview") return { name, content: JSON.stringify({ tool, ok: true, data: "<html>preview</html>" }), success: true };
 		if (tool === "get_status") return { name, content: JSON.stringify({ tool, ok: true, data: { id: "palm-tree-kiosk-bondi", url: "https://palm-tree-kiosk-bondi.freewebstore.online", deployed: true } }), success: true };
 		return { name, content: JSON.stringify({ tool, ok: true, data: { ok: true } }), success: true };
@@ -178,6 +192,7 @@ beforeEach(() => {
 	photoRequests = [];
 	searchQueries = [];
 	aiPrompts = [];
+	qualityResponses = [];
 	emits = [];
 });
 
@@ -223,13 +238,14 @@ describe("site-builder — the run", () => {
 		const outputs = await drivePipeline(siteBuilder as unknown as PipelineDef, PARAMS);
 
 		// The site was assembled in the right order on the caller's configured server.
-		expect(mcpCalls.map((c) => c.tool)).toEqual([
-			"create_site", "set_meta", "set_contact", "set_social",
-			"add_section", "add_section", "add_section", "get_preview",
-		]);
+		expect(mcpCalls.map((c) => c.tool)).toEqual(expect.arrayContaining([
+			"list_templates", "create_site", "list_sections", "read_section",
+			"bulk_update_sections", "get_quality_report", "get_rendered_preview",
+			"set_meta", "set_contact", "set_social",
+		]));
 		expect(new Set(mcpCalls.map((c) => c.url))).toEqual(new Set(["https://builder.example.com/mcp"]));
 		// Every call AFTER create_site threads the session id it handed back.
-		for (const call of mcpCalls.slice(1)) expect(call.args.session_id).toBe("sess-42");
+		for (const call of mcpCalls.slice(mcpCalls.findIndex((c) => c.tool === "create_site") + 1)) expect(call.args.session_id).toBe("sess-42");
 
 		// Nothing was deployed — the last builder step is the gate, not a deploy.
 		expect(mcpCalls.some((c) => c.tool === "deploy")).toBe(false);
@@ -240,6 +256,17 @@ describe("site-builder — the run", () => {
 	it("the draft is noindex — a business that never asked for a site can't be indexed under its name", async () => {
 		await drivePipeline(siteBuilder as unknown as PipelineDef, PARAMS);
 		expect(mcpCalls.find((c) => c.tool === "set_meta")!.args.noindex).toBe(true);
+	});
+
+	it("does at most one automatic refinement, then gates the draft on the second static report", async () => {
+		// First response is the pre-writing diagnostic; then the first gate fails and the
+		// post-refinement gate passes. A third refinement would be an unbounded loop.
+		qualityResponses = [true, false, true];
+		await drivePipeline(siteBuilder as unknown as PipelineDef, PARAMS);
+		expect(mcpCalls.filter((c) => c.tool === "bulk_update_sections")).toHaveLength(2);
+		expect(mcpCalls.filter((c) => c.tool === "get_quality_report")).toHaveLength(3);
+		expect(tickets).toHaveLength(1);
+		expect(tickets[0].action).toBe("run_pipeline");
 	});
 
 	it("caps photos at photo_limit and resolves each to a public URL (no API key in the page)", async () => {

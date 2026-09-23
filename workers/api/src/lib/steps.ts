@@ -17,8 +17,10 @@
 // `runRegistryTool`. That mutual need is real, so the calls below use a deferred
 // `await import("./tool-registry.js")`: by the time one runs, both modules are initialised.
 // Import it statically and the two initialise against each other. See lib/import-graph.ts.
-import type { RegistryToolResult, ToolDef } from "./connectors/types.js";
+import type { ToolDef } from "./connectors/types.js";
 import { getPath } from "./connectors/http.js";
+import { JSON_STEP_TOOLS } from "./steps-json.js";
+import { asArray, fail, isRecord, ok } from "./steps-shared.js";
 import { safeFetch, SsrfError } from "./ssrf.js";
 import { parseStepNumber, stepNumberError } from "./step-number.js";
 // #308: the three steps below read a tool result as DATA, not as model input, so they unwrap the
@@ -27,14 +29,6 @@ import { unfenceUntrusted } from "./untrusted-fence.js";
 import { renderWithFencedValues } from "./prompt-interpolation.js"; // #750: re-fence bound values
 
 // ── shared helpers ───────────────────────────────────────────────────────────
-
-/** Coerce the `items` input into an array. A single object is wrapped as `[object]` so
- *  a step works on one record or many; anything else → []. */
-function asArray(v: unknown): unknown[] {
-	if (Array.isArray(v)) return v;
-	if (v && typeof v === "object") return [v];
-	return [];
-}
 
 /**
  * Did an upsert actually change anything? — the decision behind `emitOn:"update"`.
@@ -85,10 +79,6 @@ export function differsFrom(
 	return comparable === 0;
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-	return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-
 /** Set a value at a dotted path on a target object, creating intermediate objects. */
 function setPath(target: Record<string, unknown>, path: string, value: unknown): void {
 	const segs = path.split(".");
@@ -101,12 +91,6 @@ function setPath(target: Record<string, unknown>, path: string, value: unknown):
 	cur[segs[segs.length - 1]] = value;
 }
 
-function ok(content: string): RegistryToolResult {
-	return { content, success: true };
-}
-function fail(content: string): RegistryToolResult {
-	return { content, success: false };
-}
 
 /** Concatenate an array-of-arrays into a flat array, `depth` levels deep (default 1). Used by
  *  the `flatten` step (#113) to collapse a grid fan-out's per-cell page arrays into one list. */
@@ -209,41 +193,6 @@ export function renderTemplate(template: string, item: unknown): string {
 		})
 		.replace(/[ \t]{2,}/g, " ")
 		.trim();
-}
-
-/**
- * Parse a value that is *supposed* to be JSON but came from a language model. Handles the
- * three shapes they actually emit: clean JSON, a ```json fenced block, and JSON with a
- * sentence wrapped around it. Returns null when nothing parses (callers treat that as
- * "this record's generation failed" rather than an error). A value that is ALREADY parsed
- * (object/array) passes straight through.
- */
-export function parseJsonLoose(value: unknown): unknown {
-	if (value === null || value === undefined) return null;
-	if (typeof value === "object") return value;
-	const raw = String(value).trim();
-	if (!raw) return null;
-	// Strip a fenced block: ```json … ``` or ``` … ```
-	const fenced = /^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i.exec(raw);
-	const body = (fenced ? fenced[1] : raw).trim();
-	const attempt = (s: string): unknown => {
-		try {
-			return JSON.parse(s);
-		} catch {
-			return undefined;
-		}
-	};
-	const direct = attempt(body);
-	if (direct !== undefined) return direct;
-	// Prose around the JSON — take the outermost {…} or […] span.
-	const first = body.search(/[{[]/);
-	if (first === -1) return null;
-	const opener = body[first];
-	const closer = opener === "{" ? "}" : "]";
-	const last = body.lastIndexOf(closer);
-	if (last <= first) return null;
-	const span = attempt(body.slice(first, last + 1));
-	return span === undefined ? null : span;
 }
 
 // ── 2. filter ──────────────────────────────────────────────────────────────
@@ -1017,71 +966,8 @@ export const STEP_TOOLS: ToolDef[] = [
 		},
 	},
 
-	// 7c ─ parse_json — turn a model's JSON reply into real fields. `ai_generate` writes raw
-	// TEXT, so a step that asks for structured output had no way to hand its fields to the
-	// next step; the alternative was one LLM call per field, which costs more AND loses
-	// coherence between fields that should read as one voice. Tolerates the ```json fence
-	// models add. A record whose field won't parse gets `null` — best-effort, like ai_generate.
-	{
-		name: "parse_json",
-		tier: "standard",
-		scope: "read",
-		mutates: false,
-		untrustedOutput: false,
-		description:
-			"Parse a JSON string field on each record into real structured data (pure, no I/O). Reads `field` (default \"text\" — what ai_generate writes) and writes the parsed value to `as` (default: back onto `field`). Strips a ```json code fence and any prose around the JSON. A value that won't parse becomes null rather than failing the batch, and is counted in `failed`. The companion to ai_generate when you asked the model for JSON.",
-		jsonSchema: {
-			type: "object",
-			properties: {
-				items: { type: "array", description: "Records carrying a JSON string field." },
-				field: { type: "string", description: 'Field holding the JSON string (default "text").' },
-				as: { type: "string", description: "Field to write the parsed value to (default: overwrite `field`)." },
-			},
-			required: [],
-		},
-		handler: async (_ctx, input) => {
-			const items = asArray(input.items).filter(isRecord) as Record<string, unknown>[];
-			const field = typeof input.field === "string" && input.field ? input.field : "text";
-			const as = typeof input.as === "string" && input.as ? input.as : field;
-			let failed = 0;
-			const out = items.map((item) => {
-				const parsed = parseJsonLoose(getPath(item, field));
-				if (parsed === null) failed++;
-				return { ...item, [as]: parsed };
-			});
-			return ok(JSON.stringify({ items: out, count: out.length, failed }, null, 2));
-		},
-	},
-
-	// 7d ─ stringify_json — safely hand structured connector output to a later text-only step.
-	// A pipeline binder keeps JSON structured (correctly), while an `ai_generate` placeholder
-	// renders an object as `[object Object]`. This deliberately small inverse lets a workflow
-	// ask a model to choose from an MCP catalogue or critique a diagnostic report without losing
-	// the actual rows that informed the decision.
-	{
-		name: "stringify_json",
-		tier: "standard",
-		scope: "read",
-		mutates: false,
-		untrustedOutput: false,
-		description:
-			"Serialize a value as JSON for a later text-only step such as ai_generate. Returns {text}; unlike direct template interpolation, objects and arrays are preserved instead of becoming [object Object].",
-		jsonSchema: {
-			type: "object",
-			properties: {
-				value: { type: ["object", "array", "string", "number", "boolean", "null"], description: "Any JSON-compatible value to serialize." },
-				pretty: { type: "boolean", description: "Pretty-print with indentation (default false)." },
-			},
-			required: ["value"],
-		},
-		handler: async (_ctx, input) => {
-			try {
-				return ok(JSON.stringify({ text: JSON.stringify(input.value, null, input.pretty === true ? 2 : undefined) }));
-			} catch {
-				return fail("value is not JSON-serializable.");
-			}
-		},
-	},
+	// 7c, 7d ─ parse_json / stringify_json — the JSON pair, in steps-json.ts.
+	...JSON_STEP_TOOLS,
 
 	// 8 ─ ai_generate — the pipeline's LLM step. Draft text per record with the owner's BYOK
 	// model (Anthropic Claude, else their CF Workers AI) — no platform spend. For each item,

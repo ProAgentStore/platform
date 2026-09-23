@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import Button from "../components/Button";
 import { statusBadgeClass } from "../lib/statusBadge";
+import type { DataRecord, RecordQueryResponse } from "../lib/types";
 
 // Spreadsheet + board view over an agent's structured collections:
 // filter/sort, show/hide columns, edit the status pipeline inline, toggle a
@@ -16,12 +17,7 @@ interface Collection {
 	fields?: Field[];
 	recordCount?: number;
 }
-interface Rec {
-	id: string;
-	data: Record<string, unknown>;
-	createdAt?: string;
-	updatedAt?: string;
-}
+type Rec = DataRecord;
 // A pipeline run record (issue #98) — GET /v1/instances/:id/pipeline-runs.
 interface Run {
 	run_id: string;
@@ -148,7 +144,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 					query.set("order_by", requestSortBy);
 					query.set("order_dir", requestSortDir);
 				}
-				const d = await api<{ records?: Rec[]; total?: number }>(
+				const d = await api<RecordQueryResponse>(
 					`/v1/instances/${instanceId}/collections/${encodeURIComponent(name)}/records?${query}`,
 				);
 				if (request === recordsRequest.current) {

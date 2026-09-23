@@ -77,7 +77,8 @@ export interface ToolPolicyEntry {
 	mutates?: boolean;
 	description: string;
 	allowed: boolean;
-	disabled: boolean;
+	/** Sent only when `true` (the owner switched it off) — a missing value means `false`. */
+	disabled?: boolean;
 	/**
 	 * Mirrors ToolPolicyReason in workers/api/src/lib/tool-refusal.ts.
 	 *
@@ -88,6 +89,7 @@ export interface ToolPolicyEntry {
 	 * still not LISTED in that state, because there is nothing on it to switch.
 	 */
 	reason: "ok" | "not_declared" | "disabled_by_owner" | "needs_permission";
+	/** Sent only when the consent gate applies — a missing value means `"n/a"`. */
 	writeConsent?: ToolWriteConsent;
 	/** Catalog group (#525): `base` is a universal facility, `connector` reaches another system. */
 	tier?: "base" | "standard" | "runtime" | "connector";

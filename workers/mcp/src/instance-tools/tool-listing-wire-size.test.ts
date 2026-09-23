@@ -367,8 +367,15 @@ describe("list_instance_tools worst case (#578)", () => {
 		if (!cut) throw new Error("no not-declared row in the reply");
 		// "What can this agent do" is only answerable if the answer says what it CANNOT and why.
 		// Prose is what was traded; none of this is.
-		for (const field of ["name", "scope", "mutates", "allowed", "disabled", "reason", "writeConsent", "tier", "invocableBy"]) {
+		for (const field of ["name", "scope", "mutates", "allowed", "reason", "tier", "invocableBy"]) {
 			expect(cut, `the truncation dropped ${field}, which is the audit rather than the prose`).toHaveProperty(field);
+		}
+		// `disabled` / `writeConsent` are OMITTED by the API when default-valued (missing means
+		// `false` / "n/a" — `projectToolListing`, 26f8ee92's regression). So the rule here is not
+		// "always present" but "truncation keeps whatever the API sent": this fixture sends both.
+		const sent = worstCase().tools.find((r) => (r as { name: string }).name === cut.name) as Record<string, unknown>;
+		for (const field of Object.keys(sent).filter((f) => f !== "description" && f !== "jsonSchema")) {
+			expect(cut, `the truncation dropped ${field}, which the API sent`).toHaveProperty(field);
 		}
 		expect(cut.reason).toBe("not_declared");
 		// And the prose that survives is the first clause, not a mid-word stump.
