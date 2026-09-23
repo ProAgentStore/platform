@@ -816,4 +816,20 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.48 is published.
 	"0.1.49": "sha256:b5008db008bf75cf5b6299e9621ef7cf23ab2a12557fc69be9fe7c7f11c0138d",
+	// 0.1.50 (#192, recent_instances never omits a working instance): ONE existing inputSchema
+	// moved — `recent_instances` gains `limit` (integer ≥ 1, optional; default 5, clamped to 20 and
+	// the clamp reported as `requestedLimit`). No tool name, annotation or outputSchema changed;
+	// 215 registrations, `MCP_TOOL_GATED` 26, always-on 189, all unchanged.
+	//
+	// The reason the schema moved: a status client passed `limit: 20` and received five entries,
+	// none of them the instance with the live coding run, and nothing in the answer said it had
+	// been cut. The list was ordered by the caller's own MCP touches alone, so a run the
+	// supervisor delegated — never named on this session — could not reach the top five. The
+	// handler now reads `/my/activity` beside the touch record, lists every WORKING instance first
+	// (`reason: active-run`, touched or not), then recency, and always returns `limit`, `total`,
+	// `truncated` and `working`. Those are response fields, not outputSchema (none is declared),
+	// so the hash moved for the input alone; the description was reworded and is excluded.
+	//
+	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.49 is published.
+	"0.1.50": "sha256:86b91bf07a3f21dd98423fdd490952df725b62cc2508d3b70774568c1a8fb23d",
 };

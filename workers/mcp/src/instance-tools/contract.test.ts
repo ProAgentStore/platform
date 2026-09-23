@@ -394,7 +394,8 @@ const TABLE: Record<string, Row> = {
 	my_instances: ["base", "none", null, null, "token"],
 	// #787: the caller's own recency view. `read`-gated like `get_instance_connection_guide`
 	// rather than a bare proxy, so MCP_READ_ONLY and a suspended account both see the call.
-	recent_instances: ["recent", "read", null, null, "token"],
+	// #192: `limit` (default 5, clamped to 20) — the cap was a silent constant before.
+	recent_instances: ["recent", "read", null, null, "limit,token"],
 	register_instance_runtime: ["runtime", "runtime", null, "envelope", "capabilities,dry_run,endpoint_url,instance_id,placement,runner_token,runner_version,token"],
 	record_instance_feedback: ["observability", "write", null, "envelope", "body,dry_run,instance_id,message_id,sentiment,session_id,surface,target_text,token,trace_id"],
 	resolve_feedback: ["observability", "write", null, "envelope", "dry_run,feedback_id,issue_url,status,token"],

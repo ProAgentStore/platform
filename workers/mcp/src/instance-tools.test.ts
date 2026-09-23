@@ -1566,14 +1566,18 @@ describe("recent_instances", () => {
 		h.fetchStub.respond((u) => u.endsWith("/v1/instances/i5/loop"), { body: { runs: [] } });
 
 		const res = await h.tools.get("recent_instances")!.handler({});
-		const body = JSON.parse(res.content[0].text) as { instances: Array<Record<string, unknown>> };
+		const body = JSON.parse(res.content[0].text) as { instances: Array<Record<string, unknown>>; limit: number; total: number; truncated: boolean; working: number };
 
 		expect(body.instances.map((i) => i.instanceId)).toEqual(["i1", "i2", "i3", "i4", "i5"]);
+		// Six qualified, five returned: the cut is reported, not implied (#192). The activity route
+		// answered nothing recognisable here (the stub's default body), which reads as "nothing working".
+		expect(body).toMatchObject({ limit: 5, total: 6, truncated: true, working: 0 });
 		expect(body.instances[0]).toMatchObject({
 			instanceId: "i1",
 			name: "platform coder",
 			slug: "coder",
 			status: "active",
+			reason: "recent-touch",
 			lastInteractionAt: "2026-09-09T10:00:00.000Z",
 			lastTool: "coding_loop_status",
 		});
@@ -1606,13 +1610,120 @@ describe("recent_instances", () => {
 		expect(h.auditEvents().filter((e) => e.tool === "recent_instances")).toEqual([]);
 	});
 
-	it("answers an empty list with a hint, and makes no roster or run call", async () => {
+	it("answers an empty list with a hint and metadata, and makes no roster or run call", async () => {
 		const h = setup();
+		// Nothing working either: the activity route answers no instances.
+		h.fetchStub.respond((u) => u.endsWith("/v1/instances/my/activity"), { body: { asOf: 1, instances: [] } });
 		const res = await h.tools.get("recent_instances")!.handler({});
-		const body = JSON.parse(res.content[0].text) as { instances: unknown[]; hint: string };
+		const body = JSON.parse(res.content[0].text) as { instances: unknown[]; hint: string; limit: number; total: number; truncated: boolean; working: number };
 		expect(body.instances).toEqual([]);
 		expect(body.hint).toContain("my_instances");
-		expect(h.fetchStub.calls).toHaveLength(0);
+		expect(body).toMatchObject({ limit: 5, total: 0, truncated: false, working: 0 });
+		// The activity read is the ONLY call: no roster, no /loop.
+		expect(h.fetchStub.calls.map((c) => c.url.replace(/^.*\/v1/, "/v1"))).toEqual(["/v1/instances/my/activity"]);
+	});
+
+	// ── #192: a working instance is never dropped by the cap, and a cut is never silent ──
+
+	/** Six touched instances plus one, `i9`, that this caller never touched but which has a run open. */
+	const rosterWithNine = (h: Harness) =>
+		h.fetchStub.respond((u) => u.endsWith("/v1/instances/my/instances"), {
+			body: {
+				instances: [
+					{ id: "i1", agent_id: "a1", slug: "coder", name: "platform coder", status: "active" },
+					{ id: "i2", agent_id: "a2", slug: "assistant", status: "active" },
+					{ id: "i3", agent_id: "a1", slug: "coder", status: "active" },
+					{ id: "i4", agent_id: "a3", slug: "browser", status: "paused" },
+					{ id: "i5", agent_id: "a1", slug: "coder", status: "active" },
+					{ id: "i6", agent_id: "a1", slug: "coder", status: "active" },
+					{ id: "i9", agent_id: "a9", slug: "pas-coder", name: "PAS ProAppStore platform Coder", status: "active" },
+				],
+			},
+		});
+	const sixTouches = (h: Harness) => {
+		touch(h, "user-1", "i1", "coding_loop_status", "2026-09-09T10:00:00.000Z");
+		touch(h, "user-1", "i2", "chat_with_instance", "2026-09-09T09:00:00.000Z");
+		touch(h, "user-1", "i3", "coding_timeline", "2026-09-09T08:00:00.000Z");
+		touch(h, "user-1", "i4", "call_instance_tool", "2026-09-09T07:00:00.000Z");
+		touch(h, "user-1", "i5", "coding_loop_start", "2026-09-09T06:00:00.000Z");
+		touch(h, "user-1", "i6", "coding_loop_status", "2026-09-09T05:00:00.000Z");
+	};
+
+	it("puts an instance with an open run FIRST even though this caller never touched it over MCP (#192)", async () => {
+		const h = setup();
+		sixTouches(h);
+		rosterWithNine(h);
+		// The supervisor delegated a run to i9; nothing on this MCP session ever named it.
+		h.fetchStub.respond((u) => u.endsWith("/v1/instances/my/activity"), {
+			body: {
+				asOf: 1,
+				instances: [
+					{ instanceId: "i3", health: "idle", queueDepth: 0, lastOutcome: { runId: "r3", status: "closed", stopReason: "completed", finishedAt: 6, startedAt: 5, lastAliveAt: 6 } },
+					{ instanceId: "i9", health: "working", queueDepth: 0, lastOutcome: { runId: "run-9", status: "running", stopReason: null, finishedAt: null, startedAt: 1_757_400_000_000, lastAliveAt: 1_757_400_500_000 } },
+				],
+			},
+		});
+		h.fetchStub.respond((u) => u.endsWith("/v1/instances/i9/loop"), {
+			body: { runs: [{ runId: "run-9", objective: "Work GitHub issue #179", status: "running", stopReason: null, health: "working", waitingReason: null, waitingUntil: null, waitNote: null, startedAt: 1_757_400_000_000, finishedAt: null }] },
+		});
+
+		const res = await h.tools.get("recent_instances")!.handler({});
+		const body = JSON.parse(res.content[0].text) as { instances: Array<Record<string, unknown>>; limit: number; total: number; truncated: boolean; working: number; hint?: string };
+
+		// i9 leads despite having no touch; the cap of 5 then admits i1..i4 and drops i5, i6.
+		expect(body.instances.map((i) => i.instanceId)).toEqual(["i9", "i1", "i2", "i3", "i4"]);
+		expect(body.instances[0]).toMatchObject({
+			instanceId: "i9",
+			name: "PAS ProAppStore platform Coder",
+			reason: "active-run",
+			lastInteractionAt: null,
+			lastTool: null,
+		});
+		expect(body.instances[0].run).toMatchObject({ runId: "run-9", health: "working", status: "running" });
+		expect(body.instances[1]).toMatchObject({ instanceId: "i1", reason: "recent-touch", lastTool: "coding_loop_status" });
+		// The cut is explicit: 7 qualified, 5 returned, 1 of them working.
+		expect(body).toMatchObject({ limit: 5, total: 7, truncated: true, working: 1 });
+		expect(body.hint).toContain("2 more instance(s) qualified");
+		expect(body).not.toHaveProperty("requestedLimit");
+		// /loop was fetched only for the five listed.
+		const loopIds = h.fetchStub.calls.filter((c) => c.url.includes("/loop")).map((c) => c.url.match(/instances\/([^/]+)\/loop/)![1]);
+		expect(loopIds).toEqual(["i9", "i1", "i2", "i3", "i4"]);
+	});
+
+	it("honours limit, reports total/truncated, and keeps a touched working instance's touch fields (#192)", async () => {
+		const h = setup();
+		sixTouches(h);
+		rosterWithNine(h);
+		// i4 is working AND was touched: it leads, and still carries its lastInteractionAt / lastTool.
+		h.fetchStub.respond((u) => u.endsWith("/v1/instances/my/activity"), {
+			body: { asOf: 1, instances: [{ instanceId: "i4", health: "working", queueDepth: 1, lastOutcome: { runId: "run-4", status: "running", stopReason: null, finishedAt: null, startedAt: 10, lastAliveAt: 20 } }] },
+		});
+
+		const res = await h.tools.get("recent_instances")!.handler({ limit: 2 });
+		const body = JSON.parse(res.content[0].text) as { instances: Array<Record<string, unknown>>; limit: number; total: number; truncated: boolean; working: number };
+		expect(body.instances.map((i) => i.instanceId)).toEqual(["i4", "i1"]);
+		expect(body.instances[0]).toMatchObject({ reason: "active-run", lastInteractionAt: "2026-09-09T07:00:00.000Z", lastTool: "call_instance_tool" });
+		expect(body).toMatchObject({ limit: 2, total: 6, truncated: true, working: 1 });
+		expect(h.fetchStub.calls.filter((c) => c.url.includes("/loop"))).toHaveLength(2);
+
+		// A limit large enough returns everything and says so.
+		const all = JSON.parse((await h.tools.get("recent_instances")!.handler({ limit: 10 })).content[0].text) as { instances: unknown[]; truncated: boolean; total: number };
+		expect(all.instances).toHaveLength(6);
+		expect(all).toMatchObject({ total: 6, truncated: false });
+	});
+
+	it("clamps limit above the maximum and reports the clamp; tolerates an activity read failure (#192)", async () => {
+		const h = setup();
+		sixTouches(h);
+		rosterWithNine(h);
+		// The activity route is down: the tool still answers from the caller's own touches.
+		h.fetchStub.respond((u) => u.endsWith("/v1/instances/my/activity"), { status: 500, body: { error: "boom" } });
+
+		const res = await h.tools.get("recent_instances")!.handler({ limit: 50 });
+		const body = JSON.parse(res.content[0].text) as { instances: Array<Record<string, unknown>>; limit: number; requestedLimit?: number; total: number; truncated: boolean; working: number };
+		expect(body).toMatchObject({ limit: 20, requestedLimit: 50, total: 6, truncated: false, working: 0 });
+		expect(body.instances.map((i) => i.instanceId)).toEqual(["i1", "i2", "i3", "i4", "i5", "i6"]);
+		expect(body.instances.every((i) => i.reason === "recent-touch")).toBe(true);
 	});
 
 	it("is a read: refused without the read scope, allowed in read-only mode", async () => {
