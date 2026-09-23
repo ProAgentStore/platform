@@ -27,7 +27,7 @@
  * ── ADR 0002
  *
  * The driver set is read from `workflows/` on disk and never hand-listed, and a file that is not a
- * driver has to be NAMED with its reason — the same two exemptions, verbatim, as
+ * driver has to be NAMED with its reason — the same named exemptions as
  * `driver-failure.test.ts` and `workflow-trace.test.ts`, because three guards over one set must not
  * be able to disagree about what the set IS. A rename therefore fails as "this guard has stopped
  * measuring" rather than passing as a clean tree.
@@ -65,6 +65,7 @@ function callableSource(file: string): string {
 const NOT_A_DRIVER: Record<string, string> = {
 	"coding-session-params.ts": "a params type — no run() and no I/O",
 	"coding-watch.ts": "a mode of CodingSessionWorkflow, dispatched from its run(); its host owns the catch",
+	"website-builder.ts": "a bounded broker/runner monitor for the subscriber's local CLI — it is not an agent_loop_runs driver, so stop_work neither mints nor resolves a cancellation row for it",
 };
 
 interface CancelPath {
@@ -111,7 +112,7 @@ const CANCEL_PATHS: Record<string, CancelPath> = {
 /**
  * Drivers that CANNOT be stopped, each with the reason and the ticket — the honest denominator.
  *
- * Empty: all five drivers are now stoppable (#619 fixed the last one).
+ * Empty: all five in-scope drivers are now stoppable (#619 fixed the last one).
  */
 const NO_CANCEL_PATH: Record<string, string> = {};
 
@@ -122,7 +123,7 @@ const drivers = files.filter((f) => !NOT_A_DRIVER[f]);
 
 describe("every durable driver can be stopped", () => {
 	it("measures the whole workflows/ directory, and says how much", () => {
-		// The denominator. Seven files today, five of them drivers, all five stoppable (#619) — and
+		// The denominator. Eight files today, five of them drivers, all five stoppable (#619) — and
 		// the guard fails if it finds fewer, so a split that halves the set reports itself instead
 		// of halving the measurement.
 		expect(files.length, `workflows/ holds ${files.length} source files`).toBeGreaterThanOrEqual(7);

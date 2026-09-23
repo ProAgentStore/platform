@@ -52,12 +52,13 @@ const DIR = dirname(fileURLToPath(import.meta.url));
 /**
  * Files in `workflows/` that are NOT durable drivers, each with the reason it is exempt.
  *
- * Deliberately the same named-list shape, and the same two entries, as `workflow-trace.test.ts`:
+ * Deliberately the same named-list shape, and entries, as `workflow-trace.test.ts`:
  * two guards over the same set must not be able to disagree about what the set IS.
  */
 const NOT_A_DRIVER: Record<string, string> = {
 	"coding-session-params.ts": "a params type — no run() and no I/O",
 	"coding-watch.ts": "a mode of CodingSessionWorkflow, dispatched from its run(); its host owns the catch",
+	"website-builder.ts": "a bounded broker/runner monitor for the subscriber's local CLI — it never drives PAGS's BYOK model loop or reads the shared retryable verdict; its job record and broker enforce its own idempotent recovery",
 };
 
 interface Consumer {
@@ -104,7 +105,7 @@ const drivers = files.filter((f) => !NOT_A_DRIVER[f]);
 
 describe("every driver consumes the retryable verdict", () => {
 	it("measures the whole workflows/ directory, and says how much", () => {
-		// The denominator. Seven files today, five of them drivers — and the guard fails if it finds
+		// The denominator. Eight files today, five of them drivers — and the guard fails if it finds
 		// fewer, so a split that halves the set reports itself instead of halving the measurement.
 		expect(files.length, `workflows/ holds ${files.length} source files`).toBeGreaterThanOrEqual(7);
 		expect(drivers.length, `of which ${drivers.length} are durable drivers`).toBeGreaterThanOrEqual(5);
