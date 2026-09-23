@@ -1812,10 +1812,10 @@ const PINS = {
 	// append-only ledger is pinned and not split) and these two.
 	// +3 at #792: the surface-lock raise above (two lines of why) and these two.
 	// +24 at #722: two raised pins and one new entry, each with the reasoning that justifies it.
-	// +3 at #192: the surface-lock raise above (two lines of why) and these two — the same price
+	// +4 at #192: the surface-lock raise above (two lines of why) and these two — the same price
 	// #792 paid for the same kind of raise.
 	// This file grows by prose about other files, which is what it is for.
-	"scripts/check-file-size.mjs": 1898,
+	"scripts/check-file-size.mjs": 1899,
 };
 
 /**
