@@ -818,7 +818,9 @@ const PINS = {
 	// no published entry was edited; moving old entries to a second file would read as deleting them.
 	// +18 at #792: the 0.1.49 record — two new tools and one moved inputSchema, with why. This pin
 	// moves with every published version by construction; that is the ledger working, not drift.
-	"workers/mcp/src/surface-lock.ts": 820,
+	// +16 at #192 (proappstore-online/platform): the 0.1.50 record — recent_instances gains `limit`
+	// and a working-first order; the entry says why the cap had hidden a live run. Ledger, not drift.
+	"workers/mcp/src/surface-lock.ts": 836,
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
@@ -1810,8 +1812,10 @@ const PINS = {
 	// append-only ledger is pinned and not split) and these two.
 	// +3 at #792: the surface-lock raise above (two lines of why) and these two.
 	// +24 at #722: two raised pins and one new entry, each with the reasoning that justifies it.
+	// +3 at #192: the surface-lock raise above (two lines of why) and these two — the same price
+	// #792 paid for the same kind of raise.
 	// This file grows by prose about other files, which is what it is for.
-	"scripts/check-file-size.mjs": 1895,
+	"scripts/check-file-size.mjs": 1898,
 };
 
 /**
