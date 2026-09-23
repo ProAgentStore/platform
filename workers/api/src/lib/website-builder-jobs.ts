@@ -93,7 +93,7 @@ export async function createWebsiteBuilderJob(
  */
 export async function revealWebsiteBuilderJobToken(env: Env, id: string): Promise<string | null> {
 	const job = await getWebsiteBuilderJob(env, id);
-	if (!job || job.status !== "running" || !websiteBuilderTokenActive(job) || !env.KEY_ENCRYPTION_KEY) return null;
+	if (job?.status !== "running" || !websiteBuilderTokenActive(job) || !env.KEY_ENCRYPTION_KEY) return null;
 	try {
 		const row = await env.DB.prepare(
 			"SELECT token_ciphertext, token_dek_wrapped, token_iv FROM website_builder_jobs WHERE id = ?1",

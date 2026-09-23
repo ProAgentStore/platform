@@ -80,7 +80,7 @@ websiteBuilderBrokerRoutes.post("/:jobId/call", async (c) => {
 	const jobId = c.req.param("jobId");
 	const token = c.req.header("X-Pags-Website-Builder-Token") || "";
 	const job = await getWebsiteBuilderJob(c.env, jobId);
-	if (!job || job.status !== "running" || !token || !websiteBuilderTokenActive(job) || (await websiteBuilderTokenHash(token)) !== job.tokenHash) {
+	if (job?.status !== "running" || !token || !websiteBuilderTokenActive(job) || (await websiteBuilderTokenHash(token)) !== job.tokenHash) {
 		return c.json({ error: "Website Builder job is not authorised." }, 401);
 	}
 	const body: { tool?: unknown; args?: unknown } = await c.req.json<{ tool?: unknown; args?: unknown }>().catch(() => ({}));
