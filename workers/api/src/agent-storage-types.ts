@@ -127,6 +127,13 @@ export interface CollectionRecord {
 	updatedAt: string;
 }
 
+/** One page of a collection query — GET /v1/instances/:id/collections/:name/records. `total` is the
+ *  match count before `limit`/`offset`, which is what the console's pagination reads. */
+export interface RecordQueryResult {
+	records: CollectionRecord[];
+	total: number;
+}
+
 // ── Activity Log ────────────────────────────────────────────────────────────
 
 export interface ActivityEvent {

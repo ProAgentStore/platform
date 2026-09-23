@@ -407,3 +407,17 @@ export interface ConnectorConsent {
 export interface ConnectorConsentsResponse {
 	consents?: ConnectorConsent[];
 }
+
+/** One collection record as the Data tab reads it (worker: `CollectionRecord`, agent-storage-types.ts). */
+export interface DataRecord {
+	id: string;
+	data: Record<string, unknown>;
+	createdAt?: string;
+	updatedAt?: string;
+}
+
+/** One page of GET /v1/instances/:id/collections/:name/records (worker: `RecordQueryResult`). */
+export interface RecordQueryResponse {
+	records?: DataRecord[];
+	total?: number;
+}
