@@ -439,7 +439,7 @@ export function registerCodingSessionTools(
 
 	server.tool(
 		"coding_repo_add",
-		"Add a repo to a coding instance. Accepts a local path (~/dev/...), GitHub owner/repo, or clone URL.",
+		"Add a repo to a coding instance. Accepts a local path (~/dev/...), GitHub owner/repo, or clone URL. An instance may hold several different repos, but never the same one twice: if it already has a binding for this repo (same owner/repo, clone URL or local folder) the add is refused with `existingRepo` naming it — use that binding, or detach it with coding_repo_remove first.",
 		{
 			instance_id: z.string().describe("Instance ID"),
 			path: z.string().describe("Local path (~/dev/my-repo), owner/repo, or clone URL"),
@@ -456,6 +456,9 @@ export function registerCodingSessionTools(
 			else if (path.includes("/")) { body.githubRepo = path; body.cloneUrl = `https://github.com/${path}.git`; }
 			else body.name = path;
 			const r = await authedCall(`/v1/instances/${instance_id}/coding/repos`, sessionToken, { method: "POST", body: JSON.stringify(body) }, env);
+			// `authedCall` RETURNS a non-2xx as `{error}` — a refused duplicate (#829, 409) is not a
+			// completed add, and must not be audited as one.
+			if ((r as { error?: string }).error) return jsonText(r);
 			await audit(safetyFor(token), { tool: "coding_repo_add", action: "completed", input: { instance_id, path } });
 			return jsonText(r);
 		},

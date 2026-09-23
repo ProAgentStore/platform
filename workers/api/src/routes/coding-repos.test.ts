@@ -7,9 +7,12 @@
  * local checkout, and — when its owner opened the Issues panel — told it "isn't connected to
  * GitHub", which is a sentence about a setup mistake they had not made.
  */
+import { readFileSync } from "node:fs";
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "../lib/auth.js";
+import { createRepo } from "../lib/coding-store.js";
+import { realSchemaD1, seedTenant, type RealSchemaD1 } from "../lib/d1-sqlite.js";
 import { signSession } from "../lib/session.js";
 // The runner transport, stubbed at the seam every repo route reaches the machine through. Only
 // the two entry points are replaced; the rest of the module (typed errors, timeouts) is real, so
@@ -672,6 +675,8 @@ describe("PUT /coding/repos/:id — the folder is editable, and checked when it 
 					first: async () => {
 						if (/FROM agent_instances/.test(flat)) return { id: INSTANCE };
 						if (/FROM coding_sessions/.test(flat)) return session;
+						// The duplicate-binding lookup (#829) asks for ANOTHER row; this stub holds one.
+						if (/FROM coding_repos .*id <> \?3/.test(flat)) return null;
 						if (/FROM coding_repos/.test(flat)) return current;
 						return null;
 					},
@@ -929,5 +934,177 @@ describe("POST /coding/repos/:id/recheck — a verdict can be re-taken on purpos
 		expect(body.checked).toBe(false);
 		expect(String(body.reason)).toMatch(/no local path/i);
 		expect(callRunner).not.toHaveBeenCalled();
+	});
+});
+
+/**
+ * One instance, one binding per repository (#829) — against the REAL schema, so the 409 the route
+ * answers and the unique indexes migration 0156 adds are both what is under test, not a stub that
+ * says yes to any INSERT.
+ */
+describe("POST /coding/repos — one binding per repository (#829)", () => {
+	const OTHER = "inst-2";
+	let d1: RealSchemaD1;
+
+	beforeEach(() => {
+		d1 = realSchemaD1();
+		seedTenant(d1, { userId: UID, instanceIds: [INSTANCE, OTHER] });
+	});
+
+	async function add(instanceId: string, body: Record<string, unknown>) {
+		const app = new Hono<{ Bindings: Env }>();
+		const routes = new Hono<{ Bindings: Env }>();
+		registerRepoRoutes(routes);
+		app.route("/v1/instances", routes);
+		app.onError((err, c) => c.json({ error: (err as Error).message }, err instanceof HttpError ? (err.status as 400) : 500));
+		const token = await signSession(UID, SECRET, { roles: [] });
+		const res = await app.request(
+			`/v1/instances/${instanceId}/coding/repos`,
+			{ method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) },
+			{ DB: d1.DB, SESSION_SIGNING_KEY: SECRET } as unknown as Env,
+		);
+		return { status: res.status, body: (await res.json()) as { repo?: { id: string }; error?: string; existingRepo?: { id: string; name: string } } };
+	}
+
+	const rows = (instanceId: string) =>
+		d1.sqlite.prepare("SELECT id, github_repo, workdir FROM coding_repos WHERE instance_id = ?").all(instanceId) as { id: string }[];
+
+	it("refuses the same GitHub repo twice on one instance, naming the binding that already exists", async () => {
+		const first = await add(INSTANCE, { githubRepo: "ProAgentStore/platform", cloneUrl: "https://github.com/ProAgentStore/platform.git" });
+		expect(first.status).toBe(201);
+		const second = await add(INSTANCE, { githubRepo: "ProAgentStore/platform", cloneUrl: "https://github.com/ProAgentStore/platform.git" });
+		expect(second.status).toBe(409);
+		expect(second.body.error).toMatch(/already bound to this instance/);
+		expect(second.body.existingRepo?.id).toBe(first.body.repo?.id);
+		expect(rows(INSTANCE)).toHaveLength(1);
+	});
+
+	it("recognises the same repo spelled differently — case, or a clone URL instead of owner/repo", async () => {
+		expect((await add(INSTANCE, { githubRepo: "ProAgentStore/platform" })).status).toBe(201);
+		expect((await add(INSTANCE, { cloneUrl: "https://github.com/proagentstore/platform" })).status).toBe(409);
+		expect(rows(INSTANCE)).toHaveLength(1);
+	});
+
+	it("allows the same GitHub repo on two different instances", async () => {
+		expect((await add(INSTANCE, { githubRepo: "ProAgentStore/platform" })).status).toBe(201);
+		expect((await add(OTHER, { githubRepo: "ProAgentStore/platform" })).status).toBe(201);
+		expect(rows(INSTANCE)).toHaveLength(1);
+		expect(rows(OTHER)).toHaveLength(1);
+	});
+
+	it("allows two different repos on one instance — several repos is supported, only a twin is not", async () => {
+		expect((await add(INSTANCE, { githubRepo: "ProAgentStore/platform" })).status).toBe(201);
+		expect((await add(INSTANCE, { githubRepo: "ProAgentStore/browser-runner" })).status).toBe(201);
+		expect(rows(INSTANCE)).toHaveLength(2);
+	});
+
+	it("refuses the same local folder twice on one instance", async () => {
+		expect((await add(INSTANCE, { localPath: "/Users/me/dev/pags/platform" })).status).toBe(201);
+		const again = await add(INSTANCE, { localPath: "/Users/me/dev/pags/platform" });
+		expect(again.status).toBe(409);
+		expect(rows(INSTANCE)).toHaveLength(1);
+	});
+
+	it("refuses moving a repo onto the folder another binding of this instance already uses", async () => {
+		const a = await add(INSTANCE, { localPath: "/Users/me/dev/a" });
+		await add(INSTANCE, { localPath: "/Users/me/dev/b" });
+		const app = new Hono<{ Bindings: Env }>();
+		const routes = new Hono<{ Bindings: Env }>();
+		registerRepoRoutes(routes);
+		app.route("/v1/instances", routes);
+		const token = await signSession(UID, SECRET, { roles: [] });
+		const res = await app.request(
+			`/v1/instances/${INSTANCE}/coding/repos/${a.body.repo?.id}`,
+			{ method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ workdir: "/Users/me/dev/b" }) },
+			{ DB: d1.DB, SESSION_SIGNING_KEY: SECRET } as unknown as Env,
+		);
+		expect(res.status).toBe(409);
+		expect(d1.sqlite.prepare("SELECT workdir FROM coding_repos WHERE id = ?").get(a.body.repo?.id)).toEqual({ workdir: "/Users/me/dev/a" });
+	});
+
+	it("detect-github does not give a local folder the identity a clone binding already has — the first reported shape", async () => {
+		await add(INSTANCE, { githubRepo: "ProAgentStore/platform" });
+		const local = await add(INSTANCE, { localPath: "/Users/me/dev/stores/pags/platform" });
+		getBoundRunnerConn.mockResolvedValue({ kind: "relay" });
+		callRunner.mockResolvedValue({ remote: "git@github.com:ProAgentStore/platform.git" });
+		const app = new Hono<{ Bindings: Env }>();
+		const routes = new Hono<{ Bindings: Env }>();
+		registerRepoRoutes(routes);
+		app.route("/v1/instances", routes);
+		const token = await signSession(UID, SECRET, { roles: [] });
+		const res = await app.request(
+			`/v1/instances/${INSTANCE}/coding/repos/${local.body.repo?.id}/detect-github`,
+			{ method: "POST", headers: { Authorization: `Bearer ${token}` } },
+			{ DB: d1.DB, SESSION_SIGNING_KEY: SECRET } as unknown as Env,
+		);
+		const body = (await res.json()) as { githubRepo: string | null; duplicateOf?: { name: string }; warning?: string };
+		expect(body.githubRepo).toBeNull();
+		expect(body.duplicateOf?.name).toBe("ProAgentStore/platform");
+		expect(body.warning).toMatch(/already has/);
+		expect(d1.sqlite.prepare("SELECT github_repo FROM coding_repos WHERE id = ?").get(local.body.repo?.id)).toEqual({ github_repo: null });
+	});
+
+	it("the unique index refuses a twin that got past the pre-check (the concurrent-add race)", async () => {
+		await createRepo({ DB: d1.DB } as unknown as Env, INSTANCE, UID, { name: "a", githubRepo: "ProAgentStore/platform" });
+		await expect(
+			createRepo({ DB: d1.DB } as unknown as Env, INSTANCE, UID, { name: "b", githubRepo: "proagentstore/PLATFORM" }),
+		).rejects.toThrow(/UNIQUE constraint failed/);
+	});
+});
+
+/**
+ * Migration 0156 removes the duplicates production already holds before it can build its index.
+ * Replayed here on the shapes measured on 2026-09-23 plus the one it must NOT resolve by itself.
+ */
+describe("migration 0156 — clearing existing duplicate bindings (#829)", () => {
+	const migration = readFileSync(new URL("../../migrations/0156_coding_repos_unique_binding.sql", import.meta.url).pathname, "utf8");
+	const deletes = migration.match(/DELETE FROM coding_repos[\s\S]*?\n {2}\);/g) ?? [];
+	const indexes = migration.match(/CREATE UNIQUE INDEX[\s\S]*?;/g) ?? [];
+
+	function withoutIndexes(): RealSchemaD1 {
+		const d1 = realSchemaD1();
+		seedTenant(d1, { userId: UID, instanceIds: [INSTANCE, "inst-2"] });
+		d1.exec("DROP INDEX idx_coding_repos_unique_github; DROP INDEX idx_coding_repos_unique_workdir;");
+		return d1;
+	}
+	const repo = (d1: RealSchemaD1, id: string, inst: string, gh: string, created: string) =>
+		d1.exec(`INSERT INTO coding_repos (id, instance_id, user_id, name, github_repo, created_at) VALUES ('${id}', '${inst}', '${UID}', '${id}', '${gh}', '${created}')`);
+	const session = (d1: RealSchemaD1, id: string, repoId: string, inst: string) =>
+		d1.exec(`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id) VALUES ('${id}', '${inst}', '${repoId}', '${UID}')`);
+	const ids = (d1: RealSchemaD1) => (d1.sqlite.prepare("SELECT id FROM coding_repos ORDER BY id").all() as { id: string }[]).map((r) => r.id);
+
+	it("parses two deletes and two indexes out of the migration", () => {
+		expect(deletes).toHaveLength(2);
+		expect(indexes).toHaveLength(2);
+	});
+
+	it("keeps the used binding and the oldest unused one, deletes the unused twins, then indexes cleanly", () => {
+		const d1 = withoutIndexes();
+		// parents-clubs shape: the OLDER row is the used one.
+		repo(d1, "used", INSTANCE, "o/parents", "2026-08-16 08:56:44");
+		session(d1, "s1", "used", INSTANCE);
+		repo(d1, "twin-of-used", INSTANCE, "O/Parents", "2026-09-12 23:15:05");
+		// A used row NEWER than its unused twin — "used" must win over "oldest".
+		repo(d1, "old-unused", INSTANCE, "o/leads", "2026-08-01 00:00:00");
+		repo(d1, "new-used", INSTANCE, "o/leads", "2026-09-01 00:00:00");
+		session(d1, "s2", "new-used", INSTANCE);
+		// FreeAgentStore/mcp shape: neither used — keep the oldest.
+		repo(d1, "mcp-old", INSTANCE, "o/mcp", "2026-08-16 11:28:28");
+		repo(d1, "mcp-new", INSTANCE, "o/mcp", "2026-09-12 23:15:08");
+		// The same repo on ANOTHER instance is not a duplicate.
+		repo(d1, "elsewhere", "inst-2", "o/mcp", "2026-09-12 23:15:08");
+		for (const sql of [...deletes, ...indexes]) d1.exec(sql);
+		expect(ids(d1)).toEqual(["elsewhere", "mcp-old", "new-used", "used"]);
+	});
+
+	it("does not choose between two bindings that both have history — the index build fails instead", () => {
+		const d1 = withoutIndexes();
+		repo(d1, "a", INSTANCE, "o/r", "2026-08-01 00:00:00");
+		repo(d1, "b", INSTANCE, "o/r", "2026-09-01 00:00:00");
+		session(d1, "sa", "a", INSTANCE);
+		session(d1, "sb", "b", INSTANCE);
+		for (const sql of deletes) d1.exec(sql);
+		expect(ids(d1)).toEqual(["a", "b"]);
+		expect(() => d1.exec(indexes[0])).toThrow(/UNIQUE constraint failed/);
 	});
 });
