@@ -322,15 +322,35 @@ export interface ToolListingOptions {
  * `allowedOnly` stays opt-in and must not become the default: `resolveToolPolicy`'s contract is
  * that "what can this agent do" is only answerable if the answer includes what it can't, and
  * defaulting it away would retire that quietly while looking like a size fix.
+ *
+ *   3. **Default-valued verdicts are omitted** (26f8ee92's regression): `disabled` when `false`
+ *      and `writeConsent` when `"n/a"`. A missing field MEANS that default — every reader compares
+ *      against `true` / `"required"` / `"per_call"` — so nothing is lost, and it frees ~3.9 KB
+ *      (120 rows). The catalogue had grown to within ~110 bytes of the budget, so one new step
+ *      tool pushed the default listing over. `invocableBy` is NOT omitted: it has two defaults
+ *      (built-in `["chat"]`, registry `["chat","call_instance_tool"]`) and readers treat a missing
+ *      value as `[]`, which would hide every registry tool from `call_instance_tool`.
  */
-export function projectToolListing(policy: readonly ToolPolicyEntry[], opts: ToolListingOptions = {}): ToolPolicyEntry[] {
+export function projectToolListing(policy: readonly ToolPolicyEntry[], opts: ToolListingOptions = {}): ToolListingRow[] {
 	const rows = opts.allowedOnly ? policy.filter((t) => t.allowed) : policy;
 	return rows.map((t) => {
-		if (opts.schemas && t.allowed) return t;
-		const { jsonSchema: _dropped, ...rest } = t;
-		return rest;
+		const { jsonSchema, disabled, writeConsent, ...rest } = t;
+		return {
+			...rest,
+			...(disabled ? { disabled } : {}),
+			...(writeConsent !== "n/a" ? { writeConsent } : {}),
+			...(opts.schemas && t.allowed && jsonSchema !== undefined ? { jsonSchema } : {}),
+		};
 	});
 }
+
+/** One row of the serialised listing: a policy entry with its default-valued verdicts omitted. */
+export type ToolListingRow = Omit<ToolPolicyEntry, "disabled" | "writeConsent"> & {
+	/** Present (and `true`) only when the owner switched the tool off. Missing means `false`. */
+	disabled?: true;
+	/** Present only when the consent gate applies. Missing means `"n/a"`. */
+	writeConsent?: Exclude<ToolWriteConsent, "n/a">;
+};
 
 /**
  * What to tell a caller that is about to spend a call on this tool. Null when nothing is in the

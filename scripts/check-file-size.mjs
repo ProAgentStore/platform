@@ -942,7 +942,7 @@ const PINS = {
 	// the re-fence for that belongs where the value meets a model (`lib/prompt-interpolation.ts`,
 	// #750), not on a step whose output the binder unwraps. Twelve lines is the whole cost of every
 	// step having answered, which is what makes a NEW step unable to ship without answering.
-	"workers/api/src/lib/steps.ts": 1117,
+	"workers/api/src/lib/steps.ts": 1033, // -84: the JSON steps (parse_json, stringify_json) + parseJsonLoose moved to steps-json.ts, and the shared ok/fail/asArray/isRecord to steps-shared.ts.
 	// First entry at #752, crossing LIMIT from 800. The addition is `renderToolContent` — the ONE
 	// place a registry tool's result is fenced from its `untrustedOutput` declaration — and the
 	// paragraphs saying why it is one place, why `head`/`tail` sit outside the block, and why a

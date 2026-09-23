@@ -169,6 +169,8 @@ export const TOOL_REACH: Readonly<Record<string, ToolReach>> = {
 	flatten: "platform",
 	slice: "platform",
 	parse_json: "platform",
+	// Its inverse (added in 26f8ee92): JSON-encodes the value it is handed and returns it — no I/O.
+	stringify_json: "platform",
 	// Scans rows it is HANDED (steps.ts: "pure, no I/O") — the fetching was done by `web_search`.
 	extract_contacts: "platform",
 	// Writes the instance's own collection and fires the agent-to-agent pump, which starts work on

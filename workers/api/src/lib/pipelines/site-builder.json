@@ -11,7 +11,7 @@
     },
     "template_slug": {
       "type": "string",
-      "description": "Designer template to build from, e.g. \"neon-ai\"."
+      "description": "Optional designer-template preference. The builder lists the live catalogue and chooses a suitable returned slug."
     },
     "photo_limit": {
       "type": "number",
@@ -219,6 +219,79 @@
     },
     {
       "tool": "mcp_call_tool",
+      "bind": "templates",
+      "inputs": {
+        "url": {
+          "$param": "mcp_url"
+        },
+        "tool": "list_templates",
+        "args": {}
+      }
+    },
+    {
+      "tool": "stringify_json",
+      "bind": "templateCatalog",
+      "inputs": {
+        "value": {
+          "$ref": "templates.data"
+        },
+        "pretty": true
+      }
+    },
+    {
+      "tool": "map",
+      "bind": "templateContext",
+      "inputs": {
+        "items": [
+          {
+            "b": {
+              "$ref": "biz.items.0"
+            },
+            "templates": {
+              "$ref": "templateCatalog.text"
+            },
+            "preferred_template_slug": {
+              "$param": "template_slug"
+            }
+          }
+        ],
+        "extract": {
+          "name": "b.name",
+          "kind": "b.kind",
+          "suburb": "b.suburb"
+        },
+        "keep": [
+          "templates",
+          "preferred_template_slug"
+        ]
+      }
+    },
+    {
+      "tool": "ai_generate",
+      "bind": "templateDraft",
+      "inputs": {
+        "items": {
+          "$ref": "templateContext.items"
+        },
+        "system": "Choose an appropriate existing designer template for a local business. Use only a template_slug literally present in the supplied catalogue. A preferred slug is a preference, not a mandate. Reply ONLY JSON.",
+        "prompt": "Business: {{name}} ({{kind}}), {{suburb}}.\nTemplate catalogue:\n{{templates}}\nPreferred template: {{preferred_template_slug}}\nReturn {\"template_slug\":\"exact catalogue slug\",\"reason\":\"short factual rationale\"}.",
+        "as": "template_json",
+        "maxTokens": 300
+      }
+    },
+    {
+      "tool": "parse_json",
+      "bind": "templateChoice",
+      "inputs": {
+        "items": {
+          "$ref": "templateDraft.items"
+        },
+        "field": "template_json",
+        "as": "template"
+      }
+    },
+    {
+      "tool": "mcp_call_tool",
       "bind": "site",
       "inputs": {
         "url": {
@@ -227,9 +300,111 @@
         "tool": "create_site",
         "args": {
           "template_slug": {
-            "$param": "template_slug"
+            "$ref": "templateChoice.items.0.template.template_slug"
           }
         }
+      }
+    },
+    {
+      "tool": "mcp_call_tool",
+      "bind": "sections",
+      "inputs": {
+        "url": {
+          "$param": "mcp_url"
+        },
+        "tool": "list_sections",
+        "args": {
+          "session_id": {
+            "$ref": "site.data.session_id"
+          }
+        }
+      }
+    },
+    {
+      "tool": "mcp_call_tool",
+      "bind": "sectionReads",
+      "forEach": {
+        "$ref": "sections.data.sections"
+      },
+      "inputs": {
+        "url": {
+          "$param": "mcp_url"
+        },
+        "tool": "read_section",
+        "args": {
+          "session_id": {
+            "$ref": "site.data.session_id"
+          },
+          "section_id": {
+            "$param": "item.id"
+          }
+        }
+      }
+    },
+    {
+      "tool": "stringify_json",
+      "bind": "sectionSource",
+      "inputs": {
+        "value": {
+          "$ref": "sectionReads"
+        },
+        "pretty": true
+      }
+    },
+    {
+      "tool": "mcp_call_tool",
+      "bind": "sectionContext",
+      "inputs": {
+        "url": {
+          "$param": "mcp_url"
+        },
+        "tool": "get_quality_report",
+        "args": {
+          "session_id": {
+            "$ref": "site.data.session_id"
+          }
+        }
+      }
+    },
+    {
+      "tool": "stringify_json",
+      "bind": "sectionDiagnostics",
+      "inputs": {
+        "value": {
+          "$ref": "sectionContext.data"
+        },
+        "pretty": true
+      }
+    },
+    {
+      "tool": "ai_generate",
+      "bind": "sectionPlan",
+      "inputs": {
+        "items": [
+          {
+            "sections": {
+              "$ref": "sectionSource.text"
+            },
+            "diagnostics": {
+              "$ref": "sectionDiagnostics.text"
+            }
+          }
+        ],
+        "system": "You improve an existing designer template. Use only section IDs in the supplied sections. Preserve layout and only return deliberate updates. Reply ONLY JSON.",
+        "prompt": "Existing sections:\n{{sections}}\nCurrent diagnostics:\n{{diagnostics}}\nReturn {\"sections\":[{\"id\":\"existing id\",\"content\":\"replacement inner HTML\",\"label\":\"optional\"}]}. Use no invented business claims.",
+        "as": "plan_json",
+        "maxTokens": 1500
+      }
+    },
+    {
+      "tool": "parse_json",
+      "bind": "plannedSections",
+      "inputs": {
+        "items": {
+          "$ref": "sectionPlan.items"
+        },
+        "field": "plan_json",
+        "as": "plan"
       }
     },
     {
@@ -364,12 +539,235 @@
     },
     {
       "tool": "mcp_call_tool",
+      "bind": "updatedTemplateSections",
+      "inputs": {
+        "url": {
+          "$param": "mcp_url"
+        },
+        "tool": "bulk_update_sections",
+        "args": {
+          "session_id": {
+            "$ref": "site.data.session_id"
+          },
+          "sections": {
+            "$ref": "plannedSections.items.0.plan.sections"
+          }
+        }
+      }
+    },
+    {
+      "tool": "mcp_call_tool",
+      "bind": "quality1",
+      "inputs": {
+        "url": {
+          "$param": "mcp_url"
+        },
+        "tool": "get_quality_report",
+        "args": {
+          "session_id": {
+            "$ref": "site.data.session_id"
+          }
+        }
+      }
+    },
+    {
+      "tool": "map",
+      "bind": "qa1",
+      "inputs": {
+        "items": [
+          {
+            "ready": {
+              "$ref": "quality1.data.ready_for_human_review"
+            }
+          }
+        ],
+        "keep": [
+          "ready"
+        ],
+        "derive": {
+          "needs_refinement": {
+            "$cond": {
+              "field": "ready",
+              "op": "falsy"
+            },
+            "then": true,
+            "else": false
+          },
+          "passed": {
+            "$cond": {
+              "field": "ready",
+              "op": "truthy"
+            },
+            "then": true,
+            "else": false
+          }
+        }
+      }
+    },
+    {
+      "tool": "stringify_json",
+      "bind": "quality1Text",
+      "inputs": {
+        "value": {
+          "$ref": "quality1.data"
+        },
+        "pretty": true
+      }
+    },
+    {
+      "tool": "ai_generate",
+      "bind": "refinementDraft",
+      "when": {
+        "$ref": "qa1.items.0.needs_refinement"
+      },
+      "inputs": {
+        "items": [
+          {
+            "sections": {
+              "$ref": "sectionSource.text"
+            },
+            "quality": {
+              "$ref": "quality1Text.text"
+            }
+          }
+        ],
+        "system": "Repair only the reported static quality failures. Use only existing section IDs and preserve the designer template. Reply ONLY JSON.",
+        "prompt": "Quality report:\n{{quality}}\nCurrent sections:\n{{sections}}\nReturn {\"sections\":[{\"id\":\"existing id\",\"content\":\"replacement inner HTML\",\"label\":\"optional\"}]}. Make only changes that address the report.",
+        "as": "refinement_json",
+        "maxTokens": 1400
+      }
+    },
+    {
+      "tool": "parse_json",
+      "bind": "refinement",
+      "when": {
+        "$ref": "qa1.items.0.needs_refinement"
+      },
+      "inputs": {
+        "items": {
+          "$ref": "refinementDraft.items"
+        },
+        "field": "refinement_json",
+        "as": "plan"
+      }
+    },
+    {
+      "tool": "mcp_call_tool",
+      "bind": "refinedSections",
+      "when": {
+        "$ref": "qa1.items.0.needs_refinement"
+      },
+      "inputs": {
+        "url": {
+          "$param": "mcp_url"
+        },
+        "tool": "bulk_update_sections",
+        "args": {
+          "session_id": {
+            "$ref": "site.data.session_id"
+          },
+          "sections": {
+            "$ref": "refinement.items.0.plan.sections"
+          }
+        }
+      }
+    },
+    {
+      "tool": "mcp_call_tool",
+      "bind": "preview2",
+      "when": {
+        "$ref": "qa1.items.0.needs_refinement"
+      },
+      "inputs": {
+        "url": {
+          "$param": "mcp_url"
+        },
+        "tool": "get_rendered_preview",
+        "args": {
+          "session_id": {
+            "$ref": "site.data.session_id"
+          }
+        }
+      }
+    },
+    {
+      "tool": "mcp_call_tool",
+      "bind": "quality2",
+      "when": {
+        "$ref": "qa1.items.0.needs_refinement"
+      },
+      "inputs": {
+        "url": {
+          "$param": "mcp_url"
+        },
+        "tool": "get_quality_report",
+        "args": {
+          "session_id": {
+            "$ref": "site.data.session_id"
+          }
+        }
+      }
+    },
+    {
+      "tool": "map",
+      "bind": "finalGate",
+      "inputs": {
+        "items": [
+          {
+            "initial_passed": {
+              "$ref": "qa1.items.0.passed"
+            },
+            "refined_passed": {
+              "$ref": "quality2.data.ready_for_human_review"
+            }
+          }
+        ],
+        "keep": [
+          "initial_passed",
+          "refined_passed"
+        ],
+        "derive": {
+          "passed": {
+            "$cond": {
+              "field": "initial_passed",
+              "op": "truthy"
+            },
+            "then": true,
+            "else": {
+              "$cond": {
+                "field": "refined_passed",
+                "op": "truthy"
+              },
+              "then": true,
+              "else": false
+            }
+          },
+          "needs_review": {
+            "$cond": {
+              "field": "initial_passed",
+              "op": "truthy"
+            },
+            "then": false,
+            "else": {
+              "$cond": {
+                "field": "refined_passed",
+                "op": "truthy"
+              },
+              "then": false,
+              "else": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "tool": "mcp_call_tool",
       "bind": "preview",
       "inputs": {
         "url": {
           "$param": "mcp_url"
         },
-        "tool": "get_preview",
+        "tool": "get_rendered_preview",
         "args": {
           "session_id": {
             "$ref": "site.data.session_id"
@@ -380,6 +778,9 @@
     {
       "tool": "create_ticket",
       "bind": "gate",
+      "when": {
+        "$ref": "finalGate.items.0.passed"
+      },
       "inputs": {
         "title": {
           "$ref": "copy.items.0.ticket_title"
@@ -429,6 +830,9 @@
     {
       "tool": "map",
       "bind": "record",
+      "when": {
+        "$ref": "finalGate.items.0.passed"
+      },
       "inputs": {
         "items": {
           "$ref": "copy.items"
@@ -457,6 +861,9 @@
     {
       "tool": "dedupe_upsert",
       "bind": "stored",
+      "when": {
+        "$ref": "finalGate.items.0.passed"
+      },
       "inputs": {
         "items": {
           "$ref": "record.items"
@@ -465,6 +872,78 @@
         "key": "place_id",
         "mode": "update",
         "emit": "site.drafted"
+      }
+    },
+    {
+      "tool": "create_ticket",
+      "bind": "review",
+      "when": {
+        "$ref": "finalGate.items.0.needs_review"
+      },
+      "inputs": {
+        "title": "Static quality review required",
+        "reasoning": "One automatic refinement was attempted but the FWS static quality gate still failed. This noindex draft has no deploy action. Review the rendered preview and quality report, then repair it before requesting deployment approval.",
+        "params": {
+          "place_id": {
+            "$param": "place_id"
+          },
+          "session_id": {
+            "$ref": "site.data.session_id"
+          },
+          "preview_url": {
+            "$ref": "preview2.data.preview_url"
+          },
+          "quality_report": {
+            "$ref": "quality2.data"
+          }
+        }
+      }
+    },
+    {
+      "tool": "map",
+      "bind": "reviewRecord",
+      "when": {
+        "$ref": "finalGate.items.0.needs_review"
+      },
+      "inputs": {
+        "items": {
+          "$ref": "copy.items"
+        },
+        "keep": [
+          "place_id",
+          "name",
+          "address",
+          "phone",
+          "maps_url",
+          "suburb",
+          "state",
+          "instagram",
+          "facebook",
+          "email",
+          "photo_urls"
+        ],
+        "derive": {
+          "site_status": "needs_review",
+          "site_session_id": {
+            "$ref": "site.data.session_id"
+          }
+        }
+      }
+    },
+    {
+      "tool": "dedupe_upsert",
+      "bind": "storedReview",
+      "when": {
+        "$ref": "finalGate.items.0.needs_review"
+      },
+      "inputs": {
+        "items": {
+          "$ref": "reviewRecord.items"
+        },
+        "collection": "sites",
+        "key": "place_id",
+        "mode": "update",
+        "emit": "site.needs_review"
       }
     }
   ],

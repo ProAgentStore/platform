@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allToolPolicyInputs, projectToolListing, resolveToolPolicy, type ToolPolicyEntry } from "./instance-tool-policy.js";
+import { allToolPolicyInputs, projectToolListing, resolveToolPolicy, type ToolListingRow } from "./instance-tool-policy.js";
 import { TOOL_TIERS, type ToolTier } from "./builtin-tool-policy.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
 import type { ToolDef } from "./connectors/types.js";
@@ -23,7 +23,7 @@ const caps = (over: Partial<AgentCapabilities>): AgentCapabilities =>
 /** 64 KiB — the acceptance criterion in #569, and a number hosts actually enforce. */
 const BUDGET = 64 * 1024;
 
-const wireBytes = (rows: readonly ToolPolicyEntry[]) => new TextEncoder().encode(JSON.stringify({ tools: rows })).length;
+const wireBytes = (rows: readonly ToolListingRow[]) => new TextEncoder().encode(JSON.stringify({ tools: rows })).length;
 
 /** Every capability shape the listing can be resolved for that MAXIMISES the payload. */
 function shapes(): Array<[string, AgentCapabilities]> {
@@ -64,13 +64,39 @@ describe("the tool listing fits in a response (#569)", () => {
 
 	it("keeps the audit fields on every row when the schemas are dropped", () => {
 		// The reduction must cost nothing auditable. This is the list #569 promised stays.
-		const [row] = projectToolListing(resolveToolPolicy(caps({}), [], allToolPolicyInputs(), []));
 		// `reach` joined the list at #584: it is what the console's "reaches outside the platform"
 		// sentence is derived from, so dropping it to save bytes would put that claim back on a
-		// field that does not answer it.
-		for (const field of ["name", "scope", "mutates", "reach", "allowed", "disabled", "reason", "writeConsent", "tier", "invocableBy", "description"]) {
-			expect(row, `the listing dropped ${field}, which is part of the audit`).toHaveProperty(field);
+		// field that does not answer it. `disabled` and `writeConsent` are pinned separately below:
+		// they are omitted when default-valued, which is still a complete answer.
+		for (const row of projectToolListing(resolveToolPolicy(caps({}), [], allToolPolicyInputs(), []))) {
+			for (const field of ["name", "scope", "mutates", "reach", "allowed", "reason", "tier", "invocableBy", "description"]) {
+				expect(row, `${row.name}: the listing dropped ${field}, which is part of the audit`).toHaveProperty(field);
+			}
 		}
+	});
+
+	it("omits `disabled` / `writeConsent` exactly when default-valued, and never loses a verdict", () => {
+		// 26f8ee92's regression: the catalogue had grown to ~110 bytes under the budget, so one new
+		// step tool broke it. These two defaults are ~3.9 KB of the default listing. A missing field
+		// MEANS the default, so the full policy must be recoverable from the row — checked for every
+		// row, with one tool switched off and one consent-gated connector left ungranted.
+		const all = allToolPolicyInputs();
+		const gated = all.find((t) => t.connector && t.scope === "write");
+		if (!gated) throw new Error("no write-scoped connector tool to exercise the consent gate");
+		const off = all.find((t) => t.name !== gated.name && !t.connector)?.name ?? "";
+		const policy = resolveToolPolicy(caps({ tools: all.map((t) => t.name) }), [off], all, []);
+		const rows = projectToolListing(policy);
+		for (const [i, row] of rows.entries()) {
+			const full = policy[i];
+			expect(row.name).toBe(full.name);
+			expect("disabled" in row, `${row.name}: disabled present iff true`).toBe(full.disabled);
+			expect(row.disabled ?? false).toBe(full.disabled);
+			expect("writeConsent" in row, `${row.name}: writeConsent present iff not "n/a"`).toBe(full.writeConsent !== "n/a");
+			expect(row.writeConsent ?? "n/a").toBe(full.writeConsent);
+		}
+		// Both branches actually exercised — a guard that only ever saw defaults proves nothing.
+		expect(rows.find((r) => r.name === off)?.disabled).toBe(true);
+		expect(rows.find((r) => r.name === gated.name)?.writeConsent).toBe("required");
 	});
 
 	it("does not narrow to the allowed set by default", () => {

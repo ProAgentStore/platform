@@ -4,6 +4,7 @@ import { api } from "@proagentstore/sdk/client";
 import Button from "../components/Button";
 import { statusBadgeClass } from "../lib/statusBadge";
 import { buildRunDetails, type PipelineRun as Run, type PipelineRunTrace, type PipelineRunTraceEvent } from "../lib/runDetails";
+import type { DataRecord, RecordQueryResponse } from "../lib/types";
 
 // Spreadsheet + board view over an agent's structured collections:
 // filter/sort, show/hide columns, edit the status pipeline inline, toggle a
@@ -18,12 +19,7 @@ interface Collection {
 	fields?: Field[];
 	recordCount?: number;
 }
-interface Rec {
-	id: string;
-	data: Record<string, unknown>;
-	createdAt?: string;
-	updatedAt?: string;
-}
+type Rec = DataRecord;
 const PIPELINE = ["new", "contacted", "won", "dead"];
 const FILTERABLE = new Set(["status", "country", "state", "city", "suburb", "website_status"]);
 const DATETIME = new Set(["found_at", "checked_at", "created_at", "createdAt", "updatedAt"]);
@@ -221,7 +217,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 					query.set("order_by", requestSortBy);
 					query.set("order_dir", requestSortDir);
 				}
-				const d = await api<{ records?: Rec[]; total?: number }>(
+				const d = await api<RecordQueryResponse>(
 					`/v1/instances/${instanceId}/collections/${encodeURIComponent(name)}/records?${query}`,
 				);
 				if (request === recordsRequest.current) {

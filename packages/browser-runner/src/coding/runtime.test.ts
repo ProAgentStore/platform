@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { CodingRuntime } from "./runtime.js";
 import { authenticatedCloneUrl, ensureRepo } from "./repo.js";
-import { HeadlessSession } from "./headless.js";
+import { defaultStatePath, HeadlessSession } from "./headless.js";
 
 // A fake `claude` that speaks stream-json: init on start, then for each user turn
 // echoes a result. Lets us drive the runtime without a real Claude install.
@@ -211,13 +211,16 @@ describe("CodingRuntime over the stream-json engine", () => {
 		expect(cold.resumed).toBe(false);
 		await until(() => rt.snapshot("prev").pane !== "" || true);
 		await until(() => rt.list().some((s) => s.sessionId === "prev"));
-		// Let the fake engine's init event land, which is what persists the resume key.
-		await wait(300);
+		// Let the fake engine's init event land, which is what persists the resume key. Waited on
+		// rather than slept for: a fixed 300ms lost the race whenever spawning the engine was slow
+		// (a loaded machine), and the warm start below then correctly found nothing to resume.
+		const statePath = defaultStatePath(join(dir, "resume-base"));
+		await until(() => existsSync(statePath) && "prev" in JSON.parse(readFileSync(statePath, "utf8")), 15_000);
 		rt.end("prev");
 
 		expect(rt.start({ sessionId: "next-cold", repoId: "r1", workDir: dir, clientType: "claude", bin }).resumed).toBe(false);
 		expect(rt.start({ sessionId: "next-warm", repoId: "r1", workDir: dir, clientType: "claude", bin, resumeFrom: "prev" }).resumed).toBe(true);
-	});
+	}, 25_000);
 
 	it("refuses a keystroke instead of answering it with an unchanged pane (#448)", () => {
 		// The old shape: `act` called `key()`, which pushed a transcript line and returned void,

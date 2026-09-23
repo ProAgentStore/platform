@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { KnowledgeDoc as WorkerKnowledgeDoc } from "../../../../workers/api/src/agent-types";
 import type { ConnectionGuideResponse as WorkerConnectionGuideResponse } from "../../../../workers/api/src/lib/connection-guide";
 import type { ConsentRow as WorkerConsentRow } from "../../../../workers/api/src/agent-types";
+import type { CollectionRecord as WorkerCollectionRecord, RecordQueryResult as WorkerRecordQueryResult } from "../../../../workers/api/src/agent-storage-types";
 import type { RunnerEvent, RunnerTask } from "../../../../packages/browser-runner/src/types";
-import type { ConnectionGuideResponse, ConnectorConsent, Credential, KnowledgeDoc, Notification, RuntimeEvent, RuntimeTask, TriggerAction } from "./types";
+import type { ConnectionGuideResponse, ConnectorConsent, Credential, DataRecord, KnowledgeDoc, Notification, RecordQueryResponse, RuntimeEvent, RuntimeTask, TriggerAction } from "./types";
 
 /**
  * The console's API-response types, checked against the Worker declarations they copy (#617).
@@ -50,6 +51,14 @@ type Extra<Console, Producer> = Exclude<keyof Console, keyof Producer>;
 const _knowledgeDocHasNoInventedFields: Extra<KnowledgeDoc, WorkerKnowledgeDoc> extends never
 	? true
 	: never = true;
+
+// ── RecordQueryResponse / DataRecord ────────────────────────────────────────────────────────────
+//
+// The Data tab's paginated records read (#616): it was an inline `{ records?: Rec[]; total?: number }`
+// until f9236781 added `total` without recording the shape. The producer is `agent-storage-types.ts`,
+// import-safe for the same reason `agent-types.ts` is: it imports nothing.
+const _recordPageHasNoInventedFields: Extra<RecordQueryResponse, WorkerRecordQueryResult> extends never ? true : never = true;
+const _dataRecordHasNoInventedFields: Extra<DataRecord, WorkerCollectionRecord> extends never ? true : never = true;
 
 // ── ConnectionGuideResponse ──────────────────────────────────────────────────────────────────
 //
@@ -116,7 +125,9 @@ describe("console response types match the Worker declarations they copy (#617)"
 			_knowledgeDocHasNoInventedFields,
 			_runtimeTaskHasNoInventedFields,
 			_runtimeEventHasNoInventedFields,
-		]).toEqual([true, true, true]);
+			_recordPageHasNoInventedFields,
+			_dataRecordHasNoInventedFields,
+		]).toEqual([true, true, true, true, true]);
 	});
 
 	it("declares every trigger action the Worker's TRIGGER_ACTIONS has, and no more", () => {
