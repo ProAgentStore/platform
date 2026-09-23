@@ -187,7 +187,7 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 				// One extra field, resolved once per step in `executePipelineStep`.
 				const ran = result.dispatched ? `${s.tool} → ${result.dispatched}` : s.tool;
 				await step.do(`s${i}-trace`, async () => {
-					await logEvent(env, { source: "pipeline", event: "pipeline.step", level: result.success ? "info" : "warn", message: `${ran} → ${bind}: ${result.content.slice(0, 160)}`, userId, instanceId, traceId: runId, context: { step: i, tool: s.tool, ...(result.dispatched ? { dispatched: result.dispatched } : {}), bind, success: result.success } }).catch(() => undefined);
+					await logEvent(env, { source: "pipeline", event: "pipeline.step", level: result.success ? "info" : "warn", message: `${ran} → ${bind}: ${result.content.slice(0, 160)}`, userId, instanceId, traceId: runId, context: { step: i, tool: s.tool, ...(result.dispatched ? { dispatched: result.dispatched } : {}), bind, success: result.success, ...(result.skipped ? { skipped: true } : {}) } }).catch(() => undefined);
 					return null;
 				});
 				if (!result.success) {

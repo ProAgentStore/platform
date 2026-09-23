@@ -128,6 +128,11 @@ describe("validatePipeline — reference checking", () => {
 		expect(validatePipeline(def)).toMatch(/\$ref "grid\.cells"/);
 	});
 
+	it("checks a when reference before accepting a guarded write", () => {
+		const def = { name: "p", steps: [{ tool: "geocode", when: { $ref: "review.needs_refinement" } }] };
+		expect(validatePipeline(def)).toMatch(/\$ref "review\.needs_refinement"/);
+	});
+
 	it("accepts the IMPLICIT bind — stepBind defaults to step{index}", () => {
 		const def = {
 			name: "p",
@@ -290,6 +295,24 @@ describe("executePipelineStep — dispatches via runRegistryTool + threads outpu
 		const res = await executePipelineStep(ctx, { tool: "reachable", forEach: { $param: "nope" } }, 0, {}, {});
 		expect(res.success).toBe(false);
 		expect(runRegistryTool).not.toHaveBeenCalled();
+	});
+
+	it("skips a guarded step unless the guard resolves to boolean true", async () => {
+		const step = { tool: "reachable", when: { $ref: "review.needs_refinement" }, inputs: { url: "https://example.com" }, bind: "refined" };
+		for (const needsRefinement of [false, undefined, "true", { value: true }]) {
+			const res = await executePipelineStep(ctx, step, 1, { review: { needs_refinement: needsRefinement } }, {});
+			expect(res).toMatchObject({ success: true, skipped: true, output: null });
+		}
+		expect(runRegistryTool).not.toHaveBeenCalled();
+	});
+
+	it("dispatches a guarded step when the prior QA verdict is boolean true", async () => {
+		runRegistryTool.mockResolvedValue({ name: "reachable", content: '{"updated":true}', success: true });
+		const step = { tool: "reachable", when: { $ref: "review.needs_refinement" }, inputs: { url: "https://example.com" }, bind: "refined" };
+		const res = await executePipelineStep(ctx, step, 1, { review: { needs_refinement: true } }, {});
+		expect(runRegistryTool).toHaveBeenCalledWith("reachable", expect.anything(), { url: "https://example.com" });
+		expect(res).toMatchObject({ success: true, output: { updated: true } });
+		expect(res.skipped).toBeUndefined();
 	});
 });
 

@@ -264,7 +264,6 @@ const KNOWN_ANONYMOUS = {
 
 	// ── DataTab / collections ─────────────────────────────────────────────────
 	"94accf36": "{ collections?: Collection[] }",
-	"d7f40120": "{ records?: Rec[] }",
 
 	// ── loop/LoopRunsSection (agents side) ────────────────────────────────────
 	// (covered above — fd4f4630, a50ac460, 111af681)

@@ -722,6 +722,7 @@ describe("lead-finder expressible from the catalog (issue #94 acceptance)", () =
 // ── slice + parse_json + $format: the composition primitives the site-builder needed ────
 const sliceT = getRegistryTool("slice")!;
 const parseJsonT = getRegistryTool("parse_json")!;
+const stringifyJsonT = getRegistryTool("stringify_json")!;
 
 describe("slice", () => {
 	const items = [1, 2, 3, 4, 5].map((n) => ({ n }));
@@ -784,6 +785,15 @@ describe("slice", () => {
 		expect((await sliceT.handler(baseCtx, { items, limit: 0 })).success).toBe(true);
 		// Absent means "all" — a blank param must NOT reach this branch, which is the bug.
 		expect(parse((await sliceT.handler(baseCtx, { items, limit: null })).content).count).toBe(5);
+	});
+});
+
+describe("stringify_json", () => {
+	it("preserves structured connector output for a text-only model prompt", async () => {
+		const out = parse((await stringifyJsonT.handler(baseCtx, {
+			value: { templates: [{ slug: "cafe-warm", category: "cafe" }] },
+		})).content);
+		expect(out.text).toBe('{"templates":[{"slug":"cafe-warm","category":"cafe"}]}');
 	});
 });
 
