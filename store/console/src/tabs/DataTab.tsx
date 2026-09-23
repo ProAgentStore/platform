@@ -41,6 +41,13 @@ const PIPELINE = ["new", "contacted", "won", "dead"];
 const FILTERABLE = new Set(["status", "country", "state", "city", "suburb", "website_status"]);
 const DATETIME = new Set(["found_at", "checked_at", "created_at", "createdAt", "updatedAt"]);
 const PAGE_SIZES = [25, 50, 100] as const;
+const SYSTEM_COLUMNS = ["createdAt", "updatedAt"] as const;
+
+function columnLabel(column: string): string {
+	if (column === "createdAt") return "Added";
+	if (column === "updatedAt") return "Updated";
+	return column;
+}
 
 function Badge({ value }: { value: string }) {
 	return <span className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${statusBadgeClass(value)}`}>{value}</span>;
@@ -182,7 +189,13 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 		() => collection?.fields?.map((f) => f.name) ?? (records[0] ? Object.keys(records[0].data) : []),
 		[collection, records],
 	);
-	const baseColumns = useMemo(() => allColumns.filter((c) => c !== "audit"), [allColumns]);
+	// Creation/update time is record metadata rather than user-supplied collection data. Keep it
+	// in the spreadsheet so an operator can see when a lead arrived and last changed, while still
+	// letting them hide either column through the regular Columns menu.
+	const baseColumns = useMemo(
+		() => [...SYSTEM_COLUMNS, ...allColumns.filter((c) => c !== "audit" && !SYSTEM_COLUMNS.includes(c as (typeof SYSTEM_COLUMNS)[number]))],
+		[allColumns],
+	);
 	const columns = useMemo(() => baseColumns.filter((c) => !hidden.has(c)), [baseColumns, hidden]);
 	const hasStatus = allColumns.includes("status");
 
@@ -215,6 +228,8 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 	const firstRecord = totalRecords === 0 ? 0 : page * pageSize + 1;
 	const lastRecord = Math.min((page + 1) * pageSize, totalRecords);
 	const hasActiveFilters = Object.values(filters).some(Boolean);
+	const recordValue = (record: Rec, column: string): unknown =>
+		column === "createdAt" ? record.createdAt : column === "updatedAt" ? record.updatedAt : record.data[column];
 
 	const setStatus = async (rec: Rec, status: string) => {
 		const prev = rec.data.status;
@@ -232,7 +247,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 
 	const exportCsv = () => {
 		const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-		const lines = [columns.map(esc).join(","), ...rows.map((r) => columns.map((c) => esc(r.data[c])).join(","))];
+		const lines = [columns.map((c) => esc(columnLabel(c))).join(","), ...rows.map((r) => columns.map((c) => esc(recordValue(r, c))).join(","))];
 		const blob = new Blob([lines.join("\n")], { type: "text/csv" });
 		const a = document.createElement("a");
 		a.href = URL.createObjectURL(blob);
@@ -385,7 +400,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 													})
 												}
 											/>
-											{c}
+											{columnLabel(c)}
 										</label>
 									))}
 								</div>
@@ -497,7 +512,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 										className="text-left px-2 py-1 border-b border-line whitespace-nowrap sticky top-0 bg-panel"
 									>
 										<button type="button" onClick={() => toggleSort(c)} className="cursor-pointer select-none text-left">
-											{c}
+											{columnLabel(c)}
 											{sortBy === c ? (sortDir === "asc" ? " ▲" : " ▼") : ""}
 										</button>
 									</th>
@@ -514,7 +529,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 									</td>
 									{columns.map((c) => (
 										<td key={c} className="px-2 py-1 whitespace-nowrap align-top">
-											{c === "status" ? <StatusSelect rec={r} /> : cell(c, r.data[c])}
+											{c === "status" ? <StatusSelect rec={r} /> : cell(c, recordValue(r, c))}
 										</td>
 									))}
 								</tr>
@@ -558,14 +573,10 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 							<tbody>
 								{baseColumns.map((c) => (
 									<tr key={c}>
-										<td className="pr-3 py-0.5 text-muted-soft align-top whitespace-nowrap">{c}</td>
-										<td className="py-0.5">{cell(c, detail.data[c])}</td>
+										<td className="pr-3 py-0.5 text-muted-soft align-top whitespace-nowrap">{columnLabel(c)}</td>
+										<td className="py-0.5">{cell(c, recordValue(detail, c))}</td>
 									</tr>
 								))}
-								<tr>
-									<td className="pr-3 py-0.5 text-muted-soft align-top">created</td>
-									<td className="py-0.5">{fmtDateTime(detail.createdAt)}</td>
-								</tr>
 							</tbody>
 						</table>
 						<h4 className="font-semibold text-sm mb-2">Audit trail — what the agent did</h4>
