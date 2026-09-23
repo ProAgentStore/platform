@@ -20,7 +20,9 @@ import { describe, expect, it } from "vitest";
 
 const DIR = dirname(fileURLToPath(import.meta.url));
 const RUNNER = readFileSync(join(DIR, "pipeline-run.ts"), "utf8");
-const STEPS = readFileSync(join(DIR, "../lib/steps.ts"), "utf8");
+// The catalog spans steps.ts and the step groups split out of it (steps-json.ts); both use the same
+// `\t\tname:` indentation, so reading them as one source keeps every step measured.
+const STEPS = ["../lib/steps.ts", "../lib/steps-json.ts"].map((f) => readFileSync(join(DIR, f), "utf8")).join("\n");
 const PIPELINE = readFileSync(join(DIR, "../lib/pipeline.ts"), "utf8");
 
 describe("the runner folds a step's partial failures into the run (#642)", () => {
@@ -86,7 +88,7 @@ describe("every step that reports a `failed` count is wired to the run", () => {
 	const segments = catalogSegments();
 
 	it("measures the whole catalog — a parse that finds nothing would pass every arm below", () => {
-		expect(segments.size, "step tools parsed out of steps.ts").toBe(12);
+		expect(segments.size, "step tools parsed out of steps.ts + steps-json.ts").toBe(13);
 		expect([...segments.keys()]).toContain("enrich");
 	});
 
