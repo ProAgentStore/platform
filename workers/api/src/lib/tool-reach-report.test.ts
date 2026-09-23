@@ -46,6 +46,9 @@ const MACHINE = new Set<string>([
 	"send_to_cli",
 	// first-party registry
 	"end_coding_session",
+	// Creates the bounded subscription-worker task over the runner relay. Its later FWS calls
+	// are a separately classified worker turn, per tool-reach.ts rule 1.
+	"start_website_builder",
 	// terminal connector
 	"terminal_list_targets",
 	"terminal_capture",

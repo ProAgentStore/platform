@@ -181,6 +181,10 @@ export const TOOL_REACH: Readonly<Record<string, ToolReach>> = {
 	send_to_cli: "machine",
 	// Kills an engine process on the owner's machine.
 	end_coding_session: "machine",
+	// Creates and starts the bounded subscription-worker task through the runner relay. The FWS
+	// calls happen in that separately classified worker turn, so rule 1 makes this direct call
+	// machine reach rather than internet reach.
+	start_website_builder: "machine",
 	// ── Outside. Each one is why this file exists.
 	// The caller picks the method, the body and the host (`lib/tools.ts`). #584's ten instances.
 	fetch_url: "internet",

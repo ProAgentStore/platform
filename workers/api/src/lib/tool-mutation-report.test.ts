@@ -62,6 +62,8 @@ const MUTATING = new Set<string>([
 	"create_ticket",
 	"record_feedback",
 	"dedupe_upsert",
+	// Creates a durable job reservation and a local runner task, then starts its workflow.
+	"start_website_builder",
 	// ── found by walking the REST of the surface, which the audit did not enumerate ──
 	"fan_out", // pages mode forwards the author's method to http_request
 	"enrich", // runs whatever tool its `tool` input names
