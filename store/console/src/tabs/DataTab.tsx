@@ -105,7 +105,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 	const [hidden, setHidden] = useState<Set<string>>(new Set());
 	const [showCols, setShowCols] = useState(false);
 	const [filters, setFilters] = useState<Record<string, string>>({});
-	const [showControls, setShowControls] = useState(true);
+	const [showControls, setShowControls] = useState(false);
 	const [detail, setDetail] = useState<Rec | null>(null);
 	// Run observability (issue #98): a "Runs" section over pipeline-run records.
 	const [surface, setSurface] = useState<"records" | "runs">("records");
