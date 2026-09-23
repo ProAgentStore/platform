@@ -300,3 +300,31 @@ export function hostedFeatureUnavailable(provider: GitProvider, feature: HostedF
 	}
 	return `${what} isn't supported for ${provider.label} repos yet. The repo still clones and codes normally.`;
 }
+
+/**
+ * Where to clone this repo from (#828) — the stored `clone_url`, else one DERIVED from the hosted
+ * identity the row already carries.
+ *
+ * A repo added as a local folder and later identified by `detect-github` gains `github_repo`,
+ * `provider` and `repo_slug`, but never `clone_url`; so does one added as bare `owner/repo`. With
+ * no URL the runner's `ensureRepo` cannot clone, and an empty or absent folder — the normal state
+ * on a machine that has simply never cloned this repo — stayed empty. The identity is enough to
+ * name the canonical https remote on every host PAGS knows, so nothing needs to be stored.
+ *
+ * `undefined` when there is nothing to derive from: a `local` or `other` repo, or no `owner/name`.
+ * The derived URL is on the provider's own host, so `mayAttachCloneCredential` still passes it.
+ */
+export function cloneUrlForRepo(repo: {
+	provider?: string | null;
+	githubRepo?: string | null;
+	repoSlug?: string | null;
+	cloneUrl?: string | null;
+}): string | undefined {
+	const stored = (repo.cloneUrl ?? "").trim();
+	if (stored) return stored;
+	const provider = repo.githubRepo ? gitProviderFor("github") : gitProviderFor(repo.provider);
+	const host = provider.hosts[0];
+	const slug = (repo.repoSlug || repo.githubRepo || "").trim().replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
+	if (!host || !slug.includes("/")) return undefined;
+	return `https://${host}/${slug}.git`;
+}

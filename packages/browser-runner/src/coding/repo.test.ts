@@ -7,12 +7,13 @@
  * with itself. The one case that needs a real git process is the one the bug turns on — a
  * subdirectory of a checkout has no `.git` of its own and must still be usable.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { checkWorkdir, parseSshIdentity } from "./repo.js";
+import { checkWorkdir, ensureRepo, parseSshIdentity } from "./repo.js";
 
 const tmp = mkdtempSync(join(tmpdir(), "pags-workdir-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -115,5 +116,59 @@ describe("parseSshIdentity", () => {
 		const userAccount = parseSshIdentity("Hi octocat! You've successfully authenticated, but GitHub does not provide shell access.");
 		expect(userAccount).not.toBeNull();
 		expect(userAccount?.includes("/")).toBe(false);
+	});
+});
+
+/**
+ * `ensureRepo` against a REAL upstream (#828). The cloud now sends a clone URL for a repo that is
+ * empty or absent on the machine; this is the half that has to turn that into a checkout — and
+ * leave every other state exactly as it found it.
+ */
+describe("ensureRepo — a never-cloned checkout is cloned into; nothing else is touched (#828)", () => {
+	const root = mkdtempSync(join(tmpdir(), "pags-ensure-"));
+	const upstream = join(root, "upstream");
+	const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "pipe" }).toString();
+	mkdirSync(upstream);
+	git(upstream, "init", "-q", "-b", "main");
+	writeFileSync(join(upstream, "README.md"), "hello\n");
+	git(upstream, "add", ".");
+	git(upstream, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init");
+	const url = `file://${upstream}`;
+	afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+	it("clones into an EMPTY folder", () => {
+		const dir = join(root, "empty");
+		mkdirSync(dir);
+		ensureRepo(dir, { cloneUrl: url });
+		expect(readFileSync(join(dir, "README.md"), "utf8")).toBe("hello\n");
+		expect(checkWorkdir(dir)).toMatchObject({ checked: true, insideWorkTree: true });
+	});
+
+	it("clones into an ABSENT folder, creating its parents", () => {
+		const dir = join(root, "nested", "never", "cloned");
+		ensureRepo(dir, { cloneUrl: url });
+		expect(existsSync(join(dir, ".git"))).toBe(true);
+	});
+
+	it("leaves an existing checkout exactly as it is", () => {
+		const dir = join(root, "existing");
+		ensureRepo(dir, { cloneUrl: url });
+		writeFileSync(join(dir, "local-edit.txt"), "mine\n");
+		ensureRepo(dir, { cloneUrl: url });
+		expect(readFileSync(join(dir, "local-edit.txt"), "utf8")).toBe("mine\n");
+	});
+
+	it("refuses a non-empty folder with no .git, and deletes nothing", () => {
+		const dir = join(root, "plain");
+		mkdirSync(dir);
+		writeFileSync(join(dir, "notes.txt"), "keep\n");
+		expect(() => ensureRepo(dir, { cloneUrl: url })).toThrow(/Refusing to clone into non-empty directory/);
+		expect(readdirSync(dir)).toEqual(["notes.txt"]);
+	});
+
+	it("with no clone URL, only makes the folder — which is why the cloud must send one", () => {
+		const dir = join(root, "no-url");
+		ensureRepo(dir, {});
+		expect(readdirSync(dir)).toEqual([]);
 	});
 });

@@ -38,13 +38,36 @@
  * the failure mode already fixed twice (#468, #530). This is a different fact and it gets its own
  * sentence, carrying #405's relayable `clone_error` verbatim plus the remedy that actually clears
  * it (fix the folder, then Re-check).
+ *
+ * ── An EMPTY or ABSENT folder is not a broken one, when there is somewhere to clone from (#828)
+ *
+ * On an instance served by more than one machine, a folder that is empty or missing on the machine
+ * picking up the run is the ordinary state of a machine that has never cloned this repo — and the
+ * runner's `ensureRepo` already clones into exactly those two states (it refuses only a NON-empty
+ * folder with no `.git`). What blocked it was this gate, deciding on one machine's stored verdict.
+ * So when the machine about to run has been asked again (`live`, see `recheckRepoForRun`):
+ *
+ *   - `ok`                              admitted — the stored verdict was stale or from elsewhere.
+ *   - `empty` / `missing` + a remote    admitted — the session start clones into it.
+ *   - `empty` / `missing`, no remote    refused, saying there is nothing to clone from.
+ *   - `not_a_git_repo`/`not_a_directory` refused — files are there that a clone would have to
+ *                                       replace, and nothing here is ever deleted to make room.
+ *
+ * A repair run (`repair_checkout`) is admitted by the same rule and no other: a checkout that was
+ * never cloned has nothing to reconcile, and once cloned it is in sync by construction.
  */
 import type { CodingRepo } from "./coding-types.js";
+import type { WorkdirVerdict } from "./coding-workdir.js";
+import { cloneUrlForRepo } from "./git-providers.js";
 
 /** The subset of a repo row this decision is made from — so a test needs no `CodingRepo` fixture. */
 export type AdmissibleRepo = Pick<CodingRepo, "name" | "cloneStatus"> & {
 	workdir?: string;
 	cloneError?: string;
+	provider?: string;
+	githubRepo?: string;
+	repoSlug?: string;
+	cloneUrl?: string;
 };
 
 export type RepoAdmission =
@@ -65,8 +88,20 @@ export type RepoAdmission =
 const REMEDY =
 	"Fix that folder on the machine, or point this repo at the right path in the Coding tab (repo settings), then press Re-check on the repo — no run will start here until that check passes.";
 
-export function admitRepoForRun(repo: AdmissibleRepo): RepoAdmission {
+const NO_REMOTE =
+	"There is no remote to clone it from — add this repo's owner/repo or clone URL in the Coding tab (repo settings), or point it at an existing checkout.";
+
+export function admitRepoForRun(repo: AdmissibleRepo, live?: WorkdirVerdict | null): RepoAdmission {
 	if (repo.cloneStatus !== "needs_attention") return { ok: true };
+	// The machine about to run answered just now — its verdict supersedes the stored one (#828).
+	if (live && live.state !== "unverified") {
+		if (live.state === "ok") return { ok: true };
+		if (live.state === "empty" || live.state === "missing") {
+			if (cloneUrlForRepo(repo)) return { ok: true };
+			return { ok: false, message: `Not starting on ${repo.name}: ${live.detail} ${NO_REMOTE}` };
+		}
+		return { ok: false, message: `Not starting on ${repo.name}: ${live.detail} ${REMEDY}` };
+	}
 	// #405 wrote `clone_error` explicitly so "an agent can say it to the owner"; it already names
 	// the path. The fallback is only for a row whose detail was lost, and it still names the folder
 	// rather than describing the repo abstractly — "what is wrong" is useless without "with what".

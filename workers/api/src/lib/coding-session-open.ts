@@ -9,7 +9,8 @@
 import { callRunner, getBoundRunnerConn, getRunnerConnIgnoringLiveness, relayConnected, type RunnerConn } from "./runner-client.js";
 import { resolveCloneCredential } from "./git-credentials.js";
 import { resolveEngine, resolveEngineEnv } from "./coding-engines.js";
-import { checkWorkdirVia, cloneStatusForVerdict } from "./coding-workdir.js";
+import { checkWorkdirVia, cloneStatusForVerdict, type WorkdirVerdict } from "./coding-workdir.js";
+import { cloneUrlForRepo } from "./git-providers.js";
 import { createSession, endSession, getActiveSessionForRepo, getLastFinishedSessionForRepo, getRepo, reassignSessionNode, updateRepoClone } from "./coding-store.js";
 import { seedBriefForRepo } from "./coding-seed-brief.js";
 import { appendTimeline } from "./coding-timeline.js";
@@ -181,6 +182,34 @@ export function relocationNote(input: { from: string | null; to: string | null; 
  * legitimate cold start per ADR 0005, and it is spelled as a request rather than as the absence of
  * a seed so that a caller has to state it.
  */
+/**
+ * Re-ask the machine a run will use about a CONDEMNED checkout, before the run is refused (#828).
+ *
+ * `needs_attention` is one machine's verdict stored on a row every machine shares. On an unpinned
+ * instance the laptop that wrote "EMPTY" need not be the one about to run: the row that blocked
+ * the FAS Coder was written by a machine whose `~` is `/Users/serge`, and every run was refused on
+ * its word. So when the stored status would block, the machine that answers NOW is asked again —
+ * and its verdict, not the stored one, is what admission decides on. Only `needs_attention` is
+ * re-probed: every other status is already admitted, and one probe per run start on a repo that
+ * is already fine would be a runner round-trip bought for nothing.
+ *
+ * The fresh verdict is written back (same rule as every other probe: `unverified` writes nothing),
+ * so a folder fixed on the machine clears the block without a trip to Re-check. `null` = no
+ * machine answered; admission then falls back to the stored verdict.
+ */
+export async function recheckRepoForRun(env: Env, instanceId: string, uid: string, repo: CodingRepo): Promise<WorkdirVerdict | null> {
+	if (repo.cloneStatus !== "needs_attention" || !repo.workdir) return null;
+	const conn = await getBoundRunnerConn(env, instanceId, uid).catch(() => null);
+	if (!conn) return null;
+	const verdict = await checkWorkdirVia(conn, repo.workdir).catch(() => null);
+	if (!verdict) return null;
+	const status = cloneStatusForVerdict(verdict);
+	if (status) {
+		await updateRepoClone(env, repo.id, { cloneStatus: status, cloneError: verdict.detail || null, checkedNow: true }).catch(() => undefined);
+	}
+	return verdict;
+}
+
 export async function startSessionOnRunner(
 	env: Env,
 	instanceId: string,
@@ -252,7 +281,10 @@ export async function startSessionOnRunner(
 	// non-GitHub repo gets its own provider's credential — or none, which means "clone it
 	// publicly / with whatever this machine already has", the same thing a public GitHub repo
 	// has always got.
-	const credential = await resolveCloneCredential(env, uid, repo);
+	// Derived when the row stores none (#828): without a URL the runner cannot clone into an empty
+	// or absent folder, and the engine launched in an empty directory instead.
+	const cloneUrl = cloneUrlForRepo(repo);
+	const credential = await resolveCloneCredential(env, uid, { ...repo, cloneUrl });
 	const engineEnv = await resolveEngineEnv(env, instanceId, uid, session);
 	// Read AFTER the relocation above, so a session that just moved machines is briefed from the
 	// record the machine it left is not carrying. Unconditional apart from an explicit clean slate:
@@ -266,7 +298,7 @@ export async function startSessionOnRunner(
 			repoId: repo.id,
 			// Local checkout → run in that dir (no clone). Else clone to a managed dir.
 			workDir: repo.workdir || undefined,
-			cloneUrl: repo.cloneUrl,
+			cloneUrl,
 			branch: repo.branch || undefined,
 			token: credential?.token,
 			// The username half. An older runner ignores it and hardcodes `x-access-token`,
