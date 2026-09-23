@@ -42,16 +42,19 @@ describe("RunnerStore.expireInFlightTasks", () => {
 		expect(new RunnerStore(dir).getTask("a")?.status).toBe("failed");
 	});
 
-	it("never expires a live job.apply_agent task (durable workflow owns it)", () => {
+	it("never expires durable workflow tasks, including Website Builder, on restart", () => {
 		const store = new RunnerStore(dir);
 		const apply: RunnerTask = { id: "j", type: "job.apply_agent", status: "running", input: {}, requiresApproval: false, createdAt: "", updatedAt: "" };
+		const website: RunnerTask = { id: "w", type: "website.build", status: "running", input: {}, requiresApproval: false, createdAt: "", updatedAt: "" };
 		store.putTask(apply);
+		store.putTask(website);
 		store.putTask(task("b", "running"));
 
 		const expired = store.expireInFlightTasks();
 
 		expect(expired).toBe(1); // only the generic task
 		expect(store.getTask("j")?.status).toBe("running"); // apply survives a runner restart
+		expect(store.getTask("w")?.status).toBe("running"); // workflow sends durable resume input
 		expect(store.getTask("b")?.status).toBe("failed");
 	});
 });

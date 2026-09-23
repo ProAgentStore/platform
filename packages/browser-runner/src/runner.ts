@@ -129,21 +129,40 @@ export class LocalRunner {
 			throw new RunnerInputError("website builder needs taskId, instanceId, lead, brokerUrl, and jobToken");
 		}
 		if (input.engine !== "claude" && input.engine !== "codex") throw new RunnerInputError("website builder engine must be claude or codex");
+		if (input.existingSessionId !== undefined && (!/^[A-Za-z0-9_-]{1,256}$/.test(input.existingSessionId))) {
+			throw new RunnerInputError("website builder existingSessionId must be a PAGS-confirmed opaque FWS session id");
+		}
+		const task = this.requireTask(input.taskId);
+		if (task.type !== "website.build") throw new RunnerInputError("website builder taskId must identify a website.build task");
+		if (isTerminalTaskStatus(task.status)) throw new RunnerInputError(`website builder task is already ${task.status}`);
 		const sessionId = this.websiteBuilderSessions.get(input.taskId) ?? websiteBuilderSessionId(input.taskId);
+		const alreadyTracked = this.coding.list().some((session) => session.sessionId === sessionId);
 		this.websiteBuilderSessions.set(input.taskId, sessionId);
-		this.coding.start({
+		const snapshot = this.coding.start({
 			sessionId,
 			repoId: `website-builder-${input.taskId}`,
 			workDir: join(this.config.dataDir, "website-builder", input.taskId),
 			clientType: websiteBuilderClient(input.engine),
 			env: { PAGS_WEBSITE_BUILDER_TOKEN: input.jobToken },
 		});
+		// A Cloudflare RPC timeout can make the workflow repeat /start while this
+		// runner is still healthy.  Returning the existing session is safe; sending the
+		// full prompt twice can make a subscription CLI create a second draft.
+		if (alreadyTracked) return snapshot;
 		this.coding.act(sessionId, { kind: "message", text: websiteBuilderPrompt(input), author: "pilot" });
+		this.addTaskEvent(task, input.existingSessionId ? "website-builder.resumed" : "website-builder.started", input.existingSessionId ? "Website Builder resumed its broker-confirmed FWS draft" : "Website Builder subscription worker started");
 		return this.coding.snapshot(sessionId);
 	}
 
-	websiteBuilderCapture(taskId: string) {
-		const sessionId = this.websiteBuilderSessions.get(taskId) ?? websiteBuilderSessionId(taskId);
+	websiteBuilderCapture(input: { taskId: string; resume?: WebsiteBuilderTaskInput }) {
+		const sessionId = this.websiteBuilderSessions.get(input.taskId) ?? websiteBuilderSessionId(input.taskId);
+		const known = this.coding.list().some((session) => session.sessionId === sessionId);
+		if (!known) {
+			if (!input.resume || input.resume.taskId !== input.taskId) {
+				throw new RunnerInputError("website builder session is not present after runner restart; durable resume input is required");
+			}
+			this.websiteBuilderStart(input.resume);
+		}
 		return this.coding.snapshot(sessionId, { drainUsage: true });
 	}
 
@@ -152,6 +171,9 @@ export class LocalRunner {
 		try { this.coding.end(sessionId); } catch { /* already ended is fine */ }
 		this.websiteBuilderSessions.delete(taskId);
 		const task = this.requireTask(taskId);
+		// Completion calls are retried by the durable workflow.  Never append duplicate
+		// events or change a completed/failed board card on an acknowledgement retry.
+		if (isTerminalTaskStatus(task.status)) return task;
 		task.status = result.status;
 		task.output = result.output;
 		task.error = result.error;

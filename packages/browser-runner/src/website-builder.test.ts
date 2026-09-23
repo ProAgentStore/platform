@@ -12,9 +12,15 @@ describe("Website Builder worker protocol", () => {
 		expect(prompt).not.toContain("FWS OAuth credential");
 	});
 
-	it("accepts only complete tagged evidence", () => {
-		const good = `${WEBSITE_BUILDER_EVIDENCE_MARKER}{"session_id":"s1","template_slug":"cafe","quality_report":{},"desktop_preview":"https://x/d","mobile_preview":"https://x/m","ready_for_human_review":true}`;
+	it("accepts only a narrow tagged session claim, not terminal QA or URLs", () => {
+		const good = `${WEBSITE_BUILDER_EVIDENCE_MARKER}{"session_id":"s1","template_slug":"cafe","desktop_preview":"https://attacker.example/d","ready_for_human_review":true}`;
 		expect(parseWebsiteBuilderEvidence(good)?.session_id).toBe("s1");
 		expect(parseWebsiteBuilderEvidence(`${WEBSITE_BUILDER_EVIDENCE_MARKER}{"session_id":"s1"}`)).toBeNull();
+	});
+
+	it("tells a resumed worker to edit its broker-confirmed session rather than create another", () => {
+		const prompt = websiteBuilderPrompt({ ...input, existingSessionId: "fws_session_1" });
+		expect(prompt).toContain("fws_session_1");
+		expect(prompt).toContain("Do not call create_site again");
 	});
 });

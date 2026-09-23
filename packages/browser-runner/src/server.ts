@@ -199,8 +199,8 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		return json(res, 200, runner.websiteBuilderStart(await readJson<WebsiteBuilderTaskInput>(req)));
 	}
 	if (req.method === "POST" && path === "/website-builder/capture") {
-		const b = await readJson<{ taskId: string }>(req);
-		return json(res, 200, runner.websiteBuilderCapture(b.taskId));
+		const b = await readJson<{ taskId: string; resume?: WebsiteBuilderTaskInput }>(req);
+		return json(res, 200, runner.websiteBuilderCapture(b));
 	}
 	if (req.method === "POST" && path === "/website-builder/complete") {
 		const b = await readJson<{ taskId: string; status: "completed" | "failed"; output?: unknown; error?: string }>(req);
