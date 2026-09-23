@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import Button from "../components/Button";
 import { statusBadgeClass } from "../lib/statusBadge";
@@ -40,6 +40,7 @@ interface Run {
 const PIPELINE = ["new", "contacted", "won", "dead"];
 const FILTERABLE = new Set(["status", "country", "state", "city", "suburb", "website_status"]);
 const DATETIME = new Set(["found_at", "checked_at", "created_at", "createdAt", "updatedAt"]);
+const PAGE_SIZES = [25, 50, 100] as const;
 
 function Badge({ value }: { value: string }) {
 	return <span className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${statusBadgeClass(value)}`}>{value}</span>;
@@ -52,25 +53,65 @@ function fmtDateTime(v: unknown): string {
 	return Number.isNaN(d.getTime()) ? String(v) : d.toLocaleString();
 }
 
+function Pagination({
+	page,
+	pageCount,
+	pageSize,
+	onPageChange,
+	onPageSizeChange,
+}: {
+	page: number;
+	pageCount: number;
+	pageSize: (typeof PAGE_SIZES)[number];
+	onPageChange: (page: number) => void;
+	onPageSizeChange: (size: (typeof PAGE_SIZES)[number]) => void;
+}) {
+	return (
+		<nav aria-label="Record pages" className="flex flex-wrap items-center justify-between gap-2 mt-3 text-xs">
+			<label className="flex items-center gap-1.5 text-muted-soft">
+				Rows per page
+				<select
+					aria-label="Rows per page"
+					value={pageSize}
+					onChange={(event) => onPageSizeChange(Number(event.target.value) as (typeof PAGE_SIZES)[number])}
+					className="border border-line rounded px-1 py-1 bg-panel text-ink"
+				>
+					{PAGE_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}
+				</select>
+			</label>
+			<div className="flex items-center gap-1.5">
+				<Button size="sm" onClick={() => onPageChange(0)} disabled={page === 0} aria-label="First page">«</Button>
+				<Button size="sm" onClick={() => onPageChange(page - 1)} disabled={page === 0}>Previous</Button>
+				<span className="text-muted-soft whitespace-nowrap" aria-live="polite">Page {page + 1} of {pageCount}</span>
+				<Button size="sm" onClick={() => onPageChange(page + 1)} disabled={page >= pageCount - 1}>Next</Button>
+				<Button size="sm" onClick={() => onPageChange(pageCount - 1)} disabled={page >= pageCount - 1} aria-label="Last page">»</Button>
+			</div>
+		</nav>
+	);
+}
+
 export default function DataTab({ instanceId }: { instanceId: string }) {
 	const [collections, setCollections] = useState<Collection[]>([]);
 	const [selected, setSelected] = useState("");
 	const [records, setRecords] = useState<Rec[]>([]);
+	const [totalRecords, setTotalRecords] = useState(0);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState("");
-	const [q, setQ] = useState("");
 	const [sortBy, setSortBy] = useState("");
 	const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+	const [page, setPage] = useState(0);
+	const [pageSize, setPageSize] = useState<(typeof PAGE_SIZES)[number]>(50);
 	const [view, setView] = useState<"table" | "board">("table");
 	const [hidden, setHidden] = useState<Set<string>>(new Set());
 	const [showCols, setShowCols] = useState(false);
 	const [filters, setFilters] = useState<Record<string, string>>({});
-	const [showControls, setShowControls] = useState(false);
+	const [showControls, setShowControls] = useState(true);
 	const [detail, setDetail] = useState<Rec | null>(null);
 	// Run observability (issue #98): a "Runs" section over pipeline-run records.
 	const [surface, setSurface] = useState<"records" | "runs">("records");
 	const [runs, setRuns] = useState<Run[]>([]);
 	const [runsLoading, setRunsLoading] = useState(false);
+	const recordsRequest = useRef(0);
 
 	const loadCollections = useCallback(async () => {
 		try {
@@ -84,19 +125,33 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 	}, [instanceId]);
 
 	const loadRecords = useCallback(
-		async (name: string) => {
+		async (name: string, requestPage: number, requestPageSize: number, requestFilters: Record<string, string>, requestSortBy: string, requestSortDir: "asc" | "desc") => {
 			if (!name) return;
+			const request = ++recordsRequest.current;
 			setLoading(true);
 			setError("");
 			try {
-				const d = await api<{ records?: Rec[] }>(
-					`/v1/instances/${instanceId}/collections/${encodeURIComponent(name)}/records?limit=1000`,
+				const query = new URLSearchParams({
+					limit: String(requestPageSize),
+					offset: String(requestPage * requestPageSize),
+				});
+				const where = Object.fromEntries(Object.entries(requestFilters).filter(([, value]) => value));
+				if (Object.keys(where).length) query.set("where", JSON.stringify(where));
+				if (requestSortBy) {
+					query.set("order_by", requestSortBy);
+					query.set("order_dir", requestSortDir);
+				}
+				const d = await api<{ records?: Rec[]; total?: number }>(
+					`/v1/instances/${instanceId}/collections/${encodeURIComponent(name)}/records?${query}`,
 				);
-				setRecords(d.records || []);
+				if (request === recordsRequest.current) {
+					setRecords(d.records || []);
+					setTotalRecords(d.total ?? 0);
+				}
 			} catch (e) {
-				setError(e instanceof Error ? e.message : "Failed to load records");
+				if (request === recordsRequest.current) setError(e instanceof Error ? e.message : "Failed to load records");
 			}
-			setLoading(false);
+			if (request === recordsRequest.current) setLoading(false);
 		},
 		[instanceId],
 	);
@@ -116,8 +171,8 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 		loadCollections();
 	}, [loadCollections]);
 	useEffect(() => {
-		if (selected) loadRecords(selected);
-	}, [selected, loadRecords]);
+		if (selected) loadRecords(selected, page, pageSize, filters, sortBy, sortDir);
+	}, [selected, page, pageSize, filters, sortBy, sortDir, loadRecords]);
 	useEffect(() => {
 		if (surface === "runs") loadRuns();
 	}, [surface, loadRuns]);
@@ -138,30 +193,28 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 		return out;
 	}, [allColumns, records]);
 
-	const rows = useMemo(() => {
-		let out = records;
-		for (const [f, v] of Object.entries(filters)) if (v) out = out.filter((r) => String(r.data[f] ?? "") === v);
-		if (q.trim()) {
-			const needle = q.toLowerCase();
-			out = out.filter((r) => allColumns.some((c) => String(r.data[c] ?? "").toLowerCase().includes(needle)));
-		}
-		if (sortBy) {
-			out = [...out].sort((a, b) => {
-				const av = String(a.data[sortBy] ?? "");
-				const bv = String(b.data[sortBy] ?? "");
-				return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
-			});
-		}
-		return out;
-	}, [records, filters, q, allColumns, sortBy, sortDir]);
+	const rows = records;
 
 	const toggleSort = (c: string) => {
+		setPage(0);
 		if (sortBy === c) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
 		else {
 			setSortBy(c);
 			setSortDir("asc");
 		}
 	};
+	const updateFilter = (field: string, value: string) => {
+		setFilters((current) => ({ ...current, [field]: value }));
+		setPage(0);
+	};
+	const clearFilters = () => {
+		setFilters({});
+		setPage(0);
+	};
+	const pageCount = Math.max(1, Math.ceil(totalRecords / pageSize));
+	const firstRecord = totalRecords === 0 ? 0 : page * pageSize + 1;
+	const lastRecord = Math.min((page + 1) * pageSize, totalRecords);
+	const hasActiveFilters = Object.values(filters).some(Boolean);
 
 	const setStatus = async (rec: Rec, status: string) => {
 		const prev = rec.data.status;
@@ -183,7 +236,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 		const blob = new Blob([lines.join("\n")], { type: "text/csv" });
 		const a = document.createElement("a");
 		a.href = URL.createObjectURL(blob);
-		a.download = `${selected}.csv`;
+		a.download = `${selected}-page-${page + 1}.csv`;
 		a.click();
 		URL.revokeObjectURL(a.href);
 	};
@@ -251,9 +304,9 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 						onChange={(e) => {
 							setSelected(e.target.value);
 							setSortBy("");
-							setQ("");
 							setFilters({});
 							setHidden(new Set());
+							setPage(0);
 						}}
 						className="border border-line rounded px-2 py-1"
 					>
@@ -281,12 +334,12 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 						</div>
 					)}
 
-					<span className="text-muted-soft whitespace-nowrap">
-						{rows.length} of {records.length}
+					<span className="text-muted-soft whitespace-nowrap" aria-live="polite">
+						{totalRecords === 0 ? "No records" : `${firstRecord}–${lastRecord} of ${totalRecords}`}
 					</span>
 
 					<Button size="sm" onClick={() => setShowControls((s) => !s)} className="ml-auto">
-						{showControls ? "Hide controls ▲" : "Controls ▾"}
+						{showControls ? "Hide filters & columns ▲" : "Filters & columns ▾"}
 					</Button>
 					</>
 					)}
@@ -297,20 +350,12 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 
 				{surface === "records" && showControls && (
 					<div className="flex flex-wrap items-center gap-2 mt-2 border-t border-line pt-2">
-						<input
-							aria-label="Filter records"
-							value={q}
-							onChange={(e) => setQ(e.target.value)}
-							placeholder="Filter…"
-							className="border border-line rounded px-2 py-1 flex-1 min-w-40"
-						/>
-
 						{Object.keys(facetValues).map((f) => (
 							<select
 								key={f}
 								aria-label={`Filter by ${f}`}
 								value={filters[f] || ""}
-								onChange={(e) => setFilters((p) => ({ ...p, [f]: e.target.value }))}
+								onChange={(e) => updateFilter(f, e.target.value)}
 								className="border border-line rounded px-1 py-1 text-xs"
 							>
 								<option value="">{f}: all</option>
@@ -321,6 +366,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 								))}
 							</select>
 						))}
+						{hasActiveFilters && <Button size="sm" onClick={clearFilters}>Clear filters</Button>}
 
 						<div className="relative">
 							<Button size="sm" onClick={() => setShowCols((s) => !s)}>Columns ▾</Button>
@@ -346,12 +392,12 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 							)}
 						</div>
 
-						<Button size="sm" onClick={exportCsv}>CSV</Button>
+						<Button size="sm" onClick={exportCsv} disabled={records.length === 0}>Export page CSV</Button>
 						<Button
 							size="sm"
 							onClick={() => {
 								loadCollections();
-								if (selected) loadRecords(selected);
+								if (selected) loadRecords(selected, page, pageSize, filters, sortBy, sortDir);
 							}}
 						>
 							Refresh
@@ -402,6 +448,8 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 				<p className="text-center py-5 text-muted-soft">Loading…</p>
 			) : collections.length === 0 ? (
 				<p className="text-muted-soft py-5">This agent has no data collections yet.</p>
+			) : totalRecords === 0 ? (
+				<p className="text-muted-soft py-5">{hasActiveFilters ? "No records match these filters." : "No records in this collection yet."}</p>
 			) : view === "board" && hasStatus ? (
 				<div className="flex gap-3 overflow-auto pb-2">
 					{PIPELINE.map((st) => {
@@ -437,17 +485,21 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 			) : (
 				<div className="overflow-auto border border-line rounded">
 					<table className="w-full border-collapse">
+						<caption className="sr-only">{selected} records</caption>
 						<thead>
 							<tr>
-								<th className="px-1 py-1 border-b border-line sticky top-0 bg-panel" />
+								<th scope="col" className="px-1 py-1 border-b border-line sticky top-0 bg-panel"><span className="sr-only">Record details</span></th>
 								{columns.map((c) => (
 									<th
 										key={c}
-										onClick={() => toggleSort(c)}
-										className="cursor-pointer text-left px-2 py-1 border-b border-line whitespace-nowrap select-none sticky top-0 bg-panel"
+										scope="col"
+										aria-sort={sortBy === c ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
+										className="text-left px-2 py-1 border-b border-line whitespace-nowrap sticky top-0 bg-panel"
 									>
-										{c}
-										{sortBy === c ? (sortDir === "asc" ? " ▲" : " ▼") : ""}
+										<button type="button" onClick={() => toggleSort(c)} className="cursor-pointer select-none text-left">
+											{c}
+											{sortBy === c ? (sortDir === "asc" ? " ▲" : " ▼") : ""}
+										</button>
 									</th>
 								))}
 							</tr>
@@ -456,7 +508,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 							{rows.map((r) => (
 								<tr key={r.id} className="border-b border-line hover:bg-panel">
 									<td className="px-1 py-1 align-top">
-										<button type="button" onClick={() => setDetail(r)} title="View audit log" className="text-accent">
+										<button type="button" onClick={() => setDetail(r)} title="View record details" aria-label={`View details for ${String(r.data.name ?? r.data.title ?? r.id)}`} className="text-accent">
 											🔍
 										</button>
 									</td>
@@ -470,6 +522,19 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 						</tbody>
 					</table>
 				</div>
+			)}
+
+			{surface === "records" && !loading && totalRecords > 0 && (
+				<Pagination
+					page={page}
+					pageCount={pageCount}
+					pageSize={pageSize}
+					onPageChange={setPage}
+					onPageSizeChange={(size) => {
+						setPageSize(size);
+						setPage(0);
+					}}
+				/>
 			)}
 
 			{detail && (
