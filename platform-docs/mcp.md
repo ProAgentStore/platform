@@ -136,7 +136,7 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
-- `serverInfo.version`: `0.1.50`
+- `serverInfo.version`: `0.1.51`
 
 That is the same value the published MCP-registry manifest (`server.json`) carries, and both
 are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —
@@ -249,7 +249,7 @@ The two published hints are **derived, not hand-maintained per tool**.
 `workers/mcp/src/tool-metadata.ts` classifies every tool `read` / `write` / `runtime` /
 `destructive` in one table, and `annotationsFor()` maps that classification onto the two
 hints. The classification is then derived **back out of the handlers** by `index.test.ts`,
-which drives all 215 tools under two different scope sets and reads the required scope out
+which drives all 216 tools under two different scope sets and reads the required scope out
 of each refusal — so a tool announced read-only that enforces a write gate fails the build
 rather than reaching a host. `conformance.test.ts` asserts the same thing against a real
 `tools/list` response.
@@ -412,7 +412,7 @@ More recipes, with real argument names, are in
 
 ## Tool Surface
 
-The server registers **215 tools**. 189 are always present. The remaining 26 are gated to
+The server registers **216 tools**. 190 are always present. The remaining 26 are gated to
 the console surfaces of the connected user's own subscribed agents, so the surface is
 per-connection:
 
@@ -489,6 +489,78 @@ of one API, so a capability the console has is structurally available here; wher
 is either the decision above or an accident. `scripts/check-mcp-parity.mjs` measures both, states
 how many console capabilities are reachable, and fails when a new one appears in neither list. The
 gaps it records today are exactly that — recorded, not accepted.
+
+## Health And Latency
+
+Added after the 2026-09-24 incident (proappstore-online/platform#198), when `whoami` took
+12 s and four unrelated core calls crossed 20 s at once. Measured the same day from an
+APAC client: TCP and TLS stayed normal while time-to-first-byte spiked to 4–16 s on
+requests that touch no auth, no database and no connector — this worker's own landing
+text, `/health`, the API worker's `/health`, and a sibling store's MCP landing page — while
+an edge endpoint with no Worker behind it and `api.github.com` stayed flat from the same
+colo, and Cloudflare had an open "Network Performance Degradation — Asia-Pacific" incident.
+That is the edge or the Worker's start, not a slow dependency. Nothing on this server could
+say so at the time; now it can.
+
+### Stages
+
+Every hop is timed under a named stage and written to Workers Logs as one JSON line,
+`{"kind":"mcp.latency","stage":…,"name":…,"ms":…,"ok":…,"traceId":…}`:
+
+| Stage | What is timed | Budget |
+|---|---|---|
+| `gateway` | the whole request as this worker saw it (edge → response start) | 1 000 ms |
+| `auth` | verifying the session / OAuth identity | 500 ms |
+| `state` | hydrating the account — the roster read at Durable Object start | 2 000 ms |
+| `tool` | one tool handler, end to end (the stage the incident's numbers were quoted in) | 5 000 ms |
+| `api` | one call to `api.proagentstore.online`, named by path without query | 3 000 ms |
+| `connector` | an external system reached on the caller's behalf (GitHub, …) | 8 000 ms |
+
+Every response carries `X-Trace-Id` (minted, or echoed from a client-supplied header) and
+`Server-Timing: gateway;dur=<ms>`, so `curl -v` shows the worker's own view of a request.
+Budgets and alert rules live in `workers/mcp/src/latency.ts`.
+
+### Alert thresholds
+
+- A stage whose **p95 stays over its budget for 5 minutes** is an incident, not a blip.
+- A **transport failure rate over 2%** (thrown fetch, aborted stream, 5xx) is an incident.
+- Fewer than 5 samples is `unknown`, never `ok` — an empty ring must not read as healthy.
+
+Fleet-wide p50/p95/p99 per stage are a Workers Logs query over `kind = "mcp.latency"`
+grouped by `stage` (and `name` for a per-tool view); timeout rate is the share of `tool`
+samples with `ok = false`, transport failures the share of `gateway` samples with `ok = false`.
+
+### The diagnostic tool and the status page
+
+`platform_health` (read-only, no scope gate, works without a session) and
+`GET https://mcp.proagentstore.online/status` (HTML) / `/status.json` render one report:
+a verdict per component — `gateway`, `auth`, `state`, `runner`, `coding_loop`,
+`connectors.github` — each `ok`, `degraded`, `down`, `unauthenticated` or `unknown`, the
+live probe's own milliseconds where a probe exists (auth: local verify; state: the API's
+`/health`; GitHub: its public status feed), the caller's recent p50/p95/p99 per stage
+against its budget, a `traceId` and a `timestamp`. Nothing in it names a tenant, an
+instance or a secret.
+
+Read it first when several unrelated tools are slow: a slow `gateway` with fast `state` and
+`connectors` is the edge or the Worker's start; a slow `state` is the API. The recent
+figures are per isolate — one session's Durable Object over MCP, the edge worker on
+`/status` — a recent-latency view, not a fleet metric.
+
+### Timeouts and idempotency for mutating calls
+
+A Worker does not stop when the client gives up: a `tools/call` whose client timed out or
+aborted the stream **keeps running server-side to completion**. So a mutating call that
+timed out may still have happened. What to do:
+
+- Every mutating tool answers the same question twice the same way: re-read before
+  re-issuing. `coding_loop_start` is guarded by the per-repo run lock — a second start while
+  a run is `running` is rejected, so the recovery is `coding_loop_status` (no `run_id`) to
+  see whether the first start landed, not a retry. `subscribe_agent`, `add_ticket` and the
+  other creators return the id they made; list first, create once.
+- Prefer `dry_run: true` on a call you are about to retry — it shows what the retry would
+  do without doing it.
+- Quote the response's `X-Trace-Id` (or the tool result's `traceId` from `platform_health`)
+  when reporting: it joins the client's view to the `mcp.request` and `mcp.latency` lines.
 
 ## Security
 

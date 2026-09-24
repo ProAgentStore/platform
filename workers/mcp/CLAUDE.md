@@ -23,7 +23,7 @@ behaves wrongly, the bug is usually in `workers/api`, not here.
 | | |
 |---|---|
 | Endpoint | `https://mcp.proagentstore.online/mcp` (Streamable HTTP) |
-| Health | `https://mcp.proagentstore.online/health` |
+| Health | `https://mcp.proagentstore.online/health` — size probe; `/status` (HTML) and `/status.json` are the per-component health + latency report (#198), same measurement as the `platform_health` tool |
 | Route | `mcp.proagentstore.online/*`, zone `proagentstore.online` (`wrangler.toml`) |
 | Registry | `server.json` at the repo root; also `/.well-known/mcp-server.json` on the store |
 | Quick add | `claude mcp add --transport http proagentstore https://mcp.proagentstore.online/mcp` |
@@ -93,7 +93,7 @@ src/
 │                     vocabulary and the draft preview the console's form is built from (#613)
     ├── composition.ts   19 tools — supervision (#183), connections (#182) with the delivery outbox,
 │                     replay and delete that complete them (#613), loops, loop presets
-    ├── account.ts        13 tools — whoami, billing, usage, keys, email, profile, budget limits,
+    ├── account.ts        14 tools — whoami, platform_health (#198), billing, usage, keys, email, profile, budget limits,
     │                     notifications, account preferences (#613)
     ├── connectors.ts    12 tools — connector status, folder grants, browsing and importing a
     │                             granted folder's files, which account an instance uses
@@ -110,9 +110,9 @@ src/
                           surfaces:["coding"]) + 5 loop tools (3 run + 2 objective queue)
 ```
 
-**215 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
+**216 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
 `coding-tools.ts` and 2 in `coding-engine-tools.ts` — all fifteen behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 165 across `instance-tools/`. 189 are always registered; 26 are
+`storage-tools.ts`, and 166 across `instance-tools/`. 190 are always registered; 26 are
 surface-gated (apply=4, repo=3, coding=19).
 
 Those four numbers ADD UP to the headline, and that is the point of stating them: 21 + 13

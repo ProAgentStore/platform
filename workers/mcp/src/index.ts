@@ -10,6 +10,7 @@ import { registerStorageTools } from "./storage-tools.js";
 import { loginHandler } from "./oauth-provider.js";
 import { installRegistrationPipeline, type RegistrationTarget } from "./registration.js";
 import { PLATFORM_GUIDE } from "./platform-guide.js";
+import { timed, withRequestTiming } from "./latency.js";
 import { MCP_SERVER_VERSION } from "./server-version.js";
 import { newTokenSubjectCache, tokenSubjectResolver } from "./audit-subject.js";
 import { annotationsFor, annotationsForRisk, outputSchemaFor, SERVER_INSTRUCTIONS } from "./tool-metadata.js";
@@ -225,7 +226,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 		// registration depends on, and it throws when the roster cannot be read. Nothing is latched or
 		// registered at that point, so the failed `initialize` is retried from scratch on the next
 		// request instead of a surface missing every gated group being served for the DO's lifetime.
-		const groups = await this.userGroups();
+		const groups = await timed("state", "user-groups", () => this.userGroups());
 
 		// Latched HERE, not after the registrations: everything below is synchronous and
 		// deterministic, and the one thing a re-run could do is register a tool twice — the hang the
@@ -1011,7 +1012,8 @@ type ProviderEnv = Env & { OAUTH_PROVIDER: OAuthHelpers };
  *
  * Token storage uses the `OAUTH_KV` binding (already configured).
  */
-export default new OAuthProvider<ProviderEnv>({
+// Wrapped so every request is a `gateway` latency sample and carries `X-Trace-Id` (#198).
+export default withRequestTiming(new OAuthProvider<ProviderEnv>({
 	apiRoute: "/mcp",
 	// `/mcp/i/<instanceId>` reaches the same transport with the id on `ctx.props` (#783).
 	apiHandler: withPinnedInstance(PagsMcp.serve("/mcp") as ExportedHandler<ProviderEnv> & {
@@ -1028,4 +1030,4 @@ export default new OAuthProvider<ProviderEnv>({
 	allowPlainPKCE: false,
 	// Preserve the previous 24h access-token lifetime.
 	accessTokenTTL: 86_400,
-});
+}));

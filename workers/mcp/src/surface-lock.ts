@@ -832,4 +832,19 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.49 is published.
 	"0.1.50": "sha256:86b91bf07a3f21dd98423fdd490952df725b62cc2508d3b70774568c1a8fb23d",
+	// 0.1.51 (proappstore-online/platform#198, health diagnostics): ONE new tool NAME, always-on,
+	// in the `account` group — 215 registrations become 216, always-on 189 → 190, gated 26 unchanged.
+	//
+	//   * `platform_health` (read, no scope gate — like `whoami`, it must answer an
+	//     unauthenticated caller asking whether the platform is slow) — one verdict per component
+	//     (gateway, auth, state, runner, coding_loop, connectors.github), live probe latency where a
+	//     probe exists, and this session's recent p50/p95/p99 per stage against its budget.
+	//
+	// What moved beside it and is NOT in this fingerprint: every response now carries
+	// `X-Trace-Id` and `Server-Timing`, every tool call / API hop / DO start is a structured
+	// `mcp.latency` log line, and `/status` + `/status.json` render the same report publicly.
+	// No existing tool's inputSchema, annotations or outputSchema changed.
+	//
+	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.50 is published.
+	"0.1.51": "sha256:f0ac19bf3242ac87fe1666430a1133aa32b0858cf695990dc83ab18b55d03ae5",
 };

@@ -1,3 +1,5 @@
+import { recordLatency } from "./latency.js";
+
 const API = "https://api.proagentstore.online";
 
 export type McpEnv = {
@@ -107,10 +109,20 @@ export async function apiCall(
 	opts?: RequestInit,
 	env?: McpEnv,
 ): Promise<unknown> {
-	const res = await fetch(`${apiBase(env)}${path}`, {
-		...opts,
-		headers: { "Content-Type": "application/json", ...opts?.headers },
-	});
+	// Every API hop is an `api` latency sample (#198), named by path without its query so an
+	// id or a cursor never lands in a log line. A thrown fetch is a failed sample and rethrows.
+	const started = Date.now();
+	let res: Response;
+	try {
+		res = await fetch(`${apiBase(env)}${path}`, {
+			...opts,
+			headers: { "Content-Type": "application/json", ...opts?.headers },
+		});
+	} catch (err) {
+		recordLatency({ stage: "api", name: path.split("?")[0] ?? path, ms: Date.now() - started, ok: false });
+		throw err;
+	}
+	recordLatency({ stage: "api", name: path.split("?")[0] ?? path, ms: Date.now() - started, ok: res.status < 500 });
 	const raw = await res.text();
 	let json: unknown = {};
 	try {

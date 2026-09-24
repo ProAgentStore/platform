@@ -399,3 +399,42 @@ describe("loginHandler /oauth/callback", () => {
 		await expect(res.text()).resolves.toContain("missing nonce or code");
 	});
 });
+
+// #198: the public status surface.
+describe("loginHandler /status", () => {
+	function stubProbes() {
+		vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("githubstatus")) return new Response(JSON.stringify({ status: { indicator: "none" } }), { status: 200 });
+			return new Response(JSON.stringify({ ok: true }), { status: 200 });
+		});
+	}
+
+	it("serves an HTML page naming every component, uncached, with no session", async () => {
+		stubProbes();
+		const res = await run(makeEnv(), "https://mcp.proagentstore.online/status");
+		expect(res.status).toBe(200);
+		expect(res.headers.get("Content-Type")).toContain("text/html");
+		expect(res.headers.get("Cache-Control")).toBe("no-store");
+		const html = await res.text();
+		for (const label of ["MCP gateway", "Authentication", "Account / state hydration", "Local-runner dispatch", "Coding-loop orchestration", "Connector: GitHub"]) expect(html).toContain(label);
+		vi.unstubAllGlobals();
+	});
+
+	it("serves the same report as JSON at /status.json, CORS-open to the store, 503 when degraded", async () => {
+		stubProbes();
+		const ok = await run(makeEnv(), "https://mcp.proagentstore.online/status.json");
+		expect(ok.status).toBe(200);
+		expect(ok.headers.get("Access-Control-Allow-Origin")).toBe("https://proagentstore.online");
+		const body = await ok.json<{ ok: boolean; components: Record<string, unknown>; version: string }>();
+		expect(body.ok).toBe(true);
+		expect(body.version).toBe(MCP_SERVER_VERSION);
+		expect(Object.keys(body.components).sort()).toEqual(["auth", "coding_loop", "connectors", "gateway", "runner", "state"]);
+		vi.stubGlobal("fetch", async () => {
+			throw new Error("api down");
+		});
+		const down = await run(makeEnv(), "https://mcp.proagentstore.online/status.json");
+		expect(down.status).toBe(503);
+		vi.unstubAllGlobals();
+	});
+});

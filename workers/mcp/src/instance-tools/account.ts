@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { probeHealth } from "../health.js";
 import { authRequired, authedCall, jsonText } from "../http.js";
 import { audit, dryRun, requirePermission } from "../safety.js";
 import type { InstanceToolsCtx } from "./shared.js";
@@ -27,6 +28,21 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 			if (!sessionToken) return authRequired();
 			const data = await authedCall("/v1/auth/me/account", sessionToken, {}, env);
 			return jsonText(data);
+		},
+	);
+
+	// #198: the read-only diagnostic. Works WITHOUT a session (gateway, API and connector
+	// probes need none) and measures auth when one is present — an unauthenticated caller
+	// asking "is the platform slow or is it me?" must not be answered with `authRequired`.
+	server.tool(
+		"platform_health",
+		"Is the platform healthy right now, and where is the time going? Read-only, safe to call at any time, no side effects. Returns one verdict per component — `gateway` (this MCP worker), `auth` (session verification), `state` (the API that hydrates your account), `runner` (local-runner dispatch), `coding_loop` (autonomous-run orchestration) and `connectors.github` — each `ok`, `degraded`, `down`, `unauthenticated` or `unknown`, with the live probe's own milliseconds where one exists and this session's recent p50/p95/p99 per stage beside the budget it is held to. `unknown` means nothing was measured (no probe exists and no recent calls), not `ok`. Carries a `traceId` and `timestamp`. Call it FIRST when several unrelated tools are slow or time out: a slow `gateway` with fast `state` and `connectors` is the edge or the Worker's start, not a dependency; a slow `state` is the API. The same measurements are public at https://mcp.proagentstore.online/status. Never returns a secret, a token, an instance id or any tenant data.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in; omit entirely to probe without measuring auth."),
+		},
+		async ({ token }) => {
+			const report = await probeHealth({ env, token: tokenFor(token) });
+			return jsonText(report);
 		},
 	);
 

@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**215 tool registrations.** 189 are always registered; 26 are gated to the console
+**216 tool registrations.** 190 are always registered; 26 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -482,6 +482,7 @@ immediately instead of a whole transcript.
 | `get_instance_pipeline` | Read back a single stored pipeline definition (with validity) | — | | |
 | `mcp_audit_log` | Recent MCP write/runtime/dry-run/denied events for this account | read | | |
 | `whoami` | Which account you are connected as — id, login, sign-in provider, email (Google only), roles, createdAt, token expiry | — | | |
+| `platform_health` | Read-only diagnostic (#198): per-component verdict — gateway, auth, state, runner, coding_loop, connectors.github — with live probe latency and this session's recent p50/p95/p99 per stage; works without a session; the same report is public at `/status` | — | | |
 | `billing_status` | Free vs Pro, paywall enforcement | — | | |
 | `usage_summary` | Token usage + estimated cost by agent/model/activity | — | | |
 | `keys_status` | Which providers have a BYOK key — **names only** | — | | |

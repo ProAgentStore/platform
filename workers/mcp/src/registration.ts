@@ -1,4 +1,5 @@
 import type { TextResult } from "./http.js";
+import { recordLatency } from "./latency.js";
 import { titleFor } from "./tool-metadata.js";
 
 /**
@@ -78,7 +79,21 @@ export function installRegistrationPipeline(
 			const first = handlerArgs[0] as { token?: unknown } | undefined;
 			const provided = typeof first?.token === "string" ? first.token : undefined;
 			const blocked = await opts.gate(name, provided);
-			const result = blocked ?? (await handler(...handlerArgs));
+			// The whole handler is one `tool` latency sample (#198) — the stage the incident's
+			// numbers were quoted in. A blocked call is not timed: nothing ran.
+			let result: unknown;
+			if (blocked) {
+				result = blocked;
+			} else {
+				const started = Date.now();
+				try {
+					result = await handler(...handlerArgs);
+				} catch (err) {
+					recordLatency({ stage: "tool", name, ms: Date.now() - started, ok: false });
+					throw err;
+				}
+				recordLatency({ stage: "tool", name, ms: Date.now() - started, ok: true });
+			}
 			// After the handler, so a slow KV never delays the answer's computation — and only for a
 			// call that ran: a suspended account's attempts are not "work it was doing".
 			if (!blocked && opts.touch) await opts.touch(name, first as Record<string, unknown> | undefined, provided);

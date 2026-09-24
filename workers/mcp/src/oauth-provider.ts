@@ -1,4 +1,5 @@
 import type { AuthRequest, OAuthHelpers } from "@cloudflare/workers-oauth-provider";
+import { probeHealth, renderStatusHtml } from "./health.js";
 import { apiBase, type McpEnv } from "./http.js";
 import { parseScopes } from "./safety.js";
 import { verifyMcpSession } from "./session.js";
@@ -28,6 +29,8 @@ export type LoginEnv = McpEnv & { OAUTH_PROVIDER: OAuthHelpers };
  *   GET /authorize/continue  — redirect to the platform login start endpoint
  *   GET /oauth/callback       — platform login callback → completeAuthorization
  *   GET /health               — health probe
+ *   GET /status               — public status page: per-component verdicts + latency (#198)
+ *   GET /status.json          — the same report as JSON
  *   GET /                     — human-readable landing text (browsers only)
  *
  * Anything else 404s. It must not fall through to the landing text — see the
@@ -62,6 +65,27 @@ export const loginHandler: ExportedHandler<LoginEnv> = {
 					},
 				},
 			);
+		}
+		if (path === "/status" || path === "/status.json") {
+			// The user-visible health page (#198): the same measurement `platform_health` makes
+			// over MCP, with no session — anyone whose client is timing out can open it in a
+			// browser and see which component is slow. Never cached: a stale "operational" page
+			// is worse than none. Placed BEFORE the `path !== "/"` 404 arm below, like /surface.
+			const report = await probeHealth({ env, traceId: request.headers.get("x-trace-id")?.slice(0, 64) ?? undefined });
+			if (path === "/status.json") {
+				return new Response(JSON.stringify(report), {
+					status: report.ok ? 200 : 503,
+					headers: {
+						"Content-Type": "application/json",
+						"Cache-Control": "no-store",
+						"Access-Control-Allow-Origin": "https://proagentstore.online",
+					},
+				});
+			}
+			return new Response(renderStatusHtml(report), {
+				status: report.ok ? 200 : 503,
+				headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+			});
 		}
 		if (path === "/surface") {
 			// The two strings a connecting MCP client is told: the server `instructions`

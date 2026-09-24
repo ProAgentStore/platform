@@ -208,6 +208,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	my_agents: "read",
 	my_instances: "read",
 	platform_guide: "read",
+	platform_health: "read",
 	query_instance_records: "read",
 	query_records: "read",
 	read_agent_file: "read",
@@ -519,7 +520,9 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// choice of coding CLI and model. `write` for the set, not `runtime`: it starts nothing and spends
 	// nothing — it edits which command the NEXT session launches, the same state the console's CLI
 	// engines panel writes — and a session already running is untouched.
-	read: 104,
+	// +1 read at #198: `platform_health`, the read-only diagnostic — every verdict in it is derived
+	// from public probes and this session's own latency ring; nothing is written.
+	read: 105,
 	// +2 write at #825: `pause_instance` / `resume_instance`. `write` rather than `destructive` —
 	// nothing is deleted and nothing is unsubscribed, and classing the OFF switch as destructive
 	// would put RESUME behind a scope the caller may not hold, which is the wrong failure mode for
