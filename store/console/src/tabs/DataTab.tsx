@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import Button from "../components/Button";
 import { statusBadgeClass } from "../lib/statusBadge";
+import { buildRunDetails, type PipelineRun as Run, type PipelineRunTrace, type PipelineRunTraceEvent } from "../lib/runDetails";
 import type { DataRecord, RecordQueryResponse } from "../lib/types";
 
 // Spreadsheet + board view over an agent's structured collections:
@@ -18,21 +20,6 @@ interface Collection {
 	recordCount?: number;
 }
 type Rec = DataRecord;
-// A pipeline run record (issue #98) — GET /v1/instances/:id/pipeline-runs.
-interface Run {
-	run_id: string;
-	pipeline: string;
-	trigger: string;
-	status: string;
-	started_at: number;
-	finished_at: number | null;
-	seen: number;
-	added: number;
-	skipped: number;
-	errors: number;
-	detail: string | null;
-}
-
 const PIPELINE = ["new", "contacted", "won", "dead"];
 const FILTERABLE = new Set(["status", "country", "state", "city", "suburb", "website_status"]);
 const DATETIME = new Set(["found_at", "checked_at", "created_at", "createdAt", "updatedAt"]);
@@ -93,6 +80,91 @@ function Pagination({
 	);
 }
 
+// The expanded view of one pipeline run (#834): the terminal detail, timing, run id, and the
+// run's own trace (run_id IS its trace_id), with the first error pulled to the top.
+function RunDetailsPanel({ instanceId, run }: { instanceId: string; run: Run }) {
+	const [events, setEvents] = useState<PipelineRunTraceEvent[] | null>(null);
+	const [traceErr, setTraceErr] = useState("");
+	const [copied, setCopied] = useState(false);
+
+	useEffect(() => {
+		let live = true;
+		api<PipelineRunTrace>(`/v1/instances/${instanceId}/trace?trace_id=${encodeURIComponent(run.run_id)}&limit=200`)
+			.then((d) => live && setEvents(d.events || []))
+			.catch((e) => live && setTraceErr(e instanceof Error ? e.message : "Couldn't load the trace"));
+		return () => {
+			live = false;
+		};
+	}, [instanceId, run.run_id]);
+
+	const d = buildRunDetails(run, events ?? []);
+	const copy = async () => {
+		// IGNORABLE (#291): clipboard, not the server — the run id stays visible beside the button.
+		await navigator.clipboard?.writeText(run.run_id).catch(() => undefined);
+		setCopied(true);
+	};
+
+	return (
+		<div className="flex flex-col gap-2 text-xs">
+			<div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+				<Badge value={run.status} />
+				<span className="text-muted-soft">Started {fmtDateTime(run.started_at)}</span>
+				<span className="text-muted-soft">{run.finished_at != null ? `Finished ${fmtDateTime(run.finished_at)} · took ${d.duration}` : "Still running"}</span>
+				<span className="flex items-center gap-1.5">
+					<span className="text-muted-soft">Run ID</span>
+					<code className="break-all">{run.run_id}</code>
+					<Button size="sm" onClick={() => void copy()}>{copied ? "Copied" : "Copy"}</Button>
+				</span>
+			</div>
+			{d.detailText && <pre className="whitespace-pre-wrap break-words border border-line rounded p-2 bg-panel">{d.detailText}</pre>}
+			{d.hasErrors && events && (
+				<div className="border border-line rounded p-2">
+					<div className="font-medium text-danger mb-1">
+						{run.errors} error{run.errors === 1 ? "" : "s"}
+						{d.firstError ? " — first:" : ""}
+					</div>
+					{d.firstError ? (
+						<div className="flex flex-col gap-0.5">
+							<div>{d.firstError.firstError || d.firstError.message}</div>
+							<div className="text-muted-soft">
+								{d.firstError.event}
+								{d.firstError.step != null && ` · step ${d.firstError.step}`}
+								{d.firstError.tool && ` (${d.firstError.tool})`}
+								{d.firstError.failed != null && ` · ${d.firstError.failed}${d.firstError.total != null ? ` of ${d.firstError.total}` : ""} failed`}
+							</div>
+						</div>
+					) : (
+						<div className="text-muted-soft">
+							None of these reached the run's trace — per-record save failures are kept in the error log. See{" "}
+							<Link to="/diagnostics" className="text-accent underline underline-offset-2">Diagnostics</Link>.
+						</div>
+					)}
+				</div>
+			)}
+			<div>
+				<div className="font-medium mb-1">Trace</div>
+				{traceErr ? (
+					<div className="text-danger">{traceErr}</div>
+				) : events == null ? (
+					<div className="text-muted-soft">Loading…</div>
+				) : events.length === 0 ? (
+					<div className="text-muted-soft">No trace events for this run — traces are kept for 14 days.</div>
+				) : (
+					<ol className="border border-line rounded divide-y divide-line">
+						{events.map((e) => (
+							<li key={e.id} className="px-2 py-1 flex gap-2">
+								<span className="text-muted-soft whitespace-nowrap">{new Date(e.ts).toLocaleTimeString()}</span>
+								<span className={`whitespace-nowrap ${e.level === "warn" || e.level === "error" ? "text-danger" : "text-muted-soft"}`}>{e.event}</span>
+								<span className="break-words min-w-0">{e.message}</span>
+							</li>
+						))}
+					</ol>
+				)}
+			</div>
+		</div>
+	);
+}
+
 export default function DataTab({ instanceId }: { instanceId: string }) {
 	const [collections, setCollections] = useState<Collection[]>([]);
 	const [selected, setSelected] = useState("");
@@ -114,6 +186,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 	const [surface, setSurface] = useState<"records" | "runs">("records");
 	const [runs, setRuns] = useState<Run[]>([]);
 	const [runsLoading, setRunsLoading] = useState(false);
+	const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
 	const recordsRequest = useRef(0);
 
 	const loadCollections = useCallback(async () => {
@@ -429,7 +502,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 						<table className="w-full border-collapse">
 							<thead>
 								<tr>
-									{["pipeline", "started", "status", "seen", "added", "skipped", "errors", "trigger"].map((h) => (
+									{["pipeline", "started", "status", "seen", "added", "skipped", "errors", "trigger", ""].map((h) => (
 										<th key={h} className="text-left px-2 py-1 border-b border-line whitespace-nowrap sticky top-0 bg-panel">
 											{h}
 										</th>
@@ -438,7 +511,8 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 							</thead>
 							<tbody>
 								{runs.map((r) => (
-									<tr key={r.run_id} className="border-b border-line hover:bg-panel" title={r.detail || ""}>
+									<Fragment key={r.run_id}>
+									<tr className="border-b border-line hover:bg-panel">
 										<td className="px-2 py-1 whitespace-nowrap">{r.pipeline}</td>
 										<td className="px-2 py-1 whitespace-nowrap text-muted-soft">{fmtDateTime(r.started_at)}</td>
 										<td className="px-2 py-1">
@@ -449,7 +523,25 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 										<td className="px-2 py-1 text-right">{r.skipped}</td>
 										<td className={`px-2 py-1 text-right ${r.errors ? "text-danger font-medium" : ""}`}>{r.errors}</td>
 										<td className="px-2 py-1 whitespace-nowrap text-muted-soft">{r.trigger}</td>
+										<td className="px-2 py-1 whitespace-nowrap">
+											<Button
+												size="sm"
+												aria-expanded={expandedRunId === r.run_id}
+												aria-controls={`run-details-${r.run_id}`}
+												onClick={() => setExpandedRunId((id) => (id === r.run_id ? null : r.run_id))}
+											>
+												{r.errors ? "Errors" : "Details"} {expandedRunId === r.run_id ? "▲" : "▾"}
+											</Button>
+										</td>
 									</tr>
+									{expandedRunId === r.run_id && (
+										<tr id={`run-details-${r.run_id}`} className="border-b border-line">
+											<td colSpan={9} className="px-2 py-2">
+												<RunDetailsPanel instanceId={instanceId} run={r} />
+											</td>
+										</tr>
+									)}
+									</Fragment>
 								))}
 							</tbody>
 						</table>
