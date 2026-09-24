@@ -22,7 +22,17 @@ import { logError } from "../lib/error-log.js";
 // Pilot's pause both report, so this surface cannot invent a third wording for one state (#440).
 import { describeFacts } from "../lib/runner-availability.js";
 import { runtimeConnectivity } from "../lib/instance-connectivity.js";
-import { createRepo, deleteRepo, getActiveSessionForRepo, getRepo, listRepos, listSessions, updateRepo, updateRepoClone } from "../lib/coding-store.js";
+import {
+	deleteRepo,
+	getActiveSessionForRepo,
+	getRepo,
+	listRepos,
+	listSessions,
+	updateRepo,
+	updateRepoClone,
+} from "../lib/coding-store.js";
+import { findDuplicateBinding, isUniqueViolation, type RepoIdentity } from "../lib/coding-repo-identity.js";
+import { createGuarded, duplicateBinding, refuseDuplicate } from "./coding-repo-duplicates.js";
 import { checkWorkdirVia, cloneStatusForVerdict, isWorkdirBroken, type WorkdirVerdict } from "../lib/coding-workdir.js";
 import { sanitizeRepoPolicies, type DeclaredRepoPolicies } from "../lib/repo-policies.js";
 import type { CloneStatus, CodingRepo } from "../lib/coding-types.js";
@@ -273,13 +283,16 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		// A local checkout the user already has on the runner machine — run there, no clone.
 		const localPath = typeof body.localPath === "string" ? body.localPath.trim() : "";
 		if (localPath) {
-			const created = await createRepo(c.env, instanceId, uid, {
+			const duplicate = await refuseDuplicate(c, instanceId, uid, { workdir: localPath });
+			if (duplicate) return duplicate;
+			const created = await createGuarded(c, instanceId, uid, { workdir: localPath }, {
 				// A bare folder name ("platform") is ambiguous — default to the last two
 				// path segments ("pags/platform"). Editable later either way.
 				name: name || lastTwoSegments(localPath) || "repo",
 				workdir: localPath,
 				provider: "local",
 			});
+			if (created instanceof Response) return created;
 			// `createRepo` optimistically calls any local path `ready`. Ask the machine that will
 			// run in it BEFORE letting that stand (#405): the runner is connected at this moment
 			// and can answer all three questions — does it exist, does it hold anything, is it a
@@ -314,7 +327,10 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		const derivedName =
 			name || slug || (cloneUrl ? cloneUrl.replace(/\.git$/, "").replace(/\/$/, "").split("/").pop() : "");
 		if (!derivedName && !cloneUrl) return c.json({ error: "a repo name or URL is required" }, 400);
-		const repo = await createRepo(c.env, instanceId, uid, {
+		const identity: RepoIdentity = { githubRepo, provider, repoSlug: slug || undefined, cloneUrl };
+		const duplicate = await refuseDuplicate(c, instanceId, uid, identity);
+		if (duplicate) return duplicate;
+		const repo = await createGuarded(c, instanceId, uid, identity, {
 			name: derivedName || "repo",
 			githubRepo,
 			provider,
@@ -323,6 +339,7 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 			cloneUrl,
 			branch: typeof body.branch === "string" ? body.branch : undefined,
 		});
+		if (repo instanceof Response) return repo;
 		return c.json({ repo }, 201);
 	});
 
@@ -357,6 +374,19 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		const ref = parseRepoRef(remote);
 		if (!ref?.slug) return c.json({ githubRepo: null, detected: false });
 		const githubRepo = ref.provider === "github" ? ref.slug : null;
+		// A local checkout of a repo this instance ALREADY has a binding for (#829). The first
+		// production duplicate was exactly this shape: `pags/platform` (a local folder) and
+		// `ProAgentStore/platform` (a clone), both GitHub-identified once this route ran. Leave the
+		// row unassociated and say why, rather than minting the second identity for one repo.
+		const twin = await findDuplicateBinding(c.env, instanceId, uid, { githubRepo: githubRepo ?? undefined, provider: ref.provider, repoSlug: ref.slug }, repo.id);
+		if (twin) {
+			return c.json({
+				githubRepo: null,
+				detected: false,
+				duplicateOf: { id: twin.id, name: twin.name },
+				warning: `This folder is a checkout of ${ref.slug}, which this instance already has as "${twin.name}" (${twin.id}). Remove one of the two bindings.`,
+			});
+		}
 		await c.env.DB.prepare(
 			"UPDATE coding_repos SET github_repo = COALESCE(?1, github_repo), provider = ?5, repo_slug = ?6, web_url = ?7, updated_at = datetime('now') WHERE id = ?2 AND instance_id = ?3 AND user_id = ?4",
 		)
@@ -690,16 +720,27 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 						409,
 					);
 				}
+				// Moving onto a folder another binding of this instance already runs in would make
+				// the two rows one checkout under two identities (#829).
+				const duplicate = await refuseDuplicate(c, instanceId, uid, { workdir: workdirIn }, repoId);
+				if (duplicate) return duplicate;
 			}
 		}
 
-		const ok = await updateRepo(c.env, instanceId, uid, repoId, {
-			name: name || undefined,
-			urls: hasUrls ? body.urls : undefined,
-			mergePolicy: policy.value,
-			workdir: moving ? workdirIn : undefined,
-			policies,
-		});
+		let ok: boolean;
+		try {
+			ok = await updateRepo(c.env, instanceId, uid, repoId, {
+				name: name || undefined,
+				urls: hasUrls ? body.urls : undefined,
+				mergePolicy: policy.value,
+				workdir: moving ? workdirIn : undefined,
+				policies,
+			});
+		} catch (err) {
+			const existing = isUniqueViolation(err) && workdirIn ? await findDuplicateBinding(c.env, instanceId, uid, { workdir: workdirIn }, repoId) : null;
+			if (!existing) throw err;
+			return duplicateBinding(c, existing);
+		}
 		if (!ok) throw new HttpError(404, "Repo not found");
 		if (!moving) return c.json({ ok: true });
 
