@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import Button from "../components/Button";
+import PipelineRunDetails from "../components/PipelineRunDetails";
 import { statusBadgeClass } from "../lib/statusBadge";
+import { runHasErrors, type Run } from "../lib/pipelineRuns";
 import type { DataRecord, RecordQueryResponse } from "../lib/types";
 
 // Spreadsheet + board view over an agent's structured collections:
@@ -18,20 +20,6 @@ interface Collection {
 	recordCount?: number;
 }
 type Rec = DataRecord;
-// A pipeline run record (issue #98) — GET /v1/instances/:id/pipeline-runs.
-interface Run {
-	run_id: string;
-	pipeline: string;
-	trigger: string;
-	status: string;
-	started_at: number;
-	finished_at: number | null;
-	seen: number;
-	added: number;
-	skipped: number;
-	errors: number;
-	detail: string | null;
-}
 
 const PIPELINE = ["new", "contacted", "won", "dead"];
 const FILTERABLE = new Set(["status", "country", "state", "city", "suburb", "website_status"]);
@@ -114,6 +102,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 	const [surface, setSurface] = useState<"records" | "runs">("records");
 	const [runs, setRuns] = useState<Run[]>([]);
 	const [runsLoading, setRunsLoading] = useState(false);
+	const [openRun, setOpenRun] = useState<string | null>(null);
 	const recordsRequest = useRef(0);
 
 	const loadCollections = useCallback(async () => {
@@ -427,10 +416,12 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 				) : (
 					<div className="overflow-auto border border-line rounded">
 						<table className="w-full border-collapse">
+							<caption className="sr-only">Pipeline runs</caption>
 							<thead>
 								<tr>
+									<th scope="col" className="px-1 py-1 border-b border-line sticky top-0 bg-panel"><span className="sr-only">Run details</span></th>
 									{["pipeline", "started", "status", "seen", "added", "skipped", "errors", "trigger"].map((h) => (
-										<th key={h} className="text-left px-2 py-1 border-b border-line whitespace-nowrap sticky top-0 bg-panel">
+										<th key={h} scope="col" className="text-left px-2 py-1 border-b border-line whitespace-nowrap sticky top-0 bg-panel">
 											{h}
 										</th>
 									))}
@@ -438,7 +429,22 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 							</thead>
 							<tbody>
 								{runs.map((r) => (
-									<tr key={r.run_id} className="border-b border-line hover:bg-panel" title={r.detail || ""}>
+									<Fragment key={r.run_id}>
+									<tr className="border-b border-line hover:bg-panel">
+										<td className="px-1 py-1">
+											{/* The detail used to live in this row's `title` — reachable by mouse hover only, and
+											    only the terminal line of it. A real control opens the whole record (#834). */}
+											<button
+												type="button"
+												aria-expanded={openRun === r.run_id}
+												aria-controls={`run-details-${r.run_id}`}
+												aria-label={`${openRun === r.run_id ? "Hide" : "Show"} details for ${r.pipeline} run started ${fmtDateTime(r.started_at)}`}
+												onClick={() => setOpenRun((o) => (o === r.run_id ? null : r.run_id))}
+												className="text-accent text-xs underline whitespace-nowrap"
+											>
+												{runHasErrors(r) ? "Errors" : "Details"} {openRun === r.run_id ? "▲" : "▾"}
+											</button>
+										</td>
 										<td className="px-2 py-1 whitespace-nowrap">{r.pipeline}</td>
 										<td className="px-2 py-1 whitespace-nowrap text-muted-soft">{fmtDateTime(r.started_at)}</td>
 										<td className="px-2 py-1">
@@ -450,6 +456,14 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 										<td className={`px-2 py-1 text-right ${r.errors ? "text-danger font-medium" : ""}`}>{r.errors}</td>
 										<td className="px-2 py-1 whitespace-nowrap text-muted-soft">{r.trigger}</td>
 									</tr>
+									{openRun === r.run_id && (
+										<tr id={`run-details-${r.run_id}`} className="border-b border-line bg-panel">
+											<td colSpan={9}>
+												<PipelineRunDetails instanceId={instanceId} run={r} fmtDateTime={fmtDateTime} />
+											</td>
+										</tr>
+									)}
+									</Fragment>
 								))}
 							</tbody>
 						</table>
