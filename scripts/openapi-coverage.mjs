@@ -56,6 +56,11 @@ const EXCLUSIONS = [
 		reason: "Bootstrap helper invoked by the agent runtime itself, not by an API client.",
 	},
 	{
+		match: /^POST \/v1\/website-builder\/jobs\/\{\}\/call$/,
+		reason:
+			"Ephemeral, job-scoped broker reached only by the local runner's capability token. It is intentionally not a public client contract: documenting it would invite callers to treat a short-lived draft authority as a general MCP proxy.",
+	},
+	{
 		match: /^[A-Z]+ \/v1\/instances\/\{\}\/coding\//,
 		reason:
 			"Coder-agent control plane (~45 routes driving a coding CLI as a child process on the subscriber's own machine — not tmux, which is the separate terminal-operator connector). Documented at summary level only — see the Coding tag in the spec — because the request/response shapes are runner-version coupled and change with the CLI, not with the API contract.",

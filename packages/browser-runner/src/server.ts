@@ -9,6 +9,7 @@ import { LocalRunner, RunnerInputError } from "./runner.js";
 import type { CommitGuardSpec } from "./commit-guard.js";
 import type { BrowserAction, CreateTaskRequest, RunnerConfig, TakeoverInput } from "./types.js";
 import type { CodingAction, StartCodingInput } from "./coding/runtime.js";
+import type { WebsiteBuilderTaskInput } from "./website-builder.js";
 import { probeGitSshIdentity } from "./coding/repo.js";
 import { listGithubOrgs, listGithubRepos, searchGithubRepos, getGithubRepoDetail, getGithubCredentialScope, type GithubBrowseInput, type GithubSearchInput, type GithubRepoDetailInput } from "./coding/github-browse.js";
 
@@ -192,6 +193,18 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	if (req.method === "POST" && path === "/coding/end") {
 		const b = await readJson<{ sessionId: string }>(req);
 		return json(res, 200, runner.coding.end(b.sessionId));
+	}
+	// ── PAGS-orchestrated Website Builder (subscription CLI worker) ─────────
+	if (req.method === "POST" && path === "/website-builder/start") {
+		return json(res, 200, runner.websiteBuilderStart(await readJson<WebsiteBuilderTaskInput>(req)));
+	}
+	if (req.method === "POST" && path === "/website-builder/capture") {
+		const b = await readJson<{ taskId: string; resume?: WebsiteBuilderTaskInput }>(req);
+		return json(res, 200, runner.websiteBuilderCapture(b));
+	}
+	if (req.method === "POST" && path === "/website-builder/complete") {
+		const b = await readJson<{ taskId: string; status: "completed" | "failed"; output?: unknown; error?: string }>(req);
+		return json(res, 200, runner.websiteBuilderComplete(b.taskId, b));
 	}
 	if (req.method === "GET" && path === "/coding/sessions") {
 		return json(res, 200, { sessions: runner.coding.list() });

@@ -49,6 +49,7 @@ import { adminOpsRoutes } from "./routes/admin-ops.js";
 import { adminTriggersRoutes } from "./routes/admin-triggers.js";
 import { adminSettingsRoutes } from "./routes/admin-settings.js";
 import { toolRoutes } from "./routes/tools.js";
+import { websiteBuilderBrokerRoutes } from "./routes/website-builder-broker.js";
 import { connectorRoutes } from "./routes/connectors.js";
 import { mcpRoutes } from "./routes/mcp.js";
 import { cloudflareAccessGate, cloudflareAccessMode } from "./lib/cf-access.js";
@@ -68,6 +69,7 @@ export { AgentDO } from "./agent-do.js";
 export { JobApplyWorkflow } from "./workflows/job-apply.js";
 // Re-export the coding-orchestrator Workflow class for wrangler (AgentCoder port)
 export { CodingSessionWorkflow } from "./workflows/coding-session.js";
+export { WebsiteBuilderWorkflow } from "./workflows/website-builder.js";
 // Re-export the declarative-pipeline Workflow class for wrangler (issue #97)
 export { PipelineRunWorkflow } from "./workflows/pipeline-run.js";
 // Re-export the generic browser-task Workflow class for wrangler (#69/#71)
@@ -171,6 +173,7 @@ app.route("/v1/agents", storageRoutes); // /v1/agents/:id/collections, /files, /
 app.route("/v1/instances", instanceStorageRoutes); // /v1/instances/:id/collections, /files, /search, /activity
 app.route("/v1/instances", codingRoutes); // /v1/instances/:id/coding/repos, /sessions (AgentCoder port)
 app.route("/v1/instances", toolRoutes); // /v1/instances/:id/tools, /tools/:name (connector/registry tools)
+app.route("/v1/website-builder/jobs", websiteBuilderBrokerRoutes); // task-scoped, draft-only FWS broker (#841)
 app.route("/v1/connectors", connectorRoutes); // generic OAuth2 authorize/callback for manifest oauth connectors (#147)
 app.route("/v1/mcp", mcpRoutes); // outbound MCP: DCR+PKCE authorize/callback (#180/#258) + first-party presets (#287)
 app.route("/v1/github", githubRoutes); // GitHub App: /status, /install-url, /installations, /callback

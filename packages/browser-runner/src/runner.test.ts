@@ -98,6 +98,14 @@ describe("LocalRunner", () => {
 		expect(runner.store.getTask(task.id)?.status).toBe("running");
 	});
 
+	it("requires complete durable input before a restarted Website Builder session can resume", () => {
+		const task = runner.createTask({ type: "website.build", input: { lead: { name: "Palm Tree Kiosk" } } });
+		expect(task.status).toBe("running");
+		// A fresh runner has no CodingRuntime map.  It must not pretend an unknown
+		// session is alive; the workflow supplies its durable input on the next poll.
+		expect(() => runner.websiteBuilderCapture({ taskId: task.id })).toThrow(/durable resume input/i);
+	});
+
 	/**
 	 * #636 — a run the owner Stopped must land on the board as Cancelled, not as Failed.
 	 *

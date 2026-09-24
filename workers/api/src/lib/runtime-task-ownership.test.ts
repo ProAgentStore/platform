@@ -137,7 +137,11 @@ describe("the cloud sweep expires exactly what the runner's own restart expires"
 	// was expired by the cloud on the next `pags up` while the runner kept it.
 	it("never expires a task the runner preserves", () => {
 		const swept = [...WORKFLOW_DRIVEN_TASKS].filter((type) => isOrphanedByRunnerReconnect(type));
-		expect(WORKFLOW_DRIVEN_TASKS.size).toBe(3);
+		// `website.build` is executed by a local subscription CLI, but the durable Website Builder
+		// workflow owns its lifecycle and can resume it after `pags up` reconnects. The runner must
+		// therefore preserve it exactly like the other workflow-driven task types.
+		expect(WORKFLOW_DRIVEN_TASKS.size).toBe(4);
+		expect(WORKFLOW_DRIVEN_TASKS.has("website.build")).toBe(true);
 		expect(swept).toEqual([]);
 	});
 });

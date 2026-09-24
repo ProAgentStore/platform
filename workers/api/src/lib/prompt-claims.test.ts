@@ -501,6 +501,9 @@ const ALLOWED_CLAIMS: Record<string, number> = {
 	// `get_stats` description. Stats is universal in `tabsFor` — it was NOT, until this guard's
 	// first run found the console had shipped the tab (#311) and the table had not been updated.
 	"lib/tool-registry.ts — tab:Stats": 1,
+	// Website Builder is explicitly `tier:"runtime"`; its tool description can therefore
+	// truthfully say the subscription worker runs through `pags up`.
+	"lib/tool-registry.ts — runtime:local-runner": 1,
 	// #557 — the ONE entry the widened scan added, and the reason it is honest rather than a pin
 	// bumped to make a number pass: `send_to_cli`'s failure path, "Runner offline — cannot send.
 	// Start it with `pags up`.". It is reached only after `getBoundRunnerConn` has returned null

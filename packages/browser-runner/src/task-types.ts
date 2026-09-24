@@ -17,4 +17,5 @@ export const WORKFLOW_DRIVEN_TASKS: ReadonlySet<string> = new Set([
 	"job.apply_agent",
 	"browser.task",
 	"browser.handoff",
+	"website.build",
 ]);

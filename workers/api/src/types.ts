@@ -12,6 +12,8 @@ export interface Env {
 	 * isolate by `setServerBuild(env.API_BUILD)` in `index.ts`.
 	 */
 	API_BUILD?: string;
+	/** Public API origin embedded in the task-scoped Website Builder broker URL. */
+	API_PUBLIC_URL?: string;
 	/**
 	 * Master switch for platform-paid internal AI (knowledge embeddings + conversation
 	 * summary, billed to the platform's Workers AI). "true" = allowed for all users;
@@ -33,6 +35,8 @@ export interface Env {
 	JOB_APPLY: Workflow;
 	/** Remote LLM brain that drives a local coding CLI toward an objective (AgentCoder port). */
 	CODING_SESSION: Workflow;
+	/** Subscription CLI worker for draft-only Website Builder jobs (#841). */
+	WEBSITE_BUILDER_SESSION: Workflow;
 	/** Durable runner for declarative data pipelines (issue #97) — walks a pipeline's steps. */
 	PIPELINE_RUN: Workflow;
 	/** Generic browser brain (#69/#71): drives the runner toward an objective on any site. */

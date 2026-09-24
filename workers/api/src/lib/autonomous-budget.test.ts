@@ -281,17 +281,19 @@ const UNPOOLED: Array<{ file: string; why: string }> = [
 describe("a workflow that can spend the user's tokens draws on a pool (#516)", () => {
 	it("the walk found the workflows and the model callers at all — it is not vacuous", () => {
 		expect(ALL_TS.length, "the source walk found almost nothing — this guard has stopped measuring").toBeGreaterThan(100);
-		// 5 workflow classes today. The denominator is asserted (ADR 0002 G1) because a walk that
+		// 6 workflow classes today. The denominator is asserted (ADR 0002 G1) because a walk that
 		// found nothing would pass exactly as loudly as one that found everything. `coding-watch.ts`
 		// is deliberately absent: it is watch MODE, a plain function `coding-session.ts` calls, not a
-		// class with a binding — which is why the `watch` exemption lives on the call site above,
-		// where the mode is actually chosen.
+		// class with a binding. `website-builder.ts` is present even though it is not in the model-
+		// driving set below: it only brokers and observes a subscriber's local CLI, and never reaches
+		// PAGS's BYOK model choke point.
 		expect(WORKFLOWS.map(rel).sort()).toEqual([
 			"workflows/agent-loop.ts",
 			"workflows/browser-task.ts",
 			"workflows/coding-session.ts",
 			"workflows/job-apply.ts",
 			"workflows/pipeline-run.ts",
+			"workflows/website-builder.ts",
 		]);
 		expect(MODEL_CALLERS.size, "no file calls runUserWorkersAi — the choke point was renamed").toBeGreaterThan(5);
 		expect([...RESERVE_CALLERS].map(rel).sort(), "callers of reserve()").toEqual([

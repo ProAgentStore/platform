@@ -37,6 +37,9 @@ const DISPATCH_SURFACES = new Set([
 	"agent-think.ts",
 	// POST /v1/instances/:id/tools/:name — runs the tool the caller named.
 	"routes/tools.ts",
+	// Job-scoped Website Builder broker — runs its fixed, policy-bound `mcp_call_tool` route
+	// rather than dispatching from a ToolDef handler.
+	"routes/website-builder-broker.ts",
 ]);
 
 function sourceFiles(dir: string, out: string[] = []): string[] {

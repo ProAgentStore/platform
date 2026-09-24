@@ -141,6 +141,15 @@ const PROPAGATION: Record<string, string> = {
 	// would overwrite that edit to fix wording. Every future subscriber gets the corrected copy; the
 	// count of live instances holding the stale one is NOT measured here.
 	"0152_email_assistant_honest_welcome.sql": "owner-initiated PUT /v1/instances/:id/state — only future subscribers get the corrected copy; the DO copy is the owner's",
+	// #836: the v2 Website Builder draft pipeline replaces only the exact stock v1 copy. The
+	// seed change and propagation ship together: the second statement writes that replacement to
+	// `agent_instances`, while archiving the prior value under `$.pipelinesReplaced` so a
+	// subscriber's customised pipeline is never silently lost.
+	"0156_site_builder_iterative_drafts.sql": "site_builder_iterative_drafts.sql",
+	// #841: the subscription-backed Website Builder path is a new, opt-in pipeline. The seed is
+	// followed by an `agent_instances` update in the same migration, so existing subscribers get
+	// the capability without replacing their established `site-builder` pipeline.
+	"0158_site_builder_local_subscription_pipeline.sql": "site_builder_local_subscription_pipeline.sql",
 };
 
 describe("seed config patches — each one records how it reaches an EXISTING instance (#496, #394)", () => {

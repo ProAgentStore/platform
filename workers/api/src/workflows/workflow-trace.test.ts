@@ -26,6 +26,7 @@ const DIR = dirname(fileURLToPath(import.meta.url));
 const NOT_A_DRIVER: Record<string, string> = {
 	"coding-session-params.ts": "a params type — no run() and no I/O",
 	"coding-watch.ts": "a mode of CodingSessionWorkflow, dispatched from its run(); traced by its host",
+	"website-builder.ts": "a bounded broker/runner monitor for the subscriber's local CLI — it is not a PAGS autonomous driver, although it writes its own job events",
 };
 
 /**
@@ -44,7 +45,7 @@ const files = readdirSync(DIR)
 
 describe("the durable drivers all record what they did", () => {
 	it("measures the whole workflows/ directory, and says how much", () => {
-		// G1/G2. The number is the evidence: seven files today, five of them drivers. A future split
+		// G1/G2. The number is the evidence: eight files today, five of them drivers. A future split
 		// that halves this list fails here instead of quietly halving the guard.
 		expect(files.length, `workflows/ holds ${files.length} source files`).toBeGreaterThanOrEqual(7);
 		const drivers = files.filter((f) => !NOT_A_DRIVER[f]);

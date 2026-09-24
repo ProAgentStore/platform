@@ -699,7 +699,11 @@ const PINS = {
 	// ran in the cloud and read a label the model wrote, while this file clicks by `ref` and never
 	// reads that label. Splitting the hook out of the method it must precede would put the ordering
 	// back in the reader's head.
-	"packages/browser-runner/src/runner.ts": 1277,
+	// +64 at #841: the runner owns both the durable task card and the CodingRuntime session, so
+	// its Website Builder lifecycle stays at that boundary. Prompt/evidence parsing lives in
+	// website-builder.ts; the additional restart guard ensures a reconnect resumes the one task
+	// rather than opening another FWS draft, and cannot be separated from CodingRuntime ownership.
+	"packages/browser-runner/src/runner.ts": 1341,
 	// +45 at #263: `probeMcpSurface`, so the connection test can ask about resources and prompts
 	// on the one guarded path out of this Worker. Raised rather than split — the network belongs
 	// with the rest of the transport, and the reasoning it feeds is pure and lives in
@@ -966,7 +970,11 @@ const PINS = {
 	// the fence rule above did: this function is the single point every surface passes through —
 	// chat, the /tools invoker, MCP and the pipeline runner — and a gate anywhere else is a gate on
 	// one surface, which is the same as no gate.
-	"workers/api/src/lib/tool-registry.ts": 890,
+	// +81 at #841: start_website_builder is a first-party ToolDef and must remain in the one
+	// registry dispatcher that applies instance policy. It now reserves before runner creation and
+	// checks the consented MCP endpoint, so duplicate tabs cannot mint drafts; the broker, storage
+	// and workflow still live in dedicated modules.
+	"workers/api/src/lib/tool-registry.ts": 971,
 	// +8 for the #312 stats prompt block. Deliberately not split: the block is two statements
 	// and its comment, and it must sit inside the existing config read (`instanceCfg`/`agentCfg`
 	// are already in hand) or the prompt costs an extra query per turn. Everything else about
@@ -1815,7 +1823,7 @@ const PINS = {
 	// +4 at #192: the surface-lock raise above (two lines of why) and these two — the same price
 	// #792 paid for the same kind of raise.
 	// This file grows by prose about other files, which is what it is for.
-	"scripts/check-file-size.mjs": 1899,
+	"scripts/check-file-size.mjs": 1907,
 };
 
 /**
