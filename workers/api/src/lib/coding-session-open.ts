@@ -8,6 +8,7 @@
 // installation tokens, engine env).
 import { callRunner, getBoundRunnerConn, getRunnerConnIgnoringLiveness, relayConnected, type RunnerConn } from "./runner-client.js";
 import { resolveCloneCredential } from "./git-credentials.js";
+import { cloneSourceFor } from "./git-providers.js";
 import { resolveEngine, resolveEngineEnv } from "./coding-engines.js";
 import { checkWorkdirVia, cloneStatusForVerdict } from "./coding-workdir.js";
 import { createSession, endSession, getActiveSessionForRepo, getLastFinishedSessionForRepo, getRepo, reassignSessionNode, updateRepoClone } from "./coding-store.js";
@@ -264,9 +265,10 @@ export async function startSessionOnRunner(
 		const started = await callRunner<{ resumed?: unknown; seeded?: unknown }>(conn, "/coding/start", {
 			sessionId: session.id,
 			repoId: repo.id,
-			// Local checkout → run in that dir (no clone). Else clone to a managed dir.
+			// Local checkout → run in that dir, cloned into only if it is absent or empty (#828).
+			// Else clone to a managed dir.
 			workDir: repo.workdir || undefined,
-			cloneUrl: repo.cloneUrl,
+			cloneUrl: cloneSourceFor(repo),
 			branch: repo.branch || undefined,
 			token: credential?.token,
 			// The username half. An older runner ignores it and hardcodes `x-access-token`,

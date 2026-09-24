@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	cloneSourceFor,
 	GIT_PROVIDERS,
 	gitProviderFor,
 	hostedFeatureUnavailable,
@@ -216,5 +217,21 @@ describe("hostedFeatureUnavailable — an unavailable surface says WHY, honestly
 
 	it("still tells a local checkout the actionable thing", () => {
 		expect(hostedFeatureUnavailable(gitProviderFor("local"), "issues")).toMatch(/local checkout/);
+	});
+});
+
+describe("cloneSourceFor — what an empty local checkout is filled from (#828)", () => {
+	it("prefers the stored clone URL, verbatim", () => {
+		expect(cloneSourceFor({ cloneUrl: "git@github.com:o/r.git", githubRepo: "o/other" })).toBe("git@github.com:o/r.git");
+	});
+
+	it("derives one from a local checkout's detected coordinates", () => {
+		expect(cloneSourceFor({ webUrl: "https://github.com/freeappstore-online/platform" })).toBe("https://github.com/freeappstore-online/platform.git");
+		expect(cloneSourceFor({ webUrl: "https://gitlab.com/g/sub/p" })).toBe("https://gitlab.com/g/sub/p.git");
+		expect(cloneSourceFor({ githubRepo: "o/r" })).toBe("https://github.com/o/r.git");
+	});
+
+	it("names nothing for a repo with no remote", () => {
+		expect(cloneSourceFor({})).toBeUndefined();
 	});
 });

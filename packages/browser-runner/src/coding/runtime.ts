@@ -282,10 +282,11 @@ export class CodingRuntime {
 			// Resolve the working dir and ensure the repo is present (clone on first
 			// start). A user-supplied local path may use ~ — expand it; otherwise
 			// clone into a managed dir. Without this the CLI would launch nowhere.
+			// A local path is cloned into only when absent or empty (#828).
 			const workDir = input.workDir
 				? resolve(input.workDir.replace(/^~(?=$|\/)/, homedir()))
 				: join(this.reposBaseDir, sanitizeSessionName(input.repoId));
-			ensureRepo(workDir, { cloneUrl: input.cloneUrl, branch: input.branch, token: input.token, tokenUsername: input.tokenUsername });
+			ensureRepo(workDir, { cloneUrl: input.cloneUrl, branch: input.branch, token: input.token, tokenUsername: input.tokenUsername, ownFolder: Boolean(input.workDir) });
 			session = new HeadlessSession({
 				id: input.sessionId,
 				workDir,

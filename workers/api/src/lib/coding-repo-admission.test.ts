@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { admitRepoForRun } from "./coding-repo-admission.js";
+import { admitRepoForRun, wouldCloneInto } from "./coding-repo-admission.js";
+import type { WorkdirVerdict } from "./coding-workdir.js";
 import type { AdmissibleRepo } from "./coding-repo-admission.js";
 
 const repo = (over: Partial<AdmissibleRepo> = {}): AdmissibleRepo => ({
@@ -72,5 +73,27 @@ describe("admitRepoForRun — a run must not start on a folder the platform has 
 		expect(admitRepoForRun(repo({ cloneStatus: "cloning", workdir: undefined }))).toEqual({ ok: true });
 		// The open path has its own, better message for "no source configured".
 		expect(admitRepoForRun(repo({ cloneStatus: "missing_url", workdir: undefined }))).toEqual({ ok: true });
+	});
+});
+
+describe("admitRepoForRun — an absent or EMPTY checkout with a clone source is admitted, the start clones it (#828)", () => {
+	const empty = repo({ cloneStatus: "needs_attention", cloneError: "…exists but is EMPTY…", githubRepo: "freeappstore-online/platform" });
+	const live = (state: WorkdirVerdict["state"]): WorkdirVerdict => ({ state, path: "/Users/serge/dev/stores/fas/platform", detail: "" });
+
+	it("admits on a LIVE empty or missing verdict", () => {
+		expect(admitRepoForRun(empty, live("empty"))).toEqual({ ok: true });
+		expect(admitRepoForRun(empty, live("missing"))).toEqual({ ok: true });
+	});
+
+	it("keeps refusing without a live verdict, or with one that a clone cannot fix", () => {
+		expect(admitRepoForRun(empty).ok).toBe(false);
+		expect(admitRepoForRun(empty, live("unverified")).ok).toBe(false);
+		// A plain folder with files: cloning over it would be data loss.
+		expect(admitRepoForRun(empty, live("not_a_git_repo")).ok).toBe(false);
+	});
+
+	it("keeps refusing when the repo names nothing to clone from", () => {
+		expect(wouldCloneInto(repo({ cloneStatus: "needs_attention" }), live("empty"))).toBe(false);
+		expect(wouldCloneInto(repo({ cloneStatus: "needs_attention", webUrl: "https://gitlab.com/g/p" }), live("empty"))).toBe(true);
 	});
 });

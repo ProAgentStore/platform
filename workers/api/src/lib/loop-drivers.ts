@@ -27,6 +27,9 @@ import { delegationTaskRecord } from "./delegation.js";
 import { claimSessionDriver, endSession, listRepos, releaseSessionDriver } from "./coding-store.js";
 import { ensureActiveSession } from "./coding-session-open.js";
 import { admitRepoForRun } from "./coding-repo-admission.js";
+import { checkWorkdirVia } from "./coding-workdir.js";
+import { cloneSourceFor } from "./git-providers.js";
+import { getBoundRunnerConn } from "./runner-client.js";
 import { pausedStartRefusal } from "./instance-pause.js";
 import { noSessionMessage } from "./coding-session-lifecycle.js";
 import { noteUnmeteredHeadlessDrive } from "./engine-metering.js";
@@ -259,7 +262,17 @@ const codingDriver: LoopDriver = {
 		// The gate is on the RUN, not on the session. The incident's session was `alive: true` —
 		// reattached, reused and useless — so gating only the OPENING of a new session would have
 		// admitted all three of those runs.
-		const admission = admitRepoForRun(repo);
+		//
+		// A stored verdict that condemns the path is re-asked once of the machine about to run
+		// (#828): if the checkout there is absent or empty and the repo names a source, the session
+		// start below clones into it — for an unpinned instance that is simply a machine that has
+		// never cloned this repo, and refusing sent the owner to clone it by hand.
+		let admission = admitRepoForRun(repo);
+		if (!admission.ok && repo.workdir && cloneSourceFor(repo)) {
+			const conn = await getBoundRunnerConn(env, instanceId, userId).catch(() => null);
+			const live = conn ? await checkWorkdirVia(conn, repo.workdir) : null;
+			admission = admitRepoForRun(repo, live);
+		}
 		if (!admission.ok) return { ok: false, status: 409, error: admission.message };
 
 		// Open one if there isn't one. Requiring a live session made delegation SINGLE-USE — the

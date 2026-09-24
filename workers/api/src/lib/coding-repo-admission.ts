@@ -31,6 +31,10 @@
  *                    predating that fix still carry it, and a stale one must not become a wall).
  *   - `missing_url`  no source configured; the open path has its own, better message for it.
  *
+ * One exception inside `needs_attention` (#828): a checkout that is absent or EMPTY on the machine
+ * about to run, for a repo that names a source to clone from, is admitted — the session start
+ * clones into it. See {@link wouldCloneInto}.
+ *
  * ── Pure, and separate from `noSessionMessage`
  *
  * The refusal must NOT go through `noSessionMessage`: that wording is tuned for CONNECTIVITY, and
@@ -39,12 +43,17 @@
  * sentence, carrying #405's relayable `clone_error` verbatim plus the remedy that actually clears
  * it (fix the folder, then Re-check).
  */
+import { cloneSourceFor } from "./git-providers.js";
 import type { CodingRepo } from "./coding-types.js";
+import type { WorkdirVerdict } from "./coding-workdir.js";
 
 /** The subset of a repo row this decision is made from — so a test needs no `CodingRepo` fixture. */
 export type AdmissibleRepo = Pick<CodingRepo, "name" | "cloneStatus"> & {
 	workdir?: string;
 	cloneError?: string;
+	cloneUrl?: string;
+	webUrl?: string;
+	githubRepo?: string;
 };
 
 export type RepoAdmission =
@@ -65,8 +74,22 @@ export type RepoAdmission =
 const REMEDY =
 	"Fix that folder on the machine, or point this repo at the right path in the Coding tab (repo settings), then press Re-check on the repo — no run will start here until that check passes.";
 
-export function admitRepoForRun(repo: AdmissibleRepo): RepoAdmission {
+/**
+ * Would starting a session on this repo FILL IN the checkout rather than run in a broken one (#828)?
+ *
+ * A path that is absent or empty on the machine that will run is not a condemnation when the repo
+ * names a source: the session start clones into exactly that state. For an unpinned instance it is
+ * the ordinary state of any machine that has never cloned the repo. Only a LIVE verdict counts —
+ * the stored one may be another machine's, or days old.
+ */
+export function wouldCloneInto(repo: AdmissibleRepo, live: WorkdirVerdict | null | undefined): boolean {
+	return Boolean(live && (live.state === "missing" || live.state === "empty") && cloneSourceFor(repo));
+}
+
+/** `live` is a fresh verdict from the machine about to run, when the caller could get one. */
+export function admitRepoForRun(repo: AdmissibleRepo, live?: WorkdirVerdict | null): RepoAdmission {
 	if (repo.cloneStatus !== "needs_attention") return { ok: true };
+	if (wouldCloneInto(repo, live)) return { ok: true };
 	// #405 wrote `clone_error` explicitly so "an agent can say it to the owner"; it already names
 	// the path. The fallback is only for a row whose detail was lost, and it still names the folder
 	// rather than describing the repo abstractly — "what is wrong" is useless without "with what".

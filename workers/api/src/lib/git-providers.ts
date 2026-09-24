@@ -253,6 +253,18 @@ export function parseRepoRef(raw: string | null | undefined): RepoRef | null {
 }
 
 /**
+ * Where a repo can be cloned from, or undefined when it names no source (#828).
+ *
+ * Its own `cloneUrl` when it has one. A LOCAL checkout never stores one — the owner typed a path —
+ * but once its origin is detected it carries the web coordinates, and those name the same remote.
+ * That is what lets an empty or absent checkout on a machine that has never cloned the repo be
+ * filled in, instead of refusing every run until someone clones it by hand.
+ */
+export function cloneSourceFor(repo: { cloneUrl?: string; webUrl?: string; githubRepo?: string }): string | undefined {
+	return repo.cloneUrl || parseRepoRef(repo.webUrl)?.cloneUrl || (repo.githubRepo ? `https://github.com/${repo.githubRepo}.git` : undefined);
+}
+
+/**
  * May a clone credential minted for `provider` be embedded in `cloneUrl`?
  *
  * The host check is the security control (module header). The https check is not decoration

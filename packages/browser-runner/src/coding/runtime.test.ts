@@ -126,6 +126,69 @@ describeGit("ensureRepo", () => {
 		expect(existsSync(join(dir, ".git"))).toBe(false);
 		rmSync(src, { recursive: true, force: true });
 	});
+
+	// ── An owner-configured path (#828): an unpinned instance on a machine that never cloned it ──
+	it("clones into the owner's EMPTY folder, with full history and no token left in origin", () => {
+		const src = makeSrc();
+		const dir = join(base, "own-empty");
+		mkdirSync(dir, { recursive: true });
+		ensureRepo(dir, { cloneUrl: src, ownFolder: true });
+		expect(existsSync(join(dir, "f.txt"))).toBe(true);
+		expect(execFileSync("git", ["rev-parse", "--is-shallow-repository"], { cwd: dir, encoding: "utf-8" }).trim()).toBe("false");
+		expect(execFileSync("git", ["remote", "get-url", "origin"], { cwd: dir, encoding: "utf-8" }).trim()).toBe(src);
+		rmSync(src, { recursive: true, force: true });
+	});
+
+	it("clones into the owner's path when it does not exist at all, parents included", () => {
+		const src = makeSrc();
+		const dir = join(base, "own-missing", "stores", "platform");
+		ensureRepo(dir, { cloneUrl: src, ownFolder: true });
+		expect(existsSync(join(dir, ".git"))).toBe(true);
+		rmSync(src, { recursive: true, force: true });
+	});
+
+	it("leaves an existing (even behind) checkout alone — reconciling it is the repair run's job", () => {
+		const src = makeSrc();
+		const dir = join(base, "own-behind");
+		ensureRepo(dir, { cloneUrl: src, ownFolder: true });
+		execFileSync("bash", ["-c", "echo more > g.txt && git add -A && git commit -q -m y"], { cwd: src });
+		const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf-8" });
+		ensureRepo(dir, { cloneUrl: src, ownFolder: true });
+		expect(execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf-8" })).toBe(head);
+		expect(existsSync(join(dir, "g.txt"))).toBe(false);
+		rmSync(src, { recursive: true, force: true });
+	});
+
+	it("runs in the owner's non-empty plain folder untouched, rather than refusing or cloning over it", () => {
+		const src = makeSrc();
+		const dir = join(base, "own-plain");
+		mkdirSync(dir, { recursive: true });
+		execFileSync("bash", ["-c", "echo mine > notes.txt"], { cwd: dir });
+		expect(ensureRepo(dir, { cloneUrl: src, ownFolder: true })).toBe(dir);
+		expect(existsSync(join(dir, ".git"))).toBe(false);
+		expect(existsSync(join(dir, "notes.txt"))).toBe(true);
+		rmSync(src, { recursive: true, force: true });
+	});
+
+	it("refuses to clone a second repository into an empty folder inside another checkout", () => {
+		const src = makeSrc();
+		const dir = join(src, "apps", "empty");
+		mkdirSync(dir, { recursive: true });
+		expect(() => ensureRepo(dir, { cloneUrl: src, ownFolder: true })).toThrow(/inside another git checkout/);
+		rmSync(src, { recursive: true, force: true });
+	});
+
+	it("a failed clone says what failed, and never echoes the token", () => {
+		const dir = join(base, "own-fail");
+		let msg = "";
+		try {
+			ensureRepo(dir, { cloneUrl: join(base, "no-such-remote"), token: "sekrit-token", ownFolder: true });
+		} catch (e) {
+			msg = (e as Error).message;
+		}
+		expect(msg).toMatch(/^Could not clone .*no-such-remote into ".*own-fail":/);
+		expect(msg).not.toContain("sekrit-token");
+	});
 });
 
 describe("CodingRuntime over the stream-json engine", () => {

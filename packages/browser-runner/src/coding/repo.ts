@@ -209,10 +209,21 @@ export function probeGitSshIdentity(host: string): GitSshIdentity {
  * `x-access-token` — the value this function used to hardcode — so an older cloud that
  * sends only `token` behaves exactly as before.
  *
+ * `ownFolder` marks a path the OWNER configured (a local checkout) rather than a managed dir
+ * (#828). Such a path is cloned into only when there is nothing there yet — absent, or an empty
+ * folder that is not inside another checkout — which is the normal state of an unpinned
+ * instance landing on a machine that has never cloned this repo. A folder with anything in it
+ * is run in exactly as it is, the behaviour a local path always had. The clone is a full one
+ * (the owner's own checkout must be able to rebase and read history), and its `origin` is left
+ * without the short-lived token, which would otherwise break every later push once it expired.
+ *
  * Returns the absolute working directory. Throws on clone failure so the caller
  * can surface it (a session can't start without its repo).
  */
-export function ensureRepo(dir: string, opts: { cloneUrl?: string; branch?: string; token?: string; tokenUsername?: string } = {}): string {
+export function ensureRepo(
+	dir: string,
+	opts: { cloneUrl?: string; branch?: string; token?: string; tokenUsername?: string; ownFolder?: boolean } = {},
+): string {
 	// A real checkout (has .git) is reused as-is.
 	if (existsSync(join(dir, ".git"))) return dir;
 	if (!opts.cloneUrl) {
@@ -228,14 +239,31 @@ export function ensureRepo(dir: string, opts: { cloneUrl?: string; branch?: stri
 	if (existsSync(dir)) {
 		const entries = readdirSync(dir);
 		if (entries.length > 0) {
+			// The owner's own folder (a monorepo subfolder, a plain project) — run in it untouched.
+			if (opts.ownFolder) return dir;
 			throw new Error(`Refusing to clone into non-empty directory "${dir}" (no .git found) — move it aside or point at an empty path.`);
+		}
+		if (opts.ownFolder && checkWorkdir(dir).insideWorkTree) {
+			throw new Error(
+				`"${dir}" is an empty folder inside another git checkout — not cloning a second repository into it. Point this repo at the checkout itself, or remove the folder.`,
+			);
 		}
 		rmSync(dir, { recursive: true, force: true });
 	}
 	const url = authenticatedCloneUrl(opts.cloneUrl, opts.token, opts.tokenUsername);
-	const args = ["clone", "--depth", "1"];
+	const args = ["clone"];
+	if (!opts.ownFolder) args.push("--depth", "1");
 	if (opts.branch) args.push("--branch", opts.branch);
 	args.push(url, dir);
-	execFileSync("git", args, { stdio: "pipe", timeout: 180_000 });
+	try {
+		execFileSync("git", args, { stdio: "pipe", timeout: 180_000 });
+		if (opts.ownFolder && url !== opts.cloneUrl) execFileSync("git", ["remote", "set-url", "origin", opts.cloneUrl], { cwd: dir, stdio: "pipe" });
+	} catch (e) {
+		// `e.message` carries the whole command line, token included — the reason git's own
+		// stderr is used instead, and the token scrubbed from that too in case git echoed the URL.
+		const stderr = String((e as { stderr?: unknown }).stderr ?? "").trim() || "git clone failed";
+		const why = opts.token ? stderr.split(opts.token).join("***") : stderr;
+		throw new Error(`Could not clone ${opts.cloneUrl} into "${dir}": ${why.slice(0, 400)}`);
+	}
 	return dir;
 }

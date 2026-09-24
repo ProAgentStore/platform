@@ -44,7 +44,7 @@ describe("loopDriverFor — the ONE Loop dispatches on what the agent DECLARES (
  * coding test assert against the offline path by accident.
  */
 function stubEnv(
-	opts: { repos?: unknown[]; session?: unknown; claimTaken?: boolean; runnerOnline?: boolean; hasRuntimeRow?: boolean; failLoopRunInsert?: boolean } = {},
+	opts: { repos?: unknown[]; session?: unknown; claimTaken?: boolean; runnerOnline?: boolean; hasRuntimeRow?: boolean; failLoopRunInsert?: boolean; repoCheck?: unknown } = {},
 ) {
 	const sql: string[] = [];
 	const created: Array<{ binding: string; params: Record<string, unknown> }> = [];
@@ -93,6 +93,8 @@ function stubEnv(
 			get: () => ({
 				async fetch(req: Request) {
 					if (new URL(req.url).pathname === "/status") return new Response(JSON.stringify({ connected: runnerOnline }));
+					const cmd = (await req.clone().json().catch(() => ({}))) as { path?: string };
+					if (cmd.path === "/coding/repo-check" && opts.repoCheck) return new Response(JSON.stringify(opts.repoCheck));
 					return new Response(JSON.stringify({ ok: true }));
 				},
 			}),
@@ -293,6 +295,53 @@ describe("the coding driver refuses a checkout the platform has already condemne
 		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
 		expect(out.ok).toBe(false);
 		if (!out.ok) expect(out.error).not.toMatch(/git working tree/);
+	});
+});
+
+describe("the coding driver admits an absent or EMPTY checkout it can clone into (#828)", () => {
+	// The incident row: an unpinned instance, a local path, GitHub coordinates, and a machine that
+	// had never cloned the repo. The stored verdict refused every run, repair runs included.
+	const emptyRepo = {
+		id: "r1",
+		name: "fas/platform",
+		instance_id: "i1",
+		user_id: "u1",
+		workdir: "~/dev/stores/fas/platform",
+		github_repo: "freeappstore-online/platform",
+		web_url: "https://github.com/freeappstore-online/platform",
+		clone_status: "needs_attention",
+		clone_error: "The configured checkout `/Users/serge/dev/stores/fas/platform` exists but is EMPTY — nothing was ever cloned into it, or its contents were moved away. There is no code at that path to read.",
+	};
+	const check = (over: Record<string, unknown>) => ({ checked: true, path: "/Users/serge/dev/stores/fas/platform", exists: true, isDirectory: true, entryCount: 0, insideWorkTree: false, gitChecked: true, ...over });
+
+	it("starts a repair run when the machine about to run still reports the folder EMPTY", async () => {
+		const { env, created } = stubEnv({ repos: [emptyRepo], session: { id: "s1", client_type: "claude", status: "active" }, repoCheck: check({}) });
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base, repairCheckout: true });
+		expect(out.ok).toBe(true);
+		expect(created[0].binding).toBe("CODING_SESSION");
+	});
+
+	it("starts when the folder does not exist at all", async () => {
+		const { env, created } = stubEnv({ repos: [emptyRepo], session: { id: "s1", client_type: "claude", status: "active" }, repoCheck: check({ exists: false, isDirectory: false }) });
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out.ok).toBe(true);
+		expect(created).toHaveLength(1);
+	});
+
+	it("still refuses when the repo names no source to clone from", async () => {
+		const noSource = { ...emptyRepo, github_repo: null, web_url: null };
+		const { env, created } = stubEnv({ repos: [noSource], session: null, repoCheck: check({}) });
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out.ok).toBe(false);
+		if (!out.ok) expect(out.error).toMatch(/EMPTY/);
+		expect(created).toHaveLength(0);
+	});
+
+	it("still refuses when the machine cannot be asked — a stale verdict is not overruled by silence", async () => {
+		const { env, created } = stubEnv({ repos: [emptyRepo], session: null });
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out.ok).toBe(false);
+		expect(created).toHaveLength(0);
 	});
 });
 
