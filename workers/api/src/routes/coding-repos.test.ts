@@ -48,14 +48,16 @@ interface Statement {
  * A D1 that resolves ownership, echoes an inserted repo back as a row, and otherwise answers
  * with `repo`. Enough to drive add-repo and the read routes without a real database.
  */
-function ownerEnv(repo?: Record<string, unknown>) {
+function ownerEnv(repo?: Record<string, unknown>, bindings: Binding[] = []) {
 	const issued: Statement[] = [];
 	let inserted: Record<string, unknown> | null = null;
 	const DB = {
 		prepare(sql: string) {
 			const flat = sql.replace(/\s+/g, " ").trim();
+			let bound: unknown[] = [];
 			const stmt = {
 				bind: (...binds: unknown[]) => {
+					bound = binds;
 					issued.push({ sql: flat, binds });
 					if (flat.startsWith("INSERT INTO coding_repos")) {
 						// The column order of the INSERT, so the assertions below read as columns
@@ -71,6 +73,15 @@ function ownerEnv(repo?: Record<string, unknown>) {
 				},
 				first: async () => {
 					if (/FROM agent_instances/.test(flat)) return { id: INSTANCE };
+					// The duplicate-binding lookup (#829): answered from `bindings`, the instance's
+					// OTHER rows, by the same instance / case-insensitive / except-self rule.
+					if (/lower\(github_repo\) = lower\(/.test(flat)) {
+						const [instanceId, githubRepo, exceptId] = bound as string[];
+						const hit = bindings.find(
+							(b) => b.instance_id === instanceId && b.id !== exceptId && b.github_repo?.toLowerCase() === githubRepo.toLowerCase(),
+						);
+						return hit ? { id: hit.id, name: hit.name } : null;
+					}
 					if (/FROM coding_repos/.test(flat)) return inserted ?? repo ?? null;
 					return null;
 				},
@@ -84,8 +95,16 @@ function ownerEnv(repo?: Record<string, unknown>) {
 	return { env, issued, insertedRepo: () => inserted };
 }
 
-function buildApp(repo?: Record<string, unknown>) {
-	const ctx = ownerEnv(repo);
+/** A row already on the instance, as far as the duplicate-binding lookup can see it. */
+interface Binding {
+	id: string;
+	instance_id: string;
+	name: string;
+	github_repo: string | null;
+}
+
+function buildApp(repo?: Record<string, unknown>, bindings: Binding[] = []) {
+	const ctx = ownerEnv(repo, bindings);
 	const app = new Hono<{ Bindings: Env }>();
 	const routes = new Hono<{ Bindings: Env }>();
 	registerRepoRoutes(routes);
@@ -95,8 +114,8 @@ function buildApp(repo?: Record<string, unknown>) {
 	return { app, ...ctx };
 }
 
-async function addRepo(body: Record<string, unknown>) {
-	const { app, env, insertedRepo, issued } = buildApp();
+async function addRepo(body: Record<string, unknown>, bindings: Binding[] = []) {
+	const { app, env, insertedRepo, issued } = buildApp(undefined, bindings);
 	const token = await signSession(UID, SECRET, { roles: [] });
 	const res = await app.request(
 		`/v1/instances/${INSTANCE}/coding/repos`,
@@ -105,7 +124,7 @@ async function addRepo(body: Record<string, unknown>) {
 	);
 	return {
 		status: res.status,
-		body: (await res.json()) as { repo?: Record<string, unknown>; warning?: string; error?: string },
+		body: (await res.json()) as { repo?: Record<string, unknown>; warning?: string; error?: string; existingId?: string; existingName?: string },
 		row: insertedRepo(),
 		issued,
 	};
@@ -186,6 +205,110 @@ describe("POST /coding/repos — a repo is stored as what it IS", () => {
  * three questions; it was never asked. Two days later the agent was still being asked about code
  * in an empty directory the console called ready, and it invented the code (#395).
  */
+describe("POST /coding/repos — one binding per GitHub repo per instance (#829)", () => {
+	const platform: Binding = { id: "repo_existing", instance_id: INSTANCE, name: "ProAgentStore/platform", github_repo: "ProAgentStore/platform" };
+
+	it("binds a GitHub repo the instance does not have yet", async () => {
+		const { status, row } = await addRepo({ githubRepo: "ProAgentStore/platform", cloneUrl: "https://github.com/ProAgentStore/platform.git" });
+		expect(status).toBe(201);
+		expect(row).toMatchObject({ github_repo: "ProAgentStore/platform", instance_id: INSTANCE });
+	});
+
+	it("refuses the same repo a second time — naming the binding that already has it — and inserts nothing", async () => {
+		// Differently cased, as coding_repo_add would pass through whatever the caller typed.
+		const { status, body, row } = await addRepo(
+			{ githubRepo: "proagentstore/PLATFORM", cloneUrl: "https://github.com/proagentstore/PLATFORM.git" },
+			[platform],
+		);
+		expect(status).toBe(409);
+		expect(body).toMatchObject({ existingId: "repo_existing", existingName: "ProAgentStore/platform" });
+		expect(body.error).toMatch(/already bound to this instance/);
+		expect(row).toBeNull();
+	});
+
+	it("refuses a clone URL of a repo already bound by coordinate", async () => {
+		const { status, row } = await addRepo({ cloneUrl: "https://github.com/ProAgentStore/platform" }, [platform]);
+		expect(status).toBe(409);
+		expect(row).toBeNull();
+	});
+
+	it("still binds a DIFFERENT repo to the same instance — several repos per instance is supported", async () => {
+		const { status, row } = await addRepo({ githubRepo: "ProAgentStore/sdk", cloneUrl: "https://github.com/ProAgentStore/sdk.git" }, [platform]);
+		expect(status).toBe(201);
+		expect(row).toMatchObject({ github_repo: "ProAgentStore/sdk" });
+	});
+
+	it("still binds the same repo to a DIFFERENT instance", async () => {
+		const { status } = await addRepo(
+			{ githubRepo: "ProAgentStore/platform", cloneUrl: "https://github.com/ProAgentStore/platform.git" },
+			[{ ...platform, instance_id: "inst-other" }],
+		);
+		expect(status).toBe(201);
+	});
+
+	it("answers a race that reaches the 0157 index with the same 409, not a 500", async () => {
+		const { app, env } = buildApp(undefined, []);
+		const prepare = env.DB.prepare.bind(env.DB);
+		(env.DB as unknown as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
+			const stmt = prepare(sql) as unknown as { run: () => Promise<unknown> };
+			if (sql.includes("INSERT INTO coding_repos")) {
+				stmt.run = async () => {
+					throw new Error("D1_ERROR: UNIQUE constraint failed: index 'idx_coding_repos_instance_github': SQLITE_CONSTRAINT");
+				};
+			}
+			return stmt;
+		};
+		const token = await signSession(UID, SECRET, { roles: [] });
+		const res = await app.request(
+			`/v1/instances/${INSTANCE}/coding/repos`,
+			{ method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ githubRepo: "ProAgentStore/platform" }) },
+			env,
+		);
+		expect(res.status).toBe(409);
+	});
+});
+
+describe("POST /coding/repos/:id/detect-github — a local row does not adopt a repo another binding holds (#829)", () => {
+	// The second production occurrence: a local-path row, a URL add of the same repo beside it,
+	// then this route stamping the local row with the same coordinate.
+	const local = {
+		id: "repo_local", instance_id: INSTANCE, user_id: UID, name: "pags/platform", github_repo: null, provider: "local",
+		repo_slug: null, web_url: null, clone_url: null, branch: "", workdir: "/Users/serge/dev/stores/pags/platform",
+		clone_status: "needs_attention", clone_error: null, urls: null, instructions: null, merge_policy: null, default_client: "claude",
+		created_at: "2026-08-08 00:00:00", updated_at: "2026-08-08 00:00:00",
+	};
+
+	async function detect(bindings: Binding[]) {
+		const { app, env, issued } = buildApp(local, bindings);
+		getBoundRunnerConn.mockResolvedValue({ url: "http://runner", token: "t" });
+		callRunner.mockResolvedValue({ remote: "git@github.com:ProAgentStore/platform.git" });
+		const token = await signSession(UID, SECRET, { roles: [] });
+		const res = await app.request(
+			`/v1/instances/${INSTANCE}/coding/repos/repo_local/detect-github`,
+			{ method: "POST", headers: { Authorization: `Bearer ${token}` } },
+			env,
+		);
+		const wrote = issued.some((s) => s.sql.startsWith("UPDATE coding_repos SET github_repo"));
+		return { status: res.status, body: (await res.json()) as Record<string, unknown>, wrote };
+	}
+
+	it("returns 409 naming both rows, and writes nothing, when another binding already has the repo", async () => {
+		const { status, body, wrote } = await detect([
+			{ id: "repo_clone", instance_id: INSTANCE, name: "ProAgentStore/platform", github_repo: "ProAgentStore/platform" },
+		]);
+		expect(status).toBe(409);
+		expect(body).toMatchObject({ repoId: "repo_local", conflictingRepoId: "repo_clone", githubRepo: "ProAgentStore/platform" });
+		expect(wrote).toBe(false);
+	});
+
+	it("adopts the detected repo when no other binding has it", async () => {
+		const { status, body, wrote } = await detect([]);
+		expect(status).toBe(200);
+		expect(body).toMatchObject({ githubRepo: "ProAgentStore/platform", detected: true });
+		expect(wrote).toBe(true);
+	});
+});
+
 describe("POST /coding/repos — a local path is CHECKED before it is called ready", () => {
 	const FAKE_CONN = { instanceId: INSTANCE } as never;
 	const HEALTHY = { checked: true, path: "/home/u/dev/thing", exists: true, isDirectory: true, entryCount: 91, insideWorkTree: true, gitChecked: true };

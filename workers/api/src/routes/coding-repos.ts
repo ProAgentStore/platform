@@ -11,7 +11,7 @@
  * registration ORDER, so moving a block past a sibling pattern is a behaviour change even when
  * the route set is unchanged. `coding.contract.test.ts` pins the order for that reason.
  */
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { HttpError } from "../lib/auth.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../lib/runner-client.js";
 import { computeETag, mergeRuns, persistBuildHistory, readBuildHistory, type BuildRun } from "../lib/build-history.js";
@@ -22,7 +22,7 @@ import { logError } from "../lib/error-log.js";
 // Pilot's pause both report, so this surface cannot invent a third wording for one state (#440).
 import { describeFacts } from "../lib/runner-availability.js";
 import { runtimeConnectivity } from "../lib/instance-connectivity.js";
-import { createRepo, deleteRepo, getActiveSessionForRepo, getRepo, listRepos, listSessions, updateRepo, updateRepoClone } from "../lib/coding-store.js";
+import { createRepo, deleteRepo, findExistingRepoBinding, getActiveSessionForRepo, getRepo, listRepos, listSessions, updateRepo, updateRepoClone } from "../lib/coding-store.js";
 import { checkWorkdirVia, cloneStatusForVerdict, isWorkdirBroken, type WorkdirVerdict } from "../lib/coding-workdir.js";
 import { sanitizeRepoPolicies, type DeclaredRepoPolicies } from "../lib/repo-policies.js";
 import type { CloneStatus, CodingRepo } from "../lib/coding-types.js";
@@ -32,6 +32,24 @@ import { parseRepoRef } from "../lib/git-providers.js";
 import { sqlTime } from "../lib/sql-time.js";
 import { getSessionRunnerConn, pickNextIssue, requireOwned } from "./coding-shared.js";
 import type { Env } from "../types.js";
+
+/** The 409 for an add that would bind a GitHub repo this instance already has (#829). */
+function duplicateBinding(c: Context, githubRepo: string, existing: { id: string; name: string }) {
+	return c.json(
+		{
+			error: `${githubRepo} is already bound to this instance${existing.name ? ` as "${existing.name}"` : ""} — use that binding, or remove it first`,
+			githubRepo,
+			existingId: existing.id,
+			existingName: existing.name,
+		},
+		409,
+	);
+}
+
+/** D1 surfaces a unique-index violation only as message text. */
+function isUniqueViolation(e: unknown): boolean {
+	return /UNIQUE constraint failed/i.test(e instanceof Error ? e.message : String(e));
+}
 
 /** "~/dev/stores/pags/platform" → "pags/platform" — a less generic default name. */
 function lastTwoSegments(path: string): string {
@@ -314,6 +332,15 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		const derivedName =
 			name || slug || (cloneUrl ? cloneUrl.replace(/\.git$/, "").replace(/\/$/, "").split("/").pop() : "");
 		if (!derivedName && !cloneUrl) return c.json({ error: "a repo name or URL is required" }, 400);
+		// One binding per GitHub repo per instance (#829). A second is never a second repo, only a
+		// stale handle on the same one — and the loop resolved to the stale one. Refused with the
+		// binding that already exists, so the caller can use it (or remove it) instead of guessing.
+		// Only the GitHub coordinate is guarded: it is the one column the 0157 index backs, and
+		// the local-path branch above never writes it (detect-github does, and is guarded there).
+		if (githubRepo) {
+			const existing = await findExistingRepoBinding(c.env, instanceId, githubRepo);
+			if (existing) return duplicateBinding(c, githubRepo, existing);
+		}
 		const repo = await createRepo(c.env, instanceId, uid, {
 			name: derivedName || "repo",
 			githubRepo,
@@ -322,7 +349,15 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 			webUrl: ref?.webUrl || undefined,
 			cloneUrl,
 			branch: typeof body.branch === "string" ? body.branch : undefined,
+		}).catch((e: unknown) => {
+			// Two adds racing past the check above meet the 0157 index instead; same answer.
+			if (githubRepo && isUniqueViolation(e)) return null;
+			throw e;
 		});
+		if (!repo) {
+			const existing = githubRepo ? await findExistingRepoBinding(c.env, instanceId, githubRepo) : null;
+			return duplicateBinding(c, githubRepo ?? "", existing ?? { id: "", name: "" });
+		}
 		return c.json({ repo }, 201);
 	});
 
@@ -357,6 +392,26 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		const ref = parseRepoRef(remote);
 		if (!ref?.slug) return c.json({ githubRepo: null, detected: false });
 		const githubRepo = ref.provider === "github" ? ref.slug : null;
+		// Adopting a GitHub identity another binding already holds would MAKE the duplicate #829 is
+		// about — the second occurrence was exactly this: a local path added, then a URL add of
+		// the same repo, then this route stamping the local row with the same coordinate. Left
+		// untouched instead, and the owner is told which two rows are the same repo.
+		if (githubRepo) {
+			const other = await findExistingRepoBinding(c.env, instanceId, githubRepo, repo.id);
+			if (other) {
+				return c.json(
+					{
+						error: `Another binding on this instance already points to ${githubRepo}`,
+						githubRepo,
+						repoId: repo.id,
+						conflictingRepoId: other.id,
+						conflictingRepoName: other.name,
+						detected: false,
+					},
+					409,
+				);
+			}
+		}
 		await c.env.DB.prepare(
 			"UPDATE coding_repos SET github_repo = COALESCE(?1, github_repo), provider = ?5, repo_slug = ?6, web_url = ?7, updated_at = datetime('now') WHERE id = ?2 AND instance_id = ?3 AND user_id = ?4",
 		)

@@ -162,6 +162,31 @@ export async function getRepo(env: Env, instanceId: string, userId: string, repo
 	return row ? toRepo(row) : null;
 }
 
+/**
+ * The binding on this instance that already points at `githubRepo` (`owner/repo`), if any (#829).
+ *
+ * One instance, one binding per GitHub repo. A second one is never a second repo — it is a stale
+ * handle on the same one, and `coding_loop_start` resolved to exactly that stale handle twice in
+ * production (a never-cloned local path beside a ready clone). GitHub names are case-insensitive,
+ * so the comparison is too. `exceptRepoId` lets a row that is ACQUIRING the name ignore itself.
+ *
+ * Deliberately not user-scoped: the instance is the unit that routes to a binding, and the
+ * migration 0157 index that backs this check is keyed the same way.
+ */
+export async function findExistingRepoBinding(
+	env: Env,
+	instanceId: string,
+	githubRepo: string,
+	exceptRepoId?: string,
+): Promise<{ id: string; name: string } | null> {
+	const row = await env.DB.prepare(
+		"SELECT id, name FROM coding_repos WHERE instance_id = ?1 AND lower(github_repo) = lower(?2) AND id <> ?3 LIMIT 1",
+	)
+		.bind(instanceId, githubRepo, exceptRepoId ?? "")
+		.first<{ id: string; name: string | null }>();
+	return row ? { id: row.id, name: row.name ?? "" } : null;
+}
+
 export async function createRepo(env: Env, instanceId: string, userId: string, input: NewRepoInput): Promise<CodingRepo> {
 	const id = `repo_${crypto.randomUUID()}`;
 	// A local checkout is already on disk → "ready". Otherwise it clones on first
