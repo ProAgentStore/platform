@@ -31,7 +31,7 @@ vi.mock("./coding-engines.js", () => ({
 	resolveEngine: vi.fn(async () => ({ command: "claude", clientType: "claude" })),
 	resolveEngineEnv: vi.fn(async () => ({})),
 }));
-vi.mock("./github-app.js", () => ({ installationTokenForOwner: vi.fn(async () => null) }));
+vi.mock("./github-app.js", () => ({ installationTokenForOwner: vi.fn(async () => null), repoScopedInstallationToken: vi.fn(async () => null) }));
 vi.mock("./runtime-nodes.js", () => ({ normalizeRunnerNode: (v: unknown) => (typeof v === "string" ? v.trim() : "") }));
 vi.mock("./instance-connectivity.js", () => ({ runtimeConnectivity: vi.fn() }));
 vi.mock("./coding-session-sweeper.js", () => ({
@@ -54,7 +54,7 @@ const timeline = await import("./coding-timeline.js");
 const RECORD = [{ seq: 1, type: "command" as const, content: "finish the health endpoint", createdAt: "2026-08-20T10:00:00Z" }];
 /** The `seed` field as it goes over the wire to `/coding/start`. */
 const seedSent = (call = 0) => (vi.mocked(runner.callRunner).mock.calls[call][2] as { seed?: string }).seed;
-const { ensureActiveSession, ensureSessionForChat, relocationNote, sessionOpenedNotice } = await import("./coding-session-open.js");
+const { ensureActiveSession, ensureSessionForChat, recheckRepoForRun, relocationNote, sessionOpenedNotice } = await import("./coding-session-open.js");
 
 const env = {} as Env;
 const repo: CodingRepo = {
@@ -809,5 +809,41 @@ describe("an agent-opened session picks the engine the OWNER set, not a column n
 		return ensureActiveSession(env, "inst", "u", repo).then(() => {
 			expect(engines.resolveEngine).toHaveBeenCalledWith(env, "inst", "u", null);
 		});
+	});
+});
+
+describe("a checkout that was never cloned gets cloned (#828)", () => {
+	// The reported row: a local folder later identified as GitHub — `github_repo` set, no clone URL.
+	const fas: CodingRepo = { ...repo, name: "fas/platform", workdir: "~/dev/stores/fas/platform", provider: "github", githubRepo: "freeappstore-online/platform", repoSlug: "freeappstore-online/platform" };
+	const startBody = () => vi.mocked(runner.callRunner).mock.calls.find((c) => c[1] === "/coding/start")?.[2] as { cloneUrl?: string; workDir?: string };
+
+	it("sends a clone URL derived from github_repo, so the runner can clone into an empty or absent folder", async () => {
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(session("csess_fas"));
+		await ensureActiveSession(env, "inst", "u", fas);
+		expect(startBody()).toMatchObject({ workDir: "~/dev/stores/fas/platform", cloneUrl: "https://github.com/freeappstore-online/platform.git" });
+	});
+
+	it("keeps a stored clone URL, and sends none for a local-only repo — an existing checkout is untouched either way", async () => {
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(session("csess_a"));
+		await ensureActiveSession(env, "inst", "u", { ...fas, cloneUrl: "git@github.com:freeappstore-online/platform.git" });
+		expect(startBody().cloneUrl).toBe("git@github.com:freeappstore-online/platform.git");
+		vi.mocked(runner.callRunner).mockClear();
+		await ensureActiveSession(env, "inst", "u", repo);
+		expect(startBody().cloneUrl).toBeUndefined();
+	});
+
+	it("recheckRepoForRun asks the machine about to run, and records what it says", async () => {
+		vi.mocked(runner.callRunner).mockResolvedValue({ checked: true, path: "/Users/serge-ivo/dev/stores/fas/platform", exists: false } as never);
+		const v = await recheckRepoForRun(env, "inst", "u", { ...fas, cloneStatus: "needs_attention" });
+		expect(v?.state).toBe("missing");
+		expect(vi.mocked(runner.callRunner).mock.calls[0][1]).toBe("/coding/repo-check");
+		expect(store.updateRepoClone).toHaveBeenCalledWith(env, "repo_1", expect.objectContaining({ cloneStatus: "needs_attention", checkedNow: true }));
+	});
+
+	it("recheckRepoForRun does not probe a repo that is not condemned, or when no machine is bound", async () => {
+		expect(await recheckRepoForRun(env, "inst", "u", { ...fas, cloneStatus: "ready" })).toBeNull();
+		vi.mocked(runner.getBoundRunnerConn).mockResolvedValue(null as never);
+		expect(await recheckRepoForRun(env, "inst", "u", { ...fas, cloneStatus: "needs_attention" })).toBeNull();
+		expect(runner.callRunner).not.toHaveBeenCalled();
 	});
 });

@@ -1,4 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { WorkdirVerdict } from "./coding-workdir.js";
+
+// Only the LIVE re-probe is replaced (#828) — it reaches a machine through the relay, which this
+// stub env does not model. Everything else in the module (opening the session) stays real.
+const { recheckRepoForRun } = vi.hoisted(() => ({ recheckRepoForRun: vi.fn(async (): Promise<WorkdirVerdict | null> => null) }));
+vi.mock("./coding-session-open.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./coding-session-open.js")>()),
+	recheckRepoForRun,
+}));
+
 import { DEFAULT_LOOP_DRIVER, loopDriverFor, LOOP_DRIVER_IDS, pickLoopRepo } from "./loop-drivers.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
 import type { Env } from "../types.js";
@@ -495,5 +505,65 @@ describe("one driver per engine — every path that starts a Pilot claims it (#2
 		const runAt = sql.findIndex((q) => q.includes("INSERT INTO agent_loop_runs"));
 		expect(claimAt).toBeGreaterThanOrEqual(0);
 		expect(claimAt).toBeLessThan(runAt);
+	});
+});
+
+describe("the coding driver clones into an empty or absent checkout instead of refusing it (#828)", () => {
+	// Production row, instance 964594b6…: condemned by a machine whose `~` is /Users/serge.
+	const fasRepo = {
+		id: "r1",
+		name: "fas/platform",
+		instance_id: "i1",
+		user_id: "u1",
+		provider: "github",
+		github_repo: "freeappstore-online/platform",
+		repo_slug: "freeappstore-online/platform",
+		clone_url: null,
+		workdir: "~/dev/stores/fas/platform",
+		clone_status: "needs_attention",
+		clone_error: "The configured checkout `/Users/serge/dev/stores/fas/platform` exists but is EMPTY — nothing was ever cloned into it, or its contents were moved away. There is no code at that path to read.",
+	};
+	const live = (state: WorkdirVerdict["state"]): WorkdirVerdict => ({ state, path: "/Users/serge-ivo/dev/stores/fas/platform", detail: state === "not_a_git_repo" ? "has files but is not inside a git working tree" : `is ${state}` });
+
+	beforeEach(() => recheckRepoForRun.mockReset().mockResolvedValue(null));
+
+	it("starts a run when the machine about to run finds the folder EMPTY", async () => {
+		recheckRepoForRun.mockResolvedValue(live("empty"));
+		const { env, created } = stubEnv({ repos: [fasRepo], session: { id: "s1", client_type: "claude", status: "active" } });
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out.ok).toBe(true);
+		expect(created[0].binding).toBe("CODING_SESSION");
+	});
+
+	it("starts a run when the folder is ABSENT on that machine", async () => {
+		recheckRepoForRun.mockResolvedValue(live("missing"));
+		const { env, created } = stubEnv({ repos: [fasRepo], session: { id: "s1", client_type: "claude", status: "active" } });
+		expect((await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base })).ok).toBe(true);
+		expect(created).toHaveLength(1);
+	});
+
+	it("starts a REPAIR run on an empty folder — repair_checkout no longer dead-ends on it", async () => {
+		recheckRepoForRun.mockResolvedValue(live("empty"));
+		const { env, created } = stubEnv({ repos: [fasRepo], session: { id: "s1", client_type: "claude", status: "active" } });
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base, repairCheckout: true });
+		expect(out.ok).toBe(true);
+		expect((created[0].params.goal as { repairCheckout?: boolean }).repairCheckout).toBe(true);
+	});
+
+	it("still refuses a plain folder with files — nothing is ever deleted to make room for a clone", async () => {
+		recheckRepoForRun.mockResolvedValue(live("not_a_git_repo"));
+		const { env, created } = stubEnv({ repos: [fasRepo], session: null });
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base, repairCheckout: true });
+		expect(out.ok).toBe(false);
+		if (!out.ok) expect(out.error).toMatch(/git working tree/);
+		expect(created).toHaveLength(0);
+	});
+
+	it("keeps the stored refusal when the machine could not be asked", async () => {
+		const { env, created } = stubEnv({ repos: [fasRepo], session: null });
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out.ok).toBe(false);
+		if (!out.ok) expect(out.error).toContain("/Users/serge/dev/stores/fas/platform");
+		expect(created).toHaveLength(0);
 	});
 });

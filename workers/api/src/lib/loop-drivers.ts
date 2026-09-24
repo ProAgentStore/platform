@@ -25,7 +25,7 @@ import { clampIterations, hasLoopLimits, PILOT_DEFAULT_MAX_STEPS, type LoopLimit
 import { readLoopLimits } from "./loop-limits-store.js";
 import { delegationTaskRecord } from "./delegation.js";
 import { claimSessionDriver, endSession, listRepos, releaseSessionDriver } from "./coding-store.js";
-import { ensureActiveSession } from "./coding-session-open.js";
+import { ensureActiveSession, recheckRepoForRun } from "./coding-session-open.js";
 import { admitRepoForRun } from "./coding-repo-admission.js";
 import { pausedStartRefusal } from "./instance-pause.js";
 import { noSessionMessage } from "./coding-session-lifecycle.js";
@@ -259,7 +259,13 @@ const codingDriver: LoopDriver = {
 		// The gate is on the RUN, not on the session. The incident's session was `alive: true` —
 		// reattached, reused and useless — so gating only the OPENING of a new session would have
 		// admitted all three of those runs.
-		const admission = admitRepoForRun(repo);
+		//
+		// A stored `needs_attention` is re-asked of the machine that will run (#828): on an unpinned
+		// instance it may be another laptop's verdict, and an EMPTY or ABSENT folder is cloned into
+		// at session start rather than refused. Repair runs go through the same gate — a checkout
+		// that was never cloned has nothing to reconcile until it is.
+		const live = await recheckRepoForRun(env, instanceId, userId, repo).catch(() => null);
+		const admission = admitRepoForRun(repo, live);
 		if (!admission.ok) return { ok: false, status: 409, error: admission.message };
 
 		// Open one if there isn't one. Requiring a live session made delegation SINGLE-USE — the

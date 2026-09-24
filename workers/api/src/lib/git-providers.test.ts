@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	cloneUrlForRepo,
 	GIT_PROVIDERS,
 	gitProviderFor,
 	hostedFeatureUnavailable,
@@ -216,5 +217,29 @@ describe("hostedFeatureUnavailable — an unavailable surface says WHY, honestly
 
 	it("still tells a local checkout the actionable thing", () => {
 		expect(hostedFeatureUnavailable(gitProviderFor("local"), "issues")).toMatch(/local checkout/);
+	});
+});
+
+describe("cloneUrlForRepo — somewhere to clone from, even when the row stored no URL (#828)", () => {
+	it("keeps a stored clone URL verbatim — ssh included, so the machine's own keys still clone it", () => {
+		expect(cloneUrlForRepo({ provider: "github", githubRepo: "o/r", cloneUrl: "git@github.com:o/r.git" })).toBe("git@github.com:o/r.git");
+	});
+
+	it("derives GitHub's https remote for the reported row: github_repo set, clone_url NULL", () => {
+		// Production, instance 964594b6…: added as a local folder, identified later, never given a URL.
+		expect(cloneUrlForRepo({ provider: "github", githubRepo: "freeappstore-online/platform", repoSlug: "freeappstore-online/platform", cloneUrl: null })).toBe(
+			"https://github.com/freeappstore-online/platform.git",
+		);
+	});
+
+	it("derives on the provider's own host for GitLab (nested namespaces) and Bitbucket", () => {
+		expect(cloneUrlForRepo({ provider: "gitlab", repoSlug: "grp/sub/proj" })).toBe("https://gitlab.com/grp/sub/proj.git");
+		expect(cloneUrlForRepo({ provider: "bitbucket", repoSlug: "team/repo" })).toBe("https://bitbucket.org/team/repo.git");
+	});
+
+	it("derives nothing for a local-only or unknown-host repo, or a slug that is not owner/name", () => {
+		expect(cloneUrlForRepo({ provider: "local" })).toBeUndefined();
+		expect(cloneUrlForRepo({ provider: "other", repoSlug: "a/b" })).toBeUndefined();
+		expect(cloneUrlForRepo({ provider: "github", repoSlug: "just-a-name" })).toBeUndefined();
 	});
 });
