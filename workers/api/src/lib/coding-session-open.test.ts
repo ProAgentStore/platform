@@ -158,6 +158,21 @@ describe("ensureActiveSession — who owns the session (#271, #275)", () => {
 		expect(body.emptyCheckoutCloneUrl).toBe("https://github.com/o/r.git");
 	});
 
+	it("derives a clone URL for a managed binding with no local folder (#828)", async () => {
+		// 754bdb6 correctly stopped sending a derived `cloneUrl` beside an owner folder, because an
+		// older runner could mistake a non-git monorepo subfolder for a clone target. That condition
+		// does not apply when there is no folder: this is the runner-managed clone path, and legacy
+		// bindings frequently have only their GitHub coordinates.
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(session("csess_managed"));
+		await ensureActiveSession(env, "inst", "u", { ...repo, workdir: undefined, githubRepo: "o/r", webUrl: "https://github.com/o/r" });
+		const body = vi.mocked(runner.callRunner).mock.calls.find((c) => c[1] === "/coding/start")?.[2] as {
+			cloneUrl?: string;
+			emptyCheckoutCloneUrl?: string;
+		};
+		expect(body.cloneUrl).toBe("https://github.com/o/r.git");
+		expect(body.emptyCheckoutCloneUrl).toBeUndefined();
+	});
+
 	it("refuses a GitHub repo stuck with no coordinates and no local path — fail-closed (#760)", async () => {
 		// THE DEFECT this test pins: a repo record that is (a) a GitHub provider, (b) has no
 		// `workdir` (it's supposed to be a managed remote clone), and (c) has no resolved

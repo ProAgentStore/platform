@@ -83,6 +83,10 @@ const REMEDY =
  * the stored one may be another machine's, or days old.
  */
 export function wouldCloneInto(repo: AdmissibleRepo, live: WorkdirVerdict | null | undefined): boolean {
+	// A binding with no owner-configured folder is a managed clone. Unlike a local path, there is
+	// no directory to re-check: the runner creates its managed destination on first open. A stale
+	// local-path verdict must not strand that binding once it has been moved to managed cloning.
+	if (!repo.workdir && cloneSourceFor(repo)) return true;
 	return Boolean(live && (live.state === "missing" || live.state === "empty") && cloneSourceFor(repo));
 }
 

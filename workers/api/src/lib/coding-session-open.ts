@@ -265,9 +265,11 @@ export async function startSessionOnRunner(
 		const started = await callRunner<{ resumed?: unknown; seeded?: unknown }>(conn, "/coding/start", {
 			sessionId: session.id,
 			repoId: repo.id,
-			// Local checkout → run in that dir (no clone). Else clone to a managed dir.
+			// Local checkout → run in that dir (no clone). Else clone to a managed dir. Use the
+			// derived source here too: older bindings commonly have `github_repo`/`web_url` but no
+			// stored clone URL, and a no-folder binding is specifically the managed-clone path.
 			workDir: repo.workdir || undefined,
-			cloneUrl: repo.cloneUrl,
+			cloneUrl: repo.workdir ? repo.cloneUrl : cloneSourceFor(repo),
 			// A local checkout that is absent or empty on this machine is cloned into (#828). Its own
 			// field so a runner older than that ignores it rather than refusing a non-empty folder.
 			emptyCheckoutCloneUrl: repo.workdir ? cloneSourceFor(repo) : undefined,

@@ -85,6 +85,13 @@ describe("admitRepoForRun — an absent or EMPTY checkout with a clone source is
 		expect(admitRepoForRun(empty, live("missing"))).toEqual({ ok: true });
 	});
 
+	it("admits a managed binding with no folder when it can derive a clone source", () => {
+		// This is not permission to overwrite a local folder: without `workdir` the runner creates
+		// its own managed destination. It also repairs legacy rows whose old local-path verdict
+		// survived after the folder was cleared.
+		expect(admitRepoForRun({ ...empty, workdir: undefined })).toEqual({ ok: true });
+	});
+
 	it("keeps refusing without a live verdict, or with one that a clone cannot fix", () => {
 		expect(admitRepoForRun(empty).ok).toBe(false);
 		expect(admitRepoForRun(empty, live("unverified")).ok).toBe(false);

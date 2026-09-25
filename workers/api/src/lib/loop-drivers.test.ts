@@ -48,6 +48,7 @@ function stubEnv(
 ) {
 	const sql: string[] = [];
 	const created: Array<{ binding: string; params: Record<string, unknown> }> = [];
+	const commands: Array<{ path?: string; body?: unknown }> = [];
 	const runnerOnline = opts.runnerOnline ?? true;
 	const hasRuntimeRow = opts.hasRuntimeRow ?? true;
 	const runtimeRow = hasRuntimeRow
@@ -93,7 +94,8 @@ function stubEnv(
 			get: () => ({
 				async fetch(req: Request) {
 					if (new URL(req.url).pathname === "/status") return new Response(JSON.stringify({ connected: runnerOnline }));
-					const cmd = (await req.clone().json().catch(() => ({}))) as { path?: string };
+					const cmd = (await req.clone().json().catch(() => ({}))) as { path?: string; body?: unknown };
+					commands.push({ path: cmd.path, body: cmd.body });
 					if (cmd.path === "/coding/repo-check" && opts.repoCheck) return new Response(JSON.stringify(opts.repoCheck));
 					return new Response(JSON.stringify({ ok: true }));
 				},
@@ -102,7 +104,7 @@ function stubEnv(
 		AGENT_LOOP: wf("AGENT_LOOP"),
 		CODING_SESSION: wf("CODING_SESSION"),
 	} as unknown as Env;
-	return { env, sql, created };
+	return { env, sql, created, commands };
 }
 
 const base = { objective: "get the suite green", budgetId: "b1", depth: 0, instanceId: "i1", userId: "u1" };
@@ -326,6 +328,43 @@ describe("the coding driver admits an absent or EMPTY checkout it can clone into
 		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
 		expect(out.ok).toBe(true);
 		expect(created).toHaveLength(1);
+	});
+
+	it("carries an empty local checkout through preflight and into the session open", async () => {
+		// This follows the actual run-admission path, not only `admitRepoForRun`: the fresh runner
+		// verdict permits the start and the owner-folder clone source reaches `/coding/start` in its
+		// compatibility field. A normal cloneUrl here would make old runners try to clone over a
+		// non-empty monorepo subfolder.
+		const { env, commands } = stubEnv({ repos: [emptyRepo], session: { id: "s1", client_type: "claude", status: "active" }, repoCheck: check({}) });
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out.ok).toBe(true);
+		const start = commands.find((command) => command.path === "/coding/start")?.body as {
+			workDir?: string;
+			cloneUrl?: string;
+			emptyCheckoutCloneUrl?: string;
+		};
+		expect(start.workDir).toBe("~/dev/stores/fas/platform");
+		expect(start.cloneUrl).toBeUndefined();
+		expect(start.emptyCheckoutCloneUrl).toBe("https://github.com/freeappstore-online/platform.git");
+	});
+
+	it("recovers a stale no-folder binding through the managed-clone session open", async () => {
+		// A legacy binding can retain `needs_attention` from the local path it used to have. With no
+		// owner folder, the runner owns its destination, so it needs no repo-check and must receive a
+		// derived normal cloneUrl rather than the local-only compatibility field.
+		const managed = { ...emptyRepo, workdir: null, clone_url: null };
+		const { env, commands } = stubEnv({ repos: [managed], session: { id: "s1", client_type: "claude", status: "active" } });
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out.ok).toBe(true);
+		expect(commands.some((command) => command.path === "/coding/repo-check")).toBe(false);
+		const start = commands.find((command) => command.path === "/coding/start")?.body as {
+			workDir?: string;
+			cloneUrl?: string;
+			emptyCheckoutCloneUrl?: string;
+		};
+		expect(start.workDir).toBeUndefined();
+		expect(start.cloneUrl).toBe("https://github.com/freeappstore-online/platform.git");
+		expect(start.emptyCheckoutCloneUrl).toBeUndefined();
 	});
 
 	it("still refuses when the repo names no source to clone from", async () => {
