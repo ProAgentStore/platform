@@ -82,7 +82,8 @@ function makeFetchStub(): FetchStub {
 		const url = typeof input === "string" ? input : input.toString();
 		const method = (init?.method || "GET").toUpperCase();
 		stub.calls.push({ url, method, body: (init?.body as string | undefined) ?? null, headers: new Headers(init?.headers) });
-		const rule = rules.find((r) => r.match(url, method));
+		const path = new URL(url).pathname;
+		const rule = rules.find((r) => r.match(url, method) || r.match(path, method));
 		return new Response(JSON.stringify(rule ? rule.body : { ok: true }), {
 			status: rule?.status ?? 200,
 			headers: { "Content-Type": "application/json" },
@@ -241,8 +242,8 @@ describe("PagsMcp.init — tool registration", () => {
 	 * or registered — so the next request starts over instead of inheriting the truncation.
 	 */
 	describe("userGroups survives a transient roster failure (#759) and refuses rather than latches (#803)", () => {
-		const rosterCalls = (h: Awaited<ReturnType<typeof setup>>) =>
-			h.fetchStub.calls.filter((c) => c.url.endsWith("/v1/instances/my/instances")).length;
+	const rosterCalls = (h: Awaited<ReturnType<typeof setup>>) =>
+			h.fetchStub.calls.filter((c) => new URL(c.url).pathname === "/v1/instances/my/instances").length;
 
 		it("retries once, and the gated tools survive", async () => {
 			// The whole ticket, as one case: the first lookup 500s and the coding surface is still
@@ -317,6 +318,12 @@ describe("PagsMcp.init — tool registration", () => {
 			const h = await setup({ groups: ["coding"] });
 			expect(rosterCalls(h)).toBe(1);
 			expect(h.tools.has("coding_session_capture")).toBe(true);
+		});
+
+		it("includes paused instances when deriving the gated tool surface (#826)", async () => {
+			const h = await setup({ groups: ["coding"] });
+			const roster = h.fetchStub.calls.find((c) => new URL(c.url).pathname === "/v1/instances/my/instances");
+			expect(new URL(roster!.url).searchParams.get("includePaused")).toBe("1");
 		});
 	});
 

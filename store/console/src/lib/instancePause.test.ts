@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { isPaused, pausePanel } from "./instancePause";
+import { isPaused, MY_INSTANCES_WITH_PAUSED, pausePanel } from "./instancePause";
 
 /**
  * The Pause control's words and its one comparison (#825).
@@ -103,5 +103,12 @@ describe("the control is wired in", () => {
 		const heading = 'text-danger">Danger zone';
 		expect(tab).toContain("<PauseCard instanceId={instanceId}");
 		expect(tab.indexOf("<PauseCard")).toBeLessThan(tab.indexOf(heading));
+	});
+
+	it("keeps paused instances available to detail and Settings views (#826)", () => {
+		const hook = readFileSync(join(import.meta.dirname, "..", "hooks", "useInstanceRecord.ts"), "utf8");
+		expect(MY_INSTANCES_WITH_PAUSED).toBe("/v1/instances/my/instances?includePaused=1");
+		expect(hook).toContain("MY_INSTANCES_WITH_PAUSED");
+		expect(tab).toContain("MY_INSTANCES_WITH_PAUSED");
 	});
 });

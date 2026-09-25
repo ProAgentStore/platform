@@ -312,16 +312,22 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
  * to MCP's `findInstanceForAgent`, and kept being registered by `pags up`. Cancelling
  * therefore cancelled nothing the user could see, which is why dogfood duplicates
  * accumulated. `?includeCanceled=1` still returns them, so nothing is stranded.
+ *
+ * Paused instances are also hidden by default (#826). They remain owned and can be resumed, so
+ * a caller resolving a specific instance must request `?includePaused=1`; otherwise its detail
+ * page could look missing and strand its Resume control.
  */
 instanceRoutes.get("/my/instances", async (c) => {
 	const session = await requireUser(c);
-	const includeCanceled = ["1", "true", "yes"].includes((c.req.query("includeCanceled") ?? "").toLowerCase());
+	const flag = (name: string) => ["1", "true", "yes"].includes((c.req.query(name) ?? "").toLowerCase());
+	const includeCanceled = flag("includeCanceled");
+	const includePaused = flag("includePaused");
 	const { results } = await c.env.DB.prepare(
 		`SELECT i.id, i.agent_id, i.status, i.created_at, i.last_activity_at, i.config AS instance_config,
             a.name, a.slug, a.description, a.category, a.icon, a.icon_bg, a.config
      FROM agent_instances i
      JOIN agents a ON a.id = i.agent_id
-     WHERE i.user_id = ?1${includeCanceled ? "" : " AND i.status != 'canceled'"}
+     WHERE i.user_id = ?1${includeCanceled ? "" : " AND i.status != 'canceled'"}${includePaused ? "" : " AND i.status != 'paused'"}
      ORDER BY COALESCE(i.last_activity_at, i.updated_at) DESC`,
 	)
 		.bind(session.uid)

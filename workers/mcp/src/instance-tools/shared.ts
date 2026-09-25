@@ -50,8 +50,10 @@ export async function findInstanceForAgent(
 	token: string,
 	agentId: string,
 ): Promise<InstanceSummary | null> {
+	// Resolution must include paused rows: a paused instance is still owned and remains a valid
+	// target for resume and other instance-scoped MCP operations (#826).
 	const data = (await authedCall(
-		"/v1/instances/my/instances",
+		"/v1/instances/my/instances?includePaused=1",
 		token,
 		{},
 		env,

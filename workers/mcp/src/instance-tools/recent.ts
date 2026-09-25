@@ -138,7 +138,8 @@ export function registerRecentTools(server: McpServer, ctx: InstanceToolsCtx): v
 				});
 			}
 
-			const roster = (await authedCall("/v1/instances/my/instances", sessionToken, {}, env)) as {
+			// The roster resolves stored ids/slugs. Paused instances remain valid MCP targets (#826).
+			const roster = (await authedCall("/v1/instances/my/instances?includePaused=1", sessionToken, {}, env)) as {
 				instances?: InstanceSummary[];
 				error?: string;
 			};

@@ -43,7 +43,10 @@ function makeFetchStub(): FetchStub {
 		const method = (init?.method || "GET").toUpperCase();
 		const body = (init?.body as string | undefined) ?? null;
 		stub.calls.push({ url, method, body, headers: new Headers(init?.headers) });
-		const rule = rules.find((r) => r.match(url, method));
+		// Most route tests deliberately name a path, not its query string. Let their matchers
+		// continue to express that intent while keeping the captured URL exact for assertions.
+		const path = new URL(url).pathname;
+		const rule = rules.find((r) => r.match(url, method) || r.match(path, method));
 		const status = rule?.status ?? stub.default.status;
 		const payload = rule ? rule.body : stub.default.body;
 		return new Response(JSON.stringify(payload), {
@@ -227,6 +230,16 @@ describe("read proxies", () => {
 		expect(res.structuredContent).toEqual({ instances });
 	});
 
+	it("my_instances exposes include_paused and requests the paused-inclusive roster only when asked (#826)", async () => {
+		const h = setup();
+		const instances = [{ id: "active-1", agent_id: "a1", status: "active" }, { id: "paused-1", agent_id: "a2", status: "paused" }];
+		h.fetchStub.respond((u) => u.includes("includePaused=1"), { body: { instances } });
+		const res = (await h.tools.get("my_instances")!.handler({ include_paused: true })) as { structuredContent?: unknown };
+		expect(h.tools.get("my_instances")!.schema).toHaveProperty("include_paused");
+		expect(h.fetchStub.calls[0].url).toBe("https://api.test/v1/instances/my/instances?includePaused=1");
+		expect(res.structuredContent).toEqual({ instances });
+	});
+
 	it("my_instances answers an empty list with the advice in text and the shape in structure", async () => {
 		// Prose and structure disagree here on purpose: "subscribe first" is the useful answer
 		// for a reader, `{instances: []}` is the useful answer for a caller, and a schema'd
@@ -242,7 +255,8 @@ describe("read proxies", () => {
 		const h = setup();
 		h.fetchStub.respond((u) => u.endsWith("/my/instances"), { body: { instances: [] } });
 		const res = await h.tools.get("my_instances")!.handler({});
-		expect(res.content[0].text).toContain("No subscribed instances");
+		expect(res.content[0].text).toContain("No active instances");
+		expect(res.content[0].text).toContain("include_paused");
 		expect(h.fetchStub.calls).toHaveLength(1);
 	});
 

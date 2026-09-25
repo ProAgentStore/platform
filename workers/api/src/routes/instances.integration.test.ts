@@ -103,7 +103,12 @@ function buildApp(opts: Opts = {}) {
 						},
 						async all() {
 							reads.push(sql);
-							if (sql.includes("FROM agent_instances i")) return { results: opts.myInstances ?? [] };
+							if (sql.includes("FROM agent_instances i")) {
+								// Honour the list route's status predicates just as D1 does. This proves which
+								// rows a caller sees, not merely which SQL fragment was composed (#826).
+								const excluded = [...sql.matchAll(/i\.status != '(\w+)'/g)].map((m) => m[1]);
+								return { results: (opts.myInstances ?? []).filter((row) => !excluded.includes(String(row.status))) };
+							}
 							// The per-USER ATS tips cache. Non-empty so an ALLOWED read is
 							// distinguishable from a refusal — both return `{tips: […]}`, so a test
 							// asserting only the shape passes even when the gate refuses everything.
@@ -423,6 +428,36 @@ describe("GET /v1/instances/my/instances (integration)", () => {
 		await get(app, env, "/v1/instances/my/instances?includeCanceled=1", await tokenFor("u1"));
 		const listSql = reads.find((s) => s.includes("FROM agent_instances i"));
 		expect(listSql).not.toContain("canceled");
+	});
+
+	// #826: a paused instance is parked, not gone — hidden from the default working list,
+	// returned on request, and visible by default again as soon as it is resumed.
+	const row = (id: string, status: string) => ({
+		id, agent_id: "a1", status, created_at: "", instance_config: "{}",
+		name: "Coder", slug: "coder", description: "", category: "code", icon: "", icon_bg: "", config: "{}",
+	});
+	const listIds = async (rows: Array<Record<string, unknown>>, query = "") => {
+		const { app, env } = buildApp({ myInstances: rows });
+		const res = await get(app, env, `/v1/instances/my/instances${query}`, await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		return ((await res.json()) as { instances: Array<{ id: string }> }).instances.map((instance) => instance.id);
+	};
+
+	it("excludes paused instances by default", async () => {
+		expect(await listIds([row("active-1", "active"), row("paused-1", "paused")])).toEqual(["active-1"]);
+	});
+
+	it("includePaused=true returns paused instances", async () => {
+		expect(await listIds([row("active-1", "active"), row("paused-1", "paused")], "?includePaused=true")).toEqual(["active-1", "paused-1"]);
+	});
+
+	it("includePaused still excludes canceled instances", async () => {
+		expect(await listIds([row("paused-1", "paused"), row("gone-1", "canceled")], "?includePaused=1")).toEqual(["paused-1"]);
+	});
+
+	it("returns an instance to the default list after it resumes", async () => {
+		expect(await listIds([row("inst-1", "paused")])).toEqual([]);
+		expect(await listIds([row("inst-1", "active")])).toEqual(["inst-1"]);
 	});
 });
 
@@ -1144,4 +1179,3 @@ describe("apply-tips is gated on the DECLARED surface, not on an agent slug", ()
 		expect(await res.json()).toEqual({ tips: [] });
 	});
 });
-

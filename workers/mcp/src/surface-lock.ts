@@ -847,4 +847,9 @@ export const SURFACE_LOCK: Record<string, string> = {
 	//
 	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.50 is published.
 	"0.1.51": "sha256:f0ac19bf3242ac87fe1666430a1133aa32b0858cf695990dc83ab18b55d03ae5",
+	// 0.1.52 (#826, hide paused instances from default listings): ONE existing inputSchema
+	// moved — `my_instances` gains optional boolean `include_paused`; clients can explicitly
+	// request paused, still-owned instances while the default roster stays focused on active work.
+	// No tool name, annotation, outputSchema, or SERVER_INSTRUCTIONS changed.
+	"0.1.52": "sha256:d028f92c5a783860c019ffa7f5e652a813826a3a53417d270dab071b8b6d5f87",
 };

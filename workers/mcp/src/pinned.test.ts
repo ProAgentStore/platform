@@ -115,7 +115,7 @@ async function setup(opts: { pinned?: string; scopes?: string[]; authToken?: str
 	} as unknown as KVNamespace;
 	fetchStub.respond((u) => u.includes("/tools?allowed=true&schemas=true"), opts.listing ?? { body: LISTING });
 	// The platform-wide path must never be consulted by a pinned session.
-	fetchStub.respond((u) => u.endsWith("/v1/instances/my/instances"), { body: { instances: [{ capabilities: { surfaces: ["coding"] } }] } });
+	fetchStub.respond((u) => new URL(u).pathname === "/v1/instances/my/instances", { body: { instances: [{ capabilities: { surfaces: ["coding"] } }] } });
 
 	const tools = new Map<string, CapturedTool>();
 	const fakeServer = {
@@ -198,7 +198,7 @@ describe("PagsMcp.init on a pinned session", () => {
 			expect(tools.has(name), name).toBe(false);
 		}
 		// It never asked the platform-wide question either.
-		expect(fetchStub.calls.some((c) => c.url.endsWith("/v1/instances/my/instances"))).toBe(false);
+		expect(fetchStub.calls.some((c) => new URL(c.url).pathname === "/v1/instances/my/instances")).toBe(false);
 		expect(fetchStub.calls.filter((c) => c.url.includes("/v1/instances/inst-1/tools?allowed=true&schemas=true"))).toHaveLength(1);
 	});
 

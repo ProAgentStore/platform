@@ -78,3 +78,9 @@ export interface PauseResponse {
 	/** False when the state already held — a retry or a double-click, not a failure. */
 	changed?: boolean;
 }
+
+/**
+ * Roster endpoint for a view that must resolve a specific owned instance, including one paused
+ * outside the default working list (#826).
+ */
+export const MY_INSTANCES_WITH_PAUSED = "/v1/instances/my/instances?includePaused=1";
