@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { buildClaudeArgs, engineAdapterFor } from "./engine-adapter.js";
+import { buildClaudeArgs, engineAdapterFor, engineInvocationWarning } from "./engine-adapter.js";
 
 describe("engineAdapterFor", () => {
 	it("keeps Claude on structured stream-json launch arguments", () => {
@@ -47,6 +47,12 @@ describe("engineAdapterFor", () => {
 			"fix it",
 		]);
 		expect(adapter.buildTurnArgs(["exec", "--json", "--sandbox", "danger-full-access"], "fix it").filter((a) => a === "--json")).toHaveLength(1);
+	});
+
+	it("warns when Claude or Codex uses its raw fallback", () => {
+		expect(engineInvocationWarning("claude", "raw")).toMatch(/running raw/i);
+		expect(engineInvocationWarning("codex", "raw")).toMatch(/running raw/i);
+		expect(engineInvocationWarning("grok", "raw")).toBeNull();
 	});
 });
 
@@ -134,6 +140,12 @@ describe("Codex engine adapter", () => {
 	it("tolerates the non-JSON lines that share the one-shot output path", () => {
 		expect(adapter.parseLine("Reading additional input from stdin...")).toEqual([]);
 		expect(adapter.parseLine("2026-09-01T01:49:15Z ERROR oauth refresh failed")).toEqual([]);
+	});
+
+	it("only downgrades after an explicit unsupported-json error", () => {
+		expect(adapter.rejectsStructuredOutput?.("error: unexpected argument '--json' found")).toBe(true);
+		expect(adapter.rejectsStructuredOutput?.("2026-09-01T01:49:15Z ERROR oauth refresh failed")).toBe(false);
+		expect(adapter.rejectsStructuredOutput?.("plain command output mentioning --json")).toBe(false);
 	});
 });
 

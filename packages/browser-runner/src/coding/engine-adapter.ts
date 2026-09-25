@@ -1,4 +1,5 @@
 import type { ClientType } from "./handlers.js";
+import { stripAnsi } from "./transcript-lines.js";
 
 export type EngineMode = "stream-json" | "raw";
 export type EngineInvocationMode = "structured" | "raw";
@@ -16,6 +17,8 @@ export interface EngineAdapter {
 	buildLaunchArgs(userArgs: string[], resumeId: string | null): string[];
 	buildTurnArgs(userArgs: string[], turnText: string): string[];
 	parseLine(line: string): NormalizedEngineEvent[];
+	/** Identifies an unsupported structured-output flag before a one-shot retry. */
+	rejectsStructuredOutput?(line: string): boolean;
 }
 
 export function engineInvocationModeFromAdapter(mode: EngineMode): EngineInvocationMode {
@@ -23,11 +26,11 @@ export function engineInvocationModeFromAdapter(mode: EngineMode): EngineInvocat
 }
 
 export function structuredCapableEngine(clientType: ClientType): boolean {
-	return clientType === "claude";
+	return clientType === "claude" || clientType === "codex";
 }
 
 export function engineInvocationWarning(clientType: ClientType, mode: EngineInvocationMode): string | null {
-	if (mode !== "raw" || clientType !== "claude") return null;
+	if (mode !== "raw" || !structuredCapableEngine(clientType)) return null;
 	return `running raw — structured not available on this machine's ${clientType} CLI`;
 }
 
@@ -184,12 +187,24 @@ function parseCodexLine(line: string): NormalizedEngineEvent[] {
 	return [];
 }
 
+/**
+ * An older Codex CLI exits before doing work when it does not know `--json`. Do not treat every
+ * plain line as a downgrade signal: current Codex can interleave malformed/tool stderr with valid
+ * JSONL, and retrying after that could run a real instruction twice.
+ */
+function codexRejectsJson(line: string): boolean {
+	const plain = stripAnsi(line).toLowerCase();
+	if (!plain.includes("--json")) return false;
+	return /(?:unexpected argument|unknown (?:argument|option)|unrecognized (?:argument|option)|invalid option)/.test(plain);
+}
+
 export const codexEngineAdapter: EngineAdapter = {
 	mode: "stream-json",
 	persistent: false,
 	buildLaunchArgs: (userArgs) => [...userArgs],
 	buildTurnArgs: buildCodexExecArgs,
 	parseLine: parseCodexLine,
+	rejectsStructuredOutput: codexRejectsJson,
 };
 
 export const genericRawEngineAdapter: EngineAdapter = {

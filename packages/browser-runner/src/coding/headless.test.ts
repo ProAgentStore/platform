@@ -49,6 +49,18 @@ process.stdout.write(JSON.stringify({ type: "item.completed", item: { id: "item_
 process.stdout.write(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } }) + "\\n");
 `;
 
+/** An old Codex CLI: it rejects --json before it can execute the prompt. */
+const FAKE_CODEX_OLD_JSON = `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.JSON_FALLBACK_LOG, JSON.stringify(args) + "\\n");
+if (args.includes("--json")) {
+  process.stderr.write("error: unexpected argument '--json' found\\n");
+  process.exit(2);
+}
+process.stdout.write("raw retry: " + args.at(-1) + "\\n");
+`;
+
 /**
  * A raw CLI that REFUSES the turn: prints its reason and exits 1 (#545).
  *
@@ -412,6 +424,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 	let pauserBin: string;
 	let argvBin: string;
 	let codexJsonArgvBin: string;
+	let oldCodexJsonBin: string;
 	let wedgedBin: string;
 	let refuserBin: string;
 	let whichGhBin: string;
@@ -423,6 +436,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		pauserBin = join(dir, "fake-pauser.js");
 		argvBin = join(dir, "fake-argv.js");
 		codexJsonArgvBin = join(dir, "fake-codex-json-argv.js");
+		oldCodexJsonBin = join(dir, "fake-codex-old-json.js");
 		wedgedBin = join(dir, "fake-wedged.js");
 		refuserBin = join(dir, "fake-refuser.js");
 		whichGhBin = join(dir, "fake-which-gh.sh");
@@ -431,6 +445,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		writeFileSync(pauserBin, FAKE_PAUSER);
 		writeFileSync(argvBin, FAKE_ARGV);
 		writeFileSync(codexJsonArgvBin, FAKE_CODEX_JSON_ARGV);
+		writeFileSync(oldCodexJsonBin, FAKE_CODEX_OLD_JSON);
 		writeFileSync(wedgedBin, FAKE_WEDGED);
 		writeFileSync(refuserBin, FAKE_REFUSER);
 		writeFileSync(whichGhBin, FAKE_WHICH_GH);
@@ -439,6 +454,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		chmodSync(pauserBin, 0o755);
 		chmodSync(argvBin, 0o755);
 		chmodSync(codexJsonArgvBin, 0o755);
+		chmodSync(oldCodexJsonBin, 0o755);
 		chmodSync(wedgedBin, 0o755);
 		chmodSync(refuserBin, 0o755);
 		chmodSync(whichGhBin, 0o755);
@@ -649,6 +665,30 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		const argv = JSON.parse(/argv: (\[.*\])/.exec(s.snapshot())?.[1] ?? "[]") as string[];
 		expect(argv).toEqual(["exec", "--json", "--sandbox", "danger-full-access", "-c", "model=o3", "fix the failing test"]);
 		expect(s.takeUsage()).toMatchObject([{ provider: "openai", model: "codex", inputTokens: 1, outputTokens: 1, costUsd: 0 }]);
+		s.stop();
+	}, 15_000);
+
+	it("retries an older Codex CLI as raw only when it explicitly rejects --json", async () => {
+		const log = join(dir, "old-codex-argv.jsonl");
+		const s = new HeadlessSession({
+			id: "codex-old-json",
+			workDir: dir,
+			clientType: "codex",
+			bin: oldCodexJsonBin,
+			command: "codex exec --sandbox danger-full-access",
+			env: { JSON_FALLBACK_LOG: log },
+		});
+		s.start();
+		s.input("use legacy mode");
+		await until(() => s.snapshot().includes("raw retry: use legacy mode"), 8000, "the raw retry to finish");
+		expect(readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line))).toEqual([
+			["exec", "--json", "--sandbox", "danger-full-access", "use legacy mode"],
+			["exec", "--sandbox", "danger-full-access", "use legacy mode"],
+		]);
+		expect(s.snapshot()).toContain("rejected --json; retrying this turn with raw output");
+		expect(s.engineMode).toBe("raw");
+		expect(s.engineModeWarning).toMatch(/running raw/i);
+		expect(s.takeUsage()).toEqual([]);
 		s.stop();
 	}, 15_000);
 

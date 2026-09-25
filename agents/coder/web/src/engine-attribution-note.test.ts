@@ -18,19 +18,19 @@ describe("engineAttributionNote — what the engines panel says about who pays (
 			expect(n?.detail).toMatch(/OPENAI_API_KEY is removed/i);
 			expect(n?.detail).toMatch(/codex login/i);
 			expect(n?.detail).toMatch(/cannot validate/i);
-			expect(n?.detail).toMatch(/no Usage row/i);
+			expect(n?.detail).toMatch(/per-token dollar amount/i);
 		});
 
 		it("names API-key billing and the Codex dollar-reporting limit", () => {
 			const n = engineAttributionNote(cmd, "api-key", null);
 			expect(n?.label).toMatch(/billed per token/i);
 			expect(n?.detail).toMatch(/OpenAI API key/i);
-			expect(n?.detail).toMatch(/does not publish token or cost records/i);
+			expect(n?.detail).toMatch(/not a dollar total/i);
 		});
 
 		it("keeps automatic and machine modes unattributed", () => {
 			expect(engineAttributionNote(cmd, "auto", null)?.label).toMatch(/payer unknown/i);
-			expect(engineAttributionNote(cmd, "machine", null)?.detail).toMatch(/no Usage row/i);
+			expect(engineAttributionNote(cmd, "machine", null)?.detail).toMatch(/cannot identify the payer/i);
 		});
 	});
 

@@ -40,16 +40,15 @@ describe("missingWriteFlag", () => {
 });
 
 describe("engineInvocationMode", () => {
-	it("shows Claude as the sole structured adapter", () => {
+	it("shows the structured adapters the runner actually has", () => {
 		expect(engineInvocationMode("claude --dangerously-skip-permissions")).toBe("structured");
 		expect(engineInvocationMode("npx claude -p")).toBe("structured");
-		expect(engineInvocationMode("codex exec --sandbox danger-full-access")).toBe("raw");
-		expect(engineInvocationMode("FOO=bar npx codex exec")).toBe("raw");
-});
+		expect(engineInvocationMode("codex exec --sandbox danger-full-access")).toBe("structured");
+		expect(engineInvocationMode("FOO=bar npx codex exec")).toBe("structured");
+	});
 
-	it("leaves Codex and other raw-only engines raw", () => {
+	it("leaves unsupported Codex commands and raw-only engines raw", () => {
 		expect(engineInvocationMode("codex")).toBe("raw");
-		expect(engineInvocationMode("codex exec --json")).toBe("raw");
 		expect(engineInvocationMode("codex exec resume thread-1")).toBe("raw");
 		expect(engineInvocationMode("codex exec review")).toBe("raw");
 		expect(engineInvocationMode("gemini --prompt")).toBe("raw");

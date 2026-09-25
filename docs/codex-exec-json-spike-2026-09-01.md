@@ -89,5 +89,12 @@ probe using `--ignore-rules -C <TEMP_REPO>` also captured parseable JSONL-only s
 event paths. The next implementation slice should parse these exact fields and keep the generic raw
 adapter as the fallback for older or incompatible Codex CLI output.
 
+The runner cannot reliably version-check a user's Codex binary before launching it. Its safe
+downgrade is therefore deliberately narrow: when a one-shot `codex exec --json` exits before any
+structured event and explicitly says that `--json` is an unknown/unexpected option, the runner
+retries the same prompt once through the generic raw adapter. Plaintext or malformed lines alone
+never trigger a retry, because current JSON mode can interleave tool/MCP stderr and retrying after
+real work could run a prompt twice.
+
 #730 remains a separate spike. This run proved a `thread_id` exists, not that
 `codex exec resume <thread_id> --json <prompt>` carries context or avoids wrong-session resume.

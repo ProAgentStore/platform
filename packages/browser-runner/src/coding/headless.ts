@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type ClientType, handlerFor } from "./handlers.js";
 import { type EngineAuthResolved, resolveEngineAuth } from "./engine-auth.js";
-import { engineAdapterFor, engineInvocationModeFromAdapter, engineInvocationWarning, type EngineAdapter, type EngineInvocationMode, type EngineMode } from "./engine-adapter.js";
+import { engineAdapterFor, engineInvocationModeFromAdapter, engineInvocationWarning, genericRawEngineAdapter, type EngineAdapter, type EngineInvocationMode, type EngineMode } from "./engine-adapter.js";
 
 export { buildClaudeArgs } from "./engine-adapter.js";
 
@@ -159,8 +159,8 @@ export class HeadlessSession {
 	 */
 	private pendingSeed: string | null = null;
 	/** "stream-json" for Claude (structured) · "raw" for any other CLI (stdout capture). */
-	private readonly mode: EngineMode;
-	private readonly adapter: EngineAdapter;
+	private mode: EngineMode;
+	private adapter: EngineAdapter;
 	private readonly cmdBin: string;
 	private readonly cmdArgs: string[];
 	private readonly binName: string;
@@ -182,6 +182,12 @@ export class HeadlessSession {
 	 * carry a previous turn's line.
 	 */
 	private turnLastLine = "";
+	/** True once this session has retried an old Codex CLI without its unsupported `--json` flag. */
+	private fellBackToRaw = false;
+	/** Structured events observed in the current one-shot process. */
+	private sawStructuredEvent = false;
+	/** A Codex CLI explicitly rejected the `--json` flag in the current one-shot process. */
+	private structuredOutputRejected = false;
 	/** Measured engine spend not yet handed to the cloud (#267). Drained by {@link takeUsage}. */
 	private pendingUsage: EngineUsageRecord[] = [];
 	/**
@@ -567,6 +573,8 @@ export class HeadlessSession {
 		// Arm the per-turn line capture BEFORE the spawn, so a report can only ever carry a line
 		// this turn produced (#545).
 		this.turnLastLine = "";
+		this.sawStructuredEvent = false;
+		this.structuredOutputRejected = false;
 		const proc = spawn(this.cmdBin, this.adapter.buildTurnArgs(this.cmdArgs, text), {
 			cwd: this.config.workDir,
 			env: this.spawnEnv,
@@ -629,6 +637,19 @@ export class HeadlessSession {
 			// codex process still editing the repo, invisible to `alive`, diagnostics and
 			// kill-tmux.
 			if (this.proc !== proc) return;
+			// A runner cannot know the Codex version before spawning it. An old binary reliably
+			// rejects the flag before it executes the prompt, so retrying only this precise failure
+			// is safe. Do NOT downgrade merely because a line failed JSON parsing: current Codex can
+			// interleave tool/MCP stderr with valid JSONL, and a second run could repeat real work.
+			if (!this.fellBackToRaw && code && !this.sawStructuredEvent && this.structuredOutputRejected) {
+				this.fellBackToRaw = true;
+				this.adapter = genericRawEngineAdapter;
+				this.mode = this.adapter.mode;
+				this.proc = null;
+				this.push(`[${this.config.clientType} CLI rejected --json; retrying this turn with raw output]`);
+				this.runOneShot(text);
+				return;
+			}
 			// THE EXIT CODE STOPS BEING ONLY PROSE HERE (#545). Recorded after the staleness guard
 			// on purpose: a turn aborted by its successor (see the kill above) must not overwrite
 			// the report of the turn that replaced it — the loser's outcome is about a turn nobody
@@ -689,8 +710,10 @@ export class HeadlessSession {
 			const line = this.buf.slice(0, nl).trim();
 			this.buf = this.buf.slice(nl + 1);
 			if (!line) continue;
-			if (this.mode === "stream-json") this.handle(line);
-			else this.pushRaw(line); // raw engine — the line IS the terminal output
+			if (this.mode === "stream-json") {
+				if (this.handle(line)) this.sawStructuredEvent = true;
+				else if (this.adapter.rejectsStructuredOutput?.(line)) this.structuredOutputRejected = true;
+			} else this.pushRaw(line); // raw engine — the line IS the terminal output
 		}
 		// A TUI/raw engine may render without newlines; surface the partial output and cap
 		// growth at 16KB. Claude's stream-json, though, emits ONE JSON object per line and a
@@ -717,8 +740,9 @@ export class HeadlessSession {
 		if (this.transcript.length > 4000) this.transcript = this.transcript.slice(-3000);
 	}
 
-	private handle(line: string): void {
-		for (const ev of this.adapter.parseLine(line)) {
+	private handle(line: string): boolean {
+		const events = this.adapter.parseLine(line);
+		for (const ev of events) {
 			switch (ev.kind) {
 			case "session":
 				if (this.config.clientType === "claude") {
@@ -779,6 +803,7 @@ export class HeadlessSession {
 		// multi-line block (a result, or a long assistant reply) rather than one line — the
 		// character bound that matters is `MAX_PANE` in runtime.ts, applied on the way out.
 		if (this.transcript.length > 4000) this.transcript = this.transcript.slice(-3000);
+		return events.length > 0;
 	}
 
 	private push(line: string): void {

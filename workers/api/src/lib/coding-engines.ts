@@ -91,10 +91,15 @@ export function deriveClientType(command: string): CodingClientType {
 
 export type EngineInvocationMode = "structured" | "raw";
 
+const CODEX_RAW_SUBCOMMANDS = new Set(["resume", "fork", "review", "help"]);
+
 /** The invocation path this command should take on a current runner (#731). */
-export function expectedEngineInvocationMode(clientType: CodingClientType, _launchCommand: string | null | undefined): EngineInvocationMode {
+export function expectedEngineInvocationMode(clientType: CodingClientType, launchCommand: string | null | undefined): EngineInvocationMode {
 	if (clientType === "claude") return "structured";
-	return "raw";
+	if (clientType !== "codex") return "raw";
+	if (!launchCommand?.trim()) return "structured";
+	const { args } = commandEngineParts(launchCommand);
+	return args[0] === "exec" && !CODEX_RAW_SUBCOMMANDS.has(args[1] ?? "") ? "structured" : "raw";
 }
 
 export interface EngineInvocationReport {
@@ -115,7 +120,7 @@ export function engineInvocationWarning(
 	resolved: EngineInvocationMode | null,
 	expected: EngineInvocationMode = "structured",
 ): string | null {
-	if (resolved !== "raw" || expected !== "structured" || clientType !== "claude") return null;
+	if (resolved !== "raw" || expected !== "structured" || (clientType !== "claude" && clientType !== "codex")) return null;
 	return `running raw — structured not available on this machine's ${clientType} CLI`;
 }
 

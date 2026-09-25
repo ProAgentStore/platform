@@ -93,17 +93,21 @@ describe("classifyEngineMetering", () => {
 		expect(classifyEngineMetering("terminal", "").metered).toBe(false);
 	});
 
-	it("does not meter Codex, regardless of its launch command", () => {
-		// Until its structured adapter lands, the generic raw fallback never parses Codex stdout.
+	it("does not meter a Codex session that is not launched as `exec --json`", () => {
+		// Same binary, opposite verdict: `codex exec --json` emits per-turn tokens, `codex chat`
+		// emits prose. The engine NAME cannot answer this, which is why the launch command is an
+		// input to the classifier rather than a check performed around it.
 		const v = classifyEngineMetering("headless", "codex", "codex chat");
 		expect(v.metered).toBe(false);
 		expect(v.reason.length).toBeGreaterThan(20);
-		expect(classifyEngineMetering("headless", "codex", "codex exec --json").metered).toBe(false);
+		expect(classifyEngineMetering("headless", "codex", "codex exec --json").metered).toBe(true);
 	});
 
-	it("keeps a missing launch command unmetered for Codex", () => {
-		expect(classifyEngineMetering("headless", "codex", null).metered).toBe(false);
-		expect(classifyEngineMetering("headless", "codex", "  ").metered).toBe(false);
+	it("reads a missing launch command as the default invocation, so old rows do not reclassify", () => {
+		// The argument arrived after these sessions were written. Treating "not recorded" as raw
+		// would retroactively turn every measured Codex session into an unmetered one.
+		expect(classifyEngineMetering("headless", "codex", null).metered).toBe(true);
+		expect(classifyEngineMetering("headless", "codex", "  ").metered).toBe(true);
 	});
 
 	it("does not read an unrecognised engine as Claude, whatever the launch command says", () => {
