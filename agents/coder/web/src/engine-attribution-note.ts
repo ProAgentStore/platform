@@ -19,7 +19,8 @@
 // know. `hasClaudeCodeToken: null` means "not looked up yet" and produces the both-ways sentence
 // rather than a confident half of it.
 
-import { isClaudeEngine } from "@proagentstore/sdk/ui";
+import { engineInvocationMode, isClaudeEngine } from "@proagentstore/sdk/ui";
+import { signInEngine } from "./engine-sign-in";
 import type { EngineAuth } from "./types";
 
 export interface EngineAttributionNote {
@@ -35,9 +36,51 @@ export interface EngineAttributionNote {
 const STORE_IT = "Save one under Profile → API Keys (`claude setup-token`).";
 
 /**
+ * Codex's line (#732). It differs from Claude's in one fact that decides every sentence: Codex has
+ * no subscription token for the platform to inject or the runner to observe. Its ChatGPT sign-in
+ * is `~/.codex/auth.json` on the runner, written by `codex login`, so every mode but `api-key`
+ * resolves to `machine-login` and a NULL payer — the platform cannot tell a ChatGPT login from an
+ * API key saved inside the CLI, and says so rather than guessing.
+ *
+ * Whether `codex login` has been run is not detectable from here either (no runner-side probe
+ * exists), so the subscription note tells the user to check rather than implying it was checked.
+ */
+function codexAttributionNote(mode: EngineAuth): EngineAttributionNote {
+	if (mode === "api-key") {
+		return {
+			attributable: true,
+			label: "Charged spend, visible on Usage",
+			detail: "Turns are billed per token to your OpenAI API key, so they count towards the charged total on the Usage page.",
+		};
+	}
+	if (mode === "subscription") {
+		return {
+			attributable: false,
+			label: "No per-token charge — draws your ChatGPT plan",
+			detail:
+				"Codex runs on the runner machine's `codex login`. If you also have an OpenAI API key saved, this mode prevents it from being used — Codex runs on your ChatGPT plan instead. The platform can't see whether `codex login` has been run on that machine: run it there first, or the engine falls back to whatever the CLI has or fails to start. Usage lists these turns under \"Payer not established\", because the login type can't be confirmed from outside the CLI.",
+		};
+	}
+	if (mode === "machine") {
+		return {
+			attributable: false,
+			label: "Attribution unknown",
+			detail:
+				"The CLI uses whatever `codex login` stored on that machine — a ChatGPT sign-in or an OpenAI API key saved in the CLI. The platform can't tell which, so Usage records these turns as \"Payer not established\". Pick ChatGPT subscription to say it is your plan, or OpenAI API key to bill a key you saved under Profile → API Keys.",
+		};
+	}
+	return {
+		attributable: false,
+		label: "Attribution unknown",
+		detail:
+			"Codex uses its ChatGPT login if `codex login` has been run on that machine, else whatever the CLI has. No saved OpenAI API key is injected in this mode. Usage records these turns as \"Payer not established\".",
+	};
+}
+
+/**
  * The attribution line for a preset, or null when there is nothing honest to say.
  *
- * Null for a non-Claude engine, and that is not an omission: no ledger row is written for a raw
+ * Null for a raw (non-Claude, non-`codex exec`) engine, and that is not an omission: no ledger row is written for a raw
  * engine at all (`engineMeteringNote` says so, in the line directly above this one), so there is
  * nothing to attribute. Two notes both saying "you will not see this" would be one message too
  * many. Null for a blank command for the same reason `engineMeteringNote` is — a preset the user
@@ -48,8 +91,12 @@ export function engineAttributionNote(
 	auth: EngineAuth | undefined,
 	hasClaudeCodeToken: boolean | null,
 ): EngineAttributionNote | null {
-	if (!command.trim() || !isClaudeEngine(command)) return null;
+	if (!command.trim()) return null;
 	const mode = auth ?? "auto";
+	// Codex's `exec --json` preset is structured, so its turns ARE ledgered and the payer question
+	// is real. A raw Codex command writes no row — same null as every other raw engine.
+	if (signInEngine(command) === "codex") return engineInvocationMode(command) === "structured" ? codexAttributionNote(mode) : null;
+	if (!isClaudeEngine(command)) return null;
 
 	if (mode === "api-key") {
 		return {

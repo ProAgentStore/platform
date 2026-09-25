@@ -1,25 +1,14 @@
 import { useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
-import { isClaudeEngine, missingWriteFlag } from "@proagentstore/sdk/ui";
+import { missingWriteFlag } from "@proagentstore/sdk/ui";
 import type { CodingEngine, EngineAuth } from "./types";
 import { engineContinuityNote } from "./engine-continuity";
 import { engineAttributionNote } from "./engine-attribution-note";
 import { engineInvocationNote } from "./engine-invocation-mode";
 import { engineMeteringNote } from "./engine-metering-note";
+import { signInOptions } from "./engine-sign-in";
 import { Cpu, Gauge, History, Trash2, Wallet } from "lucide-react";
 import Button from "./Button";
-
-/** The engine's vault-key name shown in the api-key option label. */
-function apiKeyName(command: string): string {
-	for (const t of command.trim().split(/\s+/)) {
-		const base = (t.split("/").pop() || "").toLowerCase();
-		if (base.startsWith("claude")) return "Anthropic";
-		if (base.startsWith("gemini")) return "Google";
-		if (base.startsWith("grok")) return "xAI";
-		if (base.startsWith("codex")) return "OpenAI";
-	}
-	return "provider";
-}
 
 /**
  * Instance-wide engine presets editor: label + launch command + sign-in method
@@ -98,7 +87,6 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 
 				<div className="flex flex-col gap-2">
 					{engines.map((e, i) => {
-						const isClaude = isClaudeEngine(e.command);
 						const signInId = `engine-${e.id}-auth`;
 						const needsWrite = missingWriteFlag(e.command);
 						const invocation = engineInvocationNote(e.command);
@@ -150,10 +138,9 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 										onChange={(ev) => update(i, { auth: ev.target.value as EngineAuth })}
 										className="bg-panel border border-line rounded-lg px-2 py-1 text-xs"
 									>
-										<option value="auto">{isClaude ? "Auto — subscription token if saved, else machine login" : "Auto — this machine's login"}</option>
-										<option value="machine">Machine login only</option>
-										{isClaude && <option value="subscription">Subscription token (Claude Code key)</option>}
-										<option value="api-key">{apiKeyName(e.command)} API key (per-token billing)</option>
+										{signInOptions(e.command).map((o) => (
+											<option key={o.value} value={o.value}>{o.label}</option>
+										))}
 									</select>
 									<label className="text-xs text-muted flex items-center gap-1 ml-auto">
 										<input type="radio" name="default-engine" checked={defaultId === e.id} onChange={() => setDefaultId(e.id)} />

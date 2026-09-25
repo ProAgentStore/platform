@@ -41,6 +41,8 @@ const API_KEY_ENV: Partial<Record<ClientType, string>> = {
 /**
  * The env var holding a SUBSCRIPTION token. Only Claude Code has one — for every other engine
  * "subscription" and "machine" both mean the machine's own login, so there is nothing to detect.
+ * Codex's ChatGPT subscription is exactly that: `codex login` on this machine, with OPENAI_API_KEY
+ * stripped, so it resolves to "machine-login" and the cloud reads that as success (#732).
  */
 const SUBSCRIPTION_ENV: Partial<Record<ClientType, string>> = {
 	claude: "CLAUDE_CODE_OAUTH_TOKEN",
