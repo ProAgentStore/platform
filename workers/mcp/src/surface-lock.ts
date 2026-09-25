@@ -906,4 +906,9 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// destructive scope plus its own exact confirmation, supports a no-network dry run, preserves
 	// API refusal blockers, and audits denied as distinct from completed. Appended: 0.1.56 is live.
 	"0.1.57": "sha256:e630b78e7fe2fffaa65f4b5c997c10d24aadf7ac656262ab0e2de1ea0b3acc3e",
+	// 0.1.58 (#849): no new tool — `coding_repo_add`'s inputSchema moved. `path` is now only the
+	// checkout folder and an optional `github_repo` asserts its GitHub identity; the call stores both
+	// halves together or refuses by name, so an MCP-made coding repo can no longer be half a binding.
+	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.57 is published.
+	"0.1.58": "sha256:c16b86c269085797022cb8ee1b70530941239ab9ec779e6842fa7fac2e8c4193",
 };

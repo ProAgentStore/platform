@@ -223,7 +223,7 @@ instance. If it is missing from `tools/list`, subscribe first and reconnect.
 ```text
 my_instances                                                   → the coding instance_id
 system_status          { instance_id }                         # is a runner connected?
-coding_repo_add        { instance_id, path: "~/dev/my-repo" }
+coding_repo_add        { instance_id, path: "~/dev/my-repo" }  # folder + its GitHub origin, or refused
 coding_sessions_list   { instance_id }                         → session_id
 coding_session_message { instance_id, session_id, message: "run the tests" }
 coding_session_capture { instance_id, session_id }             # poll the terminal

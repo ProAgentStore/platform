@@ -439,24 +439,33 @@ export function registerCodingSessionTools(
 
 	server.tool(
 		"coding_repo_add",
-		"Add a repo to a coding instance. Accepts a local path (~/dev/...), GitHub owner/repo, or clone URL.",
+		"Add a repo to a coding instance. A coding repo is BOTH a local checkout the engine runs in AND its GitHub identity, set together in this one call: `path` is the checkout's folder on the connected machine (~/dev/...), and its GitHub owner/repo is read from that checkout's `origin` — pass `github_repo` to assert which repo it must be. Refused, with nothing stored, when either half is missing: an owner/repo or URL with no local folder, a folder that is not a checkout, or a checkout whose origin is not a GitHub repo. The machine must be connected (`pags up`) so the folder can be verified.",
 		{
 			instance_id: z.string().describe("Instance ID"),
-			path: z.string().describe("Local path (~/dev/my-repo), owner/repo, or clone URL"),
+			path: z.string().describe("Local folder of the checkout on the connected machine (~/dev/my-repo or an absolute path)"),
+			github_repo: z.string().optional().describe("GitHub owner/repo the checkout must be. Omit to take it from the checkout's origin remote."),
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 		},
-		async ({ instance_id, path, token }) => {
+		async ({ instance_id, path, github_repo, token }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const denied = await requirePermission(safetyFor(token), "write", "coding_repo_add", { instance_id, path });
+			const denied = await requirePermission(safetyFor(token), "write", "coding_repo_add", { instance_id, path, github_repo });
 			if (denied) return denied;
-			const body: Record<string, string> = {};
-			if (path.startsWith("~") || path.startsWith("/")) body.localPath = path;
-			else if (path.includes("://") || path.includes(".git")) body.cloneUrl = path;
-			else if (path.includes("/")) { body.githubRepo = path; body.cloneUrl = `https://github.com/${path}.git`; }
-			else body.name = path;
+			// Both halves or nothing (#849): an owner/repo in `path` used to bind a repo with no
+			// folder, which then sat at `cloning` forever and no repo tool could reach.
+			const localPath = path.trim();
+			if (!localPath.startsWith("~") && !localPath.startsWith("/")) {
+				return text(
+					`Error: missing the local workdir — \`${localPath}\` is not a folder path. A coding repo needs the checkout's folder as \`path\` (~/dev/...)${localPath.includes("/") ? `; pass \`${localPath}\` as \`github_repo\` alongside it` : ""}.`,
+				);
+			}
+			const githubRepo = github_repo?.trim();
+			if (githubRepo !== undefined && !/^[\w.-]+\/[\w.-]+$/.test(githubRepo)) {
+				return text(`Error: github_repo must be a GitHub owner/repo (e.g. acme/widgets), got \`${githubRepo}\`.`);
+			}
+			const body = { localPath, requireGithub: true, ...(githubRepo ? { githubRepo } : {}) };
 			const r = await authedCall(`/v1/instances/${instance_id}/coding/repos`, sessionToken, { method: "POST", body: JSON.stringify(body) }, env);
-			await audit(safetyFor(token), { tool: "coding_repo_add", action: "completed", input: { instance_id, path } });
+			await audit(safetyFor(token), { tool: "coding_repo_add", action: "completed", input: { instance_id, path, github_repo } });
 			return jsonText(r);
 		},
 	);

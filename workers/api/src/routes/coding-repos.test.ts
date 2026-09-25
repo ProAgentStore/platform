@@ -412,6 +412,92 @@ describe("POST /coding/repos — a local path is CHECKED before it is called rea
 	});
 });
 
+describe("POST /coding/repos requireGithub — a coding repo is stored with BOTH halves or not at all (#849)", () => {
+	const FAKE_CONN = { instanceId: INSTANCE } as never;
+	const HEALTHY = { checked: true, path: "/home/u/dev/stash", exists: true, isDirectory: true, entryCount: 12, insideWorkTree: true, gitChecked: true };
+
+	/** A connected machine whose checkout is `check` and whose origin is `remote`. */
+	function machine(remote: string | null, check: Record<string, unknown> = HEALTHY) {
+		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
+		callRunner.mockImplementation(async (_conn: unknown, path: string) => (path === "/coding/git-remote" ? { remote } : check));
+	}
+	const inserted = (issued: Statement[]) => issued.some((s) => s.sql.startsWith("INSERT INTO coding_repos"));
+
+	it("stores the folder AND the GitHub identity from its origin, verified ready", async () => {
+		machine("git@github.com:proappstore-online/stash.git");
+		const { status, body, row } = await addRepo({ localPath: "~/dev/stash", requireGithub: true });
+		expect(status).toBe(201);
+		expect(row).toMatchObject({
+			workdir: "~/dev/stash",
+			provider: "github",
+			github_repo: "proappstore-online/stash",
+			repo_slug: "proappstore-online/stash",
+			web_url: "https://github.com/proappstore-online/stash",
+		});
+		expect(body.repo?.cloneStatus).toBe("ready");
+	});
+
+	it("accepts a matching github_repo, case-insensitively", async () => {
+		machine("https://github.com/proappstore-online/stash.git");
+		const { status } = await addRepo({ localPath: "~/dev/stash", githubRepo: "ProAppStore-Online/Stash", requireGithub: true });
+		expect(status).toBe(201);
+	});
+
+	it("REFUSES an owner/repo with no folder, naming the missing workdir", async () => {
+		machine("https://github.com/o/r.git");
+		const { status, body, issued } = await addRepo({ githubRepo: "o/r", requireGithub: true });
+		expect(status).toBe(400);
+		expect(body.error).toMatch(/Missing the local workdir/);
+		expect(inserted(issued)).toBe(false);
+	});
+
+	it("REFUSES a folder with no origin, naming the missing GitHub origin", async () => {
+		machine(null);
+		const { status, body, issued } = await addRepo({ localPath: "~/dev/x", requireGithub: true });
+		expect(status).toBe(400);
+		expect(body.error).toMatch(/Missing the GitHub origin/);
+		expect(inserted(issued)).toBe(false);
+	});
+
+	it("REFUSES a folder whose origin is not GitHub", async () => {
+		machine("https://gitlab.com/g/p.git");
+		const { status, body, issued } = await addRepo({ localPath: "~/dev/x", requireGithub: true });
+		expect(status).toBe(400);
+		expect(body.error).toMatch(/not a GitHub repository/);
+		expect(inserted(issued)).toBe(false);
+	});
+
+	it("REFUSES a github_repo the checkout is not a clone of", async () => {
+		machine("https://github.com/o/other.git");
+		const { status, body, issued } = await addRepo({ localPath: "~/dev/x", githubRepo: "o/r", requireGithub: true });
+		expect(status).toBe(400);
+		expect(body.error).toContain("is a checkout of o/other, not o/r");
+		expect(inserted(issued)).toBe(false);
+	});
+
+	it("REFUSES a folder that is not a checkout", async () => {
+		machine("https://github.com/o/r.git", { ...HEALTHY, entryCount: 0, insideWorkTree: false });
+		const { status, body, issued } = await addRepo({ localPath: "~/dev/x", requireGithub: true });
+		expect(status).toBe(400);
+		expect(body.error).toMatch(/Invalid local workdir.*EMPTY/);
+		expect(inserted(issued)).toBe(false);
+	});
+
+	it("REFUSES when no machine is connected to verify either half", async () => {
+		const { status, body, issued } = await addRepo({ localPath: "~/dev/x", requireGithub: true });
+		expect(status).toBe(400);
+		expect(body.error).toMatch(/No machine is connected/);
+		expect(inserted(issued)).toBe(false);
+	});
+
+	it("keeps one binding per GitHub repo (#829)", async () => {
+		machine("https://github.com/o/r.git");
+		const { status, issued } = await addRepo({ localPath: "~/dev/r", requireGithub: true }, [{ id: "repo_old", instance_id: INSTANCE, name: "r", github_repo: "o/r" }]);
+		expect(status).toBe(409);
+		expect(inserted(issued)).toBe(false);
+	});
+});
+
 /**
  * A checkout can be moved or deleted long after it was added — the same state arriving later.
  * The list is the only place that state can be caught, because it is what the console reads.

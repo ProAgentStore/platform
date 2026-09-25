@@ -11,7 +11,7 @@
  * registration ORDER, so moving a block past a sibling pattern is a behaviour change even when
  * the route set is unchanged. `coding.contract.test.ts` pins the order for that reason.
  */
-import type { Context, Hono } from "hono";
+import type { Hono } from "hono";
 import { HttpError } from "../lib/auth.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../lib/runner-client.js";
 import { computeETag, mergeRuns, persistBuildHistory, readBuildHistory, type BuildRun } from "../lib/build-history.js";
@@ -31,25 +31,8 @@ import { patchInstanceConfig } from "../lib/instance-config.js";
 import { parseRepoRef } from "../lib/git-providers.js";
 import { sqlTime } from "../lib/sql-time.js";
 import { getSessionRunnerConn, pickNextIssue, requireOwned } from "./coding-shared.js";
+import { addPairedRepo, duplicateBinding, isUniqueViolation } from "./coding-repo-add.js";
 import type { Env } from "../types.js";
-
-/** The 409 for an add that would bind a GitHub repo this instance already has (#829). */
-function duplicateBinding(c: Context, githubRepo: string, existing: { id: string; name: string }) {
-	return c.json(
-		{
-			error: `${githubRepo} is already bound to this instance${existing.name ? ` as "${existing.name}"` : ""} — use that binding, or remove it first`,
-			githubRepo,
-			existingId: existing.id,
-			existingName: existing.name,
-		},
-		409,
-	);
-}
-
-/** D1 surfaces a unique-index violation only as message text. */
-function isUniqueViolation(e: unknown): boolean {
-	return /UNIQUE constraint failed/i.test(e instanceof Error ? e.message : String(e));
-}
 
 /** "~/dev/stores/pags/platform" → "pags/platform" — a less generic default name. */
 function lastTwoSegments(path: string): string {
@@ -290,6 +273,10 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		const cloneUrlIn = typeof body.cloneUrl === "string" ? body.cloneUrl : undefined;
 		// A local checkout the user already has on the runner machine — run there, no clone.
 		const localPath = typeof body.localPath === "string" ? body.localPath.trim() : "";
+		// Both halves in one call (#849): MCP's `coding_repo_add` sends this, and a coding binding
+		// made that way is either complete — a verified checkout AND its GitHub identity — or not
+		// stored at all. The console's separate local/clone adds below are unchanged.
+		if (body.requireGithub === true) return addPairedRepo(c, instanceId, uid, name, localPath, githubRepoIn);
 		if (localPath) {
 			const created = await createRepo(c.env, instanceId, uid, {
 				// A bare folder name ("platform") is ambiguous — default to the last two
