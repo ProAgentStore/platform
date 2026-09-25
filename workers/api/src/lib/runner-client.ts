@@ -279,7 +279,15 @@ export async function callRunner<T = unknown>(conn: RunnerConn, path: string, bo
 		// prescribing `pags up` to someone already running it: the remedy depends on WHY it is not
 		// attached (`diagnoseAttachment`, #237), which this function cannot see and must not guess.
 		if (relayFailureIsDisconnect(res.status, detail)) {
-			throw new RunnerUnreachableError(`No runner connected — ${NO_SOCKET_MARKER} for this agent.`);
+			// A socket can still exist in the DO while the runner event loop is frozen. RelayDO
+			// verifies that with a bounded ping before accepting a command (#846); retain that
+			// distinction here so a coding-start failure says what actually needs attention.
+			const unresponsive = detail.includes("RUNNER_RELAY_UNRESPONSIVE");
+			throw new RunnerUnreachableError(
+				unresponsive
+					? `Runner relay is connected but not responding — ${NO_SOCKET_MARKER} for this agent.`
+					: `No runner connected — ${NO_SOCKET_MARKER} for this agent.`,
+			);
 		}
 		throw new Error(`Runner ${path} → ${res.status}: ${detail.slice(0, 200)}`);
 	}

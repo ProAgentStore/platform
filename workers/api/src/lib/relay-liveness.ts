@@ -17,12 +17,13 @@
  *
  * ── Two questions, two answers, deliberately different ──
  *
- * `probe()` — asked at CONNECT time — SENDS a ping and waits for the pong. Being wrong here is
- * cheap in one direction only: a false "alive" locks a machine out of its own slot (the bug),
- * while a false "dead" merely hands the slot to a newcomer that wanted it anyway. A relay DO is
- * keyed per (instance, node), so the "incumbent" is another process claiming the SAME hostname —
- * in practice the same machine. #237's promise still holds: a genuinely live runner answers a
- * ping in milliseconds and still gets its 4409.
+ * `probe()` — asked at CONNECT time and before a command is dispatched — SENDS a ping and waits
+ * for the pong. Being wrong here is cheap in one direction only: a false "alive" locks a machine
+ * out of its own slot (the bug), or makes a command wait its much longer execution timeout; a
+ * false "dead" merely hands the slot to a newcomer that wanted it anyway or asks a caller to
+ * retry. A relay DO is keyed per (instance, node), so the "incumbent" is another process claiming
+ * the SAME hostname — in practice the same machine. #237's promise still holds: a genuinely live
+ * runner answers a ping in milliseconds and still gets its 4409.
  *
  * `observe()` — asked at STATUS time — never waits. It pings and judges on the PREVIOUS round
  * trip, because `relayConnected` is called in a per-node LOOP on every tool-call resolution path
@@ -85,10 +86,10 @@ export class RunnerLiveness {
 	}
 
 	/**
-	 * CONNECT-time question: is the incumbent answering right now?
+	 * Explicit liveness question: is the peer answering right now?
 	 *
-	 * `false` means the caller may evict it. Unreachable sockets are `false` immediately — there
-	 * is nothing to wait for.
+	 * `false` means a connect caller may evict it and a command caller must fail fast. Unreachable
+	 * sockets are `false` immediately — there is nothing to wait for.
 	 */
 	async probe(
 		sockets: readonly PingableSocket[],

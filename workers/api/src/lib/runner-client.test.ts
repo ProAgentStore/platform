@@ -119,6 +119,16 @@ describe("callRunner (relay-only)", () => {
 		expect(err?.message).not.toContain("run `pags up`");
 	});
 
+	it("preserves the clear nonresponsive-relay error from the bounded command liveness probe", async () => {
+		const relay = mockRelay(async () => Response.json(
+			{ error: "Runner relay is connected but not responding", code: "RUNNER_RELAY_UNRESPONSIVE" },
+			{ status: 503 },
+		));
+		const err = await callRunner(mockConn({ RELAY: relay }), "/coding/start").then(() => null, (e) => e as Error);
+		expect(isRunnerUnreachable(err)).toBe(true);
+		expect(err?.message).toContain("connected but not responding");
+	});
+
 	it("treats a socket that dropped mid-command (504) as unreachable, but a hung runner as a real error", async () => {
 		const dropped = mockRelay(async () => Response.json({ error: "Runner disconnected" }, { status: 504 }));
 		expect(isRunnerUnreachable(await callRunner(mockConn({ RELAY: dropped }), "/test").catch((e) => e))).toBe(true);

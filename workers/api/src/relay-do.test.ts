@@ -7,6 +7,7 @@
  * rather than the Cloudflare-specific WebSocket plumbing.
  */
 import { describe, expect, it, vi, afterEach } from "vitest";
+import { RunnerLiveness, type PingableSocket } from "./lib/relay-liveness.js";
 
 // ── Minimal relay protocol re-implementation for testing ────────────────
 // Mirrors relay-do.ts logic without importing cloudflare:workers.
@@ -73,6 +74,20 @@ class TestRelay {
 				reject(err);
 			}
 		});
+	}
+
+	/** Mirrors RelayDO's command-time liveness gate (#846), before it creates a pending request. */
+	async commandAfterLivenessProbe(path: string, deadlineMs: number): Promise<CommandResponse> {
+		if (!this.runner || this.runner.closed) throw new Error("No runner connected");
+		const liveness = new RunnerLiveness();
+		const socket: PingableSocket = {
+			send: (data) => this.runner!.send(data),
+			close: () => this.runner?.close(),
+		};
+		if (!(await liveness.probe([socket], { deadlineMs }))) {
+			throw new Error("Runner relay is connected but not responding");
+		}
+		return this.command(path);
 	}
 
 	/** Simulates webSocketMessage from runner. */
@@ -167,6 +182,19 @@ describe("RelayDO protocol", () => {
 		vi.advanceTimersByTime(6000);
 
 		await expect(p).rejects.toThrow("timed out");
+	});
+
+	it("fails a connected but nonresponsive relay at the bounded liveness gate, before /coding/start is dispatched", async () => {
+		vi.useFakeTimers();
+		const relay = new TestRelay();
+		const ws = relay.connect(); // accepts the ping but never returns pong: a zombie relay
+
+		const start = relay.commandAfterLivenessProbe("/coding/start", 25);
+		const rejected = expect(start).rejects.toThrow("connected but not responding");
+		await vi.advanceTimersByTimeAsync(26);
+
+		await rejected;
+		expect(ws.sent).toEqual(["ping"]); // no command was allowed onto the dead connection
 	});
 
 	it("new connection replaces old one and rejects pending commands", async () => {

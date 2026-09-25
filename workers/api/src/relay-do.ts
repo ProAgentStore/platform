@@ -7,7 +7,8 @@
  * which sends a message on the WebSocket and awaits the runner's response.
  */
 import { DurableObject } from "cloudflare:workers";
-import { RunnerLiveness } from "./lib/relay-liveness.js";
+import { relayDispatchObservation } from "./lib/relay-dispatch-observability.js";
+import { PONG_DEADLINE_MS, RunnerLiveness } from "./lib/relay-liveness.js";
 import type { Env } from "./types.js";
 
 interface PendingRequest {
@@ -31,6 +32,7 @@ interface CommandResponse {
 }
 
 const DEFAULT_TIMEOUT_MS = 120_000;
+const RELAY_UNRESPONSIVE_ERROR = "Runner relay is connected but not responding";
 
 /** Accept the upgrade only to close it immediately with a code the client can read. A rejected
  *  upgrade surfaces as 1006 with no reason; an accepted-then-closed socket carries both. */
@@ -164,10 +166,23 @@ export class RelayDO extends DurableObject<Env> {
 		}
 
 		const body = (await request.json()) as { method?: string; path: string; body?: unknown; timeoutMs?: number };
+		const dispatchStartedAt = Date.now();
 		const id = crypto.randomUUID();
 		const timeoutMs = typeof body.timeoutMs === "number" && body.timeoutMs > 0
 			? Math.min(body.timeoutMs, DEFAULT_TIMEOUT_MS)
 			: DEFAULT_TIMEOUT_MS;
+
+		// `/status` must stay nonblocking because it is consulted in per-node loops, so its first
+		// look at a frozen peer is intentionally optimistic. Dispatch is different: before making a
+		// caller wait up to two minutes, require a real pong. This bounded probe closes #846's gap
+		// where `relayConnected=true` could be a zombie WebSocket that never consumed commands.
+		if (!(await this.liveness.probe(sockets, { deadlineMs: PONG_DEADLINE_MS }))) {
+			this.emitDispatchObservation({ path: body.path, timeoutMs, outcome: "unresponsive", dispatchStartedAt });
+			return Response.json(
+				{ error: RELAY_UNRESPONSIVE_ERROR, code: "RUNNER_RELAY_UNRESPONSIVE" },
+				{ status: 503 },
+			);
+		}
 
 		const cmd: CommandRequest = { id, method: body.method || "POST", path: body.path, body: body.body };
 
@@ -192,11 +207,20 @@ export class RelayDO extends DurableObject<Env> {
 				}
 			});
 		} catch (err) {
+			const message = err instanceof Error ? err.message : "Relay command failed";
+			this.emitDispatchObservation({
+				path: body.path,
+				timeoutMs,
+				outcome: message === "Relay command timed out" ? "timeout" : "failed",
+				dispatchStartedAt,
+			});
 			return Response.json(
-				{ error: err instanceof Error ? err.message : "Relay command failed" },
+				{ error: message },
 				{ status: 504 },
 			);
 		}
+
+		this.emitDispatchObservation({ path: body.path, timeoutMs, outcome: "completed", dispatchStartedAt });
 
 		return Response.json(
 			result.error ? { error: result.error } : result.result,
@@ -212,5 +236,21 @@ export class RelayDO extends DurableObject<Env> {
 			pending.reject(new Error(reason));
 		}
 		this.pending.clear();
+	}
+
+	/** Best-effort structured operational events; logging must never affect a command result. */
+	private emitDispatchObservation(input: {
+		path: string;
+		timeoutMs: number;
+		outcome: "completed" | "timeout" | "unresponsive" | "failed";
+		dispatchStartedAt: number;
+	}): void {
+		const observation = relayDispatchObservation({
+			path: input.path,
+			timeoutMs: input.timeoutMs,
+			outcome: input.outcome,
+			latencyMs: Date.now() - input.dispatchStartedAt,
+		});
+		if (observation) console.warn(JSON.stringify(observation));
 	}
 }
