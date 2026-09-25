@@ -263,7 +263,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `clear_instance_messages` | Delete all messages and voice recordings | destructive | yes | `clear_instance_messages` |
 | `delete_instance_message` | Permanently delete the whole turn containing one message (and attached voice audio) | destructive | yes | `delete_instance_message` |
 | `rename_instance` | Set or clear the display name | write | yes | |
-| `set_instance_model` | Change the instance's chat model | write | yes | |
+| `set_instance_model` | Pick the instance's brain model — Sonnet or a cheap tool-capable Cloudflare model, with cost hints; refuses a non-tool model or a Cloudflare pick without Cloudflare credentials | write | yes | |
 | `get_instance_state` | Read DO state (identity, guardrails, permissions) — read-only | — | | |
 | `pause_instance` | Temporarily stop an instance without unsubscribing — blocks new runs, asks live ones to stop; everything is kept (#825) | write | yes | |
 | `resume_instance` | Put a paused instance back to work. Does not restart the runs the pause stopped (#825) | write | yes | |

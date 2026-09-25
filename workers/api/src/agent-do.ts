@@ -1173,6 +1173,7 @@ export class AgentDO extends DurableObject<Env> {
 			state.personality = updates.personality;
 		if (updates.goal !== undefined) state.goal = updates.goal;
 		if (updates.model !== undefined) state.model = updates.model;
+		if (updates.model !== undefined) state.modelChosen = updates.modelChosen === true; // set by the instance route for a validated pick only (#852)
 		// Allow resetting stuck status (e.g., "thinking" after a timeout)
 		if (updates.status !== undefined) state.status = updates.status;
 		if (updates.welcomeMessage !== undefined)

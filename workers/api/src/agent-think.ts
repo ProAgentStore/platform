@@ -448,6 +448,7 @@ export async function runAgentThink(opts: {
 					{ label: "chat.tools", value: body.tools },
 				],
 			},
+			{ honorModel: state.modelChosen === true }, // the owner's brain pick runs where it names (#852)
 		)) as ChatCompletion;
 		if (!truncated && hitOutputCap(r.stopReason)) {
 			truncated = true;

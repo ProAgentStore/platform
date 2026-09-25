@@ -914,7 +914,7 @@ const PINS = {
 	// line harder to read, which is the opposite of what this ratchet is for.
 	// +5 for #754: accept assignedBy:"trigger" from the request body (1 line), cap title (1) and
 	// description (1) at ingest, the updated comment (1), and the AgentTask type annotation (1).
-	"workers/api/src/agent-do.ts": 1263,
+	"workers/api/src/agent-do.ts": 1264, // +1 at #852: `modelChosen`, recorded only with a validated brain pick.
 	// +3 for #308: an import plus the two lines saying why three steps unwrap the fence that the
 	// connectors now apply at the source. Raised rather than split — the growth is a comment and
 	// one import, and splitting the step catalog to absorb three lines would be the tail wagging.
@@ -1146,7 +1146,7 @@ const PINS = {
 	// leaving the pin at 1251 would hand the 394 lines straight back as headroom, and that is
 	// numerically how #138's refactor was undone within hours. The new file is 541 and needs no
 	// entry (LIMIT is 800) — deliberately, so it has to earn one before it grows.
-	"workers/api/src/agent-think.ts": 876, // +1 at #768: `turnContext`, the per-turn half kept out of the cached prompt. +18 at #851: the Workers AI `tool`-role round and its one act-or-answer re-ask; the protocol itself lives in lib/workers-ai-protocol.ts.
+	"workers/api/src/agent-think.ts": 877, // +1 at #768: `turnContext`, the per-turn half kept out of the cached prompt. +18 at #851: the Workers AI `tool`-role round and its one act-or-answer re-ask; the protocol itself lives in lib/workers-ai-protocol.ts. +1 at #852: the owner's brain pick passed to the provider seam.
 	// +44 at #379, and roughly two thirds of it is prose. A machine's identity stopped being its
 	// hostname: the registration body accepts a stable `machineId` plus the hostnames that machine
 	// has worn, the node upsert stores the id (with the COALESCE that stops an OLDER CLI erasing

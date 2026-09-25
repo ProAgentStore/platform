@@ -9,6 +9,7 @@ import { type WorkflowChoice, workflowPickerRows } from "../lib/workflow-picker"
 import { renderMd } from "@proagentstore/sdk/ui";
 import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import { Zap, ArrowLeft } from "lucide-react";
+import { BRAIN_MODELS } from "../../../../workers/api/src/lib/brain-models";
 
 type Tab = "chat" | "knowledge" | "memory" | "tasks" | "settings" | "analytics" | "ops";
 
@@ -20,12 +21,10 @@ const MODELS = [
 	{ value: "claude-haiku-4", label: "Claude Haiku 4 (fast, cheap)" },
 	{ value: "claude-3-5-sonnet", label: "Claude 3.5 Sonnet" },
 	{ value: "claude-3-5-haiku", label: "Claude 3.5 Haiku" },
-	// Local Cloudflare Workers AI — not yet configured; kept for existing agents and future llama integration.
-	{ value: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", label: "Llama 3.3 70B (local)" },
-	{ value: "@cf/meta/llama-4-scout-17b-16e-instruct", label: "Llama 4 Scout 17B (local)" },
+	// Cloudflare Workers AI. The three tool-capable brain models carry lib/brain-models.ts's cost hint (#852).
+	...BRAIN_MODELS.filter((m) => m.provider === "cloudflare").map((m) => ({ value: m.id, label: `${m.label} — ${m.hint}` })),
 	{ value: "@cf/meta/llama-3.2-3b-instruct", label: "Llama 3.2 3B (local, fast)" },
 	{ value: "@cf/mistralai/mistral-small-3.1-24b-instruct", label: "Mistral Small 24B (local)" },
-	{ value: "@cf/qwen/qwen2.5-coder-32b-instruct", label: "Qwen 2.5 Coder 32B (local)" },
 ];
 
 const localRowId = () => (globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `row-${Date.now()}-${Math.random().toString(36).slice(2)}`);

@@ -26,6 +26,7 @@
  * two edges; the chat loop builds its round with `workersAiToolRound`.
  */
 import { TOOL_CAPABLE_CF_DEFAULT } from "../agent-do-prompt.js";
+import { isWorkersAiModel } from "./brain-models.js";
 import { normalizeToolCalls, parseToolCallsFromText } from "./parse-tool-calls.js";
 
 /** Marks a completion that came from Workers AI, so the chat loop answers in the `tool` role. */
@@ -35,7 +36,7 @@ type Message = { role: string; content: unknown; tool_call_id?: unknown };
 
 /** A Workers AI model id as-is; anything else (a brain's Anthropic default) → the tool-capable default. */
 export function workersAiModelFor(model: string): string {
-	return model.startsWith("@cf/") || model.startsWith("@hf/") ? model : TOOL_CAPABLE_CF_DEFAULT;
+	return isWorkersAiModel(model) ? model : TOOL_CAPABLE_CF_DEFAULT;
 }
 
 /** Scout's `tool_call_id` pattern. An id that does not match is omitted rather than rejected. */

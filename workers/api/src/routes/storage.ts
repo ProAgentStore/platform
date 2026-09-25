@@ -9,6 +9,8 @@ import { listActiveRuns } from "../lib/agent-loop-store.js";
 import { runLiveness, runLivenessUnavailable } from "../lib/instance-run-liveness.js";
 import { resolveGithubAccess } from "../lib/github-app.js";
 import { parseGithubUrl, type RepoAuthContext } from "../lib/repo-ingest.js";
+import { BRAIN_MODELS, isWorkersAiModel } from "../lib/brain-models.js";
+import { TOOL_CAPABLE_MODELS } from "../agent-do-prompt.js";
 import type { Env } from "../types.js";
 
 export const storageRoutes = new Hono<{ Bindings: Env }>();
@@ -499,13 +501,35 @@ instanceStorageRoutes.get("/:id/state", async (c) => {
 	return Response.json({ ...state, runs });
 });
 
+/**
+ * Why an instance cannot take `model` as its brain (#852), or null when it can: it must call tools
+ * (a brain that cannot confabulates instead), and a Workers AI pick needs Cloudflare credentials —
+ * without them the pick could never run, and the chat would quietly stay on the other provider.
+ */
+async function brainModelRefusal(env: Env, uid: string, model: unknown): Promise<string | null> {
+	const options = BRAIN_MODELS.map((m) => `${m.id} (${m.hint})`).join("; ");
+	if (typeof model !== "string" || !model.trim()) return `A model id is required. Brain models: ${options}.`;
+	if (!TOOL_CAPABLE_MODELS.has(model)) return `${model} cannot call tools, so it cannot run this agent's brain. Brain models: ${options}.`;
+	if (!isWorkersAiModel(model)) return null;
+	const cf = await env.DB.prepare("SELECT 1 FROM user_api_keys WHERE user_id = ?1 AND provider = 'cloudflare'").bind(uid).first();
+	return cf ? null : `${model} runs on Cloudflare Workers AI, and no Cloudflare credentials are stored. Add your Cloudflare account ID and API token in Profile → API Keys, then pick it again.`;
+}
+
 instanceStorageRoutes.put("/:id/state", async (c) => {
 	const session = await requireUser(c);
 	const instance = await resolveOwnedInstance(c, session);
+	const body = (await c.req.json()) as Record<string, unknown>;
+	// `modelChosen` is this route's verdict, never the caller's: set only for a validated pick.
+	delete body.modelChosen;
+	if (body.model !== undefined) {
+		const refusal = await brainModelRefusal(c.env, session.uid, body.model);
+		if (refusal) throw new HttpError(400, refusal);
+		body.modelChosen = true;
+	}
 	return proxyDO(c, instance.id, "/state", {
 		method: "PUT",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify(await c.req.json()),
+		body: JSON.stringify(body),
 	});
 });
 

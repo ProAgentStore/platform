@@ -18,6 +18,7 @@ import { voiceSummary } from "../lib/voiceSummary";
 import { unsubscribeScope, type RosterInstance } from "../lib/unsubscribeScope";
 import PauseCard from "../components/PauseCard";
 import CodingEngineCard from "../components/CodingEngineCard";
+import BrainModelCard from "../components/BrainModelCard";
 import { FileConnectorPanel } from "../components/FileConnectorPanel";
 import RepoConnectPanel from "../components/RepoConnectPanel";
 import Button from "../components/Button";
@@ -554,6 +555,7 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 
 			{/* Which coding CLI + model (#792) — beside the agent's own settings, because to an owner
 			    it IS one; it is a separate card because it is not settingsSchema state (migration 0126). */}
+			<BrainModelCard instanceId={instanceId} />
 			{isCoding && <CodingEngineCard instanceId={instanceId} />}
 
 			{/* Board maintenance */}

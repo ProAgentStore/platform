@@ -42,6 +42,8 @@ interface Opts {
 	activeRuns?: Array<Record<string, unknown>>;
 	/** Make the runs lookup throw, so the "we did not measure" path can be driven. */
 	runsQueryFails?: boolean;
+	/** Users holding Cloudflare Workers AI credentials — what a Workers AI brain pick needs (#852). */
+	cloudflareUsers?: string[];
 }
 
 function buildApp(opts: Opts = {}) {
@@ -63,6 +65,7 @@ function buildApp(opts: Opts = {}) {
 									const key = args[0] as string;
 									return agents.find((a) => a.id === key || a.slug === key) ?? null;
 								}
+								if (sql.includes("FROM user_api_keys")) return opts.cloudflareUsers?.includes(args[0] as string) ? { 1: 1 } : null;
 								if (sql.includes("FROM agent_instances")) {
 									const [id, uid] = args as [string, string];
 									const inst = instances.find((i) => i.id === id && i.user_id === uid);
@@ -341,6 +344,42 @@ describe("instance storage routes (owner-scoped, different D1 table)", () => {
 		const put = doCalls.find((c) => c.path === "/state" && c.method === "PUT");
 		expect(put).toBeTruthy();
 		expect(rec(rec(put!.body).guardrails).maxLength).toBe(500);
+	});
+
+	describe("PUT state model — a brain pick is capability-verified (#852)", () => {
+		const put = async (model: unknown, extra: Record<string, unknown> = {}, cloudflareUsers: string[] = []) => {
+			const { app, env, doCalls } = buildApp({ instances: [{ id: "i1", user_id: "u1" }], cloudflareUsers });
+			const res = await json(app, env, "PUT", "/v1/instances/i1/state", { model, ...extra }, await tokenFor("u1"));
+			return { status: res.status, body: await jsonBody(res), sent: doCalls.find((c) => c.path === "/state" && c.method === "PUT")?.body };
+		};
+
+		it("forwards a Cloudflare pick, marked as the owner's choice, when Cloudflare credentials are stored", async () => {
+			for (const model of ["@cf/meta/llama-4-scout-17b-16e-instruct", "@cf/meta/llama-3.3-70b-instruct-fp8-fast", "@cf/qwen/qwen2.5-coder-32b-instruct"]) {
+				const { status, sent } = await put(model, {}, ["u1"]);
+				expect(status).toBe(200);
+				expect(sent).toEqual({ model, modelChosen: true });
+			}
+		});
+
+		it("refuses a Cloudflare pick with no Cloudflare credentials, saying where to add them — the DO is never reached", async () => {
+			const { status, body, sent } = await put("@cf/meta/llama-4-scout-17b-16e-instruct");
+			expect(status).toBe(400);
+			expect(String(body.error)).toMatch(/no Cloudflare credentials.*Profile → API Keys/);
+			expect(sent).toBeUndefined();
+		});
+
+		it("refuses a model that cannot call tools, naming the brain models and their hints", async () => {
+			const { status, body, sent } = await put("@cf/meta/llama-3.2-3b-instruct", {}, ["u1"]);
+			expect(status).toBe(400);
+			expect(String(body.error)).toMatch(/cannot call tools/);
+			expect(String(body.error)).toContain("code-optimized");
+			expect(sent).toBeUndefined();
+		});
+
+		it("never lets a caller mark a model chosen by itself", async () => {
+			const { sent } = await put(undefined, { guardrails: { maxLength: 1 }, modelChosen: true });
+			expect(sent).toEqual({ guardrails: { maxLength: 1 } });
+		});
 	});
 
 	it("DELETE memory/:key forwards an (encoded) DELETE to the instance DO", async () => {

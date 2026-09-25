@@ -18,6 +18,7 @@ import {
 import { endOnUserTurn, mergeContent, pairToolBlocks } from "./anthropic-tool-turns.js";
 import { recordUsage, type UsageContext } from "./usage.js";
 import { fromWorkersAiResult, toWorkersAiBody, workersAiModelFor } from "./workers-ai-protocol.js";
+import { isWorkersAiModel } from "./brain-models.js";
 import { logPromptSectionEstimates } from "./prompt-section-estimates.js";
 import type { Env } from "../types.js";
 
@@ -95,6 +96,9 @@ export async function runUserWorkersAi(
 	model: string,
 	body: unknown,
 	ctx?: UsageContext,
+	/** `honorModel`: the owner PICKED this model (#852) — a Workers AI pick runs on Workers AI even
+	 *  when an Anthropic key is also stored. Without it the long-standing order below applies. */
+	opts?: { honorModel?: boolean },
 ): Promise<unknown> {
 	if (ctx?.promptSections?.length) {
 		await logPromptSectionEstimates(env, {
@@ -107,6 +111,10 @@ export async function runUserWorkersAi(
 			phase: ctx.promptPhase ?? null,
 			sections: ctx.promptSections,
 		});
+	}
+	if (opts?.honorModel && isWorkersAiModel(model)) {
+		const picked = await getUserCloudflareAiCredentials(env, userId).catch(() => null);
+		if (picked) return runCloudflareAi(env, userId, picked, model, body, ctx);
 	}
 	// BYOK: try providers in order of what the user has configured
 	const anthropicKey = await getUserProviderKey(env, userId, "anthropic");

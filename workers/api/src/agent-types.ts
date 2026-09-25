@@ -112,6 +112,12 @@ export interface AgentState {
 	personality: string;
 	goal: string;
 	model: string;
+	/**
+	 * The OWNER picked `model` as this instance's brain (#852), as opposed to inheriting it from the
+	 * template. Only a pick is honoured over the owner's other provider key — an inherited `@cf/` id
+	 * on an owner who also holds an Anthropic key keeps running on Sonnet, as it always has.
+	 */
+	modelChosen?: boolean;
 	status: "idle" | "thinking" | "error";
 	systemPrompt: string;
 	guardrails: Guardrails;

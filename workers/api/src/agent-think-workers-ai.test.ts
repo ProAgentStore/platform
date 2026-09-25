@@ -38,16 +38,17 @@ const { decideCodingAction } = await import("./lib/coding-loop.js");
 let script: unknown[] = [];
 let requests: Array<{ url: string; body: { messages: Array<{ role: string; content: unknown; tool_call_id?: string }>; tools?: unknown[]; max_tokens?: number } & Record<string, unknown> }> = [];
 
-/** The owner has Cloudflare credentials and no Anthropic key — the path this issue is about. */
+/** The owner has Cloudflare credentials — and, when this is set, an Anthropic key as well (#852). */
+let anthropicKeyToo = false;
+const KEY_ROW = { key_ciphertext: new ArrayBuffer(1), dek_wrapped: new ArrayBuffer(1), iv: new ArrayBuffer(1), account_id: "acct", key_hint: "oken" };
 const env = {
 	KEY_ENCRYPTION_KEY: "k",
 	DB: {
 		prepare(sql: string) {
 			const result = {
 				async first() {
-					return /FROM user_api_keys/.test(sql) && /provider = 'cloudflare'/.test(sql)
-						? { key_ciphertext: new ArrayBuffer(1), dek_wrapped: new ArrayBuffer(1), iv: new ArrayBuffer(1), account_id: "acct", key_hint: "oken" }
-						: null;
+					if (!/FROM user_api_keys/.test(sql)) return null;
+					return /provider = 'cloudflare'/.test(sql) || anthropicKeyToo ? KEY_ROW : null;
 				},
 				async all() {
 					return { results: [] };
@@ -63,6 +64,7 @@ const env = {
 
 beforeEach(() => {
 	ran.length = 0;
+	anthropicKeyToo = false;
 	requests = [];
 	script = [];
 	vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
@@ -79,12 +81,13 @@ const LLAMA = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 const QWEN = "@cf/qwen/qwen2.5-coder-32b-instruct";
 const scoutCall = (id: string, name: string, args: Record<string, unknown>) => ({ response: "", tool_calls: [{ id, type: "function", function: { name, arguments: args } }] });
 
-const state = (model: string): AgentState => ({
+const state = (model: string, modelChosen?: boolean): AgentState => ({
 	agentId: "inst-851",
 	name: "Repo Coder",
 	personality: "direct",
 	goal: "drive the coding engine",
 	model,
+	modelChosen,
 	status: "idle",
 	systemPrompt: "",
 	guardrails: { topicRestrictions: "", blockedTerms: [], responseStyle: "", maxResponseLength: 0, requireCitations: false },
@@ -95,10 +98,10 @@ const objective: AgentMessage[] = [
 	{ id: "m1", role: "user", content: "Run the tests in platform and tell me how it went.", channel: "chat", createdAt: new Date().toISOString() },
 ];
 
-async function think(model: string) {
+async function think(model: string, modelChosen?: boolean) {
 	const progress: Array<{ tool: unknown; success: unknown }> = [];
 	const out = await runAgentThink({
-		state: state(model),
+		state: state(model, modelChosen),
 		engine: {
 			buildRAGContext: async () => "",
 			getUserContext: async () => ({ preferences: {}, interactionCount: 0 }),
@@ -179,6 +182,26 @@ describe("the chat brain on Workers AI (#851)", () => {
 		expect(asked?.role).toBe("user");
 		expect(String(asked?.content)).toMatch(/call it now/);
 		expect(out.response).toContain("12 tests passed");
+	});
+});
+
+describe("an owner's brain pick is where the turn runs (#852)", () => {
+	it("a PICKED Cloudflare model runs on Workers AI even though an Anthropic key is stored", async () => {
+		anthropicKeyToo = true;
+		script = [scoutCall("abc123XYZ", "read_terminal", { repo_name: "platform" }), { response: "✓ 12 tests passed." }];
+		const out = await think(SCOUT, true);
+		expect(ran).toEqual(["read_terminal"]);
+		expect(requests.map((r) => r.url)).toEqual([`https://api.cloudflare.com/client/v4/accounts/acct/ai/run/${SCOUT}`, `https://api.cloudflare.com/client/v4/accounts/acct/ai/run/${SCOUT}`]);
+		expect(out.response).toContain("12 tests passed");
+	});
+
+	it("an INHERITED Cloudflare model keeps running on Anthropic for an owner who holds its key", async () => {
+		anthropicKeyToo = true;
+		// The fake answers in Workers AI's shape, which the Anthropic stream reader rejects — the
+		// only fact wanted here is WHERE the first call went.
+		script = [{ response: "unused" }];
+		await think(SCOUT).catch(() => undefined);
+		expect(requests[0]?.url).toContain("api.anthropic.com");
 	});
 });
 
