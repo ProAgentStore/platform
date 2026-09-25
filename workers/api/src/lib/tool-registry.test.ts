@@ -108,6 +108,33 @@ describe("tool registry", () => {
 	});
 });
 
+describe("create_ticket — non-actionable attention", () => {
+	it("persists a needs-human ticket without turning it into an approval action", async () => {
+		const writes: unknown[][] = [];
+		const env = {
+			DB: {
+				prepare: () => ({
+					bind: (...args: unknown[]) => ({
+						run: async () => {
+							writes.push(args);
+							return { success: true };
+						},
+					}),
+				}),
+			},
+		} as unknown as Env;
+		const result = await runRegistryTool("create_ticket", { env, userId: "u1", instanceId: "i1" }, {
+			title: "Website draft needs attention",
+			status: "needs_human",
+			reasoning: "FWS quality checks still fail.",
+		});
+		expect(result.success).toBe(true);
+		expect(JSON.parse(result.content)).toMatchObject({ status: "needs_human", awaitingApproval: false });
+		expect(writes).toHaveLength(1);
+		expect(writes[0][4]).toBe("needs_human");
+	});
+});
+
 describe("record_feedback — the complaint's home (#514)", () => {
 	/** Captures the INSERT the tool performs, so the row shape is asserted rather than assumed. */
 	function envCapturing(rows: Array<{ sql: string; args: unknown[] }>): Env {

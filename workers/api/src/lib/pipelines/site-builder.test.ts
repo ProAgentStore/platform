@@ -13,10 +13,11 @@ import { FENCE_TAG } from "../untrusted-fence.js";
 import { renderWithFencedValues } from "../prompt-interpolation.js";
 import siteBuilder from "./site-builder.json" with { type: "json" };
 import siteDeploy from "./site-deploy.json" with { type: "json" };
+import siteRefine from "./site-refine.json" with { type: "json" };
 
 import { STEP_TOOLS } from "../steps.js";
 
-// Every tool the two JSONs name — getRegistryTool must know them all or validatePipeline fails.
+// Every tool the shipped Website Builder JSONs name — getRegistryTool must know them all or validatePipeline fails.
 const KNOWN = new Set([
 	"http_request", "slice", "flatten", "map", "web_search", "extract_contacts",
 	"ai_generate", "parse_json", "stringify_json", "mcp_call_tool", "create_ticket", "dedupe_upsert",
@@ -131,7 +132,7 @@ const runRegistryTool = vi.fn(async (name: string, ctx: unknown, input: Record<s
 		);
 		aiPrompts[aiPrompts.length - 1] = rendered;
 		const reply = as === "template_json"
-			? JSON.stringify({ template_slug: "neon-ai", reason: "Warm hospitality layout for a Bondi cafe." })
+			? JSON.stringify({ template_slug: "neon-ai", reason: "Warm hospitality layout for a Bondi cafe.", alternates: ["coastal-cafe", "minimal-local"] })
 			: as === "plan_json" || as === "refinement_json"
 				? JSON.stringify({ sections: [{ id: "hero", content: "<h1>Palm Tree Kiosk</h1>" }] })
 				: MODEL_REPLY;
@@ -143,12 +144,12 @@ const runRegistryTool = vi.fn(async (name: string, ctx: unknown, input: Record<s
 		if (tool === "create_site") return { name, content: JSON.stringify({ tool, ok: true, data: { session_id: "sess-42", template_slug: "neon-ai" } }), success: true };
 		if (tool === "list_templates") return { name, content: JSON.stringify({ tool, ok: true, data: { templates: [{ slug: "neon-ai", category: "cafe" }] } }), success: true };
 		if (tool === "list_sections") return { name, content: JSON.stringify({ tool, ok: true, data: { sections: [{ id: "hero" }, { id: "about" }] } }), success: true };
-		if (tool === "read_section") return { name, content: JSON.stringify({ tool, ok: true, data: { id: input.args && (input.args as Record<string, unknown>).section_id, content: "<p>Template</p>" } }), success: true };
+		if (tool === "read_section") return { name, content: JSON.stringify({ tool, ok: true, data: { id: input.args && (input.args as Record<string, unknown>).section_id, content: "<p>Template</p>", className: "bg-stone-50 py-16" } }), success: true };
 		if (tool === "get_quality_report") {
 			const ready = qualityResponses.shift() ?? true;
 			return { name, content: JSON.stringify({ tool, ok: true, data: { ready_for_human_review: ready, compliance: { failures: ready ? 0 : 1 } } }), success: true };
 		}
-		if (tool === "get_rendered_preview") return { name, content: JSON.stringify({ tool, ok: true, data: { preview_url: "https://preview.example/sess-42" } }), success: true };
+		if (tool === "capture_preview") return { name, content: JSON.stringify({ tool, ok: true, data: { session_id: "sess-42", viewport: (input.args as Record<string, unknown>)?.viewport, preview_url: "https://preview.example/sess-42" } }), success: true };
 		if (tool === "get_preview") return { name, content: JSON.stringify({ tool, ok: true, data: "<html>preview</html>" }), success: true };
 		if (tool === "get_status") return { name, content: JSON.stringify({ tool, ok: true, data: { id: "palm-tree-kiosk-bondi", url: "https://palm-tree-kiosk-bondi.freewebstore.online", deployed: true } }), success: true };
 		return { name, content: JSON.stringify({ tool, ok: true, data: { ok: true } }), success: true };
@@ -210,6 +211,7 @@ describe("site-builder — shape", () => {
 	it("validates against the real runner contract", () => {
 		expect(validatePipeline(siteBuilder)).toBeNull();
 		expect(validatePipeline(siteDeploy)).toBeNull();
+		expect(validatePipeline(siteRefine)).toBeNull();
 	});
 
 	it("names no website-builder host — the MCP endpoint is a param, so no store is a dependency", () => {
@@ -240,7 +242,7 @@ describe("site-builder — the run", () => {
 		// The site was assembled in the right order on the caller's configured server.
 		expect(mcpCalls.map((c) => c.tool)).toEqual(expect.arrayContaining([
 			"list_templates", "create_site", "list_sections", "read_section",
-			"bulk_update_sections", "get_quality_report", "get_rendered_preview",
+			"bulk_update_sections", "get_quality_report", "capture_preview",
 			"set_meta", "set_contact", "set_social",
 		]));
 		expect(new Set(mcpCalls.map((c) => c.url))).toEqual(new Set(["https://builder.example.com/mcp"]));
@@ -258,15 +260,50 @@ describe("site-builder — the run", () => {
 		expect(mcpCalls.find((c) => c.tool === "set_meta")!.args.noindex).toBe(true);
 	});
 
-	it("does at most one automatic refinement, then gates the draft on the second static report", async () => {
-		// First response is the pre-writing diagnostic; then the first gate fails and the
-		// post-refinement gate passes. A third refinement would be an unbounded loop.
-		qualityResponses = [true, false, true];
+	it("does at most two automatic refinements, then gates the exact draft session", async () => {
+		// Pre-writing diagnostics pass; both bounded QA revisions fail; the third report passes.
+		// A fourth update would be an unbounded loop.
+		qualityResponses = [true, false, false, true];
 		await drivePipeline(siteBuilder as unknown as PipelineDef, PARAMS);
-		expect(mcpCalls.filter((c) => c.tool === "bulk_update_sections")).toHaveLength(2);
-		expect(mcpCalls.filter((c) => c.tool === "get_quality_report")).toHaveLength(3);
+		expect(mcpCalls.filter((c) => c.tool === "bulk_update_sections")).toHaveLength(3);
+		expect(mcpCalls.filter((c) => c.tool === "get_quality_report")).toHaveLength(4);
+		expect(mcpCalls.filter((c) => c.tool === "capture_preview").map((c) => c.args.viewport)).toEqual(["desktop", "mobile"]);
 		expect(tickets).toHaveLength(1);
 		expect(tickets[0].action).toBe("run_pipeline");
+	});
+
+	it("records the real template choice, alternates, quality transitions and render evidence", async () => {
+		await drivePipeline(siteBuilder as unknown as PipelineDef, PARAMS);
+		expect(mcpCalls.find((c) => c.tool === "create_site")!.args.template_slug).toBe("neon-ai");
+		expect(upserted[0]).toMatchObject({
+			template_slug: "neon-ai",
+			template_rationale: expect.any(String),
+			quality_iteration_count: 0,
+			site_state: "qa_passed",
+			desktop_capture: { viewport: "desktop" },
+			mobile_capture: { viewport: "mobile" },
+		});
+	});
+
+	it("only updates existing section IDs and leaves wrapper className to FWS", async () => {
+		await drivePipeline(siteBuilder as unknown as PipelineDef, PARAMS);
+		expect(readable(aiPrompts[2])).toContain("bg-stone-50 py-16");
+		for (const update of mcpCalls.filter((c) => c.tool === "bulk_update_sections")) {
+			for (const section of update.args.sections as Array<Record<string, unknown>>) {
+				expect(["hero", "about"]).toContain(section.id);
+				expect(section).not.toHaveProperty("className");
+			}
+		}
+	});
+
+	it("turns exhausted QA into a needs-attention record and ticket without a deploy action", async () => {
+		qualityResponses = [true, false, false, false];
+		await drivePipeline(siteBuilder as unknown as PipelineDef, PARAMS);
+		expect(tickets).toHaveLength(1);
+		expect(tickets[0]).toMatchObject({ status: "needs_human" });
+		expect(tickets[0].action).toBeUndefined();
+		expect(upserted[0]).toMatchObject({ site_status: "needs_attention", site_state: "needs_attention", quality_iteration_count: 2 });
+		expect(mcpCalls.some((c) => c.tool === "deploy" || c.tool === "push_update")).toBe(false);
 	});
 
 	it("caps photos at photo_limit and resolves each to a public URL (no API key in the page)", async () => {
@@ -386,6 +423,39 @@ describe("site-deploy — the approved half", () => {
 			.map((s) => (s.inputs as Record<string, { toString(): string }>).tool);
 		expect(builderTools).not.toContain("deploy");
 		expect(builderTools).not.toContain("push_update");
+	});
+});
+
+describe("site-refine — reviewer feedback", () => {
+	it("resumes the supplied FWS session, preserves template wrappers, and never creates or deploys a site", async () => {
+		const params = {
+			session_id: "sess-42", mcp_url: "https://builder.example.com/mcp", feedback: "Make the hero more concise.",
+			place_id: "ChIJ_kiosk", name: "Palm Tree Kiosk", slug: "palm-tree-kiosk-bondi", category: "cafe",
+			description: "A casual beachfront cafe in Bondi.", suburb: "Bondi", address: "12 Beach Rd, Bondi NSW 2026, Australia", phone: "0298004444", email: "hello@palmtree.example", prior_iteration_count: 2,
+		};
+		await drivePipeline(siteRefine as unknown as PipelineDef, params);
+		expect(mcpCalls.some((c) => c.tool === "create_site")).toBe(false);
+		expect(mcpCalls.some((c) => c.tool === "deploy" || c.tool === "push_update")).toBe(false);
+		for (const call of mcpCalls) expect(call.args.session_id).toBe("sess-42");
+		const update = mcpCalls.find((c) => c.tool === "bulk_update_sections")!;
+		for (const section of update.args.sections as Array<Record<string, unknown>>) {
+			expect(["hero", "about"]).toContain(section.id);
+			expect(section).not.toHaveProperty("className");
+		}
+		expect(mcpCalls.filter((c) => c.tool === "capture_preview").map((c) => c.args.viewport)).toEqual(["desktop", "mobile"]);
+		expect(tickets[0]).toMatchObject({ action: "run_pipeline", config: { pipeline: "site-deploy" } });
+		expect(upserted[0]).toMatchObject({ site_session_id: "sess-42", site_status: "awaiting_approval", prior_iteration_count: 2 });
+	});
+
+	it("keeps a failed reviewer refinement as needs attention on the same session", async () => {
+		qualityResponses = [false, false];
+		await drivePipeline(siteRefine as unknown as PipelineDef, {
+			session_id: "sess-42", mcp_url: "https://builder.example.com/mcp", feedback: "Check contrast.", place_id: "ChIJ_kiosk",
+			name: "Palm Tree Kiosk", slug: "palm-tree-kiosk-bondi", category: "cafe", description: "A cafe.", suburb: "Bondi", address: "12 Beach Rd", phone: "0298004444", email: "hello@palmtree.example",
+		});
+		expect(tickets).toHaveLength(1);
+		expect(tickets[0]).toMatchObject({ status: "needs_human" });
+		expect(upserted[0]).toMatchObject({ site_status: "needs_attention", site_session_id: "sess-42" });
 	});
 });
 

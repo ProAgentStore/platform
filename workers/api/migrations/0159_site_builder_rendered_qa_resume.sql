@@ -1,4 +1,13 @@
-{
+-- Complete the quality-gated Website Builder migration (#836).
+-- 0156 shipped before FWS exposed durable diagnostics and real rendered captures. This
+-- upgrades only the still-exact stock v2 subscriber copy, archives it, and adds the
+-- resumable same-session reviewer-feedback pipeline. The durable pipeline workflow owns
+-- idempotent step replay; site-refine intentionally never calls create_site or deploy.
+UPDATE agents
+SET config = json_set(
+      CASE WHEN json_valid(config) THEN config ELSE '{}' END,
+      '$.pipelines.site-builder',
+      json('{
   "name": "site-builder",
   "params": {
     "place_id": {
@@ -200,8 +209,8 @@
         "items": {
           "$ref": "biz.items"
         },
-        "system": "You write short, plain, honest copy for a small local business's first website. You are given ONLY facts scraped from Google Maps and public social profiles. Never invent a fact: no awards, no founding year, no staff names, no claims about quality, price or history you were not given. If you have little to work with, write less. Australian/British spelling. No emoji, no exclamation marks, no 'nestled in the heart of'. Reply with ONLY a JSON object — no prose, no code fence.",
-        "prompt": "Business facts:\n- Name: {{name}}\n- Type: {{kind}}\n- Address: {{address}}\n- Suburb: {{suburb}}, {{state}}\n- Phone: {{phone}}\n- Google rating: {{rating}} from {{reviews_count}} reviews\n- Google's own summary: {{blurb}}\n- Opening hours: {{hours}}\n- Photo URLs (comma-separated, may be empty): {{photo_urls}}\n\nReturn JSON with exactly these keys:\n{\n  \"tagline\": \"6-10 words for the hero. What they are and where.\",\n  \"meta_description\": \"One sentence under 155 characters for search results.\",\n  \"about_html\": \"2-3 short sentences as HTML paragraphs. Only what the facts above support.\",\n  \"services_html\": \"A <ul> of 3-5 short items a customer would come here for, inferred from the business TYPE alone.\",\n  \"gallery_html\": \"For each photo URL above, one <img src=\\\"THE URL VERBATIM\\\" alt=\\\"...\\\" loading=\\\"lazy\\\"> wrapped in a <div class=\\\"grid\\\">. Copy each URL character-for-character; never shorten or invent one. Empty string if there are no photo URLs.\",\n  \"hours_line\": \"The opening hours as one readable line, or \\\"\\\" if unknown.\",\n  \"category\": \"one of: restaurant, cafe, salon, trades, retail, fitness, professional, health, education, creative, other\",\n  \"slug\": \"The business name as a URL slug: lowercase letters, numbers and hyphens ONLY, no leading/trailing hyphen, 3-40 characters. Add the suburb if the name alone is generic.\"\n}",
+        "system": "You write short, plain, honest copy for a small local business''s first website. You are given ONLY facts scraped from Google Maps and public social profiles. Never invent a fact: no awards, no founding year, no staff names, no claims about quality, price or history you were not given. If you have little to work with, write less. Australian/British spelling. No emoji, no exclamation marks, no ''nestled in the heart of''. Reply with ONLY a JSON object — no prose, no code fence.",
+        "prompt": "Business facts:\n- Name: {{name}}\n- Type: {{kind}}\n- Address: {{address}}\n- Suburb: {{suburb}}, {{state}}\n- Phone: {{phone}}\n- Google rating: {{rating}} from {{reviews_count}} reviews\n- Google''s own summary: {{blurb}}\n- Opening hours: {{hours}}\n- Photo URLs (comma-separated, may be empty): {{photo_urls}}\n\nReturn JSON with exactly these keys:\n{\n  \"tagline\": \"6-10 words for the hero. What they are and where.\",\n  \"meta_description\": \"One sentence under 155 characters for search results.\",\n  \"about_html\": \"2-3 short sentences as HTML paragraphs. Only what the facts above support.\",\n  \"services_html\": \"A <ul> of 3-5 short items a customer would come here for, inferred from the business TYPE alone.\",\n  \"gallery_html\": \"For each photo URL above, one <img src=\\\"THE URL VERBATIM\\\" alt=\\\"...\\\" loading=\\\"lazy\\\"> wrapped in a <div class=\\\"grid\\\">. Copy each URL character-for-character; never shorten or invent one. Empty string if there are no photo URLs.\",\n  \"hours_line\": \"The opening hours as one readable line, or \\\"\\\" if unknown.\",\n  \"category\": \"one of: restaurant, cafe, salon, trades, retail, fitness, professional, health, education, creative, other\",\n  \"slug\": \"The business name as a URL slug: lowercase letters, numbers and hyphens ONLY, no leading/trailing hyphen, 3-40 characters. Add the suburb if the name alone is generic.\"\n}",
         "as": "copy_json",
         "maxTokens": 900
       }
@@ -1151,4 +1160,182 @@
     "collection": "sites",
     "keyField": "place_id"
   }
-}
+}'),
+      '$.pipelines.site-refine',
+      json('{
+  "name": "site-refine",
+  "params": {
+    "session_id": { "type": "string", "description": "Existing noindex FWS draft session to refine; never creates a new draft." },
+    "mcp_url": { "type": "string", "description": "The same Website Builder MCP endpoint that owns the draft." },
+    "feedback": { "type": "string", "description": "Reviewer feedback to apply to this existing draft." },
+    "place_id": { "type": "string", "description": "Lead record to update after review." },
+    "name": { "type": "string", "description": "Business display name for a later human-approved deploy." },
+    "slug": { "type": "string", "description": "Reserved draft slug for a later human-approved deploy." },
+    "category": { "type": "string", "description": "Business category for a later human-approved deploy." },
+    "description": { "type": "string", "description": "SEO description for a later human-approved deploy." },
+    "suburb": { "type": "string", "description": "Lead suburb retained for outreach." },
+    "address": { "type": "string", "description": "Lead address retained for outreach." },
+    "phone": { "type": "string", "description": "Lead phone retained for outreach." },
+    "email": { "type": "string", "description": "Lead email retained for outreach." },
+    "prior_iteration_count": { "type": "number", "description": "Automatic revisions already recorded on the draft.", "default": 0 }
+  },
+  "steps": [
+    {
+      "tool": "mcp_call_tool",
+      "bind": "sections",
+      "inputs": { "url": { "$param": "mcp_url" }, "tool": "list_sections", "args": { "session_id": { "$param": "session_id" } } }
+    },
+    {
+      "tool": "mcp_call_tool",
+      "bind": "sectionReads",
+      "forEach": { "$ref": "sections.data.sections" },
+      "inputs": { "url": { "$param": "mcp_url" }, "tool": "read_section", "args": { "session_id": { "$param": "session_id" }, "section_id": { "$param": "item.id" } } }
+    },
+    {
+      "tool": "stringify_json",
+      "bind": "sectionSource",
+      "inputs": { "value": { "$ref": "sectionReads" }, "pretty": true }
+    },
+    {
+      "tool": "mcp_call_tool",
+      "bind": "qualityBefore",
+      "inputs": { "url": { "$param": "mcp_url" }, "tool": "get_quality_report", "args": { "session_id": { "$param": "session_id" } } }
+    },
+    {
+      "tool": "stringify_json",
+      "bind": "qualityBeforeText",
+      "inputs": { "value": { "$ref": "qualityBefore.data" }, "pretty": true }
+    },
+    {
+      "tool": "ai_generate",
+      "bind": "refinementDraft",
+      "inputs": {
+        "items": [{ "sections": { "$ref": "sectionSource.text" }, "quality": { "$ref": "qualityBeforeText.text" }, "feedback": { "$param": "feedback" } }],
+        "system": "Apply reviewer feedback and repair reported quality failures on one existing designer-template draft. Use only supplied section IDs. Preserve every wrapper and className by returning inner HTML only; never return className or section wrapper HTML. Reply ONLY JSON.",
+        "prompt": "Reviewer feedback:\n{{feedback}}\nQuality report:\n{{quality}}\nExisting sections:\n{{sections}}\nReturn {\"sections\":[{\"id\":\"existing id\",\"content\":\"replacement inner HTML\",\"label\":\"optional\"}]}. Do not create a new site or alter metadata visibility.",
+        "as": "refinement_json",
+        "maxTokens": 1600
+      }
+    },
+    {
+      "tool": "parse_json",
+      "bind": "refinement",
+      "inputs": { "items": { "$ref": "refinementDraft.items" }, "field": "refinement_json", "as": "plan" }
+    },
+    {
+      "tool": "mcp_call_tool",
+      "bind": "updatedSections",
+      "inputs": { "url": { "$param": "mcp_url" }, "tool": "bulk_update_sections", "args": { "session_id": { "$param": "session_id" }, "sections": { "$ref": "refinement.items.0.plan.sections" } } }
+    },
+    {
+      "tool": "mcp_call_tool",
+      "bind": "qualityAfter",
+      "inputs": { "url": { "$param": "mcp_url" }, "tool": "get_quality_report", "args": { "session_id": { "$param": "session_id" } } }
+    },
+    {
+      "tool": "map",
+      "bind": "gate",
+      "inputs": {
+        "items": [{ "ready": { "$ref": "qualityAfter.data.ready_for_human_review" } }],
+        "keep": ["ready"],
+        "derive": {
+          "passed": { "$cond": { "field": "ready", "op": "truthy" }, "then": true, "else": false },
+          "needs_attention": { "$cond": { "field": "ready", "op": "falsy" }, "then": true, "else": false },
+          "state": { "$cond": { "field": "ready", "op": "truthy" }, "then": "qa_passed", "else": "needs_attention" }
+        }
+      }
+    },
+    {
+      "tool": "mcp_call_tool",
+      "bind": "desktopCapture",
+      "inputs": { "url": { "$param": "mcp_url" }, "tool": "capture_preview", "args": { "session_id": { "$param": "session_id" }, "viewport": "desktop" } }
+    },
+    {
+      "tool": "mcp_call_tool",
+      "bind": "mobileCapture",
+      "inputs": { "url": { "$param": "mcp_url" }, "tool": "capture_preview", "args": { "session_id": { "$param": "session_id" }, "viewport": "mobile" } }
+    },
+    {
+      "tool": "create_ticket",
+      "bind": "approval",
+      "when": { "$ref": "gate.items.0.passed" },
+      "inputs": {
+        "title": "Deploy the refined site for review",
+        "reasoning": "Reviewer feedback was applied to the existing noindex FWS session. FWS diagnostics now pass and desktop/mobile captures were collected. Nothing is live; approval deploys this same session only.",
+        "action": "run_pipeline",
+        "config": { "pipeline": "site-deploy" },
+        "params": {
+          "session_id": { "$param": "session_id" }, "place_id": { "$param": "place_id" }, "mcp_url": { "$param": "mcp_url" }, "name": { "$param": "name" }, "slug": { "$param": "slug" }, "category": { "$param": "category" }, "description": { "$param": "description" }, "suburb": { "$param": "suburb" }, "address": { "$param": "address" }, "phone": { "$param": "phone" }, "email": { "$param": "email" }
+        }
+      }
+    },
+    {
+      "tool": "map",
+      "bind": "evidence",
+      "inputs": {
+        "items": [{ "place_id": { "$param": "place_id" }, "session_id": { "$param": "session_id" }, "quality_before": { "$ref": "qualityBefore.data" }, "quality_after": { "$ref": "qualityAfter.data" }, "desktop_capture": { "$ref": "desktopCapture.data" }, "mobile_capture": { "$ref": "mobileCapture.data" }, "gate": { "$ref": "gate.items.0" }, "prior_iteration_count": { "$param": "prior_iteration_count" } }],
+        "extract": { "place_id": "place_id", "site_session_id": "session_id", "review_quality_before": "quality_before", "review_quality_after": "quality_after", "desktop_capture": "desktop_capture", "mobile_capture": "mobile_capture", "site_state": "gate.state", "prior_iteration_count": "prior_iteration_count" }
+      }
+    },
+    {
+      "tool": "map",
+      "bind": "approvedRecord",
+      "when": { "$ref": "gate.items.0.passed" },
+      "inputs": { "items": { "$ref": "evidence.items" }, "derive": { "site_status": "awaiting_approval" } }
+    },
+    {
+      "tool": "dedupe_upsert",
+      "bind": "storedApproved",
+      "when": { "$ref": "gate.items.0.passed" },
+      "inputs": { "items": { "$ref": "approvedRecord.items" }, "collection": "sites", "key": "place_id", "mode": "update", "emit": "site.drafted" }
+    },
+    {
+      "tool": "create_ticket",
+      "bind": "needsAttention",
+      "when": { "$ref": "gate.items.0.needs_attention" },
+      "inputs": { "title": "Website draft needs attention", "status": "needs_human", "reasoning": "Reviewer feedback was applied to the existing noindex session, but FWS QA still fails. Nothing was deployed; continue using this same session." }
+    },
+    {
+      "tool": "map",
+      "bind": "needsAttentionRecord",
+      "when": { "$ref": "gate.items.0.needs_attention" },
+      "inputs": { "items": { "$ref": "evidence.items" }, "derive": { "site_status": "needs_attention" } }
+    },
+    {
+      "tool": "dedupe_upsert",
+      "bind": "storedNeedsAttention",
+      "when": { "$ref": "gate.items.0.needs_attention" },
+      "inputs": { "items": { "$ref": "needsAttentionRecord.items" }, "collection": "sites", "key": "place_id", "mode": "update", "emit": "site.needs_attention" }
+    }
+  ],
+  "sink": { "collection": "sites", "keyField": "place_id" }
+}')
+    ),
+    updated_at = datetime('now')
+WHERE slug = 'site-builder';
+
+UPDATE agent_instances
+SET config = json_set(
+      json_set(
+        json_set(
+          CASE WHEN json_valid(config) THEN config ELSE '{}' END,
+          '$.pipelinesReplaced',
+          json(COALESCE(json_extract(CASE WHEN json_valid(config) THEN config ELSE '{}' END, '$.pipelinesReplaced'), '{}'))
+        ),
+        '$.pipelinesReplaced.site-builder-v2',
+        json(json_extract(CASE WHEN json_valid(config) THEN config ELSE '{}' END, '$.pipelines.site-builder'))
+      ),
+      '$.pipelines.site-builder',
+      json((SELECT json_extract(CASE WHEN json_valid(a.config) THEN a.config ELSE '{}' END, '$.pipelines.site-builder')
+              FROM agents a
+             WHERE a.slug = 'site-builder')),
+      '$.pipelines.site-refine',
+      json((SELECT json_extract(CASE WHEN json_valid(a.config) THEN a.config ELSE '{}' END, '$.pipelines.site-refine')
+              FROM agents a
+             WHERE a.slug = 'site-builder'))
+    ),
+    updated_at = datetime('now')
+WHERE agent_id IN (SELECT id FROM agents WHERE slug = 'site-builder')
+  AND json_extract(CASE WHEN json_valid(config) THEN config ELSE '{}' END, '$.pipelines.site-builder.steps[36].bind') = 'preview2'
+  AND json_extract(CASE WHEN json_valid(config) THEN config ELSE '{}' END, '$.pipelines.site-builder.steps[36].inputs.tool') = 'get_rendered_preview'
+  AND json_extract(CASE WHEN json_valid(config) THEN config ELSE '{}' END, '$.pipelines.site-builder.steps[43].bind') = 'review';

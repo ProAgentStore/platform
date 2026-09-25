@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import siteBuilder from "./site-builder.json" with { type: "json" };
 import siteDeploy from "./site-deploy.json" with { type: "json" };
+import siteRefine from "./site-refine.json" with { type: "json" };
 import leadFinder from "./lead-finder.json" with { type: "json" };
 import leadOutreach from "./lead-outreach.json" with { type: "json" };
 import { declaredParamDefaults, validatePipeline } from "../pipeline.js";
@@ -155,11 +156,12 @@ const SITE_BUILDER_V2_MIGRATION = fileURLToPath(new URL("../../../migrations/015
 describe("migration 0156 — iterative Website Builder drafts (#836)", () => {
 	const ddl = () => readFileSync(SITE_BUILDER_V2_MIGRATION, "utf8");
 
-	it("seeds the exact v2 reference pipeline", () => {
+	it("keeps the frozen v2 reference available for the stock-copy upgrade", () => {
 		const seeded = jsonLiterals(SITE_BUILDER_V2_MIGRATION).find((value) =>
 			value && typeof value === "object" && (value as { name?: string }).name === "site-builder",
-		);
-		expect(seeded).toEqual(siteBuilder);
+		) as { steps?: Array<{ bind?: string; inputs?: { tool?: string } }> };
+		expect(seeded?.steps?.[36]).toMatchObject({ bind: "preview2", inputs: { tool: "get_rendered_preview" } });
+		expect(seeded?.steps?.[43]).toMatchObject({ bind: "review" });
 	});
 
 	it("upgrades only a stock v1 subscribed copy and archives it", () => {
@@ -168,6 +170,28 @@ describe("migration 0156 — iterative Website Builder drafts (#836)", () => {
 		expect(sql).toContain("steps[10].bind') = 'site'");
 		expect(sql).toContain("steps[10].inputs.tool') = 'create_site'");
 		expect(sql).toContain("steps[10].inputs.args.template_slug.$param') = 'text'");
+	});
+});
+
+const SITE_BUILDER_RENDERED_QA_MIGRATION = fileURLToPath(new URL("../../../migrations/0159_site_builder_rendered_qa_resume.sql", import.meta.url).href);
+
+describe("migration 0159 — rendered Website Builder QA and same-session review (#836)", () => {
+	const literals = () => jsonLiterals(SITE_BUILDER_RENDERED_QA_MIGRATION) as Array<Record<string, unknown>>;
+
+	it("seeds the exact rendered-QA builder and resumable reviewer pipeline", () => {
+		expect(literals().find((value) => value.name === "site-builder")).toEqual(siteBuilder);
+		expect(literals().find((value) => value.name === "site-refine")).toEqual(siteRefine);
+		expect(validatePipeline(siteRefine)).toBeNull();
+	});
+
+	it("updates only the stock v2 instance copy, archives it, and installs both definitions", () => {
+		const sql = readFileSync(SITE_BUILDER_RENDERED_QA_MIGRATION, "utf8");
+		expect(sql).toContain("pipelinesReplaced.site-builder-v2");
+		expect(sql).toContain("steps[36].bind') = 'preview2'");
+		expect(sql).toContain("steps[43].bind') = 'review'");
+		expect(sql).toContain("'$.pipelines.site-builder'");
+		expect(sql).toContain("'$.pipelines.site-refine'");
+		expect(sql).toMatch(/UPDATE\s+agent_instances/);
 	});
 });
 

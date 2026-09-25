@@ -36,7 +36,6 @@ import { patchBehaviour, readBehaviour } from "./behaviour-store.js";
 import { accountTimeZone } from "./account-timezone.js";
 import { fenceUntrusted, withFraming } from "./untrusted-fence.js";
 import type { ConversationTransfer } from "./conversation-transfer.js";
-
 /**
  * The tool contract now lives in `connectors/types.ts` — a leaf module with no imports
  * that reach back here (#293). It moved because every connector module needs the SHAPE
@@ -525,7 +524,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 		mutates: true,
 		untrustedOutput: false,
 		description:
-			"Put a ticket on the board asking the owner to approve a piece of work. Give it a `title`, the `reasoning` (the WHY, shown on the card), and optionally the work itself — `action` (run_pipeline / insert_record / add_knowledge / create_task / run_browse) with its `config` and `params`. A ticket carrying an action sits in Needs-approval until the owner approves it, and approving RUNS exactly that action. Use this to pause for a human decision before doing something consequential; without an action it's an informational card.",
+			"Put a ticket on the board asking the owner to approve a piece of work. Give it a `title`, the `reasoning` (the WHY, shown on the card), and optionally the work itself — `action` (run_pipeline / insert_record / add_knowledge / create_task / run_browse) with its `config` and `params`. A ticket carrying an action sits in Needs-approval until the owner approves it, and approving RUNS exactly that action. Without an action it records information, or use status=needs_human to flag attention without an automatic action.",
 		tier: "base",
 		jsonSchema: {
 			type: "object",
@@ -533,6 +532,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 				title: { type: "string", description: "Short card title, e.g. \"Deploy the site for Palm Tree Kiosk\"." },
 				reasoning: { type: "string", description: "Why this is being asked — rendered on the card so the decision is informed." },
 				description: { type: "string", description: "Optional longer detail." },
+				status: { type: "string", description: "Optional non-actionable ticket state. Use needs_human when work needs attention but must not be approved automatically." },
 				action: { type: "string", description: "Work to run on approval: run_pipeline | insert_record | add_knowledge | create_task | run_browse. Omit for an informational ticket." },
 				config: { type: "object", description: "Action config, e.g. {pipeline:\"site-deploy\"} for run_pipeline." },
 				params: { type: "object", description: "Payload handed to the action (the run params for run_pipeline)." },
@@ -552,7 +552,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 			const task = {
 				id: crypto.randomUUID(),
 				type: "ticket",
-				status: action ? "needs_approval" : "completed",
+				status: action ? "needs_approval" : input.status === "needs_human" ? "needs_human" : "completed",
 				title: title.slice(0, 200),
 				description: typeof input.description === "string" ? input.description.slice(0, 2000) : "",
 				reasoning: typeof input.reasoning === "string" ? input.reasoning.slice(0, 8000) : "",

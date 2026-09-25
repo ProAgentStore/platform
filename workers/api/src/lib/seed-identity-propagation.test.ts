@@ -144,6 +144,9 @@ const PROPAGATION: Record<string, string> = {
 	// #836: 0156 upgrades the stock Site Builder pipeline and rewrites the matching live
 	// instance copies in the same migration, archiving the prior definition first.
 	"0156_site_builder_iterative_drafts.sql": "site_builder_iterative_drafts.sql",
+	// #836 follow-up: FWS's rendered QA surface arrived after 0156, so 0159 replaces only
+	// the still-exact v2 instance copy, archives it, and adds the same-session site-refine path.
+	"0159_site_builder_rendered_qa_resume.sql": "site_builder_rendered_qa_resume.sql",
 };
 
 describe("seed config patches — each one records how it reaches an EXISTING instance (#496, #394)", () => {
