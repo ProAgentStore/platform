@@ -287,7 +287,7 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		// they disagree. A runner too old to report `authResolved` yields null, i.e. "unknown", never
 		// a restatement of the setting.
 		const { engines } = await readEngines(c.env, instanceId, uid);
-		const auth = engineAuthReport(engineAuthFor(engines, session.launchCommand), resolvedAuth);
+		const auth = engineAuthReport(engineAuthFor(engines, session.launchCommand), resolvedAuth, session.clientType);
 		const invocation = engineInvocationReport({
 			clientType: session.clientType,
 			launchCommand: session.launchCommand,

@@ -115,3 +115,14 @@ describe("isClaudeSignedOut — the `claude setup-token` CTA", () => {
 		expect(isClaudeSignedOut(undefined, "not logged in")).toBe(false);
 	});
 });
+
+describe("engineAuthBadge — Codex (#732)", () => {
+	it("says ChatGPT subscription for a Codex preset set to subscription", () => {
+		expect(engineAuthBadge(report({ engine: "codex", mode: "subscription", resolved: "machine-login" }))?.detail).toMatch(/ChatGPT subscription/);
+	});
+
+	it("keeps Claude's label for Claude and for an API that sends no engine", () => {
+		expect(engineAuthBadge(report({ engine: "claude", mode: "subscription" }))?.detail).toMatch(/Claude subscription/);
+		expect(engineAuthBadge(report({ mode: "subscription" }))?.detail).toMatch(/Claude subscription/);
+	});
+});

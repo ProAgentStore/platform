@@ -30,7 +30,7 @@ import type { Env } from "../types.js";
 
 vi.mock("./user-ai.js", () => ({ getUserProviderKey: vi.fn() }));
 const userAi = await import("./user-ai.js");
-const { resolveEngineEnv } = await import("./coding-engines.js");
+const { engineAuthFor, engineAuthReport, resolveEngineEnv } = await import("./coding-engines.js");
 
 /** Engine presets come from D1; this instance has none stored, so the defaults apply (auto). */
 const dbEnv = () =>
@@ -103,5 +103,63 @@ describe("what a coding engine signs in with decides whether its spend can be at
 		const resolved = resolveEngineAuth("claude", mergeEnv({}, overlay) as Record<string, string | undefined>);
 		expect(resolved).toBe("api-key");
 		expect(payerForEngineAuth(resolved)).toBe("byok-api");
+	});
+});
+
+describe("Codex ChatGPT subscription: the OpenAI key is kept away from `codex login` (#732)", () => {
+	beforeEach(() => vi.mocked(userAi.getUserProviderKey).mockReset());
+
+	const codexSub = { id: "codex", label: "Codex", command: "codex exec --json --sandbox danger-full-access", auth: "subscription" as const };
+	const dbWith = (engines: unknown[]) =>
+		({
+			DB: {
+				prepare() {
+					return {
+						bind() {
+							return {
+								async first() { return { config: JSON.stringify({ codingEngines: engines }) }; },
+								async all() { return { results: [] }; },
+							};
+						},
+					};
+				},
+			},
+		}) as unknown as Env;
+	const codexSession = { id: "s1", clientType: "codex", launchCommand: codexSub.command } as never;
+
+	it("strips OPENAI_API_KEY even with a vault key saved AND one exported in the shell", async () => {
+		// The machine the BA correction asked about: `codex login` active and a key in the shell.
+		// The saved vault key must not be injected, and the shell key must not be inherited.
+		vi.mocked(userAi.getUserProviderKey).mockResolvedValue("sk-openai-vault");
+		const overlay = await resolveEngineEnv(dbWith([codexSub]), "i1", "u1", codexSession);
+		expect(overlay).toEqual({ OPENAI_API_KEY: "" });
+		expect(userAi.getUserProviderKey).not.toHaveBeenCalled();
+
+		const spawnEnv = mergeEnv({ OPENAI_API_KEY: "sk-openai-from-the-shell", PATH: "/usr/bin" }, overlay);
+		expect(spawnEnv.OPENAI_API_KEY).toBeUndefined();
+
+		const resolved = resolveEngineAuth("codex", spawnEnv as Record<string, string | undefined>);
+		expect(resolved).not.toBe("api-key");
+		const report = engineAuthReport(engineAuthFor([codexSub], codexSub.command), resolved, "codex");
+		expect(report).toMatchObject({ mode: "subscription", engine: "codex", resolved: "machine-login", warning: null, payer: null });
+		expect(report.note).toMatch(/codex login/);
+		expect(report.note).toMatch(/ChatGPT plan/);
+	});
+
+	it("an old runner that ignores the strip lets the shell key win — and the report says so, in Codex's words", async () => {
+		const spawnEnv = mergeEnv({ OPENAI_API_KEY: "sk-openai-from-the-shell" }, undefined);
+		const resolved = resolveEngineAuth("codex", spawnEnv as Record<string, string | undefined>);
+		const report = engineAuthReport("subscription", resolved, "codex");
+		expect(report.warning).toMatch(/ChatGPT subscription/);
+		expect(report.warning).toMatch(/OpenAI API key/);
+		expect(report.warning).toMatch(/billing per token/i);
+		expect(report.payer).toBe("byok-api");
+	});
+
+	it("api-key mode still injects the vault OpenAI key", async () => {
+		vi.mocked(userAi.getUserProviderKey).mockResolvedValue("sk-openai-vault");
+		const codexKey = { ...codexSub, auth: "api-key" as const };
+		const overlay = await resolveEngineEnv(dbWith([codexKey]), "i1", "u1", codexSession);
+		expect(overlay).toEqual({ OPENAI_API_KEY: "sk-openai-vault" });
 	});
 });

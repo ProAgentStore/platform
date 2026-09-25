@@ -272,3 +272,44 @@ describe("engineInvocationReport — structured/raw transparency (#731)", () => 
 		});
 	});
 });
+
+describe("Codex sign-in parity (#732) — Claude's wording is unchanged, Codex gets its own", () => {
+	it("Codex subscription resolving to its machine login is the SUCCESS case, not a fallback", () => {
+		expect(engineAuthWarning("subscription", "machine-login", "codex")).toBeNull();
+	});
+
+	it("warns in Codex's own words when an OpenAI key reached a ChatGPT-subscription engine", () => {
+		const w = engineAuthWarning("subscription", "api-key", "codex");
+		expect(w).toMatch(/ChatGPT subscription/);
+		expect(w).toMatch(/OpenAI API key/);
+		expect(w).not.toMatch(/Claude/);
+	});
+
+	it("keeps the generic api-key warnings for Codex's other modes", () => {
+		expect(engineAuthWarning("auto", "api-key", "codex")).toMatch(/billing per token/i);
+		expect(engineAuthWarning("api-key", "machine-login", "codex")).toMatch(/vault/i);
+	});
+
+	it("the report names the engine, and Codex's subscription note names `codex login`", () => {
+		const r = engineAuthReport("subscription", "machine-login", "codex");
+		expect(r.engine).toBe("codex");
+		expect(r.payer).toBeNull();
+		expect(r.note).toMatch(/codex login/);
+		// Other Codex outcomes keep the shared payer sentences.
+		expect(engineAuthReport("api-key", "api-key", "codex").note).toMatch(/Billed per token/);
+		expect(engineAuthReport("auto", "machine-login", "codex").note).toMatch(/unattributed/);
+	});
+
+	it("regression: Claude's warnings and notes are byte-identical with or without the engine argument", () => {
+		const modes = ["auto", "machine", "subscription", "api-key"] as const;
+		const outcomes = ["subscription", "api-key", "machine-login", null] as const;
+		for (const m of modes) {
+			for (const o of outcomes) {
+				expect(engineAuthWarning(m, o, "claude")).toBe(engineAuthWarning(m, o));
+				expect(engineAuthReport(m, o, "claude")).toEqual(engineAuthReport(m, o));
+			}
+		}
+		expect(engineAuthWarning("subscription", "machine-login", "claude")).toMatch(/setup-token/);
+		expect(engineAuthReport("subscription", "subscription").engine).toBe("claude");
+	});
+});
