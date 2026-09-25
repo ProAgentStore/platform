@@ -288,6 +288,7 @@ const TABLE: Record<string, Row> = {
 	check_instance_loop: ["composition", "read", null, null, "instance_id,run_id,token"],
 	get_instance_connector_account: ["connectorAccounts", "read", null, null, "connector,instance_id,token"],
 	get_instance_loop_limits: ["composition", "read", null, null, "instance_id,token"],
+	get_instance_terminal_session: ["runtime", "read", null, null, "instance_id,token"],
 	get_instance_loop_presets: ["composition", "read", null, null, "instance_id,token"],
 	// `before` added by #674 — the backward arm, so a caller can walk a run's history after the
 	// default page stopped being the oldest one.
@@ -318,6 +319,7 @@ const TABLE: Record<string, Row> = {
 	delete_agent_knowledge: ["agentAuthoring", "destructive", "delete_agent_knowledge", "envelope", "agent_id,confirm,document_id,dry_run,token"],
 	delete_connection: ["composition", "destructive", "delete_connection", "envelope", "confirm,connection_id,dry_run,instance_id,token"],
 	delete_feedback: ["observability", "destructive", "delete_feedback", "envelope", "confirm,dry_run,feedback_id,token"],
+	forget_runner_node: ["runtime", "destructive", "forget_runner_node", "envelope", "confirm,dry_run,node,token"],
 	delete_instance_message: ["observability", "destructive", "delete_instance_message", "envelope", "confirm,dry_run,instance_id,message_id,token"],
 	delete_instance_file: ["knowledge", "destructive", "delete_instance_file", "envelope", "confirm,dry_run,file_id,instance_id,token"],
 	delete_instance_knowledge: ["knowledge", "destructive", "delete_instance_knowledge", "envelope", "confirm,document_id,dry_run,instance_id,token"],
@@ -402,6 +404,7 @@ const TABLE: Record<string, Row> = {
 	list_pipeline_runs: ["observability", "none", null, null, "instance_id,limit,pipeline,token"],
 	// #671: the PLATFORM view — every machine across every agent. No instance_id, by design.
 	list_runner_nodes: ["runtime", "none", null, null, "token"],
+	runner_node_forget_preflight: ["runtime", "read", null, null, "node,token"],
 	list_supervision: ["composition", "read", null, null, "supervisor_instance_id,token"],
 	list_stats_sources: ["stats", "none", null, null, "token"],
 	my_instances: ["base", "none", null, null, "include_paused,token"],
@@ -444,6 +447,7 @@ const TABLE: Record<string, Row> = {
 	// #671: `write` rather than `runtime` — it changes where calls are ROUTED, it does not itself
 	// drive anything on the machine.
 	set_instance_runner_node: ["runtime", "write", null, "envelope", "dry_run,instance_id,runner_node,token"],
+	set_instance_terminal_session: ["runtime", "write", null, "envelope", "active_terminal_target,dry_run,instance_id,token"],
 	set_instance_settings: ["settings", "write", null, "envelope", "dry_run,instance_id,settings,token"],
 	set_instance_stats: ["stats", "write", null, "envelope", "dry_run,instance_id,ops,token"],
 	set_instance_tool: ["base", "write", null, "text", "dry_run,enabled,instance_id,token,tool"],

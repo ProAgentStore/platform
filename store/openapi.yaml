@@ -9359,6 +9359,50 @@ paths:
                         label: { type: string }
                         node: { type: string, description: Which of the machine's names it points at. }
 
+  /v1/terminals/nodes/{node}/forget-preflight:
+    get:
+      summary: Inspect whether a machine can be forgotten
+      description: |
+        The non-destructive counterpart to `DELETE /v1/terminals/nodes/{node}`. It resolves any
+        supplied alias to the whole machine and returns every registration name, every instance
+        pin and open coding session that still points there, live relay connectivity, and the exact
+        verdict DELETE will enforce. The blocker list is complete even when the connected-machine
+        refusal has precedence, so a caller can fix all outstanding work before retrying.
+      operationId: preflightForgetTerminalNode
+      tags: [Terminals]
+      parameters:
+        - { name: node, in: path, required: true, description: Any one of the machine's names., schema: { type: string } }
+      responses:
+        "200":
+          description: Complete non-mutating forget verdict
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, enum: [true] }
+                  target: { type: string }
+                  names: { type: array, items: { type: string }, description: Every name a successful forget would remove. }
+                  connected: { type: boolean }
+                  blockers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        kind: { type: string, enum: [pin, session] }
+                        id: { type: string }
+                        label: { type: string }
+                        node: { type: string }
+                  verdict:
+                    type: object
+                    properties:
+                      ok: { type: boolean }
+                      reason: { type: string, enum: [connected, pinned, sessions] }
+                      message: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: No machine is registered under that name }
+        "409": { description: More than one machine has registered under that name }
+
   /v1/terminals/nodes/{node}/claim:
     delete:
       summary: Un-claim a machine name

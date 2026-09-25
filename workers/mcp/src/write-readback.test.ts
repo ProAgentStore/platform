@@ -92,6 +92,9 @@ const CONTROL_ARGS: ReadonlySet<string> = new Set([
 	"job_key",
 	"repo_id",
 	"node_id",
+	// #613: `forget_runner_node.node` identifies the registration to remove. The preflight/list
+	// reads it before the destructive action; deletion deliberately leaves no stored field to echo.
+	"node",
 	// #613: which conversation turn `delete_instance_message` removes. Taken from
 	// `instance_messages`; it addresses the deletion and is never written as content.
 	"message_id",
@@ -213,6 +216,9 @@ const READBACK: Record<string, string | null> = {
 	// #671. Readable by the tool added alongside it — the gap this closed was precisely that the
 	// pin could be neither read nor written here, so a reader had to exist for the writer to land.
 	"set_instance_runner_node.runner_node": "instance_runner_node",
+	// #613: terminal-tab selection is durable instance state, not ephemeral client state. The
+	// matching reader must land with its writer so an MCP-only caller can verify a clear/save.
+	"set_instance_terminal_session.active_terminal_target": "get_instance_terminal_session",
 	"set_agent_settings_schema.settings_schema": "get_agent_settings_schema",
 	"set_translation_config.enabled": "get_translation_config",
 	"set_translation_config.target": "get_translation_config",

@@ -136,7 +136,7 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
-- `serverInfo.version`: `0.1.56`
+- `serverInfo.version`: `0.1.57`
 
 That is the same value the published MCP-registry manifest (`server.json`) carries, and both
 are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —
@@ -216,6 +216,7 @@ Destructive or overwrite-style tools require an exact `confirm` value. By conven
 - `write_agent_file`: `confirm: "write_agent_file"`
 - `batch_write_agent_files`: `confirm: "batch_write_agent_files"`
 - `unregister_instance_runtime`: `confirm: "unregister_instance_runtime"`
+- `forget_runner_node`: `confirm: "forget_runner_node"`
 - `cancel_instance_task`: `confirm: "cancel_instance_task"`
 - `delete_instance_task`: `confirm: "delete_instance_task"`
 - `delete_connection`: `confirm: "delete_connection"`
@@ -259,7 +260,7 @@ The two published hints are **derived, not hand-maintained per tool**.
 `workers/mcp/src/tool-metadata.ts` classifies every tool `read` / `write` / `runtime` /
 `destructive` in one table, and `annotationsFor()` maps that classification onto the two
 hints. The classification is then derived **back out of the handlers** by `index.test.ts`,
-which drives all 232 tools under two different scope sets and reads the required scope out
+which drives all 236 tools under two different scope sets and reads the required scope out
 of each refusal — so a tool announced read-only that enforces a write gate fails the build
 rather than reaching a host. `conformance.test.ts` asserts the same thing against a real
 `tools/list` response.
@@ -422,7 +423,7 @@ More recipes, with real argument names, are in
 
 ## Tool Surface
 
-The server registers **232 tools**. 206 are always present. The remaining 26 are gated to
+The server registers **236 tools**. 210 are always present. The remaining 26 are gated to
 the console surfaces of the connected user's own subscribed agents, so the surface is
 per-connection:
 

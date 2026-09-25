@@ -417,32 +417,31 @@ terminalRoutes.get("/nodes", async (c) => {
 	return c.json({ nodes });
 });
 
-/**
- * Forget a machine: drop its registrations, under every name it has answered to.
- *
- * Addressed by ONE of its names and resolved to the machine, so a folded laptop is forgotten whole
- * — forgetting a single name of it would leave the tile on screen minus some of its rows, which is
- * a worse state than the one being cleaned up.
- *
- * Only `instance_runtime_nodes` is touched. `instance_runtimes` (the one legacy default row per
- * instance) is left alone: it is overwritten by the next `pags up` and deleting it would strip an
- * instance of its runtime registration outright, which is a much larger claim than "this laptop is
- * gone". Ended `coding_sessions` keep their `runner_node` string as history.
- */
-terminalRoutes.delete("/nodes/:node", async (c) => {
-	const session = await requireUser(c);
-	const uid = session.uid;
-	const target = normalizeRunnerNode(c.req.param("node"));
+/** The complete, non-mutating answer a caller needs before deleting a machine registration. */
+export type ForgetNodePreflight =
+	| { ok: true; target: string; names: string[]; connected: boolean; blockers: ForgetBlocker[]; verdict: ForgetVerdict }
+	| { ok: false; status: 404 | 409; error: string; reason?: "ambiguous" };
 
-	const rows = (await c.env.DB.prepare(
+/**
+ * Resolve a machine and calculate the SAME refusal that deletion enforces.
+ *
+ * The MCP preflight and DELETE deliberately share this function: duplicating the pin/session
+ * checks would let a caller receive an encouraging preview and a different destructive refusal
+ * as soon as either implementation drifted. Blockers are returned even when the machine is live,
+ * so the preflight reports every thing that must be dealt with rather than only the first refusal.
+ */
+export async function preflightForgetNode(env: Env, uid: string, rawTarget: string): Promise<ForgetNodePreflight> {
+	const target = normalizeRunnerNode(rawTarget);
+
+	const rows = (await env.DB.prepare(
 		"SELECT instance_id, runner_node, machine_id, last_seen_at FROM instance_runtime_nodes WHERE user_id = ?1",
 	).bind(uid).all<{ instance_id: string; runner_node: string; machine_id: string | null; last_seen_at: string | null }>()).results ?? [];
 
 	const resolved = machineNamesFor(target, rows.map((r) => ({ node: r.runner_node, machineId: r.machine_id, instanceId: r.instance_id, lastSeenAt: r.last_seen_at })));
 	if (!resolved.ok) {
 		return resolved.reason === "unknown"
-			? c.json({ error: "No machine is registered under that name." }, 404)
-			: c.json({ error: `More than one machine has registered as "${target}", so this name does not identify one. Rename one of them, or leave them.`, reason: "ambiguous" }, 409);
+			? { ok: false, status: 404, error: "No machine is registered under that name." }
+			: { ok: false, status: 409, error: `More than one machine has registered as "${target}", so this name does not identify one. Rename one of them, or leave them.`, reason: "ambiguous" };
 	}
 	const names = new Set(resolved.names);
 
@@ -451,7 +450,7 @@ terminalRoutes.delete("/nodes/:node", async (c) => {
 	// not something to match on in SQL.
 	const blockers: ForgetBlocker[] = [];
 
-	const instances = (await c.env.DB.prepare(
+	const instances = (await env.DB.prepare(
 		`SELECT i.id, i.config, a.name AS agent_name, a.slug AS agent_slug
 		 FROM agent_instances i LEFT JOIN agents a ON a.id = i.agent_id
 		 WHERE i.user_id = ?1`,
@@ -461,7 +460,7 @@ terminalRoutes.delete("/nodes/:node", async (c) => {
 		if (pin && names.has(pin)) blockers.push({ kind: "pin", id: i.id, label: instanceName(i.config, i.agent_name, i.agent_slug), node: pin });
 	}
 
-	const openSessions = (await c.env.DB.prepare(
+	const openSessions = (await env.DB.prepare(
 		`SELECT s.id, s.runner_node, s.status, r.name AS repo_name
 		 FROM coding_sessions s LEFT JOIN coding_repos r ON r.id = s.repo_id
 		 WHERE s.user_id = ?1 AND s.status IN ('active', 'suspended') AND s.runner_node IS NOT NULL`,
@@ -475,21 +474,47 @@ terminalRoutes.delete("/nodes/:node", async (c) => {
 	// forget a machine that has been off for weeks.
 	const probeIds = [...new Set(rows.filter((r) => names.has(normalizeRunnerNode(r.runner_node))).map((r) => r.instance_id))].slice(0, 25);
 	const probes = await Promise.all(probeIds.map(async (id) => {
-		for (const name of names) if (await relayConnected(c.env, id, name).catch(() => false)) return true;
+		for (const name of names) if (await relayConnected(env, id, name).catch(() => false)) return true;
 		return false;
 	}));
 
-	const verdict = diagnoseForget(probes.some(Boolean), blockers);
-	if (!verdict.ok) return c.json({ error: verdict.message, reason: verdict.reason, blockers }, 409);
+	return { ok: true, target, names: [...names], connected: probes.some(Boolean), blockers, verdict: diagnoseForget(probes.some(Boolean), blockers) };
+}
+
+/** Read the complete non-destructive forget verdict, including every pin/session blocker. */
+terminalRoutes.get("/nodes/:node/forget-preflight", async (c) => {
+	const session = await requireUser(c);
+	const preflight = await preflightForgetNode(c.env, session.uid, c.req.param("node"));
+	if (!preflight.ok) return c.json({ error: preflight.error, ...(preflight.reason ? { reason: preflight.reason } : {}) }, preflight.status);
+	return c.json(preflight);
+});
+
+/**
+ * Forget a machine: drop its registrations, under every name it has answered to.
+ *
+ * Addressed by ONE of its names and resolved to the machine, so a folded laptop is forgotten whole
+ * — forgetting a single name of it would leave the tile on screen minus some of its rows, which is
+ * a worse state than the one being cleaned up. The preflight above is the exact same refusal logic.
+ *
+ * Only `instance_runtime_nodes` is touched. `instance_runtimes` (the one legacy default row per
+ * instance) is left alone: it is overwritten by the next `pags up` and deleting it would strip an
+ * instance of its runtime registration outright, which is a much larger claim than "this laptop is
+ * gone". Ended `coding_sessions` keep their `runner_node` string as history.
+ */
+terminalRoutes.delete("/nodes/:node", async (c) => {
+	const session = await requireUser(c);
+	const preflight = await preflightForgetNode(c.env, session.uid, c.req.param("node"));
+	if (!preflight.ok) return c.json({ error: preflight.error, ...(preflight.reason ? { reason: preflight.reason } : {}) }, preflight.status);
+	if (!preflight.verdict.ok) return c.json({ error: preflight.verdict.message, reason: preflight.verdict.reason, blockers: preflight.blockers }, 409);
 
 	// One statement per name rather than a built IN list: the names are user data and this keeps
 	// every value a bound parameter.
 	let removed = 0;
-	for (const name of names) {
-		const res = await c.env.DB.prepare("DELETE FROM instance_runtime_nodes WHERE user_id = ?1 AND runner_node = ?2").bind(uid, name).run();
+	for (const name of preflight.names) {
+		const res = await c.env.DB.prepare("DELETE FROM instance_runtime_nodes WHERE user_id = ?1 AND runner_node = ?2").bind(session.uid, name).run();
 		removed += res.meta?.changes ?? 0;
 	}
-	return c.json({ forgotten: [...names], registrationsRemoved: removed });
+	return c.json({ forgotten: preflight.names, registrationsRemoved: removed });
 });
 
 /**

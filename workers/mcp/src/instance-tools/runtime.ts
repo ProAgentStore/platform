@@ -185,6 +185,109 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 		},
 	);
 
+	// ── Terminal tab state and safe machine removal (#613) ─────────────────────
+	//
+	// `activeTerminalTarget` is per-instance state rather than a local UI preference: preserving
+	// it here lets an MCP operator resume the same terminal the console would open. Machine
+	// removal is deliberately a pair: read the server's blocker-rich preflight first, then make a
+	// separately confirmed destructive call. The API owns alias resolution and refusal precedence,
+	// so neither surface can claim that a pin/session is safe when the other refuses it.
+	server.tool(
+		"get_instance_terminal_session",
+		"Read the terminal session last selected for one instance. `activeTerminalTarget` is null when no terminal is selected. This is saved per instance, so it is shared with the console's Tmux tab rather than being local MCP client state.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID or slug."),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "get_instance_terminal_session", { instance_id });
+			if (denied) return denied;
+			return jsonText(await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/terminal-session`, sessionToken, {}, env));
+		},
+	);
+
+	server.tool(
+		"set_instance_terminal_session",
+		"Save the terminal session the console's Tmux tab should reopen for one instance. Pass an empty `active_terminal_target` to clear the saved selection. This changes only platform UI state; it does not open, type into, or close a terminal.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID or slug."),
+			active_terminal_target: z.string().describe("Terminal target to reopen, or an empty string to clear the saved selection."),
+			dry_run: z.boolean().optional().describe("Report the saved terminal selection without changing it."),
+		},
+		async ({ token, instance_id, active_terminal_target, dry_run: preview }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, active_terminal_target };
+			const denied = await requirePermission(safetyFor(token), "write", "set_instance_terminal_session", input);
+			if (denied) return denied;
+			if (preview) return dryRun(safetyFor(token), "set_instance_terminal_session", active_terminal_target ? `save terminal session ${active_terminal_target} for ${instance_id}` : `clear the saved terminal session for ${instance_id}`, input, {
+				endpoint: `/v1/instances/${encodeURIComponent(instance_id)}/terminal-session`, method: "PUT", body: { activeTerminalTarget: active_terminal_target },
+			});
+			const data = (await authedCall(
+				`/v1/instances/${encodeURIComponent(instance_id)}/terminal-session`,
+				sessionToken,
+				{ method: "PUT", body: JSON.stringify({ activeTerminalTarget: active_terminal_target }) },
+				env,
+			)) as { activeTerminalTarget?: string | null; error?: string };
+			if (!data.error) await audit(safetyFor(token), { tool: "set_instance_terminal_session", action: "completed", input, result: data });
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
+	server.tool(
+		"runner_node_forget_preflight",
+		"Safely inspect whether a machine registration can be forgotten. Returns every alias that would be removed, whether the machine is connected, and ALL pin or open-session blockers. It changes nothing. If `verdict.ok` is false, fix the named blockers (or stop `pags up`) before calling forget_runner_node.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			node: z.string().describe("Any current or former registered name of the machine to inspect."),
+		},
+		async ({ token, node }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "runner_node_forget_preflight", { node });
+			if (denied) return denied;
+			return jsonText(await authedCall(`/v1/terminals/nodes/${encodeURIComponent(node)}/forget-preflight`, sessionToken, {}, env));
+		},
+	);
+
+	server.tool(
+		"forget_runner_node",
+		"Permanently remove a disconnected machine's terminal registrations under every name it has used. Call runner_node_forget_preflight first: this refuses while the machine is connected, an instance is pinned to it, or an active/suspended coding session remains there, and it names every blocker. It does not change the machine itself; running `pags up` there registers it again.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			node: z.string().describe("Any current or former registered name of the machine to forget."),
+			confirm: z.string().optional().describe('Exact confirmation required for a real forget: "forget_runner_node". Omit on dry_run.'),
+			dry_run: z.boolean().optional().describe("Preview the destructive request without removing any registrations."),
+		},
+		async ({ token, node, confirm, dry_run: preview }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { node };
+			const denied = await requirePermission(safetyFor(token), "destructive", "forget_runner_node", input);
+			if (denied) return denied;
+			if (preview) return dryRun(safetyFor(token), "forget_runner_node", `forget terminal registrations for ${node}`, input, {
+				endpoint: `/v1/terminals/nodes/${encodeURIComponent(node)}`, method: "DELETE",
+			});
+			const unconfirmed = await requireConfirmation(safetyFor(token), "forget_runner_node", confirm, "forget_runner_node", input);
+			if (unconfirmed) return unconfirmed;
+			const data = (await authedCall(
+				`/v1/terminals/nodes/${encodeURIComponent(node)}`,
+				sessionToken,
+				{ method: "DELETE" },
+				env,
+			)) as { forgotten?: string[]; registrationsRemoved?: number; error?: string; reason?: string; blockers?: unknown[] };
+			if (data.error) {
+				await audit(safetyFor(token), { tool: "forget_runner_node", action: "denied", input, result: data });
+				return jsonText(data);
+			}
+			await audit(safetyFor(token), { tool: "forget_runner_node", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
 	server.tool(
 		"unregister_instance_runtime",
 		"Remove the registered runtime endpoint for one of your private instances.",

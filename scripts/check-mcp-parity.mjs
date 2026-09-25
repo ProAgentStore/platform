@@ -169,13 +169,7 @@ const EXCLUSIONS = [
 // It is a ceiling, not a permission: adding a tool deletes an entry, and an entry that matches
 // nothing fails. Each group carries the issue tracking it where one exists.
 // ─────────────────────────────────────────────────────────────────────────────
-const KNOWN_GAPS = [
-	{
-		why:
-			"Machines and terminals, the part still missing: FORGETTING a node (and un-claiming its name), and the Tmux tab's terminal-session read/write. #613. Narrowed by #671, which closed the half that mattered for placement — `list_runner_nodes` lists every connected CLI across agents, `instance_runner_node` reads one instance's pin and its alternatives, and `set_instance_runner_node` writes it through the same route the console uses. What is left is deliberate rather than pending: forgetting a node is destructive and has refusal logic (`diagnoseUnclaim`) whose blockers a caller has no way to read over MCP yet, and `terminal-session` is UI state for a tab MCP does not render.",
-		match: /^[A-Z]+ \/v1\/(terminals\/nodes\/\{\}|instances\/\{\}\/terminal-session)$/,
-	},
-];
+const KNOWN_GAPS = [];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Inventory

@@ -896,4 +896,14 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// records the instance id and changed flag, never either personality string.
 	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.55 is published.
 	"0.1.56": "sha256:ea3b52ec2177852ace04f1dff9da9b161358e30b693ba37ffdc5f488872b84ff",
+	// 0.1.57 (#613, the final machines-and-terminals routes): four new always-on names — 232
+	// registrations become 236, always-on 206 → 210, with the 26 surface-gated tools unchanged.
+	//
+	// `get_instance_terminal_session` / `set_instance_terminal_session` read and write the same
+	// saved Tmux-tab selection as the console; the write is platform state only and has dry_run.
+	// `runner_node_forget_preflight` is a read-gated server verdict that names every alias, pin and
+	// live coding session before `forget_runner_node` can delete a registration. The delete requires
+	// destructive scope plus its own exact confirmation, supports a no-network dry run, preserves
+	// API refusal blockers, and audits denied as distinct from completed. Appended: 0.1.56 is live.
+	"0.1.57": "sha256:e630b78e7fe2fffaa65f4b5c997c10d24aadf7ac656262ab0e2de1ea0b3acc3e",
 };
