@@ -105,6 +105,12 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		return json(res, 200, runner.cancelTask(cancelMatch[1]));
 	}
 
+	const artifactMatch = path.match(/^\/tasks\/([^/]+)\/artifacts$/);
+	if (req.method === "POST" && artifactMatch) {
+		const body = await readJson<{ captureArtifacts?: unknown[] }>(req);
+		return json(res, 200, runner.appendCaptureArtifacts(artifactMatch[1], body.captureArtifacts ?? []));
+	}
+
 	if (req.method === "GET" && path === "/events") {
 		const limit = clampLimit(url.searchParams.get("limit"), 100, 500);
 		return json(res, 200, { events: runner.store.listEvents(limit) });

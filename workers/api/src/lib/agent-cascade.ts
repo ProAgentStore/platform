@@ -78,6 +78,7 @@ export const INSTANCE_CHILD_TABLES = [
 	"agent_trigger_sync_state",
 	"agent_triggers",
 	"instance_runtimes",
+	"site_builder_runtime_runs",
 	"instance_runtime_tasks",
 	"instance_runtime_task_events",
 	"instance_runtime_nodes",

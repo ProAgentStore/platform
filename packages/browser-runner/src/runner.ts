@@ -209,6 +209,35 @@ export class LocalRunner {
 	}
 
 	/**
+	 * Receive a bounded FWS capture manifest from the PAGS broker. The pixels remain behind the
+	 * job-scoped signed URLs; keeping the manifest on the durable local task lets Claude/Codex
+	 * inspect both layouts after a relay reconnect without ever receiving FWS OAuth material.
+	 */
+	appendCaptureArtifacts(id: string, artifacts: unknown[]): RunnerTask {
+		const task = this.requireTask(id);
+		if (task.type !== "site_builder_runtime") throw new RunnerInputError("Capture artifacts are only valid for Website Builder tasks");
+		if (!Array.isArray(artifacts) || artifacts.length < 1 || artifacts.length > 2) throw new RunnerInputError("Expected one or two capture artifacts");
+		const valid = artifacts.map((item) => {
+			if (!item || typeof item !== "object" || Array.isArray(item)) throw new RunnerInputError("Invalid capture artifact");
+			const a = item as Record<string, unknown>;
+			if (typeof a.id !== "string" || !/^[a-f0-9]{64}$/.test(a.id) || (a.device !== "desktop" && a.device !== "mobile") ||
+				typeof a.contentType !== "string" || typeof a.bytes !== "number" || !Number.isInteger(a.bytes) || a.bytes <= 0 || a.bytes > 4 * 1024 * 1024 ||
+				typeof a.url !== "string" || a.url.length > 4_000 || !a.url.startsWith("https://api.proagentstore.online/")) {
+				throw new RunnerInputError("Invalid capture artifact");
+			}
+			return a;
+		});
+		const prior = Array.isArray(task.input.captureArtifacts) ? task.input.captureArtifacts.filter((item): item is Record<string, unknown> => !!item && typeof item === "object" && !Array.isArray(item)) : [];
+		const merged = new Map<string, Record<string, unknown>>();
+		for (const artifact of [...prior, ...valid]) if (typeof artifact.id === "string") merged.set(artifact.id, artifact);
+		task.input = { ...task.input, captureArtifacts: [...merged.values()].slice(-8) };
+		task.updatedAt = new Date().toISOString();
+		this.store.putTask(task);
+		this.addTaskEvent(task, "site_builder.capture_received", `FWS ${valid.map((artifact) => artifact.device).join(" + ")} capture received`, { artifacts: valid.map(({ id, device, contentType, bytes }) => ({ id, device, contentType, bytes })) });
+		return task;
+	}
+
+	/**
 	 * Tear everything down, and never let one failure strand the rest (#274).
 	 *
 	 * `browserContext.close()` rejects routinely — the browser crashed, or was

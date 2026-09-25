@@ -268,6 +268,12 @@ describe("extractToolResult — unwrapping the MCP content envelope", () => {
 	it("surfaces isError from the server", () => {
 		expect(extractToolResult({ content: [{ type: "text", text: "nope" }], isError: true }).isError).toBe(true);
 	});
+
+	it("retains image blocks structurally without mixing their base64 into tool text", () => {
+		const r = extractToolResult({ content: [{ type: "text", text: '{"session_id":"s-1"}' }, { type: "image", data: "aW1hZ2U=", mimeType: "image/png" }] });
+		expect(r.data).toEqual({ session_id: "s-1" });
+		expect(r.images).toEqual([{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }]);
+	});
 });
 
 // ─── #260: protocol / version negotiation ───────────────────────────────────────────────

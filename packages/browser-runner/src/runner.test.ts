@@ -99,6 +99,14 @@ describe("LocalRunner", () => {
 		expect(runner.store.getTask(task.id)?.status).toBe("running");
 	});
 
+	it("keeps signed Website Builder captures on the local durable task, without image bytes", () => {
+		const task = runner.createTask({ type: "site_builder_runtime", input: {} });
+		const id = "a".repeat(64);
+		const updated = runner.appendCaptureArtifacts(task.id, [{ id, device: "desktop", contentType: "image/png", bytes: 123, url: "https://api.proagentstore.online/v1/capture?token=short-lived" }]);
+		expect(updated.input.captureArtifacts).toEqual([{ id, device: "desktop", contentType: "image/png", bytes: 123, url: "https://api.proagentstore.online/v1/capture?token=short-lived" }]);
+		expect(JSON.stringify(updated.input)).not.toContain("aW1hZ2U=");
+	});
+
 	/**
 	 * #636 — a run the owner Stopped must land on the board as Cancelled, not as Failed.
 	 *

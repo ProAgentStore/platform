@@ -255,27 +255,40 @@ export function serverRequestRefusal(method: string): string {
  * structured payloads as JSON text), parse it so a pipeline `$ref` can read fields off it
  * (e.g. the session id a create-style tool hands back). `structuredContent` wins when present.
  */
-export function extractToolResult(result: unknown): { data: unknown; isError: boolean } {
-	if (!result || typeof result !== "object") return { data: result, isError: false };
+export interface McpImageArtifact {
+	type: "image";
+	data: string;
+	mimeType: string;
+}
+
+/** Keep image blocks structurally separate from text. Callers must explicitly authorise
+ * where those bytes go; silently folding them into a transcript leaks both memory and data. */
+export function extractToolResult(result: unknown): { data: unknown; isError: boolean; images: McpImageArtifact[] } {
+	if (!result || typeof result !== "object") return { data: result, isError: false, images: [] };
 	const r = result as Record<string, unknown>;
 	const isError = r.isError === true;
-	if (r.structuredContent !== undefined) return { data: r.structuredContent, isError };
 	const parts = Array.isArray(r.content) ? r.content : [];
+	const images: McpImageArtifact[] = parts
+		.filter((p): p is Record<string, unknown> => !!p && typeof p === "object")
+		.flatMap((p) => p.type === "image" && typeof p.data === "string" && typeof p.mimeType === "string"
+			? [{ type: "image" as const, data: p.data, mimeType: p.mimeType }]
+			: []);
+	if (r.structuredContent !== undefined) return { data: r.structuredContent, isError, images };
 	const text = parts
 		.filter((p): p is Record<string, unknown> => !!p && typeof p === "object")
 		.map((p) => (typeof p.text === "string" ? p.text : ""))
 		.filter(Boolean)
 		.join("\n");
-	if (!text) return { data: r.content ?? r, isError };
+	if (!text) return { data: r.content ?? r, isError, images };
 	const t = text.trim();
 	if (t.startsWith("{") || t.startsWith("[")) {
 		try {
-			return { data: JSON.parse(t), isError };
+			return { data: JSON.parse(t), isError, images };
 		} catch {
 			/* not JSON — return the text */
 		}
 	}
-	return { data: text, isError };
+	return { data: text, isError, images };
 }
 
 // ─── Era detection cache ────────────────────────────────────────────────────────────────
@@ -1189,7 +1202,7 @@ export const MCP_TOOLS: ToolDef[] = [
 			} catch {
 				/* handled below */
 			}
-			const { data, isError } = extractToolResult(parsed);
+			const { data, isError, images } = extractToolResult(parsed);
 			if (isError) {
 				await recordMcp(ctx, { event: "mcp.call", level: "warn", endpoint: endpointKey, method: "tools/call", tool, era: out.era, protocolVersion: out.version, status: out.status, ok: false, failure: "tool_error", argKeys, argBytes });
 			}
@@ -1207,6 +1220,10 @@ export const MCP_TOOLS: ToolDef[] = [
 				content: JSON.stringify({ tool, ok: !isError, data }, null, 2),
 				success: !isError,
 				origin,
+				// Kept out of content (and therefore out of logs/model context). #843's
+				// Website Builder broker is the only current consumer and moves these into
+				// a job-scoped, signed artifact transfer after its own authorisation.
+				...(images.length ? { artifacts: images } : {}),
 			};
 		},
 	},

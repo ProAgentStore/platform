@@ -391,7 +391,7 @@ const TABLE: Record<string, Row> = {
 	// #671: the PLATFORM view — every machine across every agent. No instance_id, by design.
 	list_runner_nodes: ["runtime", "none", null, null, "token"],
 	list_supervision: ["composition", "read", null, null, "supervisor_instance_id,token"],
-	my_instances: ["base", "none", null, null, "token"],
+	my_instances: ["base", "none", null, null, "include_paused,token"],
 	// #787: the caller's own recency view. `read`-gated like `get_instance_connection_guide`
 	// rather than a bare proxy, so MCP_READ_ONLY and a suspended account both see the call.
 	// #192: `limit` (default 5, clamped to 20) — the cap was a silent constant before.

@@ -19,7 +19,7 @@ describe("runtime Website Builder workflow invariants", () => {
 		expect(JSON.stringify(fwsProxyInput("run-1", "https://fws.example/mcp"))).not.toMatch(/oauth|bearer|secret/i);
 	});
 	it("collects desktop and mobile visual-QA evidence", () => {
-		const evidence = { ...emptyEvidence("codex"), qualityReport: { ready_for_human_review: true }, screenshots: [{ device: "desktop" as const, url: "https://shot/desktop", capturedAt: "now" }, { device: "mobile" as const, url: "https://shot/mobile", capturedAt: "now" }] };
+		const evidence = { ...emptyEvidence("codex"), qualityReport: { ready_for_human_review: true }, screenshots: [{ device: "desktop" as const, id: "a".repeat(64), contentType: "image/png", bytes: 10, capturedAt: "now" }, { device: "mobile" as const, id: "b".repeat(64), contentType: "image/png", bytes: 10, capturedAt: "now" }] };
 		expect(hasVisualQa(evidence)).toBe(true);
 	});
 	it("enforces the one-refinement ceiling in persisted evidence", () => {

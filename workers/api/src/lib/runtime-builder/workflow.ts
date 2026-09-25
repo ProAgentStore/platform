@@ -5,6 +5,7 @@ import { callRuntime, getLiveRuntime, mirrorRuntimeTask, runtimeJson } from "../
 import type { Env } from "../../types.js";
 import { emptyEvidence, type RuntimeBuilderEngine, type RuntimeBuilderEvidence, type RuntimeBuilderRun, type RuntimeBuilderStatus } from "./types.js";
 import { fwsProxyInput, hasVisualQa } from "./fws-proxy.js";
+import { signedCaptureDelivery, storeCaptureArtifact, type CaptureRequest } from "./capture-artifacts.js";
 
 interface RunRow { id: string; instance_id: string; user_id: string; engine: RuntimeBuilderEngine; status: RuntimeBuilderStatus; evidence: string; refinement_count: number; created_at: string; updated_at: string }
 const safeJson = (value: unknown) => JSON.stringify(value);
@@ -24,7 +25,7 @@ export async function createRuntimeBuilderRun(env: Env, instanceId: string, user
 	const engines = await readEngines(env, instanceId, userId);
 	if (!engines.engines.some((candidate) => deriveClientType(candidate.command) === engine)) throw new HttpError(409, `No configured ${engine} runtime engine`);
 	const runId = crypto.randomUUID();
-	const evidence = emptyEvidence(engine);
+	const evidence = { ...emptyEvidence(engine), fwsEndpoint: mcpUrl };
 	await env.DB.prepare(`INSERT INTO site_builder_runtime_runs (id, instance_id, user_id, engine, status, evidence, refinement_count, created_at, updated_at)
 		VALUES (?1, ?2, ?3, ?4, 'drafting', ?5, 0, datetime('now'), datetime('now'))`).bind(runId, instanceId, userId, engine, safeJson(evidence)).run();
 	const runtime = await getLiveRuntime(env, instanceId, userId);
@@ -60,6 +61,59 @@ export async function submitRuntimeBuilderEvidence(env: Env, instanceId: string,
 	const status: RuntimeBuilderStatus = hasVisualQa(evidence) ? "awaiting_review" : "drafting";
 	await updateRuntimeBuilderRun(env, instanceId, userId, runId, status, { ...evidence, approvalState: status === "awaiting_review" ? "awaiting_review" : evidence.approvalState }, run.refinementCount);
 	return (await getRuntimeBuilderRun(env, instanceId, userId, runId))!;
+}
+
+/**
+ * PAGS performs the FWS call through the ordinary registry, retaining its endpoint-specific
+ * OAuth and tool-grant gates. The local model receives only a short-lived reference to the
+ * resulting image; the base64 block never lands in a model transcript or D1 evidence record.
+ */
+export async function captureRuntimeBuilderPreview(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	runId: string,
+	request: CaptureRequest,
+	args: Record<string, unknown>,
+): Promise<RuntimeBuilderRun> {
+	const run = await getRuntimeBuilderRun(env, instanceId, userId, runId);
+	if (!run) throw new HttpError(404, "Website Builder run not found");
+	if (run.status === "cancelled" || run.status === "approved") throw new HttpError(409, "Website Builder run is closed");
+	const url = run.evidence.fwsEndpoint?.trim();
+	if (!url) throw new HttpError(409, "Website Builder run has no FWS endpoint");
+	// This is intentionally NOT a raw fetch. `mcp_call_tool` resolves the user's OAuth token
+	// and verifies connector write consent plus the exact endpoint/tool grant before touching FWS.
+	// Deferred to keep the runtime-builder workflow out of the connector/trigger import cycle.
+	// The call still goes through the one registry dispatch path, so no grant or OAuth check is
+	// skipped merely because this is a durable Website Builder action.
+	const { runRegistryTool } = await import("../tool-registry.js");
+	const capture = await runRegistryTool("mcp_call_tool", { env, userId, instanceId }, { url, tool: "capture_preview", args });
+	if (!capture.success) throw new HttpError(502, `FWS capture_preview failed: ${capture.content.slice(0, 500)}`);
+	const artifact = await storeCaptureArtifact(env, run, request, capture.artifacts ?? []);
+	const runtime = await getLiveRuntime(env, instanceId, userId);
+	if (!runtime || !run.evidence.taskId) {
+		await pauseRuntimeBuilderRun(env, instanceId, userId, runId, "Local pags up runner is unavailable while forwarding FWS capture");
+		throw new HttpError(503, "Local runner is unavailable; retry the capture when it reconnects");
+	}
+	try {
+		const delivery = await signedCaptureDelivery(env, run, artifact);
+		const response = await callRuntime(env, runtime, `/tasks/${encodeURIComponent(run.evidence.taskId)}/artifacts`, {
+			method: "POST",
+			body: JSON.stringify({ runId, captureArtifacts: [delivery] }),
+		});
+		if (!response.ok) throw new Error("runner rejected FWS capture artifact");
+	} catch {
+		// R2 is already content-addressed. A retry reuses the same object/id and sends a fresh
+		// short-lived URL, while the prior durable evidence remains untouched.
+		await pauseRuntimeBuilderRun(env, instanceId, userId, runId, "Couldn't forward FWS capture to the local runner; retry the capture");
+		throw new HttpError(503, "Couldn't forward FWS capture to the local runner; retry the capture");
+	}
+	const screenshots = [...run.evidence.screenshots.filter((shot) => shot.device !== artifact.device), artifact].slice(-8);
+	const transcriptCall: RuntimeBuilderEvidence["fwsTranscript"][number] = { tool: "capture_preview", args: { device: request.device }, at: artifact.capturedAt, result: "ok" };
+	return submitRuntimeBuilderEvidence(env, instanceId, userId, runId, {
+		screenshots,
+		fwsTranscript: [...run.evidence.fwsTranscript, transcriptCall].slice(-200),
+	});
 }
 
 export async function refineRuntimeBuilderRun(env: Env, instanceId: string, userId: string, runId: string, request: string): Promise<RuntimeBuilderRun> {

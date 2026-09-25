@@ -10622,6 +10622,144 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "503": { $ref: "#/components/responses/Unavailable" }
 
+  # ── Runtime Website Builder ───────────────────────────────────────────────
+
+  /v1/instances/{instanceId}/site-builder/run:
+    post:
+      summary: Start a durable runtime Website Builder draft
+      description: Creates an owner-scoped draft task for the connected Claude Code or Codex runtime. PAGS retains deployment authority and FWS OAuth/tool grants.
+      operationId: startRuntimeSiteBuilder
+      tags: [Runtime]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [engine, mcpUrl], additionalProperties: true }
+      responses:
+        "202": { $ref: "#/components/responses/OkObject" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/site-builder/{runId}:
+    get:
+      summary: Read runtime Website Builder draft state
+      operationId: getRuntimeSiteBuilder
+      tags: [Runtime]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/site-builder/{runId}/capture:
+    post:
+      summary: Capture and forward an FWS preview to the runtime
+      description: Calls FWS `capture_preview` through PAGS' existing OAuth and per-tool grant gate, then forwards a bounded, short-lived job-scoped artifact URL to the local task. Image bytes and credentials are not persisted in run evidence.
+      operationId: captureRuntimeSiteBuilderPreview
+      tags: [Runtime]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [device], additionalProperties: true }
+      responses:
+        "202": { $ref: "#/components/responses/OkObject" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /v1/instances/{instanceId}/site-builder/{runId}/evidence:
+    post:
+      summary: Submit non-image Website Builder evidence
+      description: Records bounded transcript and quality-report metadata. Visual evidence must use the capture route, which creates authorised job-scoped artifact references.
+      operationId: submitRuntimeSiteBuilderEvidence
+      tags: [Runtime]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/site-builder/{runId}/refine:
+    post:
+      summary: Request the one permitted runtime Website Builder refinement
+      operationId: refineRuntimeSiteBuilder
+      tags: [Runtime]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, properties: { request: { type: string, maxLength: 4000 } } }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/site-builder/{runId}/cancel:
+    post:
+      summary: Cancel a runtime Website Builder draft
+      operationId: cancelRuntimeSiteBuilder
+      tags: [Runtime]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/site-builder/{runId}/approve:
+    post:
+      summary: Approve a reviewed Website Builder draft for deployment
+      description: PAGS alone performs the deployment handoff after quality report plus desktop and mobile captures are present.
+      operationId: approveRuntimeSiteBuilder
+      tags: [Runtime]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/site-builder/{runId}/artifacts/{artifactId}:
+    get:
+      summary: Download a short-lived Website Builder capture artifact
+      description: The connected runtime supplies the run-scoped HMAC query parameters it received from PAGS. This endpoint does not accept a session token and never exposes FWS OAuth credentials.
+      operationId: downloadRuntimeSiteBuilderArtifact
+      tags: [Runtime]
+      security: []
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+        - { name: artifactId, in: path, required: true, schema: { type: string, pattern: "^[a-f0-9]{64}$" } }
+        - { name: uid, in: query, required: true, schema: { type: string } }
+        - { name: exp, in: query, required: true, schema: { type: integer } }
+        - { name: token, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Capture image bytes }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   # ── Instances: remaining chat + knowledge routes ──────────────────────────
 
   /v1/instances/{instanceId}/system-message:

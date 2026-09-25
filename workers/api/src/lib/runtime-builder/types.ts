@@ -11,7 +11,12 @@ export interface FwsToolCall {
 
 export interface ScreenshotArtifact {
 	device: "desktop" | "mobile";
-	url: string;
+	/** Content-addressed, job-scoped R2 artifact. No signed URL or image bytes are persisted. */
+	id?: string;
+	contentType?: string;
+	bytes?: number;
+	width?: number;
+	height?: number;
 	capturedAt: string;
 }
 
@@ -28,6 +33,8 @@ export interface RuntimeBuilderEvidence {
 	/** The FWS draft session. Never an OAuth credential. */
 	sessionId?: string | null;
 	deployParams?: Record<string, unknown> | null;
+	/** Endpoint identity only; OAuth remains in PAGS' endpoint-scoped credential store. */
+	fwsEndpoint?: string | null;
 }
 
 export interface RuntimeBuilderRun {

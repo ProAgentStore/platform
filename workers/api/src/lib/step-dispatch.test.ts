@@ -37,6 +37,8 @@ const DISPATCH_SURFACES = new Set([
 	"agent-think.ts",
 	// POST /v1/instances/:id/tools/:name — runs the tool the caller named.
 	"routes/tools.ts",
+	// Runtime Website Builder's fixed, authorised FWS broker.
+	"lib/runtime-builder/workflow.ts",
 ]);
 
 function sourceFiles(dir: string, out: string[] = []): string[] {

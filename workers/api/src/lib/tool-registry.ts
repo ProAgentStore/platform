@@ -720,7 +720,7 @@ export async function runRegistryTool(
 	name: string,
 	ctx: RegistryToolCtx,
 	input: Record<string, unknown>,
-): Promise<{ name: string; content: string; success: boolean; transfer?: ConversationTransfer }> {
+): Promise<{ name: string; content: string; success: boolean; transfer?: ConversationTransfer; artifacts?: unknown[] }> {
 	const tool = REGISTRY.get(name);
 	if (!tool) return { name, content: `Unknown tool: ${name}`, success: false };
 	// Declared-capability gate (#381), FIRST because it is the cheapest and the most fundamental:
@@ -882,7 +882,13 @@ export async function runRegistryTool(
 				context: { tool: name, scope: tool.scope, onBehalfOf: ctx.onBehalfOf, success: r.success },
 			}).catch(() => undefined);
 		}
-		return { name, content: renderToolContent(tool, r), success: r.success, ...(r.transfer ? { transfer: r.transfer } : {}) };
+		return {
+			name,
+			content: renderToolContent(tool, r),
+			success: r.success,
+			...(r.transfer ? { transfer: r.transfer } : {}),
+			...(r.artifacts?.length ? { artifacts: r.artifacts } : {}),
+		};
 	} catch (err) {
 		return { name, content: `Error: ${err instanceof Error ? err.message : String(err)}`, success: false };
 	}

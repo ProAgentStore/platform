@@ -83,6 +83,9 @@ const EXPECTED_DEFERRED = new Set([
 	"lib/pipeline.ts",
 	"lib/triggers.ts",
 	"lib/pipeline-run-start.ts",
+	// Runtime Website Builder calls FWS through the registry so OAuth/tool grants remain
+	// authoritative; it defers that dependency to keep the trigger/registry cycle runtime-safe.
+	"lib/runtime-builder/workflow.ts",
 ]);
 
 describe("workers/api import graph", () => {

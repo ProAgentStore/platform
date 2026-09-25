@@ -102,6 +102,14 @@ describe("runner server", () => {
 		});
 	});
 
+	it("forwards bounded Website Builder capture manifests into the local task", async () => {
+		const created = await fetch(`${url}/tasks`, { method: "POST", headers: { Authorization: "Bearer secret", "X-PAGS-Instance-Id": "inst-1", "Content-Type": "application/json" }, body: JSON.stringify({ type: "site_builder_runtime", input: {} }) });
+		const task = await created.json() as { id: string };
+		const res = await fetch(`${url}/tasks/${task.id}/artifacts`, { method: "POST", headers: { Authorization: "Bearer secret", "X-PAGS-Instance-Id": "inst-1", "Content-Type": "application/json" }, body: JSON.stringify({ captureArtifacts: [{ id: "a".repeat(64), device: "mobile", contentType: "image/png", bytes: 456, url: "https://api.proagentstore.online/v1/capture?token=short-lived" }] }) });
+		expect(res.status).toBe(200);
+		await expect(res.json()).resolves.toMatchObject({ input: { captureArtifacts: [{ device: "mobile", bytes: 456 }] } });
+	});
+
 	it("returns 400 for invalid JSON request bodies", async () => {
 		const res = await fetch(`${url}/tasks`, {
 			method: "POST",

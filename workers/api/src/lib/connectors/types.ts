@@ -104,6 +104,13 @@ export interface RegistryToolResult {
 	content: string;
 	success: boolean;
 	/**
+	 * Opaque binary blocks returned by a remote tool. They deliberately never enter
+	 * `content`: model transcripts and durable event logs are the wrong place for
+	 * image bytes. A narrowly-scoped internal caller may move them into an
+	 * authorised artifact store instead (#843).
+	 */
+	artifacts?: unknown[];
+	/**
 	 * A destination for the CLIENT to move the conversation to (#279) — the one tool result that
 	 * acts on the browser rather than on the world.
 	 *

@@ -141,6 +141,9 @@ const PROPAGATION: Record<string, string> = {
 	// would overwrite that edit to fix wording. Every future subscriber gets the corrected copy; the
 	// count of live instances holding the stale one is NOT measured here.
 	"0152_email_assistant_honest_welcome.sql": "owner-initiated PUT /v1/instances/:id/state — only future subscribers get the corrected copy; the DO copy is the owner's",
+	// #836: 0156 upgrades the stock Site Builder pipeline and rewrites the matching live
+	// instance copies in the same migration, archiving the prior definition first.
+	"0156_site_builder_iterative_drafts.sql": "site_builder_iterative_drafts.sql",
 };
 
 describe("seed config patches — each one records how it reaches an EXISTING instance (#496, #394)", () => {

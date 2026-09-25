@@ -134,10 +134,11 @@ describe("the cloud sweep expires exactly what the runner's own restart expires"
 
 	// The drift that was live when #567 was written: the runner's list had three entries and the
 	// API's had two, so a `browser.handoff` — the takeover the runner mints for an engine sign-in —
-	// was expired by the cloud on the next `pags up` while the runner kept it.
+	// was expired by the cloud on the next `pags up` while the runner kept it. #841 added the
+	// durable site builder as a fourth preserved task.
 	it("never expires a task the runner preserves", () => {
 		const swept = [...WORKFLOW_DRIVEN_TASKS].filter((type) => isOrphanedByRunnerReconnect(type));
-		expect(WORKFLOW_DRIVEN_TASKS.size).toBe(3);
+		expect(WORKFLOW_DRIVEN_TASKS.size).toBe(4);
 		expect(swept).toEqual([]);
 	});
 });
