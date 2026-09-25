@@ -160,7 +160,8 @@ const PINS = {
 	// has to precede `/:instanceId/...`, which lives in this file — the same ordering constraint
 	// `/loop/queue` paid for in #788. What is NOT here is the composition: `lib/instance-activity.ts`
 	// folds the two query results and maps `runHealth`, so the handler is a fetch and a shape.
-	"workers/api/src/routes/instances.ts": 1116, // +3 (#825): the pause/resume mount — an import, a registrar call and the one-line reason, which is exactly the shape this pin asks for; the routes themselves are routes/instances-lifecycle.ts. // +4 (#772): the connection-guide mount — an import and a registrar call, plus the two-line reason. Every route module this file composes costs the same two lines; the work itself went into routes/instances-guide.ts and lib/connection-guide.ts, which is what the pin is asking for.
+	// +8 at #847: flags stay with this shared list handler and the site-builder mount stays at the contract-locked composition point; route bodies already live in siblings.
+	"workers/api/src/routes/instances.ts": 1124, // +3 (#825): the pause/resume mount — an import, a registrar call and the one-line reason, which is exactly the shape this pin asks for; the routes themselves are routes/instances-lifecycle.ts. // +4 (#772): the connection-guide mount — an import and a registrar call, plus the two-line reason. Every route module this file composes costs the same two lines; the work itself went into routes/instances-guide.ts and lib/connection-guide.ts, which is what the pin is asking for.
 	// +5 for #319: the send path now hands the live capture to the consumer alongside the audio
 	// key, so the two readings of a turn can be compared on the message. Raised rather than
 	// split — the whole change is one `storedDictation` call and the two `onSend` sites that
@@ -699,7 +700,8 @@ const PINS = {
 	// ran in the cloud and read a label the model wrote, while this file clicks by `ref` and never
 	// reads that label. Splitting the hook out of the method it must precede would put the ordering
 	// back in the reader's head.
-	"packages/browser-runner/src/runner.ts": 1277,
+	// +29 at #847: bounded capture receipt updates one LocalRunner task, its durable store and its event log; splitting that command would fragment the state transition.
+	"packages/browser-runner/src/runner.ts": 1306,
 	// +45 at #263: `probeMcpSurface`, so the connection test can ask about resources and prompts
 	// on the one guarded path out of this Worker. Raised rather than split — the network belongs
 	// with the rest of the transport, and the reasoning it feeds is pure and lives in
@@ -727,7 +729,10 @@ const PINS = {
 	// only whether this MODULE ever called `fenceUntrusted`. The prose is what stops the next author
 	// re-deriving the excuse; splitting the file would move it away from the six declarations it
 	// explains, which is the same defect one file over.
-	"workers/api/src/lib/connectors/mcp.ts": 1395,
+	// -24 at #847: the pure result-envelope parser moved to mcp-result.ts, where its runtime-artifact consumer shares the boundary; transport stays here.
+	"workers/api/src/lib/connectors/mcp.ts": 1371,
+	// New at #847: GitHub binding uniqueness is repo persistence, so findExistingRepoBinding stays with the D1 repo store rather than creating a one-query sibling.
+	"workers/api/src/lib/coding-store.ts": 824,
 	// -1 at #325: the JSON-string coercion create_agent and update_agent each had inline moved
 	// to `http.ts` as `parseJsonArg`, which is where the two copies could stop disagreeing about
 	// what a MALFORMED string means (create silently dropped it, update refused). Pin lowered so
@@ -820,7 +825,8 @@ const PINS = {
 	// moves with every published version by construction; that is the ledger working, not drift.
 	// +16 at #192 (proappstore-online/platform): the 0.1.50 record — recent_instances gains `limit`
 	// and a working-first order; the entry says why the cap had hidden a live run. Ledger, not drift.
-	"workers/mcp/src/surface-lock.ts": 851,
+	// +59 at #847: 0.1.51–0.1.57 are published append-only surface records; moving them would defeat the history check that protects this ledger.
+	"workers/mcp/src/surface-lock.ts": 910,
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
@@ -966,7 +972,8 @@ const PINS = {
 	// the fence rule above did: this function is the single point every surface passes through —
 	// chat, the /tools invoker, MCP and the pipeline runner — and a gate anywhere else is a gate on
 	// one surface, which is the same as no gate.
-	"workers/api/src/lib/tool-registry.ts": 890,
+	// +6 at #847: artifact forwarding is part of this dispatch result envelope, beside transfer and render; a second wrapper would only hide that propagation.
+	"workers/api/src/lib/tool-registry.ts": 896,
 	// +8 for the #312 stats prompt block. Deliberately not split: the block is two statements
 	// and its comment, and it must sit inside the existing config read (`instanceCfg`/`agentCfg`
 	// are already in hand) or the prompt costs an extra query per turn. Everything else about
@@ -1195,7 +1202,8 @@ const PINS = {
 	// that stops a stranger's text being stamped as the owner's standing instruction.
 	// Raised rather than split — the growth is a comment and two small string operations, and
 	// splitting the dispatch module to absorb them would hide the rationale from the mechanism.
-	"workers/api/src/lib/triggers.ts": 801,
+	// +16 at #847: runtime selection is the trigger adapter that preserves delivery/retry/idempotency; workflow creation already owns the runtime mechanics.
+	"workers/api/src/lib/triggers.ts": 817,
 	// +55 at #391 (a constant, a config field, a timer, and the paragraphs saying why): one-shot
 	// turn boundaries moved from three inferred timers to the process's own exit, and the
 	// 15-minute backstop had to become an ENFORCED ceiling — a timer that ends the turn — rather
@@ -1815,7 +1823,8 @@ const PINS = {
 	// +4 at #192: the surface-lock raise above (two lines of why) and these two — the same price
 	// #792 paid for the same kind of raise.
 	// This file grows by prose about other files, which is what it is for.
-	"scripts/check-file-size.mjs": 1899,
+	// +9 at #847: seven intentional decisions and one parser extraction need their auditable record; this ledger is the ratchet's ownership boundary.
+	"scripts/check-file-size.mjs": 1908,
 };
 
 /**

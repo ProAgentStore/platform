@@ -1,5 +1,5 @@
 import { HttpError } from "../auth.js";
-import type { McpImageArtifact } from "../connectors/mcp.js";
+import type { McpImageArtifact } from "../connectors/mcp-result.js";
 import { timingSafeEqualStr } from "../crypto.js";
 import type { Env } from "../../types.js";
 import type { RuntimeBuilderRun, ScreenshotArtifact } from "./types.js";
