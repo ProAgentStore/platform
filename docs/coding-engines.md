@@ -80,19 +80,20 @@ it can read them), only about everything it said, decided, or was told.
 Claude is the persistence exception, and its continuity is **not** in the preset either: the runner
 keeps one stream-json process alive, and across runner restarts re-spawns it with
 `--resume <session id>` against `~/.claude` — which is exactly why `--resume` is one of the
-structural flags a preset may not set. Codex also uses structured JSON now, but it is still
-one-shot and `resumedConversation` remains false until the dedicated runner implementation lands.
-The explicit-ID viability spike passed on `codex-cli 0.151.0` on 2026-09-25: the captured ID carried
-semantic context and resisted a same-CWD unrelated-exec hijack. Its evidence is recorded in
-[`codex-exec-resume-spike-2026-09-25.md`](codex-exec-resume-spike-2026-09-25.md); implementation is
-tracked separately in #848 and remains only a #693 stopgap.
+structural flags a preset may not set. Codex also uses structured JSON but remains one-shot: after
+its first turn, the runner may resume the exact persisted `thread.started.thread_id` with
+`exec resume <id>` rather than selecting a same-CWD latest session. The explicit-ID proof passed on
+`codex-cli 0.151.0` on 2026-09-25 and is recorded in
+[`codex-exec-resume-spike-2026-09-25.md`](codex-exec-resume-spike-2026-09-25.md). That opaque,
+machine-local memory is only a #693 stopgap: platform timeline seeding remains the eventual source
+of continuity, and `--last` remains prohibited.
 
-**The fix is the prefix contract, used on purpose.** Where the vendor ships a resume subcommand,
-putting it in the preset gives that engine multi-turn memory with no platform change: **multi-turn
-memory for a raw engine is a preset string, not a backend property**
-([ADR 0003](adr/0003-a-coder-engine-reports-its-own-turns.md)). Verified against the
-installed binaries on 2026-08-08, and **none of these is a
-shipped default** — each is something you add yourself, knowing the caveats below:
+**The prefix contract remains deliberate for every other one-shot engine.** A raw engine's
+multi-turn memory, where its CLI supports it, is a preset string rather than a backend property
+([ADR 0003](adr/0003-a-coder-engine-reports-its-own-turns.md)). Codex is the narrow exception:
+the runner owns its explicit-ID argv and its default preset stays a fresh `codex exec`, so a preset
+must not smuggle in a resume subcommand. The remaining vendor forms are not shipped defaults; add
+one yourself only with the caveats below.
 
 The **⚙ CLI engines** editor states this per preset, derived from the command's binary rather than
 listed per engine (`engine-continuity.ts`, mirroring `deriveClientType`), so it stays right for

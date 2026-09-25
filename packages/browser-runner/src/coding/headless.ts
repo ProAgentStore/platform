@@ -7,13 +7,13 @@ import { authoredTurn, authorTag, type TurnAuthor } from "./turn-author.js";
 import { engineSpawnEnv, mergeEnv } from "./engine-env.js";
 import { type GhGuardReport, ghGuardStatus } from "./gh-guard.js";
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
 import { type ClientType, handlerFor } from "./handlers.js";
 import { type EngineAuthResolved, resolveEngineAuth } from "./engine-auth.js";
-import { engineAdapterFor, engineInvocationModeFromAdapter, engineInvocationWarning, genericRawEngineAdapter, type EngineAdapter, type EngineInvocationMode, type EngineMode } from "./engine-adapter.js";
+import { buildCodexResumeArgs, engineAdapterFor, engineInvocationModeFromAdapter, engineInvocationWarning, genericRawEngineAdapter, type EngineAdapter, type EngineInvocationMode, type EngineMode } from "./engine-adapter.js";
+import { isCodexThreadId, readCodexState, readState, writeState } from "./headless-state.js";
 
 export { buildClaudeArgs } from "./engine-adapter.js";
+export { defaultStatePath } from "./headless-state.js";
 
 /**
  * The coding engine — Claude Code driven through its structured **stream-json**
@@ -148,6 +148,8 @@ export class HeadlessSession {
 	private run: Run = "idle";
 	/** Claude Code's own session id (from the init event) — used to --resume. */
 	private claudeSessionId: string | null = null;
+	/** Codex's thread id from `thread.started` — used only by the explicit-ID resume path (#848). */
+	private codexThreadId: string | null = null;
 	/**
 	 * The cloud's context brief, until the first turn spends it (ADR 0005, #693). Null once
 	 * delivered, and null from the start when the engine resumed its own conversation.
@@ -295,11 +297,15 @@ export class HeadlessSession {
 	 * clean, so a cloud that announced "resumed where we left off" on its own intent would be
 	 * telling most of the fleet's users the opposite of what happened.
 	 *
-	 * False for a raw (non-Claude) engine under every circumstance — `--resume` is a Claude Code
-	 * flag and {@link buildClaudeArgs} is only reached in stream-json mode.
+	 * False for raw engines. Claude has a persistent protocol-level resume; supported structured
+	 * `codex exec` uses the separately proven explicit-ID one-shot path (#848), only as the
+	 * machine-local stopgap before #693's platform-owned timeline becomes authoritative.
 	 */
 	get resumedConversation(): boolean {
-		return this.config.clientType === "claude" && this.mode === "stream-json" && this.claudeSessionId !== null;
+		return (
+			(this.config.clientType === "claude" && this.mode === "stream-json" && this.claudeSessionId !== null) ||
+			(this.config.clientType === "codex" && this.mode === "stream-json" && this.codexThreadId !== null)
+		);
 	}
 
 	/**
@@ -316,11 +322,6 @@ export class HeadlessSession {
 
 	constructor(readonly config: HeadlessSessionConfig) {
 		this.engineLabel = `${config.clientType}:${config.id}`;
-		// Our own key first, the cloud's nominated predecessor second. See `resumeFrom`.
-		this.claudeSessionId =
-			config.clientType === "claude"
-				? readState(config.statePath, config.id) ?? (config.resumeFrom ? readState(config.statePath, config.resumeFrom) : null)
-				: null;
 		const { bin, args } = parseCommand(config.command);
 		// When no explicit command is configured, fall back to THIS engine's default
 		// command (codex/gemini/grok/…) — not a hard-coded "claude", which would drive a
@@ -333,6 +334,16 @@ export class HeadlessSession {
 		this.cmdArgs = bin ? args : fallback.args;
 		this.adapter = engineAdapterFor(config.clientType, this.cmdArgs);
 		this.mode = this.adapter.mode;
+		// Our own key first, the cloud's nominated predecessor second. See `resumeFrom`. Codex uses
+		// a distinct key namespace: a vendor thread id is not interchangeable with Claude's id.
+		this.claudeSessionId =
+			config.clientType === "claude"
+				? readState(config.statePath, config.id, "claude") ?? (config.resumeFrom ? readState(config.statePath, config.resumeFrom, "claude") : null)
+				: null;
+		this.codexThreadId =
+			config.clientType === "codex" && this.mode === "stream-json"
+				? readCodexState(config.statePath, config.id) ?? (config.resumeFrom ? readCodexState(config.statePath, config.resumeFrom) : null)
+				: null;
 		// AFTER both lines above, because `resumedConversation` reads them: the brief is the fallback,
 		// so an engine that found its own conversation drops it unread rather than being handed a
 		// summary of the conversation it is already in.
@@ -511,7 +522,7 @@ export class HeadlessSession {
 			// start is a clean session rather than looping on a dead id.
 			if (code && code !== 0 && this.claudeSessionId) {
 				this.claudeSessionId = null;
-				writeState(this.config.statePath, this.config.id, null);
+				writeState(this.config.statePath, this.config.id, null, "claude");
 			}
 		});
 	}
@@ -575,7 +586,11 @@ export class HeadlessSession {
 		this.turnLastLine = "";
 		this.sawStructuredEvent = false;
 		this.structuredOutputRejected = false;
-		const proc = spawn(this.cmdBin, this.adapter.buildTurnArgs(this.cmdArgs, text), {
+		const resumedCodexThreadId = this.codexResumeThreadId;
+		const turnArgs = resumedCodexThreadId
+			? buildCodexResumeArgs(this.cmdArgs, resumedCodexThreadId, text)
+			: this.adapter.buildTurnArgs(this.cmdArgs, text);
+		const proc = spawn(this.cmdBin, turnArgs, {
 			cwd: this.config.workDir,
 			env: this.spawnEnv,
 			stdio: ["ignore", "pipe", "pipe"],
@@ -649,6 +664,12 @@ export class HeadlessSession {
 				this.push(`[${this.config.clientType} CLI rejected --json; retrying this turn with raw output]`);
 				this.runOneShot(text);
 				return;
+			}
+			// A rejected/expired explicit ID is not retried as the same turn: the CLI may have started
+			// work before failing. Drop only that known-bad local key so the NEXT turn is safely fresh.
+			if (code && resumedCodexThreadId && this.codexThreadId === resumedCodexThreadId) {
+				this.codexThreadId = null;
+				writeState(this.config.statePath, this.config.id, null, "codex");
 			}
 			// THE EXIT CODE STOPS BEING ONLY PROSE HERE (#545). Recorded after the staleness guard
 			// on purpose: a turn aborted by its successor (see the kill above) must not overwrite
@@ -728,6 +749,11 @@ export class HeadlessSession {
 		}
 	}
 
+	/** A stored id is used only for the supported structured `codex exec` shape. */
+	private get codexResumeThreadId(): string | null {
+		return this.config.clientType === "codex" && this.mode === "stream-json" && isCodexThreadId(this.codexThreadId) ? this.codexThreadId : null;
+	}
+
 	/** Raw-engine stdout: strip ANSI control codes and append to the transcript. */
 	private pushRaw(line: string): void {
 		const clean = stripAnsi(line);
@@ -747,7 +773,10 @@ export class HeadlessSession {
 			case "session":
 				if (this.config.clientType === "claude") {
 					this.claudeSessionId = ev.sessionId;
-					writeState(this.config.statePath, this.config.id, ev.sessionId);
+					writeState(this.config.statePath, this.config.id, ev.sessionId, "claude");
+				} else if (this.config.clientType === "codex" && isCodexThreadId(ev.sessionId)) {
+					this.codexThreadId = ev.sessionId;
+					writeState(this.config.statePath, this.config.id, ev.sessionId, "codex");
 				}
 				break;
 			case "assistant_text":
@@ -950,42 +979,4 @@ export function parseCommand(command: string | undefined): { bin: string; args: 
 		tokens.push(out);
 	}
 	return { bin: tokens[0] ?? "", args: tokens.slice(1) };
-}
-
-// ── tiny on-disk store: our session id → Claude's session id (resume key) ──────
-// So a runner restart can `--resume` the conversation. One JSON file, best-effort.
-
-interface StateFile {
-	[sessionId: string]: string;
-}
-
-function loadFile(path: string | undefined): StateFile {
-	if (!path || !existsSync(path)) return {};
-	try {
-		return JSON.parse(readFileSync(path, "utf8")) as StateFile;
-	} catch {
-		return {};
-	}
-}
-
-function readState(path: string | undefined, id: string): string | null {
-	return loadFile(path)[id] ?? null;
-}
-
-function writeState(path: string | undefined, id: string, claudeSessionId: string | null): void {
-	if (!path) return;
-	try {
-		const data = loadFile(path);
-		if (claudeSessionId) data[id] = claudeSessionId;
-		else delete data[id];
-		mkdirSync(dirname(path), { recursive: true });
-		writeFileSync(path, JSON.stringify(data));
-	} catch {
-		/* best-effort persistence */
-	}
-}
-
-/** Default location for the resume-id store, under the repos base dir. */
-export function defaultStatePath(reposBaseDir: string): string {
-	return join(reposBaseDir, "headless-sessions.json");
 }

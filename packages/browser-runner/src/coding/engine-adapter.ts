@@ -137,6 +137,30 @@ function buildCodexExecArgs(userArgs: string[], turnText: string): string[] {
 	return args;
 }
 
+/**
+ * The only supported runner-owned Codex continuity form (#848).
+ *
+ * `exec resume` takes the thread id between the subcommand and the prompt, so it cannot use the
+ * normal preset-prefix-plus-final-prompt contract. Its write flag is deliberately not inherited
+ * from a fresh `exec`: resume accepts the bypass flag but does not accept `--sandbox <mode>`.
+ * This remains an opaque, machine-local optimisation until #693's platform timeline owns the
+ * conversation; it must never select a conversation with `--last`.
+ */
+export function buildCodexResumeArgs(userArgs: string[], threadId: string, turnText: string): string[] {
+	const extras: string[] = [];
+	for (let i = 1; i < userArgs.length; i++) {
+		const arg = userArgs[i];
+		if (arg === "--json" || arg === "--dangerously-bypass-approvals-and-sandbox") continue;
+		if (arg === "--sandbox") {
+			i++;
+			continue;
+		}
+		if (arg.startsWith("--sandbox=")) continue;
+		extras.push(arg);
+	}
+	return ["exec", "resume", threadId, "--json", "--dangerously-bypass-approvals-and-sandbox", ...extras, turnText];
+}
+
 function parseCodexLine(line: string): NormalizedEngineEvent[] {
 	let ev: Record<string, unknown>;
 	try {

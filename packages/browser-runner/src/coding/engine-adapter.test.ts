@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { buildClaudeArgs, engineAdapterFor, engineInvocationWarning } from "./engine-adapter.js";
+import { buildClaudeArgs, buildCodexResumeArgs, engineAdapterFor, engineInvocationWarning } from "./engine-adapter.js";
 
 describe("engineAdapterFor", () => {
 	it("keeps Claude on structured stream-json launch arguments", () => {
@@ -35,6 +35,11 @@ describe("engineAdapterFor", () => {
 	it("uses structured JSON for codex exec, and leaves bare codex raw", () => {
 		expect(engineAdapterFor("codex").mode).toBe("raw");
 		expect(engineAdapterFor("codex", ["exec", "resume", "thread-1"]).mode).toBe("raw");
+		for (const subcommand of ["fork", "review", "help"]) {
+			const unsupported = engineAdapterFor("codex", ["exec", subcommand]);
+			expect(unsupported.mode).toBe("raw");
+			expect(unsupported.buildTurnArgs(["exec", subcommand], "unchanged turn")).toEqual(["exec", subcommand, "unchanged turn"]);
+		}
 
 		const adapter = engineAdapterFor("codex", ["exec", "--sandbox", "danger-full-access"]);
 		expect(adapter.mode).toBe("stream-json");
@@ -47,6 +52,25 @@ describe("engineAdapterFor", () => {
 			"fix it",
 		]);
 		expect(adapter.buildTurnArgs(["exec", "--json", "--sandbox", "danger-full-access"], "fix it").filter((a) => a === "--json")).toHaveLength(1);
+	});
+
+	it("builds explicit-ID Codex resume argv without --last or the unsupported sandbox flag (#848)", () => {
+		const threadId = "01a0d811-35aa-7fc1-bd23-f39d943db79a";
+		const args = buildCodexResumeArgs(["exec", "--json", "--sandbox", "danger-full-access", "-c", "model=o3"], threadId, "continue the exact task");
+
+		expect(args).toEqual([
+			"exec",
+			"resume",
+			threadId,
+			"--json",
+			"--dangerously-bypass-approvals-and-sandbox",
+			"-c",
+			"model=o3",
+			"continue the exact task",
+		]);
+		expect(args.at(-1)).toBe("continue the exact task");
+		expect(args).not.toContain("--sandbox");
+		expect(args).not.toContain("--last");
 	});
 
 	it("warns when Claude or Codex uses its raw fallback", () => {

@@ -49,6 +49,20 @@ process.stdout.write(JSON.stringify({ type: "item.completed", item: { id: "item_
 process.stdout.write(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } }) + "\\n");
 `;
 
+/** Structured Codex stand-in: records argv and emits the event fields #848 must preserve. */
+const FAKE_CODEX_RESUME = `#!/usr/bin/env node
+const fs = require("node:fs");
+const argv = process.argv.slice(2);
+if (process.env.CODEX_RESUME_LOG) fs.appendFileSync(process.env.CODEX_RESUME_LOG, JSON.stringify(argv) + "\\n");
+const resumed = argv[0] === "exec" && argv[1] === "resume";
+const threadId = resumed ? argv[2] : process.env.CODEX_THREAD_ID;
+process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: threadId }) + "\\n");
+process.stdout.write(JSON.stringify({ type: "item.started", item: { id: "item_1", type: "command_execution", command: "git push -u origin fix && gh pr merge 42 --squash", status: "in_progress" } }) + "\\n");
+process.stdout.write(JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "command_execution", command: "git push -u origin fix && gh pr merge 42 --squash", aggregated_output: "merged", exit_code: 0, status: "completed" } }) + "\\n");
+process.stdout.write(JSON.stringify({ type: "item.completed", item: { id: "item_2", type: "agent_message", text: "argv: " + JSON.stringify(argv) } }) + "\\n");
+process.stdout.write(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 2, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 3, reasoning_output_tokens: 0 } }) + "\\n");
+`;
+
 /** An old Codex CLI: it rejects --json before it can execute the prompt. */
 const FAKE_CODEX_OLD_JSON = `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -424,6 +438,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 	let pauserBin: string;
 	let argvBin: string;
 	let codexJsonArgvBin: string;
+	let codexResumeBin: string;
 	let oldCodexJsonBin: string;
 	let wedgedBin: string;
 	let refuserBin: string;
@@ -436,6 +451,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		pauserBin = join(dir, "fake-pauser.js");
 		argvBin = join(dir, "fake-argv.js");
 		codexJsonArgvBin = join(dir, "fake-codex-json-argv.js");
+		codexResumeBin = join(dir, "fake-codex-resume.js");
 		oldCodexJsonBin = join(dir, "fake-codex-old-json.js");
 		wedgedBin = join(dir, "fake-wedged.js");
 		refuserBin = join(dir, "fake-refuser.js");
@@ -445,6 +461,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		writeFileSync(pauserBin, FAKE_PAUSER);
 		writeFileSync(argvBin, FAKE_ARGV);
 		writeFileSync(codexJsonArgvBin, FAKE_CODEX_JSON_ARGV);
+		writeFileSync(codexResumeBin, FAKE_CODEX_RESUME);
 		writeFileSync(oldCodexJsonBin, FAKE_CODEX_OLD_JSON);
 		writeFileSync(wedgedBin, FAKE_WEDGED);
 		writeFileSync(refuserBin, FAKE_REFUSER);
@@ -454,6 +471,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		chmodSync(pauserBin, 0o755);
 		chmodSync(argvBin, 0o755);
 		chmodSync(codexJsonArgvBin, 0o755);
+		chmodSync(codexResumeBin, 0o755);
 		chmodSync(oldCodexJsonBin, 0o755);
 		chmodSync(wedgedBin, 0o755);
 		chmodSync(refuserBin, 0o755);
@@ -665,6 +683,82 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		const argv = JSON.parse(/argv: (\[.*\])/.exec(s.snapshot())?.[1] ?? "[]") as string[];
 		expect(argv).toEqual(["exec", "--json", "--sandbox", "danger-full-access", "-c", "model=o3", "fix the failing test"]);
 		expect(s.takeUsage()).toMatchObject([{ provider: "openai", model: "codex", inputTokens: 1, outputTokens: 1, costUsd: 0 }]);
+		s.stop();
+	}, 15_000);
+
+	it("persists Codex thread.started and resumes that exact ID after a same-CWD unrelated session (#848)", async () => {
+		const statePath = defaultStatePath(join(dir, "codex-resume-state"));
+		const log = join(dir, "codex-resume-argv.jsonl");
+		const original = "01a0d811-35aa-7fc1-bd23-f39d943db79a";
+		const unrelatedId = "01a0d812-0531-7c02-b742-7ce3e5b9aaea";
+		const config = (id: string, threadId: string) => ({
+			id,
+			workDir: dir,
+			clientType: "codex" as const,
+			bin: codexResumeBin,
+			command: 'codex exec --sandbox danger-full-access -c model="o3"',
+			statePath,
+			env: { CODEX_RESUME_LOG: log, CODEX_THREAD_ID: threadId },
+		});
+
+		const first = new HeadlessSession(config("target", original));
+		first.start();
+		first.input("remember the original task");
+		await until(() => first.runState() === "idle" && first.snapshot().includes("argv:"), 8000, "initial structured Codex turn");
+		expect(readState(statePath, "codex:target")).toBe(original);
+		expect(first.takeUsage()).toMatchObject([{ provider: "openai", model: "codex", inputTokens: 2, outputTokens: 3, costUsd: 0 }]);
+		expect(first.takeActs().map((a) => a.kind)).toEqual(["push", "pr.merge"]);
+		first.stop();
+
+		// This is the #730 threat model: another Codex turn runs in the very same checkout.
+		const unrelated = new HeadlessSession(config("unrelated", unrelatedId));
+		unrelated.start();
+		unrelated.input("unrelated work");
+		await until(() => unrelated.runState() === "idle", 8000, "unrelated structured Codex turn");
+		expect(readState(statePath, "codex:unrelated")).toBe(unrelatedId);
+		unrelated.stop();
+
+		const revived = new HeadlessSession(config("target", unrelatedId));
+		expect(revived.resumedConversation).toBe(true);
+		revived.start();
+		revived.input("continue the original task");
+		await until(() => revived.runState() === "idle" && revived.snapshot().includes("argv:"), 8000, "explicit-ID Codex resume");
+
+		const argv = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
+		expect(argv).toEqual([
+			["exec", "--json", "--sandbox", "danger-full-access", "-c", "model=o3", "remember the original task"],
+			["exec", "--json", "--sandbox", "danger-full-access", "-c", "model=o3", "unrelated work"],
+			["exec", "resume", original, "--json", "--dangerously-bypass-approvals-and-sandbox", "-c", "model=o3", "continue the original task"],
+		]);
+		expect(argv.at(-1)).not.toContain("--last");
+		expect(argv.at(-1)).not.toContain("--sandbox");
+		expect(argv.at(-1)?.at(-1)).toBe("continue the original task");
+		expect(revived.takeUsage()).toMatchObject([{ provider: "openai", model: "codex", inputTokens: 2, outputTokens: 3, costUsd: 0 }]);
+		expect(revived.takeActs().map((a) => a.kind)).toEqual(["push", "pr.merge"]);
+		revived.stop();
+	}, 20_000);
+
+	it("falls back to a fresh Codex turn when its stored resume state is malformed or invalid (#848)", async () => {
+		const stateDir = join(dir, "codex-invalid-resume-state");
+		mkdirSync(stateDir, { recursive: true });
+		const statePath = defaultStatePath(stateDir);
+		const log = join(dir, "codex-invalid-resume-argv.jsonl");
+		writeFileSync(statePath, JSON.stringify({ "codex:invalid": "not-a-codex-thread", "codex:number": 42 }));
+		const s = new HeadlessSession({
+			id: "invalid",
+			workDir: dir,
+			clientType: "codex",
+			bin: codexResumeBin,
+			command: "codex exec --sandbox danger-full-access",
+			statePath,
+			env: { CODEX_RESUME_LOG: log, CODEX_THREAD_ID: "01a0d813-7a6e-7439-b5a4-9cc026ac3f76" },
+		});
+
+		expect(s.resumedConversation).toBe(false);
+		s.start();
+		s.input("start safely");
+		await until(() => s.runState() === "idle", 8000, "fresh Codex turn after invalid state");
+		expect(JSON.parse(readFileSync(log, "utf8").trim())).toEqual(["exec", "--json", "--sandbox", "danger-full-access", "start safely"]);
 		s.stop();
 	}, 15_000);
 
