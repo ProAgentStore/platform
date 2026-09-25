@@ -41,14 +41,11 @@ export function isClaudeEngine(command: string): boolean {
 
 export type EngineInvocationMode = "structured" | "raw";
 
-const CODEX_RAW_SUBCOMMANDS = new Set(["resume", "fork", "review", "help"]);
-
 /** Whether this editable preset will be driven through structured events or plain stdout. */
 export function engineInvocationMode(command: string): EngineInvocationMode | null {
 	if (!command.trim()) return null;
-	const { bin, args } = engineParts(command);
+	const { bin } = engineParts(command);
 	if (!bin || bin.startsWith("claude")) return "structured";
-	if (bin.startsWith("codex") && args[0] === "exec" && !CODEX_RAW_SUBCOMMANDS.has(args[1] ?? "")) return "structured";
 	return "raw";
 }
 

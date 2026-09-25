@@ -65,7 +65,7 @@ describe("writing one", () => {
 	});
 
 	it("puts Codex's after `exec`, whose option it is", () => {
-		expect(writeEngineModel(preset("codex"), "gpt-x")).toBe("codex exec --model gpt-x --json --sandbox danger-full-access");
+		expect(writeEngineModel(preset("codex"), "gpt-x")).toBe("codex exec --model gpt-x --sandbox danger-full-access");
 	});
 
 	it("places it after the real binary, not after an env value that happens to end the same way", () => {

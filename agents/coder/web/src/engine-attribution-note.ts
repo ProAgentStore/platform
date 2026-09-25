@@ -50,8 +50,9 @@ export function engineAttributionNote(
 ): EngineAttributionNote | null {
 	if (!command.trim()) return null;
 	const isClaude = isClaudeEngine(command);
-	// Match the command parsing in EnginesModal: the supported Codex binary is the only engine
-	// whose provider-key label is OpenAI. The test deliberately uses the actual `codex exec` form.
+	// Match the command parsing in EnginesModal: Codex is the only supported engine whose
+	// provider-key label is OpenAI. This describes raw-session authentication, not Usage
+	// attribution: the generic fallback publishes no usage row.
 	const isCodex = command.trim().split(/\s+/).some((part) => (part.split("/").pop() || "").toLowerCase().startsWith("codex"));
 	if (!isClaude && !isCodex) return null;
 	const mode = auth ?? "auto";
@@ -61,27 +62,27 @@ export function engineAttributionNote(
 			return {
 				attributable: true,
 				label: "OpenAI API key — billed per token",
-				detail: "Turns use your saved OpenAI API key and are billed per token to your own account. Codex reports tokens, but not a dollar total, so Usage cannot turn those tokens into an OpenAI invoice.",
+				detail: "Turns use your saved OpenAI API key and are billed per token to your own account. This raw Codex session does not publish token or cost records to Usage, so the platform cannot attribute an invoice.",
 			};
 		}
 		if (mode === "subscription") {
 			return {
 				attributable: false,
 				label: "ChatGPT plan requested — no shell API-key billing",
-				detail: "OPENAI_API_KEY is removed before Codex starts, so a shell key cannot silently bill per token. Codex then relies on `codex login`; when that login is a ChatGPT subscription it draws your plan allowance. The platform cannot validate that opaque local login or report a per-token dollar amount.",
+				detail: "OPENAI_API_KEY is removed before Codex starts, so a shell key cannot silently bill per token. Codex then relies on `codex login`; when that login is a ChatGPT subscription it draws your plan allowance. The platform cannot validate that opaque local login, and this raw session publishes no Usage row.",
 			};
 		}
 		if (mode === "machine") {
 			return {
 				attributable: false,
 				label: "Machine credential — payer unknown",
-				detail: "Codex uses whatever is configured on this runner (`codex login` or another local CLI credential). The platform cannot identify the payer, so Usage records it as unattributed; use ChatGPT subscription to remove an inherited OPENAI_API_KEY, or choose an OpenAI API key deliberately.",
+				detail: "Codex uses whatever is configured on this runner (`codex login` or another local CLI credential). This raw session has no Usage row to attribute; use ChatGPT subscription to remove an inherited OPENAI_API_KEY, or choose an OpenAI API key deliberately.",
 			};
 		}
 		return {
 			attributable: false,
 			label: "Codex login decides — payer unknown",
-			detail: "Automatic mode removes an inherited OPENAI_API_KEY, then uses `codex login` if present or whatever other credential Codex has. A ChatGPT login draws your plan allowance rather than charging per token, but the platform cannot verify the local login or attribute its cost.",
+			detail: "Automatic mode removes an inherited OPENAI_API_KEY, then uses `codex login` if present or whatever other credential Codex has. A ChatGPT login draws your plan allowance rather than charging per token, but the platform cannot verify the local login and this raw session has no Usage row to attribute.",
 		};
 	}
 

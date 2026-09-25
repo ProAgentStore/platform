@@ -4,7 +4,7 @@ import { engineInvocationBadge, engineInvocationNote } from "./engine-invocation
 describe("engineInvocationNote — the read-only mode chip in the engines panel (#731)", () => {
 	it("labels structured commands without offering a choice", () => {
 		expect(engineInvocationNote("claude --dangerously-skip-permissions")).toMatchObject({ mode: "structured", label: "structured" });
-		expect(engineInvocationNote("codex exec --json --sandbox danger-full-access")).toMatchObject({ mode: "structured", label: "structured" });
+		expect(engineInvocationNote("codex exec --json --sandbox danger-full-access")).toMatchObject({ mode: "raw", label: "raw" });
 	});
 
 	it("labels legitimate raw commands without making them faults", () => {
@@ -25,11 +25,11 @@ describe("engineInvocationNote — the read-only mode chip in the engines panel 
 });
 
 describe("engineInvocationBadge — the live engine report (#731)", () => {
-	it("surfaces the runner-reported warning when a capable engine ran raw", () => {
+	it("surfaces the runner-reported warning when Claude ran raw", () => {
 		const badge = engineInvocationBadge({
 			expected: "structured",
 			resolved: "raw",
-			warning: "running raw — structured not available on this machine's codex CLI",
+			warning: "running raw — structured not available on this machine's claude CLI",
 		});
 		expect(badge?.tone).toBe("warn");
 		expect(badge?.label).toMatch(/raw/i);

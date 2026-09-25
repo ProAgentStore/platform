@@ -91,7 +91,6 @@ export async function appendEngineUsageTimeline(
 ): Promise<void> {
 	if (!records.length) return;
 	const turns = records.map((r) => ({
-		provider: r.provider,
 		model: r.model,
 		in: r.inputTokens,
 		out: r.outputTokens,

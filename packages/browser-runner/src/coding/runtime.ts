@@ -134,7 +134,7 @@ export interface CodingSnapshot {
 	engineRuntime: "child-process";
 	/** Whether this runner is parsing structured engine events or forwarding raw stdout (#731). */
 	engineMode: EngineInvocationMode;
-	/** Named downgrade warning when a structured-capable engine is actually running raw (#731). */
+	/** Named downgrade warning when Claude, the structured engine, is actually running raw (#731). */
 	engineModeWarning: string | null;
 	/**
 	 * How the last COMPLETED turn ended (#545) — the outcome the pane used to hold only as prose.

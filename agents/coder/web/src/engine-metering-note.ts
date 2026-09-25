@@ -19,9 +19,9 @@
 //
 // The API's `classifyEngineMetering` ("headless", engine) is the authority, and its
 // structured/raw classifier. That is not a coincidence this mirror has to track by hand: the
-// runner now drives Claude and `codex exec --json` through structured adapters, and structured
-// mode IS what produces the usage record. If another raw engine grows a structured turn-end event,
-// the API's set, the runner's mode, and this helper move together.
+// runner now drives Claude through its structured adapter, and structured mode IS what produces
+// the usage record. If another raw engine grows a structured turn-end event, the API's set, the
+// runner's mode, and this helper move together.
 
 import { engineInvocationMode } from "@proagentstore/sdk/ui";
 

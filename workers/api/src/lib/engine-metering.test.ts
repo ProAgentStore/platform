@@ -69,9 +69,8 @@ describe("isAiCli", () => {
 });
 
 describe("classifyEngineMetering", () => {
-	it("meters structured engines only when the Pilot drives them as child processes", () => {
+	it("meters Claude Code only when the Pilot drives it as a child process", () => {
 		expect(classifyEngineMetering("headless", "claude").metered).toBe(true);
-		expect(classifyEngineMetering("headless", "codex").metered).toBe(true);
 	});
 
 	it("does NOT meter Claude Code through a terminal — the driver decides, not the engine", () => {
@@ -82,6 +81,7 @@ describe("classifyEngineMetering", () => {
 	});
 
 	it("does not meter engines with no structured turn event under either driver", () => {
+		expect(classifyEngineMetering("headless", "codex").metered).toBe(false);
 		expect(classifyEngineMetering("headless", "grok").metered).toBe(false);
 		expect(classifyEngineMetering("terminal", "codex").metered).toBe(false);
 	});
@@ -93,21 +93,17 @@ describe("classifyEngineMetering", () => {
 		expect(classifyEngineMetering("terminal", "").metered).toBe(false);
 	});
 
-	it("does not meter a Codex session that is not launched as `exec --json`", () => {
-		// Same binary, opposite verdict: `codex exec --json` emits per-turn tokens, `codex chat`
-		// emits prose. The engine NAME cannot answer this, which is why the launch command is an
-		// input to the classifier rather than a check performed around it.
+	it("does not meter Codex, regardless of its launch command", () => {
+		// Until its structured adapter lands, the generic raw fallback never parses Codex stdout.
 		const v = classifyEngineMetering("headless", "codex", "codex chat");
 		expect(v.metered).toBe(false);
 		expect(v.reason.length).toBeGreaterThan(20);
-		expect(classifyEngineMetering("headless", "codex", "codex exec --json").metered).toBe(true);
+		expect(classifyEngineMetering("headless", "codex", "codex exec --json").metered).toBe(false);
 	});
 
-	it("reads a missing launch command as the default invocation, so old rows do not reclassify", () => {
-		// The argument arrived after these sessions were written. Treating "not recorded" as raw
-		// would retroactively turn every measured Codex session into an unmetered one.
-		expect(classifyEngineMetering("headless", "codex", null).metered).toBe(true);
-		expect(classifyEngineMetering("headless", "codex", "  ").metered).toBe(true);
+	it("keeps a missing launch command unmetered for Codex", () => {
+		expect(classifyEngineMetering("headless", "codex", null).metered).toBe(false);
+		expect(classifyEngineMetering("headless", "codex", "  ").metered).toBe(false);
 	});
 
 	it("does not read an unrecognised engine as Claude, whatever the launch command says", () => {
@@ -255,8 +251,11 @@ describe("noteUnmeteredHeadlessDrive — the other row of the 2x2 (#556)", () =>
 	const contextOf = (run: { args: unknown[] }) => JSON.parse(String(run.args[9])) as Record<string, unknown>;
 
 	it("records the absence for a raw engine, naming the CLI and the driver", async () => {
+		// The measured case #556 is about: `AIPA coder` runs `codex exec --sandbox
+		// danger-full-access` and produced zero ledger rows and zero absence rows, so its engine
+		// read as costless on the Usage page.
 		const { runs, env } = fakeDb();
-		await noteUnmeteredHeadlessDrive(env, { userId: "u1", instanceId: "i1" }, { id: "csess-9", clientType: "grok" });
+		await noteUnmeteredHeadlessDrive(env, { userId: "u1", instanceId: "i1" }, { id: "csess-9", clientType: "codex" });
 		expect(runs).toHaveLength(1);
 		const ctx = contextOf(runs[0]);
 		expect(ctx.driver).toBe("headless");
@@ -264,14 +263,8 @@ describe("noteUnmeteredHeadlessDrive — the other row of the 2x2 (#556)", () =>
 		// was in there" — and unlike a pane's foreground command it cannot be an unreadable
 		// observation here, because the platform chose the binary it spawned.
 		expect(ctx.aiCli).toBe(true);
-		expect(ctx.paneCommand).toBe("grok");
+		expect(ctx.paneCommand).toBe("codex");
 		expect(String(runs[0].args[8])).toMatch(/NOT measured/);
-	});
-
-	it("records NOTHING for headless Codex exec --json — token usage already has a ledger row", async () => {
-		const { runs, env } = fakeDb();
-		await noteUnmeteredHeadlessDrive(env, { userId: "u1", instanceId: "i1" }, { id: "csess-9", clientType: "codex" });
-		expect(runs).toHaveLength(0);
 	});
 
 	it("targets the runner's own engineLabel shape, so the trace names what both sides call it", async () => {
@@ -292,10 +285,10 @@ describe("noteUnmeteredHeadlessDrive — the other row of the 2x2 (#556)", () =>
 	it("keys one row per session-day, so a Loop's forty drives do not become forty rows", async () => {
 		// The volume guard. `unmeteredRowId` is coarse on purpose and `logEvent` is
 		// ON CONFLICT DO NOTHING, so repeated drives collapse. Making the id finer — per drive,
-		// per turn — is what would turn a day of raw-engine work into a trace nobody can read.
+		// per turn — is what would turn a day of Codex work into a trace nobody can read.
 		const { runs, env } = fakeDb();
 		for (let i = 0; i < 40; i++) {
-			await noteUnmeteredHeadlessDrive(env, { userId: "u1", instanceId: "i1" }, { id: "csess-9", clientType: "grok" });
+			await noteUnmeteredHeadlessDrive(env, { userId: "u1", instanceId: "i1" }, { id: "csess-9", clientType: "codex" });
 		}
 		expect(new Set(runs.map((r) => String(r.args[0]))).size).toBe(1);
 	});

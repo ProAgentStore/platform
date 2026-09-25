@@ -29,7 +29,6 @@
 import { logEvent } from "./events.js";
 import type { UnmeteredUsageSummary } from "./usage-shape.js";
 import type { Env } from "../types.js";
-import { expectedEngineInvocationMode } from "./coding-engines.js";
 
 /**
  * How the platform is driving the CLI.
@@ -67,12 +66,12 @@ const AI_CLI_COMMANDS = new Set([
 ]);
 
 /**
- * Engines that end a turn with a structured event carrying token counts.
+ * Engines that end a turn with a structured event carrying token counts and cost.
  *
- * Claude Code also reports a cost estimate. Codex reports token counts through `exec --json` but
- * no dollar figure on the observed 0.151.0 schema, so its cost source stays absent.
+ * Only Claude Code does. Codex and Grok are spawned raw and their turns are stdout text, which is
+ * why they are unmetered under BOTH drivers rather than only under the terminal one.
  */
-const STRUCTURED_ENGINES = new Set(["claude", "claude-code", "codex"]);
+const STRUCTURED_ENGINES = new Set(["claude", "claude-code"]);
 
 /**
  * The bare binary name behind whatever the runner reported.
@@ -106,13 +105,11 @@ export function isAiCli(raw: string | null | undefined): boolean {
  * The reason string is the product here. "unmetered: true" is not something a Usage page can
  * print; a sentence saying which part of the pipeline drops the number is.
  *
- * `launchCommand` is the third input the verdict genuinely depends on, and only for Codex: it
- * reports tokens under `exec --json` and says nothing at all under any other subcommand, so the
- * engine NAME alone cannot answer the question for it. Absent (an older session row that never
- * recorded one) reads as the default invocation, which is structured — the same answer this
- * function gave before the argument existed, so nothing reclassifies retroactively.
+ * `launchCommand` remains in the call shape so a later structured adapter can make a
+ * command-specific distinction without changing callers. Until then, all non-Claude engines use
+ * the generic raw fallback and remain unmetered.
  */
-export function classifyEngineMetering(driver: EngineDriver, engine?: string | null, launchCommand?: string | null): MeteringVerdict {
+export function classifyEngineMetering(driver: EngineDriver, engine?: string | null, _launchCommand?: string | null): MeteringVerdict {
 	const name = normalizePaneCommand(engine);
 	if (driver === "terminal") {
 		// Note the engine is IRRELEVANT to the verdict here. A pane holds rendered characters, so
@@ -125,14 +122,6 @@ export function classifyEngineMetering(driver: EngineDriver, engine?: string | n
 		};
 	}
 	if (STRUCTURED_ENGINES.has(name)) {
-		if (name === "codex") {
-			// The one engine whose answer the name cannot carry: `codex exec --json` emits per-turn
-			// tokens, `codex` under any other subcommand emits prose. Same binary, opposite verdict.
-			if (expectedEngineInvocationMode("codex", launchCommand) === "raw") {
-				return { metered: false, reason: "This Codex session is not launched as `exec --json`, so it ends a turn with plain stdout and reports no token counts." };
-			}
-			return { metered: true, reason: "Codex exec --json reports each turn's tokens; the observed schema does not report a dollar cost." };
-		}
 		return { metered: true, reason: "Claude Code reports each turn's tokens and cost, and that figure is recorded as measured." };
 	}
 	return {
@@ -297,9 +286,8 @@ export async function noteUnmeteredDrive(
  * needed for: under `terminal` the verdict is a CONSTANT (a pane carries rendered characters, so
  * nothing is measurable whatever runs in it), which is exactly why those six sites could call
  * `noteUnmeteredDrive` unconditionally and never consult `classifyEngineMetering` at all. Under
- * `headless` the verdict VARIES by engine — Claude Code and Codex report structured turns,
- * grok/gemini still end a turn with plain stdout — so this is the one place a call is
- * load-bearing rather than decorative.
+ * `headless` the verdict VARIES by engine — Claude Code reports each turn, codex/grok/gemini end a
+ * turn with plain stdout — so this is the one place a call is load-bearing rather than decorative.
  * That is the whole reason the function had no production caller: not a call site that turned out
  * to be hard, just the one row of the table nobody wired.
  *
@@ -318,12 +306,9 @@ export async function noteUnmeteredHeadlessDrive(
 	ctx: { userId?: string; instanceId?: string; traceId?: string },
 	session: { id: string; clientType?: string | null; launchCommand?: string | null },
 ): Promise<void> {
-	// Through the classifier, not around it (#556). The invocation-mode refinement this guard needs
-	// lives INSIDE `classifyEngineMetering` now, so there is still exactly one place that answers
-	// "can this reach the ledger". Asking `expectedEngineInvocationMode` directly also had to route
-	// the engine name through `asClient`, which falls back to "claude" for anything outside its
-	// four-name list — so aider, opencode, goose, amp, crush and cursor-agent all read as structured
-	// and recorded nothing, which is the same silence #556 was opened about.
+	// Through the classifier, not around it (#556): there is exactly one place that answers "can
+	// this reach the ledger". It deliberately reads unrecognised engines as unmetered rather than
+	// falling them through to Claude, which would erase the absence #556 exists to record.
 	if (classifyEngineMetering("headless", session.clientType, session.launchCommand).metered) return;
 	await noteUnmeteredDrive(env, ctx, {
 		// The runner's own `engineLabel` shape (`<engine>:<session id>`), rebuilt from the two
