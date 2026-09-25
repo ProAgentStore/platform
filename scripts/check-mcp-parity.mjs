@@ -175,11 +175,6 @@ const KNOWN_GAPS = [
 			"Machines and terminals, the part still missing: FORGETTING a node (and un-claiming its name), and the Tmux tab's terminal-session read/write. #613. Narrowed by #671, which closed the half that mattered for placement — `list_runner_nodes` lists every connected CLI across agents, `instance_runner_node` reads one instance's pin and its alternatives, and `set_instance_runner_node` writes it through the same route the console uses. What is left is deliberate rather than pending: forgetting a node is destructive and has refusal logic (`diagnoseUnclaim`) whose blockers a caller has no way to read over MCP yet, and `terminal-session` is UI state for a tab MCP does not render.",
 		match: /^[A-Z]+ \/v1\/(terminals\/nodes\/\{\}|instances\/\{\}\/terminal-session)$/,
 	},
-	{
-		why:
-			"Owner-initiated seed-personality resync (#496 AC2): `POST /resync-identity` reads the current seed personality from the agent template and writes it to the instance DO, without touching guardrails/goal/welcomeMessage. Console affordance: Settings → Maintenance. The raw route is callable over the API without an MCP tool; no named tool yet. #496.",
-		match: /^POST \/v1\/instances\/\{\}\/resync-identity$/,
-	},
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────

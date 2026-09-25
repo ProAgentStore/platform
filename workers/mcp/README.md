@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**231 tool registrations.** 205 are always registered; 26 are gated to the console
+**232 tool registrations.** 206 are always registered; 26 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -291,6 +291,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `write_instance_memory` | Create or update one memory entry | write | yes | |
 | `delete_instance_memory` | Delete one memory entry by key | destructive | yes | `delete_instance_memory` |
 | `get_instance_settings` | Read typed settings values + declared schema | — | | |
+| `resync_instance_personality` | Replace an instance personality from its template seed; leaves guardrails, goal, welcome message, model and user data intact | destructive | yes | `resync_instance_personality` |
 | `get_instance_behaviour_schema` | Static behaviour fields, allowed bands and prompt prose | — | | |
 | `set_instance_settings` | Patch settings (only sent fields change) | write | yes | |
 | `list_stats_sources` | Closed stats-card source vocabulary, allowed kinds, parameters and caveats | — | | |

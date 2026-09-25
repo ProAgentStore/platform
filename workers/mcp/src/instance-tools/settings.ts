@@ -1,16 +1,16 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authRequired, authedCall, jsonText } from "../http.js";
-import { audit, dryRun, requirePermission } from "../safety.js";
+import { audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
 import type { InstanceToolsCtx } from "./shared.js";
 
 /**
  * The knobs on an instance and on an agent: typed settings, name, special instructions,
  * model, translation display, read-only DO state, and the creator-side settings schema.
  *
- * Every one of these is configuration a human could set in the console; none of them runs
- * anything. So the group is entirely `write`-or-read, with no confirmation and no runtime
- * scope — which is the fastest way to see that a new tool does not belong here.
+ * Most of these are configuration a human could set in the console; none runs an agent. The
+ * exception is resync_instance_personality: it overwrites durable prompt identity from the
+ * template, so it is destructive-scoped and confirmed even though it does not delete data.
  */
 export function registerSettingsTools(server: McpServer, ctx: InstanceToolsCtx): void {
 	const { env, tokenFor, safetyFor } = ctx;
@@ -288,6 +288,41 @@ export function registerSettingsTools(server: McpServer, ctx: InstanceToolsCtx):
 				env,
 			);
 			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_translation_config", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"resync_instance_personality",
+		"Replace a subscribed instance's personality with its agent template's current seed personality. This is an explicit owner repair for instances created before the template changed — it does NOT touch guardrails, goal, welcomeMessage, model, memory, knowledge, or chat history. It can change how future turns behave, so inspect get_instance_state, dry-run, then confirm. The result says whether anything changed; it returns both personalities for the owner to verify, but the audit records only the instance id and changed flag.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Subscribed instance id from my_instances — not the agent template id."),
+			confirm: z.string().optional().describe('Must be "resync_instance_personality" to replace this instance personality.'),
+			dry_run: z.boolean().optional().describe("Describe the identity resync without fetching or changing the instance."),
+		},
+		async ({ token, instance_id, confirm, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id };
+			const denied = await requirePermission(safetyFor(token), "destructive", "resync_instance_personality", input);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/resync-identity`;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "resync_instance_personality", "replace the instance personality from its template seed", input, {
+					endpoint,
+					method: "POST",
+					effect: "Only the instance's personality would be replaced. Guardrails, goal, welcomeMessage, model, memory, knowledge, and chat history would remain unchanged.",
+					alternative: "Use get_instance_state to inspect the current instance identity; this standard dry run does not fetch the template's personality.",
+				});
+			}
+			const unconfirmed = await requireConfirmation(safetyFor(token), "resync_instance_personality", confirm, "resync_instance_personality", input);
+			if (unconfirmed) return unconfirmed;
+			const data = await authedCall(endpoint, sessionToken, { method: "POST" }, env) as { error?: string; changed?: unknown };
+			// The route returns current and seed prompt text to its authorised owner. Keep that text
+			// out of the durable MCP audit; the audit proves the mutation without becoming a second
+			// prompt store.
+			if (!data.error) await audit(safetyFor(token), { tool: "resync_instance_personality", action: "completed", input, result: { changed: data.changed === true } });
 			return jsonText(data);
 		},
 	);

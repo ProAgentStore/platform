@@ -88,7 +88,7 @@ src/
 │                     `agent_info`'s public projection cannot serve (drafts, visibility, config),
 │                     capabilities, seed state and memory, creator chat, versions, deletion and
 │                     the builder plan/execute pair (#613)
-    ├── settings.ts       17 tools — settings, name, instructions, operator manual, model, translation, state,
+    ├── settings.ts       18 tools — settings, name, instructions, operator manual, model, translation, state,
 │                     voice settings (read / customise / use-my-defaults, #613), behaviour schema
     ├── triggers.ts       7 tools — webhook / cron / connector-sync triggers, plus the action
 │                     vocabulary and the draft preview the console's form is built from (#613)
@@ -111,13 +111,13 @@ src/
                           surfaces:["coding"]) + 5 loop tools (3 run + 2 objective queue)
 ```
 
-**231 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
+**232 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
 `coding-tools.ts` and 2 in `coding-engine-tools.ts` — all fifteen behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 181 across `instance-tools/`. 205 are always registered; 26 are
+`storage-tools.ts`, and 182 across `instance-tools/`. 206 are always registered; 26 are
 surface-gated (apply=4, repo=3, coding=19).
 
 Those five numbers ADD UP to the headline, and that is the point of stating them: 21 + 13
-+ 2 + 14 + 181 = 231. They said 88 until #602, which made the paragraph sum to 132 — a total the
++ 2 + 14 + 182 = 232. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added

@@ -886,4 +886,14 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// UI's paid AI gloss cache, and an arbitrary system message becomes durable role:system prompt
 	// history. `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place.
 	"0.1.55": "sha256:31beae70fd2aa2b65037747c308a2c0bd9e0ee7246455f8afb7a34bc4fb7b9ea",
+	// 0.1.56 (#496 AC2 / #613): one new always-on destructive tool — 231 registrations become
+	// 232, always-on 205 → 206, with the 26 surface-gated tools unchanged.
+	//
+	// `resync_instance_personality` sends the console's owner-scoped resync route. It replaces only
+	// the instance personality from the current template seed; guardrails, goal, welcomeMessage,
+	// model and all user data remain untouched. Because it overwrites durable prompt identity, it
+	// requires destructive scope, an exact confirmation and supports a no-network dry run. The audit
+	// records the instance id and changed flag, never either personality string.
+	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.55 is published.
+	"0.1.56": "sha256:ea3b52ec2177852ace04f1dff9da9b161358e30b693ba37ffdc5f488872b84ff",
 };

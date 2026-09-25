@@ -381,6 +381,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	chat_with_my_agent: "destructive",
 	create_agent_version: "destructive",
 	rollback_agent_version: "destructive",
+	resync_instance_personality: "destructive",
 	execute_agent_builder_plan: "destructive",
 	delete_connection: "destructive",
 	delete_feedback: "destructive",
@@ -540,6 +541,8 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// `delete_instance_message` removes a whole durable turn (and any attached voice audio), so it is
 	// destructive, confirmed and dry-runnable. Translation and arbitrary system-message persistence
 	// stay excluded: the former is the console's AI gloss cache, the latter a prompt/provenance channel.
+	// +1 destructive at #496/#613: `resync_instance_personality` overwrites a durable prompt field
+	// from the template seed. It is confirmed and dry-runnable; its audit keeps the prompt text out.
 	// +1 read at #198: `platform_health`, the read-only diagnostic — every verdict in it is derived
 	// from public probes and this session's own latency ring; nothing is written.
 	read: 111,
@@ -559,7 +562,7 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// turn, create an enduring version, or create/scaffold a template. They all require the
 	// destructive scope, an exact confirm and a no-network dry run, because this is the creator's
 	// shared source template rather than a caller-private instance.
-	destructive: 29,
+	destructive: 30,
 };
 
 /** The subset of MCP's `ToolAnnotations` this server can state honestly.

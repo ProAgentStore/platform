@@ -343,6 +343,7 @@ const TABLE: Record<string, Row> = {
 	get_profile: ["apply", "none", null, null, "token"],
 	get_creator_dashboard: ["account", "none", null, null, "token"],
 	get_usage_dashboard: ["account", "none", null, null, "token"],
+	resync_instance_personality: ["settings", "destructive", "resync_instance_personality", "envelope", "confirm,dry_run,instance_id,token"],
 	get_translation_config: ["settings", "none", null, null, "instance_id,token"],
 	grant_instance_connector_folder: ["connectors", "write", null, "envelope", "dry_run,instance_id,name,provider,resource_id,token,url"],
 	import_instance_drive_file: ["connectors", "write", null, "envelope", "dry_run,file_id,grant_id,instance_id,title,token,url"],
