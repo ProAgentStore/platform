@@ -46,8 +46,13 @@ export async function resolveEngineEnv(
 		const key = spec ? await getUserProviderKey(env, uid, spec.provider) : null;
 		return key ? { [spec.envVar]: key } : undefined;
 	}
-	// "subscription" | "auto" — the stored `claude setup-token`. Only Claude has a
-	// subscription token env; for other engines these modes mean the machine login.
+	// Codex's ChatGPT subscription is deliberately the inverse of Claude's setup-token: Codex
+	// keeps the login in its own local auth store, so there is no token to inject. Removing an
+	// inherited OPENAI_API_KEY is what makes `codex login` authoritative instead of silently
+	// charging the shell's per-token key.
+	if (session.clientType === "codex") return stripProviderKey;
+	// Only Claude has an injectable subscription token. For the remaining engines, these modes
+	// mean the machine login while still removing a provider key that would bill per token.
 	if (session.clientType !== "claude") return providerKeyEnv ? stripProviderKey : undefined;
 	const token = await getUserProviderKey(env, uid, "claude-code");
 	// No stored setup-token → fall through to the machine's OWN login (the claude.ai session in
@@ -135,9 +140,9 @@ export function engineInvocationReport(input: {
 
 /**
  * How a session's engine signs in, chosen per engine preset:
- *  - "auto"         — the stored `claude setup-token` when saved (Claude only), else the machine's own login
+ *  - "auto"         — the stored `claude setup-token` when saved; Codex uses its local `codex login`
  *  - "machine"      — never inject anything; the CLI uses the runner machine's login
- *  - "subscription" — the stored `claude setup-token` (CLAUDE_CODE_OAUTH_TOKEN; Claude only)
+ *  - "subscription" — Claude's stored `claude setup-token`, or Codex's local ChatGPT login with OPENAI_API_KEY removed
  *  - "api-key"      — the engine's provider API key from the vault (ANTHROPIC/OPENAI/GEMINI/XAI_API_KEY)
  */
 export type EngineAuth = "auto" | "machine" | "subscription" | "api-key";
@@ -186,6 +191,8 @@ export type { EngineAuthResolved } from "./usage-payer.js";
 
 /** The transparency report for one session: what was ASKED for, what was GOT, what it runs as. */
 export interface EngineAuthReport {
+	/** Which CLI the runner observed. This makes the credential labels provider-accurate. */
+	clientType: CodingClientType;
 	/** The preset's sign-in setting. */
 	mode: EngineAuth;
 	/** What the process actually got, or null when unobservable (no runner / old runner). */
@@ -211,17 +218,26 @@ export interface EngineAuthReport {
 }
 
 /** What each observed credential means for the bill, stated plainly. */
-const PAYER_NOTE_FOR_RESOLVED: Record<EngineAuthResolved, string> = {
-	"api-key": "Billed per token to your own provider account, and counted against the account spend limit.",
-	subscription:
-		"Running on your Claude subscription — no per-token charge, and not counted against the account spend limit. It draws your plan's allowance, which is measured in tokens.",
+function providerName(clientType: CodingClientType): string {
+	return ({ claude: "Anthropic", codex: "OpenAI", gemini: "Google", grok: "xAI" } as const)[clientType];
+}
+
+/** What each observed credential means for the bill, stated plainly and per engine. */
+function payerNoteForResolved(clientType: CodingClientType, resolved: EngineAuthResolved): string {
+	if (resolved === "api-key") return `Billed per token to your own ${providerName(clientType)} account, and counted against the account spend limit.`;
+	if (resolved === "subscription") {
+		return clientType === "codex"
+			? "Running on a ChatGPT subscription — no per-token OpenAI API charge, and not counted against the account spend limit. It draws your plan's allowance."
+			: "Running on your Claude subscription — no per-token charge, and not counted against the account spend limit. It draws your plan's allowance, which is measured in tokens.";
+	}
 	// Deliberately NOT "you're on your subscription". The runner can only observe that neither
 	// credential was in the env, so the CLI used whatever login it has stored — which may be a
-	// claude.ai plan or an API key configured inside the CLI itself. Naming the ambiguity is the
-	// honest report; guessing subscription here is the error #346 exists to remove.
-	"machine-login":
-		"Running on this machine's own stored login. We cannot see whether that is a subscription or an API key configured in the CLI, so this session's spend is recorded as unattributed and never counted against the account spend limit.",
-};
+	// subscription or an API key configured inside the CLI. Naming the ambiguity is the honest
+	// report; guessing subscription here is the error #346 exists to remove.
+	return clientType === "codex"
+		? "No OPENAI_API_KEY reached Codex. It is using this machine's `codex login` or other local CLI credential; we cannot tell which account pays, so this session is recorded as unattributed and never counted against the account spend limit."
+		: "Running on this machine's own stored login. We cannot see whether that is a subscription or an API key configured in the CLI, so this session's spend is recorded as unattributed and never counted against the account spend limit.";
+}
 
 /**
  * Warn when what the engine GOT contradicts what the preset ASKED for (#248).
@@ -240,36 +256,46 @@ const PAYER_NOTE_FOR_RESOLVED: Record<EngineAuthResolved, string> = {
  *
  * Pure: no env, no I/O. `null` resolved never warns — an unknown outcome is not a wrong one.
  */
-export function engineAuthWarning(mode: EngineAuth, resolved: EngineAuthResolved | null): string | null {
+export function engineAuthWarning(mode: EngineAuth, resolved: EngineAuthResolved | null, clientType: CodingClientType = "claude"): string | null {
 	if (!resolved) return null;
 	if (resolved === "api-key" && mode !== "api-key") {
 		// The billing surprise, whichever setting was supposed to prevent it.
-		return mode === "subscription"
-			? "This session is billing per token. You chose your Claude subscription, but an API key reached the engine — and the CLI prefers the key over the subscription token."
-			: `This session is billing per token: an API key reached the engine, which "${mode === "auto" ? "Automatic" : "This machine's login"}" was not meant to do.`;
+		if (mode === "subscription") {
+			return clientType === "codex"
+				? "This session is billing per token. You chose ChatGPT subscription, but an OpenAI API key reached Codex."
+				: "This session is billing per token. You chose your Claude subscription, but an API key reached the engine — and the CLI prefers the key over the subscription token.";
+		}
+		return `This session is billing per token: a ${providerName(clientType)} API key reached the engine, which "${mode === "auto" ? "Automatic" : "This machine's login"}" was not meant to do.`;
 	}
 	if (mode === "subscription" && resolved === "machine-login") {
+		// Codex stores ChatGPT auth outside the spawn environment. The runner can prove that it
+		// stripped OPENAI_API_KEY, but it cannot prove the local login is valid; saying it "fell
+		// back" would turn that honest unknown into a false billing claim.
+		if (clientType === "codex") return null;
 		return "You chose your Claude subscription, but no subscription token is saved, so the engine fell back to this machine's own login. Save one with `claude setup-token`.";
 	}
 	if (mode === "api-key" && resolved === "machine-login") {
 		return "You chose an API key, but none is stored in the vault for this engine, so it fell back to this machine's own login.";
 	}
 	if (mode === "api-key" && resolved === "subscription") {
-		return "You chose an API key, but the engine ran on a subscription token instead.";
+		return clientType === "codex"
+			? "You chose an OpenAI API key, but Codex ran on a ChatGPT subscription instead."
+			: "You chose an API key, but the engine ran on a subscription token instead.";
 	}
 	return null;
 }
 
 /** Assemble the full per-session auth report from the preset setting + the runner's observation. */
-export function engineAuthReport(mode: EngineAuth, resolved: EngineAuthResolved | null): EngineAuthReport {
+export function engineAuthReport(mode: EngineAuth, resolved: EngineAuthResolved | null, clientType: CodingClientType = "claude"): EngineAuthReport {
 	return {
+		clientType,
 		mode,
 		resolved,
 		runtime: "child-process",
-		warning: engineAuthWarning(mode, resolved),
+		warning: engineAuthWarning(mode, resolved, clientType),
 		payer: payerForEngineAuth(resolved),
 		note: resolved
-			? PAYER_NOTE_FOR_RESOLVED[resolved]
+			? payerNoteForResolved(clientType, resolved)
 			: "No runner is reporting this session's credential, so who pays for it is unknown.",
 	};
 }

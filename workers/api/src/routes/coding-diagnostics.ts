@@ -497,7 +497,7 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 					// A reconciled orphan has no live process, so the outcome is genuinely unknown —
 					// report the mode with resolved:null rather than omitting the field and making
 					// the shape differ between branches.
-					auth: engineAuthReport(engineAuthFor(diagEngines, s.launchCommand), null),
+					auth: engineAuthReport(engineAuthFor(diagEngines, s.launchCommand), null, s.clientType),
 					invocation: engineInvocationReport({ clientType: s.clientType, launchCommand: s.launchCommand, runnerMode: null }),
 					startedAt: s.startedAt, endedAt: new Date().toISOString(), live: null,
 					issue: null, reconciled: true,
@@ -518,7 +518,7 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 				launchCommand: s.launchCommand ?? null,
 				// Setting vs outcome, per session (#248) — the same pairing /capture reports, so the
 				// diagnostics list answers "which of my sessions is billing per token?" at a glance.
-				auth: engineAuthReport(engineAuthFor(diagEngines, s.launchCommand), tracked?.authResolved ?? null),
+				auth: engineAuthReport(engineAuthFor(diagEngines, s.launchCommand), tracked?.authResolved ?? null, s.clientType),
 				invocation: engineInvocationReport({ clientType: s.clientType, launchCommand: s.launchCommand, runnerMode: tracked?.engineMode }),
 				// The D1 column is still called tmux_session (renaming it is a table rewrite for a
 				// cosmetic gain); what it holds is an engine label. Surfaced honestly.

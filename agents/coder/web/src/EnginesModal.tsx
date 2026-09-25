@@ -99,6 +99,7 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 				<div className="flex flex-col gap-2">
 					{engines.map((e, i) => {
 						const isClaude = isClaudeEngine(e.command);
+						const isCodex = apiKeyName(e.command) === "OpenAI";
 						const signInId = `engine-${e.id}-auth`;
 						const needsWrite = missingWriteFlag(e.command);
 						const invocation = engineInvocationNote(e.command);
@@ -150,16 +151,37 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 										onChange={(ev) => update(i, { auth: ev.target.value as EngineAuth })}
 										className="bg-panel border border-line rounded-lg px-2 py-1 text-xs"
 									>
-										<option value="auto">{isClaude ? "Auto — subscription token if saved, else machine login" : "Auto — this machine's login"}</option>
-										<option value="machine">Machine login only</option>
-										{isClaude && <option value="subscription">Subscription token (Claude Code key)</option>}
-										<option value="api-key">{apiKeyName(e.command)} API key (per-token billing)</option>
+										<option value="auto">
+											{isClaude
+												? "Auto — saved claude setup-token, else this machine's Claude login"
+												: isCodex
+													? "Auto — ChatGPT login if present, else whatever Codex has"
+													: "Auto — this machine's login"}
+										</option>
+										<option value="machine">
+											{isClaude
+												? "Machine login only — Claude session or CLI API key (unattributed)"
+												: isCodex
+													? "Machine login only — codex login or CLI OpenAI key (unattributed)"
+													: "Machine login only"}
+										</option>
+										{isClaude && <option value="subscription">Subscription token (from claude setup-token)</option>}
+										{isCodex && <option value="subscription">ChatGPT subscription (from codex login) — no per-token charge</option>}
+										<option value="api-key">{apiKeyName(e.command)} API key — billed per token to your own account</option>
 									</select>
 									<label className="text-xs text-muted flex items-center gap-1 ml-auto">
 										<input type="radio" name="default-engine" checked={defaultId === e.id} onChange={() => setDefaultId(e.id)} />
 										Default
 									</label>
 								</div>
+								{isCodex && e.auth === "subscription" && (
+									<div className="text-xs text-muted mt-1.5 flex items-start gap-1.5">
+										<span aria-hidden>ⓘ</span>
+										<span>
+											<b>ChatGPT plan sign-in.</b> Run <code>codex login</code> on this runner before saving. This mode removes any inherited <code>OPENAI_API_KEY</code>, so Codex uses its own login instead of a shell key. The runner can confirm that removal, but only Codex can validate the local login and plan.
+										</span>
+									</div>
+								)}
 								{continuity && (
 									// Stated for BOTH answers, in muted text rather than warning text (#449).
 									// One-shot is the design, not a defect — a non-interactive binary has nothing

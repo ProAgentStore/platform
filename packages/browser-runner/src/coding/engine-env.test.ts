@@ -15,6 +15,12 @@ describe("mergeEnv — the platform's engine choice must beat the machine's", ()
 		expect(out.CLAUDE_CODE_OAUTH_TOKEN).toBe("tok");
 	});
 
+	it("removes OPENAI_API_KEY for Codex ChatGPT sign-in too", () => {
+		const out = mergeEnv({ OPENAI_API_KEY: "sk-openai-shell", PATH: "/usr/bin" }, { OPENAI_API_KEY: "" });
+		expect("OPENAI_API_KEY" in out).toBe(false);
+		expect(out.PATH).toBe("/usr/bin");
+	});
+
 	it("keeps the rest of the machine env untouched", () => {
 		const out = mergeEnv({ PATH: "/usr/bin", HOME: "/Users/x" }, { CLAUDE_CODE_OAUTH_TOKEN: "tok" });
 		expect(out.PATH).toBe("/usr/bin");

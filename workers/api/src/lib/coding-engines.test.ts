@@ -34,6 +34,8 @@ const session = (over: Record<string, unknown> = {}) =>
 const presets: CodingEngine[] = [
 	{ id: "claude", label: "Claude Code", command: "claude --dangerously-skip-permissions" },
 	{ id: "sub", label: "Claude (subscription)", command: "claude --sub", auth: "subscription" },
+	{ id: "codex-sub", label: "Codex (ChatGPT)", command: "codex exec --json", auth: "subscription" },
+	{ id: "codex-machine", label: "Codex (machine)", command: "codex --machine", auth: "machine" },
 	{ id: "machine", label: "Claude (machine)", command: "claude --machine", auth: "machine" },
 	{ id: "key", label: "Claude (api key)", command: "claude --key", auth: "api-key" },
 ];
@@ -69,10 +71,22 @@ describe("resolveEngineEnv — a mode must decide how the engine BILLS", () => {
 		expect(out).toEqual({ ANTHROPIC_API_KEY: "" });
 	});
 
-	it("a non-Claude engine also gets its own provider key stripped", async () => {
-		// Codex would otherwise inherit OPENAI_API_KEY the same way.
-		const out = await resolveEngineEnv(buildEnv(), "i1", "u1", session({ clientType: "codex", launchCommand: "codex" }));
+	it("Codex ChatGPT subscription makes codex login authoritative by stripping OPENAI_API_KEY", async () => {
+		// Codex keeps ChatGPT auth in `codex login`, not an injectable token. Empty means DELETE
+		// on the runner, so this proves a shell key cannot silently turn the choice into per-token
+		// billing (recorded against codex-cli 0.151.0's `codex login status` behaviour).
+		const out = await resolveEngineEnv(buildEnv(), "i1", "u1", session({ clientType: "codex", launchCommand: "codex exec --json" }));
 		expect(out).toEqual({ OPENAI_API_KEY: "" });
+	});
+
+	it("keeps Codex machine mode separate while still removing an inherited OpenAI key", async () => {
+		const out = await resolveEngineEnv(buildEnv(), "i1", "u1", session({ clientType: "codex", launchCommand: "codex --machine" }));
+		expect(out).toEqual({ OPENAI_API_KEY: "" });
+	});
+
+	it("keeps Claude subscription behaviour unchanged: inject token when saved, otherwise strip only", async () => {
+		const out = await resolveEngineEnv(buildEnv(), "i1", "u1", session({ launchCommand: "claude --sub" }));
+		expect(out).toEqual({ ANTHROPIC_API_KEY: "" });
 	});
 });
 
@@ -163,6 +177,16 @@ describe("engineAuthWarning — a mismatch between the setting and the outcome",
 		expect(w).toMatch(/subscription/i);
 	});
 
+	it("gives Codex the same asked-vs-got billing warning with its real credentials", () => {
+		const w = engineAuthWarning("subscription", "api-key", "codex");
+		expect(w).toMatch(/ChatGPT subscription/i);
+		expect(w).toMatch(/OpenAI API key/i);
+		expect(w).toMatch(/billing per token/i);
+		// No injected Codex subscription token exists, so a key-free spawn is the expected,
+		// honestly unverified `codex login` outcome rather than a false "fell back" warning.
+		expect(engineAuthWarning("subscription", "machine-login", "codex")).toBeNull();
+	});
+
 	it("warns whenever an API key appears under a mode that never asked for one", () => {
 		expect(engineAuthWarning("auto", "api-key")).toMatch(/billing per token/i);
 		expect(engineAuthWarning("machine", "api-key")).toMatch(/billing per token/i);
@@ -197,6 +221,15 @@ describe("engineAuthReport — the per-session transparency payload", () => {
 			runtime: "child-process",
 		});
 		expect(engineAuthReport("subscription", "api-key").warning).toBeTruthy();
+	});
+
+	it("keeps Codex's requested ChatGPT mode distinct from the key-free observed env", () => {
+		const r = engineAuthReport("subscription", "machine-login", "codex");
+		expect(r.clientType).toBe("codex");
+		expect(r.resolved).toBe("machine-login");
+		expect(r.warning).toBeNull();
+		expect(r.note).toMatch(/No OPENAI_API_KEY reached Codex/i);
+		expect(r.note).toMatch(/cannot tell which account pays/i);
 	});
 
 	it("reports an unobserved session honestly instead of echoing the setting", () => {

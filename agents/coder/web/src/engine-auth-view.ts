@@ -11,6 +11,8 @@ export type EngineAuthResolved = "subscription" | "api-key" | "machine-login";
 
 /** The `auth` block attached to every /capture and /diagnostics session response. */
 export interface EngineAuthReport {
+	/** Present on current APIs; absent responses are Claude-era compatibility payloads. */
+	clientType?: "claude" | "codex" | "gemini" | "grok";
 	mode: EngineAuthMode;
 	/** null when no runner is connected, or the runner predates the field. */
 	resolved: EngineAuthResolved | null;
@@ -62,10 +64,16 @@ const MODE_LABEL: Record<EngineAuthMode, string> = {
  */
 export function engineAuthBadge(auth: EngineAuthReport | null | undefined): EngineAuthBadge | null {
 	if (!auth) return null;
-	const label = auth.resolved ? RESOLVED_LABEL[auth.resolved] : "Credential unknown — no runner connected";
+	const isCodex = auth.clientType === "codex";
+	const label = auth.resolved
+		? auth.resolved === "subscription" && isCodex
+			? "ChatGPT subscription — no per-token charge"
+			: RESOLVED_LABEL[auth.resolved]
+		: "Credential unknown — no runner connected";
 	// Always state the runtime: "is this tmux?" was unanswerable, and the old `tmuxSession` label
 	// actively suggested the wrong answer.
-	const detail = `Set to ${MODE_LABEL[auth.mode]} · child process`;
+	const modeLabel = auth.mode === "subscription" && isCodex ? "ChatGPT subscription" : MODE_LABEL[auth.mode];
+	const detail = `Set to ${modeLabel} · child process`;
 	return { label, detail, tone: auth.warning ? "warn" : "neutral", note: auth.note ?? null };
 }
 

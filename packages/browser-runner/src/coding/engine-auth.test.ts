@@ -61,6 +61,20 @@ describe("resolveEngineAuth over the REAL merged env (the spawn path)", () => {
 		expect(resolveEngineAuth("claude", mergeEnv(machine, overlay) as Record<string, string | undefined>)).toBe("subscription");
 	});
 
+	it("Codex ChatGPT subscription strips a shell OPENAI_API_KEY before the CLI spawns", () => {
+		// Codex keeps its ChatGPT session in `codex login`, outside the env. `machine-login` is
+		// therefore the honest observation: it proves the per-token key did NOT reach the process
+		// without pretending the runner can validate an opaque local login.
+		const machine = { OPENAI_API_KEY: "sk-openai-shell", PATH: "/usr/bin" };
+		const merged = mergeEnv(machine, { OPENAI_API_KEY: "" });
+		expect(resolveEngineAuth("codex", merged as Record<string, string | undefined>)).toBe("machine-login");
+	});
+
+	it("reports the Codex billing regression when OPENAI_API_KEY was not stripped", () => {
+		const merged = mergeEnv({ OPENAI_API_KEY: "sk-openai-shell" }, undefined);
+		expect(resolveEngineAuth("codex", merged as Record<string, string | undefined>)).toBe("api-key");
+	});
+
 	it("the DOCUMENTED silent-billing regression: no strip ⇒ the shell key wins and we say so", () => {
 		// A runner too old to honour empty-means-remove reproduces the original bug. This is the
 		// case that used to be invisible; now it resolves to api-key and the cloud warns.

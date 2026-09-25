@@ -65,6 +65,12 @@ describe("engineAuthBadge — the money question, in the session header", () => 
 		expect(engineAuthBadge(report({ mode: "auto" }))?.detail).toMatch(/Set to Automatic/);
 		expect(engineAuthBadge(report({ mode: "machine" }))?.detail).toMatch(/Set to This machine's login/);
 	});
+
+	it("names ChatGPT rather than Claude when the Codex report requested a subscription", () => {
+		const badge = engineAuthBadge(report({ clientType: "codex", mode: "subscription", resolved: "machine-login" }));
+		expect(badge?.detail).toMatch(/ChatGPT subscription/);
+		expect(badge?.detail).not.toMatch(/Claude subscription/);
+	});
 });
 
 describe("isClaudeSignedOut — the `claude setup-token` CTA", () => {

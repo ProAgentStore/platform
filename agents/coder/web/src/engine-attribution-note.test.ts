@@ -2,12 +2,36 @@ import { describe, expect, it } from "vitest";
 import { engineAttributionNote } from "./engine-attribution-note.js";
 
 describe("engineAttributionNote — what the engines panel says about who pays (#551)", () => {
-	it("says nothing for a preset with no command, or for an engine that writes no row at all", () => {
+	it("says nothing for a blank preset or a non-Claude/non-Codex engine", () => {
 		// A raw engine's spend never reaches the ledger (`engineMeteringNote` says exactly that,
 		// one line above this one in the panel). There is nothing to attribute, and two notes both
 		// saying "you will not see this" is one message too many.
 		expect(engineAttributionNote("", "auto", false)).toBeNull();
-		expect(engineAttributionNote("codex exec --sandbox danger-full-access", "api-key", true)).toBeNull();
+		expect(engineAttributionNote("grok --permission-mode bypassPermissions -p", "api-key", true)).toBeNull();
+	});
+
+	describe("Codex — ChatGPT sign-in prevents a shell OpenAI key from deciding billing", () => {
+		const cmd = "codex exec --json --sandbox danger-full-access";
+
+		it("makes the subscription boundary explicit without claiming it can validate codex login", () => {
+			const n = engineAttributionNote(cmd, "subscription", null);
+			expect(n?.detail).toMatch(/OPENAI_API_KEY is removed/i);
+			expect(n?.detail).toMatch(/codex login/i);
+			expect(n?.detail).toMatch(/cannot validate/i);
+			expect(n?.detail).toMatch(/per-token dollar amount/i);
+		});
+
+		it("names API-key billing and the Codex dollar-reporting limit", () => {
+			const n = engineAttributionNote(cmd, "api-key", null);
+			expect(n?.label).toMatch(/billed per token/i);
+			expect(n?.detail).toMatch(/OpenAI API key/i);
+			expect(n?.detail).toMatch(/not a dollar total/i);
+		});
+
+		it("keeps automatic and machine modes unattributed", () => {
+			expect(engineAttributionNote(cmd, "auto", null)?.label).toMatch(/payer unknown/i);
+			expect(engineAttributionNote(cmd, "machine", null)?.detail).toMatch(/cannot identify the payer/i);
+		});
 	});
 
 	it("api-key is the mode that produces a charged figure", () => {
