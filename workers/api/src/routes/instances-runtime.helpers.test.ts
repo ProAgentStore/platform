@@ -536,7 +536,8 @@ describe("PUT/GET /v1/instances/:id/runner-node (integration — the 'runs on' p
 		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]] });
 		const res = await put(app, env, "/v1/instances/inst-1/runner-node", { runnerNode: "laptop-A" }, await tokenFor("u1"));
 		expect(res.status).toBe(200);
-		expect(await res.json()).toEqual({ runnerNode: "laptop-A" });
+		// Plus where the agent actually is after the repin (#850) — here no runner is connected anywhere.
+	expect(await res.json()).toMatchObject({ runnerNode: "laptop-A", attachment: { node: "laptop-A", attached: false } });
 		// Targeted json_set on $.runnerNode (#231): pinning a runner must not clobber a
 		// settings or behaviour change saved from another tab between read and write.
 		const update = writes.find((w) => w.sql.includes("json_set(") && w.args[0] === "$.runnerNode");

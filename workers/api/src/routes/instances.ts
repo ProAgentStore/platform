@@ -71,6 +71,7 @@ import { parseBoundRunnerNode } from "../lib/runtime-nodes.js";
 import { diagnoseAttachment, heartbeatFresh } from "../lib/runtime-attachment.js";
 import { instanceListView, patchInstanceConfig, removeInstanceConfigKey } from "../lib/instance-config.js";
 import { setRunnerNodePin } from "../lib/runner-node-pin.js";
+import { attachOnRepin } from "../lib/runner-repin.js";
 
 export const instanceRoutes = new Hono<{ Bindings: Env }>();
 
@@ -627,7 +628,7 @@ instanceRoutes.put("/:instanceId/runner-node", async (c) => {
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	const body = (await c.req.json().catch(() => ({}))) as { runnerNode?: unknown };
 	const { to } = await setRunnerNodePin(c.env, instanceId, session.uid, body.runnerNode, { via: "api" });
-	return c.json({ runnerNode: to || null });
+	return c.json(to ? { runnerNode: to, attachment: await attachOnRepin(c.env, instanceId, session.uid, to) } : { runnerNode: null }); // a pin also MOVES the agent (#850)
 });
 
 /** Read which terminal session was last selected in the UI for this instance (#491). */

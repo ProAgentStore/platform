@@ -148,7 +148,7 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"set_instance_runner_node",
-		'Pin one instance to a specific machine, so its runner calls (chat tools, apply, coding) route there. Pass an empty `runner_node` to CLEAR the pin and let it route to whichever machine holds a live socket. Read instance_runner_node first: pinning to a name no machine currently answers to makes the agent unreachable rather than slower, and the name must be one the machine registered under. Applies to any agent with a runtime, not only coding agents.',
+		'Pin one instance to a specific machine, so its runner calls (chat tools, apply, coding) route there — and MOVE it there in the same call: when that machine\'s `pags up` is connected, it attaches the agent now and any other machine still holding it lets go, so no `pags up` is needed anywhere. The reply\'s `attachment` says what happened: `attached` (this agent\'s socket is live on the new machine), `detachedFrom`, `stillAttachedOn`, and a `detail` naming the remedy when it could not attach. Can take several seconds. Pass an empty `runner_node` to CLEAR the pin and let it route to whichever machine holds a live socket. Read instance_runner_node first: the name must be one the machine registered under. Applies to any agent with a runtime, not only coding agents.',
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID or slug"),

@@ -356,7 +356,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `unregister_instance_runtime` | Remove the registered runtime endpoint | destructive | yes | `unregister_instance_runtime` |
 | `list_runner_nodes` | Every machine running a CLI, across all agents | — | | |
 | `instance_runner_node` | Which machine one instance is pinned to, and the alternatives | — | | |
-| `set_instance_runner_node` | Pin an instance to a machine (empty clears the pin) | write | yes | |
+| `set_instance_runner_node` | Pin an instance to a machine and move it there — the connected `pags up` attaches it now and the old machine lets go (empty clears the pin) | write | yes | |
 | `get_instance_terminal_session` | Saved Tmux-tab terminal target for one instance | read | | |
 | `set_instance_terminal_session` | Save or clear that target; does not operate a terminal | write | yes | |
 | `runner_node_forget_preflight` | Every alias and blocker before a machine registration is forgotten | read | | |

@@ -9,6 +9,15 @@ import { formatStatusLine } from "./status-line.js";
 import type { PagsRequestOptions } from "./types.js";
 
 /**
+ * The one relay command this CLI answers ITSELF rather than forwarding to the local runner (#850):
+ * "re-read which agents this machine should hold, now". Sent by the cloud when an agent is repinned,
+ * over any socket this process holds — the target machine then attaches the agent in the same call,
+ * and a machine it was pinned away from lets go, instead of each waiting for the next 20s poll.
+ * The API sends it by this exact string (`workers/api/src/lib/runner-repin.ts`); change both.
+ */
+export const MEMBERSHIP_SYNC_PATH = "/pags/membership/sync";
+
+/**
  * Connect to PAGS via WebSocket relay — no tunnel, no cloudflared.
  * Opens one WS per instance to the RelayDO and dispatches incoming commands
  * to the local runner HTTP server.
@@ -68,6 +77,8 @@ export async function connectViaRelay(
 	const attached = new Map<string, RelaySocketHandle>();
 	// Instances another live runner owns (4409). Kept out of re-attach until the block clears.
 	const blocked = new Set<string>();
+	/** The membership pass in flight, so the poll and a cloud request queue rather than overlap (#850). */
+	let syncing: Promise<void> = Promise.resolve();
 	/**
 	 * Tell the parent TUI what registration actually stands at — see status-line.ts.
 	 *
@@ -80,6 +91,17 @@ export async function connectViaRelay(
 		writeLine(formatStatusLine({ registration: state, agents, reason: state === "ok" ? undefined : lastRegisterError }));
 	};
 	for (const id of instanceIds) await registerRuntime(id);
+
+	/** The cloud asking for a membership pass now (#850). A scoped run refuses: it must stay as
+	 *  narrow as the user asked, and saying so is what lets the repin report the real remedy. */
+	const answerControl = async (path: string): Promise<{ status: number; result: unknown }> => {
+		if (path !== MEMBERSHIP_SYNC_PATH) return { status: 404, result: { error: `Unknown runner control ${path}` } };
+		if (!watchInstances) {
+			return { status: 409, result: { error: "This machine's `pags up` was started with --instance, so it serves only that agent. Restart it without --instance to let it take repinned agents." } };
+		}
+		await syncMembership();
+		return { status: 200, result: { attached: [...attached.keys()] } };
+	};
 
 	const attach = (id: string, label = `${id.slice(0, 8)}…`) => {
 		if (attached.has(id)) return;
@@ -119,6 +141,7 @@ export async function connectViaRelay(
 					await registerRuntime(openedId, reconnect ? false : force);
 					reportRegistration();
 				},
+				answerControl,
 			),
 		);
 		if (label) writeLine(`Attached agent: ${label}`);
@@ -218,6 +241,48 @@ export async function connectViaRelay(
 	}
 
 	/**
+	 * One membership pass: attach what this machine should hold, detach what it should not. The
+	 * 20s poll runs it, and so does the cloud on a repin (#850) — one queue, so the two can never
+	 * diff the same set at once and attach an agent twice.
+	 */
+	function syncMembership(): Promise<void> {
+		syncing = syncing.catch(() => undefined).then(async () => {
+			await clearFinishedConflicts();
+			const res = await requestPags<{ instances?: DiscoverableInstance[] }>(
+				"GET",
+				"/v1/instances/my/instances",
+				{ ...opts, pagsToken },
+			);
+			const { attach: toAttach, detach: toDetach } = diffMembership(
+				attached.keys(),
+				res.instances ?? [],
+				runnerNode,
+				blocked,
+				// The names this machine has also worn. Without them a pin made under a
+				// previous hostname reads as "pinned to another machine", and this poll
+				// detaches the agent twenty seconds after startup attached it (#379).
+				machine.names,
+			);
+			for (const inst of toAttach) {
+				await registerRuntime(inst.id);
+				attach(inst.id, instanceLabel(inst));
+			}
+			for (const id of toDetach) detach(id);
+			// The registration retry nothing else performs (#497). A socket that came up while
+			// its `POST …/runtime` failed is the exact state the original report showed — the
+			// secure link connected, ProAgentStore "not registered" — and until this, the only
+			// thing that could clear it was the socket dropping again, which on a machine that
+			// stays awake may never happen. Silent when healthy: an empty list writes nothing.
+			const pending = pendingRegistrations(attached.keys(), registered);
+			if (pending.length) {
+				for (const id of pending) await registerRuntime(id);
+				reportRegistration();
+			}
+		});
+		return syncing;
+	}
+
+	/**
 	 * Poll for membership changes. Deliberately polling, not server push: a brand-new instance
 	 * has no socket for the server to push over, so the first version of this cannot be
 	 * realtime (#83 tracks the push path). 20s is under the console's own status refresh, so
@@ -227,37 +292,7 @@ export async function connectViaRelay(
 		const tick = () => {
 			const timer = setTimeout(async () => {
 				try {
-					await clearFinishedConflicts();
-					const res = await requestPags<{ instances?: DiscoverableInstance[] }>(
-						"GET",
-						"/v1/instances/my/instances",
-						{ ...opts, pagsToken },
-					);
-					const { attach: toAttach, detach: toDetach } = diffMembership(
-						attached.keys(),
-						res.instances ?? [],
-						runnerNode,
-						blocked,
-						// The names this machine has also worn. Without them a pin made under a
-						// previous hostname reads as "pinned to another machine", and this poll
-						// detaches the agent twenty seconds after startup attached it (#379).
-						machine.names,
-					);
-					for (const inst of toAttach) {
-						await registerRuntime(inst.id);
-						attach(inst.id, instanceLabel(inst));
-					}
-					for (const id of toDetach) detach(id);
-					// The registration retry nothing else performs (#497). A socket that came up while
-					// its `POST …/runtime` failed is the exact state the original report showed — the
-					// secure link connected, ProAgentStore "not registered" — and until this, the only
-					// thing that could clear it was the socket dropping again, which on a machine that
-					// stays awake may never happen. Silent when healthy: an empty list writes nothing.
-					const pending = pendingRegistrations(attached.keys(), registered);
-					if (pending.length) {
-						for (const id of pending) await registerRuntime(id);
-						reportRegistration();
-					}
+					await syncMembership();
 				} catch {
 					// A failed poll is not worth a log line every 20s — the next one retries, and
 					// a genuinely broken session already surfaces on the relay sockets.
@@ -290,6 +325,8 @@ export function openRelaySocket(
 	/** Called on every successful open, with whether this open is a RE-connect. The socket is the
 	 *  only thing here that retries, so anything that must survive a wake has to ride it (#497). */
 	onOpen?: (instanceId: string, reconnect: boolean) => void | Promise<void>,
+	/** Answers a cloud → CLI control command (#850) instead of forwarding it to the local runner. */
+	onControl?: (path: string) => Promise<{ status: number; result: unknown }>,
 ): RelaySocketHandle {
 	let backoffMs = 1000;
 	let reconnecting = false;
@@ -347,6 +384,13 @@ export function openRelaySocket(
 				return;
 			}
 			if (!cmd.id || !cmd.path) return;
+			if (onControl && cmd.path === MEMBERSHIP_SYNC_PATH) {
+				// A detach this pass performs may close THIS socket — the reply is then lost, and the
+				// cloud reads the socket going away as the answer it is.
+				const reply = await onControl(cmd.path).catch((err) => ({ status: 500, result: { error: err instanceof Error ? err.message : String(err) } }));
+				try { ws.send(JSON.stringify({ id: cmd.id, ...reply })); } catch { /* closed by the detach */ }
+				return;
+			}
 
 			// Dispatch to local runner HTTP server
 			const method = (cmd.method || "POST").toUpperCase();

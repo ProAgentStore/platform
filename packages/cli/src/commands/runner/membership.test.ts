@@ -165,7 +165,11 @@ describe("pendingRegistrations", () => {
  */
 describe("the discovery poll actually performs the retry (#497)", () => {
 	const relaySrc = readFileSync(join(import.meta.dirname, "relay.ts"), "utf8");
-	const discovery = relaySrc.slice(relaySrc.indexOf("function startDiscovery"));
+	// The pass itself lives in `syncMembership`, which the poll runs and a repin runs too (#850).
+	const discovery = relaySrc.slice(relaySrc.indexOf("function syncMembership"));
+	it("is the pass the poll runs", () => {
+		expect(relaySrc.slice(relaySrc.indexOf("function startDiscovery"))).toContain("await syncMembership()");
+	});
 
 	it("re-registers attached instances whose registration is missing, on every pass", () => {
 		expect(discovery).toContain("pendingRegistrations(attached.keys(), registered)");
