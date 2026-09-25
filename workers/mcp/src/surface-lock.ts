@@ -859,4 +859,17 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// and dry-runnable because they alter a shared template or create durable scaffold material.
 	// 216 registrations become 225, always-on 190 → 199; the 26 gated tools are unchanged.
 	"0.1.53": "sha256:17719ff0a61775cf50a9d672f04a69b946cd78fb9ada1be65f80e5e6b52f3576",
+	// 0.1.54 (#613/#722, connector write-consent parity): one new always-on READ tool — 225
+	// registrations become 226, `MCP_TOOL_ALWAYS_ON` 199 → 200 and the 26 gated tools stay put.
+	//
+	//   * `list_instance_connector_consents` reads the rows from
+	//     GET /v1/instances/:id/connectors/consent, including their actual `ask` / `always` mode.
+	//
+	// The existing `set_instance_connector_consent` schema also gained explicit `mode` (`off` /
+	// `ask` / `always`), because a reader that reports a per-call gate without a writer that can
+	// set it leaves the only non-default state console-only. Its legacy `enabled` path remains for
+	// compatibility and still cannot widen a stored `ask` grant. The setter stays `write` plus
+	// `dry_run`: consent is reversible and revoking it must not require destructive scope.
+	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.53 is published.
+	"0.1.54": "sha256:2c2625fc3738c33cdb586343aabebbb9d795a4d75afaf1fdf07814be9d34f07e",
 };

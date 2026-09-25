@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**225 tool registrations.** 199 are always registered; 26 are gated to the console
+**226 tool registrations.** 200 are always registered; 26 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -430,6 +430,7 @@ immediately instead of a whole transcript.
 | `list_instance_connector_grants` | Folders granted to this instance — the grant *is* the permission | — | | |
 | `list_connectors` | Every connector this deployment knows, resolved for your account (configured / connected) | — | | |
 | `list_instance_connectors` | What THIS agent may do with each connector, with the refusal sentence when it may not | — | | |
+| `list_instance_connector_consents` | Stored write-consent modes (`ask` / `always`) for this instance; absence means off | — | | |
 | `set_instance_connector_consent` | Grant or revoke a connector's WRITE consent on one instance | write | yes | |
 | `list_mcp_presets` | First-party MCP servers this deployment knows, as prefilled URLs | — | | |
 | `list_instance_mcp_grants` | Which remote MCP tools, on which endpoints, this agent may call | — | | |

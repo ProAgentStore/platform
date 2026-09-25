@@ -193,6 +193,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	list_instance_knowledge: "read",
 	list_connectors: "read",
 	list_instance_connectors: "read",
+	list_instance_connector_consents: "read",
 	list_instance_mcp_grants: "read",
 	list_instance_mcp_input_requests: "read",
 	list_mcp_presets: "read",
@@ -531,7 +532,7 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// engines panel writes — and a session already running is untouched.
 	// +1 read at #198: `platform_health`, the read-only diagnostic — every verdict in it is derived
 	// from public probes and this session's own latency ring; nothing is written.
-	read: 106,
+	read: 107,
 	// +2 write at #825: `pause_instance` / `resume_instance`. `write` rather than `destructive` —
 	// nothing is deleted and nothing is unsubscribed, and classing the OFF switch as destructive
 	// would put RESUME behind a scope the caller may not hold, which is the wrong failure mode for

@@ -172,19 +172,40 @@ export function registerConnectorGrantTools(server: McpServer, ctx: InstanceTool
 	);
 
 	server.tool(
+		"list_instance_connector_consents",
+		"Read the owner-granted WRITE consent rows for one instance. Each row names its `connector`, `scope`, and the actual `mode`: `always` dispatches a permitted write, while `ask` pauses each write for the owner's approval; a connector with no `write` row is `off`. This is separate from list_instance_connectors: that tool says whether an agent has a connector available, not whether it may change something through it. Use this before set_instance_connector_consent, and read the response again after changing a mode rather than inferring it from the request.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			return jsonText(await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/connectors/consent`, sessionToken, {}, env));
+		},
+	);
+
+	server.tool(
 		"set_instance_connector_consent",
-		"Grant or revoke WRITE consent for one connector on one instance — the owner's separate yes to an agent changing things through it, on top of the connector being connected at all. Reads never need consent; without it, a connector's write tools are refused by call_instance_tool and by the agent itself. Granting is validated against the registry first, so an unknown connector 404s and a read-only one is refused rather than stored as consent that could never do anything. Revoking always works, including for a connector that has since become read-only.",
+		"Set WRITE consent for one connector on one instance — the owner's separate yes to an agent changing things through it, on top of the connector being connected at all. `mode: \"off\"` revokes it; `ask` stores a per-call owner approval gate; `always` dispatches permitted writes without that extra pause. Reads never need consent. Read list_instance_connector_consents first: list_instance_connectors only says whether the agent has a connector, not its stored write mode. Granting is validated against the registry; revoking always works, including for a connector that has since become read-only.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),
 			connector: z.string().describe("Connector id from list_connectors or list_instance_connectors, e.g. github. Copy it exactly."),
-			enabled: z.boolean().describe("true to grant write consent, false to revoke it."),
+			mode: z.enum(["off", "ask", "always"]).optional().describe("Stored write-consent mode. `off` revokes; `ask` requires approval for each write; `always` dispatches permitted writes. Prefer this explicit mode."),
+			enabled: z.boolean().optional().describe("Legacy compatibility only: true grants a missing row as `always` without widening an existing `ask` row; false revokes. Do not combine with mode."),
 			dry_run: z.boolean().optional().describe("Preview without changing the consent."),
 		},
-		async ({ token, instance_id, connector, enabled, dry_run }) => {
+		async ({ token, instance_id, connector, mode, enabled, dry_run: preview }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const input = { instance_id, connector, enabled };
+			if (mode === undefined && enabled === undefined) return text("Provide exactly one of `mode` or legacy `enabled`.");
+			// A stale generated client can send the optional fields' schema samples together. `off`
+			// and `enabled:false` are the one non-ambiguous pair: both revoke. Every other pair could
+			// hide an attempt to turn an `ask` grant into `always`, so reject it before the API.
+			if (mode !== undefined && enabled !== undefined && !(mode === "off" && enabled === false)) return text("Provide `mode` or legacy `enabled`, not both.");
+			const body = mode === undefined ? { enabled } : { mode };
+			const input = { instance_id, connector, ...body };
 			// `write`, on the same reasoning as `set_instance_tool`: this changes what an agent is
 			// PERMITTED to do, so a read-only MCP session must not be able to widen its reach. Not
 			// `destructive`, because it is the reversible half of a pair whose other half (revoke)
@@ -192,19 +213,20 @@ export function registerConnectorGrantTools(server: McpServer, ctx: InstanceTool
 			// scope a caller may not hold, which is the wrong failure for a safety toggle.
 			const denied = await requirePermission(safetyFor(token), "write", "set_instance_connector_consent", input);
 			if (denied) return denied;
-			if (dry_run) {
+			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/connectors/${encodeURIComponent(connector)}/consent`;
+			if (preview) {
 				return dryRun(
 					safetyFor(token),
 					"set_instance_connector_consent",
-					enabled ? "grant a connector write consent on this instance" : "revoke a connector's write consent on this instance",
+					mode === "off" || enabled === false ? "revoke a connector's write consent on this instance" : mode === "ask" ? "require the owner's approval for each connector write" : "allow permitted connector writes without a per-call approval",
 					input,
-					{ endpoint: `/v1/instances/${instance_id}/connectors/${connector}/consent`, method: "PUT" },
+					{ endpoint, method: "PUT", body },
 				);
 			}
 			const data = await authedCall(
-				`/v1/instances/${instance_id}/connectors/${encodeURIComponent(connector)}/consent`,
+				endpoint,
 				sessionToken,
-				{ method: "PUT", body: JSON.stringify({ enabled }) },
+				{ method: "PUT", body: JSON.stringify(body) },
 				env,
 			);
 			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_instance_connector_consent", action: "completed", input, result: data });

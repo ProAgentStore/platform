@@ -166,11 +166,6 @@ const EXCLUSIONS = [
 const KNOWN_GAPS = [
 	{
 		why:
-			"READING a connector's write consent. MCP can already WRITE one (`set_instance_connector_consent`) and cannot read what is stored, which is the wrong way round and became worth stating at #722: a consent now carries a MODE (always · ask), so \"is this connector behind per-call approval\" is a real question with no MCP answer, while `list_instance_connectors` reports only whether a tool is available. Recorded rather than closed because the read wants to land with the mode in its payload and a tool that can SET the mode — today's write tool takes a boolean, which deliberately cannot widen an ask grant (routes/tools.ts) and therefore cannot express one either. #613.",
-		match: /^GET \/v1\/instances\/\{\}\/connectors\/consent$/,
-	},
-	{
-		why:
 			"Machines and terminals, the part still missing: FORGETTING a node (and un-claiming its name), and the Tmux tab's terminal-session read/write. #613. Narrowed by #671, which closed the half that mattered for placement — `list_runner_nodes` lists every connected CLI across agents, `instance_runner_node` reads one instance's pin and its alternatives, and `set_instance_runner_node` writes it through the same route the console uses. What is left is deliberate rather than pending: forgetting a node is destructive and has refusal logic (`diagnoseUnclaim`) whose blockers a caller has no way to read over MCP yet, and `terminal-session` is UI state for a tab MCP does not render.",
 		match: /^[A-Z]+ \/v1\/(terminals\/nodes\/\{\}|instances\/\{\}\/terminal-session)$/,
 	},

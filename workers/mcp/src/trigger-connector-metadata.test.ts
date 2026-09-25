@@ -82,6 +82,16 @@ describe("list_instance_connectors", () => {
 	});
 });
 
+describe("list_instance_connector_consents", () => {
+	it("GETs the stored rows and preserves ask versus always instead of inferring consent from connector availability", async () => {
+		const body = { consents: [{ connector: "github", scope: "write", mode: "ask" }, { connector: "linear", scope: "write", mode: "always" }] };
+		const h = setup({ body, scopes: ["read"] });
+		const res = await h.run("list_instance_connector_consents", { instance_id: "inst / 1" });
+		expect(h.calls).toEqual([{ url: "https://api.test/v1/instances/inst%20%2F%201/connectors/consent", method: "GET", body: null }]);
+		expect(JSON.parse(res.content[0].text)).toEqual(body);
+	});
+});
+
 describe("list_trigger_actions", () => {
 	it("sends the instanceId the route requires, URL-encoded", async () => {
 		const h = setup({ body: { actions: [{ action: "run_browse", available: false, reason: "this agent has no browser" }] } });
@@ -134,11 +144,11 @@ describe("preview_instance_trigger", () => {
 });
 
 describe("set_instance_connector_consent", () => {
-	it("PUTs the grant, URL-encoding the connector id", async () => {
-		const h = setup({ body: { ok: true, connector: "github", scope: "write", enabled: true } });
-		await h.run("set_instance_connector_consent", { instance_id: "inst-1", connector: "git hub", enabled: true });
+	it("PUTs the explicit mode, URL-encoding the instance and connector ids", async () => {
+		const h = setup({ body: { ok: true, connector: "github", scope: "write", enabled: true, mode: "ask" } });
+		await h.run("set_instance_connector_consent", { instance_id: "inst / 1", connector: "git hub", mode: "ask" });
 		expect(h.calls).toEqual([
-			{ url: "https://api.test/v1/instances/inst-1/connectors/git%20hub/consent", method: "PUT", body: { enabled: true } },
+			{ url: "https://api.test/v1/instances/inst%20%2F%201/connectors/git%20hub/consent", method: "PUT", body: { mode: "ask" } },
 		]);
 		expect(h.completed().map((e) => e.tool)).toEqual(["set_instance_connector_consent"]);
 	});
@@ -147,6 +157,18 @@ describe("set_instance_connector_consent", () => {
 		const h = setup();
 		await h.run("set_instance_connector_consent", { instance_id: "inst-1", connector: "github", enabled: false });
 		expect(h.calls[0]?.body).toEqual({ enabled: false });
+	});
+
+	it("refuses no mode and an ambiguous legacy-plus-mode request before either can change a consent", async () => {
+		for (const args of [
+			{ instance_id: "inst-1", connector: "github" },
+			{ instance_id: "inst-1", connector: "github", enabled: true, mode: "ask" },
+		]) {
+			const h = setup();
+			const res = await h.run("set_instance_connector_consent", args);
+			expect(res.content[0].text).toMatch(/Provide/);
+			expect(h.calls).toHaveLength(0);
+		}
 	});
 
 	it("is refused without the write scope — a read-only session cannot widen an agent's reach", async () => {
@@ -159,10 +181,10 @@ describe("set_instance_connector_consent", () => {
 
 	it("dry_run changes nothing and says which way it would go", async () => {
 		const h = setup();
-		const res = await h.run("set_instance_connector_consent", { instance_id: "inst-1", connector: "github", enabled: true, dry_run: true });
+		const res = await h.run("set_instance_connector_consent", { instance_id: "inst-1", connector: "github", mode: "ask", dry_run: true });
 		expect(h.calls).toHaveLength(0);
-		expect(JSON.parse(res.content[0].text)).toMatchObject({ dryRun: true, wouldDo: { method: "PUT" } });
-		expect(res.content[0].text).toContain("grant");
+		expect(JSON.parse(res.content[0].text)).toMatchObject({ dryRun: true, wouldDo: { method: "PUT", body: { mode: "ask" } } });
+		expect(res.content[0].text).toContain("approval");
 	});
 
 	it("surfaces the route's refusal for a read-only connector, unaudited", async () => {

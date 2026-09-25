@@ -203,6 +203,10 @@ const READBACK: Record<string, string | null> = {
 	"set_instance_instructions.instructions": "get_instance_instructions",
 	"set_instance_operator_manual.manual": "get_instance_operator_manual",
 	"set_instance_model.model": "get_instance_state",
+	// #613/#722: consent is a MODE, not a boolean. The reader landed with the explicit setter so
+	// `ask` cannot be written into an MCP-only blind spot while list_instance_connectors merely
+	// reports availability.
+	"set_instance_connector_consent.mode": "list_instance_connector_consents",
 	// #671. Readable by the tool added alongside it — the gap this closed was precisely that the
 	// pin could be neither read nor written here, so a reader had to exist for the writer to land.
 	"set_instance_runner_node.runner_node": "instance_runner_node",
