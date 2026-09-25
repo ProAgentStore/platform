@@ -23,7 +23,7 @@
  *
  * The platform NEVER writes tool-result markup into an assistant message. Results reach the model
  * as the PLATFORM's own turn — since #398 a `user` turn of real `tool_result` blocks on the
- * structured path, and the older `[name]: …` prose message on the Workers-AI fallback — and reach
+ * structured path, and since #851 `tool`-role messages on Workers AI — and reach
  * the user as the tool log. So a result block in the model's own text is proof by construction,
  * not a heuristic. (#398 strengthens this rather than weakening it: on the structured path a
  * result is now a block type an assistant turn cannot legally contain.) It is

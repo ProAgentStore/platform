@@ -1146,7 +1146,7 @@ const PINS = {
 	// leaving the pin at 1251 would hand the 394 lines straight back as headroom, and that is
 	// numerically how #138's refactor was undone within hours. The new file is 541 and needs no
 	// entry (LIMIT is 800) — deliberately, so it has to earn one before it grows.
-	"workers/api/src/agent-think.ts": 858, // +1 at #768: `turnContext`, the per-turn half kept out of the cached prompt.
+	"workers/api/src/agent-think.ts": 876, // +1 at #768: `turnContext`, the per-turn half kept out of the cached prompt. +18 at #851: the Workers AI `tool`-role round and its one act-or-answer re-ask; the protocol itself lives in lib/workers-ai-protocol.ts.
 	// +44 at #379, and roughly two thirds of it is prose. A machine's identity stopped being its
 	// hostname: the registration body accepts a stable `machineId` plus the hostnames that machine
 	// has worn, the node upsert stores the id (with the COALESCE that stops an OLDER CLI erasing

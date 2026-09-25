@@ -31,6 +31,7 @@ import { withholdConstrainedConnectorTools, type TemplatePreviewCapabilities } f
 import { capToolResult, toolLogLine } from "./lib/tool-result-cap.js";
 import { corroborateToolPaths, createPathLedger } from "./lib/path-corroboration.js";
 import { hasToolBlocks, toolResultTurn, toolUseIdsOf, type ToolOutcome } from "./lib/anthropic-tool-turns.js";
+import { announcesAction, CALL_NOW_CORRECTION, WORKERS_AI_PROTOCOL, workersAiToolRound } from "./lib/workers-ai-protocol.js";
 import { chatSurfaceForDoKey } from "./lib/agent-self-description.js";
 import { voiceControlPrompt } from "./lib/agent-style-prompt.js";
 import { behaviourPrompt, behaviourStrayPrompt, resolveBehaviour } from "./lib/agent-behaviour.js";
@@ -116,6 +117,8 @@ type ChatCompletion = {
 	 * loop never needs to know which provider ran.
 	 */
 	contentBlocks?: unknown;
+	/** Set by the Workers AI path (#851): results go back in its `tool` role, not as prose. */
+	protocol?: string;
 };
 
 export async function runAgentThink(opts: {
@@ -562,6 +565,8 @@ export async function runAgentThink(opts: {
 	// writes one into a filed issue or a run objective. Turn-scoped and declared here, beside the
 	// other accumulators, because the read and the write are usually different rounds.
 	const pathLedger = createPathLedger();
+	// One re-ask per turn for a Workers AI reply that announced an action and called nothing (#851).
+	let askedToCall = false;
 
 	/**
 	 * The ONE way a model-authored reply leaves this function (#395).
@@ -641,6 +646,14 @@ export async function runAgentThink(opts: {
 		if (toolCalls.length === 0) toolCalls = parsed.calls;
 
 		if (toolCalls.length === 0) {
+			// The open models often stop at "Let me check the terminal" where Sonnet makes the call in
+			// the same turn (#851). Asked once to act or answer; a second prose reply is the answer.
+			if (rawResult.protocol === WORKERS_AI_PROTOCOL && !askedToCall && announcesAction(parsed.text)) {
+				askedToCall = true;
+				aiMessages.push({ role: "assistant", content: parsed.text });
+				aiMessages.push({ role: "user", content: CALL_NOW_CORRECTION });
+				continue;
+			}
 			return deliver({ text: parsed.text, calls: parsed.calls.map((c) => c.name) });
 		}
 
@@ -810,8 +823,13 @@ export async function runAgentThink(opts: {
 			// fallback is deliberately NOT resumable — replaying it re-enters the narrated shape
 			// #398 removed, and it is the Workers-AI fallback, not the provider chats run on.
 			roundMessages.push(aiMessages[aiMessages.length - 2], aiMessages[aiMessages.length - 1]);
+		} else if (rawResult.protocol === WORKERS_AI_PROTOCOL) {
+			// Workers AI (#851): the model's call as its own turn, each result in the `tool` role —
+			// the platform's, as `tool_result` is on Anthropic — never narrated back as its prose.
+			for (const m of workersAiToolRound(parsed.text, toolCalls, toolResults)) aiMessages.push(m);
+			aiMessages.push({ role: "user", content: continueText });
 		} else {
-			// The Workers-AI fallback and the text-embedded path: no ids to answer, so the prose
+			// The text-embedded path on a provider without ids: nothing to answer, so the prose
 			// shape stays. Branching on whether the completion CARRIED blocks keeps this
 			// self-describing — a provider enum here would be a second thing to keep in sync, and
 			// the fallback's limitation must not set the protocol for the provider almost every chat

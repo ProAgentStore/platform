@@ -17,6 +17,7 @@ import {
 } from "./anthropic-stream.js";
 import { endOnUserTurn, mergeContent, pairToolBlocks } from "./anthropic-tool-turns.js";
 import { recordUsage, type UsageContext } from "./usage.js";
+import { fromWorkersAiResult, toWorkersAiBody, workersAiModelFor } from "./workers-ai-protocol.js";
 import { logPromptSectionEstimates } from "./prompt-section-estimates.js";
 import type { Env } from "../types.js";
 
@@ -566,6 +567,11 @@ async function runCloudflareAi(
 	body: unknown,
 	ctx?: UsageContext,
 ): Promise<unknown> {
+	// The platform's own callers speak one provider-neutral body (#851); `/run` is the exception — a
+	// public passthrough of the CALLER's Workers AI input and result, which must reach them untouched.
+	const platform = ctx?.kind !== "run";
+	// The brains name an Anthropic model; on this path that is a URL that does not exist.
+	if (platform) model = workersAiModelFor(model);
 	const encodedModel = model.split("/").map(encodeURIComponent).join("/");
 	// Still non-streamed, and correctly so: this path is the fallback for a user with CF creds and no
 	// Anthropic key, where the model is `llama-3.2-3b` and the REST endpoint's default output is a few
@@ -584,7 +590,7 @@ async function runCloudflareAi(
 					Authorization: `Bearer ${credentials.token}`,
 					"Content-Type": "application/json",
 				},
-				body: JSON.stringify(withFlatSystemPrompt(body)),
+				body: JSON.stringify(platform ? toWorkersAiBody(withFlatSystemPrompt(body)) : withFlatSystemPrompt(body)),
 				signal: controller.signal,
 			},
 		);
@@ -618,10 +624,9 @@ async function runCloudflareAi(
 			output: cu.completion_tokens || cu.output_tokens || 0,
 		});
 	}
-	if (data && typeof data === "object" && "result" in data) {
-		return (data as { result: unknown }).result;
-	}
-	return data;
+	// One result shape for every brain, whichever habit the model has (#851) — see workers-ai-protocol.
+	const result = data && typeof data === "object" && "result" in data ? (data as { result: unknown }).result : data;
+	return platform ? fromWorkersAiResult(result, (body as { tools?: unknown })?.tools) : result;
 }
 
 export async function getUserProviderKey(
