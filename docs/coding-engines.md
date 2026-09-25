@@ -284,10 +284,14 @@ running `api-key` engine does not lose its sign-in because its owner picked a mo
 
 `auth` decides whose credentials the engine launches with, independently of what it may do:
 
-- `auto` — the stored `claude setup-token` if saved (Claude only), else the machine's own login
+- `auto` — Claude uses the stored `claude setup-token` if saved, else its machine login; Codex uses its
+  local `codex login` (including a ChatGPT subscription when configured) with `OPENAI_API_KEY` removed;
+  other engines use the machine's own login
 - `machine` — inject nothing; use the runner machine's login
-- `subscription` — the stored `claude setup-token` (Claude only)
-- `api-key` — the engine's provider key from the vault (per-token billing)
+- `subscription` — Claude uses the stored `claude setup-token`; Codex uses its local `codex login` with
+  `OPENAI_API_KEY` removed, so a valid ChatGPT subscription is authoritative. Other engines have no
+  shipped subscription credential and use their machine login instead.
+- `api-key` — the engine's provider key from the vault (including Codex's `OPENAI_API_KEY`; per-token billing)
 
 Every mode except `api-key` actively **strips** the provider key from the engine's env (an empty
 value means remove, see the runner's `mergeEnv`). A developer with `ANTHROPIC_API_KEY` exported in
