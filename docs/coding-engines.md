@@ -81,7 +81,11 @@ Claude is the persistence exception, and its continuity is **not** in the preset
 keeps one stream-json process alive, and across runner restarts re-spawns it with
 `--resume <session id>` against `~/.claude` — which is exactly why `--resume` is one of the
 structural flags a preset may not set. Codex also uses structured JSON now, but it is still
-one-shot and `resumedConversation` remains false until the separate resume-by-id spike passes.
+one-shot and `resumedConversation` remains false until the dedicated runner implementation lands.
+The explicit-ID viability spike passed on `codex-cli 0.151.0` on 2026-09-25: the captured ID carried
+semantic context and resisted a same-CWD unrelated-exec hijack. Its evidence is recorded in
+[`codex-exec-resume-spike-2026-09-25.md`](codex-exec-resume-spike-2026-09-25.md); implementation is
+tracked separately in #848 and remains only a #693 stopgap.
 
 **The fix is the prefix contract, used on purpose.** Where the vendor ships a resume subcommand,
 putting it in the preset gives that engine multi-turn memory with no platform change: **multi-turn
@@ -134,7 +138,9 @@ asked what word turn 1 had said and answered correctly, on the same session id. 
 unrelated `codex exec` ran in the same directory — and the next `resume --last` followed *that* one
 instead, answering from the wrong conversation. That is the failure the platform must not ship by
 default: **resuming into the wrong prior conversation is worse than starting clean**, because it is
-confidently wrong rather than obviously blank.
+confidently wrong rather than obviously blank. The #730 probe does not rehabilitate `--last`; it
+proved only that an explicitly captured Codex `thread_id` avoids this specific hijack on
+`codex-cli 0.151.0`.
 
 It cannot be pinned from a preset, either. The contract is prefix + turn text, so there is no slot
 for `resume <SESSION_ID>` — the turn text would take the session-id positional. And a coding repo

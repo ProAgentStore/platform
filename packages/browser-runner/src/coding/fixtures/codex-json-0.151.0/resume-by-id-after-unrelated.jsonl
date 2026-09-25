@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a0d811-35aa-7fc1-bd23-f39d943db79a"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"ORIGINAL CONTEXT RECALLED C730-ORCHID-MAPLE-482917"}}
+{"type":"turn.completed","usage":{"input_tokens":24429,"cached_input_tokens":21248,"cache_write_input_tokens":0,"output_tokens":35,"reasoning_output_tokens":11}}

@@ -96,5 +96,8 @@ retries the same prompt once through the generic raw adapter. Plaintext or malfo
 never trigger a retry, because current JSON mode can interleave tool/MCP stderr and retrying after
 real work could run a prompt twice.
 
-#730 remains a separate spike. This run proved a `thread_id` exists, not that
-`codex exec resume <thread_id> --json <prompt>` carries context or avoids wrong-session resume.
+#730 subsequently passed its explicit-ID resume probe on 2026-09-25. Its separate evidence shows
+that `codex exec resume <thread_id> --json --dangerously-bypass-approvals-and-sandbox <prompt>`
+carried context and did not select an unrelated same-CWD session; see
+[`codex-exec-resume-spike-2026-09-25.md`](codex-exec-resume-spike-2026-09-25.md). The runner still
+does not implement that resume path until the narrowly scoped #848 build slice lands.
