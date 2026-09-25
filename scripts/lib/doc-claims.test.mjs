@@ -240,6 +240,12 @@ describe("parseConfirmProse", () => {
 		expect(stated.slice(0, 2)).toEqual([13, 12]);
 	});
 
+	it("reads hyphenated counts above twenty as one number", () => {
+		const future =
+			'- Twenty-six tools require an exact `confirm` value. Twenty-five use the tool\'s own name: `write_agent_file`, `delete_supervision`, `clear_instance_messages`. `remove_repo` is the exception: `confirm: "remove_all_repos"`.';
+		expect(parseConfirmProse(future, known).stated.slice(0, 2)).toEqual([26, 25]);
+	});
+
 	/** The defect #555 measured: `delete_supervision` absent, and the count a word behind. */
 	it("surfaces the stale list that shipped — a missing tool AND the wrong stated count", () => {
 		const stale =

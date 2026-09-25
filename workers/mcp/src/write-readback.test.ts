@@ -131,6 +131,10 @@ const CONTROL_ARGS: ReadonlySet<string> = new Set([
 	// #613: addressing — WHICH dead delivery `replay_connection_delivery` re-arms. Taken from
 	// `list_connection_deliveries`, never composed; the row's status reads back there too.
 	"delivery_id",
+	// #613 agent-template authoring: WHICH saved snapshot to replace the live template
+	// with. This is addressing, not content; it comes from the template's version list
+	// outside the MCP write and is never itself stored by the rollback route.
+	"version_id",
 ]);
 
 /**
@@ -441,6 +445,21 @@ const READBACK: Record<string, string | null> = {
 	"update_agent.visibility": "agent_info",
 	"update_agent.model": "agent_info",
 	"update_agent.capabilities": "agent_info",
+	// #613, agent-template authoring write half. Capability and state writes each have the
+	// owner-scoped reader that was added with the earlier read half. A creator test-chat is
+	// its own template conversation, so it reads back through agent_messages, not an
+	// instance conversation. Version descriptions have no MCP version-list reader yet, so
+	// name that intentional projection loss rather than pretending create_agent_version is
+	// readable. Builder execution takes the exact proposal that plan_agent_builder returns.
+	"set_agent_capabilities.surfaces": "get_agent_capabilities",
+	"set_agent_capabilities.runtime": "get_agent_capabilities",
+	"set_agent_capabilities.workflow": "get_agent_capabilities",
+	"set_agent_capabilities.tools": "get_agent_capabilities",
+	"set_agent_capabilities.custom_surfaces": "get_agent_capabilities",
+	"set_agent_state.state": "get_agent_state",
+	"chat_with_my_agent.message": "agent_messages",
+	"create_agent_version.description": null,
+	"execute_agent_builder_plan.plan": "plan_agent_builder",
 	"write_agent_file.path": "list_agent_files",
 	"write_agent_file.content": "read_agent_file",
 	"write_agent_file.message": "agent_deploy_status",

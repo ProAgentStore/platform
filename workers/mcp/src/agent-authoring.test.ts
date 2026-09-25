@@ -4,7 +4,7 @@ import type { McpEnv } from "./http.js";
 import { registerAgentAuthoringTools } from "./instance-tools/agent-authoring.js";
 import type { SafetyContext } from "./safety.js";
 
-// ── #613, the agent-template authoring group — the READ half ──────────────────
+// ── #613, the agent-template authoring group ─────────────────────────────────
 //
 // Six proxies over routes the console's AgentDetail already uses. What a proxy over THESE gets
 // wrong, and what is therefore pinned below:
@@ -76,9 +76,13 @@ const ROUTES: Array<[string, string]> = [
 ];
 
 describe("the registrar", () => {
-	it("registers exactly the six read tools of this slice", () => {
+	it("registers exactly the complete fifteen-route authoring group", () => {
 		expect(setup().names().sort()).toEqual(
-			["agent_messages", "export_agent", "get_agent_capabilities", "get_agent_memory", "get_agent_state", "my_agent"],
+			[
+				"agent_messages", "chat_with_my_agent", "create_agent_version", "delete_agent", "delete_agent_knowledge",
+				"execute_agent_builder_plan", "export_agent", "get_agent_capabilities", "get_agent_memory", "get_agent_state",
+				"my_agent", "plan_agent_builder", "rollback_agent_version", "set_agent_capabilities", "set_agent_state",
+			],
 		);
 	});
 
@@ -104,6 +108,63 @@ describe("the registrar", () => {
 		const h = setup();
 		await h.run("get_agent_state", { agent_id: "a/b" });
 		expect(h.calls[0].url).toBe("https://api.test/v1/agents/a%2Fb/state");
+	});
+});
+
+// The nine routes that were still in KNOWN_GAPS. Eight mutate a template (or create a template)
+// and MUST be destructive-scoped, confirmed and previewable; builder planning is the ninth route
+// but only computes a plan, so it remains an unconfirmed read despite using POST.
+const WRITES: Array<[string, string, string, Record<string, unknown>, string]> = [
+	["delete_agent", "https://api.test/v1/agents/my-agent", "DELETE", {}, "delete_agent"],
+	["delete_agent_knowledge", "https://api.test/v1/agents/my-agent/knowledge/doc-1", "DELETE", { document_id: "doc-1" }, "delete_agent_knowledge"],
+	["set_agent_capabilities", "https://api.test/v1/agents/my-agent/capabilities", "PUT", { surfaces: ["chat"], runtime: "browser", tools: ["browser_snapshot"] }, "set_agent_capabilities"],
+	["set_agent_state", "https://api.test/v1/agents/my-agent/state", "PUT", { state: { personality: "careful", goal: "help" } }, "set_agent_state"],
+	["chat_with_my_agent", "https://api.test/v1/agents/my-agent/chat", "POST", { message: "Test this draft" }, "chat_with_my_agent"],
+	["create_agent_version", "https://api.test/v1/agents/my-agent/versions", "POST", { description: "before rewrite" }, "create_agent_version"],
+	["rollback_agent_version", "https://api.test/v1/agents/my-agent/versions/ver-1/rollback", "POST", { version_id: "ver-1" }, "rollback_agent_version"],
+	["execute_agent_builder_plan", "https://api.test/v1/agent-builder/execute", "POST", { plan: { action: "create_agent", agent: { slug: "planned", name: "Planned" } } }, "execute_agent_builder_plan"],
+];
+
+describe("the authoring write half — mutation checked", () => {
+	it("uses each exact console route and API-shaped body", async () => {
+		for (const [name, url, method, args, confirm] of WRITES) {
+			const h = setup({ scopes: ["read", "write", "runtime", "destructive"] });
+			await h.run(name, { ...args, confirm });
+			expect(h.calls, name).toHaveLength(1);
+			expect(h.calls[0]).toMatchObject({ url, method });
+		}
+	});
+
+	it("requires the destructive scope and its own exact confirmation before every mutation", async () => {
+		for (const [name, _url, _method, args, confirm] of WRITES) {
+			const lackingScope = setup({ scopes: ["read", "write", "runtime"] });
+			expect((await lackingScope.run(name, { ...args, confirm })).content[0].text, name).toMatch(/requires MCP scope "destructive"/);
+			expect(lackingScope.calls, name).toHaveLength(0);
+			const missingConfirm = setup({ scopes: ["read", "write", "runtime", "destructive"] });
+			expect((await missingConfirm.run(name, args)).content[0].text, name).toContain(`confirm="${confirm}"`);
+			expect(missingConfirm.calls, name).toHaveLength(0);
+		}
+	});
+
+	it("dry runs audit a preview without contacting the API", async () => {
+		for (const [name, _url, _method, args] of WRITES) {
+			const h = setup({ scopes: ["read", "write", "runtime", "destructive"] });
+			const preview = JSON.parse((await h.run(name, { ...args, dry_run: true })).content[0].text);
+			expect(preview).toMatchObject({ dryRun: true, tool: name });
+			expect(h.calls, name).toHaveLength(0);
+		}
+	});
+
+	it("preserves omitted capabilities and maps MCP custom_surfaces to the API field", async () => {
+		const h = setup({ scopes: ["destructive"] });
+		await h.run("set_agent_capabilities", { custom_surfaces: [{ id: "report", label: "Report", bundleUrl: "/console/report.js" }], confirm: "set_agent_capabilities" });
+		expect(h.calls[0].body).toEqual({ customSurfaces: [{ id: "report", label: "Report", bundleUrl: "/console/report.js" }] });
+	});
+
+	it("plans without a mutation, confirmation or dry-run detour", async () => {
+		const h = setup({ scopes: ["read"] });
+		await h.run("plan_agent_builder", { prompt: "Build an agent that reviews contracts." });
+		expect(h.calls).toEqual([{ url: "https://api.test/v1/agent-builder/plan", method: "POST", body: { prompt: "Build an agent that reviews contracts." } }]);
 	});
 });
 

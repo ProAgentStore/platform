@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authRequired, authedCall, jsonText } from "../http.js";
+import { audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
 import type { InstanceToolsCtx } from "./shared.js";
 
 /**
@@ -42,7 +43,7 @@ import type { InstanceToolsCtx } from "./shared.js";
  * row is a surprise worth removing.
  */
 export function registerAgentAuthoringTools(server: McpServer, ctx: InstanceToolsCtx): void {
-	const { env, tokenFor, safetyFor: _safetyFor } = ctx;
+	const { env, tokenFor, safetyFor } = ctx;
 
 	/** Every route here takes the agent's id OR its slug; the phrasing is identical so it reads once. */
 	const agentIdArg = z
@@ -139,6 +140,195 @@ export function registerAgentAuthoringTools(server: McpServer, ctx: InstanceTool
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			return jsonText(await authedCall(`/v1/agents/${encodeURIComponent(agent_id)}/export`, sessionToken, {}, env));
+		},
+	);
+
+	// The write half deliberately lives beside the reads it changes. A template is copied when an
+	// instance is subscribed, not live-linked, so every description names the template and every
+	// mutation is previewable before it can alter another person's future starting point.
+	const templateIdArg = z.string().describe("Opaque template agent ID from my_agents. Copy the id exactly; these write routes require an ID, not an instance_id or a public catalogue slug.");
+	const tokenArg = z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in.");
+	const confirmArg = (value: string, action: string) => z.string().optional().describe(`Exact confirmation required to ${action}: "${value}". Omit on dry_run.`);
+	const dryRunArg = z.boolean().optional().describe("Preview this change without sending it to the API. Does not require confirm.");
+
+	server.tool(
+		"delete_agent",
+		"Permanently delete one of YOUR OWN agent TEMPLATES. This also removes the creator's own instances of it, but refuses if another subscriber has an instance — it never deletes another person's workspace. There is no restore path: use export_agent first if you may need the template, its state, knowledge or memory again.",
+		{ token: tokenArg, agent_id: templateIdArg, confirm: confirmArg("delete_agent", "delete this template"), dry_run: dryRunArg },
+		async ({ token, agent_id, confirm, dry_run: preview }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { agent_id };
+			const denied = await requirePermission(safetyFor(token), "destructive", "delete_agent", input);
+			if (denied) return denied;
+			const endpoint = `/v1/agents/${encodeURIComponent(agent_id)}`;
+			if (preview) return dryRun(safetyFor(token), "delete_agent", "permanently delete an agent template", input, { endpoint, method: "DELETE", effect: "The template and the caller's own instances of it would be deleted. The API refuses if any other subscriber has an instance.", alternative: "export_agent first to retain a complete JSON backup." });
+			const unconfirmed = await requireConfirmation(safetyFor(token), "delete_agent", confirm, "delete_agent", input);
+			if (unconfirmed) return unconfirmed;
+			const data = await authedCall(endpoint, sessionToken, { method: "DELETE" }, env);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "delete_agent", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"delete_agent_knowledge",
+		"Permanently remove one knowledge document from an agent TEMPLATE. This changes what new subscribers can receive; it does not edit existing instances. Read the template's list_knowledge and export_agent before deleting — neither the document nor its text has an undo path.",
+		{ token: tokenArg, agent_id: templateIdArg, document_id: z.string().describe("Knowledge document ID from list_knowledge for this template."), confirm: confirmArg("delete_agent_knowledge", "delete this document"), dry_run: dryRunArg },
+		async ({ token, agent_id, document_id, confirm, dry_run: preview }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { agent_id, document_id };
+			const denied = await requirePermission(safetyFor(token), "destructive", "delete_agent_knowledge", input);
+			if (denied) return denied;
+			const endpoint = `/v1/agents/${encodeURIComponent(agent_id)}/knowledge/${encodeURIComponent(document_id)}`;
+			if (preview) return dryRun(safetyFor(token), "delete_agent_knowledge", "delete a template knowledge document", input, { endpoint, method: "DELETE", effect: "The selected template document would be removed permanently; existing instances keep their separate knowledge stores.", alternative: "export_agent first to retain the document in a backup." });
+			const unconfirmed = await requireConfirmation(safetyFor(token), "delete_agent_knowledge", confirm, "delete_agent_knowledge", input);
+			if (unconfirmed) return unconfirmed;
+			const data = await authedCall(endpoint, sessionToken, { method: "DELETE" }, env);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "delete_agent_knowledge", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"set_agent_capabilities",
+		"Replace the supplied declared capabilities of an agent TEMPLATE: surfaces, runtime, workflow, tool allowlist and/or custom surfaces. These decide what future subscribers can see and what their runtime is allowed to do; read get_agent_capabilities first. Omitted fields are preserved by the API, including custom surfaces when custom_surfaces is omitted.",
+		{
+			token: tokenArg,
+			agent_id: templateIdArg,
+			surfaces: z.array(z.string()).optional().describe("Console surfaces to declare. Omit to preserve them."),
+			runtime: z.enum(["browser", "coding"]).nullable().optional().describe("Template runtime, or null to clear it. Omit to preserve it."),
+			workflow: z.string().nullable().optional().describe("Workflow name, or null to clear it. Omit to preserve it."),
+			tools: z.array(z.string()).optional().describe("Allowed runtime tool names. Omit to preserve them."),
+			custom_surfaces: z.array(z.record(z.string(), z.unknown())).optional().describe("Custom console-surface entries, mapped to the API's customSurfaces field. Omit to preserve them."),
+			confirm: confirmArg("set_agent_capabilities", "save these template capabilities"),
+			dry_run: dryRunArg,
+		},
+		async ({ token, agent_id, surfaces, runtime, workflow, tools, custom_surfaces, confirm, dry_run: preview }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const body = { ...(surfaces !== undefined ? { surfaces } : {}), ...(runtime !== undefined ? { runtime } : {}), ...(workflow !== undefined ? { workflow } : {}), ...(tools !== undefined ? { tools } : {}), ...(custom_surfaces !== undefined ? { customSurfaces: custom_surfaces } : {}) };
+			const input = { agent_id, ...body };
+			const denied = await requirePermission(safetyFor(token), "destructive", "set_agent_capabilities", input);
+			if (denied) return denied;
+			const endpoint = `/v1/agents/${encodeURIComponent(agent_id)}/capabilities`;
+			if (preview) return dryRun(safetyFor(token), "set_agent_capabilities", "save declared template capabilities", input, { endpoint, method: "PUT", fields: Object.keys(body), effect: "Only the supplied capability fields would change; omitted fields remain as stored." });
+			const unconfirmed = await requireConfirmation(safetyFor(token), "set_agent_capabilities", confirm, "set_agent_capabilities", input);
+			if (unconfirmed) return unconfirmed;
+			const data = await authedCall(endpoint, sessionToken, { method: "PUT", body: JSON.stringify(body) }, env);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_agent_capabilities", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"set_agent_state",
+		"Replace the supplied Durable Object state of an agent TEMPLATE — identity, personality, goal, guardrails and welcome message. This changes the seed copied to future subscribers, not a running instance; read get_agent_state first and create_agent_version before a substantial rewrite.",
+		{ token: tokenArg, agent_id: templateIdArg, state: z.record(z.string(), z.unknown()).describe("Complete template state object to send to the template state route."), confirm: confirmArg("set_agent_state", "save this template state"), dry_run: dryRunArg },
+		async ({ token, agent_id, state, confirm, dry_run: preview }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { agent_id, state };
+			const denied = await requirePermission(safetyFor(token), "destructive", "set_agent_state", input);
+			if (denied) return denied;
+			const endpoint = `/v1/agents/${encodeURIComponent(agent_id)}/state`;
+			if (preview) return dryRun(safetyFor(token), "set_agent_state", "save template Durable Object state", input, { endpoint, method: "PUT", stateKeys: Object.keys(state), effect: "The supplied state would become the template's seed. Existing subscriber instances are not changed." });
+			const unconfirmed = await requireConfirmation(safetyFor(token), "set_agent_state", confirm, "set_agent_state", input);
+			if (unconfirmed) return unconfirmed;
+			const data = await authedCall(endpoint, sessionToken, { method: "PUT", body: JSON.stringify(state) }, env);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_agent_state", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"chat_with_my_agent",
+		"Send a test message to one of YOUR OWN agent TEMPLATES. This is the creator conversation returned by agent_messages, not chat_with_instance's private subscriber conversation. It runs the template and records a usage/chat turn, so preview first and confirm the real call.",
+		{ token: tokenArg, agent_id: templateIdArg, message: z.string().min(1).describe("Message to send to the template test conversation."), confirm: confirmArg("chat_with_my_agent", "send this template chat message"), dry_run: dryRunArg },
+		async ({ token, agent_id, message, confirm, dry_run: preview }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { agent_id, message };
+			const denied = await requirePermission(safetyFor(token), "destructive", "chat_with_my_agent", input);
+			if (denied) return denied;
+			const endpoint = `/v1/agents/${encodeURIComponent(agent_id)}/chat`;
+			if (preview) return dryRun(safetyFor(token), "chat_with_my_agent", "run a template test-chat turn", input, { endpoint, method: "POST", messageBytes: new TextEncoder().encode(message).length, effect: "The template would receive this message and create a test-chat/usage turn." });
+			const unconfirmed = await requireConfirmation(safetyFor(token), "chat_with_my_agent", confirm, "chat_with_my_agent", input);
+			if (unconfirmed) return unconfirmed;
+			const data = await authedCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify({ message }) }, env);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "chat_with_my_agent", action: "completed", input: { agent_id, messageBytes: new TextEncoder().encode(message).length }, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"create_agent_version",
+		"Save the current state of one of YOUR OWN agent TEMPLATES as an immutable version snapshot. This does not change the live template; it creates a rollback point. Preview shows the exact route, then confirm to write the version.",
+		{ token: tokenArg, agent_id: templateIdArg, description: z.string().optional().describe("Optional human description for this snapshot."), confirm: confirmArg("create_agent_version", "create this template version"), dry_run: dryRunArg },
+		async ({ token, agent_id, description, confirm, dry_run: preview }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { agent_id, description };
+			const denied = await requirePermission(safetyFor(token), "destructive", "create_agent_version", input);
+			if (denied) return denied;
+			const endpoint = `/v1/agents/${encodeURIComponent(agent_id)}/versions`;
+			if (preview) return dryRun(safetyFor(token), "create_agent_version", "save a template version snapshot", input, { endpoint, method: "POST", effect: "A new immutable snapshot of the current template state would be created; the live template is unchanged." });
+			const unconfirmed = await requireConfirmation(safetyFor(token), "create_agent_version", confirm, "create_agent_version", input);
+			if (unconfirmed) return unconfirmed;
+			const data = await authedCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify({ ...(description !== undefined ? { description } : {}) }) }, env);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "create_agent_version", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"rollback_agent_version",
+		"Replace an agent TEMPLATE's live state with one saved version. This overwrites the current template seed and cannot restore unsaved changes; create_agent_version first if the current state matters. Existing subscriber instances remain separate and are not rewritten.",
+		{ token: tokenArg, agent_id: templateIdArg, version_id: z.string().describe("Version ID from the template's version history."), confirm: confirmArg("rollback_agent_version", "roll this template back"), dry_run: dryRunArg },
+		async ({ token, agent_id, version_id, confirm, dry_run: preview }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { agent_id, version_id };
+			const denied = await requirePermission(safetyFor(token), "destructive", "rollback_agent_version", input);
+			if (denied) return denied;
+			const endpoint = `/v1/agents/${encodeURIComponent(agent_id)}/versions/${encodeURIComponent(version_id)}/rollback`;
+			if (preview) return dryRun(safetyFor(token), "rollback_agent_version", "replace live template state with a saved version", input, { endpoint, method: "POST", effect: "The selected version's state would replace the live template state. Unsaved current state would be lost.", alternative: "create_agent_version first to retain the current state." });
+			const unconfirmed = await requireConfirmation(safetyFor(token), "rollback_agent_version", confirm, "rollback_agent_version", input);
+			if (unconfirmed) return unconfirmed;
+			const data = await authedCall(endpoint, sessionToken, { method: "POST" }, env);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "rollback_agent_version", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"plan_agent_builder",
+		"Turn a natural-language request into the deterministic agent-builder plan the creator UI uses: proposed template fields, runtime, connectors, warnings and the action it would take. Planning changes nothing; inspect this result before execute_agent_builder_plan.",
+		{ token: tokenArg, prompt: z.string().min(1).describe("Describe the agent to plan."), },
+		async ({ token, prompt }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			return jsonText(await authedCall("/v1/agent-builder/plan", sessionToken, { method: "POST", body: JSON.stringify({ prompt }) }, env));
+		},
+	);
+
+	server.tool(
+		"execute_agent_builder_plan",
+		"Execute a reviewed agent-builder plan to create or scaffold a new agent template. This can create durable platform state and, for a scaffold plan, repository material; preview first and pass the exact confirmation only when the plan is the one you intend to create.",
+		{ token: tokenArg, plan: z.record(z.string(), z.unknown()).describe("The complete plan returned by plan_agent_builder, copied without altering its structure."), confirm: confirmArg("execute_agent_builder_plan", "execute this agent-builder plan"), dry_run: dryRunArg },
+		async ({ token, plan, confirm, dry_run: preview }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { plan };
+			const denied = await requirePermission(safetyFor(token), "destructive", "execute_agent_builder_plan", input);
+			if (denied) return denied;
+			if (preview) return dryRun(safetyFor(token), "execute_agent_builder_plan", "create or scaffold a template from an agent-builder plan", input, { endpoint: "/v1/agent-builder/execute", method: "POST", action: (plan as { action?: unknown }).action, slug: ((plan as { agent?: { slug?: unknown } }).agent?.slug), effect: "The plan would create a new draft template and may scaffold repository material." });
+			const unconfirmed = await requireConfirmation(safetyFor(token), "execute_agent_builder_plan", confirm, "execute_agent_builder_plan", input);
+			if (unconfirmed) return unconfirmed;
+			const data = await authedCall("/v1/agent-builder/execute", sessionToken, { method: "POST", body: JSON.stringify({ plan }) }, env);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "execute_agent_builder_plan", action: "completed", input, result: data });
+			return jsonText(data);
 		},
 	);
 }

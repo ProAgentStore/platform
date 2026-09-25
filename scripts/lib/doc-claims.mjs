@@ -408,9 +408,18 @@ export function parseConfirmProse(src, knownTools) {
 			if (!tools.has(span)) tools.set(span, span);
 		}
 
-		for (const m of line.matchAll(/\b([a-z]+)\b/gi)) {
-			const idx = NUMBER_WORDS.indexOf(m[1].toLowerCase());
-			if (idx > 0) stated.push(idx);
+		for (const m of line.matchAll(/\b([a-z]+(?:-[a-z]+)?)\b/gi)) {
+			const word = m[1].toLowerCase();
+			const idx = NUMBER_WORDS.indexOf(word);
+			if (idx > 0) {
+				stated.push(idx);
+				continue;
+			}
+			// Confirm-gate counts are deliberately worded so they cannot be mistaken for the MCP
+			// surface total. Once the list reached 26 at #613, the old one-word vocabulary could
+			// only report 20 and 6 as two separate counts. Accept ordinary hyphenated twenties.
+			const compound = word.match(/^twenty-(one|two|three|four|five|six|seven|eight|nine)$/);
+			if (compound) stated.push(20 + NUMBER_WORDS.indexOf(compound[1]));
 		}
 	}
 	return { tools, stated, lines };

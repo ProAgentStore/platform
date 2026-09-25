@@ -852,4 +852,11 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// request paused, still-owned instances while the default roster stays focused on active work.
 	// No tool name, annotation, outputSchema, or SERVER_INSTRUCTIONS changed.
 	"0.1.52": "sha256:d028f92c5a783860c019ffa7f5e652a813826a3a53417d270dab071b8b6d5f87",
+	// 0.1.53 (#613, agent-template authoring — the write half): nine new always-on names close
+	// the last nine routes in this cohesive creator slice — template delete + knowledge delete,
+	// capabilities/state writes, creator test chat, create/rollback version, and builder plan /
+	// execute. Planning is read-only; the eight mutations are destructive-scoped, exact-confirmed
+	// and dry-runnable because they alter a shared template or create durable scaffold material.
+	// 216 registrations become 225, always-on 190 → 199; the 26 gated tools are unchanged.
+	"0.1.53": "sha256:17719ff0a61775cf50a9d672f04a69b946cd78fb9ada1be65f80e5e6b52f3576",
 };

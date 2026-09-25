@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**216 tool registrations.** 190 are always registered; 26 are gated to the console
+**225 tool registrations.** 199 are always registered; 26 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -204,6 +204,15 @@ call_instance_tool { instance_id, tool: "<exact nested tool name>", input: { ...
 | `get_agent_memory` | The TEMPLATE's seed memory; does not sync with any instance's (#613) | — | | |
 | `agent_messages` | The TEMPLATE's own test conversation, paged with `before` (#613) | — | | |
 | `export_agent` | Whole JSON backup: config + state + every document and memory entry (#613) | — | | |
+| `plan_agent_builder` | Preview the deterministic builder plan; changes nothing (#613) | — | | |
+| `delete_agent` | Permanently delete a template (refuses if another subscriber has an instance) | destructive | yes | `delete_agent` |
+| `delete_agent_knowledge` | Permanently delete one template knowledge document | destructive | yes | `delete_agent_knowledge` |
+| `set_agent_capabilities` | Replace supplied template capability fields | destructive | yes | `set_agent_capabilities` |
+| `set_agent_state` | Replace the template seed state for future subscribers | destructive | yes | `set_agent_state` |
+| `chat_with_my_agent` | Run one creator test-chat turn against a template | destructive | yes | `chat_with_my_agent` |
+| `create_agent_version` | Save a template-state version snapshot | destructive | yes | `create_agent_version` |
+| `rollback_agent_version` | Replace live template state with a saved version | destructive | yes | `rollback_agent_version` |
+| `execute_agent_builder_plan` | Create or scaffold from a reviewed builder plan | destructive | yes | `execute_agent_builder_plan` |
 | `create_agent` | Create an agent, including declarative `capabilities` + `settings_schema` | write | yes | |
 | `update_agent` | Patch an agent's settings and capabilities | write | yes | |
 | `scaffold_agent` | Create an agent *and* its GitHub repo from a starter template | write | yes | |

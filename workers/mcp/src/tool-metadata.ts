@@ -183,6 +183,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	get_agent_memory: "read",
 	agent_messages: "read",
 	export_agent: "read",
+	plan_agent_builder: "read",
 	list_errors: "read",
 	list_feedback: "read",
 	list_notifications: "read",
@@ -367,6 +368,14 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	delete_instance_knowledge: "destructive",
 	delete_instance_memory: "destructive",
 	delete_agent_task: "destructive",
+	delete_agent: "destructive",
+	delete_agent_knowledge: "destructive",
+	set_agent_capabilities: "destructive",
+	set_agent_state: "destructive",
+	chat_with_my_agent: "destructive",
+	create_agent_version: "destructive",
+	rollback_agent_version: "destructive",
+	execute_agent_builder_plan: "destructive",
 	delete_connection: "destructive",
 	delete_feedback: "destructive",
 	delete_instance_trigger: "destructive",
@@ -522,7 +531,7 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// engines panel writes — and a session already running is untouched.
 	// +1 read at #198: `platform_health`, the read-only diagnostic — every verdict in it is derived
 	// from public probes and this session's own latency ring; nothing is written.
-	read: 105,
+	read: 106,
 	// +2 write at #825: `pause_instance` / `resume_instance`. `write` rather than `destructive` —
 	// nothing is deleted and nothing is unsubscribed, and classing the OFF switch as destructive
 	// would put RESUME behind a scope the caller may not hold, which is the wrong failure mode for
@@ -534,7 +543,12 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// two must agree, because a caller holding the scope to start one holding a narrower one to
 	// continue it would be a distinction the route itself does not make.
 	runtime: 24,
-	destructive: 20,
+	// +1 read, +8 destructive at #613 (agent-template authoring, write half): builder planning
+	// only computes a proposal; the other eight can delete, overwrite, run a billable template
+	// turn, create an enduring version, or create/scaffold a template. They all require the
+	// destructive scope, an exact confirm and a no-network dry run, because this is the creator's
+	// shared source template rather than a caller-private instance.
+	destructive: 28,
 };
 
 /** The subset of MCP's `ToolAnnotations` this server can state honestly.

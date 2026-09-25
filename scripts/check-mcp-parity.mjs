@@ -171,12 +171,6 @@ const KNOWN_GAPS = [
 	},
 	{
 		why:
-			"Agent TEMPLATE authoring, the WRITE half (the creator side of AgentDetail). #613. The READ half closed at 0.1.46: `my_agent` reads the owner view of `/v1/agents/{}` — including a draft, which `agent_info`'s public projection 404s — alongside `get_agent_capabilities`, `get_agent_state`, `get_agent_memory`, `agent_messages` and `export_agent`. What is left all MUTATES a template other people may be subscribed to: delete the agent or one of its documents, write capabilities or state, chat as the creator, cut a version, roll one back, and the two agent-builder calls. Each needs a confirm gate and a dry-run story rather than a proxy, which is why it was not shipped in a slice justified as read-only.",
-		match:
-			/^(DELETE \/v1\/agents\/\{\}(\/knowledge\/\{\})?|POST \/v1\/agents\/\{\}\/(chat|versions\/\{\}\/rollback|versions)|PUT \/v1\/agents\/\{\}\/(capabilities|state)|POST \/v1\/agent-builder\/(plan|execute))$/,
-	},
-	{
-		why:
 			"Machines and terminals, the part still missing: FORGETTING a node (and un-claiming its name), and the Tmux tab's terminal-session read/write. #613. Narrowed by #671, which closed the half that mattered for placement — `list_runner_nodes` lists every connected CLI across agents, `instance_runner_node` reads one instance's pin and its alternatives, and `set_instance_runner_node` writes it through the same route the console uses. What is left is deliberate rather than pending: forgetting a node is destructive and has refusal logic (`diagnoseUnclaim`) whose blockers a caller has no way to read over MCP yet, and `terminal-session` is UI state for a tab MCP does not render.",
 		match: /^[A-Z]+ \/v1\/(terminals\/nodes\/\{\}|instances\/\{\}\/terminal-session)$/,
 	},

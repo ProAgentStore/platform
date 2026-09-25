@@ -84,9 +84,10 @@ src/
     ├── board.ts          9 tools — the board, its columns, the per-ticket thread (#150)
 ├── agent-tasks.ts    4 tools — the agent's OWN standing tasks: DO state rendered into its
 │                     prompt, deliberately not the board above (#613)
-├── agent-authoring.ts 6 tools — an agent TEMPLATE read as its OWNER: the row `agent_info`'s
-│                     public projection cannot serve (drafts, visibility, config), its
-│                     capabilities, seed state and memory, creator chat, and the export (#613)
+├── agent-authoring.ts 15 tools — an agent TEMPLATE read and written as its OWNER: the row
+│                     `agent_info`'s public projection cannot serve (drafts, visibility, config),
+│                     capabilities, seed state and memory, creator chat, versions, deletion and
+│                     the builder plan/execute pair (#613)
     ├── settings.ts       16 tools — settings, name, instructions, operator manual, model, translation, state,
 │                     voice settings (read / customise / use-my-defaults, #613)
     ├── triggers.ts       7 tools — webhook / cron / connector-sync triggers, plus the action
@@ -110,13 +111,13 @@ src/
                           surfaces:["coding"]) + 5 loop tools (3 run + 2 objective queue)
 ```
 
-**216 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
+**225 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
 `coding-tools.ts` and 2 in `coding-engine-tools.ts` — all fifteen behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 166 across `instance-tools/`. 190 are always registered; 26 are
+`storage-tools.ts`, and 175 across `instance-tools/`. 199 are always registered; 26 are
 surface-gated (apply=4, repo=3, coding=19).
 
-Those four numbers ADD UP to the headline, and that is the point of stating them: 21 + 13
-+ 14 + 149 = 197. They said 88 until #602, which made the paragraph sum to 132 — a total the
+Those five numbers ADD UP to the headline, and that is the point of stating them: 21 + 13
++ 2 + 14 + 175 = 225. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added
