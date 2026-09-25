@@ -115,7 +115,7 @@ export class LocalRunner {
 			runtimePlane: "pags",
 			runnerRole: "tool-executor",
 			capabilities: [...CAPABILITIES, ...CodingRuntime.capabilities()],
-			taskTypes: ["echo", "browser.open", "job.apply_agent", ...CodingRuntime.taskTypes()],
+			taskTypes: ["echo", "browser.open", "job.apply_agent", "site_builder_runtime", ...CodingRuntime.taskTypes()],
 			approvalRequiredFor: [...APPROVAL_REQUIRED_TASKS],
 		};
 	}

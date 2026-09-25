@@ -61,6 +61,7 @@ import { registerChatRoutes } from "./instances-chat.js";
 import { registerFileUploadRoutes } from "./instances-files.js";
 import { registerKnowledgeRoutes } from "./instances-knowledge.js";
 import { registerTaskRoutes } from "./instances-tasks.js";
+import { registerRuntimeBuilderRoutes } from "./instances-site-builder.js";
 import { registerDeployStatusRoutes } from "./instances-deploy.js";
 import { registerConnectorBindingRoutes } from "./instances-terminal.js";
 import { CONNECTOR_CONSTRAINTS } from "../lib/surface-options.js";
@@ -129,6 +130,7 @@ const PARAMS: Record<string, string> = {
 	agentId: "agent-1",
 	instanceId: "instance-owned-by-someone-else",
 	taskId: "task-1",
+	runId: "site-builder-run-1",
 	docId: "doc-1",
 	turnId: "turn-1",
 	uploadId: "upload-1",
@@ -287,6 +289,12 @@ const ROUTES = [
 	"DELETE /:instanceId/tasks/:taskId",
 	"POST /:instanceId/tasks/:taskId/cancel",
 	"GET /:instanceId/task-events",
+	"POST /:instanceId/site-builder/run",
+	"GET /:instanceId/site-builder/:runId",
+	"POST /:instanceId/site-builder/:runId/cancel",
+	"POST /:instanceId/site-builder/:runId/approve",
+	"POST /:instanceId/site-builder/:runId/refine",
+	"POST /:instanceId/site-builder/:runId/evidence",
 	"POST /:instanceId/chat",
 	"POST /:instanceId/loop-decide",
 	"POST /:instanceId/system-message",
@@ -342,6 +350,7 @@ const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
 	"instances-files.ts": registerFileUploadRoutes,
 	"instances-knowledge.ts": registerKnowledgeRoutes,
 	"instances-tasks.ts": registerTaskRoutes,
+	"instances-site-builder.ts": registerRuntimeBuilderRoutes,
 	"instances-deploy.ts": registerDeployStatusRoutes,
 	"instances-identity.ts": registerIdentityResyncRoutes,
 	"instances-terminal.ts": registerConnectorBindingRoutes,
@@ -432,6 +441,14 @@ const OWNERSHIP: Record<string, string[]> = {
 		"PUT /:instanceId/terminal-target",
 		"GET /:instanceId/tmux-session",
 		"PUT /:instanceId/tmux-session",
+	],
+	"instances-site-builder.ts": [
+		"POST /:instanceId/site-builder/run",
+		"GET /:instanceId/site-builder/:runId",
+		"POST /:instanceId/site-builder/:runId/cancel",
+		"POST /:instanceId/site-builder/:runId/approve",
+		"POST /:instanceId/site-builder/:runId/refine",
+		"POST /:instanceId/site-builder/:runId/evidence",
 	],
 	"instances-translation.ts": [
 		"GET /:instanceId/translation",
@@ -615,6 +632,12 @@ const GATES: Record<string, [number, number]> = {
 	"DELETE /:instanceId/tasks/:taskId": [401, 404],
 	"POST /:instanceId/tasks/:taskId/cancel": [401, 404],
 	"GET /:instanceId/task-events": [401, 404],
+	"POST /:instanceId/site-builder/run": [401, 404],
+	"GET /:instanceId/site-builder/:runId": [401, 404],
+	"POST /:instanceId/site-builder/:runId/cancel": [401, 404],
+	"POST /:instanceId/site-builder/:runId/approve": [401, 404],
+	"POST /:instanceId/site-builder/:runId/refine": [401, 404],
+	"POST /:instanceId/site-builder/:runId/evidence": [401, 404],
 	"POST /:instanceId/chat": [401, 404],
 	"POST /:instanceId/loop-decide": [401, 404],
 	"POST /:instanceId/pause": [401, 404],

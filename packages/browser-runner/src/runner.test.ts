@@ -34,6 +34,7 @@ describe("LocalRunner", () => {
 		});
 		expect(runner.capabilities().capabilities).toContain("browser.playwright");
 		expect(runner.capabilities().taskTypes).toContain("job.apply_agent");
+		expect(runner.capabilities().taskTypes).toContain("site_builder_runtime");
 	});
 
 	it("runs echo tasks without approval", async () => {

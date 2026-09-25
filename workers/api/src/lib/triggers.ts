@@ -28,6 +28,7 @@ import { instanceBoardLink } from "./console-links.js";
 import { logEvent } from "./events.js";
 import { enqueueDelivery } from "./connection-deliveries.js";
 import { startPipelineRun } from "./pipeline-run-start.js";
+import { createRuntimeBuilderRun } from "./runtime-builder/workflow.js";
 import {
 	exportWorkDriveFile,
 	listWorkDriveFolder,
@@ -240,6 +241,21 @@ export async function executeTriggerAction(
 		const params = { ...staticParams, ...payloadRecord(payload) };
 		// A connection stamps the emitting run onto config.traceId — carry it into the child run.
 		const parentTraceId = typeof config.traceId === "string" ? config.traceId : null;
+		// Runtime mode is intentionally an adapter at the trigger seam: connection delivery,
+		// retry and idempotency stay unchanged, while cloud mode remains the default.
+		const settingsRow = name === "site-builder"
+			? await env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2").bind(target.instance_id, target.user_id).first<{ config: string }>()
+			: null;
+		let settings: Record<string, unknown> = {};
+		try { settings = settingsRow ? ((JSON.parse(settingsRow.config || "{}") as { settings?: Record<string, unknown> }).settings ?? {}) : {}; } catch { /* cloud fallback */ }
+		const runtimeMode = settings.site_builder_mode === "runtime";
+		if (runtimeMode) {
+			const engine = settings.site_builder_engine ?? "claude";
+			const mcpUrl = params.mcp_url ?? settings.mcp_url;
+			const run = await createRuntimeBuilderRun(env, target.instance_id, target.user_id, { engine, mcpUrl, params: { ...params, mcp_url: mcpUrl } });
+			resultPayload = { pipeline: name, runId: run.id, status: run.status, runtime: true, parentTraceId };
+			return resultPayload;
+		}
 		const res = await startPipelineRun(env, target.instance_id, target.user_id, name, params, "trigger", parentTraceId);
 		if (!res.ok) throw new Error(res.error);
 		resultPayload = { pipeline: name, runId: res.runId, workflowId: res.workflowId };

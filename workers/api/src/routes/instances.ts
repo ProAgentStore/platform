@@ -18,6 +18,7 @@ import { registerGuideRoutes } from "./instances-guide.js";
 import { registerInstanceLifecycleRoutes } from "./instances-lifecycle.js";
 import { registerKnowledgeRoutes } from "./instances-knowledge.js";
 import { registerTaskRoutes } from "./instances-tasks.js";
+import { registerRuntimeBuilderRoutes } from "./instances-site-builder.js";
 import { registerTranslationRoutes } from "./instances-translation.js";
 import { registerFileUploadRoutes } from "./instances-files.js";
 import { registerConnectorBindingRoutes } from "./instances-terminal.js";
@@ -1088,6 +1089,7 @@ instanceRoutes.delete("/:instanceId/runtime", async (c) => {
  * `instances.contract.test.ts` pins the ordered table, so this cannot be tidied by accident.
  */
 registerTaskRoutes(instanceRoutes);
+registerRuntimeBuilderRoutes(instanceRoutes);
 registerChatRoutes(instanceRoutes);
 registerKnowledgeRoutes(instanceRoutes);
 // Pause / resume (#825) — the reversible lifecycle beside the cancel below.

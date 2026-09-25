@@ -74,6 +74,7 @@ export const RUNTIME_TASK_OWNERS: Readonly<Record<string, RuntimeTaskOwner>> = {
 	delegation: "cloud", // lib/delegation.ts — a durable loop run
 	escalation: "cloud", // workflows/agent-loop.ts — parked for a human, by a durable workflow
 	"pipeline.run": "cloud", // lib/pipeline-board.ts
+	"site_builder_runtime": "runner-durable", // local authoring task; PAGS owns durable run state
 	ticket: "cloud", // lib/tool-registry.ts create_ticket
 	// #722: a connector write held back by the ask-gate. Cloud-owned — it is a card waiting on a
 	// PERSON, not work a runner is doing, so a reconnect sweep must leave it exactly where it is.

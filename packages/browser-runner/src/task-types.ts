@@ -17,4 +17,6 @@ export const WORKFLOW_DRIVEN_TASKS: ReadonlySet<string> = new Set([
 	"job.apply_agent",
 	"browser.task",
 	"browser.handoff",
+	// #841: local Claude/Codex authors an FWS draft; PAGS retains the audit and deployment gate.
+	"site_builder_runtime",
 ]);
