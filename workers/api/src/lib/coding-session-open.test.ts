@@ -147,6 +147,17 @@ describe("ensureActiveSession — who owns the session (#271, #275)", () => {
 		expect((start?.[2] as { ghScope?: string[] }).ghScope).toBeUndefined();
 	});
 
+	it("sends a local checkout's clone source in its OWN field, never as `cloneUrl` (#828)", async () => {
+		// The runner clones into an owner's path only when it is absent or empty. The field is
+		// separate because a runner older than #828 reads a `cloneUrl` beside a non-empty folder with
+		// no `.git` of its own (a monorepo subfolder) as a clone target and refuses to start.
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(session("csess_fill"));
+		await ensureActiveSession(env, "inst", "u", { ...repo, githubRepo: "o/r", webUrl: "https://github.com/o/r" });
+		const body = vi.mocked(runner.callRunner).mock.calls.find((c) => c[1] === "/coding/start")?.[2] as { cloneUrl?: string; emptyCheckoutCloneUrl?: string };
+		expect(body.cloneUrl).toBeUndefined();
+		expect(body.emptyCheckoutCloneUrl).toBe("https://github.com/o/r.git");
+	});
+
 	it("refuses a GitHub repo stuck with no coordinates and no local path — fail-closed (#760)", async () => {
 		// THE DEFECT this test pins: a repo record that is (a) a GitHub provider, (b) has no
 		// `workdir` (it's supposed to be a managed remote clone), and (c) has no resolved

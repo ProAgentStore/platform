@@ -205,6 +205,17 @@ describe("CodingRuntime over the stream-json engine", () => {
 	afterEach(() => rt?.closeAll());
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
+	it("start fills an EMPTY owner path from `emptyCheckoutCloneUrl` before the engine launches (#828)", () => {
+		const src = join(dir, "fill-src");
+		mkdirSync(src);
+		execFileSync("bash", ["-c", "git init -q && git -c user.email=t@t.t -c user.name=t commit -q --allow-empty -m x && echo hi > f.txt && git add -A && git -c user.email=t@t.t -c user.name=t commit -q -m y"], { cwd: src });
+		const work = join(dir, "fill-work");
+		mkdirSync(work);
+		rt = new CodingRuntime(join(dir, "base"));
+		rt.start({ sessionId: "fill", repoId: "r1", workDir: work, emptyCheckoutCloneUrl: src, clientType: "claude", bin });
+		expect(existsSync(join(work, "f.txt"))).toBe(true);
+	});
+
 	it("start → act(message) → capture reflects the agent's real reply", async () => {
 		rt = new CodingRuntime(join(dir, "base"));
 		const first = rt.start({ sessionId: "s1", repoId: "r1", workDir: dir, clientType: "claude", bin });

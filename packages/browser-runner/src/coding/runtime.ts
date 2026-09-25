@@ -36,6 +36,13 @@ export interface StartCodingInput {
 	workDir?: string;
 	/** Clone source — fetched on first start if the working dir is absent. */
 	cloneUrl?: string;
+	/**
+	 * Clone source for an owner-configured `workDir`, used only when that path is absent or empty
+	 * (#828). A separate field, not `cloneUrl`, because a runner older than #828 would treat a
+	 * `cloneUrl` beside a non-empty folder with no `.git` (a monorepo subfolder) as a clone target
+	 * and refuse to start; it ignores this one and runs in the folder as it always has.
+	 */
+	emptyCheckoutCloneUrl?: string;
 	branch?: string;
 	/** Clone credential for a private repo (GitHub App installation token, GitLab PAT, …). */
 	token?: string;
@@ -286,7 +293,7 @@ export class CodingRuntime {
 			const workDir = input.workDir
 				? resolve(input.workDir.replace(/^~(?=$|\/)/, homedir()))
 				: join(this.reposBaseDir, sanitizeSessionName(input.repoId));
-			ensureRepo(workDir, { cloneUrl: input.cloneUrl, branch: input.branch, token: input.token, tokenUsername: input.tokenUsername, ownFolder: Boolean(input.workDir) });
+			ensureRepo(workDir, { cloneUrl: input.cloneUrl ?? input.emptyCheckoutCloneUrl, branch: input.branch, token: input.token, tokenUsername: input.tokenUsername, ownFolder: Boolean(input.workDir) });
 			session = new HeadlessSession({
 				id: input.sessionId,
 				workDir,
