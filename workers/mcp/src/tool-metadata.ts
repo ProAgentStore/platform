@@ -145,6 +145,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	get_apply_tips: "read",
 	get_budget_limits: "read",
 	get_instance_board_config: "read",
+	get_instance_behaviour_schema: "read",
 	get_instance_instructions: "read",
 	get_instance_connector_account: "read",
 	get_instance_loop_limits: "read",
@@ -159,6 +160,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	get_instance_voice_settings: "read",
 	get_instance_stats: "read",
 	get_profile: "read",
+	get_creator_dashboard: "read",
+	get_usage_dashboard: "read",
 	get_translation_config: "read",
 	ingest_repo_status: "read",
 	instance_activity: "read",
@@ -206,6 +209,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	list_pipeline_runs: "read",
 	list_runner_nodes: "read",
 	list_supervision: "read",
+	list_stats_sources: "read",
 	mcp_audit_log: "read",
 	my_agents: "read",
 	my_instances: "read",
@@ -364,6 +368,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	// the row is to retype.
 	coding_repo_remove: "destructive",
 	clear_instance_messages: "destructive",
+	delete_instance_message: "destructive",
 	delete_instance_connector_grant: "destructive",
 	delete_instance_file: "destructive",
 	delete_instance_knowledge: "destructive",
@@ -530,9 +535,14 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// choice of coding CLI and model. `write` for the set, not `runtime`: it starts nothing and spends
 	// nothing — it edits which command the NEXT session launches, the same state the console's CLI
 	// engines panel writes — and a session already running is untouched.
+	// +4 read, +1 destructive at #613 (the remaining assorted group): the creator and subscriber
+	// dashboards, the closed stats-source vocabulary and the behaviour field table are all reads;
+	// `delete_instance_message` removes a whole durable turn (and any attached voice audio), so it is
+	// destructive, confirmed and dry-runnable. Translation and arbitrary system-message persistence
+	// stay excluded: the former is the console's AI gloss cache, the latter a prompt/provenance channel.
 	// +1 read at #198: `platform_health`, the read-only diagnostic — every verdict in it is derived
 	// from public probes and this session's own latency ring; nothing is written.
-	read: 107,
+	read: 111,
 	// +2 write at #825: `pause_instance` / `resume_instance`. `write` rather than `destructive` —
 	// nothing is deleted and nothing is unsubscribed, and classing the OFF switch as destructive
 	// would put RESUME behind a scope the caller may not hold, which is the wrong failure mode for
@@ -549,7 +559,7 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// turn, create an enduring version, or create/scaffold a template. They all require the
 	// destructive scope, an exact confirm and a no-network dry run, because this is the creator's
 	// shared source template rather than a caller-private instance.
-	destructive: 28,
+	destructive: 29,
 };
 
 /** The subset of MCP's `ToolAnnotations` this server can state honestly.

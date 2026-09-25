@@ -872,4 +872,18 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// `dry_run`: consent is reversible and revoking it must not require destructive scope.
 	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.53 is published.
 	"0.1.54": "sha256:2c2625fc3738c33cdb586343aabebbb9d795a4d75afaf1fdf07814be9d34f07e",
+	// 0.1.55 (#613, assorted console parity): five new always-on names — 226 registrations
+	// become 231, always-on 200 → 205, with the 26 surface-gated tools unchanged.
+	//
+	//   * `get_creator_dashboard` / `get_usage_dashboard` (read) expose the owner-scoped
+	//     aggregates the console dashboard already reads.
+	//   * `list_stats_sources` and `get_instance_behaviour_schema` (read) expose the served,
+	//     closed vocabularies their corresponding configuration tools already require.
+	//   * `delete_instance_message` is destructive, confirmed and dry-runnable: it removes one
+	//     whole conversational turn and any attached voice audio.
+	//
+	// The two remaining routes in this group deliberately remain console-only: translation is the
+	// UI's paid AI gloss cache, and an arbitrary system message becomes durable role:system prompt
+	// history. `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place.
+	"0.1.55": "sha256:31beae70fd2aa2b65037747c308a2c0bd9e0ee7246455f8afb7a34bc4fb7b9ea",
 };

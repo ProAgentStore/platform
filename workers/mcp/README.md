@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**226 tool registrations.** 200 are always registered; 26 are gated to the console
+**231 tool registrations.** 205 are always registered; 26 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -254,11 +254,14 @@ Agent-scoped (the creator's template), not instance-scoped.
 |---|---|---|---|---|
 | `subscribe_agent` | Subscribe to a published agent, creating your private instance | write | yes | |
 | `my_instances` | List your subscribed instances | — | | |
+| `get_creator_dashboard` | Creator totals, subscribers, usage and per-agent ranking | — | | |
+| `get_usage_dashboard` | Subscriber usage totals and the last 30 days by day and agent | — | | |
 | `account_activity` | Every instance's live health (`working`/`waiting`/`stalled`/`idle`), queue depth and last outcome, in one call — two queries, uncapped, unlike `recent_instances` (#815) | read | | |
 | `recent_instances` | The instances you are driving or drove most recently over MCP — every instance with a run open comes first (`active-run`), then your own recency (`recent-touch`); `limit` (default 5, max 20) with `total` / `truncated` / `working` so a cut is never silent (#787, #192) | read | | |
 | `chat_with_instance` | The real runtime chat path (your state, your credentials) | runtime | yes | |
 | `instance_messages` | Recent messages, newest page first — page older ones with `before` = the previous call's `nextCursor` (#566) | — | | |
 | `clear_instance_messages` | Delete all messages and voice recordings | destructive | yes | `clear_instance_messages` |
+| `delete_instance_message` | Permanently delete the whole turn containing one message (and attached voice audio) | destructive | yes | `delete_instance_message` |
 | `rename_instance` | Set or clear the display name | write | yes | |
 | `set_instance_model` | Change the instance's chat model | write | yes | |
 | `get_instance_state` | Read DO state (identity, guardrails, permissions) — read-only | — | | |
@@ -288,7 +291,9 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `write_instance_memory` | Create or update one memory entry | write | yes | |
 | `delete_instance_memory` | Delete one memory entry by key | destructive | yes | `delete_instance_memory` |
 | `get_instance_settings` | Read typed settings values + declared schema | — | | |
+| `get_instance_behaviour_schema` | Static behaviour fields, allowed bands and prompt prose | — | | |
 | `set_instance_settings` | Patch settings (only sent fields change) | write | yes | |
+| `list_stats_sources` | Closed stats-card source vocabulary, allowed kinds, parameters and caveats | — | | |
 | `get_instance_stats` | Resolved stats cards + their current numbers (`null` in a series = nothing ran, not zero) | — | | |
 | `set_instance_stats` | Patch your own stats cards (`card: null` removes/hides; never edits the template) | write | yes | |
 | `get_instance_instructions` | Read Special Instructions | — | | |

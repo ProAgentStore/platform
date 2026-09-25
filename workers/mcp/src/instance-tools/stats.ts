@@ -23,6 +23,19 @@ export function registerStatsTools(server: McpServer, ctx: InstanceToolsCtx): vo
 	const { env, tokenFor, safetyFor } = ctx;
 
 	server.tool(
+		"list_stats_sources",
+		"Read the supported stats-card source catalogue: each source's label, allowed card kinds, parameters, and caveat, plus the maximum card count. Use this before set_agent_stats_schema or set_instance_stats rather than inventing a source or losing the caveat that qualifies its number.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+		},
+		async ({ token }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			return jsonText(await authedCall("/v1/stats/sources", sessionToken, {}, env));
+		},
+	);
+
+	server.tool(
 		"get_agent_stats_schema",
 		"Read an agent's declared stats cards (creator view — the default card set every subscriber inherits on the Stats tab).",
 		{

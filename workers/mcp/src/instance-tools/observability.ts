@@ -88,6 +88,39 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 	);
 
 	server.tool(
+		"delete_instance_message",
+		"Permanently delete the conversational turn containing one message from a subscribed instance. This can remove paired user/assistant messages and attached voice audio, but cannot unmix that turn from an existing conversation summary or extracted memory. Read instance_messages first, dry-run to check the id, then confirm. There is no undo.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			message_id: z.string().describe("A message id from instance_messages. The server deletes the whole turn containing it."),
+			confirm: z.string().optional().describe('Must be "delete_instance_message" to permanently delete the turn.'),
+			dry_run: z.boolean().optional().describe("Describe the deletion without doing it. Does not require confirm."),
+		},
+		async ({ token, instance_id, message_id, confirm, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, message_id };
+			const denied = await requirePermission(safetyFor(token), "destructive", "delete_instance_message", input);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/messages/${encodeURIComponent(message_id)}`;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "delete_instance_message", "permanently delete one conversation turn", input, {
+					endpoint,
+					method: "DELETE",
+					effect: "The server would delete the full turn containing this message, including any attached voice audio. Existing summaries and extracted memory remain because they cannot be precisely un-mixed.",
+					alternative: "Use instance_messages to inspect the turn first; there is no reversible single-turn hide operation.",
+				});
+			}
+			const unconfirmed = await requireConfirmation(safetyFor(token), "delete_instance_message", confirm, "delete_instance_message", input);
+			if (unconfirmed) return unconfirmed;
+			const data = await authedCall(endpoint, sessionToken, { method: "DELETE" }, env);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "delete_instance_message", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
 		"instance_activity",
 		"Read a subscribed instance's activity log (chat, tool calls, file uploads, record mutations — append-only).",
 		{

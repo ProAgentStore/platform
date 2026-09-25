@@ -80,7 +80,7 @@ src/
 │                     view: one ticket, its deletion, the needs_input answer and the live
 │                     takeover controls (#613)
     ├── knowledge.ts      12 tools — documents (incl. in-place edit + URL ingest, #613), files, vectors, memory
-    ├── observability.ts  12 tools — messages, activity, errors (flat + grouped), trace, pipeline runs, feedback (incl. file + delete, #613)
+    ├── observability.ts  13 tools — messages, activity, errors (flat + grouped), trace, pipeline runs, feedback (incl. file + delete, #613), single-turn deletion
     ├── board.ts          9 tools — the board, its columns, the per-ticket thread (#150)
 ├── agent-tasks.ts    4 tools — the agent's OWN standing tasks: DO state rendered into its
 │                     prompt, deliberately not the board above (#613)
@@ -88,18 +88,18 @@ src/
 │                     `agent_info`'s public projection cannot serve (drafts, visibility, config),
 │                     capabilities, seed state and memory, creator chat, versions, deletion and
 │                     the builder plan/execute pair (#613)
-    ├── settings.ts       16 tools — settings, name, instructions, operator manual, model, translation, state,
-│                     voice settings (read / customise / use-my-defaults, #613)
+    ├── settings.ts       17 tools — settings, name, instructions, operator manual, model, translation, state,
+│                     voice settings (read / customise / use-my-defaults, #613), behaviour schema
     ├── triggers.ts       7 tools — webhook / cron / connector-sync triggers, plus the action
 │                     vocabulary and the draft preview the console's form is built from (#613)
     ├── composition.ts   19 tools — supervision (#183), connections (#182) with the delivery outbox,
 │                     replay and delete that complete them (#613), loops, loop presets
-    ├── account.ts        14 tools — whoami, platform_health (#198), billing, usage, keys, email, profile, budget limits,
-    │                     notifications, account preferences (#613)
+    ├── account.ts        16 tools — whoami, platform_health (#198), billing, usage, keys, email, profile, budget limits,
+│                     notifications, account preferences (#613), creator and subscriber dashboards
     ├── connectors.ts    13 tools — connector status, folder grants, browsing and importing a
     │                             granted folder's files, which account an instance uses
 │                     (#736), the catalogue, this agent's verdict, and write consent (#613)
-    ├── stats.ts          4 tools — declarative stats cards (creator schema + subscriber override)
+    ├── stats.ts          5 tools — declarative stats cards (creator schema + subscriber override) and source vocabulary
     ├── mcp-connections.ts 6 tools — PAGS as an MCP CLIENT: presets, per-(endpoint,tool) grants,
 │                     the connection test, and the paused-elicitation inbox (#613)
 ├── guide.ts          1 tool — the per-instance connection guide (#772)
@@ -111,13 +111,13 @@ src/
                           surfaces:["coding"]) + 5 loop tools (3 run + 2 objective queue)
 ```
 
-**226 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
+**231 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
 `coding-tools.ts` and 2 in `coding-engine-tools.ts` — all fifteen behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 176 across `instance-tools/`. 200 are always registered; 26 are
+`storage-tools.ts`, and 181 across `instance-tools/`. 205 are always registered; 26 are
 surface-gated (apply=4, repo=3, coding=19).
 
 Those five numbers ADD UP to the headline, and that is the point of stating them: 21 + 13
-+ 2 + 14 + 176 = 226. They said 88 until #602, which made the paragraph sum to 132 — a total the
++ 2 + 14 + 181 = 231. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added
@@ -151,7 +151,7 @@ Tests sit beside their modules: `index.test.ts`, `index-auth.test.ts`,
 do not see — its names are an instance's data.
 
 `instance-tools/contract.test.ts` is the one to know about. It holds every tool registered
-under `instance-tools/` — 107 of them — to a table of **group, scope, confirmation string,
+under `instance-tools/` — 112 of them — to a table of **group, scope, confirmation string,
 dry-run behaviour and input fields** —
 and every value in that table is DERIVED by driving the registered handler (call it holding
 only `read`, then holding everything but `read`, and read the required scope out of the

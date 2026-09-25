@@ -16,6 +16,19 @@ export function registerSettingsTools(server: McpServer, ctx: InstanceToolsCtx):
 	const { env, tokenFor, safetyFor } = ctx;
 
 	server.tool(
+		"get_instance_behaviour_schema",
+		"Read the platform's behaviour field table — labels, allowed bands, and the prompt prose each setting controls. It is static product vocabulary shared by every instance; read it with the instance's behaviour values before explaining or changing a behaviour setting.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+		},
+		async ({ token }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			return jsonText(await authedCall("/v1/instances/behaviour-schema", sessionToken, {}, env));
+		},
+	);
+
+	server.tool(
 		"get_instance_settings",
 		"Read a subscribed instance's typed agent settings (values + the agent's declared settings schema, e.g. Language Buddy's target language).",
 		{

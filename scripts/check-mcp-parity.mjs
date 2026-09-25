@@ -144,6 +144,12 @@ const EXCLUSIONS = [
 		match: null,
 	},
 	{
+		label: "Under-message translation and durable system-message injection",
+		why:
+			"`translate` is an under-message UI gloss: it invokes AI and persists a cache solely to render translated transcript text. `system-message` is console-only status persistence, but its arbitrary content becomes durable `role:system` history forwarded into later model prompts. MCP exposes the translation configuration and reads cached glosses with messages, but exposes neither renderer-only work nor a prompt/provenance injection channel. #613 owner guidance (2026-09-20).",
+		match: /^(POST \/v1\/instances\/\{\}\/(system-message|translate))$/,
+	},
+	{
 		label: "User deletion",
 		why: "Not modelled.",
 		match: null,
@@ -168,12 +174,6 @@ const KNOWN_GAPS = [
 		why:
 			"Machines and terminals, the part still missing: FORGETTING a node (and un-claiming its name), and the Tmux tab's terminal-session read/write. #613. Narrowed by #671, which closed the half that mattered for placement — `list_runner_nodes` lists every connected CLI across agents, `instance_runner_node` reads one instance's pin and its alternatives, and `set_instance_runner_node` writes it through the same route the console uses. What is left is deliberate rather than pending: forgetting a node is destructive and has refusal logic (`diagnoseUnclaim`) whose blockers a caller has no way to read over MCP yet, and `terminal-session` is UI state for a tab MCP does not render.",
 		match: /^[A-Z]+ \/v1\/(terminals\/nodes\/\{\}|instances\/\{\}\/terminal-session)$/,
-	},
-	{
-		why:
-			"Assorted single routes with no group: the creator dashboard tallies, the stats source catalogue, the behaviour SCHEMA (`get_instance_behaviour` reads the values but not the field table the console renders), deleting one chat turn, posting a system message into a conversation, and the translation endpoint the gloss layer calls. #613.",
-		match:
-			/^[A-Z]+ \/v1\/(dashboard\/(creator|usage)|stats\/sources|instances\/behaviour-schema|instances\/\{\}\/(messages\/\{\}|system-message|translate))$/,
 	},
 	{
 		why:

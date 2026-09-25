@@ -18,6 +18,32 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 	const { env, tokenFor, safetyFor } = ctx;
 
 	server.tool(
+		"get_creator_dashboard",
+		"Read your creator dashboard: how many agents you own, their active subscribers, total recorded usage, and the per-agent ranking. Account-wide and owner-scoped — an agent with no subscribers still appears with zeroes.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+		},
+		async ({ token }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			return jsonText(await authedCall("/v1/dashboard/creator", sessionToken, {}, env));
+		},
+	);
+
+	server.tool(
+		"get_usage_dashboard",
+		"Read your subscriber usage dashboard: active instances, chat and AI-call totals, plus the last 30 days by day and by agent. This is a usage measurement, not billing; it does not replace usage_summary's cost and provider detail.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+		},
+		async ({ token }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			return jsonText(await authedCall("/v1/dashboard/usage", sessionToken, {}, env));
+		},
+	);
+
+	server.tool(
 		"whoami",
 		"Which account this connection is signed in as: id, login, sign-in provider — the string `github` or `google` — plus a display label, email (only when signed in with Google — a GitHub login is a username, not an address, and comes back as `login`), roles, account createdAt, and this token's tokenExpiry. Answers 'who am I connected as?' — nothing here is a secret. For plan/billing use billing_status; for BYOK keys use keys_status.",
 		{

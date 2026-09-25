@@ -318,6 +318,7 @@ const TABLE: Record<string, Row> = {
 	delete_agent_knowledge: ["agentAuthoring", "destructive", "delete_agent_knowledge", "envelope", "agent_id,confirm,document_id,dry_run,token"],
 	delete_connection: ["composition", "destructive", "delete_connection", "envelope", "confirm,connection_id,dry_run,instance_id,token"],
 	delete_feedback: ["observability", "destructive", "delete_feedback", "envelope", "confirm,dry_run,feedback_id,token"],
+	delete_instance_message: ["observability", "destructive", "delete_instance_message", "envelope", "confirm,dry_run,instance_id,message_id,token"],
 	delete_instance_file: ["knowledge", "destructive", "delete_instance_file", "envelope", "confirm,dry_run,file_id,instance_id,token"],
 	delete_instance_knowledge: ["knowledge", "destructive", "delete_instance_knowledge", "envelope", "confirm,document_id,dry_run,instance_id,token"],
 	delete_instance_memory: ["knowledge", "destructive", "delete_instance_memory", "envelope", "confirm,dry_run,instance_id,key,token"],
@@ -329,6 +330,7 @@ const TABLE: Record<string, Row> = {
 	get_agent_stats_schema: ["stats", "none", null, null, "agent_id,token"],
 	get_apply_tips: ["apply", "none", null, null, "instance_id,token"],
 	get_instance_board_config: ["board", "none", null, null, "instance_id,token"],
+	get_instance_behaviour_schema: ["settings", "none", null, null, "token"],
 	get_instance_connection_guide: ["guide", "read", null, null, "instance_id,token"],
 	get_instance_instructions: ["settings", "none", null, null, "instance_id,token"],
 	get_instance_operator_manual: ["settings", "none", null, null, "instance_id,token"],
@@ -339,6 +341,8 @@ const TABLE: Record<string, Row> = {
 	get_instance_voice_settings: ["settings", "none", null, null, "instance_id,token"],
 	get_instance_stats: ["stats", "none", null, null, "instance_id,schema_only,token,window"],
 	get_profile: ["apply", "none", null, null, "token"],
+	get_creator_dashboard: ["account", "none", null, null, "token"],
+	get_usage_dashboard: ["account", "none", null, null, "token"],
 	get_translation_config: ["settings", "none", null, null, "instance_id,token"],
 	grant_instance_connector_folder: ["connectors", "write", null, "envelope", "dry_run,instance_id,name,provider,resource_id,token,url"],
 	import_instance_drive_file: ["connectors", "write", null, "envelope", "dry_run,file_id,grant_id,instance_id,title,token,url"],
@@ -398,6 +402,7 @@ const TABLE: Record<string, Row> = {
 	// #671: the PLATFORM view — every machine across every agent. No instance_id, by design.
 	list_runner_nodes: ["runtime", "none", null, null, "token"],
 	list_supervision: ["composition", "read", null, null, "supervisor_instance_id,token"],
+	list_stats_sources: ["stats", "none", null, null, "token"],
 	my_instances: ["base", "none", null, null, "include_paused,token"],
 	// #787: the caller's own recency view. `read`-gated like `get_instance_connection_guide`
 	// rather than a bare proxy, so MCP_READ_ONLY and a suspended account both see the call.

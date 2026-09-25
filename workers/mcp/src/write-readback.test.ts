@@ -92,6 +92,9 @@ const CONTROL_ARGS: ReadonlySet<string> = new Set([
 	"job_key",
 	"repo_id",
 	"node_id",
+	// #613: which conversation turn `delete_instance_message` removes. Taken from
+	// `instance_messages`; it addresses the deletion and is never written as content.
+	"message_id",
 	// read-shaping on a tool that also writes
 	"limit",
 	"before",
