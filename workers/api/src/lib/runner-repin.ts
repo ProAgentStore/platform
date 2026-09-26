@@ -19,7 +19,7 @@
  * A runner too old to answer the command still attaches on its own poll, which is why a missing
  * reply waits out one poll interval before answering `attached: false`.
  */
-import { aliasNodesFor, type NodeRegistration } from "./machine-identity.js";
+import { aliasNodesFor, type NodeRegistration, stampMs } from "./machine-identity.js";
 import { callRunner, evictStaleRunnerSocket, getRunnerConnIgnoringLiveness, relayConnected, type RunnerConn } from "./runner-client.js";
 import { RunnerUnreachableError } from "./runner-unreachable.js";
 import { normalizeRunnerNode } from "./runtime-nodes.js";
@@ -41,6 +41,31 @@ const POLL_WAIT_MS = 22_000;
 export const REPIN_BUDGET_MS = 25_000;
 /** Below this, a runner command is not worth sending — it could not answer in time. */
 const MIN_COMMAND_MS = 1_000;
+
+/** How recently a machine must have reported in to be taken as up while holding no socket (#853 finding 14). */
+const RECENTLY_SEEN_MS = 120_000;
+const ago = (ms: number) => {
+	const s = Math.max(0, Math.round(ms / 1000));
+	return s < 90 ? `${s} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${Math.round(s / 3600)} h`;
+};
+
+/**
+ * Why nothing on `node` could be asked to attach the agent, when no socket of this owner's is live
+ * there (#853 finding 14). "No socket" is not "no `pags up`": a runner whose agents are all pinned
+ * elsewhere holds none and sends no heartbeat, yet takes a newly pinned agent on its own poll. When
+ * the machine last reported in is what tells the two apart — recently means up, so the move is
+ * `unconfirmed` rather than failed.
+ */
+function noCarrierAnswer(node: string, names: ReadonlySet<string>, rows: readonly NodeRegistration[], now: number): { unconfirmed?: true; detail: string } {
+	const seen = Math.max(0, ...rows.filter((r) => names.has(normalizeRunnerNode(r.node))).map((r) => stampMs(r.lastSeenAt)));
+	if (seen > 0 && now - seen <= RECENTLY_SEEN_MS) {
+		return {
+			unconfirmed: true,
+			detail: `\`pags up\` on ${node} reported in ${ago(now - seen)} ago but holds no relay socket for any of your agents, so it could not be asked directly. It picks this agent up on its own within about 20 s now that the pin names ${node} — call instance_runner_node to confirm.`,
+		};
+	}
+	return { detail: `No \`pags up\` is running on ${node}${seen > 0 ? ` (last seen ${ago(now - seen)} ago)` : ""} — nothing there holds a relay socket to hand this agent to. Start it there; it takes the agent on its own once it is running.` };
+}
 
 /** Said when the budget ran out before the move could be confirmed either way. */
 const unconfirmedDetail = (node: string) =>
@@ -141,7 +166,7 @@ export async function attachAgentOnNode(env: Env, instanceId: string, userId: st
 	// 2. Ask the machine's runner, through the first of this owner's sockets there that answers.
 	const carriers = await liveCarriers(env, userId, rows, targetNames);
 	if (carriers.length === 0) {
-		return { node, attached: false, evicted, detail: `No \`pags up\` is connected on ${node} to hand this agent to. Start it there; it takes the agent on its own once it is running.` };
+		return { node, attached: false, evicted, ...noCarrierAnswer(node, targetNames, rows, now()) };
 	}
 	let answered: SyncReply | null = null;
 	let refusal = "";

@@ -79,7 +79,7 @@ export function sanitizeMachineNames(value: unknown): string[] {
 }
 
 /** D1 writes `YYYY-MM-DD HH:MM:SS` in UTC with no zone marker; `Date.parse` would read local. */
-function stampMs(value: string | null | undefined): number {
+export function stampMs(value: string | null | undefined): number {
 	if (!value) return 0;
 	return Date.parse(value.includes("T") ? value : `${value.replace(" ", "T")}Z`) || 0;
 }

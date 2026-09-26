@@ -122,12 +122,38 @@ describe("repinning an idle agent to an online machine (#850)", () => {
 });
 
 describe("when the move cannot complete, the repin says why (#850)", () => {
-	it("no runner on the target machine: not attached, named, and no waiting", async () => {
+	// #853 finding 14. "No socket on X" is not "no `pags up` on X": a runner whose agents are all pinned
+	// elsewhere holds no socket and sends no heartbeat, yet takes a newly pinned agent on its own 20s
+	// poll. When it last reported is the one fact that tells the two apart.
+	const LAST_SEEN = Date.parse("2026-09-25T22:00:00Z"); // Macmini's freshest registration above
+
+	it("no runner on the target machine for hours: says it is not running, when it was last seen, and no waiting", async () => {
 		live.clear();
+		clock = LAST_SEEN + 10 * 3_600_000;
 		const out = await repin();
 		expect(out.attached).toBe(false);
-		expect(out.detail).toMatch(/No `pags up` is connected on Macmini/);
+		expect(out.detail).toMatch(/^No `pags up` is running on Macmini \(last seen 10 h ago\)/);
+		expect(out.detail).toMatch(/Start it there/);
 		expect(slept).toEqual([]);
+	});
+
+	it("a runner seen moments ago but holding no socket: NOT called absent — it picks the agent up on its own poll (#853 finding 14)", async () => {
+		live.clear();
+		clock = LAST_SEEN + 30_000;
+		const out = await repin();
+		expect(out.attached).toBe(false);
+		expect(out.unconfirmed).toBe(true);
+		expect(out.detail).toMatch(/`pags up` on Macmini reported in 30 s ago but holds no relay socket/);
+		expect(out.detail).toMatch(/picks this agent up on its own within about 20 s.*instance_runner_node/);
+		expect(out.detail).not.toMatch(/No `pags up` is/);
+		expect(slept).toEqual([]);
+	});
+
+	it("a machine never registered at all: not running, with no last-seen claim", async () => {
+		live.clear();
+		const out = await attachOnRepin(env, AGENT, "u1", "NewBox", deps);
+		expect(out.detail).toMatch(/^No `pags up` is running on NewBox — /);
+		expect(out.detail).not.toMatch(/last seen/);
 	});
 
 	it("a runner started with --instance: refused by name, no waiting", async () => {

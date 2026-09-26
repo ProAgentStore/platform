@@ -546,7 +546,7 @@ describe("POST /v1/instances/:id/runner-attach — the remote `pags up --force` 
 	it("answers from the relay's view, with the reason, when nothing on that machine can take the agent", async () => {
 		const res = await attach({ runnerNode: "pink-laptop" });
 		expect(res.status).toBe(200);
-		expect(await res.json()).toMatchObject({ node: "pink-laptop", attached: false, evicted: 0, detail: expect.stringMatching(/No `pags up` is connected on pink-laptop/) });
+		expect(await res.json()).toMatchObject({ node: "pink-laptop", attached: false, evicted: 0, detail: expect.stringMatching(/^No `pags up` is running on pink-laptop — nothing there holds a relay socket/) }); // never registered: no last-seen claim (#853 finding 14)
 	});
 
 	it("is owner-scoped: another account's agent is not found", async () => {
