@@ -134,6 +134,13 @@ pags up            # one runner for every active runtime-capable instance
 
 **Install once per machine, ever.** Since CLI 0.4.63 the `pags` that npm installs is a small bootstrap stub (#862): every `pags up` asks npm for the latest `@proagentstore/cli`, fetches a newer release into `~/.config/proagentstore/cli/<version>/` and runs it — so a machine never needs `npm i -g` again, however far behind it falls or whether it has ever heard of `runner_update`. `runner_update` (#859) updates the same cache remotely while `pags up` keeps running. A machine on 0.4.62 or older gets the stub from one last `npm i -g @proagentstore/cli` (or, on 0.4.62, from `runner_update`). `PAGS_NO_SELF_UPDATE=1` turns the check off; a source checkout is never self-updated.
 
+**Remote updates restart everything, not just the runner (#860).** After `runner_update` installs a release, `pags up` restarts itself — supervisor included — with the same flags, and every agent re-attaches (an older `pags up` restarts only the runner, and `runner_update`'s answer says so in `supervisor`). A runner started without `pags up` can be updated remotely too, once something will start it again:
+
+- **launchd / systemd** — run `pags runner connect <any-instance-id> --watch-instances` with `PAGS_SERVICE=1` and restart-on-failure (launchd `KeepAlive` → `SuccessfulExit: false`; systemd `Restart=on-failure`). The runner exits with code 75 after an update, and the service manager starts it on the new release. It signs in with the saved `pags login` session.
+- **anything else** (a tmux script, `nohup`) — set `PAGS_RESTART_COMMAND` to the shell command that starts it; the runner runs it, detached, as it exits.
+
+With neither, `runner_update` refuses rather than stop a runner nothing would bring back. Either way a coding engine mid-turn is waited for first.
+
 `pags up` is the canonical runner: **one process serves every active instance whose `capabilities.runtime` is non-null**. Cloud-only chat/RAG/connector agents (`runtime: null`) are skipped — they never need a local runner.
 
 Membership is **live**, not a startup snapshot. `pags up` passes `--watch-instances` (CLI ≥ 0.4.30), so the runner re-reads `/v1/instances/my/instances` every 20s and attaches newly eligible agents — and detaches ones that stopped being eligible — without a restart. Subscribing to a coding agent while the runner is up just works. (Polling, not push: a brand-new instance has no socket to push over; #83 tracks the push path.) A scoped `pags up --instance <id>` deliberately does *not* watch — it means that one agent and nothing else.

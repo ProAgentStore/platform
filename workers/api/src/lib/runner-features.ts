@@ -23,6 +23,8 @@ import { cliAtLeast } from "./runner-upgrade.js";
 export const RUNNER_CONTROL_MIN_CLI = "0.4.62";
 /** The self-updating bootstrap stub (#862): from here on `pags up` moves onto the latest release by itself. */
 export const BOOTSTRAP_MIN_CLI = "0.4.63";
+/** `runner_update` restarts the `pags up` supervisor too, and runners under launchd/systemd or a restart command (#860). */
+export const SUPERVISOR_RESTART_MIN_CLI = "0.4.64";
 
 export interface RunnerFeature {
 	feature: string;
@@ -30,6 +32,7 @@ export interface RunnerFeature {
 }
 
 export const RUNNER_FEATURES: readonly RunnerFeature[] = [
+	{ feature: "runner_update restarts pags up itself, and service-managed runners", minCli: SUPERVISOR_RESTART_MIN_CLI },
 	{ feature: "self-updating pags up (never needs a manual install again)", minCli: BOOTSTRAP_MIN_CLI },
 	{ feature: "runner_update (remote CLI update + restart)", minCli: RUNNER_CONTROL_MIN_CLI },
 	{ feature: "coding_repo_add clone (background, https or SSH)", minCli: RUNNER_CONTROL_MIN_CLI },

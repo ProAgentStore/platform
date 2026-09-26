@@ -37,7 +37,18 @@ interface MachineReply {
 	waitingFor?: string[];
 	detail?: string;
 	dryRun?: boolean;
+	/** What starts it again (#860) — `self-update.ts`'s `Restarter`. Absent from a CLI older than #860. */
+	restartedBy?: string;
+	/** What the update did not reach, when something (#860). */
+	supervisor?: string;
 }
+
+/**
+ * Said when the `pags up` supervising the runner stays on its old code (#860). A CLI older than #860
+ * does not say how it restarts, and its `pags up` is necessarily one that respawns only the runner.
+ */
+const LEGACY_SUPERVISOR_NOTE =
+	"The `pags up` on this machine predates supervisor restarts (#860): the runner comes back on the new release, but the `pags up` window keeps running its own older code until it is restarted there once.";
 
 export interface RunnerUpdateResult {
 	node: string;
@@ -53,6 +64,10 @@ export interface RunnerUpdateResult {
 	/** Of those, the ones still without a socket — with each one's reason. */
 	missing?: Array<{ instanceId: string; detail: string }>;
 	waitingFor?: string[];
+	/** How the machine brought itself back (#860): `pags-up`, `pags-up-child-only`, `service` or `command`. */
+	restartedBy?: string;
+	/** Set when the machine's `pags up` supervisor did NOT move onto the new release (#860). */
+	supervisor?: string;
 	detail?: string;
 }
 
@@ -142,15 +157,19 @@ export async function updateRunnerNode(env: Env, userId: string, rawNode: string
 		.first<{ runner_version: string | null }>()
 		.then((r) => r?.runner_version ?? null)
 		.catch(() => null);
+	const supervisor = reply.restartedBy ? reply.supervisor : LEGACY_SUPERVISOR_NOTE;
+	const outcome =
+		missing.length === 0
+			? `${node} updated ${reply.current} → ${reply.latest} and restarted; all ${held.length} agent(s) it held are attached again.`
+			: `${node} updated ${reply.current} → ${reply.latest} and restarted, but ${missing.length} of ${held.length} agent(s) did not re-attach — see missing; force_runner_attach takes a slot over.`;
 	return {
 		...base,
 		action: "restarted",
 		version,
 		reattached,
 		missing,
-		detail:
-			missing.length === 0
-				? `${node} updated ${reply.current} → ${reply.latest} and restarted; all ${held.length} agent(s) it held are attached again.`
-				: `${node} updated ${reply.current} → ${reply.latest} and restarted, but ${missing.length} of ${held.length} agent(s) did not re-attach — see missing; force_runner_attach takes a slot over.`,
+		...(reply.restartedBy ? { restartedBy: reply.restartedBy } : {}),
+		...(supervisor ? { supervisor } : {}),
+		detail: supervisor ? `${outcome} ${supervisor}` : outcome,
 	};
 }

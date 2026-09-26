@@ -159,3 +159,38 @@ describe("runner_update — every other outcome says what happened (#859)", () =
 		expect(await update()).toMatchObject({ action: "unreachable", detail: expect.stringMatching(/No `pags up` is connected on Macmini/) });
 	});
 });
+
+describe("runner_update — does the `pags up` supervisor move too? (#860)", () => {
+	beforeEach(() => {
+		comesBack = { [CODER]: 2, [OTHER]: 2, [THIRD]: 2 };
+	});
+
+	it("a `pags up` that restarts itself: supervisor and runner both on the new release — nothing extra to say", async () => {
+		reply = () => ({ action: "restarting", current: "0.4.63", latest: "0.4.64", restartedBy: "pags-up" });
+		const out = await update();
+		expect(out).toMatchObject({ action: "restarted", restartedBy: "pags-up", missing: [] });
+		expect(out.supervisor).toBeUndefined();
+		expect(out.detail).not.toMatch(/predates supervisor restarts/);
+	});
+
+	it("an older `pags up` that respawns only the runner: SAYS the supervisor stayed behind", async () => {
+		reply = () => ({ action: "restarting", current: "0.4.63", latest: "0.4.64", restartedBy: "pags-up-child-only", supervisor: "The `pags up` on this machine predates supervisor restarts (#860): …" });
+		const out = await update();
+		expect(out).toMatchObject({ restartedBy: "pags-up-child-only", supervisor: expect.stringMatching(/predates supervisor restarts/) });
+		expect(out.detail).toMatch(/all 3 agent\(s\) it held are attached again\. The `pags up` on this machine predates supervisor restarts/);
+	});
+
+	it("a CLI too old to say how it restarts is one whose `pags up` respawns only the runner — said as well", async () => {
+		const out = await update();
+		expect(out.restartedBy).toBeUndefined();
+		expect(out.supervisor).toMatch(/predates supervisor restarts.*keeps running its own older code/);
+	});
+
+	it("a runner under launchd/systemd comes back through the service manager, every agent re-attached", async () => {
+		reply = () => ({ action: "restarting", current: "0.4.63", latest: "0.4.64", restartedBy: "service" });
+		const out = await update();
+		expect(out).toMatchObject({ action: "restarted", restartedBy: "service", reattached: [], missing: [] });
+		expect(out.supervisor).toBeUndefined();
+	});
+});
+

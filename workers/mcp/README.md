@@ -358,7 +358,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `instance_runner_node` | Which machine one instance is pinned to, and the alternatives | — | | |
 | `set_instance_runner_node` | Pin an instance to a machine and move it there — the connected `pags up` attaches it now and the old machine lets go (empty clears the pin) | write | yes | |
 | `force_runner_attach` | Force a machine's connected `pags up` to (re)attach one agent now — the remote `pags up --force` for that agent: clears a stale socket from its relay slot and takes the slot over. Does not change the pin | runtime | yes | |
-| `runner_update` | Update a machine's `pags` CLI to the latest release and restart it in place — waits for busy engines so no run is cut off, then checks every agent it held is attached again (re-attaching stragglers). The first update of a CLI older than 0.4.62 still needs the machine | runtime | yes | |
+| `runner_update` | Update a machine's `pags` CLI to the latest release and restart it in place — waits for busy engines so no run is cut off, then checks every agent it held is attached again (re-attaching stragglers). `pags up` restarts itself on the new release; a runner under launchd/systemd (`PAGS_SERVICE=1`) or with `PAGS_RESTART_COMMAND` is restarted by that. The first update of a CLI older than 0.4.62 still needs the machine | runtime | yes | |
 | `get_instance_terminal_session` | Saved Tmux-tab terminal target for one instance | read | | |
 | `set_instance_terminal_session` | Save or clear that target; does not operate a terminal | write | yes | |
 | `runner_node_forget_preflight` | Every alias and blocker before a machine registration is forgotten | read | | |

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { Command } from "commander";
 import { requireSession } from "./login.js";
@@ -8,7 +9,7 @@ import { hostname } from "node:os";
 import { writeLine } from "../output.js";
 import { clearScreen, printLogo, printStatus, printStep, waitForKey, type TuiState } from "../tui.js";
 import { parseStatusLine } from "./runner/status-line.js";
-import { RUNNER_RESTART_EXIT_CODE, SUPERVISED_ENV } from "./runner/self-update.js";
+import { restartUpArgs, RUNNER_RESTART_EXIT_CODE, SUPERVISED_ENV, SUPERVISOR_RESTARTS } from "./runner/self-update.js";
 
 const API_BASE = "https://api.proagentstore.online";
 const CLI_VERSION = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
@@ -175,14 +176,12 @@ export const upCommand = new Command("up")
 		// fanning back out to the whole account is the bug the restart path already guards.
 		if (!opts.instance) args.push("--watch-instances");
 
-		// Supervised (#859): the child may ask for a respawn after `runner_update` installed a new CLI.
-		// `process.argv[1]` resolves to the installed files, so the respawn runs the updated code.
-		const spawnChild = () =>
-			spawn(process.execPath, args, {
-				stdio: ["ignore", "pipe", "pipe"],
-				env: { ...process.env, PAGS_TOKEN: session.token, [SUPERVISED_ENV]: "1" },
-			});
-		let child = spawnChild();
+		// Supervised (#859): the child may exit asking for a restart after `runner_update` installed a new
+		// CLI. {@link SUPERVISOR_RESTARTS} tells it this `pags up` restarts ITSELF on the new release (#860).
+		const child = spawn(process.execPath, args, {
+			stdio: ["ignore", "pipe", "pipe"],
+			env: { ...process.env, PAGS_TOKEN: session.token, [SUPERVISED_ENV]: SUPERVISOR_RESTARTS },
+		});
 
 		const logs: string[] = [];
 
@@ -263,18 +262,15 @@ export const upCommand = new Command("up")
 		};
 
 		let childDead = false;
-		const wire = () => {
-			child.stdout?.on("data", handleOutput);
-			child.stderr?.on("data", handleOutput);
-			child.on("exit", onChildExit);
-		};
-		function onChildExit(code: number | null) {
+		child.stdout?.on("data", handleOutput);
+		child.stderr?.on("data", handleOutput);
+		child.on("exit", (code: number | null) => {
 			// `runner_update` installed a newer CLI and asked to be started again (#859) — not a crash.
+			// The WHOLE `pags up` restarts, not only this child (#860): respawning just the child left
+			// this supervisor on the old code until someone restarted it at the machine. No prompt on the
+			// way back — nobody may be at the keyboard, and every agent must re-attach unattended.
 			if (code === RUNNER_RESTART_EXIT_CODE) {
-				state.lastEvent = "Runner updated remotely — restarting on the new version";
-				printStatus(state);
-				child = spawnChild();
-				wire();
+				restartUp("Runner updated remotely — restarting pags up on the new version…", { PAGS_NO_PROMPT: "1" });
 				return;
 			}
 			childDead = true;
@@ -285,8 +281,31 @@ export const upCommand = new Command("up")
 				if (recent.length) state.lastEvent += ": " + recent[recent.length - 1].slice(0, 60);
 				printStatus(state);
 			}
+		});
+
+		/**
+		 * `pags up` again with the SAME flags, on this terminal, leaving with its exit status. Node cannot
+		 * exec in place, so this process waits, blocked, while the new one owns the terminal — blocked
+		 * rather than awaiting, so it never reads a keystroke meant for the new one. `process.argv[1]` is
+		 * the installed `pags` (the #862 stub when there is one), so the new process runs the newest CLI.
+		 */
+		function restartUp(why: string, env: NodeJS.ProcessEnv = {}): never {
+			writeLine(`  ${why}`);
+			try {
+				if (process.stdin.isTTY) process.stdin.setRawMode(false);
+				process.stdin.pause();
+				// execFileSync (argv, no shell) so an instance id/slug can't be mis-quoted.
+				execFileSync(process.execPath, [process.argv[1], ...restartUpArgs(opts)], { stdio: "inherit", env: { ...process.env, ...env } });
+			} catch (e) {
+				// Restarting IS what `r` promises. Swallowing the failure and exiting 0 told the
+				// shell — and anything scripting `pags up` — that the runner had been restarted
+				// while nothing was left running and no agent could be reached from the cloud.
+				const status = (e as { status?: number }).status;
+				writeLine(`  Restart failed${typeof status === "number" ? ` (exit ${status})` : ""} — the runner is NOT running. Run 'pags up' again.`);
+				process.exit(typeof status === "number" && status !== 0 ? status : 1);
+			}
+			process.exit(0);
 		}
-		wire();
 
 		const shutdown = () => {
 			child.kill();
@@ -320,31 +339,7 @@ export const upCommand = new Command("up")
 				printStatus(state);
 			}
 			if (key === "r") {
-				if (childDead) {
-					writeLine("  Restarting runner...");
-					const { execFileSync } = await import("node:child_process");
-					// Preserve the ORIGINAL flags on restart — dropping `--instance` here made a
-					// scoped `pags up --instance X` silently fan back out to every instance. Use
-					// execFileSync (argv, no shell) so an instance id/slug can't be mis-quoted.
-					const restartArgs = [process.argv[1], "up"];
-					if (opts.headless) restartArgs.push("--headless");
-					if (opts.force) restartArgs.push("--force");
-					if (opts.instance) restartArgs.push("--instance", opts.instance);
-					try {
-						execFileSync(process.execPath, restartArgs, {
-							stdio: "inherit",
-							env: process.env,
-						});
-					} catch (e) {
-						// Restarting IS what `r` promises. Swallowing the failure and exiting 0 told the
-						// shell — and anything scripting `pags up` — that the runner had been restarted
-						// while nothing was left running and no agent could be reached from the cloud.
-						const status = (e as { status?: number }).status;
-						writeLine(`  Restart failed${typeof status === "number" ? ` (exit ${status})` : ""} — the runner is NOT running. Run 'pags up' again.`);
-						process.exit(typeof status === "number" && status !== 0 ? status : 1);
-					}
-					process.exit(0);
-				}
+				if (childDead) restartUp("Restarting runner...");
 				printStatus(state);
 			}
 		}

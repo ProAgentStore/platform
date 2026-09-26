@@ -4,7 +4,7 @@ import { loadMachineIdentity } from "../../machine.js";
 import { writeError, writeLine } from "../../output.js";
 import { apiPathSegment, clean, pagsApiBase, requestPags, requestRunner } from "./http.js";
 import { CLI_VERSION, runsFromSource } from "./process.js";
-import { installVersion, latestPublishedVersion, planRunnerUpdate, RUNNER_RESTART_EXIT_CODE, RUNNER_UPDATE_PATH, SUPERVISED_ENV, type UpdatePlan } from "./self-update.js";
+import { installVersion, latestPublishedVersion, leaveForRestart, planRunnerUpdate, restarterFrom, RUNNER_UPDATE_PATH, supervisorNote, type UpdatePlan } from "./self-update.js";
 import { diffMembership, instanceLabel, pendingRegistrations, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance, type ReattachRequest } from "./membership.js";
 import { formatStatusLine } from "./status-line.js";
 import type { PagsRequestOptions } from "./types.js";
@@ -111,18 +111,21 @@ export async function connectViaRelay(
 			current: CLI_VERSION,
 			latest: await latestPublishedVersion(),
 			fromSource: runsFromSource(),
-			supervised: process.env[SUPERVISED_ENV] === "1",
+			restarter: restarterFrom(process.env),
 			busy: (sessions.sessions ?? []).filter((s) => s.alive && s.runState && s.runState !== "idle").map((s) => s.sessionId),
 		};
 	};
-	/** Install the release, then leave with the code `pags up` respawns on. Sockets close first, cleanly. */
+	/**
+	 * Install the release, then leave so whatever supervises this process starts it again (#860) — see
+	 * `leaveForRestart`. Sockets close first, cleanly.
+	 */
 	const installAndRestart = async (plan: Extract<UpdatePlan, { action: "update" }>) => {
 		writeLine(`Updating ${plan.current} → ${plan.latest} (runner_update)…`);
 		await installVersion(plan.latest);
 		writeLine(`Installed ${plan.latest} — restarting; every agent re-attaches on the way back up.`);
 		setTimeout(() => {
 			for (const id of [...attached.keys()]) detach(id);
-			process.exit(RUNNER_RESTART_EXIT_CODE);
+			leaveForRestart(plan.restarter);
 		}, 500).unref();
 	};
 	/** A deferred update waits for busy engines to finish, re-checking — never cuts a turn off (#859). */
@@ -155,7 +158,8 @@ export async function connectViaRelay(
 		} catch (e) {
 			return { status: 500, result: { error: `npm could not install ${plan.latest}: ${e instanceof Error ? e.message : String(e)}` } };
 		}
-		return { status: 200, result: { action: "restarting", current: plan.current, latest: plan.latest } };
+		const supervisor = supervisorNote(plan.restarter);
+		return { status: 200, result: { action: "restarting", current: plan.current, latest: plan.latest, restartedBy: plan.restarter, ...(supervisor ? { supervisor } : {}) } };
 	};
 
 	const answerControl = async (path: string, body?: unknown): Promise<{ status: number; result: unknown }> => {
