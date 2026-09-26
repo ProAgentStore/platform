@@ -330,6 +330,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	coding_loop_start: "runtime",
 	// It drives a machine: clears a relay socket and makes that machine's runner reconnect (#856).
 	force_runner_attach: "runtime",
+	// Installs software on a machine and restarts its runner (#859).
+	runner_update: "runtime",
 	coding_overseer: "runtime",
 	coding_session_end: "runtime",
 	coding_session_fresh: "runtime",
@@ -566,7 +568,8 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// continue it would be a distinction the route itself does not make.
 	// +1 runtime at #856: `force_runner_attach`, the remote `pags up --force` for one agent. `runtime`,
 	// not `write`: unlike the pin it acts ON the machine — a socket is closed and a runner reconnects.
-	runtime: 25,
+	// +1 runtime at #859: `runner_update`, a remote CLI update + restart — it acts ON the machine.
+	runtime: 26,
 	// +1 read, +8 destructive at #613 (agent-template authoring, write half): builder planning
 	// only computes a proposal; the other eight can delete, overwrite, run a billable template
 	// turn, create an enduring version, or create/scaffold a template. They all require the

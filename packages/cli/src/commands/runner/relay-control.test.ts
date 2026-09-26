@@ -5,6 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MEMBERSHIP_SYNC_PATH, openRelaySocket } from "./relay.js";
+import { RUNNER_UPDATE_PATH } from "./self-update.js";
 
 vi.mock("../../output.js", () => ({ writeLine: () => undefined, writeError: () => undefined }));
 
@@ -58,6 +59,16 @@ describe("the membership-sync control command (#850)", () => {
 		await ws.onmessage?.({ data: JSON.stringify({ id: "c4", path: MEMBERSHIP_SYNC_PATH, body: { attach: "inst-9", force: true } }) });
 		expect(onControl).toHaveBeenCalledWith(MEMBERSHIP_SYNC_PATH, { attach: "inst-9", force: true });
 		expect(JSON.parse(ws.sent[0])).toMatchObject({ id: "c4", status: 200, result: { target: "inst-9", holding: true } });
+		handle.close();
+	});
+
+	it("answers runner_update itself too — never forwarded to the local runner (#859)", async () => {
+		const onControl = vi.fn(async () => ({ status: 200, result: { action: "restarting", current: "0.4.62", latest: "0.4.63" } }));
+		const { ws, handle } = await open(onControl);
+		await ws.onmessage?.({ data: JSON.stringify({ id: "c5", path: RUNNER_UPDATE_PATH, body: { dryRun: false } }) });
+		expect(onControl).toHaveBeenCalledWith(RUNNER_UPDATE_PATH, { dryRun: false });
+		expect(forwarded).toEqual([]);
+		expect(JSON.parse(ws.sent[0])).toMatchObject({ id: "c5", status: 200, result: { action: "restarting" } });
 		handle.close();
 	});
 

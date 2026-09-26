@@ -8,6 +8,7 @@ import { hostname } from "node:os";
 import { writeLine } from "../output.js";
 import { clearScreen, printLogo, printStatus, printStep, waitForKey, type TuiState } from "../tui.js";
 import { parseStatusLine } from "./runner/status-line.js";
+import { RUNNER_RESTART_EXIT_CODE, SUPERVISED_ENV } from "./runner/self-update.js";
 
 const API_BASE = "https://api.proagentstore.online";
 const CLI_VERSION = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
@@ -174,10 +175,14 @@ export const upCommand = new Command("up")
 		// fanning back out to the whole account is the bug the restart path already guards.
 		if (!opts.instance) args.push("--watch-instances");
 
-		const child = spawn(process.execPath, args, {
-			stdio: ["ignore", "pipe", "pipe"],
-			env: { ...process.env, PAGS_TOKEN: session.token },
-		});
+		// Supervised (#859): the child may ask for a respawn after `runner_update` installed a new CLI.
+		// `process.argv[1]` resolves to the installed files, so the respawn runs the updated code.
+		const spawnChild = () =>
+			spawn(process.execPath, args, {
+				stdio: ["ignore", "pipe", "pipe"],
+				env: { ...process.env, PAGS_TOKEN: session.token, [SUPERVISED_ENV]: "1" },
+			});
+		let child = spawnChild();
 
 		const logs: string[] = [];
 
@@ -257,11 +262,21 @@ export const upCommand = new Command("up")
 			}
 		};
 
-		child.stdout?.on("data", handleOutput);
-		child.stderr?.on("data", handleOutput);
-
 		let childDead = false;
-		child.on("exit", (code) => {
+		const wire = () => {
+			child.stdout?.on("data", handleOutput);
+			child.stderr?.on("data", handleOutput);
+			child.on("exit", onChildExit);
+		};
+		function onChildExit(code: number | null) {
+			// `runner_update` installed a newer CLI and asked to be started again (#859) — not a crash.
+			if (code === RUNNER_RESTART_EXIT_CODE) {
+				state.lastEvent = "Runner updated remotely — restarting on the new version";
+				printStatus(state);
+				child = spawnChild();
+				wire();
+				return;
+			}
 			childDead = true;
 			if (code && code !== 0) {
 				state.runner = "error";
@@ -270,7 +285,8 @@ export const upCommand = new Command("up")
 				if (recent.length) state.lastEvent += ": " + recent[recent.length - 1].slice(0, 60);
 				printStatus(state);
 			}
-		});
+		}
+		wire();
 
 		const shutdown = () => {
 			child.kill();

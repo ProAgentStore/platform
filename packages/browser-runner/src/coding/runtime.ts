@@ -447,11 +447,13 @@ export class CodingRuntime {
 		return { ok: true, usage, acts, authResolved };
 	}
 
-	list(): Array<{ sessionId: string; alive: boolean; engineLabel: string }> {
+	list(): Array<{ sessionId: string; alive: boolean; engineLabel: string; runState: "idle" | "thinking" | "responding" }> {
 		return [...this.sessions.entries()].map(([sessionId, s]) => ({
 			sessionId,
 			alive: s.alive,
 			engineLabel: s.engineLabel,
+			// Whether an engine is mid-turn — what `runner_update` waits on before restarting (#859).
+			runState: s.runState(),
 		}));
 	}
 

@@ -94,12 +94,12 @@ export function runnerUpgradeMessage(f: RunnerUpgradeFacts): string {
 		// No resolved machine: the old sentence, unchanged. Inventing a name would be worse than
 		// the vagueness — this arm is reachable when the connection was resolved by a path that
 		// does not record which node answered.
-		return `This machine's runner is too old to ${f.what} — it needs CLI ${f.minCli} or newer. Run \`npm i -g @proagentstore/cli\` on that machine and restart \`pags up\`.`;
+		return `This machine's runner is too old to ${f.what} — it needs CLI ${f.minCli} or newer. Call runner_update for that machine (or run \`npm i -g @proagentstore/cli\` there and restart \`pags up\`).`;
 	}
 	const has = f.nodeVersion ? ` (it has ${f.nodeVersion})` : "";
 	const parts = [
 		`\`${node}\` needs a newer runner to ${f.what}${has} — this needs CLI ${f.minCli} or newer.`,
-		`Run \`npm i -g @proagentstore/cli\` on \`${node}\`, then restart \`pags up\` there.`,
+		`Call runner_update for \`${node}\` (or run \`npm i -g @proagentstore/cli\` there and restart \`pags up\`).`,
 	];
 	if (f.pinned) {
 		// Without this the owner has no way to DISCOVER the pin from the failure, and the pin is
@@ -131,8 +131,8 @@ export function runnerUpgradeMessage(f: RunnerUpgradeFacts): string {
 export function runnerUpgradeClause(f: { what: string; minCli: string; node?: string | null }): string {
 	const node = (f.node || "").trim();
 	return node
-		? `\`${node}\` cannot ${f.what} — it needs CLI ${f.minCli} or newer; run \`npm i -g @proagentstore/cli\` on \`${node}\` and restart \`pags up\` there`
-		: `this machine's runner cannot ${f.what} — CLI ${f.minCli} or newer, then restart \`pags up\``;
+		? `\`${node}\` cannot ${f.what} — it needs CLI ${f.minCli} or newer; call runner_update for \`${node}\` (or run \`npm i -g @proagentstore/cli\` there and restart \`pags up\`)`
+		: `this machine's runner cannot ${f.what} — CLI ${f.minCli} or newer; call runner_update for it (or update and restart \`pags up\` there)`;
 }
 
 interface NodeRow {

@@ -197,7 +197,7 @@ async function cloneOnMachine(conn: RunnerConn, localPath: string, slug: string,
 
 /** #857's synchronous clone, for a runner that has no clone jobs yet — https only, one relay command. */
 async function legacyClone(conn: RunnerConn, localPath: string, slug: string, protocol: CloneProtocol): Promise<CloneOutcome> {
-	if (protocol === "ssh") return { kind: "failed", error: "This machine's `pags` CLI is too old to clone over SSH. Update it and restart `pags up`." };
+	if (protocol === "ssh") return { kind: "failed", error: "This machine's `pags` CLI is too old to clone over SSH. Call runner_update for this machine, then add the repo again." };
 	try {
 		await callRunner(conn, "/coding/clone", { workDir: localPath, cloneUrl: `https://github.com/${slug}.git` }, { timeoutMs: LEGACY_CLONE_TIMEOUT_MS });
 		return { kind: "done" };
@@ -205,9 +205,9 @@ async function legacyClone(conn: RunnerConn, localPath: string, slug: string, pr
 		const message = e instanceof Error ? e.message : String(e);
 		const trouble = runnerTrouble(e);
 		if (trouble) return { kind: "failed", error: trouble };
-		if (/→ 404/.test(message)) return { kind: "failed", error: "This machine's `pags` CLI is too old to clone. Update it and restart `pags up`, or clone the repository there yourself and add it without clone." };
+		if (/→ 404/.test(message)) return { kind: "failed", error: "This machine's `pags` CLI is too old to clone. Call runner_update for this machine to update and restart it remotely, then add the repo again — or clone the repository there yourself and add it without clone." };
 		if (/timed out/i.test(message)) {
-			return { kind: "failed", error: `The clone of ${slug} did not finish within 2 minutes on this older CLI and may still be running. Update \`pags\` for background clones, or once \`${localPath}\` holds the checkout, call coding_repo_add again without clone.` };
+			return { kind: "failed", error: `The clone of ${slug} did not finish within 2 minutes on this older CLI and may still be running. Call runner_update for this machine to get background clones, or once \`${localPath}\` holds the checkout, call coding_repo_add again without clone.` };
 		}
 		return {
 			kind: "failed",

@@ -91,6 +91,8 @@ export function createRunnerCommand(): Command {
 			});
 
 			const shutdown = () => { shuttingDown = true; if (!runner.killed) runner.kill("SIGTERM"); };
+			// Any exit takes the local runtime with it — including the restart `runner_update` asks for (#859).
+			process.once("exit", shutdown);
 			process.once("SIGINT", () => { shutdown(); process.exit(0); });
 			process.once("SIGTERM", () => { shutdown(); process.exit(0); });
 

@@ -177,7 +177,7 @@ export async function attachAgentOnNode(env: Env, instanceId: string, userId: st
 			? refused
 				? `The \`pags up\` on ${node} did not take this agent even when forced — it is not one that machine may run (pinned to another machine, paused, or without a runtime).`
 				: `The \`pags up\` on ${node} was told to take this agent over and no live socket appeared — check that machine's runner window for a relay error.`
-			: `The \`pags up\` on ${node} ${oldRunner ? "is too old to be asked and has not attached this agent on its own poll" : "did not attach this agent"}. Call force_runner_attach to take its slot on ${node} over — the remote \`pags up --force\` for this one agent.`,
+			: `The \`pags up\` on ${node} ${oldRunner ? "is too old to be asked (call runner_update for it) and has not attached this agent on its own poll" : "did not attach this agent"}. Call force_runner_attach to take its slot on ${node} over — the remote \`pags up --force\` for this one agent.`,
 	};
 }
 
@@ -220,7 +220,7 @@ export async function attachOnRepin(env: Env, instanceId: string, userId: string
  * in to its runner, freshest first. A list, not the first: `relayConnected` is optimistic, so one of
  * them may be a frozen peer that only the command's own probe exposes (#856).
  */
-async function liveCarriers(env: Env, userId: string, rows: readonly NodeRegistration[], targetNames: ReadonlySet<string>): Promise<RunnerConn[]> {
+export async function liveCarriers(env: Env, userId: string, rows: readonly NodeRegistration[], targetNames: ReadonlySet<string>): Promise<RunnerConn[]> {
 	const out: RunnerConn[] = [];
 	const seen = new Set<string>();
 	for (const r of rows) {

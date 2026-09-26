@@ -185,45 +185,6 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 		},
 	);
 
-	// ── Remote force-reattach (#856) ────────────────────────────────────────────
-	//
-	// An agent whose socket went stale — a frozen or duplicate runner holding its relay slot, or a
-	// runner that lost a 4409 and blocked it — could only be recovered by `pags up --force` typed at the
-	// machine. This is that, remotely and for ONE agent: the stale socket is cleared from the agent's
-	// slot, and the machine's connected `pags up` is told to attach this agent and take its slot over.
-	server.tool(
-		"force_runner_attach",
-		"Force a machine's connected `pags up` to (re)attach ONE agent now — the remote equivalent of `pags up --force`, scoped to this instance. Use it when instance_runner_node shows the machine online (`nodeOnline: true`) but this agent not connected, when a start fails with \"another runner on it may already hold this agent\", or when set_instance_runner_node's `attachment.detail` names this tool. It clears a stale socket from the agent's relay slot (only one that answers no ping — a live one is taken over by the runner, not killed), then asks the machine's runner, over a socket that answers there, to attach this agent with force. Targets the machine the agent is pinned to unless `runner_node` names another; it does NOT change the pin (set_instance_runner_node does). Answers `{node, attached, evicted, detail?}` from the relay's own view; when `attached` is false, `detail` is the specific reason — e.g. every socket on that machine is frozen, or the machine may not run this agent. Needs a `pags up` running on the machine; it cannot start one.",
-		{
-			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
-			instance_id: z.string().describe("Instance ID or slug"),
-			runner_node: z.string().optional().describe("Machine (node) name to attach on, from instance_runner_node's `nodes`. Omit to use the machine the agent is pinned to."),
-			dry_run: z.boolean().optional().describe("Report which machine would be asked, without asking it."),
-		},
-		async ({ token, instance_id, runner_node, dry_run }) => {
-			const sessionToken = tokenFor(token);
-			if (!sessionToken) return authRequired();
-			const input = { instance_id, runner_node };
-			// `runtime`: it drives a machine — closes a relay socket and makes a runner reconnect.
-			const denied = await requirePermission(safetyFor(token), "runtime", "force_runner_attach", input);
-			if (denied) return denied;
-			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/runner-attach`;
-			if (dry_run) {
-				return dryRun(safetyFor(token), "force_runner_attach", `force ${instance_id} to attach on ${runner_node || "its pinned machine"}`, input, {
-					endpoint,
-					method: "POST",
-					effect: `${runner_node || "The machine this agent is pinned to"} would have any stale socket cleared from this agent's slot and its \`pags up\` told to attach the agent now, taking the slot over.`,
-				});
-			}
-			const data = (await authedCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify({ runnerNode: runner_node || undefined }) }, env)) as {
-				attached?: boolean;
-				error?: string;
-			};
-			if (!data.error) await audit(safetyFor(token), { tool: "force_runner_attach", action: "completed", input, result: data });
-			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
-		},
-	);
-
 	// ── Terminal tab state and safe machine removal (#613) ─────────────────────
 	//
 	// `activeTerminalTarget` is per-instance state rather than a local UI preference: preserving

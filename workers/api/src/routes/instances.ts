@@ -73,6 +73,7 @@ import { diagnoseAttachment, heartbeatFresh } from "../lib/runtime-attachment.js
 import { instanceListView, patchInstanceConfig, removeInstanceConfigKey } from "../lib/instance-config.js";
 import { setRunnerNodePin } from "../lib/runner-node-pin.js";
 import { attachOnRepin } from "../lib/runner-repin.js";
+import { runnerVersionView } from "../lib/runner-features.js";
 
 export const instanceRoutes = new Hono<{ Bindings: Env }>();
 
@@ -583,8 +584,9 @@ instanceRoutes.get("/:instanceId/runner-node", async (c) => {
 	// "machine online but THIS agent isn't attached to it" (its `pags up` was started
 	// before this agent, so it never opened this instance's socket).
 	const allNodeRows = await c.env.DB.prepare(
-		"SELECT DISTINCT instance_id, runner_node FROM instance_runtime_nodes WHERE user_id = ?1",
-	).bind(session.uid).all<{ instance_id: string; runner_node: string }>();
+		"SELECT DISTINCT instance_id, runner_node, runner_version FROM instance_runtime_nodes WHERE user_id = ?1 ORDER BY updated_at",
+	).bind(session.uid).all<{ instance_id: string; runner_node: string; runner_version: string | null }>();
+	const versionOf = new Map((allNodeRows.results ?? []).map((r) => [normalizeRunnerNode(r.runner_node), r.runner_version])); // freshest wins (#859)
 	const idsByNode = new Map<string, string[]>();
 	for (const r of allNodeRows.results ?? []) {
 		const nn = normalizeRunnerNode(r.runner_node);
@@ -604,7 +606,7 @@ instanceRoutes.get("/:instanceId/runner-node", async (c) => {
 	const nodesDetail = await Promise.all(
 		detailNodes.slice(0, 25).map(async (node) => {
 			const connected = await relayConnected(c.env, instanceId, node).catch(() => false);
-			return { node, connected, nodeOnline: connected ? true : await nodeMachineOnline(node) };
+			return { node, connected, nodeOnline: connected ? true : await nodeMachineOnline(node), ...runnerVersionView(versionOf.get(node)) };
 		}),
 	);
 	// Where the pin ACTUALLY resolves right now (#379). A pin names a hostname, and a hostname

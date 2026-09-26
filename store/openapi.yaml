@@ -9441,6 +9441,51 @@ paths:
         "404": { description: No machine is registered under that name }
         "409": { description: More than one machine has registered under that name }
 
+  /v1/terminals/nodes/{node}/update:
+    post:
+      summary: Update a machine's pags CLI and restart it in place
+      description: |
+        `runner_update` (#859). The machine installs the latest `@proagentstore/cli` with npm and
+        restarts under its `pags up` — waiting first while any coding engine is mid-turn, so a run is
+        parked across the restart and resumed rather than cut off. After a restart the answer names the
+        agents the machine held, the ones #856's attach path had to re-attach, and any still missing with
+        the reason. `action` is the verdict: `restarted`, `scheduled`, `up-to-date`, `refused`,
+        `unsupported` (a CLI too old to update itself), `unreachable`, `failed`, or `would-update` for a
+        dry run. Always 200, so the reason reaches the caller.
+      operationId: updateRunnerNode
+      tags: [Runtime]
+      parameters:
+        - { name: node, in: path, required: true, schema: { type: string }, description: "Any name the machine answers to." }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                dryRun: { type: boolean, description: "Ask the machine what it would do, without updating." }
+      responses:
+        "200":
+          description: What happened on that machine
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  node: { type: string }
+                  action: { type: string, enum: [restarted, scheduled, up-to-date, refused, unsupported, unreachable, failed, would-update] }
+                  current: { type: string }
+                  latest: { type: string }
+                  version: { type: string, nullable: true }
+                  held: { type: array, items: { type: string } }
+                  reattached: { type: array, items: { type: string } }
+                  missing:
+                    type: array
+                    items: { type: object, properties: { instanceId: { type: string }, detail: { type: string } } }
+                  waitingFor: { type: array, items: { type: string } }
+                  detail: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /v1/terminals/nodes/{node}/claim:
     delete:
       summary: Un-claim a machine name

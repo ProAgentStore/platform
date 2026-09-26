@@ -20,6 +20,7 @@ import { registerCompositionTools } from "./composition.js";
 import { registerConnectorAccountTools, registerConnectorGrantTools } from "./connectors.js";
 import { registerGuideTools } from "./guide.js";
 import { registerKnowledgeTools } from "./knowledge.js";
+import { registerMachineControlTools } from "./machine-control.js";
 import { registerMcpConnectionTools } from "./mcp-connections.js";
 import { registerObservabilityTools } from "./observability.js";
 import { registerRecentTools } from "./recent.js";
@@ -44,6 +45,7 @@ export function registerInstanceTools(
 	// Ungated — every subscriber gets these, whatever agent they run.
 	registerBaseTools(server, ctx);
 	registerRuntimeTools(server, ctx);
+	registerMachineControlTools(server, ctx);
 	registerKnowledgeTools(server, ctx);
 	registerObservabilityTools(server, ctx);
 	// The per-instance connection guide (#772) — ungated: the discovery problem it solves

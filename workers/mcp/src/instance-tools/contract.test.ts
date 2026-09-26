@@ -19,6 +19,7 @@ import { registerObservabilityTools } from "./observability.js";
 import { registerRecentTools } from "./recent.js";
 import { registerRepoTools } from "./repo.js";
 import { registerRuntimeTools } from "./runtime.js";
+import { registerMachineControlTools } from "./machine-control.js";
 import { registerSettingsTools } from "./settings.js";
 import type { InstanceToolsCtx } from "./shared.js";
 import { registerStatsTools } from "./stats.js";
@@ -447,7 +448,8 @@ const TABLE: Record<string, Row> = {
 	// #671: `write` rather than `runtime` — it changes where calls are ROUTED, it does not itself
 	// drive anything on the machine.
 	set_instance_runner_node: ["runtime", "write", null, "envelope", "dry_run,instance_id,runner_node,token"],
-	force_runner_attach: ["runtime", "runtime", null, "envelope", "dry_run,instance_id,runner_node,token"],
+	force_runner_attach: ["machineControl", "runtime", null, "envelope", "dry_run,instance_id,runner_node,token"],
+	runner_update: ["machineControl", "runtime", null, "envelope", "dry_run,runner_node,token"],
 	set_instance_terminal_session: ["runtime", "write", null, "envelope", "active_terminal_target,dry_run,instance_id,token"],
 	set_instance_settings: ["settings", "write", null, "envelope", "dry_run,instance_id,settings,token"],
 	set_instance_stats: ["stats", "write", null, "envelope", "dry_run,instance_id,ops,token"],
@@ -522,6 +524,7 @@ const REGISTRARS: Record<string, (s: unknown, c: InstanceToolsCtx) => void> = {
 	connectorAccounts: registerConnectorAccountTools as any,
 	guide: registerGuideTools as any,
 	knowledge: registerKnowledgeTools as any,
+	machineControl: registerMachineControlTools as any,
 	mcpConnections: registerMcpConnectionTools as any,
 	observability: registerObservabilityTools as any,
 	recent: registerRecentTools as any,

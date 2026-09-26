@@ -45,6 +45,11 @@ function findWorkspaceRoot(): string {
 	return process.cwd();
 }
 
+/** Running from a source checkout (`pnpm dev`) rather than an npm install — the same test `runnerSpawnSpec` makes. */
+export function runsFromSource(): boolean {
+	return existsSync(resolve(findWorkspaceRoot(), "packages", "browser-runner", "src", "index.ts"));
+}
+
 export function bundledRunnerPath(): string {
 	return fileURLToPath(new URL("./browser-runner/index.js", import.meta.url));
 }

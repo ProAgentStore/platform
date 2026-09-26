@@ -221,6 +221,7 @@ const READBACK: Record<string, string | null> = {
 	// pin could be neither read nor written here, so a reader had to exist for the writer to land.
 	"set_instance_runner_node.runner_node": "instance_runner_node",
 	"force_runner_attach.runner_node": "instance_runner_node",
+	"runner_update.runner_node": "list_runner_nodes",
 	// #613: terminal-tab selection is durable instance state, not ephemeral client state. The
 	// matching reader must land with its writer so an MCP-only caller can verify a clear/save.
 	"set_instance_terminal_session.active_terminal_target": "get_instance_terminal_session",

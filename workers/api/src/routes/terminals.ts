@@ -5,6 +5,8 @@ import { lastTerminal } from "../lib/coding-timeline.js";
 import { normalizeRunnerNode, parseBoundRunnerNode } from "../lib/runtime-nodes.js";
 import { adoptableIdByName, identityHint, machineNamesFor, normalizeMachineId } from "../lib/machine-identity.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
+import { runnerFeatureGaps } from "../lib/runner-features.js";
+import { updateRunnerNode } from "../lib/runner-update.js";
 import type { Env } from "../types.js";
 
 /**
@@ -117,6 +119,8 @@ export interface TerminalNode {
 	identityHint: string | null;
 	placement: string;
 	runnerVersion: string;
+	/** Features this runner is too old for (#859) — `[]` when current, null when it reported no version. Fix: runner_update. */
+	runnerBehind: string[] | null;
 	lastSeenAt: string | null;
 	/** Live: any (instance,node) relay socket is up. */
 	connected: boolean;
@@ -210,6 +214,7 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 				identityHint: null,
 				placement: r.placement,
 				runnerVersion: r.runner_version,
+				runnerBehind: null,
 				lastSeenAt: r.last_seen_at,
 				connected: false,
 				instances: [],
@@ -275,7 +280,10 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 	// Why an unidentified machine has no id, said out loud (#393). Computed against the group's
 	// FRESHEST registration, which is the version actually running there — an old row left behind
 	// by a CLI the machine has since upgraded past must not keep prescribing an upgrade.
-	for (const n of byKey.values()) n.identityHint = identityHint(n.machineId, n.runnerVersion);
+	for (const n of byKey.values()) {
+		n.identityHint = identityHint(n.machineId, n.runnerVersion);
+		n.runnerBehind = runnerFeatureGaps(n.runnerVersion)?.map((g) => `${g.feature} (needs ${g.minCli})`) ?? null;
+	}
 
 	// Drop machines that ended up with no runner-using agents AND no sessions — i.e. a node
 	// that (via an older, over-eager `pags up`) only registered chat/RAG agents that don't
@@ -482,6 +490,19 @@ export async function preflightForgetNode(env: Env, uid: string, rawTarget: stri
 }
 
 /** Read the complete non-destructive forget verdict, including every pin/session blocker. */
+/**
+ * Update a machine's `pags` CLI and restart it in place (#859) — `runner_update`. The machine waits
+ * for busy engines, installs the latest release and restarts; this re-attaches every agent it held.
+ * `?dryRun=1` (or `{dryRun:true}`) asks the machine what it would do without doing it.
+ */
+terminalRoutes.post("/nodes/:node/update", async (c) => {
+	const session = await requireUser(c);
+	const body = (await c.req.json().catch(() => ({}))) as { dryRun?: unknown };
+	const result = await updateRunnerNode(c.env, session.uid, c.req.param("node"), { dryRun: body.dryRun === true || c.req.query("dryRun") === "1" });
+	// 200 whatever the outcome: `action` is the verdict, and a non-2xx would lose the machine's reason at the MCP seam.
+	return c.json(result);
+});
+
 terminalRoutes.get("/nodes/:node/forget-preflight", async (c) => {
 	const session = await requireUser(c);
 	const preflight = await preflightForgetNode(c.env, session.uid, c.req.param("node"));

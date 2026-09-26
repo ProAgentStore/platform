@@ -594,6 +594,10 @@ describe("PUT/GET /v1/instances/:id/runner-node (integration — the 'runs on' p
 		expect(body.runnerNode).toBe("laptop-A");
 		expect(body.nodes).toContain("laptop-A");
 		expect(body.nodesDetail.find((n) => n.node === "laptop-A")?.connected).toBe(true);
+		// Each machine's runner version, and what it is too old for — the fix being runner_update (#859).
+		const laptop = body.nodesDetail.find((n) => n.node === "laptop-A") as { runnerVersion?: string | null; behind?: string[] | null };
+		expect(laptop.runnerVersion).toBe("0.3.3");
+		expect(laptop.behind).toEqual(expect.arrayContaining([expect.stringMatching(/^runner_update .*\(needs 0\.4\.62\)$/)]));
 	});
 
 	// #379. The picker renders one tile per `runner_node` string, so one laptop that had worn

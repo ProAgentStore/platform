@@ -3,7 +3,8 @@ import { loadSession } from "../login.js";
 import { loadMachineIdentity } from "../../machine.js";
 import { writeError, writeLine } from "../../output.js";
 import { apiPathSegment, clean, pagsApiBase, requestPags, requestRunner } from "./http.js";
-import { CLI_VERSION } from "./process.js";
+import { CLI_VERSION, runsFromSource } from "./process.js";
+import { installVersion, latestPublishedVersion, planRunnerUpdate, RUNNER_RESTART_EXIT_CODE, RUNNER_UPDATE_PATH, SUPERVISED_ENV, type UpdatePlan } from "./self-update.js";
 import { diffMembership, instanceLabel, pendingRegistrations, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance, type ReattachRequest } from "./membership.js";
 import { formatStatusLine } from "./status-line.js";
 import type { PagsRequestOptions } from "./types.js";
@@ -16,6 +17,9 @@ import type { PagsRequestOptions } from "./types.js";
  * The API sends it by this exact string (`workers/api/src/lib/runner-repin.ts`); change both.
  */
 export const MEMBERSHIP_SYNC_PATH = "/pags/membership/sync";
+
+/** Every relay command the CLI answers itself rather than forwarding to the local runner. */
+const CLI_CONTROL_PATHS = new Set([MEMBERSHIP_SYNC_PATH, RUNNER_UPDATE_PATH]);
 
 /**
  * Connect to PAGS via WebSocket relay — no tunnel, no cloudflared.
@@ -96,7 +100,66 @@ export async function connectViaRelay(
 
 	/** The cloud asking for a membership pass now (#850). A scoped run refuses: it must stay as
 	 *  narrow as the user asked, and saying so is what lets the repin report the real remedy. */
+	/** The facts `runner_update` decides on (#859): versions, how this process runs, which engines are mid-turn. */
+	const updateFacts = async () => {
+		const sessions = await requestRunner<{ sessions?: Array<{ sessionId: string; alive?: boolean; runState?: string }> }>("GET", "/coding/sessions", {
+			url: localUrl,
+			token: runnerToken,
+			instanceId: instanceIds[0],
+		}).catch(() => ({ sessions: [] }));
+		return {
+			current: CLI_VERSION,
+			latest: await latestPublishedVersion(),
+			fromSource: runsFromSource(),
+			supervised: process.env[SUPERVISED_ENV] === "1",
+			busy: (sessions.sessions ?? []).filter((s) => s.alive && s.runState && s.runState !== "idle").map((s) => s.sessionId),
+		};
+	};
+	/** Install the release, then leave with the code `pags up` respawns on. Sockets close first, cleanly. */
+	const installAndRestart = async (plan: Extract<UpdatePlan, { action: "update" }>) => {
+		writeLine(`Updating ${plan.current} → ${plan.latest} (runner_update)…`);
+		await installVersion(plan.latest);
+		writeLine(`Installed ${plan.latest} — restarting; every agent re-attaches on the way back up.`);
+		setTimeout(() => {
+			for (const id of [...attached.keys()]) detach(id);
+			process.exit(RUNNER_RESTART_EXIT_CODE);
+		}, 500).unref();
+	};
+	/** A deferred update waits for busy engines to finish, re-checking — never cuts a turn off (#859). */
+	let updateWaiting = false;
+	const updateWhenIdle = () => {
+		if (updateWaiting) return;
+		updateWaiting = true;
+		const until = Date.now() + 60 * 60_000;
+		const tick = () =>
+			setTimeout(async () => {
+				const plan = planRunnerUpdate(await updateFacts());
+				if (plan.action === "update") {
+					await installAndRestart(plan).catch((e) => writeError(`runner_update: install failed — ${e instanceof Error ? e.message : String(e)}`));
+					updateWaiting = false;
+				} else if (plan.action === "wait" && Date.now() < until) tick();
+				else updateWaiting = false;
+			}, 15_000).unref();
+		tick();
+	};
+	const answerUpdate = async (body?: unknown): Promise<{ status: number; result: unknown }> => {
+		const dryRun = (body as { dryRun?: unknown } | undefined)?.dryRun === true;
+		const plan = planRunnerUpdate(await updateFacts());
+		if (dryRun || plan.action === "up-to-date" || plan.action === "refused") return { status: 200, result: { ...plan, dryRun } };
+		if (plan.action === "wait") {
+			updateWhenIdle();
+			return { status: 200, result: { ...plan, detail: "Restarts itself as soon as these engines finish their turns — no run is cut off." } };
+		}
+		try {
+			await installAndRestart(plan);
+		} catch (e) {
+			return { status: 500, result: { error: `npm could not install ${plan.latest}: ${e instanceof Error ? e.message : String(e)}` } };
+		}
+		return { status: 200, result: { action: "restarting", current: plan.current, latest: plan.latest } };
+	};
+
 	const answerControl = async (path: string, body?: unknown): Promise<{ status: number; result: unknown }> => {
+		if (path === RUNNER_UPDATE_PATH) return answerUpdate(body);
 		if (path !== MEMBERSHIP_SYNC_PATH) return { status: 404, result: { error: `Unknown runner control ${path}` } };
 		const request = body as ReattachRequest | undefined;
 		const named = typeof request?.attach === "string" ? request.attach : "";
@@ -400,7 +463,7 @@ export function openRelaySocket(
 				return;
 			}
 			if (!cmd.id || !cmd.path) return;
-			if (onControl && cmd.path === MEMBERSHIP_SYNC_PATH) {
+			if (onControl && CLI_CONTROL_PATHS.has(cmd.path)) {
 				// A detach this pass performs may close THIS socket — the reply is then lost, and the
 				// cloud reads the socket going away as the answer it is.
 				const reply = await onControl(cmd.path, cmd.body).catch((err) => ({ status: 500, result: { error: err instanceof Error ? err.message : String(err) } }));

@@ -510,7 +510,7 @@ describe("POST /coding/repos requireGithub + clone — the cold start (#857)", (
 	 * `cloneFails`. `legacy` is a pre-#858 runner: no jobs (404), only the synchronous `/coding/clone`.
 	 * Every runner call is recorded so a test can say exactly what was asked.
 	 */
-	function machine(opts: { initial: Record<string, unknown>; origin?: string | null; cloneFails?: string; finishAfter?: number; legacy?: boolean; via?: "https" | "ssh" }) {
+	function machine(opts: { initial: Record<string, unknown>; origin?: string | null; cloneFails?: string; finishAfter?: number; legacy?: boolean; ancient?: boolean; via?: "https" | "ssh" }) {
 		const asked: Array<{ path: string; body: unknown }> = [];
 		/** The URL the machine cloned from — a fresh clone's `origin`. */
 		let clonedFrom: string | null = null;
@@ -540,6 +540,7 @@ describe("POST /coding/repos requireGithub + clone — the cold start (#857)", (
 				return { ...job };
 			}
 			if (path === "/coding/clone") {
+				if (opts.ancient) throw new Error('Runner /coding/clone → 404: {"error":"Not found"}');
 				if (opts.cloneFails) throw new Error(`Runner /coding/clone → 400: ${JSON.stringify({ error: opts.cloneFails })}`);
 				clonedFrom = (body as { cloneUrl: string }).cloneUrl;
 				return { cloned: true, path: "/home/u/dev/grass-karma" };
@@ -693,11 +694,19 @@ describe("POST /coding/repos requireGithub + clone — the cold start (#857)", (
 			expect(asked.find((a) => a.path === "/coding/clone")?.body).toEqual({ workDir: "~/dev/grass-karma", cloneUrl: "https://github.com/acme/grass-karma.git" });
 		});
 
+		it("a runner too old to clone at all points at runner_update, the remote fix (#859)", async () => {
+			machine({ initial: MISSING, legacy: true, ancient: true });
+			const { status, body, issued } = await add({ githubRepo: "acme/grass-karma", clone: true });
+			expect(status).toBe(400);
+			expect(body.error).toMatch(/too old to clone\. Call runner_update for this machine/);
+			expect(inserted(issued)).toBe(false);
+		});
+
 		it("…but cannot be asked for SSH, and says so", async () => {
 			machine({ initial: MISSING, legacy: true });
 			const { status, body } = await add({ githubRepo: "acme/grass-karma", clone: true, cloneProtocol: "ssh" });
 			expect(status).toBe(400);
-			expect(body.error).toMatch(/too old to clone over SSH/);
+			expect(body.error).toMatch(/too old to clone over SSH\. Call runner_update/);
 		});
 	});
 });

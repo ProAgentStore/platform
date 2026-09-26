@@ -929,4 +929,8 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// now run in the background on the machine; a still-running one answers 202 and nothing is stored.
 	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.61 is published.
 	"0.1.62": "sha256:969da61e7a36e4f6ce62bd95d7e313caee086a20fa894d9bc7b4c1f43c29f2cd",
+	// 0.1.63 (#859): one new always-on `runtime` tool — 237 registrations become 238, always-on 211 → 212,
+	// gated unchanged. `runner_update` updates a machine's `pags` CLI and restarts it in place, waiting
+	// for busy engines and re-attaching every agent it held. Appended, never edited in place: 0.1.62 is published.
+	"0.1.63": "sha256:004f208b2f3bc77968ead4a1fd074d8068a3a22c4ef797b80df1eb102919f541",
 };
