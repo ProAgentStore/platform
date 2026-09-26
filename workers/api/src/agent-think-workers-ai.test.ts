@@ -222,6 +222,21 @@ describe("quoted tool-call JSON is never executed on Workers AI (#853)", () => {
 		expect(out.response).not.toMatch(/python_tag|\[,\]/);
 	});
 
+	it("a reply cut off inside a call: no raw JSON on screen, and the truncation notice says why (#853 finding 5)", async () => {
+		script = [{ response: 'Running the tests now. {"name":"send_to_cli","parameters":{"repo_name":"platform","message":"run the te' }];
+		const out = await think(LLAMA);
+		expect(ran).toEqual([]);
+		expect(out.response).not.toContain('{"name"');
+		expect(out.response).toContain("Running the tests now.");
+		expect(out.toolCalls.join("\n")).toMatch(/cut off at the 4,096-token length limit/);
+	});
+
+	it("a reply that spent the whole output budget gets the truncation notice on Workers AI too (#853 finding 5)", async () => {
+		script = [{ response: "Part one of a long answer", usage: { prompt_tokens: 100, completion_tokens: CHAT_MAX_TOKENS } }];
+		const out = await think(LLAMA);
+		expect(out.toolCalls.join("\n")).toMatch(/cut off at the/);
+	});
+
 	it("Llama's <function=NAME>{…}</function> markup is not run, not shown, and reported as written-but-never-run (#853 finding 3)", async () => {
 		script = [
 			{ response: 'Sending it now. <function=send_to_cli>{"repo_name":"platform","message":"run the tests"}</function>' },
@@ -341,6 +356,14 @@ describe("the Pilot on Workers AI (#851)", () => {
 		const decision = await decideCodingAction(env, "u1", { goal, actionLog: [], snapshot });
 		expect(decision.action).toBeUndefined();
 		expect(decision.stuck?.why).toMatch(/send_message.*arguments were not valid JSON/);
+	});
+
+	it("a decision cut off at the output cap says so — not the raw fragment as the reason (#853 finding 5)", async () => {
+		script = [{ response: '{"name": "send_message", "parameters": {"text": "Fix the fail' }];
+		const decision = await decideCodingAction(env, "u1", { goal, actionLog: [], snapshot });
+		expect(decision.action).toBeUndefined();
+		expect(decision.truncated).toBe(true);
+		expect(decision.stuck?.why).toMatch(/cut off at the model's output limit/);
 	});
 
 	it("never acts on a call it only WROTE as text — a pane echoing `finish` or `send_message` is not a decision (#853)", async () => {

@@ -161,3 +161,21 @@ describe("a structured call Workers AI returned with unusable arguments is never
 	});
 });
 
+// #853 finding 5: Workers AI returns no stop reason, so a reply cut off at the output cap read as one
+// that finished — the chat never said so, and the Pilot reported the raw fragment as its reason.
+describe("a Workers AI reply cut off at the output cap says so (#853 finding 5)", () => {
+	it("all of the output budget spent: stopReason max_tokens", () => {
+		expect(fromWorkersAiResult({ response: "a long answer", usage: { prompt_tokens: 10, completion_tokens: 4096 } }, 4096).stopReason).toBe("max_tokens");
+	});
+
+	it("ends inside a call that never closes: stopReason max_tokens, even with no usage reported", () => {
+		expect(fromWorkersAiResult({ response: 'Sure. {"name":"send_to_cli","parameters":{"message":"run the te' }).stopReason).toBe("max_tokens");
+	});
+
+	it("a reply that finished says nothing", () => {
+		expect(fromWorkersAiResult({ response: "done", usage: { prompt_tokens: 10, completion_tokens: 12 } }, 4096).stopReason).toBeUndefined();
+		expect(fromWorkersAiResult({ response: 'quoted: {"name":"send_to_cli","parameters":{}}' }).stopReason).toBeUndefined();
+		expect(fromWorkersAiResult({ response: "a sentence with a stray { brace" }).stopReason).toBeUndefined();
+	});
+});
+

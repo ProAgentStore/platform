@@ -28,7 +28,7 @@
  */
 import { TOOL_CAPABLE_CF_DEFAULT } from "../agent-do-prompt.js";
 import { isWorkersAiModel } from "./brain-models.js";
-import { type MalformedToolCall, splitToolCalls } from "./parse-tool-calls.js";
+import { cutOffCall, type MalformedToolCall, splitToolCalls } from "./parse-tool-calls.js";
 
 /** Marks a completion that came from Workers AI, so the chat loop answers in the `tool` role. */
 export const WORKERS_AI_PROTOCOL = "workers-ai";
@@ -104,6 +104,8 @@ export interface WorkersAiCompletion {
 	/** Calls the model made whose arguments were not valid JSON — never run, answered instead (#853 finding 4). */
 	malformed_tool_calls?: MalformedToolCall[];
 	usage?: { input: number; output: number };
+	/** `max_tokens` when the reply was cut off at the output cap — Workers AI reports none (#853 finding 5). */
+	stopReason?: "max_tokens";
 	protocol: typeof WORKERS_AI_PROTOCOL;
 }
 
@@ -118,13 +120,18 @@ export interface WorkersAiCompletion {
  * turned into an action. Lifting even a LEADING call left that door open to an echo; the text is
  * prose, and the callers strip and report such JSON as named-but-never-run.
  */
-export function fromWorkersAiResult(raw: unknown): WorkersAiCompletion {
+export function fromWorkersAiResult(raw: unknown, maxTokens?: number): WorkersAiCompletion {
 	const r = (raw ?? {}) as { response?: unknown; tool_calls?: unknown; usage?: Record<string, number> };
 	const response = typeof r.response === "string" ? r.response : r.response == null ? "" : JSON.stringify(r.response);
 	const { calls, malformed } = splitToolCalls(Array.isArray(r.tool_calls) ? r.tool_calls : []);
 	const u = r.usage;
+	// Workers AI says nothing about WHY it stopped (#853 finding 5), so the cap is inferred: the whole
+	// output budget spent, or a reply that ends inside a call it never closed.
+	const spent = u?.completion_tokens || u?.output_tokens || 0;
+	const cutOff = (typeof maxTokens === "number" && maxTokens > 0 && spent >= maxTokens) || cutOffCall(response) !== null;
 	return {
 		response,
+		...(cutOff ? { stopReason: "max_tokens" as const } : {}),
 		...(calls.length > 0 ? { tool_calls: calls } : {}),
 		...(malformed.length > 0 ? { malformed_tool_calls: malformed } : {}),
 		...(u ? { usage: { input: u.prompt_tokens || u.input_tokens || 0, output: u.completion_tokens || u.output_tokens || 0 } } : {}),

@@ -299,3 +299,26 @@ describe("parseToolCallsFromText — no residue where the calls were (#853 findi
 	});
 });
 
+// #853 finding 5: a call cut off at the output cap never closes, so the walker never matched it and
+// the raw fragment stayed in the owner's reply.
+describe("parseToolCallsFromText — a call cut off at the end of the reply (#853 finding 5)", () => {
+	const tools = new Set(["send_to_cli"]);
+
+	it("is removed from the reply — it is not a call, and never run", () => {
+		expect(parseToolCallsFromText('Running it. {"name":"send_to_cli","parameters":{"message":"run the te', tools)).toEqual({ calls: [], text: "Running it. " });
+	});
+
+	it("takes a <|python_tag|> in front of it too, and keeps a complete call before it reported", () => {
+		expect(parseToolCallsFromText('<|python_tag|>{"name":"send_to_cli","parameters":{"message":"x', tools).text).toBe("");
+		const out = parseToolCallsFromText('{"name":"send_to_cli","parameters":{"message":"a"}} {"name":"send_to_cli","parameters":{"message":"b', tools);
+		expect(out.calls).toEqual([{ name: "send_to_cli", arguments: { message: "a" } }]);
+		expect(out.text.trim()).toBe("");
+	});
+
+	it("an unfinished object naming no real tool, or a stray brace, stays as written", () => {
+		for (const text of ['{"name":"lead","email":"a@b.c', "if (x) {", '{"name":"send_to_cli" is how it is called']) {
+			expect(parseToolCallsFromText(text, tools).text).toBe(text);
+		}
+	});
+});
+

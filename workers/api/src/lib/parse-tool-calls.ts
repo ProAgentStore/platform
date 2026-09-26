@@ -98,7 +98,26 @@ export function parseToolCallsFromText(
 	}
 	// Both forms, in the order they were written.
 	found.sort((a, b) => a.span[0] - b.span[0]);
-	return { calls: found.map((f) => f.call), text: removeSpans(text, withWrappers(text, found.map((f) => f.span))) };
+	// A call the output cap cut off never closes, so nothing above matched it (#853 finding 5). Not a
+	// call and never run — but not left on screen as raw JSON either: it goes, with what it held.
+	const dangling = cutOffCall(text);
+	const cut = dangling && (!allowed || allowed.has(dangling.name)) ? dangling : null;
+	const keep = cut ? found.filter((f) => f.span[0] < cut.start) : found;
+	const spans = withWrappers(text, keep.map((f) => f.span));
+	if (cut) spans.push([/<\|python_tag\|>\s*$/.exec(text.slice(0, cut.start))?.index ?? cut.start, text.length]);
+	return { calls: keep.map((f) => f.call), text: removeSpans(text, spans) };
+}
+
+/**
+ * The call the reply ENDS inside, if it does: `{"name":"X",…` that never closes — what the output cap
+ * leaves when it cuts a call short (#853 finding 5). The outermost such object; a complete quoted call
+ * before it, or a stray brace, is not one.
+ */
+export function cutOffCall(text: string): { start: number; name: string } | null {
+	for (const m of text.matchAll(/\{\s*"name"\s*:\s*"([\w.-]+)"\s*,/g)) {
+		if (findMatchingBrace(text, m.index ?? 0) === -1) return { start: m.index ?? 0, name: m[1] };
+	}
+	return null;
 }
 
 /**
