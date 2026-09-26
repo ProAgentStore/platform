@@ -7,7 +7,7 @@
  * of only the new behaviour would let the next change take the old promise back.
  */
 import { describe, expect, it } from "vitest";
-import { PONG_STALE_MS, RunnerLiveness, type PingableSocket } from "./relay-liveness.js";
+import { evictStaleSockets, PONG_STALE_MS, RunnerLiveness, type PingableSocket } from "./relay-liveness.js";
 
 /** A peer that answers a ping — the shape of a runner whose process is running. */
 function livePeer(liveness: RunnerLiveness, now = () => Date.now()): PingableSocket {
@@ -122,5 +122,32 @@ describe("RunnerLiveness.observe — the status-time question, answered without 
 		expect(liveness.observe([frozen], 10_000)).toBe(false);
 		liveness.pong(11_000);
 		expect(liveness.observe([frozen], 12_000)).toBe(true);
+	});
+});
+
+describe("evictStaleSockets — clearing an agent's slot remotely (#856)", () => {
+	/** A socket that takes the ping and never answers — a frozen or duplicate runner. Records its close. */
+	function frozenPeer(): PingableSocket & { closed: Array<[number, string]> } {
+		const closed: Array<[number, string]> = [];
+		return { closed, send() {}, close(code: number, reason: string) { closed.push([code, reason]); } };
+	}
+
+	it("closes a slot nobody answers in, with 4410 so a merely slow runner reconnects rather than gives up", async () => {
+		const peer = frozenPeer();
+		const verdict = await evictStaleSockets([peer], new RunnerLiveness(), { deadlineMs: 20 });
+		expect(verdict).toEqual({ sockets: 1, alive: false, evicted: 1 });
+		expect(peer.closed).toEqual([[4410, "stale runner socket evicted so the agent can reattach"]]);
+	});
+
+	it("NEVER touches a socket that answers — that is the agent, attached", async () => {
+		const liveness = new RunnerLiveness();
+		let closed = false;
+		const peer = { ...livePeer(liveness), close() { closed = true; } };
+		expect(await evictStaleSockets([peer], liveness, { deadlineMs: 500 })).toEqual({ sockets: 1, alive: true, evicted: 0 });
+		expect(closed).toBe(false);
+	});
+
+	it("an empty slot is reported empty, not evicted", async () => {
+		expect(await evictStaleSockets([], new RunnerLiveness())).toEqual({ sockets: 0, alive: false, evicted: 0 });
 	});
 });

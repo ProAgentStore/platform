@@ -447,6 +447,7 @@ const TABLE: Record<string, Row> = {
 	// #671: `write` rather than `runtime` — it changes where calls are ROUTED, it does not itself
 	// drive anything on the machine.
 	set_instance_runner_node: ["runtime", "write", null, "envelope", "dry_run,instance_id,runner_node,token"],
+	force_runner_attach: ["runtime", "runtime", null, "envelope", "dry_run,instance_id,runner_node,token"],
 	set_instance_terminal_session: ["runtime", "write", null, "envelope", "active_terminal_target,dry_run,instance_id,token"],
 	set_instance_settings: ["settings", "write", null, "envelope", "dry_run,instance_id,settings,token"],
 	set_instance_stats: ["stats", "write", null, "envelope", "dry_run,instance_id,ops,token"],

@@ -20,7 +20,8 @@
  * reply waits out one poll interval before answering `attached: false`.
  */
 import { aliasNodesFor, type NodeRegistration } from "./machine-identity.js";
-import { callRunner, getRunnerConnIgnoringLiveness, relayConnected } from "./runner-client.js";
+import { callRunner, evictStaleRunnerSocket, getRunnerConnIgnoringLiveness, relayConnected, type RunnerConn } from "./runner-client.js";
+import { RunnerUnreachableError } from "./runner-unreachable.js";
 import { normalizeRunnerNode } from "./runtime-nodes.js";
 import type { Env } from "../types.js";
 
@@ -51,9 +52,24 @@ export interface RepinDeps {
 	now?: () => number;
 }
 
-export async function attachOnRepin(env: Env, instanceId: string, userId: string, node: string, deps: RepinDeps = {}): Promise<RepinAttachment> {
-	const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-	const now = deps.now ?? Date.now;
+/** What {@link attachAgentOnNode} achieved on one machine, and — when it did not — the specific reason. */
+export interface AgentAttachment {
+	node: string;
+	/** This agent's own socket answers on that machine now. */
+	attached: boolean;
+	/** Stale sockets cleared from the agent's slot there so a runner could take it (#856). */
+	evicted: number;
+	/** The actionable sentence when `attached` is false. */
+	detail?: string;
+}
+
+/** The runner-reply shape of a targeted membership sync (#856). Older CLIs answer without `holding`. */
+interface SyncReply {
+	holding?: boolean;
+}
+
+/** The owner's node registrations — the map from a machine's names to the agents holding sockets there. */
+export async function nodeRegistrations(env: Env, userId: string): Promise<NodeRegistration[]> {
 	const { results } = await env.DB.prepare(
 		`SELECT runner_node AS node, machine_id AS machineId, instance_id AS instanceId, last_seen_at AS lastSeenAt
 		 FROM instance_runtime_nodes WHERE user_id = ?1 AND runner_node IS NOT NULL AND runner_node != ''
@@ -62,13 +78,114 @@ export async function attachOnRepin(env: Env, instanceId: string, userId: string
 		.bind(userId)
 		.all<NodeRegistration>()
 		.catch(() => ({ results: [] as NodeRegistration[] }));
-	const rows = results ?? [];
+	return results ?? [];
+}
+
+/**
+ * Get THIS agent a live socket on THIS machine, or say exactly why not (#850, #856).
+ *
+ *   1. The agent's own slot is PROBED — a real ping, not the optimistic `/status` — and a slot held by
+ *      a socket nobody answers behind (a frozen or duplicate runner) is cleared, so the machine's
+ *      runner is not refused 4409 when it connects. A socket that answers is the agent, attached.
+ *   2. The machine's `pags up` is asked, over any socket of this owner's that ANSWERS there, to attach
+ *      this agent by name: it un-blocks it, drops a handle that is not delivering, and reconnects it —
+ *      with `force=1` when {@link AgentAttachOptions.force} (the remote `pags up --force`). A frozen
+ *      carrier is skipped for the next one; it was stopping at the first (#856, pink-laptop).
+ *   3. The relay is asked again whether a socket now answers.
+ */
+export interface AgentAttachOptions extends RepinDeps {
+	/** Take the slot even from a runner still answering in it — only on an explicit request. */
+	force: boolean;
+	/** Registrations already read by the caller. */
+	rows?: NodeRegistration[];
+}
+
+export async function attachAgentOnNode(env: Env, instanceId: string, userId: string, node: string, opts: AgentAttachOptions): Promise<AgentAttachment> {
+	const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+	const now = opts.now ?? Date.now;
+	const rows = opts.rows ?? (await nodeRegistrations(env, userId));
 	// The target MACHINE, by every name it is provably known by — the runner there answers to any of them.
 	const targetNames = new Set([node, ...aliasNodesFor(node, rows)]);
 	const attachedOnTarget = async () => {
 		for (const n of targetNames) if (await relayConnected(env, instanceId, n)) return true;
 		return false;
 	};
+
+	// 1. The agent's own slot: attached already, or cleared of whatever stale socket held it.
+	let evicted = 0;
+	for (const n of targetNames) {
+		const verdict = await evictStaleRunnerSocket(env, instanceId, n);
+		if (verdict.alive && !opts.force) return { node, attached: true, evicted };
+		evicted += verdict.evicted;
+	}
+
+	// 2. Ask the machine's runner, through the first of this owner's sockets there that answers.
+	const carriers = await liveCarriers(env, userId, rows, targetNames);
+	if (carriers.length === 0) {
+		return { node, attached: false, evicted, detail: `No \`pags up\` is connected on ${node} to hand this agent to. Start it there; it takes the agent on its own once it is running.` };
+	}
+	let answered: SyncReply | null = null;
+	let refusal = "";
+	let unresponsive = 0;
+	let oldRunner = false;
+	for (const carrier of carriers) {
+		try {
+			answered = (await callRunner<SyncReply>(carrier, MEMBERSHIP_SYNC_PATH, { attach: instanceId, force: opts.force }, { timeoutMs: SYNC_TIMEOUT_MS })) ?? {};
+			break;
+		} catch (e) {
+			const message = e instanceof Error ? e.message : String(e);
+			if (e instanceof RunnerUnreachableError) {
+				unresponsive++;
+				continue;
+			}
+			if (/--instance/.test(message)) {
+				refusal = `The \`pags up\` on ${node} was started with --instance, so it serves only that agent. Restart it there without --instance.`;
+				break;
+			}
+			// A runner that predates the control command forwards it and 404s — it still attaches on its own poll.
+			if (/→ 404/.test(message)) {
+				oldRunner = true;
+				break;
+			}
+			refusal = `The \`pags up\` on ${node} could not be asked to attach this agent (${message}).`;
+		}
+	}
+	if (refusal && !answered && !oldRunner) return { node, attached: false, evicted, detail: refusal };
+	if (!answered && !oldRunner) {
+		return {
+			node,
+			attached: false,
+			evicted,
+			detail: `Every relay socket \`pags up\` holds on ${node} is connected but not answering (${unresponsive} tried) — the runner there is frozen or gone, so nothing on that machine can be asked to attach this agent. Restart \`pags up\` on ${node}.`,
+		};
+	}
+
+	// 3. The relay's answer, after the runner has had time to open the socket.
+	const waitUntil = now() + (answered ? OPEN_WAIT_MS : POLL_WAIT_MS);
+	let attached = await attachedOnTarget();
+	while (!attached && now() < waitUntil) {
+		await sleep(1_000);
+		attached = await attachedOnTarget();
+	}
+	if (attached) return { node, attached, evicted };
+	const refused = answered?.holding === false;
+	return {
+		node,
+		attached,
+		evicted,
+		detail: opts.force
+			? refused
+				? `The \`pags up\` on ${node} did not take this agent even when forced — it is not one that machine may run (pinned to another machine, paused, or without a runtime).`
+				: `The \`pags up\` on ${node} was told to take this agent over and no live socket appeared — check that machine's runner window for a relay error.`
+			: `The \`pags up\` on ${node} ${oldRunner ? "is too old to be asked and has not attached this agent on its own poll" : "did not attach this agent"}. Call force_runner_attach to take its slot on ${node} over — the remote \`pags up --force\` for this one agent.`,
+	};
+}
+
+export async function attachOnRepin(env: Env, instanceId: string, userId: string, node: string, deps: RepinDeps = {}): Promise<RepinAttachment> {
+	const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+	const now = deps.now ?? Date.now;
+	const rows = await nodeRegistrations(env, userId);
+	const targetNames = new Set([node, ...aliasNodesFor(node, rows)]);
 	const waitFor = async (check: () => Promise<boolean>, ms: number) => {
 		const until = now() + ms;
 		while (!(await check())) {
@@ -78,28 +195,9 @@ export async function attachOnRepin(env: Env, instanceId: string, userId: string
 		return true;
 	};
 
-	// 1. Attach on the target, over a socket some agent of this owner already holds there.
-	let attached = await attachedOnTarget();
-	let detail: string | undefined;
-	if (!attached) {
-		const carrier = await findCarrier(env, userId, rows, targetNames);
-		if (!carrier) {
-			detail = `No \`pags up\` is connected on ${node} to hand this agent to. Start it there; it takes the agent on its own once it is running.`;
-		} else {
-			const sync = await callRunner<{ error?: string }>(carrier, MEMBERSHIP_SYNC_PATH, {}, { timeoutMs: SYNC_TIMEOUT_MS }).then(
-				() => ({ ok: true, error: "" }),
-				(e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }),
-			);
-			// A scoped runner refused, by name — waiting would not change its answer.
-			const scoped = /--instance/.test(sync.error);
-			attached = scoped ? false : await waitFor(attachedOnTarget, sync.ok ? OPEN_WAIT_MS : POLL_WAIT_MS);
-			if (!attached) {
-				detail = scoped
-					? `The \`pags up\` on ${node} was started with --instance, so it serves only that agent. Restart it there without --instance.`
-					: `The \`pags up\` on ${node} did not attach this agent${sync.ok ? "" : ` (${sync.error})`}. Check that machine's runner window.`;
-			}
-		}
-	}
+	// 1. Attach on the target — without force: a repin moves the agent, it does not take a slot another
+	// runner still answers in. When that is what stands in the way, the detail names the tool that does.
+	const { attached, detail } = await attachAgentOnNode(env, instanceId, userId, node, { force: false, rows, sleep, now });
 
 	// 2. Detach from every other machine that still holds this agent. Its own socket carries the
 	// request, so the reply is usually lost to the detach it caused — the relay is asked instead.
@@ -117,8 +215,13 @@ export async function attachOnRepin(env: Env, instanceId: string, userId: string
 	return { node, attached, detachedFrom, stillAttachedOn, ...(attached ? {} : { detail }) };
 }
 
-/** A live socket on the target machine, held by ANY of this owner's agents — the way in to its runner. */
-async function findCarrier(env: Env, userId: string, rows: readonly NodeRegistration[], targetNames: ReadonlySet<string>) {
+/**
+ * Every socket this owner's agents hold on the target machine that the relay believes live — the ways
+ * in to its runner, freshest first. A list, not the first: `relayConnected` is optimistic, so one of
+ * them may be a frozen peer that only the command's own probe exposes (#856).
+ */
+async function liveCarriers(env: Env, userId: string, rows: readonly NodeRegistration[], targetNames: ReadonlySet<string>): Promise<RunnerConn[]> {
+	const out: RunnerConn[] = [];
 	const seen = new Set<string>();
 	for (const r of rows) {
 		const n = normalizeRunnerNode(r.node);
@@ -127,7 +230,7 @@ async function findCarrier(env: Env, userId: string, rows: readonly NodeRegistra
 		seen.add(key);
 		if (!(await relayConnected(env, r.instanceId, n))) continue;
 		const conn = await getRunnerConnIgnoringLiveness(env, r.instanceId, userId, n).catch(() => null);
-		if (conn) return conn;
+		if (conn) out.push(conn);
 	}
-	return null;
+	return out;
 }

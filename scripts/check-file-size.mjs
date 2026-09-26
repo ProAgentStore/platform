@@ -161,7 +161,7 @@ const PINS = {
 	// `/loop/queue` paid for in #788. What is NOT here is the composition: `lib/instance-activity.ts`
 	// folds the two query results and maps `runHealth`, so the handler is a fetch and a shape.
 	// +8 at #847: flags stay with this shared list handler and the site-builder mount stays at the contract-locked composition point; route bodies already live in siblings.
-	"workers/api/src/routes/instances.ts": 1125, // +3 (#825): the pause/resume mount — an import, a registrar call and the one-line reason, which is exactly the shape this pin asks for; the routes themselves are routes/instances-lifecycle.ts. // +4 (#772): the connection-guide mount — an import and a registrar call, plus the two-line reason. Every route module this file composes costs the same two lines; the work itself went into routes/instances-guide.ts and lib/connection-guide.ts, which is what the pin is asking for. +1 at #850: attachOnRepin import — the repin that moves the agent lives in lib/runner-repin.ts.
+	"workers/api/src/routes/instances.ts": 1127, // +3 (#825): the pause/resume mount — an import, a registrar call and the one-line reason, which is exactly the shape this pin asks for; the routes themselves are routes/instances-lifecycle.ts. // +4 (#772): the connection-guide mount — an import and a registrar call, plus the two-line reason. Every route module this file composes costs the same two lines; the work itself went into routes/instances-guide.ts and lib/connection-guide.ts, which is what the pin is asking for. +1 at #850: attachOnRepin import — the repin that moves the agent lives in lib/runner-repin.ts. +2 at #856: the runner-attach mount — an import and the registrar call; the route lives in instances-runner-attach.ts.
 	// +5 for #319: the send path now hands the live capture to the consumer alongside the audio
 	// key, so the two readings of a turn can be compared on the message. Raised rather than
 	// split — the whole change is one `storedDictation` call and the two `onSend` sites that
@@ -825,8 +825,8 @@ const PINS = {
 	// moves with every published version by construction; that is the ledger working, not drift.
 	// +16 at #192 (proappstore-online/platform): the 0.1.50 record — recent_instances gains `limit`
 	// and a working-first order; the entry says why the cap had hidden a live run. Ledger, not drift.
-	// +59 at #847: 0.1.51–0.1.57 are published append-only surface records; moving them would defeat the history check that protects this ledger. +5 at #849: the 0.1.58 record. +5 at #854: the 0.1.59 record.
-	"workers/mcp/src/surface-lock.ts": 920,
+	// +59 at #847: 0.1.51–0.1.57 are published append-only surface records; moving them would defeat the history check that protects this ledger. +5 at #849: the 0.1.58 record. +5 at #854: the 0.1.59 record. +5 at #856: the 0.1.60 record.
+	"workers/mcp/src/surface-lock.ts": 925,
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.

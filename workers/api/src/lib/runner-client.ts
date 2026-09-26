@@ -3,6 +3,7 @@ import { aliasNodesFor, type NodeRegistration } from "./machine-identity.js";
 import { NO_SOCKET_MARKER, relayFailureIsDisconnect, RunnerUnreachableError } from "./runner-unreachable.js";
 import { normalizeRunnerNode, readInstanceRunnerNode, relayNameForInstance } from "./runtime-nodes.js";
 import type { Env } from "../types.js";
+import type { StaleSocketVerdict } from "./relay-liveness.js";
 
 /** A resolved connection to a user's local browser runner (via WebSocket relay). */
 export interface RunnerConn {
@@ -239,6 +240,28 @@ export async function relayConnected(env: Env, instanceId: string, runnerNode?: 
 		return data.connected === true;
 	} catch {
 		return false;
+	}
+}
+
+/**
+ * Free one agent's relay slot on one machine of a socket nobody answers behind (#856).
+ *
+ * The relay's own ping probe decides, so a live socket is never touched — `alive: true` means the
+ * agent IS attached there. `evicted` sockets were stale: a frozen or duplicate runner's, holding the
+ * slot so the machine's own `pags up` was refused with 4409. Never throws; no relay reads as empty.
+ */
+export async function evictStaleRunnerSocket(env: Env, instanceId: string, runnerNode: string): Promise<StaleSocketVerdict> {
+	const none: StaleSocketVerdict = { sockets: 0, alive: false, evicted: 0 };
+	try {
+		if (!env.RELAY) return none;
+		const stub = env.RELAY.get(env.RELAY.idFromName(relayNameForInstance(instanceId, runnerNode)));
+		const res = await stub.fetch(new Request("https://relay/evict-stale", { method: "POST" }));
+		if (!res.ok) return none;
+		// Read field by field: a relay that answers another shape must not turn a count into NaN.
+		const v = (await res.json().catch(() => ({}))) as Partial<StaleSocketVerdict>;
+		return { sockets: Number(v.sockets) || 0, alive: v.alive === true, evicted: Number(v.evicted) || 0 };
+	} catch {
+		return none;
 	}
 }
 

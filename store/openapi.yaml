@@ -4949,6 +4949,44 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{instanceId}/runner-attach:
+    post:
+      summary: Force a machine's connected runner to (re)attach this agent now
+      description: |
+        The remote equivalent of `pags up --force`, scoped to one agent (#856). A stale socket — one
+        that answers no ping, left by a frozen or duplicate runner — is cleared from this agent's relay
+        slot, and the machine's connected `pags up` is told, over a socket that answers there, to attach
+        this agent and take its slot over. Targets the pinned machine unless `runnerNode` names another;
+        the pin itself is not changed. The answer is the relay's view afterwards, with the specific
+        reason when the agent could not be attached. Needs a `pags up` running on the machine.
+      operationId: forceRunnerAttach
+      tags: [Runtime]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                runnerNode: { type: string, description: "Machine to attach on. Omit to use the pinned machine." }
+                force: { type: boolean, default: true, description: "Take the slot even from a runner that still answers in it." }
+      responses:
+        "200":
+          description: What happened on that machine
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  node: { type: string }
+                  attached: { type: boolean, description: "This agent's own socket answers on that machine now." }
+                  evicted: { type: integer, description: "Stale sockets cleared from the agent's slot." }
+                  detail: { type: string, description: "Why it could not attach, and what to do. Absent when attached." }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/instances/{instanceId}/terminal-session:
     get:
       summary: Read the last terminal session selected for this instance

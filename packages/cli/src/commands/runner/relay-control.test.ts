@@ -46,9 +46,18 @@ describe("the membership-sync control command (#850)", () => {
 		const onControl = vi.fn(async () => ({ status: 200, result: { attached: ["inst-1", "inst-2"] } }));
 		const { ws, handle } = await open(onControl);
 		await ws.onmessage?.({ data: JSON.stringify({ id: "c1", path: MEMBERSHIP_SYNC_PATH }) });
-		expect(onControl).toHaveBeenCalledWith(MEMBERSHIP_SYNC_PATH);
+		expect(onControl).toHaveBeenCalledWith(MEMBERSHIP_SYNC_PATH, undefined);
 		expect(forwarded).toEqual([]);
 		expect(JSON.parse(ws.sent[0])).toEqual({ id: "c1", status: 200, result: { attached: ["inst-1", "inst-2"] } });
+		handle.close();
+	});
+
+	it("hands the cloud's body through — a targeted reattach names its agent (#856)", async () => {
+		const onControl = vi.fn(async () => ({ status: 200, result: { attached: ["inst-9"], target: "inst-9", holding: true } }));
+		const { ws, handle } = await open(onControl);
+		await ws.onmessage?.({ data: JSON.stringify({ id: "c4", path: MEMBERSHIP_SYNC_PATH, body: { attach: "inst-9", force: true } }) });
+		expect(onControl).toHaveBeenCalledWith(MEMBERSHIP_SYNC_PATH, { attach: "inst-9", force: true });
+		expect(JSON.parse(ws.sent[0])).toMatchObject({ id: "c4", status: 200, result: { target: "inst-9", holding: true } });
 		handle.close();
 	});
 

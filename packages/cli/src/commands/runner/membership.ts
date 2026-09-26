@@ -145,3 +145,48 @@ export function instanceLabel(inst: { id: string; name?: string }): string {
 	const short = `${inst.id.slice(0, 8)}…`;
 	return inst.name ? `${inst.name} (${short})` : short;
 }
+
+/** What the cloud's body on a membership-sync command asks for (#856). Every field optional. */
+export interface ReattachRequest {
+	/** One agent to (re)attach NOW — the relay has no live socket for it. */
+	attach?: unknown;
+	/** Take that agent's slot even if another socket answers there: `pags up --force`, for one agent. */
+	force?: unknown;
+}
+
+/** How one control request changes the runner's own state — decided here, applied by the relay. */
+export interface ReattachPlan {
+	/** The agent the request names, or null for a plain membership sync. */
+	target: string | null;
+	/** Drop it from `blocked`: the conflict that blocked it is what the cloud just cleared. */
+	unblock: boolean;
+	/** Close the handle held for it — the cloud asked BECAUSE it is not delivering a live socket. */
+	detach: boolean;
+	/** Open its next socket with `force=1`. */
+	force: boolean;
+	/** A scoped run (`--instance`) that does not serve this agent refuses, with this sentence. */
+	refuse?: string;
+}
+
+/**
+ * The remote equivalent of `pags up --force`, scoped to one agent (#856).
+ *
+ * A runner can hold a handle for an agent that delivers nothing — its socket was evicted as stale,
+ * or it lost a 4409 and BLOCKED the agent for the life of the process. Both used to need a person
+ * at the machine. Here the cloud names the agent, and the runner lets go of whatever it holds for
+ * it and attaches it afresh. A scoped run takes the request only for the agent it was started for.
+ */
+export function reattachPlan(request: ReattachRequest | undefined, state: { held: boolean; blocked: boolean; watching: boolean; scope: readonly string[] }): ReattachPlan {
+	const target = typeof request?.attach === "string" && request.attach ? request.attach : null;
+	const force = target !== null && request?.force === true;
+	if (!state.watching && !(target && state.scope.includes(target))) {
+		return {
+			target,
+			unblock: false,
+			detach: false,
+			force: false,
+			refuse: "This machine's `pags up` was started with --instance, so it serves only that agent. Restart it without --instance to let it take repinned agents.",
+		};
+	}
+	return { target, unblock: target !== null && state.blocked, detach: target !== null && state.held, force };
+}

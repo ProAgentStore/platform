@@ -126,3 +126,41 @@ export class RunnerLiveness {
 		return true;
 	}
 }
+
+/** What {@link evictStaleSockets} found in one agent's slot on one machine. */
+export interface StaleSocketVerdict {
+	/** Sockets the slot held when asked. */
+	sockets: number;
+	/** One of them answered a ping — the agent IS attached there, and nothing was touched. */
+	alive: boolean;
+	/** Sockets closed because none answered — the slot is now free for a runner to take. */
+	evicted: number;
+}
+
+/**
+ * Free an agent's relay slot of a socket nobody is behind any more (#856).
+ *
+ * A frozen or duplicate runner's socket keeps the slot: the relay answers a new runner 4409
+ * "another runner is already connected", the runner blocks the agent, and the only way out was
+ * `pags up --force` typed at the machine. This is the half of that force the platform can do
+ * remotely and SAFELY: it closes the slot's sockets only when not one of them answers a ping within
+ * the deadline — never a live peer, which would be taking over an attached agent, not clearing a
+ * stale one. Code 4410 rather than 4409, so a runner that is merely slow reconnects instead of
+ * reading a conflict and giving up.
+ */
+export async function evictStaleSockets(
+	sockets: readonly PingableSocket[],
+	liveness: RunnerLiveness,
+	opts: { deadlineMs?: number } = {},
+): Promise<StaleSocketVerdict> {
+	if (sockets.length === 0) return { sockets: 0, alive: false, evicted: 0 };
+	if (await liveness.probe(sockets, { deadlineMs: opts.deadlineMs ?? PONG_DEADLINE_MS })) return { sockets: sockets.length, alive: true, evicted: 0 };
+	for (const ws of sockets) {
+		try {
+			ws.close(4410, "stale runner socket evicted so the agent can reattach");
+		} catch {
+			/* already closed */
+		}
+	}
+	return { sockets: sockets.length, alive: false, evicted: sockets.length };
+}

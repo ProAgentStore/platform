@@ -4,7 +4,7 @@ import { loadMachineIdentity } from "../../machine.js";
 import { writeError, writeLine } from "../../output.js";
 import { apiPathSegment, clean, pagsApiBase, requestPags, requestRunner } from "./http.js";
 import { CLI_VERSION } from "./process.js";
-import { diffMembership, instanceLabel, pendingRegistrations, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance } from "./membership.js";
+import { diffMembership, instanceLabel, pendingRegistrations, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance, type ReattachRequest } from "./membership.js";
 import { formatStatusLine } from "./status-line.js";
 import type { PagsRequestOptions } from "./types.js";
 
@@ -79,6 +79,8 @@ export async function connectViaRelay(
 	const blocked = new Set<string>();
 	/** The membership pass in flight, so the poll and a cloud request queue rather than overlap (#850). */
 	let syncing: Promise<void> = Promise.resolve();
+	/** Agents whose NEXT socket opens with `force=1`, because the cloud asked for a takeover (#856). */
+	const forceNext = new Set<string>();
 	/**
 	 * Tell the parent TUI what registration actually stands at — see status-line.ts.
 	 *
@@ -94,13 +96,26 @@ export async function connectViaRelay(
 
 	/** The cloud asking for a membership pass now (#850). A scoped run refuses: it must stay as
 	 *  narrow as the user asked, and saying so is what lets the repin report the real remedy. */
-	const answerControl = async (path: string): Promise<{ status: number; result: unknown }> => {
+	const answerControl = async (path: string, body?: unknown): Promise<{ status: number; result: unknown }> => {
 		if (path !== MEMBERSHIP_SYNC_PATH) return { status: 404, result: { error: `Unknown runner control ${path}` } };
-		if (!watchInstances) {
-			return { status: 409, result: { error: "This machine's `pags up` was started with --instance, so it serves only that agent. Restart it without --instance to let it take repinned agents." } };
+		const request = body as ReattachRequest | undefined;
+		const named = typeof request?.attach === "string" ? request.attach : "";
+		const plan = reattachPlan(request, { held: attached.has(named), blocked: blocked.has(named), watching: watchInstances, scope: instanceIds });
+		if (plan.refuse) return { status: 409, result: { error: plan.refuse } };
+		// A named agent (#856): let go of whatever this process holds for it, then attach it afresh.
+		if (plan.target) {
+			if (plan.unblock) blocked.delete(plan.target);
+			if (plan.detach) detach(plan.target);
+			if (plan.force) forceNext.add(plan.target);
 		}
-		await syncMembership();
-		return { status: 200, result: { attached: [...attached.keys()] } };
+		if (watchInstances) await syncMembership();
+		else if (plan.target) {
+			await registerRuntime(plan.target);
+			attach(plan.target);
+		}
+		// A forced attach that did not happen (the agent is pinned elsewhere) must not linger.
+		if (plan.target && !attached.has(plan.target)) forceNext.delete(plan.target);
+		return { status: 200, result: { attached: [...attached.keys()], ...(plan.target ? { target: plan.target, holding: attached.has(plan.target) } : {}) } };
 	};
 
 	const attach = (id: string, label = `${id.slice(0, 8)}…`) => {
@@ -118,7 +133,8 @@ export async function connectViaRelay(
 				mintToken,
 				localUrl,
 				runnerToken,
-				force,
+				// `pags up --force` for the whole process, or for this one agent at the cloud's request (#856).
+				force || forceNext.delete(id),
 				(conflicted) => {
 					blocked.add(conflicted);
 					attached.delete(conflicted);
@@ -326,7 +342,7 @@ export function openRelaySocket(
 	 *  only thing here that retries, so anything that must survive a wake has to ride it (#497). */
 	onOpen?: (instanceId: string, reconnect: boolean) => void | Promise<void>,
 	/** Answers a cloud → CLI control command (#850) instead of forwarding it to the local runner. */
-	onControl?: (path: string) => Promise<{ status: number; result: unknown }>,
+	onControl?: (path: string, body?: unknown) => Promise<{ status: number; result: unknown }>,
 ): RelaySocketHandle {
 	let backoffMs = 1000;
 	let reconnecting = false;
@@ -387,7 +403,7 @@ export function openRelaySocket(
 			if (onControl && cmd.path === MEMBERSHIP_SYNC_PATH) {
 				// A detach this pass performs may close THIS socket — the reply is then lost, and the
 				// cloud reads the socket going away as the answer it is.
-				const reply = await onControl(cmd.path).catch((err) => ({ status: 500, result: { error: err instanceof Error ? err.message : String(err) } }));
+				const reply = await onControl(cmd.path, cmd.body).catch((err) => ({ status: 500, result: { error: err instanceof Error ? err.message : String(err) } }));
 				try { ws.send(JSON.stringify({ id: cmd.id, ...reply })); } catch { /* closed by the detach */ }
 				return;
 			}

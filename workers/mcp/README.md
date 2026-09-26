@@ -146,7 +146,7 @@ implementation.
 
 ## Tools
 
-**236 tool registrations.** 210 are always registered; 26 are gated to the console
+**237 tool registrations.** 211 are always registered; 26 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -357,6 +357,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `list_runner_nodes` | Every machine running a CLI, across all agents | — | | |
 | `instance_runner_node` | Which machine one instance is pinned to, and the alternatives | — | | |
 | `set_instance_runner_node` | Pin an instance to a machine and move it there — the connected `pags up` attaches it now and the old machine lets go (empty clears the pin) | write | yes | |
+| `force_runner_attach` | Force a machine's connected `pags up` to (re)attach one agent now — the remote `pags up --force` for that agent: clears a stale socket from its relay slot and takes the slot over. Does not change the pin | runtime | yes | |
 | `get_instance_terminal_session` | Saved Tmux-tab terminal target for one instance | read | | |
 | `set_instance_terminal_session` | Save or clear that target; does not operate a terminal | write | yes | |
 | `runner_node_forget_preflight` | Every alias and blocker before a machine registration is forgotten | read | | |

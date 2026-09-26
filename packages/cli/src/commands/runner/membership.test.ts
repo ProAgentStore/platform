@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { diffMembership, instanceLabel, isEligible, partitionByPin, pendingRegistrations, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance } from "./membership.js";
+import { diffMembership, instanceLabel, isEligible, partitionByPin, pendingRegistrations, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance } from "./membership.js";
 
 const NODE = "my-laptop";
 const inst = (over: Partial<DiscoverableInstance> & { id: string }): DiscoverableInstance => ({
@@ -224,5 +224,32 @@ describe("registrationStatus — measured against the LIVE attached set (#810)",
 		// "16/31 partial" forever.
 		const attached = Array.from({ length: 16 }, (_, i) => `here-${i}`);
 		expect(registrationStatus(attached, new Set(attached)).state).toBe("ok");
+	});
+});
+
+describe("reattachPlan — the remote `pags up --force`, for one agent (#856)", () => {
+	const watching = { held: false, blocked: false, watching: true, scope: [] as string[] };
+
+	it("a plain sync changes nothing about any one agent", () => {
+		expect(reattachPlan(undefined, watching)).toEqual({ target: null, unblock: false, detach: false, force: false });
+	});
+
+	it("an agent this runner BLOCKED after a 4409 is unblocked, so the sync can attach it", () => {
+		expect(reattachPlan({ attach: "a1" }, { ...watching, blocked: true })).toEqual({ target: "a1", unblock: true, detach: false, force: false });
+	});
+
+	it("a handle that is not delivering a live socket is let go of and reopened, forced when asked", () => {
+		expect(reattachPlan({ attach: "a1", force: true }, { ...watching, held: true })).toEqual({ target: "a1", unblock: false, detach: true, force: true });
+	});
+
+	it("force means nothing without a named agent — never a process-wide takeover", () => {
+		expect(reattachPlan({ force: true }, watching).force).toBe(false);
+	});
+
+	it("a scoped run refuses an agent it was not started for, and takes the one it was", () => {
+		const scoped = { held: false, blocked: true, watching: false, scope: ["a1"] };
+		expect(reattachPlan({ attach: "a2" }, scoped).refuse).toMatch(/--instance/);
+		expect(reattachPlan({ attach: "a1" }, scoped)).toEqual({ target: "a1", unblock: true, detach: false, force: false });
+		expect(reattachPlan(undefined, scoped).refuse).toMatch(/--instance/);
 	});
 });

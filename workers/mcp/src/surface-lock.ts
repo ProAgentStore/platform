@@ -916,4 +916,9 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// `set_instance_loop_limits` takes `max_objective_chars` (the per-instance cap; default 8,000).
 	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.58 is published.
 	"0.1.59": "sha256:55e0ec46bd497fb2c95cf7319b7d07261a41ddd52dd154d1ee84acb02f846ae7",
+	// 0.1.60 (#856): one new always-on `runtime` tool — 236 registrations become 237, always-on
+	// 210 → 211, gated unchanged. `force_runner_attach` is the remote `pags up --force` for one agent:
+	// clears a stale socket from its relay slot and asks the machine's connected runner to take it.
+	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.59 is published.
+	"0.1.60": "sha256:6109bbb6cdb9d5f6c23950a798ab6e1943b163694b6c55176ca65e047f1caff1",
 };

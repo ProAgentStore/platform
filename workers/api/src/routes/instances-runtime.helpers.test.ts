@@ -531,13 +531,36 @@ describe("GET /v1/instances/:id/runtime/status (integration — #380, the pin-bl
 	});
 });
 
+describe("POST /v1/instances/:id/runner-attach — the remote `pags up --force` (#856)", () => {
+	const attach = async (body: unknown, uid = "u1") => {
+		const { app, env } = buildApp({ owns: [["inst-1", "u1"]] });
+		return app.request("/v1/instances/inst-1/runner-attach", { method: "POST", headers: { Authorization: `Bearer ${await tokenFor(uid)}`, "Content-Type": "application/json" }, body: JSON.stringify(body) }, env);
+	};
+
+	it("refuses an unpinned agent with no machine named, saying how to name one", async () => {
+		const res = await attach({});
+		expect(res.status).toBe(400);
+		expect(((await res.json()) as { error: string }).error).toMatch(/not pinned to a machine — name one with runnerNode/);
+	});
+
+	it("answers from the relay's view, with the reason, when nothing on that machine can take the agent", async () => {
+		const res = await attach({ runnerNode: "pink-laptop" });
+		expect(res.status).toBe(200);
+		expect(await res.json()).toMatchObject({ node: "pink-laptop", attached: false, evicted: 0, detail: expect.stringMatching(/No `pags up` is connected on pink-laptop/) });
+	});
+
+	it("is owner-scoped: another account's agent is not found", async () => {
+		expect((await attach({ runnerNode: "pink-laptop" }, "u2")).status).toBe(404);
+	});
+});
+
 describe("PUT/GET /v1/instances/:id/runner-node (integration — the 'runs on' pin)", () => {
 	it("pins the instance to a node and persists runnerNode into the config", async () => {
 		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]] });
 		const res = await put(app, env, "/v1/instances/inst-1/runner-node", { runnerNode: "laptop-A" }, await tokenFor("u1"));
 		expect(res.status).toBe(200);
 		// Plus where the agent actually is after the repin (#850) — here no runner is connected anywhere.
-	expect(await res.json()).toMatchObject({ runnerNode: "laptop-A", attachment: { node: "laptop-A", attached: false } });
+		expect(await res.json()).toMatchObject({ runnerNode: "laptop-A", attachment: { node: "laptop-A", attached: false } });
 		// Targeted json_set on $.runnerNode (#231): pinning a runner must not clobber a
 		// settings or behaviour change saved from another tab between read and write.
 		const update = writes.find((w) => w.sql.includes("json_set(") && w.args[0] === "$.runnerNode");

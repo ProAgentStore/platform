@@ -8,7 +8,7 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import { relayDispatchObservation } from "./lib/relay-dispatch-observability.js";
-import { PONG_DEADLINE_MS, RunnerLiveness } from "./lib/relay-liveness.js";
+import { evictStaleSockets, PONG_DEADLINE_MS, RunnerLiveness } from "./lib/relay-liveness.js";
 import type { Env } from "./types.js";
 
 interface PendingRequest {
@@ -58,6 +58,7 @@ export class RelayDO extends DurableObject<Env> {
 	 *   GET  /connect  -- WebSocket upgrade (runner)
 	 *   GET  /status   -- is a runner connected?
 	 *   POST /command  -- send a command to the runner (cloud-side)
+	 *   POST /evict-stale -- free this slot of sockets nobody answers behind (#856)
 	 */
 	async fetch(request: Request): Promise<Response> {
 		const url = new URL(request.url);
@@ -65,6 +66,7 @@ export class RelayDO extends DurableObject<Env> {
 		if (url.pathname === "/connect") return this.handleConnect(request);
 		if (url.pathname === "/status") return this.handleStatus();
 		if (url.pathname === "/command" && request.method === "POST") return this.handleCommand(request);
+		if (url.pathname === "/evict-stale" && request.method === "POST") return this.handleEvictStale();
 
 		return new Response("Not found", { status: 404 });
 	}
@@ -143,6 +145,13 @@ export class RelayDO extends DurableObject<Env> {
 	}
 
 	// ── Cloud-side command dispatch ──────────────────────────────────────
+
+	/** The remote half of `pags up --force` for one agent (#856) — see `evictStaleSockets`. */
+	private async handleEvictStale(): Promise<Response> {
+		const verdict = await evictStaleSockets(this.ctx.getWebSockets("runner"), this.liveness);
+		if (verdict.evicted > 0) this.rejectAll("Stale runner socket evicted");
+		return Response.json(verdict);
+	}
 
 	private handleStatus(): Response {
 		const sockets = this.ctx.getWebSockets("runner");

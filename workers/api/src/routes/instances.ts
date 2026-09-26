@@ -15,6 +15,7 @@ import { registerBehaviourRoutes } from "./instances-behaviour.js";
 import { registerBrowseRoutes } from "./instances-browse.js";
 import { registerChatRoutes } from "./instances-chat.js";
 import { registerGuideRoutes } from "./instances-guide.js";
+import { registerRunnerAttachRoutes } from "./instances-runner-attach.js";
 import { registerInstanceLifecycleRoutes } from "./instances-lifecycle.js";
 import { registerKnowledgeRoutes } from "./instances-knowledge.js";
 import { registerTaskRoutes } from "./instances-tasks.js";
@@ -1041,6 +1042,7 @@ registerBehaviourRoutes(instanceRoutes);
 // The generated connection guide (#772) — its own module because it is derived state with a
 // renderer of its own, and this file is already at its size pin.
 registerGuideRoutes(instanceRoutes);
+registerRunnerAttachRoutes(instanceRoutes); // the remote `pags up --force`, for one agent (#856)
 registerBrowseRoutes(instanceRoutes);
 registerTranslationRoutes(instanceRoutes);
 registerFileUploadRoutes(instanceRoutes);
