@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { agentCapabilities, columnForStatus, connectorConstraintsForInstance, customSurfacesEnabled, hasSurface, sanitizeDeclaredCapabilities, sanitizeSettingsSchema, sanitizeToolList, sanitizeCustomSurfaces } from "./agent-capabilities.js";
 import { constraintsFor, optionsFor } from "./surface-options.js";
+import { workflowRuntimeDenial } from "./agent-workflows.js";
 
 /** Custom surfaces are fail-closed (#186); the shape rules only run once a platform enables them. */
 const ON = { CUSTOM_SURFACES_ENABLED: "1" };
@@ -34,6 +35,23 @@ describe("agentCapabilities", () => {
 	it("falls back to coding for the coder slug or code category", () => {
 		expect(agentCapabilities({ slug: "coder" }).surfaces).toEqual(["coding"]);
 		expect(agentCapabilities({ category: "code" }).surfaces).toEqual(["coding"]);
+	});
+
+	it("the legacy fallback resolves the same brains a declared row would (#160)", () => {
+		expect(agentCapabilities({ slug: "job-application-assistant" })).toMatchObject({ runtime: "browser", workflow: "JOB_APPLY" });
+		expect(agentCapabilities({ slug: "coder" })).toMatchObject({ runtime: "coding", workflow: "CODING_SESSION" });
+		expect(agentCapabilities({ category: "code" })).toMatchObject({ runtime: "coding", workflow: "CODING_SESSION" });
+		// Anything else derives no brain — an undeclared agent gets the generic loop, never a Pilot.
+		expect(agentCapabilities({ slug: "data-analyst", category: "data" }).workflow).toBeNull();
+	});
+
+	it("every fallback derivation satisfies the workflow/runtime guard it never passes through (#705, #160)", () => {
+		// The three declaring routes refuse an unsatisfiable pair; the fallback bypasses all three, so
+		// an edit here that paired a workflow with the wrong runtime would reach production unrefused.
+		for (const agent of [{ slug: "job-application-assistant" }, { slug: "coder" }, { category: "code" }, { slug: "anything-else" }]) {
+			const caps = agentCapabilities(agent);
+			expect(workflowRuntimeDenial(caps.workflow, caps.runtime ?? null), JSON.stringify(agent)).toBeNull();
+		}
 	});
 
 	it("derives nothing for the insurance slug/category — its workflow never existed (#375)", () => {

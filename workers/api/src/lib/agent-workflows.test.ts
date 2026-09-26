@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { AGENT_WORKFLOWS, isAgentWorkflow, workflowChoices, workflowRequiredRuntime, workflowRuntimeDenial } from "./agent-workflows.js";
-import { KNOWN_RUNTIMES } from "./agent-capabilities.js";
+import { agentCapabilities, KNOWN_RUNTIMES, sanitizeDeclaredCapabilities } from "./agent-capabilities.js";
 import { triggerActionRequirement } from "./trigger-capability.js";
 
 const VALUES = AGENT_WORKFLOWS.map((w) => w.value);
@@ -159,5 +159,37 @@ describe("every workflow states whether it needs hands (#705)", () => {
 		expect(workflowRuntimeDenial("PIPELINE_RUN", null)).toBeNull();
 		expect(workflowRequiredRuntime("INSURANCE_QUOTES")).toBeNull();
 		for (const junk of [undefined, "", 7, {}, "job_apply"]) expect(workflowRuntimeDenial(junk, null), String(junk)).toBeNull();
+	});
+});
+
+/**
+ * #160's recorded decision is "reframe, don't retire": `capabilities.workflow` stays a closed set of
+ * brains that reach a physical executor and may park mid-run. These pin the two edges of that set
+ * that the catalog-table tests above do not reach — the doors a value actually arrives through —
+ * and the one path that never passes a declaring route at all.
+ */
+describe("the closed set holds at every door, not only in the table (#160)", () => {
+	it("a creator cannot declare a platform-driven workflow: the write sanitizer drops PIPELINE_RUN and AGENT_LOOP to null", () => {
+		for (const value of ["PIPELINE_RUN", "AGENT_LOOP"]) {
+			expect(sanitizeDeclaredCapabilities({ workflow: value }).workflow, value).toBeNull();
+			expect(workflowChoices().map((c) => c.value), value).not.toContain(value);
+		}
+	});
+
+	it("a stored platform-driven value resolves to no workflow on read, so it cannot route a loop", () => {
+		// A row written before the table existed, or by hand, must not resolve to a brain the platform
+		// starts itself — the read-side filter is the second half of the closed set.
+		for (const value of ["PIPELINE_RUN", "AGENT_LOOP", "INSURANCE_QUOTES"]) {
+			const cfg = JSON.stringify({ capabilities: { surfaces: ["chat"], runtime: null, workflow: value } });
+			expect(agentCapabilities({ slug: "x", config: cfg }).workflow, value).toBeNull();
+		}
+	});
+
+	it("every declarable workflow round-trips through the sanitizer and the resolver unchanged", () => {
+		for (const w of AGENT_WORKFLOWS) {
+			expect(sanitizeDeclaredCapabilities({ workflow: w.value, runtime: w.requiresRuntime }).workflow).toBe(w.value);
+			const cfg = JSON.stringify({ capabilities: { surfaces: ["chat"], runtime: w.requiresRuntime, workflow: w.value } });
+			expect(agentCapabilities({ slug: "x", config: cfg }).workflow).toBe(w.value);
+		}
 	});
 });
