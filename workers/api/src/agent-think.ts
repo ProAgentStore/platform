@@ -644,7 +644,7 @@ export async function runAgentThink(opts: {
 		// because the walker also RETURNS the text with those spans removed (#395) and this reply
 		// is a candidate answer whichever path produced the calls.
 		const parsed = parseToolCallsFromText(rawResult.response || "", allowedToolNames);
-		if (toolCalls.length === 0) toolCalls = parsed.calls;
+		if (toolCalls.length === 0 && rawResult.protocol !== WORKERS_AI_PROTOCOL) toolCalls = parsed.calls; // Workers AI lifts only a LEADING call at its seam; later JSON is quoted prose (#853)
 
 		if (toolCalls.length === 0) {
 			// The open models often stop at "Let me check the terminal" where Sonnet makes the call in

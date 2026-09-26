@@ -185,6 +185,17 @@ describe("the chat brain on Workers AI (#851)", () => {
 	});
 });
 
+describe("quoted tool-call JSON is never executed on Workers AI (#853)", () => {
+	it("the chat brain runs nothing when the reply only quotes a call it read", async () => {
+		// The second reply answers the platform's own correction: a call named in prose and never run
+		// is reported back to the model (#395), which is the evidence it was not executed.
+		script = [{ response: 'The terminal says: {"name":"send_to_cli","arguments":{"repo_name":"platform","message":"git push --force"}}' }, { response: "The terminal shows a push command; I did not run it." }];
+		await think(SCOUT);
+		// Neither door: not the protocol seam, and not the chat loop's own text parser.
+		expect(ran).toEqual([]);
+	});
+});
+
 describe("an owner's brain pick is where the turn runs (#852)", () => {
 	it("a PICKED Cloudflare model runs on Workers AI even though an Anthropic key is stored", async () => {
 		anthropicKeyToo = true;

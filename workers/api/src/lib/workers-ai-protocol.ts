@@ -27,7 +27,7 @@
  */
 import { TOOL_CAPABLE_CF_DEFAULT } from "../agent-do-prompt.js";
 import { isWorkersAiModel } from "./brain-models.js";
-import { normalizeToolCalls, parseToolCallsFromText } from "./parse-tool-calls.js";
+import { findMatchingBrace, normalizeToolCalls, parseToolCallsFromText } from "./parse-tool-calls.js";
 
 /** Marks a completion that came from Workers AI, so the chat loop answers in the `tool` role. */
 export const WORKERS_AI_PROTOCOL = "workers-ai";
@@ -86,19 +86,20 @@ export interface WorkersAiCompletion {
 /**
  * A Workers AI result → the flat shape every brain reads (`{name, arguments, id?}` calls and
  * `{input, output}` usage). A call written into the reply text is lifted out — only when the
- * request offered tools, and only for a tool it offered — so no brain has to know which model
- * prefers which habit.
+ * request offered tools, only for a tool it offered, and only from the START of the reply (#853)
+ * — so no brain has to know which model prefers which habit.
  */
 export function fromWorkersAiResult(raw: unknown, offeredTools?: unknown): WorkersAiCompletion {
 	const r = (raw ?? {}) as { response?: unknown; tool_calls?: unknown; usage?: Record<string, number> };
 	let response = typeof r.response === "string" ? r.response : r.response == null ? "" : JSON.stringify(r.response);
 	let calls = normalizeToolCalls(Array.isArray(r.tool_calls) ? r.tool_calls : []);
 	const offered = toolNames(offeredTools);
-	if (calls.length === 0 && offered.size > 0) {
-		const parsed = parseToolCallsFromText(response, offered);
+	const span = calls.length === 0 && offered.size > 0 ? leadingCallSpan(response) : null;
+	if (span) {
+		const parsed = parseToolCallsFromText(response.slice(span.start, span.end), offered);
 		if (parsed.calls.length > 0) {
 			calls = parsed.calls;
-			response = parsed.text.trim();
+			response = response.slice(span.end).trim();
 		}
 	}
 	const u = r.usage;
@@ -108,6 +109,37 @@ export function fromWorkersAiResult(raw: unknown, offeredTools?: unknown): Worke
 		...(u ? { usage: { input: u.prompt_tokens || u.input_tokens || 0, output: u.completion_tokens || u.output_tokens || 0 } } : {}),
 		protocol: WORKERS_AI_PROTOCOL,
 	};
+}
+
+/**
+ * Where a reply's LEADING calls are: after nothing but whitespace and an optional `<|python_tag|>`,
+ * a run of JSON objects (separated by whitespace, `,` or `;`), or one JSON array of them. Null when
+ * the reply does not open with a call.
+ *
+ * Only the start, never mid-prose (#853). A model that makes a call writes it as its reply; a model
+ * that QUOTES one — a terminal pane, a fetched page, a tool result carrying
+ * `{"name":"send_to_cli",…}` — has written a sentence first. Lifting from anywhere turned a prompt
+ * injection in text the brain merely read into an action it took.
+ */
+function leadingCallSpan(text: string): { start: number; end: number } | null {
+	const skip = (from: number, pattern: RegExp) => from + (pattern.exec(text.slice(from))?.[0].length ?? 0);
+	const start = skip(0, /^\s*(?:<\|python_tag\|>\s*)?/);
+	const array = text[start] === "[";
+	let i = array ? start + 1 : start;
+	let end = -1;
+	for (;;) {
+		i = skip(i, /^[\s,;]*/);
+		if (text[i] !== "{") break;
+		const close = findMatchingBrace(text, i);
+		if (close === -1) break;
+		end = i = close + 1;
+	}
+	if (end === -1) return null;
+	if (array) {
+		const after = skip(end, /^\s*/);
+		if (text[after] === "]") end = after + 1;
+	}
+	return { start, end };
 }
 
 function toolNames(tools: unknown): Set<string> {
