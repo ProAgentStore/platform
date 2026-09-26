@@ -209,6 +209,19 @@ describe("quoted tool-call JSON is never executed on Workers AI (#853)", () => {
 		expect(ran).toEqual([]);
 	});
 
+	it("calls written as text leave no `[,]` or <|python_tag|> residue — in the reply or in what the model is shown (#853 finding 6)", async () => {
+		script = [
+			{ response: '<|python_tag|>[{"name":"read_terminal","parameters":{"repo_name":"platform"}},{"name":"send_to_cli","parameters":{"repo_name":"platform","message":"hi"}}]' },
+			{ response: "I have not run anything yet." },
+		];
+		const out = await think(LLAMA);
+		expect(ran).toEqual([]);
+		const shown = JSON.stringify(requests[1].body.messages.slice(-2));
+		expect(shown).not.toContain("python_tag");
+		expect(shown).not.toContain("[,]");
+		expect(out.response).not.toMatch(/python_tag|\[,\]/);
+	});
+
 	it("Llama's <function=NAME>{…}</function> markup is not run, not shown, and reported as written-but-never-run (#853 finding 3)", async () => {
 		script = [
 			{ response: 'Sending it now. <function=send_to_cli>{"repo_name":"platform","message":"run the tests"}</function>' },

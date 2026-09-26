@@ -98,7 +98,29 @@ export function parseToolCallsFromText(
 	}
 	// Both forms, in the order they were written.
 	found.sort((a, b) => a.span[0] - b.span[0]);
-	return { calls: found.map((f) => f.call), text: removeSpans(text, found.map((f) => f.span)) };
+	return { calls: found.map((f) => f.call), text: removeSpans(text, withWrappers(text, found.map((f) => f.span))) };
+}
+
+/**
+ * The call spans, widened over what existed only to HOLD the calls (#853 finding 6): the `,`/`;`
+ * between adjacent calls, a `[ … ]` wrapping nothing but calls, and Llama's `<|python_tag|>` right
+ * before them. Cutting the calls alone left `[,]`, `;` or a bare tag as the owner's reply. Nothing
+ * beyond that is taken — a sentence's own `;` or a bracket that also holds prose stays.
+ */
+function withWrappers(text: string, spans: ReadonlyArray<[number, number]>): Array<[number, number]> {
+	const groups: Array<[number, number]> = [];
+	for (const [start, end] of spans) {
+		const last = groups.at(-1);
+		if (last && /^[\s,;]*$/.test(text.slice(last[1], start))) last[1] = end;
+		else groups.push([start, end]);
+	}
+	return groups.map(([start, end]) => {
+		const open = /\[\s*$/.exec(text.slice(0, start));
+		const close = /^\s*\]/.exec(text.slice(end));
+		if (open && close) [start, end] = [open.index, end + close[0].length];
+		const tag = /<\|python_tag\|>\s*$/.exec(text.slice(0, start));
+		return [tag ? tag.index : start, end];
+	});
 }
 
 /** Cut the given [start, end) ranges out of `text`. Ranges arrive in order and never overlap. */

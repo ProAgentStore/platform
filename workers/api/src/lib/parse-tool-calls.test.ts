@@ -265,3 +265,37 @@ describe("parseToolCallsFromText — Llama's <function=NAME>{…}</function> for
 	});
 });
 
+// #853 finding 6: removing each call's span left what surrounded the calls — `[,]` from a JSON array
+// of two, `;` from semicolon-separated calls, a bare `<|python_tag|>` — as the owner's reply, and as
+// the assistant turn the correction round hands back to the model.
+describe("parseToolCallsFromText — no residue where the calls were (#853 finding 6)", () => {
+	const tools = new Set(["a", "b", "read_terminal"]);
+	const A = '{"name":"a","arguments":{}}';
+	const B = '{"name":"b","arguments":{}}';
+
+	it("the issue's three probes leave nothing behind", () => {
+		expect(parseToolCallsFromText(`[${A},${B}]`, tools)).toEqual({ calls: [{ name: "a", arguments: {} }, { name: "b", arguments: {} }], text: "" });
+		expect(parseToolCallsFromText(`${A};${B}`, tools).text).toBe("");
+		expect(parseToolCallsFromText(`<|python_tag|>${A}`, tools).text).toBe("");
+	});
+
+	it("with spacing and newlines too, and a lone call in brackets", () => {
+		expect(parseToolCallsFromText(`[\n  ${A},\n  ${B}\n]`, tools).text).toBe("");
+		expect(parseToolCallsFromText(`${A} ; ${B}`, tools).text).toBe("");
+		expect(parseToolCallsFromText(`<|python_tag|> ${A}; ${B}`, tools).text).toBe("");
+		expect(parseToolCallsFromText(`[${A}]`, tools).text).toBe("");
+	});
+
+	it("keeps the prose around them", () => {
+		expect(parseToolCallsFromText(`Checking now. [${A}, ${B}] Back soon.`, tools).text).toBe("Checking now.  Back soon.");
+	});
+
+	it("never eats prose punctuation or a bracket that is not wrapping the calls", () => {
+		// A list of numbers, a sentence's own semicolon, and brackets that hold more than calls stay.
+		expect(parseToolCallsFromText(`Totals: [1, 2]; then ${A}`, tools).text).toBe("Totals: [1, 2]; then ");
+		expect(parseToolCallsFromText(`[see ${A}]`, tools).text).toBe("[see ]");
+		expect(parseToolCallsFromText(`Done; ${A}`, tools).text).toBe("Done; ");
+		expect(parseToolCallsFromText(`(${A})`, tools).text).toBe("()");
+	});
+});
+
