@@ -34,13 +34,15 @@ import { sanitizeMaxIterations } from "./agent-loop.js";
 import { buildInstanceBoard } from "./board.js";
 import type { BuildRun } from "./build-history.js";
 import { listRepos } from "./coding-store.js";
-import { openBudget, resolveAccountCeilings } from "./delegation-budget-store.js";
+import { resolveAccountCeilings } from "./delegation-budget-store.js";
 import { logError } from "./error-log.js";
 import { listHostedBuilds, type HostedRepoRef } from "./hosted-repo.js";
 import { readInstanceConfigPair } from "./instance-config.js";
 import { type LoopStartInput, type LoopStartResult, loopDriverFor } from "./loop-drivers.js";
 import { clampIterations } from "./loop-limits.js";
 import { readLoopLimits } from "./loop-limits-store.js";
+import { ensureTicketBudget } from "./ticket-budget.js";
+import { appendTicketProgress, dollars } from "./ticket-progress.js";
 import { attachTicketRuns } from "./tickets.js";
 import { mirrorRuntimeTask } from "../routes/instances-runtime.js";
 import type { Env } from "../types.js";
@@ -208,9 +210,13 @@ export async function pickupNextTicket(env: Env, instanceId: string, userId: str
 		if (running) return { started: false, reason: "busy" };
 
 		const { results } = await env.DB.prepare(
-			`SELECT id, title, description FROM tickets
-			  WHERE instance_id = ?1 AND user_id = ?2 AND pickup_authority = 'agent' AND queue_picked_at IS NULL
-			  ORDER BY created_at, id LIMIT 50`,
+			// A ticket whose own budget is exhausted is parked (#865) — skipped here, so it neither
+			// blocks the tickets behind it nor retries every minute until a person raises it.
+			`SELECT t.id, t.title, t.description FROM tickets t
+			   LEFT JOIN delegation_budgets b ON b.id = t.budget_id AND b.user_id = t.user_id
+			  WHERE t.instance_id = ?1 AND t.user_id = ?2 AND t.pickup_authority = 'agent' AND t.queue_picked_at IS NULL
+			    AND (b.id IS NULL OR b.status = 'open')
+			  ORDER BY t.created_at, t.id LIMIT 50`,
 		)
 			.bind(instanceId, userId)
 			.all<{ id: string; title: string; description: string }>();
@@ -246,15 +252,18 @@ export async function pickupNextTicket(env: Env, instanceId: string, userId: str
 				.run();
 		};
 
-		// Its own budget, per start — the objective queue's rule (#184): a queue run is a separate run
-		// the platform started, not a draw on whatever pool a previous run opened.
+		// The TICKET's own pool (#865), not a fresh one per run: every run of this ticket draws on it,
+		// so a ticket re-queued after a failure does not get a new allowance each time, and one that
+		// runs away exhausts its own pool and parks. Still a root (depth 0), still admitted per start.
 		let budgetId: string;
 		let maxIterations: number;
 		try {
 			const ceilings = await resolveAccountCeilings(env, userId);
 			const limits = await readLoopLimits(env, instanceId, userId).catch(() => ({}));
 			maxIterations = clampIterations(sanitizeMaxIterations(undefined, ceilings.loopMaxIterations), limits, ceilings.loopMaxIterations);
-			budgetId = (await openBudget(env, userId, instanceId)).id;
+			const pool = await ensureTicketBudget(env, instanceId, userId, next.id);
+			if (pool.status !== "open") throw new Error("this ticket's budget is exhausted — raise it to resume");
+			budgetId = pool.id;
 		} catch (e) {
 			// A spent daily ceiling passes; the ticket keeps its place.
 			const note = `budget refused: ${e instanceof Error ? e.message : String(e)}`;
@@ -296,6 +305,10 @@ export async function pickupNextTicket(env: Env, instanceId: string, userId: str
 			updatedAt: now,
 		});
 		await attachTicketRuns(env, instanceId, userId, [{ ticketId: next.id, taskId: started.runId, status: "running", updatedAt: now }]);
+		// What was attempted, on the ticket's own record (#865): the objective, and what is left to spend.
+		const pool = await ensureTicketBudget(env, instanceId, userId, next.id).catch(() => null);
+		const left = pool ? ` Budget: ${dollars(pool.costMicrosLimit - pool.costMicrosSpent - pool.costMicrosReserved)} of ${dollars(pool.costMicrosLimit)} left.` : "";
+		await appendTicketProgress(env, { ticketId: next.id, instanceId, userId, runId: started.runId, kind: "started", body: `Started by the queue (${started.driver}): ${objective}${left}` });
 		return { started: true, ticketId: next.id, runId: started.runId, driver: started.driver };
 	} catch (e) {
 		await logError(env, { source: "loop", userId, message: `ticket queue pickup failed for ${instanceId}: ${e instanceof Error ? e.message : String(e)}`, context: { instanceId } }).catch(() => undefined);

@@ -4506,7 +4506,7 @@ paths:
   /v1/instances/{instanceId}/tickets/{ticketId}:
     get:
       summary: One ticket and its stored runs
-      description: "#757. `{ticket, attempts, queue}` — attempts newest first, each `{id, status, updatedAt}` as last observed; `queue` is the ticket's queue state (#864): `{authority, pickedAt, runId, note}`. Owner-scoped: another owner's ticket is a 404."
+      description: "#757. `{ticket, attempts, queue}` — attempts newest first, each `{id, status, updatedAt}` as last observed; `queue` is the ticket's queue state (#864): `{authority, pickedAt, runId, note}`; `budget` is its own pool (#865): `{budgetId, allowanceMicros, limitMicros, spentMicros, reservedMicros, remainingMicros, status (unopened|open|exhausted), exhaustedReason}`; `progress` is its durable run history, oldest first (#865): `[{seq, runId, kind (started|finished|parked|stalled|resumed), body, createdAt}]` — separate from the Q&A thread. Owner-scoped: another owner's ticket is a 404."
       operationId: getTicket
       tags: [Board]
       parameters:
@@ -4604,6 +4604,38 @@ paths:
         "400": { description: authority is not human or agent }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/tickets/{ticketId}/budget:
+    put:
+      summary: Set or raise a ticket's own budget — and resume a parked ticket
+      description: |
+        #865. A ticket owns one budget pool that every run started for it draws on, so its spend is
+        cumulative and a runaway ticket parks on its own limit (the account backstop still applies).
+        Before the first run this sets the allowance the pool opens with; after, it RAISES the pool
+        and re-opens it if it was exhausted, keeping what was spent — the resume. An opened pool is
+        never lowered (409). One raise may add at most the account's per-run ceiling. Audited as
+        `ticket.budget_raised`. `requeue: true` also offers the ticket to the queue again. A
+        person-only route — no agent tool reaches it.
+      operationId: setTicketBudget
+      tags: [Board]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: ticketId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [limitMicros]
+              properties:
+                limitMicros: { type: integer, minimum: 1, description: "The ticket's total budget in micro-dollars ($1 = 1000000)." }
+                requeue: { type: boolean }
+      responses:
+        "200": { description: "`{budget, queue}` after the change" }
+        "400": { description: Not a positive figure, or one raise over the per-run ceiling }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Lowering a budget that has already been drawn on }
   /v1/instances/{instanceId}/board/items/{jobKey}/github-issue:
     put:
       summary: Link or unlink a board card to a GitHub issue

@@ -145,3 +145,20 @@ describe("the opt-in ticket queue's owner controls (#864)", () => {
 		expect(ok.body.queue).toMatchObject({ authority: "agent", pickedAt: null });
 	});
 });
+
+describe("the ticket's own budget over HTTP (#865)", () => {
+	it("only the owner sets or raises it; bad figures are 400; the ticket read reports budget and progress", async () => {
+		const { env, call } = setup();
+		await mirrorRuntimeTask(env, "i1", "u1", { id: "run-1", type: "task", status: "queued" });
+		const ticketId = ((await call("POST", promote("run-1"), "u1")).body.ticket as { id: string }).id;
+		expect((await call("PUT", `/v1/instances/i1/tickets/${ticketId}/budget`, "u2", { limitMicros: 5_000_000 })).status).toBe(404);
+		expect((await call("PUT", `/v1/instances/i2/tickets/${ticketId}/budget`, "u2", { limitMicros: 5_000_000 })).status).toBe(404);
+		expect((await call("PUT", `/v1/instances/i1/tickets/${ticketId}/budget`, "u1", { limitMicros: "lots" })).status).toBe(400);
+		const ok = await call("PUT", `/v1/instances/i1/tickets/${ticketId}/budget`, "u1", { limitMicros: 5_000_000, requeue: true });
+		expect(ok.status).toBe(200);
+		expect(ok.body.budget).toMatchObject({ allowanceMicros: 5_000_000, status: "unopened" });
+		const read = await call("GET", `/v1/instances/i1/tickets/${ticketId}`, "u1");
+		expect(read.body.budget).toMatchObject({ allowanceMicros: 5_000_000 });
+		expect(read.body.progress).toEqual([]);
+	});
+});

@@ -8,6 +8,8 @@
 import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
 import { buildInstanceBoard } from "../lib/board.js";
+import { raiseTicketBudget, ticketBudgetView } from "../lib/ticket-budget.js";
+import { listTicketProgress } from "../lib/ticket-progress.js";
 import { setTicketAuthority, setTicketQueueEnabled, ticketQueueEnabled, ticketQueueState } from "../lib/ticket-queue.js";
 import { attachTicketRuns, getTicket, recordTicket, ticketsForInstance } from "../lib/tickets.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
@@ -60,7 +62,12 @@ ticketRoutes.get("/:instanceId/tickets/:ticketId", async (c) => {
 		.filter((r) => r.ticketId === ticket.id)
 		.map((r) => ({ id: r.taskId, status: r.status, updatedAt: r.updatedAt }))
 		.sort((a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0));
-	return c.json({ ticket, attempts, queue: await ticketQueueState(c.env, instanceId, session.uid, ticket.id) });
+	const [queue, budget, progress] = await Promise.all([
+		ticketQueueState(c.env, instanceId, session.uid, ticket.id),
+		ticketBudgetView(c.env, instanceId, session.uid, ticket.id),
+		listTicketProgress(c.env, instanceId, session.uid, ticket.id),
+	]);
+	return c.json({ ticket, attempts, queue, budget, progress });
 });
 
 // ── The opt-in ticket queue (#864, #757 slice 3) ───────────────────────────────────────────────────
@@ -102,4 +109,26 @@ ticketRoutes.put("/:instanceId/tickets/:ticketId/authority", async (c) => {
 	const ok = await setTicketAuthority(c.env, instanceId, session.uid, c.req.param("ticketId"), body.authority, body.requeue === true);
 	if (!ok) return c.json({ error: "Ticket not found" }, 404);
 	return c.json({ queue: await ticketQueueState(c.env, instanceId, session.uid, c.req.param("ticketId")) });
+});
+
+/**
+ * PUT /v1/instances/:instanceId/tickets/:ticketId/budget { limitMicros, requeue? } — the ticket's own
+ * allowance (#865). Before its first run it sets the pool the ticket will open; after, it raises that
+ * pool and re-opens it if it was exhausted, keeping what was spent — the resume. It never lowers an
+ * opened pool. `requeue: true` also offers the ticket to the queue again. A person-only route: an
+ * agent that could raise its own ticket's budget would have no budget at all.
+ */
+ticketRoutes.put("/:instanceId/tickets/:ticketId/budget", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const ticketId = c.req.param("ticketId");
+	const body = (await c.req.json().catch(() => ({}))) as { limitMicros?: unknown; requeue?: unknown };
+	const raised = await raiseTicketBudget(c.env, instanceId, session.uid, ticketId, Number(body.limitMicros));
+	if (!raised.ok) return c.json({ error: raised.error }, raised.status);
+	if (body.requeue === true) {
+		const state = await ticketQueueState(c.env, instanceId, session.uid, ticketId);
+		if (state) await setTicketAuthority(c.env, instanceId, session.uid, ticketId, state.authority, true);
+	}
+	return c.json({ budget: raised.view, queue: await ticketQueueState(c.env, instanceId, session.uid, ticketId) });
 });

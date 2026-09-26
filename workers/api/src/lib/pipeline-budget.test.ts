@@ -81,10 +81,10 @@ describe("BUDGET_OPENING_TOOLS", () => {
 			// unbounded chain of follow-ups then draws on. A root, so depth 0 — the queue is the
 			// owner's, not a subordinate's.
 			"lib/objective-queue-start.ts",
-			// The opt-in ticket queue (#864): a per-minute sweep that starts a released ticket with
-			// nobody present. A new autonomous entry point, so a root pool of its own per start, for
-			// the objective queue's reason above.
-			"lib/ticket-queue.ts",
+			// A ticket's OWN pool (#865), opened on its first run and drawn on by every run after —
+			// the ticket queue (#864) starts runs against it instead of opening a pool per run, so a
+			// re-queued ticket does not get a fresh allowance each time. A root, so depth 0.
+			"lib/ticket-budget.ts",
 			// `POST …/coding/sessions/:id/run` — handing one named session to the Pilot is the
 			// same commitment as pressing Loop, through a narrower door. A root, so depth 0 (#502).
 			// Moved out of `routes/coding.ts` with the #775 split; `/run` is a drive route.

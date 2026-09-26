@@ -26,6 +26,7 @@
  * rate limits and `safeFetch`, none of which this groundwork has to decide (#579 phase 3).
  */
 import { codingSessionLink, instanceLink } from "./console-links.js";
+import { appendTicketProgress, dollars } from "./ticket-progress.js";
 import type { Env } from "../types.js";
 
 export const RUN_EVENT_TYPES = ["run.finished", "run.stalled"] as const;
@@ -122,6 +123,37 @@ export async function recordRunEvent(env: Env, runId: string, event: RunEventTyp
 			.bind(row.run_id, row.instance_id, row.user_id, row.status, finishedIso)
 			.run()
 			.catch(() => undefined);
+
+		// What happened, on the ticket's own record (#865). A run attached to a ticket — the queue
+		// stores that relation at start — gets one note per ending: what it did and what is left.
+		// Resolved through the run's own instance and owner, so a run can only annotate its own ticket.
+		const owning = await env.DB.prepare(
+			`SELECT t.id AS ticket_id, b.cost_micros_spent AS spent, b.cost_micros_limit AS lim
+			   FROM ticket_runs r
+			   JOIN tickets t ON t.id = r.ticket_id AND t.instance_id = ?2 AND t.user_id = ?3
+			   LEFT JOIN delegation_budgets b ON b.id = t.budget_id AND b.user_id = t.user_id
+			  WHERE r.task_id = ?1 LIMIT 1`,
+		)
+			.bind(row.run_id, row.instance_id, row.user_id)
+			.first<{ ticket_id: string; spent: number | null; lim: number | null }>()
+			.catch(() => null);
+		if (owning) {
+			const kind = event === "run.stalled" ? "stalled" : row.stop_reason === "budget" ? "parked" : "finished";
+			const spend = owning.lim != null ? ` Ticket budget: ${dollars(owning.spent ?? 0)} of ${dollars(owning.lim)} spent.` : "";
+			const what = kind === "parked"
+				? `Parked: the ticket's own budget ran out after ${row.iteration} iteration(s) — raise it to resume.`
+				: kind === "stalled"
+					? `Stalled: the run stopped reporting and the platform closed it (${row.stop_reason ?? "no reason"}) after ${row.iteration} iteration(s).`
+					: `Run ${row.status} (${row.stop_reason ?? "no reason"}) after ${row.iteration} iteration(s).`;
+			await appendTicketProgress(env, {
+				ticketId: owning.ticket_id,
+				instanceId: row.instance_id,
+				userId: row.user_id,
+				runId: row.run_id,
+				kind,
+				body: `${what}${row.detail ? ` ${row.detail}` : ""}${spend}`,
+			});
+		}
 
 		const payload = runEventPayload({ ...row, finished_at: finishedAt }, event);
 		const inserted = await env.DB.prepare(
