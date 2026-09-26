@@ -6,7 +6,7 @@ import { Settings, Cpu, Play, Square, Loader2, RefreshCw } from "lucide-react";
 import AddRepoForm from "./AddRepoForm";
 import RepoIssues from "./RepoIssues";
 import PullsPanel from "./PullsPanel";
-import { repoProviderBadge, repoTitle } from "./repo-title";
+import { repoHasHostedPanel, repoProviderBadge, repoTitle } from "./repo-title";
 import { isEngineBusy } from "./engine-busy";
 import { repoOpenAction } from "./repo-open";
 import { repoFreshnessLabel, staleListNotice, type RecheckReport } from "./repo-freshness";
@@ -242,10 +242,10 @@ export default function ReposList({
 						{verdicts[r.id] && <span className="basis-full break-words text-muted">{verdicts[r.id]}</span>}
 					</div>
 				)}
-				{r.githubRepo && <RepoIssues instanceId={instanceId} repo={r} onWorkOnIssue={onWorkOnIssue} />}
+				{repoHasHostedPanel(r, "issues") && <RepoIssues instanceId={instanceId} repo={r} onWorkOnIssue={onWorkOnIssue} />}
 				{/* Pulls sits with Issues, collapsed (#401): nested in a repo card it is one of several
-				    things, and an expanded PR list per repo would poll GitHub for every row on the page. */}
-				{r.githubRepo && <PullsPanel instanceId={instanceId} repo={r} />}
+				    things, and an expanded PR list per repo would poll the host for every row on the page. */}
+				{repoHasHostedPanel(r, "pulls") && <PullsPanel instanceId={instanceId} repo={r} />}
 			</div>
 		);
 	};

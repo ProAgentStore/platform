@@ -41,28 +41,63 @@ export function repoIsGitHub(repo: RepoIdentity): boolean {
 }
 
 /**
- * Why this repo's Issues panel is empty — the client-side mirror of the API's
- * `hostedFeatureUnavailable`.
+ * Which host a repo is on, reading a pre-#221 payload (no `provider`) as GitHub when it carries a
+ * GitHub coordinate and as local otherwise — the same fallback `repoProviderBadge` uses.
+ */
+function repoProvider(repo: RepoIdentity): string {
+	return (repo.provider || "").trim() || (repoIsGitHub(repo) ? "github" : "local");
+}
+
+/**
+ * The hosted panels the API can serve per provider — a mirror of `supports` in the API's
+ * `lib/git-providers.ts`, pinned against it by `repo-title.test.ts`. Since #221 phases 3–4 and
+ * `1f0d3a33` GitLab and Bitbucket serve issues AND pulls, so gating a panel on `githubRepo` hid
+ * surfaces that work (and told the owner they did not).
+ */
+export const HOSTED_PANELS: Readonly<Record<string, { issues: boolean; pulls: boolean }>> = {
+	github: { issues: true, pulls: true },
+	gitlab: { issues: true, pulls: true },
+	bitbucket: { issues: true, pulls: true },
+};
+
+/** Can this repo show its host's Issues / Pulls panel? It needs a host that serves it AND a coordinate to ask about. */
+export function repoHasHostedPanel(repo: RepoIdentity, panel: "issues" | "pulls"): boolean {
+	const slug = (repo.repoSlug || repo.githubRepo || "").trim();
+	return !!slug && HOSTED_PANELS[repoProvider(repo)]?.[panel] === true;
+}
+
+/**
+ * The tooltip on a row's external link. It names the host the link actually goes to — "Open on
+ * GitHub" on a GitLab merge request is a small lie on every row. A repo with no known host cannot
+ * render these panels at all, so its answer is the neutral one rather than a guess.
+ */
+export function repoLinkTitle(repo: RepoIdentity): string {
+	const provider = repoProvider(repo);
+	return HOSTED_PANELS[provider] ? `Open on ${repoProviderLabel(provider)}` : "Open in a new tab";
+}
+
+/**
+ * Why this repo's Issues panel is empty — the client-side mirror of the API's refusal.
  *
  * PURE and here rather than inline in the panel, because the wrong version of this sentence is
- * what #221 is about on this surface: "isn't connected to GitHub" reads as a setup mistake to
- * someone whose GitLab repo is connected perfectly well. The gap is ours, and it says so.
+ * what #221 is about on this surface. It used to tell a GitLab or Bitbucket owner their host was
+ * unsupported, which stopped being true when phases 3–4 shipped; it now names the only real gaps —
+ * a local-only repo, a remote PAGS cannot read, or a hosted repo whose coordinate is unknown.
  */
 export function repoIssuesUnavailable(repo: RepoIdentity): string {
-	const provider = (repo.provider || "").trim();
-	if (provider && provider !== "local" && provider !== "github") {
-		return `Issues aren't supported for ${repoProviderLabel(provider)} repos yet — PAGS drives GitHub issues only.`;
-	}
-	return "This repo isn't connected to GitHub, so it has no issues to show.";
+	return unavailable(repo, "issues");
 }
 
 /** The same sentence for the Pulls panel (#401) — same rule, its own noun. */
 export function repoPullsUnavailable(repo: RepoIdentity): string {
-	const provider = (repo.provider || "").trim();
-	if (provider && provider !== "local" && provider !== "github") {
-		return `Pull requests aren't supported for ${repoProviderLabel(provider)} repos yet — PAGS drives GitHub only.`;
-	}
-	return "This repo isn't connected to GitHub, so it has no pull requests to show.";
+	return unavailable(repo, "pull requests");
+}
+
+function unavailable(repo: RepoIdentity, noun: string): string {
+	const provider = repoProvider(repo);
+	if (HOSTED_PANELS[provider]) return `PAGS doesn't know which ${repoProviderLabel(provider)} repository this is, so it has no ${noun} to show — set it in this repo's settings.`;
+	if (provider === "other") return `This repo's remote isn't on GitHub, GitLab or Bitbucket, so PAGS can't read its ${noun}.`;
+	return `This repo is local-only — it isn't connected to GitHub, GitLab or Bitbucket, so it has no ${noun} to show.`;
 }
 
 /** The host's display name. Mirrors `GIT_PROVIDERS` in the API's lib/git-providers.ts. */
@@ -90,8 +125,7 @@ export function repoProviderLabel(provider?: string | null): string {
  * must be able to see which host a repo is on without opening its settings.
  */
 export function repoProviderBadge(repo: RepoIdentity): string | null {
-	const provider = (repo.provider || "").trim() || (repoIsGitHub(repo) ? "github" : "local");
-	switch (provider) {
+	switch (repoProvider(repo)) {
 		// GitHub says it by showing an owner/repo coordinate; a badge would be noise on the
 		// overwhelmingly common case.
 		case "github":

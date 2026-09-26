@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { api } from "@proagentstore/sdk/client";
 import type { CodingRepo } from "./types";
+import { repoLinkTitle } from "./repo-title";
 import { CircleDot, ExternalLink, RefreshCw, ChevronRight, Play } from "lucide-react";
 
 interface Issue {
@@ -13,10 +14,10 @@ interface Issue {
 }
 
 /**
- * Read-only GitHub Issues for one repo. Fetched on expand from the cloud (works on any
+ * Read-only hosted Issues for one repo. Fetched on expand from the cloud (works on any
  * runner). "Work on this" hands the issue straight to the Loop, which dispatches to the
- * agent's Pilot and drives the engine (#210) — it does start work. Only rendered for
- * GitHub-connected repos.
+ * agent's Pilot and drives the engine (#210) — it does start work. Rendered for any repo whose
+ * host serves issues (`repoHasHostedPanel`): GitHub, GitLab and Bitbucket since #221.
  */
 export default function RepoIssues({
 	instanceId,
@@ -123,7 +124,7 @@ export default function RepoIssues({
 									<Play size={10} /> <span className="hidden sm:inline">Work on this</span>
 								</button>
 								{i.url && (
-									<a href={i.url} target="_blank" rel="noreferrer" title="Open on GitHub" className="shrink-0 text-muted hover:text-accent">
+									<a href={i.url} target="_blank" rel="noreferrer" title={repoLinkTitle(repo)} className="shrink-0 text-muted hover:text-accent">
 										<ExternalLink size={12} />
 									</a>
 								)}

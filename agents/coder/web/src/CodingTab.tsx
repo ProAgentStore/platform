@@ -5,7 +5,7 @@ import type { CodingRepo, CodingSession, CodingEngine, LoopPreset, TimelineEntry
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { useVoice } from "@proagentstore/sdk/hooks";
 import { useCodingLoop } from "./use-coding-loop";
-import { repoIssuesUnavailable, repoPullsUnavailable, repoTitle } from "./repo-title";
+import { repoHasHostedPanel, repoIssuesUnavailable, repoPullsUnavailable, repoTitle } from "./repo-title";
 import { noticeSentence } from "./runner-offline-notice";
 import { resolveRepoState, repoStatusLabel, terminalPollBusy, type RepoState } from "./repo-status";
 import { parseRepoInput } from "./repo-input";
@@ -855,7 +855,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				)}
 				{soloView === "issues" && (
 					<div className="flex-1 min-h-0 overflow-auto px-2 py-2 sm:px-4 sm:py-3">
-						{solo?.githubRepo ? (
+						{solo && repoHasHostedPanel(solo, "issues") ? (
 							<div className="bg-panel border border-line rounded-xl p-3">
 								<RepoIssues instanceId={instanceId} repo={solo} onWorkOnIssue={workOnIssue} startOpen />
 							</div>
@@ -866,7 +866,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				)}
 				{soloView === "pulls" && (
 					<div className="flex-1 min-h-0 overflow-auto px-2 py-2 sm:px-4 sm:py-3">
-						{solo?.githubRepo ? (
+						{solo && repoHasHostedPanel(solo, "pulls") ? (
 							<div className="bg-panel border border-line rounded-xl p-3">
 								<PullsPanel instanceId={instanceId} repo={solo} startOpen />
 							</div>

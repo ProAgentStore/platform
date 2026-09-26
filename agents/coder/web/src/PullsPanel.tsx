@@ -10,6 +10,7 @@ import {
 	type PullRow,
 } from "./pulls-view";
 import type { CodingRepo } from "./types";
+import { repoLinkTitle } from "./repo-title";
 import {
 	Bot,
 	CheckCircle2,
@@ -189,7 +190,7 @@ export default function PullsPanel({
 									<div className="flex items-start gap-1.5">
 										<span className="flex-1 min-w-0 line-clamp-2 sm:truncate leading-5" title={p.title}>{p.title}</span>
 										{p.url && (
-											<a href={p.url} target="_blank" rel="noreferrer" title="Open on GitHub" className="shrink-0 text-muted hover:text-accent mt-0.5">
+											<a href={p.url} target="_blank" rel="noreferrer" title={repoLinkTitle(repo)} className="shrink-0 text-muted hover:text-accent mt-0.5">
 												<ExternalLink size={12} />
 											</a>
 										)}
