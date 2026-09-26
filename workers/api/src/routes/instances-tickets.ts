@@ -8,6 +8,7 @@
 import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
 import { buildInstanceBoard } from "../lib/board.js";
+import { setTicketAuthority, setTicketQueueEnabled, ticketQueueEnabled, ticketQueueState } from "../lib/ticket-queue.js";
 import { attachTicketRuns, getTicket, recordTicket, ticketsForInstance } from "../lib/tickets.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import type { Env } from "../types.js";
@@ -59,5 +60,46 @@ ticketRoutes.get("/:instanceId/tickets/:ticketId", async (c) => {
 		.filter((r) => r.ticketId === ticket.id)
 		.map((r) => ({ id: r.taskId, status: r.status, updatedAt: r.updatedAt }))
 		.sort((a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0));
-	return c.json({ ticket, attempts });
+	return c.json({ ticket, attempts, queue: await ticketQueueState(c.env, instanceId, session.uid, ticket.id) });
+});
+
+// ── The opt-in ticket queue (#864, #757 slice 3) ───────────────────────────────────────────────────
+//
+// Human-session routes only, owner-scoped by `requireOwnedInstance` and by instance+owner in every
+// statement. There is deliberately no agent tool that reaches them: an agent that could turn the queue
+// on, or release a ticket to itself, would convert one prompt injection into standing unattended work.
+
+/** GET /v1/instances/:instanceId/ticket-queue — is this instance's queue on? Off unless its owner turned it on. */
+ticketRoutes.get("/:instanceId/ticket-queue", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	return c.json({ enabled: await ticketQueueEnabled(c.env, instanceId, session.uid) });
+});
+
+/** PUT /v1/instances/:instanceId/ticket-queue { enabled } — turn autonomous ticket pickup on or off. */
+ticketRoutes.put("/:instanceId/ticket-queue", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as { enabled?: unknown };
+	if (typeof body.enabled !== "boolean") return c.json({ error: "enabled (true or false) is required" }, 400);
+	await setTicketQueueEnabled(c.env, instanceId, session.uid, body.enabled);
+	return c.json({ enabled: body.enabled });
+});
+
+/**
+ * PUT /v1/instances/:instanceId/tickets/:ticketId/authority { authority, requeue? } — may the queue
+ * pick this ticket up on its own (`agent`), or must a person release it (`human`, the default)?
+ * `requeue: true` also clears an earlier pickup, offering a ticket whose run failed to the queue again.
+ */
+ticketRoutes.put("/:instanceId/tickets/:ticketId/authority", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as { authority?: unknown; requeue?: unknown };
+	if (body.authority !== "human" && body.authority !== "agent") return c.json({ error: 'authority must be "human" or "agent"' }, 400);
+	const ok = await setTicketAuthority(c.env, instanceId, session.uid, c.req.param("ticketId"), body.authority, body.requeue === true);
+	if (!ok) return c.json({ error: "Ticket not found" }, 404);
+	return c.json({ queue: await ticketQueueState(c.env, instanceId, session.uid, c.req.param("ticketId")) });
 });

@@ -72,6 +72,7 @@ export interface AgentSubscribers {
  */
 export const INSTANCE_CHILD_TABLES = [
 	"run_events",
+	"ticket_queues",
 	"ticket_runs",
 	"tickets",
 	"coding_timeline",

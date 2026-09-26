@@ -116,3 +116,32 @@ describe("POST /tasks/direct — a human's ticket is first-class from creation (
 		expect(JSON.parse(row.payload).title).toBe("theirs");
 	});
 });
+
+describe("the opt-in ticket queue's owner controls (#864)", () => {
+	it("the queue is OFF until the owner turns it on, and another owner can neither read nor flip it", async () => {
+		const { call } = setup();
+		expect((await call("GET", "/v1/instances/i1/ticket-queue", "u1")).body).toEqual({ enabled: false });
+		expect((await call("PUT", "/v1/instances/i1/ticket-queue", "u2", { enabled: true })).status).toBe(404);
+		expect((await call("GET", "/v1/instances/i1/ticket-queue", "u2")).status).toBe(404);
+		expect((await call("PUT", "/v1/instances/i1/ticket-queue", "u1", { enabled: "yes" })).status).toBe(400);
+		expect((await call("PUT", "/v1/instances/i1/ticket-queue", "u1", { enabled: true })).body).toEqual({ enabled: true });
+		expect((await call("GET", "/v1/instances/i1/ticket-queue", "u1")).body).toEqual({ enabled: true });
+		expect((d1.sqlite.prepare("SELECT COUNT(*) AS n FROM ticket_queues").get() as { n: number }).n).toBe(1);
+	});
+
+	it("only the owner releases a ticket to the queue; the ticket read reports it", async () => {
+		const { env, call } = setup();
+		await mirrorRuntimeTask(env, "i1", "u1", { id: "run-1", type: "task", status: "queued" });
+		const ticketId = ((await call("POST", promote("run-1"), "u1")).body.ticket as { id: string }).id;
+		expect(((await call("GET", `/v1/instances/i1/tickets/${ticketId}`, "u1")).body.queue as { authority: string }).authority).toBe("human");
+
+		expect((await call("PUT", `/v1/instances/i1/tickets/${ticketId}/authority`, "u2", { authority: "agent" })).status).toBe(404);
+		expect((await call("PUT", `/v1/instances/i2/tickets/${ticketId}/authority`, "u2", { authority: "agent" })).status).toBe(404);
+		expect((await call("PUT", `/v1/instances/i1/tickets/${ticketId}/authority`, "u1", { authority: "robot" })).status).toBe(400);
+		expect((await call("PUT", `/v1/instances/i1/tickets/nope/authority`, "u1", { authority: "agent" })).status).toBe(404);
+
+		const ok = await call("PUT", `/v1/instances/i1/tickets/${ticketId}/authority`, "u1", { authority: "agent" });
+		expect(ok.status).toBe(200);
+		expect(ok.body.queue).toMatchObject({ authority: "agent", pickedAt: null });
+	});
+});

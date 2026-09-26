@@ -58,6 +58,7 @@ import { cloudflareAccessGate, cloudflareAccessMode } from "./lib/cf-access.js";
 import { runDueTriggers } from "./lib/triggers.js";
 import { runDueDeliveries } from "./lib/connections.js";
 import { routeRunEvents } from "./lib/run-event-routing.js";
+import { runTicketQueue } from "./lib/ticket-queue.js";
 import { runCommitCloseWatch } from "./lib/commit-close-watch.js";
 import { runDeployWatch } from "./lib/deploy-watch.js";
 import { runStaleRunSweep } from "./lib/run-sweeper.js";
@@ -266,6 +267,11 @@ export default {
 		// failure domain: a routing error leaves rows unrouted for the next tick, never the pump.
 		ctx.waitUntil(
 			routeRunEvents(env).catch((err) => logUnhandled(env, err, { path: "scheduled:run-events", method: "CRON" })),
+		);
+		// The opt-in ticket queue (#864): only instances whose owner turned it on, only tickets a person
+		// released. Its own failure domain — a pickup that fails leaves the ticket for the next tick.
+		ctx.waitUntil(
+			runTicketQueue(env).catch((err) => logUnhandled(env, err, { path: "scheduled:ticket-queue", method: "CRON" })),
 		);
 		// Close runs whose Workflow died mid-step (#207C). A third independent failure domain: a
 		// row stuck at `running` forever tells every supervisor its subordinate is still working.

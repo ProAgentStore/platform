@@ -4506,7 +4506,7 @@ paths:
   /v1/instances/{instanceId}/tickets/{ticketId}:
     get:
       summary: One ticket and its stored runs
-      description: "#757. `{ticket, attempts}` — attempts newest first, each `{id, status, updatedAt}` as last observed. Owner-scoped: another owner's ticket is a 404."
+      description: "#757. `{ticket, attempts, queue}` — attempts newest first, each `{id, status, updatedAt}` as last observed; `queue` is the ticket's queue state (#864): `{authority, pickedAt, runId, note}`. Owner-scoped: another owner's ticket is a 404."
       operationId: getTicket
       tags: [Board]
       parameters:
@@ -4536,6 +4536,72 @@ paths:
       responses:
         "200": { description: "`{events: [{seq, eventType, payload, createdAt}], nextCursor}`" }
         "400": { description: since is not a non-negative number }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/ticket-queue:
+    get:
+      summary: Is this instance's ticket queue on?
+      description: "#864. The opt-in autonomous ticket queue. OFF unless the owner turned it on — no instance is enabled by default."
+      operationId: getTicketQueue
+      tags: [Board]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200": { description: "`{enabled}`" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Turn the ticket queue on or off
+      description: |
+        #864 (#757 slice 3). When on, a per-minute sweep starts the oldest ticket a person released
+        (`authority: agent`) whose card is `queued` or `needs_approval` — never `needs_human`,
+        `blocked` or `failed` — one run at a time per instance, through the agent's own loop driver
+        (so a coder keeps one active session per repo), and not while the instance's deploy repo or a
+        repo it drives has a red build on its default branch. The run carries `ticketId` on the board.
+      operationId: setTicketQueue
+      tags: [Board]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+      responses:
+        "200": { description: "`{enabled}`" }
+        "400": { description: enabled is not a boolean }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/tickets/{ticketId}/authority:
+    put:
+      summary: Release a ticket to the queue, or take it back
+      description: |
+        #864. `authority: agent` lets the queue pick the ticket up on its own; `human` (every ticket's
+        default, including one an agent created) means a person must start it. A person-only route —
+        no agent tool reaches it. `requeue: true` also clears an earlier pickup, offering a ticket
+        whose run failed or was refused to the queue again.
+      operationId: setTicketAuthority
+      tags: [Board]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: ticketId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [authority]
+              properties:
+                authority: { type: string, enum: [human, agent] }
+                requeue: { type: boolean }
+      responses:
+        "200": { description: "`{queue}` — the ticket's queue state after the change" }
+        "400": { description: authority is not human or agent }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/board/items/{jobKey}/github-issue:

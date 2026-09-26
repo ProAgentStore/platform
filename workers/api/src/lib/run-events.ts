@@ -109,6 +109,20 @@ export async function recordRunEvent(env: Env, runId: string, event: RunEventTyp
 			.first<RunRow>();
 		if (!row || row.status === "running" || row.finished_at !== finishedAt) return "skipped";
 
+		// A run the ticket queue started (#864) is on the board as a `ticket.run` row naming its ticket;
+		// its status follows the run to its end here, the one point every driver's end passes, so the
+		// ticket's stored attempt does not read `running` for a run that finished. Scoped to the run's
+		// own instance and owner, and to that row type, so no other row can be touched by a run id.
+		const finishedIso = new Date(finishedAt).toISOString();
+		await env.DB.prepare(
+			`UPDATE instance_runtime_tasks
+			    SET status = ?4, payload = json_set(payload, '$.status', ?4, '$.updatedAt', ?5), updated_at = datetime('now')
+			  WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND type = 'ticket.run'`,
+		)
+			.bind(row.run_id, row.instance_id, row.user_id, row.status, finishedIso)
+			.run()
+			.catch(() => undefined);
+
 		const payload = runEventPayload({ ...row, finished_at: finishedAt }, event);
 		const inserted = await env.DB.prepare(
 			`INSERT INTO run_events (run_id, user_id, instance_id, event_type, payload, created_at)

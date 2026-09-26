@@ -18,6 +18,7 @@ import { INPUT_TTL_MS } from "./mcp-elicitation.js";
 import { openMcpInputRequest, listMcpInputRequests, purgeExpiredMcpInputRequests } from "./mcp-input-requests.js";
 import { purgeExpiredFlows, saveFlow } from "./mcp-oauth-store.js";
 import { sqlTime } from "./sql-time.js";
+import { finishLoopRun } from "./agent-loop-store.js";
 import { closeWorkCards, setWorkCardProgress, upsertWorkCard } from "./work-card.js";
 import { mirrorRuntimeTask, mirroredRuntimeTasks, mirrorRuntimeEvent } from "../routes/instances-runtime.js";
 import type { Env } from "../types.js";
@@ -175,6 +176,19 @@ describe("#634 — instance_runtime_tasks.updated_at is one ordering, not two", 
 	});
 });
 
+describe("#864 — a queue run's settle writes updated_at in the one ordering", () => {
+	it("recordRunEvent's ticket.run settle stamps datetime('now'), not the ISO it puts in the payload", async () => {
+		const { d1, env } = fixture();
+		d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, max_iterations, started_at, status) VALUES ('q-run', 'u1', 'i1', 'x', 5, 1, 'running')`);
+		await mirrorRuntimeTask(env, "i1", "u1", { id: "q-run", type: "ticket.run", status: "running", ticketId: "t1" });
+		await finishLoopRun(env, "q-run", "done", "ok", Date.now());
+		const row = d1.sqlite.prepare("SELECT status, updated_at FROM instance_runtime_tasks WHERE id = 'q-run'").get() as { status: string; updated_at: string };
+		expect(row.status).toBe("completed");
+		expect(offenders(d1, "instance_runtime_tasks", "updated_at")).toEqual([]);
+		d1.close();
+	});
+});
+
 describe("#657 — an expiring secret's TTL fires on the clock, not on the date", () => {
 	it("purges an input request 30 minutes after it was opened", async () => {
 		// Before the fix `expires_at <= datetime('now')` was false for the whole UTC day the row
@@ -294,13 +308,15 @@ describe("the writer census", () => {
 		return out;
 	}
 
-	it("is twelve statements across eight files, and every one of them is accounted for", () => {
+	it("is thirteen statements across nine files, and every one of them is accounted for", () => {
 		const found = writerFiles();
 		expect(
 			[...new Set(found.map((f) => f.file))].sort(),
 			"a new writer of instance_runtime_tasks.updated_at — add it to the executable cases above, then update this list",
 		).toEqual([
 			"lib/loop-drivers.ts",
+			// #864: settles a ticket-queue run's `ticket.run` row when the run ends. Driven above.
+			"lib/run-events.ts",
 			"lib/work-card.ts",
 			"routes/instances-apply.ts",
 			"routes/instances-browse.ts",
@@ -309,7 +325,7 @@ describe("the writer census", () => {
 			"workflows/agent-loop.ts",
 			"workflows/job-apply.ts",
 		]);
-		expect(found).toHaveLength(12);
+		expect(found).toHaveLength(13);
 	});
 
 	it("every writer that BINDS a timestamp names a producer from sql-time.ts", () => {

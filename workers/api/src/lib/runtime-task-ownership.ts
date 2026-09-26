@@ -76,6 +76,9 @@ export const RUNTIME_TASK_OWNERS: Readonly<Record<string, RuntimeTaskOwner>> = {
 	"pipeline.run": "cloud", // lib/pipeline-board.ts
 	"site_builder_runtime": "runner-durable", // local authoring task; PAGS owns durable run state
 	ticket: "cloud", // lib/tool-registry.ts create_ticket
+	// #864: a run the ticket queue started, on the board naming its ticket. The run is a durable loop
+	// in the cloud, and `run-events.ts` settles the row when it ends — never a runner's to expire.
+	"ticket.run": "cloud", // lib/ticket-queue.ts
 	// #722: a connector write held back by the ask-gate. Cloud-owned — it is a card waiting on a
 	// PERSON, not work a runner is doing, so a reconnect sweep must leave it exactly where it is.
 	tool_approval: "cloud", // lib/tool-approval-queue.ts
