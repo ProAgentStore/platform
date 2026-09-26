@@ -692,6 +692,8 @@ export async function decideCodingAction(
 			: undefined)) as {
 		response?: string;
 		tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }>;
+		/** A decision whose arguments were not valid JSON (#853 finding 4) — never acted on. */
+		malformed_tool_calls?: Array<{ name: string; error: string }>;
 		usage?: { input: number; output: number };
 		stopReason?: string;
 	};
@@ -702,9 +704,12 @@ export async function decideCodingAction(
 		// The two endings that used to read identically. "No action chosen" is a brain that replied
 		// in prose; a cap stop is a brain whose tool call did not fit, which is a different problem
 		// with a different remedy, and the owner is told which one happened.
+		const unreadable = res.malformed_tool_calls?.[0];
 		const why = truncated
 			? "The decision was cut off at the model's output limit before it named an action."
-			: res.response || "no action chosen";
+			: unreadable
+				? `The decision named ${unreadable.name}, but its arguments were not valid JSON (${unreadable.error}), so it was not acted on.`
+				: res.response || "no action chosen";
 		return { thought: res.response, stuck: { why }, usage: res.usage, truncated };
 	}
 	return { ...toDecision(call), usage: res.usage, thought: res.response, truncated };

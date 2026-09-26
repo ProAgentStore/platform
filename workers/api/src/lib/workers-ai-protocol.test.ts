@@ -148,3 +148,16 @@ describe("content Workers AI cannot carry is refused, not flattened (#853)", () 
 		]);
 	});
 });
+
+describe("a structured call Workers AI returned with unusable arguments is never lost silently (#853 finding 4)", () => {
+	it("empty-string arguments are a call with no arguments", () => {
+		expect(fromWorkersAiResult({ response: "", tool_calls: [{ name: "read_terminal", arguments: "" }] }).tool_calls).toEqual([{ name: "read_terminal", arguments: {} }]);
+	});
+
+	it("malformed arguments: not a call to run, but reported beside the calls — name, id and why", () => {
+		const out = fromWorkersAiResult({ response: "", tool_calls: [{ id: "x1", name: "send_to_cli", arguments: "{oops" }] });
+		expect(out.tool_calls).toBeUndefined();
+		expect(out.malformed_tool_calls).toEqual([{ name: "send_to_cli", id: "x1", error: expect.stringMatching(/JSON/) }]);
+	});
+});
+

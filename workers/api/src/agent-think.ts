@@ -22,7 +22,7 @@ import { resolveSettingsValues, settingsPromptBlock } from "./lib/instance-setti
 import { resolveStatsCards, statsPromptBlock } from "./lib/stats-schema.js";
 import { executeStorageTool } from "./lib/storage-tools.js";
 import { executeTool, type ToolCallRequest, type ToolCallResult } from "./lib/tools.js";
-import { normalizeToolCalls, parseToolCallsFromText } from "./lib/parse-tool-calls.js";
+import { type MalformedToolCall, malformedCallAnswer, normalizeToolCalls, parseToolCallsFromText } from "./lib/parse-tool-calls.js";
 import { honestReply, toolLogWithNotices, type ParsedReply } from "./lib/invented-results.js";
 import { logEvent, logToolFailure } from "./lib/events.js";
 import { runUserWorkersAi, systemPromptSections } from "./lib/user-ai.js";
@@ -119,6 +119,7 @@ type ChatCompletion = {
 	contentBlocks?: unknown;
 	/** Set by the Workers AI path (#851): results go back in its `tool` role, not as prose. */
 	protocol?: string;
+	malformed_tool_calls?: MalformedToolCall[]; // unreadable arguments: answered, never run (#853 finding 4)
 };
 
 export async function runAgentThink(opts: {
@@ -568,6 +569,7 @@ export async function runAgentThink(opts: {
 	const pathLedger = createPathLedger();
 	// One re-ask per turn for a Workers AI reply that announced an action and called nothing (#851).
 	let askedToCall = false;
+	let askedToFixArguments = false; // one more round to resend unreadable calls (#853 finding 4)
 
 	/**
 	 * The ONE way a model-authored reply leaves this function (#395).
@@ -643,9 +645,11 @@ export async function runAgentThink(opts: {
 		// action. The text is still walked, for the reply with those spans removed (#395) and for the
 		// names `deliver` reports as written-but-never-run.
 		const toolCalls = normalizeToolCalls(rawResult.tool_calls || []);
+		// Calls made with unreadable arguments (#853 finding 4): never run on a guess, answered below.
+		const malformed = rawResult.malformed_tool_calls ?? [];
 		const parsed = parseToolCallsFromText(rawResult.response || "", allowedToolNames);
 
-		if (toolCalls.length === 0) {
+		if (toolCalls.length === 0 && malformed.length === 0) {
 			// The open models often stop at "Let me check the terminal" where Sonnet makes the call in
 			// the same turn (#851). Asked once to act or answer; a second prose reply is the answer.
 			if (rawResult.protocol === WORKERS_AI_PROTOCOL && !askedToCall && announcesAction(parsed.text)) {
@@ -798,6 +802,12 @@ export async function runAgentThink(opts: {
 			// handed. Failures only — see logToolFailure for why not one row per tool.
 			if (!toolResult.success) await logToolFailure(env, { tool: tc.name, content: toolResult.content, round, userId, instanceId: state.agentId, traceId: delegation?.traceId ?? null });
 		}
+		// Answered AFTER the rest, so results still line up with calls; shown to the owner and traced.
+		for (const m of malformed) {
+			record(m, malformedCallAnswer(m), true);
+			allToolLog.push(toolLogLine(m.name, malformedCallAnswer(m), false));
+			await logToolFailure(env, { tool: m.name, content: malformedCallAnswer(m), round, userId, instanceId: state.agentId, traceId: delegation?.traceId ?? null });
+		}
 
 		// The round, in the protocol the provider actually offers (#398).
 		//
@@ -826,7 +836,7 @@ export async function runAgentThink(opts: {
 		} else if (rawResult.protocol === WORKERS_AI_PROTOCOL) {
 			// Workers AI (#851): the model's call as its own turn, each result in the `tool` role —
 			// the platform's, as `tool_result` is on Anthropic — never narrated back as its prose.
-			for (const m of workersAiToolRound(parsed.text, toolCalls, toolResults)) aiMessages.push(m);
+			for (const m of workersAiToolRound(parsed.text, [...toolCalls, ...malformed.map((c) => ({ ...c, arguments: {} }))], toolResults)) aiMessages.push(m);
 			aiMessages.push({ role: "user", content: continueText });
 		} else {
 			// The text-embedded path on a provider without ids: nothing to answer, so the prose
@@ -839,7 +849,8 @@ export async function runAgentThink(opts: {
 		}
 		// The model only re-requested calls it already made — nothing new will
 		// happen in another round, so stop and let it write the final response.
-		if (executedThisRound === 0) break;
+		if (executedThisRound === 0 && (malformed.length === 0 || askedToFixArguments)) break;
+		if (executedThisRound === 0) askedToFixArguments = true;
 	}
 
 	// Final reminder before generating the response

@@ -28,7 +28,7 @@
  */
 import { TOOL_CAPABLE_CF_DEFAULT } from "../agent-do-prompt.js";
 import { isWorkersAiModel } from "./brain-models.js";
-import { normalizeToolCalls } from "./parse-tool-calls.js";
+import { type MalformedToolCall, splitToolCalls } from "./parse-tool-calls.js";
 
 /** Marks a completion that came from Workers AI, so the chat loop answers in the `tool` role. */
 export const WORKERS_AI_PROTOCOL = "workers-ai";
@@ -101,6 +101,8 @@ export function toWorkersAiBody(body: unknown): Record<string, unknown> {
 export interface WorkersAiCompletion {
 	response: string;
 	tool_calls?: Array<{ name: string; arguments: Record<string, unknown>; id?: string }>;
+	/** Calls the model made whose arguments were not valid JSON — never run, answered instead (#853 finding 4). */
+	malformed_tool_calls?: MalformedToolCall[];
 	usage?: { input: number; output: number };
 	protocol: typeof WORKERS_AI_PROTOCOL;
 }
@@ -119,11 +121,12 @@ export interface WorkersAiCompletion {
 export function fromWorkersAiResult(raw: unknown): WorkersAiCompletion {
 	const r = (raw ?? {}) as { response?: unknown; tool_calls?: unknown; usage?: Record<string, number> };
 	const response = typeof r.response === "string" ? r.response : r.response == null ? "" : JSON.stringify(r.response);
-	const calls = normalizeToolCalls(Array.isArray(r.tool_calls) ? r.tool_calls : []);
+	const { calls, malformed } = splitToolCalls(Array.isArray(r.tool_calls) ? r.tool_calls : []);
 	const u = r.usage;
 	return {
 		response,
 		...(calls.length > 0 ? { tool_calls: calls } : {}),
+		...(malformed.length > 0 ? { malformed_tool_calls: malformed } : {}),
 		...(u ? { usage: { input: u.prompt_tokens || u.input_tokens || 0, output: u.completion_tokens || u.output_tokens || 0 } } : {}),
 		protocol: WORKERS_AI_PROTOCOL,
 	};

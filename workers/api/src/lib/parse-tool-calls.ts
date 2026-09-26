@@ -115,34 +115,46 @@ function findMatchingBrace(text: string, start: number): number {
  * tell apart by reading them. Optional, because the text-embedded path has no ids to give and the
  * Workers-AI fallback does not use them; a caller that needs the structured protocol checks for it.
  */
-export function normalizeToolCalls(
-	rawCalls: unknown[],
-): Array<{ name: string; arguments: Record<string, unknown>; id?: string }> {
-	const out: Array<{ name: string; arguments: Record<string, unknown>; id?: string }> = [];
+export function normalizeToolCalls(rawCalls: unknown[]): ToolCall[] {
+	return splitToolCalls(rawCalls).calls;
+}
+
+export type ToolCall = { name: string; arguments: Record<string, unknown>; id?: string };
+
+/** A call the model made whose `arguments` could not be read — never run, always answered (#853 finding 4). */
+export type MalformedToolCall = { name: string; id?: string; error: string };
+
+/** What the model is told about such a call, in that call's own result slot. */
+export const malformedCallAnswer = (m: MalformedToolCall) =>
+	`Not run — its arguments were not valid JSON (${m.error}). Call it again with its arguments as one complete JSON object.`;
+
+/**
+ * {@link normalizeToolCalls}, plus the calls it could NOT normalize. A call with malformed `arguments`
+ * is kept out of `calls` — one bad call must not fail the batch, and it must never run on arguments
+ * guessed from a fragment — but it is no longer dropped without a word: it comes back in `malformed`
+ * so the caller can tell the model, or the owner, what happened to it (#853 finding 4). Empty or
+ * whitespace-only `arguments` are not malformed: that is a call with no arguments.
+ */
+export function splitToolCalls(rawCalls: unknown[]): { calls: ToolCall[]; malformed: MalformedToolCall[] } {
+	const calls: ToolCall[] = [];
+	const malformed: MalformedToolCall[] = [];
 	for (const tc of rawCalls) {
+		const call = (tc ?? {}) as Record<string, unknown>;
+		const fn = call.function && typeof call.function === "object" ? (call.function as Record<string, unknown>) : null;
+		const name = fn ? fn.name : call.name;
+		const rawArgs = fn ? fn.arguments : call.arguments;
+		if (typeof name !== "string" || !name) continue;
+		const id = typeof call.id === "string" && call.id ? call.id : undefined;
+		let parsed: unknown;
 		try {
-			const call = tc as Record<string, unknown>;
-			let name: unknown;
-			let rawArgs: unknown;
-			if (call.function && typeof call.function === "object") {
-				const fn = call.function as Record<string, unknown>;
-				name = fn.name;
-				rawArgs = fn.arguments;
-			} else {
-				name = call.name;
-				rawArgs = call.arguments;
-			}
-			if (typeof name !== "string" || !name) continue;
-			// A model can emit malformed JSON in `arguments`. Parse defensively: skip just
-			// THIS call rather than letting a bare JSON.parse throw and drop the whole batch
-			// (which failed the entire chat turn). Non-object results collapse to {}.
-			const parsed = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs;
-			const args = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
-			const id = typeof call.id === "string" && call.id ? call.id : undefined;
-			out.push({ name, arguments: args, ...(id ? { id } : {}) });
-		} catch {
-			// malformed arguments for this call — skip it, keep the rest
+			parsed = typeof rawArgs === "string" ? (rawArgs.trim() ? JSON.parse(rawArgs) : {}) : rawArgs;
+		} catch (e) {
+			malformed.push({ name, ...(id ? { id } : {}), error: (e instanceof Error ? e.message : String(e)).slice(0, 160) });
+			continue;
 		}
+		// Non-object results collapse to {}.
+		const args = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+		calls.push({ name, arguments: args, ...(id ? { id } : {}) });
 	}
-	return out;
+	return { calls, malformed };
 }

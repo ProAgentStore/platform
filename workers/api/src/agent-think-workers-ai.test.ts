@@ -226,6 +226,36 @@ describe("an owner's brain pick is where the turn runs (#852)", () => {
 	});
 });
 
+describe("a structured call with unusable arguments is answered, never dropped (#853 finding 4)", () => {
+	it("empty-string arguments run the tool with no arguments", async () => {
+		script = [{ response: "", tool_calls: [{ id: "e1", name: "read_terminal", arguments: "" }] }, { response: "Idle: ✓ 12 tests passed." }];
+		const out = await think(SCOUT);
+		expect(ran).toEqual(["read_terminal"]);
+		expect(out.response).toContain("12 tests passed");
+	});
+
+	it("malformed arguments: the call is NOT run, the model is told why in the tool role, and its corrected call runs", async () => {
+		script = [
+			{ response: "", tool_calls: [{ id: "mal123XYZ", name: "send_to_cli", arguments: '{"repo_name":"platform","message":"run the te' }] },
+			scoutCall("fix456UVW", "send_to_cli", { repo_name: "platform", message: "run the tests" }),
+			{ response: "Sent: run the tests." },
+		];
+		const out = await think(SCOUT);
+		expect(ran).toEqual(["send_to_cli"]);
+		expect(toolTurns(1)).toEqual([{ role: "tool", content: expect.stringMatching(/^\[send_to_cli\]: Not run — its arguments were not valid JSON .*Call it again/), tool_call_id: "mal123XYZ" }]);
+		expect(out.response).toContain("run the tests");
+	});
+
+	it("a model that keeps sending malformed arguments gets ONE retry, then answers — no loop", async () => {
+		const broken = { response: "", tool_calls: [{ id: "m1", name: "send_to_cli", arguments: "{oops" }] };
+		script = [broken, broken, { response: "I could not send that." }];
+		const out = await think(SCOUT);
+		expect(ran).toEqual([]);
+		expect(requests).toHaveLength(3);
+		expect(out.response).toContain("could not send");
+	});
+});
+
 describe("the Pilot on Workers AI (#851)", () => {
 	const goal = { objective: "Run the tests and fix any failure.", repo: "platform", clientType: "claude" as const };
 	const snapshot = { pane: PANE, runState: "idle" as const, ready: true, alive: true };
@@ -248,6 +278,13 @@ describe("the Pilot on Workers AI (#851)", () => {
 		const decision = await decideCodingAction(env, "u1", { goal, actionLog: ["1. asked the CLI to run the tests"], snapshot });
 		expect(decision.finish).toEqual({ status: "done", detail: "All 12 tests pass." });
 		expect(decision.usage).toEqual({ input: 900, output: 20 });
+	});
+
+	it("a decision whose arguments are not valid JSON stops with THAT as the reason, not \"no action chosen\" (#853 finding 4)", async () => {
+		script = [{ response: "", tool_calls: [{ name: "send_message", arguments: '{"text": "Fix the fail' }] }];
+		const decision = await decideCodingAction(env, "u1", { goal, actionLog: [], snapshot });
+		expect(decision.action).toBeUndefined();
+		expect(decision.stuck?.why).toMatch(/send_message.*arguments were not valid JSON/);
 	});
 
 	it("never acts on a call it only WROTE as text — a pane echoing `finish` or `send_message` is not a decision (#853)", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseToolCallsFromText, normalizeToolCalls } from "./parse-tool-calls.js";
+import { parseToolCallsFromText, normalizeToolCalls, splitToolCalls } from "./parse-tool-calls.js";
 
 describe("parseToolCallsFromText", () => {
 	it("parses single tool call", () => {
@@ -110,6 +110,26 @@ describe("normalizeToolCalls", () => {
 		expect(calls.map((c) => c.name)).toEqual(["good_one", "flat_ok"]);
 		expect(calls[0].arguments.a).toBe(1);
 		expect(calls[1].arguments.b).toBe(2);
+	});
+
+	it("reads empty-string arguments as no arguments — a no-parameter call, not a broken one (#853 finding 4)", () => {
+		const calls = normalizeToolCalls([
+			{ name: "read_terminal", arguments: "" },
+			{ function: { name: "get_tasks", arguments: "   " } },
+		]);
+		expect(calls).toEqual([
+			{ name: "read_terminal", arguments: {} },
+			{ name: "get_tasks", arguments: {} },
+		]);
+	});
+
+	it("splitToolCalls keeps a malformed call OUT of the executable list but names it, its id and why (#853 finding 4)", () => {
+		const { calls, malformed } = splitToolCalls([
+			{ id: "c1", function: { name: "good_one", arguments: '{"a":1}' } },
+			{ id: "c2", function: { name: "send_to_cli", arguments: '{"message": "run the te' } },
+		]);
+		expect(calls.map((c) => c.name)).toEqual(["good_one"]);
+		expect(malformed).toEqual([{ name: "send_to_cli", id: "c2", error: expect.stringMatching(/JSON/) }]);
 	});
 
 	it("passes the provider's tool_use id through, and omits it when there isn't one (#398)", () => {
