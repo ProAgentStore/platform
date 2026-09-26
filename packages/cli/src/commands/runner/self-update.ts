@@ -13,9 +13,15 @@
  *   3. installs `@proagentstore/cli@<latest>` with npm, answers, and exits with
  *      {@link RUNNER_RESTART_EXIT_CODE}; `pags up` respawns `runner connect` from the new files, and
  *      discovery re-attaches every agent this machine may run.
+ *
+ * Under the bootstrap stub (#862) the release goes into the stub's payload cache rather than over the
+ * global install: the respawn runs `process.argv[1]` — the stub — which picks the newest payload.
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { BOOTSTRAP_ENV, CLI_PACKAGE, installPayload, olderThan } from "../../bootstrap/payload.js";
+
+export { CLI_PACKAGE, latestPublishedVersion, olderThan } from "../../bootstrap/payload.js";
 
 const run = promisify(execFile);
 
@@ -25,7 +31,6 @@ export const RUNNER_UPDATE_PATH = "/pags/runner/update";
 export const RUNNER_RESTART_EXIT_CODE = 75;
 /** Set by a `pags up` that respawns on {@link RUNNER_RESTART_EXIT_CODE}. Without it nothing would restart us. */
 export const SUPERVISED_ENV = "PAGS_UP_SUPERVISED";
-export const CLI_PACKAGE = "@proagentstore/cli";
 
 export interface UpdateFacts {
 	current: string;
@@ -45,16 +50,6 @@ export type UpdatePlan =
 	| { action: "wait"; current: string; latest: string; waitingFor: string[] }
 	| { action: "update"; current: string; latest: string };
 
-/** Numeric semver compare, `a < b`. Anything unparseable is not "older" — never update on a guess. */
-export function olderThan(a: string, b: string): boolean {
-	const parse = (v: string) => /^(\d+)\.(\d+)\.(\d+)/.exec(v.trim())?.slice(1).map(Number);
-	const x = parse(a);
-	const y = parse(b);
-	if (!x || !y) return false;
-	for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] < y[i];
-	return false;
-}
-
 /** What this machine should do about an update request. Pure. */
 export function planRunnerUpdate(f: UpdateFacts): UpdatePlan {
 	if (f.fromSource) return { action: "refused", current: f.current, reason: "This runner runs from a source checkout — update it with `git pull` there, not npm." };
@@ -71,18 +66,12 @@ export function planRunnerUpdate(f: UpdateFacts): UpdatePlan {
 	return { action: "update", current: f.current, latest: f.latest };
 }
 
-/** The newest published CLI version, or null. */
-export async function latestPublishedVersion(): Promise<string | null> {
-	try {
-		const { stdout } = await run("npm", ["view", CLI_PACKAGE, "version"], { timeout: 30_000 });
-		return stdout.trim() || null;
-	} catch {
-		return null;
-	}
-}
-
-/** Install `version` globally. Rejects with npm's own reason. */
+/** Install `version` — into the stub's cache when bootstrapped (#862), else globally. Rejects with npm's own reason. */
 export async function installVersion(version: string): Promise<void> {
+	if (process.env[BOOTSTRAP_ENV]) {
+		await installPayload(version);
+		return;
+	}
 	try {
 		await run("npm", ["i", "-g", `${CLI_PACKAGE}@${version}`], { timeout: 5 * 60_000 });
 	} catch (e) {

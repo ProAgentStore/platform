@@ -21,6 +21,8 @@ import { cliAtLeast } from "./runner-upgrade.js";
  * (#857, #858), and `runner_update` itself (#859). All first published in this release.
  */
 export const RUNNER_CONTROL_MIN_CLI = "0.4.62";
+/** The self-updating bootstrap stub (#862): from here on `pags up` moves onto the latest release by itself. */
+export const BOOTSTRAP_MIN_CLI = "0.4.63";
 
 export interface RunnerFeature {
 	feature: string;
@@ -28,6 +30,7 @@ export interface RunnerFeature {
 }
 
 export const RUNNER_FEATURES: readonly RunnerFeature[] = [
+	{ feature: "self-updating pags up (never needs a manual install again)", minCli: BOOTSTRAP_MIN_CLI },
 	{ feature: "runner_update (remote CLI update + restart)", minCli: RUNNER_CONTROL_MIN_CLI },
 	{ feature: "coding_repo_add clone (background, https or SSH)", minCli: RUNNER_CONTROL_MIN_CLI },
 	{ feature: "force_runner_attach / repin attach", minCli: RUNNER_CONTROL_MIN_CLI },

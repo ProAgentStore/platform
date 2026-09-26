@@ -91,7 +91,7 @@ export async function updateRunnerNode(env: Env, userId: string, rawNode: string
 					node,
 					action: "unsupported",
 					held,
-					detail: `The \`pags\` CLI on ${node} predates runner_update, so it cannot update itself. Update it once at the machine — \`npm i -g @proagentstore/cli\` — and restart \`pags up\` there; every later update can be done remotely with runner_update.`,
+					detail: `The \`pags\` CLI on ${node} predates runner_update, so it cannot update itself. Update it once at the machine — \`npm i -g @proagentstore/cli\` — and restart \`pags up\` there; that installs the self-updating stub (#862), so it is the last update anyone does by hand: every \`pags up\` then moves onto the latest release by itself, and runner_update does it remotely.`,
 				};
 			}
 			return { node, action: "failed", held, detail: `${node} could not update: ${message.replace(/^Runner \/pags\/runner\/update → \d+: /, "").slice(0, 400)}` };

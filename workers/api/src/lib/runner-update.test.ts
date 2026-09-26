@@ -147,7 +147,7 @@ describe("runner_update — every other outcome says what happened (#859)", () =
 		reply = () => new Error('Runner /pags/runner/update → 404: {"error":"Not found"}');
 		const out = await update();
 		expect(out.action).toBe("unsupported");
-		expect(out.detail).toMatch(/predates runner_update.*Update it once at the machine.*every later update can be done remotely/);
+		expect(out.detail).toMatch(/predates runner_update.*Update it once at the machine.*the last update anyone does by hand.*runner_update does it remotely/);
 	});
 
 	it("a frozen socket is skipped for the next one; no connected runner at all is unreachable", async () => {
