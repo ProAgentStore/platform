@@ -109,6 +109,23 @@ interface SyncReply {
 	holding?: boolean;
 }
 
+/**
+ * Every machine THIS agent is registered on (#853 finding 15). Scoped to the agent, so it needs no cap:
+ * the stale machines used to be read off {@link nodeRegistrations}' 200 most recent rows across ALL of
+ * the owner's agents, and on a large account this agent's older rows fell outside that window — a
+ * machine still holding it was never asked to let go.
+ */
+async function agentNodes(env: Env, userId: string, instanceId: string): Promise<string[]> {
+	const { results } = await env.DB.prepare(
+		`SELECT DISTINCT runner_node AS node FROM instance_runtime_nodes
+		 WHERE user_id = ?1 AND instance_id = ?2 AND runner_node IS NOT NULL AND runner_node != ''`,
+	)
+		.bind(userId, instanceId)
+		.all<{ node: string }>()
+		.catch(() => ({ results: [] as { node: string }[] }));
+	return [...new Set((results ?? []).map((r) => normalizeRunnerNode(r.node)))];
+}
+
 /** The owner's node registrations — the map from a machine's names to the agents holding sockets there. */
 export async function nodeRegistrations(env: Env, userId: string): Promise<NodeRegistration[]> {
 	const { results } = await env.DB.prepare(
@@ -255,7 +272,7 @@ export async function attachOnRepin(env: Env, instanceId: string, userId: string
 	// request, so the reply is usually lost to the detach it caused — the relay is asked instead.
 	const detachedFrom: string[] = [];
 	const stillAttachedOn: string[] = [];
-	const ownNodes = [...new Set(rows.filter((r) => r.instanceId === instanceId).map((r) => normalizeRunnerNode(r.node)))];
+	const ownNodes = await agentNodes(env, userId, instanceId);
 	for (const stale of ownNodes.filter((n) => n && !targetNames.has(n))) {
 		if (!(await relayConnected(env, instanceId, stale))) continue;
 		// No time left to ask: still holding it, and said so — it lets go on its own poll (the pin moved).

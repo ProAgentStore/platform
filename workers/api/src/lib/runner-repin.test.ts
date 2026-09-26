@@ -62,7 +62,25 @@ const rows = [
 	{ node: "Mac.modem", machineId: "m-air", instanceId: AGENT, lastSeenAt: "2026-09-25 21:00:00" },
 	{ node: "RLs-MacBook-Air", machineId: "m-air", instanceId: AGENT, lastSeenAt: "2026-09-20 21:00:00" },
 ];
-const env = { DB: { prepare: () => ({ bind: () => ({ all: async () => ({ results: rows }) }) }) } } as never;
+/**
+ * The owner's registrations, most recent first — as D1 returns them. The fake honours the two reads
+ * the module makes: one scoped to an instance (`instance_id = ?2`), and the account-wide one with its
+ * `LIMIT` (#853 finding 15 is exactly what that limit hides).
+ */
+let accountRows = rows;
+const env = {
+	DB: {
+		prepare: (sql: string) => ({
+			bind: (...args: unknown[]) => ({
+				all: async () => {
+					if (/instance_id = \?2/.test(sql)) return { results: accountRows.filter((r) => r.instanceId === args[1]).map((r) => ({ node: r.node })) };
+					const limit = Number(/LIMIT (\d+)/.exec(sql)?.[1] ?? Number.POSITIVE_INFINITY);
+					return { results: accountRows.slice(0, limit) };
+				},
+			}),
+		}),
+	},
+} as never;
 
 let clock = 0;
 const slept: number[] = [];
@@ -75,6 +93,7 @@ beforeEach(() => {
 	frozen.clear();
 	hangs.clear();
 	timeouts.length = 0;
+	accountRows = rows;
 	bodies.length = 0;
 	synced.length = 0;
 	slept.length = 0;
@@ -177,6 +196,20 @@ describe("when the move cannot complete, the repin says why (#850)", () => {
 		deps.sleep = original;
 		expect(out.attached).toBe(true);
 		expect(clock).toBe(20_000);
+	});
+
+	// #853 finding 15: the stale machines were read off the owner's 200 most recent registrations across
+	// ALL their agents, so on a large account this agent's older rows fell outside the window — and a
+	// machine still holding it was never asked to let go, nor even reported.
+	it("finds this agent's stale machine however many newer registrations the account has", async () => {
+		const noise = Array.from({ length: 250 }, (_, i) => ({ node: `box-${i}`, machineId: `m-${i}`, instanceId: `other-${i}`, lastSeenAt: "2026-09-25 23:00:00" }));
+		// Most recent first: the target's carriers, then 250 newer rows of other agents, then this agent's.
+		accountRows = [rows[0], rows[1], ...noise, rows[2], rows[3]];
+		live.add(`${AGENT}@Mac.modem`);
+		const out = await repin();
+		expect(out.attached).toBe(true);
+		expect(out.detachedFrom).toEqual(["Mac.modem"]);
+		expect(live.has(`${AGENT}@Mac.modem`)).toBe(false);
 	});
 
 	it("uses the path the CLI answers", () => {
