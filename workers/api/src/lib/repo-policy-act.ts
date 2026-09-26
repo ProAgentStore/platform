@@ -29,6 +29,19 @@
  * the stash is repo-global ACROSS worktrees and is how uncommitted work gets swallowed. A policy
  * that cannot restore its invariant without destroying something reports and stops.
  *
+ * ── And it stops fighting: the flap breaker
+ *
+ * A switch that CONFIRMS and is then undone before the next run ends is not a policy holding — it is
+ * a tug-of-war with whatever keeps checking the other branch out (most often the work itself, on a
+ * repo whose declared branch is not where its work happens). Left alone it re-fires at every run
+ * end forever, which is the "retrying forever" #322's escalation rule forbids. So after
+ * `FLAP_LIMIT` confirmed switches of one policy on one repo inside `FLAP_WINDOW_MS`, the policy stops
+ * ACTING there and says so: the card goes to `needs_human` naming the count, and `policy.halted`
+ * lands in the trace. It does not stop OBSERVING — the violation stays visible, which is the line
+ * `repo-policies.ts` draws against suppression — and it resumes by itself once the window drains.
+ * The count is read from the trace (`policy.act`, status confirmed), so the audit record IS the
+ * breaker's memory; a count that cannot be read acts on nothing that tick.
+ *
  * ── And it never acts on a stale verdict
  *
  * The trigger is a finding computed from a read taken moments earlier in the same step. A repo row
@@ -208,6 +221,48 @@ export function describeRepoPolicyAct(
 	};
 }
 
+/** Confirmed switches of one policy on one repo that halt further acting there, and over what window. */
+export const FLAP_LIMIT = 3;
+export const FLAP_WINDOW_MS = 24 * 60 * 60_000;
+
+/**
+ * How many times this policy CONFIRMED a remediation on this repo inside the window, read from the
+ * trace `enforceRepoPolicies` writes. Scoped by owner and instance as well as repo and policy, so no
+ * other tenant's history can halt (or un-halt) this one. Null when the trace could not be read.
+ */
+export async function recentConfirmedActs(
+	env: Env,
+	q: { instanceId: string; userId: string; repoId: string; policy: RepoPolicyId; now: number },
+): Promise<number | null> {
+	try {
+		const row = await env.DB.prepare(
+			`SELECT COUNT(*) AS n FROM agent_events
+			  WHERE instance_id = ?1 AND user_id = ?2 AND source = 'coding' AND event = 'policy.act' AND ts >= ?3
+			    AND json_extract(context, '$.repoId') = ?4 AND json_extract(context, '$.policy') = ?5
+			    AND json_extract(context, '$.status') = 'confirmed'`,
+		)
+			.bind(q.instanceId, q.userId, q.now - FLAP_WINDOW_MS, q.repoId, q.policy)
+			.first<{ n: number }>();
+		return typeof row?.n === "number" ? row.n : null;
+	} catch {
+		return null;
+	}
+}
+
+/** The card for a halted policy. Pure. It stays open: the invariant still does not hold. */
+export function describeRepoPolicyHalt(policy: RepoPolicyId, repoLabel: string, branch: string, confirmed: number): { status: "needs_human"; title: string; description: string; type: string } {
+	const attribution = ` (standing policy \`${policy}\`)`;
+	const text =
+		`Switched back to \`${branch}\` ${confirmed} times in the last ${FLAP_WINDOW_MS / 3_600_000}h and something moved it off again each time — ` +
+		"probably the work itself runs on another branch. The policy has stopped acting on this repo until that count drops; set it to observe, or change the declared branch. Nothing was changed.";
+	return {
+		status: "needs_human",
+		type: repoPolicyDef(policy)?.cardType ?? "coding.policy",
+		title: `${repoLabel} keeps leaving ${branch}`.slice(0, MAX_TITLE),
+		description: `${text.slice(0, Math.max(0, MAX_DESCRIPTION - attribution.length))}${attribution}`,
+	};
+}
+
 /**
  * The run-end hook, whole: read the checkout, judge every declared invariant, act on the ones the
  * owner promoted, and leave the board saying what is true.
@@ -234,6 +289,24 @@ export async function enforceRepoPolicies(
 	for (const f of findings) {
 		if (f.status === "violated" && f.remediation) {
 			const remediation = f.remediation;
+			const confirmed = await recentConfirmedActs(env, { instanceId, userId, repoId, policy: f.policy, now: Date.now() });
+			// Unknown acts on nothing — the same rule as an unreadable checkout.
+			if (confirmed === null) continue;
+			if (confirmed >= FLAP_LIMIT) {
+				const halt = describeRepoPolicyHalt(f.policy, repoLabel, remediation.branch, confirmed);
+				await upsertWorkCard(env, { instanceId, userId, id: f.cardId, task: { id: f.cardId, ...halt, policy: f.policy, act: "halted", createdAt: now, updatedAt: now } });
+				await logEvent(env, {
+					source: "coding",
+					event: "policy.halted",
+					level: "warn",
+					userId,
+					instanceId,
+					traceId: sessionId,
+					message: `standing policy \`${f.policy}\`: ${halt.title}`,
+					context: { policy: f.policy, repoId, verb: remediation.verb, branch: remediation.branch, confirmed, limit: FLAP_LIMIT, windowMs: FLAP_WINDOW_MS },
+				});
+				continue;
+			}
 			const outcome = await runRepoPolicyRemediation(conn, { repo, sessionId, remediation }).catch(
 				(e): RepoPolicyActOutcome => ({ requested: remediation, from: null, observed: null, ...classifyRunnerError(e, conn.runnerNode) }),
 			);

@@ -219,6 +219,8 @@ function fakeEnv(repo: CodingRepo | null, conn: RunnerConn, writes: Array<{ sql:
 				bind(...binds: unknown[]) {
 					return {
 						async first() {
+							// The flap breaker's count (#322): no confirmed history in this double.
+							if (sql.includes("FROM agent_events")) return { n: 0 };
 							if (!repo) return null;
 							return {
 								id: repo.id,

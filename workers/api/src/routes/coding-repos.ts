@@ -18,6 +18,7 @@ import { computeETag, mergeRuns, persistBuildHistory, readBuildHistory, type Bui
 import type { IssueDetail } from "../lib/github-issues.js";
 import { canReadHosted, hostedCoordinate, hostedReadRefusal, latestHostedBuild, listHostedBuilds, listHostedIssues, readHostedIssue, type HostedRepoRef } from "../lib/hosted-repo.js";
 import { logError } from "../lib/error-log.js";
+import { logEvent } from "../lib/events.js";
 // One vocabulary for "why is there no machine" — the same diagnosis `/runtime/status` and the
 // Pilot's pause both report, so this surface cannot invent a third wording for one state (#440).
 import { describeFacts } from "../lib/runner-availability.js";
@@ -735,6 +736,8 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 			}
 		}
 
+		// What the repo claimed BEFORE, read only when the claim is changing — the audit below needs it.
+		const before = policies !== undefined ? ((await getRepo(c.env, instanceId, uid, repoId))?.policies ?? null) : undefined;
 		const ok = await updateRepo(c.env, instanceId, uid, repoId, {
 			name: name || undefined,
 			urls: hasUrls ? body.urls : undefined,
@@ -743,6 +746,18 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 			policies,
 		});
 		if (!ok) throw new HttpError(404, "Repo not found");
+		// #322: a policy is the one thing that acts with nobody present, so WHO promoted it, and
+		// from what, is part of the record — not only what it later did (`policy.act`).
+		if (policies !== undefined) {
+			await logEvent(c.env, {
+				source: "coding",
+				event: "policy.declared",
+				userId: uid,
+				instanceId,
+				message: `standing policies on repo ${repoId} set by the owner`,
+				context: { repoId, before, after: Object.keys(policies).length ? policies : null, by: uid },
+			});
+		}
 		if (!moving) return c.json({ ok: true });
 
 		// Store, THEN verify — the same order and the same helper the add path uses (#405), so all

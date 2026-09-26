@@ -54,7 +54,9 @@
  * here is the end of another run — a fresh observation of a repo something has just worked in, not
  * a timer re-firing on stale state — and the attempt costs one local git call and no model spend,
  * so it draws on no budget an interactive delegation needs. Suppressing it would hide an invariant
- * that still does not hold.
+ * that still does not hold. The one bound is on SUCCESS repeating: a switch that keeps confirming and
+ * keeps being undone is a tug-of-war, and `repo-policy-act.ts`'s flap breaker stops the ACTING (never
+ * the observing) after `FLAP_LIMIT` confirmed switches in a window, with the card saying so.
  *
  * **It does not re-verify the checkout's path.** That is #440 (a transport failure stored as the
  * repo's state, plus `clone_checked_at`), and duplicating it here would put two writers on
