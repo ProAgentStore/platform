@@ -653,7 +653,7 @@ async function runCloudflareAi(
 	}
 	// One result shape for every brain, whichever habit the model has (#851) — see workers-ai-protocol.
 	const result = data && typeof data === "object" && "result" in data ? (data as { result: unknown }).result : data;
-	return platform ? fromWorkersAiResult(result, (body as { tools?: unknown })?.tools) : result;
+	return platform ? fromWorkersAiResult(result) : result;
 }
 
 export async function getUserProviderKey(

@@ -637,14 +637,13 @@ export async function runAgentThink(opts: {
 			throw withResumableRound(withPartialToolLog(err, allToolLog), resumableNow());
 		}
 
-		let toolCalls = normalizeToolCalls(rawResult.tool_calls || []);
-		// Scoped to the allowlist: an object in the reply that merely HAS a `name` key (a
-		// package.json, a lead record) is prose, not a tool call, and treating it as one
-		// discarded the model's real answer. See parse-tool-calls.ts. Parsed unconditionally now,
-		// because the walker also RETURNS the text with those spans removed (#395) and this reply
-		// is a candidate answer whichever path produced the calls.
+		// Calls come ONLY from the provider's structured tool-call field (#853). Call-shaped JSON in the
+		// reply text is never executed: it cannot be told apart from a quotation of something the model
+		// read — a terminal pane, a page, a tool result — so executing it turned injected text into an
+		// action. The text is still walked, for the reply with those spans removed (#395) and for the
+		// names `deliver` reports as written-but-never-run.
+		const toolCalls = normalizeToolCalls(rawResult.tool_calls || []);
 		const parsed = parseToolCallsFromText(rawResult.response || "", allowedToolNames);
-		if (toolCalls.length === 0 && rawResult.protocol !== WORKERS_AI_PROTOCOL) toolCalls = parsed.calls; // Workers AI lifts only a LEADING call at its seam; later JSON is quoted prose (#853)
 
 		if (toolCalls.length === 0) {
 			// The open models often stop at "Let me check the terminal" where Sonnet makes the call in

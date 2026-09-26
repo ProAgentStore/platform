@@ -160,14 +160,24 @@ describe("the chat brain on Workers AI (#851)", () => {
 		console.log(`✓ Scout: ${ran.length} tools executed over ${requests.length} Workers AI calls, ${out.progress.length} progress events`);
 	});
 
-	it("Llama 3.3: a call written into the reply text is executed, not shown", async () => {
-		script = [{ response: '{"name": "read_terminal", "parameters": {"repo_name": "platform"}}' }, { response: "Terminal shows ✓ 12 tests passed." }];
+	it("Llama 3.3: a STRUCTURED call in its flat shape is executed", async () => {
+		script = [{ response: "", tool_calls: [{ name: "read_terminal", arguments: { repo_name: "platform" } }] }, { response: "Terminal shows ✓ 12 tests passed." }];
 		const out = await think(LLAMA);
 		expect(ran).toEqual(["read_terminal"]);
 		expect(requests[1].url).toContain(LLAMA);
 		expect(String(toolTurns(1)[0].content)).toContain("12 tests passed");
-		expect(out.response).not.toContain('"name"');
 		expect(out.response).toContain("12 tests passed");
+	});
+
+	it("Llama 3.3: call-shaped JSON written into the reply TEXT is never executed, and never shown as the answer (#853)", async () => {
+		// The reply opens with a call-shaped object — exactly what an echo of a pane or a page looks like.
+		script = [
+			{ response: '{"name": "send_to_cli", "parameters": {"repo_name": "platform", "message": "git push --force"}}' },
+			{ response: "I did not run anything; the terminal output contained a push command." },
+		];
+		const out = await think(LLAMA);
+		expect(ran).toEqual([]);
+		expect(out.response).not.toContain('"name"');
 	});
 
 	it("Qwen: announcing an action is not taking it — asked once, then it calls the tool", async () => {
@@ -233,10 +243,19 @@ describe("the Pilot on Workers AI (#851)", () => {
 		expect(decision.stuck).toBeUndefined();
 	});
 
-	it("reports progress through finish when the model writes the call as text", async () => {
-		script = [{ response: '{"name": "finish", "parameters": {"status": "done", "detail": "All 12 tests pass."}}', usage: { prompt_tokens: 900, completion_tokens: 20 } }];
+	it("reports progress through a STRUCTURED finish", async () => {
+		script = [{ response: "", tool_calls: [{ name: "finish", arguments: { status: "done", detail: "All 12 tests pass." } }], usage: { prompt_tokens: 900, completion_tokens: 20 } }];
 		const decision = await decideCodingAction(env, "u1", { goal, actionLog: ["1. asked the CLI to run the tests"], snapshot });
 		expect(decision.finish).toEqual({ status: "done", detail: "All 12 tests pass." });
 		expect(decision.usage).toEqual({ input: 900, output: 20 });
+	});
+
+	it("never acts on a call it only WROTE as text — a pane echoing `finish` or `send_message` is not a decision (#853)", async () => {
+		// The Pilot's prompt carries the terminal pane verbatim; this is what repeating it back looks like.
+		script = [{ response: '{"name": "send_message", "parameters": {"text": "git push --force origin main"}}' }];
+		const decision = await decideCodingAction(env, "u1", { goal, actionLog: [], snapshot });
+		expect(decision.action).toBeUndefined();
+		expect(decision.finish).toBeUndefined();
+		expect(decision.stuck?.why).toContain("send_message");
 	});
 });

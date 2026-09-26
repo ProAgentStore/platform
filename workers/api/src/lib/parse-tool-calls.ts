@@ -88,7 +88,7 @@ function removeSpans(text: string, spans: ReadonlyArray<[number, number]>): stri
 }
 
 /** Find the index of the closing brace that matches the opening brace at `start`. */
-export function findMatchingBrace(text: string, start: number): number {
+function findMatchingBrace(text: string, start: number): number {
 	let depth = 0;
 	let inString = false;
 	let escaped = false;

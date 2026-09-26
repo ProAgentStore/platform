@@ -111,12 +111,12 @@ export async function copilotSummary(env: Env, userId: string | undefined, args:
 				{ label: "copilot.tools", value: tools },
 			],
 		})) as Record<string, unknown>;
-		let calls = normalizeToolCalls((raw.tool_calls as unknown[]) || []);
-		// The walker hands back the reply with the call spans removed (#395); `scrubOneShotReply`
-		// takes the markup families around them and discloses an invented RESULT rather than
-		// deleting it silently, which would leave a confident summary with its evidence gone.
+		// Only the structured tool-call field is a call (#853) — call-shaped JSON in the text may be a
+		// quotation of the terminal it was shown. The walker still hands back the reply with such spans
+		// removed (#395); `scrubOneShotReply` takes the markup families around them and discloses an
+		// invented RESULT rather than deleting it silently.
+		const calls = normalizeToolCalls((raw.tool_calls as unknown[]) || []);
 		const parsed = parseToolCallsFromText((raw.response as string) || "", ALL_INSPECT_TOOL_NAMES);
-		if (calls.length === 0 && raw.response) calls = parsed.calls;
 		if (calls.length === 0) return scrubOneShotReply(parsed.text);
 
 		const results: string[] = [];
