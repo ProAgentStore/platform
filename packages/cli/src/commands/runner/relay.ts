@@ -5,7 +5,7 @@ import { writeError, writeLine } from "../../output.js";
 import { apiPathSegment, clean, pagsApiBase, requestPags, requestRunner } from "./http.js";
 import { CLI_VERSION, runsFromSource } from "./process.js";
 import { installVersion, latestPublishedVersion, leaveForRestart, planRunnerUpdate, restarterFrom, RUNNER_UPDATE_PATH, supervisorNote, type UpdatePlan } from "./self-update.js";
-import { diffMembership, instanceLabel, pendingRegistrations, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance, type ReattachRequest } from "./membership.js";
+import { diffMembership, instanceLabel, pendingRegistrations, pinnedAway, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance, type ReattachRequest } from "./membership.js";
 import { formatStatusLine } from "./status-line.js";
 import type { PagsRequestOptions } from "./types.js";
 
@@ -169,6 +169,15 @@ export async function connectViaRelay(
 		const named = typeof request?.attach === "string" ? request.attach : "";
 		const plan = reattachPlan(request, { held: attached.has(named), blocked: blocked.has(named), watching: watchInstances, scope: instanceIds });
 		if (plan.refuse) return { status: 409, result: { error: plan.refuse } };
+		// A scoped run told the pin moved (#853 finding 13): let go of what is pinned elsewhere now —
+		// its socket and, with it, its heartbeat — and attach nothing.
+		if (plan.release) {
+			const res = await requestPags<{ instances?: DiscoverableInstance[] }>("GET", "/v1/instances/my/instances", { ...opts, pagsToken });
+			const released = pinnedAway(attached.keys(), res.instances ?? [], runnerNode, machine.names);
+			for (const id of released) detach(id, `${id.slice(0, 8)}… (pinned to another machine now)`);
+			if (released.length && attached.size === 0) writeLine("This `pags up --instance` holds no agent now — close it, or restart it without --instance.");
+			return { status: 200, result: { attached: [...attached.keys()], released } };
+		}
 		// A named agent (#856): let go of whatever this process holds for it, then attach it afresh.
 		if (plan.target) {
 			if (plan.unblock) blocked.delete(plan.target);

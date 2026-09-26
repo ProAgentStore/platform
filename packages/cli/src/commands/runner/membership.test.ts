@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { diffMembership, instanceLabel, isEligible, partitionByPin, pendingRegistrations, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance } from "./membership.js";
+import { diffMembership, instanceLabel, isEligible, partitionByPin, pendingRegistrations, pinnedAway, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance } from "./membership.js";
 
 const NODE = "my-laptop";
 const inst = (over: Partial<DiscoverableInstance> & { id: string }): DiscoverableInstance => ({
@@ -250,6 +250,45 @@ describe("reattachPlan — the remote `pags up --force`, for one agent (#856)", 
 		const scoped = { held: false, blocked: true, watching: false, scope: ["a1"] };
 		expect(reattachPlan({ attach: "a2" }, scoped).refuse).toMatch(/--instance/);
 		expect(reattachPlan({ attach: "a1" }, scoped)).toEqual({ target: "a1", unblock: true, detach: false, force: false });
-		expect(reattachPlan(undefined, scoped).refuse).toMatch(/--instance/);
+	});
+});
+
+// #853 finding 13. A repin sends the machine it moves the agent AWAY from a plain sync over that
+// agent's own socket. A scoped run refused every plain sync, so a `pags up --instance X` left behind
+// by a repin held X's socket — and its heartbeat — forever: X read "online" on the old machine, and
+// clearing the pin could route straight back to it.
+describe("a scoped run lets go of an agent the pin moved away (#853 finding 13)", () => {
+	const scoped = { held: true, blocked: false, watching: false, scope: ["a1"] };
+
+	it("a plain sync to a scoped run is a RELEASE pass, not a refusal — and it attaches nothing", () => {
+		expect(reattachPlan(undefined, scoped)).toEqual({ target: null, unblock: false, detach: false, force: false, release: true });
+		expect(reattachPlan({}, scoped).refuse).toBeUndefined();
+	});
+
+	it("a watching run keeps its full membership pass — no release-only mode there", () => {
+		expect(reattachPlan(undefined, { ...scoped, watching: true }).release).toBeUndefined();
+	});
+
+	it("a scoped run still refuses to take an agent it was not started for", () => {
+		expect(reattachPlan({ attach: "a2" }, scoped).refuse).toMatch(/--instance/);
+	});
+
+	it("pinnedAway: only a held agent whose pin names ANOTHER machine — never one pinned here, under an old name, unpinned, or not listed", () => {
+		const listed = [
+			inst({ id: "moved", config: { runnerNode: "other-box" } }),
+			inst({ id: "here", config: { runnerNode: NODE } }),
+			inst({ id: "old-name", config: { runnerNode: "my-laptop.local" } }),
+			inst({ id: "unpinned" }),
+			inst({ id: "not-held", config: { runnerNode: "other-box" } }),
+		];
+		expect(pinnedAway(["moved", "here", "old-name", "unpinned", "gone"], listed, NODE, ["my-laptop.local"])).toEqual(["moved"]);
+	});
+
+	it("the relay runs the release pass for a scoped run, detaching what pinnedAway names", () => {
+		const relaySrc = readFileSync(join(import.meta.dirname, "relay.ts"), "utf8");
+		const control = relaySrc.slice(relaySrc.indexOf("const answerControl"), relaySrc.indexOf("const attach = "));
+		expect(control).toMatch(/if \(plan\.release\)/);
+		expect(control).toContain("pinnedAway(attached.keys()");
+		expect(control).toMatch(/detach\(id/);
 	});
 });

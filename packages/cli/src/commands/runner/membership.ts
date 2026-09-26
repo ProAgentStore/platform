@@ -127,6 +127,19 @@ export function partitionByPin<T extends DiscoverableInstance>(
 }
 
 /**
+ * The agents this runner holds whose pin now names ANOTHER machine (#853 finding 13) — what a scoped
+ * run lets go of when a repin asks. Only the pin: an agent pinned here (under any of this machine's
+ * names), unpinned, or not in the listing at all is kept, because a scoped run was started for it.
+ */
+export function pinnedAway(held: Iterable<string>, instances: readonly DiscoverableInstance[], thisNode: string, alsoKnownAs: readonly string[] = []): string[] {
+	const pins = new Map(instances.map((i) => [i.id, i.config?.runnerNode]));
+	return [...held].filter((id) => {
+		const pin = pins.get(id);
+		return !!pin && pin !== thisNode && !alsoKnownAs.includes(pin);
+	});
+}
+
+/**
  * What the registration light should say, from the LIVE attached set (#810).
  *
  * The denominator is what this machine currently serves — not the list it was started with.
@@ -166,6 +179,8 @@ export interface ReattachPlan {
 	force: boolean;
 	/** A scoped run (`--instance`) that does not serve this agent refuses, with this sentence. */
 	refuse?: string;
+	/** A scoped run given a plain sync: let go of what the pin moved away, attach nothing (#853 finding 13). */
+	release?: true;
 }
 
 /**
@@ -179,6 +194,10 @@ export interface ReattachPlan {
 export function reattachPlan(request: ReattachRequest | undefined, state: { held: boolean; blocked: boolean; watching: boolean; scope: readonly string[] }): ReattachPlan {
 	const target = typeof request?.attach === "string" && request.attach ? request.attach : null;
 	const force = target !== null && request?.force === true;
+	// A plain sync is what a repin sends the machine it moves an agent AWAY from (#853 finding 13). A
+	// scoped run refused it, so a `pags up --instance X` held X — socket and heartbeat — forever after
+	// X was pinned elsewhere. Letting go only narrows the scope; nothing is attached.
+	if (!state.watching && !target) return { target, unblock: false, detach: false, force: false, release: true };
 	if (!state.watching && !(target && state.scope.includes(target))) {
 		return {
 			target,
