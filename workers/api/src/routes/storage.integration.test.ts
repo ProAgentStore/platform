@@ -1,9 +1,11 @@
 import { Hono } from "hono";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TOOL_CAPABLE_MODELS } from "../agent-do-prompt.js";
 import { HttpError } from "../lib/auth.js";
 import { BRAIN_MODELS, brainModel } from "../lib/brain-models.js";
+import { encryptKey } from "../lib/crypto.js";
 import { signSession } from "../lib/session.js";
+import { encodeCloudflareAiCredentials } from "../lib/user-ai.js";
 import { instanceStorageRoutes, storageRoutes } from "./storage.js";
 import type { Env } from "../types.js";
 
@@ -29,6 +31,15 @@ const rows = (v: unknown): Record<string, unknown>[] => (Array.isArray(v) ? v : 
  */
 
 const SECRET = "storage-integration-secret";
+/** The key-encryption key the stored Cloudflare credentials are sealed with — a test key. */
+const KEK = "0".repeat(63) + "1";
+
+/** A `user_api_keys` Cloudflare row as D1 stores it: the `{accountId, token}` envelope, encrypted (#853). */
+let cloudflareRow: Record<string, unknown>;
+beforeAll(async () => {
+	const { ciphertext, dekWrapped, iv } = await encryptKey(encodeCloudflareAiCredentials("acct123", "cf-token-abc"), KEK);
+	cloudflareRow = { 1: 1, key_ciphertext: ciphertext.buffer, dek_wrapped: dekWrapped.buffer, iv: iv.buffer, account_id: "acct123", key_hint: "…abc" };
+});
 
 interface DoCall {
 	agentDoName: string;
@@ -57,6 +68,7 @@ function buildApp(opts: Opts = {}) {
 
 	const env = {
 		SESSION_SIGNING_KEY: SECRET,
+		KEY_ENCRYPTION_KEY: KEK,
 		DB: {
 			prepare(sql: string) {
 				return {
@@ -67,7 +79,7 @@ function buildApp(opts: Opts = {}) {
 									const key = args[0] as string;
 									return agents.find((a) => a.id === key || a.slug === key) ?? null;
 								}
-								if (sql.includes("FROM user_api_keys")) return opts.cloudflareUsers?.includes(args[0] as string) ? { 1: 1 } : null;
+								if (sql.includes("FROM user_api_keys")) return opts.cloudflareUsers?.includes(args[0] as string) ? cloudflareRow : null;
 								if (sql.includes("FROM agent_instances")) {
 									const [id, uid] = args as [string, string];
 									const inst = instances.find((i) => i.id === id && i.user_id === uid);
@@ -349,6 +361,22 @@ describe("instance storage routes (owner-scoped, different D1 table)", () => {
 	});
 
 	describe("PUT state model — a brain pick is capability-verified (#852)", () => {
+		/**
+		 * Cloudflare's answer to the credential check (#853 finding 8). Every Workers AI pick asks it, so
+		 * the default is a working token; a test that needs a refusal or an outage sets its own.
+		 */
+		const probes: Array<{ url: string; auth: string | null }> = [];
+		let cloudflare: () => Promise<Response> = async () => Response.json({ success: true, result: [] });
+		beforeEach(() => {
+			probes.length = 0;
+			cloudflare = async () => Response.json({ success: true, result: [] });
+			vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+				probes.push({ url: String(url), auth: new Headers(init?.headers).get("authorization") });
+				return cloudflare();
+			});
+		});
+		afterEach(() => vi.unstubAllGlobals());
+
 		const put = async (model: unknown, extra: Record<string, unknown> = {}, cloudflareUsers: string[] = []) => {
 			const { app, env, doCalls } = buildApp({ instances: [{ id: "i1", user_id: "u1" }], cloudflareUsers });
 			const res = await json(app, env, "PUT", "/v1/instances/i1/state", { model, ...extra }, await tokenFor("u1"));
@@ -409,6 +437,68 @@ describe("instance storage routes (owner-scoped, different D1 table)", () => {
 				expect(String(body.error)).not.toMatch(/Sonnet/);
 				expect(sent).toBeUndefined();
 			}
+		});
+
+		// #853 finding 8: a credential row existing is not a credential that works. The pick used to be
+		// accepted on the row alone, and every turn then fell back to Anthropic without a word.
+		it("checks the stored credentials against Cloudflare before accepting a Workers AI pick", async () => {
+			const { status, sent } = await put("@cf/meta/llama-4-scout-17b-16e-instruct", {}, ["u1"]);
+			expect(status).toBe(200);
+			expect(sent).toEqual({ model: "@cf/meta/llama-4-scout-17b-16e-instruct", modelChosen: true });
+			expect(probes).toEqual([{ url: expect.stringMatching(/^https:\/\/api\.cloudflare\.com\/client\/v4\/accounts\/acct123\/ai\//), auth: "Bearer cf-token-abc" }]);
+		});
+
+		it("refuses a pick Cloudflare rejects the credentials for — bad token, revoked, wrong account — saying what to do; nothing stored (#853)", async () => {
+			for (const [code, message] of [
+				[400, "Authentication failed (status: 400)"],
+				[401, "Unauthorized"],
+				[403, "Forbidden"],
+				[404, "Could not route to /client/v4/accounts/acct123/ai/models/search, perhaps your object identifier is invalid?"],
+			] as const) {
+				cloudflare = async () => Response.json({ success: false, errors: [{ code: 9106, message }] }, { status: code });
+				const { status, body, sent } = await put("@cf/meta/llama-4-scout-17b-16e-instruct", {}, ["u1"]);
+				expect(status).toBe(400);
+				expect(String(body.error)).toMatch(new RegExp(`Cloudflare rejected your stored Workers AI credentials \\(HTTP ${code}: `));
+				expect(String(body.error)).toContain(message);
+				expect(String(body.error)).toMatch(/Profile → API Keys/);
+				expect(String(body.error)).not.toContain("cf-token-abc");
+				expect(sent).toBeUndefined();
+			}
+		});
+
+		it("does not accept a pick it could not check — Cloudflare unreachable is a 502 that changes nothing (#853)", async () => {
+			cloudflare = async () => {
+				throw new TypeError("fetch failed");
+			};
+			const down = await put("@cf/meta/llama-4-scout-17b-16e-instruct", {}, ["u1"]);
+			expect(down.status).toBe(502);
+			expect(String(down.body.error)).toMatch(/could not reach Cloudflare to check your Workers AI credentials.*nothing was changed/i);
+			expect(down.sent).toBeUndefined();
+
+			cloudflare = async () => new Response("upstream", { status: 503 });
+			const outage = await put("@cf/meta/llama-4-scout-17b-16e-instruct", {}, ["u1"]);
+			expect(outage.status).toBe(502);
+			expect(String(outage.body.error)).toMatch(/HTTP 503.*nothing was changed/);
+			expect(outage.sent).toBeUndefined();
+		});
+
+		it("refuses a pick whose stored credentials cannot even be read — never asking Cloudflare with nothing (#853)", async () => {
+			const sealed = cloudflareRow;
+			cloudflareRow = { ...sealed, key_ciphertext: new Uint8Array(16).buffer };
+			try {
+				const { status, body, sent } = await put("@cf/meta/llama-4-scout-17b-16e-instruct", {}, ["u1"]);
+				expect(status).toBe(400);
+				expect(String(body.error)).toMatch(/stored Cloudflare Workers AI credentials cannot be read.*Profile → API Keys/);
+				expect(probes).toEqual([]);
+				expect(sent).toBeUndefined();
+			} finally {
+				cloudflareRow = sealed;
+			}
+		});
+
+		it("an Anthropic pick never asks Cloudflare", async () => {
+			expect((await put("claude-sonnet-4-6", {}, ["u1"])).status).toBe(200);
+			expect(probes).toEqual([]);
 		});
 
 		it("never lets a caller mark a model chosen by itself", async () => {

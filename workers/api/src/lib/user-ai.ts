@@ -80,7 +80,7 @@ export function isCreditBalanceMessage(message: string): boolean {
 	return m.includes("credit balance") || m.includes("insufficient_funds") || m.includes("insufficient credit");
 }
 
-interface StoredCloudflareAiCredentials {
+export interface StoredCloudflareAiCredentials {
 	accountId: string;
 	token: string;
 }
@@ -688,7 +688,7 @@ export async function getUserProviderKey(
 	}
 }
 
-async function getUserCloudflareAiCredentials(
+export async function getUserCloudflareAiCredentials(
 	env: Env,
 	userId: string | undefined,
 ): Promise<StoredCloudflareAiCredentials> {

@@ -11,6 +11,7 @@ import { resolveGithubAccess } from "../lib/github-app.js";
 import { parseGithubUrl, type RepoAuthContext } from "../lib/repo-ingest.js";
 import { BRAIN_MODELS, brainModel, isWorkersAiModel } from "../lib/brain-models.js";
 import { TOOL_CAPABLE_MODELS } from "../agent-do-prompt.js";
+import { cloudflareAiCredentialProblem } from "../lib/cloudflare-ai-check.js";
 import type { Env } from "../types.js";
 
 export const storageRoutes = new Hono<{ Bindings: Env }>();
@@ -509,18 +510,24 @@ instanceStorageRoutes.get("/:id/state", async (c) => {
  * It must also be IN the brain catalogue (#853 finding 7). Calling tools is not enough: the Anthropic
  * brain always runs claude-sonnet-4-6, so a Haiku or Opus pick was accepted and ran — and billed —
  * Sonnet under another name, and a Workers AI model outside the catalogue never had #851's parity.
+ *
+ * And a Workers AI pick's credentials must WORK, checked against Cloudflare (#853 finding 8) — 502, not
+ * 400, when Cloudflare cannot be asked: the pick is not the owner's fault, and it is still not taken.
  */
-async function brainModelRefusal(env: Env, uid: string, model: unknown): Promise<string | null> {
+async function brainModelRefusal(env: Env, uid: string, model: unknown): Promise<{ status: 400 | 502; error: string } | null> {
+	const refuse = (error: string) => ({ status: 400 as const, error });
 	const options = BRAIN_MODELS.map((m) => `${m.id} (${m.hint})`).join("; ");
-	if (typeof model !== "string" || !model.trim()) return `A model id is required. Brain models: ${options}.`;
-	if (!TOOL_CAPABLE_MODELS.has(model)) return `${model} cannot call tools, so it cannot run this agent's brain. Brain models: ${options}.`;
+	if (typeof model !== "string" || !model.trim()) return refuse(`A model id is required. Brain models: ${options}.`);
+	if (!TOOL_CAPABLE_MODELS.has(model)) return refuse(`${model} cannot call tools, so it cannot run this agent's brain. Brain models: ${options}.`);
 	if (!brainModel(model)) {
 		const sonnet = model.startsWith("claude-") ? " The Anthropic brain always runs claude-sonnet-4-6, so this pick would run Sonnet, not the model named." : "";
-		return `${model} is not a brain model.${sonnet} Brain models: ${options}.`;
+		return refuse(`${model} is not a brain model.${sonnet} Brain models: ${options}.`);
 	}
 	if (!isWorkersAiModel(model)) return null;
 	const cf = await env.DB.prepare("SELECT 1 FROM user_api_keys WHERE user_id = ?1 AND provider = 'cloudflare'").bind(uid).first();
-	return cf ? null : `${model} runs on Cloudflare Workers AI, and no Cloudflare credentials are stored. Add your Cloudflare account ID and API token in Profile → API Keys, then pick it again.`;
+	if (!cf) return refuse(`${model} runs on Cloudflare Workers AI, and no Cloudflare credentials are stored. Add your Cloudflare account ID and API token in Profile → API Keys, then pick it again.`);
+	// …and the row must hold credentials Cloudflare accepts (#853 finding 8).
+	return cloudflareAiCredentialProblem(env, uid);
 }
 
 instanceStorageRoutes.put("/:id/state", async (c) => {
@@ -531,7 +538,7 @@ instanceStorageRoutes.put("/:id/state", async (c) => {
 	delete body.modelChosen;
 	if (body.model !== undefined) {
 		const refusal = await brainModelRefusal(c.env, session.uid, body.model);
-		if (refusal) throw new HttpError(400, refusal);
+		if (refusal) throw new HttpError(refusal.status, refusal.error);
 		body.modelChosen = true;
 	}
 	return proxyDO(c, instance.id, "/state", {
