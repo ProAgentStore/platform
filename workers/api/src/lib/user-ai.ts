@@ -113,8 +113,19 @@ export async function runUserWorkersAi(
 		});
 	}
 	if (opts?.honorModel && isWorkersAiModel(model)) {
-		const picked = await getUserCloudflareAiCredentials(env, userId).catch(() => null);
-		if (picked) return runCloudflareAi(env, userId, picked, model, body, ctx);
+		// The owner PICKED this model, so it runs here or the turn fails saying why (#853 finding 8).
+		// Falling through to the order below ran — and billed — Anthropic under the Cloudflare pick
+		// whenever the credentials were removed, revoked or unreadable after the pick was checked; and a
+		// read that failed on a LATER round flipped the provider mid-turn (#853 finding 9).
+		const picked = await getUserCloudflareAiCredentials(env, userId).catch((e: unknown) => (e instanceof Error ? e : new Error(String(e))));
+		if (!(picked instanceof Error)) return runCloudflareAi(env, userId, picked, model, body, ctx);
+		// No row at all is the one error thrown with the class's default message.
+		const removed = picked instanceof UserAiCredentialsError && picked.message === new UserAiCredentialsError().message;
+		throw new UserAiCredentialsError(
+			removed
+				? `${model} runs on Cloudflare Workers AI, and no Cloudflare credentials are stored — they were removed after this brain model was picked. Add your Cloudflare account ID and API token in Profile → API Keys, or pick another brain model.`
+				: `${model} runs on Cloudflare Workers AI, but your stored Cloudflare credentials cannot be read (${picked.message}). Re-add them in Profile → API Keys, or pick another brain model.`,
+		);
 	}
 	// BYOK: try providers in order of what the user has configured
 	const anthropicKey = await getUserProviderKey(env, userId, "anthropic");

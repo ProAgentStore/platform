@@ -232,6 +232,71 @@ function sseResponse(text: string, chunkSize = 0): Response {
 	return new Response(stream, { headers: { "Content-Type": "text/event-stream" } });
 }
 
+// #853 finding 8, the run-time half: the pick was checked when it was made (4bcf3cde), but credentials
+// deleted, revoked or made unreadable AFTERWARDS were read with `.catch(() => null)` and the turn fell
+// through to the Anthropic key — running and billing Sonnet while the console showed the pick.
+describe("an owner's Workers AI pick never falls back to Anthropic without a word (#853 finding 8)", () => {
+	const SCOUT = "@cf/meta/llama-4-scout-17b-16e-instruct";
+
+	/** An owner holding an Anthropic key, and — per `cloudflare` — a Cloudflare row, a broken one, or none. */
+	async function owner(cloudflare: "stored" | "unreadable" | "gone") {
+		const anthropic = await encryptKey("sk-ant-test", TEST_KEK);
+		const cf = await encryptedCloudflareRow();
+		const env = {
+			KEY_ENCRYPTION_KEY: TEST_KEK,
+			DB: {
+				prepare(sql: string) {
+					return {
+						bind(...args: unknown[]) {
+							return {
+								first: async () => {
+									if (!sql.includes("SELECT key_ciphertext")) return null;
+									const provider = args[1] ?? (sql.includes("'cloudflare'") ? "cloudflare" : undefined);
+									if (provider === "anthropic") return { key_ciphertext: anthropic.ciphertext, dek_wrapped: anthropic.dekWrapped, iv: anthropic.iv, key_hint: "test" };
+									if (cloudflare === "gone") return null;
+									return cloudflare === "unreadable" ? { ...cf, key_ciphertext: new Uint8Array(16), account_id: "acct-123", key_hint: "oken" } : { ...cf, account_id: "acct-123", key_hint: "oken" };
+								},
+								run: async () => ({ success: true }),
+							};
+						},
+					};
+				},
+			},
+		} as unknown as Env;
+		const fetchMock = vi.fn(async () => Response.json({ success: true, result: { response: "hello" } }));
+		vi.stubGlobal("fetch", fetchMock);
+		return { env, fetchMock };
+	}
+
+	it("credentials REMOVED after the pick: the turn fails, naming the pick and the remedy — Anthropic is never called", async () => {
+		const { env, fetchMock } = await owner("gone");
+		const err = await runUserWorkersAi(env, "user-1", SCOUT, { messages: [{ role: "user", content: "hi" }] }, undefined, { honorModel: true }).catch((e: unknown) => e);
+		expect(err).toBeInstanceOf(UserAiCredentialsError);
+		expect(String((err as Error).message)).toMatch(new RegExp(`${SCOUT.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")} runs on Cloudflare Workers AI.*no Cloudflare credentials are stored.*Profile → API Keys.*pick another brain model`));
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("credentials that can no longer be READ: the turn fails saying so — Anthropic is never called", async () => {
+		const { env, fetchMock } = await owner("unreadable");
+		const err = await runUserWorkersAi(env, "user-1", SCOUT, { messages: [] }, undefined, { honorModel: true }).catch((e: unknown) => e);
+		expect(err).toBeInstanceOf(UserAiCredentialsError);
+		expect(String((err as Error).message)).toMatch(/stored Cloudflare credentials cannot be read/);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("credentials still there: the pick runs on Workers AI, as before", async () => {
+		const { env, fetchMock } = await owner("stored");
+		await runUserWorkersAi(env, "user-1", SCOUT, { messages: [] }, undefined, { honorModel: true });
+		expect(String(fetchMock.mock.calls[0]?.[0])).toContain("api.cloudflare.com/client/v4/accounts/acct-123/ai/run/");
+	});
+
+	it("a model that was NOT picked keeps the long-standing order — no Cloudflare credentials, the Anthropic key runs it", async () => {
+		const { env, fetchMock } = await owner("gone");
+		await runUserWorkersAi(env, "user-1", SCOUT, { messages: [] }).catch(() => undefined);
+		expect(String(fetchMock.mock.calls[0]?.[0])).toContain("api.anthropic.com");
+	});
+});
+
 describe("system prompt blocks — the cacheable half and the per-turn half (#768)", () => {
 	const BLOCKS = [
 		{ label: "stable", text: "You are the Coder.\n\nHONESTY rules.", cache: true },

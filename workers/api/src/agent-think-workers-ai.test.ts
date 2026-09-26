@@ -40,6 +40,8 @@ let requests: Array<{ url: string; body: { messages: Array<{ role: string; conte
 
 /** The owner has Cloudflare credentials — and, when this is set, an Anthropic key as well (#852). */
 let anthropicKeyToo = false;
+/** The owner's Cloudflare credentials were deleted AFTER the model was picked (#853 finding 8). */
+let cloudflareGone = false;
 const KEY_ROW = { key_ciphertext: new ArrayBuffer(1), dek_wrapped: new ArrayBuffer(1), iv: new ArrayBuffer(1), account_id: "acct", key_hint: "oken" };
 const env = {
 	KEY_ENCRYPTION_KEY: "k",
@@ -48,7 +50,8 @@ const env = {
 			const result = {
 				async first() {
 					if (!/FROM user_api_keys/.test(sql)) return null;
-					return /provider = 'cloudflare'/.test(sql) || anthropicKeyToo ? KEY_ROW : null;
+					if (/provider = 'cloudflare'/.test(sql)) return cloudflareGone ? null : KEY_ROW;
+					return anthropicKeyToo ? KEY_ROW : null;
 				},
 				async all() {
 					return { results: [] };
@@ -65,6 +68,7 @@ const env = {
 beforeEach(() => {
 	ran.length = 0;
 	anthropicKeyToo = false;
+	cloudflareGone = false;
 	requests = [];
 	script = [];
 	vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
@@ -228,6 +232,31 @@ describe("an owner's brain pick is where the turn runs (#852)", () => {
 		expect(ran).toEqual(["read_terminal"]);
 		expect(requests.map((r) => r.url)).toEqual([`https://api.cloudflare.com/client/v4/accounts/acct/ai/run/${SCOUT}`, `https://api.cloudflare.com/client/v4/accounts/acct/ai/run/${SCOUT}`]);
 		expect(out.response).toContain("12 tests passed");
+	});
+
+	it("a PICKED Cloudflare model whose credentials were removed since: the turn FAILS saying why — it never quietly runs on Anthropic (#853 finding 8)", async () => {
+		anthropicKeyToo = true;
+		cloudflareGone = true;
+		const err = await think(SCOUT, true).catch((e: unknown) => e);
+		expect((err as Error).name).toBe("UserAiCredentialsError");
+		expect(String((err as Error).message)).toMatch(/runs on Cloudflare Workers AI.*no Cloudflare credentials are stored/);
+		expect(requests).toEqual([]);
+	});
+
+	it("credentials that stop reading on a LATER round fail the turn there — the round never flips to Anthropic mid-turn (#853 finding 9)", async () => {
+		anthropicKeyToo = true;
+		script = [scoutCall("abc123XYZ", "read_terminal", { repo_name: "platform" }), { response: "unused" }];
+		const fetchImpl = globalThis.fetch;
+		vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+			const res = await fetchImpl(url, init);
+			cloudflareGone = true; // gone from the second round on
+			return res;
+		});
+		const err = await think(SCOUT, true).catch((e: unknown) => e);
+		expect(ran).toEqual(["read_terminal"]);
+		expect((err as Error).name).toBe("UserAiCredentialsError");
+		expect(requests).toHaveLength(1);
+		expect(requests.every((r) => r.url.includes("api.cloudflare.com"))).toBe(true);
 	});
 
 	it("an INHERITED Cloudflare model keeps running on Anthropic for an owner who holds its key", async () => {
