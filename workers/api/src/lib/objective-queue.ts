@@ -10,6 +10,7 @@
 // `(instance_id, repo_id)` and what each `status` means.
 
 import type { Env } from "../types.js";
+import { MAX_CONFIGURABLE_OBJECTIVE_CHARS } from "./loop-limits.js";
 
 /** Every status an entry can hold. See the migration for what each one means. */
 export const QUEUE_STATUSES = ["pending", "running", "started", "cancelled", "failed"] as const;
@@ -75,8 +76,8 @@ function toEntry(row: ObjectiveQueueRow): ObjectiveQueueEntry {
 	};
 }
 
-/** The same bound `objective` cap `createLoopRun` and `POST /loop` already enforce. */
-const OBJECTIVE_MAX = 2000;
+/** The widest cap any instance may set (#854) — `POST /loop` has already refused past the instance's own. */
+const OBJECTIVE_MAX = MAX_CONFIGURABLE_OBJECTIVE_CHARS;
 
 export interface EnqueueInput {
 	instanceId: string;

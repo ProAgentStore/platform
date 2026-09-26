@@ -18,6 +18,49 @@ export interface LoopLimitsConfig {
 	minIterations?: number;
 	/** Clamp a request DOWN to this. Absent ⇒ the account ceiling alone applies. */
 	maxIterations?: number;
+	/** The longest objective a run on this instance accepts (#854). Absent ⇒ `DEFAULT_MAX_OBJECTIVE_CHARS`. */
+	maxObjectiveChars?: number;
+}
+
+/**
+ * How long a run's objective may be, in characters, when the owner has set nothing (#854).
+ *
+ * It was 2,000 — an input-hardening number from `/loop-decide` (ceb19f22) copied into every entry
+ * point by #158, bounding no column (both are TEXT) and no model window. What it does bound is the
+ * Pilot's system prompt, which carries the objective whole on EVERY decision beside ~4.4k chars of
+ * rules, a 6k-char terminal pane and the step log. 8,000 chars (~2k tokens) keeps that worst case
+ * near 7k tokens — inside the tightest brain model (Llama 3.3's 24k window, #852) with room left
+ * for the 2,048-token reply — and fits an issue's acceptance criteria plus a refinement.
+ */
+export const DEFAULT_MAX_OBJECTIVE_CHARS = 8_000;
+
+/**
+ * The range an owner may set `maxObjectiveChars` to. The ceiling is the same arithmetic taken to
+ * its limit: 20k chars (~5k tokens) still leaves the smallest window room for the pane and reply.
+ * It is also what every store slices to, so nothing an instance accepts is ever cut afterwards.
+ */
+export const MIN_CONFIGURABLE_OBJECTIVE_CHARS = 100;
+export const MAX_CONFIGURABLE_OBJECTIVE_CHARS = 20_000;
+
+/** The objective cap in force on an instance. */
+export function effectiveMaxObjectiveChars(config: LoopLimitsConfig): number {
+	return config.maxObjectiveChars ?? DEFAULT_MAX_OBJECTIVE_CHARS;
+}
+
+/** The cap in force and the range it may be set to — what the loop-limits routes report beside the iteration bounds. */
+export function objectiveCapView(config: LoopLimitsConfig) {
+	return {
+		maxObjectiveChars: effectiveMaxObjectiveChars(config),
+		objectiveChars: { default: DEFAULT_MAX_OBJECTIVE_CHARS, min: MIN_CONFIGURABLE_OBJECTIVE_CHARS, max: MAX_CONFIGURABLE_OBJECTIVE_CHARS },
+	};
+}
+
+/**
+ * Why `objective` is refused, or null. States both numbers, so a caller can fix it in one try —
+ * the bare "objective too long" named neither the limit nor how far over it was.
+ */
+export function objectiveTooLong(objective: string, limit: number): string | null {
+	return objective.length > limit ? `objective too long: ${objective.length} chars, limit ${limit}` : null;
 }
 
 /**
@@ -57,7 +100,30 @@ export function sanitizeLoopLimitsConfig(raw: unknown): LoopLimitsConfig {
 	const out: LoopLimitsConfig = {};
 	if (max !== undefined) out.maxIterations = max;
 	if (min !== undefined) out.minIterations = max !== undefined ? Math.min(min, max) : min;
+	const chars = objectiveBound(r.maxObjectiveChars);
+	if (chars !== undefined) out.maxObjectiveChars = chars;
 	return out;
+}
+
+function objectiveBound(raw: unknown): number | undefined {
+	const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : Number.NaN;
+	if (!Number.isFinite(n) || n < 1) return undefined;
+	return Math.max(MIN_CONFIGURABLE_OBJECTIVE_CHARS, Math.min(MAX_CONFIGURABLE_OBJECTIVE_CHARS, Math.floor(n)));
+}
+
+/**
+ * A PUT body applied to what is stored (#854). The iteration pair keeps its original meaning — the
+ * body REPLACES it, and naming neither clears it — unless the body only speaks about the objective
+ * cap, which must not wipe iteration bounds the owner set in another call. `maxObjectiveChars` is a
+ * patch of its own: absent keeps it, `null`/`0` returns it to the default. An empty body clears all.
+ */
+export function mergeLoopLimits(stored: LoopLimitsConfig, raw: unknown): LoopLimitsConfig {
+	const body = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+	const speaksIterations = body.minIterations !== undefined || body.maxIterations !== undefined;
+	const speaksObjective = "maxObjectiveChars" in body;
+	const iterations = speaksIterations || !speaksObjective ? body : stored;
+	const chars = speaksObjective ? body.maxObjectiveChars : Object.keys(body).length ? stored.maxObjectiveChars : undefined;
+	return sanitizeLoopLimitsConfig({ minIterations: iterations.minIterations, maxIterations: iterations.maxIterations, maxObjectiveChars: chars });
 }
 
 function bound(raw: unknown): number | undefined {

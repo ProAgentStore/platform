@@ -5,6 +5,7 @@
 
 import { statusFor, type LoopStopReason } from "./agent-loop.js";
 import type { Env } from "../types.js";
+import { MAX_CONFIGURABLE_OBJECTIVE_CHARS } from "./loop-limits.js";
 
 export interface LoopRunRow {
 	run_id: string;
@@ -207,7 +208,7 @@ export async function createLoopRun(
 			input.runId,
 			input.userId,
 			input.instanceId,
-			input.objective.slice(0, 2000),
+			input.objective.slice(0, MAX_CONFIGURABLE_OBJECTIVE_CHARS),
 			input.maxIterations,
 			input.budgetId ?? null,
 			input.startedAt,

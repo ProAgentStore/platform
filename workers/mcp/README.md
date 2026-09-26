@@ -403,8 +403,8 @@ immediately instead of a whole transcript.
 | `check_instance_loop` | Status, steps taken, stop reason (omit `run_id` to list runs) | read | | |
 | `continue_instance_run` | Carry a STOPPED run's objective onto a fresh run, briefed on what it already landed. Only after an ending with no verdict; reuses its repo and step cap, opens its own budget; `note` adds the owner's later instruction to the objective (#806) | write | yes | |
 | `preview_instance_run_continue` | What a continue would CARRY FORWARD, before spending on it: whether the briefing is this run's, another run's or none at all, the note the new run would get, and the step cap it would be given. A run that cannot be continued still answers, with the refusal (#806) | read | | |
-| `get_instance_loop_limits` | The iteration floor and ceiling every run on this instance is clamped into, plus the account ceiling they sit under (#820) | read | | |
-| `set_instance_loop_limits` | Set that floor and ceiling — they bind whatever `max_iterations` a caller passes; omit both to clear. An inverted pair is refused, not repaired | write | yes | |
+| `get_instance_loop_limits` | The iteration floor and ceiling every run on this instance is clamped into, plus the account ceiling they sit under (#820), and the objective cap in force (`maxObjectiveChars`, default 8,000, #854) | read | | |
+| `set_instance_loop_limits` | Set that floor and ceiling — they bind whatever `max_iterations` a caller passes; omit everything to clear. An inverted pair is refused, not repaired. `max_objective_chars` sets the instance's objective cap (100–20,000; 0 = default 8,000) and, alone, leaves the iteration bounds as they are | write | yes | |
 | `get_instance_loop_presets` | The saved objectives the loop form offers, and whose list it is (`instance` / `agent` / `default`) (#613) | read | | |
 | `set_instance_loop_presets` | Replace the instance's own presets — the whole list; `[]` goes back to inheriting. An out-of-limit list is refused, not trimmed | write | yes | |
 | `stop_instance_loop` | Cooperative stop — the in-flight step finishes | write | no ([why](#tools-with-no-dry-run)) | |

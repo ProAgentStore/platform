@@ -1,6 +1,6 @@
 import type { Env } from "../types.js";
 import { patchInstanceConfig, readInstanceConfigPair, removeInstanceConfigKey } from "./instance-config.js";
-import { hasLoopLimits, sanitizeLoopLimitsConfig, type LoopLimitsConfig } from "./loop-limits.js";
+import { hasLoopLimits, mergeLoopLimits, sanitizeLoopLimitsConfig, type LoopLimitsConfig } from "./loop-limits.js";
 
 /**
  * D1 access for the per-instance iteration bounds (#820) — the mirror of `loop-presets-store.ts`.
@@ -37,8 +37,10 @@ export async function writeLoopLimits(
 	userId: string,
 	raw: unknown,
 ): Promise<LoopLimitsConfig | null> {
-	const limits = sanitizeLoopLimitsConfig(raw);
-	const ok = hasLoopLimits(limits)
+	const limits = mergeLoopLimits(await readLoopLimits(env, instanceId, userId), raw);
+	// `hasLoopLimits` is iteration-only on purpose (it decides the Pilot's step default), so the
+	// objective cap is asked about separately before "nothing configured" removes the key.
+	const ok = hasLoopLimits(limits) || limits.maxObjectiveChars !== undefined
 		? await patchInstanceConfig(env, instanceId, userId, KEY, limits)
 		: await removeInstanceConfigKey(env, instanceId, userId, KEY);
 	return ok ? limits : null;

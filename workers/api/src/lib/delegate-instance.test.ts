@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { delegateToInstance } from "./delegate-instance.js";
 import type { Env } from "../types.js";
+import { DEFAULT_MAX_OBJECTIVE_CHARS } from "./loop-limits.js";
 
 /** A registered, heartbeating runner — the default state these tests reason from. */
 const RUNTIME_ROW = {
@@ -15,7 +16,7 @@ const RUNTIME_ROW = {
 /** D1 + workflow stub. `edges` seeds the owner's supervision graph. */
 function buildEnv(
 	edges: Array<[string, string]> = [["sup", "sub"]],
-	opts: { targetConfig?: string | null; repos?: unknown[]; session?: unknown } = {},
+	opts: { targetConfig?: string | null; repos?: unknown[]; session?: unknown; subordinateConfig?: string } = {},
 ) {
 	const created: Array<Record<string, unknown>> = [];
 	const codingCreated: Array<Record<string, unknown>> = [];
@@ -29,6 +30,8 @@ function buildEnv(
 					bind(...args: unknown[]) {
 						return {
 							async first() {
+								// The subordinate's own config, for its loop limits (#854).
+								if (sql.includes("owner_preferences")) return { config: opts.subordinateConfig ?? "{}", agent_config: null, owner_preferences: null };
 								// The capability lookup that decides chat-loop vs Pilot.
 								if (sql.includes("JOIN agents a ON a.id = i.agent_id")) {
 									// Default to a PLAIN agent. agentCapabilities also has a slug/category
@@ -140,9 +143,21 @@ describe("delegateToInstance — the graph is the authority", () => {
 		expect(await delegateToInstance(env, { ...base, objective: "  " })).toMatchObject({ ok: false, status: 400 });
 	});
 
+	it("applies the SUBORDINATE's own objective cap — raised or lowered (#854)", async () => {
+		const low = buildEnv([["sup", "sub"]], { subordinateConfig: JSON.stringify({ loopLimits: { maxObjectiveChars: 200 } }) }).env;
+		expect(await delegateToInstance(low, { ...base, objective: "x".repeat(201) })).toMatchObject({ ok: false, status: 400, error: "objective too long: 201 chars, limit 200" });
+		const high = buildEnv([["sup", "sub"]], { subordinateConfig: JSON.stringify({ loopLimits: { maxObjectiveChars: 12_000 } }) }).env;
+		expect(await delegateToInstance(high, { ...base, objective: "x".repeat(10_000) })).not.toMatchObject({ error: expect.stringContaining("too long") });
+	});
+
 	it("rejects an oversized objective", async () => {
 		const { env } = buildEnv();
-		expect(await delegateToInstance(env, { ...base, objective: "x".repeat(2001) })).toMatchObject({ ok: false, status: 400 });
+		// Refused past the subordinate's cap — the default when it set none — naming both numbers (#854).
+		expect(await delegateToInstance(env, { ...base, objective: "x".repeat(DEFAULT_MAX_OBJECTIVE_CHARS + 1) })).toMatchObject({
+			ok: false,
+			status: 400,
+			error: `objective too long: ${DEFAULT_MAX_OBJECTIVE_CHARS + 1} chars, limit ${DEFAULT_MAX_OBJECTIVE_CHARS}`,
+		});
 	});
 });
 

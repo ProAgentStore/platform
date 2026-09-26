@@ -4,6 +4,7 @@ import { HttpError } from "../lib/auth.js";
 import { signSession } from "../lib/session.js";
 import { instanceRoutes } from "./instances.js";
 import type { Env } from "../types.js";
+import { DEFAULT_MAX_OBJECTIVE_CHARS } from "../lib/loop-limits.js";
 
 /**
  * INTEGRATION test for the instance-lifecycle routes in instances.ts. Drives the
@@ -82,6 +83,11 @@ function buildApp(opts: Opts = {}) {
 							// subscribe: creator lookup + subscriber login
 							if (sql.includes("SELECT owner_id FROM agents")) return { owner_id: agentMeta.owner_id ?? "creator" };
 							if (sql.includes("github_login FROM users")) return { github_login: "octocat" };
+							// readInstanceConfigPair (loop limits, #854): the instance's config in its own column.
+							if (sql.includes("owner_preferences")) {
+								const [id, uid] = args as [string, string];
+								return owns.has(`${id}::${uid}`) ? { config: instanceConfig, agent_config: agentMeta.config, owner_preferences: null } : null;
+							}
 							// settingsSchemaForInstance: JOIN agents on owned instance
 							if (sql.includes("JOIN agents a ON a.id = i.agent_id")) {
 								const [id, uid] = args as [string, string];
@@ -773,6 +779,23 @@ describe("POST /v1/instances/:id/loop-decide (integration)", () => {
 		const res = await post(app, env, "/v1/instances/inst-1/loop-decide", { objective: "do it", messages: "nope" }, await tokenFor("u1"));
 		expect(res.status).toBe(400);
 		expect((await res.json() as { error: string }).error).toContain("messages must be an array");
+	});
+
+	it("refuses an objective past the 8,000-char default, naming both numbers (#854)", async () => {
+		const { app, env } = buildApp({ owns: [["inst-1", "u1"]] });
+		const res = await post(app, env, "/v1/instances/inst-1/loop-decide", { objective: "x".repeat(DEFAULT_MAX_OBJECTIVE_CHARS + 1), messages: [] }, await tokenFor("u1"));
+		expect(res.status).toBe(400);
+		expect((await res.json() as { error: string }).error).toBe(`objective too long: ${DEFAULT_MAX_OBJECTIVE_CHARS + 1} chars, limit ${DEFAULT_MAX_OBJECTIVE_CHARS}`);
+	});
+
+	it("applies the instance's own cap, and lets an objective within it through to the model call (#854)", async () => {
+		const instanceConfig = JSON.stringify({ loopLimits: { maxObjectiveChars: 300 } });
+		const { app, env } = buildApp({ owns: [["inst-1", "u1"]], instanceConfig });
+		const over = await post(app, env, "/v1/instances/inst-1/loop-decide", { objective: "x".repeat(301), messages: [] }, await tokenFor("u1"));
+		expect((await over.json() as { error: string }).error).toBe("objective too long: 301 chars, limit 300");
+		// Within the cap it passes validation and reaches the BYOK call — 402 here, as no key is set.
+		const within = await post(app, env, "/v1/instances/inst-1/loop-decide", { objective: "x".repeat(300), messages: [] }, await tokenFor("u1"));
+		expect(within.status).toBe(402);
 	});
 
 	it("402s when the owner has no API key configured (BYOK credentials error)", async () => {

@@ -22,6 +22,8 @@ import { loopDriverFor } from "./loop-drivers.js";
 import { capabilitiesForInstance } from "./agent-capabilities.js";
 import { logEvent } from "./events.js";
 import type { Env } from "../types.js";
+import { effectiveMaxObjectiveChars, objectiveTooLong } from "./loop-limits.js";
+import { readLoopLimits } from "./loop-limits-store.js";
 
 export interface DelegateInstanceInput {
 	userId: string;
@@ -48,7 +50,10 @@ export type DelegateInstanceResult =
 export async function delegateToInstance(env: Env, input: DelegateInstanceInput): Promise<DelegateInstanceResult> {
 	const objective = (input.objective || "").trim();
 	if (!objective) return { ok: false, status: 400, error: "An objective is required to delegate." };
-	if (objective.length > 2000) return { ok: false, status: 400, error: "Objective too long." };
+	// The SUBORDINATE's cap: it is the instance whose runs carry the objective (#854).
+	const limits = await readLoopLimits(env, input.subordinateInstanceId, input.userId).catch(() => ({}));
+	const tooLong = objectiveTooLong(objective, effectiveMaxObjectiveChars(limits));
+	if (tooLong) return { ok: false, status: 400, error: tooLong };
 	if (input.supervisorInstanceId === input.subordinateInstanceId) {
 		return { ok: false, status: 400, error: "An agent cannot delegate to itself." };
 	}

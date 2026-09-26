@@ -54,7 +54,7 @@ import type { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { CONTINUE_RESUME_LOOKBACK_MS, getLoopRun, isResumableStopReason, type LoopRunView } from "../lib/agent-loop-store.js";
 import { sanitizeMaxIterations } from "../lib/agent-loop.js";
-import { clampIterations } from "../lib/loop-limits.js";
+import { clampIterations, DEFAULT_MAX_OBJECTIVE_CHARS, effectiveMaxObjectiveChars } from "../lib/loop-limits.js";
 import { readLoopLimits } from "../lib/loop-limits-store.js";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { getRepo, getSession } from "../lib/coding-store.js";
@@ -118,8 +118,6 @@ async function continueCeiling(env: Env, userId: string, instanceId: string, run
 	return clampIterations(sanitizeMaxIterations(requested ?? run.maxIterations, accountCeiling), limits, accountCeiling);
 }
 
-/** The objective column's own bound (`createLoopRun` slices to it; `POST /:id/loop` refuses past it). */
-const OBJECTIVE_MAX = 2000;
 
 /** How the owner's addition is introduced. Exported so the tests quote it rather than restate it. */
 export const OWNER_NOTE_LEAD = "Added by the owner when continuing this run:";
@@ -140,13 +138,13 @@ export const OWNER_NOTE_LEAD = "Added by the owner when continuing this run:";
  * Refused, not truncated, past the column's bound. A note cut mid-sentence is an instruction the
  * owner did not give, and `createLoopRun` would cut it silently.
  */
-export function continueObjective(objective: string, note: unknown): string {
+export function continueObjective(objective: string, note: unknown, limit = DEFAULT_MAX_OBJECTIVE_CHARS): string {
 	const added = typeof note === "string" ? note.trim() : "";
 	if (!added) return objective;
 	const combined = `${objective}\n\n${OWNER_NOTE_LEAD} ${added}`;
-	if (combined.length > OBJECTIVE_MAX) {
-		const room = Math.max(0, OBJECTIVE_MAX - objective.length - OWNER_NOTE_LEAD.length - 3);
-		throw new HttpError(400, `note too long — the objective and your note share ${OBJECTIVE_MAX} characters, which leaves ${room} for the note`);
+	if (combined.length > limit) {
+		const room = Math.max(0, limit - objective.length - OWNER_NOTE_LEAD.length - 3);
+		throw new HttpError(400, `note too long — the objective and your note share ${limit} characters, which leaves ${room} for the note`);
 	}
 	return combined;
 }
@@ -192,7 +190,9 @@ export function registerLoopContinueRoutes(router: Hono<{ Bindings: Env }>): voi
 			budget?: { costMicros?: number; delegations?: number; maxDepth?: number };
 		};
 		// Before anything is opened: a refused note must not leave a budget behind it.
-		const objective = continueObjective(run.objective, body.note);
+		// The instance's own objective cap (#854) — the same one `POST /:id/loop` applies.
+		const limits = await readLoopLimits(c.env, instanceId, session.uid).catch(() => ({}));
+		const objective = continueObjective(run.objective, body.note, effectiveMaxObjectiveChars(limits));
 
 		// The stopped run's own ceiling is the DEFAULT, not a floor to add to. "Grant more
 		// iterations" is what the owner asks for by naming a number; pressing Continue with an

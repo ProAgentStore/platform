@@ -2,8 +2,14 @@ import { describe, expect, it } from "vitest";
 import { MAX_ITERATIONS_CAP, sanitizeMaxIterations } from "./agent-loop.js";
 import {
 	clampIterations,
+	DEFAULT_MAX_OBJECTIVE_CHARS,
+	effectiveMaxObjectiveChars,
 	hasLoopLimits,
 	MAX_CONFIGURABLE_ITERATIONS,
+	MAX_CONFIGURABLE_OBJECTIVE_CHARS,
+	mergeLoopLimits,
+	MIN_CONFIGURABLE_OBJECTIVE_CHARS,
+	objectiveTooLong,
 	PILOT_DEFAULT_MAX_STEPS,
 	sanitizeLoopLimitsConfig,
 } from "./loop-limits.js";
@@ -197,5 +203,52 @@ describe("the unnamed-caller path the coding driver takes (delegate_goal names n
 
 	it("applies a configured ceiling on the one path that never names a number", () => {
 		expect(pilotSteps({ maxIterations: 20 })).toBe(20);
+	});
+});
+
+describe("the objective cap (#854)", () => {
+	it("is 8,000 when the instance sets nothing, and the instance's own number when it does", () => {
+		expect(effectiveMaxObjectiveChars({})).toBe(DEFAULT_MAX_OBJECTIVE_CHARS);
+		expect(effectiveMaxObjectiveChars({ maxObjectiveChars: 12_000 })).toBe(12_000);
+		expect(effectiveMaxObjectiveChars({ maxObjectiveChars: 500 })).toBe(500);
+	});
+
+	it("names the length and the limit when refusing, and passes anything within it", () => {
+		expect(objectiveTooLong("x".repeat(9123), 8000)).toBe("objective too long: 9123 chars, limit 8000");
+		expect(objectiveTooLong("x".repeat(8000), 8000)).toBeNull();
+		expect(objectiveTooLong("", 8000)).toBeNull();
+	});
+
+	it("stores a configured cap inside its range, and drops nonsense rather than throwing", () => {
+		expect(sanitizeLoopLimitsConfig({ maxObjectiveChars: 12_000 })).toEqual({ maxObjectiveChars: 12_000 });
+		expect(sanitizeLoopLimitsConfig({ maxObjectiveChars: 10 })).toEqual({ maxObjectiveChars: MIN_CONFIGURABLE_OBJECTIVE_CHARS });
+		expect(sanitizeLoopLimitsConfig({ maxObjectiveChars: 1e9 })).toEqual({ maxObjectiveChars: MAX_CONFIGURABLE_OBJECTIVE_CHARS });
+		expect(sanitizeLoopLimitsConfig({ maxObjectiveChars: "lots" })).toEqual({});
+		expect(sanitizeLoopLimitsConfig({ maxObjectiveChars: 0 })).toEqual({});
+	});
+
+	it("is NOT an iteration limit — setting it alone leaves the Pilot's step default in charge", () => {
+		expect(hasLoopLimits({ maxObjectiveChars: 12_000 })).toBe(false);
+	});
+
+	describe("a PUT body merged over what is stored", () => {
+		const stored = { minIterations: 30, maxIterations: 60, maxObjectiveChars: 12_000 };
+
+		it("setting only the objective cap keeps the owner's iteration bounds", () => {
+			expect(mergeLoopLimits({ minIterations: 30, maxIterations: 60 }, { maxObjectiveChars: 4000 })).toEqual({ minIterations: 30, maxIterations: 60, maxObjectiveChars: 4000 });
+		});
+
+		it("setting only iterations keeps the objective cap", () => {
+			expect(mergeLoopLimits(stored, { maxIterations: 40 })).toEqual({ maxIterations: 40, maxObjectiveChars: 12_000 });
+		});
+
+		it("null or 0 returns the objective cap to the default, and leaves iterations alone", () => {
+			expect(mergeLoopLimits(stored, { maxObjectiveChars: null })).toEqual({ minIterations: 30, maxIterations: 60 });
+			expect(mergeLoopLimits(stored, { maxObjectiveChars: 0 })).toEqual({ minIterations: 30, maxIterations: 60 });
+		});
+
+		it("an empty body still clears everything, as it always cleared the configuration", () => {
+			expect(mergeLoopLimits(stored, {})).toEqual({});
+		});
 	});
 });

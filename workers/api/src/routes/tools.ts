@@ -47,7 +47,7 @@ import { registerLoopContinueRoutes } from "./loop-continue-routes.js";
 import { readLoopPresets, writeLoopPresets } from "../lib/loop-presets-store.js";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { sanitizeMaxIterations } from "../lib/agent-loop.js";
-import { clampIterations, MAX_CONFIGURABLE_ITERATIONS } from "../lib/loop-limits.js";
+import { clampIterations, effectiveMaxObjectiveChars, MAX_CONFIGURABLE_ITERATIONS, objectiveCapView, objectiveTooLong } from "../lib/loop-limits.js";
 import { readLoopLimits, writeLoopLimits } from "../lib/loop-limits-store.js";
 import { openBudget, resolveAccountCeilings } from "../lib/delegation-budget-store.js";
 import { delegateToInstance } from "../lib/delegate-instance.js";
@@ -1142,7 +1142,9 @@ toolRoutes.post("/:id/loop", async (c) => {
 	const repairCheckout = body.repairCheckout === true;
 	const objective = String(body.objective ?? "").trim() || (repairCheckout ? REPAIR_RUN_OBJECTIVE : "");
 	if (!objective) throw new HttpError(400, "objective is required");
-	if (objective.length > 2000) throw new HttpError(400, "objective too long");
+	const loopLimits = await readLoopLimits(c.env, instanceId, session.uid).catch(() => ({})); // the objective cap (#854), then iterations (#820)
+	const tooLong = objectiveTooLong(objective, effectiveMaxObjectiveChars(loopLimits));
+	if (tooLong) throw new HttpError(400, tooLong);
 	// Which repo, when the caller knows (#374). Optional because it is driver-specific: a
 	// supervisor delegating a goal names an agent, not a checkout, and the chat driver ignores it
 	// entirely — but the Coding tab is open on ONE session and `repos[0]` is the wrong engine for
@@ -1156,7 +1158,6 @@ toolRoutes.post("/:id/loop", async (c) => {
 	// number that will actually run — a caller told "10" while a floor of 30 was applied would be
 	// left wondering why the run went longer than it asked for, which is AC4.
 	const ceilings = await resolveAccountCeilings(c.env, session.uid);
-	const loopLimits = await readLoopLimits(c.env, instanceId, session.uid).catch(() => ({}));
 	const maxIterations = clampIterations(
 		sanitizeMaxIterations(body.maxIterations, ceilings.loopMaxIterations),
 		loopLimits,
@@ -1250,18 +1251,18 @@ toolRoutes.get("/:id/loop-limits", async (c) => {
 		readLoopLimits(c.env, instanceId, session.uid),
 		resolveAccountCeilings(c.env, session.uid),
 	]);
-	return c.json({ limits, accountCeiling: ceilings.loopMaxIterations, maxConfigurable: MAX_CONFIGURABLE_ITERATIONS });
+	return c.json({ limits, accountCeiling: ceilings.loopMaxIterations, maxConfigurable: MAX_CONFIGURABLE_ITERATIONS, ...objectiveCapView(limits) });
 });
 
 toolRoutes.put("/:id/loop-limits", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("id");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
-	const body = (await c.req.json().catch(() => ({}))) as { minIterations?: unknown; maxIterations?: unknown };
+	const body = (await c.req.json().catch(() => ({}))) as { minIterations?: unknown; maxIterations?: unknown; maxObjectiveChars?: unknown };
 	const saved = await writeLoopLimits(c.env, instanceId, session.uid, body);
 	if (!saved) throw new HttpError(404, "instance not found");
 	const ceilings = await resolveAccountCeilings(c.env, session.uid);
-	return c.json({ limits: saved, accountCeiling: ceilings.loopMaxIterations, maxConfigurable: MAX_CONFIGURABLE_ITERATIONS });
+	return c.json({ limits: saved, accountCeiling: ceilings.loopMaxIterations, maxConfigurable: MAX_CONFIGURABLE_ITERATIONS, ...objectiveCapView(saved) });
 });
 
 toolRoutes.put("/:id/loop-presets", async (c) => {

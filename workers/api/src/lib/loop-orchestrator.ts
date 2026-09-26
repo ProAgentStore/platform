@@ -12,6 +12,7 @@ import { logEvent } from "./events.js";
 import { parseLoopDecision, type LoopDecisionResult } from "./loop-decide.js";
 import { runUserWorkersAi } from "./user-ai.js";
 import type { Env } from "../types.js";
+import { MAX_CONFIGURABLE_OBJECTIVE_CHARS } from "./loop-limits.js";
 
 export interface LoopTurn {
 	role: string;
@@ -29,7 +30,7 @@ export interface LoopDecideInput {
 /** Clamp the inputs the model sees. Pure, so the prompt shape is testable without a model. */
 export function sanitizeDecideInput(raw: Partial<LoopDecideInput>): LoopDecideInput {
 	return {
-		objective: String(raw.objective ?? "").slice(0, 2000),
+		objective: String(raw.objective ?? "").slice(0, MAX_CONFIGURABLE_OBJECTIVE_CHARS),
 		messages: Array.isArray(raw.messages) ? raw.messages.slice(-20) : [],
 		iteration: Math.max(0, Math.min(1_000, Number(raw.iteration) || 0)),
 		maxIterations: Math.max(1, Math.min(1_000, Number(raw.maxIterations) || 10)),
@@ -55,7 +56,8 @@ export function buildLoopUserContent(input: LoopDecideInput): string {
 		.slice(-6)
 		.map((m) => `${m.role}: ${(m.content || "").slice(0, 2000)}`)
 		.join("\n\n");
-	return `OBJECTIVE: ${input.objective.slice(0, 500)}\n\nCONVERSATION:\n${conversationText || "(no messages yet)"}`;
+	// The whole objective (#854): it was cut to 500 here, a quarter of what the route accepted, silently.
+	return `OBJECTIVE: ${input.objective}\n\nCONVERSATION:\n${conversationText || "(no messages yet)"}`;
 }
 
 /**

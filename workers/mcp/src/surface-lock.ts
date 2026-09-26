@@ -911,4 +911,9 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// halves together or refuses by name, so an MCP-made coding repo can no longer be half a binding.
 	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.57 is published.
 	"0.1.58": "sha256:c16b86c269085797022cb8ee1b70530941239ab9ec779e6842fa7fac2e8c4193",
+	// 0.1.59 (#854): no new tool — three inputSchemas moved. `coding_loop_start` and
+	// `start_instance_loop` declare `objective.max(20000)`, the widest cap an instance can set, and
+	// `set_instance_loop_limits` takes `max_objective_chars` (the per-instance cap; default 8,000).
+	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.58 is published.
+	"0.1.59": "sha256:55e0ec46bd497fb2c95cf7319b7d07261a41ddd52dd154d1ee84acb02f846ae7",
 };

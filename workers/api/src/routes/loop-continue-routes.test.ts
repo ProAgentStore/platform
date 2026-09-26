@@ -18,6 +18,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "../lib/auth.js";
 import { CONTINUE_RESUME_LOOKBACK_MS } from "../lib/agent-loop-store.js";
 import type { Env } from "../types.js";
+import { DEFAULT_MAX_OBJECTIVE_CHARS } from "../lib/loop-limits.js";
 
 const getLoopRun = vi.fn();
 const requireOwnedInstance = vi.fn();
@@ -149,7 +150,7 @@ describe("resuming WITH what the owner knows now (#806 item 3(b))", () => {
 	});
 
 	it("REFUSES a note that does not fit rather than cutting it — and opens no budget for the refusal", async () => {
-		getLoopRun.mockResolvedValue({ ...stoppedRun, objective: "x".repeat(1900) });
+		getLoopRun.mockResolvedValue({ ...stoppedRun, objective: "x".repeat(DEFAULT_MAX_OBJECTIVE_CHARS - 100) });
 		const res = await post("/i1/loop/run-1/continue", { note: "y".repeat(200) });
 		expect(res.status).toBe(400);
 		expect(((await res.json()) as { error: string }).error).toMatch(/note too long .* leaves \d+ for the note/);
@@ -158,7 +159,7 @@ describe("resuming WITH what the owner knows now (#806 item 3(b))", () => {
 	});
 
 	it("tells the owner the room that is actually there — a note of exactly that size fits", () => {
-		const objective = "x".repeat(1900);
+		const objective = "x".repeat(DEFAULT_MAX_OBJECTIVE_CHARS - 100);
 		let room = 0;
 		try {
 			continueObjective(objective, "y".repeat(500));
@@ -166,7 +167,7 @@ describe("resuming WITH what the owner knows now (#806 item 3(b))", () => {
 			room = Number(/leaves (\d+)/.exec((e as Error).message)?.[1]);
 		}
 		expect(room).toBeGreaterThan(0);
-		expect(continueObjective(objective, "y".repeat(room))).toHaveLength(2000);
+		expect(continueObjective(objective, "y".repeat(room))).toHaveLength(DEFAULT_MAX_OBJECTIVE_CHARS);
 		expect(() => continueObjective(objective, "y".repeat(room + 1))).toThrow(/note too long/);
 	});
 

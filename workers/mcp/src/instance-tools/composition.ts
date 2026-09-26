@@ -363,7 +363,7 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
-			objective: z.string().describe("The outcome you want, in plain language."),
+			objective: z.string().max(MAX_CONFIGURABLE_OBJECTIVE_CHARS).describe(`The outcome you want, in plain language. ${OBJECTIVE_CAP_NOTE}`),
 			max_iterations: z.coerce.number().optional().describe("Cap on steps (default 10, max 50)."),
 			dry_run: z.boolean().optional().describe("Report the objective and the step cap that would be committed, without starting the run."),
 		},
@@ -536,7 +536,7 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 	// getting it wrong, which is exactly why it must not be the one deciding.
 	server.tool(
 		"get_instance_loop_limits",
-		"Read the iteration floor and ceiling configured on an instance — the bounds the platform applies to EVERY run it starts, whatever `max_iterations` the caller passes. `limits.minIterations` clamps a request up, `limits.maxIterations` clamps it down; either may be absent, and `{}` means none are configured (a run then gets whatever the caller asked for, defaulting to 10). `accountCeiling` is the account-wide maximum these sit under and can only narrow — read it before judging a floor, since 30 means one thing under a ceiling of 50 and nothing under a ceiling of 20.",
+		"Read the iteration floor and ceiling configured on an instance — the bounds the platform applies to EVERY run it starts, whatever `max_iterations` the caller passes. `limits.minIterations` clamps a request up, `limits.maxIterations` clamps it down; either may be absent, and `{}` means none are configured (a run then gets whatever the caller asked for, defaulting to 10). `accountCeiling` is the account-wide maximum these sit under and can only narrow — read it before judging a floor, since 30 means one thing under a ceiling of 50 and nothing under a ceiling of 20. Also the objective cap: `maxObjectiveChars` is the longest objective a run on this instance accepts right now (the instance's own `limits.maxObjectiveChars`, else the default), and `objectiveChars` gives the default and the range it may be set to.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
@@ -552,7 +552,7 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 
 	server.tool(
 		"set_instance_loop_limits",
-		`Set the iteration floor and ceiling for an instance's runs. A run started below \`min_iterations\` is silently raised to it — including a run that named no number at all — and one above \`max_iterations\` is lowered. This is a property of the INSTANCE, not of the call: it binds runs started from the console, from chat, from the objective queue, from a continue, and from another agent's delegation alike. Each bound is a whole number from 1 to ${MAX_CONFIGURABLE_ITERATIONS}; send neither to clear the configuration. The account-wide ceiling still wins — these can only narrow it, never widen it, so a floor above it is stored but capped at run time. Returns the stored bounds plus that ceiling.`,
+		`Set the iteration floor and ceiling for an instance's runs. A run started below \`min_iterations\` is silently raised to it — including a run that named no number at all — and one above \`max_iterations\` is lowered. This is a property of the INSTANCE, not of the call: it binds runs started from the console, from chat, from the objective queue, from a continue, and from another agent's delegation alike. Each bound is a whole number from 1 to ${MAX_CONFIGURABLE_ITERATIONS}; send nothing at all to clear the configuration. \`max_objective_chars\` sets the objective cap (#854) and, sent alone, leaves the iteration bounds untouched. The account-wide ceiling still wins — these can only narrow it, never widen it, so a floor above it is stored but capped at run time. Returns the stored bounds plus that ceiling.`,
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
@@ -570,12 +570,21 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 				.max(MAX_CONFIGURABLE_ITERATIONS)
 				.optional()
 				.describe("Clamp every run DOWN to at most this. Omit to leave the account ceiling alone in charge."),
+			max_objective_chars: z
+				.coerce.number()
+				.int()
+				.min(0)
+				.max(MAX_CONFIGURABLE_OBJECTIVE_CHARS)
+				.optional()
+				.describe(
+					`The longest objective a run on this instance accepts (#854), ${MIN_CONFIGURABLE_OBJECTIVE_CHARS}–${MAX_CONFIGURABLE_OBJECTIVE_CHARS} (a smaller positive number is stored as ${MIN_CONFIGURABLE_OBJECTIVE_CHARS}); 0 returns it to the default of ${DEFAULT_MAX_OBJECTIVE_CHARS}. Sent on its own it leaves the iteration bounds as they are.`,
+				),
 			dry_run: z.boolean().optional().describe("Report the bounds that would be saved, without saving them."),
 		},
-		async ({ token, instance_id, min_iterations, max_iterations, dry_run }) => {
+		async ({ token, instance_id, min_iterations, max_iterations, max_objective_chars, dry_run }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const input = { instance_id, min_iterations, max_iterations };
+			const input = { instance_id, min_iterations, max_iterations, max_objective_chars };
 			const denied = await requirePermission(safetyFor(token), "write", "set_instance_loop_limits", input);
 			if (denied) return denied;
 			// Refused here rather than repaired by the route. The route is total on purpose — it also
@@ -588,11 +597,23 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 				);
 			}
 			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/loop-limits`;
-			const body = JSON.stringify({ minIterations: min_iterations, maxIterations: max_iterations });
+			const onlyObjective = min_iterations === undefined && max_iterations === undefined && max_objective_chars !== undefined;
+			const body = JSON.stringify({
+				minIterations: min_iterations,
+				maxIterations: max_iterations,
+				// `null` is the route's "back to the default"; absent keeps what is stored.
+				...(max_objective_chars === undefined ? {} : { maxObjectiveChars: max_objective_chars || null }),
+			});
+			const objectiveEffect =
+				max_objective_chars === undefined
+					? ""
+					: ` Objectives would be capped at ${max_objective_chars || DEFAULT_MAX_OBJECTIVE_CHARS} characters${max_objective_chars ? "" : " (the default)"}.`;
 			const describe =
-				min_iterations === undefined && max_iterations === undefined
-					? `${instance_id} would go back to having no iteration bounds; a run would get whatever the caller asks for, defaulting to 10.`
-					: `Every run on ${instance_id} would be clamped into ${min_iterations ?? 1}–${max_iterations ?? "the account ceiling"} iterations, whatever the caller passes.`;
+				onlyObjective
+					? `${instance_id}'s iteration bounds would stay as they are.${objectiveEffect}`
+					: min_iterations === undefined && max_iterations === undefined
+						? `${instance_id} would go back to having no iteration bounds and the default objective cap; a run would get whatever the caller asks for, defaulting to 10.`
+						: `Every run on ${instance_id} would be clamped into ${min_iterations ?? 1}–${max_iterations ?? "the account ceiling"} iterations, whatever the caller passes.${objectiveEffect}`;
 			if (dry_run) {
 				return dryRun(safetyFor(token), "set_instance_loop_limits", "set an instance's iteration bounds", input, {
 					endpoint,
@@ -721,6 +742,18 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
  * the same reason as the preset limits above: this worker cannot import the API worker.
  */
 export const MAX_CONFIGURABLE_ITERATIONS = 1_000;
+
+/**
+ * COPIES of the objective cap in `workers/api/src/lib/loop-limits.ts` (#854), held to it by
+ * `loop-limits-copy.test.ts`. `MAX_CONFIGURABLE_OBJECTIVE_CHARS` is the schema `.max()` on every
+ * objective: no instance can accept more, so a longer one is refused before it is sent.
+ */
+export const DEFAULT_MAX_OBJECTIVE_CHARS = 8_000;
+export const MIN_CONFIGURABLE_OBJECTIVE_CHARS = 100;
+export const MAX_CONFIGURABLE_OBJECTIVE_CHARS = 20_000;
+
+/** The objective sentence both run-starting tools carry. */
+export const OBJECTIVE_CAP_NOTE = `At most ${DEFAULT_MAX_OBJECTIVE_CHARS.toLocaleString("en-US")} characters by default — an instance's own cap (get_instance_loop_limits \`maxObjectiveChars\`, set with set_instance_loop_limits) can raise it to ${MAX_CONFIGURABLE_OBJECTIVE_CHARS.toLocaleString("en-US")} or lower it. Past the cap the run is refused with the length and the limit; to hand over a long spec, reference it ("implement issue #N") rather than inlining it.`;
 
 export const MAX_LOOP_PRESETS = 12;
 export const MAX_PRESET_LABEL = 60;

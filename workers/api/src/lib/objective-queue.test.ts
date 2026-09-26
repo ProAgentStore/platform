@@ -15,6 +15,7 @@
 import { describe, expect, it } from "vitest";
 import { cancelQueueEntry, dequeueNext, enqueueObjective, finishQueueEntry, listQueue, requeueEntry } from "./objective-queue.js";
 import type { Env } from "../types.js";
+import { MAX_CONFIGURABLE_OBJECTIVE_CHARS } from "./loop-limits.js";
 
 interface Call {
 	sql: string;
@@ -98,10 +99,10 @@ describe("enqueueObjective", () => {
 		expect(calls[0].args[5]).toBe(999);
 	});
 
-	it("caps the objective at the same 2000 chars the run row and POST /loop enforce", async () => {
+	it("stores up to the widest cap any instance may set — the same bound as the run row (#854)", async () => {
 		const { env } = buildEnv();
-		const entry = await enqueueObjective(env, { instanceId: "i1", userId: "u1", objective: "x".repeat(5000) });
-		expect(entry.objective).toHaveLength(2000);
+		const entry = await enqueueObjective(env, { instanceId: "i1", userId: "u1", objective: "x".repeat(MAX_CONFIGURABLE_OBJECTIVE_CHARS + 5000) });
+		expect(entry.objective).toHaveLength(MAX_CONFIGURABLE_OBJECTIVE_CHARS);
 	});
 });
 

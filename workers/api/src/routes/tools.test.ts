@@ -7,6 +7,7 @@ import { toolRoutes } from "./tools.js";
 import { unfenceUntrusted } from "../lib/untrusted-fence.js";
 // Imported so the health expectations are COMPUTED by the shared function, never hand-written.
 import { runHealth, STALLED_AFTER_MS, waitClause } from "../lib/work-report.js";
+import { DEFAULT_MAX_OBJECTIVE_CHARS } from "../lib/loop-limits.js";
 
 /**
  * Knowingly-partial test doubles, and the only `any` left in this file.
@@ -110,6 +111,9 @@ function testApp(
 								// The tool-policy join (agent_instances ⨝ agents) needs the AGENT's config,
 								// which is where capabilities.tools lives; the plain ownership read needs
 								// the INSTANCE row. Same table, different shape.
+								// `readInstanceConfigPair` (loop limits, #820/#854): instance config and agent config
+								// in their own columns — not the tool-policy join's shape below.
+								if (sql.includes("owner_preferences")) return { config, agent_config: opts.agentConfig ?? FIXTURE_AGENT_CONFIG, owner_preferences: null };
 								if (sql.includes("JOIN agents")) {
 									return { slug: "fixture", category: "general", config: opts.agentConfig ?? FIXTURE_AGENT_CONFIG, instance_config: config };
 								}
@@ -892,6 +896,44 @@ describe("durable agent loop (#158)", () => {
 			body: JSON.stringify({ objective: "go", maxIterations: 9999 }),
 		}, env);
 		expect(((await res.json()) as { maxIterations: number }).maxIterations).toBe(50);
+	});
+
+	describe("the objective cap (#854)", () => {
+		const start = async (objective: string, config?: string) => {
+			let started = 0;
+			const { app, env } = testApp({ config, loopCreate: async () => { started++; return { id: "wf-loop" }; } });
+			const res = await app.request("/v1/instances/i1/loop", {
+				method: "POST",
+				headers: { Authorization: `Bearer ${await tok()}`, "Content-Type": "application/json" },
+				body: JSON.stringify({ objective }),
+			}, env);
+			return { status: res.status, error: ((await res.json()) as { error?: string }).error, started };
+		};
+		const capped = (n: number) => JSON.stringify({ loopLimits: { maxObjectiveChars: n } });
+
+		it("applies the 8,000-char default when the instance sets none — the old 2,000 no longer refuses", async () => {
+			expect(DEFAULT_MAX_OBJECTIVE_CHARS).toBe(8000);
+			expect(await start("x".repeat(DEFAULT_MAX_OBJECTIVE_CHARS))).toMatchObject({ status: 201, started: 1 });
+			expect(await start("x".repeat(2500))).toMatchObject({ status: 201 });
+		});
+
+		it("refuses past the cap, naming the length AND the limit, and starts nothing", async () => {
+			expect(await start("x".repeat(DEFAULT_MAX_OBJECTIVE_CHARS + 1))).toEqual({
+				status: 400,
+				error: `objective too long: ${DEFAULT_MAX_OBJECTIVE_CHARS + 1} chars, limit ${DEFAULT_MAX_OBJECTIVE_CHARS}`,
+				started: 0,
+			});
+		});
+
+		it("an instance override RAISES the cap", async () => {
+			expect(await start("x".repeat(12_000), capped(12_000))).toMatchObject({ status: 201, started: 1 });
+			expect(await start("x".repeat(12_001), capped(12_000))).toMatchObject({ status: 400, error: "objective too long: 12001 chars, limit 12000" });
+		});
+
+		it("an instance override LOWERS the cap", async () => {
+			expect(await start("x".repeat(500), capped(500))).toMatchObject({ status: 201 });
+			expect(await start("x".repeat(501), capped(500))).toMatchObject({ status: 400, error: "objective too long: 501 chars, limit 500", started: 0 });
+		});
 	});
 
 	it("requires an objective", async () => {

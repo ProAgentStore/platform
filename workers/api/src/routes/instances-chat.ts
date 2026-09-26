@@ -17,6 +17,8 @@ import {
 	type InstanceRow,
 } from "./instances-runtime.js";
 import type { Env } from "../types.js";
+import { effectiveMaxObjectiveChars, objectiveTooLong } from "../lib/loop-limits.js";
+import { readLoopLimits } from "../lib/loop-limits-store.js";
 
 /**
  * The conversation with an instance (#305): the chat turn itself, the loop orchestrator that
@@ -175,7 +177,8 @@ export function registerChatRoutes(router: Hono<{ Bindings: Env }>): void {
 			maxIterations: number;
 		}>();
 		if (!objective || typeof objective !== "string") throw new HttpError(400, "objective required");
-		if (objective.length > 2000) throw new HttpError(400, "objective too long");
+		const tooLong = objectiveTooLong(objective, effectiveMaxObjectiveChars(await readLoopLimits(c.env, instanceId, session.uid).catch(() => ({}))));
+		if (tooLong) throw new HttpError(400, tooLong);
 		if (!Array.isArray(messages)) throw new HttpError(400, "messages must be an array");
 		if (messages.length > 20) throw new HttpError(400, "too many messages");
 
