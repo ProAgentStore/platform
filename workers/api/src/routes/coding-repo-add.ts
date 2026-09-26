@@ -8,7 +8,9 @@ import { RunnerUnreachableError } from "../lib/runner-unreachable.js";
 import { createRepo, findExistingRepoBinding, updateRepoClone } from "../lib/coding-store.js";
 import { checkWorkdirVia } from "../lib/coding-workdir.js";
 import { parseRepoRef } from "../lib/git-providers.js";
+import { RUNNER_CONTROL_MIN_CLI } from "../lib/runner-features.js";
 import { sqlTime } from "../lib/sql-time.js";
+import type { Env } from "../types.js";
 
 /** The 409 for an add that would bind a GitHub repo this instance already has (#829). */
 export function duplicateBinding(c: Context, githubRepo: string, existing: { id: string; name: string }) {
@@ -81,6 +83,7 @@ export async function addPairedRepo(
 		if (bound) return duplicateBinding(c, githubRepoIn, bound);
 		const outcome = await cloneOnMachine(conn, localPath, githubRepoIn, protocol);
 		if (outcome.kind === "pending") return stillCloning(c, outcome.job);
+		if (outcome.kind === "too-old") return tooOldToClone(c, conn, outcome.ssh);
 		if (outcome.kind === "failed") return refuse(outcome.error);
 		verdict = await checkWorkdirVia(conn, localPath);
 	}
@@ -133,7 +136,7 @@ interface CloneJobView {
 	startedAt?: number;
 }
 
-type CloneOutcome = { kind: "done" } | { kind: "pending"; job: CloneJobView } | { kind: "failed"; error: string };
+type CloneOutcome = { kind: "done" } | { kind: "pending"; job: CloneJobView } | { kind: "failed"; error: string } | { kind: "too-old"; ssh: boolean };
 
 /**
  * How long one call waits on a background clone before answering "still cloning" (#858). Under the
@@ -197,7 +200,7 @@ async function cloneOnMachine(conn: RunnerConn, localPath: string, slug: string,
 
 /** #857's synchronous clone, for a runner that has no clone jobs yet — https only, one relay command. */
 async function legacyClone(conn: RunnerConn, localPath: string, slug: string, protocol: CloneProtocol): Promise<CloneOutcome> {
-	if (protocol === "ssh") return { kind: "failed", error: "This machine's `pags` CLI is too old to clone over SSH. Call runner_update for this machine, then add the repo again." };
+	if (protocol === "ssh") return { kind: "too-old", ssh: true };
 	try {
 		await callRunner(conn, "/coding/clone", { workDir: localPath, cloneUrl: `https://github.com/${slug}.git` }, { timeoutMs: LEGACY_CLONE_TIMEOUT_MS });
 		return { kind: "done" };
@@ -205,7 +208,7 @@ async function legacyClone(conn: RunnerConn, localPath: string, slug: string, pr
 		const message = e instanceof Error ? e.message : String(e);
 		const trouble = runnerTrouble(e);
 		if (trouble) return { kind: "failed", error: trouble };
-		if (/→ 404/.test(message)) return { kind: "failed", error: "This machine's `pags` CLI is too old to clone. Call runner_update for this machine to update and restart it remotely, then add the repo again — or clone the repository there yourself and add it without clone." };
+		if (/→ 404/.test(message)) return { kind: "too-old", ssh: false };
 		if (/timed out/i.test(message)) {
 			return { kind: "failed", error: `The clone of ${slug} did not finish within 2 minutes on this older CLI and may still be running. Call runner_update for this machine to get background clones, or once \`${localPath}\` holds the checkout, call coding_repo_add again without clone.` };
 		}
@@ -214,6 +217,25 @@ async function legacyClone(conn: RunnerConn, localPath: string, slug: string, pr
 			error: `Could not clone ${slug} into \`${localPath}\`: ${errorText(e).slice(0, 400)} — the machine clones with its OWN git credentials, so for a private repository sign in there (\`gh auth login\` sets up https access), then add the repo again.`,
 		};
 	}
+}
+
+/**
+ * 400 for a runner with no clone endpoint that serves the call (#861): the sentence, plus a stable code
+ * and both versions so a caller can act without parsing it. `found` is what the machine last registered.
+ */
+async function tooOldToClone(c: Context<{ Bindings: Env }>, conn: RunnerConn, ssh: boolean) {
+	const found = conn.runnerNode
+		? await c.env.DB.prepare("SELECT runner_version FROM instance_runtime_nodes WHERE instance_id = ?1 AND runner_node = ?2 LIMIT 1")
+				.bind(conn.instanceId, conn.runnerNode)
+				.first<{ runner_version: string | null }>()
+				.then((r) => r?.runner_version ?? null)
+				.catch(() => null)
+		: null;
+	const cli = `This machine's \`pags\` CLI${found ? ` (${found})` : ""}`;
+	const error = ssh
+		? `${cli} is too old to clone over SSH — that needs ${RUNNER_CONTROL_MIN_CLI} or newer. Call runner_update for this machine, then add the repo again.`
+		: `${cli} is too old to clone — that needs ${RUNNER_CONTROL_MIN_CLI} or newer. Call runner_update for this machine to update and restart it remotely, then add the repo again — or clone the repository there yourself and add it without clone.`;
+	return c.json({ error, code: "runner_too_old_to_clone", required: RUNNER_CONTROL_MIN_CLI, found }, 400);
 }
 
 /**

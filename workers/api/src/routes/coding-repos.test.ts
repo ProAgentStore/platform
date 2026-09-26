@@ -83,6 +83,8 @@ function ownerEnv(repo?: Record<string, unknown>, bindings: Binding[] = []) {
 						return hit ? { id: hit.id, name: hit.name } : null;
 					}
 					if (/FROM coding_repos/.test(flat)) return inserted ?? repo ?? null;
+					// The version the connected machine registered — read only by the too-old-to-clone refusal (#861).
+					if (/FROM instance_runtime_nodes/.test(flat)) return { runner_version: "0.4.61" };
 					return null;
 				},
 				all: async () => ({ results: [] }),
@@ -124,7 +126,7 @@ async function addRepo(body: Record<string, unknown>, bindings: Binding[] = []) 
 	);
 	return {
 		status: res.status,
-		body: (await res.json()) as { repo?: Record<string, unknown>; warning?: string; error?: string; existingId?: string; existingName?: string },
+		body: (await res.json()) as { repo?: Record<string, unknown>; warning?: string; error?: string; existingId?: string; existingName?: string; code?: string; required?: string; found?: string | null },
 		row: insertedRepo(),
 		issued,
 	};
@@ -499,7 +501,7 @@ describe("POST /coding/repos requireGithub — a coding repo is stored with BOTH
 });
 
 describe("POST /coding/repos requireGithub + clone — the cold start (#857)", () => {
-	const FAKE_CONN = { instanceId: INSTANCE } as never;
+	const FAKE_CONN = { instanceId: INSTANCE, runnerNode: "macmini" } as never;
 	const HEALTHY = { checked: true, path: "/home/u/dev/grass-karma", exists: true, isDirectory: true, entryCount: 12, insideWorkTree: true, gitChecked: true };
 	const MISSING = { checked: true, path: "/home/u/dev/grass-karma", exists: false, isDirectory: false, entryCount: 0, insideWorkTree: false, gitChecked: true };
 
@@ -691,22 +693,34 @@ describe("POST /coding/repos requireGithub + clone — the cold start (#857)", (
 			const asked = machine({ initial: MISSING, legacy: true });
 			const { status } = await add({ githubRepo: "acme/grass-karma", clone: true });
 			expect(status).toBe(201);
+			// Background first; the synchronous clone only after it 404s.
+			const clonePaths = asked.map((a) => a.path).filter((p) => p === "/coding/clone-start" || p === "/coding/clone");
+			expect(clonePaths).toEqual(["/coding/clone-start", "/coding/clone"]);
 			expect(asked.find((a) => a.path === "/coding/clone")?.body).toEqual({ workDir: "~/dev/grass-karma", cloneUrl: "https://github.com/acme/grass-karma.git" });
 		});
 
-		it("a runner too old to clone at all points at runner_update, the remote fix (#859)", async () => {
-			machine({ initial: MISSING, legacy: true, ancient: true });
+		it("a runner that serves clone jobs never falls back to the synchronous clone", async () => {
+			const asked = machine({ initial: MISSING });
+			expect((await add({ githubRepo: "acme/grass-karma", clone: true })).status).toBe(201);
+			expect(asked.some((a) => a.path === "/coding/clone")).toBe(false);
+		});
+
+		it("a runner too old to clone at all (0.4.61: both endpoints 404) gets a structured refusal naming both versions and runner_update (#859, #861)", async () => {
+			const asked = machine({ initial: MISSING, legacy: true, ancient: true });
 			const { status, body, issued } = await add({ githubRepo: "acme/grass-karma", clone: true });
 			expect(status).toBe(400);
-			expect(body.error).toMatch(/too old to clone\. Call runner_update for this machine/);
+			expect(body).toMatchObject({ code: "runner_too_old_to_clone", required: "0.4.62", found: "0.4.61" });
+			expect(body.error).toMatch(/`pags` CLI \(0\.4\.61\) is too old to clone — that needs 0\.4\.62 or newer\. Call runner_update for this machine/);
+			expect(asked.map((a) => a.path).filter((p) => p.startsWith("/coding/clone"))).toEqual(["/coding/clone-status", "/coding/clone-start", "/coding/clone"]);
 			expect(inserted(issued)).toBe(false);
 		});
 
-		it("…but cannot be asked for SSH, and says so", async () => {
+		it("…but cannot be asked for SSH, and says so with the same structured refusal", async () => {
 			machine({ initial: MISSING, legacy: true });
 			const { status, body } = await add({ githubRepo: "acme/grass-karma", clone: true, cloneProtocol: "ssh" });
 			expect(status).toBe(400);
-			expect(body.error).toMatch(/too old to clone over SSH\. Call runner_update/);
+			expect(body).toMatchObject({ code: "runner_too_old_to_clone", required: "0.4.62", found: "0.4.61" });
+			expect(body.error).toMatch(/too old to clone over SSH — that needs 0\.4\.62 or newer\. Call runner_update/);
 		});
 	});
 });
