@@ -82,6 +82,13 @@ function ownerEnv(repo?: Record<string, unknown>, bindings: Binding[] = []) {
 						);
 						return hit ? { id: hit.id, name: hit.name } : null;
 					}
+					// The same-folder lookup (#853 finding 10): a binding whose folder is one of the paths
+					// asked about, trailing slashes ignored — the SQL's `rtrim(workdir, '/')`.
+					if (/rtrim\(workdir, '\/'\) IN/.test(flat)) {
+						const [instanceId, ...paths] = bound as string[];
+						const hit = bindings.find((b) => b.instance_id === instanceId && b.workdir && paths.includes(b.workdir.replace(/\/+$/, "")));
+						return hit ? { id: hit.id, instance_id: hit.instance_id, user_id: UID, name: hit.name, github_repo: hit.github_repo, provider: hit.github_repo ? "github" : "local", workdir: hit.workdir, clone_status: "ready", branch: "", created_at: "2026-08-01 00:00:00", updated_at: "2026-08-01 00:00:00" } : null;
+					}
 					if (/FROM coding_repos/.test(flat)) return inserted ?? repo ?? null;
 					// The version the connected machine registered — read only by the too-old-to-clone refusal (#861).
 					if (/FROM instance_runtime_nodes/.test(flat)) return { runner_version: "0.4.61" };
@@ -103,6 +110,8 @@ interface Binding {
 	instance_id: string;
 	name: string;
 	github_repo: string | null;
+	/** The binding's folder, for the same-folder lookup (#853 finding 10). */
+	workdir?: string | null;
 }
 
 function buildApp(repo?: Record<string, unknown>, bindings: Binding[] = []) {
@@ -490,6 +499,78 @@ describe("POST /coding/repos requireGithub — a coding repo is stored with BOTH
 		expect(status).toBe(400);
 		expect(body.error).toMatch(/No machine is connected/);
 		expect(inserted(issued)).toBe(false);
+	});
+
+	// #853 finding 10: #849's own repair flow. A folder bound locally, with no GitHub half, used to get
+	// a SECOND binding from the paired add — two repos for one checkout.
+	describe("a folder that already has a binding (#853 finding 10)", () => {
+		const LOCAL_ONLY = { id: "repo_local", instance_id: INSTANCE, name: "stash (local)", github_repo: null, workdir: "~/dev/stash" };
+		const updated = (issued: Statement[]) => issued.filter((s) => s.sql.startsWith("UPDATE coding_repos SET github_repo"));
+
+		it("a local-only binding for the SAME folder gets its GitHub half attached in place — no second binding", async () => {
+			machine("git@github.com:proappstore-online/stash.git");
+			const { status, body, issued } = await addRepo({ localPath: "~/dev/stash", requireGithub: true }, [LOCAL_ONLY]);
+			expect(status).toBe(200);
+			expect(inserted(issued)).toBe(false);
+			expect(updated(issued)).toHaveLength(1);
+			expect(updated(issued)[0].binds).toEqual(expect.arrayContaining(["repo_local", INSTANCE, "proappstore-online/stash", "https://github.com/proappstore-online/stash"]));
+			expect(body.repo).toMatchObject({ id: "repo_local", name: "stash (local)", githubRepo: "proappstore-online/stash", provider: "github", workdir: "~/dev/stash", cloneStatus: "ready" });
+			expect(String((body as { detail?: string }).detail)).toMatch(/already bound.*attached.*in place/);
+		});
+
+		it("matches the folder however it was written — a trailing slash, or the path as the machine resolved it", async () => {
+			machine("https://github.com/proappstore-online/stash.git");
+			const slash = await addRepo({ localPath: "~/dev/stash", requireGithub: true }, [{ ...LOCAL_ONLY, workdir: "~/dev/stash/" }]);
+			expect(slash.status).toBe(200);
+			expect(inserted(slash.issued)).toBe(false);
+			// Stored absolute; asked as `~/…`. HEALTHY's runner-resolved path is `/home/u/dev/stash`.
+			const resolved = await addRepo({ localPath: "~/dev/stash", requireGithub: true }, [{ ...LOCAL_ONLY, workdir: "/home/u/dev/stash" }]);
+			expect(resolved.status).toBe(200);
+			expect(inserted(resolved.issued)).toBe(false);
+		});
+
+		it("a folder already bound to a DIFFERENT GitHub repo is refused, naming that binding — nothing stored or changed", async () => {
+			machine("https://github.com/proappstore-online/stash.git");
+			const { status, body, issued } = await addRepo(
+				{ localPath: "~/dev/stash", requireGithub: true },
+				[{ ...LOCAL_ONLY, name: "old stash", github_repo: "someone/else" }],
+			);
+			expect(status).toBe(409);
+			expect(body.error).toMatch(/`~\/dev\/stash` is already bound as "old stash" to someone\/else/);
+			expect(body.existingId).toBe("repo_local");
+			expect(inserted(issued)).toBe(false);
+			expect(updated(issued)).toEqual([]);
+		});
+
+		it("a race that binds the repo elsewhere first meets the 0157 index — answered with the same 409, not a 500", async () => {
+			machine("https://github.com/proappstore-online/stash.git");
+			const { app, env } = buildApp(undefined, [LOCAL_ONLY]);
+			const prepare = env.DB.prepare.bind(env.DB);
+			(env.DB as unknown as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
+				const stmt = prepare(sql) as unknown as { run: () => Promise<unknown> };
+				if (sql.includes("UPDATE coding_repos SET github_repo")) {
+					stmt.run = async () => {
+						throw new Error("D1_ERROR: UNIQUE constraint failed: index 'idx_coding_repos_instance_github': SQLITE_CONSTRAINT");
+					};
+				}
+				return stmt;
+			};
+			const token = await signSession(UID, SECRET, { roles: [] });
+			const res = await app.request(
+				`/v1/instances/${INSTANCE}/coding/repos`,
+				{ method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ localPath: "~/dev/stash", requireGithub: true }) },
+				env,
+			);
+			expect(res.status).toBe(409);
+		});
+
+		it("a local binding for a DIFFERENT folder is left alone — the add creates its own", async () => {
+			machine("https://github.com/proappstore-online/stash.git");
+			const { status, issued } = await addRepo({ localPath: "~/dev/stash", requireGithub: true }, [{ ...LOCAL_ONLY, workdir: "~/dev/stash-old" }]);
+			expect(status).toBe(201);
+			expect(inserted(issued)).toBe(true);
+			expect(updated(issued)).toEqual([]);
+		});
 	});
 
 	it("keeps one binding per GitHub repo (#829)", async () => {

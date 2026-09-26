@@ -25,7 +25,7 @@ function client(v: unknown): CodingClientType {
 	return CLIENTS.includes(v as CodingClientType) ? (v as CodingClientType) : "claude";
 }
 
-interface RepoRow {
+export interface RepoRow {
 	id: string;
 	instance_id: string;
 	user_id: string;
@@ -61,7 +61,7 @@ function parseRepoUrls(raw: string | null): CodingRepo["urls"] {
 	}
 }
 
-function toRepo(r: RepoRow): CodingRepo {
+export function toRepo(r: RepoRow): CodingRepo {
 	return {
 		id: r.id,
 		instanceId: r.instance_id,

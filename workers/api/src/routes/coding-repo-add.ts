@@ -5,6 +5,7 @@
 import type { Context } from "hono";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../lib/runner-client.js";
 import { RunnerUnreachableError } from "../lib/runner-unreachable.js";
+import { attachGithubIdentity, findRepoByWorkdir } from "../lib/coding-repo-folder.js";
 import { createRepo, findExistingRepoBinding, updateRepoClone } from "../lib/coding-store.js";
 import { checkWorkdirVia } from "../lib/coding-workdir.js";
 import { parseRepoRef } from "../lib/git-providers.js";
@@ -102,6 +103,40 @@ export async function addPairedRepo(
 	}
 	const existing = await findExistingRepoBinding(c.env, instanceId, ref.slug);
 	if (existing) return duplicateBinding(c, ref.slug, existing);
+	// The folder may already be bound (#853 finding 10) — #849's repair flow is exactly a local-only
+	// binding getting its GitHub half. That row is completed IN PLACE, keeping its id, sessions and
+	// timeline; a second binding on one checkout left two repos for session and engine resolution to
+	// choose between. A folder bound to some OTHER repo is refused by name, never rebound.
+	const sameFolder = await findRepoByWorkdir(c.env, instanceId, [localPath, verdict.path]);
+	if (sameFolder?.githubRepo) {
+		return c.json(
+			{
+				error: `\`${localPath}\` is already bound as "${sameFolder.name}" to ${sameFolder.githubRepo}, but its origin is ${ref.slug} — remove that binding first (coding_repo_remove), or fix the checkout's origin.`,
+				existingId: sameFolder.id,
+				existingName: sameFolder.name,
+			},
+			409,
+		);
+	}
+	if (sameFolder) {
+		const raced = await attachGithubIdentity(c.env, instanceId, sameFolder.id, { githubRepo: ref.slug, webUrl: ref.webUrl || undefined, cloneUrl: ref.cloneUrl }).then(
+			() => false,
+			(e: unknown) => {
+				if (isUniqueViolation(e)) return true;
+				throw e;
+			},
+		);
+		// A concurrent add bound this repo between the check above and here — the same 409 as the check.
+		if (raced) return duplicateBinding(c, ref.slug, (await findExistingRepoBinding(c.env, instanceId, ref.slug)) ?? { id: "", name: "" });
+		await updateRepoClone(c.env, sameFolder.id, { cloneStatus: "ready", cloneError: null, checkedNow: true });
+		return c.json(
+			{
+				repo: { ...sameFolder, githubRepo: ref.slug, provider: "github", repoSlug: ref.slug, webUrl: ref.webUrl || undefined, cloneUrl: ref.cloneUrl, cloneStatus: "ready", cloneCheckedAt: sqlTime() },
+				detail: `\`${localPath}\` was already bound as "${sameFolder.name}" with no GitHub repo; ${ref.slug} is attached to that binding in place — no second binding was made.`,
+			},
+			200,
+		);
+	}
 	const created = await createRepo(c.env, instanceId, uid, {
 		name: name || ref.slug,
 		workdir: localPath,
