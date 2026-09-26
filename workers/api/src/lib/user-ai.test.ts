@@ -263,7 +263,8 @@ describe("an owner's Workers AI pick never falls back to Anthropic without a wor
 				},
 			},
 		} as unknown as Env;
-		const fetchMock = vi.fn(async () => Response.json({ success: true, result: { response: "hello" } }));
+		// Typed with fetch's parameters so `mock.calls[0][0]` is the URL the code asked for, not an empty tuple.
+		const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({ success: true, result: { response: "hello" } }));
 		vi.stubGlobal("fetch", fetchMock);
 		return { env, fetchMock };
 	}
@@ -322,7 +323,8 @@ describe("a turn under way stays on its provider (#853 finding 9)", () => {
 				},
 			},
 		} as unknown as Env;
-		const fetchMock = vi.fn(async () => Response.json({ success: true, result: { response: "hello" } }));
+		// Typed with fetch's parameters so `mock.calls[0][0]` is the URL the code asked for, not an empty tuple.
+		const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({ success: true, result: { response: "hello" } }));
 		vi.stubGlobal("fetch", fetchMock);
 		return { env, fetchMock };
 	}

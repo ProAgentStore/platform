@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import Card from "./Card";
+import type { InstanceModelState } from "../lib/types";
 import { BRAIN_MODELS, brainModel } from "../../../../workers/api/src/lib/brain-models";
 
 /**
@@ -16,7 +17,7 @@ export default function BrainModelCard({ instanceId }: { instanceId: string }) {
 	const [busy, setBusy] = useState(false);
 
 	useEffect(() => {
-		api<{ model?: string }>(`/v1/instances/${instanceId}/state`)
+		api<InstanceModelState>(`/v1/instances/${instanceId}/state`)
 			.then((s) => setModel(s.model ?? ""))
 			.catch((e) => setMsg(e instanceof Error ? e.message : String(e)));
 	}, [instanceId]);

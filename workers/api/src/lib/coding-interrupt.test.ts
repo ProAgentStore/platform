@@ -121,7 +121,10 @@ describe("the iteration-1→2 handoff on a fresh session (#855)", () => {
 			h.deps,
 			h.ordinal,
 		);
-		const run = parkedView as NonNullable<typeof parkedView>;
+		// Assigned inside the `sleep` callback, so control flow still reads `parkedView` as its `null`
+		// initialiser here; name the row type rather than derive it from the narrowed variable.
+		const run = parkedView as NonNullable<Awaited<ReturnType<typeof getLoopRun>>> | null;
+		if (!run) throw new Error("the run was never read while parked");
 		expect(run).not.toBeNull();
 		expect(run.waitingReason).toBe("platform_interrupt");
 		expect(run.waitingUntil).toBe(T0 + interruptBackoffMs(1));

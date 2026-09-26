@@ -246,6 +246,18 @@ export interface RuntimeEvent {
 // Coding types (CodingRepo/CodingSession/CodingEngine) live in @proagentstore/coder-web.
 
 /**
+ * The part of `GET /v1/instances/:id/state` the Brain model card reads (#852, #866).
+ *
+ * Mirrors the `model` field of `AgentState` in `workers/api/src/agent-types.ts` — the producer of
+ * that response. Optional here because the card must also render against a state that has not been
+ * initialised yet. `types.test.ts` asserts this names no field the producer lacks, and that the
+ * producer's field is assignable to it.
+ */
+export interface InstanceModelState {
+	model?: string;
+}
+
+/**
  * A knowledge-base document, as `GET /v1/instances/:id/knowledge` sends it.
  *
  * Mirrors `KnowledgeDoc` in `workers/api/src/agent-types.ts:74`. The field names below are the

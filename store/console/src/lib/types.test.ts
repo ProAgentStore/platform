@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { KnowledgeDoc as WorkerKnowledgeDoc } from "../../../../workers/api/src/agent-types";
 import type { ConnectionGuideResponse as WorkerConnectionGuideResponse } from "../../../../workers/api/src/lib/connection-guide";
-import type { ConsentRow as WorkerConsentRow } from "../../../../workers/api/src/agent-types";
+import type { AgentState as WorkerAgentState, ConsentRow as WorkerConsentRow } from "../../../../workers/api/src/agent-types";
 import type { CollectionRecord as WorkerCollectionRecord, RecordQueryResult as WorkerRecordQueryResult } from "../../../../workers/api/src/agent-storage-types";
 import type { RunnerEvent, RunnerTask } from "../../../../packages/browser-runner/src/types";
-import type { ConnectionGuideResponse, ConnectorConsent, Credential, DataRecord, KnowledgeDoc, Notification, RecordQueryResponse, RuntimeEvent, RuntimeTask, TriggerAction } from "./types";
+import type { ConnectionGuideResponse, ConnectorConsent, InstanceModelState, Credential, DataRecord, KnowledgeDoc, Notification, RecordQueryResponse, RuntimeEvent, RuntimeTask, TriggerAction } from "./types";
 
 /**
  * The console's API-response types, checked against the Worker declarations they copy (#617).
@@ -59,6 +59,15 @@ const _knowledgeDocHasNoInventedFields: Extra<KnowledgeDoc, WorkerKnowledgeDoc> 
 // import-safe for the same reason `agent-types.ts` is: it imports nothing.
 const _recordPageHasNoInventedFields: Extra<RecordQueryResponse, WorkerRecordQueryResult> extends never ? true : never = true;
 const _dataRecordHasNoInventedFields: Extra<DataRecord, WorkerCollectionRecord> extends never ? true : never = true;
+
+// ── InstanceModelState ──────────────────────────────────────────────────────────────────────────
+//
+// #866: the Brain model card read `GET /v1/instances/:id/state` through an inline `{ model?: string }`
+// that no list recorded, which is what turned CI red. The producer is `AgentState` in
+// `agent-types.ts` (import-safe: it imports nothing). The key check catches a field the console
+// invents; the assignment catches the producer changing `model`'s type under it.
+const _instanceModelStateHasNoInventedFields: Extra<InstanceModelState, WorkerAgentState> extends never ? true : never = true;
+const _instanceModelStateAcceptsTheProducer: InstanceModelState = {} as Pick<WorkerAgentState, "model">;
 
 // ── ConnectionGuideResponse ──────────────────────────────────────────────────────────────────
 //
@@ -127,7 +136,9 @@ describe("console response types match the Worker declarations they copy (#617)"
 			_runtimeEventHasNoInventedFields,
 			_recordPageHasNoInventedFields,
 			_dataRecordHasNoInventedFields,
-		]).toEqual([true, true, true, true, true]);
+			_instanceModelStateHasNoInventedFields,
+		]).toEqual([true, true, true, true, true, true]);
+		expect(_instanceModelStateAcceptsTheProducer).toEqual({});
 	});
 
 	it("declares every trigger action the Worker's TRIGGER_ACTIONS has, and no more", () => {

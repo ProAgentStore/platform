@@ -36,7 +36,8 @@ function setup(reply: unknown = { repo: { id: "repo_1" } }, status = 201) {
 }
 
 const textOf = (r: ToolResult) => r.content[0].text;
-const posts = (calls: { method: string }[]) => calls.filter((c) => c.method === "POST");
+// Generic, so a POST keeps its `url`/`body` — typed as `{ method }[]` it returned rows the test could not read.
+const posts = <C extends { method: string }>(calls: C[]): C[] => calls.filter((c) => c.method === "POST");
 
 afterEach(() => vi.unstubAllGlobals());
 
