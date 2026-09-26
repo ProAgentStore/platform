@@ -204,6 +204,20 @@ describe("quoted tool-call JSON is never executed on Workers AI (#853)", () => {
 		// Neither door: not the protocol seam, and not the chat loop's own text parser.
 		expect(ran).toEqual([]);
 	});
+
+	it("Llama's <function=NAME>{…}</function> markup is not run, not shown, and reported as written-but-never-run (#853 finding 3)", async () => {
+		script = [
+			{ response: 'Sending it now. <function=send_to_cli>{"repo_name":"platform","message":"run the tests"}</function>' },
+			{ response: "I have not sent anything to the terminal yet." },
+		];
+		const out = await think(LLAMA);
+		expect(ran).toEqual([]);
+		// The platform's #395 correction round is the evidence the call was recognised: it names the tool.
+		expect(requests).toHaveLength(2);
+		expect(JSON.stringify(requests[1].body.messages.slice(-2))).toContain("send_to_cli");
+		expect(out.response).not.toContain("<function=");
+		expect(out.response).not.toContain("</function>");
+	});
 });
 
 describe("an owner's brain pick is where the turn runs (#852)", () => {

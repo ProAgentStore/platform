@@ -27,19 +27,44 @@
  * their spans removed. The wider markup families the model wraps around these objects
  * (`<tool_call>`, `</parameter>`, and any invented `<tool_response>`) are not this walker's
  * business — they are stripped and adjudicated in `invented-results.ts`.
+ *
+ * ONE wrapper is: Llama 3.x's documented custom-tool form, `<function=NAME>{…}</function>` (#853
+ * finding 3). Its object carries no `name` — the tag does — so the walker skipped it and the whole
+ * thing reached the owner's screen as a call that never happened. It is read here, by the tag's name
+ * and under the same allowlist, with the closing tag optional (Llama often drops it); the span goes,
+ * tags included, and the name is reported like any other call written as text — never executed.
  */
 export function parseToolCallsFromText(
 	text: string,
 	allowed?: ReadonlySet<string>,
 ): { calls: Array<{ name: string; arguments: Record<string, unknown> }>; text: string } {
-	const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
-	// The spans that became calls, in order — removed from the returned text.
-	const spans: Array<[number, number]> = [];
+	const found: Array<{ span: [number, number]; call: { name: string; arguments: Record<string, unknown> } }> = [];
+	// Llama's `<function=NAME>{…}</function>` first (#853 finding 3): its object has no `name` of its own.
+	for (const m of text.matchAll(/<function=([\w.-]+)>\s*/g)) {
+		const name = m[1];
+		const open = (m.index ?? 0) + m[0].length;
+		if (text[open] !== "{" || (allowed && !allowed.has(name))) continue;
+		const close = findMatchingBrace(text, open);
+		if (close === -1) continue;
+		try {
+			const args = JSON.parse(text.slice(open, close + 1));
+			if (!args || typeof args !== "object" || Array.isArray(args)) continue;
+			const tail = /^\s*<\/function>/.exec(text.slice(close + 1));
+			found.push({ span: [m.index ?? 0, close + 1 + (tail ? tail[0].length : 0)], call: { name, arguments: args } });
+		} catch {
+			// Not an object: the tag stays prose, like any brace that is not JSON below.
+		}
+	}
+	const inTag = (at: number) => found.some(({ span: [s, e] }) => at >= s && at < e);
 	// Walk the text character by character, extracting balanced JSON objects
 	let i = 0;
 	while (i < text.length) {
 		const start = text.indexOf("{", i);
 		if (start === -1) break;
+		if (inTag(start)) {
+			i = start + 1;
+			continue;
+		}
 		// Find the matching closing brace (handle nesting + strings)
 		const end = findMatchingBrace(text, start);
 		if (end === -1) { i = start + 1; continue; }
@@ -61,8 +86,7 @@ export function parseToolCallsFromText(
 				rawArgs = rest;
 			}
 			const args = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs;
-			calls.push({ name, arguments: args });
-			spans.push([start, end + 1]);
+			found.push({ span: [start, end + 1], call: { name, arguments: args } });
 		} catch {
 			// Ignorable BY CONSTRUCTION, and the only correct behaviour here (#291). This is a
 			// SCANNER: it walks every `{` in the model's prose and asks "was that JSON?". A throw
@@ -72,7 +96,9 @@ export function parseToolCallsFromText(
 			// not parse is not a tool call and must stay visible to the reader.
 		}
 	}
-	return { calls, text: removeSpans(text, spans) };
+	// Both forms, in the order they were written.
+	found.sort((a, b) => a.span[0] - b.span[0]);
+	return { calls: found.map((f) => f.call), text: removeSpans(text, found.map((f) => f.span)) };
 }
 
 /** Cut the given [start, end) ranges out of `text`. Ranges arrive in order and never overlap. */

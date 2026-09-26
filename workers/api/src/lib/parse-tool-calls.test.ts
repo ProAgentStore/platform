@@ -223,3 +223,45 @@ describe("parseToolCallsFromText removes what it parsed (#395)", () => {
 		expect(parseToolCallsFromText("Nothing to do here.", allowed).text).toBe("Nothing to do here.");
 	});
 });
+
+// #853 finding 3: Llama 3.x writes its documented custom-tool form, `<function=NAME>{…}</function>`. The
+// inner object has no `name`, so the walker skipped it and the markup reached the owner's screen — a
+// call that never happened, shown as if it had. It is reported and stripped like any call written as
+// text; like them, it is never executed (#853 finding 1).
+describe("parseToolCallsFromText — Llama's <function=NAME>{…}</function> form (#853 finding 3)", () => {
+	const tools = new Set(["read_terminal", "send_to_cli", "write_memory"]);
+
+	it("is recognised by the tag's name, and the whole span — tags included — leaves the reply", () => {
+		expect(parseToolCallsFromText('<function=read_terminal>{"repo_name":"a"}</function>', tools)).toEqual({
+			calls: [{ name: "read_terminal", arguments: { repo_name: "a" } }],
+			text: "",
+		});
+	});
+
+	it("keeps the prose around it", () => {
+		const out = parseToolCallsFromText('Let me check the terminal. <function=read_terminal>{"repo_name":"a"}</function> Back soon.', tools);
+		expect(out.calls.map((c) => c.name)).toEqual(["read_terminal"]);
+		expect(out.text).toBe("Let me check the terminal.  Back soon.");
+	});
+
+	it("takes the closing tag as optional — Llama often leaves it off", () => {
+		const out = parseToolCallsFromText('<function=send_to_cli>{"repo_name":"a","message":"run the tests"}', tools);
+		expect(out).toEqual({ calls: [{ name: "send_to_cli", arguments: { repo_name: "a", message: "run the tests" } }], text: "" });
+	});
+
+	it("keeps text order across both forms, and several of each", () => {
+		const out = parseToolCallsFromText(
+			'<function=read_terminal>{"repo_name":"a"}</function>{"name":"write_memory","arguments":{"key":"k"}}<function=send_to_cli>{"message":"x"}</function>',
+			tools,
+		);
+		expect(out.calls.map((c) => c.name)).toEqual(["read_terminal", "write_memory", "send_to_cli"]);
+		expect(out.text).toBe("");
+	});
+
+	it("leaves a tag naming no real tool, or holding no valid object, where it was — it is prose, not a call", () => {
+		for (const text of ['<function=rm_rf>{"path":"/"}</function>', '<function=read_terminal>{"repo_name": "a"</function>', "<function=read_terminal>no object here</function>"]) {
+			expect(parseToolCallsFromText(text, tools)).toEqual({ calls: [], text });
+		}
+	});
+});
+
