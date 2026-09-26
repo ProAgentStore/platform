@@ -71,6 +71,7 @@ export interface AgentSubscribers {
  * answer rather than half of it plus a schema detail the reader has to know.
  */
 export const INSTANCE_CHILD_TABLES = [
+	"run_events",
 	"ticket_runs",
 	"tickets",
 	"coding_timeline",

@@ -2,6 +2,7 @@ import { closeCodingSessionCards, upsertCodingSessionCard } from "./coding-board
 import { parseMergePolicy } from "./coding-authority.js";
 import { gitProviderFor, type GitProviderId } from "./git-providers.js";
 import { parseRepoPolicies, type DeclaredRepoPolicies } from "./repo-policies.js";
+import { recordRunEvent } from "./run-events.js";
 import type { Env } from "../types.js";
 import type {
 	CloneStatus,
@@ -790,14 +791,25 @@ export async function claimSessionDriver(
  * look rather than assume nothing happened.
  */
 async function retireDisplacedRuns(env: Env, instanceId: string, userId: string, sessionId: string): Promise<void> {
+	const now = Date.now();
 	await env.DB.prepare(
 		`UPDATE agent_loop_runs
 		    SET status = 'needs_human', stop_reason = 'interrupted', detail = ?4, finished_at = ?5
 		  WHERE session_id = ?1 AND instance_id = ?2 AND user_id = ?3 AND status = 'running'`,
 	)
-		.bind(sessionId, instanceId, userId, DISPLACED_DETAIL, Date.now())
+		.bind(sessionId, instanceId, userId, DISPLACED_DETAIL, now)
 		.run()
 		.catch(() => undefined);
+	// It stopped heartbeating and the platform closed it: a stall, announced as one (#579). The rows
+	// this write closed are the ones stamped with its `now`; `recordRunEvent` re-checks that per row.
+	try {
+		const { results } = await env.DB.prepare("SELECT run_id FROM agent_loop_runs WHERE session_id = ?1 AND instance_id = ?2 AND user_id = ?3 AND finished_at = ?4")
+			.bind(sessionId, instanceId, userId, now)
+			.all<{ run_id: string }>();
+		for (const r of results ?? []) await recordRunEvent(env, r.run_id, "run.stalled", now);
+	} catch {
+		/* best-effort, like the close itself */
+	}
 }
 
 const DISPLACED_DETAIL =

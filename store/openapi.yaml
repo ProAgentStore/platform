@@ -4516,6 +4516,28 @@ paths:
         "200": { description: The ticket and its attempts }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/run-events:
+    get:
+      summary: Run-finished and run-stalled events, as a cursor feed
+      description: |
+        #579. One event per terminal transition of a run on this instance, oldest first:
+        `run.finished` when the run closed itself (any status), `run.stalled` when the platform
+        closed a run that stopped reporting. Each `payload` carries `runId`, `status`, `stopReason`,
+        `detail`, `iterations`, `sessionId`, `startedAt`, `finishedAt`, `traceId` and a console `link`.
+        Send the returned `nextCursor` as `since` to read only what is new; it equals `since` when
+        nothing has arrived. The same events are routable to another agent through a connection on
+        event type `run.finished` / `run.stalled`. Owner-scoped: another owner's instance is a 404.
+      operationId: listRunEvents
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: since, in: query, required: false, schema: { type: integer, minimum: 0 }, description: "The seq of the last event already seen (exclusive). Default 0." }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200 }, description: "Default 50." }
+      responses:
+        "200": { description: "`{events: [{seq, eventType, payload, createdAt}], nextCursor}`" }
+        "400": { description: since is not a non-negative number }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/board/items/{jobKey}/github-issue:
     put:
       summary: Link or unlink a board card to a GitHub issue

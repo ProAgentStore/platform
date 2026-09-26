@@ -22,6 +22,7 @@ import { MAX_PARK_MS, PARK_LIMIT_MS } from "./work-report.js";
 import { RUN_WAIT_REASONS } from "./agent-loop-store.js";
 import { statusFor, type LoopStopReason } from "./agent-loop.js";
 import type { Env } from "../types.js";
+import { recordRunEvent } from "./run-events.js";
 
 /**
  * How long a run may be silent before it is presumed dead.
@@ -199,6 +200,9 @@ async function closeRuns(
 	for (const r of rows.filter((r) => r.session_id)) {
 		await closeCodingSessionCards(env, r.instance_id, r.user_id, [r.session_id as string], cardStatus).catch(() => undefined);
 	}
+	// The platform closed these, not the runs: `run.stalled` (#579). A row the workflow closed first
+	// carries its own finished_at, so `recordRunEvent` skips it rather than calling a finish a stall.
+	for (const r of rows) await recordRunEvent(env, r.run_id, "run.stalled", now);
 	return res.meta?.changes ?? 0;
 }
 

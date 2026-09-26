@@ -51,11 +51,13 @@ import { adminSettingsRoutes } from "./routes/admin-settings.js";
 import { toolRoutes } from "./routes/tools.js";
 import { agentTypeToolRoutes } from "./routes/agent-type-tools.js";
 import { ticketRoutes } from "./routes/instances-tickets.js";
+import { runEventRoutes } from "./routes/instances-run-events.js";
 import { connectorRoutes } from "./routes/connectors.js";
 import { mcpRoutes } from "./routes/mcp.js";
 import { cloudflareAccessGate, cloudflareAccessMode } from "./lib/cf-access.js";
 import { runDueTriggers } from "./lib/triggers.js";
 import { runDueDeliveries } from "./lib/connections.js";
+import { routeRunEvents } from "./lib/run-event-routing.js";
 import { runCommitCloseWatch } from "./lib/commit-close-watch.js";
 import { runDeployWatch } from "./lib/deploy-watch.js";
 import { runStaleRunSweep } from "./lib/run-sweeper.js";
@@ -175,6 +177,7 @@ app.route("/v1/instances", instanceStorageRoutes); // /v1/instances/:id/collecti
 app.route("/v1/instances", codingRoutes); // /v1/instances/:id/coding/repos, /sessions (AgentCoder port)
 app.route("/v1/instances", toolRoutes); // /v1/instances/:id/tools, /tools/:name (connector/registry tools)
 app.route("/v1/instances", ticketRoutes); // /v1/instances/:id/board/items/:jobKey/ticket, /tickets/:ticketId (#757)
+app.route("/v1/instances", runEventRoutes); // /v1/instances/:id/run-events?since= (#579)
 app.route("/v1/connectors", connectorRoutes); // generic OAuth2 authorize/callback for manifest oauth connectors (#147)
 app.route("/v1/mcp", mcpRoutes); // outbound MCP: DCR+PKCE authorize/callback (#180/#258) + first-party presets (#287)
 app.route("/v1/github", githubRoutes); // GitHub App: /status, /install-url, /installations, /callback
@@ -258,6 +261,11 @@ export default {
 		// versa — these are independent failure domains.
 		ctx.waitUntil(
 			runDueDeliveries(env).catch((err) => logUnhandled(env, err, { path: "scheduled:deliveries", method: "CRON" })),
+		);
+		// Hand recorded run.finished / run.stalled events to the connection outbox (#579). Its own
+		// failure domain: a routing error leaves rows unrouted for the next tick, never the pump.
+		ctx.waitUntil(
+			routeRunEvents(env).catch((err) => logUnhandled(env, err, { path: "scheduled:run-events", method: "CRON" })),
 		);
 		// Close runs whose Workflow died mid-step (#207C). A third independent failure domain: a
 		// row stuck at `running` forever tells every supervisor its subordinate is still working.

@@ -5,6 +5,7 @@
 
 import { statusFor, type LoopStopReason } from "./agent-loop.js";
 import type { Env } from "../types.js";
+import { recordRunEvent } from "./run-events.js";
 import { MAX_CONFIGURABLE_OBJECTIVE_CHARS } from "./loop-limits.js";
 
 export interface LoopRunRow {
@@ -562,4 +563,6 @@ export async function finishLoopRun(
 	)
 		.bind(runId, statusFor(stopReason), stopReason, detail.slice(0, 2000), finishedAt)
 		.run();
+	// Announce it (#579): every driver closes through here, so this is the one `run.finished` producer.
+	await recordRunEvent(env, runId, "run.finished", finishedAt);
 }

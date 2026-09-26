@@ -731,8 +731,8 @@ const PINS = {
 	// explains, which is the same defect one file over.
 	// -24 at #847: the pure result-envelope parser moved to mcp-result.ts, where its runtime-artifact consumer shares the boundary; transport stays here.
 	"workers/api/src/lib/connectors/mcp.ts": 1371,
-	// New at #847: GitHub binding uniqueness is repo persistence, so findExistingRepoBinding stays with the D1 repo store rather than creating a one-query sibling.
-	"workers/api/src/lib/coding-store.ts": 824,
+	// New at #847: GitHub binding uniqueness is repo persistence, so findExistingRepoBinding stays with the D1 repo store rather than creating a one-query sibling. +12 at #579: retireDisplacedRuns announces the runs it closes as `run.stalled`; the read of which rows it closed belongs beside the write that closed them.
+	"workers/api/src/lib/coding-store.ts": 836,
 	// -1 at #325: the JSON-string coercion create_agent and update_agent each had inline moved
 	// to `http.ts` as `parseJsonArg`, which is where the two copies could stop disagreeing about
 	// what a MALFORMED string means (create silently dropped it, update refused). Pin lowered so
