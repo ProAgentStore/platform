@@ -492,10 +492,10 @@ describe("splitTrailingCommand", () => {
 	// Precision over convenience: phraseMatchesTranscript already refuses a single-word command
 	// that isn't the whole utterance. Stripping a trailing bare word would both truncate the
 	// message and take an action the user didn't ask for — much worse than not firing.
-	it("does NOT treat a trailing single word as a command — that would hijack ordinary speech", () => {
-		const r = splitTrailingCommand("don't forget to mute", undefined, "en-US", { muted: false });
-		expect(r.command).toBeNull();
-		expect(r.text).toBe("don't forget to mute");
+	// #457 step 2: a trailing bare "mute" no longer has to choose between hijacking the sentence and
+	// ignoring the mute. It FIRES (cheap, reversible) and PARKS the whole sentence — nothing is cut.
+	it("a trailing single word mutes and PARKS the sentence — never sent truncated, never dropped (#457)", () => {
+		expect(splitTrailingCommand("don't forget to mute", undefined, "en-US", { muted: false })).toEqual({ verdict: "park", command: "mute", text: "don't forget to mute" });
 	});
 
 	it("a turn that IS the command sends nothing", () => {
@@ -520,7 +520,7 @@ describe("splitTrailingCommand", () => {
 		expect(splitTrailingCommand("okay start listening", undefined, "en-US", { muted: true }).command).toBe("unmute");
 		expect(splitTrailingCommand("okay start listening", undefined, "en-US", { muted: false }).command).toBeNull();
 		// bare word, whole utterance → still a command, as matchVoiceCommand has always had it
-		expect(splitTrailingCommand("unmute", undefined, "en-US", { muted: true })).toEqual({ command: "unmute", text: "" });
+		expect(splitTrailingCommand("unmute", undefined, "en-US", { muted: true })).toEqual({ verdict: "fire", command: "unmute", text: "" });
 	});
 
 	it("uses custom words when set, like every other command path", () => {
@@ -586,8 +586,8 @@ describe('matchVoiceCommand — bare "stop" (#331)', () => {
 	// A turn that IS the command sends nothing; a turn that ENDS with the doubled imperative
 	// keeps what came before, the same contract every other trailing command has.
 	it("sends nothing when the turn is only the stop word", () => {
-		expect(splitTrailingCommand("Stop-stop.", undefined, "en-US", { muted: false })).toEqual({ command: "exit", text: "" });
-		expect(splitTrailingCommand("Stop.", undefined, "en-US", { muted: false })).toEqual({ command: "exit", text: "" });
+		expect(splitTrailingCommand("Stop-stop.", undefined, "en-US", { muted: false })).toEqual({ verdict: "fire", command: "exit", text: "" });
+		expect(splitTrailingCommand("Stop.", undefined, "en-US", { muted: false })).toEqual({ verdict: "fire", command: "exit", text: "" });
 	});
 });
 
@@ -678,7 +678,7 @@ describe('splitTrailingCommand — "next" (#277)', () => {
 	});
 
 	it("an utterance that IS the command sends nothing", () => {
-		expect(splitTrailingCommand("next", undefined, "en", { canSwitch: true })).toEqual({ command: "next", text: "" });
+		expect(splitTrailingCommand("next", undefined, "en", { canSwitch: true })).toEqual({ verdict: "fire", command: "next", text: "" });
 	});
 
 	it("is inert without canSwitch, so the words stay in the message", () => {
@@ -934,7 +934,7 @@ describe("precedence: an explicit binding outranks a built-in (#385)", () => {
 	it("carries the same rule into splitTrailingCommand, which strips words off a real message", () => {
 		// Without the shared rule the two disagree: the matcher says "not a command", the splitter
 		// still amputates the phrase from the end of the sentence it is part of.
-		expect(splitTrailingCommand("stop stop", REPORTED, "en-US", { muted: false })).toEqual({ command: null, text: "stop stop" });
+		expect(splitTrailingCommand("stop stop", REPORTED, "en-US", { muted: false })).toEqual({ verdict: "none", command: null, text: "stop stop" });
 	});
 
 	it("changes nothing for a user who bound nothing — blank still means 'use ours'", () => {
@@ -1035,26 +1035,28 @@ describe("a repeated command word is a command, not a message (#456)", () => {
 	it("fires mute at one, two and five repetitions, and sends nothing", () => {
 		for (const said of ["mute", "Mute, mute", "mute mute", "Mute, mute, mute, mute, mute"]) {
 			expect(matchVoiceCommand(said, undefined, "en", { muted: false }), said).toBe("mute");
-			expect(splitTrailingCommand(said, undefined, "en", notMuted), said).toEqual({ command: "mute", text: "" });
+			expect(splitTrailingCommand(said, undefined, "en", notMuted), said).toEqual({ verdict: "fire", command: "mute", text: "" });
 		}
 	});
 
 	// THE PRECISION RULE THAT MUST SURVIVE. A bare trailing command word is genuinely ambiguous,
 	// and truncating a sentence is the expensive mistake — so one stays a message.
-	it("leaves a single trailing command word alone, which is why the threshold is two", () => {
-		for (const said of ["don't forget to mute", "push everything, mute", "remind me to unmute later"]) {
+	it("never STRIPS a single trailing command word, which is why the threshold is two — a bare mute parks instead (#457)", () => {
+		for (const said of ["don't forget to mute", "push everything, mute"]) {
 			expect(matchVoiceCommand(said, undefined, "en", { muted: false }), said).toBeNull();
-			expect(splitTrailingCommand(said, undefined, "en", notMuted), said).toEqual({ command: null, text: said });
+			expect(splitTrailingCommand(said, undefined, "en", notMuted), said).toEqual({ verdict: "park", command: "mute", text: said });
 		}
+		// Not a trailing command at all, so nothing to fire or park.
+		expect(splitTrailingCommand("remind me to unmute later", undefined, "en", notMuted)).toEqual({ verdict: "none", command: null, text: "remind me to unmute later" });
 	});
 
 	it("strips a REPEATED trailing run and keeps the message that came before it", () => {
 		expect(splitTrailingCommand("push everything, mute mute", undefined, "en", notMuted)).toEqual({
-			command: "mute",
+			verdict: "fire", command: "mute",
 			text: "push everything",
 		});
 		expect(splitTrailingCommand("Run the tests, mute mute mute.", undefined, "en", notMuted)).toEqual({
-			command: "mute",
+			verdict: "fire", command: "mute",
 			text: "Run the tests",
 		});
 	});
@@ -1063,7 +1065,7 @@ describe("a repeated command word is a command, not a message (#456)", () => {
 	// while muted and `exit` in both, so the coverage has to follow the candidate list.
 	it("covers the other repeatable commands, not just mute", () => {
 		expect(matchVoiceCommand("unmute unmute unmute", undefined, "en", { muted: true })).toBe("unmute");
-		expect(splitTrailingCommand("unmute unmute", undefined, "en", { muted: true })).toEqual({ command: "unmute", text: "" });
+		expect(splitTrailingCommand("unmute unmute", undefined, "en", { muted: true })).toEqual({ verdict: "fire", command: "unmute", text: "" });
 		expect(matchVoiceCommand("stop stop stop stop", undefined, "en", { muted: false })).toBe("exit");
 	});
 
@@ -1099,7 +1101,7 @@ describe("a repeated command word is a command, not a message (#456)", () => {
 	it("does not touch ordinary speech that happens to repeat a word", () => {
 		for (const said of ["very very good work", "I said no no to that", "that that is fine"]) {
 			expect(matchVoiceCommand(said, undefined, "en", { muted: false }), said).toBeNull();
-			expect(splitTrailingCommand(said, undefined, "en", notMuted), said).toEqual({ command: null, text: said });
+			expect(splitTrailingCommand(said, undefined, "en", notMuted), said).toEqual({ verdict: "none", command: null, text: said });
 		}
 	});
 
@@ -1141,12 +1143,12 @@ describe("a command can be switched off, without freezing its words (#443)", () 
 	 */
 	it("a disabled command's phrase reaches the agent as ordinary speech instead of being amputated", () => {
 		expect(splitTrailingCommand("run the tests, mute mic", off("mute"), "en", notMuted)).toEqual({
-			command: null,
+			verdict: "none", command: null,
 			text: "run the tests, mute mic",
 		});
 		// …and the same utterance with mute ON is still split, so the assertion is about the flag.
 		expect(splitTrailingCommand("run the tests, mute mic", undefined, "en", notMuted)).toEqual({
-			command: "mute",
+			verdict: "fire", command: "mute",
 			text: "run the tests",
 		});
 	});
@@ -1154,7 +1156,7 @@ describe("a command can be switched off, without freezing its words (#443)", () 
 	it("takes the repetition path with it, so no branch keeps a disabled command alive", () => {
 		expect(matchVoiceCommand("mute mute mute", off("mute"), "en", { muted: false })).toBeNull();
 		expect(splitTrailingCommand("push everything, mute mute", off("mute"), "en", notMuted)).toEqual({
-			command: null,
+			verdict: "none", command: null,
 			text: "push everything, mute mute",
 		});
 	});

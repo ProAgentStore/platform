@@ -55,9 +55,14 @@ export type ImmediateCommand = Extract<VoiceCommand, "mute" | "unmute" | "exit">
  * turn can be all three things at once: "run the tests, mute" mutes and sends, "next" sends
  * nothing and leaves, "check the logs, next" does both in that order — the message belongs to
  * the agent being left, so it goes before the departure.
+ *
+ * `park` (#457 step 2) mutes AND holds the whole utterance for the composer: the turn ended on a
+ * bare "mute" that may have been a mention (`"don't forget to mute"`), so the cheap decision fires
+ * and the expensive one is left to the user — nothing sent, nothing cut, nothing lost.
  */
 export type FinalizedTurn =
 	| { action: "scrap" }
+	| { action: "park"; text: string; command: "mute" }
 	| { action: "back" }
 	| { action: "repeat" }
 	| { action: "send"; text: string; command: ImmediateCommand | null; switchAfter: boolean }
@@ -118,6 +123,10 @@ export function planFinalizedTurn(
 	let switchAfter = false;
 	if (cfg.commandsEnabled) {
 		const split = splitTrailingCommand(msg, cfg.words, cfg.lang, { muted: cfg.muted, canSwitch: cfg.canSwitch, fired: cfg.firedDuringCapture });
+		if (split.verdict === "park") {
+			const parked = stripStopWord(split.text, cfg.stopWords).text.trim();
+			return { action: "park", text: parked, command: "mute" };
+		}
 		body = split.text;
 		if (split.command === "repeat") return { action: "repeat" };
 		if (split.command === "mute" || split.command === "unmute" || split.command === "exit") command = split.command;

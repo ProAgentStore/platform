@@ -1311,6 +1311,14 @@ export function useVoice(instanceId: string | undefined, opts: {
 					repeatLastRef.current();
 					return;
 				}
+				// #457 step 2: a bare trailing "mute" that may be a mention mutes (one tap to undo) and PARKS
+				// the whole sentence in the composer. `"send"` = this turn is in hand; the recovery is ours.
+				if (plan.action === "park") {
+					muteFromCommandRef.current("send");
+					flushSync(() => clearVoiceText());
+					if (plan.text) onRecoveredTextRef.current?.(plan.text);
+					return;
+				}
 				// The trailing command applies FIRST — the user asked for silence in the same breath
 				// as the request, and getting it after the send is getting it late. "send", because
 				// the transcript is already in hand here and `plan.text` is emitted below: this path

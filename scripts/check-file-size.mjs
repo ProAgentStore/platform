@@ -309,8 +309,8 @@ const PINS = {
 	// `startAsControl` path (Whisper mode) and the VoiceStt fallback (browser-dictation mode).
 	// `ensureControlStt` shrank by losing its inline error handler but `startListening` and the
 	// reconcile effect gained the gate-vs-ctrlStt branches. The merge removes one of the three
-	// `SpeechRecognition` construction sites and one re-arm cycle at every turn boundary.
-	"packages/sdk/src/voice/use-voice.ts": 2094,
+	// `SpeechRecognition` construction sites and one re-arm cycle at every turn boundary. +8 at #457 step 2: finalize's `park` branch (mute, then the composer), which has to sit beside the send it pre-empts.
+	"packages/sdk/src/voice/use-voice.ts": 2102,
 	// New entry at #385/#386/#387 — 689 → 845, crossing LIMIT, and it is prose that crossed it.
 	// This file is the vocabulary and the RULES over it: which phrases are in force for a command,
 	// which transcript may be judged for one, what a failing restart loop means. All three tickets
@@ -376,8 +376,8 @@ const PINS = {
 	// three of the five phases the ADR says may never be dead zones. The comment carries why the
 	// reorder is a no-op for everyone else — the built-in tables are pairwise disjoint, asserted with
 	// its denominator in convo.test.ts — because the next person to reach for an ordering change
-	// needs that fact, and re-deriving it means reading twenty language tables.
-	"packages/sdk/src/voice/convo.ts": 1105,
+	// needs that fact, and re-deriving it means reading twenty language tables. +7 at #457 step 2: the park branch and verdicts on every return; the verdict type and park rule moved out to command-intent.ts.
+	"packages/sdk/src/voice/convo.ts": 1112,
 	// +2 for #319: an import and the one-line swap of the user-bubble body for `SpokenMessage`.
 	// The toggle, the divergence count and their prose live in that component, not here.
 	// +6 net for #335/#336: `loadMessages` now says whether it is OPENING a conversation or

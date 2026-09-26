@@ -35,7 +35,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { readAdr } from "../../../../scripts/lib/adr.mjs";
-import { commandStateFor, matchVoiceCommand, shouldRunControlListener, type TranscriptKind, type VoiceCommand, type VoiceCommandWords } from "./convo.js";
+import { commandStateFor, matchVoiceCommand, shouldRunControlListener, splitTrailingCommand, type TranscriptKind, type VoiceCommand, type VoiceCommandWords } from "./convo.js";
+import { planFinalizedTurn } from "./turn.js";
 import { classifyResult, isEchoing, planMuteTeardown, type Dictation } from "./machine.js";
 import { planMicRestart } from "./mic-retry.js";
 
@@ -500,6 +501,80 @@ describe("M5 — mute never costs the user their words", () => {
 		const body = callbackBody("handleResult", "const makeStt = useCallback(");
 		const ignore = body.slice(body.indexOf('if (verdict === "ignore")'), body.indexOf('if (verdict === "recover")'));
 		expect(ignore, "the ignore branch is back to a bare `return` — a dropped turn leaves no message, no bubble and no error row, so nobody can answer 'where did my words go?' (#420)").toMatch(/reportClientError\(/);
+	});
+});
+
+/**
+ * M5 + #457 step 2 — firing and stripping are separate verdicts, and the uncertain case PARKS.
+ *
+ * The table is the guard the issue asks for: three verdicts, each with a row a user can actually say,
+ * so a refactor that collapses them back into one `{command, text}` decision fails here — most
+ * visibly on "don't forget to mute", which under one verdict must either truncate a sentence or
+ * refuse a mute, and under three does neither.
+ */
+describe("M5 — the three verdicts: fire, park, none (#457 step 2)", () => {
+	const notMuted = { muted: false };
+	const TABLE: Array<[string, "fire" | "park" | "none", VoiceCommand | null, string]> = [
+		// fire — strong evidence: whole utterance, repeated word (#456), trailing multi-word phrase
+		["mute", "fire", "mute", ""],
+		["Mute, mute, mute", "fire", "mute", ""],
+		["push everything, mute mute", "fire", "mute", "push everything"],
+		["run the tests, mute the mic", "fire", "mute", "run the tests"],
+		// park — a bare trailing mute after content: mute fires, the sentence is held whole
+		["don't forget to mute", "park", "mute", "don't forget to mute"],
+		["push everything, mute", "park", "mute", "push everything, mute"],
+		// none — no command, or a negated one
+		["please don't mute the music playing", "none", null, "please don't mute the music playing"],
+		["don't mute", "none", null, "don't mute"],
+		["do not mute", "none", null, "do not mute"],
+		["never mute", "none", null, "never mute"],
+		["run the tests", "none", null, "run the tests"],
+	];
+
+	it("classifies every row, and all three verdicts are in use — none can be collapsed away", () => {
+		for (const [said, verdict, command, text] of TABLE) {
+			expect(splitTrailingCommand(said, undefined, "en", notMuted), said).toEqual({ verdict, command, text });
+		}
+		expect(new Set(TABLE.map((r) => r[1]))).toEqual(new Set(["fire", "park", "none"]));
+	});
+
+	it("\"don't forget to mute\" mutes and PARKS the sentence — not sent, not truncated, not dropped", () => {
+		const plan = planFinalizedTurn("don't forget to mute", { commandsEnabled: true, canScrap: false, canSwitch: false, muted: false, lang: "en" });
+		expect(plan).toEqual({ action: "park", text: "don't forget to mute", command: "mute" });
+	});
+
+	it("a negation is never a mute — the adversarial false positive park's liberal firing must not create", () => {
+		for (const said of ["please don't mute the music playing", "don't mute", "Do NOT mute.", "you should never mute"]) {
+			expect(splitTrailingCommand(said, undefined, "en", notMuted).command, said).toBeNull();
+			expect(planFinalizedTurn(said, { commandsEnabled: true, canScrap: false, canSwitch: false, muted: false, lang: "en" }), said).toMatchObject({ action: "send", command: null });
+		}
+	});
+
+	it("regression: a whole-utterance command still strips completely, and a repeated word (#456) still strips its run", () => {
+		const cfg = { commandsEnabled: true, canScrap: false, canSwitch: false, muted: false, lang: "en" };
+		expect(planFinalizedTurn("mute", cfg)).toEqual({ action: "none", command: "mute", switchAfter: false });
+		expect(planFinalizedTurn("Mute, mute, mute, mute, mute", cfg)).toEqual({ action: "none", command: "mute", switchAfter: false });
+		expect(planFinalizedTurn("push everything, mute mute", cfg)).toEqual({ action: "send", text: "push everything", command: "mute", switchAfter: false });
+	});
+
+	it("parks for MUTE only — the one command that is cheap to fire wrongly", () => {
+		const muted = { muted: true, canSwitch: true };
+		expect(splitTrailingCommand("remind me to unmute", undefined, "en", muted).verdict).toBe("none");
+		expect(splitTrailingCommand("don't repeat", undefined, "en", { muted: false, canSwitch: true }).verdict).toBe("none");
+		expect(splitTrailingCommand("take me to the next", undefined, "en", { muted: false, canSwitch: true }).verdict).toBe("none");
+		// And never while already muted: there is nothing to fire.
+		expect(splitTrailingCommand("don't forget to mute", undefined, "en", muted).verdict).toBe("none");
+	});
+
+	it("finalize parks through the recover hook, after muting, and sends nothing (structural)", () => {
+		const start = USE_VOICE.indexOf('if (plan.action === "park") {');
+		expect(start, "finalize no longer handles a parked turn — it would fall through to emitSend and deliver a sentence the user never confirmed").toBeGreaterThan(-1);
+		const branch = USE_VOICE.slice(start, USE_VOICE.indexOf("return;", start) + "return;".length);
+		expect(branch).toMatch(/muteFromCommandRef\.current\("send"\)/);
+		expect(branch).toMatch(/onRecoveredTextRef\.current\?\.\(plan\.text\)/);
+		expect(branch).not.toMatch(/emitSendRef/);
+		// …and it comes BEFORE the send path, so a park can never also be sent.
+		expect(start).toBeLessThan(USE_VOICE.indexOf("const outcome = emitSendRef.current(plan.text);"));
 	});
 });
 

@@ -136,6 +136,8 @@ function legacyFinalize(
 	let switchAfter = false;
 	if (cfg.commandsEnabled) {
 		const split = splitTrailingCommand(msg, cfg.words, cfg.lang, { muted: cfg.muted, canSwitch: cfg.canSwitch });
+		// #457 step 2 added one branch to the chain: a parked turn is held whole, stop-word removed.
+		if (split.verdict === "park") return { action: "park", text: stripStopWord(split.text, cfg.stopWords).text.trim(), command: "mute" };
 		body = split.text;
 		if (split.command === "repeat") return { action: "repeat" };
 		if (split.command === "mute") command = "mute";
@@ -456,16 +458,12 @@ describe("a command that fired during capture never reaches the agent (#457 step
 		});
 	});
 
-	// THE DEFECT, stated as the same call without the flag. Unchanged behaviour — the precision
-	// rule that protects "don't forget to mute" is exactly what makes this case need evidence.
-	it("still sends the word when nothing fired, because from the string alone it may be prose", () => {
-		expect(planFinalizedTurn("run the tests, mute", base)).toEqual({
-			action: "send",
-			text: "run the tests, mute",
-			command: null,
-			switchAfter: false,
-		});
-		expect(planFinalizedTurn("don't forget to mute", base)).toMatchObject({ action: "send", text: "don't forget to mute" });
+	// The same call without the flag. From the string alone the bare word may be prose, so it is
+	// never STRIPPED — but since #457 step 2 it is not sent either: mute fires (one tap to undo) and
+	// the WHOLE sentence is parked in the composer, so nothing is truncated and nothing is lost.
+	it("with nothing fired, a bare trailing mute mutes and parks the whole sentence — nothing sent, nothing cut (#457 step 2)", () => {
+		expect(planFinalizedTurn("run the tests, mute", base)).toEqual({ action: "park", text: "run the tests, mute", command: "mute" });
+		expect(planFinalizedTurn("don't forget to mute", base)).toEqual({ action: "park", text: "don't forget to mute", command: "mute" });
 	});
 
 	it("relaxes the rule for the command that fired and for nothing else", () => {

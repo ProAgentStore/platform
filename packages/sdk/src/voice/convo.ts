@@ -4,6 +4,7 @@
  * unit-tested without a browser.
  */
 
+import { type CommandSplit, parksOnTrailingMute } from "./command-intent.js";
 import { collapseRepeatedRuns, normalizeSpeech, trimTrailingPunctuation } from "./normalize.js";
 
 /** Tunables for the restart/freeze guard. */
@@ -901,7 +902,7 @@ export function splitTrailingCommand(
 	words?: VoiceCommandWords,
 	lang?: string,
 	state?: { muted?: boolean; canSwitch?: boolean; fired?: VoiceCommand | null },
-): { command: VoiceCommand | null; text: string } {
+): CommandSplit {
 	// Same candidate set and ordering as matchVoiceCommand, so the two can never disagree
 	// about what a word means.
 	const canSwitch = state?.canSwitch === true;
@@ -917,21 +918,19 @@ export function splitTrailingCommand(
 	for (const cmd of candidates) {
 		const phrases = commandPhrases(cmd, words, lang).map((p) => normalizeTranscript(p));
 		if (phrases.some((p) => p === norm || (foldedNorm !== norm && p === foldedNorm))) {
-			return { command: cmd, text: "" };
+			return { verdict: "fire", command: cmd, text: "" };
 		}
 	}
 
 	// A command phrase at the END → act on it and keep what came before. Restricted to
-	// MULTI-WORD phrases, deliberately: `phraseMatchesTranscript` already refuses to fire a
-	// single-word command that isn't the whole utterance, precisely so ordinary speech isn't
-	// hijacked, and stripping a trailing bare word would reintroduce that. "don't forget to
-	// mute" must stay a message — silently truncating it AND muting is far worse than making
-	// the user pause before saying a one-word command.
+	// MULTI-WORD phrases, deliberately: stripping a trailing BARE word would truncate `"don't
+	// forget to mute"`. That case is no longer forced into "send it whole and fire nothing" —
+	// since #457 step 2 a trailing bare mute is PARKED at the end of this function instead.
 	for (const cmd of candidates) {
 		const multiWord = commandPhrases(cmd, words, lang).filter((p) => normalizeTranscript(p).includes(" "));
 		if (!multiWord.length) continue;
 		const stripped = stripStopWord(text, multiWord);
-		if (stripped.ended && stripped.text.trim()) return { command: cmd, text: stripped.text };
+		if (stripped.ended && stripped.text.trim()) return { verdict: "fire", command: cmd, text: stripped.text };
 	}
 
 	// A REPEATED bare command word at the end (#456) — the "smart cut-off" the multi-word rule
@@ -944,7 +943,7 @@ export function splitTrailingCommand(
 			const w = normalizeTranscript(p);
 			if (!w || w.includes(" ")) continue; // multi-word phrases are already handled above
 			const stripped = stripRepeatedTail(text, w, words);
-			if (stripped?.trim()) return { command: cmd, text: stripped };
+			if (stripped?.trim()) return { verdict: "fire", command: cmd, text: stripped };
 		}
 	}
 	// A command that ALREADY FIRED during capture (#457 step 3). Not a heuristic and not a fifth
@@ -963,9 +962,17 @@ export function splitTrailingCommand(
 	// the rule above deliberately declines to strip on its own.
 	if (state?.fired) {
 		const stripped = stripStopWord(text, commandPhrases(state.fired, words, lang));
-		if (stripped.ended) return { command: null, text: stripped.text };
+		if (stripped.ended) return { verdict: "fire", command: null, text: stripped.text };
 	}
-	return { command: null, text };
+	// A single trailing "mute" after other words (#457 step 2) — every rule above declines it, since
+	// it may be `"don't forget to mute"`. Mute FIRES (one tap to undo) and the whole utterance PARKS
+	// in the composer, uncut. `mute` only: `unmute` would open the mic, `exit`/`next` end or move the
+	// session, `repeat` replaces the turn — none is cheap to fire wrongly. See command-intent.ts.
+	const singleMute = commandPhrases("mute", words, lang).map((p) => normalizeTranscript(p)).filter((p) => p && !p.includes(" ") && !boundByUser(p, words, "mute"));
+	if (candidates.includes("mute") && parksOnTrailingMute(norm, singleMute)) {
+		return { verdict: "park", command: "mute", text };
+	}
+	return { verdict: "none", command: null, text };
 }
 
 /**

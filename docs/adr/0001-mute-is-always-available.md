@@ -75,6 +75,18 @@ The one exception is a mute arriving on the END of a request. "Run the tests, mu
 *plus* a request for quiet, and #228 exists because latching there threw the request away. Those two
 call sites say so in as many words (`pendingTurn: "send"`); everywhere else the default is to recover.
 
+**When the mute is detected with low confidence in a mixed utterance, the text is PARKED** (#457
+step 2). A turn that ends on a single bare mute word with other words before it — "don't forget to
+mute", "push everything, mute" — cannot be told apart from a mention by its string alone. Firing
+and stripping are therefore decided separately: mute **fires** (cheap, one tap to undo), and the
+whole sentence goes to the **composer**, untruncated — not sent to the agent, and not dropped. The
+send-on-the-end exception above still holds where the evidence is strong: a trailing multi-word
+phrase, a repeated word ("…, mute mute", #456), or a mute that already fired during capture (#457
+step 3) strips the command and sends the request. A negated mute ("don't mute", "never mute") fires
+nothing. Decided by the Pilot on #457's acceptance criteria in the absence of an owner answer to the
+park-versus-deliver question the issue raised; reversing it means changing the `park` verdict in
+`splitTrailingCommand` and this paragraph together.
+
 ### What M3 permits
 
 M3 forbids *disabling* the control path during TTS. It does **not** forbid making that path harder
