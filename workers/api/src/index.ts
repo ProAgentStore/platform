@@ -49,6 +49,7 @@ import { adminOpsRoutes } from "./routes/admin-ops.js";
 import { adminTriggersRoutes } from "./routes/admin-triggers.js";
 import { adminSettingsRoutes } from "./routes/admin-settings.js";
 import { toolRoutes } from "./routes/tools.js";
+import { agentTypeToolRoutes } from "./routes/agent-type-tools.js";
 import { connectorRoutes } from "./routes/connectors.js";
 import { mcpRoutes } from "./routes/mcp.js";
 import { cloudflareAccessGate, cloudflareAccessMode } from "./lib/cf-access.js";
@@ -168,6 +169,7 @@ app.route("/v1/push", pushRoutes);
 app.route("/v1/agents", versionRoutes);     // /v1/agents/:id/versions, /:versionId/rollback
 app.route("/v1/agents", exportRoutes);
 app.route("/v1/agents", storageRoutes); // /v1/agents/:id/collections, /files, /search, /activity, /summaries
+app.route("/v1/agents", agentTypeToolRoutes); // /v1/agents/:slug/tools — an agent type's declared tools (#771)
 app.route("/v1/instances", instanceStorageRoutes); // /v1/instances/:id/collections, /files, /search, /activity
 app.route("/v1/instances", codingRoutes); // /v1/instances/:id/coding/repos, /sessions (AgentCoder port)
 app.route("/v1/instances", toolRoutes); // /v1/instances/:id/tools, /tools/:name (connector/registry tools)

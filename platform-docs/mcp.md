@@ -122,6 +122,21 @@ registers a single tool, `pinned_instance_unavailable`, and every call still pas
 owner check and the live tool policy, so a tool the owner switches off is refused whatever
 the session still lists. Get the id from `my_instances` on `/mcp`.
 
+Several instances of one agent TYPE (a pilot driving three Coders, say)? Connect to the type's URL
+instead (#771):
+
+```
+https://mcp.proagentstore.online/mcp/t/<agent_slug>
+```
+
+It publishes the tools that agent type **declares**, under their real names with their real field
+names **plus an `instance_id` argument** naming which of your instances of that type runs the call
+(`github_read_issue {repo, number, instance_id}`), and `call_instance_tool` for a tool one instance
+has beyond the type (e.g. one its owner unlocked by a permission). No `chat` / `guide` / `messages` —
+those are about one instance. Every call goes to that instance's invoke route, which checks you own
+it, applies its live tool policy, and refuses an instance of a different type. A type that cannot be
+read registers one tool, `agent_type_unavailable`, that says so.
+
 ## Agent Rules
 
 ```md
@@ -169,6 +184,8 @@ part a host is most likely to keep:
    `confirm` + `destructive`-scope refusals below are real and cannot be argued past.
 6. **Pin when you already know the instance.** `/mcp/i/<instance_id>` publishes only that
    instance's own tools, with no `instance_id` argument, plus `chat`, `guide` and `messages`.
+   For several instances of one agent type, `/mcp/t/<agent_slug>` publishes the type's tools,
+   each with an `instance_id` argument.
 
 Parameter schemas are exact. Use the `snake_case` names from `tools/list`; do not translate
 them to camelCase or wrap arguments in extra objects. IDs, session IDs, task IDs, job keys,

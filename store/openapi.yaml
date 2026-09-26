@@ -6915,6 +6915,33 @@ paths:
 
   # ── Tools, connectors, connections ────────────────────────────────────────
 
+  /v1/agents/{slug}/tools:
+    get:
+      summary: An agent type's declared tools
+      description: |
+        What every instance of this agent TYPE shares (#771): the tools its template declares, in the
+        same row shape as `GET /v1/instances/{instanceId}/tools` and from the same policy, with no
+        instance's own choices applied (switched-off tools, write consent, permission-unlocked tools —
+        those are per instance, and the invoke route applies them). What a `/mcp/t/<slug>` MCP session
+        registers. Readable for a published agent, one you own, or one you have an instance of.
+      operationId: listAgentTypeTools
+      tags: [Tools]
+      parameters:
+        - { name: slug, in: path, required: true, description: The agent's slug (or id)., schema: { type: string } }
+        - { name: allowed, in: query, description: Send `true` to narrow to the declared set., schema: { type: string, enum: ["true"] } }
+        - { name: schemas, in: query, description: Send `true` to include each declared tool's input schema., schema: { type: string, enum: ["true"] } }
+      responses:
+        "200":
+          description: The type's tool policy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agent: { type: object, properties: { id: { type: string }, slug: { type: string } } }
+                  tools: { type: array, items: { type: object, additionalProperties: true } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/tools:
     get:
       summary: Every registry tool, with this instance's verdict on it
@@ -7668,6 +7695,7 @@ paths:
       parameters:
         - { $ref: "#/components/parameters/InstanceId" }
         - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: agent, in: query, description: "An agent type slug (#771). When set, an instance of any other type is refused with 400 — what a `/mcp/t/<slug>` MCP session sends. Omitted, the route behaves as without it.", schema: { type: string } }
       requestBody:
         required: true
         content:

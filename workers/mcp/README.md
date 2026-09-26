@@ -58,6 +58,23 @@ that is not yours registers one tool, `pinned_instance_unavailable`, that says s
 call still passes the API's owner check and live tool policy. Get the id from `my_instances`
 on `/mcp`. The platform-wide connector is unchanged.
 
+### Pinned to one agent type (#771)
+
+Several instances of one agent TYPE (a pilot driving three Coders, say)? Connect to the type's URL
+instead (#771):
+
+```
+https://mcp.proagentstore.online/mcp/t/<agent_slug>
+```
+
+It publishes the tools that agent type **declares**, under their real names with their real field
+names **plus an `instance_id` argument** naming which of your instances of that type runs the call
+(`github_read_issue {repo, number, instance_id}`), and `call_instance_tool` for a tool one instance
+has beyond the type (e.g. one its owner unlocked by a permission). No `chat` / `guide` / `messages` —
+those are about one instance. Every call goes to that instance's invoke route, which checks you own
+it, applies its live tool policy, and refuses an instance of a different type. A type that cannot be
+read registers one tool, `agent_type_unavailable`, that says so.
+
 ### stdio-only clients
 
 ```json

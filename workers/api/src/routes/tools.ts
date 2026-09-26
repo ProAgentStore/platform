@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
+import { agentTypeMismatch } from "./agent-type-tools.js";
 import { listConnectorAccounts, pinnedAccountsFrom, resolveConnectorAccount } from "../lib/connector-accounts.js";
 import { getRegistryTool, runRegistryTool } from "../lib/tool-registry.js";
 import { agentLacksTool, DISABLED_TOOLS_KEY, explainRefusal, instanceToolPolicy, projectToolListing, readDisabledTools } from "../lib/instance-tool-policy.js";
@@ -203,6 +204,9 @@ toolRoutes.post("/:id/tools/:name", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("id");
 	const instance = await requireOwnedInstance(c.env, instanceId, session.uid);
+	const expectedType = c.req.query("agent"); // set by a /mcp/t/<type> session (#771)
+	const mismatch = expectedType ? await agentTypeMismatch(c.env, instance.agent_id, expectedType) : null;
+	if (mismatch) throw new HttpError(400, mismatch);
 	const name = c.req.param("name");
 	const tool = getRegistryTool(name);
 	// A BUILT-IN name gets its own answer rather than "unknown" (#525): the listing now carries

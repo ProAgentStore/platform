@@ -816,7 +816,9 @@ const PINS = {
 	// refused `initialize` leaves nothing latched or registered and the next request starts over.
 	// Seven of the lines are code (the error carried, the throw, the pinned branch's own latch);
 	// the rest say why the order latch → pipeline → registrations must not change.
-	"workers/mcp/src/index.ts": 1039,
+	// +16 at #771: the `/mcp/t/<agentSlug>` session's props field, its init branch and method, and
+	// the risk→annotations helper both pinned surfaces now share; the surface itself is type-pinned.ts.
+	"workers/mcp/src/index.ts": 1055,
 	// First entry, at #806: the 0.1.48 record took it from 786 to 802. Pinned rather than split
 	// because it is an APPEND-ONLY ledger — one hash per published version plus why the surface
 	// moved — and `check-surface-lock.mjs --require-history` reads THIS path's git history to prove
@@ -1377,7 +1379,7 @@ const PINS = {
 	// lets an agent restore dispatch-without-asking on a connector its owner put behind approval.
 	// The storage is in `lib/connector-consent.ts` and the gate in `lib/tool-registry.ts`, so this
 	// file took the route and none of the mechanism.
-	"workers/api/src/routes/tools.ts": 1360, // +1 at #854: the per-instance objective cap check (the arithmetic lives in lib/loop-limits.ts).
+	"workers/api/src/routes/tools.ts": 1364, // +1 at #854: the per-instance objective cap check (the arithmetic lives in lib/loop-limits.ts). +4 at #771: the invoke route's opt-in `?agent=` type check (the check itself lives in routes/agent-type-tools.ts).
 	// New entry at #722, crossing LIMIT from 799 to 810. The addition is the approval-time re-check
 	// on `runActionableTicket`: a `call_tool` ticket is re-validated against LIVE permissions before
 	// it is claimed, because the gate was evaluated when the card was written and the human clicks
@@ -1824,7 +1826,8 @@ const PINS = {
 	// #792 paid for the same kind of raise.
 	// This file grows by prose about other files, which is what it is for.
 	// +9 at #847: seven intentional decisions and one parser extraction need their auditable record; this ledger is the ratchet's ownership boundary.
-	"scripts/check-file-size.mjs": 1908,
+	// +3 at #771: the mcp/index.ts and routes/tools.ts raises above (two lines of why) and this one.
+	"scripts/check-file-size.mjs": 1911,
 };
 
 /**

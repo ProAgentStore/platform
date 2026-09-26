@@ -28,6 +28,7 @@ behaves wrongly, the bug is usually in `workers/api`, not here.
 | Registry | `server.json` at the repo root; also `/.well-known/mcp-server.json` on the store |
 | Quick add | `claude mcp add --transport http proagentstore https://mcp.proagentstore.online/mcp` |
 | Pinned (#783) | `https://mcp.proagentstore.online/mcp/i/<instance_id>` — one instance's own tools under their real names, no `instance_id` argument, plus `chat`/`guide`/`messages`; nothing platform-wide. `src/pinned.ts`. |
+| Type-pinned (#771) | `https://mcp.proagentstore.online/mcp/t/<agent_slug>` — an agent type's declared tools under their real names, each with an `instance_id` argument, plus `call_instance_tool`; calls refuse an instance of another type. `src/type-pinned.ts`. |
 
 ## Auth and safety
 
@@ -58,6 +59,8 @@ src/
 ├── pinned.ts             the /mcp/i/<id> session (#783): URL → ctx.props, and a registrar whose
 │                         names are the instance's policy rows (data — never a literal, so the
 │                         counts below describe the platform-wide surface only)
+├── type-pinned.ts        the /mcp/t/<agentSlug> session (#771): the type's declared tools via
+│                         pinned.ts's registrar, each with `instance_id`, plus call_instance_tool
 ├── json-schema-zod.ts    the connectors' JSON Schema subset → zod shape, so a pinned tool
 │                         publishes its real field names
 ├── tool-metadata.ts      annotations, titles, output schemas (advisory, never a check)

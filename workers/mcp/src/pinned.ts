@@ -90,29 +90,35 @@ type PropsCtx = ExecutionContext & { props?: Record<string, unknown> };
 /** The request type an `ExportedHandler` receives (Workers' `cf` generic, not the DOM's). */
 type IncomingRequest = Request<unknown, IncomingRequestCfProperties<unknown>>;
 
-interface FetchHandler<E> {
+export interface FetchHandler<E> {
 	fetch: (request: IncomingRequest, env: E, ctx: PropsCtx) => Response | Promise<Response>;
 }
 
 /**
- * Wrap the MCP transport so `/mcp/i/<instanceId>` reaches the same transport as `/mcp`, with
- * the instance id on `ctx.props.pinnedInstance`. Any other path is passed through untouched —
- * the platform-wide connector's behaviour is not changed by one byte.
+ * Wrap the MCP transport so a pinned path (`pin` reads it) reaches the same transport as `/mcp`,
+ * with what it names on `ctx.props[prop]`. Any other path is passed through untouched — the
+ * platform-wide connector's behaviour is not changed by one byte. Shared by the instance pin
+ * (#783) and the agent-type pin (#771, `type-pinned.ts`).
  */
-export function withPinnedInstance<E>(inner: FetchHandler<E>): FetchHandler<E> {
+export function withPathPin<E>(inner: FetchHandler<E>, pin: (pathname: string) => string | null, prop: string): FetchHandler<E> {
 	return {
 		...inner,
 		fetch(request, env, ctx) {
 			const url = new URL(request.url);
-			const instanceId = pinnedInstanceFromPath(url.pathname);
-			if (!instanceId) return inner.fetch(request, env, ctx);
+			const pinned = pin(url.pathname);
+			if (!pinned) return inner.fetch(request, env, ctx);
 			url.pathname = "/mcp";
-			ctx.props = { ...(ctx.props ?? {}), pinnedInstance: instanceId };
+			ctx.props = { ...(ctx.props ?? {}), [prop]: pinned };
 			// Same method, headers, body and `cf` — only the path differs. The cast restores the
 			// incoming `cf` generic the constructor widens to `RequestInitCfProperties`.
 			return inner.fetch(new Request(url.toString(), request) as IncomingRequest, env, ctx);
 		},
 	};
+}
+
+/** `/mcp/i/<instanceId>` → the transport, with the id on `ctx.props.pinnedInstance`. */
+export function withPinnedInstance<E>(inner: FetchHandler<E>): FetchHandler<E> {
+	return withPathPin(inner, pinnedInstanceFromPath, "pinnedInstance");
 }
 
 /**
@@ -162,24 +168,32 @@ export async function loadPinnedSurface(env: McpEnv, token: string | null, insta
 	if (data.error || !Array.isArray(data.tools)) {
 		return { instanceId, rows: [], skipped: [], error: data.error || "tool listing unavailable" };
 	}
+	return { instanceId, ...selectInvocableRows(data.tools, new Set<string>(Object.values(FIXED)), "on this instance") };
+}
+
+/**
+ * The listed rows a pinned session can register, and why each other one was not: allowed,
+ * reachable through the invoker route, and under a name that is an MCP tool name and not one of
+ * the session's own fixed tools. `where` finishes the "not allowed" reason.
+ */
+export function selectInvocableRows(tools: readonly PinnedToolRow[], reserved: ReadonlySet<string>, where: string): { rows: PinnedToolRow[]; skipped: string[] } {
 	const rows: PinnedToolRow[] = [];
 	const skipped: string[] = [];
-	const fixed = new Set<string>(Object.values(FIXED));
-	for (const row of data.tools) {
+	for (const row of tools) {
 		if (!row || typeof row.name !== "string") continue;
 		if (row.allowed === false) {
-			skipped.push(`${row.name} (not allowed on this instance)`);
+			skipped.push(`${row.name} (not allowed ${where})`);
 		} else if (!(row.invocableBy ?? []).includes("call_instance_tool")) {
 			// `invocableBy:["chat"]` means the agent runs it in conversation; the invoker route
 			// cannot reach it, so a pinned tool for it would refuse every call (#525).
 			skipped.push(`${row.name} (chat-only — ask for it through chat)`);
-		} else if (fixed.has(row.name) || !TOOL_NAME.test(row.name)) {
+		} else if (reserved.has(row.name) || !TOOL_NAME.test(row.name)) {
 			skipped.push(`${row.name} (name reserved or not an MCP tool name)`);
 		} else {
 			rows.push(row);
 		}
 	}
-	return { instanceId, rows, skipped };
+	return { rows, skipped };
 }
 
 /**
@@ -201,6 +215,65 @@ export interface PinnedCtx {
 	env: McpEnv;
 	tokenFor: TokenResolver;
 	safetyFor: SafetyResolver;
+}
+
+/**
+ * Where a registered row's call goes: the session's own instance (#783), or the instance the caller
+ * names in an `instance_id` argument, which must be of agent type `agentType` (#771).
+ */
+export type RowTarget = { instance: string } | { agentType: string };
+
+/** The `instance_id` argument a type-pinned tool carries — added LAST, after the tool's own fields. */
+export const INSTANCE_ID_FIELD = "instance_id";
+
+/**
+ * Register policy rows as tools under their real names and real field names, each proxied to
+ * `POST /v1/instances/:id/tools/:name`, which re-checks ownership and the live policy on every call.
+ * Every name is passed as a VARIABLE (see the module header).
+ */
+export function registerToolRows(server: McpServer, ctx: PinnedCtx, rows: readonly PinnedToolRow[], target: RowTarget): void {
+	const { env, tokenFor, safetyFor } = ctx;
+	for (const row of rows) {
+		const { shape: own, unsupported } = jsonSchemaToZodShape(row.jsonSchema);
+		const scope: McpScope = row.mutates ? "write" : "read";
+		const note = unsupported.length
+			? ` (Fields without a published shape, sent through as given: ${unsupported.map((u) => u || "<root>").join(", ")}.)`
+			: "";
+		const byArgument = "agentType" in target;
+		const description = byArgument
+			? `${row.description || row.name} [${target.agentType} tool — name the instance in ${INSTANCE_ID_FIELD}]${note}`
+			: `${row.description || row.name} [pinned to instance ${target.instance}]${note}`;
+		const shape = byArgument
+			? { ...own, [INSTANCE_ID_FIELD]: z.string().describe(`Which of your ${target.agentType} instances to run it on — an id from my_instances.`) }
+			: own;
+		server.tool(row.name, description, shape, async (input: Record<string, unknown>) => {
+			const sessionToken = tokenFor();
+			if (!sessionToken) return authRequired();
+			const { [INSTANCE_ID_FIELD]: named, ...rest } = input ?? {};
+			const id = byArgument ? String(named ?? "") : target.instance;
+			const args = byArgument ? rest : (input ?? {});
+			const denied = await requirePermission(safetyFor(), scope, row.name, { tool: row.name, ...(byArgument ? { instance_id: id, agentType: target.agentType } : { pinned: id }) });
+			if (denied) return denied;
+			// A type-pinned call names the type it expects, and the API refuses another type's instance (#771).
+			const expect = byArgument ? `?agent=${encodeURIComponent(target.agentType)}` : "";
+			const data = await authedCall(
+				`/v1/instances/${encodeURIComponent(id)}/tools/${encodeURIComponent(row.name)}${expect}`,
+				sessionToken,
+				{ method: "POST", body: JSON.stringify(args) },
+				env,
+			);
+			// Same vocabulary as `call_instance_tool` (`argKeys` + `argBytes`), so a pinned call and
+			// an unpinned call of the same tool audit alike — plus `pinned` / `agentType`, so a reader can tell.
+			const body = JSON.stringify(args);
+			await audit(safetyFor(), {
+				tool: row.name,
+				action: "completed",
+				input: { instance_id: id, ...(byArgument ? { agentType: target.agentType } : { pinned: true }), argKeys: Object.keys(args), argBytes: new TextEncoder().encode(body).length },
+				result: { ok: auditOk(data) },
+			});
+			return jsonText(data);
+		});
+	}
 }
 
 /**
@@ -226,36 +299,7 @@ export function registerPinnedTools(server: McpServer, ctx: PinnedCtx, surface: 
 	}
 
 	// ── The instance's own tools, under their real names ──
-	for (const row of surface.rows) {
-		const { shape, unsupported } = jsonSchemaToZodShape(row.jsonSchema);
-		const scope: McpScope = row.mutates ? "write" : "read";
-		const note = unsupported.length
-			? ` (Fields without a published shape, sent through as given: ${unsupported.map((u) => u || "<root>").join(", ")}.)`
-			: "";
-		const description = `${row.description || row.name} [pinned to instance ${id}]${note}`;
-		server.tool(row.name, description, shape, async (input: Record<string, unknown>) => {
-			const sessionToken = tokenFor();
-			if (!sessionToken) return authRequired();
-			const denied = await requirePermission(safetyFor(), scope, row.name, { tool: row.name, pinned: id });
-			if (denied) return denied;
-			const data = await authedCall(
-				path(`/tools/${encodeURIComponent(row.name)}`),
-				sessionToken,
-				{ method: "POST", body: JSON.stringify(input ?? {}) },
-				env,
-			);
-			// Same vocabulary as `call_instance_tool` (`argKeys` + `argBytes`), so a pinned call and
-			// an unpinned call of the same tool audit alike — plus `pinned`, so a reader can tell.
-			const args = JSON.stringify(input ?? {});
-			await audit(safetyFor(), {
-				tool: row.name,
-				action: "completed",
-				input: { instance_id: id, pinned: true, argKeys: Object.keys(input ?? {}), argBytes: new TextEncoder().encode(args).length },
-				result: { ok: auditOk(data) },
-			});
-			return jsonText(data);
-		});
-	}
+	registerToolRows(server, ctx, surface.rows, { instance: id });
 
 	// ── The fixed three: the conversation itself ──
 	const chat = {

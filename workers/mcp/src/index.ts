@@ -16,6 +16,7 @@ import { newTokenSubjectCache, tokenSubjectResolver } from "./audit-subject.js";
 import { annotationsFor, annotationsForRisk, outputSchemaFor, SERVER_INSTRUCTIONS } from "./tool-metadata.js";
 import { newTouchThrottle, recordInstanceTouch, touchedInstance } from "./recent-instances.js";
 import { loadPinnedSurface, pinnedRiskFor, registerPinnedTools, withPinnedInstance } from "./pinned.js";
+import { loadTypeSurface, registerTypeTools, typeRiskFor, withPinnedType } from "./type-pinned.js";
 import {
 	AGENT_ID,
 	agentTemplateFiles,
@@ -37,6 +38,7 @@ import {
 	type SafetyContext,
 	requireConfirmation,
 	requirePermission,
+	type McpScope,
 } from "./safety.js";
 import { suspensionBlock } from "./suspension.js";
 
@@ -46,8 +48,16 @@ type Props = {
 	mcpSubject?: string;
 	/** Set by `withPinnedInstance` for a `/mcp/i/<id>` session (#783) — never by the OAuth grant. */
 	pinnedInstance?: string;
+	/** Set by `withPinnedType` for a `/mcp/t/<agentSlug>` session (#771) — never by the OAuth grant. */
+	pinnedType?: string;
 };
 type Env = McpEnv;
+
+/** Per-tool metadata for a pinned surface (#783, #771): annotations from each name's risk class — the names are data, outside `TOOL_RISK`. */
+const riskMetadata = (risk: (name: string) => McpScope | undefined) => (name: string): Record<string, unknown> => {
+	const annotations = annotationsForRisk(risk(name));
+	return annotations ? { annotations } : {};
+};
 
 /** Per-tool metadata for the platform-wide surface: annotations + output schema, keyed by name. */
 function platformMetadata(name: string): Record<string, unknown> {
@@ -120,12 +130,15 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 	 */
 	private async initPinned(instanceId: string): Promise<void> {
 		const surface = await loadPinnedSurface(this.env, this.userToken, instanceId);
-		const risk = pinnedRiskFor(surface);
-		this.installRegistrationPipeline((name) => {
-			const annotations = annotationsForRisk(risk(name));
-			return annotations ? { annotations } : {};
-		}, instanceId);
+		this.installRegistrationPipeline(riskMetadata(pinnedRiskFor(surface)), instanceId);
 		registerPinnedTools(this.server, { env: this.env, tokenFor: (p) => this.token(p), safetyFor: (p) => this.safety(p) }, surface);
+	}
+
+	/** A session pinned to one AGENT TYPE (#771): its declared tools, each with `instance_id`. See `type-pinned.ts`. */
+	private async initTypePinned(agentType: string): Promise<void> {
+		const surface = await loadTypeSurface(this.env, this.userToken, agentType);
+		this.installRegistrationPipeline(riskMetadata(typeRiskFor(surface)));
+		registerTypeTools(this.server, { env: this.env, tokenFor: (p) => this.token(p), safetyFor: (p) => this.safety(p) }, surface);
 	}
 
 
@@ -221,6 +234,11 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 		if (this.props?.pinnedInstance) {
 			this.toolsRegistered = true;
 			return this.initPinned(this.props.pinnedInstance);
+		}
+		// Same for a `/mcp/t/<agentSlug>` session (#771): only that type's surface.
+		if (this.props?.pinnedType) {
+			this.toolsRegistered = true;
+			return this.initTypePinned(this.props.pinnedType);
 		}
 
 		// Which agent-specific tool groups this user gets — scoped to their agents. Resolved BEFORE
@@ -1018,10 +1036,10 @@ type ProviderEnv = Env & { OAUTH_PROVIDER: OAuthHelpers };
 // Wrapped so every request is a `gateway` latency sample and carries `X-Trace-Id` (#198).
 export default withRequestTiming(new OAuthProvider<ProviderEnv>({
 	apiRoute: "/mcp",
-	// `/mcp/i/<instanceId>` reaches the same transport with the id on `ctx.props` (#783).
-	apiHandler: withPinnedInstance(PagsMcp.serve("/mcp") as ExportedHandler<ProviderEnv> & {
+	// `/mcp/i/<instanceId>` (#783) and `/mcp/t/<agentSlug>` (#771) reach the same transport, pinned via `ctx.props`.
+	apiHandler: withPinnedType(withPinnedInstance(PagsMcp.serve("/mcp") as ExportedHandler<ProviderEnv> & {
 		fetch: NonNullable<ExportedHandler<ProviderEnv>["fetch"]>;
-	}) as ExportedHandler<ProviderEnv> & {
+	})) as ExportedHandler<ProviderEnv> & {
 		fetch: NonNullable<ExportedHandler<ProviderEnv>["fetch"]>;
 	},
 	defaultHandler: loginHandler as ExportedHandler<ProviderEnv>,
