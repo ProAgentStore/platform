@@ -413,6 +413,19 @@ describe("HeadlessSession (stream-json engine)", () => {
 		s.stop();
 	});
 
+	it("a persistent engine never takes the per-turn replay — its own conversation is the optimisation, preferred (#693 slice 2)", async () => {
+		const statePath = defaultStatePath(dir);
+		const s = new HeadlessSession({ id: "replay-claude", workDir: dir, clientType: "claude", bin, statePath });
+		expect(s.holdsConversationThisTurn).toBe(true);
+		s.input("first", { replay: "REPLAY: never for a live process" });
+		await until(() => s.runState() === "idle" && s.snapshot().includes("Done: first"));
+		s.input("second", { replay: "REPLAY: never for a live process" });
+		await until(() => s.runState() === "idle" && s.snapshot().includes("Done: second"));
+		expect(s.snapshot()).not.toContain("REPLAY:");
+		expect(s.snapshot()).not.toContain("keeps no memory between turns");
+		s.stop();
+	});
+
 	it("reports no brief when the cloud sent none, or sent an empty one", () => {
 		// A `pags up` newer than the cloud, and a repo with no record, are the same case: nothing to
 		// say. `seeded` must read false so the cloud does not tell a user their engine was briefed.
@@ -478,6 +491,86 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		chmodSync(whichGhBin, 0o755);
 	});
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+	describe("per-turn replay from the platform's record (#693 slice 2)", () => {
+		it("a raw engine gets the replay on EVERY turn, before the instruction — memory it never had", async () => {
+			const s = new HeadlessSession({ id: "replay-raw", workDir: dir, clientType: "grok", command: "grok", bin: codexBin });
+			expect(s.holdsConversationThisTurn).toBe(false);
+			s.input("turn one", { replay: "REPLAY-A: we renamed the config loader" });
+			await until(() => s.runState() === "idle" && s.snapshot().includes("done: "), 12_000, "raw turn one");
+			s.input("turn two", { replay: "REPLAY-B: and turn one finished" });
+			await until(() => s.runState() === "idle" && (s.snapshot().match(/done: /g) ?? []).length >= 2, 12_000, "raw turn two");
+			const pane = s.snapshot();
+			// The fake engine echoes the argv it RECEIVED: what the engine got, not what we meant to send.
+			expect(pane).toContain("thinking about: REPLAY-A: we renamed the config loader");
+			expect(pane).toContain("thinking about: REPLAY-B: and turn one finished");
+			expect(pane.indexOf("REPLAY-B")).toBeLessThan(pane.lastIndexOf("turn two"));
+			// The owner reading the pane is told what happened, in one line per turn.
+			expect(pane.split("keeps no memory between turns").length - 1).toBe(2);
+			s.stop();
+		}, 30_000);
+
+		it("the replay supersedes the one-shot session brief — both are the record; the replay is the later composition", async () => {
+			const s = new HeadlessSession({ id: "replay-seed", workDir: dir, clientType: "codex", command: "codex", bin: codexBin, seed: "SEED: from session start" });
+			s.input("go", { replay: "REPLAY: composed for this turn" });
+			await until(() => s.runState() === "idle" && s.snapshot().includes("done: "), 12_000, "raw turn");
+			expect(s.snapshot()).toContain("REPLAY: composed for this turn");
+			expect(s.snapshot()).not.toContain("SEED: from session start");
+			expect(s.seededConversation).toBe(false);
+			s.stop();
+		}, 20_000);
+
+		it("an older cloud that sends no replay changes nothing: the session brief still leads turn one, and turn two is bare", async () => {
+			const s = new HeadlessSession({ id: "replay-none", workDir: dir, clientType: "codex", command: "codex", bin: codexBin, seed: "SEED: only once" });
+			s.input("one");
+			await until(() => s.runState() === "idle" && s.snapshot().includes("done: "), 12_000, "turn one");
+			s.input("two");
+			await until(() => s.runState() === "idle" && (s.snapshot().match(/done: /g) ?? []).length >= 2, 12_000, "turn two");
+			const pane = s.snapshot();
+			expect(pane).toContain("thinking about: SEED: only once");
+			expect(pane).toMatch(/^thinking about: two$/m); // turn two reached the engine bare
+			expect(pane).not.toContain("keeps no memory between turns");
+			s.stop();
+		}, 30_000);
+
+		it("reconnect: a runner restart loses nothing a raw engine had — the next turn carries the record again", async () => {
+			const before = new HeadlessSession({ id: "replay-restart", workDir: dir, clientType: "grok", command: "grok", bin: codexBin });
+			before.input("before the restart", { replay: "REPLAY: first" });
+			await until(() => before.runState() === "idle" && before.snapshot().includes("done: "), 12_000, "pre-restart turn");
+			before.stop();
+			// A new process object for the same session id, as after `pags up` restarts: no local state carried over.
+			const after = new HeadlessSession({ id: "replay-restart", workDir: dir, clientType: "grok", command: "grok", bin: codexBin });
+			after.input("after the restart", { replay: "REPLAY: the platform still has it" });
+			await until(() => after.runState() === "idle" && after.snapshot().includes("done: "), 12_000, "post-restart turn");
+			expect(after.snapshot()).toContain("thinking about: REPLAY: the platform still has it");
+			after.stop();
+		}, 30_000);
+
+		it("cross-engine: structured Codex spends the replay until it has a thread, then its own resume wins", async () => {
+			const statePath = defaultStatePath(join(dir, "codex-replay-state"));
+			const log = join(dir, "codex-replay-argv.jsonl");
+			const s = new HeadlessSession({
+				id: "replay-codex",
+				workDir: dir,
+				clientType: "codex",
+				bin: codexResumeBin,
+				command: "codex exec",
+				statePath,
+				env: { CODEX_RESUME_LOG: log, CODEX_THREAD_ID: "01a0d811-35aa-7fc1-bd23-f39d943db79b" },
+			});
+			expect(s.holdsConversationThisTurn).toBe(false);
+			s.input("first", { replay: "REPLAY-1" });
+			await until(() => s.runState() === "idle" && s.snapshot().includes("argv:"), 8000, "first structured turn");
+			expect(s.holdsConversationThisTurn).toBe(true);
+			s.input("second", { replay: "REPLAY-2" });
+			await until(() => s.runState() === "idle" && readFileSync(log, "utf8").trim().split("\n").length >= 2, 8000, "resumed structured turn");
+			const argv = readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l) as string[]);
+			expect(argv[0].at(-1)).toMatch(/^REPLAY-1\n\nfirst$/);
+			expect(argv[1].slice(0, 2)).toEqual(["exec", "resume"]);
+			expect(argv[1].at(-1)).toBe("second");
+			s.stop();
+		}, 20_000);
+	});
 
 	it("reports NO usage — an unmeasurable engine must leave a gap, not a zero", async () => {
 		// A custom raw engine emits no structured result event, so there is nothing to measure.

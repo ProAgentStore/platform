@@ -80,8 +80,8 @@ export interface HeadlessSessionConfig {
 	 * deliberate and stays: `--resume` is cheaper and higher fidelity than any reconstruction.
 	 *
 	 * A RAW engine has no conversation under any circumstance, so it always takes the brief. That is
-	 * first-turn context, not memory: a one-shot engine still forgets between turns, and giving it
-	 * multi-turn memory is a separate change.
+	 * first-turn context; memory BETWEEN turns is the per-turn `replay` on each message (#693 slice
+	 * 2), spent by {@link HeadlessSession.input} whenever the engine holds no conversation itself.
 	 */
 	seed?: string;
 	/** Override the spawned binary (tests). Defaults to "claude". */
@@ -527,8 +527,28 @@ export class HeadlessSession {
 		});
 	}
 
-	/** Send a user turn. `author` names who wrote it, because `role` cannot — see turn-author.ts (#505). */
-	input(text: string, opts: { author?: TurnAuthor } = {}): void {
+	/**
+	 * Does the engine carry its own conversation into THIS turn (#693 slice 2)?
+	 *
+	 * The boundary ADR 0005 draws, stated where the runner applies it: the platform's record is the
+	 * source of truth and the engine's own memory is an optimisation preferred when it is there. It is
+	 * there for a PERSISTENT process (Claude's stream-json session, a persistent REPL), which holds
+	 * every turn since it started, and for a structured Codex turn that will resume its explicit
+	 * thread (#848). A one-shot raw process has nothing: each turn is a new process.
+	 */
+	get holdsConversationThisTurn(): boolean {
+		return this.adapter.persistent || this.codexResumeThreadId !== null;
+	}
+
+	/**
+	 * Send a user turn. `author` names who wrote it, because `role` cannot — see turn-author.ts (#505).
+	 *
+	 * `replay` is the cloud's per-turn composition of the platform's record (#693 slice 2). It is spent
+	 * only when {@link holdsConversationThisTurn} is false, so an engine with its own memory is never
+	 * handed a summary of the conversation it is already in; when spent it replaces the one-shot
+	 * session-start brief, being the same record composed later.
+	 */
+	input(text: string, opts: { author?: TurnAuthor; replay?: string } = {}): void {
 		// The Engine reads the preamble, the pane the short marker; the instruction stays evidence.
 		const sent = authoredTurn(text, opts.author);
 		// The brief leads the turn and is spent in the reading (#693). It goes to the ENGINE only:
@@ -536,10 +556,12 @@ export class HeadlessSession {
 		// Pilot re-read through `/coding/capture` and twelve thousand characters of reconstructed
 		// history would evict the live output they are looking at — the same budget argument
 		// `turn-author.ts` makes for its two-word marker.
-		const seed = this.pendingSeed;
+		const replay = this.holdsConversationThisTurn ? null : opts.replay?.trim() || null;
+		const seed = replay ?? this.pendingSeed;
 		this.pendingSeed = null;
 		if (!this.alive) this.start();
-		if (seed) this.push("[pags] a context brief from ProAgentStore's record was delivered with this turn — a reconstruction, not the previous conversation");
+		if (replay) this.push("[pags] this engine keeps no memory between turns, so ProAgentStore's record of the conversation so far was delivered with this turn — a reconstruction, not the engine's own memory");
+		else if (seed) this.push("[pags] a context brief from ProAgentStore's record was delivered with this turn — a reconstruction, not the previous conversation");
 		this.push(`\n❯ [${stamp()}] ${authorTag(opts.author)}${text}`); // ❯ — your turn, timestamped
 		this.run = "thinking";
 		const now = Date.now();

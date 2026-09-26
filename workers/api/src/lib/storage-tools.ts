@@ -16,6 +16,7 @@ import { lastTerminal } from "./coding-timeline.js";
 import { accountTimeZone } from "./account-timezone.js";
 import { localStamp } from "./agent-clock.js";
 import { RETRIEVAL_EMPTY_MESSAGE, searchKnowledgeFor } from "./retrieval.js";
+import { withTurnReplay } from "./coding-turn-replay.js";
 import type { Env } from "../types.js";
 
 export interface StorageToolCallRequest {
@@ -764,7 +765,11 @@ export async function executeStorageTool(
 					await callRunner(
 						rConn,
 						"/coding/act",
-						{ sessionId: rSession.id, action: { kind: "message", text: msg, author: "pilot" } },
+						{
+							sessionId: rSession.id,
+							// #693 slice 2: an engine with no memory of its own gets the platform's record with the turn.
+							action: await withTurnReplay(ctx.env as Env, { instanceId: ctx.agentId, userId: ctx.userId, repoId: rRepo.id, repoName: rRepo.name, clientType: rSession.clientType }, { kind: "message", text: msg, author: "pilot" }),
+						},
 						{ timeoutMs: READ_TIMEOUT_MS },
 					);
 					// Set the expectation BEFORE the brain reads back. A one-shot engine runs the turn

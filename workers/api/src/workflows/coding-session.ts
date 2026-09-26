@@ -57,6 +57,7 @@ import { PILOT_DEFAULT_MAX_STEPS } from "../lib/loop-limits.js";
 import { CodingRunProbe, recordCodingFailure } from "../lib/coding-failure.js";
 import { planInterruptionResume, roundThroughInterruptions, type InterruptionResume } from "../lib/coding-interrupt.js";
 import { postSystemMessage } from "../lib/instance-system-message.js";
+import { withTurnReplay } from "../lib/coding-turn-replay.js";
 import type { Env } from "../types.js";
 
 export type { CodingSessionParams } from "./coding-session-params.js";
@@ -504,7 +505,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		const deps: CodingDeps = {
 			snapshot: () => measured(guard(runRetry, `s${n++}-snapshot`, capture)),
 			act: (a: CodingActionKind) =>
-				measured(guard(runRetry, `s${n++}-act`, () => callRunner<CodingPaneSnapshot>(conn, "/coding/act", { sessionId, action: a }))),
+				measured(guard(runRetry, `s${n++}-act`, async () => callRunner<CodingPaneSnapshot>(conn, "/coding/act", { sessionId, action: await withTurnReplay(env, { instanceId, userId, repoId, repoName: goal.repo, clientType: goal.clientType }, a) }))), // #693 slice 2: the replay is composed INSIDE the step, so a replayed step re-sends what it sent
 			// The spend gate lives in `coding-decide-budget.ts` — the LLM call is the only place this
 			// loop spends money, so it is the only place a budget has to sit (#159).
 			decide: (p) =>

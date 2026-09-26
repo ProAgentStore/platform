@@ -244,7 +244,18 @@ function historyHeading(ages: number[]): string {
  */
 export async function seedBriefForRepo(
 	env: Env,
-	args: { instanceId: string; userId: string; repoId: string; repoName?: string },
+	args: {
+		instanceId: string;
+		userId: string;
+		repoId: string;
+		repoName?: string;
+		/**
+		 * The instruction this brief will be delivered WITH, when it rides a turn (#693 slice 2). The
+		 * turn is logged to the timeline before it is sent, so without this the newest line of the
+		 * replay would be the very request that follows it — the engine would read it twice.
+		 */
+		instruction?: string;
+	},
 ): Promise<string> {
 	try {
 		const now = Date.now();
@@ -279,7 +290,9 @@ export async function seedBriefForRepo(
 		// The SAME `now` the window was derived from, so the ages rendered on the lines cannot
 		// disagree with the bound that selected them (a row admitted at 3 days 23 hours must not
 		// render as "4 days" because the clock was read twice).
-		return composeSeedBrief(entries, { repoName: args.repoName, now });
+		const newest = entries[entries.length - 1];
+		const echoed = args.instruction && newest && (newest.type === "command" || newest.type === "chat_user") && typeof newest.content === "string" && newest.content && args.instruction.endsWith(newest.content);
+		return composeSeedBrief(echoed ? entries.slice(0, -1) : entries, { repoName: args.repoName, now });
 	} catch {
 		return "";
 	}

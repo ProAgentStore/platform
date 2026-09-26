@@ -33,6 +33,7 @@ import { isExecutableTarget, parseDelegationTarget, targetId, unsupportedTargetR
 import { ensureSessionForChat, startSessionOnRunner } from "../lib/coding-session-open.js";
 import type { CodingGoal } from "../lib/coding-loop.js";
 import { getSessionRunnerConn, readSpecialInstructions, requireOwned } from "./coding-shared.js";
+import { withTurnReplay } from "../lib/coding-turn-replay.js";
 import type { Env } from "../types.js";
 
 /**
@@ -73,7 +74,9 @@ async function driveClaude(
 	// person, which is how a run came to report a decision back to the owner as his own (#505).
 	// `author` is passed through from the caller — see the docstring. Held by
 	// `lib/turn-author-callsites.test.ts`.
-	const act = () => callRunner(conn, "/coding/act", { sessionId, action: { kind: "message", text: instruction, author } }).catch(() => null);
+	// #693 slice 2: an engine with no memory of its own gets the platform's record with the turn.
+	const action = await withTurnReplay(c.env, { instanceId, userId: uid, repoId: session.repoId, clientType: session.clientType }, { kind: "message", text: instruction, author });
+	const act = () => callRunner(conn, "/coding/act", { sessionId, action }).catch(() => null);
 	let snap = await act();
 	const repo = session ? await getRepo(c.env, instanceId, uid, session.repoId) : null;
 	if (snap === null && session && repo) {

@@ -109,7 +109,16 @@ export type CodingAction =
 	 * the Engine sees every one of them as `role: "user"`. Optional because a caller that does not
 	 * declare an author has said nothing, and `turn-author.ts` renders that as nothing.
 	 */
-	| { kind: "message"; text: string; author?: TurnAuthor }
+	| {
+			kind: "message";
+			text: string;
+			author?: TurnAuthor;
+			/**
+			 * The platform's record of this repo, composed by the cloud for THIS turn (#693 slice 2).
+			 * Spent only when the engine holds no conversation of its own — see `HeadlessSession.input`.
+			 */
+			replay?: string;
+	  }
 	/**
 	 * Still in the union, and refused by `act` (#448). The cloud no longer constructs it — the
 	 * kind is gone from `CodingActionKind` there — but this runner is a published npm package
@@ -386,7 +395,7 @@ export class CodingRuntime {
 			case "message":
 				// Narrowed rather than trusted: this runner is a published package any caller can
 				// POST to, and an unrecognised author must read as "unstated", not become a label.
-				session.input(action.text, { author: asTurnAuthor(action.author) });
+				session.input(action.text, { author: asTurnAuthor(action.author), replay: typeof action.replay === "string" ? action.replay : undefined });
 				break;
 			case "keys": {
 				// A snapshot is no longer the whole answer (#448). `key()` records the attempt and

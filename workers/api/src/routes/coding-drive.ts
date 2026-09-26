@@ -11,6 +11,7 @@ import { logError } from "../lib/error-log.js";
 import { resolveCloneCredential } from "../lib/git-credentials.js";
 import { callRunner } from "../lib/runner-client.js";
 import { getSessionRunnerConn, readSpecialInstructions, requireOwned } from "./coding-shared.js";
+import { withTurnReplay } from "../lib/coding-turn-replay.js";
 import type { Env } from "../types.js";
 
 /**
@@ -77,7 +78,9 @@ export function registerDriveRoutes(codingRoutes: Hono<{ Bindings: Env }>): void
 			const combined = [await readSpecialInstructions(c.env, instanceId, uid), repo?.instructions].filter(Boolean).join("\n\n");
 			if (combined) action.text = `[Project rules — follow these for everything you do:\n${combined}\n]\n\n${action.text}`;
 		}
-		let snap = await callRunner(conn, "/coding/act", { sessionId, action }).catch(() => null);
+		// #693 slice 2: an engine with no memory of its own gets the platform's record with the turn.
+		const sent = session ? await withTurnReplay(c.env, { instanceId, userId: uid, repoId: session.repoId, clientType: session.clientType }, action) : action;
+		let snap = await callRunner(conn, "/coding/act", { sessionId, action: sent }).catch(() => null);
 		if (snap === null) {
 			// The runner is online but lost the in-memory session (it restarted) — its
 			// tmux pane usually survives, so reattach (CodingSession.start reconnects to
@@ -87,7 +90,7 @@ export function registerDriveRoutes(codingRoutes: Hono<{ Bindings: Env }>): void
 			const fresh = await getSession(c.env, instanceId, uid, sessionId);
 			const repo = fresh ? await getRepo(c.env, instanceId, uid, fresh.repoId) : null;
 			const relocated = fresh && repo ? (await startSessionOnRunner(c.env, instanceId, uid, fresh, repo)).conn : null;
-			snap = await callRunner(relocated ?? conn, "/coding/act", { sessionId, action }).catch(() => null);
+			snap = await callRunner(relocated ?? conn, "/coding/act", { sessionId, action: sent }).catch(() => null);
 		}
 		if (snap === null) throw new HttpError(409, "This session isn't live on the runner — open it again (or run pags up).");
 		await noteUnmeteredHeadlessDrive(c.env, { userId: uid, instanceId, traceId: sessionId }, session);

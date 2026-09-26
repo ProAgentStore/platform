@@ -108,6 +108,16 @@ to regress and no flag is needed. Slice 2 makes it primary for raw engines, whic
 regress. Only after both are proven does the question of Claude's default arise, and it may well
 stay `--resume`.
 
+**Status.** Slice 1 shipped in `e82da9b0` (with #737 and #738). Slice 2 shipped under #693: every
+message turn to an engine that is not Claude carries a **replay** composed from `coding_timeline`
+by the same composer, bounds and preamble as the slice-1 brief (`lib/coding-turn-replay.ts`). The
+split is the one slice 1 established: the **cloud composes** because only it holds the record, and
+the **runner spends or drops** because only the machine knows whether this turn's engine carries a
+conversation of its own (`HeadlessSession.holdsConversationThisTurn`: a persistent process, or a
+structured Codex turn resuming its thread, #848). Slice 3 — Claude's default — is **not decided**
+and stays `--resume`: it waits on the measurement slice 1 named and nobody has taken (reap a
+session, reopen it, ask what it was doing, compare against `coding_timeline`).
+
 ## Enforcement
 
 The violation is silent by construction — a cold engine looks exactly like a warm one until someone
@@ -120,7 +130,11 @@ asks it something it should remember. So the guard cannot be "review it carefull
 2. **Relocation is the known hole.** A test must assert that a session moved by
    `reassignSessionNode` cannot present a cold engine. That is the case that produced this record,
    and it is reachable without the two-machine hardware test.
-3. **Retention.** `coding_timeline` is permanent and the MCP audit trail is 90-day KV. If seeding
+3. **Every door that sends a turn composes it through `withTurnReplay`.** Asserted over the source
+   in `coding-turn-replay.test.ts`, so a new `/coding/act` sender cannot quietly leave a raw engine
+   forgetting between turns on one path. The replay is scoped by owner, instance and repo and cut
+   at `RESUME_WINDOW_MS`, which the same file pins against another tenant's and another repo's rows.
+4. **Retention.** `coding_timeline` is permanent and the MCP audit trail is 90-day KV. If seeding
    ever depends on a record that expires, the guarantee expires with it. Any retention change to
    `coding_timeline` must be read as a change to this ADR.
 
