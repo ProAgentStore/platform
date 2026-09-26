@@ -136,9 +136,9 @@ describe("content Workers AI cannot carry is refused, not flattened (#853)", () 
 		expect(() => toWorkersAiBody(pdfRequest)).toThrow(/PDF input requires an Anthropic key/);
 	});
 
-	it("refuses any other non-text block by its type — an image, a replayed tool_result", () => {
+	it("refuses any other non-text block by its type — an image", () => {
 		expect(() => toWorkersAiBody({ messages: [{ role: "user", content: [{ type: "image", source: {} }] }] })).toThrow(/"image" content block/);
-		expect(() => toWorkersAiBody({ messages: [{ role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: "x" }] }] })).toThrow(/"tool_result"/);
+		// A replayed tool round is NOT refused since #853 finding 9: it is rendered as text, results kept.
 	});
 
 	it("leaves a text-only request exactly as it was — strings and text parts both", () => {
@@ -176,6 +176,25 @@ describe("a Workers AI reply cut off at the output cap says so (#853 finding 5)"
 		expect(fromWorkersAiResult({ response: "done", usage: { prompt_tokens: 10, completion_tokens: 12 } }, 4096).stopReason).toBeUndefined();
 		expect(fromWorkersAiResult({ response: 'quoted: {"name":"send_to_cli","parameters":{}}' }).stopReason).toBeUndefined();
 		expect(fromWorkersAiResult({ response: "a sentence with a stray { brace" }).stopReason).toBeUndefined();
+	});
+});
+
+describe("a stored Anthropic tool round replayed on Workers AI is readable, not refused (#853 finding 9)", () => {
+	it("tool_use and tool_result blocks become text naming the call and carrying the result", () => {
+		const body = toWorkersAiBody({
+			messages: [
+				{ role: "assistant", content: [{ type: "text", text: "Checking." }, { type: "tool_use", id: "toolu_01", name: "read_terminal", input: { repo_name: "platform" } }] },
+				{ role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_01", content: [{ type: "text", text: "✓ 12 tests passed" }] }, { type: "text", text: "Continue." }] },
+				{ role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_02", content: "no such repo", is_error: true }] },
+			],
+		}) as { messages: Array<{ role: string; content: string }> };
+		expect(body.messages[0].content).toBe('Checking.\n\n[called read_terminal with {"repo_name":"platform"}]');
+		expect(body.messages[1].content).toBe("[tool result]: ✓ 12 tests passed\n\nContinue.");
+		expect(body.messages[2].content).toBe("[tool result, error]: no such repo");
+	});
+
+	it("still refuses what Workers AI cannot read at all — a document", () => {
+		expect(() => toWorkersAiBody({ messages: [{ role: "user", content: [{ type: "document", source: {} }] }] })).toThrow(WorkersAiUnsupportedContentError);
 	});
 });
 

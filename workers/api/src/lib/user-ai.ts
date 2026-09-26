@@ -85,6 +85,12 @@ export interface StoredCloudflareAiCredentials {
 	token: string;
 }
 
+/** The two providers a brain runs on — which one a turn is on is read off its first completion. */
+export type AiProvider = "anthropic" | "cloudflare";
+
+const midTurnLoss = (provider: string, credential: string) =>
+	`This turn's earlier rounds ran on ${provider}, and ${credential} can no longer be read, so it cannot continue — another provider cannot read those rounds. Check it in Profile → API Keys, then ask again.`;
+
 /**
  * Run AI inference using the user's stored API key.
  * Priority: Anthropic Claude > Cloudflare Workers AI.
@@ -97,8 +103,9 @@ export async function runUserWorkersAi(
 	body: unknown,
 	ctx?: UsageContext,
 	/** `honorModel`: the owner PICKED this model (#852) — a Workers AI pick runs on Workers AI even
-	 *  when an Anthropic key is also stored. Without it the long-standing order below applies. */
-	opts?: { honorModel?: boolean },
+	 *  when an Anthropic key is also stored. Without it the long-standing order below applies.
+	 *  `provider`: the provider this TURN already ran on (#853 finding 9) — it continues there or fails. */
+	opts?: { honorModel?: boolean; provider?: AiProvider },
 ): Promise<unknown> {
 	if (ctx?.promptSections?.length) {
 		await logPromptSectionEstimates(env, {
@@ -111,6 +118,19 @@ export async function runUserWorkersAi(
 			phase: ctx.promptPhase ?? null,
 			sections: ctx.promptSections,
 		});
+	}
+	// A turn under way stays where it started (#853 finding 9): its history is in THAT provider's tool
+	// protocol, which the other one cannot read. Choosing per call sent a later round wherever the keys
+	// pointed at that moment — a removed or unreadable key flipped the turn mid-way.
+	if (opts?.provider === "anthropic") {
+		const key = await getUserProviderKey(env, userId, "anthropic");
+		if (!key) throw new UserAiCredentialsError(midTurnLoss("Anthropic", "the Anthropic key"));
+		return runAnthropic(env, userId, key, body as Parameters<typeof runAnthropic>[3], ctx);
+	}
+	if (opts?.provider === "cloudflare") {
+		const creds = await getUserCloudflareAiCredentials(env, userId).catch(() => null);
+		if (!creds) throw new UserAiCredentialsError(midTurnLoss("Cloudflare Workers AI", "the Cloudflare credentials"));
+		return runCloudflareAi(env, userId, creds, model, body, ctx);
 	}
 	if (opts?.honorModel && isWorkersAiModel(model)) {
 		// The owner PICKED this model, so it runs here or the turn fails saying why (#853 finding 8).

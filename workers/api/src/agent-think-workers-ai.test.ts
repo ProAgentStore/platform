@@ -102,9 +102,10 @@ const objective: AgentMessage[] = [
 	{ id: "m1", role: "user", content: "Run the tests in platform and tell me how it went.", channel: "chat", createdAt: new Date().toISOString() },
 ];
 
-async function think(model: string, modelChosen?: boolean) {
+async function think(model: string, modelChosen?: boolean, resume?: Parameters<typeof runAgentThink>[0]["resume"]) {
 	const progress: Array<{ tool: unknown; success: unknown }> = [];
 	const out = await runAgentThink({
+		resume,
 		state: state(model, modelChosen),
 		engine: {
 			buildRAGContext: async () => "",
@@ -324,6 +325,49 @@ describe("a structured call with unusable arguments is answered, never dropped (
 		expect(ran).toEqual([]);
 		expect(requests).toHaveLength(3);
 		expect(out.response).toContain("could not send");
+	});
+});
+
+// #853 finding 9: the provider was chosen per CALL. A turn whose first round ran on one provider could
+// send a later round to the other one, carrying history that provider cannot read — and a retry
+// that resumed stored Anthropic rounds on Workers AI could not read their results.
+describe("one turn, one provider (#853 finding 9)", () => {
+	it("a model the owner did NOT pick: a later round stays on the provider the turn started on, even if an Anthropic key appears meanwhile", async () => {
+		script = [scoutCall("abc123XYZ", "read_terminal", { repo_name: "platform" }), { response: "✓ 12 tests passed." }];
+		const fetchImpl = globalThis.fetch;
+		vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+			const res = await fetchImpl(url, init);
+			anthropicKeyToo = true; // from round two on, the default order would pick Anthropic
+			return res;
+		});
+		const out = await think("claude-sonnet-4-6");
+		expect(ran).toEqual(["read_terminal"]);
+		expect(requests).toHaveLength(2);
+		expect(requests.every((r) => r.url.includes("api.cloudflare.com"))).toBe(true);
+		expect(out.response).toContain("12 tests passed");
+	});
+
+	it("a retry that resumes stored Anthropic rounds on Workers AI keeps their results — nothing refused, nothing lost", async () => {
+		const resume = {
+			prompt: "Run the tests in platform and tell me how it went.",
+			savedAt: Date.now(),
+			roundsUsed: 1,
+			executed: [["read_terminal:{}", 0]] as [string, number][],
+			mutations: 0,
+			executedTools: ["read_terminal"],
+			toolLog: ["read_terminal ✅"],
+			messages: [
+				{ role: "assistant", content: [{ type: "text", text: "Checking the terminal." }, { type: "tool_use", id: "toolu_01", name: "read_terminal", input: { repo_name: "platform" } }] },
+				{ role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_01", content: "[live · idle]\n✓ 12 tests passed" }, { type: "text", text: "Continue based on the tool results above." }] },
+			],
+		};
+		script = [{ response: "The tests passed: ✓ 12 tests passed." }];
+		const out = await think(SCOUT, true, resume);
+		expect(ran).toEqual([]);
+		const sent = JSON.stringify(requests[0].body.messages);
+		expect(sent).toContain("read_terminal");
+		expect(sent).toContain("12 tests passed");
+		expect(out.response).toContain("12 tests passed");
 	});
 });
 

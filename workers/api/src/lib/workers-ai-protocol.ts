@@ -59,14 +59,21 @@ export class WorkersAiUnsupportedContentError extends Error {
 	}
 }
 
-/** Text of any content shape the platform builds — a string, or text parts. Any other block is refused. */
+/**
+ * Text of any content shape the platform builds — a string, or text parts — and of the Anthropic tool
+ * round a retry replays (#853 finding 9): a stored round is `tool_use` / `tool_result` blocks, and a
+ * retry that runs on Workers AI must keep what those tools returned, not refuse or drop it. Any other
+ * block (a document, an image) is refused.
+ */
 function contentText(content: unknown): string {
 	if (typeof content === "string") return content;
 	if (Array.isArray(content)) {
 		return content
 			.map((p) => {
 				if (typeof p === "string") return p;
-				const block = (p ?? {}) as { type?: unknown; text?: unknown };
+				const block = (p ?? {}) as { type?: unknown; text?: unknown; name?: unknown; input?: unknown; content?: unknown; is_error?: unknown };
+				if (block.type === "tool_use") return `[called ${String(block.name)} with ${JSON.stringify(block.input ?? {})}]`;
+				if (block.type === "tool_result") return `[tool result${block.is_error === true ? ", error" : ""}]: ${contentText(block.content ?? "")}`;
 				if (block.type !== undefined && block.type !== "text") throw new WorkersAiUnsupportedContentError(String(block.type));
 				return typeof block.text === "string" ? block.text : "";
 			})

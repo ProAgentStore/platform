@@ -25,7 +25,7 @@ import { executeTool, type ToolCallRequest, type ToolCallResult } from "./lib/to
 import { type MalformedToolCall, malformedCallAnswer, normalizeToolCalls, parseToolCallsFromText } from "./lib/parse-tool-calls.js";
 import { honestReply, toolLogWithNotices, type ParsedReply } from "./lib/invented-results.js";
 import { logEvent, logToolFailure } from "./lib/events.js";
-import { runUserWorkersAi, systemPromptSections } from "./lib/user-ai.js";
+import { type AiProvider, runUserWorkersAi, systemPromptSections } from "./lib/user-ai.js";
 import { CHAT_MAX_TOKENS, hitOutputCap, truncationNotice } from "./lib/reply-truncation.js";
 import { withholdConstrainedConnectorTools, type TemplatePreviewCapabilities } from "./lib/template-preview-tools.js";
 import { capToolResult, toolLogLine } from "./lib/tool-result-cap.js";
@@ -429,6 +429,7 @@ export async function runAgentThink(opts: {
 	 * or the stop-reason read. `agent-think.test.ts` asserts that over the source.
 	 */
 	let truncated = false;
+	let provider: AiProvider | undefined; // the turn's provider, read off its first completion (#853 finding 9)
 	const chatComplete = async (body: { messages: { role: string; content: unknown }[]; tools?: unknown[]; toolChoice?: "auto" | "none" }): Promise<ChatCompletion> => {
 		const system = body.messages.find((m) => m.role === "system")?.content;
 		const nonSystem = body.messages.filter((m) => m.role !== "system").map((m) => m.content);
@@ -449,8 +450,9 @@ export async function runAgentThink(opts: {
 					{ label: "chat.tools", value: body.tools },
 				],
 			},
-			{ honorModel: state.modelChosen === true }, // the owner's brain pick runs where it names (#852)
+			{ honorModel: state.modelChosen === true, provider }, // the owner's pick runs where it names (#852); a turn stays put (#853)
 		)) as ChatCompletion;
+		provider ??= r.protocol === WORKERS_AI_PROTOCOL ? "cloudflare" : "anthropic";
 		if (!truncated && hitOutputCap(r.stopReason)) {
 			truncated = true;
 			// Durable, because "the agent stopped mid-sentence" is otherwise only ever a user's

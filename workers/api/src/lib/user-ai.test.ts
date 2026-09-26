@@ -297,6 +297,59 @@ describe("an owner's Workers AI pick never falls back to Anthropic without a wor
 	});
 });
 
+describe("a turn under way stays on its provider (#853 finding 9)", () => {
+	/** An owner with the given keys; a key's row missing is how a removed or unreadable key reads. */
+	async function owner(keys: { anthropic: boolean; cloudflare: boolean }) {
+		const anthropic = await encryptKey("sk-ant-test", TEST_KEK);
+		const cf = await encryptedCloudflareRow();
+		const env = {
+			KEY_ENCRYPTION_KEY: TEST_KEK,
+			DB: {
+				prepare(sql: string) {
+					return {
+						bind(...args: unknown[]) {
+							return {
+								first: async () => {
+									if (!sql.includes("SELECT key_ciphertext")) return null;
+									const provider = args[1] ?? (sql.includes("'cloudflare'") ? "cloudflare" : undefined);
+									if (provider === "anthropic") return keys.anthropic ? { key_ciphertext: anthropic.ciphertext, dek_wrapped: anthropic.dekWrapped, iv: anthropic.iv, key_hint: "test" } : null;
+									return keys.cloudflare ? { ...cf, account_id: "acct-123", key_hint: "oken" } : null;
+								},
+								run: async () => ({ success: true }),
+							};
+						},
+					};
+				},
+			},
+		} as unknown as Env;
+		const fetchMock = vi.fn(async () => Response.json({ success: true, result: { response: "hello" } }));
+		vi.stubGlobal("fetch", fetchMock);
+		return { env, fetchMock };
+	}
+
+	it("started on Anthropic, its key gone: the turn fails saying why — it never continues on Workers AI", async () => {
+		const { env, fetchMock } = await owner({ anthropic: false, cloudflare: true });
+		const err = await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [] }, undefined, { provider: "anthropic" }).catch((e: unknown) => e);
+		expect(err).toBeInstanceOf(UserAiCredentialsError);
+		expect(String((err as Error).message)).toMatch(/earlier rounds ran on Anthropic.*cannot continue/);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("started on Workers AI, its credentials gone: fails saying why — it never continues on Anthropic", async () => {
+		const { env, fetchMock } = await owner({ anthropic: true, cloudflare: false });
+		const err = await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [] }, undefined, { provider: "cloudflare" }).catch((e: unknown) => e);
+		expect(err).toBeInstanceOf(UserAiCredentialsError);
+		expect(String((err as Error).message)).toMatch(/earlier rounds ran on Cloudflare Workers AI.*cannot continue/);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("started on Workers AI, an Anthropic key there too: stays on Workers AI", async () => {
+		const { env, fetchMock } = await owner({ anthropic: true, cloudflare: true });
+		await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [] }, undefined, { provider: "cloudflare" });
+		expect(String(fetchMock.mock.calls[0]?.[0])).toContain("api.cloudflare.com");
+	});
+});
+
 describe("system prompt blocks — the cacheable half and the per-turn half (#768)", () => {
 	const BLOCKS = [
 		{ label: "stable", text: "You are the Coder.\n\nHONESTY rules.", cache: true },
