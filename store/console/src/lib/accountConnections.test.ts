@@ -8,6 +8,9 @@ import {
 	disconnectedMessage,
 	disconnectPromptFor,
 	accountRows,
+	grantNote,
+	grantOffers,
+	startPath,
 	needsPerAgentChoice,
 	needsReconnect,
 	NO_ACCOUNT_CHOSEN_LABEL,
@@ -583,3 +586,77 @@ describe("AccountConnections' sentence is now true (#736 AC6)", () => {
 		expect(settings).toContain("<AgentAccountChoice instanceId={instanceId} />");
 	});
 });
+
+// #718: Gmail's send and manage-mail are OPTIONAL grants — chosen at connect or allowed later — so a
+// read-only Gmail is a state with an offer attached, never a "reconnect".
+describe("optional grants — chosen, stated, and offered without a reconnect (#718)", () => {
+	const SEND_G = { id: "send", label: "Send and reply as you" };
+	const MODIFY_G = { id: "modify", label: "Archive and mark read" };
+	const gmail = (grants: Array<{ id: string; label: string; held: boolean }>, over: Partial<ConnectorEntry> = {}) =>
+		entry({
+			id: "gmail",
+			label: "Gmail",
+			grantModel: "user",
+			reach: null,
+			scopes: { read: true, write: true },
+			flow: { start: "/v1/email/google/start", disconnect: "/v1/email/google" },
+			missingScopes: [],
+			optionalGrants: grants,
+			accounts: [{ accountId: "me@example.com", label: "me@example.com", connectedAt: null, missingScopes: [], optionalGrants: grants }],
+			...over,
+		});
+
+	it("a read-only account SAYS read-only — and nothing about reconnecting", () => {
+		const e = gmail([{ ...SEND_G, held: false }, { ...MODIFY_G, held: false }]);
+		expect(connectionSummary(e)).toBe("connected as me@example.com · read-only");
+		expect(connectionSummary(e)).not.toMatch(/reconnect/);
+		expect(needsReconnect(e)).toBe(false);
+	});
+
+	it("an account allowed some names what it is NOT allowed; allowed everything says nothing", () => {
+		expect(connectionSummary(gmail([{ ...SEND_G, held: true }, { ...MODIFY_G, held: false }]))).toBe("connected as me@example.com · Archive and mark read not allowed");
+		expect(connectionSummary(gmail([{ ...SEND_G, held: true }, { ...MODIFY_G, held: true }]))).toBe("connected as me@example.com");
+	});
+
+	it("a grant that predates the recording is offered, not called stale — on a connector whose write powers are optional", () => {
+		const e = gmail([{ ...SEND_G, held: false }, { ...MODIFY_G, held: false }], { missingScopes: null });
+		expect(needsReconnect(e)).toBe(false);
+		expect(scopeShortfallNote(null, true, true)).toBeNull();
+		// A connector with no optional grants keeps treating an unrecorded grant as stale, exactly as before.
+		expect(scopeShortfallNote(null, true)).toBe("read-only — reconnect to allow sending");
+	});
+
+	it("grantOffers lists what an Allow button is owed; grantNote is null for a connector offering nothing", () => {
+		expect(grantOffers([{ ...SEND_G, held: true }, { ...MODIFY_G, held: false }]).map((g) => g.id)).toEqual(["modify"]);
+		expect(grantOffers(undefined)).toEqual([]);
+		expect(grantNote(undefined)).toBeNull();
+		expect(grantNote([])).toBeNull();
+	});
+
+	it("each of several accounts states its own grants on its row", () => {
+		const e = gmail([], {
+			accounts: [
+				{ accountId: "a@x.test", label: "a@x.test", connectedAt: null, missingScopes: [], optionalGrants: [{ ...SEND_G, held: false }, { ...MODIFY_G, held: false }] },
+				{ accountId: "b@x.test", label: "b@x.test", connectedAt: null, missingScopes: [], optionalGrants: [{ ...SEND_G, held: true }, { ...MODIFY_G, held: true }] },
+			],
+		});
+		expect(accountRows(e).map((r) => r.note)).toEqual(["read-only", null]);
+	});
+
+	it("startPath carries the chosen grants and the mailbox to pre-select; a plain connect is the bare start", () => {
+		expect(startPath("/v1/email/google/start")).toBe("/v1/email/google/start");
+		expect(startPath("/v1/email/google/start", ["send", "modify"])).toBe("/v1/email/google/start?grant=send&grant=modify");
+		expect(startPath("/v1/email/google/start", ["send"], "me@example.com")).toBe("/v1/email/google/start?grant=send&account=me%40example.com");
+		expect(startPath("/v1/x?y=1", ["send"])).toBe("/v1/x?y=1&grant=send");
+	});
+
+	it("the Connections panel offers the choice at connect and an Allow per missing grant — no per-connector names", () => {
+		const src = maskComments(readFileSync(new URL("../components/AccountConnections.tsx", import.meta.url), "utf8"));
+		expect(src).toContain('type="checkbox"');
+		expect(src).toContain("Connects read-only.");
+		expect(src).toMatch(/Allow: \{g\.label\}/);
+		expect(src).toContain("startPath(entry.flow.start, grants, account)");
+		expect(src).not.toMatch(/["']gmail["']/);
+	});
+});
+

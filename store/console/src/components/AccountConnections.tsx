@@ -7,7 +7,9 @@ import {
 	disconnectedMessage,
 	disconnectPromptFor,
 	type ConnectorEntry,
+	grantOffers,
 	needsPerAgentChoice,
+	startPath,
 } from "../lib/accountConnections";
 import type { ConnectorReach } from "../lib/connectorState";
 import Button from "./Button";
@@ -36,6 +38,9 @@ export default function AccountConnections() {
 	const [msg, setMsg] = useState("");
 	const [githubLinked, setGithubLinked] = useState<string | null>(null);
 	const [githubMsg, setGithubMsg] = useState("");
+	// The optional powers ticked for a NEW connection, per connector (#718). Unticked is the default:
+	// a plain connect is read-only, and nothing is asked for that the owner did not choose.
+	const [chosen, setChosen] = useState<Record<string, string[]>>({});
 
 	const load = useCallback(async () => {
 		try {
@@ -79,10 +84,10 @@ export default function AccountConnections() {
 		return () => window.removeEventListener("focus", onFocus);
 	}, [load]);
 
-	const connect = async (entry: ConnectorEntry) => {
+	const connect = async (entry: ConnectorEntry, grants: string[] = [], account?: string | null) => {
 		if (!entry.flow) return;
 		try {
-			const { url } = await api<{ url: string }>(entry.flow.start);
+			const { url } = await api<{ url: string }>(startPath(entry.flow.start, grants, account));
 			window.open(url, "_blank", "noopener");
 			setMsg(`Complete the ${entry.label} sign-in in the new tab, then come back here.`);
 		} catch (e) {
@@ -211,6 +216,16 @@ export default function AccountConnections() {
 													{row.name}
 													{row.note && <span className="text-warning"> · {row.note}</span>}
 												</span>
+												{grantOffers(entry.accounts?.find((a) => a.accountId === row.accountId)?.optionalGrants).map((g) => (
+													<button
+														key={g.id}
+														type="button"
+														className="shrink-0 underline underline-offset-2"
+														onClick={() => connect(entry, [g.id], row.accountId || row.name)}
+													>
+														Allow: {g.label}
+													</button>
+												))}
 												<button
 													type="button"
 													className="shrink-0 text-danger underline underline-offset-2"
@@ -235,7 +250,33 @@ export default function AccountConnections() {
 									<p className="text-2xs text-muted-soft mt-0.5">
 										Choose the account at {entry.label} — picking the same one refreshes it, picking a
 										different one adds it alongside.
+										{(entry.optionalGrants?.length ?? 0) > 0 && " Neither ever takes away something you already allowed."}
 									</p>
+								)}
+								{/* What a NEW connection may do beyond reading (#718) — chosen here, before the
+								    provider's screen, rather than left as a box to untick there. */}
+								{!entry.connected && (entry.optionalGrants?.length ?? 0) > 0 && (
+									<fieldset className="mt-1.5">
+										<legend className="text-2xs text-muted-soft">
+											Connects read-only. Also let agents (each still needs its own permission):
+										</legend>
+										{entry.optionalGrants?.map((g) => (
+											<label key={g.id} className="flex items-center gap-1.5 text-2xs">
+												<input
+													type="checkbox"
+													checked={chosen[entry.id]?.includes(g.id) ?? false}
+													onChange={(e) =>
+														setChosen((prev) => {
+															const cur = prev[entry.id] ?? [];
+															return { ...prev, [entry.id]: e.target.checked ? [...cur, g.id] : cur.filter((x) => x !== g.id) };
+														})
+													}
+												/>
+												{g.label}
+											</label>
+										))}
+										<p className="text-2xs text-muted-soft">You can allow either later from this page without reconnecting from scratch.</p>
+									</fieldset>
 								)}
 							</div>
 							{entry.connected ? (
@@ -272,6 +313,14 @@ export default function AccountConnections() {
 									    were already there. Reconnect also remains the answer to an expired token —
 									    now that disconnect revokes grants, that round trip is destructive. */}
 									<Button onClick={() => connect(entry)}>Add or reconnect</Button>
+									{/* One "Allow …" per optional power this account does not hold (#718). With several
+									    accounts they sit on each account's own line above instead. */}
+									{!needsPerAgentChoice(entry) &&
+										grantOffers(entry.optionalGrants).map((g) => (
+											<Button key={g.id} onClick={() => connect(entry, [g.id], entry.account)}>
+												Allow: {g.label}
+											</Button>
+										))}
 									{/* `danger` rather than the muted button with a red hover it used to be: this
 									    control revokes grants everywhere and does not give them back, which the
 									    paragraph above says out loud. A destructive action that only looks
@@ -281,7 +330,7 @@ export default function AccountConnections() {
 									)}
 								</div>
 							) : (
-								<Button onClick={() => connect(entry)} className="shrink-0">
+								<Button onClick={() => connect(entry, chosen[entry.id] ?? [])} className="shrink-0">
 									Connect {entry.label}
 								</Button>
 							)}

@@ -117,11 +117,17 @@ describe("a dedicated OAuth flow asks for what its manifest declares", () => {
 	});
 
 	// The specific regression, named so a failure reads as itself rather than as a loop index.
-	it("Gmail asks for readonly, send AND modify — the archive/mark-read power (#716, #717)", async () => {
-		const requested = await requestedScopes("/v1/email/google/start");
-		expect(requested).toContain("https://www.googleapis.com/auth/gmail.readonly");
-		expect(requested).toContain("https://www.googleapis.com/auth/gmail.send");
-		expect(requested).toContain("https://www.googleapis.com/auth/gmail.modify");
+	it("a plain Gmail connect asks for read-only; choosing every optional grant asks for send AND modify (#716, #717, #718)", async () => {
+		const plain = await requestedScopes("/v1/email/google/start");
+		expect(plain).toContain("https://www.googleapis.com/auth/gmail.readonly");
+		expect(plain).not.toContain("https://www.googleapis.com/auth/gmail.send");
+		expect(plain).not.toContain("https://www.googleapis.com/auth/gmail.modify");
+		// Every optional grant the manifest offers is reachable through the live route — the #717 lesson,
+		// now for the optional list: a declared power no consent can grant is the same defect.
+		const all = await requestedScopes("/v1/email/google/start?grant=send&grant=modify");
+		for (const g of getConnector("gmail")?.oauth?.optionalGrants ?? []) for (const s of g.scopes) expect(all).toContain(s);
+		expect(all).toContain("https://www.googleapis.com/auth/gmail.send");
+		expect(all).toContain("https://www.googleapis.com/auth/gmail.modify");
 	});
 
 	// Permanent deletion needs `https://mail.google.com/`. Nothing in this codebase requests it and

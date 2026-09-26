@@ -377,12 +377,33 @@ export interface Connector {
 	oauth?: {
 		authUrl: string;
 		tokenUrl: string;
+		/** What a plain connect asks for — the least the connector is useful with. */
 		scopes?: string[];
+		/** Powers asked for ONLY when the owner chooses them (#718); see {@link OptionalGrant}. */
+		optionalGrants?: OptionalGrant[];
 		clientIdEnv?: string;
 		secretEnv?: string;
 	};
 	/** The tools this connector provides. Their `connector`/`tier`/`scope` are stamped from here. */
 	tools: ToolDef[];
+}
+
+/**
+ * A power a connector asks the provider for only when the owner CHOOSES it (#718) — at connect, by
+ * ticking it, or later with "Allow …" on the account page — never as part of a plain connect.
+ *
+ * Least privilege at the grant layer: the downstream gates (permissions, `capabilities.tools`,
+ * write consent) all constrain what an agent does with a token the platform already holds; this is
+ * the one layer where the capability is simply not held until someone asks for it. An optional grant
+ * that has not been given is not a shortfall — `missingScopesFor` diffs the baseline `scopes` only.
+ */
+export interface OptionalGrant {
+	/** The value of `?grant=` on the connector's start route. */
+	id: string;
+	/** What it lets an agent do, in the owner's words — the console's "Allow …" button reads it. */
+	label: string;
+	/** The provider scopes it adds to the request. */
+	scopes: string[];
 }
 
 /** Env keys usable as a platform token source (all `string | undefined`). */

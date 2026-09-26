@@ -6,7 +6,7 @@
 // which carries the SSRF guard, `{{param}}` interpolation, responseMap extraction, and pagination.
 //
 // Design + rationale: docs/connector-manifest.md.
-import type { Connector, EnvTokenKey } from "./types.js";
+import type { Connector, EnvTokenKey, OptionalGrant } from "./types.js";
 import type { ToolDef, JsonSchema } from "./types.js";
 import { executeHttpRequest, SAFE_METHODS } from "./http.js";
 
@@ -96,7 +96,7 @@ export type ManifestAuth =
 	/** OAuth2 authorization-code flow. `clientIdEnv`/`secretEnv` name Worker env vars holding
 	 *  the client credentials — built-in manifests only (sanitize strips them so an untrusted
 	 *  manifest can't point at platform secrets). */
-	| { type: "oauth2"; authUrl: string; tokenUrl: string; scopes?: string[]; clientIdEnv?: string; secretEnv?: string };
+	| { type: "oauth2"; authUrl: string; tokenUrl: string; scopes?: string[]; optionalGrants?: OptionalGrant[]; clientIdEnv?: string; secretEnv?: string };
 
 export interface ConnectorManifest {
 	id: string;
@@ -217,7 +217,7 @@ export function compileConnector(
 		auth: connectorAuthKind(m.auth),
 		...(m.auth.type === "platform-token" ? { tokenEnv: m.auth.tokenEnv } : {}),
 		...(m.auth.type === "oauth2"
-			? { oauth: { authUrl: m.auth.authUrl, tokenUrl: m.auth.tokenUrl, scopes: m.auth.scopes, clientIdEnv: m.auth.clientIdEnv, secretEnv: m.auth.secretEnv } }
+			? { oauth: { authUrl: m.auth.authUrl, tokenUrl: m.auth.tokenUrl, scopes: m.auth.scopes, ...(m.auth.optionalGrants ? { optionalGrants: m.auth.optionalGrants } : {}), clientIdEnv: m.auth.clientIdEnv, secretEnv: m.auth.secretEnv } }
 			: {}),
 		scopes: {
 			read: tools.some((t) => t.scope === "read"),

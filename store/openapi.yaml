@@ -11543,12 +11543,18 @@ paths:
     get:
       summary: Begin the Gmail connection
       description: |
-        Read-only Gmail access, so a permissioned agent can look up a confirmation or
-        verification link. Only the refresh token is persisted (encrypted, vault provider
-        `gmail`); access tokens are minted on demand and never stored. The refresh token is
-        also never revealable — not through the key vault, not over MCP.
+        A plain connect is READ-ONLY (`gmail.readonly`). Sending (`gmail.send`) and archive/mark-read
+        (`gmail.modify`) are optional grants, asked for only when named in `grant` (#718). Every
+        authorize URL carries `include_granted_scopes=true` and the stored grant is merged, never
+        replaced, so a reconnect or an elevate never takes away a power already granted. Only the
+        refresh token is persisted (encrypted, vault provider `gmail`); access tokens are minted on
+        demand and never stored. The refresh token is also never revealable — not through the key
+        vault, not over MCP.
       operationId: gmailStart
       tags: [Connectors]
+      parameters:
+        - { name: grant, in: query, description: "An optional power to request as well: `send` or `modify`. Repeat it, or comma-separate. Unknown values are refused with 400.", schema: { type: string } }
+        - { name: account, in: query, description: "A mailbox address to pre-select at Google (`login_hint`), for allowing more on one of several accounts.", schema: { type: string } }
       responses:
         "200":
           description: The Google consent URL

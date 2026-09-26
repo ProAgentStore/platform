@@ -278,18 +278,19 @@ describe("gmail_download_attachment", () => {
 });
 
 describe("the declaration", () => {
-	// #713 asserted that gmail.modify was NOT requested. #716 reverses that deliberately, because
-	// archiving has no narrower scope. The assertion is inverted rather than deleted, and the ONE
-	// line that has not moved is kept: mail.google.com stays out, so nothing here can permanently
-	// delete a message. That is the boundary worth guarding, and it always was.
-	it("asks for readonly + send + modify, and never for full-mailbox access (#716)", () => {
+	// #713 kept gmail.modify out; #716/#717 put it in; #718 moves send AND modify out of the plain
+	// connect into optional grants the owner chooses. The ONE line that has never moved is kept:
+	// mail.google.com stays out, so nothing here can permanently delete a message.
+	it("a plain connect is read-only; send and modify are optional grants; never full-mailbox access (#718)", () => {
 		expect(GMAIL_MANIFEST.auth).toMatchObject({ type: "oauth2" });
-		const scopes = (GMAIL_MANIFEST.auth as { scopes: string[] }).scopes;
-		expect(scopes).toContain("https://www.googleapis.com/auth/gmail.readonly");
-		expect(scopes).toContain("https://www.googleapis.com/auth/gmail.send");
-		expect(scopes).toContain("https://www.googleapis.com/auth/gmail.modify");
+		const auth = GMAIL_MANIFEST.auth as { scopes: string[]; optionalGrants: Array<{ id: string; label: string; scopes: string[] }> };
+		expect(auth.scopes).toEqual(["openid", "email", "https://www.googleapis.com/auth/gmail.readonly"]);
+		expect(auth.optionalGrants.map((g) => [g.id, g.scopes])).toEqual([
+			["send", ["https://www.googleapis.com/auth/gmail.send"]],
+			["modify", ["https://www.googleapis.com/auth/gmail.modify"]],
+		]);
 		// The line that has not moved: permanent deletion needs this, and it is never requested.
-		expect(scopes).not.toContain("https://mail.google.com/");
+		for (const s of [...auth.scopes, ...auth.optionalGrants.flatMap((g) => g.scopes)]) expect(s).not.toBe("https://mail.google.com/");
 	});
 
 	it("declares write reach now, which is what puts sending and drafting behind the #90 consent gate", () => {
@@ -401,7 +402,7 @@ describe("the scope migration", () => {
 				body: "hello",
 			});
 			expect(res.success, name).toBe(false);
-			expect(res.content, name).toMatch(/Reconnect Gmail/);
+			expect(res.content, name).toMatch(/"Allow: Send and reply as you"/);
 		}
 		// The refusal happens BEFORE the API call — that is the whole point of recording scopes.
 		expect(sent).toHaveLength(0);
@@ -411,7 +412,7 @@ describe("the scope migration", () => {
 		stubGmail();
 		const res = await tool("gmail_reply")(ctxWith(sendEnv({ grantedScopes: null })), { message_id: "m1", body: "hi" });
 		expect(res.success).toBe(false);
-		expect(res.content).toMatch(/reading only/);
+		expect(res.content).toMatch(/has not been allowed to send/);
 	});
 
 	it("still refuses a send when email permission is off, before it ever looks at scopes", async () => {
@@ -566,7 +567,7 @@ describe("canSend resolves WHICH mailbox before reading its scopes (#715)", () =
 		const { sent } = stubGmail();
 		const res = await tool("gmail_reply")(ctxWith(twoAccountEnv("read@x.test")), { message_id: "m1", body: "hi" });
 		expect(res.success).toBe(false);
-		expect(res.content).toMatch(/reading only/);
+		expect(res.content).toMatch(/has not been allowed to send/);
 		expect(sent).toHaveLength(0);
 	});
 });
@@ -606,7 +607,8 @@ describe("gmail_archive", () => {
 		expect(res.success).toBe(false);
 		// The refusal must not read as "reconnect to allow sending" — sending already works here.
 		expect(res.content).toMatch(/cannot archive or mark mail read/);
-		expect(res.content).toMatch(/reading and sending are unaffected/);
+		expect(res.content).toMatch(/"Allow: Archive and mark read"/);
+		expect(res.content).not.toMatch(/send/i);
 		expect(calls).toHaveLength(0);
 	});
 
@@ -728,7 +730,7 @@ describe("gmail_draft_reply (#765)", () => {
 		expect(drafts[0].message.threadId).toBe("t-42");
 	});
 
-	it("refuses without gmail.modify, naming the reconnect action", async () => {
+	it("refuses without gmail.modify, naming the Allow action that exists in the console (#718)", async () => {
 		const { drafts } = stubDraft();
 		const res = await tool("gmail_draft_reply")(ctxWith(sendEnv({ grantedScopes: SEND_SCOPES })), {
 			message_id: "m1",
@@ -737,7 +739,7 @@ describe("gmail_draft_reply (#765)", () => {
 		expect(res.success).toBe(false);
 		// The refusal must name the manage-mail scope, not the send scope.
 		expect(res.content).toMatch(/cannot archive or mark mail read/);
-		expect(res.content).toMatch(/manage-mail/);
+		expect(res.content).toMatch(/"Allow: Archive and mark read"/);
 		expect(drafts).toHaveLength(0);
 	});
 
@@ -844,8 +846,8 @@ describe("gmail_draft_send (#765)", () => {
 			draft_id: "draft-99",
 		});
 		expect(res.success).toBe(false);
-		expect(res.content).toMatch(/Reconnect Gmail/);
-		expect(res.content).toMatch(/reading only/);
+		expect(res.content).toMatch(/"Allow: Send and reply as you"/);
+		expect(res.content).toMatch(/has not been allowed to send/);
 		expect(calls).toHaveLength(0);
 	});
 

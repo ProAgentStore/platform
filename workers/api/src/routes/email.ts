@@ -6,10 +6,16 @@
  * encrypted in the key vault as provider "gmail". Access tokens are minted on demand and never
  * stored.
  *
- * Three scopes are requested: `gmail.readonly`, `gmail.send` and — since #717 — `gmail.modify`.
- * The first two are deliberately separate powers, and `gmail.send` is send-ONLY: it cannot read,
- * delete or modify. `gmail.modify` is the archive/mark-read/relabel power the action tools need
- * (#716); Google publishes no narrower scope for it.
+ * What is requested is the OWNER's choice (#718). A plain connect asks for `gmail.readonly` alone;
+ * `gmail.send` and `gmail.modify` are the manifest's optional grants, asked for only when named in
+ * `?grant=` — ticked at connect, or "Allow …" on the account page later. `gmail.send` is send-ONLY:
+ * it cannot read, delete or modify. `gmail.modify` is the archive/mark-read/relabel power (#716);
+ * Google publishes no narrower scope for it.
+ *
+ * Allowing more never takes anything away. Every authorize URL carries `include_granted_scopes`, so
+ * Google's grant covers what this client already held, and the stored `granted_scopes` is MERGED
+ * with what comes back rather than overwritten — a reconnect or an elevate that asks for less than
+ * the account already has cannot narrow it.
  *
  * What that costs, stated rather than assumed. `gmail.modify` can move a message to Trash, so a
  * bug could hide mail — but it CANNOT permanently delete: that needs `https://mail.google.com/`,
@@ -24,11 +30,10 @@
  * `oauth-scope-drift.test.ts` now fails if a scope is added to a manifest without its live start
  * route asking for it.
  *
- * `prompt=consent` below means an ALREADY connected user genuinely re-asks on reconnect and picks
- * the new scope up; without it Google returns the old grant and the reconnect changes nothing.
- * Only what was actually granted is recorded, so someone who unticks the manage-mail box keeps
- * reading and sending and only the two action tools refuse — the console says which half is
- * missing (`store/console/src/lib/accountConnections.ts`).
+ * `prompt=consent` below means an ALREADY connected user genuinely re-asks and picks a newly chosen
+ * scope up; without it Google returns the old grant and the elevate changes nothing. Only what was
+ * actually granted is recorded, so someone who unticks a box at Google still holds everything else,
+ * and the console offers the missing power again (`store/console/src/lib/accountConnections.ts`).
  *
  * A connection made before #713 holds `gmail.readonly` alone. Its refresh token keeps working and
  * keeps minting access tokens, so nothing looks broken until a send 403s at Google. That is why
@@ -38,7 +43,8 @@
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { decryptKey, encryptKey } from "../lib/crypto.js";
-import { GMAIL_MODIFY_SCOPE, GMAIL_SCOPE, GMAIL_SEND_SCOPE, mintGmailAccessToken, scopesAllowSend } from "../lib/gmail.js";
+import { mintGmailAccessToken, scopesAllowSend } from "../lib/gmail.js";
+import { getConnector } from "../lib/connectors/registry.js";
 import { signConnectorState, verifyConnectorState } from "../lib/connector-oauth.js";
 import { listConnectorAccounts } from "../lib/connector-accounts.js";
 import { clearOauthBindCookie, newOauthNonce, oauthBindCookie, readOauthBindCookie, OAUTH_BIND_ERROR } from "../lib/oauth-nonce.js";
@@ -61,12 +67,38 @@ function redirectUri(c: { req: { url: string } }): string {
 // have landed in three files and missed this one. Gmail is the highest-value of the four: the
 // refresh token it stores is what `find_confirmation_link` reads the owner's mail with.
 
-/** Start the Gmail OAuth flow. Returns the Google consent URL to open. */
+/**
+ * The scopes one start asks for: the manifest's baseline, plus the optional grants named in `grant`
+ * (#718). A grant the manifest does not declare is refused rather than ignored or passed through —
+ * a caller can never have Google asked for a scope the connector does not describe.
+ */
+export function gmailRequestScopes(grants: readonly string[]): { scopes: string[] } | { error: string } {
+	const oauth = getConnector(PROVIDER)?.oauth;
+	const offered = oauth?.optionalGrants ?? [];
+	const scopes = [...(oauth?.scopes ?? [])];
+	for (const id of new Set(grants)) {
+		const grant = offered.find((g) => g.id === id);
+		if (!grant) return { error: `Unknown Gmail permission "${id}" — choose from: ${offered.map((g) => g.id).join(", ")}.` };
+		scopes.push(...grant.scopes);
+	}
+	return { scopes };
+}
+
+/**
+ * Start the Gmail OAuth flow. Returns the Google consent URL to open.
+ *
+ * `?grant=send&grant=modify` (or `grant=send,modify`) adds optional powers to the read-only baseline
+ * (#718); omitted, the connect is read-only. `?account=<address>` pre-selects that mailbox at Google
+ * (`login_hint`), for an "Allow …" on one of several connected accounts.
+ */
 emailRoutes.get("/google/start", async (c) => {
 	const session = await requireUser(c);
 	if (!c.env.GOOGLE_CLIENT_ID || !c.env.GOOGLE_CLIENT_SECRET) {
 		throw new HttpError(503, "Gmail connection is not configured on this deployment");
 	}
+	const requested = gmailRequestScopes(c.req.queries("grant")?.flatMap((g) => g.split(",")).map((g) => g.trim()).filter(Boolean) ?? []);
+	if ("error" in requested) throw new HttpError(400, requested.error);
+	const account = c.req.query("account")?.trim();
 	// Bind the state to THIS browser and to THIS connector: otherwise an attacker starts the
 	// flow, sends the consent URL to a victim, and the VICTIM's Gmail refresh token is stored
 	// under the ATTACKER's account. See lib/oauth-nonce.ts.
@@ -82,11 +114,15 @@ emailRoutes.get("/google/start", async (c) => {
 	url.searchParams.set("client_id", c.env.GOOGLE_CLIENT_ID);
 	url.searchParams.set("redirect_uri", redirectUri(c));
 	url.searchParams.set("response_type", "code");
-	url.searchParams.set("scope", `openid email ${GMAIL_SCOPE} ${GMAIL_SEND_SCOPE} ${GMAIL_MODIFY_SCOPE}`);
+	url.searchParams.set("scope", requested.scopes.join(" "));
 	url.searchParams.set("access_type", "offline");
-	// Forces a refresh_token every time — and, since #713, is also what re-prompts an ALREADY
-	// connected user for a newly-added scope (send then, modify now in #717). Without it Google
-	// silently returns the old grant and the reconnect appears to succeed while changing nothing.
+	// The grant covers everything this client already held for the account, not only this request
+	// (#718) — so an elevate for one power, or a plain reconnect, never drops another.
+	url.searchParams.set("include_granted_scopes", "true");
+	if (account && account.length <= 320) url.searchParams.set("login_hint", account);
+	// Forces a refresh_token every time — and is what re-prompts an ALREADY connected user for a
+	// newly chosen scope. Without it Google silently returns the old grant and the elevate appears
+	// to succeed while changing nothing.
 	url.searchParams.set("prompt", "consent");
 	url.searchParams.set("state", state);
 	return c.json({ url: url.toString() });
@@ -185,6 +221,12 @@ emailRoutes.delete("/google", async (c) => {
 	});
 });
 
+/** The union of two space-separated scope strings, order kept; null only when both are empty (#718). */
+export function mergeScopes(held: string | null | undefined, returned: string | null | undefined): string | null {
+	const all = [...new Set(`${held ?? ""} ${returned ?? ""}`.split(/\s+/).filter(Boolean))];
+	return all.length ? all.join(" ") : null;
+}
+
 /** OAuth callback — exchange the code, store the refresh token. */
 emailRoutes.get("/google/callback", async (c) => {
 	const code = c.req.query("code");
@@ -242,7 +284,7 @@ emailRoutes.get("/google/callback", async (c) => {
 	// What Google ACTUALLY granted, not what we asked for. A user can untick a scope on the
 	// consent screen, and recording the request rather than the grant would make `canSend` lie in
 	// exactly the case it exists to catch (migration 0133).
-	const grantedScopes = tok.scope ?? null;
+	const returned = tok.scope ?? null;
 
 	// The mailbox address IS the account id (#715). Reconnecting the same mailbox updates its
 	// row; authorising a DIFFERENT one adds a row beside it, which is the whole point — one
@@ -252,6 +294,16 @@ emailRoutes.get("/google/callback", async (c) => {
 	// any other unlabelled connection, which is the old single-slot behaviour and is the right
 	// fallback: it is what the row meant before this change.
 	const accountId = accountLabel ?? "";
+
+	// MERGED with what this account already held (#718), never overwritten by it. With
+	// `include_granted_scopes` Google's answer should already be the union; the merge makes that
+	// hold even if it is not, because the failure it prevents is silent — an elevate for manage-mail
+	// that came back without send would leave a working sending agent refusing every send.
+	const prior = await c.env.DB.prepare("SELECT granted_scopes FROM user_api_keys WHERE user_id = ?1 AND provider = 'gmail' AND account_id = ?2")
+		.bind(uid, accountId)
+		.first<{ granted_scopes: string | null }>()
+		.catch(() => null);
+	const grantedScopes = mergeScopes(prior?.granted_scopes, returned);
 
 	await c.env.DB.prepare(
 		`INSERT INTO user_api_keys (user_id, provider, account_id, key_ciphertext, dek_wrapped, iv, account_label, granted_scopes, created_at)

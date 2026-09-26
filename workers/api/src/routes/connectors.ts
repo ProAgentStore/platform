@@ -10,7 +10,7 @@ import { CONNECTORS, getConnector } from "../lib/connectors/registry.js";
 import { resolveOauthConfig } from "../lib/connectors/client.js";
 import { connectorGrantReach, connectorGrantReachByProvider, revokeUserConnectorGrants } from "../lib/connector-grants.js";
 import { unattendedClassOf } from "../lib/connectors/unattended.js";
-import type { Connector } from "../lib/connectors/types.js";
+import type { Connector, OptionalGrant } from "../lib/connectors/types.js";
 import { signConnectorState, verifyConnectorState, saveConnectorRefreshToken } from "../lib/connector-oauth.js";
 import { clearOauthBindCookie, newOauthNonce, oauthBindCookie, readOauthBindCookie, OAUTH_BIND_ERROR } from "../lib/oauth-nonce.js";
 import type { Env } from "../types.js";
@@ -150,13 +150,34 @@ export function missingScopesFor(
 ): string[] | null {
 	const declared = connector.oauth?.scopes;
 	if (!declared?.length || !grantedScopes) return null;
+	return absentScopes(declared, grantedScopes);
+}
+
+/** Which of `wanted` a grant string does not hold, honouring provider aliases and superset scopes. */
+function absentScopes(wanted: readonly string[], grantedScopes: string): string[] {
 	const held = new Set(grantedScopes.split(/\s+/).filter(Boolean).map(canonicalScope));
 	const supersets = SCOPE_SUPERSETS.filter((sup) => held.has(sup.scope));
-	return declared.filter((raw) => {
+	return wanted.filter((raw) => {
 		const want = canonicalScope(raw);
 		if (held.has(want)) return false;
 		return !supersets.some((sup) => sup.covers(want));
 	});
+}
+
+/**
+ * The connector's optional grants (#718), each with whether this stored grant holds it. An unrecorded
+ * grant (pre-migration-0133) holds none as far as anyone can prove, so each is offered — asking again
+ * with `include_granted_scopes` costs a consent screen, never a power already held.
+ */
+export function optionalGrantsFor(
+	connector: { oauth?: { optionalGrants?: readonly OptionalGrant[] } },
+	grantedScopes: string | null | undefined,
+): Array<{ id: string; label: string; held: boolean }> {
+	return (connector.oauth?.optionalGrants ?? []).map((g) => ({
+		id: g.id,
+		label: g.label,
+		held: !!grantedScopes && absentScopes(g.scopes, grantedScopes).length === 0,
+	}));
 }
 
 connectorRoutes.get("/", async (c) => {
@@ -207,6 +228,7 @@ connectorRoutes.get("/", async (c) => {
 					label: a.account_label,
 					connectedAt: a.created_at,
 					missingScopes: missingScopesFor(connector, a.granted_scopes),
+					optionalGrants: optionalGrantsFor(connector, a.granted_scopes),
 				})),
 				// Only meaningful where a grant IS the reach. A `user`-model connector has no grants
 				// to count, and `{grants:0}` on it would read as "nothing uses this" rather than
@@ -228,6 +250,9 @@ connectorRoutes.get("/", async (c) => {
 				// old read-only connection as fully capable.
 				grantedScopes: row?.granted_scopes ? row.granted_scopes.split(/\s+/).filter(Boolean) : null,
 				missingScopes: missingScopesFor(connector, row?.granted_scopes),
+				// What can be ALLOWED on top of the baseline, and whether it is (#718). Per account above;
+				// here for the one account, or held:false throughout when there is none or several.
+				optionalGrants: optionalGrantsFor(connector, row?.granted_scopes),
 				flow: connectFlow(connector),
 			};
 		}),

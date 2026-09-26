@@ -43,6 +43,15 @@ export interface ConnectorEntry {
 	scopes?: { read: boolean; write: boolean };
 	/** Every account the owner holds for this connector (#715). One entry is the ordinary case. */
 	accounts?: ConnectorAccountRow[];
+	/** Powers asked for only when chosen, and whether the one account holds each (#718). */
+	optionalGrants?: GrantOffer[];
+}
+
+/** One optional power a connector offers (#718), and whether this account has been allowed it. */
+export interface GrantOffer {
+	id: string;
+	label: string;
+	held: boolean;
 }
 
 /** One connected account within a connector row. */
@@ -51,6 +60,7 @@ export interface ConnectorAccountRow {
 	label: string | null;
 	connectedAt: string | null;
 	missingScopes?: string[] | null;
+	optionalGrants?: GrantOffer[];
 }
 
 /**
@@ -141,8 +151,41 @@ export function accountRows(entry: HasAccounts): Array<{ accountId: string; name
 		accountId: a.accountId,
 		// An account with no captured address still has to be nameable, or it cannot be disconnected.
 		name: a.label?.trim() || a.accountId || "unnamed connection",
-		note: scopeShortfallNote(a.missingScopes, entry.scopes?.write === true),
+		note: scopeShortfallNote(a.missingScopes, entry.scopes?.write === true, (a.optionalGrants?.length ?? 0) > 0) ?? grantNote(a.optionalGrants),
 	}));
+}
+
+/**
+ * The optional powers not yet allowed on an account (#718) — each one an "Allow …" button. Asking for
+ * one never takes another away: the start route requests it with `include_granted_scopes` and the
+ * API merges the stored grant.
+ */
+export function grantOffers(grants: GrantOffer[] | null | undefined): GrantOffer[] {
+	return (grants ?? []).filter((g) => !g.held);
+}
+
+/**
+ * What the account is allowed beyond the baseline, in one phrase — `null` when it holds every
+ * optional power or the connector offers none (#718). Read-only is SAID, not implied: it is the
+ * state a plain connect now leaves, and the owner should be able to see it without a tool refusing.
+ */
+export function grantNote(grants: GrantOffer[] | null | undefined): string | null {
+	const offers = grantOffers(grants);
+	if (!offers.length) return null;
+	if (offers.length === grants?.length) return "read-only";
+	return `${offers.map((g) => g.label).join(", ")} not allowed`;
+}
+
+/**
+ * The start route for a connect or an "Allow …" (#718): the connector's own start path, plus the
+ * chosen optional grants and — for one of several accounts — which mailbox to pre-select.
+ */
+export function startPath(start: string, grants: readonly string[] = [], account?: string | null): string {
+	const params = new URLSearchParams();
+	for (const g of grants) params.append("grant", g);
+	if (account) params.set("account", account);
+	const q = params.toString();
+	return q ? `${start}${start.includes("?") ? "&" : "?"}${q}` : start;
 }
 
 /**
@@ -167,11 +210,12 @@ export function needsPerAgentChoice(entry: HasAccounts): boolean {
  * against the alternative of an agent discovering the gap as a provider 403 mid-task. Only for a
  * connector that declares write, because a read-only one has nothing a reconnect would add.
  */
-export function accountNeedsReconnect(missingScopes: string[] | null | undefined, connectorCanWrite: boolean): boolean {
+export function accountNeedsReconnect(missingScopes: string[] | null | undefined, connectorCanWrite: boolean, offersGrants = false): boolean {
 	if (missingScopes?.length) return true;
 	// Unknown is treated as stale, but only where a reconnect could ADD something: an unrecorded
-	// grant on a read-only connector is not short of anything.
-	return (missingScopes === null || missingScopes === undefined) && connectorCanWrite;
+	// grant on a read-only connector is not short of anything — and on a connector whose write
+	// powers are OPTIONAL grants (#718), what an old grant lacks is offered as "Allow …", not a reconnect.
+	return (missingScopes === null || missingScopes === undefined) && connectorCanWrite && !offersGrants;
 }
 
 /**
@@ -194,8 +238,8 @@ export function accountNeedsReconnect(missingScopes: string[] | null | undefined
  * what it holds, and for Gmail that population is precisely the read-only set (#713), so it keeps
  * the original sentence.
  */
-export function scopeShortfallNote(missingScopes: string[] | null | undefined, connectorCanWrite: boolean): string | null {
-	if (!accountNeedsReconnect(missingScopes, connectorCanWrite)) return null;
+export function scopeShortfallNote(missingScopes: string[] | null | undefined, connectorCanWrite: boolean, offersGrants = false): string | null {
+	if (!accountNeedsReconnect(missingScopes, connectorCanWrite, offersGrants)) return null;
 	const missing = new Set((missingScopes ?? []).map((s) => s.split("/").pop() ?? s));
 	const send = missing.has("gmail.send");
 	const modify = missing.has("gmail.modify");
@@ -212,7 +256,7 @@ export function needsReconnect(entry: ConnectorEntry): boolean {
 	// "read-only" over a list in which each account was already stating its own verdict, and said
 	// it even when every one of them could send. The per-account rows are the answer here.
 	if ((entry.accounts?.length ?? 0) > 1) return false;
-	return accountNeedsReconnect(entry.missingScopes, entry.scopes?.write === true);
+	return accountNeedsReconnect(entry.missingScopes, entry.scopes?.write === true, (entry.optionalGrants?.length ?? 0) > 0);
 }
 
 /**
@@ -241,7 +285,12 @@ export function connectionSummary(entry: ConnectorEntry): string {
 	// Which sentence comes from `scopeShortfallNote`, shared with `accountRows` so the summary and
 	// the rows beneath it cannot say different things about the same grant. WHETHER to say it is
 	// still `needsReconnect`'s call, because only it knows about the multi-account short-circuit.
-	const note = needsReconnect(entry) ? scopeShortfallNote(entry.missingScopes, entry.scopes?.write === true) : null;
+	// Optional grants (#718) are only stated for ONE account; with several, each row says its own.
+	const note = needsReconnect(entry)
+		? scopeShortfallNote(entry.missingScopes, entry.scopes?.write === true, (entry.optionalGrants?.length ?? 0) > 0)
+		: (entry.accounts?.length ?? 0) > 1
+			? null
+			: grantNote(entry.optionalGrants);
 	const short = note ? ` · ${note}` : "";
 	const reach = entry.reach;
 	if (!reach || reach.grants === 0) return `${who}${short}`;

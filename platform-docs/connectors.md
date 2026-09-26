@@ -402,27 +402,41 @@ checked on every Drive route, and an agent that declares no tool allowlist at al
 
 ## Gmail
 
-Gmail reads the owner's mailbox, replies from it, and can tidy it — archive a message or mark it
-read. Three OAuth scopes are requested, and they are deliberately separate powers:
+Gmail reads the owner's mailbox, and — only if the owner allows it — replies from it and tidies it
+(archive a message, mark it read). The three OAuth scopes are deliberately separate powers, and
+only the first is held by default (#718):
 
-| Scope | What it allows |
-|---|---|
-| `gmail.readonly` | Search, read a message, download its attachments. |
-| `gmail.send` | Send a message. **Send only** — it cannot read, delete or modify. |
-| `gmail.modify` | Archive, mark read, relabel. There is no narrower scope for these. |
+| Scope | What it allows | Held |
+|---|---|---|
+| `gmail.readonly` | Search, read a message, download its attachments. | Always — a plain connect is read-only. |
+| `gmail.send` | Send a message. **Send only** — it cannot read, delete or modify. | Only if chosen: **"Send and reply as you"**. |
+| `gmail.modify` | Archive, mark read, relabel. There is no narrower scope for these. | Only if chosen: **"Archive and mark read"**. |
 
 `https://mail.google.com/` is **never** requested. That is the scope permanent deletion needs, so
 nothing an agent does to a message is unrecoverable: `gmail.modify` can move mail to Trash, where
 the owner has 30 days to retrieve it, and no tool exposes even that.
 
-**What the consent screen shows.** All three appear as separate checkboxes, so you can tick reading
-and sending and leave manage-mail unticked. Only what was actually **granted** is recorded, so an
-account that declines it keeps reading and sending — `gmail_archive` and `gmail_mark_read` are the
-only two tools that then refuse, and Preferences → Connections says so on the row: *"cannot archive
-or mark read — reconnect to allow managing mail"*.
+**Choosing at connect.** Preferences → Connections shows, under **Connect Gmail**, *"Connects
+read-only. Also let agents:"* with one checkbox per optional power, both unticked. Leave them
+unticked and Google is asked for reading only — there is nothing to decline on Google's screen. Tick
+one and Google is asked for it too. Either way only what Google actually **grants** is recorded.
 
-Reconnecting genuinely re-asks. The flow sends `prompt=consent`, so an account connected before
-manage-mail existed is shown the new checkbox rather than being handed its old grant back.
+**Allowing more later.** A connected account that lacks a power says so on its row (*"read-only"*,
+or *"Archive and mark read not allowed"*) and carries an **"Allow: …"** button per missing power. It
+opens Google's consent for just that power, with the mailbox pre-selected. Nothing you already
+allowed is taken away, by this or by **Add or reconnect**: every request sends
+`include_granted_scopes=true`, and the stored grant is **merged** with Google's answer, never
+replaced by it. There is no "remove a power" button: to narrow access, disconnect and connect again
+with fewer boxes ticked, or revoke the app at myaccount.google.com/permissions.
+
+A missing optional power is not a fault. It is not listed in `missingScopes` and never produces a
+"reconnect" note. When an agent tries a tool the account has not been allowed, the tool refuses
+**before** calling Google, and the refusal names the same **"Allow: …"** button.
+
+**Over the API.** `GET /v1/email/google/start?grant=send&grant=modify` (or `grant=send,modify`) adds
+optional powers to the read-only baseline. A grant the manifest does not declare is refused with 400.
+`&account=<address>` pre-selects the mailbox at Google. `GET /v1/connectors` reports
+`optionalGrants: [{id, label, held}]` for the connector and for each account.
 
 ### Tools
 
@@ -481,11 +495,13 @@ rather than discovering it mid-task:
 - `GET /v1/connectors` reports `grantedScopes` and `missingScopes` for every OAuth connector.
   `missingScopes: null` means the grant predates recording — which is *not* the same as nothing
   being missing, and is rendered as a shortfall rather than as completeness.
-- The console shows such a row as **"connected — read-only, reconnect to allow sending"**.
-- `gmail_reply` / `gmail_send` refuse before the API call, naming the reconnect.
+- Since #718 such a row shows **"read-only"** with **"Allow: Send and reply as you"** and
+  **"Allow: Archive and mark read"** buttons. Its unrecorded grant is offered both powers rather
+  than called stale.
+- `gmail_reply` / `gmail_send` refuse before the API call, naming that button.
 
-Reconnecting re-prompts Google for consent, so the new scope is actually granted rather than the
-old grant being silently returned.
+Allowing a power re-prompts Google for consent (`prompt=consent`), so the new scope is actually
+granted rather than the old grant being silently returned.
 
 ## Google Docs Through Google Drive
 

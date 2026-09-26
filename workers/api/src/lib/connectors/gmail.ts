@@ -307,14 +307,25 @@ async function canSend(env: Env, userId: string, instanceId: string | undefined)
 	return scopesAllowSend(await grantedScopesFor(env, userId, instanceId));
 }
 
-const RECONNECT_TO_MODIFY =
-	"This Gmail account was not authorised to change messages, so it cannot archive or mark mail " +
-	"read. Reconnect it in the console (Preferences → Connections) and allow the manage-mail " +
-	"permission — reading and sending are unaffected either way.";
+/**
+ * The two optional Gmail powers (#718). `gmail.send` is send-ONLY — it cannot read, delete or modify.
+ * `gmail.modify` (#716) is archive, mark read, relabel; there is no narrower scope for it. It can move
+ * mail to Trash but NOT permanently delete (that needs https://mail.google.com/, never requested), so
+ * the worst an agent can do to a message is recoverable by the owner.
+ *
+ * The labels are what the console's "Allow …" buttons say, and the refusals below quote them, so a
+ * refusal names an action that exists on screen (#517).
+ */
+export const GMAIL_SEND_GRANT = { id: "send", label: "Send and reply as you", scopes: ["https://www.googleapis.com/auth/gmail.send"] };
+export const GMAIL_MODIFY_GRANT = { id: "modify", label: "Archive and mark read", scopes: ["https://www.googleapis.com/auth/gmail.modify"] };
 
-const RECONNECT_TO_SEND =
-	"Gmail is connected but was authorised for reading only. Reconnect Gmail in the console " +
-	"(Preferences → Connections) to grant send access — the consent screen will now ask for it.";
+const allowAction = (label: string) =>
+	`In the console, open Preferences → Connections and use "Allow: ${label}" on Gmail — what it can already do is kept, nothing is reconnected from scratch.`;
+
+const RECONNECT_TO_MODIFY =
+	`This Gmail account has not been allowed to change messages, so it cannot archive or mark mail read. ${allowAction(GMAIL_MODIFY_GRANT.label)}`;
+
+const RECONNECT_TO_SEND = `This Gmail account has not been allowed to send. ${allowAction(GMAIL_SEND_GRANT.label)}`;
 
 /** Pull one instance file's bytes back out as standard base64, for attaching. */
 async function readInstanceFile(
@@ -614,29 +625,17 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 		type: "oauth2",
 		authUrl: "https://accounts.google.com/o/oauth2/v2/auth",
 		tokenUrl: "https://oauth2.googleapis.com/token",
-		// `openid email` is what lets the status route say WHICH account is connected.
-		// gmail.readonly covers search, message read AND messages.attachments.get.
-		// gmail.send (#713) is send-ONLY — it cannot read, delete or modify. `gmail.modify` would
-		// also cover sending and is deliberately NOT requested: it would let a bug delete mail.
-		//
-		// This list is what a NEW consent asks for. Connections made before #713 hold readonly
-		// alone, keep working for the read tools, and are caught by the `canSend` check rather
-		// than by a 403 — see routes/email.ts and migration 0133.
-		scopes: [
-			"openid",
-			"email",
-			"https://www.googleapis.com/auth/gmail.readonly",
-			"https://www.googleapis.com/auth/gmail.send",
-			// gmail.modify (#716) — archive, mark read, relabel. There is no narrower scope for it.
-			// It can also move mail to Trash, but NOT permanently delete: that needs
-			// https://mail.google.com/, which this codebase never requests. So the worst an agent
-			// can do to a message is recoverable by the owner.
-			//
-			// Declared, not required. Google's consent screen lets a person grant send but decline
-			// this, and only what was actually GRANTED is recorded — so an account without it keeps
-			// reading and sending, and only the two action tools refuse.
-			"https://www.googleapis.com/auth/gmail.modify",
-		],
+		// What a PLAIN connect asks for (#718): read-only. `openid email` is what lets the status
+		// route say WHICH account is connected; gmail.readonly covers search, message read AND
+		// messages.attachments.get. Gmail is the connector whose content strangers write, and
+		// sending is "the most consequential thing an agent on this platform can do"
+		// (lib/gmail.ts), so it is not held until the owner chooses it.
+		scopes: ["openid", "email", "https://www.googleapis.com/auth/gmail.readonly"],
+		// Asked for only when chosen — ticked at connect, or "Allow …" later (#718). Requested with
+		// `include_granted_scopes`, and the stored grant is MERGED, so allowing one never drops
+		// another (routes/email.ts). Connections made before this hold whatever they were granted
+		// and lose nothing; missing one of these is an offer, never a "reconnect".
+		optionalGrants: [GMAIL_SEND_GRANT, GMAIL_MODIFY_GRANT],
 		clientIdEnv: "GOOGLE_CLIENT_ID",
 		secretEnv: "GOOGLE_CLIENT_SECRET",
 	},
