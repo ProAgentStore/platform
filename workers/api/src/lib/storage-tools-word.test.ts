@@ -7,42 +7,12 @@
  * the real `upload_file` → `read_file` path over a byte-faithful R2, so they also pin that a binary
  * upload lands byte-for-byte.
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { executeStorageTool } from "./storage-tools.js";
-import { AgentStorageEngine } from "../agent-storage.js";
+import type { AgentStorageEngine } from "../agent-storage.js";
 import type { FileMeta } from "../agent-storage-types.js";
+import { byteEngine as engine, byteR2 } from "./byte-storage-double.js";
 import type { Env } from "../types.js";
-
-function mockDoStorage() {
-	const store = new Map<string, unknown>();
-	return {
-		get: vi.fn(async <T>(key: string) => (store.get(key) as T) ?? null),
-		put: vi.fn(async (key: string, value: unknown) => { store.set(key, value); }),
-		delete: vi.fn(async (k: string | string[]) => { for (const x of Array.isArray(k) ? k : [k]) store.delete(x); return true; }),
-		list: vi.fn(async <T>(opts?: { prefix?: string }) => new Map([...store.entries()].filter(([k]) => !opts?.prefix || k.startsWith(opts.prefix))) as Map<string, T>),
-	};
-}
-
-/** R2 that keeps the exact bytes it was given — one bucket may be shared by several agents' engines. */
-function byteR2() {
-	const objects = new Map<string, Uint8Array>();
-	const bytesOf = (data: unknown) => (typeof data === "string" ? new TextEncoder().encode(data) : new Uint8Array(data as ArrayBuffer).slice());
-	return {
-		objects,
-		put: vi.fn(async (key: string, data: unknown) => { objects.set(key, bytesOf(data)); return {}; }),
-		head: vi.fn(async (key: string) => (objects.has(key) ? { size: objects.get(key)!.length } : null)),
-		get: vi.fn(async (key: string) => {
-			const b = objects.get(key);
-			return b ? { body: new Blob([b]).stream(), arrayBuffer: async () => b.slice().buffer } : null;
-		}),
-		delete: vi.fn(async () => undefined),
-	};
-}
-
-function engine(agentId: string, r2 = byteR2()) {
-	const storage = mockDoStorage();
-	return { engine: new AgentStorageEngine(storage as never, r2 as never, null, null, agentId, null), storage, r2 };
-}
 
 const call = (e: AgentStorageEngine, name: string, input: Record<string, unknown>) =>
 	executeStorageTool({ name, input }, e, { env: {} as unknown as Env, agentId: "agent-1", userId: "u1" });

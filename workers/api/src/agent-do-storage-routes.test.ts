@@ -168,7 +168,7 @@ describe("file routes", () => {
 		expect((await routes.uploadFile(engine, post({ name: "a.txt" }))).status).toBe(400);
 	});
 
-	it("decodes base64 uploads to bytes and defaults mime + text extraction", async () => {
+	it("decodes base64 uploads to bytes, typed by name — never text/plain — with text extraction on (#762)", async () => {
 		let opts: Record<string, unknown> = {};
 		const res = await routes.uploadFile(
 			fakeEngine<"fileUpload">({
@@ -180,9 +180,60 @@ describe("file routes", () => {
 			post({ name: "a.bin", content: "", contentBase64: btoa("hello") }),
 		);
 		expect(res.status).toBe(201);
-		expect(opts.mimeType).toBe("text/plain");
+		expect(opts.mimeType).toBe("application/octet-stream");
 		expect(opts.extractText).toBe(true);
 		expect(new TextDecoder().decode(opts.data as ArrayBuffer)).toBe("hello");
+	});
+
+	describe("base64 uploads over HTTP match the upload_file tool (#762)", () => {
+		const recording = () => {
+			const calls: Array<Record<string, unknown>> = [];
+			return { calls, engine: fakeEngine<"fileUpload">({ fileUpload: async (o: Record<string, unknown>) => { calls.push(o); return { id: "f1" }; } }) };
+		};
+
+		it("a .docx with no mime_type is stored as a Word document; text content keeps text/plain", async () => {
+			const { calls, engine } = recording();
+			await routes.uploadFile(engine, post({ name: "Club Championships.docx", contentBase64: btoa("PK\x03\x04") }));
+			await routes.uploadFile(engine, post({ name: "notes", content: "hi" }));
+			expect(calls.map((c) => c.mimeType)).toEqual(["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "text/plain"]);
+		});
+
+		it("an explicit mime_type still wins", async () => {
+			const { calls, engine } = recording();
+			await routes.uploadFile(engine, post({ name: "form.docx", contentBase64: btoa("x"), mime_type: "application/pdf" }));
+			expect(calls[0].mimeType).toBe("application/pdf");
+		});
+
+		it("over the 12MB cap is a 413 naming the limit, refused before decoding — nothing stored", async () => {
+			const { calls, engine } = recording();
+			const res = await routes.uploadFile(engine, post({ name: "big.bin", contentBase64: "A".repeat(17 * 1024 * 1024) }));
+			expect(res.status).toBe(413);
+			expect(((await res.json()) as { error: string }).error).toMatch(/over the 12MB limit/);
+			expect(calls).toEqual([]);
+		});
+
+		it("exactly at the cap is accepted", async () => {
+			const { calls, engine } = recording();
+			const res = await routes.uploadFile(engine, post({ name: "max.bin", contentBase64: "A".repeat((12 * 1024 * 1024 * 4) / 3) }));
+			expect(res.status).toBe(201);
+			expect((calls[0].data as ArrayBuffer).byteLength).toBe(12 * 1024 * 1024);
+		});
+
+		it("malformed base64 is a 400 saying so, not a 500 — nothing stored", async () => {
+			const { calls, engine } = recording();
+			const res = await routes.uploadFile(engine, post({ name: "x.pdf", contentBase64: "not*base64!" }));
+			expect(res.status).toBe(400);
+			expect(((await res.json()) as { error: string }).error).toMatch(/not valid standard base64/);
+			expect(calls).toEqual([]);
+		});
+
+		it("content and contentBase64 together are refused, naming both", async () => {
+			const { calls, engine } = recording();
+			const res = await routes.uploadFile(engine, post({ name: "x.txt", content: "hi", contentBase64: btoa("hi") }));
+			expect(res.status).toBe(400);
+			expect(((await res.json()) as { error: string }).error).toMatch(/content or contentBase64, not both/);
+			expect(calls).toEqual([]);
+		});
 	});
 
 	it("honours extract_text:false", async () => {

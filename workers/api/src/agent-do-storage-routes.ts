@@ -13,7 +13,7 @@
  * one routing table in `agent-do.ts`.
  */
 import type { AgentStorageEngine } from "./agent-storage.js";
-import { bytesFromBase64 } from "./agent-storage-utils.js";
+import { decodeBase64Upload, guessMimeType } from "./agent-storage-utils.js";
 import type { ActivityEvent, CollectionField } from "./agent-storage-types.js";
 import { json } from "./lib/do-json.js";
 
@@ -149,13 +149,20 @@ export async function uploadFile(
 	}>();
 	if (!body.name || (!body.content && !body.contentBase64))
 		return json({ error: "name and content or contentBase64 required" }, 400);
-	const data = body.contentBase64
-		? bytesFromBase64(body.contentBase64).slice().buffer
-		: body.content;
+	if (body.content && body.contentBase64) return json({ error: "provide content or contentBase64, not both" }, 400);
+	// The same cap and decode as the upload_file tool (#762): MCP's upload_agent_file and the Gmail
+	// downloader reach this route directly. Bytes are typed by their name, never as text/plain,
+	// which would send a .docx through the text extractor as UTF-8 noise.
+	let data: string | ArrayBuffer = body.content;
+	if (body.contentBase64) {
+		const decoded = decodeBase64Upload(body.contentBase64);
+		if ("error" in decoded) return json({ error: `contentBase64: ${decoded.error}` }, decoded.status);
+		data = decoded.bytes.slice().buffer;
+	}
 	const meta = await engine.fileUpload({
 		name: body.name,
 		path: body.path,
-		mimeType: body.mime_type || "text/plain",
+		mimeType: body.mime_type || (body.contentBase64 ? guessMimeType(body.name) : "text/plain"),
 		data,
 		userId: body.user_id,
 		tags: body.tags,

@@ -3,7 +3,7 @@
  * Extends the base AGENT_TOOLS with the new storage engine.
  */
 import { AgentStorageEngine } from "../agent-storage.js";
-import { bytesFromBase64 } from "../agent-storage-utils.js";
+import { decodeBase64Upload, guessMimeType } from "../agent-storage-utils.js";
 import { confirmationLinkFound, confirmationLinkWithoutLinks } from "./confirmation-link-result.js";
 import { executePdfTool, PDF_STORAGE_TOOLS } from "./pdf-storage-tools.js";
 import { fileWindowResult, knowledgeDocResult, listKnowledgeResult, searchKnowledgeResult } from "./knowledge-result.js";
@@ -331,15 +331,12 @@ export async function executeStorageTool(
 				if (!name) return fail(call.name, "name required");
 				if (content && contentBase64) return fail(call.name, "provide content or content_base64, not both");
 				if (!content && !contentBase64) return fail(call.name, "provide content (text) or content_base64 (binary, base64-encoded)");
-				const MAX_BASE64_BYTES = 12 * 1024 * 1024;
 				let fileData: string | ArrayBuffer;
 				let mimeType = (call.input.mime_type as string) || guessMimeType(name);
 				if (contentBase64) {
-					const clean = contentBase64.replace(/^data:[^,]+,/, "").replace(/\s/g, "");
-					const decodedLen = Math.floor(clean.length * 0.75);
-					if (decodedLen > MAX_BASE64_BYTES)
-						return fail(call.name, `content_base64 decodes to ~${Math.round(decodedLen / 1024 / 1024)}MB, over the 12MB limit`);
-					fileData = bytesFromBase64(contentBase64).buffer as ArrayBuffer;
+					const decoded = decodeBase64Upload(contentBase64);
+					if ("error" in decoded) return fail(call.name, `content_base64: ${decoded.error}`);
+					fileData = decoded.bytes.buffer as ArrayBuffer;
 				} else {
 					fileData = content as string;
 					if (!call.input.mime_type) mimeType = guessMimeType(name) === "application/octet-stream" ? "text/plain" : guessMimeType(name);
@@ -818,30 +815,6 @@ function stringInput(value: unknown): string {
 function optionalInput(value: unknown): string | undefined {
 	const text = stringInput(value);
 	return text || undefined;
-}
-
-function guessMimeType(filename: string): string {
-	const ext = filename.split(".").pop()?.toLowerCase() || "";
-	const map: Record<string, string> = {
-		txt: "text/plain",
-		md: "text/markdown",
-		json: "application/json",
-		csv: "text/csv",
-		html: "text/html",
-		xml: "application/xml",
-		pdf: "application/pdf",
-		doc: "application/msword",
-		docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-		png: "image/png",
-		jpg: "image/jpeg",
-		jpeg: "image/jpeg",
-		gif: "image/gif",
-		svg: "image/svg+xml",
-		mp3: "audio/mpeg",
-		mp4: "video/mp4",
-		zip: "application/zip",
-	};
-	return map[ext] || "application/octet-stream";
 }
 
 function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {

@@ -124,6 +124,53 @@ export function bytesFromBase64(value: string): Uint8Array {
 	return bytes;
 }
 
+/**
+ * The most bytes one base64 upload may carry — the same ceiling as a Gmail attachment (#762).
+ * Every base64 path (the upload_file tool, the file route MCP and connectors post to) shares it.
+ */
+export const MAX_BASE64_UPLOAD_BYTES = 12 * 1024 * 1024;
+
+/**
+ * Decode an upload's base64. The size is checked from the string length BEFORE anything is
+ * allocated, and malformed input is a refusal naming the problem rather than an `atob` throw.
+ */
+export function decodeBase64Upload(value: string): { bytes: Uint8Array } | { error: string; status: 400 | 413 } {
+	const clean = value.replace(/^data:[^,]+,/, "").replace(/\s/g, "");
+	const decodedLen = Math.floor(clean.length * 0.75);
+	if (decodedLen > MAX_BASE64_UPLOAD_BYTES)
+		return { error: `base64 content decodes to ~${Math.round(decodedLen / 1024 / 1024)}MB, over the ${MAX_BASE64_UPLOAD_BYTES / 1024 / 1024}MB limit`, status: 413 };
+	try {
+		return { bytes: bytesFromBase64(clean) };
+	} catch {
+		return { error: "base64 content is not valid standard base64", status: 400 };
+	}
+}
+
+/** A MIME type from a filename's extension; `application/octet-stream` when unknown. */
+export function guessMimeType(filename: string): string {
+	const ext = filename.split(".").pop()?.toLowerCase() || "";
+	const map: Record<string, string> = {
+		txt: "text/plain",
+		md: "text/markdown",
+		json: "application/json",
+		csv: "text/csv",
+		html: "text/html",
+		xml: "application/xml",
+		pdf: "application/pdf",
+		doc: "application/msword",
+		docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+		png: "image/png",
+		jpg: "image/jpeg",
+		jpeg: "image/jpeg",
+		gif: "image/gif",
+		svg: "image/svg+xml",
+		mp3: "audio/mpeg",
+		mp4: "video/mp4",
+		zip: "application/zip",
+	};
+	return map[ext] || "application/octet-stream";
+}
+
 export interface ExtractedFileText {
 	text: string;
 	status: "none" | "extracted" | "unsupported" | "failed";
