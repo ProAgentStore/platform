@@ -111,7 +111,8 @@ describe("the pause machine hands the park's END to the heartbeat", () => {
  * Files that call `recordLiveness` in production. Read from disk, and the count is ASSERTED — a
  * moved or renamed driver must fail as "this guard stopped measuring", never as a clean tree.
  */
-const LIVENESS_SOURCES = ["workflows/coding-session.ts"];
+// `lib/coding-interrupt.ts` since #855: the interruption park moved out of the workflow's catch.
+const LIVENESS_SOURCES = ["workflows/coding-session.ts", "lib/coding-interrupt.ts"];
 
 /** One `recordLiveness(...)` call, as written. Every site in this repo is a single line. */
 function livenessCallSites(): { file: string; line: number; text: string }[] {
@@ -131,14 +132,16 @@ function livenessCallSites(): { file: string; line: number; text: string }[] {
  * adding a park must not be able to exempt itself, which is exactly how `until` went unwritten.
  */
 const NO_KNOWN_END: Record<string, string> = {
-	platform_interrupt:
-		"our own deploy evicted the isolate, or the provider's transport dropped (#758); Cloudflare replays the journal when it replays it, and there is no instant to state (#583)",
+	// Empty since #855. `platform_interrupt` was here — "Cloudflare replays the journal when it replays
+	// it, and there is no instant to state" — and that replay never came: the workflow now retries the
+	// round itself after a backoff it chose, so the park states the instant it resumes like any other.
 };
 
 describe("every park field has a production writer", () => {
 	it("measures every recordLiveness call site, and says how many", () => {
 		const sites = livenessCallSites();
-		// The denominator. Three sites today: one clear, one park with a knowable end, one without.
+		// The denominator. Three sites today: one clear, and two parks that both state their end — the
+		// handoff/usage-limit tick, and the interruption's scheduled retry (#855).
 		expect(sites.length, `${sites.length} recordLiveness call site(s) across ${LIVENESS_SOURCES.length} source file(s)`).toBe(3);
 	});
 

@@ -51,10 +51,11 @@ import { annotateOwnerAttribution } from "../lib/run-attribution.js";
 import { finishLoopRun, isCancelRequested, recordIteration, recordLiveness, type RunWaitReason } from "../lib/agent-loop-store.js";
 import { tryDequeueAndStart } from "../lib/objective-queue-start.js";
 import { traceCodingRun } from "../lib/coding-run-trace.js";
-import { codingCrashReport, outcomeWord, resumeNotice, runOutcomeNote } from "../lib/coding-run-report.js";
+import { codingCrashReport, outcomeWord, runOutcomeNote } from "../lib/coding-run-report.js";
 import { statusFor, type LoopStopReason } from "../lib/agent-loop.js";
 import { PILOT_DEFAULT_MAX_STEPS } from "../lib/loop-limits.js";
-import { classifyCodingFailure, driverResumePlan, CodingRunProbe, MAX_PLATFORM_RESUMES, recordCodingFailure } from "../lib/coding-failure.js";
+import { CodingRunProbe, recordCodingFailure } from "../lib/coding-failure.js";
+import { planInterruptionResume, roundThroughInterruptions, type InterruptionResume } from "../lib/coding-interrupt.js";
 import { postSystemMessage } from "../lib/instance-system-message.js";
 import type { Env } from "../types.js";
 
@@ -631,16 +632,36 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			},
 		});
 
-		let result: CodingResult = { outcome: "failed", detail: "did not start", steps: 0 };
 		/**
-		 * Is this death an INTERRUPTION we are going to be replayed through, rather than an ending?
-		 *
-		 * Gates the teardown below. A resumed run still owns its session, its driver claim and its
-		 * board card, so running the terminal writes on the way out would tear down the very run
-		 * Cloudflare is about to resume — and the owner would read a completed-and-failed run that
-		 * then carried on working. `lib/coding-failure.ts` owns the decision; this only obeys it.
+		 * An interruption is resumed HERE, by the workflow (#855) — see `lib/coding-interrupt.ts` for why a
+		 * rethrow out of `run()` never was. The bookkeeping is one journalled step per interruption, keyed
+		 * by an ordinal a replay re-derives identically, so an eviction mid-backoff returns the recorded
+		 * plan rather than counting the interruption, filing its row and posting the notice twice.
 		 */
-		let resuming = false;
+		let interruptions = 0;
+		const roundDeps = {
+			plan: async (e: unknown, k: number) =>
+				(await step.do(`interrupt-${k}`, () =>
+					planInterruptionResume(e, {
+						env,
+						runId: event.payload.loopRunId ?? null,
+						record: (err) =>
+							recordCodingFailure(env, {
+								err, userId, instanceId, sessionId, probe, steps: pilotSteps, startedAt: runStartedAt, repo: goal.repo,
+								node: conn.runnerNode ?? null, runId: event.payload.loopRunId ?? null, taskId: event.payload.boardTaskId ?? null, disposition: "resumed",
+							}).then(() => undefined),
+						trace: (why, meta) => traceCodingRun(env, traceCtx, "coding.run.interrupted", why, { ...meta, phase: probe.phase }).then(() => undefined),
+						announce: postToChat,
+						now: () => Date.now(),
+					}),
+				)) as InterruptionResume | null,
+			sleep: (label: string, ms: number) => step.sleep(label, ms),
+			resumed: (note: string) => {
+				goal.resumeNote = note;
+			},
+		};
+
+		let result: CodingResult = { outcome: "failed", detail: "did not start", steps: 0 };
 		// Wrap the whole run so a thrown step (clone/runner/AI hiccup that exhausts its
 		// retries) STILL ends the session + notifies — otherwise the D1 row sits "active"
 		// forever, the runner tmux is never torn down, and the run silently vanishes.
@@ -799,7 +820,13 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 
 			for (let round = 0; round < 12 && !syncGate.blocked; round++) {
 				// The caller's cap when it named one, the historical 40 when it did not (#374).
-				result = await runCodingLoop(deps, goal, { maxSteps: event.payload.maxSteps ?? PILOT_DEFAULT_MAX_STEPS });
+				// An interruption is retried in place after a published backoff (#855); anything else — or
+				// one past the bound — is rethrown to the terminal catch below.
+				result = await roundThroughInterruptions(
+					() => runCodingLoop(deps, goal, { maxSteps: event.payload.maxSteps ?? PILOT_DEFAULT_MAX_STEPS }),
+					roundDeps,
+					{ next: () => ++interruptions },
+				);
 				// Both are consumed by the round above — cleared so a stale handoff value or a stale platform note isn't re-injected into a later round.
 				goal.userHint = undefined;
 				goal.resumeNote = undefined;
@@ -833,230 +860,203 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			const crash = codingCrashReport(e);
 			crashReason = crash.stopReason;
 			result = { outcome: "failed", detail: crash.detail, steps: result.steps, transcript: result.transcript };
-			// …and if this death was NOT the objective failing, the run is RESUMED rather than ended (#583) —
-			// asked BEFORE the record, because the record has to say which of the two this row is (#546). The
-			// verdict it consumes was recorded on every death with nobody to read it, as `coding-failure.ts`
-			// said in a comment. Rethrowing IS the resume: an error escaping `run()` makes Cloudflare replay
-			// the instance from its journal — run `82739cb6` was observed filing itself twice with one
-			// `runStartedAt`. Classified at the call site, never off the record's return value (see
-			// `driverResumePlan`), and HELD: the class also decides what the owner is TOLD below (#758).
-			const failure = classifyCodingFailure(e);
-			const plan = await driverResumePlan(env, failure, event.payload.loopRunId ?? null);
-			// …and it is RECORDED (#529). Every peer workflow logs its own crash; this one logged nothing,
-			// so three runs that died on one instruction existed only as chat bubbles. `disposition` is
-			// what stops ONE run reading as several deaths: run `b9d9c051` filed an interruption at
-			// 00:25:19 and its real death at 00:28:27, and both rows said "coding run failed" (#546).
+			// Recorded (#529) as an ENDING. An interruption the run could be resumed through never reaches
+			// here — the round loop retries it in the workflow (#855). What arrives is a death outside the
+			// rounds, or one past the resume bound, and rethrowing it "for a journal replay" was not a
+			// resume: an error escaping `run()` ends the Workflow instance, and the run sat parked on
+			// `platform_interrupt`, reported as "being resumed", until the sweeper closed it. Ending it here
+			// is the loud version of the same outcome — the owner is told at once, under the interruption's
+			// own stop reason (#546), instead of fifteen minutes later by a sweeper that says nothing.
 			await recordCodingFailure(env, {
 				err: e, userId, instanceId, sessionId, probe, steps: pilotSteps, startedAt: runStartedAt, repo: goal.repo,
-				node: conn.runnerNode ?? null, runId: event.payload.loopRunId ?? null, taskId: event.payload.boardTaskId ?? null, disposition: plan.resume ? "resumed" : "ended",
+				node: conn.runnerNode ?? null, runId: event.payload.loopRunId ?? null, taskId: event.payload.boardTaskId ?? null, disposition: "ended",
 			}).catch(() => undefined);
-			if (plan.resume) {
-				resuming = true;
-				// Said OUT LOUD, on both surfaces: a silent recovery is still an unexplained one. The sentence is
-				// `coding-run-report.ts`'s — inline it said "a platform update", false of a provider drop (#758).
-				await traceCodingRun(env, traceCtx, "coding.run.interrupted", plan.why, { attempt: plan.attempts, phase: probe.phase, failureClass: failure.class });
-				await postToChat(resumeNotice(failure.class, plan.why, plan.attempts, MAX_PLATFORM_RESUMES));
-				// …so every surface reads "waiting" rather than "stalled" while the replay is in flight: a
-				// resume has nothing ticking BY DESIGN, and `runHealth` must not read that as death.
-				if (event.payload.loopRunId) await recordLiveness(env, event.payload.loopRunId, Date.now(), { reason: "platform_interrupt" }).catch(() => undefined);
-				throw e;
-			}
 		} finally {
-			// TEARDOWN — skipped entirely for a run that is being resumed (#583).
+			// TEARDOWN. Everything below is terminal: it enforces the repo's end-of-run policies, drains
+			// the closing acts, ends the session, notifies, and closes the delegation row and board card.
+			// It used to be skipped for a run "being resumed" by a journal replay (#583); that resume is now
+			// a retry inside the round loop (#855), so a run that reaches this `finally` has ENDED.
 			//
-			// Everything below is terminal: it enforces the repo's end-of-run policies, drains the
-			// closing acts, ends the session, notifies, and closes the delegation row and board card. A
-			// resumed run still OWNS all of that — its session, its single-flight driver claim, its card —
-			// and Cloudflare is about to replay it, so running these would tear down the run that then
-			// carries on working, and the owner would read a failure notification for a run still going.
+			// The `finally` is kept rather than moved into the try's success path: a crash must still
+			// reach every line of it, which is the #341 property this block exists for.
+			// The repo's STANDING POLICIES are evaluated here (#322), because this is where its
+			// state is already read — the moment it actually changed, and the only moment a live
+			// runner is guaranteed. No scheduler was added: a policy that misses this evaluation
+			// re-observes at the next run end and never replays a stale one.
 			//
-			// The `finally` is kept rather than moved into the try's success path: a crash we do NOT
-			// resume must still reach every line of it, which is the #341 property this block exists for.
-			if (!resuming) {
-				// The repo's STANDING POLICIES are evaluated here (#322), because this is where its
-				// state is already read — the moment it actually changed, and the only moment a live
-				// runner is guaranteed. No scheduler was added: a policy that misses this evaluation
-				// re-observes at the next run end and never replays a stale one.
-				//
-				// Uncommitted work is a PENDING HUMAN DECISION, so it goes on the board (#276). Before
-				// that, a run told "leave the change in the working tree" left it there and nothing
-				// recorded it; every later `git status` rediscovered the same diff as a novelty, 50
-				// hours on. What #322 adds is that the invariant is DECLARED by the repo rather than
-				// assumed by this function, and that the card says which policy raised it — the stable
-				// card ids are unchanged, so cards already open in production still close.
-				//
-				// A policy the OWNER promoted to `act` is also restored here, by a fixed argv on the
-				// runner — never by handing the Engine a goal, which would close the vocabulary at the
-				// name of the policy and leave it open at the hands. One verb exists (switch a CLEAN
-				// checkout back to its declared branch); the card says what was done and how to undo it,
-				// and nothing here can commit, push or discard. `lib/repo-policy-act.ts`.
-				//
-				// Read BEFORE the session is closed below, so the runner can resolve the workdir from
-				// the live session (the only way to see a managed clone dir).
-				await step.do("repo-state-end", async () => {
-					await enforceRepoPolicies(env, { conn, instanceId, userId, repoId, repoLabel: goal.repo, sessionId });
-					return null;
-				});
-				// The LAST check against upstream (#785, ask 2). The one-active-session-per-repo rule
-				// bounds but does not remove the race: a human, or another tool, can push to `main`
-				// while a run works, and a run that ends BEHIND has finished on top of a base that
-				// moved. Ahead is reported too — unpushed commits at the end of a run are a fact the
-				// owner needs in the thread, not something to discover from a later `git status`.
-				// Fetch only; the run is over and nothing here may merge into a tree it no longer
-				// drives.
-				await step.do("repo-sync-end", async () => {
-					const repo = await getRepo(env, instanceId, userId, repoId).catch(() => null);
-					if (!repo) return null;
-					const v = await readRepoSync(conn, { workDir: repo.workdir, sessionId, branch: repo.branch, forceFetch: true }).catch(() => null);
-					const line = v ? describeRepoSync(v) : null;
-					if (!line) return null;
-					await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: `Upstream sync at end of run: ${line}` }).catch(() => undefined);
-					if (v && (v.state === "behind" || v.state === "diverged" || v.state === "ahead")) await postToChat(`**Repository sync at end of run** — ${line}`);
-					return null;
-				});
-				// The CLOSING drain (#294), before anything can tear the session down.
-				//
-				// A coding run routinely ends with the consequential act — it pushes, opens the PR,
-				// merges, and finishes — and since #271 a delegated run usually leaves its session LIVE,
-				// so `/coding/end` is not reached and there is no later drain at all. Without this the
-				// record would miss the merge on precisely the runs that end by merging.
-				//
-				// Unconditional rather than in the `else` branch: for a session that IS ended below, the
-				// subsequent `/coding/end` drain then simply returns nothing, which is free.
-				await step.do("acts-final-drain", async () => {
-					const snap = await callRunner<{ usage?: unknown; acts?: unknown }>(
-						conn,
-						"/coding/capture",
-						{ sessionId, drainUsage: true },
-						{ timeoutMs: READ_TIMEOUT_MS },
-					).catch(() => null);
-					if (!snap) return null;
-					// Usage is drained by the same flag, so it has to be banked here too or this call
-					// would silently discard the closing turn's spend to record its acts (#267).
-					const closingUsageRecords = sanitizeEngineUsage(snap.usage);
-					await recordEngineUsage(
+			// Uncommitted work is a PENDING HUMAN DECISION, so it goes on the board (#276). Before
+			// that, a run told "leave the change in the working tree" left it there and nothing
+			// recorded it; every later `git status` rediscovered the same diff as a novelty, 50
+			// hours on. What #322 adds is that the invariant is DECLARED by the repo rather than
+			// assumed by this function, and that the card says which policy raised it — the stable
+			// card ids are unchanged, so cards already open in production still close.
+			//
+			// A policy the OWNER promoted to `act` is also restored here, by a fixed argv on the
+			// runner — never by handing the Engine a goal, which would close the vocabulary at the
+			// name of the policy and leave it open at the hands. One verb exists (switch a CLEAN
+			// checkout back to its declared branch); the card says what was done and how to undo it,
+			// and nothing here can commit, push or discard. `lib/repo-policy-act.ts`.
+			//
+			// Read BEFORE the session is closed below, so the runner can resolve the workdir from
+			// the live session (the only way to see a managed clone dir).
+			await step.do("repo-state-end", async () => {
+				await enforceRepoPolicies(env, { conn, instanceId, userId, repoId, repoLabel: goal.repo, sessionId });
+				return null;
+			});
+			// The LAST check against upstream (#785, ask 2). The one-active-session-per-repo rule
+			// bounds but does not remove the race: a human, or another tool, can push to `main`
+			// while a run works, and a run that ends BEHIND has finished on top of a base that
+			// moved. Ahead is reported too — unpushed commits at the end of a run are a fact the
+			// owner needs in the thread, not something to discover from a later `git status`.
+			// Fetch only; the run is over and nothing here may merge into a tree it no longer
+			// drives.
+			await step.do("repo-sync-end", async () => {
+				const repo = await getRepo(env, instanceId, userId, repoId).catch(() => null);
+				if (!repo) return null;
+				const v = await readRepoSync(conn, { workDir: repo.workdir, sessionId, branch: repo.branch, forceFetch: true }).catch(() => null);
+				const line = v ? describeRepoSync(v) : null;
+				if (!line) return null;
+				await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: `Upstream sync at end of run: ${line}` }).catch(() => undefined);
+				if (v && (v.state === "behind" || v.state === "diverged" || v.state === "ahead")) await postToChat(`**Repository sync at end of run** — ${line}`);
+				return null;
+			});
+			// The CLOSING drain (#294), before anything can tear the session down.
+			//
+			// A coding run routinely ends with the consequential act — it pushes, opens the PR,
+			// merges, and finishes — and since #271 a delegated run usually leaves its session LIVE,
+			// so `/coding/end` is not reached and there is no later drain at all. Without this the
+			// record would miss the merge on precisely the runs that end by merging.
+			//
+			// Unconditional rather than in the `else` branch: for a session that IS ended below, the
+			// subsequent `/coding/end` drain then simply returns nothing, which is free.
+			await step.do("acts-final-drain", async () => {
+				const snap = await callRunner<{ usage?: unknown; acts?: unknown }>(
+					conn,
+					"/coding/capture",
+					{ sessionId, drainUsage: true },
+					{ timeoutMs: READ_TIMEOUT_MS },
+				).catch(() => null);
+				if (!snap) return null;
+				// Usage is drained by the same flag, so it has to be banked here too or this call
+				// would silently discard the closing turn's spend to record its acts (#267).
+				const closingUsageRecords = sanitizeEngineUsage(snap.usage);
+				await recordEngineUsage(
+					env,
+					{ userId, sessionId, instanceId, authResolved: (snap as { authResolved?: EngineAuthResolved | null }).authResolved ?? null },
+					closingUsageRecords,
+				).catch(() => undefined);
+				await appendEngineUsageTimeline(env, { sessionId, instanceId, userId }, closingUsageRecords);
+				const closing = sanitizeEngineActs(snap.acts);
+				await recordEngineActs(env, { userId, sessionId, instanceId, traceId: event.payload.loopRunId ?? null }, closing).catch(() => undefined);
+				// A coding run routinely ends WITH the merge, so this drain is where the incident's own
+				// shape lands. Nothing is left to halt, but the breach still has to be recorded (#314).
+				await recordAuthorityViolations(
+					env,
+					{ userId, instanceId, sessionId, repoLabel: goal.repo, traceId: event.payload.loopRunId ?? null },
+					mergePolicy,
+					closing,
+				).catch(() => null);
+				// A run routinely ends WITH the pull request it opened, so the wrong-org write of
+				// #676 lands in exactly this drain. Nothing is left to halt; the breach still has
+				// to be recorded, or the run that reported success stays the only account of it.
+				await recordRepoScopeViolations(
+					env,
+					{ userId, instanceId, sessionId, repoLabel: goal.repo, traceId: event.payload.loopRunId ?? null },
+					writeScope,
+					closing,
+				).catch(() => null);
+				return null;
+			});
+			await step.do("end", async () => {
+				// A run closes only the session it OPENED (#271). Ending one a human opened made
+				// delegation single-use and took away a thing the user had created.
+				if (shouldEndSessionAfterRun({ openedByRun: event.payload.sessionOpenedByRun === true })) {
+					const ended = await callRunner<{ ok?: boolean; acts?: unknown }>(conn, "/coding/end", { sessionId }).catch(() => null);
+					// Whatever the final drain above could not reach — a turn that completed between
+					// the two calls. Cheap, and idempotent on the deterministic row id.
+					await recordEngineActs(
 						env,
-						{ userId, sessionId, instanceId, authResolved: (snap as { authResolved?: EngineAuthResolved | null }).authResolved ?? null },
-						closingUsageRecords,
+						{ userId, sessionId, instanceId, traceId: event.payload.loopRunId ?? null },
+						sanitizeEngineActs(ended?.acts),
 					).catch(() => undefined);
-					await appendEngineUsageTimeline(env, { sessionId, instanceId, userId }, closingUsageRecords);
-					const closing = sanitizeEngineActs(snap.acts);
-					await recordEngineActs(env, { userId, sessionId, instanceId, traceId: event.payload.loopRunId ?? null }, closing).catch(() => undefined);
-					// A coding run routinely ends WITH the merge, so this drain is where the incident's own
-					// shape lands. Nothing is left to halt, but the breach still has to be recorded (#314).
-					await recordAuthorityViolations(
-						env,
-						{ userId, instanceId, sessionId, repoLabel: goal.repo, traceId: event.payload.loopRunId ?? null },
-						mergePolicy,
-						closing,
-					).catch(() => null);
-					// A run routinely ends WITH the pull request it opened, so the wrong-org write of
-					// #676 lands in exactly this drain. Nothing is left to halt; the breach still has
-					// to be recorded, or the run that reported success stays the only account of it.
-					await recordRepoScopeViolations(
-						env,
-						{ userId, instanceId, sessionId, repoLabel: goal.repo, traceId: event.payload.loopRunId ?? null },
-						writeScope,
-						closing,
-					).catch(() => null);
-					return null;
-				});
-				await step.do("end", async () => {
-					// A run closes only the session it OPENED (#271). Ending one a human opened made
-					// delegation single-use and took away a thing the user had created.
-					if (shouldEndSessionAfterRun({ openedByRun: event.payload.sessionOpenedByRun === true })) {
-						const ended = await callRunner<{ ok?: boolean; acts?: unknown }>(conn, "/coding/end", { sessionId }).catch(() => null);
-						// Whatever the final drain above could not reach — a turn that completed between
-						// the two calls. Cheap, and idempotent on the deterministic row id.
-						await recordEngineActs(
-							env,
-							{ userId, sessionId, instanceId, traceId: event.payload.loopRunId ?? null },
-							sanitizeEngineActs(ended?.acts),
-						).catch(() => undefined);
-						// The runner session is now gone — sync the D1 row so it doesn't sit
-						// "active" forever (the row was created active by the /sessions route).
-						const status = result.outcome === "failed" || result.outcome === "max_steps" ? "error" : "ended";
-						// Through `endSession`, not raw SQL: it is the ONE place a session leaves `active`,
-						// so it is the one place the board card can reliably follow (#206). It also covers
-						// `suspended`, which the raw `status = 'active'` predicate here silently skipped —
-						// a Pilot finishing after a `--force` takeover elsewhere left the row suspended
-						// forever with nothing to close it.
-						await endSession(env, instanceId, userId, sessionId, status);
-					} else if (event.payload.driverId) {
-						// The session survives, so `endSession` — which is what normally frees the
-						// single-flight claim — never runs. Release it here or the repo is locked out
-						// of every further run for STALE_DRIVER_MS (15 minutes), which would turn
-						// "delegation is single-use" into "delegation is once every quarter hour".
-						await releaseSessionDriver(env, instanceId, userId, sessionId, event.payload.driverId);
-					}
-					// THE RUN'S VERDICT, LAST AND UNCONDITIONAL (#553).
-					//
-					// The card used to reach a terminal status only as a side effect of `endSession`, i.e.
-					// only inside the branch above and only when that call actually MOVED the row. Both
-					// conditions failed routinely. A session the HUMAN opened skips the branch entirely, so
-					// `csess_22d08431` sat "running" 16 hours after its run died; and where a cron reaper had
-					// already closed the row, `endSession` changed nothing and the card kept the reaper's
-					// `completed` — which is how two failed runs read as successes. Since #271 a session
-					// outliving its run is NORMAL, so a card keyed to session lifetime is structurally wrong
-					// rather than occasionally stale.
-					//
-					// Written from `statusFor`, the same table the loop-run row uses, so the two surfaces
-					// describing one run cannot disagree. Unconditional, while every session-side writer is
-					// `openOnly` — that asymmetry is what makes "the run outranks the session" a rule rather
-					// than a race.
-					await setCodingSessionCardStatus(env, instanceId, userId, sessionId, statusFor(crashReason ?? stopReasonFor(result.outcome))).catch(() => undefined);
-					await appendTimeline(env, { sessionId, instanceId, userId, type: "outcome", content: `${result.outcome}${result.detail ? ` — ${result.detail}` : ""}` });
-					// The end, in the trace. Paired with `coding.run.start`: an unmatched start is a run
-					// that vanished, which is the shape of every incident in #580 and #546 and was not
-					// queryable at all before this.
-					await traceCodingRun(env, traceCtx, "coding.run.end", `${result.outcome}${result.detail ? ` — ${result.detail}` : ""}`, {
-						outcome: result.outcome,
-						stopReason: crashReason ?? stopReasonFor(result.outcome),
-						steps: pilotSteps,
-					});
-					return null;
-				});
-				// Tell the user the run is over so they can check the results + summary.
-				await step.do("notify-end", async () => {
-					const ok = runSucceeded(result.outcome);
-					const title = ok ? "✅ Coder finished" : "⚠️ Coder stopped";
-					const body = `${goal.repo}: ${result.detail || result.outcome}`;
-					// A session ends once. `update` — nothing is waiting on the user, so this is what a
-					// "Coder" mute is for.
-					await notifyUser(env, userId, "coding", title, body, codingSessionLink(instanceId, sessionId), {
-						key: `coding-end:${sessionId}`, instanceId,
-					}).catch(() => undefined);
-					return null;
-				});
-				// #155: close out the observable delegation task on the board (if this was a
-				// delegated goal) so its status reflects the real outcome, not a stuck "running".
-				// Inline upsert into instance_runtime_tasks (the board's source) — same shape as
-				// mirrorRuntimeTask, kept here so the workflow doesn't import a routes module.
-				// Close the loop-run row a delegation opened, so ONE surface answers "how did it go"
-				// for both delegation kinds. Written here, in the same terminal step that closes the
-				// board card, so the two cannot disagree.
-				await closeDelegation(result);
-				// THE LOCK IS NOW FREE — start whatever was queued behind it (#788).
+					// The runner session is now gone — sync the D1 row so it doesn't sit
+					// "active" forever (the row was created active by the /sessions route).
+					const status = result.outcome === "failed" || result.outcome === "max_steps" ? "error" : "ended";
+					// Through `endSession`, not raw SQL: it is the ONE place a session leaves `active`,
+					// so it is the one place the board card can reliably follow (#206). It also covers
+					// `suspended`, which the raw `status = 'active'` predicate here silently skipped —
+					// a Pilot finishing after a `--force` takeover elsewhere left the row suspended
+					// forever with nothing to close it.
+					await endSession(env, instanceId, userId, sessionId, status);
+				} else if (event.payload.driverId) {
+					// The session survives, so `endSession` — which is what normally frees the
+					// single-flight claim — never runs. Release it here or the repo is locked out
+					// of every further run for STALE_DRIVER_MS (15 minutes), which would turn
+					// "delegation is single-use" into "delegation is once every quarter hour".
+					await releaseSessionDriver(env, instanceId, userId, sessionId, event.payload.driverId);
+				}
+				// THE RUN'S VERDICT, LAST AND UNCONDITIONAL (#553).
 				//
-				// LAST, and after `closeDelegation`, for two reasons that are the same reason: the run
-				// that just ended must be fully closed before another can be admitted. The session was
-				// ended (or its single-flight claim released) in the `end` step above, so the next
-				// start's `claimSessionDriver` can actually succeed; and `finishLoopRun` has written
-				// this run's terminal row, so nothing that reads `agent_loop_runs` sees two running runs
-				// for one repo.
+				// The card used to reach a terminal status only as a side effect of `endSession`, i.e.
+				// only inside the branch above and only when that call actually MOVED the row. Both
+				// conditions failed routinely. A session the HUMAN opened skips the branch entirely, so
+				// `csess_22d08431` sat "running" 16 hours after its run died; and where a cron reaper had
+				// already closed the row, `endSession` changed nothing and the card kept the reaper's
+				// `completed` — which is how two failed runs read as successes. Since #271 a session
+				// outliving its run is NORMAL, so a card keyed to session lifetime is structurally wrong
+				// rather than occasionally stale.
 				//
-				// Inside `if (!resuming)` with everything else terminal: a run Cloudflare is about to
-				// replay has NOT ended and still holds its claim. Draining there would start a second
-				// run against the engine the replay carries on driving — the exact collision #208
-				// exists to prevent, arriving by the door #788 opened.
-				//
-				// `tryDequeueAndStart` never throws, so no `.catch` here: a queue that cannot be drained
-				// is recorded in `error_log` and must not turn a finished run into a failed step.
-				await step.do("objective-queue-drain", async () => {
-					await tryDequeueAndStart(env, instanceId, repoId, userId);
-					return null;
+				// Written from `statusFor`, the same table the loop-run row uses, so the two surfaces
+				// describing one run cannot disagree. Unconditional, while every session-side writer is
+				// `openOnly` — that asymmetry is what makes "the run outranks the session" a rule rather
+				// than a race.
+				await setCodingSessionCardStatus(env, instanceId, userId, sessionId, statusFor(crashReason ?? stopReasonFor(result.outcome))).catch(() => undefined);
+				await appendTimeline(env, { sessionId, instanceId, userId, type: "outcome", content: `${result.outcome}${result.detail ? ` — ${result.detail}` : ""}` });
+				// The end, in the trace. Paired with `coding.run.start`: an unmatched start is a run
+				// that vanished, which is the shape of every incident in #580 and #546 and was not
+				// queryable at all before this.
+				await traceCodingRun(env, traceCtx, "coding.run.end", `${result.outcome}${result.detail ? ` — ${result.detail}` : ""}`, {
+					outcome: result.outcome,
+					stopReason: crashReason ?? stopReasonFor(result.outcome),
+					steps: pilotSteps,
 				});
-			}
+				return null;
+			});
+			// Tell the user the run is over so they can check the results + summary.
+			await step.do("notify-end", async () => {
+				const ok = runSucceeded(result.outcome);
+				const title = ok ? "✅ Coder finished" : "⚠️ Coder stopped";
+				const body = `${goal.repo}: ${result.detail || result.outcome}`;
+				// A session ends once. `update` — nothing is waiting on the user, so this is what a
+				// "Coder" mute is for.
+				await notifyUser(env, userId, "coding", title, body, codingSessionLink(instanceId, sessionId), {
+					key: `coding-end:${sessionId}`, instanceId,
+				}).catch(() => undefined);
+				return null;
+			});
+			// #155: close out the observable delegation task on the board (if this was a
+			// delegated goal) so its status reflects the real outcome, not a stuck "running".
+			// Inline upsert into instance_runtime_tasks (the board's source) — same shape as
+			// mirrorRuntimeTask, kept here so the workflow doesn't import a routes module.
+			// Close the loop-run row a delegation opened, so ONE surface answers "how did it go"
+			// for both delegation kinds. Written here, in the same terminal step that closes the
+			// board card, so the two cannot disagree.
+			await closeDelegation(result);
+			// THE LOCK IS NOW FREE — start whatever was queued behind it (#788).
+			//
+			// LAST, and after `closeDelegation`, for two reasons that are the same reason: the run
+			// that just ended must be fully closed before another can be admitted. The session was
+			// ended (or its single-flight claim released) in the `end` step above, so the next
+			// start's `claimSessionDriver` can actually succeed; and `finishLoopRun` has written
+			// this run's terminal row, so nothing that reads `agent_loop_runs` sees two running runs
+			// for one repo.
+			//
+			// `tryDequeueAndStart` never throws, so no `.catch` here: a queue that cannot be drained
+			// is recorded in `error_log` and must not turn a finished run into a failed step.
+			await step.do("objective-queue-drain", async () => {
+				await tryDequeueAndStart(env, instanceId, repoId, userId);
+				return null;
+			});
 		}
 		return result;
 	}

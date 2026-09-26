@@ -67,7 +67,7 @@ What running out *means* is entailed by the reason, and the two kinds demand opp
 | --- | --- | --- |
 | `engine_limit` | the coding CLI's own usage limit has to reset | **resumes** — the run continues by itself, and the owner does nothing |
 | `human` | it is waiting for YOU to answer a handoff | **gives up** — the run stops waiting, and the owner has until then to act |
-| `platform_interrupt` | it was interrupted by something other than the work and is being resumed | **resumes** — the run continues by itself, and the owner does nothing |
+| `platform_interrupt` | it was interrupted by something other than the work and a retry is scheduled | **resumes** — the run continues by itself, and the owner does nothing |
 
 <!-- /generated:run-wait-reasons -->
 

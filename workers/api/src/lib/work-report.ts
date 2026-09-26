@@ -336,7 +336,8 @@ interface Park {
 const PARKS: Record<RunWaitReason, Park> = {
 	engine_limit: { why: "the coding CLI's own usage limit has to reset", deadline: "resume" },
 	human: { why: "it is waiting for YOU to answer a handoff", deadline: "give_up" },
-	platform_interrupt: { why: "it was interrupted by something other than the work and is being resumed", deadline: "resume" },
+	// "Being resumed" only while a retry is actually SCHEDULED — see `waitClause` for the park without one (#855).
+	platform_interrupt: { why: "it was interrupted by something other than the work and a retry is scheduled", deadline: "resume" },
 };
 
 /**
@@ -376,6 +377,12 @@ export function waitClause(run: RunHealthInput & { waitingUntil?: number | null 
 	// rendered under a guessed verb, and a guessed verb is the entire defect.
 	const why = park?.why ?? `it is parked (${run.waitingReason})`;
 	const left = run.waitingUntil && run.waitingUntil > now ? ago(run.waitingUntil - now).replace(" ago", "") : "";
+	// An interruption with NO retry scheduled is not "being resumed" (#855): that note sat over a run
+	// nothing was going to resume for 13 minutes while the owner was told to expect it. Said as what it
+	// is, with the only clock that does apply — the park budget the sweeper closes it on.
+	if (run.waitingReason === "platform_interrupt" && !left) {
+		return `WAITING on an interruption with NO resume scheduled — nothing is set to advance it, so it is closed as interrupted once it has been parked ${Math.round(PARK_LIMIT_MS.platform_interrupt / 60_000)}m. Sending the session a message, or starting the run again, moves it now`;
+	}
 	const until = park && left ? DEADLINE_CLAUSE[park.deadline](left) : "";
 	// Said out loud, because the whole defect is that this state was indistinguishable from working:
 	// nothing has advanced and that is CORRECT, so neither "stalled" nor a bare "running" is honest.

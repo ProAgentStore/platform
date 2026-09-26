@@ -322,10 +322,15 @@ describe("describeLoopRun", () => {
 				waitingUntil: null,
 			});
 			expect(runHealth(resuming, NOW)).toBe("waiting");
-			// The clause is cause-NEUTRAL since #758: the same park now also carries a provider
-			// transport drop, and "a platform update interrupted it" would be a false accusation
-			// against our own deploys. Which cause it was lives on the `error_log` row's class.
-			expect(describeLoopRun(resuming, NOW)).toContain("interrupted by something other than the work");
+			// No retry published — so the report must NOT say it is being resumed (#855).
+			expect(describeLoopRun(resuming, NOW)).toContain("NO resume scheduled");
+			expect(describeLoopRun(resuming, NOW)).not.toContain("being resumed");
+			// With the instant the workflow retries, it is a scheduled resume, said with its clock. The
+			// clause is cause-NEUTRAL since #758: which cause it was lives on the `error_log` row's class.
+			const scheduled = { ...resuming, waitingUntil: NOW + 60_000 };
+			expect(runHealth(scheduled, NOW)).toBe("waiting");
+			expect(describeLoopRun(scheduled, NOW)).toContain("interrupted by something other than the work and a retry is scheduled");
+			expect(describeLoopRun(scheduled, NOW)).toContain("expected to resume in");
 		});
 
 		it("but it does NOT outrank it forever — a replay that never landed is stalled (#790)", () => {

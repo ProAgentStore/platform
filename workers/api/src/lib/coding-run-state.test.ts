@@ -118,9 +118,20 @@ describe("refusingEngineIssue — an engine that is up but refusing is an issue 
 		const human = refusingEngineIssue({ sessionLabel: "s", alive: true, run: { status: "running", waitingReason: "human", detail: "takeover requested" } });
 		expect(human?.severity).toBe("warn");
 		expect(human?.message).toContain("waiting for a person");
-		const interrupt = refusingEngineIssue({ sessionLabel: "s", alive: true, run: { status: "running", waitingReason: "platform_interrupt", detail: "" } });
-		// Being resumed after our OWN deploy is not the owner's problem to fix.
-		expect(interrupt?.severity).toBe("info");
+		const now = Date.now();
+		const scheduled = refusingEngineIssue({ sessionLabel: "s", alive: true, now, run: { status: "running", waitingReason: "platform_interrupt", detail: "", waitingUntil: now + 60_000 } });
+		// A retry SCHEDULED after an interruption is not the owner's problem to fix (#855).
+		expect(scheduled?.severity).toBe("info");
+		expect(scheduled?.message).toContain("a retry is scheduled");
+	});
+
+	it("does NOT tell the owner an interruption resumes itself when no retry is scheduled (#855)", () => {
+		// The incident's note: "being resumed… nothing to do" over a run nothing was resuming for 13 minutes.
+		const unscheduled = refusingEngineIssue({ sessionLabel: "s", alive: true, run: { status: "running", waitingReason: "platform_interrupt", detail: "" } });
+		expect(unscheduled?.severity).toBe("warn");
+		expect(unscheduled?.message).toContain("NO resume is scheduled");
+		expect(unscheduled?.fix).toMatch(/coding_session_message/);
+		expect(unscheduled?.fix).not.toMatch(/resumes itself/);
 	});
 
 	it("still reports a park whose reason nothing recognises", () => {

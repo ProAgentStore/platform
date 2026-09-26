@@ -88,6 +88,8 @@ export interface SessionRunPark {
 	/** `engine_limit` | `human` | `platform_interrupt` | "" — see `RunWaitReason`. */
 	waitingReason: string;
 	detail: string;
+	/** ms epoch the park is due to end, if one was published — for an interruption, when it retries (#855). */
+	waitingUntil?: number | null;
 }
 
 /** An issue in the shape `coding_diagnostics` reports. */
@@ -110,10 +112,17 @@ const PARK_GLOSS: Record<string, { what: string; fix: string; severity: "warn" |
 		severity: "warn",
 	},
 	platform_interrupt: {
-		what: "the run was interrupted — a platform deploy, or the AI provider dropping the connection — and is being resumed",
+		what: "the run was interrupted — a platform deploy, or the AI provider dropping the connection — and a retry is scheduled",
 		fix: "Nothing to do — it resumes itself",
 		severity: "info",
 	},
+};
+
+/** The same park with NO retry scheduled (#855) — it will not resume itself, so it must not say so. */
+const UNSCHEDULED_INTERRUPT = {
+	what: "the run was interrupted and NO resume is scheduled — nothing is set to advance it",
+	fix: "Send the session a message (coding_session_message) or start the run again; otherwise it is closed as interrupted",
+	severity: "warn" as const,
 };
 
 /**
@@ -136,6 +145,7 @@ export function refusingEngineIssue(input: {
 	sessionLabel: string;
 	alive: boolean;
 	run: SessionRunPark | null | undefined;
+	now?: number;
 }): CodingIssue | null {
 	const run = input.run;
 	if (!run) return null;
@@ -144,7 +154,8 @@ export function refusingEngineIssue(input: {
 	// on a closed row would announce a wait that is over. `work-report.ts:waitClause` carries the
 	// same guard with the same comment.
 	if (run.status !== "running" || !run.waitingReason) return null;
-	const parked = PARK_GLOSS[run.waitingReason];
+	const unscheduled = run.waitingReason === "platform_interrupt" && !(run.waitingUntil && run.waitingUntil > (input.now ?? Date.now()));
+	const parked = unscheduled ? UNSCHEDULED_INTERRUPT : PARK_GLOSS[run.waitingReason];
 	// `waitingReason` is guaranteed non-empty by the guard above.
 	const what = parked?.what ?? `the run is parked (${run.waitingReason})`;
 	const where = input.alive ? "the engine is up but not working" : "the engine is not running";

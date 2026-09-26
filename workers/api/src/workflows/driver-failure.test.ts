@@ -76,8 +76,10 @@ interface Consumer {
  */
 const CONSUMERS: Record<string, Consumer> = {
 	"coding-session.ts": {
-		reads: "driverResumePlan",
-		bound: `durable — agent_loop_runs.interruptions, capped at MAX_PLATFORM_RESUMES (${MAX_PLATFORM_RESUMES})`,
+		// Through `lib/coding-interrupt.ts` since #855, which resumes in the workflow instead of
+		// rethrowing; it calls `driverResumePlan` itself (asserted below), so the bound is the same one.
+		reads: "planInterruptionResume",
+		bound: `durable — agent_loop_runs.interruptions, capped at MAX_PLATFORM_RESUMES (${MAX_PLATFORM_RESUMES}), via driverResumePlan`,
 	},
 	"agent-loop.ts": {
 		reads: "driverResumePlan",
@@ -96,6 +98,9 @@ const CONSUMERS: Record<string, Consumer> = {
 		bound: "UNBOUNDED — pipeline_runs has no interruptions column; bounding it is a migration",
 	},
 };
+
+/** The shared, durably bounded decision — and the one wrapper (#855) that reaches it for the Pilot. */
+const BOUNDED_READERS = ["driverResumePlan", "planInterruptionResume"];
 
 const files = readdirSync(DIR)
 	.filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
@@ -135,7 +140,10 @@ describe("every driver consumes the retryable verdict", () => {
 		expect(bounded.length + unbounded.length, `${drivers.length} drivers, all with a stated bound`).toBe(drivers.length);
 		// Every driver that reaches the SHARED decision function is bounded by it, by construction:
 		// `driverResumePlan` refuses to resume a run with no loop-run row.
-		for (const f of bounded) expect(CONSUMERS[f].reads, `${f} claims a bound without using the bounded path`).toBe("driverResumePlan");
+		for (const f of bounded) expect(BOUNDED_READERS, `${f} claims a bound without using the bounded path`).toContain(CONSUMERS[f].reads);
+		// …and the wrapper really is the bounded path, not a name that merely sounds like it (#855).
+		const wrapper = readFileSync(join(DIR, "../lib/coding-interrupt.ts"), "utf8");
+		expect(wrapper).toContain("driverResumePlan(deps.env, failure, deps.runId)");
 		for (const f of unbounded) expect(CONSUMERS[f].bound.length, `${f} says UNBOUNDED without saying why`).toBeGreaterThan(30);
 	});
 
@@ -220,19 +228,19 @@ describe("agent-loop's resume is wired, not decorative", () => {
  */
 describe("no driver files a run as dead before deciding to resume it (#546)", () => {
 	/** Derived, never hand-listed: the drivers the registry credits with the SHARED decision. */
-	const resuming = Object.keys(CONSUMERS).filter((f) => CONSUMERS[f].reads === "driverResumePlan");
+	const resuming = Object.keys(CONSUMERS).filter((f) => BOUNDED_READERS.includes(CONSUMERS[f].reads));
 
 	it("measures both of them — a driver dropping out of this set is the guard going quiet", () => {
 		expect(resuming.sort(), "drivers reaching driverResumePlan").toEqual(["agent-loop.ts", "coding-session.ts"]);
 	});
 
-	it.each(resuming)("%s asks driverResumePlan BEFORE it writes its terminal account of the run", (file) => {
+	it.each(resuming)("%s asks the bounded decision BEFORE it writes its terminal account of the run", (file) => {
 		const src = readFileSync(join(DIR, file), "utf8");
 		// The terminal write differs per driver — one files an error row, the other sets the stop
 		// reason the run is closed with — so the marker is named per driver rather than assumed.
 		const terminal = file === "coding-session.ts" ? "recordCodingFailure(env, {" : 'stop = { reason: "failed"';
-		const decide = src.indexOf("driverResumePlan(");
-		expect(decide, `${file} never calls driverResumePlan`).toBeGreaterThan(-1);
+		const decide = src.indexOf(`${CONSUMERS[file].reads}(`);
+		expect(decide, `${file} never calls ${CONSUMERS[file].reads}`).toBeGreaterThan(-1);
 		expect(decide, `${file} writes "${terminal}" before it knows whether the run is resumed`).toBeLessThan(src.indexOf(terminal));
 	});
 
@@ -240,8 +248,15 @@ describe("no driver files a run as dead before deciding to resume it (#546)", ()
 		// Order alone is not enough: deciding first and then writing the same row regardless would
 		// satisfy the arm above and change nothing in production. The disposition has to reach the
 		// record, and it has to come from the plan — a literal would pass a naive `toContain`.
+		// Since #855 the two are two call sites, each certain of what it is: the interruption the round
+		// loop resumes files `resumed` from inside its bookkeeping step, and the terminal catch — which
+		// no resumable interruption reaches any more — files `ended`.
 		const src = readFileSync(join(DIR, "coding-session.ts"), "utf8");
-		expect(src).toContain('disposition: plan.resume ? "resumed" : "ended"');
+		const plan = src.slice(src.indexOf("planInterruptionResume(e, {"), src.indexOf("sleep: (label: string, ms: number)"));
+		expect(plan).toContain('disposition: "resumed"');
+		const terminal = src.slice(src.indexOf("} catch (e) {\n\t\t\t// A step exhausted"), src.indexOf("} finally {"));
+		expect(terminal).toContain('disposition: "ended"');
+		expect(terminal, "the terminal catch must not resume — a rethrow out of run() ends the instance").not.toContain("throw e;");
 	});
 
 	it("agent-loop's interruption is recorded as an interruption, at warn", () => {

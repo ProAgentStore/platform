@@ -306,6 +306,23 @@ export function codingFailureLevel(cls: CodingFailureClass): "error" | "warn" {
  */
 export const MAX_PLATFORM_RESUMES = 3;
 
+/**
+ * How long a coding run waits before retrying the round an interruption cut short (#855).
+ *
+ * The resume used to be "let the error escape `run()` and Cloudflare replays the journal". It does
+ * not: an error escaping a Workflow's `run()` ends the instance `errored`, and the run row sat in
+ * `waiting: platform_interrupt` — telling the owner it was "being resumed" — until the sweeper
+ * closed it. The retry now happens INSIDE the workflow, after a durable `step.sleep`, so it survives
+ * an eviction and has an instant to publish. Exponential from 30s — 30s, 1m, 2m for the three
+ * attempts {@link MAX_PLATFORM_RESUMES} allows — so a deploy storm or a provider blip has time to
+ * pass, and the whole ladder stays well inside the 15-minute park budget the sweeper enforces.
+ */
+export const INTERRUPT_BACKOFF_BASE_MS = 30_000;
+
+export function interruptBackoffMs(attempt: number): number {
+	return INTERRUPT_BACKOFF_BASE_MS * 2 ** Math.max(0, Math.min(attempt, MAX_PLATFORM_RESUMES) - 1);
+}
+
 export interface ResumeRule {
 	/** May a run that died this way be RESUMED, rather than ended? */
 	resume: boolean;

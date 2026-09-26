@@ -173,6 +173,18 @@ export function resumeNotice(cls: CodingFailureClass, why: string, attempt: numb
 }
 
 /**
+ * What the Pilot is told when the round an interruption cut short is retried (#855).
+ *
+ * Attributed to the PLATFORM (it rides `goal.resumeNote`, never `userHint`), and it says the one
+ * thing the Pilot cannot see: the instruction in flight may have landed. The engine kept working
+ * through the interruption — the incident's engine had finished its turn and was idle, waiting — so
+ * the right first move is to read the terminal, not to repeat the last instruction.
+ */
+export function interruptedRoundNote(why: string): string {
+	return `PLATFORM NOTE: your previous round was interrupted (${why}) and has been resumed. The engine may already have finished the instruction you last sent — read the terminal and continue from what it shows; do not repeat an instruction it has already carried out.`;
+}
+
+/**
  * Drop advice addressed to whoever OPERATES the Worker from a sentence addressed to its subscriber.
  *
  * "To configure this limit, refer to <wrangler docs>" is true, actionable and aimed at us: the

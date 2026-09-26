@@ -243,36 +243,33 @@ describe("the Pilot CONSUMES the verdict — the property #518 was written to pr
 	 */
 	const workflow = readFileSync(fileURLToPath(new URL("../workflows/coding-session.ts", import.meta.url).href), "utf8");
 
-	it("rethrows on a resume, so Cloudflare replays the journal", () => {
-		const branch = workflow.slice(workflow.indexOf("if (plan.resume) {"));
-		expect(branch.slice(0, branch.indexOf("\n\t\t\t}"))).toContain("throw e;");
+	it("resumes IN the workflow — the round is retried after a durable sleep, never rethrown for a replay (#855)", () => {
+		// The #855 defect: an error escaping `run()` ends a Workflow instance, it does not replay it. The
+		// round loop now runs each round through `roundThroughInterruptions`, whose waits are `step.sleep`.
+		expect(workflow).toContain("result = await roundThroughInterruptions(");
+		expect(workflow).toContain("sleep: (label: string, ms: number) => step.sleep(label, ms)");
+		const terminal = workflow.slice(workflow.indexOf("} catch (e) {\n\t\t\t// A step exhausted"), workflow.indexOf("} finally {"));
+		expect(terminal).not.toContain("throw e;");
 	});
 
-	it("skips the whole teardown while resuming, so the run is not torn down under the replay", () => {
-		// The one that matters most. Without it the `finally` ends the session, releases the driver
-		// claim, closes the board card and posts "**Loop stopped**" — and the replay then carries on
-		// working inside a run every surface has already reported as failed.
-		expect(workflow).toContain("if (!resuming) {");
-		const teardown = workflow.slice(workflow.indexOf("if (!resuming) {"));
+	it("the bookkeeping is one JOURNALLED step per interruption, so a replay cannot count it twice", () => {
+		expect(workflow).toMatch(/step\.do\(`interrupt-\$\{k\}`, \(\) =>/);
+		expect(workflow).toContain("planInterruptionResume(e, {");
+	});
+
+	it("the teardown is unconditional — a run that reaches the finally has ended", () => {
+		// `resuming` gated the teardown for a replay that never came; the retry now happens before the
+		// finally is reached, so nothing about an in-flight resume can pass through it.
+		expect(workflow).not.toMatch(/\bresuming\b/);
+		const teardown = workflow.slice(workflow.indexOf("} finally {"));
 		for (const terminal of ["repo-state-end", "acts-final-drain", 'step.do("end"', "notify-end", "closeDelegation(result)"]) {
-			expect(teardown, `${terminal} must sit inside the !resuming guard`).toContain(terminal);
+			expect(teardown, `${terminal} must be in the teardown`).toContain(terminal);
 		}
-		// …and nothing terminal sits BEFORE the guard, which is what the containment above assumes.
-		const before = workflow.slice(0, workflow.indexOf("if (!resuming) {"));
-		expect(before).not.toContain("closeDelegation(result)");
 	});
 
-	it("only the resume branch may set `resuming`", () => {
-		// A second writer would decouple "we decided to replay" from "we skipped the teardown",
-		// which is the pair this whole mechanism rests on.
-		expect(workflow.match(/\bresuming = true\b/g) ?? []).toHaveLength(1);
-	});
-
-	it("marks the run as WAITING while it is being replayed", () => {
-		// A replay has nothing ticking by design. Without this the run looks silent, and `isStalled`
-		// would report a recovery in progress as a death — the false stall #459 is about.
-		const branch = workflow.slice(workflow.indexOf("if (plan.resume) {"));
-		expect(branch.slice(0, branch.indexOf("\n\t\t\t}"))).toContain('reason: "platform_interrupt"');
+	it("marks the run as WAITING with the instant it retries — a SCHEDULED resume, not a claimed one", () => {
+		const helper = readFileSync(fileURLToPath(new URL("./coding-interrupt.ts", import.meta.url).href), "utf8");
+		expect(helper).toContain('{ reason: "platform_interrupt", until: at + delayMs }');
 	});
 });
 
