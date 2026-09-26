@@ -88,6 +88,12 @@ export async function addPairedRepo(
 		if (outcome.kind === "failed") return refuse(outcome.error);
 		verdict = await checkWorkdirVia(conn, localPath);
 	}
+	// A CLI with no checkout check cannot pair anything; its remedy is an update, not a second try (#853 finding 11).
+	if (verdict.outdatedRunner) {
+		return refuse(
+			`This machine's \`pags\` CLI is too old to check a checkout, so \`${localPath}\` cannot be verified. Call runner_update for this machine to update and restart it remotely, then add the repo again.`,
+		);
+	}
 	if (verdict.state !== "ok") return refuse(`Invalid local workdir: ${verdict.detail}`);
 	const remote = await callRunner<{ remote?: string | null }>(conn, "/coding/git-remote", { workDir: localPath }, { timeoutMs: READ_TIMEOUT_MS })
 		.then((r) => r.remote ?? null)

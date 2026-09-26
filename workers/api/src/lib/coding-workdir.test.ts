@@ -83,3 +83,20 @@ describe("verdictFromCheck — no verdict is not a bad verdict", () => {
 		expect(verdictFromCheck("~/dev/thing", { error: "boom" }).path).toBe("~/dev/thing");
 	});
 });
+
+// #853 finding 11: a CLI with no `/coding/repo-check` is the one `unverified` with a definite remedy.
+describe("verdictFromCheck — a runner too old to check says so (#853 finding 11)", () => {
+	it("a 404 from the runner marks the verdict as an outdated runner — still unverified, never broken", () => {
+		const v = verdictFromCheck("~/dev/x", { error: 'Runner /coding/repo-check → 404: {"error":"Not found"}' });
+		expect(v).toMatchObject({ state: "unverified", outdatedRunner: true });
+		expect(isWorkdirBroken(v)).toBe(false);
+	});
+
+	it("any other failure to check is not called outdated", () => {
+		for (const error of ["Runner /coding/repo-check → 504: timed out", "Runner relay is connected but not responding"]) {
+			expect(verdictFromCheck("~/dev/x", { error }).outdatedRunner).toBeUndefined();
+		}
+		expect(verdictFromCheck("~/dev/x", {}).outdatedRunner).toBeUndefined();
+	});
+});
+

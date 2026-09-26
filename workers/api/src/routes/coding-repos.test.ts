@@ -494,6 +494,31 @@ describe("POST /coding/repos requireGithub — a coding repo is stored with BOTH
 		expect(inserted(issued)).toBe(false);
 	});
 
+	it("a runner too old to check a checkout says to UPDATE it — naming runner_update, not \"could not be verified\" (#853 finding 11)", async () => {
+		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
+		callRunner.mockImplementation(async (_conn: unknown, path: string) => {
+			if (path === "/coding/repo-check") throw new Error('Runner /coding/repo-check → 404: {"error":"Not found"}');
+			return { remote: "https://github.com/o/r.git" };
+		});
+		const { status, body, issued } = await addRepo({ localPath: "~/dev/x", requireGithub: true });
+		expect(status).toBe(400);
+		expect(body.error).toMatch(/`pags` CLI is too old to check a checkout.*Call runner_update for this machine/);
+		expect(body.error).not.toMatch(/could not be verified/);
+		expect(inserted(issued)).toBe(false);
+	});
+
+	it("a check that merely failed (a timeout) still says it could not be verified — nothing claims the CLI is old", async () => {
+		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
+		callRunner.mockImplementation(async (_conn: unknown, path: string) => {
+			if (path === "/coding/repo-check") throw new Error("Runner /coding/repo-check → 504: timed out");
+			return { remote: "https://github.com/o/r.git" };
+		});
+		const { status, body } = await addRepo({ localPath: "~/dev/x", requireGithub: true });
+		expect(status).toBe(400);
+		expect(body.error).toMatch(/could not be verified/);
+		expect(body.error).not.toMatch(/too old/);
+	});
+
 	it("REFUSES when no machine is connected to verify either half", async () => {
 		const { status, body, issued } = await addRepo({ localPath: "~/dev/x", requireGithub: true });
 		expect(status).toBe(400);

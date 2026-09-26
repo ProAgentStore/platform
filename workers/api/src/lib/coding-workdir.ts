@@ -49,6 +49,11 @@ export interface WorkdirVerdict {
 	 * both true and actionable. Empty for `ok`.
 	 */
 	detail: string;
+	/**
+	 * `unverified` because the runner has no `/coding/repo-check` at all — a CLI older than #405 — rather
+	 * than because a check failed (#853 finding 11). The one `unverified` with a definite remedy: update it.
+	 */
+	outdatedRunner?: true;
 }
 
 /** Raw `/coding/repo-check` shape. Every field optional — an older runner sends none of them. */
@@ -82,6 +87,7 @@ export function verdictFromCheck(workDir: string, raw: unknown): WorkdirVerdict 
 			detail: r.error
 				? `The checkout could not be verified on the connected machine: ${r.error}`
 				: "The checkout could not be verified on the connected machine.",
+			...(r.error && /→ 404\b/.test(r.error) ? { outdatedRunner: true as const } : {}),
 		};
 	}
 	const path = r.path || workDir;
