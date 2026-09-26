@@ -560,8 +560,8 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 				createdAt: now,
 				updatedAt: now,
 			};
-			const { mirrorRuntimeTask } = await import("../routes/instances-runtime.js");
-			await mirrorRuntimeTask(ctx.env, ctx.instanceId, ctx.userId, task);
+			const { createTicketCard } = await import("./tickets.js"); // the one ticket-creation path (#757)
+			await createTicketCard(ctx.env, ctx.instanceId, ctx.userId, task, "agent");
 			return {
 				content: JSON.stringify({ ticketId: task.id, status: task.status, awaitingApproval: !!action }, null, 2),
 				success: true,

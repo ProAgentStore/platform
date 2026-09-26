@@ -281,6 +281,10 @@ function buildApp(opts: {
 	const writes: Write[] = [];
 	const owns = new Set((opts.owns ?? []).map(([i, u]) => `${i}::${u}`));
 	const DB = {
+		// The ticket's first stored run (#757) is written through `batch`.
+		async batch(stmts: Array<{ run: () => Promise<unknown> }>) {
+			return Promise.all(stmts.map((s) => s.run()));
+		},
 		prepare(sql: string) {
 			return {
 				// Bind-less .run() — reached by logEvent's opportunistic retention DELETE (#680).
@@ -313,6 +317,12 @@ function buildApp(opts: {
 								const [id, uid] = args as [string, string];
 								if (!owns.has(`${id}::${uid}`)) return null;
 								return mockRow({ instance_id: id, user_id: uid, runner_node: opts.defaultRuntimeNode ?? "" });
+							}
+							// The ticket card just mirrored is this tenant's own (#757's ownership check), and
+							// the ticket recorded for it reads back.
+							if (sql.startsWith("SELECT 1 AS ok FROM instance_runtime_tasks")) return { ok: 1 };
+							if (sql.includes("FROM tickets")) {
+								return { id: "tkt_1", instance_id: args[0], job_key: args[2], title: "t", description: "", created_by: "human", created_at: "" };
 							}
 							if (sql.includes("FROM instance_runtime_tasks")) {
 								return opts.mirroredTask ? { payload: JSON.stringify(opts.mirroredTask) } : null;

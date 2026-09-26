@@ -4484,6 +4484,38 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{instanceId}/board/items/{jobKey}/ticket:
+    post:
+      summary: Make a board card a first-class ticket
+      description: |
+        #757. The card gets a durable identity (`tickets`) and its current runs are stored as the ticket's
+        attempts (`ticket_runs`), so they survive being cleared and later runs keep attaching. Idempotent:
+        201 with `created:true` the first time, 200 with the SAME ticket after. The card's status, column
+        and actions are unchanged — a ticket's status is its card's. Only a card on THIS instance's own
+        board can be promoted (404 otherwise).
+      operationId: promoteBoardItem
+      tags: [Board]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: jobKey, in: path, required: true, description: The card's `jobKey` from the board (URL-encoded)., schema: { type: string } }
+      responses:
+        "200": { description: Already a ticket — the same one, `created:false` }
+        "201": { description: Promoted — `{ticket, created:true, attempts}` }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/tickets/{ticketId}:
+    get:
+      summary: One ticket and its stored runs
+      description: "#757. `{ticket, attempts}` — attempts newest first, each `{id, status, updatedAt}` as last observed. Owner-scoped: another owner's ticket is a 404."
+      operationId: getTicket
+      tags: [Board]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: ticketId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: The ticket and its attempts }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/board/items/{jobKey}/github-issue:
     put:
       summary: Link or unlink a board card to a GitHub issue

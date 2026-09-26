@@ -110,17 +110,29 @@ describe("tool registry", () => {
 
 describe("create_ticket — non-actionable attention", () => {
 	it("persists a needs-human ticket without turning it into an approval action", async () => {
-		const writes: unknown[][] = [];
+		const writes: Array<{ sql: string; args: unknown[] }> = [];
 		const env = {
 			DB: {
-				prepare: () => ({
+				prepare: (sql: string) => ({
 					bind: (...args: unknown[]) => ({
+						sql,
+						args,
 						run: async () => {
-							writes.push(args);
-							return { success: true };
+							writes.push({ sql, args });
+							return { success: true, meta: { changes: 1 } };
 						},
+						first: async () =>
+							sql.startsWith("SELECT 1 AS ok FROM instance_runtime_tasks")
+								? { ok: 1 } // the card just written is this tenant's own
+								: sql.startsWith("SELECT id, instance_id, job_key")
+									? { id: "tkt_1", instance_id: "i1", job_key: args[2], title: "t", description: "", created_by: "agent", created_at: "" }
+									: null,
 					}),
 				}),
+				batch: async (stmts: Array<{ sql: string; args: unknown[] }>) => {
+					for (const s of stmts) writes.push({ sql: s.sql, args: s.args });
+					return [];
+				},
 			},
 		} as unknown as Env;
 		const result = await runRegistryTool("create_ticket", { env, userId: "u1", instanceId: "i1" }, {
@@ -130,8 +142,14 @@ describe("create_ticket — non-actionable attention", () => {
 		});
 		expect(result.success).toBe(true);
 		expect(JSON.parse(result.content)).toMatchObject({ status: "needs_human", awaitingApproval: false });
-		expect(writes).toHaveLength(1);
-		expect(writes[0][4]).toBe("needs_human");
+		const card = writes.filter((w) => w.sql.includes("INSERT INTO instance_runtime_tasks"));
+		expect(card).toHaveLength(1);
+		expect(card[0].args[4]).toBe("needs_human");
+		// The same card is a first-class ticket (#757), created by the agent, holding the card as its first run.
+		const ticket = writes.find((w) => w.sql.includes("INSERT INTO tickets"));
+		expect(ticket?.args.slice(1, 4)).toEqual(["i1", "u1", card[0].args[0]]);
+		expect(ticket?.args[6]).toBe("agent");
+		expect(writes.find((w) => w.sql.includes("INSERT INTO ticket_runs"))?.args.slice(0, 2)).toEqual(["tkt_1", card[0].args[0]]);
 	});
 });
 

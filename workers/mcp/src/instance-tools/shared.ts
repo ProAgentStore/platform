@@ -96,7 +96,7 @@ export function normalizeTriggerConfig(
 }
 
 export interface BoardColumn { id: string; title: string; statuses?: string[]; catchAll?: boolean }
-export interface BoardItem { jobKey: string; title: string; subtitle?: string; description?: string; reasoning?: string; status: string; runStatus?: string; userStatus?: string | null; url?: string; attempts?: unknown[]; latestTaskId?: string; updatedAt?: string; sessionEnded?: boolean }
+export interface BoardItem { jobKey: string; title: string; subtitle?: string; description?: string; reasoning?: string; status: string; runStatus?: string; userStatus?: string | null; url?: string; attempts?: unknown[]; latestTaskId?: string; updatedAt?: string; sessionEnded?: boolean; ticketId?: string }
 
 /**
  * CANONICAL SOURCE: `workers/api/src/lib/agent-capabilities.ts` `columnForStatus`.
@@ -158,6 +158,9 @@ export function groupBoard(data: unknown, opts?: { reasoning?: boolean; offset?:
 			// The card is keyed on a coding session that is OVER, so its takeover is not available.
 			// Emitted only when true — absence must never have to be read as "the session is fine".
 			sessionEnded: it.sessionEnded ? true : undefined,
+			// A first-class ticket (#757): its runs are stored as its history. Absent for a card that
+			// is still only a grouping of runs — promote_board_item makes it one.
+			ticketId: it.ticketId || undefined,
 		};
 		const colId = columnFor(cols, String(it.status ?? ""));
 		const title = colId ? (cols.find((c) => c.id === colId)?.title ?? colId) : "Other";
@@ -190,7 +193,7 @@ export function groupBoard(data: unknown, opts?: { reasoning?: boolean; offset?:
 		// upserted row per session however many runs drove it, and the count was pinned at 1 on all
 		// 83 measured cards while one of them had nine runs and a failure behind it. The API now
 		// joins the runs at read time, so the sentence is true for both card families.
-		note: "One card per job (retries of the same job collapse into one; `attempts` = the runs behind it). `updatedAt` is when the card last moved. `moved:true` means a human set the status. `sessionEnded:true` means the coding session is over, so there is nothing left to take over. `detail` describes the run the card is ABOUT, so it can never contradict the column; where the runs behind it ended differently it leads with the count (`9 runs: 8 completed, 1 failed`). Failed = the run couldn't finish; Blocked = the agent stopped needing you. `board` is a PAGE of the cards — `jobCount` and `columns` describe the whole board, so a column missing from `board` may simply have no card in this page; continue with `offset: page.nextOffset` while `page.hasMore`.",
+		note: "One card per job (retries of the same job collapse into one; `attempts` = the runs behind it). `updatedAt` is when the card last moved. `moved:true` means a human set the status. `sessionEnded:true` means the coding session is over, so there is nothing left to take over. `ticketId` means the card is a first-class ticket whose runs are stored as its history (promote_board_item makes one). `detail` describes the run the card is ABOUT, so it can never contradict the column; where the runs behind it ended differently it leads with the count (`9 runs: 8 completed, 1 failed`). Failed = the run couldn't finish; Blocked = the agent stopped needing you. `board` is a PAGE of the cards — `jobCount` and `columns` describe the whole board, so a column missing from `board` may simply have no card in this page; continue with `offset: page.nextOffset` while `page.hasMore`.",
 	});
 	const fitted = fitPage({
 		rows: placed,

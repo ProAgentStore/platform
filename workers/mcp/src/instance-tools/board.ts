@@ -135,6 +135,29 @@ export function registerBoardTools(server: McpServer, ctx: InstanceToolsCtx): vo
 	);
 
 	server.tool(
+		"promote_board_item",
+		"Make a board card a first-class ticket (#757): its runs are then stored as the ticket's history instead of disappearing when they are cleared, and the card keeps its identity with no run behind it. Address the card by `job_key` from instance_board. Idempotent — promoting a card that already is a ticket returns the same ticket (`created:false`). Changes nothing else: the card's column, actions and approvals are exactly as before. A card created by create_ticket is already a ticket.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			job_key: z.string().describe("The card's jobKey from instance_board"),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, job_key, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, job_key };
+			const denied = await requirePermission(safetyFor(token), "write", "promote_board_item", input);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${instance_id}/board/items/${encodeURIComponent(job_key)}/ticket`;
+			if (dry_run) return dryRun(safetyFor(token), "promote_board_item", "make board card a ticket", input, { endpoint, method: "POST" });
+			const data = await authedCall(endpoint, sessionToken, { method: "POST" }, env);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "promote_board_item", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
 		"update_board_ticket",
 		"Amend an existing board ticket's WORDING — its title, description and/or reasoning (PAS #137). Address the card by `job_key` from instance_board, the same key set_board_item_status takes. Only the fields you pass change: omit one and it is left alone, pass \"\" to clear it. Everything else about the ticket — its column, its declared action, when it was created — is untouched. To MOVE a card between columns use set_board_item_status; this tool never changes status. Use it to correct a ticket filed with wrong or imprecise wording instead of filing a second, corrected one.",
 		{

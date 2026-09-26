@@ -427,6 +427,7 @@ const TABLE: Record<string, Row> = {
 	set_agent_state: ["agentAuthoring", "destructive", "set_agent_state", "envelope", "agent_id,confirm,dry_run,state,token"],
 	set_agent_stats_schema: ["stats", "write", null, "envelope", "agent_id,cards,dry_run,token"],
 	set_board_item_status: ["board", "write", null, "envelope", "dry_run,instance_id,job_key,status,token"],
+	promote_board_item: ["board", "write", null, "envelope", "dry_run,instance_id,job_key,token"],
 	// No `dry_run` on either pause (#667), and that is a decision recorded in composition.ts:
 	// the call is fully determined by one id and one boolean, so a preview could only echo the id
 	// back with less information than `list_connections`/`list_supervision` already give. `write`

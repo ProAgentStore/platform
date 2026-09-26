@@ -30,6 +30,7 @@ import { executeTriggerAction } from "../lib/triggers.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
 import { readInstanceConfig } from "./instances-apply.js";
 import { touchInstanceActivity } from "../lib/instance-config.js";
+import { createTicketCard } from "../lib/tickets.js";
 import { sqlTime } from "../lib/sql-time.js";
 import {
 	callRuntime,
@@ -449,8 +450,7 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 			createdAt: now,
 			updatedAt: now,
 		};
-		await mirrorRuntimeTask(c.env, instanceId, session.uid, task);
-		return c.json(task, 201);
+		return c.json({ ...task, ticketId: (await createTicketCard(c.env, instanceId, session.uid, task, "human")).id }, 201); // one creation path (#757)
 	});
 
 	/**

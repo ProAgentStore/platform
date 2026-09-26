@@ -86,7 +86,7 @@ src/
 │                     takeover controls (#613)
     ├── knowledge.ts      12 tools — documents (incl. in-place edit + URL ingest, #613), files, vectors, memory
     ├── observability.ts  13 tools — messages, activity, errors (flat + grouped), trace, pipeline runs, feedback (incl. file + delete, #613), single-turn deletion
-    ├── board.ts          9 tools — the board, its columns, the per-ticket thread (#150)
+    ├── board.ts          10 tools — the board, its columns, the per-ticket thread (#150), card→ticket promotion (#757)
 ├── agent-tasks.ts    4 tools — the agent's OWN standing tasks: DO state rendered into its
 │                     prompt, deliberately not the board above (#613)
 ├── agent-authoring.ts 15 tools — an agent TEMPLATE read and written as its OWNER: the row
@@ -116,13 +116,13 @@ src/
                           surfaces:["coding"]) + 5 loop tools (3 run + 2 objective queue)
 ```
 
-**238 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
+**239 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
 `coding-tools.ts` and 2 in `coding-engine-tools.ts` — all fifteen behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 188 across `instance-tools/`. 212 are always registered; 26 are
+`storage-tools.ts`, and 189 across `instance-tools/`. 213 are always registered; 26 are
 surface-gated (apply=4, repo=3, coding=19).
 
 Those five numbers ADD UP to the headline, and that is the point of stating them: 21 + 13
-+ 2 + 14 + 188 = 238. They said 88 until #602, which made the paragraph sum to 132 — a total the
++ 2 + 14 + 189 = 239. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added

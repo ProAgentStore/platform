@@ -12,6 +12,7 @@ import { patchInstanceConfig, removeInstanceConfigKey } from "./instance-config.
 import { readIssue, type IssueSummary } from "./github-issues.js";
 import { sqlLiteralList } from "./sql.js";
 import { TICKET_ANSWER_EVENT, TICKET_QUESTION_EVENT } from "./ticket-chat.js";
+import { attachTicketRuns, overlayTickets, ticketsForInstance } from "./tickets.js";
 
 /** How the board can be viewed in the console. Persisted per-instance so the choice
  *  follows the user across devices and is settable via UI, MCP, and the agent itself. */
@@ -121,6 +122,12 @@ export interface BoardItemView {
 	 * the board.
 	 */
 	githubIssue?: GithubIssueProjection;
+	/**
+	 * The first-class ticket this card is (#757), when it has been promoted or was created as one.
+	 * Present means `attempts` includes the ticket's STORED runs, so it no longer shrinks when runs
+	 * are cleared. Absent means the card is still only a grouping of its runs.
+	 */
+	ticketId?: string;
 }
 
 /** The cached GitHub issue fields a board card stores and displays (#682). */
@@ -177,6 +184,8 @@ interface RawTask {
 	output?: Record<string, unknown>;
 	createdAt?: string;
 	updatedAt?: string;
+	/** The first-class ticket this run belongs to, when whoever dispatched it said so (#757). */
+	ticketId?: string;
 }
 
 /** Friendly names for the platform's own task types, so a card never shows a raw
@@ -334,7 +343,7 @@ function serializeIssueCache(issue: IssueSummary): string {
 
 /** Build the instance's single work board: configured columns + one card per job. */
 export async function buildInstanceBoard(env: Env, instanceId: string, userId: string): Promise<InstanceBoard> {
-	const [tasks, overlayRows, boardCfg, threadRows] = await Promise.all([
+	const [tasks, overlayRows, boardCfg, threadRows, storedTickets] = await Promise.all([
 		mirroredRuntimeTasks(env, instanceId, userId, BOARD_TASK_LIMIT),
 		env.DB.prepare("SELECT job_key, user_status, title, subtitle, url, updated_at, github_issue_number, github_issue_cache FROM board_items WHERE instance_id = ?1 AND user_id = ?2")
 			.bind(instanceId, userId)
@@ -350,6 +359,7 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 		)
 			.bind(instanceId, userId)
 			.all<{ task_id: string | null; n: number }>(),
+		ticketsForInstance(env, instanceId, userId),
 	]);
 	const { columns, view } = boardCfg;
 
@@ -457,6 +467,49 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 			...(githubIssue ? { githubIssue } : {}),
 		});
 	}
+
+	// First-class tickets (#757): stored runs join their card, and a ticket whose card has no runs left
+	// still shows. What changed since last read is written back — nothing, on an ordinary poll.
+	const tickets = overlayTickets(
+		[...byKey].map(([jobKey, arr]) => ({
+			jobKey,
+			attempts: arr.map((t) => ({ id: String(t.id ?? ""), status: String(t.status ?? ""), updatedAt: t.updatedAt || t.createdAt || "", ...(typeof t.ticketId === "string" ? { ticketId: t.ticketId } : {}) })),
+		})),
+		storedTickets,
+	);
+	const withStored = (item: BoardItemView, ticketId: string, stored: BoardAttempt[]) => {
+		const seen = new Set(item.attempts.map((a) => a.id));
+		item.ticketId = ticketId;
+		item.attempts = [...item.attempts, ...stored.filter((a) => !seen.has(a.id))];
+	};
+	for (const item of items) {
+		const t = tickets.byJobKey.get(item.jobKey);
+		if (t) withStored(item, t.ticketId, t.attempts);
+	}
+	for (const { ticket, attempts } of tickets.standalone) {
+		const moved = items.find((i) => i.jobKey === ticket.jobKey);
+		if (moved) {
+			withStored(moved, ticket.id, attempts);
+			continue;
+		}
+		const latest = attempts[0];
+		items.push({
+			jobKey: ticket.jobKey,
+			latestTaskId: latest?.id ?? "",
+			threadTurns: latest ? (threadTurnsByTask.get(latest.id) ?? 0) : 0,
+			title: ticket.title,
+			subtitle: "",
+			description: ticket.description,
+			url: "",
+			runStatus: latest?.status ?? "",
+			userStatus: null,
+			status: latest?.status ?? "",
+			attempts,
+			updatedAt: latest?.updatedAt || ticket.createdAt,
+			ticketId: ticket.id,
+		});
+	}
+	if (tickets.attach.length) await attachTicketRuns(env, instanceId, userId, tickets.attach).catch(() => undefined);
 
 	items.sort((a, b) => Date.parse(b.updatedAt || "") - Date.parse(a.updatedAt || ""));
 

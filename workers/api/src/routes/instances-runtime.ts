@@ -252,7 +252,7 @@ export async function mirrorRuntimeTask(
        type = excluded.type,
        status = excluded.status,
        payload = excluded.payload,
-       updated_at = excluded.updated_at`,
+       updated_at = excluded.updated_at WHERE instance_runtime_tasks.instance_id = excluded.instance_id AND instance_runtime_tasks.user_id = excluded.user_id`,
 	)
 		.bind(id, instanceId, userId, type, status, safeJsonStringify(task), createdAt, updatedAt)
 		.run();

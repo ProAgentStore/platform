@@ -265,6 +265,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	set_agent_settings_schema: "write",
 	set_agent_stats_schema: "write",
 	set_board_item_status: "write",
+	promote_board_item: "write", // #757 — makes a card a first-class ticket; idempotent
 	set_budget_limits: "write",
 	set_connection_enabled: "write",
 	set_instance_board_config: "write",
@@ -561,7 +562,7 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// would put RESUME behind a scope the caller may not hold, which is the wrong failure mode for
 	// a safety toggle (the reasoning `set_instance_connector_consent` already records). Not `read`
 	// either: switching an agent off is a real change.
-	write: 68,
+	write: 69, // +1 at #757: promote_board_item
 	// +1 runtime at #806: `continue_instance_run`. `runtime` rather than `write` for the reason
 	// `start_instance_loop` is — it starts an autonomous run that spends on its own — and the
 	// two must agree, because a caller holding the scope to start one holding a narrower one to

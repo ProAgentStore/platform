@@ -306,6 +306,7 @@ const READBACK: Record<string, string | null> = {
 
 	// ── board ──
 	"set_board_item_status.status": "instance_board",
+	"promote_board_item.job_key": "instance_board", // read back as the card's `ticketId` (#757)
 	"set_instance_board_config.columns": "get_instance_board_config",
 	"set_instance_board_config.view": "get_instance_board_config",
 	"update_agent_board_config.config": "get_agent_board_config",

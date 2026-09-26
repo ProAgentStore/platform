@@ -44,6 +44,8 @@ interface BoardItem {
 	updatedAt: string;
 	/** Turns in this ticket's conversation (#150). Older servers omit it — treat as 0. */
 	threadTurns?: number;
+	/** Set when this card is a first-class ticket (#757): its runs are stored, not just grouped. */
+	ticketId?: string;
 }
 
 export default function BoardTab({ instanceId, apply }: { instanceId: string; apply?: boolean }) {
@@ -161,6 +163,16 @@ export default function BoardTab({ instanceId, apply }: { instanceId: string; ap
 
 	// Approve a task waiting for approval (generic runner tasks that require a human
 	// OK before they run, e.g. browser.open). Acts on the job's latest task.
+	// Make a card a first-class ticket (#757). Idempotent on the server, so a double click is harmless.
+	const handlePromote = async (item: BoardItem) => {
+		try {
+			await api(`/v1/instances/${instanceId}/board/items/${encodeURIComponent(item.jobKey)}/ticket`, { method: "POST" });
+			await loadBoard();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : "Could not make this card a ticket");
+		}
+	};
+
 	const handleApprove = async (item: BoardItem) => {
 		if (!item.latestTaskId) return;
 		try {
@@ -227,6 +239,7 @@ export default function BoardTab({ instanceId, apply }: { instanceId: string; ap
 		onApprove: item.status === "needs_approval" ? () => handleApprove(item) : undefined,
 		retrying: retrying.has(item.jobKey),
 		onDelete: () => handleDeleteItem(item),
+		onPromote: item.ticketId ? undefined : () => handlePromote(item),
 	});
 
 	return (
@@ -373,7 +386,7 @@ function AskButton({ turns, onAsk, className = "" }: { turns: number; onAsk: () 
 	);
 }
 
-function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove, onRetry, onApprove, retrying, onDelete }: {
+function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove, onRetry, onApprove, retrying, onDelete, onPromote }: {
 	item: BoardItem;
 	cols: BoardColumn[];
 	expanded: boolean;
@@ -385,6 +398,8 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMov
 	onApprove?: () => void;
 	retrying?: boolean;
 	onDelete: () => void;
+	/** Absent when the card already is a ticket (#757). */
+	onPromote?: () => void;
 }) {
 	const isFinished = ["completed", "cancelled", "failed", "blocked", "expired", "rejected"].includes(item.status);
 	// A moved card whose runs are gone stands alone — no run to open.
@@ -417,6 +432,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMov
 				<div className="flex gap-1.5 flex-wrap items-center text-2xs">
 					<span className={`px-1.5 py-0.5 rounded font-medium ${statusClass(item.status)}`}>{item.status}</span>
 					{item.userStatus && <span className="text-muted-soft" title={`Automation: ${item.runStatus}`}>moved</span>}
+					{item.ticketId && <span className="px-1.5 py-0.5 rounded border border-line text-muted" title="A first-class ticket: its runs are kept as its history">ticket</span>}
 					{item.updatedAt && <span className="text-muted-soft">{formatTime(item.updatedAt)}</span>}
 				</div>
 			</button>
@@ -425,6 +441,16 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMov
 			    that Approve + Retry + the column select already filled it. */}
 			<div className="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-line/60">
 				{openable && <AskButton turns={item.threadTurns ?? 0} onAsk={() => onAsk(item.latestTaskId)} />}
+				{onPromote && (
+					<Button
+						size="sm"
+						variant="ghost"
+						onClick={(e) => { e.stopPropagation(); onPromote(); }}
+						title="Keep this card as a ticket — its runs are stored as its history instead of disappearing when they are cleared"
+					>
+						Make ticket
+					</Button>
+				)}
 				{onApprove && (
 					<button
 						type="button"
@@ -490,7 +516,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMov
 }
 
 /** A compact one-line row for the List view — same actions as the Kanban card. */
-function ListRow({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove, onRetry, onApprove, retrying, onDelete }: {
+function ListRow({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove, onRetry, onApprove, retrying, onDelete, onPromote }: {
 	item: BoardItem;
 	cols: BoardColumn[];
 	expanded: boolean;
@@ -502,6 +528,8 @@ function ListRow({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove
 	onApprove?: () => void;
 	retrying?: boolean;
 	onDelete: () => void;
+	/** Absent when the card already is a ticket (#757). */
+	onPromote?: () => void;
 }) {
 	const isFinished = ["completed", "cancelled", "failed", "blocked", "expired", "rejected"].includes(item.status);
 	const openable = !!item.latestTaskId;
@@ -519,8 +547,12 @@ function ListRow({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove
 				</button>
 				<span className={`shrink-0 px-1.5 py-0.5 rounded text-2xs font-medium ${statusClass(item.status)}`}>{item.status}</span>
 				{item.userStatus && <span className="shrink-0 text-2xs text-muted-soft hidden sm:inline" title={`Automation: ${item.runStatus}`}>moved</span>}
+				{item.ticketId && <span className="shrink-0 text-2xs px-1.5 py-0.5 rounded border border-line text-muted hidden sm:inline" title="A first-class ticket: its runs are kept as its history">ticket</span>}
 				{item.updatedAt && <span className="shrink-0 text-2xs text-muted-soft hidden md:inline">{formatTime(item.updatedAt)}</span>}
 				{openable && <AskButton turns={item.threadTurns ?? 0} onAsk={() => onAsk(item.latestTaskId)} className="shrink-0" />}
+				{onPromote && (
+					<Button size="sm" variant="ghost" className="shrink-0" onClick={onPromote} title="Keep this card as a ticket — its runs are stored as its history">Make ticket</Button>
+				)}
 				{onApprove && (
 					<button type="button" onClick={onApprove} className="shrink-0 text-2xs px-2 py-1 rounded border border-success-line text-success hover:bg-success-soft font-bold" title="Approve this task to run">Approve</button>
 				)}

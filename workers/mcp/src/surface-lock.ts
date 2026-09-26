@@ -933,4 +933,7 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// gated unchanged. `runner_update` updates a machine's `pags` CLI and restarts it in place, waiting
 	// for busy engines and re-attaching every agent it held. Appended, never edited in place: 0.1.62 is published.
 	"0.1.63": "sha256:004f208b2f3bc77968ead4a1fd074d8068a3a22c4ef797b80df1eb102919f541",
+	// 0.1.64 (#757): one new always-on `write` tool — 238 → 239, always-on 212 → 213. `promote_board_item`
+	// makes a board card a first-class ticket (idempotent). Appended, never edited in place: 0.1.63 is published.
+	"0.1.64": "sha256:08c906cafd8a3dbef3a772b923ecdd08fe803dd8acc1873b64cd86d5e840c41f",
 };
