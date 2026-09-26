@@ -9,7 +9,7 @@ import { listActiveRuns } from "../lib/agent-loop-store.js";
 import { runLiveness, runLivenessUnavailable } from "../lib/instance-run-liveness.js";
 import { resolveGithubAccess } from "../lib/github-app.js";
 import { parseGithubUrl, type RepoAuthContext } from "../lib/repo-ingest.js";
-import { BRAIN_MODELS, isWorkersAiModel } from "../lib/brain-models.js";
+import { BRAIN_MODELS, brainModel, isWorkersAiModel } from "../lib/brain-models.js";
 import { TOOL_CAPABLE_MODELS } from "../agent-do-prompt.js";
 import type { Env } from "../types.js";
 
@@ -505,11 +505,19 @@ instanceStorageRoutes.get("/:id/state", async (c) => {
  * Why an instance cannot take `model` as its brain (#852), or null when it can: it must call tools
  * (a brain that cannot confabulates instead), and a Workers AI pick needs Cloudflare credentials —
  * without them the pick could never run, and the chat would quietly stay on the other provider.
+ *
+ * It must also be IN the brain catalogue (#853 finding 7). Calling tools is not enough: the Anthropic
+ * brain always runs claude-sonnet-4-6, so a Haiku or Opus pick was accepted and ran — and billed —
+ * Sonnet under another name, and a Workers AI model outside the catalogue never had #851's parity.
  */
 async function brainModelRefusal(env: Env, uid: string, model: unknown): Promise<string | null> {
 	const options = BRAIN_MODELS.map((m) => `${m.id} (${m.hint})`).join("; ");
 	if (typeof model !== "string" || !model.trim()) return `A model id is required. Brain models: ${options}.`;
 	if (!TOOL_CAPABLE_MODELS.has(model)) return `${model} cannot call tools, so it cannot run this agent's brain. Brain models: ${options}.`;
+	if (!brainModel(model)) {
+		const sonnet = model.startsWith("claude-") ? " The Anthropic brain always runs claude-sonnet-4-6, so this pick would run Sonnet, not the model named." : "";
+		return `${model} is not a brain model.${sonnet} Brain models: ${options}.`;
+	}
 	if (!isWorkersAiModel(model)) return null;
 	const cf = await env.DB.prepare("SELECT 1 FROM user_api_keys WHERE user_id = ?1 AND provider = 'cloudflare'").bind(uid).first();
 	return cf ? null : `${model} runs on Cloudflare Workers AI, and no Cloudflare credentials are stored. Add your Cloudflare account ID and API token in Profile → API Keys, then pick it again.`;

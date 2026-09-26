@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
+import { TOOL_CAPABLE_MODELS } from "../agent-do-prompt.js";
 import { HttpError } from "../lib/auth.js";
+import { BRAIN_MODELS, brainModel } from "../lib/brain-models.js";
 import { signSession } from "../lib/session.js";
 import { instanceStorageRoutes, storageRoutes } from "./storage.js";
 import type { Env } from "../types.js";
@@ -374,6 +376,39 @@ describe("instance storage routes (owner-scoped, different D1 table)", () => {
 			expect(String(body.error)).toMatch(/cannot call tools/);
 			expect(String(body.error)).toContain("code-optimized");
 			expect(sent).toBeUndefined();
+		});
+
+		it("forwards every model in the brain catalogue — the Cloudflare ones given credentials", async () => {
+			for (const { id } of BRAIN_MODELS) {
+				const { status, sent } = await put(id, {}, ["u1"]);
+				expect(status).toBe(200);
+				expect(sent).toEqual({ model: id, modelChosen: true });
+			}
+		});
+
+		// #853 finding 7: these call tools but are not brain models. The Anthropic brain always runs
+		// claude-sonnet-4-6, so accepting a Haiku or Opus id billed and ran Sonnet under another name.
+		it("refuses a tool-capable Claude model outside the catalogue, saying the Anthropic brain runs Sonnet 4.6 — nothing stored (#853)", async () => {
+			for (const model of ["claude-haiku-4-5", "claude-opus-4-6", "claude-sonnet-4-5-20250514"]) {
+				const { status, body, sent } = await put(model, {}, ["u1"]);
+				expect(status).toBe(400);
+				expect(String(body.error)).toMatch(new RegExp(`^${model} is not a brain model`));
+				expect(String(body.error)).toMatch(/Anthropic brain always runs claude-sonnet-4-6/);
+				expect(String(body.error)).toContain("code-optimized");
+				expect(sent).toBeUndefined();
+			}
+		});
+
+		it("refuses a tool-capable Workers AI model outside the catalogue, even with Cloudflare credentials — nothing stored (#853)", async () => {
+			const offCatalogue = [...TOOL_CAPABLE_MODELS].filter((m) => m.startsWith("@cf/") && !brainModel(m));
+			expect(offCatalogue).toContain("@cf/mistralai/mistral-small-3.1-24b-instruct");
+			for (const model of offCatalogue) {
+				const { status, body, sent } = await put(model, {}, ["u1"]);
+				expect(status).toBe(400);
+				expect(String(body.error)).toMatch(new RegExp(`^${model.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")} is not a brain model`));
+				expect(String(body.error)).not.toMatch(/Sonnet/);
+				expect(sent).toBeUndefined();
+			}
 		});
 
 		it("never lets a caller mark a model chosen by itself", async () => {
