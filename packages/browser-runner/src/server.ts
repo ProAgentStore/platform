@@ -403,6 +403,16 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 			return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
 		}
 	}
+	// Background cold-start clones (#858): start (or join) one, and read it back. An older runner 404s
+	// both, and the cloud falls back to the synchronous `/coding/clone` below.
+	if (req.method === "POST" && (path === "/coding/clone-start" || path === "/coding/clone-status")) {
+		const b = await readJson<{ workDir?: string; slug?: string; protocol?: "auto" | "https" | "ssh" }>(req);
+		try {
+			return json(res, 200, path === "/coding/clone-start" ? runner.coding.startClone(b) : runner.coding.cloneStatus(b));
+		} catch (e: unknown) {
+			return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
+		}
+	}
 	// Clone into an absent or empty owner folder (#857) — the cold-start half of `coding_repo_add`.
 	// An older runner 404s this, and the cloud says the CLI must be updated rather than guessing.
 	if (req.method === "POST" && path === "/coding/clone") {

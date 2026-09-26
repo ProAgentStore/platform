@@ -439,15 +439,19 @@ export function registerCodingSessionTools(
 
 	server.tool(
 		"coding_repo_add",
-		"Add a repo to a coding instance. A coding repo is BOTH a local checkout the engine runs in AND its GitHub identity, set together in this one call: `path` is the checkout's folder on the connected machine (~/dev/...), and its GitHub owner/repo is read from that checkout's `origin` — pass `github_repo` to assert which repo it must be. Refused, with nothing stored, when either half is missing: an owner/repo or URL with no local folder, a folder that is not a checkout, or a checkout whose origin is not a GitHub repo. The machine must be connected (`pags up`) so the folder can be verified. COLD START: with `clone: true` and `github_repo`, a `path` that does not exist yet (or is an empty folder) is first cloned there on the connected machine, using that machine's own git credentials, and then bound through the same checks — so a fresh instance needs no terminal step. Without `clone`, a missing folder is refused as always; a folder that already exists is never cloned into.",
+		"Add a repo to a coding instance. A coding repo is BOTH a local checkout the engine runs in AND its GitHub identity, set together in this one call: `path` is the checkout's folder on the connected machine (~/dev/...), and its GitHub owner/repo is read from that checkout's `origin` — pass `github_repo` to assert which repo it must be. Refused, with nothing stored, when either half is missing: an owner/repo or URL with no local folder, a folder that is not a checkout, or a checkout whose origin is not a GitHub repo. The machine must be connected (`pags up`) so the folder can be verified. COLD START: with `clone: true` and `github_repo`, a `path` that does not exist yet (or is an empty folder) is first cloned there on the connected machine, using that machine's own git credentials, and then bound through the same checks — so a fresh instance needs no terminal step. Credentials: https first (the machine's credential helper, e.g. `gh auth login`); if that is refused and the machine has an SSH key github.com accepts, it clones over SSH — `clone_protocol` pins one. LONG CLONES run in the background on the machine: if one is still running after ~45s the reply is `{cloning: true, job, detail}` with NOTHING stored yet — call coding_repo_add again with the same arguments to join that same clone (never a second one) and bind it once it finishes. Without `clone`, a missing folder is refused as always; a folder that already exists is never cloned into.",
 		{
 			instance_id: z.string().describe("Instance ID"),
 			path: z.string().describe("Local folder of the checkout on the connected machine (~/dev/my-repo or an absolute path)"),
 			github_repo: z.string().optional().describe("GitHub owner/repo the checkout must be. Omit to take it from the checkout's origin remote. Required with clone."),
 			clone: z.boolean().optional().describe("Opt in to cloning github_repo into path when path does not exist yet or is empty (#857). Default false. Never clones into a folder that has anything in it."),
+			clone_protocol: z
+				.enum(["auto", "https", "ssh"])
+				.optional()
+				.describe("How the machine authenticates the clone (#858): auto (default) tries https, then SSH if https is refused and the machine has a key github.com accepts; https or ssh uses only that."),
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 		},
-		async ({ instance_id, path, github_repo, clone, token }) => {
+		async ({ instance_id, path, github_repo, clone, clone_protocol, token }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const denied = await requirePermission(safetyFor(token), "write", "coding_repo_add", { instance_id, path, github_repo, clone });
@@ -465,7 +469,8 @@ export function registerCodingSessionTools(
 				return text(`Error: github_repo must be a GitHub owner/repo (e.g. acme/widgets), got \`${githubRepo}\`.`);
 			}
 			if (clone === true && !githubRepo) return text("Error: clone needs github_repo — which GitHub repository to clone into `path`.");
-			const body = { localPath, requireGithub: true, ...(githubRepo ? { githubRepo } : {}), ...(clone === true ? { clone: true } : {}) };
+			const transport = clone_protocol && clone_protocol !== "auto" ? { cloneProtocol: clone_protocol } : {};
+			const body = { localPath, requireGithub: true, ...(githubRepo ? { githubRepo } : {}), ...(clone === true ? { clone: true, ...transport } : {}) };
 			const r = await authedCall(`/v1/instances/${instance_id}/coding/repos`, sessionToken, { method: "POST", body: JSON.stringify(body) }, env);
 			await audit(safetyFor(token), { tool: "coding_repo_add", action: "completed", input: { instance_id, path, github_repo, clone: clone === true } });
 			return jsonText(r);

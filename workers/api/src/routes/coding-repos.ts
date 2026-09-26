@@ -276,7 +276,7 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		// Both halves in one call (#849): MCP's `coding_repo_add` sends this, and a coding binding
 		// made that way is either complete — a verified checkout AND its GitHub identity — or not
 		// stored at all. The console's separate local/clone adds below are unchanged.
-		if (body.requireGithub === true) return addPairedRepo(c, instanceId, uid, name, localPath, githubRepoIn, body.clone === true);
+		if (body.requireGithub === true) return addPairedRepo(c, instanceId, uid, name, localPath, githubRepoIn, body.clone === true, body.cloneProtocol === "https" || body.cloneProtocol === "ssh" ? body.cloneProtocol : "auto");
 		if (localPath) {
 			const created = await createRepo(c.env, instanceId, uid, {
 				// A bare folder name ("platform") is ambiguous — default to the last two

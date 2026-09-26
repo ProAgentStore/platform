@@ -104,3 +104,25 @@ describe("coding_repo_add — cold start: clone is opt-in (#857)", () => {
 		expect(posts(calls)).toHaveLength(0);
 	});
 });
+
+describe("coding_repo_add — the clone's transport (#858)", () => {
+	it("passes a pinned protocol through with the clone", async () => {
+		const { calls, tool } = setup();
+		await tool.handler({ instance_id: "i1", path: "~/dev/gk", github_repo: "acme/gk", clone: true, clone_protocol: "ssh" });
+		expect(JSON.parse(posts(calls)[0].body ?? "{}")).toEqual({ localPath: "~/dev/gk", requireGithub: true, githubRepo: "acme/gk", clone: true, cloneProtocol: "ssh" });
+	});
+
+	it("sends nothing for auto — the default — and nothing at all without clone", async () => {
+		const { calls, tool } = setup();
+		await tool.handler({ instance_id: "i1", path: "~/dev/gk", github_repo: "acme/gk", clone: true, clone_protocol: "auto" });
+		await tool.handler({ instance_id: "i1", path: "~/dev/gk", github_repo: "acme/gk", clone_protocol: "ssh" });
+		expect(JSON.parse(posts(calls)[0].body ?? "{}")).not.toHaveProperty("cloneProtocol");
+		expect(JSON.parse(posts(calls)[1].body ?? "{}")).toEqual({ localPath: "~/dev/gk", requireGithub: true, githubRepo: "acme/gk" });
+	});
+
+	it("relays a still-running clone as the 202 body, untouched", async () => {
+		const reply = { cloning: true, job: { path: "~/dev/gk", slug: "acme/gk", state: "cloning" }, detail: "Still cloning" };
+		const { tool } = setup(reply, 202);
+		expect(JSON.parse(textOf(await tool.handler({ instance_id: "i1", path: "~/dev/gk", github_repo: "acme/gk", clone: true })))).toEqual(reply);
+	});
+});

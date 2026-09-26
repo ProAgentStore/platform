@@ -11,6 +11,7 @@ import type { EngineInvocationMode } from "./engine-adapter.js";
 import { type GitCmd, InspectError, readGitRemoteOrigin, readRepoFile, type RepoSearchMode, repoSearch, repoSync, repoTree, runRepoGit } from "./inspect.js";
 import { fastForwardRepo, type GitWriteCmd, switchRepoBranch } from "./repo-write.js";
 import { checkWorkdir, cloneIntoWorkdir, ensureRepo, sanitizeSessionName } from "./repo.js";
+import { type CloneProtocol, CloneJobs } from "./repo-clone-job.js";
 import { asTurnAuthor, type TurnAuthor } from "./turn-author.js";
 import type { GhGuardReport } from "./gh-guard.js";
 
@@ -172,6 +173,8 @@ const MAX_PANE = 64 * 1024;
 
 export class CodingRuntime {
 	private sessions = new Map<string, HeadlessSession>();
+	/** Background cold-start clones, one per folder (#858). */
+	private cloneJobs = new CloneJobs();
 	/**
 	 * Active human handoffs keyed by session id. `resolved` flips when the human
 	 * finishes (console "Resume" / submits a value); the brain workflow polls
@@ -276,6 +279,22 @@ export class CodingRuntime {
 	 */
 	checkRepo(input: { sessionId?: string; workDir?: string }) {
 		return checkWorkdir(this.resolveWorkDir(input));
+	}
+
+	/**
+	 * Start — or join — a background clone of GitHub `slug` into an absent or empty owner folder (#858).
+	 * Answers at once with the job; `cloneStatus` reads it back. See `repo-clone-job.ts`.
+	 */
+	startClone(input: { workDir?: string; slug?: string; protocol?: CloneProtocol }) {
+		if (!input.workDir || !input.slug || !/^[\w.-]+\/[\w.-]+$/.test(input.slug)) throw new InspectError("workDir and an owner/repo slug are required");
+		const protocol: CloneProtocol = input.protocol === "https" || input.protocol === "ssh" ? input.protocol : "auto";
+		return this.cloneJobs.start(this.resolveWorkDir({ workDir: input.workDir }), input.slug, protocol);
+	}
+
+	/** The background clone for this folder, or `state: "none"` (#858). */
+	cloneStatus(input: { workDir?: string }) {
+		if (!input.workDir) throw new InspectError("workDir is required");
+		return this.cloneJobs.status(this.resolveWorkDir({ workDir: input.workDir }));
 	}
 
 	/** Clone a repository into an absent or empty owner folder (#857) — see `cloneIntoWorkdir`. */

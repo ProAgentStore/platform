@@ -925,4 +925,8 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// with `github_repo`, a missing or empty `path` is cloned on the connected machine and then bound.
 	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.60 is published.
 	"0.1.61": "sha256:48dd0e1e59f5fb69a88f721af569702ebbc58008900c0596828a537e809b48a7",
+	// 0.1.62 (#858): no new tool — `coding_repo_add` gains `clone_protocol` (auto | https | ssh). Clones
+	// now run in the background on the machine; a still-running one answers 202 and nothing is stored.
+	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.61 is published.
+	"0.1.62": "sha256:969da61e7a36e4f6ce62bd95d7e313caee086a20fa894d9bc7b4c1f43c29f2cd",
 };

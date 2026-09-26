@@ -8,7 +8,7 @@
  * GitHub", which is a sentence about a setup mistake they had not made.
  */
 import { Hono } from "hono";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "../lib/auth.js";
 import { signSession } from "../lib/session.js";
 // The runner transport, stubbed at the seam every repo route reaches the machine through. Only
@@ -504,16 +504,41 @@ describe("POST /coding/repos requireGithub + clone — the cold start (#857)", (
 	const MISSING = { checked: true, path: "/home/u/dev/grass-karma", exists: false, isDirectory: false, entryCount: 0, insideWorkTree: false, gitChecked: true };
 
 	/**
-	 * A connected machine whose folder starts as `initial`. A clone — unless `cloneFails` — turns it into
-	 * a checkout whose origin is the URL cloned; every runner call is recorded so a test can say what was asked.
+	 * A connected machine whose folder starts as `initial`, speaking the background-clone protocol (#858):
+	 * `/coding/clone-start` answers `cloning` at once, and the job finishes on the `finishAfter`-th status
+	 * read — `done` (the folder becomes a checkout whose origin is the URL cloned) or `failed` with
+	 * `cloneFails`. `legacy` is a pre-#858 runner: no jobs (404), only the synchronous `/coding/clone`.
+	 * Every runner call is recorded so a test can say exactly what was asked.
 	 */
-	function machine(opts: { initial: Record<string, unknown>; origin?: string | null; cloneFails?: string }) {
+	function machine(opts: { initial: Record<string, unknown>; origin?: string | null; cloneFails?: string; finishAfter?: number; legacy?: boolean; via?: "https" | "ssh" }) {
 		const asked: Array<{ path: string; body: unknown }> = [];
 		/** The URL the machine cloned from — a fresh clone's `origin`. */
 		let clonedFrom: string | null = null;
+		let job: Record<string, unknown> | null = null;
+		let reads = 0;
+		const finish = () => {
+			if (job?.state !== "cloning") return;
+			if (opts.cloneFails) Object.assign(job, { state: "failed", error: opts.cloneFails });
+			else {
+				const via = opts.via ?? "https";
+				clonedFrom = via === "ssh" ? `git@github.com:${job.slug}.git` : `https://github.com/${job.slug}.git`;
+				Object.assign(job, { state: "done", via });
+			}
+		};
 		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
 		callRunner.mockImplementation(async (_conn: unknown, path: string, body: unknown) => {
 			asked.push({ path, body });
+			if (path === "/coding/clone-start" || path === "/coding/clone-status") {
+				if (opts.legacy) throw new Error(`Runner ${path} → 404: {"error":"Not found"}`);
+				if (path === "/coding/clone-start") {
+					const b = body as { workDir: string; slug: string };
+					job = { path: b.workDir, slug: b.slug, state: "cloning", attempts: [], startedAt: Date.now() };
+					return { ...job };
+				}
+				if (!job) return { path: (body as { workDir: string }).workDir, state: "none" };
+				if (++reads >= (opts.finishAfter ?? 1)) finish();
+				return { ...job };
+			}
 			if (path === "/coding/clone") {
 				if (opts.cloneFails) throw new Error(`Runner /coding/clone → 400: ${JSON.stringify({ error: opts.cloneFails })}`);
 				clonedFrom = (body as { cloneUrl: string }).cloneUrl;
@@ -531,9 +556,9 @@ describe("POST /coding/repos requireGithub + clone — the cold start (#857)", (
 		const asked = machine({ initial: MISSING });
 		const { status, body, row } = await add({ githubRepo: "acme/grass-karma", clone: true });
 		expect(status).toBe(201);
-		// The machine cloned the repository named, over https with its own credentials.
-		expect(asked.filter((a) => a.path === "/coding/clone")).toEqual([
-			{ path: "/coding/clone", body: { workDir: "~/dev/grass-karma", cloneUrl: "https://github.com/acme/grass-karma.git" } },
+		// The machine was asked to clone the repository named — a background job it answers at once (#858).
+		expect(asked.filter((a) => a.path === "/coding/clone-start")).toEqual([
+			{ path: "/coding/clone-start", body: { workDir: "~/dev/grass-karma", slug: "acme/grass-karma", protocol: "auto" } },
 		]);
 		// …and it was then verified like any checkout before anything was stored.
 		expect(row).toMatchObject({ workdir: "~/dev/grass-karma", provider: "github", github_repo: "acme/grass-karma" });
@@ -550,7 +575,7 @@ describe("POST /coding/repos requireGithub + clone — the cold start (#857)", (
 		const { status, body, issued } = await add({ githubRepo: "acme/grass-karma" });
 		expect(status).toBe(400);
 		expect(body.error).toMatch(/^Invalid local workdir: .*does not exist/);
-		expect(asked.some((a) => a.path === "/coding/clone")).toBe(false);
+		expect(asked.some((a) => a.path.startsWith("/coding/clone-start") || a.path === "/coding/clone")).toBe(false);
 		expect(inserted(issued)).toBe(false);
 	});
 
@@ -558,7 +583,7 @@ describe("POST /coding/repos requireGithub + clone — the cold start (#857)", (
 		const asked = machine({ initial: HEALTHY, origin: "git@github.com:acme/grass-karma.git" });
 		const { status } = await add({ githubRepo: "acme/grass-karma", clone: true });
 		expect(status).toBe(201);
-		expect(asked.some((a) => a.path === "/coding/clone")).toBe(false);
+		expect(asked.some((a) => a.path.startsWith("/coding/clone-start") || a.path === "/coding/clone")).toBe(false);
 	});
 
 	it("an EXISTING checkout whose origin is another repo is refused as today — never cloned over, nothing stored", async () => {
@@ -566,7 +591,7 @@ describe("POST /coding/repos requireGithub + clone — the cold start (#857)", (
 		const { status, body, issued } = await add({ githubRepo: "acme/grass-karma", clone: true });
 		expect(status).toBe(400);
 		expect(body.error).toContain("is a checkout of acme/other, not acme/grass-karma");
-		expect(asked.some((a) => a.path === "/coding/clone")).toBe(false);
+		expect(asked.some((a) => a.path.startsWith("/coding/clone-start") || a.path === "/coding/clone")).toBe(false);
 		expect(inserted(issued)).toBe(false);
 	});
 
@@ -579,7 +604,12 @@ describe("POST /coding/repos requireGithub + clone — the cold start (#857)", (
 	});
 
 	it("a repository the machine cannot read fails with git's reason and what to do about it — nothing stored", async () => {
-		machine({ initial: MISSING, cloneFails: "Could not clone https://github.com/acme/private.git into \"/home/u/dev/grass-karma\": remote: Repository not found." });
+		// The runner's own account of a failed job: every attempt, then the fix (repo-clone-job.ts).
+		machine({
+			initial: MISSING,
+			cloneFails:
+				"https: remote: Repository not found. | ssh: not tried — this machine has no SSH key that github.com accepts — the machine clones with its OWN git credentials: sign in over https there (`gh auth login`), or add an SSH key that github.com accepts.",
+		});
 		const { status, body, issued } = await add({ githubRepo: "acme/private", clone: true });
 		expect(status).toBe(400);
 		expect(body.error).toMatch(/Could not clone acme\/private into `~\/dev\/grass-karma`: .*Repository not found/);
@@ -598,7 +628,77 @@ describe("POST /coding/repos requireGithub + clone — the cold start (#857)", (
 		const asked = machine({ initial: MISSING });
 		const { status } = await add({ githubRepo: "acme/grass-karma", clone: true }, [{ id: "repo_old", instance_id: INSTANCE, name: "gk", github_repo: "acme/grass-karma" }]);
 		expect(status).toBe(409);
-		expect(asked.some((a) => a.path === "/coding/clone")).toBe(false);
+		expect(asked.some((a) => a.path.startsWith("/coding/clone-start") || a.path === "/coding/clone")).toBe(false);
+	});
+
+	describe("long clones run in the background, and SSH-only machines clone (#858)", () => {
+		afterEach(() => vi.useRealTimers());
+		/** Fake only the wait's clock — the request's own async work (session signing, crypto) stays real. */
+		const fakeClock = () => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+		/** Advance the fake clock a second at a time, yielding to real I/O between, until the call answers. */
+		async function settle<T>(call: Promise<T>): Promise<T> {
+			let done = false;
+			void call.finally(() => {
+				done = true;
+			});
+			for (let i = 0; i < 600 && !done; i++) {
+				await new Promise((r) => setImmediate(r));
+				await vi.advanceTimersByTimeAsync(1_000);
+			}
+			return call;
+		}
+
+		it("a clone still running when the wait ends answers 202 — NOTHING stored — with the job and what to do", async () => {
+			fakeClock();
+			machine({ initial: MISSING, finishAfter: Number.POSITIVE_INFINITY });
+			const { status, body, issued } = await settle(add({ githubRepo: "acme/grass-karma", clone: true }));
+			expect(status).toBe(202);
+			expect(body).toMatchObject({ cloning: true, job: { path: "~/dev/grass-karma", slug: "acme/grass-karma", state: "cloning" } });
+			expect((body as { detail: string }).detail).toMatch(/Nothing is stored yet\. Call coding_repo_add again with the same arguments: it joins this clone — never starts a second/);
+			expect(inserted(issued)).toBe(false);
+		});
+
+		it("the REPEATED call joins the clone in flight — no second clone — and binds once it finishes", async () => {
+			fakeClock();
+			// First call: the clone outlives the wait (it finishes on the 30th status read, ~60s in).
+			const asked = machine({ initial: MISSING, finishAfter: 30 });
+			expect((await settle(add({ githubRepo: "acme/grass-karma", clone: true }))).status).toBe(202);
+			// Second call, same arguments: it must not read the half-written folder as a checkout, nor clone again.
+			const { status, row } = await settle(add({ githubRepo: "acme/grass-karma", clone: true }));
+			expect(status).toBe(201);
+			expect(row).toMatchObject({ workdir: "~/dev/grass-karma", github_repo: "acme/grass-karma" });
+			expect(asked.filter((a) => a.path === "/coding/clone-start")).toHaveLength(1);
+		});
+
+		it("an SSH-ONLY machine: the runner cloned over SSH, the git@ origin passes the same GitHub check, and it binds", async () => {
+			machine({ initial: MISSING, via: "ssh" });
+			const { status, row } = await add({ githubRepo: "acme/private", clone: true });
+			expect(status).toBe(201);
+			expect(row).toMatchObject({ provider: "github", github_repo: "acme/private", repo_slug: "acme/private" });
+		});
+
+		it("the caller may pin the transport — cloneProtocol reaches the runner as asked, anything else is auto", async () => {
+			const asked = machine({ initial: MISSING, via: "ssh" });
+			await add({ githubRepo: "acme/private", clone: true, cloneProtocol: "ssh" });
+			expect(asked.find((a) => a.path === "/coding/clone-start")?.body).toMatchObject({ protocol: "ssh" });
+			const again = machine({ initial: MISSING });
+			await add({ githubRepo: "acme/private", clone: true, cloneProtocol: "ftp" });
+			expect(again.find((a) => a.path === "/coding/clone-start")?.body).toMatchObject({ protocol: "auto" });
+		});
+
+		it("a runner that predates clone jobs still clones — #857's synchronous https clone", async () => {
+			const asked = machine({ initial: MISSING, legacy: true });
+			const { status } = await add({ githubRepo: "acme/grass-karma", clone: true });
+			expect(status).toBe(201);
+			expect(asked.find((a) => a.path === "/coding/clone")?.body).toEqual({ workDir: "~/dev/grass-karma", cloneUrl: "https://github.com/acme/grass-karma.git" });
+		});
+
+		it("…but cannot be asked for SSH, and says so", async () => {
+			machine({ initial: MISSING, legacy: true });
+			const { status, body } = await add({ githubRepo: "acme/grass-karma", clone: true, cloneProtocol: "ssh" });
+			expect(status).toBe(400);
+			expect(body.error).toMatch(/too old to clone over SSH/);
+		});
 	});
 });
 

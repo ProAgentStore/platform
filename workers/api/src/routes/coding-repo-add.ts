@@ -38,7 +38,16 @@ export function isUniqueViolation(e: unknown): boolean {
  * is a real checkout, and its `origin` resolves to GitHub (matching `githubRepoIn` when given).
  * A missing half is refused by name — never defaulted, never dropped.
  */
-export async function addPairedRepo(c: Context, instanceId: string, uid: string, name: string, localPath: string, githubRepoIn: string | undefined, clone = false) {
+export async function addPairedRepo(
+	c: Context,
+	instanceId: string,
+	uid: string,
+	name: string,
+	localPath: string,
+	githubRepoIn: string | undefined,
+	clone = false,
+	protocol: CloneProtocol = "auto",
+) {
 	const refuse = (error: string) => c.json({ error }, 400);
 	if (!localPath) {
 		return refuse(
@@ -51,6 +60,16 @@ export async function addPairedRepo(c: Context, instanceId: string, uid: string,
 			`No machine is connected, so \`${localPath}\` cannot be verified as a checkout nor its GitHub origin read. Run \`pags up\` on the machine that has it, then add the repo again.`,
 		);
 	}
+	// A clone of this folder already in flight (#858) — a call REPEATED while a long clone runs joins it
+	// rather than reading a half-written checkout as finished. Checked before the folder is judged.
+	if (clone) {
+		const inFlight = await readCloneJob(conn, localPath);
+		if (inFlight?.state === "cloning") {
+			const outcome = await awaitClone(conn, localPath, inFlight);
+			if (outcome.kind === "pending") return stillCloning(c, outcome.job);
+			if (outcome.kind === "failed") return refuse(outcome.error);
+		}
+	}
 	let verdict = await checkWorkdirVia(conn, localPath);
 	// Cold start (#857): nothing there yet, and the caller opted in — clone it, then carry on through
 	// EVERY check below exactly as for a checkout that was already there. Only an absent or empty folder
@@ -60,8 +79,9 @@ export async function addPairedRepo(c: Context, instanceId: string, uid: string,
 		// Refused BEFORE the clone, so a repo already bound here is not cloned a second time for nothing.
 		const bound = await findExistingRepoBinding(c.env, instanceId, githubRepoIn);
 		if (bound) return duplicateBinding(c, githubRepoIn, bound);
-		const failure = await cloneOnMachine(conn, localPath, githubRepoIn);
-		if (failure) return refuse(failure);
+		const outcome = await cloneOnMachine(conn, localPath, githubRepoIn, protocol);
+		if (outcome.kind === "pending") return stillCloning(c, outcome.job);
+		if (outcome.kind === "failed") return refuse(outcome.error);
 		verdict = await checkWorkdirVia(conn, localPath);
 	}
 	if (verdict.state !== "ok") return refuse(`Invalid local workdir: ${verdict.detail}`);
@@ -100,29 +120,114 @@ export async function addPairedRepo(c: Context, instanceId: string, uid: string,
 	return c.json({ repo: { ...created, cloneStatus: "ready", cloneCheckedAt: sqlTime() } }, 201);
 }
 
-/** The relay's own ceiling on one command — a clone that outlasts it may still be running on the machine. */
-const CLONE_TIMEOUT_MS = 120_000;
+export type CloneProtocol = "auto" | "https" | "ssh";
+
+/** A background clone as the runner reports it (#858) — `packages/browser-runner/src/coding/repo-clone-job.ts`. */
+interface CloneJobView {
+	path: string;
+	slug?: string;
+	state: "cloning" | "done" | "failed" | "none";
+	via?: "https" | "ssh";
+	attempts?: string[];
+	error?: string;
+	startedAt?: number;
+}
+
+type CloneOutcome = { kind: "done" } | { kind: "pending"; job: CloneJobView } | { kind: "failed"; error: string };
 
 /**
- * Clone `owner/repo` into `localPath` on the connected machine (#857), or say why it could not.
- *
- * Over https with the MACHINE's own git credentials — the credential helper that `gh auth login`
- * configures — never a platform token, so what the machine can read is exactly what it can clone.
- * Returns null on success, else the sentence to refuse with; nothing has been stored either way.
+ * How long one call waits on a background clone before answering "still cloning" (#858). Under the
+ * relay's two-minute command ceiling and a typical MCP client's own timeout; a small repository is
+ * cloned and bound inside it exactly as #857's synchronous clone was.
  */
-async function cloneOnMachine(conn: RunnerConn, localPath: string, slug: string): Promise<string | null> {
-	const cloneUrl = `https://github.com/${slug}.git`;
+const CLONE_WAIT_MS = 45_000;
+const CLONE_POLL_MS = 2_000;
+/** A pre-#858 runner's synchronous clone is one relay command, capped by the relay at two minutes. */
+const LEGACY_CLONE_TIMEOUT_MS = 120_000;
+
+/** The runner's answer for why it could not be asked — or null when the error is git's own. */
+function runnerTrouble(e: unknown): string | null {
+	const message = e instanceof Error ? e.message : String(e);
+	if (e instanceof RunnerUnreachableError) return `The machine stopped answering before the clone could run (${message}). Check \`pags up\` there, then add the repo again.`;
+	return null;
+}
+
+const errorText = (e: unknown) =>
+	(e instanceof Error ? e.message : String(e)).replace(/^Runner \/coding\/[a-z-]+ → \d+: /, "").replace(/^\{"error":"(.*)"\}$/s, "$1");
+
+/** The clone job for this folder, or null when there is none or the runner predates jobs. */
+async function readCloneJob(conn: RunnerConn, localPath: string): Promise<CloneJobView | null> {
+	return callRunner<CloneJobView>(conn, "/coding/clone-status", { workDir: localPath }, { timeoutMs: READ_TIMEOUT_MS }).catch(() => null);
+}
+
+/** Wait on a running clone for up to {@link CLONE_WAIT_MS}, reading it back every couple of seconds. */
+async function awaitClone(conn: RunnerConn, localPath: string, job: CloneJobView): Promise<CloneOutcome> {
+	const until = Date.now() + CLONE_WAIT_MS;
+	let current = job;
+	while (current.state === "cloning" && Date.now() < until) {
+		await new Promise<void>((r) => setTimeout(r, CLONE_POLL_MS));
+		current = (await readCloneJob(conn, localPath)) ?? current;
+	}
+	if (current.state === "cloning") return { kind: "pending", job: current };
+	if (current.state === "failed") return { kind: "failed", error: `Could not clone ${current.slug ?? "the repository"} into \`${localPath}\`: ${current.error ?? "git failed"}` };
+	return { kind: "done" };
+}
+
+/**
+ * Clone `owner/repo` into `localPath` on the connected machine (#857), as a BACKGROUND job (#858).
+ *
+ * The runner starts the clone and answers at once; this reads it back for up to {@link CLONE_WAIT_MS}.
+ * Finished → the caller binds it. Still running → `pending`, and the caller answers 202: nothing is
+ * stored, and repeating the call joins the same clone. Transport is the MACHINE's own credentials —
+ * https first, SSH next when https is refused and the machine has a key github.com accepts (`protocol`
+ * pins one). A runner that predates jobs gets #857's synchronous https clone.
+ */
+async function cloneOnMachine(conn: RunnerConn, localPath: string, slug: string, protocol: CloneProtocol): Promise<CloneOutcome> {
+	let job: CloneJobView;
 	try {
-		await callRunner(conn, "/coding/clone", { workDir: localPath, cloneUrl }, { timeoutMs: CLONE_TIMEOUT_MS });
-		return null;
+		job = await callRunner<CloneJobView>(conn, "/coding/clone-start", { workDir: localPath, slug, protocol }, { timeoutMs: READ_TIMEOUT_MS });
+	} catch (e) {
+		const trouble = runnerTrouble(e);
+		if (trouble) return { kind: "failed", error: trouble };
+		if (/→ 404/.test(e instanceof Error ? e.message : String(e))) return legacyClone(conn, localPath, slug, protocol);
+		return { kind: "failed", error: `Could not start a clone of ${slug} into \`${localPath}\`: ${errorText(e).slice(0, 300)}` };
+	}
+	return awaitClone(conn, localPath, job);
+}
+
+/** #857's synchronous clone, for a runner that has no clone jobs yet — https only, one relay command. */
+async function legacyClone(conn: RunnerConn, localPath: string, slug: string, protocol: CloneProtocol): Promise<CloneOutcome> {
+	if (protocol === "ssh") return { kind: "failed", error: "This machine's `pags` CLI is too old to clone over SSH. Update it and restart `pags up`." };
+	try {
+		await callRunner(conn, "/coding/clone", { workDir: localPath, cloneUrl: `https://github.com/${slug}.git` }, { timeoutMs: LEGACY_CLONE_TIMEOUT_MS });
+		return { kind: "done" };
 	} catch (e) {
 		const message = e instanceof Error ? e.message : String(e);
-		if (e instanceof RunnerUnreachableError) return `The machine stopped answering before the clone could run (${message}). Check \`pags up\` there, then add the repo again.`;
-		if (/→ 404/.test(message)) return "This machine's `pags` CLI is too old to clone. Update it and restart `pags up`, or clone the repository there yourself and add it without clone.";
+		const trouble = runnerTrouble(e);
+		if (trouble) return { kind: "failed", error: trouble };
+		if (/→ 404/.test(message)) return { kind: "failed", error: "This machine's `pags` CLI is too old to clone. Update it and restart `pags up`, or clone the repository there yourself and add it without clone." };
 		if (/timed out/i.test(message)) {
-			return `The clone of ${slug} did not finish within ${CLONE_TIMEOUT_MS / 60_000} minutes and may still be running on the machine. Once \`${localPath}\` holds the checkout, call coding_repo_add again without clone.`;
+			return { kind: "failed", error: `The clone of ${slug} did not finish within 2 minutes on this older CLI and may still be running. Update \`pags\` for background clones, or once \`${localPath}\` holds the checkout, call coding_repo_add again without clone.` };
 		}
-		const why = message.replace(/^Runner \/coding\/clone → \d+: /, "").replace(/^\{"error":"(.*)"\}$/s, "$1");
-		return `Could not clone ${slug} into \`${localPath}\`: ${why.slice(0, 400)} — the machine clones with its OWN git credentials, so for a private repository sign in there (\`gh auth login\` sets up https access), then add the repo again.`;
+		return {
+			kind: "failed",
+			error: `Could not clone ${slug} into \`${localPath}\`: ${errorText(e).slice(0, 400)} — the machine clones with its OWN git credentials, so for a private repository sign in there (\`gh auth login\` sets up https access), then add the repo again.`,
+		};
 	}
+}
+
+/**
+ * 202, nothing stored: the clone is still running on the machine (#858). Repeating the SAME call joins
+ * it — never a second clone — and binds once it has finished and every check passes.
+ */
+function stillCloning(c: Context, job: CloneJobView) {
+	const elapsed = job.startedAt ? Math.round((Date.now() - job.startedAt) / 1000) : null;
+	return c.json(
+		{
+			cloning: true,
+			job: { path: job.path, slug: job.slug, state: job.state, startedAt: job.startedAt ?? null, attempts: job.attempts ?? [] },
+			detail: `Still cloning ${job.slug ?? "the repository"} into \`${job.path}\` on the machine${elapsed !== null ? ` (${elapsed}s so far)` : ""}. Nothing is stored yet. Call coding_repo_add again with the same arguments: it joins this clone — never starts a second — and binds the repo once the clone has finished and every check passes.`,
+		},
+		202,
+	);
 }
