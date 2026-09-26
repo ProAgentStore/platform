@@ -33,6 +33,18 @@ const SYNC_TIMEOUT_MS = 15_000;
 const OPEN_WAIT_MS = 8_000;
 /** How long a runner that could not answer gets: one 20s discovery poll, plus a margin. */
 const POLL_WAIT_MS = 22_000;
+/**
+ * The most a whole repin may take (#853 finding 12). The route awaits it, and the parts above SUM past
+ * a typical 60s MCP tool timeout — the client reported failure while the pin was written. Every command
+ * and wait is cut to what is left of this; the pin itself is saved before any of it runs.
+ */
+export const REPIN_BUDGET_MS = 25_000;
+/** Below this, a runner command is not worth sending — it could not answer in time. */
+const MIN_COMMAND_MS = 1_000;
+
+/** Said when the budget ran out before the move could be confirmed either way. */
+const unconfirmedDetail = (node: string) =>
+	`The pin to ${node} is saved, but the move was not confirmed within ${REPIN_BUDGET_MS / 1000}s — a runner is slow or not answering. A healthy \`pags up\` on ${node} finishes it on its own 20s poll; call instance_runner_node to see where the agent is attached now.`;
 
 export interface RepinAttachment {
 	/** The machine the pin names. */
@@ -43,8 +55,10 @@ export interface RepinAttachment {
 	detachedFrom: string[];
 	/** Machines still holding a socket for it — they drop it on their next poll (the pin moved). */
 	stillAttachedOn: string[];
-	/** One sentence for the owner when `attached` is false; absent when it is true. */
+	/** One sentence for the owner when `attached` is false, or when the move is `unconfirmed`. */
 	detail?: string;
+	/** {@link REPIN_BUDGET_MS} ran out before every step could be confirmed (#853 finding 12). */
+	unconfirmed?: true;
 }
 
 export interface RepinDeps {
@@ -61,6 +75,8 @@ export interface AgentAttachment {
 	evicted: number;
 	/** The actionable sentence when `attached` is false. */
 	detail?: string;
+	/** The caller's deadline ran out before the attach could be confirmed either way. */
+	unconfirmed?: true;
 }
 
 /** The runner-reply shape of a targeted membership sync (#856). Older CLIs answer without `holding`. */
@@ -98,12 +114,15 @@ export interface AgentAttachOptions extends RepinDeps {
 	force: boolean;
 	/** Registrations already read by the caller. */
 	rows?: NodeRegistration[];
+	/** Epoch ms by which to answer, whatever the machine does (#853 finding 12). Absent: no bound. */
+	deadline?: number;
 }
 
 export async function attachAgentOnNode(env: Env, instanceId: string, userId: string, node: string, opts: AgentAttachOptions): Promise<AgentAttachment> {
 	const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 	const now = opts.now ?? Date.now;
 	const rows = opts.rows ?? (await nodeRegistrations(env, userId));
+	const left = () => (opts.deadline ?? Number.POSITIVE_INFINITY) - now();
 	// The target MACHINE, by every name it is provably known by — the runner there answers to any of them.
 	const targetNames = new Set([node, ...aliasNodesFor(node, rows)]);
 	const attachedOnTarget = async () => {
@@ -129,8 +148,9 @@ export async function attachAgentOnNode(env: Env, instanceId: string, userId: st
 	let unresponsive = 0;
 	let oldRunner = false;
 	for (const carrier of carriers) {
+		if (left() < MIN_COMMAND_MS) break;
 		try {
-			answered = (await callRunner<SyncReply>(carrier, MEMBERSHIP_SYNC_PATH, { attach: instanceId, force: opts.force }, { timeoutMs: SYNC_TIMEOUT_MS })) ?? {};
+			answered = (await callRunner<SyncReply>(carrier, MEMBERSHIP_SYNC_PATH, { attach: instanceId, force: opts.force }, { timeoutMs: Math.min(SYNC_TIMEOUT_MS, left()) })) ?? {};
 			break;
 		} catch (e) {
 			const message = e instanceof Error ? e.message : String(e);
@@ -150,6 +170,8 @@ export async function attachAgentOnNode(env: Env, instanceId: string, userId: st
 			refusal = `The \`pags up\` on ${node} could not be asked to attach this agent (${message}).`;
 		}
 	}
+	// Out of time with no answer: nothing definite to say about this machine, and saying "refused" would be false.
+	if (!answered && !oldRunner && left() < MIN_COMMAND_MS) return { node, attached: false, evicted, unconfirmed: true, detail: unconfirmedDetail(node) };
 	if (refusal && !answered && !oldRunner) return { node, attached: false, evicted, detail: refusal };
 	if (!answered && !oldRunner) {
 		return {
@@ -161,13 +183,15 @@ export async function attachAgentOnNode(env: Env, instanceId: string, userId: st
 	}
 
 	// 3. The relay's answer, after the runner has had time to open the socket.
-	const waitUntil = now() + (answered ? OPEN_WAIT_MS : POLL_WAIT_MS);
+	const fullWait = now() + (answered ? OPEN_WAIT_MS : POLL_WAIT_MS);
+	const waitUntil = Math.min(fullWait, now() + left());
 	let attached = await attachedOnTarget();
 	while (!attached && now() < waitUntil) {
 		await sleep(1_000);
 		attached = await attachedOnTarget();
 	}
 	if (attached) return { node, attached, evicted };
+	if (waitUntil < fullWait) return { node, attached, evicted, unconfirmed: true, detail: unconfirmedDetail(node) };
 	const refused = answered?.holding === false;
 	return {
 		node,
@@ -186,6 +210,8 @@ export async function attachOnRepin(env: Env, instanceId: string, userId: string
 	const now = deps.now ?? Date.now;
 	const rows = await nodeRegistrations(env, userId);
 	const targetNames = new Set([node, ...aliasNodesFor(node, rows)]);
+	const deadline = now() + REPIN_BUDGET_MS;
+	const left = () => deadline - now();
 	const waitFor = async (check: () => Promise<boolean>, ms: number) => {
 		const until = now() + ms;
 		while (!(await check())) {
@@ -197,7 +223,8 @@ export async function attachOnRepin(env: Env, instanceId: string, userId: string
 
 	// 1. Attach on the target — without force: a repin moves the agent, it does not take a slot another
 	// runner still answers in. When that is what stands in the way, the detail names the tool that does.
-	const { attached, detail } = await attachAgentOnNode(env, instanceId, userId, node, { force: false, rows, sleep, now });
+	const { attached, detail, unconfirmed } = await attachAgentOnNode(env, instanceId, userId, node, { force: false, rows, sleep, now, deadline });
+	let cut = unconfirmed === true;
 
 	// 2. Detach from every other machine that still holds this agent. Its own socket carries the
 	// request, so the reply is usually lost to the detach it caused — the relay is asked instead.
@@ -206,12 +233,23 @@ export async function attachOnRepin(env: Env, instanceId: string, userId: string
 	const ownNodes = [...new Set(rows.filter((r) => r.instanceId === instanceId).map((r) => normalizeRunnerNode(r.node)))];
 	for (const stale of ownNodes.filter((n) => n && !targetNames.has(n))) {
 		if (!(await relayConnected(env, instanceId, stale))) continue;
+		// No time left to ask: still holding it, and said so — it lets go on its own poll (the pin moved).
+		if (left() < MIN_COMMAND_MS) {
+			stillAttachedOn.push(stale);
+			cut = true;
+			continue;
+		}
 		const conn = await getRunnerConnIgnoringLiveness(env, instanceId, userId, stale).catch(() => null);
-		if (conn) await callRunner(conn, MEMBERSHIP_SYNC_PATH, {}, { timeoutMs: SYNC_TIMEOUT_MS }).catch(() => undefined);
-		const gone = await waitFor(async () => !(await relayConnected(env, instanceId, stale)), OPEN_WAIT_MS);
+		if (conn) await callRunner(conn, MEMBERSHIP_SYNC_PATH, {}, { timeoutMs: Math.min(SYNC_TIMEOUT_MS, left()) }).catch(() => undefined);
+		const gone = await waitFor(async () => !(await relayConnected(env, instanceId, stale)), Math.min(OPEN_WAIT_MS, Math.max(0, left())));
 		(gone ? detachedFrom : stillAttachedOn).push(stale);
+		if (!gone && left() < MIN_COMMAND_MS) cut = true;
 	}
 
+	if (cut) {
+		const released = `${stillAttachedOn.join(", ")} did not confirm letting it go within ${REPIN_BUDGET_MS / 1000}s; each drops it on its own poll, since the pin moved.`;
+		return { node, attached, detachedFrom, stillAttachedOn, unconfirmed: true, detail: attached ? `Attached on ${node}. ${released}` : (detail ?? unconfirmedDetail(node)) };
+	}
 	return { node, attached, detachedFrom, stillAttachedOn, ...(attached ? {} : { detail }) };
 }
 

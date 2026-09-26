@@ -16,6 +16,10 @@ const bodies: unknown[] = [];
 /** What each machine's runner does when asked to sync: open/close sockets, or refuse. */
 let onSync: (node: string, body?: unknown) => { status: number; error?: string; reply?: unknown } = () => ({ status: 200 });
 const synced: Array<{ via: string; node: string }> = [];
+/** Carriers whose runner never answers: the command runs to its own timeout, then the relay gives up (#853 finding 12). */
+const hangs = new Set<string>();
+/** The timeout every runner command was sent with, in order. */
+const timeouts: number[] = [];
 
 vi.mock("./runner-client.js", () => ({
 	relayConnected: async (_env: unknown, id: string, node: string) => live.has(`${id}@${node}`) || stale.has(`${id}@${node}`),
@@ -28,8 +32,13 @@ vi.mock("./runner-client.js", () => ({
 		return live.has(key) ? { sockets: 1, alive: true, evicted: 0 } : { sockets: 0, alive: false, evicted: 0 };
 	},
 	getRunnerConnIgnoringLiveness: async (_env: unknown, id: string, _uid: string, node: string) => ({ instanceId: id, runnerNode: node, relayName: `${id}:node:${node}` }),
-	callRunner: async (conn: { instanceId: string; runnerNode: string }, path: string, body?: unknown) => {
+	callRunner: async (conn: { instanceId: string; runnerNode: string }, path: string, body?: unknown, opts?: { timeoutMs?: number }) => {
 		expect(path).toBe("/pags/membership/sync");
+		timeouts.push(opts?.timeoutMs ?? Number.NaN);
+		if (hangs.has(`${conn.instanceId}@${conn.runnerNode}`)) {
+			clock += opts?.timeoutMs ?? 0;
+			throw new Error(`Runner ${path} → 504: {"error":"Runner timed out"}`);
+		}
 		if (frozen.has(conn.instanceId)) {
 			const { RunnerUnreachableError } = await import("./runner-unreachable.js");
 			throw new RunnerUnreachableError("Runner relay is connected but not responding — the relay has no live socket for this agent.");
@@ -42,7 +51,7 @@ vi.mock("./runner-client.js", () => ({
 	},
 }));
 
-const { attachAgentOnNode, attachOnRepin, MEMBERSHIP_SYNC_PATH } = await import("./runner-repin.js");
+const { attachAgentOnNode, attachOnRepin, MEMBERSHIP_SYNC_PATH, REPIN_BUDGET_MS } = await import("./runner-repin.js");
 
 const AGENT = "f8ddc272"; // Heartfull App Coder
 const OTHER = "coder-2"; // already hosted on Macmini
@@ -64,6 +73,8 @@ beforeEach(() => {
 	live.clear();
 	stale.clear();
 	frozen.clear();
+	hangs.clear();
+	timeouts.length = 0;
 	bodies.length = 0;
 	synced.length = 0;
 	slept.length = 0;
@@ -144,6 +155,56 @@ describe("when the move cannot complete, the repin says why (#850)", () => {
 
 	it("uses the path the CLI answers", () => {
 		expect(MEMBERSHIP_SYNC_PATH).toBe("/pags/membership/sync");
+	});
+});
+
+// #853 finding 12: the route awaits the whole move, and every step had its own timeout but nothing
+// bounded the SUM — 15s per carrier sync, a 22s poll wait, 8–23s per stale machine. A client with a
+// ~60s tool timeout reported failure while the pin had been written and the move might have worked.
+describe("a repin answers within its budget, whatever the machines do (#853 finding 12)", () => {
+	it("the budget sits well inside a typical 60s MCP tool timeout", () => {
+		expect(REPIN_BUDGET_MS).toBeLessThanOrEqual(30_000);
+	});
+
+	it("every machine hanging — both carriers on the target, both stale machines — still answers inside the budget, UNCONFIRMED, saying the pin holds", async () => {
+		hangs.add(`${OTHER}@Macmini`);
+		hangs.add("coder-3@Macmini");
+		live.add("coder-3@Macmini");
+		for (const n of ["Mac.modem", "RLs-MacBook-Air"]) {
+			live.add(`${AGENT}@${n}`);
+			hangs.add(`${AGENT}@${n}`);
+		}
+		const out = await repin();
+		expect(clock).toBeLessThanOrEqual(REPIN_BUDGET_MS);
+		expect(timeouts.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(REPIN_BUDGET_MS);
+		expect(out).toMatchObject({ node: "Macmini", attached: false, unconfirmed: true });
+		expect(out.detail).toMatch(/pin to Macmini is saved.*instance_runner_node/);
+		// A stale machine it had no time to ask is still reported, not silently dropped.
+		expect(out.stillAttachedOn.sort()).toEqual(["Mac.modem", "RLs-MacBook-Air"]);
+	});
+
+	it("a hanging target carrier costs only what the budget has left — the next carrier is still asked in time", async () => {
+		hangs.add(`${OTHER}@Macmini`);
+		live.add("coder-3@Macmini");
+		const out = await repin();
+		expect(out.attached).toBe(true);
+		expect(out.unconfirmed).toBeUndefined();
+		expect(clock).toBeLessThanOrEqual(REPIN_BUDGET_MS);
+	});
+
+	it("attached in time, but a stale machine it could not reach in time: attached, and the unconfirmed release is named", async () => {
+		hangs.add(`${OTHER}@Macmini`);
+		live.add("coder-3@Macmini");
+		live.add(`${AGENT}@Mac.modem`);
+		hangs.add(`${AGENT}@Mac.modem`);
+		const out = await repin();
+		expect(out).toMatchObject({ attached: true, stillAttachedOn: ["Mac.modem"], unconfirmed: true });
+		expect(out.detail).toMatch(/^Attached on Macmini\. Mac\.modem did not confirm letting it go/);
+		expect(clock).toBeLessThanOrEqual(REPIN_BUDGET_MS);
+	});
+
+	it("a quick repin says nothing about a budget", async () => {
+		expect(await repin()).toEqual({ node: "Macmini", attached: true, detachedFrom: [], stillAttachedOn: [] });
 	});
 });
 
