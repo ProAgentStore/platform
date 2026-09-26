@@ -1,4 +1,4 @@
-import { runUserWorkersAi, UserAiCredentialsError } from "./user-ai.js";
+import { runUserWorkersAi, UserAiCredentialsError, UserAiUnsupportedInputError } from "./user-ai.js";
 import { getProfile, upsertProfile, PROFILE_FIELDS, type Profile } from "./profile.js";
 import { instanceKnowledgeLink, profileLink } from "./console-links.js";
 import { logError } from "./error-log.js";
@@ -132,6 +132,14 @@ export async function parseResumeIntoProfile(env: Env, instanceId: string, userI
 	} catch (e) {
 		if (e instanceof UserAiCredentialsError) {
 			await notifyUser(env, userId, "apply", "Résumé saved (not auto-filled)", "Add an Anthropic API key in Profile → API Keys, then re-upload, to auto-fill your Profile from your résumé.", profileLink()).catch(() => undefined);
+			return;
+		}
+		// Cloudflare Workers AI cannot read a PDF (#853). Refused before the model is asked — it used to
+		// be handed the instruction without the document and could invent the fields — so nothing was
+		// written, and the owner is told the one thing that makes auto-fill work. A configuration fact,
+		// not a failure, so not an error-log row.
+		if (e instanceof UserAiUnsupportedInputError) {
+			await notifyUser(env, userId, "apply", "Résumé saved (not auto-filled)", `${e.message} Then re-upload to auto-fill your Profile — it is unchanged.`, profileLink()).catch(() => undefined);
 			return;
 		}
 		// A REAL failure: persist it to the error log AND alert the user (never silent).

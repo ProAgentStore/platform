@@ -40,9 +40,11 @@ vi.mock("./profile.js", async () => {
 });
 vi.mock("./user-ai.js", () => {
 	class UserAiCredentialsError extends Error {}
+	class UserAiUnsupportedInputError extends Error {}
 	return {
 		runUserWorkersAi: (...a: unknown[]) => runUserWorkersAi(...a),
 		UserAiCredentialsError,
+		UserAiUnsupportedInputError,
 	};
 });
 

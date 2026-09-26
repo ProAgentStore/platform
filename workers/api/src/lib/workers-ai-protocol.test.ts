@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TOOL_CAPABLE_CF_DEFAULT } from "../agent-do-prompt.js";
-import { announcesAction, fromWorkersAiResult, toWorkersAiBody, workersAiModelFor, workersAiToolRound, WORKERS_AI_PROTOCOL } from "./workers-ai-protocol.js";
+import { announcesAction, fromWorkersAiResult, toWorkersAiBody, WorkersAiUnsupportedContentError, workersAiModelFor, workersAiToolRound, WORKERS_AI_PROTOCOL } from "./workers-ai-protocol.js";
 
 const TOOLS = [{ type: "function", function: { name: "read_terminal", description: "", parameters: {} } }];
 
@@ -144,5 +144,31 @@ describe("a call is lifted only from the START of the reply (#853)", () => {
 		);
 		expect(out.tool_calls).toEqual([{ name: "read_terminal", arguments: {} }]);
 		expect(out.response).toContain("send_to_cli");
+	});
+});
+
+describe("content Workers AI cannot carry is refused, not flattened (#853)", () => {
+	const pdfRequest = {
+		messages: [
+			{ role: "system", content: "Extract the résumé." },
+			{ role: "user", content: [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: "JVBERi0x" } }, { type: "text", text: "Extract this candidate's details." }] },
+		],
+	};
+
+	it("refuses a request carrying a PDF document block, saying an Anthropic key is required", () => {
+		expect(() => toWorkersAiBody(pdfRequest)).toThrow(WorkersAiUnsupportedContentError);
+		expect(() => toWorkersAiBody(pdfRequest)).toThrow(/PDF input requires an Anthropic key/);
+	});
+
+	it("refuses any other non-text block by its type — an image, a replayed tool_result", () => {
+		expect(() => toWorkersAiBody({ messages: [{ role: "user", content: [{ type: "image", source: {} }] }] })).toThrow(/"image" content block/);
+		expect(() => toWorkersAiBody({ messages: [{ role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: "x" }] }] })).toThrow(/"tool_result"/);
+	});
+
+	it("leaves a text-only request exactly as it was — strings and text parts both", () => {
+		expect(toWorkersAiBody({ messages: [{ role: "user", content: "hello" }, { role: "user", content: [{ type: "text", text: "a" }, "b"] }] }).messages).toEqual([
+			{ role: "user", content: "hello" },
+			{ role: "user", content: "a\n\nb" },
+		]);
 	});
 });

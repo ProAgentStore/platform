@@ -17,7 +17,7 @@ import {
 } from "./anthropic-stream.js";
 import { endOnUserTurn, mergeContent, pairToolBlocks } from "./anthropic-tool-turns.js";
 import { recordUsage, type UsageContext } from "./usage.js";
-import { fromWorkersAiResult, toWorkersAiBody, workersAiModelFor } from "./workers-ai-protocol.js";
+import { fromWorkersAiResult, toWorkersAiBody, WorkersAiUnsupportedContentError, workersAiModelFor } from "./workers-ai-protocol.js";
 import { isWorkersAiModel } from "./brain-models.js";
 import { logPromptSectionEstimates } from "./prompt-section-estimates.js";
 import type { Env } from "../types.js";
@@ -567,6 +567,23 @@ function withFlatSystemPrompt(body: unknown): unknown {
 	};
 }
 
+/**
+ * The request only an Anthropic key can serve (#853): content Workers AI cannot read, such as a PDF.
+ * A provider error, so every caller already handles it; its own class, so a caller can tell the
+ * owner what to add rather than logging it as a failure.
+ */
+export class UserAiUnsupportedInputError extends UserAiProviderError {}
+
+/** The Workers AI body, or the refusal — thrown before any request is made. */
+function workersAiPayload(body: unknown): unknown {
+	try {
+		return toWorkersAiBody(withFlatSystemPrompt(body));
+	} catch (e) {
+		if (e instanceof WorkersAiUnsupportedContentError) throw new UserAiUnsupportedInputError(e.message, 400);
+		throw e;
+	}
+}
+
 async function runCloudflareAi(
 	env: Env,
 	userId: string | undefined,
@@ -586,6 +603,8 @@ async function runCloudflareAi(
 	// hundred tokens — a total-time deadline is the right measurement for a call that short. It shares
 	// the CONSTANT with the Anthropic path so there is one 25 in the codebase, not two.
 	const timeoutMs = (body as { timeoutMs?: number })?.timeoutMs ?? AI_FIRST_TOKEN_TIMEOUT_MS;
+	// Built first: content this path cannot carry is refused before any request or timer (#853).
+	const payload = platform ? workersAiPayload(body) : withFlatSystemPrompt(body);
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), timeoutMs);
 	let res: Response;
@@ -598,7 +617,7 @@ async function runCloudflareAi(
 					Authorization: `Bearer ${credentials.token}`,
 					"Content-Type": "application/json",
 				},
-				body: JSON.stringify(platform ? toWorkersAiBody(withFlatSystemPrompt(body)) : withFlatSystemPrompt(body)),
+				body: JSON.stringify(payload),
 				signal: controller.signal,
 			},
 		);

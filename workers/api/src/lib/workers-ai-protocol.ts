@@ -42,12 +42,33 @@ export function workersAiModelFor(model: string): string {
 /** Scout's `tool_call_id` pattern. An id that does not match is omitted rather than rejected. */
 const TOOL_CALL_ID = /^[a-zA-Z0-9]{9}$/;
 
-/** Text of any content shape the platform builds — a string, or text parts / blocks. */
+/**
+ * A content block Workers AI cannot carry (#853). Thrown rather than dropped: flattening kept only
+ * the text parts, so a PDF résumé reached the model as the bare instruction "Extract…" and the
+ * model was asked to fill a profile from a document it never received.
+ */
+export class WorkersAiUnsupportedContentError extends Error {
+	constructor(public readonly blockType: string) {
+		super(
+			blockType === "document"
+				? "PDF input requires an Anthropic key — Cloudflare Workers AI cannot read documents. Add an Anthropic API key in Profile → API Keys."
+				: `Cloudflare Workers AI cannot read a "${blockType}" content block — this request requires an Anthropic key.`,
+		);
+		this.name = "WorkersAiUnsupportedContentError";
+	}
+}
+
+/** Text of any content shape the platform builds — a string, or text parts. Any other block is refused. */
 function contentText(content: unknown): string {
 	if (typeof content === "string") return content;
 	if (Array.isArray(content)) {
 		return content
-			.map((p) => (typeof p === "string" ? p : typeof (p as { text?: unknown })?.text === "string" ? (p as { text: string }).text : ""))
+			.map((p) => {
+				if (typeof p === "string") return p;
+				const block = (p ?? {}) as { type?: unknown; text?: unknown };
+				if (block.type !== undefined && block.type !== "text") throw new WorkersAiUnsupportedContentError(String(block.type));
+				return typeof block.text === "string" ? block.text : "";
+			})
 			.filter(Boolean)
 			.join("\n\n");
 	}
