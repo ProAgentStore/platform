@@ -92,6 +92,8 @@ const CONTROL_ARGS: ReadonlySet<string> = new Set([
 	"job_key",
 	"repo_id",
 	"node_id",
+	// #857: `coding_repo_add.clone` is an instruction — clone before binding — not a stored field.
+	"clone",
 	// #613: `forget_runner_node.node` identifies the registration to remove. The preflight/list
 	// reads it before the destructive action; deletion deliberately leaves no stored field to echo.
 	"node",

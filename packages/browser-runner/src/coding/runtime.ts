@@ -10,7 +10,7 @@ import type { EngineAuthResolved } from "./engine-auth.js";
 import type { EngineInvocationMode } from "./engine-adapter.js";
 import { type GitCmd, InspectError, readGitRemoteOrigin, readRepoFile, type RepoSearchMode, repoSearch, repoSync, repoTree, runRepoGit } from "./inspect.js";
 import { fastForwardRepo, type GitWriteCmd, switchRepoBranch } from "./repo-write.js";
-import { checkWorkdir, ensureRepo, sanitizeSessionName } from "./repo.js";
+import { checkWorkdir, cloneIntoWorkdir, ensureRepo, sanitizeSessionName } from "./repo.js";
 import { asTurnAuthor, type TurnAuthor } from "./turn-author.js";
 import type { GhGuardReport } from "./gh-guard.js";
 
@@ -276,6 +276,12 @@ export class CodingRuntime {
 	 */
 	checkRepo(input: { sessionId?: string; workDir?: string }) {
 		return checkWorkdir(this.resolveWorkDir(input));
+	}
+
+	/** Clone a repository into an absent or empty owner folder (#857) — see `cloneIntoWorkdir`. */
+	cloneRepo(input: { workDir?: string; cloneUrl?: string }) {
+		if (!input.workDir || !input.cloneUrl) throw new InspectError("workDir and cloneUrl are required");
+		return cloneIntoWorkdir(this.resolveWorkDir({ workDir: input.workDir }), input.cloneUrl);
 	}
 
 	static taskTypes(): string[] {

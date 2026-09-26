@@ -403,6 +403,16 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 			return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
 		}
 	}
+	// Clone into an absent or empty owner folder (#857) — the cold-start half of `coding_repo_add`.
+	// An older runner 404s this, and the cloud says the CLI must be updated rather than guessing.
+	if (req.method === "POST" && path === "/coding/clone") {
+		const b = await readJson<{ workDir?: string; cloneUrl?: string }>(req);
+		try {
+			return json(res, 200, runner.coding.cloneRepo(b));
+		} catch (e: unknown) {
+			return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
+		}
+	}
 	if (req.method === "POST" && path === "/coding/tree") {
 		const b = await readJson<{ sessionId?: string; workDir?: string; path?: string; maxDepth?: number; maxEntries?: number }>(req);
 		try {

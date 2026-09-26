@@ -83,3 +83,24 @@ describe("coding_repo_add — both halves or nothing (#849)", () => {
 		expect(out).toContain("Missing the GitHub origin");
 	});
 });
+
+describe("coding_repo_add — cold start: clone is opt-in (#857)", () => {
+	it("sends clone:true with the folder and the repository", async () => {
+		const { calls, tool } = setup();
+		await tool.handler({ instance_id: "i1", path: "~/dev/grass-karma", github_repo: "acme/grass-karma", clone: true });
+		expect(JSON.parse(posts(calls)[0].body ?? "{}")).toEqual({ localPath: "~/dev/grass-karma", requireGithub: true, githubRepo: "acme/grass-karma", clone: true });
+	});
+
+	it("sends no clone flag at all when the caller did not opt in — the request is byte-for-byte what it was", async () => {
+		const { calls, tool } = setup();
+		await tool.handler({ instance_id: "i1", path: "~/dev/grass-karma", github_repo: "acme/grass-karma" });
+		expect(JSON.parse(posts(calls)[0].body ?? "{}")).toEqual({ localPath: "~/dev/grass-karma", requireGithub: true, githubRepo: "acme/grass-karma" });
+	});
+
+	it("REFUSES clone without github_repo — there is nothing to clone — and calls nothing", async () => {
+		const { calls, tool } = setup();
+		const out = textOf(await tool.handler({ instance_id: "i1", path: "~/dev/grass-karma", clone: true }));
+		expect(out).toMatch(/^Error: clone needs github_repo/);
+		expect(posts(calls)).toHaveLength(0);
+	});
+});

@@ -199,6 +199,24 @@ export function probeGitSshIdentity(host: string): GitSshIdentity {
 }
 
 /**
+ * Clone `cloneUrl` into the owner's folder `dir` — only when there is nothing there yet (#857).
+ *
+ * The cold-start step `coding_repo_add … clone:true` asks for. It is {@link ensureRepo}'s owner-folder
+ * clone and inherits every one of its guards: an existing checkout is left untouched, a folder with
+ * anything in it is never cloned into, an empty folder inside another checkout is refused, and the
+ * clone is a full one whose `origin` is the plain URL. Authentication is the MACHINE's own — its git
+ * credential helper for https — and a repository it cannot read fails with git's reason.
+ *
+ * `cloned` says whether this call cloned; false means the folder was already there and was not touched.
+ */
+export function cloneIntoWorkdir(dir: string, cloneUrl: string): { cloned: boolean; path: string } {
+	const before = checkWorkdir(dir);
+	const empty = !before.exists || (before.isDirectory && before.entryCount === 0);
+	ensureRepo(dir, { cloneUrl, ownFolder: true });
+	return { cloned: empty, path: dir };
+}
+
+/**
  * Ensure a repo is present at `dir`, cloning it from `cloneUrl` if not. Idempotent
  * — an existing checkout is left alone (no clobber). For private repos the cloud
  * sends a token, injected as the password half of an https URL. The coding CLI then
@@ -256,7 +274,9 @@ export function ensureRepo(
 	if (opts.branch) args.push("--branch", opts.branch);
 	args.push(url, dir);
 	try {
-		execFileSync("git", args, { stdio: "pipe", timeout: 180_000 });
+		// No prompt, ever (#857): a clone the machine's credentials cannot authorise must FAIL, with git's
+		// own reason, rather than wait on a username prompt no one will ever see until the timeout.
+		execFileSync("git", args, { stdio: "pipe", timeout: 180_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
 		if (opts.ownFolder && url !== opts.cloneUrl) execFileSync("git", ["remote", "set-url", "origin", opts.cloneUrl], { cwd: dir, stdio: "pipe" });
 	} catch (e) {
 		// `e.message` carries the whole command line, token included — the reason git's own

@@ -921,4 +921,8 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// clears a stale socket from its relay slot and asks the machine's connected runner to take it.
 	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.59 is published.
 	"0.1.60": "sha256:6109bbb6cdb9d5f6c23950a798ab6e1943b163694b6c55176ca65e047f1caff1",
+	// 0.1.61 (#857): no new tool — `coding_repo_add`'s inputSchema gains an opt-in `clone` boolean:
+	// with `github_repo`, a missing or empty `path` is cloned on the connected machine and then bound.
+	// `SERVER_INSTRUCTIONS` did not move. Appended, never edited in place: 0.1.60 is published.
+	"0.1.61": "sha256:48dd0e1e59f5fb69a88f721af569702ebbc58008900c0596828a537e809b48a7",
 };

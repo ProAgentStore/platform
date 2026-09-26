@@ -498,6 +498,110 @@ describe("POST /coding/repos requireGithub — a coding repo is stored with BOTH
 	});
 });
 
+describe("POST /coding/repos requireGithub + clone — the cold start (#857)", () => {
+	const FAKE_CONN = { instanceId: INSTANCE } as never;
+	const HEALTHY = { checked: true, path: "/home/u/dev/grass-karma", exists: true, isDirectory: true, entryCount: 12, insideWorkTree: true, gitChecked: true };
+	const MISSING = { checked: true, path: "/home/u/dev/grass-karma", exists: false, isDirectory: false, entryCount: 0, insideWorkTree: false, gitChecked: true };
+
+	/**
+	 * A connected machine whose folder starts as `initial`. A clone — unless `cloneFails` — turns it into
+	 * a checkout whose origin is the URL cloned; every runner call is recorded so a test can say what was asked.
+	 */
+	function machine(opts: { initial: Record<string, unknown>; origin?: string | null; cloneFails?: string }) {
+		const asked: Array<{ path: string; body: unknown }> = [];
+		/** The URL the machine cloned from — a fresh clone's `origin`. */
+		let clonedFrom: string | null = null;
+		getBoundRunnerConn.mockResolvedValue(FAKE_CONN);
+		callRunner.mockImplementation(async (_conn: unknown, path: string, body: unknown) => {
+			asked.push({ path, body });
+			if (path === "/coding/clone") {
+				if (opts.cloneFails) throw new Error(`Runner /coding/clone → 400: ${JSON.stringify({ error: opts.cloneFails })}`);
+				clonedFrom = (body as { cloneUrl: string }).cloneUrl;
+				return { cloned: true, path: "/home/u/dev/grass-karma" };
+			}
+			if (path === "/coding/git-remote") return { remote: clonedFrom ?? opts.origin ?? null };
+			return clonedFrom ? HEALTHY : opts.initial;
+		});
+		return asked;
+	}
+	const inserted = (issued: Statement[]) => issued.some((s) => s.sql.startsWith("INSERT INTO coding_repos"));
+	const add = (body: Record<string, unknown>, bindings: Binding[] = []) => addRepo({ localPath: "~/dev/grass-karma", requireGithub: true, ...body }, bindings);
+
+	it("clones into a path that does not exist, then binds it in one call — a working coder, no terminal step", async () => {
+		const asked = machine({ initial: MISSING });
+		const { status, body, row } = await add({ githubRepo: "acme/grass-karma", clone: true });
+		expect(status).toBe(201);
+		// The machine cloned the repository named, over https with its own credentials.
+		expect(asked.filter((a) => a.path === "/coding/clone")).toEqual([
+			{ path: "/coding/clone", body: { workDir: "~/dev/grass-karma", cloneUrl: "https://github.com/acme/grass-karma.git" } },
+		]);
+		// …and it was then verified like any checkout before anything was stored.
+		expect(row).toMatchObject({ workdir: "~/dev/grass-karma", provider: "github", github_repo: "acme/grass-karma" });
+		expect(body.repo?.cloneStatus).toBe("ready");
+	});
+
+	it("clones into an EMPTY folder as well", async () => {
+		machine({ initial: { ...HEALTHY, entryCount: 0, insideWorkTree: false } });
+		expect((await add({ githubRepo: "acme/grass-karma", clone: true })).status).toBe(201);
+	});
+
+	it("WITHOUT clone:true a missing path is refused exactly as before — nothing cloned, nothing stored", async () => {
+		const asked = machine({ initial: MISSING });
+		const { status, body, issued } = await add({ githubRepo: "acme/grass-karma" });
+		expect(status).toBe(400);
+		expect(body.error).toMatch(/^Invalid local workdir: .*does not exist/);
+		expect(asked.some((a) => a.path === "/coding/clone")).toBe(false);
+		expect(inserted(issued)).toBe(false);
+	});
+
+	it("an EXISTING checkout whose origin matches is bound as today — clone:true clones nothing", async () => {
+		const asked = machine({ initial: HEALTHY, origin: "git@github.com:acme/grass-karma.git" });
+		const { status } = await add({ githubRepo: "acme/grass-karma", clone: true });
+		expect(status).toBe(201);
+		expect(asked.some((a) => a.path === "/coding/clone")).toBe(false);
+	});
+
+	it("an EXISTING checkout whose origin is another repo is refused as today — never cloned over, nothing stored", async () => {
+		const asked = machine({ initial: HEALTHY, origin: "https://github.com/acme/other.git" });
+		const { status, body, issued } = await add({ githubRepo: "acme/grass-karma", clone: true });
+		expect(status).toBe(400);
+		expect(body.error).toContain("is a checkout of acme/other, not acme/grass-karma");
+		expect(asked.some((a) => a.path === "/coding/clone")).toBe(false);
+		expect(inserted(issued)).toBe(false);
+	});
+
+	it("a DISCONNECTED machine fails clearly — the clone cannot run, nothing stored", async () => {
+		const { status, body, issued } = await add({ githubRepo: "acme/grass-karma", clone: true });
+		expect(status).toBe(400);
+		expect(body.error).toMatch(/No machine is connected/);
+		expect(callRunner).not.toHaveBeenCalled();
+		expect(inserted(issued)).toBe(false);
+	});
+
+	it("a repository the machine cannot read fails with git's reason and what to do about it — nothing stored", async () => {
+		machine({ initial: MISSING, cloneFails: "Could not clone https://github.com/acme/private.git into \"/home/u/dev/grass-karma\": remote: Repository not found." });
+		const { status, body, issued } = await add({ githubRepo: "acme/private", clone: true });
+		expect(status).toBe(400);
+		expect(body.error).toMatch(/Could not clone acme\/private into `~\/dev\/grass-karma`: .*Repository not found/);
+		expect(body.error).toMatch(/its OWN git credentials.*gh auth login/);
+		expect(inserted(issued)).toBe(false);
+	});
+
+	it("clone without github_repo is refused — there is nothing to clone", async () => {
+		machine({ initial: MISSING });
+		const { status, body } = await add({ clone: true });
+		expect(status).toBe(400);
+		expect(body.error).toMatch(/Cloning needs github_repo/);
+	});
+
+	it("a repository already bound to this instance is refused BEFORE it is cloned a second time", async () => {
+		const asked = machine({ initial: MISSING });
+		const { status } = await add({ githubRepo: "acme/grass-karma", clone: true }, [{ id: "repo_old", instance_id: INSTANCE, name: "gk", github_repo: "acme/grass-karma" }]);
+		expect(status).toBe(409);
+		expect(asked.some((a) => a.path === "/coding/clone")).toBe(false);
+	});
+});
+
 /**
  * A checkout can be moved or deleted long after it was added — the same state arriving later.
  * The list is the only place that state can be caught, because it is what the console reads.
