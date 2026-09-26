@@ -3,6 +3,7 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, isAdmin, isSuspended, requireUser } from "../lib/auth.js";
 import { signChatToken, verifyChatToken } from "../lib/session.js";
 import type { Env } from "../types.js";
+import { templateModelRefusal } from "../lib/brain-models.js";
 
 export const chatRoutes = new Hono<{ Bindings: Env }>();
 
@@ -223,12 +224,16 @@ chatRoutes.get("/:id/state", async (c) => {
 chatRoutes.put("/:id/state", async (c) => {
 	await requireUser(c);
 	const agent = await resolveAgent(c);
+	const body = (await c.req.json()) as Record<string, unknown>;
+	// The template's own state model is what a new subscriber inherits FIRST (#863).
+	const modelRefusal = templateModelRefusal(body.model);
+	if (modelRefusal) throw new HttpError(400, modelRefusal);
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
 	const doRes = await stub.fetch(
 		new Request("https://agent/state", {
 			method: "PUT",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify(await c.req.json()),
+			body: JSON.stringify(body),
 		}),
 	);
 	return c.json(await doRes.json());

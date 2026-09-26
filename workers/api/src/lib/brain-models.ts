@@ -29,6 +29,32 @@ export function brainModel(id: string): BrainModel | undefined {
 	return BRAIN_MODELS.find((m) => m.id === id);
 }
 
+/** The brain models with their hints, in the one sentence every refusal lists them in. */
+export const brainModelOptions = () => BRAIN_MODELS.map((m) => `${m.id} (${m.hint})`).join("; ");
+
+/**
+ * Why `model` cannot run an agent's brain as named, or null when it is a brain model (#853 finding 7).
+ * Calling tools is not enough: the Anthropic brain always runs claude-sonnet-4-6, so a Haiku or Opus id
+ * ran — and billed — Sonnet under another name, and a Workers AI model outside the list never had
+ * #851's tool-calling parity.
+ */
+export function offCatalogueModel(model: string): string | null {
+	if (brainModel(model)) return null;
+	const sonnet = model.startsWith("claude-") ? " The Anthropic brain always runs claude-sonnet-4-6, so this pick would run Sonnet, not the model named." : "";
+	return `${model} is not a brain model.${sonnet} Brain models: ${brainModelOptions()}.`;
+}
+
+/**
+ * The same rule for an agent TEMPLATE's model (#863) — what every subscriber's instance starts on.
+ * Omitted or empty keeps meaning "the platform default". No credential check: those belong to
+ * whoever picks a model for an instance, not to the template's creator.
+ */
+export function templateModelRefusal(model: unknown): string | null {
+	if (model === undefined || model === null || model === "") return null;
+	if (typeof model !== "string") return `model must be a brain model id. Brain models: ${brainModelOptions()}.`;
+	return offCatalogueModel(model);
+}
+
 /** A Workers AI model id — the one kind of id whose provider the id itself names. */
 export function isWorkersAiModel(id: string): boolean {
 	return id.startsWith("@cf/") || id.startsWith("@hf/");

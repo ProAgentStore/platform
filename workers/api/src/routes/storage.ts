@@ -9,7 +9,7 @@ import { listActiveRuns } from "../lib/agent-loop-store.js";
 import { runLiveness, runLivenessUnavailable } from "../lib/instance-run-liveness.js";
 import { resolveGithubAccess } from "../lib/github-app.js";
 import { parseGithubUrl, type RepoAuthContext } from "../lib/repo-ingest.js";
-import { BRAIN_MODELS, brainModel, isWorkersAiModel } from "../lib/brain-models.js";
+import { brainModelOptions, isWorkersAiModel, offCatalogueModel } from "../lib/brain-models.js";
 import { TOOL_CAPABLE_MODELS } from "../agent-do-prompt.js";
 import { cloudflareAiCredentialProblem } from "../lib/cloudflare-ai-check.js";
 import type { Env } from "../types.js";
@@ -516,13 +516,11 @@ instanceStorageRoutes.get("/:id/state", async (c) => {
  */
 async function brainModelRefusal(env: Env, uid: string, model: unknown): Promise<{ status: 400 | 502; error: string } | null> {
 	const refuse = (error: string) => ({ status: 400 as const, error });
-	const options = BRAIN_MODELS.map((m) => `${m.id} (${m.hint})`).join("; ");
+	const options = brainModelOptions();
 	if (typeof model !== "string" || !model.trim()) return refuse(`A model id is required. Brain models: ${options}.`);
 	if (!TOOL_CAPABLE_MODELS.has(model)) return refuse(`${model} cannot call tools, so it cannot run this agent's brain. Brain models: ${options}.`);
-	if (!brainModel(model)) {
-		const sonnet = model.startsWith("claude-") ? " The Anthropic brain always runs claude-sonnet-4-6, so this pick would run Sonnet, not the model named." : "";
-		return refuse(`${model} is not a brain model.${sonnet} Brain models: ${options}.`);
-	}
+	const offCatalogue = offCatalogueModel(model);
+	if (offCatalogue) return refuse(offCatalogue);
 	if (!isWorkersAiModel(model)) return null;
 	const cf = await env.DB.prepare("SELECT 1 FROM user_api_keys WHERE user_id = ?1 AND provider = 'cloudflare'").bind(uid).first();
 	if (!cf) return refuse(`${model} runs on Cloudflare Workers AI, and no Cloudflare credentials are stored. Add your Cloudflare account ID and API token in Profile → API Keys, then pick it again.`);

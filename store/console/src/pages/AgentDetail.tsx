@@ -10,22 +10,11 @@ import { renderMd } from "@proagentstore/sdk/ui";
 import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import { Zap, ArrowLeft } from "lucide-react";
 import { BRAIN_MODELS } from "../../../../workers/api/src/lib/brain-models";
+import { templateModelField, templateModelOptions } from "../lib/template-models";
 
 type Tab = "chat" | "knowledge" | "memory" | "tasks" | "settings" | "analytics" | "ops";
 
 const CATEGORIES = ["general", "chat", "code", "data", "creative", "productivity"];
-const MODELS = [
-	// API models we have keys for (Anthropic path — ANTHROPIC_API_KEY configured). Default first.
-	{ value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6 (recommended)" },
-	{ value: "claude-opus-4", label: "Claude Opus 4 (most capable)" },
-	{ value: "claude-haiku-4", label: "Claude Haiku 4 (fast, cheap)" },
-	{ value: "claude-3-5-sonnet", label: "Claude 3.5 Sonnet" },
-	{ value: "claude-3-5-haiku", label: "Claude 3.5 Haiku" },
-	// Cloudflare Workers AI. The three tool-capable brain models carry lib/brain-models.ts's cost hint (#852).
-	...BRAIN_MODELS.filter((m) => m.provider === "cloudflare").map((m) => ({ value: m.id, label: `${m.label} — ${m.hint}` })),
-	{ value: "@cf/meta/llama-3.2-3b-instruct", label: "Llama 3.2 3B (local, fast)" },
-	{ value: "@cf/mistralai/mistral-small-3.1-24b-instruct", label: "Mistral Small 24B (local)" },
-];
 
 const localRowId = () => (globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `row-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
@@ -108,7 +97,7 @@ export default function AgentDetail() {
 	const [sDesc, setSDesc] = useState("");
 	const [sCat, setSCat] = useState("general");
 	const [sVis, setSVis] = useState("draft");
-	const [sModel, setSModel] = useState(MODELS[0].value);
+	const [sModel, setSModel] = useState(BRAIN_MODELS[0].id);
 	const [sPersonality, setSPersonality] = useState("");
 	const [sGoal, setSGoal] = useState("");
 	const [sWelcome, setSWelcome] = useState("");
@@ -251,7 +240,7 @@ export default function AgentDetail() {
 			setSDesc(a.description);
 			setSCat(a.category);
 			setSVis(a.visibility);
-			setSModel(a.model || MODELS[0].value);
+			setSModel(a.model || BRAIN_MODELS[0].id);
 			// Load DO state
 			try {
 				const state = await api<Record<string, unknown>>(`/v1/agents/${a.id}/state`);
@@ -400,8 +389,9 @@ export default function AgentDetail() {
 
 	const saveSettings = async () => {
 		if (!id) return;
-		const catalogue = { name: sName, description: sDesc, category: sCat, visibility: sVis, model: sModel };
-		const state = { name: sName, personality: sPersonality, goal: sGoal, model: sModel, welcomeMessage: sWelcome };
+		// A kept off-catalogue model is left out of the save rather than re-sent and refused (#863).
+		const catalogue = { name: sName, description: sDesc, category: sCat, visibility: sVis, ...templateModelField(sModel) };
+		const state = { name: sName, personality: sPersonality, goal: sGoal, ...templateModelField(sModel), welcomeMessage: sWelcome };
 		try {
 			try {
 				await api(`/v1/agents/${id}`, { method: "PUT", body: JSON.stringify(catalogue) });
@@ -592,7 +582,7 @@ export default function AgentDetail() {
 						<h3 className="text-base font-semibold mb-3">Model & Publishing</h3>
 						<div className="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
 							<label className="flex flex-col gap-1"><span className="text-xs text-muted font-semibold">Visibility</span><select value={sVis} onChange={e => setSVis(e.target.value)}><option value="draft">Draft</option><option value="published">Published</option><option value="unlisted">Unlisted</option></select></label>
-							<label className="flex flex-col gap-1"><span className="text-xs text-muted font-semibold">Model</span><select value={sModel} onChange={e => setSModel(e.target.value)}>{MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}</select></label>
+							<label className="flex flex-col gap-1"><span className="text-xs text-muted font-semibold">Model</span><select value={sModel} onChange={e => setSModel(e.target.value)}>{templateModelOptions(sModel).map(m => <option key={m.value} value={m.value} disabled={m.disabled}>{m.label}</option>)}</select></label>
 						</div>
 					</div>
 
@@ -942,7 +932,7 @@ function CreateAgent() {
 					<button type="button" onClick={() => setShowAdvanced(v => !v)} className="mt-4 text-sm text-muted hover:text-ink">{showAdvanced ? "Hide advanced" : "Show advanced"}</button>
 					{showAdvanced && (
 						<div className="grid grid-cols-2 gap-3 mt-3 max-sm:grid-cols-1">
-							<div><label htmlFor="agent-builder-model" className="text-xs text-muted font-semibold block mb-1">Model</label><select id="agent-builder-model" value={plan.agent.model} onChange={e => updateAgent({ model: e.target.value })}>{MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}</select></div>
+							<div><label htmlFor="agent-builder-model" className="text-xs text-muted font-semibold block mb-1">Model</label><select id="agent-builder-model" value={plan.agent.model} onChange={e => updateAgent({ model: e.target.value })}>{templateModelOptions(plan.agent.model).map(m => <option key={m.value} value={m.value} disabled={m.disabled}>{m.label}</option>)}</select></div>
 							<div><label htmlFor="agent-builder-action" className="text-xs text-muted font-semibold block mb-1">Action</label><input id="agent-builder-action" value={plan.action} readOnly /></div>
 							<div><label htmlFor="agent-builder-personality" className="text-xs text-muted font-semibold block mb-1">Personality</label><textarea id="agent-builder-personality" value={plan.agent.personality} onChange={e => updateAgent({ personality: e.target.value })} /></div>
 							<div><label htmlFor="agent-builder-goal" className="text-xs text-muted font-semibold block mb-1">Goal</label><textarea id="agent-builder-goal" value={plan.agent.goal} onChange={e => updateAgent({ goal: e.target.value })} /></div>

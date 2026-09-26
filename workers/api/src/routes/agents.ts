@@ -8,6 +8,7 @@ import { HttpError, isSuspended, requireCreator, requireUser } from "../lib/auth
 import { verifySession } from "../lib/session.js";
 import type { Env } from "../types.js";
 import { blockPublishReason } from "../lib/test-agent-guard.js";
+import { templateModelRefusal } from "../lib/brain-models.js";
 
 export const agentRoutes = new Hono<{ Bindings: Env }>();
 
@@ -344,6 +345,10 @@ agentRoutes.post("/", async (c) => {
 		);
 	}
 
+	// The model every subscriber's instance will start on must be one that runs as named (#863).
+	const modelRefusal = templateModelRefusal(body.model);
+	if (modelRefusal) throw new HttpError(400, modelRefusal);
+
 	// Declarative capabilities (#141), validated HERE rather than after the INSERT below: a
 	// refused declaration must not leave a half-built agent row and an initialized DO behind.
 	// See the comment on the config write for what this block is and why settingsSchema rides
@@ -454,6 +459,9 @@ agentRoutes.put("/:id", async (c) => {
 	}
 
 	const body = await c.req.json<Record<string, unknown>>();
+	// Checked before anything is written (#863) — same rule as create.
+	const modelRefusal = templateModelRefusal(body.model);
+	if (modelRefusal) throw new HttpError(400, modelRefusal);
 
 	// Don't let a smoke-test fixture reach the public catalog by accident (#65). Checked
 	// against the values AFTER this update, so renaming "Smoke Test Agent" → a real product

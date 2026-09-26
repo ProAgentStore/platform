@@ -1,8 +1,10 @@
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { HttpError } from "../lib/auth.js";
+import { BRAIN_MODELS } from "../lib/brain-models.js";
 import { signSession } from "../lib/session.js";
 import { agentRoutes } from "./agents.js";
+import { chatRoutes } from "./chat.js";
 import type { Env } from "../types.js";
 
 /**
@@ -122,6 +124,7 @@ function buildApp(opts: Opts = {}) {
 
 	const app = new Hono<{ Bindings: Env }>();
 	app.route("/v1/agents", agentRoutes);
+	app.route("/v1/agents", chatRoutes); // PUT /:id/state — the template's own state (#863)
 	app.onError((err, c) => {
 		if (err instanceof HttpError) return c.json({ error: err.message }, err.status as 400);
 		throw err;
@@ -647,3 +650,64 @@ describe("workflow/runtime mismatch is refused at all three declaring doors (#70
 		expect((await jsonBody(res)).workflow).toBeNull();
 	});
 });
+
+// #863 (the template half of #853 finding 7). A template's model is what every subscriber's instance
+// starts on, but it was stored unchecked: Claude Opus/Haiku ids that the Anthropic brain runs as
+// Sonnet, a 3B model that cannot call tools, Mistral outside #851's parity set. Omitted or empty
+// still means the platform default.
+describe("a template's model must be a brain model (#863)", () => {
+	const OFF = ["claude-opus-4", "claude-haiku-4", "claude-3-5-sonnet", "@cf/meta/llama-3.2-3b-instruct", "@cf/mistralai/mistral-small-3.1-24b-instruct"];
+	const creator = () => tokenFor("u1", ["creator"]);
+
+	it("POST refuses an off-catalogue model, naming the brain models — no row, no DO", async () => {
+		for (const model of OFF) {
+			const { app, env, writes, doCalls } = buildApp();
+			const res = await json(app, env, "POST", "/v1/agents", { slug: "new-a", name: "New", model }, await creator());
+			expect(res.status).toBe(400);
+			expect((await jsonBody(res)).error).toMatch(new RegExp(`^${model.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")} is not a brain model`));
+			expect(writes.some((w) => w.sql.includes("INSERT INTO agents"))).toBe(false);
+			expect(doCalls).toEqual([]);
+		}
+	});
+
+	it("POST says a Claude id would run as Sonnet 4.6", async () => {
+		const { app, env } = buildApp();
+		const res = await json(app, env, "POST", "/v1/agents", { slug: "new-a", name: "New", model: "claude-opus-4" }, await creator());
+		expect((await jsonBody(res)).error).toMatch(/Anthropic brain always runs claude-sonnet-4-6/);
+	});
+
+	it("POST accepts every brain model, and no model at all", async () => {
+		for (const model of [...BRAIN_MODELS.map((m) => m.id), undefined, ""]) {
+			const { app, env } = buildApp();
+			const res = await json(app, env, "POST", "/v1/agents", { slug: "new-a", name: "New", ...(model === undefined ? {} : { model }) }, await creator());
+			expect(res.status).toBe(201);
+		}
+	});
+
+	it("PUT refuses an off-catalogue model — nothing updated", async () => {
+		const { app, env, writes } = buildApp({ agents: [{ id: "a1", slug: "a", owner_id: "u1" }] });
+		const res = await json(app, env, "PUT", "/v1/agents/a1", { name: "Renamed", model: "claude-haiku-4" }, await tokenFor("u1"));
+		expect(res.status).toBe(400);
+		expect((await jsonBody(res)).error).toMatch(/^claude-haiku-4 is not a brain model/);
+		expect(writes.some((w) => w.sql.startsWith("UPDATE agents SET"))).toBe(false);
+	});
+
+	it("PUT accepts a brain model", async () => {
+		const { app, env, writes } = buildApp({ agents: [{ id: "a1", slug: "a", owner_id: "u1" }] });
+		const res = await json(app, env, "PUT", "/v1/agents/a1", { model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" }, await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		expect(writes.find((w) => w.sql.startsWith("UPDATE agents SET"))?.args).toContain("@cf/meta/llama-3.3-70b-instruct-fp8-fast");
+	});
+
+	it("the template's own state — what a subscriber inherits first — is held to the same rule", async () => {
+		const { app, env, doCalls } = buildApp({ agents: [{ id: "a1", slug: "a", owner_id: "u1" }] });
+		const bad = await json(app, env, "PUT", "/v1/agents/a1/state", { name: "x", model: "@cf/mistralai/mistral-small-3.1-24b-instruct" }, await tokenFor("u1"));
+		expect(bad.status).toBe(400);
+		expect(doCalls).toEqual([]);
+		const good = await json(app, env, "PUT", "/v1/agents/a1/state", { name: "x", model: "claude-sonnet-4-6" }, await tokenFor("u1"));
+		expect(good.status).toBe(200);
+		const noModel = await json(app, env, "PUT", "/v1/agents/a1/state", { name: "y" }, await tokenFor("u1"));
+		expect(noModel.status).toBe(200);
+	});
+});
+

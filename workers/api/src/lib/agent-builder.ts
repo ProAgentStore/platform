@@ -1,5 +1,6 @@
 import { HttpError } from "./auth.js";
 import type { Env, SessionPayload } from "../types.js";
+import { templateModelRefusal } from "./brain-models.js";
 
 export type BuilderAction = "create_agent" | "scaffold_agent";
 export type BuilderTemplate = "worker" | "cron" | "api";
@@ -52,7 +53,8 @@ export interface AgentBuilderExecuteResult {
 }
 
 const DEFAULT_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
-const FAST_MODEL = "@cf/meta/llama-3.2-3b-instruct";
+// Every planned model is a brain model (#863): a simple agent used to get a 3B model that cannot call tools.
+const FAST_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
 const CODER_MODEL = "@cf/qwen/qwen2.5-coder-32b-instruct";
 
 function hasAny(text: string, words: string[]): boolean {
@@ -207,6 +209,9 @@ export function planAgentFromPrompt(prompt: string): AgentBuilderPlan {
 }
 
 async function createAgentRecord(env: Env, session: SessionPayload, plan: AgentBuilderPlan): Promise<string> {
+	// A plan's model can be edited before it runs; this insert does not go through POST /v1/agents (#863).
+	const modelRefusal = templateModelRefusal(plan.agent.model);
+	if (modelRefusal) throw new HttpError(400, modelRefusal);
 	const existing = await env.DB.prepare("SELECT id FROM agents WHERE slug = ?1")
 		.bind(plan.agent.slug)
 		.first<{ id: string }>();

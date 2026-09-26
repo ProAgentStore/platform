@@ -534,7 +534,8 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				const repo = repoNameFor(slug);
 				const org = this.env.GITHUB_ORG || "ProAgentStore";
 				const selectedTemplate = template || "worker";
-				const selectedModel = model || "@cf/meta/llama-3.2-3b-instruct";
+				// A brain model, like everything the API now stores for a template (#863).
+				const selectedModel = model || "@cf/meta/llama-4-scout-17b-16e-instruct";
 				const input = {
 					slug,
 					name,
