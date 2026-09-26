@@ -384,7 +384,7 @@ export async function executeStorageTool(
 				const file = await engine.fileGet(id);
 				if (!file) return fail(call.name, `File not found: ${id}`);
 				if (!file.meta.mimeType.startsWith("text/") && !/json|xml|csv|html/.test(file.meta.mimeType)) {
-					return fail(call.name, `${file.meta.name} is ${file.meta.mimeType} and has no extracted text — its content is not readable as text`);
+					return fail(call.name, `${file.meta.name} is ${file.meta.mimeType} and has no extracted text — ${file.meta.extractionError ?? "its content is not readable as text"}`);
 				}
 				const reader = file.body.getReader();
 				const chunks: Uint8Array[] = [];

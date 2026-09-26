@@ -162,7 +162,7 @@ export async function extractFileText(input: {
 			return {
 				text: "",
 				status: "unsupported",
-				error: "This is a legacy Word (.doc) document. The .doc format is not supported — upload a .docx file instead.",
+				error: "This is a legacy Word (.doc) document, and its text cannot be read here. Next step: ask for it as .docx or PDF, or get the form's questions from the owner and build an answer sheet (build_answer_sheet) to send alongside the original.",
 			};
 		}
 		return { text: "", status: "unsupported" };

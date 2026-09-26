@@ -344,14 +344,18 @@ endobj
 		expect(result.error).toContain("ZIP signature");
 	});
 
-	it("returns status:unsupported with a named-format error for a legacy .doc file", async () => {
-		const result = await extractFileText({
-			name: "old.doc",
-			mimeType: "application/msword",
-			data: new Uint8Array([0xd0, 0xcf, 0x11, 0xe0]), // OLE2 magic
-		});
+	// #764: whatever is decided about Word forms, a .doc is never met with silence — the refusal
+	// names the format, says it cannot be read, and offers the next step.
+	it.each([
+		["old.doc", "application/msword"],
+		["old.doc", "application/vnd.ms-word"],
+		["Entry Form.DOC", "application/octet-stream"],
+	])("a legacy .doc (%s, %s) is refused by name, with the next step", async (name, mimeType) => {
+		const result = await extractFileText({ name, mimeType, data: new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]) }); // OLE2 magic
 		expect(result.status).toBe("unsupported");
-		expect(result.error).toMatch(/\.doc/);
-		expect(result.error).toMatch(/not supported/i);
+		expect(result.error).toMatch(/legacy Word \(\.doc\)/);
+		expect(result.error).toMatch(/cannot be read/);
+		expect(result.error).toMatch(/\.docx or PDF/);
+		expect(result.error).toMatch(/build_answer_sheet/);
 	});
 });

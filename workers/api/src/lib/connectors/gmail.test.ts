@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { GMAIL_CONNECTOR, GMAIL_MANIFEST } from "./gmail.js";
+import { bytesFromBase64 } from "../../agent-storage-utils.js";
 import type { Env } from "../../types.js";
 import { renderToolContent } from "../tool-registry.js";
 import type { RegistryToolCtx } from "./types.js";
@@ -274,6 +275,64 @@ describe("gmail_download_attachment", () => {
 		expect(res.content).not.toContain("%PDF");
 		expect(posted[0]).toMatchObject({ name: "Form.pdf", mime_type: "application/pdf" });
 		expect(String(posted[0].contentBase64)).not.toMatch(/[-_]/); // translated to standard base64
+	});
+
+	// #756: the motivating attachment was a binary `.doc`. ASCII fixtures never exercise the
+	// base64url alphabet or Gmail's unpadded encoding, so this one carries every byte value.
+	it("a binary .doc attachment reaches the file store byte-for-byte, typed application/msword (#756)", async () => {
+		const bytes = new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, ...Array.from({ length: 256 }, (_, i) => i), 0xfb, 0xff]);
+		const b64url = btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+		expect(b64url).toMatch(/[-_]/);
+		const docMessage = { ...MESSAGE, payload: { ...MESSAGE.payload, parts: [{ mimeType: "application/msword", filename: "Junior Comp Entry Form.doc", body: { attachmentId: "att-doc", size: bytes.length } }] } };
+		const posted: Array<Record<string, unknown>> = [];
+		vi.stubGlobal("fetch", async (url: string) =>
+			String(url).includes("/attachments/") ? Response.json({ data: b64url, size: bytes.length }) : Response.json(docMessage),
+		);
+		const env = {
+			AGENT: {
+				idFromName: (n: string) => n,
+				get: () => ({
+					fetch: async (req: Request) => {
+						if (new URL(req.url).pathname === "/state") return Response.json({ permissions: { email: true } });
+						posted.push((await req.json()) as Record<string, unknown>);
+						return Response.json({ id: "file-doc", name: "Junior Comp Entry Form.doc", size: bytes.length }, { status: 201 });
+					},
+				}),
+			},
+		} as unknown as Env;
+
+		const res = await tool("gmail_download_attachment")(ctxWith(env), { message_id: "m1", attachment_id: "Junior Comp Entry Form.doc" });
+		expect(res.success).toBe(true);
+		expect(res.content).toContain("file-doc");
+		expect(posted).toHaveLength(1);
+		expect(posted[0]).toMatchObject({ name: "Junior Comp Entry Form.doc", mime_type: "application/msword" });
+		expect(bytesFromBase64(String(posted[0].contentBase64))).toEqual(bytes);
+	});
+
+	it("with email not enabled, nothing is fetched from Gmail and nothing is written to the file store", async () => {
+		const fetched: string[] = [];
+		const writes: string[] = [];
+		vi.stubGlobal("fetch", async (url: string) => {
+			fetched.push(String(url));
+			return Response.json(MESSAGE);
+		});
+		const env = {
+			AGENT: {
+				idFromName: (n: string) => n,
+				get: () => ({
+					fetch: async (req: Request) => {
+						if (new URL(req.url).pathname === "/state") return Response.json({ permissions: { email: false } });
+						writes.push(req.url);
+						return Response.json({ id: "file-x" }, { status: 201 });
+					},
+				}),
+			},
+		} as unknown as Env;
+		const res = await tool("gmail_download_attachment")(ctxWith(env), { message_id: "m1", attachment_id: "Form.pdf" });
+		expect(res.success).toBe(false);
+		expect(res.content).toMatch(/Email access is not enabled/);
+		expect(fetched).toEqual([]);
+		expect(writes).toEqual([]);
 	});
 });
 
