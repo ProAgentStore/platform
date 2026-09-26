@@ -760,7 +760,7 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 /** Compiled Connector — consumed by the registry exactly like any other connector.
  *  `scopes` derives from the tools: all three are `read`, so this still declares
  *  `{read:true, write:false}`, byte-for-byte the reach Gmail had before #711. */
-export const GMAIL_CONNECTOR: Connector = compileConnector(GMAIL_MANIFEST, {
+const COMPILED_GMAIL: Connector = compileConnector(GMAIL_MANIFEST, {
 	gmail_search: searchHandler,
 	gmail_read_message: readHandler,
 	gmail_download_attachment: downloadHandler,
@@ -771,3 +771,13 @@ export const GMAIL_CONNECTOR: Connector = compileConnector(GMAIL_MANIFEST, {
 	gmail_archive: labelChangeHandler("archive"),
 	gmail_mark_read: labelChangeHandler("mark_read"),
 }).connector;
+
+/**
+ * The compiled connector plus the two facts a manifest has no key for (#352 Stage 2): the callback
+ * path Google has registered for Gmail, and that each connected MAILBOX is its own row (#715). With
+ * them the generic flow is exactly the dedicated one it replaced — same URI, same rows.
+ */
+export const GMAIL_CONNECTOR: Connector = {
+	...COMPILED_GMAIL,
+	oauth: COMPILED_GMAIL.oauth && { ...COMPILED_GMAIL.oauth, redirectPath: "/v1/email/google/callback", identity: { label: "userinfo-email", perAccount: true } },
+};

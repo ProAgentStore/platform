@@ -11593,9 +11593,35 @@ paths:
 
   # ── Gmail ─────────────────────────────────────────────────────────────────
 
+  /v1/connectors/oauth/callback:
+    get:
+      summary: Connector OAuth callback — one redirect URI for every connector
+      description: |
+        #352 Stage 2. The same exchange as `/v1/connectors/{id}/oauth/callback`, for an OAuth app
+        that registers ONE redirect URI for all the connectors it serves. The connector is read from
+        the state's claim only to choose which to verify against; verification then pins the state
+        to that connector, its signature and expiry, and the single-use bind cookie of the browser
+        that started the flow, so a forged claim fails. A connector uses this path by declaring it as
+        its `redirectPath` once the URI is registered with the provider.
+      operationId: connectorOauthCallbackAny
+      security: []
+      tags: [Connectors]
+      parameters:
+        - { name: code, in: query, required: true, schema: { type: string } }
+        - { name: state, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Connected — a small HTML confirmation page
+          content:
+            text/html:
+              schema: { type: string }
+        "400": { description: "Missing code/state, a state naming no OAuth connector, failed bind check, token exchange failure, or no refresh token returned" }
+        "500": { description: Key encryption is not configured on this deployment }
+        "503": { description: The connector's OAuth credentials are not configured on this deployment }
+
   /v1/email/google/start:
     get:
-      summary: Begin the Gmail connection
+      summary: Begin the Gmail connection (alias of /v1/connectors/gmail/oauth/start, #352)
       description: |
         A plain connect is READ-ONLY (`gmail.readonly`). Sending (`gmail.send`) and archive/mark-read
         (`gmail.modify`) are optional grants, asked for only when named in `grant` (#718). Every
@@ -11623,7 +11649,7 @@ paths:
 
   /v1/email/google/callback:
     get:
-      summary: Gmail OAuth callback
+      summary: Gmail OAuth callback — the redirect registered with Google, an alias of the generic callback (#352)
       operationId: gmailCallback
       security: []
       tags: [Connectors]
@@ -11695,7 +11721,7 @@ paths:
 
   /v1/drive/google/callback:
     get:
-      summary: Google Drive OAuth callback
+      summary: Google Drive OAuth callback — the redirect registered with Google, an alias of the generic callback (#352)
       operationId: driveCallback
       security: []
       tags: [Connectors]
@@ -11947,7 +11973,7 @@ paths:
 
   /v1/workdrive/zoho/callback:
     get:
-      summary: Zoho WorkDrive OAuth callback
+      summary: Zoho WorkDrive OAuth callback — the redirect registered with Zoho, an alias of the generic callback (#352)
       operationId: workdriveCallback
       security: []
       tags: [Connectors]

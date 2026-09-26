@@ -1,9 +1,8 @@
-// Generic connector OAuth2 (issue #147). ONE authorize/callback flow for every oauth
-// connector, driven by the connector's manifest `oauth` config (authUrl/tokenUrl/scopes +
-// the env-var names for the client credentials) instead of a hand-rolled per-provider route
-// (drive.ts remains its own for Drive-specific userinfo labeling). Adding an OAuth SaaS is
-// then a manifest + an OAuth app registration pointing its redirect at
-// `/v1/connectors/<id>/oauth/callback` — no bespoke route code.
+// Generic connector OAuth2 (issue #147). ONE authorize/callback flow for every oauth connector —
+// since #352 Stage 2 including Google Drive, Zoho WorkDrive and Gmail, whose dedicated flows are
+// gone (the flow itself is `lib/connector-oauth-flow.ts`). Adding an OAuth SaaS is a declaration
+// plus an OAuth app registration pointing its redirect at `/v1/connectors/<id>/oauth/callback`, or
+// at the id-less `/v1/connectors/oauth/callback` — no bespoke route code.
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { CONNECTORS, getConnector } from "../lib/connectors/registry.js";
@@ -11,30 +10,13 @@ import { resolveOauthConfig } from "../lib/connectors/client.js";
 import { connectorGrantReach, connectorGrantReachByProvider, revokeUserConnectorGrants } from "../lib/connector-grants.js";
 import { unattendedClassOf } from "../lib/connectors/unattended.js";
 import type { Connector, OptionalGrant } from "../lib/connectors/types.js";
-import { signConnectorState, verifyConnectorState, saveConnectorRefreshToken } from "../lib/connector-oauth.js";
-import { clearOauthBindCookie, newOauthNonce, oauthBindCookie, readOauthBindCookie, OAUTH_BIND_ERROR } from "../lib/oauth-nonce.js";
+import { connectorStateProvider } from "../lib/connector-oauth.js";
+import { completeConnectorOauth, startConnectorOauth } from "../lib/connector-oauth-flow.js";
+import { listConnectorAccounts } from "../lib/connector-accounts.js";
+import { OAUTH_BIND_ERROR } from "../lib/oauth-nonce.js";
 import type { Env } from "../types.js";
 
 export const connectorRoutes = new Hono<{ Bindings: Env }>();
-
-const STATE_TTL_SECONDS = 600;
-
-function callbackUri(reqUrl: string, id: string): string {
-	return new URL(`/v1/connectors/${encodeURIComponent(id)}/oauth/callback`, reqUrl).toString();
-}
-
-/** Resolve a connector that is oauth-auth AND has credentials wired, or throw a clear error. */
-function requireOauthConnector(env: Env, id: string) {
-	const connector = getConnector(id);
-	if (connector?.auth !== "oauth" || !connector.oauth) {
-		throw new HttpError(404, `No OAuth connector "${id}".`);
-	}
-	const creds = resolveOauthConfig(env, id);
-	if (!creds.clientId || !creds.clientSecret || !creds.tokenUrl) {
-		throw new HttpError(503, `The ${id} connector's OAuth credentials are not configured on this deployment.`);
-	}
-	return { connector, creds };
-}
 
 /**
  * Is this connector usable ON THIS DEPLOYMENT at all? Distinct from "the caller connected it" —
@@ -63,28 +45,14 @@ function isConfigured(env: Env, connector: Connector): boolean {
 }
 
 /**
- * Which connect/disconnect flow is LIVE for a connector today (#355).
- *
- * Three of them predate the generic OAuth routes and keep their own, because their OAuth apps
- * register `/v1/{drive,email}/google/callback` — not `/v1/connectors/<id>/oauth/callback` — so
- * the generic authorize URL would be rejected at the provider (see connected-accounts.ts).
- *
- * This lives on the server rather than in the console because the console is the FOURTH consumer
- * to need it, and the previous three each hardcoded their own copy. That is the arrangement this
- * whole route exists to end: the account page renders whatever the catalog says, so an owner sees
- * a new connector without a console change, and #352 Stage 2 retires a dedicated flow by deleting
- * one line here rather than by hunting for the buttons that point at it.
+ * Which connect/disconnect flow is live for a connector (#355). Since #352 Stage 2 there is one:
+ * the dedicated Drive/WorkDrive/Gmail pairs were retired into the generic flow, so every oauth
+ * connector that declares where to send the browser connects at `/v1/connectors/<id>/oauth/start`.
+ * The console reads this rather than knowing it, which is why retiring a flow needed no console
+ * change.
  */
-const DEDICATED_FLOWS: Record<string, { start: string; disconnect: string }> = {
-	google_drive: { start: "/v1/drive/google/start", disconnect: "/v1/drive/google" },
-	zoho_workdrive: { start: "/v1/workdrive/zoho/start", disconnect: "/v1/workdrive/zoho" },
-	gmail: { start: "/v1/email/google/start", disconnect: "/v1/email/google" },
-};
-
 /** The endpoints a UI should call to connect/disconnect, or null when there is nothing to call. */
 function connectFlow(connector: Connector): { start: string; disconnect: string } | null {
-	const dedicated = DEDICATED_FLOWS[connector.id];
-	if (dedicated) return dedicated;
 	// The generic flow can only be offered to a connector whose manifest declares where to send
 	// the browser. Anything else has no connect step a caller could take.
 	if (connector.auth !== "oauth" || !connector.oauth) return null;
@@ -259,73 +227,22 @@ connectorRoutes.get("/", async (c) => {
 	});
 });
 
-/** GET /v1/connectors/:id/oauth/start — return the provider authorize URL (signed state). */
-connectorRoutes.get("/:id/oauth/start", async (c) => {
-	const session = await requireUser(c);
-	const id = c.req.param("id");
-	const { connector, creds } = requireOauthConnector(c.env, id);
+/** GET /v1/connectors/:id/oauth/start — return the provider authorize URL (signed, browser-bound state). */
+connectorRoutes.get("/:id/oauth/start", (c) => startConnectorOauth(c, c.req.param("id")));
 
-	// Bind the state to THIS browser and to THIS connector — a signed state is otherwise
-	// bearer-grade, so an attacker's link completed by a victim stores the VICTIM's refresh
-	// token under the ATTACKER's account. See lib/oauth-nonce.ts.
-	const bindNonce = newOauthNonce();
-	const state = await signConnectorState(
-		session.uid,
-		Math.floor(Date.now() / 1000) + STATE_TTL_SECONDS,
-		c.env.SESSION_SIGNING_KEY,
-		{ nonce: bindNonce, provider: id },
-	);
-	c.header("Set-Cookie", oauthBindCookie(bindNonce, id));
-	const url = new URL(connector.oauth!.authUrl);
-	url.searchParams.set("client_id", creds.clientId!);
-	url.searchParams.set("redirect_uri", callbackUri(c.req.url, id));
-	url.searchParams.set("response_type", "code");
-	if (connector.oauth!.scopes?.length) url.searchParams.set("scope", connector.oauth!.scopes.join(" "));
-	// Ask for a durable refresh token (Google/most providers honor these; harmless elsewhere).
-	url.searchParams.set("access_type", "offline");
-	url.searchParams.set("prompt", "consent");
-	url.searchParams.set("state", state);
-	return c.json({ url: url.toString() });
-});
+/** GET /v1/connectors/:id/oauth/callback — exchange the code, store the credential. */
+connectorRoutes.get("/:id/oauth/callback", (c) => completeConnectorOauth(c, c.req.param("id")));
 
-/** GET /v1/connectors/:id/oauth/callback — exchange the code, store the refresh token. */
-connectorRoutes.get("/:id/oauth/callback", async (c) => {
-	const id = c.req.param("id");
-	const code = c.req.query("code");
-	const stateRaw = c.req.query("state");
-	if (!code || !stateRaw) return c.text("missing code or state", 400);
-	if (!c.env.KEY_ENCRYPTION_KEY) return c.text("Key encryption not configured", 500);
-
-	const { creds } = requireOauthConnector(c.env, id);
-	const uid = await verifyConnectorState(stateRaw, c.env.SESSION_SIGNING_KEY, {
-		cookieNonce: readOauthBindCookie(c.req.header("cookie"), id),
-		provider: id,
-	});
-	c.header("Set-Cookie", clearOauthBindCookie(id)); // single-use, whatever the outcome
-	if (!uid) return c.text(OAUTH_BIND_ERROR, 400);
-
-	const tokenRes = await fetch(creds.tokenUrl!, {
-		method: "POST",
-		headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
-		body: new URLSearchParams({
-			client_id: creds.clientId!,
-			client_secret: creds.clientSecret!,
-			code,
-			redirect_uri: callbackUri(c.req.url, id),
-			grant_type: "authorization_code",
-		}),
-	});
-	if (!tokenRes.ok) return c.text(`${id} token exchange failed (${tokenRes.status})`, 400);
-	const tok = (await tokenRes.json()) as { refresh_token?: string; access_token?: string };
-	if (!tok.refresh_token) {
-		return c.text(`${id} did not return a refresh token — reconnect and grant offline access.`, 400);
-	}
-
-	await saveConnectorRefreshToken(c.env, { userId: uid, provider: id, refreshToken: tok.refresh_token });
-
-	return c.html(
-		`<!doctype html><title>${id} connected</title><body style='font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0'><div style='text-align:center'><h1>Connected</h1><p>You can close this tab and return to ProAgentStore.</p></div></body>`,
-	);
+/**
+ * GET /v1/connectors/oauth/callback — the ONE redirect URI an OAuth app needs for every connector it
+ * serves (#352 Stage 2). The URL does not name the connector, so the state's claim chooses which to
+ * verify against; verification still pins the state to that connector, its signature and the
+ * browser that started it, so a forged claim only selects a check that fails.
+ */
+connectorRoutes.get("/oauth/callback", (c) => {
+	const provider = connectorStateProvider(c.req.query("state") ?? "");
+	if (!provider || getConnector(provider)?.auth !== "oauth") return c.text(OAUTH_BIND_ERROR, 400);
+	return completeConnectorOauth(c, provider);
 });
 
 /** GET /v1/connectors/:id/oauth/status — is this oauth connector connected for the caller? */
@@ -365,9 +282,16 @@ connectorRoutes.delete("/:id/oauth", async (c) => {
 	const session = await requireUser(c);
 	const id = c.req.param("id");
 	const connector = getConnector(id);
+	// `?account=` removes ONE account of a connector that keys a row per account (Gmail's mailboxes,
+	// #715) — the contract the retired `DELETE /v1/email/google` carried, now the generic route's.
+	const perAccount = connector?.oauth?.identity?.perAccount === true;
+	const account = perAccount ? c.req.query("account") : undefined;
 	const revoked = connector?.grantModel === "instance-resource"
 		? await revokeUserConnectorGrants(c.env, session.uid, id)
 		: undefined;
-	await c.env.DB.prepare("DELETE FROM user_api_keys WHERE user_id = ?1 AND provider = ?2").bind(session.uid, id).run();
-	return c.json({ success: true, ...(revoked ? { revoked } : {}) });
+	const result = account === undefined
+		? await c.env.DB.prepare("DELETE FROM user_api_keys WHERE user_id = ?1 AND provider = ?2").bind(session.uid, id).run()
+		: await c.env.DB.prepare("DELETE FROM user_api_keys WHERE user_id = ?1 AND provider = ?2 AND account_id = ?3").bind(session.uid, id, account).run();
+	const remaining = perAccount ? (await listConnectorAccounts(c.env, session.uid, id)).map((a) => ({ accountId: a.accountId, label: a.label })) : undefined;
+	return c.json({ success: true, ...(revoked ? { revoked } : {}), ...(perAccount ? { removed: result.meta?.changes ?? 0, remaining } : {}) });
 });

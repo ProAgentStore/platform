@@ -22,13 +22,12 @@
  * which this codebase never requests anywhere, and there is no delete tool to reach it with. So
  * the worst an agent can do to a message is recoverable by the owner from Trash or All Mail.
  *
- * This list has to match what the connector manifest declares (`lib/connectors/gmail.ts`), and
- * for one release it did not: #716 added `gmail.modify` to the manifest, Gmail connects through
- * THIS dedicated route rather than the generic connector one, and the two lists drifted. The
- * effect was not cosmetic — `gmail_archive` and `gmail_mark_read` could never succeed for
- * anybody, and every connected account rendered as permanently short of scope.
- * `oauth-scope-drift.test.ts` now fails if a scope is added to a manifest without its live start
- * route asking for it.
+ * For one release the scopes this route asked for drifted from the manifest (#716 added
+ * `gmail.modify` to one list only), so `gmail_archive` and `gmail_mark_read` could never succeed.
+ * Since #352 Stage 2 there is no second list: Gmail connects through the generic flow
+ * (`lib/connector-oauth-flow.ts`), which asks for exactly the manifest's scopes and declared optional
+ * grants. What remains here is the account-level status and disconnect, and the two OAuth paths as
+ * aliases of the generic flow.
  *
  * `prompt=consent` below means an ALREADY connected user genuinely re-asks and picks a newly chosen
  * scope up; without it Google returns the old grant and the elevate changes nothing. Only what was
@@ -41,92 +40,24 @@
  * an old connection is unaffected, and the send half says "reconnect" instead of failing raw.
  */
 import { Hono } from "hono";
-import { HttpError, requireUser } from "../lib/auth.js";
-import { decryptKey, encryptKey } from "../lib/crypto.js";
+import { requireUser } from "../lib/auth.js";
+import { decryptKey } from "../lib/crypto.js";
 import { mintGmailAccessToken, scopesAllowSend } from "../lib/gmail.js";
-import { getConnector } from "../lib/connectors/registry.js";
-import { signConnectorState, verifyConnectorState } from "../lib/connector-oauth.js";
 import { listConnectorAccounts } from "../lib/connector-accounts.js";
-import { clearOauthBindCookie, newOauthNonce, oauthBindCookie, readOauthBindCookie, OAUTH_BIND_ERROR } from "../lib/oauth-nonce.js";
+import { completeConnectorOauth, startConnectorOauth } from "../lib/connector-oauth-flow.js";
 import type { Env } from "../types.js";
 
 export const emailRoutes = new Hono<{ Bindings: Env }>();
 
-const AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
-const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
-const STATE_TTL_SECONDS = 10 * 60;
-/** The vault provider this flow stores under — also pins the state to THIS connector. */
+/** The vault provider Gmail's connection is stored under. */
 const PROVIDER = "gmail";
 
-function redirectUri(c: { req: { url: string } }): string {
-	return new URL("/v1/email/google/callback", c.req.url).toString();
-}
-
-// The state helpers used to be a LOCAL copy of connector-oauth.ts's, byte-identical down to the
-// base64url helpers — so the fix that binds a state to its browser (and to its connector) would
-// have landed in three files and missed this one. Gmail is the highest-value of the four: the
-// refresh token it stores is what `find_confirmation_link` reads the owner's mail with.
-
-/**
- * The scopes one start asks for: the manifest's baseline, plus the optional grants named in `grant`
- * (#718). A grant the manifest does not declare is refused rather than ignored or passed through —
- * a caller can never have Google asked for a scope the connector does not describe.
- */
-export function gmailRequestScopes(grants: readonly string[]): { scopes: string[] } | { error: string } {
-	const oauth = getConnector(PROVIDER)?.oauth;
-	const offered = oauth?.optionalGrants ?? [];
-	const scopes = [...(oauth?.scopes ?? [])];
-	for (const id of new Set(grants)) {
-		const grant = offered.find((g) => g.id === id);
-		if (!grant) return { error: `Unknown Gmail permission "${id}" — choose from: ${offered.map((g) => g.id).join(", ")}.` };
-		scopes.push(...grant.scopes);
-	}
-	return { scopes };
-}
-
-/**
- * Start the Gmail OAuth flow. Returns the Google consent URL to open.
- *
- * `?grant=send&grant=modify` (or `grant=send,modify`) adds optional powers to the read-only baseline
- * (#718); omitted, the connect is read-only. `?account=<address>` pre-selects that mailbox at Google
- * (`login_hint`), for an "Allow …" on one of several connected accounts.
- */
-emailRoutes.get("/google/start", async (c) => {
-	const session = await requireUser(c);
-	if (!c.env.GOOGLE_CLIENT_ID || !c.env.GOOGLE_CLIENT_SECRET) {
-		throw new HttpError(503, "Gmail connection is not configured on this deployment");
-	}
-	const requested = gmailRequestScopes(c.req.queries("grant")?.flatMap((g) => g.split(",")).map((g) => g.trim()).filter(Boolean) ?? []);
-	if ("error" in requested) throw new HttpError(400, requested.error);
-	const account = c.req.query("account")?.trim();
-	// Bind the state to THIS browser and to THIS connector: otherwise an attacker starts the
-	// flow, sends the consent URL to a victim, and the VICTIM's Gmail refresh token is stored
-	// under the ATTACKER's account. See lib/oauth-nonce.ts.
-	const bindNonce = newOauthNonce();
-	const state = await signConnectorState(
-		session.uid,
-		Math.floor(Date.now() / 1000) + STATE_TTL_SECONDS,
-		c.env.SESSION_SIGNING_KEY,
-		{ nonce: bindNonce, provider: PROVIDER },
-	);
-	c.header("Set-Cookie", oauthBindCookie(bindNonce, PROVIDER));
-	const url = new URL(AUTH_ENDPOINT);
-	url.searchParams.set("client_id", c.env.GOOGLE_CLIENT_ID);
-	url.searchParams.set("redirect_uri", redirectUri(c));
-	url.searchParams.set("response_type", "code");
-	url.searchParams.set("scope", requested.scopes.join(" "));
-	url.searchParams.set("access_type", "offline");
-	// The grant covers everything this client already held for the account, not only this request
-	// (#718) — so an elevate for one power, or a plain reconnect, never drops another.
-	url.searchParams.set("include_granted_scopes", "true");
-	if (account && account.length <= 320) url.searchParams.set("login_hint", account);
-	// Forces a refresh_token every time — and is what re-prompts an ALREADY connected user for a
-	// newly chosen scope. Without it Google silently returns the old grant and the elevate appears
-	// to succeed while changing nothing.
-	url.searchParams.set("prompt", "consent");
-	url.searchParams.set("state", state);
-	return c.json({ url: url.toString() });
-});
+// #352 Stage 2 — the OAuth flow is the generic one (`lib/connector-oauth-flow.ts`). These two paths
+// stay mounted as aliases, never as a second implementation: `/v1/email/google/callback` is the redirect URI
+// the provider's OAuth app has registered (the connector declares it as `redirectPath`), and the start
+// path keeps any caller written before the console read `flow.start` from `GET /v1/connectors`.
+emailRoutes.get("/google/start", (c) => startConnectorOauth(c, PROVIDER));
+emailRoutes.get("/google/callback", (c) => completeConnectorOauth(c, PROVIDER));
 
 /**
  * Which Gmail accounts the current user has connected (#715).
@@ -219,107 +150,4 @@ emailRoutes.delete("/google", async (c) => {
 		removed: result.meta?.changes ?? 0,
 		remaining: remaining.map((a) => ({ accountId: a.accountId, label: a.label })),
 	});
-});
-
-/** The union of two space-separated scope strings, order kept; null only when both are empty (#718). */
-export function mergeScopes(held: string | null | undefined, returned: string | null | undefined): string | null {
-	const all = [...new Set(`${held ?? ""} ${returned ?? ""}`.split(/\s+/).filter(Boolean))];
-	return all.length ? all.join(" ") : null;
-}
-
-/** OAuth callback — exchange the code, store the refresh token. */
-emailRoutes.get("/google/callback", async (c) => {
-	const code = c.req.query("code");
-	const stateRaw = c.req.query("state");
-	if (!code || !stateRaw) return c.text("missing code or state", 400);
-	if (!c.env.GOOGLE_CLIENT_ID || !c.env.GOOGLE_CLIENT_SECRET) {
-		return c.text("Gmail connection is not configured", 503);
-	}
-	if (!c.env.KEY_ENCRYPTION_KEY) return c.text("Key encryption not configured", 500);
-
-	const uid = await verifyConnectorState(stateRaw, c.env.SESSION_SIGNING_KEY, {
-		cookieNonce: readOauthBindCookie(c.req.header("cookie"), PROVIDER),
-		provider: PROVIDER,
-	});
-	c.header("Set-Cookie", clearOauthBindCookie(PROVIDER)); // single-use, whatever the outcome
-	if (!uid) return c.text(OAUTH_BIND_ERROR, 400);
-
-	const tokenRes = await fetch(TOKEN_ENDPOINT, {
-		method: "POST",
-		headers: { "Content-Type": "application/x-www-form-urlencoded" },
-		body: new URLSearchParams({
-			client_id: c.env.GOOGLE_CLIENT_ID,
-			client_secret: c.env.GOOGLE_CLIENT_SECRET,
-			code,
-			redirect_uri: redirectUri(c),
-			grant_type: "authorization_code",
-		}),
-	});
-	if (!tokenRes.ok) return c.text(`Gmail token exchange failed (${tokenRes.status})`, 400);
-	const tok = (await tokenRes.json()) as { refresh_token?: string; access_token?: string; scope?: string };
-	if (!tok.refresh_token) {
-		return c.text(
-			"Google did not return a refresh token. Remove this app's access at myaccount.google.com/permissions and reconnect.",
-			400,
-		);
-	}
-
-	// Capture WHICH account this is, so the UI can show it (scope includes `email`).
-	let accountLabel: string | null = null;
-	if (tok.access_token) {
-		try {
-			const ui = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
-				headers: { Authorization: `Bearer ${tok.access_token}` },
-			});
-			if (ui.ok) accountLabel = ((await ui.json()) as { email?: string }).email ?? null;
-		} catch {
-			/* non-fatal — the connection still works without the label */
-		}
-	}
-
-	const { ciphertext, dekWrapped, iv } = await encryptKey(
-		tok.refresh_token,
-		c.env.KEY_ENCRYPTION_KEY,
-	);
-	// What Google ACTUALLY granted, not what we asked for. A user can untick a scope on the
-	// consent screen, and recording the request rather than the grant would make `canSend` lie in
-	// exactly the case it exists to catch (migration 0133).
-	const returned = tok.scope ?? null;
-
-	// The mailbox address IS the account id (#715). Reconnecting the same mailbox updates its
-	// row; authorising a DIFFERENT one adds a row beside it, which is the whole point — one
-	// person, several mailboxes, each agent choosing which it speaks as.
-	//
-	// An address we could not read falls back to '', the unnamed-default id. That collapses with
-	// any other unlabelled connection, which is the old single-slot behaviour and is the right
-	// fallback: it is what the row meant before this change.
-	const accountId = accountLabel ?? "";
-
-	// MERGED with what this account already held (#718), never overwritten by it. With
-	// `include_granted_scopes` Google's answer should already be the union; the merge makes that
-	// hold even if it is not, because the failure it prevents is silent — an elevate for manage-mail
-	// that came back without send would leave a working sending agent refusing every send.
-	const prior = await c.env.DB.prepare("SELECT granted_scopes FROM user_api_keys WHERE user_id = ?1 AND provider = 'gmail' AND account_id = ?2")
-		.bind(uid, accountId)
-		.first<{ granted_scopes: string | null }>()
-		.catch(() => null);
-	const grantedScopes = mergeScopes(prior?.granted_scopes, returned);
-
-	await c.env.DB.prepare(
-		`INSERT INTO user_api_keys (user_id, provider, account_id, key_ciphertext, dek_wrapped, iv, account_label, granted_scopes, created_at)
-     VALUES (?1, 'gmail', ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))
-     ON CONFLICT(user_id, provider, account_id) DO UPDATE SET
-       key_ciphertext = excluded.key_ciphertext,
-       dek_wrapped = excluded.dek_wrapped,
-       iv = excluded.iv,
-       account_label = excluded.account_label,
-       granted_scopes = excluded.granted_scopes,
-       created_at = excluded.created_at`,
-	)
-		.bind(uid, accountId, ciphertext, dekWrapped, iv, accountLabel, grantedScopes)
-		.run();
-
-	return c.html(
-		"<!doctype html><title>Gmail connected</title><body style='font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0'><div style='text-align:center'><h1>✅ Gmail connected</h1><p>You can close this tab and return to ProAgentStore.</p></div></body>",
-	);
 });

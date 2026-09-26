@@ -150,6 +150,8 @@ function fetchSites(): { compliant: FetchSite[]; noDeadline: FetchSite[] } {
  * deadline of their own and do not route through `safeFetch`.
  *
  * Measured at #438 after the safeFetch floor landed: 55.
+ * 49 at #352 Stage 2: the three dedicated OAuth flows (Drive, WorkDrive, Gmail) were retired into the
+ * one generic flow, deleting six bare fetches, and the generic flow's two now carry a deadline.
  *
  * This is a FLOOR on the fix, not a ceiling on the problem. When you add a `signal:`
  * to a call site (or route it through `safeFetch`), lower this number in the same
@@ -158,7 +160,7 @@ function fetchSites(): { compliant: FetchSite[]; noDeadline: FetchSite[] } {
  * If you add a NEW `fetch(` call with no deadline (and it is not to `safeFetch`),
  * you must raise this number — and that comment will be read by the next reviewer.
  */
-const NO_DEADLINE_PIN = 55;
+const NO_DEADLINE_PIN = 49;
 
 const listing = (sites: FetchSite[]) => sites.map((s) => `  ${s.rel}:${s.line}  ${s.excerpt.slice(0, 100)}`).join("\n");
 

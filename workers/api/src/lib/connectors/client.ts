@@ -43,7 +43,9 @@ export function resolveOauthConfig(env: Env, connectorId: string): OauthClientCr
 	return {
 		clientId: oauth.clientIdEnv ? e[oauth.clientIdEnv] : undefined,
 		clientSecret: oauth.secretEnv ? e[oauth.secretEnv] : undefined,
-		tokenUrl: oauth.tokenUrl,
+		// Per-deployment endpoints win (Zoho's data-centre, #352 Stage 2): a refresh against the
+		// wrong DC's token URL fails exactly like a revoked grant.
+		tokenUrl: oauth.endpointsFromEnv ? oauth.endpointsFromEnv(env).tokenUrl : oauth.tokenUrl,
 	};
 }
 

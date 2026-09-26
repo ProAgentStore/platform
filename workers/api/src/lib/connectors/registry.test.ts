@@ -72,11 +72,16 @@ describe("connector registry", () => {
 			expect(getConnector("gmail")?.grantModel).toBe("user");
 		});
 
-		it("declares WorkDrive with NO oauth block — its endpoints are per data-centre", () => {
-			// Not an omission: `workDriveAccountsBase(env)` is env-dependent, so there is no static
-			// authorize URL to declare. Omitting it keeps the generic OAuth route 404ing for this id
-			// instead of building a URL against the wrong DC.
-			expect(getConnector("zoho_workdrive")?.oauth).toBeUndefined();
+		it("declares WorkDrive's endpoints per data-centre, so the generic flow reaches the RIGHT one (#352 Stage 2)", () => {
+			// Why WorkDrive used to declare no oauth block at all: its accounts server is per DC.
+			// `endpointsFromEnv` is what lets it connect through the generic flow without ever
+			// building a URL against the wrong DC.
+			const oauth = getConnector("zoho_workdrive")?.oauth;
+			expect(oauth?.endpointsFromEnv?.({ ZOHO_ACCOUNTS_BASE: "https://accounts.zoho.eu/" } as never)).toEqual({
+				authUrl: "https://accounts.zoho.eu/oauth/v2/auth",
+				tokenUrl: "https://accounts.zoho.eu/oauth/v2/token",
+			});
+			expect(oauth?.endpointsFromEnv?.({} as never).tokenUrl).toBe("https://accounts.zoho.com/oauth/v2/token");
 			expect(getConnector("google_drive")?.oauth?.tokenUrl).toBe("https://oauth2.googleapis.com/token");
 		});
 	});

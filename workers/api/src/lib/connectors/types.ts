@@ -383,6 +383,32 @@ export interface Connector {
 		optionalGrants?: OptionalGrant[];
 		clientIdEnv?: string;
 		secretEnv?: string;
+		/**
+		 * The callback path REGISTERED with the provider's OAuth app (#352 Stage 2). Omitted, it is the
+		 * generic `/v1/connectors/<id>/oauth/callback`. A connector whose app has a different path
+		 * registered declares it here, and that path is mounted as an alias of the same generic
+		 * handler — so the authorize URL, the token exchange and the route that receives the browser
+		 * all name the one URI the provider will accept. Changing it is a provider-dashboard step
+		 * first and this line second, never the other way round.
+		 */
+		redirectPath?: string;
+		/**
+		 * Where the endpoints come from when they are per-deployment rather than static — Zoho's
+		 * accounts server is per data-centre. Takes the Worker env, returns both URLs; `authUrl` /
+		 * `tokenUrl` above are then the default data-centre's, kept for readers of the declaration.
+		 */
+		endpointsFromEnv?: (env: Env) => { authUrl: string; tokenUrl: string };
+		/**
+		 * How a connected account is named and keyed (#352 Stage 2 — each was one dedicated flow's
+		 * own behaviour, now declared so the generic flow reproduces it exactly).
+		 *   label: "userinfo-email" reads the Google account address (the scopes must include
+		 *          `openid email`); any other string is stored as the label verbatim.
+		 *   perAccount: one row PER account, keyed by the label (#715 — Gmail's several mailboxes).
+		 *          Omitted, the connection is the single unnamed row (`account_id = ''`), which is
+		 *          what every existing Drive/WorkDrive/Sheets connection already is — so a reconnect
+		 *          refreshes that row instead of adding a second one beside it.
+		 */
+		identity?: { label: "userinfo-email" | string; perAccount?: boolean };
 	};
 	/** The tools this connector provides. Their `connector`/`tier`/`scope` are stamped from here. */
 	tools: ToolDef[];

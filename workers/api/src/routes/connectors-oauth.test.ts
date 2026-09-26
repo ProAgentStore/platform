@@ -125,7 +125,8 @@ describe("GET /:id/oauth/callback", () => {
 		const [tokenUrl, init] = fetchMock.mock.calls[0];
 		expect(tokenUrl).toBe("https://slack.com/api/oauth.v2.access");
 		expect(String((init as RequestInit).body)).toContain("grant_type=authorization_code");
-		expect(saveConnectorRefreshToken).toHaveBeenCalledWith(expect.anything(), { userId: "u1", provider: "slack", refreshToken: "RT-1" });
+		// A connector that declares no identity is the single unnamed row, as it always was (#352 Stage 2).
+		expect(saveConnectorRefreshToken).toHaveBeenCalledWith(expect.anything(), { userId: "u1", provider: "slack", refreshToken: "RT-1", accountLabel: null, accountId: "", grantedScopes: null });
 	});
 	it("400 on missing code/state", async () => {
 		const res = await app.request("/slack/oauth/callback?code=CODE", {}, env());
@@ -240,12 +241,11 @@ describe("GET /v1/connectors — the catalog, resolved for the caller", () => {
 
 	// The console renders connect/disconnect from this, so a connector whose flow is not named
 	// here has no buttons — which is the honest outcome for one that cannot be connected.
-	it("names the LIVE connect/disconnect flow, dedicated or generic", async () => {
+	it("names the LIVE connect/disconnect flow — the generic one for every connector since #352 Stage 2", async () => {
 		const by = await list(envWithKeys([]));
-		expect(by.get("google_drive")).toMatchObject({ flow: { start: "/v1/drive/google/start", disconnect: "/v1/drive/google" } });
-		expect(by.get("gmail")).toMatchObject({ flow: { start: "/v1/email/google/start", disconnect: "/v1/email/google" } });
-		expect(by.get("zoho_workdrive")).toMatchObject({ flow: { start: "/v1/workdrive/zoho/start", disconnect: "/v1/workdrive/zoho" } });
-		// Nothing dedicated: the generic routes, which its manifest CAN drive.
+		expect(by.get("google_drive")).toMatchObject({ flow: { start: "/v1/connectors/google_drive/oauth/start", disconnect: "/v1/connectors/google_drive/oauth" } });
+		expect(by.get("gmail")).toMatchObject({ flow: { start: "/v1/connectors/gmail/oauth/start", disconnect: "/v1/connectors/gmail/oauth" } });
+		expect(by.get("zoho_workdrive")).toMatchObject({ flow: { start: "/v1/connectors/zoho_workdrive/oauth/start", disconnect: "/v1/connectors/zoho_workdrive/oauth" } });
 		expect(by.get("slack")).toMatchObject({ flow: { start: "/v1/connectors/slack/oauth/start", disconnect: "/v1/connectors/slack/oauth" } });
 	});
 

@@ -35,14 +35,15 @@
  * `PROVIDERS` map with a matching Zod enum, the `sync_connector` trigger branch, and the
  * apology comment in `client.ts`.
  *
- * A caveat that is real and unchanged from `google_sheets`: declaring `oauth` makes the generic
- * `/v1/connectors/:id/oauth/start` able to build an authorize URL whose `redirect_uri` is
- * `/v1/connectors/<id>/oauth/callback` — a path these providers' OAuth apps do not have
- * registered, so it would fail at the provider. The console does not link it; the dedicated
- * flows (`/v1/drive/google/start`, …) remain the live ones until #352 Stage 2 registers the
- * generic redirect and retires them.
+ * #352 Stage 2: both now CONNECT through the generic flow (`lib/connector-oauth-flow.ts`) — the
+ * dedicated start/callback implementations are gone. Each declares the `redirectPath` its OAuth app
+ * already has registered (`/v1/drive/google/callback`, `/v1/workdrive/zoho/callback`), which is
+ * mounted as an alias of the generic callback: the provider sees the URI it has always accepted, so
+ * no dashboard change was needed to retire the flows and no in-flight connect broke. Moving to the
+ * id-less generic `/v1/connectors/oauth/callback` is a dashboard registration first, then one line.
  */
 import { DRIVE_SCOPE } from "../drive.js";
+import { WORKDRIVE_SCOPE, workDriveAccountsBase } from "../workdrive.js";
 import type { Connector } from "./types.js";
 
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -66,6 +67,11 @@ export const GOOGLE_DRIVE_CONNECTOR: Connector = {
 		scopes: ["openid", "email", DRIVE_SCOPE],
 		clientIdEnv: "GOOGLE_CLIENT_ID",
 		secretEnv: "GOOGLE_CLIENT_SECRET",
+		// Registered on the Google OAuth app since Drive shipped; see the header.
+		redirectPath: "/v1/drive/google/callback",
+		// One Drive connection per owner, labelled with the Google address — the row every existing
+		// connection already is (`account_id = ''`), so a reconnect updates it.
+		identity: { label: "userinfo-email" },
 	},
 	tools: [],
 };
@@ -76,15 +82,24 @@ export const ZOHO_WORKDRIVE_CONNECTOR: Connector = {
 	auth: "oauth",
 	scopes: { read: true, write: false },
 	grantModel: "instance-resource",
-	// No `oauth` block ON PURPOSE. Zoho's authorize/token endpoints are per data-centre
-	// (`workDriveAccountsBase(env)` reads ZOHO_ACCOUNTS_BASE), so there is no static URL to
-	// declare and the manifest shape cannot express one. Omitting it keeps the generic OAuth
-	// routes answering 404 for this id rather than minting an authorize URL against the wrong
-	// DC — the declaration says what is true, including the part that is not yet generic.
-	//
-	// But "no manifest oauth" is not "cannot be connected": the dedicated flow works whenever
-	// these two are set, and `/v1/workdrive/status` has always said so. Declaring them keeps the
-	// catalog's `configured` from contradicting it (#355).
+	// Zoho's authorize/token endpoints are per data-centre (`workDriveAccountsBase(env)` reads
+	// ZOHO_ACCOUNTS_BASE). `endpointsFromEnv` is what lets the generic flow reach the RIGHT one —
+	// the reason this connector used to declare no `oauth` block at all. The static URLs are the
+	// default data-centre's, the same fallback `workDriveAccountsBase` uses.
+	oauth: {
+		authUrl: "https://accounts.zoho.com/oauth/v2/auth",
+		tokenUrl: "https://accounts.zoho.com/oauth/v2/token",
+		endpointsFromEnv: (env) => {
+			const base = workDriveAccountsBase(env);
+			return { authUrl: `${base}/oauth/v2/auth`, tokenUrl: `${base}/oauth/v2/token` };
+		},
+		scopes: [WORKDRIVE_SCOPE],
+		clientIdEnv: "ZOHO_CLIENT_ID",
+		secretEnv: "ZOHO_CLIENT_SECRET",
+		redirectPath: "/v1/workdrive/zoho/callback",
+		// Zoho returns no userinfo on this scope; the dedicated flow stored this fixed label.
+		identity: { label: "Zoho WorkDrive" },
+	},
 	credentialEnv: ["ZOHO_CLIENT_ID", "ZOHO_CLIENT_SECRET"],
 	tools: [],
 };

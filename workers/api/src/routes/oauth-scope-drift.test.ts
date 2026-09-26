@@ -1,5 +1,5 @@
 /**
- * A dedicated OAuth flow must ask for everything its manifest declares (#717).
+ * A live OAuth flow must ask for everything its manifest declares (#717; one flow since #352 Stage 2).
  *
  * THE DEFECT THIS EXISTS FOR. Three connectors do not connect through the generic
  * `/v1/connectors/:id/oauth/start` — their OAuth apps register `/v1/{drive,email}/google/callback`
@@ -68,16 +68,14 @@ const env = () =>
 
 const authed = { headers: { Authorization: "Bearer tok" } };
 
-/** Every connector the server says connects through a route of its OWN, not the generic one. */
-async function dedicatedFlows(): Promise<Array<{ id: string; start: string }>> {
+/** Every connector's LIVE connect flow, as the server states it. */
+async function liveFlows(): Promise<Array<{ id: string; start: string }>> {
 	const res = await app.request("/v1/connectors", authed, env());
 	expect(res.status).toBe(200);
 	const { connectors } = (await res.json()) as Array<never> & {
 		connectors: Array<{ id: string; flow: { start: string } | null }>;
 	};
-	return connectors
-		.filter((c) => c.flow && !c.flow.start.startsWith("/v1/connectors/"))
-		.map((c) => ({ id: c.id, start: c.flow!.start }));
+	return connectors.filter((c) => c.flow).map((c) => ({ id: c.id, start: c.flow!.start }));
 }
 
 /** The `scope` parameter of the authorize URL a start route hands the browser. */
@@ -88,28 +86,19 @@ async function requestedScopes(start: string): Promise<string[]> {
 	return (new URL(url).searchParams.get("scope") ?? "").split(/\s+/).filter(Boolean);
 }
 
-describe("a dedicated OAuth flow asks for what its manifest declares", () => {
-	it("finds the dedicated flows from the catalog rather than from a list written here", async () => {
-		const flows = await dedicatedFlows();
-		// If this drops to zero the guard has silently stopped guarding anything — #352 Stage 2
-		// retiring the last dedicated flow should delete this file, not leave it passing vacuously.
-		expect(flows.length).toBeGreaterThan(0);
-		expect(flows.map((f) => f.id)).toContain("gmail");
-		expect(flows.map((f) => f.id)).toContain("google_drive");
+describe("every live OAuth flow asks for what its manifest declares", () => {
+	// #352 Stage 2 retired the last dedicated flow. The drift this file was written for needed TWO
+	// lists of scopes — the manifest, and a bespoke route's own string — and there is now one flow
+	// reading one list. The guard is kept, inverted: a dedicated flow coming back fails here first.
+	it("no connector has a dedicated flow any more — every live flow is the generic route", async () => {
+		const flows = await liveFlows();
+		expect(flows.map((f) => f.id)).toEqual(expect.arrayContaining(["gmail", "google_drive", "zoho_workdrive"]));
+		expect(flows.filter((f) => !f.start.startsWith("/v1/connectors/"))).toEqual([]);
 	});
 
-	it("requests a superset of every declared scope, for every dedicated flow", async () => {
-		const flows = await dedicatedFlows();
-		for (const flow of flows) {
+	it("requests a superset of every declared scope, for every live flow", async () => {
+		for (const flow of await liveFlows()) {
 			const declared = getConnector(flow.id)?.oauth?.scopes ?? [];
-			// A connector with no `oauth` block declares no scopes, so there is nothing to drift
-			// from — zoho_workdrive, whose authorize endpoint is per data-centre and cannot be
-			// expressed in the manifest. Asserted rather than assumed, so "declares nothing" can
-			// never quietly become "declares something nobody checks".
-			if (declared.length === 0) {
-				expect(getConnector(flow.id)?.oauth).toBeUndefined();
-				continue;
-			}
 			const requested = new Set(await requestedScopes(flow.start));
 			const notAsked = declared.filter((s) => !requested.has(s));
 			expect(notAsked, `${flow.id}: declared in the manifest but never requested by ${flow.start}`).toEqual([]);
@@ -118,13 +107,13 @@ describe("a dedicated OAuth flow asks for what its manifest declares", () => {
 
 	// The specific regression, named so a failure reads as itself rather than as a loop index.
 	it("a plain Gmail connect asks for read-only; choosing every optional grant asks for send AND modify (#716, #717, #718)", async () => {
-		const plain = await requestedScopes("/v1/email/google/start");
+		const plain = await requestedScopes("/v1/connectors/gmail/oauth/start");
 		expect(plain).toContain("https://www.googleapis.com/auth/gmail.readonly");
 		expect(plain).not.toContain("https://www.googleapis.com/auth/gmail.send");
 		expect(plain).not.toContain("https://www.googleapis.com/auth/gmail.modify");
 		// Every optional grant the manifest offers is reachable through the live route — the #717 lesson,
 		// now for the optional list: a declared power no consent can grant is the same defect.
-		const all = await requestedScopes("/v1/email/google/start?grant=send&grant=modify");
+		const all = await requestedScopes("/v1/connectors/gmail/oauth/start?grant=send&grant=modify");
 		for (const g of getConnector("gmail")?.oauth?.optionalGrants ?? []) for (const s of g.scopes) expect(all).toContain(s);
 		expect(all).toContain("https://www.googleapis.com/auth/gmail.send");
 		expect(all).toContain("https://www.googleapis.com/auth/gmail.modify");
@@ -133,7 +122,7 @@ describe("a dedicated OAuth flow asks for what its manifest declares", () => {
 	// Permanent deletion needs `https://mail.google.com/`. Nothing in this codebase requests it and
 	// no tool could use it; the bound on the blast radius of gmail.modify is that it stays that way.
 	it("never asks for full-mailbox access, which is what permanent deletion would need", async () => {
-		const requested = await requestedScopes("/v1/email/google/start");
+		const requested = await requestedScopes("/v1/connectors/gmail/oauth/start");
 		expect(requested).not.toContain("https://mail.google.com/");
 	});
 

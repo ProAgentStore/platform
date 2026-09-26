@@ -17,7 +17,9 @@ import { HttpError } from "../lib/auth.js";
 import { signConnectorState } from "../lib/connector-oauth.js";
 import { newOauthNonce, oauthBindCookie } from "../lib/oauth-nonce.js";
 import { connectorRoutes } from "./connectors.js";
-import { emailRoutes, gmailRequestScopes, mergeScopes } from "./email.js";
+import { emailRoutes } from "./email.js";
+import { mergeScopes, requestScopesFor } from "../lib/connector-oauth-flow.js";
+import { getConnector } from "../lib/connectors/registry.js";
 import type { Env } from "../types.js";
 
 const READ = "https://www.googleapis.com/auth/gmail.readonly";
@@ -90,7 +92,7 @@ describe("GET /v1/email/google/start — what is asked for is the owner's choice
 			expect(res.status).toBe(400);
 			expect(((await res.json()) as { error: string }).error).toMatch(/choose from: send, modify/);
 		}
-		expect(gmailRequestScopes(["send"])).toEqual({ scopes: ["openid", "email", READ, SEND] });
+		expect(requestScopesFor(getConnector("gmail")!, ["send"])).toEqual({ scopes: ["openid", "email", READ, SEND] });
 	});
 
 	it("?account= pre-selects that mailbox at Google, for an Allow on one of several accounts", async () => {
@@ -116,7 +118,8 @@ async function callback(prior: string | null | undefined, returned: string | und
 	);
 	expect(res.status).toBe(200);
 	const insert = h.writes.find((w) => w.sql.includes("INSERT INTO user_api_keys"));
-	return (insert?.binds[6] as string | null) ?? null;
+	// `saveConnectorRefreshToken`: (user, provider, account_id, ciphertext, dek, iv, label, granted_scopes).
+	return (insert?.binds[7] as string | null) ?? null;
 }
 
 describe("the callback never narrows what an account already holds (#718)", () => {

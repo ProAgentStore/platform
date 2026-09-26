@@ -110,6 +110,25 @@ export async function verifyConnectorState(
 }
 
 /**
+ * The connector a state CLAIMS to be for, unverified — or null (#352 Stage 2).
+ *
+ * Only for choosing which connector to verify against at the id-less generic callback, where the
+ * URL no longer says. It grants nothing: `verifyConnectorState` then checks the signature, expiry,
+ * this same provider and the browser's nonce, so a forged claim only selects a verification that
+ * fails.
+ */
+export function connectorStateProvider(token: string): string | null {
+	try {
+		const [payload] = token.split(".");
+		if (!payload) return null;
+		const { p } = JSON.parse(new TextDecoder().decode(unb64url(payload))) as { p?: unknown };
+		return typeof p === "string" && p ? p : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
  * Read one connector credential.
  *
  * `accountId` names WHICH of the owner's accounts (#715). Omitting it keeps the pre-#715
