@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	ACT_KIND_COUNT,
@@ -503,5 +504,69 @@ describe("recordEngineActs — the sink is the EXISTING trace, not a fifth recor
 			await recordEngineActs(env, { userId: "u1", instanceId: "i1", sessionId: "s1" }, sanitizeEngineActs([act({ at: undefined })]));
 			expect(calls[0].binds[1]).toBe(0); // ts
 		});
+	});
+});
+
+/**
+ * Run 9f2e7ddc (#873), as the cloud receives it. A runner published before #873 stored the RAW
+ * command cut at 400 characters and classified heredoc body lines as commands; the fixtures are
+ * that run's commands (the runner package's `fixtures/trace-9f2e7ddc`), and `stored()` is exactly
+ * what such a runner sent — the first 400 characters, which match the trace byte for byte.
+ */
+const traceFile = (name: string) =>
+	readFileSync(new URL(`../../../../packages/browser-runner/src/coding/fixtures/trace-9f2e7ddc/${name}.sh`, import.meta.url), "utf8");
+const stored = (name: string) => traceFile(name).trim().slice(0, 400);
+
+describe("an act that only a heredoc body shows is labelled unverified, not asserted (#873)", () => {
+	it("the trace's Python-edit acts: the stored command ends inside the heredoc", () => {
+		for (const kind of ["push.trunk", "pr.merge"]) {
+			const claim = deriveAct(kind, stored("python-edit"));
+			expect(claim.unverified, kind).toBe(true);
+			expect(claim.phrase, kind).toMatch(/unverified: the recorded command ends inside a heredoc body$/);
+		}
+	});
+
+	it("the trace's repo.delete from a commit message: unverified", () => {
+		const claim = deriveAct("repo.delete", stored("commit-and-push"));
+		expect(claim).toMatchObject({ unverified: true, phrase: "deleted a repository — unverified: the recorded command ends inside a heredoc body" });
+	});
+
+	it("names the body as the only match when the stored text shows it", () => {
+		const claim = deriveAct("pr.open", traceFile("issue-comment"));
+		expect(claim).toMatchObject({ unverified: true, phrase: "opened a pull request — unverified: the matching text is inside a heredoc body, not a command" });
+	});
+
+	it("never downgrades: an unverified act keeps the kind's floor", () => {
+		// A command cut inside a heredoc cannot rule out a real act after it.
+		expect(deriveAct("push.trunk", stored("python-edit")).irreversible).toBe(true);
+		expect(deriveAct("repo.delete", stored("commit-and-push")).irreversible).toBe(true);
+	});
+
+	it("is kept, labelled in the trace message and the run summary, and flagged in the row's context", async () => {
+		const acts = sanitizeEngineActs([act({ kind: "repo.delete", command: stored("commit-and-push"), target: null })]);
+		expect(acts).toHaveLength(1);
+		const summary = describeEngineAct(acts[0]);
+		expect(summary).toContain("unverified");
+		expect(summarizeActs([{ summary, irreversible: acts[0].irreversible }])).toContain("deleted a repository — unverified");
+		const { calls, env } = fakeDb();
+		await recordEngineActs(env, { userId: "u1", instanceId: "i1", sessionId: "s1" }, acts);
+		expect(calls[0].binds.some((b) => typeof b === "string" && b.includes('"unverified":true'))).toBe(true);
+	});
+
+	it("a #873 runner's evidence keeps the real push after a long commit message: verified", () => {
+		// The runner now collapses each body before the cap, so the push is inside the stored text.
+		const elided = traceFile("commit-and-push").replace(/<<'EOF'\n[\s\S]*?\nEOF\n/, "<<'EOF'\n[heredoc body: 18 lines]\nEOF\n").slice(0, 400);
+		const claim = deriveAct("push.trunk", elided);
+		expect(claim.unverified).toBeUndefined();
+		expect(claim.phrase).toBe("pushed directly to the trunk");
+	});
+
+	it("genuine operations are verified exactly as before", () => {
+		expect(deriveAct("push.trunk", "git push origin main")).toEqual({ phrase: "pushed directly to the trunk", irreversible: true });
+		expect(deriveAct("pr.merge", "gh pr merge 3 --merge")).toEqual({ phrase: "merged a pull request", irreversible: true });
+		expect(deriveAct("repo.delete", "gh repo delete someorg/somerepo --yes")).toEqual({ phrase: "deleted a repository", irreversible: true });
+		expect(deriveAct("push.trunk", "git commit -F - <<'EOF'\nsome message\nEOF\ngit push origin main")).toEqual({ phrase: "pushed directly to the trunk", irreversible: true });
+		// A truncated command with NO heredoc keeps the old claim-free fallback — nothing new is said.
+		expect(deriveAct("repo.delete", "cd repo && echo cut before the command")).toEqual({ phrase: "deleted a repository", irreversible: true });
 	});
 });

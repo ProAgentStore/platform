@@ -35,6 +35,8 @@
  * "nothing happened", and every consumer has to say so rather than render it as an all-clear.
  */
 
+import { splitHeredocs } from "./heredoc.js";
+
 /** The kinds of act worth writing down. Anything not here is ordinary work and is not recorded. */
 export type EngineActKind =
 	| "pr.merge"
@@ -127,10 +129,15 @@ export function redactCommand(command: string): string {
  * Over-splitting costs nothing (a fragment simply matches no rule); under-splitting loses an act,
  * and the real-world shape of the case this exists for is exactly a compound line:
  * `cd repo && git push -u origin fix && gh pr create --fill && gh pr merge --squash`.
+ *
+ * Heredoc BODIES are removed first (#873): they are data — a commit message, a comment body, a
+ * script editing a test file — and their lines, split as commands, recorded pushes, merges and a
+ * repository deletion that never ran. This side sees the whole command, so a real command after
+ * the terminator is still read.
  */
 export function splitSegments(command: string): string[] {
-	return String(command ?? "")
-		.split(/\|\||&&|[;|\n]/)
+	return splitHeredocs(String(command ?? ""))
+		.executed.split(/\|\||&&|[;|\n]/)
 		.map((s) => s.trim())
 		.filter(Boolean);
 }
@@ -318,7 +325,9 @@ export function classifySegment(segment: string): ClassifiedAct | null {
  * was on that line.
  */
 export function classifyCommand(id: string, command: string, at: string = new Date().toISOString()): EngineActRecord[] {
-	const full = redactCommand(command);
+	// The evidence keeps what was executed and collapses each heredoc body to one line (#873), so
+	// the 400-character cap is not spent on a commit message while the push after it is cut off.
+	const full = redactCommand(splitHeredocs(command).elided);
 	if (!full) return [];
 	const out: EngineActRecord[] = [];
 	for (const seg of splitSegments(command)) {

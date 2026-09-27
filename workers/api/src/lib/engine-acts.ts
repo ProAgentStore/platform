@@ -53,6 +53,7 @@
  * floor. Unverifiable evidence never downgrades an act, and never adds a qualifier to one.
  */
 import { logEvent } from "./events.js";
+import { splitHeredocs } from "./heredoc.js";
 import type { Env } from "../types.js";
 
 /** One act as the runner reports it. Mirrors `EngineActRecord` in the browser-runner package. */
@@ -274,6 +275,13 @@ function describeDelete(command: string): ActClaim | null {
 export interface ActClaim {
 	phrase: string;
 	irreversible: boolean;
+	/**
+	 * The only text that could be this act is inside a heredoc body (#873) — a commit message, a
+	 * comment body, a script's source — so the command does not show it being run. Labelled, not
+	 * dropped: a stored command cut inside a heredoc cannot rule out a real act after it, and the
+	 * consequence stays at the kind's floor, because unverifiable evidence never downgrades an act.
+	 */
+	unverified?: true;
 }
 
 /** One kind's rule: what it may claim, and which text is allowed to settle it. */
@@ -313,8 +321,8 @@ export interface ActRule {
  */
 export const ACT_RULES: Record<string, ActRule> = {
 	// A merge is a merge; the command adds nothing the kind does not already say.
-	"pr.merge": { base: "merged a pull request", floor: true },
-	"pr.open": { base: "opened a pull request", floor: false },
+	"pr.merge": { base: "merged a pull request", floor: true, match: /\bgh\s+pr\s+merge\b/ },
+	"pr.open": { base: "opened a pull request", floor: false, match: /\bgh\s+pr\s+create\b/ },
 	push: {
 		base: "pushed a branch",
 		floor: false,
@@ -413,7 +421,7 @@ export const ACT_RULES: Record<string, ActRule> = {
 				? { phrase: "ran a publish dry-run (nothing was published)", irreversible: false }
 				: { phrase: "published a package", irreversible: true },
 	},
-	"repo.delete": { base: "deleted a repository", floor: true },
+	"repo.delete": { base: "deleted a repository", floor: true, match: /\bgh\s+repo\s+delete\b/ },
 	deploy: {
 		base: "deployed",
 		floor: true,
@@ -470,10 +478,23 @@ export function deriveAct(kind: string, command: string): ActClaim {
 	const rule = ACT_RULES[kind];
 	if (!rule) return { phrase: kind, irreversible: false };
 	const fallback: ActClaim = { phrase: rule.base, irreversible: rule.floor };
-	if (!rule.from || !rule.match) return fallback;
-	const segs = segments(command).filter((s) => (rule.match as RegExp).test(s));
-	if (!segs.length) return fallback;
-	return rule.from(command, segs) ?? fallback;
+	const match = rule.match;
+	if (!match) return fallback;
+	// Heredoc bodies are data, not commands (#873): only the executed text may settle a claim.
+	const { executed, bodies, unterminated } = splitHeredocs(command);
+	const segs = segments(executed).filter((s) => match.test(s));
+	if (!segs.length) {
+		// Nothing executed shows this act. If a body does, or the stored text was cut inside one, the
+		// act rests on text that is not a command — say so rather than assert it. The consequence
+		// stays at the floor: a command cut inside a heredoc cannot rule out a real act after it.
+		const why = segments(bodies).some((s) => match.test(s))
+			? "the matching text is inside a heredoc body, not a command"
+			: unterminated
+				? "the recorded command ends inside a heredoc body"
+				: null;
+		return why ? { phrase: `${rule.base} — unverified: ${why}`, irreversible: rule.floor, unverified: true } : fallback;
+	}
+	return rule.from?.(executed, segs) ?? fallback;
 }
 
 /**
@@ -613,6 +634,7 @@ export async function recordEngineActs(
 				irreversible: act.irreversible,
 				ok: act.ok,
 				sessionId: ctx.sessionId,
+				...(deriveAct(act.kind, act.command).unverified ? { unverified: true } : {}),
 			},
 			// When the runner supplied a parseable `at`, use it. When it did not, store ts = 0
 			// rather than the drain time. A drain-time stamp is not the act's real occurrence time;

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	classifyCommand,
@@ -283,5 +284,53 @@ describe("toolCallOk / toolResultMark — the outcome the transcript used to dro
 		// unknown instead of as a pass, whatever its output text begins with.
 		expect(toolResultMark({ is_error: true })).toBe("✗");
 		expect(toolResultMark({})).toBe("✓");
+	});
+});
+
+/**
+ * Run 9f2e7ddc (#873): heredoc bodies recorded as acts. The fixtures are the run's own commands —
+ * each file's first 400 characters are exactly what the trace stored, the rest the lines that ran,
+ * abridged to what matters here.
+ */
+const trace = (name: string) => readFileSync(new URL(`./fixtures/trace-9f2e7ddc/${name}.sh`, import.meta.url), "utf8");
+
+describe("heredoc bodies are data, not commands (#873)", () => {
+	it("a Python heredoc whose source contains git push / gh pr merge records nothing", () => {
+		// Recorded as "pushed a branch origin main" twice and "merged a pull request #3".
+		expect(classifyCommand("tu_py", trace("python-edit"))).toEqual([]);
+	});
+
+	it("a commit-message heredoc naming gh repo delete records only the real push after it", () => {
+		// Recorded as "deleted a repository" beside the genuine push.
+		const acts = classifyCommand("tu_commit", trace("commit-and-push"));
+		expect(acts.map((a) => a.kind)).toEqual(["push.trunk"]);
+	});
+
+	it("an issue-comment body heredoc naming git push / gh pr create records nothing", () => {
+		expect(classifyCommand("tu_comment", trace("issue-comment"))).toEqual([]);
+	});
+
+	it("the evidence collapses each body, so the executed command survives the 400-character cap", () => {
+		// The commit message alone is longer than the cap; the push after it must still be in the record.
+		const [push] = classifyCommand("tu_commit", trace("commit-and-push"));
+		expect(push.command.length).toBeLessThanOrEqual(400);
+		expect(push.command).toContain("[heredoc body: 18 lines]");
+		expect(push.command).toContain("git push");
+		expect(push.command).not.toContain("gh repo delete");
+	});
+
+	it("still records the genuine operations", () => {
+		const kinds = (cmd: string) => classifyCommand("tu", cmd).map((a) => a.kind);
+		expect(kinds("git push origin main")).toEqual(["push.trunk"]);
+		expect(kinds("gh pr merge 3 --merge")).toEqual(["pr.merge"]);
+		expect(kinds("gh repo delete someorg/somerepo --yes")).toEqual(["repo.delete"]);
+		// After the terminator, and on the operator's own line — both run.
+		expect(kinds("git commit -F - <<'EOF'\nsome message\nEOF\ngit push origin main")).toEqual(["push.trunk"]);
+		expect(kinds("git commit -F - <<'EOF' && git push origin main\nsome message\nEOF")).toEqual(["push.trunk"]);
+		expect(kinds("git commit -m \"$(cat <<'EOF'\nmsg\nEOF\n)\" && git push origin main && gh pr merge 3 --merge")).toEqual(["push.trunk", "pr.merge"]);
+	});
+
+	it("`EOF && git push` does not end the heredoc — the shell never runs that push, so it is not recorded", () => {
+		expect(classifyCommand("tu", "git commit -F - <<'EOF'\nsome message\nEOF && git push origin main")).toEqual([]);
 	});
 });

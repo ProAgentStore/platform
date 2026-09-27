@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	describeRepoScopeViolation,
@@ -194,6 +195,38 @@ describe("prose about the change is not where it was written (#872)", () => {
 	it("a cross-repo READ on the same line as an in-scope push is not judged", () => {
 		const command = "gh api repos/other-org/other-repo/pulls/138 && git push origin main";
 		expect(outOfScopeWrite(["proappstore-online/crm"], { kind: "push", command })).toBeNull();
+	});
+});
+
+describe("body payloads of any gh command are not targets (#873)", () => {
+	// Run 9f2e7ddc posted the #872 closing comment with `gh issue comment 872 --repo
+	// ProAgentStore/platform --body-file - <<'EOF'`; its body named the CRM URL and `git push`, and
+	// the guard refused "mcp/apps" three times. The fixture is that command; `stored` is the first
+	// 400 characters, as the trace holds it — cut inside the body, with no terminator.
+	const full = readFileSync(new URL("../../../../packages/browser-runner/src/coding/fixtures/trace-9f2e7ddc/issue-comment.sh", import.meta.url), "utf8");
+	const stored = full.trim().slice(0, 400);
+	const registered = ["ProAgentStore/platform"];
+
+	it("the trace's issue-comment command, stored or whole, is not a write to mcp/apps", () => {
+		for (const command of [stored, full]) {
+			for (const kind of ["pr.open", "push"]) expect(outOfScopeWrite(registered, { kind, command })).toBeNull();
+		}
+	});
+
+	it("a body cut before its terminator is still body — even a line that reads as a push", () => {
+		// The gap #872's terminator-only pattern left: this was refused as "mcp/apps".
+		const command = "gh issue comment 872 --repo ProAgentStore/platform --body-file - <<'EOF'\nFor example git push https://mcp.proappstore.online/mcp/apps/crm main";
+		expect(outOfScopeWrite(registered, { kind: "push", command })).toBeNull();
+	});
+
+	it("genuine cross-repo writes are still refused — including right after a body", () => {
+		const cases: Array<[string, string]> = [
+			["git push https://mcp.proappstore.online/mcp/apps/crm main", "mcp/apps"],
+			['gh pr create --repo other-org/other-repo --title "x"', "other-org/other-repo"],
+			["gh issue comment 1 --repo ProAgentStore/platform --body-file - <<'EOF'\nbody\nEOF\ngit push https://github.com/other-org/other-repo.git main", "other-org/other-repo"],
+			["git commit -F - <<'EOF' && git push git@github.com:other-org/other-repo.git main\nmsg\nEOF", "other-org/other-repo"],
+		];
+		for (const [command, refused] of cases) expect(outOfScopeWrite(registered, { kind: "push", command }), command).toBe(refused);
 	});
 });
 

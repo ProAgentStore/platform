@@ -50,6 +50,7 @@
  * likewise left alone.
  */
 import { logEvent } from "./events.js";
+import { splitHeredocs } from "./heredoc.js";
 import { upsertWorkCard } from "./work-card.js";
 import type { EngineActReport } from "./engine-acts.js";
 import type { Env } from "../types.js";
@@ -94,9 +95,6 @@ const REPO_POSITIONS: readonly RegExp[] = [
 	new RegExp(`\\brepos/${SLUG}(?=$|[\\s"'/])`, "g"),
 ];
 
-/** A heredoc body: `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"`, through its terminator line. */
-const HEREDOC = /<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1[^\n]*\n[\s\S]*?\n[ \t]*\2[ \t]*(?=\n|$)/g;
-
 /**
  * The segments that perform a REMOTE write: the commands the runner classifies as one, plus a
  * `gh api` call with a mutating method. A `gh api` GET is a read, and reads are never judged.
@@ -125,9 +123,9 @@ const PROSE_FLAG = /(?:^|\s)(?:-t|-b|-n|--title|--body|--notes|--subject)(?:\s*=
  * comment — while a push to an unregistered URL, or `--repo` naming one, is still refused.
  */
 export function remoteWriteText(command: string): string {
-	return String(command ?? "")
-		.replace(HEREDOC, "")
-		.split(/\|\||&&|[;|\n]/)
+	// Every heredoc body goes, including one the 400-character cap cut before its terminator (#873).
+	return splitHeredocs(String(command ?? ""))
+		.executed.split(/\|\||&&|[;|\n]/)
 		.filter((seg) => REMOTE_WRITE_SEGMENT.test(seg))
 		.map((seg) => (/\bgh\s/.test(seg) ? seg.replace(PROSE_FLAG, " ") : seg))
 		.join("\n");
