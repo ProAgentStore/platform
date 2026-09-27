@@ -13,7 +13,7 @@ import {
 	setBoardItemStatus,
 	setInstanceBoardConfig,
 } from "../lib/board.js";
-import type { BoardColumn } from "../lib/agent-capabilities.js";
+import { type BoardColumn, capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { buildTicketAction, isRunnableStatus, readCallToolTicket, readTicketAction, validateTicketAction } from "../lib/actionable-ticket.js";
 import { dispatchApprovedToolCall, recheckCallToolTicket } from "../lib/tool-approval-run.js";
 import { logEvent } from "../lib/events.js";
@@ -89,7 +89,11 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 			const hasRuntimeSetupTask = tasks.some(
 				(task) => isRecord(task) && task.id === runtimeSetupTaskId(instanceId),
 			);
-			if (!hasRuntimeSetupTask) tasks.unshift(runtimeSetupTask(instanceId));
+			if (!hasRuntimeSetupTask) {
+				// A coding agent's card names the GitHub and repository steps too (#868).
+				const caps = await capabilitiesForInstance(c.env, instanceId, session.uid).catch(() => null);
+				tasks.unshift(runtimeSetupTask(instanceId, undefined, { coding: caps?.runtime === "coding" }));
+			}
 			return c.json({
 				tasks,
 				runtimeUnavailable: true,

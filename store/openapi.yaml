@@ -5139,6 +5139,43 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{instanceId}/runner-setup:
+    get:
+      summary: The setup checklist for a coding agent that runs on your own machine
+      description: |
+        What is still needed before this coding agent can work on the owner's machine (#868), each
+        step with a live verdict derived from state the platform already records: a runner
+        connected (`pags login` + `pags up`), this agent attached to it, the GitHub App installed
+        on the bound repository's owner, a repository bound and admitted, and the coding engine
+        signed in. Reads only the caller's own machines, installations and repositories. 409 for an
+        agent that has no local coding runner.
+      operationId: getRunnerSetup
+      tags: [Runtime]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: The checklist
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  instanceId: { type: string }
+                  ready: { type: boolean, description: "Every step is done." }
+                  steps:
+                    type: array
+                    items:
+                      type: object
+                      required: [step, done, instruction]
+                      properties:
+                        step: { type: string, enum: [runner_connected, instance_attached, github_app, repo_bound, engine_signed_in] }
+                        done: { type: boolean }
+                        instruction: { type: string, description: "What to do, or what is already true." }
+                        link: { type: string, description: "Where to do it, when there is a page for it." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /v1/instances/{instanceId}/terminal-session:
     get:
       summary: Read the last terminal session selected for this instance

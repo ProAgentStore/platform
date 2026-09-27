@@ -161,7 +161,7 @@ const PINS = {
 	// `/loop/queue` paid for in #788. What is NOT here is the composition: `lib/instance-activity.ts`
 	// folds the two query results and maps `runHealth`, so the handler is a fetch and a shape.
 	// +8 at #847: flags stay with this shared list handler and the site-builder mount stays at the contract-locked composition point; route bodies already live in siblings.
-	"workers/api/src/routes/instances.ts": 1129, // +3 (#825): the pause/resume mount — an import, a registrar call and the one-line reason, which is exactly the shape this pin asks for; the routes themselves are routes/instances-lifecycle.ts. // +4 (#772): the connection-guide mount — an import and a registrar call, plus the two-line reason. Every route module this file composes costs the same two lines; the work itself went into routes/instances-guide.ts and lib/connection-guide.ts, which is what the pin is asking for. +1 at #850: attachOnRepin import — the repin that moves the agent lives in lib/runner-repin.ts. +2 at #856: the runner-attach mount — an import and the registrar call; the route lives in instances-runner-attach.ts. +2 at #859: instance_runner_node reports each node's runner version and what it is behind on (an import and the version map).
+	"workers/api/src/routes/instances.ts": 1131, // +3 (#825): the pause/resume mount — an import, a registrar call and the one-line reason, which is exactly the shape this pin asks for; the routes themselves are routes/instances-lifecycle.ts. // +4 (#772): the connection-guide mount — an import and a registrar call, plus the two-line reason. Every route module this file composes costs the same two lines; the work itself went into routes/instances-guide.ts and lib/connection-guide.ts, which is what the pin is asking for. +1 at #850: attachOnRepin import — the repin that moves the agent lives in lib/runner-repin.ts. +2 at #856: the runner-attach mount — an import and the registrar call; the route lives in instances-runner-attach.ts. +2 at #859: instance_runner_node reports each node's runner version and what it is behind on (an import and the version map). +2 at #868: the runner-setup mount — an import and the registrar call; the route lives in instances-runner-setup.ts.
 	// +5 for #319: the send path now hands the live capture to the consumer alongside the audio
 	// key, so the two readings of a turn can be compared on the message. Raised rather than
 	// split — the whole change is one `storedDictation` call and the two `onSend` sites that
@@ -1183,7 +1183,7 @@ const PINS = {
 	// that had stopped moving. It is now DESC + reverse — invisible at both call sites, which get
 	// the order they always did, and therefore exactly the line someone "tidies" back to ASC. Not
 	// split: another lane holds this file and a structural move would collide for no gain.
-	"workers/api/src/routes/instances-runtime.ts": 892,
+	"workers/api/src/routes/instances-runtime.ts": 914, // +22 at #868: the Runner setup card names every step (install, pags login, pags up) and, for a coding agent, the GitHub App and repository steps — it is the card's builder, and the live verdicts went to lib/runner-setup.ts.
 	// +1 for #344: one import. The board link it builds is now `instanceBoardLink`, because a
 	// console link a Worker writes by hand is a link nothing checks against the router — two were
 	// found broken that way. The line it replaced was the same length; the import is the cost.
@@ -1379,7 +1379,7 @@ const PINS = {
 	// lets an agent restore dispatch-without-asking on a connector its owner put behind approval.
 	// The storage is in `lib/connector-consent.ts` and the gate in `lib/tool-registry.ts`, so this
 	// file took the route and none of the mechanism.
-	"workers/api/src/routes/tools.ts": 1364, // +1 at #854: the per-instance objective cap check (the arithmetic lives in lib/loop-limits.ts). +4 at #771: the invoke route's opt-in `?agent=` type check (the check itself lives in routes/agent-type-tools.ts).
+	"workers/api/src/routes/tools.ts": 1368, // +1 at #854: the per-instance objective cap check (the arithmetic lives in lib/loop-limits.ts). +4 at #771: the invoke route's opt-in `?agent=` type check (the check itself lives in routes/agent-type-tools.ts). +4 at #868: a coding run's start is Pro-gated before its budget pool opens — the import, the gate and its two-line reason.
 	// New entry at #722, crossing LIMIT from 799 to 810. The addition is the approval-time re-check
 	// on `runActionableTicket`: a `call_tool` ticket is re-validated against LIVE permissions before
 	// it is claimed, because the gate was evaluated when the card was written and the human clicks
@@ -1388,7 +1388,7 @@ const PINS = {
 	// `lib/tool-approval-run.ts`; the dispatch it guards is there too. Splitting this file is worth
 	// doing on its own terms (it is the board/ticket surface AND the runtime-task surface), but
 	// doing it inside a security fix would bury the fix in a move diff.
-	"workers/api/src/routes/instances-tasks.ts": 810,
+	"workers/api/src/routes/instances-tasks.ts": 814, // +4 at #868: the no-runtime branch resolves the agent's capabilities so a coding agent's setup card names its GitHub and repository steps.
 	// First entry at #477: Usage.tsx crossed 800 lines as BudgetPanel expanded to cover per-tree
 	// run knobs (perTreeCostMicros, perTreeDelegations, perTreeMaxDepth, loopMaxIterations) and
 	// their edit fields. The page is one coherent screen — usage data + the limits that bound it —

@@ -253,6 +253,7 @@ const ROUTES = [
 	"DELETE /:instanceId/behaviour",
 	"GET /:instanceId/connection-guide",
 	"POST /:instanceId/runner-attach",
+	"GET /:instanceId/runner-setup",
 	"POST /:instanceId/browse",
 	"GET /:instanceId/translation",
 	"PUT /:instanceId/translation",
@@ -391,6 +392,7 @@ const OWNERSHIP: Record<string, string[]> = {
 	],
 	"instances-guide.ts": ["GET /:instanceId/connection-guide"],
 	"instances-runner-attach.ts": ["POST /:instanceId/runner-attach"],
+	"instances-runner-setup.ts": ["GET /:instanceId/runner-setup"],
 	"instances-lifecycle.ts": ["POST /:instanceId/pause", "POST /:instanceId/resume"],
 	"instances-browse.ts": ["POST /:instanceId/browse"],
 	"instances-chat.ts": [
@@ -586,6 +588,8 @@ const GATES: Record<string, [number, number]> = {
 	"GET /:instanceId/connection-guide": [401, 404],
 	// Owner-scoped before it reads the pin or touches a relay (#856): a stranger learns nothing about the agent's machines.
 	"POST /:instanceId/runner-attach": [401, 404],
+	// Owner-scoped before it reads a heartbeat, an installation or a repo (#868): a stranger learns nothing about the owner's machines.
+	"GET /:instanceId/runner-setup": [401, 404],
 	"POST /:instanceId/browse": [401, 404],
 	"GET /:instanceId/translation": [401, 404],
 	"PUT /:instanceId/translation": [401, 404],

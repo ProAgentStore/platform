@@ -196,24 +196,46 @@ export function cloudflareAiSetupTask(
 	};
 }
 
+/**
+ * The "Runner setup" card, for an instance no machine has registered yet. One runner serves every
+ * agent, so the card is shared — but a coding agent (#868) needs more than the runner: the GitHub
+ * App on its repository's owner and a bound repository, which a browser agent never does. The
+ * steps are in `description` because that is what the board renders; the live verdict for each
+ * is `GET /v1/instances/:id/runner-setup`.
+ */
 export function runtimeSetupTask(
 	instanceId: string,
 	now = new Date().toISOString(),
+	opts: { coding?: boolean } = {},
 ): Record<string, unknown> {
+	const install = "npm i -g @proagentstore/cli";
+	const steps = [`Install the CLI: ${install}`, "Sign in: pags login", "Connect: pags up (leave it running)"];
+	if (opts.coding) {
+		steps.push("Install the GitHub App on your repository's owner (Coding tab → Connect GitHub)", "Add your repository in the Coding tab");
+	}
 	return {
 		id: runtimeSetupTaskId(instanceId),
 		type: RUNTIME_SETUP_TASK_TYPE,
 		status: "blocked",
 		requiresApproval: false,
+		description: steps.map((s, i) => `${i + 1}. ${s}`).join(" "),
 		approval: {
-			prompt: "Connect the local ProAgentStore browser runtime before creating browser tasks.",
+			prompt: opts.coding
+				? "Connect your local coding runner: install the CLI, sign in with `pags login`, and run `pags up` on the machine that holds your repository."
+				: "Connect the local ProAgentStore browser runtime before creating browser tasks: install the CLI, sign in with `pags login`, and run `pags up`.",
 		},
 		input: {
-			install: "npm i -g @proagentstore/cli",
+			install,
+			login: "pags login",
 			// Canonical command: one runner serves ALL your agents (coding + browser).
 			connect: "pags up",
+			...(opts.coding
+				? { github: "Install the GitHub App on your repository's owner", repo: "Add your repository in the Coding tab", checklist: `/v1/instances/${instanceId}/runner-setup` }
+				: {}),
 		},
-		error: "No ProAgentStore browser runtime is registered for this instance.",
+		error: opts.coding
+			? "No local coding runner is connected for this instance."
+			: "No ProAgentStore browser runtime is registered for this instance.",
 		createdAt: now,
 		updatedAt: now,
 		synthetic: true,

@@ -16,6 +16,7 @@ import { registerBrowseRoutes } from "./instances-browse.js";
 import { registerChatRoutes } from "./instances-chat.js";
 import { registerGuideRoutes } from "./instances-guide.js";
 import { registerRunnerAttachRoutes } from "./instances-runner-attach.js";
+import { registerRunnerSetupRoutes } from "./instances-runner-setup.js";
 import { registerInstanceLifecycleRoutes } from "./instances-lifecycle.js";
 import { registerKnowledgeRoutes } from "./instances-knowledge.js";
 import { registerTaskRoutes } from "./instances-tasks.js";
@@ -1045,6 +1046,7 @@ registerBehaviourRoutes(instanceRoutes);
 // renderer of its own, and this file is already at its size pin.
 registerGuideRoutes(instanceRoutes);
 registerRunnerAttachRoutes(instanceRoutes); // the remote `pags up --force`, for one agent (#856)
+registerRunnerSetupRoutes(instanceRoutes); // the local coding runner setup checklist (#868)
 registerBrowseRoutes(instanceRoutes);
 registerTranslationRoutes(instanceRoutes);
 registerFileUploadRoutes(instanceRoutes);

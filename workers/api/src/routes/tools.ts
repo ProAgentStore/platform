@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
+import { requirePro } from "../lib/billing.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import { agentTypeMismatch } from "./agent-type-tools.js";
 import { listConnectorAccounts, pinnedAccountsFrom, resolveConnectorAccount } from "../lib/connector-accounts.js";
@@ -1167,11 +1168,6 @@ toolRoutes.post("/:id/loop", async (c) => {
 		loopLimits,
 		ceilings.loopMaxIterations,
 	);
-	// Every server-driven loop gets a budget, even an unconfigured one — an autonomous run with
-	// no spend bound is the failure #184 exists to prevent, and "we'll set a limit later" is how
-	// the first runaway happens. sanitizeLimits clamps a request to the ceiling.
-	const budget = await openBudget(c.env, session.uid, instanceId, body.budget);
-
 	// ONE Loop, in the ONE chat — but what it DRIVES is whatever the agent declares (#210).
 	// Hardcoding AGENT_LOOP here meant a Repo Coder's Loop looped a chat with no write tools:
 	// it could read its repo in a circle and never touch the engine. The supervisor path already
@@ -1181,6 +1177,14 @@ toolRoutes.post("/:id/loop", async (c) => {
 	// Only a coding run has a checkout to repair; a chat driver given the flag would loop its chat
 	// on a brief about git, which is a run that can only fail.
 	if (repairCheckout && driver.id !== "coding") throw new HttpError(400, "repairCheckout needs a coding agent — this agent's runs drive its chat, and there is no checkout to repair");
+	// A coding run drives the owner's local runner, which is a Pro feature (#868) — refused here,
+	// before a pool is opened, rather than after it reaches a machine the paywall let it register.
+	if (driver.id === "coding") await requirePro(c.env, session);
+
+	// Every server-driven loop gets a budget, even an unconfigured one — an autonomous run with
+	// no spend bound is the failure #184 exists to prevent, and "we'll set a limit later" is how
+	// the first runaway happens. sanitizeLimits clamps a request to the ceiling.
+	const budget = await openBudget(c.env, session.uid, instanceId, body.budget);
 	const started = await driver.start({
 		env: c.env,
 		instanceId,

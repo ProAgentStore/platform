@@ -275,8 +275,24 @@ describe("runtime task protocol shape", () => {
 		});
 		expect(task.input).toMatchObject({
 			install: "npm i -g @proagentstore/cli",
+			login: "pags login",
 			connect: "pags up",
 		});
+		// A browser agent is not told about GitHub or a repository it will never need.
+		expect(String(task.description)).not.toMatch(/GitHub|repository/);
+	});
+
+	it("tells a coding agent every step, signed in before connected, in the text the board renders (#868)", () => {
+		const task = runtimeSetupTask("inst-1", "2026-06-22T00:00:00.000Z", { coding: true });
+		const text = String(task.description);
+		expect(text).not.toMatch(/browser/i);
+		expect((task.approval as { prompt: string }).prompt).toMatch(/local coding runner/);
+		expect(text.indexOf("npm i -g @proagentstore/cli")).toBeGreaterThan(-1);
+		expect(text.indexOf("pags login")).toBeLessThan(text.indexOf("pags up"));
+		expect(text).toMatch(/GitHub App/);
+		expect(text).toMatch(/Add your repository in the Coding tab/);
+		expect(task.input).toMatchObject({ login: "pags login", connect: "pags up", checklist: "/v1/instances/inst-1/runner-setup" });
+		expect(task.id).toBe(runtimeSetupTaskId("inst-1"));
 	});
 });
 
