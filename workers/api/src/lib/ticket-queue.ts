@@ -31,6 +31,7 @@
  */
 import { capabilitiesForInstance } from "./agent-capabilities.js";
 import { sanitizeMaxIterations } from "./agent-loop.js";
+import { codingRunRefusal } from "./billing.js";
 import { buildInstanceBoard } from "./board.js";
 import type { BuildRun } from "./build-history.js";
 import { listRepos } from "./coding-store.js";
@@ -162,7 +163,7 @@ export async function setTicketAuthority(env: Env, instanceId: string, userId: s
 
 export type PickupResult =
 	| { started: true; ticketId: string; runId: string; driver: string }
-	| { started: false; reason: "disabled" | "leased" | "busy" | "none" | "deploy_red" | "raced" | "budget" | "driver_busy" | "refused"; ticketId?: string; detail?: string };
+	| { started: false; reason: "disabled" | "leased" | "busy" | "none" | "deploy_red" | "not_entitled" | "raced" | "budget" | "driver_busy" | "refused"; ticketId?: string; detail?: string };
 
 /** The seam tests use to observe the start without spawning a Workflow. Defaults to the real driver. */
 export interface PickupDeps {
@@ -232,6 +233,20 @@ export async function pickupNextTicket(env: Env, instanceId: string, userId: str
 		const red = await (deps.redDeploy ?? redDeployBlocking)(env, instanceId, userId).catch(() => null);
 		if (red) return { started: false, reason: "deploy_red", ticketId: next.id, detail: red };
 
+		// A coding run needs Pro (#870). Checked before the claim and the ticket's pool, so a lapsed
+		// subscription parks the ticket where it is — unclaimed, no budget, the reason on the ticket —
+		// and it starts on the first sweep after the owner upgrades.
+		const caps = await capabilitiesForInstance(env, instanceId, userId).catch(() => null);
+		if (loopDriverFor(caps).id === "coding") {
+			const refusal = await codingRunRefusal(env, userId);
+			if (refusal) {
+				await env.DB.prepare("UPDATE tickets SET queue_note = ?4 WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3")
+					.bind(next.id, instanceId, userId, refusal.slice(0, 500))
+					.run();
+				return { started: false, reason: "not_entitled", ticketId: next.id, detail: refusal };
+			}
+		}
+
 		// The claim: WHERE still unpicked, so two sweeps that both reached here cannot both start it.
 		const claim = await env.DB.prepare(
 			`UPDATE tickets SET queue_picked_at = datetime('now'), queue_run_id = NULL, queue_note = NULL
@@ -272,7 +287,7 @@ export async function pickupNextTicket(env: Env, instanceId: string, userId: str
 		}
 
 		const objective = `Ticket: ${next.title}${next.description ? `\n\n${next.description}` : ""}`.slice(0, MAX_OBJECTIVE);
-		const start = deps.start ?? (async (input: LoopStartInput) => loopDriverFor(await capabilitiesForInstance(env, instanceId, userId).catch(() => null)).start(input));
+		const start = deps.start ?? ((input: LoopStartInput) => loopDriverFor(caps).start(input));
 		const started = await start({ env, instanceId, userId, objective, maxIterations, budgetId, depth: 0 });
 
 		if (!started.ok) {

@@ -11,7 +11,7 @@
  * "1"/"true", signed-in platform APIs require Pro unless explicitly allowlisted
  * by the API entrypoint (auth, billing, public endpoints).
  */
-import { HttpError } from "./auth.js";
+import { HttpError, rolesOf } from "./auth.js";
 import type { Env, SessionPayload } from "../types.js";
 
 const STRIPE_API = "https://api.stripe.com/v1";
@@ -202,6 +202,23 @@ export async function isEntitled(env: Env, session: SessionPayload): Promise<boo
 export async function requirePro(env: Env, session: SessionPayload): Promise<void> {
 	if (!isPaywallEnforced(env)) return;
 	if (!(await isEntitled(env, session))) throw new HttpError(402, UPGRADE_MESSAGE);
+}
+
+/**
+ * The Pro gate for a coding run started with no session behind it (#870): the ticket queue, a
+ * supervisor's delegation, the objective-queue drainer. Same rule as {@link requirePro} — admins
+ * are entitled, everyone else needs a usable subscription — with admin read from the users row,
+ * since there is no session token to carry the role. Returns the refusal sentence, or null.
+ */
+export async function codingRunRefusal(env: Env, userId: string): Promise<string | null> {
+	if (!isPaywallEnforced(env)) return null;
+	const row = await env.DB.prepare(
+		"SELECT roles, subscription_status, subscription_expires_at FROM users WHERE id = ?1",
+	)
+		.bind(userId)
+		.first<{ roles: string | null; subscription_status: string | null; subscription_expires_at: string | null }>();
+	if (rolesOf(row?.roles).includes("admin")) return null;
+	return isSubscriptionActive(subFromUserRow(row)) ? null : UPGRADE_MESSAGE;
 }
 
 /** Instance cap for a user: Pro (or unenforced dev mode) is effectively unlimited. */

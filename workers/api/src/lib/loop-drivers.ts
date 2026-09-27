@@ -31,6 +31,7 @@ import { checkWorkdirVia } from "./coding-workdir.js";
 import { cloneSourceFor } from "./git-providers.js";
 import { getBoundRunnerConn } from "./runner-client.js";
 import { pausedStartRefusal } from "./instance-pause.js";
+import { codingRunRefusal } from "./billing.js";
 import { noSessionMessage } from "./coding-session-lifecycle.js";
 import { noteUnmeteredHeadlessDrive } from "./engine-metering.js";
 import { classifySubordinateConnectivity } from "./subordinate-connectivity.js";
@@ -469,9 +470,31 @@ function withPauseGate(driver: LoopDriver): LoopDriver {
 	};
 }
 
+/**
+ * Refuse a CODING run for an account without Pro (#870), at the same one door as the pause gate.
+ *
+ * A coding run drives the owner's own machine, which is a Pro feature (#868). `POST /:id/loop`
+ * refused it with `requirePro`, but the ticket queue and supervisor delegation start runs with no
+ * session and never passed that route — so the run was created and failed later at the runner.
+ * Gating the driver covers every entry point, including the next one. Callers that open a budget
+ * pool before starting ask {@link codingRunRefusal} first, so a refused run opens nothing.
+ */
+function withProGate(driver: LoopDriver): LoopDriver {
+	if (driver.id !== codingDriver.id) return driver;
+	return {
+		id: driver.id,
+		label: driver.label,
+		async start(input) {
+			const refusal = await codingRunRefusal(input.env, input.userId);
+			if (refusal) return { ok: false, status: 402, error: refusal };
+			return driver.start(input);
+		},
+	};
+}
+
 export function loopDriverFor(capabilities: AgentCapabilities | null | undefined): LoopDriver {
 	const wf = capabilities?.workflow;
-	return withPauseGate((wf && DRIVERS[wf]) || DEFAULT_LOOP_DRIVER);
+	return withPauseGate(withProGate((wf && DRIVERS[wf]) || DEFAULT_LOOP_DRIVER));
 }
 
 /** Every driver id, for tests and diagnostics. */

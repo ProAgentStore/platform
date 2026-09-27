@@ -82,7 +82,7 @@ export async function isSuspended(c: Context<{ Bindings: Env }>, uid: string): P
  *
  * Fails closed either way: an unparseable `roles` never grants admin.
  */
-function rolesOf(raw: string | null | undefined): string[] {
+export function rolesOf(raw: string | null | undefined): string[] {
 	if (!raw) return [];
 	try {
 		const parsed: unknown = JSON.parse(raw);

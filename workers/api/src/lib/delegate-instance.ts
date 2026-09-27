@@ -19,6 +19,7 @@ import { depthAbove, subordinatesOf } from "./supervision-graph.js";
 import { loadGraph } from "./supervision.js";
 import { openBudget } from "./delegation-budget-store.js";
 import { loopDriverFor } from "./loop-drivers.js";
+import { codingRunRefusal } from "./billing.js";
 import { capabilitiesForInstance } from "./agent-capabilities.js";
 import { logEvent } from "./events.js";
 import type { Env } from "../types.js";
@@ -72,6 +73,14 @@ export async function delegateToInstance(env: Env, input: DelegateInstanceInput)
 	// Depth is derived, never taken from the caller.
 	const depth = depthAbove(graph, input.subordinateInstanceId);
 
+	// A coding subordinate runs on the owner's machine, a Pro feature (#870) — refused before a pool
+	// is opened. The driver gate refuses it too; asking here is what keeps the refusal from costing one.
+	const caps = await capabilitiesForInstance(env, input.subordinateInstanceId, input.userId);
+	if (loopDriverFor(caps).id === "coding") {
+		const refusal = await codingRunRefusal(env, input.userId);
+		if (refusal) return { ok: false, status: 402, error: refusal };
+	}
+
 	// Inherit the parent's pool; only a ROOT delegation opens a new one. Opening one per hop is
 	// the per-path copy that makes the tree total grow as fanout^depth.
 	const budgetId = input.budgetId ?? (await openBudget(env, input.userId, input.supervisorInstanceId)).id;
@@ -90,7 +99,6 @@ export async function delegateToInstance(env: Env, input: DelegateInstanceInput)
 	// Collapsing the branch also fixes a real gap: the coding path `return`ed early, so a
 	// delegation to a Repo Coder never emitted the `delegate` event below. A multi-level tree with
 	// a coding agent in it rendered as unrelated runs — precisely the join the event exists for.
-	const caps = await capabilitiesForInstance(env, input.subordinateInstanceId, input.userId);
 	const started = await loopDriverFor(caps).start({
 		env,
 		instanceId: input.subordinateInstanceId,
