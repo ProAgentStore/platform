@@ -4,7 +4,7 @@ import { providerSentenceOf, readProviderAccountHealth, VERIFY_HINT } from "./pr
 
 /** The row `recordCodingFailure` writes for the run #773 was filed on, framing and all. */
 const CREDIT_MESSAGE =
-	"coding run 7f3a9c12 failed (provider_credentials) at s1-decide after 0 steps: Anthropic (400): Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.";
+	"coding run 7f3a9c12 failed (provider_credentials) at s1-decide after 0 steps: Anthropic (400): Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits. — Anthropic API key ending in 9abc has insufficient balance. This is the Anthropic API key balance, never a machine or Claude CLI subscription. Top up at console.anthropic.com/settings/billing";
 
 function db(opts: { failure?: { message: string; context?: string; seen_at: string } | null; lastUsedAt?: string | null; throwOn?: "error_log" | "user_api_keys" }) {
 	const prepared: string[] = [];
@@ -36,9 +36,7 @@ function db(opts: { failure?: { message: string; context?: string; seen_at: stri
 
 describe("the owner's provider account, as last observed (#773)", () => {
 	it("strips the run's framing and keeps the provider's sentence", () => {
-		expect(providerSentenceOf(CREDIT_MESSAGE)).toBe(
-			"Anthropic (400): Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.",
-		);
+		expect(providerSentenceOf(CREDIT_MESSAGE)).toContain("Anthropic API key ending in 9abc");
 		expect(providerSentenceOf("coding run 7f3a9c12 interrupted (infra_transient) at s2 after 4 steps, resumed: Durable Object reset")).toBe("Durable Object reset");
 		// A message with no framing is returned whole rather than emptied.
 		expect(providerSentenceOf("Anthropic (401): invalid x-api-key")).toBe("Anthropic (401): invalid x-api-key");
@@ -62,6 +60,9 @@ describe("the owner's provider account, as last observed (#773)", () => {
 		// Re-read from the sentence: the row was filed as `provider_credentials` before the split,
 		// and the reader must not send the owner to the key page for an empty balance.
 		expect(h.failureClass).toBe("provider_credit");
+		expect(h.lastFailure).toContain("Anthropic API key ending in 9abc");
+		expect(h.remedy).toContain("Anthropic API key balance");
+		expect(h.remedy).toContain("never a machine or Claude CLI subscription");
 		expect(h.remedy).toContain("console.anthropic.com/settings/billing");
 		expect(h.lastFailure).toMatch(/^Anthropic \(400\): Your credit balance is too low/);
 		expect(h.lastFailureAt).toBe("2026-09-09 07:07:00");

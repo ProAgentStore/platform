@@ -400,7 +400,7 @@ describe("system prompt blocks — the cacheable half and the per-turn half (#76
 	});
 
 	it("reaches the Anthropic request body as separate blocks", async () => {
-		const env = await envWithAnthropicKey();
+		const env = await envWithAnthropicKey("sk-ant-live-key-9abc");
 		let sentBody: { system?: unknown; messages: unknown[] } = { messages: [] };
 		vi.stubGlobal(
 			"fetch",
@@ -747,11 +747,14 @@ describe("the chat call streams, and its deadlines measure silence (#427)", () =
 		// request — so the sentence is the only signature, and it must survive into the message the
 		// run driver classifies on, with the page to go to appended rather than substituted.
 		const LIVE = "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.";
-		const env = await envWithAnthropicKey();
+		const env = await envWithAnthropicKey("sk-ant-live-key-9abc");
 		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ type: "error", error: { type: "invalid_request_error", message: LIVE } }, { status: 400 })));
 		const err = (await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "hi" }] }).catch((e: unknown) => e)) as UserAiProviderError;
 		expect(err).toMatchObject({ name: "UserAiProviderError", upstreamStatus: 400, retryable: false });
 		expect(err.message).toContain(LIVE);
+		expect(err.message).toContain("Anthropic API key ending in 9abc");
+		expect(err.message).toContain("Anthropic API key balance");
+		expect(err.message).toContain("never a machine or Claude CLI subscription");
 		expect(err.message).toContain("console.anthropic.com/settings/billing");
 		expect(isCreditBalanceMessage(LIVE)).toBe(true);
 		expect(classifyCodingFailure(err).class).toBe("provider_credit");

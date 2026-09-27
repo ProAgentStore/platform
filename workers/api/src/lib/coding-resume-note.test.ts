@@ -164,7 +164,7 @@ describe("#806 — the other endings that leave work half-done without a verdict
 	it.each([
 		["max_iterations", "used up its step limit"],
 		["engine_limit", "the coding CLI's own usage limit had not reset in time"],
-		["provider_credit", "the owner's AI provider account ran out of credit"],
+		["provider_credit", "its Anthropic API key balance was empty, not because of a machine or Claude CLI subscription"],
 	] as const)("names the TRUE cause for %s — never 'interrupted by the platform'", (reason, cause) => {
 		const note = codingResumeNote([act()], reason) ?? "";
 		expect(note).toContain(cause);

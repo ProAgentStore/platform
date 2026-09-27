@@ -125,7 +125,7 @@ describe("`interrupted` is distinguishable from a run whose objective failed (#5
 describe("an empty provider balance is the OWNER's to clear — not a failure, not an interruption (#773)", () => {
 	/** Verbatim from the run the ticket was filed on, hint and all (`user-ai.ts` appends it). */
 	const CREDIT =
-		"Anthropic (400): Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits. — Insufficient Anthropic credit balance. Top up at console.anthropic.com/settings/billing";
+		"Anthropic (400): Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits. — Anthropic API key ending in 9abc has insufficient balance. This is the Anthropic API key balance, never a machine or Claude CLI subscription. Top up at console.anthropic.com/settings/billing";
 
 	it("is its own set, disjoint from the interruptions", () => {
 		// G1: asserted, not assumed — the two tables answer different questions ("what cut this off"
@@ -148,9 +148,11 @@ describe("an empty provider balance is the OWNER's to clear — not a failure, n
 		expect(crash.stopReason).not.toBe("interrupted");
 	});
 
-	it("leads with what to DO, names the page, and keeps the vendor's own text last", () => {
+	it("leads with the exact API key and remedy, so neither a machine nor CLI subscription is blamed (#874)", () => {
 		const { detail } = codingCrashReport(new Error(CREDIT));
-		expect(detail.startsWith("Stopped because the Anthropic account has no credit left")).toBe(true);
+		expect(detail.startsWith("Stopped because Anthropic API key ending in 9abc has insufficient balance")).toBe(true);
+		expect(detail).toContain("Anthropic API key balance");
+		expect(detail).toContain("never a machine or Claude CLI subscription");
 		expect(detail).toContain("console.anthropic.com/settings/billing");
 		expect(detail).toContain("not by the objective");
 		expect(detail).not.toMatch(/^run error:/);
@@ -158,6 +160,7 @@ describe("an empty provider balance is the OWNER's to clear — not a failure, n
 		// (`top up at` is this module's sentence; the capitalised `Top up` later is `user-ai.ts`'s hint.)
 		expect(detail.indexOf("top up at")).toBeLessThan(detail.indexOf("Anthropic (400)"));
 		expect(cardDetail(detail).length).toBeLessThanOrEqual(CARD_DETAIL_MAX);
+		expect(cardDetail(detail)).toContain("ending in 9abc");
 		expect(cardDetail(detail)).toContain("console.anthropic.com/settings/billing");
 	});
 

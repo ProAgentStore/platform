@@ -118,6 +118,19 @@ const CEILING_MARKERS = [
  */
 const CREDIT_MARKERS = ["credit balance", "insufficient_funds", "insufficient credit", "insufficient_quota"];
 
+/** The deliberately small, platform-authored key identifier attached by `user-ai.ts` (#874). */
+const ANTHROPIC_KEY_HINT = /\bAnthropic API key ending in ([A-Za-z0-9_-]{4})\b/;
+
+/**
+ * Name the exact Anthropic key which made a failed request, but never disclose more than its
+ * existing four-character display hint. A workflow may serialize the Error and lose fields, so
+ * this reads the platform-authored message rather than trusting an `instanceof` property.
+ */
+export function anthropicCreditKeyIdentity(message: string): string | null {
+	const hint = ANTHROPIC_KEY_HINT.exec(message)?.[1];
+	return hint ? `Anthropic API key ending in ${hint}` : null;
+}
+
 /** No key or a rejected key — one door, one remedy: the owner fixes the key. */
 const CREDENTIAL_MARKERS = [
 	"invalid api key",
@@ -398,7 +411,10 @@ export const DRIVER_RESUME_POLICY: Record<CodingFailureClass, ResumeRule> = {
 	// Not a transport fact and not a platform fact: the owner's own Anthropic account is out of money,
 	// and a replay would spend nothing and fix nothing (#773). Stated with the page to go to, because
 	// this sentence is what the crash report and the chat bubble carry.
-	provider_credit: { resume: false, why: "the Anthropic account has insufficient credit balance; top up credits at console.anthropic.com/settings/billing to continue" },
+	provider_credit: {
+		resume: false,
+		why: "the Anthropic API key balance is insufficient — never a machine or Claude CLI subscription; top up the key at console.anthropic.com/settings/billing to continue",
+	},
 	provider_credentials: { resume: false, why: "no key or a rejected key; only the owner can clear it" },
 	provider_rate_limit: { resume: false, why: "the provider is throttling this key and wants a backoff, not an immediate replay" },
 	provider_error: { resume: false, why: "the provider answered with an error we have not split out; retrying an unread error is a guess" },

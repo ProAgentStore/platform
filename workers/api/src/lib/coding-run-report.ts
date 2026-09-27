@@ -19,7 +19,7 @@
  * itself. The interrupting classes are the ones where the run was cut off by something other than
  * the work it was asked to do — see {@link INTERRUPTED_CLASSES}.
  */
-import { classifyCodingFailure, type CodingFailureClass } from "./coding-failure.js";
+import { anthropicCreditKeyIdentity, classifyCodingFailure, type CodingFailureClass } from "./coding-failure.js";
 import { isRunnerGone } from "./runner-unreachable.js";
 import type { LoopStopReason } from "./agent-loop.js";
 
@@ -70,14 +70,20 @@ export const INTERRUPTED_CLASSES: ReadonlySet<CodingFailureClass> = new Set(Obje
  * own "Update it in Profile → API Keys" hint from `user-ai.ts`, and widening this table is a
  * decision about what the board column should say for it, which #773 did not make.
  */
-const OWNER_ACTION: Partial<Record<CodingFailureClass, { stopReason: LoopStopReason; sentence: string }>> = {
+const OWNER_ACTION: Partial<Record<CodingFailureClass, { stopReason: LoopStopReason }>> = {
 	provider_credit: {
 		stopReason: "provider_credit",
-		sentence:
-			"Stopped because the Anthropic account has no credit left, not by the objective — top up at " +
-			"console.anthropic.com/settings/billing, then start the run again; retrying before that will fail the same way.",
 	},
 };
+
+/** The lead sentence must survive a card's 300-character cap and identify the key that was used. */
+function providerCreditStopDetail(message: string): string {
+	const key = anthropicCreditKeyIdentity(message) ?? "the Anthropic API key used for this request";
+	return (
+		`Stopped because ${key} has insufficient balance — this is the Anthropic API key balance, never a machine or Claude CLI subscription, not by the objective. ` +
+		"Top up at console.anthropic.com/settings/billing, then start the run again; retrying before that will fail the same way."
+	);
+}
 
 export const OWNER_ACTION_CLASSES: ReadonlySet<CodingFailureClass> = new Set(Object.keys(OWNER_ACTION) as CodingFailureClass[]);
 
@@ -128,7 +134,7 @@ export function codingCrashReport(err: unknown): CodingCrashReport {
 	// first, the vendor's own text last where the card's 300 characters will cut it — and its own
 	// stop reason, so `coding_loop_status` says "top up" rather than "failed".
 	const owner = OWNER_ACTION[cls];
-	if (owner) return { detail: `${owner.sentence} ${withoutVendorAdvice(message)}`, stopReason: owner.stopReason };
+	if (owner) return { detail: `${providerCreditStopDetail(message)} ${withoutVendorAdvice(message)}`, stopReason: owner.stopReason };
 	const subject = INTERRUPTED_BY[cls];
 	if (!subject) {
 		return { detail: `run error: ${message}`, stopReason: null };

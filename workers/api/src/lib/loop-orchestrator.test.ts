@@ -13,7 +13,7 @@ import { UserAiCredentialsError } from "./user-ai.js";
 import type { Env } from "../types.js";
 
 // The provider's live sentence, as `user-ai.test.ts` pins it, in the frame `user-ai.ts` throws it in.
-const CREDIT = "Anthropic (400): Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits. — Insufficient Anthropic credit balance. Top up at console.anthropic.com/settings/billing";
+const CREDIT = "Anthropic (400): Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits. — Anthropic API key ending in 9abc has insufficient balance. This is the Anthropic API key balance, never a machine or Claude CLI subscription. Top up at console.anthropic.com/settings/billing";
 const BAD_KEY = "Anthropic (401): invalid x-api-key — Invalid API key. Update it in Profile → API Keys → Anthropic";
 
 /** A transcript whose last turn is what the durable loop records when AgentDO `/chat` returns `{ error }`. */
@@ -56,7 +56,11 @@ describe("settledDecision — the one outcome the transcript already decides (#7
 	});
 
 	it("names the remedy the rest of the platform names for that class", () => {
-		expect(settledDecision({ messages: failedTurn(CREDIT) })?.reason).toContain("console.anthropic.com/settings/billing");
+		const reason = settledDecision({ messages: failedTurn(CREDIT) })?.reason ?? "";
+		expect(reason).toContain("Anthropic API key balance");
+		expect(reason).toContain("never a machine or Claude CLI subscription");
+		expect(reason).toContain("ending in 9abc");
+		expect(reason).toContain("console.anthropic.com/settings/billing");
 		expect(settledDecision({ messages: failedTurn(BAD_KEY) })?.reason).toContain("only the owner can clear it");
 	});
 

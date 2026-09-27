@@ -1,5 +1,6 @@
 import { decryptKey } from "./crypto.js";
 import { backfillKeyHint } from "./key-hint-backfill.js";
+import { keyHint } from "./key-hint.js";
 import {
 	AI_FIRST_TOKEN_TIMEOUT_MS,
 	AI_STALL_TIMEOUT_MS,
@@ -379,7 +380,10 @@ async function runAnthropic(
 			: res.status === 401
 				? " — Invalid API key. Update it in Profile → API Keys → Anthropic"
 				: res.status === 400 && isCreditBalanceMessage(errMsg)
-					? " — Insufficient Anthropic credit balance. Top up at console.anthropic.com/settings/billing"
+					// `keyHint` is exactly four non-secret trailing characters (#780). `runAnthropic`
+					// holds the precise key that made this request, so this identifies THAT key even if
+					// the owner replaces it before reading the error; a later vault lookup could lie.
+					? ` — Anthropic API key ending in ${keyHint(apiKey) ?? "an unavailable hint"} has insufficient balance. This is the Anthropic API key balance, never a machine or Claude CLI subscription. Top up at console.anthropic.com/settings/billing`
 					: "";
 		throw new UserAiProviderError(
 			`Anthropic (${res.status}): ${errMsg}${hint}`,
