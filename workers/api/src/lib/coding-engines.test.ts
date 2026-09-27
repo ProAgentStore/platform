@@ -63,11 +63,29 @@ describe("resolveEngineEnv — a mode must decide how the engine BILLS", () => {
 		// mode into per-token billing, because the runner inherits process.env wholesale and
 		// Claude Code prefers an API key over the subscription login.
 		const out = await resolveEngineEnv(buildEnv(), "i1", "u1", session());
-		expect(out).toEqual({ ANTHROPIC_API_KEY: "" }); // "" means REMOVE (runner mergeEnv)
+		// "" means REMOVE (runner mergeEnv). The inherited subscription token goes too (#867): the
+		// machine's own login is what "auto" falls back to, and a stale token in `pags up`'s env beat it.
+		expect(out).toEqual({ ANTHROPIC_API_KEY: "", CLAUDE_CODE_OAUTH_TOKEN: "" });
 	});
 
-	it("machine mode strips it too — an env key is not a login", async () => {
-		const out = await resolveEngineEnv(buildEnv(), "i1", "u1", session({ launchCommand: "claude --machine" }));
+	it("machine mode strips it too — an env key is not a login — and keeps a token the machine exports (#867)", async () => {
+		// A STORED machine preset: with none, "claude --machine" matches no preset and runs as auto.
+		const withMachinePreset = {
+			DB: {
+				prepare() {
+					return {
+						bind() {
+							return {
+								async first() { return { config: JSON.stringify({ codingEngines: [{ id: "machine", label: "M", command: "claude --machine", auth: "machine" }] }) }; },
+								async all() { return { results: [] }; },
+							};
+						},
+					};
+				},
+			},
+		} as unknown as Env;
+		const out = await resolveEngineEnv(withMachinePreset, "i1", "u1", session({ launchCommand: "claude --machine" }));
+		// "machine" means whatever the machine holds, so CLAUDE_CODE_OAUTH_TOKEN is NOT removed here.
 		expect(out).toEqual({ ANTHROPIC_API_KEY: "" });
 	});
 
@@ -86,7 +104,7 @@ describe("resolveEngineEnv — a mode must decide how the engine BILLS", () => {
 
 	it("keeps Claude subscription behaviour unchanged: inject token when saved, otherwise strip only", async () => {
 		const out = await resolveEngineEnv(buildEnv(), "i1", "u1", session({ launchCommand: "claude --sub" }));
-		expect(out).toEqual({ ANTHROPIC_API_KEY: "" });
+		expect(out).toEqual({ ANTHROPIC_API_KEY: "", CLAUDE_CODE_OAUTH_TOKEN: "" });
 	});
 });
 

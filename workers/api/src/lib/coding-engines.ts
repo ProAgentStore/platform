@@ -58,7 +58,15 @@ export async function resolveEngineEnv(
 	// No stored setup-token → fall through to the machine's OWN login (the claude.ai session in
 	// the keychain), which is what "auto" promises. Still strip the API key: inheriting it is
 	// what turned "auto" into per-token billing.
-	if (!token) return stripProviderKey;
+	//
+	// And strip an inherited subscription token (#867). `pags up` hands the engine its environment
+	// as it was when `pags up` started, and Claude Code prefers CLAUDE_CODE_OAUTH_TOKEN over the
+	// login `claude` + `/login` stores — so a token exported in that shell, once expired, beat every
+	// later interactive `/login` on the same machine: a terminal (a fresh env) worked, and every
+	// engine the runner spawned failed with "OAuth access token is invalid. Please run /login".
+	// Removed, the CLI reads the stored login on each spawn — the one a person refreshes. "machine"
+	// is deliberately left alone: it means whatever the machine holds, an exported token included.
+	if (!token) return { ...stripProviderKey, CLAUDE_CODE_OAUTH_TOKEN: "" };
 	// The runner spawns the CLI with `{...process.env, ...thisEnv}`, so a machine that exports
 	// ANTHROPIC_API_KEY hands the engine an API key — and Claude Code prefers it over the
 	// subscription token. Injecting CLAUDE_CODE_OAUTH_TOKEN alone therefore did NOTHING: picking

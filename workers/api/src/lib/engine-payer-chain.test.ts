@@ -11,7 +11,7 @@ import type { Env } from "../types.js";
  * finding: on a real account 99.62% of the notional AI value — 3,462 calls, $9,584.87 — arrives
  * with a NULL payer, and every hop that produced it is individually correct.
  *
- *   1. `resolveEngineEnv`, `auto` mode, no stored `claude-code` key → `{ ANTHROPIC_API_KEY: "" }`
+ *   1. `resolveEngineEnv`, `auto` mode, no stored `claude-code` key → `{ ANTHROPIC_API_KEY: "", CLAUDE_CODE_OAUTH_TOKEN: "" }`
  *   2. the runner's `mergeEnv` reads "" as DELETE, so the spawn env has neither credential
  *   3. `resolveEngineAuth` sees neither → "machine-login"
  *   4. `payerForEngineAuth("machine-login")` → null
@@ -51,7 +51,7 @@ describe("what a coding engine signs in with decides whether its spend can be at
 	it("auto with NO stored token ends at a null payer — even on a machine whose shell exports a key", async () => {
 		vi.mocked(userAi.getUserProviderKey).mockResolvedValue(null);
 		const overlay = await resolveEngineEnv(dbEnv(), "i1", "u1", claudeSession());
-		expect(overlay).toEqual({ ANTHROPIC_API_KEY: "" });
+		expect(overlay).toEqual({ ANTHROPIC_API_KEY: "", CLAUDE_CODE_OAUTH_TOKEN: "" });
 
 		// The machine's shell has a key. Stripping it is the point of the mode (#248): "auto" must
 		// not silently become per-token billing. What it costs is attribution.
