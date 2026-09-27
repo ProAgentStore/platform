@@ -936,4 +936,8 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// 0.1.64 (#757): one new always-on `write` tool — 238 → 239, always-on 212 → 213. `promote_board_item`
 	// makes a board card a first-class ticket (idempotent). Appended, never edited in place: 0.1.63 is published.
 	"0.1.64": "sha256:08c906cafd8a3dbef3a772b923ecdd08fe803dd8acc1873b64cd86d5e840c41f",
+	// 0.1.65 (#868): one new always-on `runtime`-group read tool — 239 → 240, always-on 213 → 214.
+	// `runner_setup` reads a coding agent's local runner setup checklist. Appended, never edited in
+	// place: 0.1.64 is published.
+	"0.1.65": "sha256:097b9940015957392f21bd51a56c04f56f06004d90208dad70ffa4fb48c76520",
 };

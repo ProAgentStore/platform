@@ -366,6 +366,7 @@ const TABLE: Record<string, Row> = {
 	// be pinned to. Ungated like its `instance_runtime_status` neighbour: it is a read of the owner's
 	// own placement.
 	instance_runner_node: ["runtime", "none", null, null, "instance_id,token"],
+	runner_setup: ["runtime", "none", null, null, "instance_id,token"],
 	instance_runtime_status: ["runtime", "none", null, null, "instance_id,probe,token"],
 	instance_task_events: ["runtime", "none", null, null, "instance_id,limit,token"],
 	keys_status: ["account", "none", null, null, "token"],

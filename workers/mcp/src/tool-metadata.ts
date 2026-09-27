@@ -169,6 +169,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	instance_board: "read",
 	instance_messages: "read",
 	instance_runner_node: "read",
+	runner_setup: "read",
 	instance_runtime_status: "read",
 	instance_task_events: "read",
 	keys_status: "read",
@@ -556,7 +557,8 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// from the template seed. It is confirmed and dry-runnable; its audit keeps the prompt text out.
 	// +1 read at #198: `platform_health`, the read-only diagnostic — every verdict in it is derived
 	// from public probes and this session's own latency ring; nothing is written.
-	read: 113,
+	// +1 read at #868: `runner_setup`, the local runner setup checklist — derived from recorded state.
+	read: 114,
 	// +2 write at #825: `pause_instance` / `resume_instance`. `write` rather than `destructive` —
 	// nothing is deleted and nothing is unsubscribed, and classing the OFF switch as destructive
 	// would put RESUME behind a scope the caller may not hold, which is the wrong failure mode for

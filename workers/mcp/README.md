@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**239 tool registrations.** 213 are always registered; 26 are gated to the console
+**240 tool registrations.** 214 are always registered; 26 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -374,6 +374,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `unregister_instance_runtime` | Remove the registered runtime endpoint | destructive | yes | `unregister_instance_runtime` |
 | `list_runner_nodes` | Every machine running a CLI, across all agents | — | | |
 | `instance_runner_node` | Which machine one instance is pinned to, and the alternatives | — | | |
+| `runner_setup` | A coding agent's local runner setup checklist — CLI and `pags up`, attachment, GitHub App, bound repository, engine sign-in — each with a live verdict | — | | |
 | `set_instance_runner_node` | Pin an instance to a machine and move it there — the connected `pags up` attaches it now and the old machine lets go (empty clears the pin) | write | yes | |
 | `force_runner_attach` | Force a machine's connected `pags up` to (re)attach one agent now — the remote `pags up --force` for that agent: clears a stale socket from its relay slot and takes the slot over. Does not change the pin | runtime | yes | |
 | `runner_update` | Update a machine's `pags` CLI to the latest release and restart it in place — waits for busy engines so no run is cut off, then checks every agent it held is attached again (re-attaching stragglers). `pags up` restarts itself on the new release; a runner under launchd/systemd (`PAGS_SERVICE=1`) or with `PAGS_RESTART_COMMAND` is restarted by that. The first update of a CLI older than 0.4.62 still needs the machine | runtime | yes | |

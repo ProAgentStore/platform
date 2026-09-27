@@ -146,6 +146,22 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 		},
 	);
 
+	// The setup checklist for a coding agent on the owner's own machine (#868). Every verdict is
+	// derived from recorded state by the API, so this reads and never asks the runner anything.
+	server.tool(
+		"runner_setup",
+		"Read the setup checklist for a coding agent that runs on your own machine (e.g. a `local-coder` subscription): what is done and what is left before coding_loop_start can work. Answers `{instanceId, ready, steps[]}`; each step is `{step, done, instruction, link?}`, in order: `runner_connected` (the CLI is installed, signed in with `pags login`, and `pags up` is running), `instance_attached` (this agent is attached to that machine), `github_app` (the GitHub App is installed on the bound repository's owner), `repo_bound` (a repository is bound and its checkout would be admitted — coding_repo_add), `engine_signed_in` (the coding engine on the machine is signed in). Follow the first step with `done: false`. Coding agents only: any other agent answers 409.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID or slug"),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			return jsonText(await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/runner-setup`, sessionToken, {}, env));
+		},
+	);
+
 	server.tool(
 		"set_instance_runner_node",
 		'Pin one instance to a specific machine, so its runner calls (chat tools, apply, coding) route there — and MOVE it there in the same call: when that machine\'s `pags up` is connected, it attaches the agent now and any other machine still holding it lets go, so no `pags up` is needed anywhere. The reply\'s `attachment` says what happened: `attached` (this agent\'s socket is live on the new machine), `detachedFrom`, `stillAttachedOn`, `unconfirmed` when a slow machine kept the move from being confirmed within 25s (the pin is saved either way; instance_runner_node shows where it attached), and a `detail` naming the remedy when it could not attach — usually force_runner_attach, which takes the agent\'s slot over on that machine when a stale or duplicate socket stands in the way. Can take several seconds. Pass an empty `runner_node` to CLEAR the pin and let it route to whichever machine holds a live socket. Read instance_runner_node first: the name must be one the machine registered under. Applies to any agent with a runtime, not only coding agents.',
