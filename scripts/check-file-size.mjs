@@ -687,7 +687,7 @@ const PINS = {
 	// the wording and the control are ./repo-repair + ./RepoUnusableNotice, shared with ReposList
 	// so the two surfaces cannot report one directory differently — which is why this is +8 and
 	// not the +30 an inline banner would have cost.
-	"agents/coder/web/src/CodingTab.tsx": 980,
+	"agents/coder/web/src/CodingTab.tsx": 983, // +3 at #869: the import and the two call sites of RunnerSetupChecklist (the card itself is its own file).
 	// +18 for #425: two Chrome launch flags, the args array reformatted one-per-line to fit them,
 	// and the paragraph saying why they are a PAIR. `--use-fake-ui-for-media-stream` on its own
 	// auto-GRANTS the real microphone to any page the agent drives — strictly worse than the prompt

@@ -36,6 +36,7 @@ import BuildsPanel from "./BuildsPanel";
 import PullsPanel from "./PullsPanel";
 import { isClaudeSignedOut } from "./engine-auth-view";
 import ClaudeSignedOutBanner from "./ClaudeSignedOutBanner";
+import RunnerSetupChecklist from "./RunnerSetupChecklist";
 import EngineCredentialStrip from "./EngineCredentialStrip";
 import EngineSigninPrompt from "./EngineSigninPrompt";
 import { Copy, FolderCog, Square, SquareTerminal, FolderGit2, Hammer, CircleDot, GitPullRequest, Cpu, RotateCw } from "lucide-react";
@@ -798,6 +799,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				<EngineTurnBanner report={lastTurn} />
 
 				{claudeSignedOut && soloView === "terminal" && <ClaudeSignedOutBanner onOpenProfile={() => navigate("/profile")} onRestart={restartSession} />}
+				{!openSession && soloView === "terminal" && <RunnerSetupChecklist instanceId={instanceId} runnerOnline={runnerOnline} />}
 
 				{/* The checkout is unusable, and the field that fixes it (#67). This surface reported it
 				    as the two truncated words "Path unusable" in the caption above and nothing else —
@@ -945,6 +947,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					<button type="button" onClick={() => void loadCoding()} className="underline font-semibold">Retry</button>
 				</div>
 			)}
+			{landingView === "repos" && <RunnerSetupChecklist instanceId={instanceId} runnerOnline={runnerOnline} />}
 			{landingView === "repos" ? (
 				<ReposList
 					singleRepo={singleRepo}

@@ -2729,6 +2729,90 @@ test.describe("ProAgentStore Console smoke", () => {
 	});
 });
 
+/**
+ * The local runner setup checklist on a coding agent (#869): the live verdicts from
+ * `GET /v1/instances/:id/runner-setup` (#868), shown until every step is done.
+ */
+test.describe("Coding tab — local runner setup checklist (#869)", () => {
+	const coder = {
+		id: "inst-1",
+		name: "Local Coder",
+		slug: "local-coder",
+		category: "code",
+		capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" },
+	};
+	const notReady = {
+		instanceId: "inst-1",
+		ready: false,
+		steps: [
+			{ step: "runner_connected", done: true, instruction: "On the machine that holds your repository: install the CLI (npm i -g @proagentstore/cli), sign in with `pags login`, then run `pags up` and leave it running." },
+			{ step: "instance_attached", done: true, instruction: "Once `pags up` is running it attaches this agent automatically.", link: "/console/instances/inst-1/board" },
+			{ step: "github_app", done: false, instruction: "Install the ProAgentStore GitHub App on acme (Coding tab → Connect GitHub), so this agent can read and comment on its issues.", link: "https://github.com/apps/proagentstore/installations/new" },
+			{ step: "repo_bound", done: false, instruction: "Add your repository in the Coding tab — a GitHub repository, or a folder path on the machine running `pags up`.", link: "/console/instances/inst-1/coding" },
+			{ step: "engine_signed_in", done: false, instruction: "Sign the coding CLI (Claude Code, Codex or Grok) in on your machine with your own account.", link: "/console/instances/inst-1/board" },
+		],
+	};
+	async function mockCoder(page: Page, setup: { status: number; body: unknown }) {
+		await mockSignedInConsole(page, { instances: [coder] });
+		await page.route("**/v1/instances/inst-1/coding/**", async (route) => {
+			const url = route.request().url();
+			const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+			if (url.includes("/repos")) return json({ repos: [] });
+			if (url.includes("/engines")) return json({ engines: [], defaultEngineId: "claude" });
+			if (url.includes("/sessions")) return json({ sessions: [] });
+			return json({});
+		});
+		await page.route("**/v1/instances/inst-1/runner-setup", (route) =>
+			route.fulfill({ status: setup.status, contentType: "application/json", body: JSON.stringify(setup.body) }));
+	}
+
+	test("shows what is left, marks the next step, and links each one", async ({ page }) => {
+		await mockCoder(page, { status: 200, body: notReady });
+		await page.goto("/console/instances/inst-1/coding");
+		const card = page.getByRole("region", { name: /Set up your local runner/ });
+		await expect(card).toBeVisible();
+		await expect(card).toContainText("2 of 5 done");
+		// The first step not done is the current one.
+		await expect(card.locator('li[aria-current="step"]')).toContainText("Install the GitHub App");
+		await expect(card.locator("li")).toHaveCount(5);
+		// Done steps drop their instruction; open ones keep it.
+		await expect(card).not.toContainText("pags login");
+		await expect(card).toContainText("Install the ProAgentStore GitHub App on acme");
+		// The external link opens in a new tab; the link back to this Coding tab is not offered.
+		const gh = card.getByRole("link", { name: /Install the GitHub App/ });
+		await expect(gh).toHaveAttribute("href", "https://github.com/apps/proagentstore/installations/new");
+		await expect(gh).toHaveAttribute("target", "_blank");
+		await expect(card.getByRole("button", { name: /Bind your repository/ })).toHaveCount(0);
+		// An in-app link routes under the console base.
+		await card.getByRole("button", { name: /Sign in to the coding engine/ }).click();
+		await expect(page).toHaveURL(/\/console\/instances\/inst-1\/board$/);
+	});
+
+	test("renders nothing once setup is done, or when the checklist cannot be read", async ({ page }) => {
+		await mockCoder(page, { status: 200, body: { ...notReady, ready: true, steps: notReady.steps.map((s) => ({ ...s, done: true })) } });
+		await page.goto("/console/instances/inst-1/coding");
+		await expect(page.getByRole("button", { name: "Repos" })).toBeVisible();
+		await expect(page.locator("#runner-setup-checklist")).toHaveCount(0);
+
+		await page.unroute("**/v1/instances/inst-1/runner-setup");
+		await page.route("**/v1/instances/inst-1/runner-setup", (route) =>
+			route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "no runner setup checklist" }) }));
+		await page.reload();
+		await expect(page.getByRole("button", { name: "Repos" })).toBeVisible();
+		await expect(page.locator("#runner-setup-checklist")).toHaveCount(0);
+	});
+
+	test("fits a 320px phone — long shell commands wrap instead of scrolling sideways", async ({ page }) => {
+		await page.setViewportSize({ width: 320, height: 812 });
+		await mockCoder(page, { status: 200, body: { ...notReady, steps: notReady.steps.map((s) => ({ ...s, done: false })) } });
+		await page.goto("/console/instances/inst-1/coding");
+		await expect(page.locator("#runner-setup-checklist")).toBeVisible();
+		const { mainOv, docOv } = await measureOverflow(page);
+		expect(mainOv).toBeLessThanOrEqual(1);
+		expect(docOv).toBeLessThanOrEqual(1);
+	});
+});
+
 test.describe("ProAgentStore skill discovery", () => {
 	test("skills catalog links to the MCP operator skill", async ({ page }) => {
 		await page.goto("/skills/");
