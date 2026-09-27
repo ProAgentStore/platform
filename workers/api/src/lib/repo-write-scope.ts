@@ -94,6 +94,45 @@ const REPO_POSITIONS: readonly RegExp[] = [
 	new RegExp(`\\brepos/${SLUG}(?=$|[\\s"'/])`, "g"),
 ];
 
+/** A heredoc body: `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"`, through its terminator line. */
+const HEREDOC = /<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1[^\n]*\n[\s\S]*?\n[ \t]*\2[ \t]*(?=\n|$)/g;
+
+/**
+ * The segments that perform a REMOTE write: the commands the runner classifies as one, plus a
+ * `gh api` call with a mutating method. A `gh api` GET is a read, and reads are never judged.
+ */
+const REMOTE_WRITE_SEGMENT =
+	/\bgit\s+push\b|\bgh\s+pr\s+(?:create|merge)\b|\bgh\s+release\s+create\b|\bgh\s+repo\s+delete\b|\bgh\s+api\b.*(?:-X|--method)[=\s]*(?:POST|PUT|PATCH|DELETE)\b/i;
+
+/**
+ * `gh` flags whose value is prose — a PR title or body, a merge subject, release notes — never a
+ * target. Applied to `gh` segments only: `git push` takes no prose, and its `-n` is `--dry-run`,
+ * which has no value to strip — treating it as one would swallow the remote after it.
+ */
+const PROSE_FLAG = /(?:^|\s)(?:-t|-b|-n|--title|--body|--notes|--subject)(?:\s*=\s*|\s+)(?:"(?:[^"\\]|\\.)*(?:"|$)|'[^']*(?:'|$)|\S+)/g;
+
+/**
+ * The part of a command that is the remote write itself (#872).
+ *
+ * The act record carries the whole command line, so it also carries whatever the Engine wrote
+ * ABOUT the change: a commit message in a heredoc, a PR body. Scanning all of it turned a URL in
+ * prose into a push target — a CRM run whose commit message mentioned
+ * `https://mcp.proappstore.online/mcp/apps/crm` was halted for writing to "mcp/apps" while it
+ * pushed `origin main` to the registered CRM repo. So: heredoc bodies go, only the segments that
+ * push, open or merge a PR, publish a release or delete a repo are kept, and the values of `gh`'s
+ * prose flags inside them go. What is left is the Git operation and the remote it names. A push to
+ * a NAMED remote (`origin`) names no repository and stays "unknown" — permitted, per the module
+ * comment — while a push to an unregistered URL, or `--repo` naming one, is still refused.
+ */
+export function remoteWriteText(command: string): string {
+	return String(command ?? "")
+		.replace(HEREDOC, "")
+		.split(/\|\||&&|[;|\n]/)
+		.filter((seg) => REMOTE_WRITE_SEGMENT.test(seg))
+		.map((seg) => (/\bgh\s/.test(seg) ? seg.replace(PROSE_FLAG, " ") : seg))
+		.join("\n");
+}
+
 /**
  * Every repository slug the command explicitly names, in order, deduplicated.
  *
@@ -135,7 +174,8 @@ export function outOfScopeWrite(registered: readonly string[], act: { kind: stri
 	if (!REMOTE_WRITE_KINDS.has(act.kind)) return null;
 	const scope = registered.filter((r) => typeof r === "string" && r.includes("/"));
 	if (!scope.length) return null;
-	for (const slug of repoSlugsInCommand(act.command)) {
+	// Only the remote write's own words (#872): a URL in the commit message is not where it pushed.
+	for (const slug of repoSlugsInCommand(remoteWriteText(act.command))) {
 		if (!scope.some((r) => sameRepo(r, slug))) return slug;
 	}
 	return null;

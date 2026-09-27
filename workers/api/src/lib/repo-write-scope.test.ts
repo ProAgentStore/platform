@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
 	describeRepoScopeViolation,
+	outOfScopeWrite,
 	recordRepoScopeViolations,
+	remoteWriteText,
 	repoSlugsInCommand,
 	unscopedWrites,
 } from "./repo-write-scope.js";
@@ -135,6 +137,72 @@ describe("unknown is never a violation", () => {
 		// A local-path repo with no `github_repo` gives us no scope at all. Refusing every write
 		// there would break every local-only Coder; permitting is stated, not assumed.
 		expect(unscopedWrites([], [act({ command: INCIDENT_COMMAND })])).toEqual([]);
+	});
+});
+
+describe("prose about the change is not where it was written (#872)", () => {
+	// The CRM run that was halted for writing to "mcp/apps": instance d9027b1e, run 61199405,
+	// registered for proappstore-online/crm. It added CRM files and pushed `origin main`; the
+	// commit message, in a heredoc, named the CRM app's MCP URL.
+	const CRM_COMMAND = [
+		"git add CLAUDE.md docs/mcp.md scripts/smoke-pas-mcp.mjs && git commit -m \"$(cat <<'EOF'",
+		"docs: document the PAS MCP endpoint",
+		"",
+		"The CRM app is served at https://mcp.proappstore.online/mcp/apps/crm.",
+		"EOF",
+		')" && git push origin main',
+	].join("\n");
+
+	it("a URL path in a heredoc commit message does not make the push out of scope", () => {
+		expect(unscopedWrites(["proappstore-online/crm"], [act({ kind: "push.trunk", command: CRM_COMMAND })])).toEqual([]);
+	});
+
+	it("nor does a URL in an inline -m message, an unquoted heredoc, or a PR's title and body", () => {
+		for (const command of [
+			'git commit -m "see https://mcp.proappstore.online/mcp/apps/crm" && git push origin main',
+			"git commit -F - <<EOF\nlinks https://github.com/other/repo/issues/9\nEOF\ngit push origin main",
+			'gh pr create --repo proappstore-online/crm --title "Port https://github.com/other/repo" --body "Mirrors https://github.com/other/repo/pull/3"',
+			"gh pr merge 12 --squash --subject 'from https://github.com/other/repo' --body=https://github.com/other/repo/pull/3",
+		]) {
+			expect(unscopedWrites(["proappstore-online/crm"], [act({ kind: "push", command })]), command).toEqual([]);
+		}
+	});
+
+	it("a heredoc line that LOOKS like a push is still prose", () => {
+		const command = "git commit -F - <<'MSG'\nnever run: git push https://github.com/other/repo.git main\nMSG\ngit push origin main";
+		expect(unscopedWrites(["proappstore-online/crm"], [act({ kind: "push.trunk", command })])).toEqual([]);
+	});
+
+	it("a real push to an unregistered remote is still refused — after the same heredoc commit", () => {
+		const command = CRM_COMMAND.replace("git push origin main", "git push https://github.com/other-org/other-repo.git main");
+		const found = unscopedWrites(["proappstore-online/crm"], [act({ kind: "push.trunk", command })]);
+		expect(found.map((f) => f.refused)).toEqual(["other-org/other-repo"]);
+	});
+
+	it("still refuses an unregistered ssh remote, --repo target, dry-run push, and mutating gh api call", () => {
+		const cases: Array<[string, string]> = [
+			["git push git@github-personal:other-org/other-repo.git main", "other-org/other-repo"],
+			['gh pr create --repo other-org/other-repo --title "x" --body "y"', "other-org/other-repo"],
+			["git push -n https://github.com/other-org/other-repo.git main", "other-org/other-repo"],
+			["git push origin main && gh api repos/other-org/other-repo/pulls -X POST -f title=x", "other-org/other-repo"],
+		];
+		for (const [command, refused] of cases) {
+			expect(outOfScopeWrite(["proappstore-online/crm"], { kind: "push", command }), command).toBe(refused);
+		}
+	});
+
+	it("a cross-repo READ on the same line as an in-scope push is not judged", () => {
+		const command = "gh api repos/other-org/other-repo/pulls/138 && git push origin main";
+		expect(outOfScopeWrite(["proappstore-online/crm"], { kind: "push", command })).toBeNull();
+	});
+});
+
+describe("remoteWriteText keeps the Git operation and drops the prose", () => {
+	it("keeps only the write segments, without heredoc bodies or gh prose values", () => {
+		const text = remoteWriteText("git add a && git commit -m \"$(cat <<'EOF'\nhttps://x.test/a/b\nEOF\n)\" && git push origin main && gh pr create --body 'https://x.test/c/d' --fill");
+		expect(text).toContain("git push origin main");
+		expect(text).toContain("gh pr create");
+		expect(text).not.toMatch(/x\.test|git add|git commit/);
 	});
 });
 
