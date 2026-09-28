@@ -210,7 +210,7 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 	// so neither surface can claim that a pin/session is safe when the other refuses it.
 	server.tool(
 		"get_instance_terminal_session",
-		"Read the terminal session last selected for one instance. `activeTerminalTarget` is null when no terminal is selected. This is saved per instance, so it is shared with the console's Tmux tab rather than being local MCP client state.",
+		"Read the terminal session last selected for one instance. `activeTerminalTarget` is null when no terminal is selected. `lastTerminalTarget` is the one last DRIVEN through the agent's terminal tools (or selected): it is recorded by use and kept after that terminal ends, until DELETE /terminal-history clears it. This is saved per instance, so it is shared with the console's Tmux tab rather than being local MCP client state.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID or slug."),

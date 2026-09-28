@@ -5195,11 +5195,20 @@ paths:
                 type: object
                 properties:
                   activeTerminalTarget: { type: string, nullable: true }
+                  lastTerminalTarget:
+                    type: string
+                    nullable: true
+                    description: |
+                      The target last DRIVEN through the instance's terminal tools (or selected), e.g.
+                      `tmux:shell` (#878). Recorded by use and kept after that terminal ends, until
+                      `DELETE /terminal-history` clears it. Falls back to `activeTerminalTarget`.
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
     put:
       summary: Persist (or clear) the last-selected terminal session for this instance
-      description: An empty or null `activeTerminalTarget` clears the stored value.
+      description: |
+        An empty or null `activeTerminalTarget` clears the stored value. Setting one also records it as
+        `lastTerminalTarget`; clearing the selection does not clear that.
       operationId: setTerminalSession
       tags: [Runtime]
       parameters: [{ $ref: "#/components/parameters/InstanceId" }]
@@ -5220,6 +5229,68 @@ paths:
                 type: object
                 properties:
                   activeTerminalTarget: { type: string, nullable: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/terminal-history:
+    get:
+      summary: Read what this instance's terminals did, after they have ended
+      description: |
+        A repo-less terminal instance has no coding session, so its record is kept here (#878): every
+        `tmux_*` / `terminal_*` tool call that succeeded leaves the command typed (`command`), the pane
+        it returned (`terminal`, deduped and throttled, ≤ 8,000 characters) and lifecycle facts
+        (`system`). No cursor returns the NEWEST page; `before` walks back, `since` polls forward.
+        `terminal=1` returns panes only. Rows within a page are oldest→newest. `GET
+        /coding/timeline` serves the same record when the instance has no coding session.
+      operationId: getTerminalHistory
+      tags: [Runtime]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: since, in: query, schema: { type: integer }, description: Exclusive seq cursor, forward. }
+        - { name: before, in: query, schema: { type: integer }, description: Exclusive seq cursor, backward. }
+        - { name: limit, in: query, schema: { type: integer }, description: Rows per page (default 40, max 200). }
+        - { name: terminal, in: query, schema: { type: string, enum: ["1"] }, description: Panes only. }
+      responses:
+        "200":
+          description: One page of the record
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  lastTerminalTarget: { type: string, nullable: true }
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        seq: { type: integer }
+                        type: { type: string, enum: [terminal, command, system] }
+                        target: { type: string }
+                        content: { type: string }
+                        createdAt: { type: string }
+                  hasMore: { type: boolean }
+                  oldestSeq: { type: integer, nullable: true }
+                  newestSeq: { type: integer, nullable: true }
+                  nextSeq: { type: integer }
+        "400": { description: "`since` and `before` together" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      summary: Clear this instance's terminal record
+      description: Deletes every stored row and the remembered `lastTerminalTarget`. The only way the record is removed apart from its per-instance row cap.
+      operationId: clearTerminalHistory
+      tags: [Runtime]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: How many rows were deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cleared: { type: integer }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 

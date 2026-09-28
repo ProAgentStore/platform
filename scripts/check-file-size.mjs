@@ -975,7 +975,12 @@ const PINS = {
 	// chat, the /tools invoker, MCP and the pipeline runner — and a gate anywhere else is a gate on
 	// one surface, which is the same as no gate.
 	// +6 at #847: artifact forwarding is part of this dispatch result envelope, beside transfer and render; a second wrapper would only hide that propagation.
-	"workers/api/src/lib/tool-registry.ts": 896,
+	// New entry at #878: 797 → 808 for the repo-less terminal path in coding_session_capture/_message — an import, a bound caller and one branch in each; the logic is src/terminal-fallback.ts, not here.
+	"workers/mcp/src/coding-tools.ts": 808,
+	// Pinned at #878 at its size on main: #874 (2b0ca68) grew it past the 800-line default without an entry, which left this ratchet failing for every commit after it. Recorded as it stands — not grown here.
+	"workers/api/src/lib/user-ai.ts": 803,
+	// +3 at #878: the terminal record hook — an import and a one-line call with its comment after the handler. It belongs HERE for the reason the gates do: every surface dispatches through this function, and recording anywhere else would record one surface. The storage is lib/terminal-record.ts.
+	"workers/api/src/lib/tool-registry.ts": 899,
 	// +8 for the #312 stats prompt block. Deliberately not split: the block is two statements
 	// and its comment, and it must sit inside the existing config read (`instanceCfg`/`agentCfg`
 	// are already in hand) or the prompt costs an extra query per turn. Everything else about
@@ -1827,7 +1832,8 @@ const PINS = {
 	// This file grows by prose about other files, which is what it is for.
 	// +9 at #847: seven intentional decisions and one parser extraction need their auditable record; this ledger is the ratchet's ownership boundary.
 	// +3 at #771: the mcp/index.ts and routes/tools.ts raises above (two lines of why) and this one.
-	"scripts/check-file-size.mjs": 1911,
+	// +6 at #878: the tool-registry raise and the coding-tools.ts and user-ai.ts entries above, each with its reason, and this line.
+	"scripts/check-file-size.mjs": 1917,
 };
 
 /**

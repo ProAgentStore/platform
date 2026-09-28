@@ -64,6 +64,7 @@ import { registerTaskRoutes } from "./instances-tasks.js";
 import { registerRuntimeBuilderRoutes } from "./instances-site-builder.js";
 import { registerDeployStatusRoutes } from "./instances-deploy.js";
 import { registerConnectorBindingRoutes } from "./instances-terminal.js";
+import { registerTerminalHistoryRoutes } from "./instances-terminal-history.js";
 import { CONNECTOR_CONSTRAINTS } from "../lib/surface-options.js";
 import { registerTranslationRoutes } from "./instances-translation.js";
 import { registerIdentityResyncRoutes } from "./instances-identity.js";
@@ -218,6 +219,8 @@ const ROUTES = [
 	"PUT /:instanceId/runner-node",
 	"GET /:instanceId/terminal-session",
 	"PUT /:instanceId/terminal-session",
+	"GET /:instanceId/terminal-history",
+	"DELETE /:instanceId/terminal-history",
 	"POST /:instanceId/runtime/heartbeat",
 	"PUT /:instanceId/voice-audio/:turnId",
 	"GET /:instanceId/voice-audio/:turnId",
@@ -359,6 +362,7 @@ const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
 	"instances-deploy.ts": registerDeployStatusRoutes,
 	"instances-identity.ts": registerIdentityResyncRoutes,
 	"instances-terminal.ts": registerConnectorBindingRoutes,
+	"instances-terminal-history.ts": registerTerminalHistoryRoutes,
 	"instances-translation.ts": registerTranslationRoutes,
 };
 
@@ -449,6 +453,9 @@ const OWNERSHIP: Record<string, string[]> = {
 		"GET /:instanceId/tmux-session",
 		"PUT /:instanceId/tmux-session",
 	],
+	// A repo-less terminal's record, kept after the terminal ends (#878) — mounted right after the
+	// terminal-session pair it extends.
+	"instances-terminal-history.ts": ["GET /:instanceId/terminal-history", "DELETE /:instanceId/terminal-history"],
 	"instances-site-builder.ts": [
 		"POST /:instanceId/site-builder/run",
 		"GET /:instanceId/site-builder/:runId",
@@ -539,6 +546,8 @@ const GATES: Record<string, [number, number]> = {
 	// The last-selected terminal session for this instance (#491). Same gate as runner-node.
 	"GET /:instanceId/terminal-session": [401, 404],
 	"PUT /:instanceId/terminal-session": [401, 404],
+	"GET /:instanceId/terminal-history": [401, 404],
+	"DELETE /:instanceId/terminal-history": [401, 404],
 	"POST /:instanceId/runtime/heartbeat": [401, 404],
 	"PUT /:instanceId/voice-audio/:turnId": [401, 404],
 	"GET /:instanceId/voice-audio/:turnId": [401, 404],

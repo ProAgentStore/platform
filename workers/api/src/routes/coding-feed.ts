@@ -4,7 +4,9 @@ import { HttpError } from "../lib/auth.js";
 import { resolveRunState } from "../lib/coding-run-state.js";
 import { listSessions } from "../lib/coding-store.js";
 import type { CodingSessionRecord } from "../lib/coding-types.js";
-import { loadTerminalSnapshots, loadTimelineFeed } from "../lib/coding-timeline.js";
+import { budgetFeedEvent, loadTerminalSnapshots, loadTimelineFeed } from "../lib/coding-timeline.js";
+import { lastTerminalTargetOf, loadTerminalHistory } from "../lib/terminal-record.js";
+import { readInstanceConfig } from "./instances-apply.js";
 import { callRunner, READ_TIMEOUT_MS } from "../lib/runner-client.js";
 import type { Env } from "../types.js";
 import { getSessionRunnerConn, requireOwned } from "./coding-shared.js";
@@ -71,11 +73,28 @@ export function registerFeedRoutes(codingRoutes: Hono<{ Bindings: Env }>): void 
 						: (sessions.find((s) => s.status === "active") ?? sessions[0]),
 				};
 		const { run, session } = resolved;
-		if (!session) throw new HttpError(404, runId ? "Run session not found" : wanted ? "Session not found" : "No coding session on this instance");
 		const num = (q: string) => {
 			const n = Number.parseInt(c.req.query(q) ?? "", 10);
 			return Number.isFinite(n) ? n : undefined;
 		};
+		// ── No coding session at all: a repo-less terminal's own record (#878) ──
+		//
+		// A terminal-operator instance never has a session row — that row needs a repo — so this route
+		// answered every such instance with a 404, and once its tmux session ended nothing anywhere
+		// said what had run there. `terminal_history` is that record (`lib/terminal-record.ts`), and it
+		// answers the SAME two reads with the same cursors, so `coding_timeline` and `coding_terminal`
+		// need no second path. Only when nothing was asked for by id: a named session or run that does
+		// not exist is still the caller's mistake, and answering it with other data would hide that.
+		if (!session && !runId && !wanted) {
+			const history = await terminalHistoryPage(c.env, instanceId, uid, {
+				terminalOnly: c.req.query("terminal") === "1",
+				since: num("since"),
+				before: num("before"),
+				limit: num("limit"),
+			});
+			if (history) return c.json(history);
+		}
+		if (!session) throw new HttpError(404, runId ? "Run session not found" : wanted ? "Session not found" : "No coding session on this instance, and no terminal history recorded for it");
 		// ── `?terminal=1` — the SNAPSHOTS, whole, on the same session resolution (#699) ──
 		//
 		// The feed above cuts a `terminal` row to its 400-character tail, because a page of forty
@@ -171,4 +190,44 @@ async function readRunState(
 	if (!conn) return { runState: resolveRunState({ sessionActive: true, runnerConnected: false }), runnerConnected: false };
 	const snap = await callRunner<{ runState?: string }>(conn, "/coding/capture", { sessionId: session.id }, { timeoutMs: READ_TIMEOUT_MS }).catch(() => null);
 	return { runState: resolveRunState({ sessionActive: true, runnerConnected: true, engineRunState: snap?.runState }), runnerConnected: true };
+}
+
+/**
+ * The page `GET …/coding/timeline` answers with for an instance that has no coding session but has
+ * driven a terminal (#878) — null when it has done neither, so the 404 still says so.
+ *
+ * Shaped like the two session answers it stands in for, with `sessionId: null` and
+ * `source: "terminal_history"` saying which record this is. No `runState`: there is no engine here to
+ * have one, and the live pane is a `tmux_capture_pane` / `terminal_capture` away.
+ */
+async function terminalHistoryPage(
+	env: Env,
+	instanceId: string,
+	uid: string,
+	q: { terminalOnly: boolean; since?: number; before?: number; limit?: number },
+): Promise<Record<string, unknown> | null> {
+	if (q.since !== undefined && q.before !== undefined) throw new HttpError(400, "Pass `since` or `before`, not both.");
+	const cfg = await readInstanceConfig(env, instanceId, uid);
+	const terminalTarget = lastTerminalTargetOf(cfg);
+	// `terminal=1` walks back only (see the arm above), and pages whole snapshots under its own cap.
+	const page = await loadTerminalHistory(env, {
+		instanceId,
+		userId: uid,
+		terminalOnly: q.terminalOnly,
+		since: q.terminalOnly ? undefined : q.since,
+		before: q.before,
+		limit: q.terminalOnly ? (q.limit ?? 5) : q.limit,
+		maxLimit: q.terminalOnly ? 50 : 200,
+	});
+	if (!page.entries.length && !terminalTarget && q.before === undefined && q.since === undefined) return null;
+	const base = { runId: null, sessionId: null, sessionStatus: null, source: "terminal_history", terminalTarget };
+	if (q.terminalOnly) return { ...base, entries: page.entries, hasMore: page.hasMore, oldestSeq: page.oldestSeq, newestSeq: page.newestSeq };
+	return {
+		...base,
+		repoId: null,
+		events: page.entries.map((e) => ({ ...budgetFeedEvent(e), target: e.target })),
+		nextSeq: page.nextSeq,
+		hasMore: page.hasMore,
+		...(q.since === undefined ? { oldestSeq: page.oldestSeq ?? undefined } : {}),
+	};
 }

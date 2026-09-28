@@ -24,6 +24,8 @@ import { registerRuntimeBuilderRoutes } from "./instances-site-builder.js";
 import { registerTranslationRoutes } from "./instances-translation.js";
 import { registerFileUploadRoutes } from "./instances-files.js";
 import { registerConnectorBindingRoutes } from "./instances-terminal.js";
+import { registerTerminalHistoryRoutes } from "./instances-terminal-history.js";
+import { lastTerminalTargetOf, rememberTerminalTarget } from "../lib/terminal-record.js";
 import { registerDeployStatusRoutes } from "./instances-deploy.js";
 import { registerIdentityResyncRoutes } from "./instances-identity.js";
 import { instanceCapFor, isEntitled, isPaywallEnforced, requirePro } from "../lib/billing.js";
@@ -635,20 +637,15 @@ instanceRoutes.put("/:instanceId/runner-node", async (c) => {
 	return c.json(to ? { runnerNode: to, attachment: await attachOnRepin(c.env, instanceId, session.uid, to) } : { runnerNode: null }); // a pin also MOVES the agent (#850)
 });
 
-/** Read which terminal session was last selected in the UI for this instance (#491). */
+/** Read which terminal session was last selected in the UI for this instance (#491) — and, beside it,
+ *  the one last DRIVEN through its tools (#878), which survives the tmux session ending: `lib/terminal-record.ts`. */
 instanceRoutes.get("/:instanceId/terminal-session", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
-	const row = await c.env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2")
-		.bind(instanceId, session.uid)
-		.first<{ config: string | null }>();
-	let target: string | null = null;
-	try {
-		const cfg = JSON.parse(row?.config || "{}") as { activeTerminalTarget?: unknown };
-		target = typeof cfg.activeTerminalTarget === "string" && cfg.activeTerminalTarget ? cfg.activeTerminalTarget : null;
-	} catch { /* stay null */ }
-	return c.json({ activeTerminalTarget: target });
+	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
+	const target = typeof cfg.activeTerminalTarget === "string" && cfg.activeTerminalTarget ? cfg.activeTerminalTarget : null;
+	return c.json({ activeTerminalTarget: target, lastTerminalTarget: lastTerminalTargetOf(cfg) ?? target });
 });
 
 /** Persist (or clear) the last-selected terminal session for this instance (#491).
@@ -661,8 +658,11 @@ instanceRoutes.put("/:instanceId/terminal-session", async (c) => {
 	const target = typeof body.activeTerminalTarget === "string" ? body.activeTerminalTarget.trim().slice(0, 200) : "";
 	if (target) await patchInstanceConfig(c.env, instanceId, session.uid, "activeTerminalTarget", target);
 	else await removeInstanceConfigKey(c.env, instanceId, session.uid, "activeTerminalTarget");
+	// Choosing a target is using it (#878). Clearing the CHOICE leaves the last-used one — that is DELETE /terminal-history.
+	if (target) await rememberTerminalTarget(c.env, instanceId, session.uid, target);
 	return c.json({ activeTerminalTarget: target || null });
 });
+registerTerminalHistoryRoutes(instanceRoutes); // GET/DELETE /terminal-history — the record above survives the session (#878)
 
 /** Heartbeat from user/CLI after checking the browser runtime is online. */
 instanceRoutes.post("/:instanceId/runtime/heartbeat", async (c) => {

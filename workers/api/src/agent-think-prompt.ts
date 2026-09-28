@@ -439,12 +439,15 @@ export async function buildPromptBlock(ctx: PromptBlockContext): Promise<PromptB
 				typeof instanceCfg.activeTerminalTarget === "string" && instanceCfg.activeTerminalTarget
 					? instanceCfg.activeTerminalTarget
 					: null;
-			if (hasTmuxTools && activeTerminalTarget) {
-				const sessionName = activeTerminalTarget.startsWith("tmux:")
-					? activeTerminalTarget.slice("tmux:".length)
-					: activeTerminalTarget;
+			// With nothing selected, the session last DRIVEN (#878) — recorded by use, kept after it ends.
+			const lastUsed = !activeTerminalTarget && typeof instanceCfg.lastTerminalTarget === "string" && instanceCfg.lastTerminalTarget.startsWith("tmux:") ? instanceCfg.lastTerminalTarget : null;
+			const defaultTarget = activeTerminalTarget ?? lastUsed;
+			if (hasTmuxTools && defaultTarget) {
+				const sessionName = defaultTarget.startsWith("tmux:")
+					? defaultTarget.slice("tmux:".length)
+					: defaultTarget;
 				systemPrompt +=
-					`\n\nDEFAULT TERMINAL SESSION: The owner's last-selected session is "${sessionName}".` +
+					`\n\nDEFAULT TERMINAL SESSION: The ${lastUsed ? "session last used on this agent" : "owner's last-selected session"} is "${sessionName}".` +
 					` When asked to check, read, or drive a terminal without naming a specific session, use "${sessionName}" as the session parameter.` +
 					` If it no longer appears in tmux_list_sessions, say so and ask which session to use instead.`;
 			}

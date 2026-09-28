@@ -36,6 +36,7 @@ import { patchBehaviour, readBehaviour } from "./behaviour-store.js";
 import { accountTimeZone } from "./account-timezone.js";
 import { fenceUntrusted, withFraming } from "./untrusted-fence.js";
 import type { ConversationTransfer } from "./conversation-transfer.js";
+import { recordTerminalToolUse } from "./terminal-record.js";
 /**
  * The tool contract now lives in `connectors/types.ts` — a leaf module with no imports
  * that reach back here (#293). It moved because every connector module needs the SHAPE
@@ -866,6 +867,8 @@ export async function runRegistryTool(
 			connectorClient: ctx.connectorClient ?? ((provider: string) => connectorClient(ctx.env, provider, { userId: ctx.userId, instanceId: consentInstanceOf({ instanceId: ctx.instanceId ?? "", userId: ctx.userId ?? "", onBehalfOf: ctx.onBehalfOf }) || undefined })),
 		};
 		const r = await tool.handler(handlerCtx, callInput);
+		// #878: a repo-less terminal's only durable record, AFTER every gate (a refused call records nothing); best-effort — lib/terminal-record.ts.
+		if (tool.connector === "tmux" || tool.connector === "terminal") await recordTerminalToolUse(ctx.env, { instanceId: ctx.instanceId, userId: ctx.userId, name, input: callInput, success: r.success, content: r.content }).catch(() => undefined);
 		// #185 audit: record WHOSE authority ran a delegated tool call. Only when delegated —
 		// for ordinary work the authority is trivially the instance already on the event, so
 		// logging every call would be pure noise at real cost. When a supervisor asked, "who

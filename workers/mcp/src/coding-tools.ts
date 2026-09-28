@@ -28,6 +28,7 @@ import { z } from "zod";
 import { authedCall, authRequired, type McpEnv, jsonText, text } from "./http.js";
 import { registerCodingEngineTools } from "./coding-engine-tools.js";
 import { github } from "./repo-tools.js";
+import { captureTerminal, messageTerminal } from "./terminal-fallback.js";
 import { audit, dryRun, requireConfirmation, requirePermission, type SafetyContext } from "./safety.js";
 import { runStateSentence } from "./state-vocabulary.js";
 
@@ -226,6 +227,8 @@ export function registerCodingSessionTools(
 		return { repos: r.repos || [] };
 	};
 
+	const apiFor = (sessionToken: string) => (path: string, init?: RequestInit) => authedCall(path, sessionToken, init ?? {}, env); // #878
+
 	server.tool(
 		"coding_session_open",
 		"Pick up work on a repo: opens its conversation and CONTINUES where the last one left off (the engine keeps the previous context for four days), which is what you want for a follow-up question or a second instruction on the same task. Says which conversation you got and why, verbatim from the server's own decision. Use coding_session_fresh instead when the point is to start clean. Omit repo_id when the agent has exactly one repo; with several it asks which rather than guessing.",
@@ -271,7 +274,7 @@ export function registerCodingSessionTools(
 		// emit — the runner's union is `idle | thinking | responding` — and `offline` was, at the
 		// time, produced only by the timeline route. `state-vocabulary.test.ts` measures this
 		// sentence against the code that emits it, over every tool that publishes a state enum.
-		`Capture the live terminal output from a coding session (what the CLI is showing right now), plus WHY it looks that way. ${runStateSentence()} Only the first three come from an engine — the rest mean nobody looked at one, so read \`runnerConnected\`, \`alive\` and \`ready\` alongside: a stopped engine, an absent machine and a failed probe are different problems with the same look. \`authPrompt\` means the engine is blocked on sign-in, which otherwise looks exactly like a hang. LIVE sessions only — the pane lives on the runner, so an ENDED session answers with an empty pane. That empty pane is not evidence the run did nothing: every snapshot taken while it ran is stored, and coding_terminal returns them in full for a session that has ended. To read what a run DID, use coding_timeline for the narrative and coding_terminal for the pane text; to find out whether the work is stuck, use coding_diagnostics.`,
+		`Capture the live terminal output from a coding session (what the CLI is showing right now), plus WHY it looks that way. ${runStateSentence()} Only the first three come from an engine — the rest mean nobody looked at one, so read \`runnerConnected\`, \`alive\` and \`ready\` alongside: a stopped engine, an absent machine and a failed probe are different problems with the same look. \`authPrompt\` means the engine is blocked on sign-in, which otherwise looks exactly like a hang. LIVE sessions only — the pane lives on the runner, so an ENDED session answers with an empty pane. That empty pane is not evidence the run did nothing: every snapshot taken while it ran is stored, and coding_terminal returns them in full for a session that has ended. To read what a run DID, use coding_timeline for the narrative and coding_terminal for the pane text; to find out whether the work is stuck, use coding_diagnostics. An agent with NO repo (a bare terminal) has no coding session: this reads its selected or last-used terminal instead — live when it is still there, else the last pane the platform stored for it, marked \`source: "stored"\` with \`capturedAt\`.`,
 		{
 			instance_id: z.string().describe("Instance ID"),
 			session_id: z.string().optional().describe("Session ID. If omitted, uses the first active session."),
@@ -284,7 +287,9 @@ export function registerCodingSessionTools(
 			if (r.error) return jsonText(r);
 			const sessions = r.sessions || [];
 			const sid = session_id || sessions.find((s) => s.status === "active")?.id;
-			if (!sid) return text("No active coding session found.");
+			// #878: a repo-less terminal instance has no session — read its terminal (live, else stored). `terminal-fallback.ts`.
+			const terminal = sid ? null : await captureTerminal(apiFor(sessionToken), instance_id, await listRepos(instance_id, sessionToken));
+			if (!sid) return terminal ? jsonText(terminal) : text("No active coding session found.");
 			const d = (await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/capture`, sessionToken, {}, env)) as {
 				runState?: string;
 				pane?: string;
@@ -329,7 +334,7 @@ export function registerCodingSessionTools(
 		// is in `SERVER_INSTRUCTIONS`, in `PLATFORM_GUIDE`, and in `coding_session_open`'s result.
 		// It costs no version bump: descriptions are excluded from the surface fingerprint
 		// (`conformance.test.ts`, `surface-lock.ts` DECISION 1).
-		"Say something to the coding CLI working on a repo — the FALLBACK for work an instance tool cannot do, not the first path. Before using it, check list_instance_tools: anything the agent's own tools already cover (GitHub issues and pull requests, HTTP calls, search, its knowledge and files) should go through call_instance_tool, which returns structured data instead of a terminal pane this tool can only show you a truncated tail of. Use this for driving the engine itself: writing code, running the repo's own commands, anything that needs the checkout on the owner's machine. If nothing is running there it WAKES the repo first — opening its conversation where the last one left off — so a follow-up instruction after a break just works. With several idle repos it asks which one you mean instead of picking.",
+		"Say something to the coding CLI working on a repo — the FALLBACK for work an instance tool cannot do, not the first path. Before using it, check list_instance_tools: anything the agent's own tools already cover (GitHub issues and pull requests, HTTP calls, search, its knowledge and files) should go through call_instance_tool, which returns structured data instead of a terminal pane this tool can only show you a truncated tail of. Use this for driving the engine itself: writing code, running the repo's own commands, anything that needs the checkout on the owner's machine. If nothing is running there it WAKES the repo first — opening its conversation where the last one left off — so a follow-up instruction after a break just works. With several idle repos it asks which one you mean instead of picking. An agent with NO repo (a bare terminal) needs none: the message is typed into its selected or last-used terminal, and a tmux target that has ended is opened again under the same name — a fresh shell — before sending.",
 		{
 			instance_id: z.string().describe("Instance ID"),
 			session_id: z.string().optional().describe("Session ID. If omitted, uses the first active session — and if none is running, wakes the repo."),
@@ -358,6 +363,11 @@ export function registerCodingSessionTools(
 			if (!sid) {
 				const repos = await listRepos(instance_id, sessionToken);
 				if ("error" in repos) return jsonText(repos);
+				// #878: no repo is not "nothing to talk to" — a terminal instance's session is its terminal (reattached if ended),
+				// reached through the same dispatch, policy and consent as call_instance_tool. `terminal-fallback.ts`.
+				const toTerminal = repos.repos.length === 0 ? await messageTerminal(apiFor(sessionToken), instance_id, message) : null;
+				if (toTerminal?.sent) await audit(safetyFor(token), { tool: "coding_session_message", action: "completed", input: { instance_id, terminal: toTerminal.target, reopened: toTerminal.reopened === true, messageBytes: new TextEncoder().encode(message).length } });
+				if (toTerminal) return text(toTerminal.text);
 				const resolved = resolveRepoForOpen(repos.repos);
 				// Several idle repos: the caller named a message, not a repo, and there is nothing
 				// running to infer one from. Ask — opening the wrong repo would type someone's
