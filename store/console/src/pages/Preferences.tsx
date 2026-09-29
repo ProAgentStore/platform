@@ -4,10 +4,11 @@ import { api } from "@proagentstore/sdk/client";
 import VoiceFields from "../components/VoiceFields";
 import TranslationFields from "../components/TranslationFields";
 import AccountConnections from "../components/AccountConnections";
-import NotificationPreferences, { type NotificationTypeSpec } from "../components/NotificationPreferences";
+import NotificationPreferences from "../components/NotificationPreferences";
 import { machineTimeZone, setAccountTimeZone, timeZoneOptions, useAccountTimeZone } from "../lib/accountTimezone";
 import Card from "../components/Card";
 import Button from "../components/Button";
+import type { AccountCodingDefaultApplyResponse, AccountPreferencesResponse, AccountPreferencesWriteResponse, CodingEngineOption, NotificationTypeSpec } from "../lib/types";
 
 /** The current wall clock in a zone, or "" when this runtime cannot resolve it — never a throw. */
 function nowIn(zone: string): string {
@@ -16,6 +17,10 @@ function nowIn(zone: string): string {
 	} catch {
 		return "";
 	}
+}
+
+function recordOrEmpty(value: unknown): Record<string, unknown> {
+	return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 /**
@@ -57,11 +62,11 @@ export default function Preferences() {
 	const [voice, setVoice] = useState<Record<string, unknown>>({});
 	const [translation, setTranslation] = useState<Record<string, unknown>>({});
 	const [coding, setCoding] = useState<{ defaultEngineId?: string }>({});
-	const [codingEngineOptions, setCodingEngineOptions] = useState<Array<{ id: string; label: string }>>([]);
+	const [codingEngineOptions, setCodingEngineOptions] = useState<ReadonlyArray<CodingEngineOption>>([]);
 	const [codingMsg, setCodingMsg] = useState("");
 	const [applyingCoding, setApplyingCoding] = useState(false);
-	const [languages, setLanguages] = useState<Array<{ name: string; tag: string }>>([]);
-	const [notificationTypes, setNotificationTypes] = useState<NotificationTypeSpec[]>([]);
+	const [languages, setLanguages] = useState<ReadonlyArray<{ name: string; tag: string }>>([]);
+	const [notificationTypes, setNotificationTypes] = useState<ReadonlyArray<NotificationTypeSpec>>([]);
 	const [mutedNotifications, setMutedNotifications] = useState<string[]>([]);
 	// The instance scope (#784): empty means every instance.
 	const [notificationInstances, setNotificationInstances] = useState<string[]>([]);
@@ -85,19 +90,9 @@ export default function Preferences() {
 	useEffect(() => {
 		(async () => {
 			try {
-				const d = await api<{
-					preferences?: {
-						voice?: Record<string, unknown>;
-						translation?: Record<string, unknown>;
-						coding?: { defaultEngineId?: string };
-						notifications?: { muted?: string[]; instances?: string[] };
-					};
-					languages?: Array<{ name: string; tag: string }>;
-					notificationTypes?: NotificationTypeSpec[];
-					codingEngineOptions?: Array<{ id: string; label: string }>;
-				}>("/v1/preferences");
-				setVoice(d.preferences?.voice || {});
-				setTranslation(d.preferences?.translation || {});
+				const d = await api<AccountPreferencesResponse>("/v1/preferences");
+				setVoice(recordOrEmpty(d.preferences?.voice));
+				setTranslation(recordOrEmpty(d.preferences?.translation));
 				setCoding(d.preferences?.coding || {});
 				setCodingEngineOptions(d.codingEngineOptions || []);
 				setLanguages(d.languages || []);
@@ -121,11 +116,11 @@ export default function Preferences() {
 	const saveVoice = useCallback(async (patch: Record<string, unknown>) => {
 		const next = { ...voice, ...patch };
 		setVoice(next);
-		const d = await api<{ preferences?: { voice?: Record<string, unknown> } }>("/v1/preferences", {
+		const d = await api<AccountPreferencesWriteResponse>("/v1/preferences", {
 			method: "PUT",
 			body: JSON.stringify({ voice: next }),
 		});
-		if (d.preferences?.voice) setVoice(d.preferences.voice);
+		if (d.preferences?.voice) setVoice(recordOrEmpty(d.preferences.voice));
 	}, [voice]);
 
 	const saveTranslation = useCallback(async (next: Record<string, unknown>) => {
@@ -138,7 +133,7 @@ export default function Preferences() {
 		setCoding(next);
 		setCodingMsg("Saved — future coder sessions inherit this unless the agent has its own engine.");
 		try {
-			const d = await api<{ preferences?: { coding?: { defaultEngineId?: string } } }>("/v1/preferences", {
+			const d = await api<AccountPreferencesWriteResponse>("/v1/preferences", {
 				method: "PUT",
 				body: JSON.stringify({ coding: next }),
 			});
@@ -152,10 +147,7 @@ export default function Preferences() {
 		setApplyingCoding(true);
 		setCodingMsg("");
 		try {
-			const d = await api<{
-				restarted: number;
-				skipped?: Record<string, number>;
-			}>("/v1/preferences/coding/default-engine/apply", { method: "POST" });
+			const d = await api<AccountCodingDefaultApplyResponse>("/v1/preferences/coding/default-engine/apply", { method: "POST" });
 			const skipped = Object.entries(d.skipped || {}).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k.replace(/-/g, " ")}`);
 			setCodingMsg(`Applied to ${d.restarted} idle coder${d.restarted === 1 ? "" : "s"}${skipped.length ? `; skipped ${skipped.join(", ")}.` : "."}`);
 		} catch (e) {

@@ -6,36 +6,8 @@ import { createSession, getRepo } from "./coding-store.js";
 import { parseAccountPreferences } from "./preferences.js";
 import { callRunner, getRunnerConn, READ_TIMEOUT_MS } from "./runner-client.js";
 import type { CodingClientType, CodingRepo, CodingSessionRecord } from "./coding-types.js";
+import type { ApplyDefaultEngineItem, ApplyDefaultEngineResult, ApplyDefaultEngineSkipReason } from "./coding-default-engine-types.js";
 import type { Env } from "../types.js";
-
-export type ApplyDefaultEngineSkipReason =
-	| "already-default"
-	| "explicit-instance-default"
-	| "active-run"
-	| "offline"
-	| "busy"
-	| "unreadable"
-	| "stop-failed"
-	| "start-failed";
-
-export interface ApplyDefaultEngineItem {
-	instanceId: string;
-	repoId: string;
-	sessionId: string;
-	repoName: string;
-	reason?: ApplyDefaultEngineSkipReason;
-	runState?: string | null;
-	from?: string | null;
-	to?: string;
-	newSessionId?: string;
-}
-
-export interface ApplyDefaultEngineResult {
-	defaultEngineId: string;
-	restarted: number;
-	skipped: Record<ApplyDefaultEngineSkipReason, number>;
-	items: ApplyDefaultEngineItem[];
-}
 
 interface ActiveSessionRow {
 	id: string;

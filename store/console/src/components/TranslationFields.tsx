@@ -9,7 +9,7 @@ export interface TranslationFieldsProps {
 	/** Persist the whole section (the API takes a complete translation object). */
 	onSave: (next: { enabled: boolean; target: string; transliterate: boolean; wordTap: boolean; fontSize: string }) => Promise<unknown>;
 	/** Target languages the platform can gloss into. */
-	languages: Array<{ name: string; tag: string }>;
+	languages: ReadonlyArray<{ name: string; tag: string }>;
 }
 
 export default function TranslationFields({ value, onSave, languages }: TranslationFieldsProps) {

@@ -27,7 +27,7 @@
 // removes.
 
 import { isValidTimeZone } from "./cron-time.js";
-import { type NotificationPreferences, sanitizeNotificationPreferences } from "./notifications.js";
+import { type NotificationPreferences, type NotificationTypeSpec, sanitizeNotificationPreferences } from "./notifications.js";
 
 // Lenient on READ, strict on WRITE. The sanitizers below coerce anything unknown to a safe value,
 // because they also parse rows that were stored years ago by older code — but an explicit save must
@@ -172,6 +172,27 @@ export interface AccountPreferences {
 
 export interface CodingPreferences {
 	defaultEngineId?: string;
+}
+
+export interface PreferenceLanguageOption {
+	name: string;
+	tag: string;
+}
+
+export interface CodingEngineOption {
+	id: string;
+	label: string;
+}
+
+export interface AccountPreferencesResponse {
+	preferences: AccountPreferences;
+	languages: ReadonlyArray<PreferenceLanguageOption>;
+	notificationTypes: NotificationTypeSpec[];
+	codingEngineOptions: CodingEngineOption[];
+}
+
+export interface AccountPreferencesWriteResponse {
+	preferences: AccountPreferences;
 }
 
 const num = (v: unknown, lo: number, hi: number, dflt: number): number =>

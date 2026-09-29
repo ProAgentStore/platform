@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { KnowledgeDoc as WorkerKnowledgeDoc } from "../../../../workers/api/src/agent-types";
 import type { ConnectionGuideResponse as WorkerConnectionGuideResponse } from "../../../../workers/api/src/lib/connection-guide";
+import type { ApplyDefaultEngineResult as WorkerApplyDefaultEngineResult } from "../../../../workers/api/src/lib/coding-default-engine-types";
+import type { AccountPreferencesResponse as WorkerAccountPreferencesResponse, AccountPreferencesWriteResponse as WorkerAccountPreferencesWriteResponse } from "../../../../workers/api/src/lib/preferences";
 import type { AgentState as WorkerAgentState, ConsentRow as WorkerConsentRow } from "../../../../workers/api/src/agent-types";
 import type { CollectionRecord as WorkerCollectionRecord, RecordQueryResult as WorkerRecordQueryResult } from "../../../../workers/api/src/agent-storage-types";
 import type { RunnerEvent, RunnerTask } from "../../../../packages/browser-runner/src/types";
-import type { ConnectionGuideResponse, ConnectorConsent, InstanceModelState, Credential, DataRecord, KnowledgeDoc, Notification, RecordQueryResponse, RuntimeEvent, RuntimeTask, TriggerAction } from "./types";
+import type { AccountCodingDefaultApplyResponse, AccountPreferencesResponse, AccountPreferencesWriteResponse, ConnectionGuideResponse, ConnectorConsent, InstanceModelState, Credential, DataRecord, KnowledgeDoc, Notification, RecordQueryResponse, RuntimeEvent, RuntimeTask, TriggerAction } from "./types";
 
 /**
  * The console's API-response types, checked against the Worker declarations they copy (#617).
@@ -68,6 +70,24 @@ const _dataRecordHasNoInventedFields: Extra<DataRecord, WorkerCollectionRecord> 
 // invents; the assignment catches the producer changing `model`'s type under it.
 const _instanceModelStateHasNoInventedFields: Extra<InstanceModelState, WorkerAgentState> extends never ? true : never = true;
 const _instanceModelStateAcceptsTheProducer: InstanceModelState = {} as Pick<WorkerAgentState, "model">;
+
+// ── Account preferences ─────────────────────────────────────────────────────
+//
+// #879 added the account-wide coding-engine default to the Preferences page. Naming the response
+// keeps new sections from arriving as unguarded inline `api<{...}>` shapes, and the producer types
+// live in `lib/preferences.ts`, which is pure enough for the console to import.
+const _accountPreferencesHasNoInventedFields: Extra<AccountPreferencesResponse, WorkerAccountPreferencesResponse> extends never
+	? true
+	: never = true;
+const _accountPreferencesAcceptsTheProducer: AccountPreferencesResponse = {} as WorkerAccountPreferencesResponse;
+const _accountPreferencesWriteHasNoInventedFields: Extra<AccountPreferencesWriteResponse, WorkerAccountPreferencesWriteResponse> extends never
+	? true
+	: never = true;
+const _accountPreferencesWriteAcceptsTheProducer: AccountPreferencesWriteResponse = {} as WorkerAccountPreferencesWriteResponse;
+const _accountCodingApplyHasNoInventedFields: Extra<AccountCodingDefaultApplyResponse, WorkerApplyDefaultEngineResult> extends never
+	? true
+	: never = true;
+const _accountCodingApplyAcceptsTheProducer: AccountCodingDefaultApplyResponse = {} as WorkerApplyDefaultEngineResult;
 
 // ── ConnectionGuideResponse ──────────────────────────────────────────────────────────────────
 //
@@ -137,8 +157,14 @@ describe("console response types match the Worker declarations they copy (#617)"
 			_recordPageHasNoInventedFields,
 			_dataRecordHasNoInventedFields,
 			_instanceModelStateHasNoInventedFields,
-		]).toEqual([true, true, true, true, true, true]);
+			_accountPreferencesHasNoInventedFields,
+			_accountPreferencesWriteHasNoInventedFields,
+			_accountCodingApplyHasNoInventedFields,
+		]).toEqual([true, true, true, true, true, true, true, true, true]);
 		expect(_instanceModelStateAcceptsTheProducer).toEqual({});
+		expect(_accountPreferencesAcceptsTheProducer).toEqual({});
+		expect(_accountPreferencesWriteAcceptsTheProducer).toEqual({});
+		expect(_accountCodingApplyAcceptsTheProducer).toEqual({});
 	});
 
 	it("declares every trigger action the Worker's TRIGGER_ACTIONS has, and no more", () => {

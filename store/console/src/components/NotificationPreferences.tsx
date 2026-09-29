@@ -1,16 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
-import type { Instance } from "../lib/types";
+import type { Instance, NotificationTypeSpec } from "../lib/types";
 import Card from "./Card";
-
-/** One row of the vocabulary, as `GET /v1/preferences` serves it. */
-export interface NotificationTypeSpec {
-	id: string;
-	label: string;
-	description: string;
-	/** True when this type can ALSO raise a request for your input, which a mute never hides. */
-	alerts: boolean;
-}
 
 /**
  * Which notifications may interrupt you (#360).
@@ -43,7 +34,7 @@ export default function NotificationPreferences({
 	instances,
 	onInstancesSaved,
 }: {
-	types: NotificationTypeSpec[];
+	types: ReadonlyArray<NotificationTypeSpec>;
 	muted: string[];
 	onSaved: (muted: string[]) => void;
 	/**

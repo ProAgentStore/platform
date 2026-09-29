@@ -162,6 +162,52 @@ export interface MessageGloss {
 	pairs?: Array<[string, string]>;
 }
 
+export interface NotificationTypeSpec {
+	id: string;
+	label: string;
+	description: string;
+	/** True when this type can ALSO raise a request for your input, which a mute never hides. */
+	alerts: boolean;
+}
+
+export interface AccountCodingPreferences {
+	defaultEngineId?: string;
+}
+
+export interface ConsoleAccountPreferences {
+	voice?: unknown;
+	translation?: unknown;
+	coding?: AccountCodingPreferences;
+	notifications?: { muted?: string[]; instances?: string[] };
+	timezone?: string;
+}
+
+export interface PreferenceLanguageOption {
+	name: string;
+	tag: string;
+}
+
+export interface CodingEngineOption {
+	id: string;
+	label: string;
+}
+
+export interface AccountPreferencesResponse {
+	preferences?: ConsoleAccountPreferences;
+	languages?: ReadonlyArray<PreferenceLanguageOption>;
+	notificationTypes?: ReadonlyArray<NotificationTypeSpec>;
+	codingEngineOptions?: ReadonlyArray<CodingEngineOption>;
+}
+
+export interface AccountPreferencesWriteResponse {
+	preferences?: ConsoleAccountPreferences;
+}
+
+export interface AccountCodingDefaultApplyResponse {
+	restarted: number;
+	skipped?: Record<string, number>;
+}
+
 export interface Message {
 	id?: string;
 	role: "user" | "assistant" | "system";
