@@ -945,4 +945,9 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// coder instances inherit when they do not have their own explicit engine. Appended, never edited
 	// in place: 0.1.65 is published.
 	"0.1.66": "sha256:eec90b7ef29b61e0c750c587a757e7aa30b421691b421fcd9748e9230a8b7d18",
+	// 0.1.67 (#879): one new always-on account tool — 240 → 241, always-on 214 → 215.
+	// `apply_account_coding_default` applies the saved account coding CLI default to reachable
+	// idle coder sessions, skipping active, busy, offline, already-default, and explicitly pinned
+	// coders. Appended, never edited in place: 0.1.66 is published.
+	"0.1.67": "sha256:89fbe37ecb5ba768b0d82ef3e6acc487afd412f3be4fe1ec882554fe47fc9b2f",
 };

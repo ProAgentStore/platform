@@ -313,6 +313,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	//    annotation as `destructive` deliberately — the difference between those two is a
 	//    difference in the GATE (scope + confirm), not in what a host should ask a user. ──
 	answer_instance_mcp_input_request: "runtime",
+	apply_account_coding_default: "runtime",
 	approve_instance_task: "runtime",
 	replay_connection_delivery: "runtime",
 	test_instance_mcp_server: "runtime",
@@ -572,7 +573,9 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// +1 runtime at #856: `force_runner_attach`, the remote `pags up --force` for one agent. `runtime`,
 	// not `write`: unlike the pin it acts ON the machine — a socket is closed and a runner reconnects.
 	// +1 runtime at #859: `runner_update`, a remote CLI update + restart — it acts ON the machine.
-	runtime: 26,
+	// +1 runtime at #879: `apply_account_coding_default` restarts reachable idle coder sessions
+	// so they launch with the account default engine. It is account-scoped state applied to machines.
+	runtime: 27,
 	// +1 read, +8 destructive at #613 (agent-template authoring, write half): builder planning
 	// only computes a proposal; the other eight can delete, overwrite, run a billable template
 	// turn, create an enduring version, or create/scaffold a template. They all require the

@@ -171,3 +171,29 @@ describe("set_account_preferences — a section patch must not touch the section
 		for (const s of ACCOUNT_PREFERENCE_SECTIONS) expect(Object.keys(shape), s).toContain(s);
 	});
 });
+
+describe("apply_account_coding_default", () => {
+	it("posts to the account coding-default apply route, and audits the completion", async () => {
+		const h = setup();
+		await h.run("apply_account_coding_default");
+		expect(h.calls).toEqual([{ url: "https://api.test/v1/preferences/coding/default-engine/apply", method: "POST", body: null }]);
+		expect(h.events().some((e) => e.tool === "apply_account_coding_default" && e.action === "completed")).toBe(true);
+	});
+
+	it("dry_run touches no network and names the apply route", async () => {
+		const h = setup();
+		const res = await h.run("apply_account_coding_default", { dry_run: true });
+		expect(h.calls).toHaveLength(0);
+		expect(JSON.parse(res.content[0].text)).toMatchObject({
+			dryRun: true,
+			tool: "apply_account_coding_default",
+			wouldDo: { endpoint: "/v1/preferences/coding/default-engine/apply", method: "POST", body: {} },
+		});
+	});
+
+	it("is refused without runtime scope, before any request", async () => {
+		const h = setup({ scopes: ["read", "write"] });
+		await h.run("apply_account_coding_default");
+		expect(h.calls).toHaveLength(0);
+	});
+});

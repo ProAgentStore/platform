@@ -392,6 +392,34 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 			return jsonText(data);
 		},
 	);
+
+	server.tool(
+		"apply_account_coding_default",
+		"Apply your saved account-wide coding CLI default to reachable idle coder sessions now. This is the MCP equivalent of the Preferences page's Apply button: it restarts only coders that inherit the account default, have no active run, are reachable, and are idle; it skips coders that are already on the default, offline, busy, running, or explicitly pinned to another engine.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const body = {};
+			const denied = await requirePermission(safetyFor(token), "runtime", "apply_account_coding_default", body);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "apply_account_coding_default", "apply account coding default to idle coders", body, {
+					endpoint: "/v1/preferences/coding/default-engine/apply",
+					method: "POST",
+					body,
+				});
+			}
+			const data = await authedCall("/v1/preferences/coding/default-engine/apply", sessionToken, { method: "POST" }, env);
+			if (!(data as { error?: string }).error) {
+				await audit(safetyFor(token), { tool: "apply_account_coding_default", action: "completed", input: body, result: { ok: true } });
+			}
+			return jsonText(data);
+		},
+	);
 }
 
 /**
