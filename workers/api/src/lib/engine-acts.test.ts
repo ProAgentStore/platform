@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
 	ACT_KIND_COUNT,
@@ -514,7 +515,10 @@ describe("recordEngineActs — the sink is the EXISTING trace, not a fifth recor
  * what such a runner sent — the first 400 characters, which match the trace byte for byte.
  */
 const traceFile = (name: string) =>
-	readFileSync(new URL(`../../../../packages/browser-runner/src/coding/fixtures/trace-9f2e7ddc/${name}.sh`, import.meta.url), "utf8");
+	readFileSync(
+		fileURLToPath(new URL(`../../../../packages/browser-runner/src/coding/fixtures/trace-9f2e7ddc/${name}.sh`, import.meta.url).href),
+		"utf8",
+	);
 const stored = (name: string) => traceFile(name).trim().slice(0, 400);
 
 describe("an act that only a heredoc body shows is labelled unverified, not asserted (#873)", () => {

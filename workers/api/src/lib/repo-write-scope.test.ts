@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
 	describeRepoScopeViolation,
@@ -203,7 +204,10 @@ describe("body payloads of any gh command are not targets (#873)", () => {
 	// ProAgentStore/platform --body-file - <<'EOF'`; its body named the CRM URL and `git push`, and
 	// the guard refused "mcp/apps" three times. The fixture is that command; `stored` is the first
 	// 400 characters, as the trace holds it — cut inside the body, with no terminator.
-	const full = readFileSync(new URL("../../../../packages/browser-runner/src/coding/fixtures/trace-9f2e7ddc/issue-comment.sh", import.meta.url), "utf8");
+	const full = readFileSync(
+		fileURLToPath(new URL("../../../../packages/browser-runner/src/coding/fixtures/trace-9f2e7ddc/issue-comment.sh", import.meta.url).href),
+		"utf8",
+	);
 	const stored = full.trim().slice(0, 400);
 	const registered = ["ProAgentStore/platform"];
 
