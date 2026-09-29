@@ -8,7 +8,7 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import { relayDispatchObservation } from "./lib/relay-dispatch-observability.js";
-import { evictStaleSockets, PONG_DEADLINE_MS, RunnerLiveness } from "./lib/relay-liveness.js";
+import { evictStaleSockets, PONG_DEADLINE_MS, RunnerLiveness, sendOnFirstOpen } from "./lib/relay-liveness.js";
 import type { Env } from "./types.js";
 
 interface PendingRequest {
@@ -205,14 +205,13 @@ export class RelayDO extends DurableObject<Env> {
 
 				this.pending.set(id, { resolve, reject, timer });
 
-				// Send to runner
-				const ws = sockets[0];
-				try {
-					ws.send(JSON.stringify(cmd));
-				} catch (err) {
+				// Send to the first socket that is still open (#880) — the probe above may have closed
+				// `sockets[0]`. None open is a disconnect, and says so in the words callers classify
+				// (`DROPPED_REASONS`), not the runtime's raw send-after-close text.
+				if (!sendOnFirstOpen(sockets, JSON.stringify(cmd))) {
 					clearTimeout(timer);
 					this.pending.delete(id);
-					reject(err);
+					reject(new Error("Runner disconnected"));
 				}
 			});
 		} catch (err) {

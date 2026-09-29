@@ -164,3 +164,27 @@ export async function evictStaleSockets(
 	}
 	return { sockets: sockets.length, alive: false, evicted: sockets.length };
 }
+
+/**
+ * Send one command frame on the first socket that will take it; `null` if none will (#880).
+ *
+ * `RelayDO.handleCommand` used to send on `sockets[0]` unconditionally. The liveness probe that
+ * runs just before it closes any socket whose ping `send` throws — so when the slot held a
+ * half-closed socket first and a live one second, the probe passed (the live one answered) and the
+ * command then went to the socket the probe had just closed, failing with the runtime's raw
+ * "Can't call WebSocket send() after close()". Whether a call hit that or a clean timeout depended
+ * on list order, which is why the same health check read differently seconds apart.
+ *
+ * A socket whose `send` throws is closed here too, for the same reason `ping` closes it.
+ */
+export function sendOnFirstOpen<T extends PingableSocket>(sockets: readonly T[], data: string): T | null {
+	for (const ws of sockets) {
+		try {
+			ws.send(data);
+			return ws;
+		} catch {
+			try { ws.close(1000, "stale"); } catch { /* already closed */ }
+		}
+	}
+	return null;
+}

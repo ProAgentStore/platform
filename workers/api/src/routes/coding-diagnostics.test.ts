@@ -285,3 +285,74 @@ describe("the owner's provider account is part of the diagnosis (#773)", () => {
 		expect((body.issues as Array<Record<string, unknown>>).some((i) => String(i.message).includes("Anthropic key"))).toBe(false);
 	});
 });
+
+describe("a live relay with a hung health responder reads one way (#880)", () => {
+	const liveConn = {
+		endpointUrl: `http://${NEW_NODE}`,
+		token: "tok",
+		instanceId: INSTANCE,
+		userId: UID,
+		env: {} as Env,
+		runnerNode: NEW_NODE,
+		relayName: `${INSTANCE}:node:${NEW_NODE}`,
+	};
+
+	beforeEach(() => {
+		getBoundRunnerConn.mockResolvedValue(liveConn);
+		// The runtime row says what the runner last REGISTERED as — "online" — which is the value
+		// that used to be reported as `runnerStatus` beside `runnerOnline: false`.
+		getLiveRuntime.mockResolvedValue({
+			endpoint_url: `http://${NEW_NODE}`, capabilities: "[]", runner_version: "0.4.60", runner_node: NEW_NODE,
+			status: "online", last_seen_at: "2026-09-30 09:00:00", placement: "local", instance_id: INSTANCE,
+		});
+	});
+
+	for (const raw of ['{"error":"Relay command timed out"}', `{"error":"Can't call WebSocket send() after close()."}`]) {
+		it(`never pairs runnerOnline:false with runnerStatus:"online" (${raw})`, async () => {
+			callRunner.mockRejectedValue(new Error(`Runner /health → 504: ${raw}`));
+			const { app, env } = buildApp({ staleNode: NEW_NODE });
+			const { body } = await getDiag(app, env);
+			const summary = body.summary as Record<string, unknown>;
+			const runner = body.runner as Record<string, unknown>;
+
+			expect(summary.runnerOnline).toBe(false);
+			expect(summary.runnerStatus).toBe("unresponsive");
+			expect(summary.relayConnected).toBe(true);
+			expect(summary.healthCheck).not.toBe("ok");
+			expect(runner.status).toBe("unresponsive");
+			expect(runner.reportedStatus).toBe("online");
+			expect(runner.relayConnected).toBe(true);
+			expect(runner.reachable).toBe(false);
+			const health = runner.health as Record<string, unknown>;
+			expect(health.ok).toBe(false);
+			expect(String(health.detail)).toContain(JSON.parse(raw).error);
+
+			const issue = (body.issues as Array<Record<string, unknown>>).find((i) => i.severity === "error");
+			expect(String(issue?.message)).toContain("connected but not responding");
+			expect(String(issue?.fix)).toContain("reconnecting alone will not help");
+		});
+	}
+
+	it("reports the same health error on consecutive calls when the timeout repeats", async () => {
+		callRunner.mockRejectedValue(new Error('Runner /health → 504: {"error":"Relay command timed out"}'));
+		const { app, env } = buildApp({ staleNode: NEW_NODE });
+		const first = ((await getDiag(app, env)).body.runner as Record<string, Record<string, unknown>>).health;
+		const second = ((await getDiag(app, env)).body.runner as Record<string, Record<string, unknown>>).health;
+		expect(first).toEqual(second);
+		expect(first.state).toBe("timeout");
+	});
+
+	it("reports online consistently when the health check answers", async () => {
+		const { app, env } = buildApp({ staleNode: NEW_NODE });
+		const { body } = await getDiag(app, env);
+		const summary = body.summary as Record<string, unknown>;
+		expect(summary).toMatchObject({ runnerOnline: true, runnerStatus: "online", relayConnected: true, healthCheck: "ok" });
+	});
+
+	it("reports offline, with the health check not attempted, when there is no socket", async () => {
+		getBoundRunnerConn.mockResolvedValue(null);
+		const { app, env } = buildApp({ staleNode: NEW_NODE });
+		const summary = (await getDiag(app, env)).body.summary as Record<string, unknown>;
+		expect(summary).toMatchObject({ runnerOnline: false, runnerStatus: "offline", relayConnected: false, healthCheck: "not_attempted" });
+	});
+});

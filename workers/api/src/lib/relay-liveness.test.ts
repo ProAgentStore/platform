@@ -7,7 +7,7 @@
  * of only the new behaviour would let the next change take the old promise back.
  */
 import { describe, expect, it } from "vitest";
-import { evictStaleSockets, PONG_STALE_MS, RunnerLiveness, type PingableSocket } from "./relay-liveness.js";
+import { evictStaleSockets, PONG_STALE_MS, RunnerLiveness, sendOnFirstOpen, type PingableSocket } from "./relay-liveness.js";
 
 /** A peer that answers a ping — the shape of a runner whose process is running. */
 function livePeer(liveness: RunnerLiveness, now = () => Date.now()): PingableSocket {
@@ -149,5 +149,41 @@ describe("evictStaleSockets — clearing an agent's slot remotely (#856)", () =>
 
 	it("an empty slot is reported empty, not evicted", async () => {
 		expect(await evictStaleSockets([], new RunnerLiveness())).toEqual({ sockets: 0, alive: false, evicted: 0 });
+	});
+});
+
+describe("command dispatch skips a socket the probe just closed (#880)", () => {
+	class Sock implements PingableSocket {
+		sent: string[] = [];
+		closed = false;
+		send(data: string) {
+			if (this.closed) throw new Error("Can't call WebSocket send() after close().");
+			this.sent.push(data);
+		}
+		close() { this.closed = true; }
+	}
+
+	it("sends on the live second socket when the first is half-closed", () => {
+		const dead = new Sock();
+		dead.closed = true;
+		const live = new Sock();
+		expect(sendOnFirstOpen([dead, live], "cmd")).toBe(live);
+		expect(live.sent).toEqual(["cmd"]);
+	});
+
+	it("returns null — never throws the runtime's send-after-close — when no socket is open", () => {
+		const a = new Sock();
+		const b = new Sock();
+		a.closed = true;
+		b.closed = true;
+		expect(sendOnFirstOpen([a, b], "cmd")).toBeNull();
+		expect(sendOnFirstOpen([], "cmd")).toBeNull();
+	});
+
+	it("prefers the first open socket, so a healthy single-socket slot is unchanged", () => {
+		const a = new Sock();
+		const b = new Sock();
+		expect(sendOnFirstOpen([a, b], "cmd")).toBe(a);
+		expect(b.sent).toEqual([]);
 	});
 });

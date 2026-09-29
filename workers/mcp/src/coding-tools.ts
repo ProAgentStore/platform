@@ -696,7 +696,7 @@ export function registerCodingSessionTools(
 
 	server.tool(
 		"coding_diagnostics",
-		"Full diagnostics for a coding instance: runner connectivity, terminal sessions, repos, issues. Use to debug why sessions are offline or stuck. For deploy and CI status — workflow run outcomes, whether a push passed or failed — use coding_instance_deploy_status instead; this tool covers the runner and session layer, not the GitHub Actions layer.",
+		"Full diagnostics for a coding instance: runner connectivity, terminal sessions, repos, issues. Runner state is two separate measurements — `relayConnected` (the relay holds a live socket) and `healthCheck` (the runner's health responder answered: ok | timeout | unresponsive | disconnected | failed | not_attempted) — and one status derived from both, `runnerStatus`: online | unresponsive (socket live, a process on the machine is wedged — restart the runner, reconnecting will not help) | offline | unregistered. `runnerOnline` is exactly `runnerStatus === \"online\"`. Use to debug why sessions are offline or stuck. For deploy and CI status — workflow run outcomes, whether a push passed or failed — use coding_instance_deploy_status instead; this tool covers the runner and session layer, not the GitHub Actions layer.",
 		{
 			instance_id: z.string().describe("Instance ID"),
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),

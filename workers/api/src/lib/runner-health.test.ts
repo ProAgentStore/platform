@@ -1,0 +1,56 @@
+/**
+ * #880: one runner, one verdict. A hung health responder behind a live relay socket must read the
+ * same on every call, and `runnerStatus` must never contradict `runnerOnline`.
+ */
+import { describe, expect, it } from "vitest";
+import { classifyHealthProbeFailure, type HealthCheckState, runnerLiveStatus } from "./runner-health.js";
+import { NO_SOCKET_MARKER, RunnerUnreachableError } from "./runner-unreachable.js";
+
+describe("classifyHealthProbeFailure", () => {
+	it("gives the two wordings #880 saw alternate a stable error each, keeping the raw text as detail", () => {
+		const timeout = classifyHealthProbeFailure(new Error('Runner /health → 504: {"error":"Relay command timed out"}'));
+		expect(timeout).toMatchObject({ ok: false, state: "timeout", error: "Runner relay is connected but its health check did not answer in time" });
+		expect(timeout.detail).toContain("Relay command timed out");
+
+		const closed = classifyHealthProbeFailure(new Error(`Runner /health → 504: {"error":"Can't call WebSocket send() after close()."}`));
+		expect(closed.state).toBe("disconnected");
+		expect(closed.error).toBe("Runner relay socket closed during the health check");
+	});
+
+	it("repeats the same error for the same failure, whatever the raw text varies in", () => {
+		const a = classifyHealthProbeFailure(new Error('Runner /health → 504: {"error":"Relay command timed out"}'));
+		const b = classifyHealthProbeFailure(new Error("Relay command timed out"));
+		expect(a.error).toBe(b.error);
+		expect(a.state).toBe(b.state);
+	});
+
+	it("names a relay that fails its ping gate, and a typed disconnect", () => {
+		expect(classifyHealthProbeFailure(new RunnerUnreachableError(`Runner relay is connected but not responding — ${NO_SOCKET_MARKER} for this agent.`)).state).toBe("unresponsive");
+		expect(classifyHealthProbeFailure(new RunnerUnreachableError(`No runner connected — ${NO_SOCKET_MARKER} for this agent.`)).state).toBe("disconnected");
+		expect(classifyHealthProbeFailure(new Error('Runner /health → 504: {"error":"Runner disconnected"}')).state).toBe("disconnected");
+	});
+
+	it("falls back to `failed` for anything else, and accepts a non-Error throw", () => {
+		expect(classifyHealthProbeFailure(new Error("Runner /health → 500: boom"))).toMatchObject({ state: "failed", error: "Runner health check failed" });
+		expect(classifyHealthProbeFailure("weird").detail).toBe("weird");
+	});
+});
+
+describe("runnerLiveStatus", () => {
+	it("separates a wedged responder behind a live socket from an absent machine", () => {
+		expect(runnerLiveStatus({ registered: true, relayConnected: true, healthCheck: "ok" })).toBe("online");
+		expect(runnerLiveStatus({ registered: true, relayConnected: true, healthCheck: "timeout" })).toBe("unresponsive");
+		expect(runnerLiveStatus({ registered: true, relayConnected: false, healthCheck: "not_attempted" })).toBe("offline");
+		expect(runnerLiveStatus({ registered: false, relayConnected: false, healthCheck: "not_attempted" })).toBe("unregistered");
+	});
+
+	it("is `online` exactly when the health check passed over a live socket", () => {
+		const states: HealthCheckState[] = ["ok", "timeout", "unresponsive", "disconnected", "failed", "not_attempted"];
+		for (const registered of [true, false])
+			for (const relayConnected of [true, false])
+				for (const healthCheck of states) {
+					const status = runnerLiveStatus({ registered, relayConnected, healthCheck });
+					expect(status === "online").toBe(relayConnected && healthCheck === "ok");
+				}
+	});
+});

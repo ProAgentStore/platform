@@ -24,6 +24,7 @@ import { refusingEngineIssue } from "../lib/coding-run-state.js";
 import { listRepos, listSessions, reconcileOrphanedSessions } from "../lib/coding-store.js";
 import { readProviderAccountHealth } from "../lib/provider-account-health.js";
 import { relayNameForInstance } from "../lib/runtime-nodes.js";
+import { classifyHealthProbeFailure, type HealthCheckState, runnerLiveStatus } from "../lib/runner-health.js";
 import { getLiveRuntime } from "./instances-runtime.js";
 import { getDefaultRunnerConn, requireOwned } from "./coding-shared.js";
 import { MAX_SSH_HOSTS, httpsLoginFrom, sshHostGroups, sshIdentityIssues } from "../lib/ssh-identity.js";
@@ -383,12 +384,19 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		// worth asking about is a fact about the repos — see the probe block below.
 		const gitIdentityByHost = new Map<string, GitIdentityResult | null>();
 		let runnerReachable = false;
+		// Socket liveness (`relayIsConnected`) and responder liveness (`healthCheck`) are separate
+		// measurements, reported separately (#880). A failure is classified into a closed state
+		// with a fixed sentence — the raw relay text used to alternate between calls.
+		let healthCheck: HealthCheckState = "not_attempted";
 		if (conn) {
 			try {
 				runnerHealth = await callRunner<unknown>(conn, "/health", undefined, { timeoutMs: READ_TIMEOUT_MS });
 				runnerReachable = true;
+				healthCheck = "ok";
 			} catch (e) {
-				runnerHealth = { error: e instanceof Error ? e.message : String(e) };
+				const failure = classifyHealthProbeFailure(e);
+				runnerHealth = failure;
+				healthCheck = failure.state;
 			}
 			try {
 				runnerDiag = await callRunner<unknown>(conn, "/coding/diagnostics", undefined, { timeoutMs: READ_TIMEOUT_MS });
@@ -397,9 +405,18 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			}
 		}
 		const effectivelyReachable = runnerReachable;
+		// The ONE status (#880). `runner.status` used to be the runtime row's `status` column — what
+		// the runner last registered as — so it read "online" beside `runnerOnline: false` for a
+		// machine whose health responder was hung. That column is still reported, as
+		// `reportedStatus`, and is no longer a claim about now.
+		const liveStatus = runnerLiveStatus({ registered: !!runtimeRow, relayConnected: relayIsConnected, healthCheck });
 
-		(runner as Record<string, unknown>).reachable = effectivelyReachable;
-		(runner as Record<string, unknown>).health = runnerHealth;
+		runner.reportedStatus = runner.status;
+		runner.status = liveStatus;
+		runner.relayConnected = relayIsConnected;
+		runner.healthCheck = healthCheck;
+		runner.reachable = effectivelyReachable;
+		runner.health = runnerHealth;
 
 		// 3. D1 sessions + repos + the engine presets (needed to name each session's sign-in MODE,
 		//    which is half of the auth report — the runner supplies the other half).
@@ -607,8 +624,16 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			issues.push({ severity: "error", message: "No runner registered for this instance", fix: "Run `pags up` to connect your machine" });
 		} else if (runtimeRow.status === "offline" && !relayIsConnected) {
 			issues.push({ severity: "error", message: "Runner status is offline", fix: "Restart `pags up` to reconnect" });
-		} else if (!effectivelyReachable) {
+		} else if (!relayIsConnected) {
 			issues.push({ severity: "error", message: "Runner registered but not reachable", fix: "Restart `pags up` to reconnect" });
+		} else if (liveStatus === "unresponsive") {
+			// The socket is live, so "reconnect" is the wrong remedy (#880): something on the machine
+			// is wedged, and only restarting the runner process there clears it.
+			issues.push({
+				severity: "error",
+				message: `Runner is connected but not responding (health check: ${healthCheck})`,
+				fix: "Restart `pags up` on the machine — the relay socket is live, so reconnecting alone will not help",
+			});
 		}
 
 		for (const s of sessions) {
@@ -663,9 +688,11 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 
 		return c.json({
 			summary: {
-				runnerOnline: effectivelyReachable,
-				runnerStatus: runner.status,
+				// Always agree: runnerOnline === (runnerStatus === "online") (#880).
+				runnerOnline: liveStatus === "online",
+				runnerStatus: liveStatus,
 				relayConnected: relayIsConnected,
+				healthCheck,
 				relayName,
 				totalRepos: repos.length,
 				totalSessions: sessions.length,
