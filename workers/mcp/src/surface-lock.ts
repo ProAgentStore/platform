@@ -940,4 +940,9 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// `runner_setup` reads a coding agent's local runner setup checklist. Appended, never edited in
 	// place: 0.1.64 is published.
 	"0.1.65": "sha256:097b9940015957392f21bd51a56c04f56f06004d90208dad70ffa4fb48c76520",
+	// 0.1.66 (#879): no new tool — `set_account_preferences`'s inputSchema gains the optional
+	// `coding` section, so MCP callers can set or clear the account-wide default coding engine that
+	// coder instances inherit when they do not have their own explicit engine. Appended, never edited
+	// in place: 0.1.65 is published.
+	"0.1.66": "sha256:eec90b7ef29b61e0c750c587a757e7aa30b421691b421fcd9748e9230a8b7d18",
 };

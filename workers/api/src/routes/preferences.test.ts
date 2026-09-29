@@ -60,6 +60,29 @@ const put = (body: unknown): RequestInit => ({ method: "PUT", body: JSON.stringi
 const read = async (res: Response) => (await res.json<{ preferences: AccountPreferences }>()).preferences;
 
 describe("the account timezone", () => {
+	it("round-trips the account coding engine default without touching other sections (#879)", async () => {
+		const { app, env, saved } = testApp({ timezone: "Europe/London", voice: { speed: 130 } });
+		const res = await call(app, env, put({ coding: { defaultEngineId: "codex" } }));
+		expect(res.status).toBe(200);
+		const prefs = await read(res);
+		expect(prefs.coding).toEqual({ defaultEngineId: "codex" });
+		expect(prefs.timezone).toBe("Europe/London");
+		expect(prefs.voice?.speed).toBe(130);
+		expect(saved().coding).toEqual({ defaultEngineId: "codex" });
+	});
+
+	it("rejects an unknown account coding engine instead of silently falling back (#879)", async () => {
+		const { app, env, saved } = testApp();
+		const res = await call(app, env, put({ coding: { defaultEngineId: "cursor" } }));
+		expect(res.status).toBe(400);
+		expect(saved().coding).toBeUndefined();
+	});
+
+	it("clears the account coding engine default back to platform inheritance (#879)", async () => {
+		const { app, env } = testApp({ coding: { defaultEngineId: "codex" } });
+		expect((await read(await call(app, env, put({ coding: { defaultEngineId: null } })))).coding).toEqual({});
+	});
+
 	it("round-trips the notification instance scope and rejects a malformed one (#784)", async () => {
 		const { app, env, saved } = testApp();
 		const res = await call(app, env, put({ notifications: { muted: ["deploy"], instances: ["inst-a", "inst-b"] } }));

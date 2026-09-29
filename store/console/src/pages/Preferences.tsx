@@ -7,6 +7,7 @@ import AccountConnections from "../components/AccountConnections";
 import NotificationPreferences, { type NotificationTypeSpec } from "../components/NotificationPreferences";
 import { machineTimeZone, setAccountTimeZone, timeZoneOptions, useAccountTimeZone } from "../lib/accountTimezone";
 import Card from "../components/Card";
+import Button from "../components/Button";
 
 /** The current wall clock in a zone, or "" when this runtime cannot resolve it — never a throw. */
 function nowIn(zone: string): string {
@@ -55,6 +56,10 @@ function nowIn(zone: string): string {
 export default function Preferences() {
 	const [voice, setVoice] = useState<Record<string, unknown>>({});
 	const [translation, setTranslation] = useState<Record<string, unknown>>({});
+	const [coding, setCoding] = useState<{ defaultEngineId?: string }>({});
+	const [codingEngineOptions, setCodingEngineOptions] = useState<Array<{ id: string; label: string }>>([]);
+	const [codingMsg, setCodingMsg] = useState("");
+	const [applyingCoding, setApplyingCoding] = useState(false);
 	const [languages, setLanguages] = useState<Array<{ name: string; tag: string }>>([]);
 	const [notificationTypes, setNotificationTypes] = useState<NotificationTypeSpec[]>([]);
 	const [mutedNotifications, setMutedNotifications] = useState<string[]>([]);
@@ -84,13 +89,17 @@ export default function Preferences() {
 					preferences?: {
 						voice?: Record<string, unknown>;
 						translation?: Record<string, unknown>;
+						coding?: { defaultEngineId?: string };
 						notifications?: { muted?: string[]; instances?: string[] };
 					};
 					languages?: Array<{ name: string; tag: string }>;
 					notificationTypes?: NotificationTypeSpec[];
+					codingEngineOptions?: Array<{ id: string; label: string }>;
 				}>("/v1/preferences");
 				setVoice(d.preferences?.voice || {});
 				setTranslation(d.preferences?.translation || {});
+				setCoding(d.preferences?.coding || {});
+				setCodingEngineOptions(d.codingEngineOptions || []);
 				setLanguages(d.languages || []);
 				// The vocabulary comes from the server, not from a second copy of the list here —
 				// see NotificationPreferences.
@@ -122,6 +131,37 @@ export default function Preferences() {
 	const saveTranslation = useCallback(async (next: Record<string, unknown>) => {
 		setTranslation(next);
 		await api("/v1/preferences", { method: "PUT", body: JSON.stringify({ translation: next }) });
+	}, []);
+
+	const saveCodingDefault = useCallback(async (defaultEngineId: string) => {
+		const next = defaultEngineId ? { defaultEngineId } : {};
+		setCoding(next);
+		setCodingMsg("Saved — future coder sessions inherit this unless the agent has its own engine.");
+		try {
+			const d = await api<{ preferences?: { coding?: { defaultEngineId?: string } } }>("/v1/preferences", {
+				method: "PUT",
+				body: JSON.stringify({ coding: next }),
+			});
+			setCoding(d.preferences?.coding || {});
+		} catch (e) {
+			setCodingMsg(e instanceof Error ? e.message : String(e));
+		}
+	}, []);
+
+	const applyCodingDefault = useCallback(async () => {
+		setApplyingCoding(true);
+		setCodingMsg("");
+		try {
+			const d = await api<{
+				restarted: number;
+				skipped?: Record<string, number>;
+			}>("/v1/preferences/coding/default-engine/apply", { method: "POST" });
+			const skipped = Object.entries(d.skipped || {}).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k.replace(/-/g, " ")}`);
+			setCodingMsg(`Applied to ${d.restarted} idle coder${d.restarted === 1 ? "" : "s"}${skipped.length ? `; skipped ${skipped.join(", ")}.` : "."}`);
+		} catch (e) {
+			setCodingMsg(e instanceof Error ? e.message : String(e));
+		}
+		setApplyingCoding(false);
 	}, []);
 
 	/**
@@ -169,6 +209,33 @@ export default function Preferences() {
 				instances={notificationInstances}
 				onInstancesSaved={setNotificationInstances}
 			/>
+
+			<Card className="mb-3 sm:mb-4">
+				<h3 className="text-base font-bold mb-1">Default coding engine</h3>
+				<p className="text-xs text-muted mb-3">
+					Used when a coder opens a new session and that agent has not selected its own engine. Running work keeps the CLI it started with.
+				</p>
+				<div className="flex flex-col sm:flex-row sm:items-end gap-2 sm:gap-3">
+					<div>
+						<label htmlFor="account-coding-engine" className="text-xs text-muted block mb-1">Engine</label>
+						<select
+							id="account-coding-engine"
+							value={coding.defaultEngineId || ""}
+							onChange={(e) => void saveCodingDefault(e.target.value)}
+							className="text-sm bg-paper border border-line rounded-lg px-3 py-2 block w-full sm:w-56"
+						>
+							<option value="">Platform default</option>
+							{codingEngineOptions.map((e) => (
+								<option key={e.id} value={e.id}>{e.label}</option>
+							))}
+						</select>
+					</div>
+					<Button onClick={() => void applyCodingDefault()} disabled={applyingCoding}>
+						{applyingCoding ? "Applying…" : "Apply to idle coders"}
+					</Button>
+				</div>
+				{codingMsg && <p className="text-xs text-muted mt-2">{codingMsg}</p>}
+			</Card>
 
 			<Card className="mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-2">Appearance</h3>

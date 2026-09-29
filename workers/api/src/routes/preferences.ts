@@ -14,10 +14,13 @@
  */
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
+import { applyDefaultCodingEngineToIdle } from "../lib/coding-default-engine-apply.js";
+import { DEFAULT_ENGINES } from "../lib/coding-engines.js";
 import { isValidTimeZone } from "../lib/cron-time.js";
 import { isKnownNotificationType, NOTIFICATION_TYPES, sanitizeNotificationPreferences } from "../lib/notifications.js";
 import {
 	parseAccountPreferences,
+	sanitizeCodingPreferences,
 	sanitizeTranslationSettings,
 	sanitizeVoiceSettings,
 	unknownVoiceField,
@@ -49,6 +52,7 @@ preferenceRoutes.get("/", async (c) => {
 		preferences: await readPreferences(c.env, session.uid),
 		languages: TRANSLATION_LANGUAGES,
 		notificationTypes: NOTIFICATION_TYPES,
+		codingEngineOptions: DEFAULT_ENGINES.map((e) => ({ id: e.id, label: e.label })),
 	});
 });
 
@@ -64,6 +68,7 @@ preferenceRoutes.put("/", async (c) => {
 	const body = (await c.req.json().catch(() => ({}))) as {
 		voice?: unknown;
 		translation?: unknown;
+		coding?: unknown;
 		timezone?: unknown;
 		notifications?: unknown;
 	};
@@ -93,6 +98,17 @@ preferenceRoutes.put("/", async (c) => {
 		const bad = unknownVoiceField((body.voice ?? {}) as Record<string, unknown>);
 		if (bad) throw new HttpError(400, bad);
 	}
+	if (body.coding !== undefined) {
+		if (!body.coding || typeof body.coding !== "object" || Array.isArray(body.coding)) {
+			throw new HttpError(400, "coding must be an object");
+		}
+		const engineId = (body.coding as { defaultEngineId?: unknown }).defaultEngineId;
+		const clears = engineId === null || engineId === "";
+		if (!clears && typeof engineId !== "string") throw new HttpError(400, "coding.defaultEngineId must be an engine id");
+		if (!clears && !DEFAULT_ENGINES.some((e) => e.id === engineId)) {
+			throw new HttpError(400, `unknown coding engine: ${String(engineId).slice(0, 40)}`);
+		}
+	}
 	// Strict on write, and REJECTED rather than coerced (#329). A typo'd zone silently becoming UTC
 	// is the same lie #18 refused for cron schedules: the user believes they told us where they are,
 	// and every timestamp they read afterwards is quietly wrong by hours.
@@ -110,6 +126,7 @@ preferenceRoutes.put("/", async (c) => {
 			body.translation !== undefined
 				? sanitizeTranslationSettings(body.translation, current.translation)
 				: current.translation,
+		coding: body.coding !== undefined ? sanitizeCodingPreferences(body.coding, current.coding) : current.coding,
 		// `null`/`""` clears it back to UNSET, which is a state a user must be able to return to: it
 		// is not "UTC", it is "you were never told", and it is what makes the agent say UTC out loud
 		// instead of dressing a guess up as local time.
@@ -124,4 +141,9 @@ preferenceRoutes.put("/", async (c) => {
 		.bind(JSON.stringify(next), session.uid)
 		.run();
 	return c.json({ preferences: next });
+});
+
+preferenceRoutes.post("/coding/default-engine/apply", async (c) => {
+	const session = await requireUser(c);
+	return c.json(await applyDefaultCodingEngineToIdle(c.env, session.uid));
 });

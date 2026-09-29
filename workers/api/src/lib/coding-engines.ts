@@ -12,6 +12,7 @@
 import { commandEngineParts } from "./coding-command.js";
 import { writeEngineModel } from "./coding-engine-model.js";
 import { getUserProviderKey } from "./user-ai.js";
+import { parseAccountPreferences } from "./preferences.js";
 import { reusedSessionEngineNotice } from "./coding-session-lifecycle.js";
 import { payerForEngineAuth, type EngineAuthResolved, type PayerOrUnknown } from "./usage-payer.js";
 import type { CodingClientType, CodingSessionRecord } from "./coding-types.js";
@@ -380,11 +381,18 @@ export const ENGINE_WRITE_FLAGS: Record<CodingClientType, string[]> = {
 	claude: ["--dangerously-skip-permissions", "--permission-mode acceptEdits"],
 };
 
+export type EngineDefaultSource = "instance" | "account" | "platform";
+
 /** Read the instance's engine presets (seeded defaults when unset). */
-export async function readEngines(env: Env, instanceId: string, userId: string): Promise<{ engines: CodingEngine[]; defaultEngineId: string }> {
-	const row = await env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2")
+export async function readEngines(env: Env, instanceId: string, userId: string): Promise<{ engines: CodingEngine[]; defaultEngineId: string; defaultEngineSource: EngineDefaultSource; accountDefaultEngineId?: string }> {
+	const row = await env.DB.prepare(
+		`SELECT i.config, u.preferences
+		   FROM agent_instances i
+		   LEFT JOIN users u ON u.id = i.user_id
+		  WHERE i.id = ?1 AND i.user_id = ?2`,
+	)
 		.bind(instanceId, userId)
-		.first<{ config: string }>();
+		.first<{ config: string; preferences?: string | null }>();
 	let cfg: { codingEngines?: CodingEngine[]; defaultEngineId?: string } = {};
 	try {
 		cfg = JSON.parse(row?.config || "{}");
@@ -396,8 +404,17 @@ export async function readEngines(env: Env, instanceId: string, userId: string):
 		? cfg.codingEngines.filter((e) => e && typeof e.id === "string" && typeof e.label === "string" && typeof e.command === "string")
 		: [];
 	const engines = valid.length ? valid : DEFAULT_ENGINES;
-	const defaultEngineId = cfg.defaultEngineId && engines.some((e) => e.id === cfg.defaultEngineId) ? cfg.defaultEngineId : engines[0].id;
-	return { engines, defaultEngineId };
+	const hasInstanceDefault = Object.hasOwn(cfg as Record<string, unknown>, "defaultEngineId");
+	const accountDefaultEngineId = parseAccountPreferences(row?.preferences).coding?.defaultEngineId;
+	const inheritedDefault = !hasInstanceDefault && accountDefaultEngineId && engines.some((e) => e.id === accountDefaultEngineId)
+		? accountDefaultEngineId
+		: undefined;
+	const explicitDefault = hasInstanceDefault && cfg.defaultEngineId && engines.some((e) => e.id === cfg.defaultEngineId)
+		? cfg.defaultEngineId
+		: undefined;
+	const defaultEngineId = explicitDefault ?? inheritedDefault ?? engines[0].id;
+	const defaultEngineSource: EngineDefaultSource = explicitDefault ? "instance" : inheritedDefault ? "account" : "platform";
+	return { engines, defaultEngineId, defaultEngineSource, ...(accountDefaultEngineId ? { accountDefaultEngineId } : {}) };
 }
 
 /** The launch command + derived client type for an engine id (falls back to the default engine). */

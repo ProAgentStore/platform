@@ -189,6 +189,11 @@ describe("parseAccountPreferences — a corrupt blob must not break sign-in", ()
 		expect(p.voice?.speed).toBe(120);
 		expect(p.translation).toBeUndefined();
 	});
+
+	it("sanitizes the account coding default as an inherited engine id (#879)", () => {
+		expect(parseAccountPreferences(JSON.stringify({ coding: { defaultEngineId: "codex" } })).coding).toEqual({ defaultEngineId: "codex" });
+		expect(parseAccountPreferences(JSON.stringify({ coding: { defaultEngineId: "Bad Engine" } })).coding).toEqual({});
+	});
 });
 
 describe("cross-package drift — the allowlist has to agree with the code that uses it", () => {

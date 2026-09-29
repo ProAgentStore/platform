@@ -388,6 +388,7 @@ const READBACK: Record<string, string | null> = {
 	"set_account_preferences.notifications": "get_account_preferences",
 	"set_account_preferences.voice": "get_account_preferences",
 	"set_account_preferences.translation": "get_account_preferences",
+	"set_account_preferences.coding": "get_account_preferences",
 
 	// ── connector grants ──
 	"grant_instance_connector_folder.provider": "list_instance_connector_grants",

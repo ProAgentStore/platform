@@ -56,6 +56,23 @@ describe("reading the choice", () => {
 });
 
 describe("choosing an engine", () => {
+	it("inherits the account default when this instance has no explicit engine choice (#879)", async () => {
+		await env.DB.prepare("UPDATE users SET preferences = ?1 WHERE id = 'u1'")
+			.bind(JSON.stringify({ coding: { defaultEngineId: "codex" } }))
+			.run();
+		expect((await readEngines(env, "inst-1", "u1")).defaultEngineSource).toBe("account");
+		expect((await resolveEngine(env, "inst-1", "u1", undefined)).clientType).toBe("codex");
+	});
+
+	it("keeps an explicit instance engine above the account default (#879)", async () => {
+		await env.DB.prepare("UPDATE users SET preferences = ?1 WHERE id = 'u1'")
+			.bind(JSON.stringify({ coding: { defaultEngineId: "codex" } }))
+			.run();
+		await writeEngineChoice(env, "inst-1", "u1", { engineId: "gemini" });
+		expect((await readEngines(env, "inst-1", "u1")).defaultEngineSource).toBe("instance");
+		expect((await resolveEngine(env, "inst-1", "u1", undefined)).clientType).toBe("gemini");
+	});
+
 	it("is what the LAUNCHER then resolves — the dropdown is not a second opinion (migration 0126)", async () => {
 		await writeEngineChoice(env, "inst-1", "u1", { engineId: "codex" });
 		expect((await resolveEngine(env, "inst-1", "u1", undefined)).clientType).toBe("codex");

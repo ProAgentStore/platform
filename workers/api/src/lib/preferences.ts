@@ -133,6 +133,14 @@ export interface AccountPreferences {
 	voice?: VoiceSettings;
 	translation?: TranslationSettings;
 	/**
+	 * Account-wide coding preferences (#879).
+	 *
+	 * This is deliberately NOT an instance setting. An instance can still carry an explicit
+	 * `config.defaultEngineId`; that wins. This value is the inherited default for coders that have
+	 * never chosen their own CLI engine.
+	 */
+	coding?: CodingPreferences;
+	/**
 	 * The user's IANA timezone — the account default for every surface that shows a time (#329).
 	 *
 	 * It lives here rather than in `user_profile` or a per-agent `settingsSchema` field for the same
@@ -160,6 +168,10 @@ export interface AccountPreferences {
 	 * Enforced in `notifyUser`, and NEVER over an `alert` — see `pushAllowedByPreference`.
 	 */
 	notifications?: NotificationPreferences;
+}
+
+export interface CodingPreferences {
+	defaultEngineId?: string;
 }
 
 const num = (v: unknown, lo: number, hi: number, dflt: number): number =>
@@ -325,6 +337,16 @@ export function sanitizeTranslationSettings(
 	};
 }
 
+const ENGINE_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
+export function sanitizeCodingPreferences(raw: unknown, base: CodingPreferences = {}): CodingPreferences {
+	const o = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
+	const rawDefault = o.defaultEngineId;
+	if (rawDefault === null || rawDefault === "") return {};
+	if (typeof rawDefault === "string" && ENGINE_ID_RE.test(rawDefault)) return { defaultEngineId: rawDefault };
+	return base.defaultEngineId ? { defaultEngineId: base.defaultEngineId } : {};
+}
+
 /** Parse a stored `users.preferences` blob. Junk yields no preferences, never a broken shape. */
 export function parseAccountPreferences(raw: string | null | undefined): AccountPreferences {
 	if (!raw) return {};
@@ -334,6 +356,7 @@ export function parseAccountPreferences(raw: string | null | undefined): Account
 		return {
 			voice: o.voice ? sanitizeVoiceSettings(o.voice) : undefined,
 			translation: o.translation ? sanitizeTranslationSettings(o.translation) : undefined,
+			coding: o.coding ? sanitizeCodingPreferences(o.coding) : undefined,
 			// Validated on READ as well as on write. A zone the runtime cannot resolve would make
 			// `Intl.DateTimeFormat` throw on the per-turn prompt path, and a stored value can predate
 			// this check (or name a zone this runtime's tz database does not carry). Dropping it back
