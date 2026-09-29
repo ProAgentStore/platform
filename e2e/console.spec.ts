@@ -2802,7 +2802,7 @@ test.describe("Coding tab — local runner setup checklist (#869)", () => {
 		await expect(page.locator("#runner-setup-checklist")).toHaveCount(0);
 	});
 
-	test("fits a 320px phone — long shell commands wrap instead of scrolling sideways", async ({ page }) => {
+		test("mobile — fits a 320px phone — long shell commands wrap instead of scrolling sideways", async ({ page }) => {
 		await page.setViewportSize({ width: 320, height: 812 });
 		await mockCoder(page, { status: 200, body: { ...notReady, steps: notReady.steps.map((s) => ({ ...s, done: false })) } });
 		await page.goto("/console/instances/inst-1/coding");
