@@ -212,7 +212,7 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 
 	server.tool(
 		"coding_loop_start",
-		"Give an agent an objective and let it work on it autonomously, on the server. Returns a run id immediately — poll status with coding_loop_status and live work events with coding_loop_trace; the run keeps going after this call returns and after you disconnect. Durable and budgeted: its spend is drawn from a pool and stop_instance_loop / coding_loop_stop can end it. What it drives depends on the agent — a coding agent's engine, otherwise its chat. Same runs as start_instance_loop. Per-repo run lock: only one run may work on a repo at a time — starting a second is rejected with an error naming the repo; call coding_loop_status (no run_id) or check_instance_loop to see whether one is already running, and coding_loop_stop or stop_instance_loop to clear it first. Do NOT use a run for work a direct connector tool already does: filing or commenting on issues, reading issues or PRs, reading issue comments, and checking workflow-run / deploy status are all one-call operations via github_create_issue, github_comment_issue, github_update_issue, github_list_issues, github_read_issue, github_list_issue_comments, github_list_pulls, github_read_pull, and github_workflow_runs — call list_instance_tools to confirm which are available on this agent, then call_instance_tool to invoke one. An autonomous run is the right path for work that needs the code checkout: writing code, running tests, or any sequence of commands on the owner's machine.",
+		"Give an agent an objective and let it work on it autonomously, on the server. Returns a run id immediately — poll status with coding_loop_status and live work events with coding_loop_trace; the run keeps going after this call returns and after you disconnect. Durable and budgeted: its spend is drawn from a pool and stop_instance_loop / coding_loop_stop can end it. What it drives depends on the agent — a coding agent's engine, otherwise its chat. Same runs as start_instance_loop. Which repo: pass repo_id (from coding_repos_list) to target one repo of a multi-repo instance. With one repo it may be omitted; with more than one and no repo_id the call is refused with the registered repo_ids rather than guessed, and a repo_id that is not on this instance is refused. Per-repo run lock: only one run may work on a repo at a time — starting a second is rejected with an error naming the repo (runs on OTHER repos of the same instance are unaffected); call coding_loop_status (no run_id) or check_instance_loop to see whether one is already running, and coding_loop_stop or stop_instance_loop to clear it first. Do NOT use a run for work a direct connector tool already does: filing or commenting on issues, reading issues or PRs, reading issue comments, and checking workflow-run / deploy status are all one-call operations via github_create_issue, github_comment_issue, github_update_issue, github_list_issues, github_read_issue, github_list_issue_comments, github_list_pulls, github_read_pull, and github_workflow_runs — call list_instance_tools to confirm which are available on this agent, then call_instance_tool to invoke one. An autonomous run is the right path for work that needs the code checkout: writing code, running tests, or any sequence of commands on the owner's machine.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID or slug"),
@@ -222,14 +222,16 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 				.optional()
 				.describe(`What the agent should accomplish. Required unless repair_checkout is set — a repair run's objective is written by the platform, and anything you pass here rides along as a note. ${OBJECTIVE_CAP_NOTE}`),
 			max_iterations: z.coerce.number().int().min(1).max(50).optional().describe("Maximum loop iterations (default 10). The server clamps this to your account's loop ceiling."),
+			repo_id: z.string().optional().describe("Which of the instance's repos the run works on — an id from coding_repos_list. Optional when the instance has exactly one repo; REQUIRED when it has more than one (omitted, the call is refused with the list of registered repo_ids). A repo_id that is not on this instance is refused, never replaced by another repo. The per-repo run lock and queue_if_busy apply to THIS repo."),
 			queue_if_busy: z.boolean().optional().describe("When the repo is already being worked on, QUEUE this objective instead of failing. Answers `{queued:true, entry}` instead of a run id, and the platform starts it automatically the moment the active run reaches a terminal state — done, failed or max iterations. Queue is FIFO per repo; read it with coding_loop_queue and withdraw an entry with coding_loop_queue_cancel. Only the BUSY refusal queues: an agent with no repository, no runner, or an unusable checkout still fails immediately, because waiting fixes none of those. Off by default — without it, a busy instance is still an error."),
 			repair_checkout: z.boolean().optional().describe("Start a REPAIR run instead of a work run: when a run was blocked because the checkout is behind or has diverged (the block message ends by naming this flag), this lets the agent fix THAT itself — the platform writes the objective (get onto the branch, in sync with upstream, clean tree), the run is let through the pre-flight sync gate, and it may do nothing else: no ticket work, no pushes, and nothing is ever deleted — work in the way is parked on a `wip/` branch the report names. Coding agents only. Off by default."),
 			dry_run: z.boolean().optional().describe("Report the run that would be started, and the spend it would commit, without starting it."),
 		},
-		async ({ token, instance_id, objective, max_iterations, queue_if_busy, repair_checkout, dry_run }) => {
+		async ({ token, instance_id, objective, max_iterations, repo_id, queue_if_busy, repair_checkout, dry_run }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const maxIter = max_iterations ?? 10;
+			const repoId = (repo_id ?? "").trim() || undefined;
 			const repair = repair_checkout === true;
 			// The one argument the schema cannot express: objective is required EXCEPT on a repair run.
 			if (!repair && !(objective ?? "").trim()) return jsonText({ error: "objective is required (or set repair_checkout: true to start a repair run, whose objective the platform writes)" });
@@ -253,16 +255,22 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 						: `${instance_id} would work on this objective by itself, for up to ${maxIter} steps, and keep going after this call returns.${queue_if_busy ? " If the repo is busy it would be QUEUED instead, and started when the active run ends." : ""}`,
 					objective: objective ?? null,
 					objectiveBytes: new TextEncoder().encode(objective ?? "").length,
+					repoId: repoId ?? null,
 					repairCheckout: repair || undefined,
 					spend: `Each step spends the instance's own BYOK budget, drawn from a pool opened for the run. coding_loop_stop is the way to end it early.`,
-					note: `instance_id is resolved against my_instances on the real call; this dry run does not resolve it, so a slug that does not exist still fails then.`,
+					note: `instance_id is resolved against my_instances on the real call; this dry run does not resolve it, so a slug that does not exist still fails then. The same goes for repo_id: it is checked against the instance's repos on the real call, and omitting it on a multi-repo instance is refused then.`,
 				});
 			}
 			const id = await resolveId(sessionToken, instance_id);
 			const data = await authedCall(
 				`/v1/instances/${encodeURIComponent(id)}/loop`,
 				sessionToken,
-				{ method: "POST", body: JSON.stringify({ objective: (objective ?? "").trim() || undefined, maxIterations: maxIter, queueIfBusy: queue_if_busy === true, repairCheckout: repair }) },
+				{
+					method: "POST",
+					// `requireRepoChoice` (#877): this caller can name the repo, so on a multi-repo instance an
+					// omitted repo_id is refused with the list rather than resolved to whichever was touched last.
+					body: JSON.stringify({ objective: (objective ?? "").trim() || undefined, maxIterations: maxIter, repoId, requireRepoChoice: true, queueIfBusy: queue_if_busy === true, repairCheckout: repair }),
+				},
 				env,
 			);
 			// `authedCall` RETURNS a non-2xx as `{error}` rather than throwing, so reporting
@@ -276,7 +284,7 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 			await audit(safetyFor(token), {
 				tool: "coding_loop_start",
 				action: queued ? "queued" : "completed",
-				input: { instance_id: id, objectiveBytes: new TextEncoder().encode(objective ?? "").length, maxIterations: maxIter, queueIfBusy: queue_if_busy === true, repairCheckout: repair },
+				input: { instance_id: id, repoId: repoId ?? null, objectiveBytes: new TextEncoder().encode(objective ?? "").length, maxIterations: maxIter, queueIfBusy: queue_if_busy === true, repairCheckout: repair },
 				result: queued
 					? { queueEntryId: (data as { entry?: { id?: string } }).entry?.id ?? null }
 					: { runId: (data as { runId?: string }).runId ?? null, budgetId: (data as { budgetId?: string }).budgetId ?? null },

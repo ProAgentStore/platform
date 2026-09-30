@@ -585,3 +585,112 @@ describe("one driver per engine — every path that starts a Pilot claims it (#2
 		expect(claimAt).toBeLessThan(runAt);
 	});
 });
+
+describe("pickLoopRepo with requireChoice — coding_loop_start on a multi-repo instance (#877)", () => {
+	const two = [
+		{ id: "r1", name: "proappstore-online/platform" },
+		{ id: "r2", name: "proappstore-online/template-app" },
+	];
+
+	it("refuses an omitted repo when there is more than one, listing every registered repo_id", () => {
+		const out = pickLoopRepo(two, undefined, { requireChoice: true });
+		expect(out.ok).toBe(false);
+		if (!out.ok) {
+			expect(out.error).toContain("needs a repo_id");
+			expect(out.error).toContain("r1 (proappstore-online/platform)");
+			expect(out.error).toContain("r2 (proappstore-online/template-app)");
+		}
+	});
+
+	it("keeps the single-repo instance working with repo_id omitted", () => {
+		expect(pickLoopRepo([two[0]], undefined, { requireChoice: true })).toEqual({ ok: true, repo: two[0] });
+	});
+
+	it("takes the named repo on a multi-repo instance", () => {
+		expect(pickLoopRepo(two, "r2", { requireChoice: true })).toEqual({ ok: true, repo: two[1] });
+	});
+
+	it("without the flag, omission is unchanged — the first repo, as a supervisor has always had", () => {
+		expect(pickLoopRepo(two)).toEqual({ ok: true, repo: two[0] });
+	});
+
+	it("a repo_id that is not on the instance names it and lists the ones that are", () => {
+		const out = pickLoopRepo(two, "r9", { requireChoice: true });
+		expect(out.ok).toBe(false);
+		if (!out.ok) {
+			expect(out.error).toContain("(r9) is not on this agent");
+			expect(out.error).toContain("r1 (proappstore-online/platform)");
+		}
+	});
+});
+
+describe("the coding driver targets one repo of a multi-repo instance (#877)", () => {
+	const REPOS = [
+		{ id: "r1", name: "first/repo", instance_id: "i1", user_id: "u1", clone_status: "ready" },
+		{ id: "r2", name: "second/repo", instance_id: "i1", user_id: "u1", clone_status: "ready" },
+	];
+
+	/**
+	 * The shared stub, made repo-aware where the lock lives: each repo has its own active session
+	 * (`s-r1`, `s-r2`), and the driver claim fails only on the sessions listed in `held`.
+	 */
+	function perRepoEnv(held: string[]) {
+		const s = stubEnv({ repos: REPOS, session: null });
+		const db = s.env.DB as unknown as { prepare: (q: string) => { bind: (...a: unknown[]) => Record<string, (...x: unknown[]) => Promise<unknown>> } };
+		const inner = db.prepare.bind(db);
+		const claims: string[] = [];
+		db.prepare = (q: string) => {
+			const p = inner(q);
+			return {
+				bind: (...args: unknown[]) => {
+					const b = p.bind(...args);
+					return {
+						...b,
+						async first() {
+							if (q.includes("FROM coding_sessions WHERE repo_id")) return { id: `s-${args[0]}`, repo_id: args[0], client_type: "claude", status: "active", runner_node: "macbook" };
+							return b.first();
+						},
+						async run() {
+							if (q.includes("SET driver_id")) {
+								claims.push(String(args[0]));
+								if (held.includes(String(args[0]))) return { meta: { changes: 0 } };
+							}
+							return b.run();
+						},
+					};
+				},
+			};
+		};
+		return { ...s, claims };
+	}
+
+	it("a repo busy with a run does not lock its sibling: the targeted free repo starts", async () => {
+		const { env, created, claims } = perRepoEnv(["s-r1"]);
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base, repoId: "r2", requireRepoChoice: true });
+		expect(out.ok).toBe(true);
+		expect(created[0].params.repoId).toBe("r2");
+		// Only the TARGETED repo's session was claimed — the busy one was never touched.
+		expect(claims).toEqual(["s-r2"]);
+	});
+
+	it("the targeted busy repo is refused as `busy` — the refusal queue_if_busy queues — naming THAT repo", async () => {
+		const { env, created } = perRepoEnv(["s-r2"]);
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base, repoId: "r2", requireRepoChoice: true });
+		expect(out).toMatchObject({ ok: false, status: 409, reason: "busy" });
+		if (!out.ok) expect(out.error).toContain("second/repo is already being worked on");
+		expect(created).toHaveLength(0);
+	});
+
+	it("an omitted repo_id on the multi-repo instance is refused before any session is touched — and it is NOT `busy`, so it never queues", async () => {
+		const { env, created, claims } = perRepoEnv([]);
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base, requireRepoChoice: true });
+		expect(out).toMatchObject({ ok: false, status: 409 });
+		if (!out.ok) {
+			expect((out as { reason?: string }).reason).not.toBe("busy");
+			expect(out.error).toContain("r1 (first/repo)");
+			expect(out.error).toContain("r2 (second/repo)");
+		}
+		expect(created).toHaveLength(0);
+		expect(claims).toEqual([]);
+	});
+});

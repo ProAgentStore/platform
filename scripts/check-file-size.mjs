@@ -834,7 +834,7 @@ const PINS = {
 	// +16 at #192 (proappstore-online/platform): the 0.1.50 record — recent_instances gains `limit`
 	// and a working-first order; the entry says why the cap had hidden a live run. Ledger, not drift.
 	// +59 at #847: 0.1.51–0.1.57 are published append-only surface records; moving them would defeat the history check that protects this ledger. +5 at #849: the 0.1.58 record. +5 at #854: the 0.1.59 record. +5 at #856: the 0.1.60 record. +4 at #857: the 0.1.61 record. +4 at #858: the 0.1.62 record. +4 at #859: the 0.1.63 record.
-	"workers/mcp/src/surface-lock.ts": 959, // +10 at #879: 0.1.66 + 0.1.67 records; +5 at #881: the 0.1.68 record — append-only surface ledger, not drift.
+	"workers/mcp/src/surface-lock.ts": 963, // +10 at #879: 0.1.66 + 0.1.67 records; +5 at #881: the 0.1.68 record; +4 at #877: the 0.1.69 record — append-only surface ledger, not drift.
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
@@ -1390,7 +1390,7 @@ const PINS = {
 	// lets an agent restore dispatch-without-asking on a connector its owner put behind approval.
 	// The storage is in `lib/connector-consent.ts` and the gate in `lib/tool-registry.ts`, so this
 	// file took the route and none of the mechanism.
-	"workers/api/src/routes/tools.ts": 1368, // +1 at #854: the per-instance objective cap check (the arithmetic lives in lib/loop-limits.ts). +4 at #771: the invoke route's opt-in `?agent=` type check (the check itself lives in routes/agent-type-tools.ts). +4 at #868: a coding run's start is Pro-gated before its budget pool opens — the import, the gate and its two-line reason.
+	"workers/api/src/routes/tools.ts": 1373, // +5 at #877: POST /loop reads `requireRepoChoice` and hands it to the driver (the decision lives in pickLoopRepo). +1 at #854: the per-instance objective cap check (the arithmetic lives in lib/loop-limits.ts). +4 at #771: the invoke route's opt-in `?agent=` type check (the check itself lives in routes/agent-type-tools.ts). +4 at #868: a coding run's start is Pro-gated before its budget pool opens — the import, the gate and its two-line reason.
 	// New entry at #722, crossing LIMIT from 799 to 810. The addition is the approval-time re-check
 	// on `runActionableTicket`: a `call_tool` ticket is re-validated against LIVE permissions before
 	// it is claimed, because the gate was evaluated when the card was written and the human clicks

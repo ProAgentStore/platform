@@ -8342,9 +8342,21 @@ paths:
                 repoId:
                   type: string
                   description: >
-                    Coding agents only — which repository this run is for. Omit and the agent's
-                    first repo is used, which is what a delegated goal means. A repo that is not
-                    on this agent is refused rather than falling back.
+                    Coding agents only — which repository this run is for (an id from the
+                    instance's coding repos). Omit and the agent's first repo is used, which is
+                    what a delegated goal means — unless `requireRepoChoice` is set. A repo that is
+                    not on this instance (another instance's, or another account's) is refused
+                    with a 409 listing this instance's repo ids, never replaced by another repo.
+                    The per-repo run lock and `queueIfBusy` apply to the repo chosen here: a busy
+                    repo does not block a sibling, and a queued objective waits for this repo only.
+                requireRepoChoice:
+                  type: boolean
+                  description: >
+                    Refuse rather than pick when `repoId` is omitted and the agent has more than one
+                    repository — the 409 lists every registered repo id with its name. A single-repo
+                    agent is unaffected. Sent by MCP `coding_loop_start`; default false, so the
+                    console's Loop and supervisors keep "omitted means the first repo". This refusal
+                    is never queued by `queueIfBusy`.
                 queueIfBusy:
                   type: boolean
                   description: >
@@ -8391,6 +8403,17 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "402": { $ref: "#/components/responses/PaymentRequired" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >
+            Not started: the repo is already being worked on (and `queueIfBusy` was not set), the
+            `repoId` is not on this instance, `requireRepoChoice` was set on a multi-repo agent with
+            no `repoId`, or there is no repository, runner or usable checkout. `error` says which.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
     get:
       summary: List this instance's loop runs
       operationId: listLoopRuns

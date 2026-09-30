@@ -1138,6 +1138,7 @@ toolRoutes.post("/:id/loop", async (c) => {
 		objective?: string;
 		maxIterations?: number;
 		repoId?: string;
+		requireRepoChoice?: boolean;
 		queueIfBusy?: boolean;
 		repairCheckout?: boolean;
 		budget?: { costMicros?: number; delegations?: number; maxDepth?: number };
@@ -1156,6 +1157,9 @@ toolRoutes.post("/:id/loop", async (c) => {
 	// it. Not ownership-checked here: `pickLoopRepo` matches it against `listRepos`, which is
 	// already scoped to this caller and instance.
 	const repoId = typeof body.repoId === "string" && body.repoId.trim() ? body.repoId.trim() : undefined;
+	// #877: `coding_loop_start` asks to be refused rather than guessed for on a multi-repo agent.
+	// Absent everywhere else, so the console's Loop and supervisors keep "absent means you pick".
+	const requireRepoChoice = body.requireRepoChoice === true;
 
 	// Resolve the per-account loop-iterations ceiling before clamping the caller's request (#477),
 	// then the instance's own floor and ceiling on top (#820). The driver clamps again with the
@@ -1192,6 +1196,7 @@ toolRoutes.post("/:id/loop", async (c) => {
 		objective,
 		maxIterations,
 		repoId,
+		requireRepoChoice,
 		budgetId: budget.id,
 		depth: 0,
 		repairCheckout,

@@ -86,6 +86,15 @@ export interface LoopStartInput {
 	 */
 	repoId?: string;
 	/**
+	 * Refuse, rather than pick, when `repoId` is absent and the agent has more than one repo (#877).
+	 *
+	 * Opt-in because "absent means you pick" is still the right contract for the callers that know an
+	 * agent and not a checkout — a supervisor's `delegate_goal`, the queue drainer, the console's
+	 * instance-page Loop. `coding_loop_start` sets it: an MCP caller CAN name the repo, and a run on a
+	 * multi-repo instance that silently lands on whichever repo was touched last is the bug #877 reports.
+	 */
+	requireRepoChoice?: boolean;
+	/**
 	 * Open an observable "Delegated: …" board card. Only a SUPERVISOR's run gets one — an owner
 	 * pressing Loop on their own agent was not delegated to by anybody, and a card that says so
 	 * would be a lie. Their coding run is already on the board as its session card (#206).
@@ -201,16 +210,28 @@ export type LoopRepoChoice<T> = { ok: true; repo: T } | { ok: false; error: stri
  * Silently working the wrong repository is exactly the outcome a fallback produces, and it is not
  * recoverable — the engine has already edited a checkout nobody asked it to touch.
  */
-export function pickLoopRepo<T extends { id: string }>(repos: readonly T[], repoId?: string | null): LoopRepoChoice<T> {
+export function pickLoopRepo<T extends { id: string; name?: string }>(
+	repos: readonly T[],
+	repoId?: string | null,
+	opts: { requireChoice?: boolean } = {},
+): LoopRepoChoice<T> {
 	if (!repoId) {
-		return repos[0]
-			? { ok: true, repo: repos[0] }
-			: { ok: false, error: "This coding agent has no repository yet — add one on its Coding tab first." };
+		if (!repos[0]) return { ok: false, error: "This coding agent has no repository yet — add one on its Coding tab first." };
+		// #877: more than one, and the caller said it would choose — list them instead of guessing.
+		if (opts.requireChoice && repos.length > 1) {
+			return { ok: false, error: `This agent has ${repos.length} repositories, so the run needs a repo_id to say which one. Registered: ${repoList(repos)}.` };
+		}
+		return { ok: true, repo: repos[0] };
 	}
 	const found = repos.find((r) => r.id === repoId);
 	return found
 		? { ok: true, repo: found }
-		: { ok: false, error: "That repository is not on this agent — reload the Coding tab and try again." };
+		: { ok: false, error: `That repository (${repoId}) is not on this agent — reload the Coding tab and try again. Its repositories: ${repoList(repos) || "none"}.` };
+}
+
+/** `id (name)` per repo — the id is what a caller passes back, the name is how a person recognises it. */
+function repoList(repos: readonly { id: string; name?: string }[]): string {
+	return repos.map((r) => (r.name ? `${r.id} (${r.name})` : r.id)).join(", ");
 }
 
 /**
@@ -225,7 +246,7 @@ const codingDriver: LoopDriver = {
 	async start(input) {
 		const { env, instanceId, userId, objective } = input;
 		const repos = await listRepos(env, instanceId, userId).catch(() => []);
-		const chosen = pickLoopRepo(repos, input.repoId);
+		const chosen = pickLoopRepo(repos, input.repoId, { requireChoice: input.requireRepoChoice });
 		if (!chosen.ok) return { ok: false, status: 409, error: chosen.error };
 		const repo = chosen.repo;
 		// Connectivity FIRST, and from the same resolver delegation itself uses — so the refusal

@@ -301,7 +301,7 @@ const TABLE: Record<string, Row> = {
 	clear_instance_messages: ["observability", "destructive", "clear_instance_messages", "envelope", "confirm,dry_run,instance_id,token"],
 	clear_instance_voice_settings: ["settings", "write", null, "envelope", "dry_run,instance_id,token"],
 	delete_instance_task: ["runtime", "destructive", "delete_instance_task", "envelope", "confirm,dry_run,instance_id,task_id,token"],
-	coding_loop_start: ["coding", "runtime", null, "envelope", "dry_run,instance_id,max_iterations,objective,queue_if_busy,repair_checkout,token"],
+	coding_loop_start: ["coding", "runtime", null, "envelope", "dry_run,instance_id,max_iterations,objective,queue_if_busy,repair_checkout,repo_id,token"],
 	// Both were ungated ("none") while they read and mutated MCP-DO memory, which nothing else
 	// could see. Now they read and cancel the SERVER's run record, so they are scoped like every
 	// other read and every other write (#502).

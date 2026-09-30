@@ -872,6 +872,29 @@ describe("coding loop tools drive the server's durable, budgeted run (#502)", ()
 		});
 	};
 
+	it("sends repo_id as repoId so a multi-repo instance's run lands on the named repo (#877)", async () => {
+		const h = setup();
+		withInstance(h);
+		h.fetchStub.respond((u, m) => u.endsWith("/i1/loop") && m === "POST", {
+			body: { runId: "run-2", driver: "CODING_SESSION", budgetId: "bud-2", maxIterations: 10, status: "running" },
+		});
+		await h.tools.get("coding_loop_start")!.handler({ instance_id: "coder", objective: "fix it", repo_id: " repo_template ", queue_if_busy: true });
+		const started = h.fetchStub.calls.find((c) => c.url.endsWith("/i1/loop") && c.method === "POST");
+		expect(JSON.parse(started?.body ?? "{}")).toMatchObject({ repoId: "repo_template", requireRepoChoice: true, queueIfBusy: true });
+	});
+
+	it("relays the API's refusal of a repo_id that is not on the instance, unchanged (#877)", async () => {
+		const h = setup();
+		withInstance(h);
+		h.fetchStub.respond((u, m) => u.endsWith("/i1/loop") && m === "POST", {
+			status: 409,
+			body: { error: "That repository (repo_other) is not on this agent — reload the Coding tab and try again. Its repositories: repo_a (a)." },
+		});
+		const res = await h.tools.get("coding_loop_start")!.handler({ instance_id: "coder", objective: "x", repo_id: "repo_other" });
+		expect(res.content[0].text).toContain("not on this agent");
+		expect(res.content[0].text).not.toContain("runId");
+	});
+
 	it("starts the run through POST /loop — the one path that opens a budget pool", async () => {
 		const h = setup();
 		withInstance(h);
@@ -890,7 +913,9 @@ describe("coding loop tools drive the server's durable, budgeted run (#502)", ()
 		// `queueIfBusy: false` is sent EXPLICITLY rather than omitted (#788): the default must be
 		// stated on the wire, so the API's "don't silently auto-queue" rule is a fact about the
 		// request rather than about whichever side happens to default it.
-		expect(JSON.parse(started?.body ?? "{}")).toEqual({ objective: "do the thing", maxIterations: 5, queueIfBusy: false, repairCheckout: false });
+		// No repo_id → none sent, and `requireRepoChoice` asks the API to REFUSE rather than guess on a
+		// multi-repo instance (#877); a single-repo instance is unaffected.
+		expect(JSON.parse(started?.body ?? "{}")).toEqual({ objective: "do the thing", maxIterations: 5, requireRepoChoice: true, queueIfBusy: false, repairCheckout: false });
 		// It must NOT reimplement the loop here any more.
 		expect(h.fetchStub.calls.some((c) => c.url.includes("/loop-decide"))).toBe(false);
 		expect(h.fetchStub.calls.some((c) => c.url.endsWith("/i1/chat"))).toBe(false);

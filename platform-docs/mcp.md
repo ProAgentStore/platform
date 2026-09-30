@@ -151,7 +151,7 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
-- `serverInfo.version`: `0.1.68`
+- `serverInfo.version`: `0.1.69`
 
 That is the same value the published MCP-registry manifest (`server.json`) carries, and both
 are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —
@@ -583,8 +583,11 @@ timed out may still have happened. What to do:
 
 - Every mutating tool answers the same question twice the same way: re-read before
   re-issuing. `coding_loop_start` is guarded by the per-repo run lock — a second start while
-  a run is `running` is rejected, so the recovery is `coding_loop_status` (no `run_id`) to
-  see whether the first start landed, not a retry. `subscribe_agent`, `add_ticket` and the
+  a run is `running` on that repo is rejected, so the recovery is `coding_loop_status` (no
+  `run_id`) to see whether the first start landed, not a retry. On an instance with more than
+  one repo, pass `repo_id` (from `coding_repos_list`): omitted, the start is refused with the
+  registered repo_ids rather than guessed, and a `repo_id` from another instance is refused.
+  The lock and `queue_if_busy` then apply to that repo alone. `subscribe_agent`, `add_ticket` and the
   other creators return the id they made; list first, create once.
 - Prefer `dry_run: true` on a call you are about to retry — it shows what the retry would
   do without doing it.
