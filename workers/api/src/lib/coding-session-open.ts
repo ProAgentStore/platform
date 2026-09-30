@@ -53,6 +53,11 @@ export interface StartOnRunnerResult {
 	 */
 	engineUnavailable?: boolean;
 	/**
+	 * WHICH of the two it is (#891), set with `engineUnavailable`. `signed-out` is the one a sign-in
+	 * fixes, so a run refused on it is recorded as `engine_auth` rather than as a generic refusal.
+	 */
+	engineState?: "no-binary" | "signed-out";
+	/**
 	 * The runner CONFIRMED it launched the engine with a conversation to continue.
 	 *
 	 * False is the honest default for everything else, including an older `pags up`: a runner
@@ -274,7 +279,7 @@ export async function startSessionOnRunner(
 		// Only a definite answer refuses. `unverified` (an older runner, a slow reply) launches as
 		// every session did before the check existed; if the engine then dies, #882 says why.
 		if (preflight.state === "no-binary" || preflight.state === "signed-out") {
-			return { conn: null, resumed: false, seeded: false, startError: preflight.message, engineUnavailable: true };
+			return { conn: null, resumed: false, seeded: false, startError: preflight.message, engineUnavailable: true, engineState: preflight.state };
 		}
 	}
 	const credential = await resolveCloneCredential(env, uid, repo);
@@ -430,7 +435,16 @@ export type EnsureSessionResult =
 	 * falls back to the last saved snapshot — needs its id; without it the failure is total where
 	 * it used to be partial.
 	 */
-	| { ok: false; startError: string | null; session?: CodingSessionRecord | null };
+	| {
+			ok: false;
+			startError: string | null;
+			session?: CodingSessionRecord | null;
+			/**
+			 * The machine definitely cannot run the engine (#879/#891) — the preflight's verdict, and the
+			 * session it was asked for (on a fresh open that row has already been ended).
+			 */
+			engine?: { state: "no-binary" | "signed-out"; sessionId: string };
+	  };
 
 /**
  * The repo's live session, opening one if there isn't one.
@@ -448,6 +462,13 @@ export async function ensureActiveSession(
 	instanceId: string,
 	userId: string,
 	repo: CodingRepo,
+	/**
+	 * `preflightEngine` asks the machine about the engine on the RE-ATTACH path too (#891). A fresh
+	 * open always asks; a reused session never did, so a run started on an engine that had since lost
+	 * its login was admitted and discovered it one failed turn at a time. A run start sets it; a
+	 * terminal reconnect does not, and pays no round-trip.
+	 */
+	opts?: { preflightEngine?: boolean },
 ): Promise<EnsureSessionResult> {
 	// Re-attach before handing a session over: it can be `active` in D1 while its engine process is
 	// gone (runner restarted, laptop slept). Idempotent on the runner, so this is free when it
@@ -459,8 +480,9 @@ export async function ensureActiveSession(
 	// reads `ok: true` as a live engine, claims the driver, opens the run row and bills the Pilot's
 	// reasoning turns against a pane that never launched. Report what the fresh path reports.
 	const reattach = async (s: CodingSessionRecord): Promise<EnsureSessionResult> => {
-		const started = await startSessionOnRunner(env, instanceId, userId, s, repo).catch(() => null);
+		const started = await startSessionOnRunner(env, instanceId, userId, s, repo, { preflightEngine: opts?.preflightEngine }).catch(() => null);
 		if (started?.conn) return { ok: true, session: s, opened: false, resumed: started.resumed, seeded: started.seeded };
+		if (started?.engineState) return { ok: false, startError: started.startError ?? null, session: s, engine: { state: started.engineState, sessionId: s.id } };
 		// The launch's OWN reason first (#440). The row is the fallback for the case this call
 		// never got as far as raising one (a `.catch(() => null)` above, or a session that could
 		// not be created), and it is no longer the primary source: since a transport failure is
@@ -521,6 +543,7 @@ export async function ensureActiveSession(
 		// session" that sent a user chasing `pags up`. It used to be re-read off the repo row;
 		// since #440 the row is not written for a transport failure, so the answer comes from the
 		// call and the row is only the fallback.
+		if (started.engineState) return { ok: false, startError: started.startError ?? null, engine: { state: started.engineState, sessionId: session.id } };
 		if (started.startError) return { ok: false, startError: started.startError };
 		const fresh = await getRepo(env, instanceId, userId, repo.id).catch(() => null);
 		return { ok: false, startError: fresh?.cloneError ?? null };

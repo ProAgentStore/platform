@@ -34,6 +34,7 @@ import { pausedStartRefusal } from "./instance-pause.js";
 import { codingRunRefusal } from "./billing.js";
 import { noSessionMessage } from "./coding-session-lifecycle.js";
 import { noteUnmeteredHeadlessDrive } from "./engine-metering.js";
+import { recordEngineAuthRefusal } from "./engine-auth-refusal.js";
 import { classifySubordinateConnectivity } from "./subordinate-connectivity.js";
 import { EMPTY_RUNTIME_FACTS, runtimeConnectivity } from "./instance-connectivity.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
@@ -143,7 +144,12 @@ export type LoopStartResult =
 			 * Absent rather than `"other"`: a driver that has not thought about this question should
 			 * not be able to answer it by accident.
 			 */
-			reason?: "busy";
+			reason?: "busy" | "engine_auth";
+			/**
+			 * Set with `reason: "engine_auth"` (#891): the refused run was RECORDED, finished with that
+			 * stop reason, so sign-in tooling can find it and `continue` can pick it back up.
+			 */
+			runId?: string;
 	  };
 
 export interface LoopDriver {
@@ -300,7 +306,26 @@ const codingDriver: LoopDriver = {
 		// Open one if there isn't one. Requiring a live session made delegation SINGLE-USE — the
 		// Pilot ended the session its own driver required, so the second goal always 409'd — and
 		// meant a supervisor could not supervise unless a human first sat in the console.
-		const ensured = await ensureActiveSession(env, instanceId, userId, repo);
+		//
+		// And ask the machine whether it can run the engine, on a reused session too (#891): a fresh
+		// open always did, but a reused one was admitted on an engine that had since lost its login,
+		// and each turn then spent its time failing a 401 before the Pilot gave up.
+		const ensured = await ensureActiveSession(env, instanceId, userId, repo, { preflightEngine: true });
+		if (!ensured.ok && ensured.engine?.state === "signed-out") {
+			const { maxIterations } = await boundedIterations(input);
+			const message = ensured.startError ?? `The coding engine is not signed in on the machine that runs ${repo.name}.`;
+			const runId = await recordEngineAuthRefusal(env, {
+				instanceId,
+				userId,
+				objective,
+				maxIterations,
+				budgetId: input.budgetId,
+				sessionId: ensured.engine.sessionId,
+				delegatedBy: input.onBehalfOf ?? null,
+				preflightMessage: message,
+			}).catch(() => undefined);
+			return { ok: false, status: 409, reason: "engine_auth", runId, error: message };
+		}
 		if (!ensured.ok) {
 			return { ok: false, status: 409, error: noSessionMessage({ repoName: repo.name, connectivity, startError: ensured.startError }) };
 		}

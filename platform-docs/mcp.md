@@ -587,7 +587,10 @@ timed out may still have happened. What to do:
   `run_id`) to see whether the first start landed, not a retry. On an instance with more than
   one repo, pass `repo_id` (from `coding_repos_list`): omitted, the start is refused with the
   registered repo_ids rather than guessed, and a `repo_id` from another instance is refused.
-  The lock and `queue_if_busy` then apply to that repo alone. `subscribe_agent`, `add_ticket` and the
+  The lock and `queue_if_busy` then apply to that repo alone. An engine that is not signed in on
+  the machine is refused before the first turn with `stopReason: engine_auth` (`needsReauth: true`,
+  and a recorded `runId`). Do not retry it: sign the engine in with `coding_engine_reauth`, then
+  continue that run. `subscribe_agent`, `add_ticket` and the
   other creators return the id they made; list first, create once.
 - Prefer `dry_run: true` on a call you are about to retry — it shows what the retry would
   do without doing it.

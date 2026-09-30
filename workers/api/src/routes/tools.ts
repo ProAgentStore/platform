@@ -1222,6 +1222,7 @@ toolRoutes.post("/:id/loop", async (c) => {
 			// it is waiting.
 			return c.json({ queued: true, entry, blocked: started.error }, 202);
 		}
+		if (started.reason === "engine_auth") return c.json({ error: started.error, stopReason: "engine_auth", needsReauth: true, runId: started.runId ?? null }, 409); // #891: see lib/engine-auth-refusal.ts
 		throw new HttpError(started.status, started.error);
 	}
 	return c.json({ runId: started.runId, driver: started.driver, budgetId: budget.id, maxIterations, status: "running" }, 201);

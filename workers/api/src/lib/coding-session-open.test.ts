@@ -907,6 +907,13 @@ describe("the machine is asked whether it can run the engine before a fresh laun
 		expect(JSON.stringify(check?.[2])).not.toContain("tok");
 	});
 
+	it("a fresh open says WHICH verdict refused it, and for which session (#891)", async () => {
+		answer({ checked: true, bin: "codex", binaryFound: true, login: "missing" });
+		expect(await ensureActiveSession(env, "inst", "u", repo)).toMatchObject({ ok: false, engine: { state: "signed-out", sessionId: "csess_new" } });
+		answer({ checked: true, bin: "codex", binaryFound: false, login: "unknown" });
+		expect(await ensureActiveSession(env, "inst", "u", repo)).toMatchObject({ ok: false, engine: { state: "no-binary", sessionId: "csess_new" } });
+	});
+
 	it("an IN-FLIGHT session keeps its engine: a reuse is not re-pointed and not preflighted", async () => {
 		// The account default now resolves to Codex, but the live Claude session is what a run
 		// start reuses — the default only applies to the NEXT session that has to be created.
@@ -914,6 +921,60 @@ describe("the machine is asked whether it can run the engine before a fresh laun
 		const res = await ensureActiveSession(env, "inst", "u", repo);
 		expect(res).toMatchObject({ ok: true, opened: false, session: { id: "csess_live", clientType: "claude" } });
 		expect(store.createSession).not.toHaveBeenCalled();
+		expect(paths()).not.toContain("/coding/engine-check");
+	});
+});
+
+describe("a run start asks about the engine on a REUSED session too (#891)", () => {
+	// A fresh open always asked (#879). A reused session never did, so a run was admitted onto an
+	// engine that had since lost its login. Each turn then spent ~35s retrying a 401 before failing,
+	// and the Pilot gave up after three identical failures.
+	const answer = (check: unknown) =>
+		vi.mocked(runner.callRunner).mockImplementation((async (_c: unknown, path: string) => {
+			if (path === "/coding/engine-check") {
+				if (check instanceof Error) throw check;
+				return check;
+			}
+			return { ok: true };
+		}) as never);
+	const paths = () => vi.mocked(runner.callRunner).mock.calls.map((c) => c[1]);
+	const live = { ...session("csess_live"), clientType: "codex" as const, launchCommand: "codex exec --json" };
+
+	beforeEach(() => {
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(live);
+	});
+
+	it("refuses a signed-out engine before re-attaching, and leaves the owner's session open", async () => {
+		answer({ checked: true, bin: "codex", binaryFound: true, login: "missing" });
+		const res = await ensureActiveSession(env, "inst", "u", repo, { preflightEngine: true });
+		expect(res).toMatchObject({ ok: false, engine: { state: "signed-out", sessionId: "csess_live" }, session: { id: "csess_live" } });
+		if (!res.ok) expect(res.startError).toMatch(/Codex is installed on machine "mac" but not signed in/);
+		expect(paths()).not.toContain("/coding/start");
+		// Refusing a RUN does not end the session: it may be a human's, and signing in fixes it.
+		expect(store.endSession).not.toHaveBeenCalled();
+	});
+
+	it("checks the session's OWN engine, not the instance default", async () => {
+		answer({ checked: true, bin: "codex", binaryFound: true, login: "found" });
+		await ensureActiveSession(env, "inst", "u", repo, { preflightEngine: true });
+		const check = vi.mocked(runner.callRunner).mock.calls.find((c) => c[1] === "/coding/engine-check");
+		expect(check?.[2]).toMatchObject({ clientType: "codex", command: "codex exec --json" });
+	});
+
+	it("a signed-in engine re-attaches as before", async () => {
+		answer({ checked: true, bin: "codex", binaryFound: true, login: "found" });
+		expect(await ensureActiveSession(env, "inst", "u", repo, { preflightEngine: true })).toMatchObject({ ok: true, opened: false });
+		expect(paths().slice(0, 2)).toEqual(["/coding/engine-check", "/coding/start"]);
+	});
+
+	it("a runner too old to answer re-attaches exactly as before", async () => {
+		answer(new Error('Runner /coding/engine-check → 404: {"error":"Not found"}'));
+		expect(await ensureActiveSession(env, "inst", "u", repo, { preflightEngine: true })).toMatchObject({ ok: true, opened: false });
+	});
+
+	it("without the option (a terminal reconnect) nothing is asked", async () => {
+		answer({ checked: true, bin: "codex", binaryFound: true, login: "missing" });
+		expect(await ensureActiveSession(env, "inst", "u", repo)).toMatchObject({ ok: true, opened: false });
 		expect(paths()).not.toContain("/coding/engine-check");
 	});
 });

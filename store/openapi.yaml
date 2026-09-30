@@ -8407,13 +8407,30 @@ paths:
           description: >
             Not started: the repo is already being worked on (and `queueIfBusy` was not set), the
             `repoId` is not on this instance, `requireRepoChoice` was set on a multi-repo agent with
-            no `repoId`, or there is no repository, runner or usable checkout. `error` says which.
+            no `repoId`, there is no repository, runner or usable checkout, or the machine cannot run
+            the coding engine (not installed, or not signed in). `error` says which. A coding engine
+            that is definitely NOT SIGNED IN on the machine is refused before the first turn with
+            `stopReason: engine_auth` and `needsReauth: true`, and the refused run is recorded,
+            already finished with that stop reason, under `runId`: sign the engine in
+            (`coding_engine_reauth`, from any device) and continue that run. A runner too old to
+            answer the check starts the run as before.
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   error: { type: string }
+                  stopReason:
+                    type: string
+                    enum: [engine_auth]
+                    description: Present only on the not-signed-in refusal.
+                  needsReauth:
+                    type: boolean
+                    description: Present (true) only on the not-signed-in refusal.
+                  runId:
+                    type: string
+                    nullable: true
+                    description: The refused run, recorded as finished with `stopReason: engine_auth` and continuable once the engine is signed in.
     get:
       summary: List this instance's loop runs
       operationId: listLoopRuns

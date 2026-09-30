@@ -44,7 +44,7 @@ describe("loopDriverFor — the ONE Loop dispatches on what the agent DECLARES (
  * coding test assert against the offline path by accident.
  */
 function stubEnv(
-	opts: { repos?: unknown[]; session?: unknown; claimTaken?: boolean; runnerOnline?: boolean; hasRuntimeRow?: boolean; failLoopRunInsert?: boolean; repoCheck?: unknown } = {},
+	opts: { repos?: unknown[]; session?: unknown; claimTaken?: boolean; runnerOnline?: boolean; hasRuntimeRow?: boolean; failLoopRunInsert?: boolean; repoCheck?: unknown; engineCheck?: unknown } = {},
 ) {
 	const sql: string[] = [];
 	const created: Array<{ binding: string; params: Record<string, unknown> }> = [];
@@ -97,6 +97,7 @@ function stubEnv(
 					const cmd = (await req.clone().json().catch(() => ({}))) as { path?: string; body?: unknown };
 					commands.push({ path: cmd.path, body: cmd.body });
 					if (cmd.path === "/coding/repo-check" && opts.repoCheck) return new Response(JSON.stringify(opts.repoCheck));
+					if (cmd.path === "/coding/engine-check" && opts.engineCheck) return new Response(JSON.stringify(opts.engineCheck));
 					return new Response(JSON.stringify({ ok: true }));
 				},
 			}),
@@ -692,5 +693,57 @@ describe("the coding driver targets one repo of a multi-repo instance (#877)", (
 		}
 		expect(created).toHaveLength(0);
 		expect(claims).toEqual([]);
+	});
+});
+
+describe("the coding driver refuses a run whose engine is not signed in, before the first turn (#891)", () => {
+	const REPO = [{ id: "r1", name: "fws/platform", instance_id: "i1", user_id: "u1", clone_status: "ready" }];
+	const LIVE = { id: "s1", client_type: "codex", launch_command: "codex exec --json", status: "active", repo_id: "r1", runner_node: "macbook" };
+	const SIGNED_OUT = { checked: true, bin: "codex", binaryFound: true, login: "missing" };
+
+	it("on a REUSED session: refused as `engine_auth`, recorded as a finished run, and no Pilot started", async () => {
+		const { env, sql, created, commands } = stubEnv({ repos: REPO, session: LIVE, engineCheck: SIGNED_OUT });
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out).toMatchObject({ ok: false, status: 409, reason: "engine_auth" });
+		if (!out.ok) {
+			expect(out.runId).toMatch(/[0-9a-f-]{36}/);
+			expect(out.error).toMatch(/Codex is installed on .* but not signed in/);
+			expect(out.error).toContain("coding_engine_reauth");
+		}
+		// The run is on the record, already closed, so diagnostics and the re-auth relay can find it.
+		expect(sql.some((q) => q.includes("INSERT INTO agent_loop_runs"))).toBe(true);
+		expect(sql.some((q) => q.includes("UPDATE agent_loop_runs") && q.includes("stop_reason"))).toBe(true);
+		// Nothing ran: no workflow, no driver claim, no launch.
+		expect(created).toHaveLength(0);
+		expect(sql.some((q) => q.includes("driver_id"))).toBe(false);
+		expect(commands.map((c) => c.path)).not.toContain("/coding/start");
+	});
+
+	it("on a FRESH session: the same refusal", async () => {
+		const { env, created } = stubEnv({ repos: REPO, session: null, engineCheck: SIGNED_OUT });
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out).toMatchObject({ ok: false, status: 409, reason: "engine_auth" });
+		expect(created).toHaveLength(0);
+	});
+
+	it("a missing binary is refused WITHOUT `engine_auth`: signing in does not install a CLI", async () => {
+		const { env, sql, created } = stubEnv({ repos: REPO, session: LIVE, engineCheck: { checked: true, bin: "codex", binaryFound: false, login: "unknown" } });
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out).toMatchObject({ ok: false, status: 409 });
+		if (!out.ok) {
+			expect(out.reason).toBeUndefined();
+			expect(out.error).toContain("npm i -g @openai/codex");
+		}
+		expect(sql.some((q) => q.includes("INSERT INTO agent_loop_runs"))).toBe(false);
+		expect(created).toHaveLength(0);
+	});
+
+	it("a signed-in engine, or a runner that cannot say, starts as before", async () => {
+		for (const engineCheck of [{ checked: true, bin: "codex", binaryFound: true, login: "found" }, undefined]) {
+			const { env, created } = stubEnv({ repos: REPO, session: LIVE, engineCheck });
+			const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+			expect(out.ok).toBe(true);
+			expect(created[0].binding).toBe("CODING_SESSION");
+		}
 	});
 });

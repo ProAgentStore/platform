@@ -99,6 +99,16 @@ A runner too old to answer the sync check, or a machine that is offline, is repo
 
 The gate can be stood down for an account's API Worker with `CODING_SYNC_GATE=off`; the observation and the error-log rows continue either way.
 
+## Before A Coding Run Starts: The Engine Must Be Signed In
+
+Before the first turn, the platform also asks the machine whether it can run the session's engine: is the CLI on the PATH `pags up` spawns with, and is the engine's own subscription login stored there? It asks for a brand-new session and for a reused one too, because a login can expire under a session that is still open. Only a definite answer refuses:
+
+- **Not signed in**: the run is refused before any iteration is spent. The refusal carries `stopReason: engine_auth` and `needsReauth: true`, and the run is recorded, already finished with `stopReason: engine_auth`. That makes it look like a run that stopped on a login prompt: `coding_diagnostics` reports `needsReauth`, `coding_engine_reauth` lists it among the runs to continue once the sign-in lands, and `continue_instance_run` picks it back up.
+- **Not installed**: the run is refused with the install command, and no run is recorded. Signing in does not fix a missing binary.
+- **Could not tell** (a runner older than the check, or no answer in time): the run starts as it always did.
+
+The check reads only whether a login exists, never its value. A login that is stored but has been revoked on the provider's side still gets through it and fails on the first turn.
+
 ## Where You See This
 
 - **`check_instance_loop`** and **`coding_loop_status`** (MCP) — an instance's recent runs, each with `health` and, when parked, a note saying what for and until when.
