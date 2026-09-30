@@ -197,7 +197,7 @@ export const STATUS_DOMAINS: Record<string, StatusDomain> = {
 			"comment — the schema comment went stale, which this table records rather than absorbs.",
 	},
 	"coding_repos.clone_status": {
-		values: { unknown: "app?", cloning: "app?", ready: "app?", missing_url: "app?", error: "app?" },
+		values: { unknown: "app?", cloning: "app?", ready: "app?", missing_url: "app?", error: "app?", needs_path: "app?" },
 		note:
 			"Every write goes through one statement, `SET clone_status = COALESCE(?2, clone_status)` " +
 			"(lib/coding-store.ts:226), bound from `patch.cloneStatus`. The literals are at the " +

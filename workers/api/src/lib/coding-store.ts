@@ -62,6 +62,20 @@ function parseRepoUrls(raw: string | null): CodingRepo["urls"] {
 	}
 }
 
+/**
+ * The status a row may REPORT, given what it stores (#883).
+ *
+ * `ready` means "the checkout is usable", and every repo read tool finds that checkout by
+ * `workdir`. A row with no folder therefore cannot be ready, whatever its column says — a managed
+ * clone used to be stamped `ready` after its first session, and an instance showed a "ready" repo
+ * that `repo_grep` then refused. Derived at read time as well as migrated (0166) so a row written
+ * by an older build, or by a path that still writes `ready`, cannot leak the old answer. Only
+ * `ready` is rewritten: `cloning`, `error` and `missing_url` already say something truer.
+ */
+export function effectiveCloneStatus(workdir: string | null | undefined, stored: string): string {
+	return stored === "ready" && !(workdir ?? "").trim() ? "needs_path" : stored;
+}
+
 export function toRepo(r: RepoRow): CodingRepo {
 	return {
 		id: r.id,
@@ -78,7 +92,7 @@ export function toRepo(r: RepoRow): CodingRepo {
 		cloneUrl: r.clone_url ?? undefined,
 		branch: r.branch,
 		workdir: r.workdir ?? undefined,
-		cloneStatus: r.clone_status as CloneStatus,
+		cloneStatus: effectiveCloneStatus(r.workdir, r.clone_status) as CloneStatus,
 		cloneError: r.clone_error ?? undefined,
 		// Undefined on every row written before migration 0110, and on every row no machine has
 		// looked at since. Both mean the same thing — nobody has checked — which is why there is no
@@ -151,7 +165,7 @@ export async function listRepoWorkdirs(env: Env, instanceId: string, userId: str
 	)
 		.bind(instanceId, userId)
 		.all<{ name: string | null; workdir: string | null; clone_status: string | null }>();
-	return (results ?? []).map((r) => ({ name: r.name ?? "", workdir: r.workdir, cloneStatus: r.clone_status ?? "" }));
+	return (results ?? []).map((r) => ({ name: r.name ?? "", workdir: r.workdir, cloneStatus: effectiveCloneStatus(r.workdir, r.clone_status ?? "") }));
 }
 
 export async function getRepo(env: Env, instanceId: string, userId: string, repoId: string): Promise<CodingRepo | null> {

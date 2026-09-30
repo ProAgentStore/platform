@@ -47,6 +47,7 @@ export const CLONE_STATUS_PHRASE = {
 	missing_url: "NOT CLONED — no clone URL is configured, so nothing was ever fetched and there is no code to read",
 	error: "clone FAILED",
 	needs_attention: "UNUSABLE",
+	needs_path: "NO LOCAL CHECKOUT PATH — none is recorded, so the repo read tools have nothing to read until the repo is bound with a folder path (or cloned into one)",
 	unknown: "not checked (no machine connected) — nobody has looked at this path, so its state is genuinely unknown; do not assume the code is there",
 } satisfies Record<CloneStatus, string>;
 

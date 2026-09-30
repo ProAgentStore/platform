@@ -3,6 +3,7 @@ import {
 	ACTIVITY_TOUCH_MS,
 	createRepo,
 	getRepo,
+	listRepoWorkdirs,
 	reassignSessionNode,
 	reconcileOrphanedSessions,
 	resumeSessionsForNode,
@@ -255,6 +256,32 @@ describe("toRepo — provider identity", () => {
 	it("falls back to `local` for a row with neither", async () => {
 		const { env } = rowEnv({ ...baseRepoRow, github_repo: null, provider: null, repo_slug: null, web_url: null });
 		expect((await getRepo(env, "inst-1", "user-1", "repo_1"))?.provider).toBe("local");
+	});
+});
+
+describe("toRepo — a binding with no folder is never ready (#883)", () => {
+	it("reports a legacy `ready` row with no workdir as needs_path", async () => {
+		const { env } = rowEnv({ ...baseRepoRow, github_repo: "o/r", workdir: null, clone_status: "ready" });
+		expect((await getRepo(env, "inst-1", "user-1", "repo_1"))?.cloneStatus).toBe("needs_path");
+		const blank = rowEnv({ ...baseRepoRow, github_repo: "o/r", workdir: "  ", clone_status: "ready" });
+		expect((await getRepo(blank.env, "inst-1", "user-1", "repo_1"))?.cloneStatus).toBe("needs_path");
+	});
+
+	it("leaves a bound checkout's status exactly as stored", async () => {
+		const { env } = rowEnv({ ...baseRepoRow, github_repo: "o/r", workdir: "~/dev/r", clone_status: "ready" });
+		expect(await getRepo(env, "inst-1", "user-1", "repo_1")).toMatchObject({ cloneStatus: "ready", workdir: "~/dev/r" });
+	});
+
+	it("does not rewrite statuses that already say something truer", async () => {
+		for (const stored of ["cloning", "missing_url", "error", "needs_attention", "unknown"]) {
+			const { env } = rowEnv({ ...baseRepoRow, workdir: null, clone_status: stored });
+			expect((await getRepo(env, "inst-1", "user-1", "repo_1"))?.cloneStatus).toBe(stored);
+		}
+	});
+
+	it("listRepoWorkdirs derives the same status the repo list reports", async () => {
+		const { env } = rowEnv({ name: "p", workdir: null, clone_status: "ready" });
+		expect(await listRepoWorkdirs(env, "inst-1", "user-1")).toEqual([{ name: "p", workdir: null, cloneStatus: "needs_path" }]);
 	});
 });
 

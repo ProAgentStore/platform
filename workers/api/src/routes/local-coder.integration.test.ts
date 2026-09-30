@@ -9,6 +9,8 @@
  *   · tenancy: a second account cannot see the owner's machines, start work on the owner's
  *     instance, or reach the owner's runner through the relay.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "../lib/auth.js";
@@ -70,11 +72,12 @@ function node(instanceId: string, user: string, name: string, lastSeen: string |
 	);
 }
 
-function repo(id: string, instanceId: string, user: string, opts: { github?: string; cloneStatus?: string; cloneError?: string } = {}) {
+function repo(id: string, instanceId: string, user: string, opts: { github?: string; cloneStatus?: string; cloneError?: string; workdir?: string | null } = {}) {
+	const workdir = opts.workdir === undefined ? "/home/me/app" : opts.workdir;
 	d1.exec(
 		`INSERT INTO coding_repos (id, instance_id, user_id, name, github_repo, provider, clone_status, clone_error, workdir)
 		  VALUES (${q(id)}, ${q(instanceId)}, ${q(user)}, 'app', ${opts.github ? q(opts.github) : "NULL"}, ${q(opts.github ? "github" : "local")},
-		          ${q(opts.cloneStatus ?? "ready")}, ${opts.cloneError ? q(opts.cloneError) : "NULL"}, '/home/me/app')`,
+		          ${q(opts.cloneStatus ?? "ready")}, ${opts.cloneError ? q(opts.cloneError) : "NULL"}, ${workdir === null ? "NULL" : q(workdir)})`,
 	);
 }
 
@@ -168,6 +171,47 @@ describe("GET /v1/instances/:id/runner-setup — the checklist (#868)", () => {
 		const step = (await runnerSetupChecklist(env, "lc-1", "u1")).steps.find((s) => s.step === "repo_bound");
 		expect(step?.done).toBe(false);
 		expect(step?.instruction).toMatch(/not a git working tree/);
+	});
+
+	it("a bound repository with no local folder is not bound, and names the call that fixes it (#883)", async () => {
+		// Instance a185b1db exactly: a GitHub binding, `clone_status = ready`, no workdir — every
+		// step reported done while repo_grep/repo_read_file/repo_tree all refused.
+		node("lc-1", "u1", "my-mac", d1Time());
+		install("u1", "Acme");
+		repo("r1", "lc-1", "u1", { github: "acme/app", workdir: null });
+		session("s1", "lc-1", "r1", "u1");
+		const body = await runnerSetupChecklist(env, "lc-1", "u1");
+		const step = body.steps.find((s) => s.step === "repo_bound");
+		expect(step?.done).toBe(false);
+		expect(step?.instruction).toMatch(/no folder on your machine is recorded/);
+		expect(step?.instruction).toContain("`coding_repo_add`");
+		expect(step?.instruction).toContain("`path`");
+		expect(step?.instruction).toContain("`clone: true`");
+		expect(body.ready).toBe(false);
+	});
+
+	it("the repo list reports a folderless legacy `ready` row as needs_path, and a real checkout as ready (#883)", async () => {
+		repo("r1", "lc-1", "u1", { github: "acme/app", workdir: null });
+		repo("r2", "lc-1", "u1", { github: "acme/other" });
+		const res = await get("/v1/instances/lc-1/coding/repos");
+		expect(res.status).toBe(200);
+		const { repos } = (await res.json()) as { repos: { id: string; cloneStatus: string }[] };
+		const by = Object.fromEntries(repos.map((r) => [r.id, r.cloneStatus]));
+		expect(by.r1).toBe("needs_path");
+		expect(by.r2).toBe("ready");
+	});
+
+	it("migration 0166 rewrites only folderless `ready` rows to needs_path (#883)", async () => {
+		repo("r1", "lc-1", "u1", { github: "acme/app", workdir: null });
+		repo("r2", "lc-1", "u1", { github: "acme/blank", workdir: "   " });
+		repo("r3", "lc-1", "u1", { github: "acme/other" });
+		repo("r4", "lc-1", "u1", { github: "acme/cloning", workdir: null, cloneStatus: "cloning" });
+		d1.exec(readFileSync(fileURLToPath(new URL("../../migrations/0166_coding_repos_needs_path.sql", import.meta.url).href), "utf8"));
+		const status = (id: string) => one<{ clone_status: string }>(`SELECT clone_status FROM coding_repos WHERE id = ${q(id)}`).clone_status;
+		expect(status("r1")).toBe("needs_path");
+		expect(status("r2")).toBe("needs_path");
+		expect(status("r3")).toBe("ready");
+		expect(status("r4")).toBe("cloning");
 	});
 
 	it("an engine waiting for its sign-in is not signed in", async () => {

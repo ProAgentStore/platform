@@ -342,6 +342,23 @@ async function repoRefusalHint(ctx: RegistryToolCtx, rows: readonly RepoWorkdirR
 	}
 }
 
+/**
+ * The programmatic remedy, named for a caller driving this agent through MCP rather than the console
+ * (#883). A binding with no folder reads as "ready" nowhere any more, but the refusal is where the
+ * gap is FELT, so it has to say which call closes it and with which arguments. Only on the Coding
+ * branches: `coding_repo_add` binds a coding repo, and an agent without that surface has none.
+ */
+const CODING_REPO_ADD_REMEDY =
+	"Over MCP, bind it with `coding_repo_add`: pass `path` = the checkout's folder on the connected machine, and if that folder has no checkout yet add `clone: true` with `github_repo` = owner/repo to clone it there first.";
+
+/**
+ * The same remedy for a binding that already EXISTS without a folder. `coding_repo_add` refuses a
+ * second binding of one GitHub repo (#829), so over MCP the folderless one has to go first — the
+ * console's folder field is the in-place fix and keeps the binding's history.
+ */
+const CODING_REPO_READD_REMEDY =
+	"Over MCP, remove the folderless binding with `coding_repo_remove`, then call `coding_repo_add` with `path` = the checkout's folder on the connected machine — adding `clone: true` with `github_repo` = owner/repo if that folder has no checkout yet.";
+
 /** The generic name for the setting, used when a field is declared without a usable label. */
 const GENERIC_SETTING_LABEL = "the repository setting";
 
@@ -357,10 +374,10 @@ function repoMissingWhere(hint: RepoRefusalHint): string {
 		return `${named} in the console (Settings → Agent settings) to the checkout on your machine, e.g. ~/work/my-repo.`;
 	}
 	if (hint.coding && hint.repoWithoutFolder) {
-		return `The repository "${hint.repoWithoutFolder}" is already on this agent's Coding tab, but no folder on your machine is recorded for it — that is why there is nothing to read. Open that repository's settings in the Coding tab and set its folder to the checkout, e.g. ~/work/my-repo. Fix the repository that is already there rather than adding a second one.`;
+		return `The repository "${hint.repoWithoutFolder}" is already on this agent's Coding tab, but no folder on your machine is recorded for it — that is why there is nothing to read. Open that repository's settings in the Coding tab and set its folder to the checkout, e.g. ~/work/my-repo. Fix the repository that is already there rather than adding a second one. ${CODING_REPO_READD_REMEDY}`;
 	}
 	if (hint.coding) {
-		return `Add the repository in the console (Coding tab) and give it the folder on your machine, e.g. ~/work/my-repo — that folder is what these tools read.`;
+		return `Add the repository in the console (Coding tab) and give it the folder on your machine, e.g. ~/work/my-repo — that folder is what these tools read. ${CODING_REPO_ADD_REMEDY}`;
 	}
 	return `This agent has no console control for a repository: its settings declare no repository field and it has no Coding tab, so there is nowhere for you to set one. That is a gap in how the agent itself is configured, not something you can fix.`;
 }

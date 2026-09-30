@@ -139,7 +139,7 @@ describe("the phrase table is the defence, not the ternary chain it replaced", (
 	// only thing making the next new status a build error) also breaks a test rather than passing
 	// quietly. Keep the literal list: reading it from the type is impossible, and reading it from
 	// the table under test would make the assertion vacuous.
-	const ALL: CloneStatus[] = ["unknown", "cloning", "ready", "missing_url", "error", "needs_attention"];
+	const ALL: CloneStatus[] = ["unknown", "cloning", "ready", "missing_url", "error", "needs_attention", "needs_path"];
 
 	it("has a phrase for every CloneStatus", () => {
 		expect(Object.keys(CLONE_STATUS_PHRASE).sort()).toEqual([...ALL].sort());

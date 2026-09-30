@@ -17,8 +17,13 @@ export type CodingClientType = "claude" | "gemini" | "codex" | "grok";
  * empty, or not a checkout. Distinct from `error`, which is a clone that failed, and from
  * `unknown`, which is a path nobody has been able to look at yet. It is a string column, so no
  * migration: what changed is that `ready` is now only written about a path someone checked.
+ *
+ * `needs_path` (#883): a binding with NO local folder recorded. Its GitHub identity may be fine and
+ * a session may even clone it into a managed directory, but every repo read tool resolves the
+ * checkout by `workdir`, so "ready" there was a promise nothing could keep. Never stored as a
+ * verdict on a path — it is derived from the absence of one (`effectiveCloneStatus`).
  */
-export type CloneStatus = "unknown" | "cloning" | "ready" | "missing_url" | "error" | "needs_attention";
+export type CloneStatus = "unknown" | "cloning" | "ready" | "missing_url" | "error" | "needs_attention" | "needs_path";
 
 export type CodingSessionStatus = "active" | "ended" | "error" | "suspended";
 

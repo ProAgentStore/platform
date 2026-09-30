@@ -92,17 +92,16 @@ export interface StartOnRunnerResult {
  * already encodes the shared half — it returns `null` for `unverified`, so a machine that could
  * not answer changes nothing in either direction.
  *
- * A MANAGED CLONE (no `workdir`) keeps the old unconditional `ready`, and that is not an
- * exception to the rule: `/coding/start` clones it, so something did look, and it is the clone
- * itself that succeeded. There is no local path to probe and `/coding/repo-check` would be asked
- * about a directory D1 has never learned the name of.
+ * A MANAGED CLONE (no `workdir`) is recorded as `needs_path`, not `ready` (#883): `/coding/start`
+ * cloned it, but into a directory D1 has never learned the name of, so no repo read tool can reach
+ * it. Saying `ready` there is what made `coding_repos_list` contradict `repo_grep`.
  *
  * Never throws: this is bookkeeping after a launch that already worked, and a failed probe must
  * not turn a live session into a failed open.
  */
 async function recordStartVerdict(env: Env, conn: RunnerConn, repo: CodingRepo): Promise<void> {
 	if (!repo.workdir) {
-		await updateRepoClone(env, repo.id, { cloneStatus: "ready", cloneError: null }).catch(() => undefined);
+		await updateRepoClone(env, repo.id, { cloneStatus: "needs_path", cloneError: null }).catch(() => undefined);
 		return;
 	}
 	const verdict = await checkWorkdirVia(conn, repo.workdir).catch(() => null);

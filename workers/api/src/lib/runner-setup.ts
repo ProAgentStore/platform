@@ -12,7 +12,9 @@
  *   instance_attached — THIS instance's registration (default row or a node) is fresh.
  *   github_app        — the owner has a VERIFIED installation (`listUserInstallations`) on the bound
  *                       repository's owner; before a repository is bound, on any account.
- *   repo_bound        — a repository is bound and `admitRepoForRun` would admit a run on it.
+ *   repo_bound        — a repository is bound WITH a local folder (#883: a folderless binding is
+ *                       `needs_path`, and every repo read tool refuses it) and `admitRepoForRun`
+ *                       would admit a run on it.
  *   engine_signed_in  — a session has started on the machine and no `engine.signin` card is
  *                       waiting for the owner.
  *
@@ -101,6 +103,7 @@ export async function runnerSetupChecklist(env: Env, instanceId: string, userId:
 			};
 
 	const admission = repo ? admitRepoForRun(repo) : null;
+	const needsPath = repo?.cloneStatus === "needs_path" || Boolean(repo && !(repo.workdir ?? "").trim());
 	const steps: RunnerSetupStep[] = [
 		{
 			step: "runner_connected",
@@ -118,12 +121,14 @@ export async function runnerSetupChecklist(env: Env, instanceId: string, userId:
 		github,
 		{
 			step: "repo_bound",
-			done: Boolean(admission?.ok),
+			done: Boolean(admission?.ok) && !needsPath,
 			instruction: !repo
 				? "Add your repository in the Coding tab — a GitHub repository, or a folder path on the machine running `pags up`."
 				: admission && !admission.ok
 					? admission.message
-					: `${repo.name} is bound.`,
+					: needsPath
+						? `${repo.name} is bound but no folder on your machine is recorded for it, so the repo tools cannot read it. Set its folder in the Coding tab (repo settings), or remove it with \`coding_repo_remove\` and call \`coding_repo_add\` with \`path\` (plus \`clone: true\` and \`github_repo\` if that folder has no checkout yet).`
+						: `${repo.name} is bound.`,
 			link: coding,
 		},
 		{

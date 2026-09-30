@@ -820,6 +820,52 @@ describe("after 0102 the refusal points at the Coding tab, not a deleted setting
 		expect(msg).toContain("You can still answer questions about that repository's GitHub issues");
 	});
 
+	it("a folderless binding makes every repo read tool refuse with the coding_repo_add remedy (#883)", async () => {
+		// Instance a185b1db: the binding reported `ready` and the tools answered with a refusal that
+		// named only a console control — useless to an MCP caller. Each tool must name the call and
+		// the arguments that close the gap, and must not touch the runner.
+		for (const name of ["repo_grep", "repo_read_file", "repo_tree"]) {
+			const env = {
+				DB: {
+					prepare: (sql: string) => ({
+						bind: () => ({
+							first: async () =>
+								sql.includes("JOIN agents")
+									? { slug: null, category: null, agent_config: JSON.stringify(CODER_REPO_TODAY), instance_config: JSON.stringify({ settings: {} }) }
+									: { config: JSON.stringify({ settings: {} }) },
+							all: async () => ({ results: [{ name: "ProAgentStore/platform", workdir: null, clone_status: "ready" }] }),
+						}),
+					}),
+				},
+			} as unknown as Env;
+			const r = await tool(name).handler({ env, userId: "u1", instanceId: "i1", agentId: "i1" } as never, { pattern: "x", path: "README.md" });
+			expect(r.success).toBe(false);
+			const msg = r.content as string;
+			expect(msg).toContain('"ProAgentStore/platform"');
+			expect(msg).toContain("no folder on your machine is recorded for it");
+			expect(msg).toContain("`coding_repo_add`");
+			expect(msg).toContain("`path`");
+			expect(msg).toContain("`clone: true`");
+			expect(msg).toContain("`coding_repo_remove`");
+		}
+		expect(callRunner).not.toHaveBeenCalled();
+	});
+
+	it("a Coding agent with no repository at all is told to call coding_repo_add with path/clone", () => {
+		const msg = repoMissingMessage({ label: null, github: false, coord: null, coding: true, repoWithoutFolder: null });
+		expect(msg).toContain("`coding_repo_add`");
+		expect(msg).toContain("`path`");
+		expect(msg).toContain("`clone: true`");
+		expect(msg).not.toContain("coding_repo_remove");
+	});
+
+	it("an agent with no Coding surface is never sent to coding_repo_add", () => {
+		const msg = repoMissingMessage({ label: null, github: false, coord: null, coding: false, repoWithoutFolder: null });
+		expect(msg).not.toContain("coding_repo_add");
+		const setting = repoMissingMessage({ label: "Repository path", github: false, coord: null, coding: false, repoWithoutFolder: null });
+		expect(setting).not.toContain("coding_repo_add");
+	});
+
 	it("honours a legacy agent's RESOLVED surface, not just a declared one", async () => {
 		// `category:'code'` resolves to `surfaces:['coding']` in agentCapabilities, so such an agent
 		// really does render the Coding tab. Reading only the declaration would tell its owner no

@@ -798,14 +798,14 @@ describe("a successful spawn is not a look at the checkout (#548)", () => {
 		expect(store.updateRepoClone).not.toHaveBeenCalled();
 	});
 
-	it("still calls a MANAGED CLONE ready without probing, because the clone itself is the look", async () => {
+	it("records a MANAGED CLONE as needs_path, never ready, and does not probe it (#883)", async () => {
 		// No `workdir` → nothing local to check, and `/coding/start` is what cloned it. Asking
 		// `/coding/repo-check` about a managed dir whose path D1 never learns would answer about
-		// nothing.
+		// nothing — and for the same reason the repo read tools cannot reach it, so it is not ready.
 		const cloned = { ...repo, workdir: undefined, cloneUrl: "https://github.com/o/r.git" };
 		vi.mocked(runner.callRunner).mockResolvedValue({ ok: true } as never);
 		await ensureActiveSession(env, "inst", "u", cloned);
-		expect(store.updateRepoClone).toHaveBeenCalledWith(env, "repo_1", { cloneStatus: "ready", cloneError: null });
+		expect(store.updateRepoClone).toHaveBeenCalledWith(env, "repo_1", { cloneStatus: "needs_path", cloneError: null });
 		expect(vi.mocked(runner.callRunner).mock.calls.some((c) => c[1] === "/coding/repo-check")).toBe(false);
 	});
 

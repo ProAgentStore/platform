@@ -592,6 +592,8 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 					// here too: "the agent answers about a repo that isn't there" is exactly the
 					// symptom someone opens this panel to explain.
 					: r.cloneStatus === "needs_attention" ? r.cloneError || "the local path is not usable"
+					// #883 — bound, but no folder recorded: the repo read tools have nothing to read.
+					: r.cloneStatus === "needs_path" ? "no local folder is recorded, so repo_grep/repo_read_file/repo_tree cannot read it"
 					: null,
 			};
 		});
@@ -688,7 +690,9 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 							? "Delete and re-add the repo, or fix the clone URL"
 							: r.cloneStatus === "needs_attention"
 								? "Point the repo at the real checkout (⚙ Repo settings), or delete it — the agent cannot read code that isn't there"
-								: undefined,
+								: r.cloneStatus === "needs_path"
+									? "Set the repo's folder (⚙ Repo settings), or remove it and re-add with coding_repo_add `path` (plus `clone: true` if the folder is empty)"
+									: undefined,
 				});
 		}
 
