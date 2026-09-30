@@ -149,7 +149,10 @@ export default function Preferences() {
 		try {
 			const d = await api<AccountCodingDefaultApplyResponse>("/v1/preferences/coding/default-engine/apply", { method: "POST" });
 			const skipped = Object.entries(d.skipped || {}).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k.replace(/-/g, " ")}`);
-			setCodingMsg(`Applied to ${d.restarted} idle coder${d.restarted === 1 ? "" : "s"}${skipped.length ? `; skipped ${skipped.join(", ")}.` : "."}`);
+			// A coder skipped because its machine cannot run the engine (or cannot say) needs the owner
+			// to act there — name the repo and relay the sentence rather than just counting it (#879).
+			const actions = (d.items || []).filter((i) => i.detail).map((i) => `${i.repoName}: ${i.detail}`);
+			setCodingMsg(`Applied to ${d.restarted} idle coder${d.restarted === 1 ? "" : "s"}${skipped.length ? `; skipped ${skipped.join(", ")}.` : "."}${actions.length ? ` ${actions.join(" ")}` : ""}`);
 		} catch (e) {
 			setCodingMsg(e instanceof Error ? e.message : String(e));
 		}

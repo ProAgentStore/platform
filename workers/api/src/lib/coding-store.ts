@@ -830,6 +830,27 @@ const DISPLACED_DETAIL =
 	"This run stopped heartbeating and a newer run took over its session, so the platform closed it. " +
 	"It did not report either way — check the repository before assuming its work was lost.";
 
+/**
+ * Claim a session ONLY if nobody holds it — never a steal (#879).
+ *
+ * For apply-now's restart, which must not race a run: once this lands, a run starting on the session
+ * fails its own `claimSessionDriver` (the claim is fresh), so nothing can begin between apply-now's
+ * idle check and the restart. Deliberately stricter than `claimSessionDriver`: taking over a stale
+ * claim retires the run that held it (#790), and a convenience action has no business closing a run
+ * — a session with ANY claim on it is simply not idle enough to touch.
+ */
+export async function claimFreeSessionDriver(env: Env, instanceId: string, userId: string, sessionId: string, driverId: string): Promise<boolean> {
+	const res = await env.DB.prepare(
+		`UPDATE coding_sessions
+		    SET driver_id = ?4, driver_at = ?5
+		  WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3
+		    AND status = 'active' AND driver_id IS NULL`,
+	)
+		.bind(sessionId, instanceId, userId, driverId, Date.now())
+		.run();
+	return (res.meta?.changes ?? 0) > 0;
+}
+
 /** Give the session back. Scoped to the holder, so a late release can't free someone else's claim. */
 export async function releaseSessionDriver(
 	env: Env,

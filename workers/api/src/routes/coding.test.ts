@@ -318,6 +318,17 @@ describe("every response that carries a session says what the engine came up wit
 		expect(reuse).not.toMatch(/\(await startSessionOnRunner\([^)]*\)\)\.conn != null/);
 	});
 
+	it("POST /sessions asks the machine about the engine on a FRESH launch, and refuses by name (#879)", () => {
+		const body = routeSrc('codingRoutes.post("/:instanceId/coding/sessions"');
+		const create = body.slice(body.indexOf("const continuity = await continuityForNewSession"));
+		expect(create).toContain("preflightEngine: true");
+		expect(create).toMatch(/if \(started\.engineUnavailable\)[\s\S]*endSession\([\s\S]*"error"\)[\s\S]*409/);
+		// A re-attach to an engine that is already running has nothing to learn from the check.
+		const reuse = body.slice(body.indexOf("if (existing)"), body.indexOf("const { command, clientType }"));
+		expect(reuse).not.toContain("preflightEngine");
+		expect(routeSrc('coding/sessions/:sessionId/start"')).not.toContain("preflightEngine");
+	});
+
 	it("POST /sessions reports it on the create-race arm too", () => {
 		const body = routeSrc('codingRoutes.post("/:instanceId/coding/sessions"');
 		const race = body.slice(body.indexOf("Lost a create race"));

@@ -2,7 +2,8 @@ import { listActiveRuns } from "./agent-loop-store.js";
 import { DEFAULT_ENGINES, resolveEngine } from "./coding-engines.js";
 import { endCodingSession } from "./coding-session-end.js";
 import { continuityForNewSession, startSessionOnRunner } from "./coding-session-open.js";
-import { createSession, getRepo } from "./coding-store.js";
+import { claimFreeSessionDriver, createSession, getRepo, releaseSessionDriver } from "./coding-store.js";
+import { preflightEngine, type EnginePreflight } from "./engine-preflight.js";
 import { parseAccountPreferences } from "./preferences.js";
 import { callRunner, getRunnerConn, READ_TIMEOUT_MS } from "./runner-client.js";
 import type { CodingClientType, CodingRepo, CodingSessionRecord } from "./coding-types.js";
@@ -32,9 +33,23 @@ interface ActiveSessionRow {
 interface ApplyDefaultEngineDeps {
 	captureRunState?: (session: CodingSessionRecord) => Promise<{ runState: string | null; reachable: boolean }>;
 	restartSession?: (args: { session: CodingSessionRecord; repo: CodingRepo; command: string; clientType: CodingClientType }) => Promise<{ ok: boolean; newSessionId?: string; reason?: ApplyDefaultEngineSkipReason }>;
+	/** Can the session's machine run the TARGET engine? `target` is the session re-pointed at it. */
+	preflight?: (target: CodingSessionRecord) => Promise<EnginePreflight>;
 }
 
-const SKIP_REASONS: ApplyDefaultEngineSkipReason[] = ["already-default", "explicit-instance-default", "active-run", "offline", "busy", "unreadable", "stop-failed", "start-failed"];
+const SKIP_REASONS: ApplyDefaultEngineSkipReason[] = [
+	"already-default",
+	"explicit-instance-default",
+	"active-run",
+	"queued-objective",
+	"offline",
+	"busy",
+	"unreadable",
+	"engine-unavailable",
+	"runner-outdated",
+	"stop-failed",
+	"start-failed",
+];
 
 function emptySkipped(): Record<ApplyDefaultEngineSkipReason, number> {
 	return Object.fromEntries(SKIP_REASONS.map((r) => [r, 0])) as Record<ApplyDefaultEngineSkipReason, number>;
@@ -89,6 +104,29 @@ async function activeCodingSessions(env: Env, userId: string): Promise<ActiveSes
 	return res.results ?? [];
 }
 
+/** Is an objective waiting to start on this repo (or on any repo of the instance)? */
+async function hasQueuedObjective(env: Env, userId: string, instanceId: string, repoId: string): Promise<boolean> {
+	const row = await env.DB.prepare(
+		`SELECT 1 AS hit FROM instance_objective_queue
+		  WHERE instance_id = ?1 AND user_id = ?2 AND status IN ('pending', 'running') AND (repo_id IS NULL OR repo_id = ?3)
+		  LIMIT 1`,
+	)
+		.bind(instanceId, userId, repoId)
+		.first<{ hit: number }>();
+	return Boolean(row?.hit);
+}
+
+/** A run open on this session — or one not yet bound to any session, which may be about to take it. */
+async function hasActiveRun(env: Env, userId: string, session: CodingSessionRecord): Promise<boolean> {
+	return (await listActiveRuns(env, userId, session.instanceId)).some((r) => r.sessionId === session.id || !r.sessionId);
+}
+
+async function defaultPreflight(env: Env, userId: string, target: CodingSessionRecord): Promise<EnginePreflight> {
+	const conn = await getRunnerConn(env, target.instanceId, userId, target.runnerNode ?? null).catch(() => null);
+	if (!conn) return { state: "unverified", outdated: false, message: "The machine this coder runs on is not connected." };
+	return preflightEngine(env, conn, target.instanceId, userId, target);
+}
+
 async function defaultCapture(env: Env, session: CodingSessionRecord): Promise<{ runState: string | null; reachable: boolean }> {
 	const conn = await getRunnerConn(env, session.instanceId, session.userId, session.runnerNode ?? null).catch(() => null);
 	if (!conn) return { runState: null, reachable: false };
@@ -126,6 +164,9 @@ export async function applyDefaultCodingEngineToIdle(
 	const result: ApplyDefaultEngineResult = { defaultEngineId, restarted: 0, skipped: emptySkipped(), items: [] };
 	const capture = deps.captureRunState ?? ((session: CodingSessionRecord) => defaultCapture(env, session));
 	const restart = deps.restartSession ?? ((args) => defaultRestart(env, userId, args));
+	const preflight = deps.preflight ?? ((target: CodingSessionRecord) => defaultPreflight(env, userId, target));
+	// One identity for this sweep's claims, so a release can only ever free a claim it took.
+	const driverId = `apply-default:${crypto.randomUUID()}`;
 
 	for (const row of await activeCodingSessions(env, userId)) {
 		const session = toSession(row);
@@ -152,21 +193,71 @@ export async function applyDefaultCodingEngineToIdle(
 			skip("already-default", { to: desired.command });
 			continue;
 		}
-		if (row.driver_id || (await listActiveRuns(env, userId, session.instanceId)).some((r) => r.sessionId === session.id || !r.sessionId)) {
+		// Cheap refusals first, without a claim — most busy coders stop here.
+		if (row.driver_id || (await hasActiveRun(env, userId, session))) {
 			skip("active-run", { to: desired.command });
+			continue;
+		}
+		if (await hasQueuedObjective(env, userId, session.instanceId, session.repoId)) {
+			skip("queued-objective", { to: desired.command });
+			continue;
+		}
+
+		// ── The race (#879): a run may start between the checks above and the restart below.
+		//
+		// Close it with the same lock runs use. The claim is atomic and never steals, so from here a
+		// run starting on this session fails its own `claimSessionDriver` — and if one got in first,
+		// this claim fails and the coder is skipped as mid-run. Everything that decides "idle" is
+		// re-checked UNDER the claim, because a run row can be written by a path that claims later.
+		// Every skip below releases it; a restart ends the session, which clears it.
+		const claimed = await claimFreeSessionDriver(env, session.instanceId, userId, session.id, driverId);
+		if (!claimed) {
+			skip("active-run", { to: desired.command });
+			continue;
+		}
+		const release = () => releaseSessionDriver(env, session.instanceId, userId, session.id, driverId);
+		if (await hasActiveRun(env, userId, session)) {
+			await release();
+			skip("active-run", { to: desired.command });
+			continue;
+		}
+		if (await hasQueuedObjective(env, userId, session.instanceId, session.repoId)) {
+			await release();
+			skip("queued-objective", { to: desired.command });
 			continue;
 		}
 		const state = await capture(session);
 		if (!state.reachable) {
+			await release();
 			skip("offline", { runState: state.runState, to: desired.command });
 			continue;
 		}
 		if (state.runState !== "idle") {
+			await release();
 			skip(state.runState ? "busy" : "unreadable", { runState: state.runState, to: desired.command });
 			continue;
 		}
-		const restarted = await restart({ session, repo: (await getRepo(env, session.instanceId, userId, session.repoId))!, command: desired.command, clientType: desired.clientType });
+		// Ask the machine BEFORE ending a working session: an engine it cannot run would replace a
+		// working coder with a dead one. An older runner cannot answer, and that is a skip here —
+		// unlike a plain session start, this path has a working session to lose.
+		const verdict = await preflight({ ...session, clientType: desired.clientType, launchCommand: desired.command });
+		if (verdict.state !== "ok") {
+			await release();
+			const reason = verdict.state === "unverified" ? (verdict.outdated ? "runner-outdated" : "offline") : "engine-unavailable";
+			skip(reason, { runState: state.runState, to: desired.command, detail: verdict.message });
+			continue;
+		}
+		const repo = await getRepo(env, session.instanceId, userId, session.repoId);
+		if (!repo) {
+			await release();
+			skip("start-failed", { runState: state.runState, to: desired.command });
+			continue;
+		}
+		const restarted = await restart({ session, repo, command: desired.command, clientType: desired.clientType });
 		if (!restarted.ok) {
+			// A stop that failed leaves the old session up — give its claim back. A start that failed
+			// after the stop has nothing left to release.
+			if (restarted.reason === "stop-failed") await release();
 			skip(restarted.reason ?? "start-failed", { runState: state.runState, to: desired.command });
 			continue;
 		}

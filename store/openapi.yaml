@@ -10746,8 +10746,13 @@ paths:
       description: |
         Restarts active coding sessions that are reachable and idle so they launch with the
         caller's account-level default coding engine. Sessions with a running agent loop, a live
-        driver, an explicit per-instance engine, an unreachable runner, or a non-idle CLI are
-        skipped and reported by reason. This does not interrupt in-progress work.
+        driver, a queued objective, an explicit per-instance engine, an unreachable runner, or a
+        non-idle CLI are skipped and reported by reason. Each session is claimed atomically before
+        it is restarted, so a run cannot start between the idle check and the restart. Before a
+        working session is stopped, its machine is asked whether it can run the default engine: a
+        missing binary or a missing subscription login is skipped as `engine-unavailable`, and a
+        runner too old to answer as `runner-outdated`, each with a `detail` sentence naming the
+        engine and the remedy. This does not interrupt in-progress work.
       operationId: applyDefaultCodingEngineToIdle
       tags: [Preferences]
       responses:

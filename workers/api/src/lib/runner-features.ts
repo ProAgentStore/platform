@@ -12,6 +12,7 @@ import { RESULT_LINES_MIN_CLI, TOOL_OUTCOME_MIN_CLI } from "./engine-tool-calls.
 import { MACHINE_ID_MIN_CLI } from "./machine-identity.js";
 import { SWITCH_BRANCH_MIN_CLI } from "./repo-policy-act.js";
 import { REPO_SYNC_MIN_CLI } from "./repo-sync.js";
+import { ENGINE_CHECK_MIN_CLI } from "./engine-preflight.js";
 import { FAST_FORWARD_MIN_CLI } from "./repo-sync-gate.js";
 import { cliAtLeast } from "./runner-upgrade.js";
 
@@ -32,6 +33,7 @@ export interface RunnerFeature {
 }
 
 export const RUNNER_FEATURES: readonly RunnerFeature[] = [
+	{ feature: "engine check before launch (installed + signed in), required by apply-now", minCli: ENGINE_CHECK_MIN_CLI },
 	{ feature: "runner_update restarts pags up itself, and service-managed runners", minCli: SUPERVISOR_RESTART_MIN_CLI },
 	{ feature: "self-updating pags up (never needs a manual install again)", minCli: BOOTSTRAP_MIN_CLI },
 	{ feature: "runner_update (remote CLI update + restart)", minCli: RUNNER_CONTROL_MIN_CLI },

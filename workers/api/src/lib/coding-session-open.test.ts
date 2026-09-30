@@ -20,6 +20,7 @@ vi.mock("./coding-store.js", () => ({
 	updateRepoClone: vi.fn(async () => undefined),
 }));
 vi.mock("./runner-client.js", () => ({
+	READ_TIMEOUT_MS: 15_000,
 	callRunner: vi.fn(async () => ({ ok: true })),
 	getBoundRunnerConn: vi.fn(),
 	// The loader, not the live-checked resolve (#532): `startSessionOnRunner` reasons about a
@@ -53,7 +54,9 @@ const timeline = await import("./coding-timeline.js");
 /** One row of the repo's record — enough that `composeSeedBrief` returns something real. */
 const RECORD = [{ seq: 1, type: "command" as const, content: "finish the health endpoint", createdAt: "2026-08-20T10:00:00Z" }];
 /** The `seed` field as it goes over the wire to `/coding/start`. */
-const seedSent = (call = 0) => (vi.mocked(runner.callRunner).mock.calls[call][2] as { seed?: string }).seed;
+/** The N-th `/coding/start` body — by path, since a fresh launch first asks `/coding/engine-check` (#879). */
+const startBody = (n = 0) => vi.mocked(runner.callRunner).mock.calls.filter((c) => c[1] === "/coding/start")[n]?.[2];
+const seedSent = (call = 0) => (startBody(call) as { seed?: string }).seed;
 const { ensureActiveSession, ensureSessionForChat, relocationNote, sessionOpenedNotice } = await import("./coding-session-open.js");
 
 const env = {} as Env;
@@ -463,8 +466,8 @@ describe("continuity on the open path (#408)", () => {
 		vi.mocked(store.getLastFinishedSessionForRepo).mockResolvedValue(priorClaude);
 		vi.mocked(runner.callRunner).mockResolvedValue({ resumed: true } as never);
 		const res = await ensureSessionForChat(env, "inst", "u", repo);
-		const startBody = vi.mocked(runner.callRunner).mock.calls[0][2] as { resumeFrom?: string };
-		expect(startBody.resumeFrom).toBe("csess_old");
+		const sent = startBody() as { resumeFrom?: string };
+		expect(sent.resumeFrom).toBe("csess_old");
 		expect(res.ok && res.notice).toMatch(/picked up this repo's previous conversation/);
 	});
 
@@ -487,7 +490,7 @@ describe("continuity on the open path (#408)", () => {
 		vi.mocked(store.createSession).mockResolvedValue(session("csess_new"));
 		vi.mocked(store.getLastFinishedSessionForRepo).mockResolvedValue({ ...priorClaude, lastActivityAt: Date.now() - 30 * 24 * 3_600_000 });
 		const res = await ensureSessionForChat(env, "inst", "u", repo);
-		expect((vi.mocked(runner.callRunner).mock.calls[0][2] as { resumeFrom?: string }).resumeFrom).toBeUndefined();
+		expect((startBody() as { resumeFrom?: string }).resumeFrom).toBeUndefined();
 		expect(res.ok && res.notice).toMatch(/30 days ago/);
 	});
 
@@ -497,7 +500,7 @@ describe("continuity on the open path (#408)", () => {
 		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(session("csess_live"));
 		await ensureSessionForChat(env, "inst", "u", repo);
 		expect(store.getLastFinishedSessionForRepo).not.toHaveBeenCalled();
-		expect((vi.mocked(runner.callRunner).mock.calls[0][2] as { resumeFrom?: string }).resumeFrom).toBeUndefined();
+		expect((startBody() as { resumeFrom?: string }).resumeFrom).toBeUndefined();
 	});
 });
 
@@ -546,7 +549,7 @@ describe("no open hands back a cold engine when the platform holds a record (ADR
 		vi.mocked(store.getLastFinishedSessionForRepo).mockResolvedValue(priorClaude);
 		vi.mocked(runner.callRunner).mockResolvedValue({ sessionId: "csess_new", pane: "", ready: true } as never);
 		await ensureActiveSession(env, "inst", "u", repo);
-		const body = vi.mocked(runner.callRunner).mock.calls[0][2] as { resumeFrom?: string; seed?: string };
+		const body = startBody() as { resumeFrom?: string; seed?: string };
 		expect(body.resumeFrom).toBe("csess_old");
 		expect(body.seed).toContain("finish the health endpoint");
 	});
@@ -835,5 +838,82 @@ describe("an agent-opened session picks the engine the OWNER set, not a column n
 		return ensureActiveSession(env, "inst", "u", repo).then(() => {
 			expect(engines.resolveEngine).toHaveBeenCalledWith(env, "inst", "u", null);
 		});
+	});
+});
+
+describe("the machine is asked whether it can run the engine before a fresh launch (#879)", () => {
+	const answer = (check: unknown) =>
+		vi.mocked(runner.callRunner).mockImplementation((async (_c: unknown, path: string) => {
+			if (path === "/coding/engine-check") {
+				if (check instanceof Error) throw check;
+				return check;
+			}
+			return { ok: true };
+		}) as never);
+	const paths = () => vi.mocked(runner.callRunner).mock.calls.map((c) => c[1]);
+
+	beforeEach(() => {
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(null);
+		vi.mocked(engines.resolveEngine).mockResolvedValue({ command: "codex exec --json", clientType: "codex" });
+		vi.mocked(store.createSession).mockResolvedValue({ ...session("csess_new"), clientType: "codex", launchCommand: "codex exec --json" });
+	});
+
+	it("refuses, naming the engine, when its binary is not on the machine — and never launches", async () => {
+		answer({ checked: true, bin: "codex", binaryFound: false, login: "unknown" });
+		const res = await ensureActiveSession(env, "inst", "u", repo);
+		expect(res.ok).toBe(false);
+		expect(res.startError).toMatch(/Codex is not installed on machine "mac"/);
+		expect(res.startError).toContain("npm i -g @openai/codex");
+		expect(res.startError).not.toMatch(/api[ _-]?key/i);
+		expect(paths()).not.toContain("/coding/start");
+		// The row it created for the launch is closed, not left for the next attempt to reuse.
+		expect(store.endSession).toHaveBeenCalledWith(env, "inst", "u", "csess_new", "error");
+	});
+
+	it("refuses a signed-out engine with the subscription sign-in, never an API key", async () => {
+		answer({ checked: true, bin: "codex", binaryFound: true, login: "missing" });
+		const res = await ensureActiveSession(env, "inst", "u", repo);
+		expect(res.ok).toBe(false);
+		expect(res.startError).toMatch(/Codex is installed on machine "mac" but not signed in/);
+		expect(res.startError).toContain("codex login");
+		expect(res.startError).toContain("coding_engine_reauth");
+		expect(res.startError).not.toMatch(/api[ _-]?key/i);
+	});
+
+	it("an older runner that cannot answer launches exactly as before (runner version skew)", async () => {
+		answer(new Error('Runner /coding/engine-check → 404: {"error":"Not found"}'));
+		const res = await ensureActiveSession(env, "inst", "u", repo);
+		expect(res).toMatchObject({ ok: true, opened: true });
+		expect(paths()).toEqual(expect.arrayContaining(["/coding/engine-check", "/coding/start"]));
+	});
+
+	it("a runner reply without the version marker is also 'unverified', never a refusal", async () => {
+		answer({ ok: true });
+		expect(await ensureActiveSession(env, "inst", "u", repo)).toMatchObject({ ok: true, opened: true });
+	});
+
+	it("a login it cannot determine does not refuse", async () => {
+		answer({ checked: true, bin: "codex", binaryFound: true, login: "unknown" });
+		expect(await ensureActiveSession(env, "inst", "u", repo)).toMatchObject({ ok: true, opened: true });
+	});
+
+	it("tells the machine when the platform injects the credential, so its own login is not demanded", async () => {
+		vi.mocked(engines.resolveEngineEnv).mockResolvedValueOnce({ CLAUDE_CODE_OAUTH_TOKEN: "tok", ANTHROPIC_API_KEY: "" });
+		answer({ checked: true, bin: "claude", binaryFound: true, login: "found" });
+		await ensureActiveSession(env, "inst", "u", repo);
+		const check = vi.mocked(runner.callRunner).mock.calls.find((c) => c[1] === "/coding/engine-check");
+		expect((check?.[2] as { credentialInjected?: boolean }).credentialInjected).toBe(true);
+		// Presence only: no credential value travels in the check.
+		expect(JSON.stringify(check?.[2])).not.toContain("tok");
+	});
+
+	it("an IN-FLIGHT session keeps its engine: a reuse is not re-pointed and not preflighted", async () => {
+		// The account default now resolves to Codex, but the live Claude session is what a run
+		// start reuses — the default only applies to the NEXT session that has to be created.
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(session("csess_live"));
+		const res = await ensureActiveSession(env, "inst", "u", repo);
+		expect(res).toMatchObject({ ok: true, opened: false, session: { id: "csess_live", clientType: "claude" } });
+		expect(store.createSession).not.toHaveBeenCalled();
+		expect(paths()).not.toContain("/coding/engine-check");
 	});
 });

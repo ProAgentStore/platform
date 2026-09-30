@@ -11,6 +11,7 @@ import { resolveCloneCredential } from "./git-credentials.js";
 import { cloneSourceFor } from "./git-providers.js";
 import { resolveEngine, resolveEngineEnv } from "./coding-engines.js";
 import { checkWorkdirVia, cloneStatusForVerdict } from "./coding-workdir.js";
+import { preflightEngine } from "./engine-preflight.js";
 import { createSession, endSession, getActiveSessionForRepo, getLastFinishedSessionForRepo, getRepo, reassignSessionNode, updateRepoClone } from "./coding-store.js";
 import { seedBriefForRepo } from "./coding-seed-brief.js";
 import { appendTimeline } from "./coding-timeline.js";
@@ -45,6 +46,12 @@ export interface StartOnRunnerResult {
 	 * old, and would be relayed to the owner as the reason their session did not start.
 	 */
 	startError?: string | null;
+	/**
+	 * The machine definitely cannot run this session's engine — not installed, or not signed in
+	 * (#879). Set only by a launch that asked for `preflightEngine`; `startError` carries the
+	 * sentence naming the engine and the remedy.
+	 */
+	engineUnavailable?: boolean;
 	/**
 	 * The runner CONFIRMED it launched the engine with a conversation to continue.
 	 *
@@ -187,7 +194,17 @@ export async function startSessionOnRunner(
 	uid: string,
 	session: CodingSessionRecord,
 	repo: CodingRepo,
-	opts?: { resumeFrom?: string | null; cleanSlate?: boolean },
+	opts?: {
+		resumeFrom?: string | null;
+		cleanSlate?: boolean;
+		/**
+		 * Ask the machine whether it can run this session's engine before launching it (#879).
+		 * Opt-in, and only for a launch that creates a NEW engine process: a re-attach to an
+		 * engine that is already running has nothing to learn from it, and would pay a round-trip
+		 * on every terminal reconnect. A runner too old to answer is launched on exactly as before.
+		 */
+		preflightEngine?: boolean;
+	},
 ): Promise<StartOnRunnerResult> {
 	// IGNORING LIVENESS, deliberately (#532) — the reclaim immediately below is what acts on a dead
 	// stamped node, and it probes the relay itself two lines down. Resolving live here would only
@@ -252,6 +269,14 @@ export async function startSessionOnRunner(
 	// non-GitHub repo gets its own provider's credential — or none, which means "clone it
 	// publicly / with whatever this machine already has", the same thing a public GitHub repo
 	// has always got.
+	if (opts?.preflightEngine) {
+		const preflight = await preflightEngine(env, conn, instanceId, uid, session);
+		// Only a definite answer refuses. `unverified` (an older runner, a slow reply) launches as
+		// every session did before the check existed; if the engine then dies, #882 says why.
+		if (preflight.state === "no-binary" || preflight.state === "signed-out") {
+			return { conn: null, resumed: false, seeded: false, startError: preflight.message, engineUnavailable: true };
+		}
+	}
 	const credential = await resolveCloneCredential(env, uid, repo);
 	const engineEnv = await resolveEngineEnv(env, instanceId, uid, session);
 	// Read AFTER the relocation above, so a session that just moved machines is briefed from the
@@ -485,7 +510,7 @@ export async function ensureActiveSession(
 	// (`getLastFinishedSessionForRepo` only reads finished rows, but the ordering makes that a fact
 	// rather than a coincidence), and BEFORE the launch, because the runner needs the answer.
 	const continuity = await continuityForNewSession(env, instanceId, userId, repo.id, clientType);
-	const started = await startSessionOnRunner(env, instanceId, userId, session, repo, { resumeFrom: continuity.resumeFrom, cleanSlate: continuity.seed === null });
+	const started = await startSessionOnRunner(env, instanceId, userId, session, repo, { resumeFrom: continuity.resumeFrom, cleanSlate: continuity.seed === null, preflightEngine: true });
 	if (!started.conn) {
 		// A session row whose engine never launched is worse than none: `getActiveSessionForRepo`
 		// would hand it to every later attempt, so the repo would be permanently stuck behind a

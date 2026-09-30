@@ -5,7 +5,7 @@ import { ENGINE_AUTHS, engineAuthFor, engineAuthReport, engineInvocationReport, 
 import { readEngineChoice, writeEngineChoice } from "../lib/coding-engine-choice.js";
 import { resolveRunState } from "../lib/coding-run-state.js";
 import { continuityForNewSession, startSessionOnRunner } from "../lib/coding-session-open.js";
-import { createSession, getActiveSessionForRepo, getRepo, getSession, listSessions, touchSessionActivity } from "../lib/coding-store.js";
+import { createSession, endSession, getActiveSessionForRepo, getRepo, getSession, listSessions, touchSessionActivity } from "../lib/coding-store.js";
 import { appendEngineUsageTimeline, appendTimeline, lastTerminalRow } from "../lib/coding-timeline.js";
 import type { CodingSessionRecord } from "../lib/coding-types.js";
 import { recordEngineActs, sanitizeEngineActs } from "../lib/engine-acts.js";
@@ -164,7 +164,13 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		// which end a session and open another in the same breath. Without the flag the policy would
 		// resume the session they just ended — the one the user is trying to get away from.
 		const continuity = await continuityForNewSession(c.env, instanceId, uid, repoId, clientType, { forceFresh: body.fresh === true });
-		const started = await startSessionOnRunner(c.env, instanceId, uid, session, repo, { resumeFrom: continuity.resumeFrom, cleanSlate: continuity.seed === null });
+		const started = await startSessionOnRunner(c.env, instanceId, uid, session, repo, { resumeFrom: continuity.resumeFrom, cleanSlate: continuity.seed === null, preflightEngine: true });
+		if (started.engineUnavailable) {
+			// The machine cannot run this engine (#879). Close the row rather than leave an active
+			// session no engine will ever answer in, and say which engine and what to do.
+			await endSession(c.env, instanceId, uid, session.id, "error").catch(() => undefined);
+			return c.json({ error: started.startError, engineUnavailable: true, runnerConnected: true }, 409);
+		}
 		// Bump last_activity_at — starting a coding session is a real user-driven event.
 		void touchInstanceActivity(c.env, instanceId, uid);
 		return c.json({ session, runnerConnected: started.conn != null, resumed: started.resumed, seeded: started.seeded, continuity }, 201);

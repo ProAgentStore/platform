@@ -395,7 +395,7 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"apply_account_coding_default",
-		"Apply your saved account-wide coding CLI default to reachable idle coder sessions now. This is the MCP equivalent of the Preferences page's Apply button: it restarts only coders that inherit the account default, have no active run, are reachable, and are idle; it skips coders that are already on the default, offline, busy, running, or explicitly pinned to another engine.",
+		"Apply your saved account-wide coding CLI default to reachable idle coder sessions now. This is the MCP equivalent of the Preferences page's Apply button: it restarts only coders that inherit the account default, have no active run or queued objective, are reachable, and are idle; it skips coders that are already on the default, offline, busy, running, queued, or explicitly pinned to another engine. Each coder is claimed atomically before its restart, so a run cannot start in between. Before a working session is stopped its machine is asked whether it can run the default engine: a missing binary or subscription login skips it as engine-unavailable, and a runner too old to answer as runner-outdated (call runner_update), each with a `detail` naming the engine and the fix. Never uses an API key.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			dry_run: z.boolean().optional(),

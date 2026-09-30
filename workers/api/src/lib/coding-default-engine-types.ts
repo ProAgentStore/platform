@@ -6,7 +6,13 @@ export type ApplyDefaultEngineSkipReason =
 	| "busy"
 	| "unreadable"
 	| "stop-failed"
-	| "start-failed";
+	| "start-failed"
+	/** A queued objective is waiting on this repo; its run will start on the new default anyway. */
+	| "queued-objective"
+	/** The machine definitely cannot run the default engine: not installed, or not signed in. */
+	| "engine-unavailable"
+	/** The machine's CLI is too old to confirm it can run the default engine. */
+	| "runner-outdated";
 
 export interface ApplyDefaultEngineItem {
 	instanceId: string;
@@ -18,6 +24,8 @@ export interface ApplyDefaultEngineItem {
 	from?: string | null;
 	to?: string;
 	newSessionId?: string;
+	/** The sentence to relay for a skip that needs the owner to act (engine-unavailable, runner-outdated). */
+	detail?: string;
 }
 
 export interface ApplyDefaultEngineResult {

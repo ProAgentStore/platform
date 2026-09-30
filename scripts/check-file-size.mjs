@@ -731,8 +731,14 @@ const PINS = {
 	// explains, which is the same defect one file over.
 	// -24 at #847: the pure result-envelope parser moved to mcp-result.ts, where its runtime-artifact consumer shares the boundary; transport stays here.
 	"workers/api/src/lib/connectors/mcp.ts": 1371,
+	// New at #883: the no-repository refusal gained the coding_repo_add / coding_repo_remove remedies an
+	// MCP caller can act on. The refusal's branches are asserted together, so they stay in one place.
+	"workers/api/src/lib/connectors/repo-local.ts": 807,
 	// New at #847: GitHub binding uniqueness is repo persistence, so findExistingRepoBinding stays with the D1 repo store rather than creating a one-query sibling. +12 at #579: retireDisplacedRuns announces the runs it closes as `run.stalled`; the read of which rows it closed belongs beside the write that closed them.
-	"workers/api/src/lib/coding-store.ts": 836,
+	// +35 at #883/#879: `effectiveCloneStatus` (a folderless binding is `needs_path`, derived where rows are
+	// mapped so every reader agrees) and `claimFreeSessionDriver` (apply-now's never-steal claim, beside
+	// the claim/release pair it must not diverge from). Both are repo/session persistence.
+	"workers/api/src/lib/coding-store.ts": 871,
 	// -1 at #325: the JSON-string coercion create_agent and update_agent each had inline moved
 	// to `http.ts` as `parseJsonArg`, which is where the two copies could stop disagreeing about
 	// what a MALFORMED string means (create silently dropped it, update refused). Pin lowered so
@@ -1833,7 +1839,8 @@ const PINS = {
 	// +9 at #847: seven intentional decisions and one parser extraction need their auditable record; this ledger is the ratchet's ownership boundary.
 	// +3 at #771: the mcp/index.ts and routes/tools.ts raises above (two lines of why) and this one.
 	// +6 at #878: the tool-registry raise and the coding-tools.ts and user-ai.ts entries above, each with its reason, and this line.
-	"scripts/check-file-size.mjs": 1917,
+	// +7 at #879: the coding-store.ts raise and the new repo-local.ts entry above, each with its reason, and this line.
+	"scripts/check-file-size.mjs": 1924,
 };
 
 /**

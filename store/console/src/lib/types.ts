@@ -206,6 +206,8 @@ export interface AccountPreferencesWriteResponse {
 export interface AccountCodingDefaultApplyResponse {
 	restarted: number;
 	skipped?: Record<string, number>;
+	/** Per coder; `detail` is the sentence to show for a skip the owner must act on (#879). */
+	items?: Array<{ repoName: string; reason?: string; detail?: string }>;
 }
 
 export interface Message {
