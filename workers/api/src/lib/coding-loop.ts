@@ -15,6 +15,7 @@ import {
 } from "./coding-repetition.js";
 import { clockLine } from "./coding-wait.js";
 import { engineSignInBlock, type EngineAuthPrompt } from "./engine-auth-prompt.js";
+import { deadSessionDetail } from "./coding-dead-session.js";
 import { instructionAttributionNote } from "./run-attribution.js";
 import {
 	EMPTY_STREAK,
@@ -248,7 +249,9 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 			// most often surfaces (#881). Read its last words before calling it a crash.
 			const block = engineSignInBlock(snap);
 			if (block) return reauthResult(block, goal, step, transcript);
-			return { outcome: "failed", detail: "coding session is not running", steps: step, transcript };
+			// …and otherwise say what it DID print (#882): a missing binary is named, anything else
+			// carries the engine's last lines instead of a constant.
+			return { outcome: "failed", detail: deadSessionDetail(snap.pane), steps: step, transcript };
 		}
 
 		// Let the CLI finish whatever it's doing before deciding the next move.

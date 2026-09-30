@@ -972,11 +972,11 @@ describe("runCodingLoop — an engine blocked on its own sign-in is `needs_reaut
 		expect((await runCodingLoop(deps, GOAL)).outcome).toBe("needs_reauth");
 	});
 
-	it("a dead session with no sign-in evidence still fails as before", async () => {
+	it("a dead session with no sign-in evidence still fails, carrying what the engine said (#882)", async () => {
 		const { deps } = harness([{ action: { kind: "message", text: "x" } }], { alive: false, pane: "segfault" });
 		const r = await runCodingLoop(deps, GOAL);
 		expect(r.outcome).toBe("failed");
-		expect(r.detail).toBe("coding session is not running");
+		expect(r.detail).toBe("coding session is not running. The engine's last output: segfault");
 	});
 
 	it("a failed turn that is a lost login stops at once instead of counting three strikes", async () => {
@@ -1000,5 +1000,18 @@ describe("runCodingLoop — an engine blocked on its own sign-in is `needs_reaut
 	it("an engine QUOTING a sign-in message from source is not blocked", async () => {
 		const { deps } = harness([{ stuck: { why: "unsure" } }], { pane: `↳ throw new Error("${NOT_LOGGED_IN}")` });
 		expect((await runCodingLoop(deps, GOAL)).outcome).toBe("stuck");
+	});
+});
+
+describe("runCodingLoop — a dead session says why it died (#882)", () => {
+	it("names a missing engine binary instead of 'not running' with nothing after it", async () => {
+		// The exact line the runner writes when `spawn codex` fails — pink-laptop had no codex at all.
+		const { deps } = harness([{ action: { kind: "message", text: "x" } }], { alive: false, pane: "[codex] failed to start: spawn codex ENOENT" });
+		const r = await runCodingLoop(deps, { ...GOAL, clientType: "codex" });
+		expect(r.outcome).toBe("failed");
+		expect(r.detail).toMatch(/^coding session is not running: the engine could not be started/);
+		expect(r.detail).toContain("`codex` is not installed on the runner");
+		expect(r.detail).toContain("spawn codex ENOENT");
+		expect(r.detail).toContain("npm install -g @openai/codex");
 	});
 });
