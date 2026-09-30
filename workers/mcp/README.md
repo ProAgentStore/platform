@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**241 tool registrations.** 215 are always registered; 26 are gated to the console
+**242 tool registrations.** 215 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -392,6 +392,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `coding_repos_list` | Repos registered on the instance + their sessions | — | | |
 | `coding_engine_get` | Which coding CLI the instance opens sessions with and which model it runs; plus the model the last measured engine turn actually ran (#792) | read | | |
 | `coding_engine_set` | Choose the instance's coding CLI and optionally pin its model (`--model` in the preset's own command). Next session only; a running one keeps its engine (#792) | write | yes | |
+| `coding_engine_reauth` | Sign a coding engine back in from any device: runs its subscription login on the runner (Claude paste-code, Codex device-code) and relays the URL, code and result; never an API key. Resumes a run parked on sign-in (#881) | runtime | yes | |
 | `coding_repo_add` | Add a repo as BOTH its local checkout (`path`) and its GitHub identity (from the checkout's origin, or asserted with `github_repo`) in one call; refused with nothing stored when either half is missing. With `clone: true` + `github_repo`, a missing or empty `path` is first cloned on the connected machine with its own git credentials — https, or SSH when https is refused and the machine has a key (`clone_protocol` pins one). A long clone runs in the background: a 202 `{cloning: true}` stores nothing, and repeating the call joins the same clone and binds it when done | write | | |
 | `coding_repo_remove` | Detach a repo from a coding instance — the counterpart to `coding_repo_add`; stops any active engine on it first, and deletes no code | destructive | yes | `coding_repo_remove` |
 | `coding_sessions_list` | All sessions, active and ended | — | | |

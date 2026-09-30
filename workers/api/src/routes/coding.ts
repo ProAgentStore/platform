@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Env } from "../types.js";
 import { registerCopilotRoutes } from "./coding-brains.js";
 import { registerDiagnosticsRoutes } from "./coding-diagnostics.js";
+import { registerReauthRoutes } from "./coding-reauth.js";
 import { registerDriveRoutes } from "./coding-drive.js";
 import { registerFeedRoutes } from "./coding-feed.js";
 import { registerPullRoutes } from "./coding-pulls.js";
@@ -30,6 +31,7 @@ import { registerTimelineRoutes } from "./coding-timeline-routes.js";
  *   `coding-timeline-routes.ts` the session-scoped conversation (read + clear)
  *   `coding-drive.ts`          drive the engine, hand it to the brain, end or restart it
  *   `coding-diagnostics.ts`    the reconcile-and-explain surface
+ *   `coding-reauth.ts`         the engine re-auth relay (#881)
  *   `coding-shared.ts`         the tenant gate + the things the modules need in common
  *
  * `coding.contract.test.ts` derives the route table, the registration order, and what each
@@ -68,3 +70,6 @@ registerDriveRoutes(codingRoutes);
 
 // ── Diagnostics: close-sessions / browse / the reconcile-and-explain view ─
 registerDiagnosticsRoutes(codingRoutes);
+
+// ── Engine re-auth relay (#881): sign an engine in from any device ───────
+registerReauthRoutes(codingRoutes);

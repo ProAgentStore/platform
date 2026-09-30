@@ -122,6 +122,7 @@ const PREDECESSOR_ENDING: Record<ResumableStopReason, string> = {
 	max_iterations: "a previous run on this repository used up its step limit before it could report. It was not your objective failing, and it did not finish",
 	engine_limit: "a previous run on this repository stopped because the coding CLI's own usage limit had not reset in time. It was not your objective failing, and it did not finish",
 	provider_credit: "a previous run on this repository stopped because its Anthropic API key balance was empty, not because of a machine or Claude CLI subscription. It was not your objective failing, and it did not finish",
+	engine_auth: "a previous run on this repository stopped because the coding CLI was not signed in, and it has been signed in again since. It was not your objective failing, and it did not finish",
 };
 
 const truncate = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);

@@ -24,9 +24,11 @@ interface Spy {
 	endTakeovers: number;
 	/** Every board-card transition the pause machine asked for, in order (#553). */
 	cards: string[];
+	/** Engine restarts requested after a sign-in (#881). */
+	restarts: number;
 }
 
-function spy(over: Partial<{ resolveAfter: number; cancelAfterTicks: number; timeZone: string }> = {}): Spy {
+function spy(over: Partial<{ resolveAfter: number; cancelAfterTicks: number; timeZone: string; signedInAfter: number; restartFails: boolean }> = {}): Spy {
 	const s: Spy = {
 		slept: [],
 		announced: [],
@@ -35,10 +37,17 @@ function spy(over: Partial<{ resolveAfter: number; cancelAfterTicks: number; tim
 		takeovers: 0,
 		endTakeovers: 0,
 		cards: [],
+		restarts: 0,
 		deps: null as unknown as PauseDeps,
 	};
 	let polls = 0;
+	let signInPolls = 0;
 	s.deps = {
+		reauthCompletedSince: async () => over.signedInAfter !== undefined && ++signInPolls >= over.signedInAfter,
+		restartEngine: async () => {
+			s.restarts++;
+			if (over.restartFails) throw new Error("the running engine did not stop");
+		},
 		repo: "heartfull/platform",
 		timeZone: over.timeZone,
 		now: () => NOW,
@@ -311,5 +320,66 @@ describe("how an outcome is reported", () => {
 		expect(runSucceeded("waiting")).toBe(false);
 		expect(runSucceeded("failed")).toBe(false);
 		expect(runSucceeded("max_steps")).toBe(false);
+	});
+});
+
+describe("resolvePause — an engine blocked on its own sign-in parks for the relay (#881)", () => {
+	const reauth: CodingResult = {
+		outcome: "needs_reauth",
+		detail: 'The claude engine is not signed in. It said: "Not logged in · Please run /login".',
+		steps: 1,
+	};
+
+	it("resumes the run as soon as the relay reports a sign-in — no takeover involved", async () => {
+		const s = spy({ signedInAfter: 3 });
+		const v = await resolvePause(s.deps, { round: 0, result: reauth, state: { waits: 0, spentMs: 0 } });
+		expect(v.resume).toBe(true);
+		if (v.resume) expect(v.resumeNote).toContain("signed the coding engine in");
+		expect(s.takeovers).toBe(0);
+		expect(s.slept).toHaveLength(3);
+		expect(s.cards).toEqual(["needs_human", "running"]);
+		expect(s.notified[0]).toEqual({ title: "🔑 Coder needs you to sign in", alert: true });
+		expect(s.announced[0]).toContain("coding_engine_reauth");
+		expect(s.announced.at(-1)).toContain("Signed in");
+		// A NEW engine process: the old one holds the stale env, or is dead with the old message on screen.
+		expect(s.restarts).toBe(1);
+		expect(s.announced.at(-1)).toContain("restarted on the new sign-in");
+	});
+
+	it("still resumes when the engine could not be restarted, and tells the owner what to do", async () => {
+		const s = spy({ signedInAfter: 1, restartFails: true });
+		const v = await resolvePause(s.deps, { round: 0, result: reauth, state: { waits: 0, spentMs: 0 } });
+		expect(v.resume).toBe(true);
+		expect(s.announced.at(-1)).toContain("coding_session_restart");
+	});
+
+	it("does not restart the engine when nobody signed in", async () => {
+		const s = spy();
+		await resolvePause(s.deps, { round: 0, result: reauth, state: { waits: 0, spentMs: 0 } });
+		expect(s.restarts).toBe(0);
+	});
+
+	it("gives up after the handoff bound, ending on the resumable `engine_auth` stop reason", async () => {
+		const s = spy();
+		const v = await resolvePause(s.deps, { round: 0, result: reauth, state: { waits: 0, spentMs: 0 } });
+		expect(v.resume).toBe(false);
+		if (v.resume) return;
+		expect(v.result.outcome).toBe("needs_reauth");
+		expect(v.result.detail).toContain("Waiting on sign-in");
+		expect(v.result.detail).toContain("continue the run");
+		expect(s.slept).toHaveLength(HANDOFF_WAIT_POLLS);
+		expect(stopReasonFor(v.result.outcome)).toBe("engine_auth");
+		expect(statusFor("engine_auth")).toBe("needs_human");
+	});
+
+	it("honours Stop while parked", async () => {
+		const s = spy({ cancelAfterTicks: 1 });
+		const v = await resolvePause(s.deps, { round: 0, result: reauth, state: { waits: 0, spentMs: 0 } });
+		expect(v.resume).toBe(false);
+		if (!v.resume) expect(v.result.outcome).toBe("cancelled");
+	});
+
+	it("is not reported as a success", () => {
+		expect(runSucceeded("needs_reauth")).toBe(false);
 	});
 });

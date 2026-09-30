@@ -6,10 +6,10 @@
  */
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
-import { keyHint } from "../lib/key-hint.js";
+import { upsertUserProviderKey } from "../lib/user-api-key-store.js";
 import { backfillKeyHint } from "../lib/key-hint-backfill.js";
 import { wrongProviderError } from "../lib/key-shape.js";
-import { decryptKey, encryptKey } from "../lib/crypto.js";
+import { decryptKey } from "../lib/crypto.js";
 import { logError } from "../lib/error-log.js";
 import { logEvent } from "../lib/events.js";
 import { recordVoiceUsage } from "../lib/usage.js";
@@ -281,31 +281,7 @@ keysRoutes.put("/:provider", async (c) => {
 		if (mismatch) throw new HttpError(400, mismatch);
 	}
 
-	const { ciphertext, dekWrapped, iv } = await encryptKey(
-		keyToStore,
-		c.env.KEY_ENCRYPTION_KEY,
-	);
-
-	await c.env.DB.prepare(
-		// account_id '' — the unnamed default. An AI provider key is singular by nature (you have
-		// one Anthropic key), so it stays in the slot it has always occupied; the multi-account
-		// vault (#715) is for connectors whose credential names a mailbox or a drive.
-		`INSERT INTO user_api_keys (user_id, provider, account_id, key_ciphertext, dek_wrapped, iv, created_at, key_hint)
-     VALUES (?1, ?2, '', ?3, ?4, ?5, datetime('now'), ?6)
-     ON CONFLICT(user_id, provider, account_id) DO UPDATE SET
-       key_ciphertext = excluded.key_ciphertext,
-       dek_wrapped = excluded.dek_wrapped,
-       iv = excluded.iv,
-       created_at = excluded.created_at,
-       -- Overwritten, not coalesced: replacing the key replaces which key this is, and a stale
-       -- hint would name the key the owner just took OUT of the slot (#780).
-       key_hint = excluded.key_hint`,
-	)
-		// The hint is derived from `keyToStore`, the same string being encrypted on the line
-		// above — for cloudflare that is the `{accountId,token}` envelope, which `keyHint`
-		// unwraps so the hint names the token the owner pasted rather than the encoding.
-		.bind(session.uid, providerId, ciphertext, dekWrapped, iv, keyHint(keyToStore))
-		.run();
+	await upsertUserProviderKey(c.env, session.uid, providerId, keyToStore);
 
 	return c.json({ success: true, provider: providerId });
 });

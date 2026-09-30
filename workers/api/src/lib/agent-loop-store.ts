@@ -68,6 +68,9 @@ export interface LoopRunRow {
  *                        Which of the two it was lives where causes live — the `error_log` row's
  *                        `failureClass` and the sentence `coding-run-report.ts` composes from it.
  *                        No knowable instant; when one exists it is a RESUME.
+ *   engine_auth        — the coding CLI is not signed in (#881). Resolved by the owner signing it in
+ *                        through the re-auth relay, from any device — not by a takeover, which is why
+ *                        it is not `human`. Its deadline is a GIVE-UP, like `human`'s.
  *
  * ── Why this is an array and not only a union (#596)
  *
@@ -80,7 +83,7 @@ export interface LoopRunRow {
  * Every table keyed by a park reason — `work-report.ts`'s `PARKS`, `coding-run-state.ts`'s
  * `PARK_GLOSS` — is a place a new member can go unhandled. This array is what lets a test walk them.
  */
-export const RUN_WAIT_REASONS = ["engine_limit", "human", "platform_interrupt"] as const;
+export const RUN_WAIT_REASONS = ["engine_limit", "human", "platform_interrupt", "engine_auth"] as const;
 
 export type RunWaitReason = (typeof RUN_WAIT_REASONS)[number];
 
@@ -279,7 +282,7 @@ export const CONTINUE_RESUME_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
 /**
  * The stop reasons after which a successor is told what already landed (#523 item 4, #806).
  *
- * The test is "did the run reach a verdict on its objective". These four did not — something else
+ * The test is "did the run reach a verdict on its objective". These five did not — something else
  * ended the run while the work was still going, and a new run started from the bare objective
  * re-does what is already pushed:
  *
@@ -288,13 +291,15 @@ export const CONTINUE_RESUME_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
  *   * `engine_limit`    — the coding CLI's usage window outlasted the run's wait (#541).
  *   * `provider_credit` — the owner's Anthropic account ran dry; its own sentence says "start the
  *                         run again" after topping up (#773), and that restart is this successor.
+ *   * `engine_auth`     — the coding CLI was not signed in and the park ran out before anyone signed
+ *                         it in (#881). Once the relay has signed it in, the successor carries on.
  *
  * The rest are verdicts or choices and stay out. A `failed` run got to say what happened, and
  * repeating its steps may be exactly right. `escalated` is the run asking a human, answered through
  * its own handoff rather than a successor. `cancelled` is a human stopping it, and a restart after
  * that may well be the "start clean" #806 lists as an option in its own right. `done` needs nothing.
  */
-export const RESUMABLE_STOP_REASONS = ["interrupted", "max_iterations", "engine_limit", "provider_credit"] as const satisfies readonly LoopStopReason[];
+export const RESUMABLE_STOP_REASONS = ["interrupted", "max_iterations", "engine_limit", "provider_credit", "engine_auth"] as const satisfies readonly LoopStopReason[];
 
 export type ResumableStopReason = (typeof RESUMABLE_STOP_REASONS)[number];
 

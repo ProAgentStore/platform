@@ -426,6 +426,13 @@ const READBACK: Record<string, string | null> = {
 	"coding_repo_add.github_repo": "coding_repos_list",
 	"coding_engine_set.engine_id": "coding_engine_get",
 	"coding_engine_set.model": "coding_engine_get",
+	// #881: which engine a relay signs in is the relay record `coding_diagnostics` returns
+	// (`engineReauth.clientType`). The rest are COMMANDS to a live login CLI, never stored — and `text`
+	// is a one-time sign-in code, which no reader may ever return.
+	"coding_engine_reauth.client_type": "coding_diagnostics",
+	"coding_engine_reauth.action": null,
+	"coding_engine_reauth.text": null,
+	"coding_engine_reauth.keys": null,
 	"coding_session_fresh.engine_id": "coding_sessions_list",
 	"coding_session_open.engine_id": "coding_sessions_list",
 

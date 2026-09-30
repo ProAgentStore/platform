@@ -828,7 +828,7 @@ const PINS = {
 	// +16 at #192 (proappstore-online/platform): the 0.1.50 record — recent_instances gains `limit`
 	// and a working-first order; the entry says why the cap had hidden a live run. Ledger, not drift.
 	// +59 at #847: 0.1.51–0.1.57 are published append-only surface records; moving them would defeat the history check that protects this ledger. +5 at #849: the 0.1.58 record. +5 at #854: the 0.1.59 record. +5 at #856: the 0.1.60 record. +4 at #857: the 0.1.61 record. +4 at #858: the 0.1.62 record. +4 at #859: the 0.1.63 record.
-	"workers/mcp/src/surface-lock.ts": 954, // +10 at #879: 0.1.66 + 0.1.67 records — append-only surface ledger, not drift.
+	"workers/mcp/src/surface-lock.ts": 959, // +10 at #879: 0.1.66 + 0.1.67 records; +5 at #881: the 0.1.68 record — append-only surface ledger, not drift.
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
@@ -976,7 +976,7 @@ const PINS = {
 	// one surface, which is the same as no gate.
 	// +6 at #847: artifact forwarding is part of this dispatch result envelope, beside transfer and render; a second wrapper would only hide that propagation.
 	// New entry at #878: 797 → 808 for the repo-less terminal path in coding_session_capture/_message — an import, a bound caller and one branch in each; the logic is src/terminal-fallback.ts, not here.
-	"workers/mcp/src/coding-tools.ts": 808,
+	"workers/mcp/src/coding-tools.ts": 811, // +3 at #881: import + registration of `coding_engine_reauth`, whose body lives in its own coding-reauth-tools.ts.
 	// Pinned at #878 at its size on main: #874 (2b0ca68) grew it past the 800-line default without an entry, which left this ratchet failing for every commit after it. Recorded as it stands — not grown here.
 	"workers/api/src/lib/user-ai.ts": 803,
 	// +3 at #878: the terminal record hook — an import and a one-line call with its comment after the handler. It belongs HERE for the reason the gates do: every surface dispatches through this function, and recording anywhere else would record one surface. The storage is lib/terminal-record.ts.
@@ -1580,7 +1580,7 @@ const PINS = {
 	// and became `PILOT_DEFAULT_MAX_STEPS`, which the coding driver has to clamp by name — an
 	// unnamed delegation is the one path where a configured ceiling would otherwise be ignored.
 	// The import is the whole line; both use sites are unchanged in length. +1 at #693 slice 2: the `withTurnReplay` import; the Pilot's act site carries its reason inline.
-	"workers/api/src/workflows/coding-session.ts": 1069,
+	"workers/api/src/workflows/coding-session.ts": 1073, // +4 at #881: the `engine_auth` park reason, the relay poll and the post-sign-in engine restart — wiring only; the park itself is coding-pause.ts.
 	// This file, crossing its own LIMIT at #456 — and it is not an oddity, it is the guard working.
 	// A pin entry is REQUIRED to carry the reason its file grew, so this list is an append-only
 	// ledger of decisions: it can only get longer, and the one thing it must never do is get shorter

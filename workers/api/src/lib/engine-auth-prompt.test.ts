@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { authPromptGuidance, detectAuthPrompt } from "./engine-auth-prompt.js";
+import { authPromptGuidance, detectAuthPrompt, engineSignInBlock } from "./engine-auth-prompt.js";
 
 /** The real Gemini CLI prompt, verbatim from a live session. */
 const GEMINI_MENU = `
@@ -165,5 +165,32 @@ describe("detectAuthPrompt — a coding agent QUOTING source is not a sign-in pr
 	it("ignores an auth URL that only appears inside quoted output", () => {
 		// The console's sign-in button navigates the owner's real-profile browser to this URL.
 		expect(detectAuthPrompt("Please sign in\n↳ const LOGIN = 'https://accounts.google.com/o/oauth2/auth';")?.url).toBeNull();
+	});
+});
+
+describe("the headless engines' own sign-in failures (#881)", () => {
+	it.each([
+		"Not logged in · Please run /login",
+		"API Error: 401 - OAuth access token is invalid. Please run /login",
+		"Failed to authenticate: OAuth session expired and could not be refreshed",
+		"Error: not logged in. Please run codex login",
+	])("detects %s", (line) => {
+		expect(detectAuthPrompt(`⏺ working\n${line}`)).not.toBeNull();
+	});
+
+	it("reads the engine's turn report when the pane has nothing", () => {
+		expect(engineSignInBlock({ pane: "", lastTurn: { detail: "OAuth token has expired. Please run /login" } })).not.toBeNull();
+		expect(engineSignInBlock({ pane: "", lastTurn: { detail: "exit 1: --skip-git-repo-check was not specified" } })).toBeNull();
+		expect(engineSignInBlock({ pane: null, lastTurn: null })).toBeNull();
+	});
+
+	it("still ignores the phrases when the engine is quoting source", () => {
+		expect(detectAuthPrompt('↳ throw new Error("Not logged in · Please run /login")')).toBeNull();
+		expect(detectAuthPrompt('const msg = "OAuth session expired and could not be refreshed";')).toBeNull();
+	});
+
+	it("points the owner at the relay, which works from any device", () => {
+		const p = detectAuthPrompt("Not logged in · Please run /login");
+		expect(p && authPromptGuidance(p)).toContain("coding_engine_reauth");
 	});
 });

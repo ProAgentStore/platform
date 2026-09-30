@@ -9,7 +9,7 @@ import { createSession, getActiveSessionForRepo, getRepo, getSession, listSessio
 import { appendEngineUsageTimeline, appendTimeline, lastTerminalRow } from "../lib/coding-timeline.js";
 import type { CodingSessionRecord } from "../lib/coding-types.js";
 import { recordEngineActs, sanitizeEngineActs } from "../lib/engine-acts.js";
-import { authPromptGuidance, detectAuthPrompt } from "../lib/engine-auth-prompt.js";
+import { authPromptGuidance, detectAuthPrompt, engineSignInBlock } from "../lib/engine-auth-prompt.js";
 import { sanitizeEngineUsage } from "../lib/engine-usage.js";
 import { logEvent } from "../lib/events.js";
 import { patchInstanceConfig, touchInstanceActivity } from "../lib/instance-config.js";
@@ -254,7 +254,12 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		// An engine blocked on sign-in looks EXACTLY like a hung session: idle runState, a pane that
 		// stops changing, no error anywhere. Surfacing it here means the console can say "sign in"
 		// instead of the owner watching a dead terminal and concluding the platform is broken.
-		const authPrompt = detectAuthPrompt(String((snap as { pane?: unknown }).pane ?? ""));
+		// The turn report too (#881): a headless engine that exits on a dead login says so in its last
+		// turn's detail, not necessarily in the pane.
+		const authPrompt = engineSignInBlock({
+			pane: String((snap as { pane?: unknown }).pane ?? ""),
+			lastTurn: (snap as { lastTurn?: { detail?: string } | null }).lastTurn ?? null,
+		});
 
 		// Persist the transcript. Until #275 the ONLY writer was /explain (the Co-pilot), so anyone
 		// working in the Terminal view had nothing saved at all: the pane lived in the runner's memory
@@ -311,6 +316,8 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			runnerConnected: true,
 			auth,
 			invocation,
+			// Always present (#881), so "signed in" and "not asked" are not the same absent field.
+			needsReauth: !!authPrompt,
 			...(authPrompt ? { authPrompt: { ...authPrompt, guidance: authPromptGuidance(authPrompt) } } : {}),
 		});
 	});

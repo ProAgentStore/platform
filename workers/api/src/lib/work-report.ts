@@ -102,6 +102,9 @@ export const PARK_LIMIT_MS: Record<RunWaitReason, number> = {
 	platform_interrupt: STALLED_AFTER_MS,
 	human: 30 * 60 * 1000,
 	engine_limit: 8 * 60 * 60 * 1000,
+	// The same 15-minute give-up as a handoff (`coding-pause.ts`'s `waitForSignIn`), doubled for the
+	// same reason `human` is (#881).
+	engine_auth: 30 * 60 * 1000,
 };
 
 /**
@@ -336,6 +339,7 @@ interface Park {
 const PARKS: Record<RunWaitReason, Park> = {
 	engine_limit: { why: "the coding CLI's own usage limit has to reset", deadline: "resume" },
 	human: { why: "it is waiting for YOU to answer a handoff", deadline: "give_up" },
+	engine_auth: { why: "the coding engine is not signed in — sign it in with coding_engine_reauth, from any device", deadline: "give_up" },
 	// "Being resumed" only while a retry is actually SCHEDULED — see `waitClause` for the park without one (#855).
 	platform_interrupt: { why: "it was interrupted by something other than the work and a retry is scheduled", deadline: "resume" },
 };

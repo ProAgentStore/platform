@@ -25,7 +25,7 @@
  */
 
 /** The endings the server will continue. Kept in the order `RESUMABLE_STOP_REASONS` lists them. */
-export const CONTINUABLE_STOP_REASONS = ["interrupted", "max_iterations", "engine_limit", "provider_credit"] as const;
+export const CONTINUABLE_STOP_REASONS = ["interrupted", "max_iterations", "engine_limit", "provider_credit", "engine_auth"] as const;
 
 /** The fields of a loop run that decide whether Continue is offered (`LoopRunView` has more). */
 export interface LoopRunContinueLike {

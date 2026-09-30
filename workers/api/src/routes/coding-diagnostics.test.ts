@@ -62,6 +62,10 @@ function buildEnv(opts: {
 	providerFailure?: { message: string; seen_at: string } | null;
 	/** `user_api_keys.last_used_at` for the Anthropic key — the last SUCCESSFUL call (#773). */
 	anthropicLastUsedAt?: string | null;
+	/** The newest `agent_loop_runs` row for the instance (#881). */
+	latestRun?: Record<string, unknown> | null;
+	/** `config.engineReauth`, the relay's record (#881). */
+	engineReauth?: Record<string, unknown> | null;
 }): Env {
 	const staleNode = opts.staleNode ?? OLD_NODE;
 	const DB = {
@@ -70,12 +74,14 @@ function buildEnv(opts: {
 				bind(..._args: unknown[]) {
 					return {
 						async first() {
+							if (sql.includes("$.engineReauth")) return opts.engineReauth ? { state: JSON.stringify(opts.engineReauth) } : null;
 							if (sql.includes("FROM agent_instances")) return { id: INSTANCE };
 							if (sql.includes("FROM error_log")) {
 								const f = opts.providerFailure;
 								return f ? { message: f.message, context: null, last_context: null, seen_at: f.seen_at } : null;
 							}
 							if (sql.includes("FROM user_api_keys")) return opts.anthropicLastUsedAt === undefined ? null : { last_used_at: opts.anthropicLastUsedAt };
+							if (sql.includes("FROM agent_loop_runs") && sql.includes("ORDER BY started_at DESC LIMIT 1")) return opts.latestRun ?? null;
 							if (sql.includes("FROM instance_runtimes") && opts.hasRuntimeRow !== false) {
 								return {
 									endpoint_url: `http://${staleNode}`,
@@ -354,5 +360,54 @@ describe("a live relay with a hung health responder reads one way (#880)", () =>
 		const { app, env } = buildApp({ staleNode: NEW_NODE });
 		const summary = (await getDiag(app, env)).body.summary as Record<string, unknown>;
 		expect(summary).toMatchObject({ runnerOnline: false, runnerStatus: "offline", relayConnected: false, healthCheck: "not_attempted" });
+	});
+});
+
+describe("coding_diagnostics says when the ENGINE is not signed in (#881)", () => {
+	const stopped = {
+		run_id: "da66854d-aef2-44ff-94fb-4af42cafd778",
+		session_id: "csess_x",
+		status: "needs_human",
+		stop_reason: "engine_auth",
+		waiting_reason: null,
+		started_at: Date.now() - 20 * 60_000,
+		finished_at: Date.now() - 60_000,
+	};
+
+	it("flags a run that stopped on sign-in, with the relay as the fix", async () => {
+		const { app, env } = buildApp({ latestRun: stopped });
+		const { body } = await getDiag(app, env);
+		expect((body.summary as Record<string, unknown>).needsReauth).toBe(true);
+		expect(body.signIn).toMatchObject({ runId: stopped.run_id, state: "stopped" });
+		const issue = (body.issues as Array<Record<string, unknown>>).find((i) => String(i.message).includes("not signed in"));
+		expect(issue?.severity).toBe("error");
+		expect(String(issue?.fix)).toContain("coding_engine_reauth");
+		expect(String(issue?.fix)).toContain("continue_instance_run");
+	});
+
+	it("flags a run PARKED on sign-in, and says it will continue by itself", async () => {
+		const { app, env } = buildApp({ latestRun: { ...stopped, status: "running", stop_reason: null, waiting_reason: "engine_auth", finished_at: null } });
+		const { body } = await getDiag(app, env);
+		expect((body.summary as Record<string, unknown>).needsReauth).toBe(true);
+		const issue = (body.issues as Array<Record<string, unknown>>).find((i) => String(i.message).includes("not signed in"));
+		expect(String(issue?.fix)).toContain("continues by itself");
+	});
+
+	it("clears once the relay has signed the engine in since", async () => {
+		const engineReauth = {
+			clientType: "claude", method: "claude-login", session: "pags-signin-claude", runnerNode: null,
+			status: "succeeded", startedAt: Date.now() - 30_000, completedAt: Date.now() - 10_000,
+		};
+		const { app, env } = buildApp({ latestRun: stopped, engineReauth });
+		const { body } = await getDiag(app, env);
+		expect((body.summary as Record<string, unknown>).needsReauth).toBe(false);
+		expect(body.signIn).toBeNull();
+		expect((body.engineReauth as Record<string, unknown>).status).toBe("succeeded");
+	});
+
+	it("reads false — not absent — when no run is blocked", async () => {
+		const { app, env } = buildApp({ latestRun: { ...stopped, stop_reason: "done", status: "completed" } });
+		const { body } = await getDiag(app, env);
+		expect((body.summary as Record<string, unknown>).needsReauth).toBe(false);
 	});
 });

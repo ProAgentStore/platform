@@ -950,3 +950,55 @@ describe("systemPrompt — who remembers what (#822)", () => {
 		expect(p).toMatch(/Never ask again for something the step log shows you already asked for; the CLI still has it/);
 	});
 });
+
+describe("runCodingLoop — an engine blocked on its own sign-in is `needs_reauth`, not a crash (#881)", () => {
+	const NOT_LOGGED_IN = "Not logged in · Please run /login";
+
+	it("a dead session whose last words are a sign-in failure ends needs_reauth, not 'not running'", async () => {
+		const { deps } = harness([{ action: { kind: "message", text: "x" } }], { alive: false, pane: `⏺ starting\n${NOT_LOGGED_IN}` });
+		const r = await runCodingLoop(deps, GOAL);
+		expect(r.outcome).toBe("needs_reauth");
+		expect(r.detail).toContain("not signed in");
+		expect(r.detail).toContain("coding_engine_reauth");
+		expect(r.detail).toContain(NOT_LOGGED_IN);
+	});
+
+	it("reads the turn report when the pane is empty — the headless engine exits on a dead login", async () => {
+		const { deps } = harness([{ action: { kind: "message", text: "x" } }], {
+			alive: false,
+			pane: "",
+			lastTurn: { verdict: "failed", exitCode: 1, at: 1, detail: "API Error: 401 - OAuth access token is invalid. Please run /login" },
+		});
+		expect((await runCodingLoop(deps, GOAL)).outcome).toBe("needs_reauth");
+	});
+
+	it("a dead session with no sign-in evidence still fails as before", async () => {
+		const { deps } = harness([{ action: { kind: "message", text: "x" } }], { alive: false, pane: "segfault" });
+		const r = await runCodingLoop(deps, GOAL);
+		expect(r.outcome).toBe("failed");
+		expect(r.detail).toBe("coding session is not running");
+	});
+
+	it("a failed turn that is a lost login stops at once instead of counting three strikes", async () => {
+		const { deps } = harness([{ action: { kind: "message", text: "x" } }], {
+			pane: "Failed to authenticate: OAuth session expired and could not be refreshed",
+			lastTurn: { verdict: "failed", exitCode: 1, at: 7, detail: "OAuth session expired and could not be refreshed" },
+		});
+		expect((await runCodingLoop(deps, GOAL)).outcome).toBe("needs_reauth");
+	});
+
+	it("the Pilot escalating `stuck` over a sign-in pane becomes needs_reauth", async () => {
+		const { deps } = harness([{ stuck: { why: "The CLI says Not logged in" } }], { pane: NOT_LOGGED_IN });
+		expect((await runCodingLoop(deps, GOAL)).outcome).toBe("needs_reauth");
+	});
+
+	it("a stuck handoff with no sign-in on the pane stays stuck", async () => {
+		const { deps } = harness([{ stuck: { why: "needs a decision" } }], { pane: "Which approach do you prefer?" });
+		expect((await runCodingLoop(deps, GOAL)).outcome).toBe("stuck");
+	});
+
+	it("an engine QUOTING a sign-in message from source is not blocked", async () => {
+		const { deps } = harness([{ stuck: { why: "unsure" } }], { pane: `↳ throw new Error("${NOT_LOGGED_IN}")` });
+		expect((await runCodingLoop(deps, GOAL)).outcome).toBe("stuck");
+	});
+});

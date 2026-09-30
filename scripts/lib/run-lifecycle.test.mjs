@@ -55,7 +55,7 @@ const messages = (r) => r.failures.map((f) => f.message).join("\n");
 describe("parseConstArray", () => {
 	it("reads the members of the real declarations", () => {
 		expect(parseConstArray(WORK_REPORT, "RUN_HEALTH_STATES").members).toEqual(["working", "waiting", "stalled", "ended"]);
-		expect(parseConstArray(LOOP_STORE, "RUN_WAIT_REASONS").members).toEqual(["engine_limit", "human", "platform_interrupt"]);
+		expect(parseConstArray(LOOP_STORE, "RUN_WAIT_REASONS").members).toEqual(["engine_limit", "human", "platform_interrupt", "engine_auth"]);
 	});
 
 	it("reports a RESHAPED declaration rather than returning an empty set (ADR 0002 G3)", () => {
@@ -82,6 +82,7 @@ describe("parseParks", () => {
 		expect(parks.engine_limit.deadline).toBe("resume");
 		expect(parks.platform_interrupt.deadline).toBe("resume");
 		expect(parks.human.deadline).toBe("give_up");
+		expect(parks.engine_auth.deadline).toBe("give_up");
 	});
 
 	it("reports a missing table instead of rendering a verbless page", () => {
@@ -219,6 +220,6 @@ describe("checkRunLifecycle", () => {
 			docName: "platform-docs/run-lifecycle.md",
 		});
 		expect(messages(r)).toBe("");
-		expect(r.notes[0]).toContain("4 health state(s) + 3 park reason(s) (2 deadline kind(s))");
+		expect(r.notes[0]).toContain("4 health state(s) + 4 park reason(s) (2 deadline kind(s))");
 	});
 });

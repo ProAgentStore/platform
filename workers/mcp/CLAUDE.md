@@ -116,10 +116,10 @@ src/
                           surfaces:["coding"]) + 5 loop tools (3 run + 2 objective queue)
 ```
 
-**241 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
-`coding-tools.ts` and 2 in `coding-engine-tools.ts` — all fifteen behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 191 across `instance-tools/`. 215 are always registered; 26 are
-surface-gated (apply=4, repo=3, coding=19).
+**242 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 13 in
+`coding-tools.ts`, 2 in `coding-engine-tools.ts` and 1 in `coding-reauth-tools.ts` — all sixteen behind the `groups.has("coding")` gate — 14 in
+`storage-tools.ts`, and 191 across `instance-tools/`. 215 are always registered; 27 are
+surface-gated (apply=4, repo=3, coding=20).
 
 Those five numbers ADD UP to the headline, and that is the point of stating them: 21 + 13
 + 2 + 14 + 191 = 241. They said 88 until #602, which made the paragraph sum to 132 — a total the
@@ -262,7 +262,7 @@ tells you exactly what you changed about it.
   holds `MCP_TOOL_COUNT` / `MCP_TOOL_ALWAYS_ON` to a REAL registration run, and
   `scripts/docs-drift.mjs` holds every prose claim to the constants. Adding a tool fails
   the test until the constant moves. `tools/list` is still the authoritative surface for a
-  given connection, because 26 tools are surface-gated.
+  given connection, because 27 tools are surface-gated.
 
 ## Bindings and secrets
 

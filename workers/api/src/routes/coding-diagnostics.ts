@@ -25,6 +25,7 @@ import { listRepos, listSessions, reconcileOrphanedSessions } from "../lib/codin
 import { readProviderAccountHealth } from "../lib/provider-account-health.js";
 import { relayNameForInstance } from "../lib/runtime-nodes.js";
 import { classifyHealthProbeFailure, type HealthCheckState, runnerLiveStatus } from "../lib/runner-health.js";
+import { latestRunRow, readReauthState, signInBlockFrom } from "../lib/engine-reauth-store.js";
 import { getLiveRuntime } from "./instances-runtime.js";
 import { getDefaultRunnerConn, requireOwned } from "./coding-shared.js";
 import { MAX_SSH_HOSTS, httpsLoginFrom, sshHostGroups, sshIdentityIssues } from "../lib/ssh-identity.js";
@@ -503,6 +504,16 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			reconciled = new Set(await reconcileOrphanedSessions(env, instanceId, uid, trackedIds).catch(() => []));
 		}
 
+		// 4b. Is the ENGINE signed in (#881)? A run that stopped or parked on the engine's own sign-in
+		// is the evidence — the loop classifies it (`needs_reauth`) from the engine's own words, so this
+		// reads the verdict rather than re-guessing it from a pane. A relay that has signed the engine
+		// in since clears it.
+		const [engineReauth, latestRun] = await Promise.all([
+			readReauthState(env, instanceId, uid).catch(() => null),
+			latestRunRow(env, instanceId, uid).catch(() => null),
+		]);
+		const signInBlock = signInBlockFrom(latestRun, engineReauth, Date.now());
+
 		const sessions = dbSessions.map((s) => {
 			// Reflect a just-reconciled orphan as ended (D1 was updated above).
 			if (reconciled.has(s.id)) {
@@ -518,6 +529,7 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 					invocation: engineInvocationReport({ clientType: s.clientType, launchCommand: s.launchCommand, runnerMode: null }),
 					startedAt: s.startedAt, endedAt: new Date().toISOString(), live: null,
 					issue: null, reconciled: true,
+					needsReauth: signInBlock?.sessionId === s.id,
 				};
 			}
 			return mapDiagSession(s);
@@ -550,6 +562,8 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 					workDir: tracked.workDir,
 					underTakeover: tracked.takeover,
 				} : null,
+				// The engine behind this session is blocked on its own sign-in (#881).
+				needsReauth: signInBlock?.sessionId === s.id,
 				// Issue detection
 				issue: s.status === "active" && !tracked
 					? (effectivelyReachable ? "orphaned: D1 says active but runner has no tmux for it" : "unknown: runner offline")
@@ -609,6 +623,7 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		// Read off the record, never probed here (the ticket's non-goal); `verify` names the probe.
 		const providerAccount = await readProviderAccountHealth(env, uid).catch(() => null);
 
+
 		// 6. Auto-detected issues
 		const issues: Array<{ severity: "error" | "warn" | "info"; message: string; fix?: string }> = [];
 
@@ -633,6 +648,20 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 				severity: "error",
 				message: `Runner is connected but not responding (health check: ${healthCheck})`,
 				fix: "Restart `pags up` on the machine — the relay socket is live, so reconnecting alone will not help",
+			});
+		}
+
+		if (signInBlock) {
+			issues.push({
+				severity: "error",
+				message:
+					signInBlock.state === "parked"
+						? `The coding engine is not signed in — run ${signInBlock.runId.slice(0, 8)} is parked waiting for a sign-in`
+						: `The coding engine is not signed in — run ${signInBlock.runId.slice(0, 8)} stopped waiting for a sign-in`,
+				fix:
+					signInBlock.state === "parked"
+						? "Sign the engine in from any device with coding_engine_reauth; the parked run continues by itself"
+						: "Sign the engine in from any device with coding_engine_reauth, then continue the run (continue_instance_run)",
 			});
 		}
 
@@ -683,7 +712,7 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		// `healthySessions: 1, issueCount: 0` for an engine that had refused every instruction for
 		// hours — the two numbers a reader checks first, both wrong in the same direction.
 		const healthySessions = activeSessions.filter(
-			(s) => s.live?.alive && !refusingEngineIssue({ sessionLabel: s.id, alive: true, run: latestRunFor(s.id) }),
+			(s) => s.live?.alive && !s.needsReauth && !refusingEngineIssue({ sessionLabel: s.id, alive: true, run: latestRunFor(s.id) }),
 		);
 
 		return c.json({
@@ -698,6 +727,9 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 				totalSessions: sessions.length,
 				activeSessions: activeSessions.length,
 				healthySessions: healthySessions.length,
+				// The engine is blocked on its own sign-in (#881) — distinct from every runner/relay state
+				// above, which can all read healthy while this is true.
+				needsReauth: !!signInBlock,
 				issueCount: issues.filter((i) => i.severity === "error" || i.severity === "warn").length,
 			},
 			runner,
@@ -722,6 +754,10 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			// one, because "which identity does this machine use" has two answers and the whole
 			// point of the issue is that they can differ. `null` = unverified, not "no login".
 			githubCredentials,
+			// Sign-in (#881): the run evidence, and the relay's own record. `signIn: null` = no run is
+			// blocked on sign-in; `engineReauth: null` = no relay has been started.
+			signIn: signInBlock,
+			engineReauth,
 			// The owner's provider account, as last observed (#773). `no_failure_recorded` is not
 			// "healthy" — it is "nothing on record"; `verify` is how to get a live answer.
 			providerAccount,

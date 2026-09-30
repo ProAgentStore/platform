@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 import { canContinueRun, CONTINUABLE_STOP_REASONS, continueBody, previewLines, type ContinuePreview } from "./loopContinue";
 
 describe("canContinueRun", () => {
-	it.each(["interrupted", "max_iterations", "engine_limit", "provider_credit"])("offers Continue after %s", (stopReason) => {
+	it.each(["interrupted", "max_iterations", "engine_limit", "provider_credit", "engine_auth"])("offers Continue after %s", (stopReason) => {
 		expect(canContinueRun({ status: "failed", stopReason })).toBe(true);
 	});
 

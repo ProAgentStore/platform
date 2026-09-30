@@ -27,6 +27,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authedCall, authRequired, type McpEnv, jsonText, text } from "./http.js";
 import { registerCodingEngineTools } from "./coding-engine-tools.js";
+import { registerCodingReauthTools } from "./coding-reauth-tools.js";
 import { github } from "./repo-tools.js";
 import { captureTerminal, messageTerminal } from "./terminal-fallback.js";
 import { audit, dryRun, requireConfirmation, requirePermission, type SafetyContext } from "./safety.js";
@@ -446,6 +447,8 @@ export function registerCodingSessionTools(
 	// The instance's standing engine + model choice (#792) — its own file, registered HERE so the
 	// published order is unchanged.
 	registerCodingEngineTools(server, env, tokenFor, safetyFor);
+	// Sign an engine back in from any device (#881) — beside the engine choice it signs in.
+	registerCodingReauthTools(server, env, tokenFor, safetyFor);
 
 	server.tool(
 		"coding_repo_add",

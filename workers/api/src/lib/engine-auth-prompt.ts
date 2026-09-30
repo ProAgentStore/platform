@@ -78,6 +78,18 @@ const AUTH_PHRASES = [
 	"waiting for authentication",
 	"visit the following url",
 	"open this url in your browser",
+	// The HEADLESS engine's sign-in failures (#881). A structured `claude -p` never shows a menu —
+	// it exits with one of these lines, and the run used to end as "coding session is not running"
+	// or a Pilot "stuck", indistinguishable from a crash. Wording is the CLIs' own, from the runs
+	// #878/#879/#867 lost to it.
+	"please run /login",
+	"oauth session expired",
+	"oauth access token is invalid",
+	"oauth token has expired",
+	// NOT "could not be refreshed": it is the tail of Claude's "OAuth session expired and could not be
+	// refreshed" (matched above), and on its own it is generic enough to fire on quoted source.
+	"run codex login",
+	"run `codex login`",
 ];
 
 /** Phrases that look like auth but are NOT a block — the engine is running normally. */
@@ -177,8 +189,23 @@ export function detectAuthPrompt(pane: string): EngineAuthPrompt | null {
  * button and nothing happened" dead end.
  */
 export function authPromptGuidance(prompt: EngineAuthPrompt): string {
+	// The relay (#881) is the path that works from ANY device, so it is named first; the takeover
+	// view still works for someone who can see the runner's browser.
+	const relay = " Or, from any device, sign it in with the re-auth relay (coding_engine_reauth).";
 	if (prompt.kind === "oauth-url") {
-		return "This engine needs you to sign in. Open the takeover view — the sign-in page loads in the browser on the runner machine, so the redirect it expects actually works.";
+		return `This engine needs you to sign in. Open the takeover view — the sign-in page loads in the browser on the runner machine, so the redirect it expects actually works.${relay}`;
 	}
-	return "This engine is showing a sign-in menu. Open the takeover view and choose an option there; it is running on the runner machine, not in this tab.";
+	return `This engine is showing a sign-in menu. Open the takeover view and choose an option there; it is running on the runner machine, not in this tab.${relay}`;
+}
+
+/**
+ * Is the ENGINE blocked on sign-in, judged from everything a loop snapshot carries (#881)?
+ *
+ * The pane alone is not enough: a headless engine that exits on a dead login leaves its last words
+ * in the turn report (`lastTurn.detail`) as well as, or instead of, the pane. Both are read through
+ * the same narrow detector, so a false positive here is exactly as unlikely as it is on the capture
+ * route.
+ */
+export function engineSignInBlock(snap: { pane?: string | null; lastTurn?: { detail?: string | null } | null }): EngineAuthPrompt | null {
+	return detectAuthPrompt(snap.pane ?? "") ?? detectAuthPrompt(snap.lastTurn?.detail ?? "");
 }

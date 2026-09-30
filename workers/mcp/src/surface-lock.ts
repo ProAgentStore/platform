@@ -950,4 +950,9 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// idle coder sessions, skipping active, busy, offline, already-default, and explicitly pinned
 	// coders. Appended, never edited in place: 0.1.66 is published.
 	"0.1.67": "sha256:89fbe37ecb5ba768b0d82ef3e6acc487afd412f3be4fe1ec882554fe47fc9b2f",
+	// 0.1.68 (#881): one new `runtime` tool, GATED to the `coding` surface — 241 → 242, always-on
+	// stays 215, gated 26 → 27. `coding_engine_reauth` runs a coding engine's subscription login on
+	// the runner (Claude paste-code, Codex device-code) and relays it to any device; never an API key.
+	// Appended, never edited in place: 0.1.67 is published.
+	"0.1.68": "sha256:995a34408374a3d1c7c6765c78902319885a3474b5af31145d9f6134884eea9a",
 };

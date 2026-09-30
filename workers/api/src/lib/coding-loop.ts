@@ -14,6 +14,7 @@ import {
 	PILOT_PANE_CHARS,
 } from "./coding-repetition.js";
 import { clockLine } from "./coding-wait.js";
+import { engineSignInBlock, type EngineAuthPrompt } from "./engine-auth-prompt.js";
 import { instructionAttributionNote } from "./run-attribution.js";
 import {
 	EMPTY_STREAK,
@@ -143,8 +144,14 @@ export type CodingActionKind = { kind: "message"; text: string; author?: "pilot"
  * that resolves on a clock rather than by anyone doing anything. The loop returns it, the workflow
  * parks and re-enters — and only when the run's wait budget is spent does it stay as the outcome,
  * which is why it must never be treated as a failure by the surfaces that read one.
+ *
+ * `needs_reauth` (#881) is the Engine blocked on its OWN sign-in — "Not logged in · Please run
+ * /login". It used to end as `failed` ("coding session is not running") or as a Pilot `stuck`,
+ * both of which read like a crash. Its remedy is one specific owner act — sign the engine in, which
+ * the re-auth relay lets them do from any device — so it is its own outcome, and the workflow parks
+ * on it waiting for that relay to report success.
  */
-export type CodingOutcome = "done" | "stuck" | "needs_input" | "failed" | "max_steps" | "cancelled" | "waiting";
+export type CodingOutcome = "done" | "stuck" | "needs_input" | "failed" | "max_steps" | "cancelled" | "waiting" | "needs_reauth";
 
 export interface CodingDecision {
 	thought?: string;
@@ -236,7 +243,13 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 	for (let step = 0; step < maxSteps; step++) {
 		let snap = await deps.snapshot();
 		if (snap.cancelled) return { outcome: "cancelled", detail: snap.stopReason, steps: step, transcript };
-		if (!snap.alive) return { outcome: "failed", detail: "coding session is not running", steps: step, transcript };
+		if (!snap.alive) {
+			// A headless engine that could not sign in EXITS, so a dead session is where a lost login
+			// most often surfaces (#881). Read its last words before calling it a crash.
+			const block = engineSignInBlock(snap);
+			if (block) return reauthResult(block, goal, step, transcript);
+			return { outcome: "failed", detail: "coding session is not running", steps: step, transcript };
+		}
 
 		// Let the CLI finish whatever it's doing before deciding the next move.
 		if (snap.runState !== "idle") {
@@ -259,6 +272,10 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 		const seen = observeTurn(turns, snap.lastTurn);
 		turns = seen.streak;
 		if (seen.newFailure) {
+			// A turn refused on a dead login is not one of three strikes — no instruction and no retry
+			// changes it, and only the owner signing the engine in does (#881).
+			const block = engineSignInBlock(snap);
+			if (block) return reauthResult(block, goal, step, transcript);
 			const note = engineFailureNote(turns);
 			actionLog.push(note);
 			transcript.push(note);
@@ -303,6 +320,11 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 			return { outcome: "waiting", detail: why, waitUntil: decision.waitUntil.at, steps: step, transcript };
 		}
 		if (decision.stuck) {
+			// The Pilot reading "Not logged in" off the pane and escalating is the case the runs in
+			// #881 died of: a generic handoff nobody could perform from where they were. The pane
+			// decides, not the brain's wording — the same narrow detector as everywhere else.
+			const block = engineSignInBlock(snap);
+			if (block) return reauthResult(block, goal, step, transcript);
 			return { outcome: "stuck", detail: decision.stuck.why, steps: step, transcript };
 		}
 		if (decision.needsInput) {
@@ -745,4 +767,16 @@ export function toDecision(call: { name: string; arguments: Record<string, unkno
 		default:
 			return { stuck: { why: `unknown tool ${call.name}` } };
 	}
+}
+
+/** The loop's `needs_reauth` ending (#881): what the engine said, and what fixes it. */
+export function reauthDetail(block: EngineAuthPrompt, clientType: CodingGoal["clientType"]): string {
+	const said = block.evidence ? ` It said: "${block.evidence}".` : "";
+	return `The ${clientType} engine is not signed in.${said} Sign it in with the re-auth relay (coding_engine_reauth) — it runs the engine's subscription login on the runner and relays it to any device; the run continues once it succeeds.`;
+}
+
+function reauthResult(block: EngineAuthPrompt, goal: CodingGoal, step: number, transcript: string[]): CodingResult {
+	const detail = reauthDetail(block, goal.clientType);
+	transcript.push(`needs_reauth: ${detail}`);
+	return { outcome: "needs_reauth", detail, steps: step, transcript };
 }

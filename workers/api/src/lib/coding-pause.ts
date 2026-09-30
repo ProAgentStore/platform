@@ -64,6 +64,20 @@ export interface PauseDeps {
 	takeoverStatus: () => Promise<{ resolved: boolean; value?: string }>;
 	/** Close the takeover once it is resolved. */
 	endTakeover: () => Promise<void>;
+	/**
+	 * Has the re-auth relay signed the engine in at or after `since` (#881)? What a run parked on
+	 * `needs_reauth` polls — the relay is driven by the owner from another device, so this record is
+	 * the only thing the two sides share.
+	 */
+	reauthCompletedSince: (since: number) => Promise<boolean>;
+	/**
+	 * Stop the engine and launch it again, with its env resolved FRESH (#881). A signed-in engine has
+	 * to be a NEW process: a live headless session keeps the env it was spawned with — a replaced
+	 * Claude token would not reach it — and a dead one still shows the old "Not logged in" line,
+	 * which the loop would read as a fresh sign-in block and park on again. Throws when the stop
+	 * failed, in which case nothing was relaunched (two engines on one checkout is worse).
+	 */
+	restartEngine: () => Promise<void>;
 	/** A DURABLE sleep — `step.sleep`, so a six-hour park survives the workflow being evicted. */
 	sleep: (label: string, ms: number) => Promise<void>;
 	/**
@@ -129,6 +143,7 @@ export async function resolvePause(
 ): Promise<PauseVerdict> {
 	const { result } = input;
 	if (result.outcome === "waiting") return waitForEngineReset(deps, input);
+	if (result.outcome === "needs_reauth") return waitForSignIn(deps, input);
 	if (result.outcome !== "stuck" && result.outcome !== "needs_input") return { resume: false, result };
 	return waitForHuman(deps, input);
 }
@@ -247,6 +262,58 @@ async function waitForEngineReset(
 	return { resume: true, resumeNote: engineResumeNote(plan, deps.timeZone) };
 }
 
+/**
+ * The engine is not signed in (#881). Park until the re-auth relay reports a login, then resume.
+ *
+ * Not a takeover: the takeover view drives the ENGINE session, and a headless engine that could not
+ * sign in has exited — there is nothing in it to take over, which is why these runs sat out fifteen
+ * minutes and died. What resolves it is the relay (`coding_engine_reauth`), which runs the engine's
+ * subscription login on the runner and relays it to whatever device the owner is holding. Same
+ * 15-minute bound as a handoff (the sweeper's park budget); the stop reason it ends on,
+ * `engine_auth`, is resumable, so a login that lands after the park still continues the run.
+ */
+async function waitForSignIn(deps: PauseDeps, input: { round: number; result: CodingResult }): Promise<PauseVerdict> {
+	const { result, round } = input;
+	const since = deps.now();
+	await deps.card("needs_human");
+	await deps.notify("🔑 Coder needs you to sign in", `${deps.repo}: the coding engine is not signed in`, `coding-reauth:${round}`, true);
+	await deps.announce(
+		`🔑 **Coder needs you to sign in** — paused on ${deps.repo}: ${result.detail ?? "the coding engine is not signed in."} Sign it in from any device with coding_engine_reauth; the run continues by itself once it succeeds. If nobody signs it in within ${HANDOFF_GIVE_UP_MS / 60_000} minutes the run stops, and can be continued after signing in.`,
+	);
+
+	for (let poll = 0; poll < HANDOFF_WAIT_POLLS; poll++) {
+		await deps.sleep(`reauth-${round}-${poll}`, HANDOFF_POLL_MS);
+		const until = deps.now() + (HANDOFF_WAIT_POLLS - poll - 1) * HANDOFF_POLL_MS;
+		if (poll % HANDOFF_TICK_EVERY === 0 && !(await deps.tick({ until }))) {
+			return { resume: false, result: { ...result, outcome: "cancelled", detail: "Stopped by you while waiting for the coding engine to be signed in." } };
+		}
+		if (await deps.reauthCompletedSince(since).catch(() => false)) {
+			const restarted = await deps.restartEngine().then(
+				() => true,
+				() => false,
+			);
+			await deps.card("running");
+			await deps.announce(
+				restarted
+					? `🔑 **Signed in** — the coding engine on ${deps.repo} is signed in again and was restarted on the new sign-in; the run continues where it stopped.`
+					: `🔑 **Signed in** — but the coding engine on ${deps.repo} could not be restarted, so it may still hold the old sign-in. If the run stops on sign-in again, restart the session (coding_session_restart) and continue it.`,
+			);
+			return {
+				resume: true,
+				ownerTurn: true,
+				resumeNote: "The owner signed the coding engine in again (it had stopped on its own sign-in). Continue the objective from where it stopped; if the engine session ended, the next instruction starts it again.",
+			};
+		}
+	}
+	return {
+		resume: false,
+		result: {
+			...result,
+			detail: `Waiting on sign-in: ${result.detail ?? "the coding engine is not signed in."} Nobody signed it in within ${HANDOFF_GIVE_UP_MS / 60_000} minutes, so the run stopped here — sign in with coding_engine_reauth, then continue the run.`,
+		},
+	};
+}
+
 // ── How an outcome is reported ──────────────────────────────────────────────
 
 /**
@@ -275,6 +342,8 @@ export function stopReasonFor(outcome: CodingOutcome): LoopStopReason {
 			return "escalated";
 		case "waiting":
 			return "engine_limit";
+		case "needs_reauth":
+			return "engine_auth";
 		default:
 			return "done";
 	}

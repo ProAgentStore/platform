@@ -49,6 +49,7 @@ import { describeRepoScopeViolation, recordRepoScopeViolations, registeredRepoSl
 import { actsInWindow } from "../lib/instance-work.js";
 import { annotateOwnerAttribution } from "../lib/run-attribution.js";
 import { finishLoopRun, isCancelRequested, recordIteration, recordLiveness, type RunWaitReason } from "../lib/agent-loop-store.js";
+import { reauthCompletedSince } from "../lib/engine-reauth-store.js";
 import { tryDequeueAndStart } from "../lib/objective-queue-start.js";
 import { traceCodingRun } from "../lib/coding-run-trace.js";
 import { codingCrashReport, outcomeWord, runOutcomeNote } from "../lib/coding-run-report.js";
@@ -604,6 +605,8 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			takeoverStatus: () =>
 				runRetry(`hstatus-${round}-${n++}`, () => callRunner(conn, "/coding/takeover-status", { sessionId })) as Promise<{ resolved: boolean; value?: string }>,
 			endTakeover: () => runRetry(`resume-${round}`, () => callRunner(conn, `/coding/takeover/${encodeURIComponent(sessionId)}/end`, {})).then(() => undefined),
+			reauthCompletedSince: (since) => reauthCompletedSince(env, instanceId, userId, since),
+			restartEngine: () => runRetry(`reauth-end-${round}`, () => callRunner(conn, "/coding/end", { sessionId })).then(() => runRetry(`reauth-start-${round}`, () => startOnRunner())).then(() => undefined),
 			sleep: (label, ms) => step.sleep(label, ms),
 			notify: (title, body, key, alert) =>
 				runRetry(`notify-${key}-${round}`, async () => {
@@ -838,7 +841,8 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				// on — the only place both the reason and the run id are in hand before the wait
 				// starts. `waiting` is the engine's own usage window; `stuck`/`needs_input` are a
 				// person. A tick that could not tell them apart is why the record could not either.
-				const parkReason: RunWaitReason = result.outcome === "waiting" ? "engine_limit" : "human";
+				const parkReason: RunWaitReason =
+					result.outcome === "waiting" ? "engine_limit" : result.outcome === "needs_reauth" ? "engine_auth" : "human";
 				const pause = await resolvePause(pauseDeps(round, parkReason), { round, result, state: waitState });
 				if (!pause.resume) {
 					result = pause.result;

@@ -54,6 +54,7 @@ import type { Env } from "../types.js";
 import { codingRoutes } from "./coding.js";
 import { registerCopilotRoutes } from "./coding-brains.js";
 import { registerDiagnosticsRoutes } from "./coding-diagnostics.js";
+import { registerReauthRoutes } from "./coding-reauth.js";
 import { registerFeedRoutes } from "./coding-feed.js";
 import { registerPullRoutes } from "./coding-pulls.js";
 import { registerRepoRoutes } from "./coding-repos.js";
@@ -243,6 +244,11 @@ const ROUTES = [
 	// GitHub repository detail (#687) — issues, PRs, branches for a given owner/repo.
 	"GET /:instanceId/coding/github-repo-detail",
 	"GET /:instanceId/coding/diagnostics",
+	// The engine re-auth relay (#881), registered last.
+	"POST /:instanceId/coding/engine-reauth",
+	"GET /:instanceId/coding/engine-reauth",
+	"POST /:instanceId/coding/engine-reauth/input",
+	"DELETE /:instanceId/coding/engine-reauth",
 ];
 
 describe("the coding route surface", () => {
@@ -282,6 +288,7 @@ const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
 	"coding-brains.ts": registerCopilotRoutes,
 	"coding-diagnostics.ts": registerDiagnosticsRoutes,
 	"coding-feed.ts": registerFeedRoutes,
+	"coding-reauth.ts": registerReauthRoutes,
 };
 
 /** module → the routes it owns. `coding.ts` is the remainder, computed not listed. */
@@ -336,6 +343,14 @@ const OWNERSHIP: Record<string, string[]> = {
 	// that resolves the session ITSELF — every other one is handed a session id — and that rule is
 	// what makes one read answer both "what is it doing right now" and "what did that run do".
 	"coding-feed.ts": ["GET /:instanceId/coding/timeline"],
+	// The engine re-auth relay (#881): its own module, because it drives a terminal on the runner
+	// rather than a coding session, and owns the record a parked run waits on.
+	"coding-reauth.ts": [
+		"POST /:instanceId/coding/engine-reauth",
+		"GET /:instanceId/coding/engine-reauth",
+		"POST /:instanceId/coding/engine-reauth/input",
+		"DELETE /:instanceId/coding/engine-reauth",
+	],
 };
 
 /**

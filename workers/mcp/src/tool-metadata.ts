@@ -343,6 +343,9 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	// act `coding_session_fresh` performs, so it takes the same class (#696).
 	coding_session_open: "runtime",
 	coding_session_restart: "runtime",
+	// #881: runs the engine's subscription login on the runner and relays it. `runtime` for every
+	// action, including `status` — it opens a terminal and drives a CLI on the machine.
+	coding_engine_reauth: "runtime",
 	register_instance_runtime: "runtime",
 	run_instance_task: "runtime",
 	run_instance_trigger: "runtime",
@@ -575,7 +578,9 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// +1 runtime at #859: `runner_update`, a remote CLI update + restart — it acts ON the machine.
 	// +1 runtime at #879: `apply_account_coding_default` restarts reachable idle coder sessions
 	// so they launch with the account default engine. It is account-scoped state applied to machines.
-	runtime: 27,
+	// +1 runtime at #881: `coding_engine_reauth`, the remote engine sign-in. `runtime`, not `write`:
+	// it opens a terminal on the machine and drives the engine's login CLI there.
+	runtime: 28,
 	// +1 read, +8 destructive at #613 (agent-template authoring, write half): builder planning
 	// only computes a proposal; the other eight can delete, overwrite, run a billable template
 	// turn, create an enduring version, or create/scaffold a template. They all require the
