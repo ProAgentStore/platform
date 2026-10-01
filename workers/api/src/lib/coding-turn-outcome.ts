@@ -49,6 +49,9 @@ export const MAX_ENGINE_FAILURES = 3;
  */
 export const TURN_REPORT_MIN_CLI = "0.4.51";
 
+/** The CLI release whose failed-turn report carries the engine's own output, `tail` (#889). */
+export const TURN_TAIL_MIN_CLI = "0.4.68";
+
 /**
  * What one report means.
  *

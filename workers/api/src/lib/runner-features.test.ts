@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { TURN_TAIL_MIN_CLI } from "./coding-turn-outcome.js";
 import { ENGINE_CHECK_MIN_CLI } from "./engine-preflight.js";
 import { BOOTSTRAP_MIN_CLI, RUNNER_CONTROL_MIN_CLI, RUNNER_FEATURES, runnerFeatureGaps, runnerVersionView } from "./runner-features.js";
 
@@ -10,7 +11,7 @@ describe("what a runner version is too old for (#859)", () => {
 	});
 
 	it("a current runner is behind on nothing; an unknown version is not judged", () => {
-		expect(runnerFeatureGaps(ENGINE_CHECK_MIN_CLI)).toEqual([]);
+		expect(runnerFeatureGaps(TURN_TAIL_MIN_CLI)).toEqual([]);
 		expect(runnerFeatureGaps("")).toBeNull();
 		expect(runnerVersionView(null)).toEqual({ runnerVersion: null, behind: null });
 	});
@@ -24,15 +25,19 @@ describe("what a runner version is too old for (#859)", () => {
 		expect(runnerFeatureGaps(RUNNER_CONTROL_MIN_CLI)?.map((g) => g.feature)).toContain("self-updating pags up (never needs a manual install again)");
 	});
 
-	it("a machine on 0.4.63 is behind only on the supervisor restart (#860) and the engine check (#879)", () => {
+	it("a machine on 0.4.63 is behind only on the failed-turn output (#889), the supervisor restart (#860) and the engine check (#879)", () => {
 		expect(runnerFeatureGaps(BOOTSTRAP_MIN_CLI)?.map((g) => g.feature)).toEqual([
+			"the engine's own output in a failed run's detail",
 			"engine check before launch (installed + signed in), required by apply-now",
 			"runner_update restarts pags up itself, and service-managed runners",
 		]);
 	});
 
 	it("a machine one release behind the engine check is told so, and a current one is not (#879)", () => {
-		expect(runnerVersionView("0.4.66").behind).toEqual(["engine check before launch (installed + signed in), required by apply-now (needs 0.4.67)"]);
-		expect(runnerFeatureGaps(ENGINE_CHECK_MIN_CLI)).toEqual([]);
+		expect(runnerVersionView("0.4.66").behind).toEqual([
+			"the engine's own output in a failed run's detail (needs 0.4.68)",
+			"engine check before launch (installed + signed in), required by apply-now (needs 0.4.67)",
+		]);
+		expect(runnerFeatureGaps(ENGINE_CHECK_MIN_CLI)?.map((g) => g.feature)).toEqual(["the engine's own output in a failed run's detail"]);
 	});
 });
