@@ -11,6 +11,9 @@ const relay = (over: Partial<EngineReauthState> = {}): EngineReauthState => ({
 	status: "succeeded",
 	startedAt: T,
 	completedAt: T + 60_000,
+	origin: "relay",
+	deviceCode: null,
+	expiryWarnedAt: null,
 	...over,
 });
 const run = (over: Partial<LatestRunRow> = {}): LatestRunRow => ({
@@ -30,6 +33,12 @@ describe("parseReauthState", () => {
 		expect(parseReauthState({ status: "succeeded" })).toBeNull();
 		expect(parseReauthState({ ...relay(), status: "weird" })).toBeNull();
 		expect(parseReauthState("nope")).toBeNull();
+	});
+
+	it("reads a record written before #890 as a relay flow that was never warned", () => {
+		const { origin: _o, deviceCode: _d, expiryWarnedAt: _w, ...old } = relay();
+		expect(parseReauthState(old)).toEqual(relay());
+		expect(parseReauthState({ ...relay(), origin: "observed", deviceCode: "ABCD-EFGH2", expiryWarnedAt: T + 1 })).toMatchObject({ origin: "observed", deviceCode: "ABCD-EFGH2", expiryWarnedAt: T + 1 });
 	});
 });
 

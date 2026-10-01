@@ -29,6 +29,16 @@ export interface EngineReauthState {
 	startedAt: number;
 	/** Epoch ms, when the status became terminal. */
 	completedAt: number | null;
+	/**
+	 * Who started the login (#890). `relay`: `coding_engine_reauth`, which owns its tmux session and
+	 * closes it when the login ends. `observed`: someone typed it into their own tmux session through
+	 * the tmux connector. The platform only watches that session and never closes it.
+	 */
+	origin: "relay" | "observed";
+	/** The one-time code the flow showed when it was recorded, if any. Used to tell a restarted flow from the same one. */
+	deviceCode: string | null;
+	/** Epoch ms when the "about to expire" warning went out (#890). Set once, so it goes out once. */
+	expiryWarnedAt: number | null;
 }
 
 const STATUSES: readonly ReauthStatus[] = ["pending", "succeeded", "failed", "cancelled"];
@@ -47,6 +57,10 @@ export function parseReauthState(raw: unknown): EngineReauthState | null {
 		status: r.status as ReauthStatus,
 		startedAt: r.startedAt,
 		completedAt: typeof r.completedAt === "number" ? r.completedAt : null,
+		// Records written before #890 carry none of these: they were all relay-started, never warned.
+		origin: r.origin === "observed" ? "observed" : "relay",
+		deviceCode: typeof r.deviceCode === "string" ? r.deviceCode : null,
+		expiryWarnedAt: typeof r.expiryWarnedAt === "number" ? r.expiryWarnedAt : null,
 	};
 }
 
@@ -66,6 +80,42 @@ export async function readReauthState(env: Env, instanceId: string, userId: stri
 
 export async function writeReauthState(env: Env, instanceId: string, userId: string, state: EngineReauthState): Promise<void> {
 	await patchInstanceConfig(env, instanceId, userId, REAUTH_CONFIG_KEY, state);
+}
+
+/**
+ * Mark the expiry warning as sent, only if it has not been sent for THIS flow (#890). The condition
+ * is in SQL, so two overlapping cron ticks cannot both win: `true` means this caller claimed it and
+ * must send the warning, `false` means it was already sent or a newer flow replaced this one.
+ */
+export async function claimExpiryWarning(env: Env, instanceId: string, userId: string, startedAt: number, now: number): Promise<boolean> {
+	const res = await env.DB.prepare(
+		`UPDATE agent_instances
+		    SET config = json_set(config, '$.engineReauth.expiryWarnedAt', ?1)
+		  WHERE id = ?2 AND user_id = ?3 AND json_valid(config)
+		    AND json_extract(config, '$.engineReauth.status') = 'pending'
+		    AND json_extract(config, '$.engineReauth.startedAt') = ?4
+		    AND json_extract(config, '$.engineReauth.expiryWarnedAt') IS NULL`,
+	)
+		.bind(now, instanceId, userId, startedAt)
+		.run();
+	return (res.meta?.changes ?? 0) > 0;
+}
+
+/**
+ * Close out a pending flow the sweep saw end on its pane (#890), only if it is still THIS flow. A
+ * newer sign-in started in between is left alone.
+ */
+export async function finishReauthIfCurrent(env: Env, instanceId: string, userId: string, startedAt: number, status: "succeeded" | "failed", now: number): Promise<boolean> {
+	const res = await env.DB.prepare(
+		`UPDATE agent_instances
+		    SET config = json_set(config, '$.engineReauth.status', ?1, '$.engineReauth.completedAt', ?2)
+		  WHERE id = ?3 AND user_id = ?4 AND json_valid(config)
+		    AND json_extract(config, '$.engineReauth.status') = 'pending'
+		    AND json_extract(config, '$.engineReauth.startedAt') = ?5`,
+	)
+		.bind(status, now, instanceId, userId, startedAt)
+		.run();
+	return (res.meta?.changes ?? 0) > 0;
 }
 
 /** Did a relay sign an engine in at or after `since`? What a run parked on sign-in polls. */

@@ -18,6 +18,8 @@ import { readInstanceRunnerNode } from "../lib/runtime-nodes.js";
 import { sessionAttachment } from "../lib/session-attachment.js";
 import { shouldPersistSnapshot, terminalSnapshotContent } from "../lib/terminal-snapshot.js";
 import { recordEngineUsage } from "../lib/usage.js";
+import { readReauthState } from "../lib/engine-reauth-store.js";
+import { reauthExpiryView } from "../lib/engine-reauth-expiry.js";
 import { getSessionRunnerConn, requireOwned } from "./coding-shared.js";
 import { getRuntime, getRuntimeForNode, mirrorRuntimeTask, normalizeRunnerNode } from "./instances-runtime.js";
 import type { Env } from "../types.js";
@@ -324,6 +326,8 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			invocation,
 			// Always present (#881), so "signed in" and "not asked" are not the same absent field.
 			needsReauth: !!authPrompt,
+			// #890: a pending device-code sign-in on this instance, and how long its code has left. Null = none to watch.
+			signInExpiry: reauthExpiryView(await readReauthState(c.env, instanceId, uid).catch(() => null), Date.now()),
 			...(authPrompt ? { authPrompt: { ...authPrompt, guidance: authPromptGuidance(authPrompt) } } : {}),
 		});
 	});

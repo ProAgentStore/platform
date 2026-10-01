@@ -26,6 +26,7 @@ import { readProviderAccountHealth } from "../lib/provider-account-health.js";
 import { relayNameForInstance } from "../lib/runtime-nodes.js";
 import { classifyHealthProbeFailure, type HealthCheckState, runnerLiveStatus } from "../lib/runner-health.js";
 import { latestRunRow, readReauthState, signInBlockFrom } from "../lib/engine-reauth-store.js";
+import { reauthExpiryView } from "../lib/engine-reauth-expiry.js";
 import { getLiveRuntime } from "./instances-runtime.js";
 import { getDefaultRunnerConn, requireOwned } from "./coding-shared.js";
 import { MAX_SSH_HOSTS, httpsLoginFrom, sshHostGroups, sshIdentityIssues } from "../lib/ssh-identity.js";
@@ -762,6 +763,7 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			// blocked on sign-in; `engineReauth: null` = no relay has been started.
 			signIn: signInBlock,
 			engineReauth,
+			signInExpiry: reauthExpiryView(engineReauth, Date.now()), // #890: a pending device-code sign-in and how long its code has left; null = none to watch
 			// The owner's provider account, as last observed (#773). `no_failure_recorded` is not
 			// "healthy" — it is "nothing on record"; `verify` is how to get a live answer.
 			providerAccount,

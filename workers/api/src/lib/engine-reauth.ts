@@ -186,7 +186,8 @@ const URL_RE = /https:\/\/[^\s"'`)<>\]]+/g;
 const DEVICE_CODE_RE = /\b([A-Z0-9]{4,5}-[A-Z0-9]{4,5})\b/;
 const SETUP_TOKEN_RE = /sk-ant-oat\d{2}-[A-Za-z0-9_-]{20,}/;
 const SUCCESS_RE = /login successful|logged in successfully|successfully logged in|you are now logged in/i;
-const FAILED_RE = /\b(login failed|failed to (?:log|sign) in|authentication failed|oauth error|invalid (?:code|grant)|code (?:has )?expired)\b/i;
+// "device auth timed out after 15 minutes" is how Codex ends an unattended device-code flow (#890).
+const FAILED_RE = /\b(login failed|failed to (?:log|sign) in|authentication failed|oauth error|invalid (?:code|grant)|code (?:has )?expired|(?:device (?:auth|code)|login|sign-in) timed out)\b/i;
 const MENU_RE = /select login method|how would you like to authenticate|choose (?:a|your) (?:login|sign-in) method/i;
 
 /** Read what the login CLI is showing. Pure; `method` decides what "done" looks like. */

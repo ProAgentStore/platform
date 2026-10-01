@@ -174,7 +174,8 @@ async function advance(
 		await writeReauthState(c.env, instanceId, uid, next);
 		// Close the login terminal: a finished login has nothing more to say, and a setup-token
 		// session holds the token in its scrollback.
-		await callRunner(conn, "/tmux/session", { action: "kill", session: state.session }).catch(() => undefined);
+		// Only the relay's own session. An observed login (#890) ran in the owner's tmux session.
+		if (state.origin !== "observed") await callRunner(conn, "/tmux/session", { action: "kill", session: state.session }).catch(() => undefined);
 		if (next.status === "succeeded") {
 			resumableRuns = await stoppedOnSignIn(c.env, instanceId, uid).catch(() => []);
 			const more = resumableRuns.length
@@ -246,6 +247,9 @@ export function registerReauthRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 			status: "pending",
 			startedAt: Date.now(),
 			completedAt: null,
+			origin: "relay",
+			deviceCode: null,
+			expiryWarnedAt: null,
 		};
 		await writeReauthState(c.env, instanceId, uid, state);
 		const r = await advance(c, conn, instanceId, uid, state, String(ran.pane ?? ""));
@@ -285,7 +289,7 @@ export function registerReauthRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		const state = await readReauthState(c.env, instanceId, uid);
 		if (!state) return c.json({ status: "none" });
 		const conn = await getBoundRunnerConn(c.env, instanceId, uid).catch(() => null);
-		if (conn) await callRunner(conn, "/tmux/session", { action: "kill", session: state.session }).catch(() => undefined);
+		if (conn && state.origin !== "observed") await callRunner(conn, "/tmux/session", { action: "kill", session: state.session }).catch(() => undefined);
 		const next: EngineReauthState = state.status === "pending" ? { ...state, status: "cancelled", completedAt: Date.now() } : state;
 		if (next !== state) await writeReauthState(c.env, instanceId, uid, next);
 		return c.json({ status: next.status, clientType: next.clientType });

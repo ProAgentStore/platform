@@ -3,10 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // Mock the runner transport BEFORE importing the connector — the tmux handlers reach
 // the machine via getBoundRunnerConn + callRunner over the relay; we drive those.
 // vi.hoisted so the fns exist when the hoisted vi.mock factory runs.
-const { getBoundRunnerConn, callRunner } = vi.hoisted(() => ({
+const { getBoundRunnerConn, callRunner, observeDeviceAuth } = vi.hoisted(() => ({
 	getBoundRunnerConn: vi.fn(),
 	callRunner: vi.fn(),
+	observeDeviceAuth: vi.fn(async () => false),
 }));
+// The observation itself is tested in engine-reauth-expiry.test.ts. Here: every pane a tmux tool
+// reads reaches it, and it never changes what the tool returns (#890).
+vi.mock("../engine-reauth-expiry.js", () => ({ observeDeviceAuth }));
 vi.mock("../runner-client.js", () => ({
 	getBoundRunnerConn,
 	callRunner,
@@ -331,5 +335,29 @@ describe("tmux connector — the single-session binding (#447)", () => {
 			}
 			expect(t.jsonSchema.properties, t.name).toHaveProperty(arg);
 		}
+	});
+});
+
+describe("tmux connector: a device-code sign-in typed into a tmux session is handed to the expiry watch (#890)", () => {
+	const PANE = "https://auth.openai.com/codex/device\n   ABCD-EFGH2";
+	const cases: Array<[string, Record<string, unknown>]> = [
+		["tmux_capture_pane", { session: "work" }],
+		["tmux_run_command", { session: "work", command: "codex login --device-auth" }],
+		["tmux_send_keys", { session: "work", keys: "Enter" }],
+		["tmux_send_message", { session: "work", message: "codex login --device-auth" }],
+	];
+
+	it.each(cases)("%s passes its pane, session and instance", async (name, input) => {
+		observeDeviceAuth.mockClear();
+		callRunner.mockResolvedValue({ pane: PANE, changed: true });
+		await tool(name).handler(ctx(), input);
+		expect(observeDeviceAuth).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ instanceId: "i1", userId: "u1", session: "work", pane: PANE }));
+	});
+
+	it("a failing observation never changes the tool's result", async () => {
+		observeDeviceAuth.mockRejectedValueOnce(new Error("D1 down"));
+		callRunner.mockResolvedValue({ pane: PANE });
+		const out = await tool("tmux_capture_pane").handler(ctx(), { session: "work" });
+		expect(out).toMatchObject({ success: true, content: PANE });
 	});
 });

@@ -109,6 +109,11 @@ describe("readReauthPane", () => {
 		expect(readReauthPane("Starting…", "claude-login").state).toBe("working");
 	});
 
+	it("reads Codex's unattended timeout as a failure, even with the code still in the scrollback (#890)", () => {
+		const pane = "https://auth.openai.com/codex/device\n   ABCD-EFGH2\nError: device auth timed out after 15 minutes";
+		expect(readReauthPane(pane, "codex-device-auth").state).toBe("failed");
+	});
+
 	it("setup-token succeeds when the token is printed — and the token is stored, never shown", () => {
 		const pane = `Your OAuth token (valid for 1 year):\n\n${TOKEN}\n\nStore this token securely.`;
 		expect(readReauthPane(pane, "claude-setup-token").state).toBe("succeeded");

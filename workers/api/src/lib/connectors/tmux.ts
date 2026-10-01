@@ -16,6 +16,16 @@
 import type { ToolDef, RegistryToolCtx } from "./types.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../runner-client.js";
 import { noteUnmeteredDrive } from "../engine-metering.js";
+import { observeDeviceAuth } from "../engine-reauth-expiry.js";
+
+/**
+ * A device-code sign-in typed into the owner's own tmux session is recorded so it can be warned
+ * about before its code expires (#890). Best-effort: it never changes what the tool returns.
+ */
+async function watchForDeviceAuth(ctx: RegistryToolCtx, conn: RunnerConn, session: string, pane: unknown): Promise<void> {
+	if (typeof pane !== "string" || !pane) return;
+	await observeDeviceAuth(ctx.env, { instanceId: ctx.instanceId, userId: ctx.userId, runnerNode: conn.runnerNode ?? null, session, pane }).catch(() => undefined);
+}
 
 /** Resolve the live runner for this instance, or a helpful error string. */
 async function resolveRunner(ctx: RegistryToolCtx): Promise<{ conn: RunnerConn } | { error: string }> {
@@ -78,6 +88,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 				{ session, lines: input.lines },
 				{ timeoutMs: READ_TIMEOUT_MS },
 			);
+			await watchForDeviceAuth(ctx, r.conn, session, res.pane);
 			return { content: res.pane ?? "", success: true, origin: `the tmux session "${session}" on your machine` };
 		},
 	},
@@ -106,6 +117,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 			if (!command.trim()) return { content: "A `command` is required.", success: false };
 			const res = await callRunner<{ pane?: string; paneBefore?: string; changed?: boolean; activeCommand?: string | null }>(r.conn, "/tmux/run", { session, command });
 			await noteUnmeteredDrive(ctx.env, ctx, { driver: "terminal", target: `tmux:${session}`, activeCommand: res.activeCommand });
+			await watchForDeviceAuth(ctx, r.conn, session, res.pane);
 			// The landed note is the PLATFORM's judgement about the pane, not the pane — it rides in
 			// `tail`, outside the fence, or the model reads our diagnosis as terminal output.
 			const landed = res.changed === false ? "(pane did not change — the command may not have landed; is the CLI ready?)" : "";
@@ -139,6 +151,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 			if (text == null && keys.length === 0) return { content: "Provide `text` and/or `keys` to send.", success: false };
 			const res = await callRunner<{ pane?: string; paneBefore?: string; changed?: boolean; activeCommand?: string | null }>(r.conn, "/tmux/send", { session, text, keys });
 			await noteUnmeteredDrive(ctx.env, ctx, { driver: "terminal", target: `tmux:${session}`, activeCommand: res.activeCommand });
+			await watchForDeviceAuth(ctx, r.conn, session, res.pane);
 			const landed = res.changed === false ? "(pane did not change — the input may not have landed; is the CLI at its input prompt?)" : "";
 			return { content: res.pane ?? `Sent to ${session}.`, success: true, tail: landed, origin: `the tmux session "${session}" on your machine` };
 		},
@@ -174,6 +187,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 				{ session, text: message, keys: ["Enter"] },
 			);
 			await noteUnmeteredDrive(ctx.env, ctx, { driver: "terminal", target: `tmux:${session}`, activeCommand: res.activeCommand });
+			await watchForDeviceAuth(ctx, r.conn, session, res.pane);
 			if (res.changed === false) {
 				return {
 					content: res.pane ?? "",

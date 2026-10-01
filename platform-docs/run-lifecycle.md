@@ -109,6 +109,16 @@ Before the first turn, the platform also asks the machine whether it can run the
 
 The check reads only whether a login exists, never its value. A login that is stored but has been revoked on the provider's side still gets through it and fails on the first turn.
 
+### A Sign-In Waiting Unattended Is Flagged Before Its Code Expires
+
+`codex login --device-auth` shows a one-time code that works for 15 minutes. If nobody enters it, the CLI times out in a pane nobody is watching, and the missing login only shows up later, when a run fails on it. So the platform watches that flow while the code still works:
+
+- **Which flows.** A sign-in started with `coding_engine_reauth`, and one typed by hand into your own tmux session through the tmux tools. The second is recorded when a tmux tool's pane shows a Codex device code. The platform never closes that session. Only a method whose code lifetime is known is watched (today, Codex's device code). Claude's sign-in flows are not.
+- **The warning.** At the 10-minute mark (5 minutes left), a per-minute check reads the login pane. If the code is still showing, one alert goes to your notification feed with the link, the code and when it expires. It is sent once per flow. If the pane shows the sign-in finished, failed or disappeared, nothing is sent and the record is closed. If the machine cannot be read, nothing is sent either, because the platform cannot tell whether anyone is still waiting.
+- **The flag.** `coding_diagnostics` and `coding_session_capture` both carry `signInExpiry`: the flow's engine, session, `expiresAt`, `expiresInSeconds`, `expiringSoon` (5 minutes or less left), `expired`, and `warnedAt`. It is `null` when there is no pending sign-in with a known lifetime, which is the case for every ordinary session.
+
+A flow noticed in a tmux session is timed from when the platform first saw its code, so its warning can come late but never early.
+
 ## Where You See This
 
 - **`check_instance_loop`** and **`coding_loop_status`** (MCP) — an instance's recent runs, each with `health` and, when parked, a note saying what for and until when.

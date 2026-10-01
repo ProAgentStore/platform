@@ -135,6 +135,29 @@ describe("the re-auth relay (#881)", () => {
 		expect(upsertUserProviderKey).not.toHaveBeenCalled();
 	});
 
+	it("an OBSERVED login (#890) runs in the owner's own tmux session: finishing or cancelling it never kills that session", async () => {
+		store.state = {
+			clientType: "codex",
+			method: "codex-device-auth",
+			session: "work",
+			runnerNode: "pink-laptop",
+			status: "pending",
+			startedAt: Date.now(),
+			completedAt: null,
+			origin: "observed",
+			deviceCode: "WXYZ-1234",
+			expiryWarnedAt: null,
+		};
+		pane = "https://auth.openai.com/codex/device\n   WXYZ-1234\nSuccessfully logged in";
+		expect((await call("GET", "")).body.status).toBe("succeeded");
+		expect(calls.some((c) => c.path === "/tmux/session" && c.body.action === "kill")).toBe(false);
+
+		store.state = { ...store.state, status: "pending", completedAt: null };
+		await call("DELETE", "");
+		expect(calls.some((c) => c.path === "/tmux/session" && c.body.action === "kill")).toBe(false);
+		expect(store.state?.status).toBe("cancelled");
+	});
+
 	it("start: picks the highlighted SUBSCRIPTION option of Claude's login menu, never another", async () => {
 		hasUserProviderKey.mockResolvedValue(false);
 		pane = "Select login method:\n❯ 1. Claude account with subscription · Pro, Max\n  2. Anthropic Console account · API usage billing";

@@ -63,6 +63,7 @@ import { runCommitCloseWatch } from "./lib/commit-close-watch.js";
 import { runDeployWatch } from "./lib/deploy-watch.js";
 import { runStaleRunSweep } from "./lib/run-sweeper.js";
 import { runCodingSessionSweep } from "./lib/coding-session-sweeper.js";
+import { runReauthExpiryWatch } from "./lib/engine-reauth-expiry.js";
 import { runStatsRollup } from "./lib/stats-rollup.js";
 import { sweepTerminalSnapshots } from "./lib/coding-timeline.js";
 import type { Env } from "./types.js";
@@ -283,6 +284,8 @@ export default {
 		// a run ending — which #271 correctly stopped — and orphan detection needed a human to open
 		// the diagnostics panel. `runCodingSessionSweep` swallows + logs its own errors.
 		ctx.waitUntil(runCodingSessionSweep(env));
+		// Warn before an unattended device-code sign-in expires (#890). Swallows its own errors.
+		ctx.waitUntil(runReauthExpiryWatch(env));
 		// Snapshot yesterday's stats for instances that were active (#313). A sixth independent
 		// failure domain, and the one with the weakest claim on the tick: a missed rollup leaves a
 		// GAP in a chart, which is a visible and honest outcome, where a missed delivery loses work.
