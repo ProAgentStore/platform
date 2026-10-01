@@ -90,6 +90,10 @@ const AUTH_PHRASES = [
 	// refreshed" (matched above), and on its own it is generic enough to fire on quoted source.
 	"run codex login",
 	"run `codex login`",
+	// Codex with no usable login (#882): it does not prompt, it retries OpenAI's 401 for ~35s and
+	// fails the turn. OpenAI's own wording — narrow enough that only a request sent with NO
+	// credential produces it. Reaches the pane and the turn report since #889 stopped dropping it.
+	"missing bearer or basic authentication",
 ];
 
 /** Phrases that look like auth but are NOT a block — the engine is running normally. */

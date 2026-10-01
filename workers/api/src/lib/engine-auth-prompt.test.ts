@@ -194,3 +194,18 @@ describe("the headless engines' own sign-in failures (#881)", () => {
 		expect(p && authPromptGuidance(p)).toContain("coding_engine_reauth");
 	});
 });
+
+describe("Codex with no usable login (#882)", () => {
+	// The production lines, from HeartFull-online/platform: Codex never prompts, it retries the 401.
+	const RETRY = '[codex] error: Reconnecting... 2/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: wss://api.openai.com/v1/responses)';
+	const FAILED = "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses";
+
+	it("is a sign-in block, read from the pane or from the turn report", () => {
+		expect(detectAuthPrompt(RETRY)).not.toBeNull();
+		expect(engineSignInBlock({ pane: "", lastTurn: { detail: `[error] ${FAILED}` } })).not.toBeNull();
+	});
+
+	it("a bare 401 is NOT — a tool's curl to some other API says that too", () => {
+		expect(detectAuthPrompt("curl: (22) The requested URL returned error: 401 Unauthorized")).toBeNull();
+	});
+});
