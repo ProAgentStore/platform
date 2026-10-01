@@ -53,3 +53,30 @@ export function wrongProviderError(providerId: string, key: string): string | nu
 	const to = LABELS[providerId]?.name ?? providerId;
 	return `That looks like ${from} key, not ${to}. Check you pasted it into the right provider.`;
 }
+
+/** A Cloudflare account ID: 32 hex characters, as the dashboard shows it. */
+const CLOUDFLARE_ACCOUNT_ID = /^[0-9a-f]{32}$/i;
+
+/**
+ * Reject a Cloudflare Workers AI pair whose account ID is not an account ID (#893).
+ *
+ * The account ID is the one half with a fixed, documented shape, so it is the half checked —
+ * and checking it catches the swap that put a live token into the account-ID slot, where
+ * Cloudflare's 404 then quoted it back. The token's shape is NOT allowlisted, for the reason this
+ * file opens with; it is refused only when it is itself account-ID-shaped, which is the other half
+ * of the same swap. Neither message quotes the values: these are credentials.
+ */
+export function cloudflareCredentialsError(accountId: string, token: string): string | null {
+	const id = (accountId || "").trim();
+	const tok = (token || "").trim();
+	const tokenIsAnId = CLOUDFLARE_ACCOUNT_ID.test(tok);
+	if (!CLOUDFLARE_ACCOUNT_ID.test(id)) {
+		return tokenIsAnId
+			? "The Account ID and API token look swapped: the token field holds a 32-character hex account ID, and the Account ID field does not. Paste each into the other field."
+			: "That Account ID is not a Cloudflare account ID — it must be the 32-character hex ID the Cloudflare dashboard shows for your account, not the API token.";
+	}
+	if (tokenIsAnId) {
+		return "The API token field holds a 32-character hex account ID, not an API token. Paste the API token from dash.cloudflare.com/profile/api-tokens.";
+	}
+	return null;
+}

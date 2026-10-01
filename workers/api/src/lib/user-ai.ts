@@ -20,6 +20,7 @@ import { endOnUserTurn, mergeContent, pairToolBlocks } from "./anthropic-tool-tu
 import { recordUsage, type UsageContext } from "./usage.js";
 import { fromWorkersAiResult, toWorkersAiBody, WorkersAiUnsupportedContentError, workersAiModelFor } from "./workers-ai-protocol.js";
 import { isWorkersAiModel } from "./brain-models.js";
+import { redactCloudflareUpstream } from "./cloudflare-redact.js";
 import { logPromptSectionEstimates } from "./prompt-section-estimates.js";
 import type { Env } from "../types.js";
 
@@ -671,7 +672,9 @@ async function runCloudflareAi(
 			`Cloudflare Workers AI request failed with HTTP ${res.status}`,
 			res.status === 401 || res.status === 403 ? 400 : 502,
 			res.status,
-			data,
+			// `details` reaches the verify response and the error log; Cloudflare's errors quote the
+			// account path, which holds a token when the two were saved swapped (#893).
+			redactCloudflareUpstream(data, credentials),
 		);
 	}
 	await env.DB.prepare(

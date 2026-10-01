@@ -8,14 +8,16 @@ import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { upsertUserProviderKey } from "../lib/user-api-key-store.js";
 import { backfillKeyHint } from "../lib/key-hint-backfill.js";
-import { wrongProviderError } from "../lib/key-shape.js";
+import { cloudflareCredentialsError, wrongProviderError } from "../lib/key-shape.js";
 import { decryptKey } from "../lib/crypto.js";
 import { logError } from "../lib/error-log.js";
 import { logEvent } from "../lib/events.js";
 import { recordVoiceUsage } from "../lib/usage.js";
 import { estimateTtsMicros, estimateSttMicros, secondsFromAudioBytes } from "../lib/ai-pricing.js";
 import {
+	type AiProvider,
 	encodeCloudflareAiCredentials,
+	getUserCloudflareAiCredentials,
 	getUserProviderKey,
 	runUserWorkersAi,
 	UserAiCredentialsError,
@@ -272,7 +274,11 @@ keysRoutes.put("/:provider", async (c) => {
 				"Cloudflare Workers AI requires accountId and key",
 			);
 		}
-		keyToStore = encodeCloudflareAiCredentials(accountId.trim(), key.trim());
+		// A swapped pair is refused here, before Cloudflare is ever asked about it (#893) — the ask is
+		// what quoted a token back on screen.
+		const shape = cloudflareCredentialsError(accountId, key);
+		if (shape) throw new HttpError(400, shape);
+		keyToStore = encodeCloudflareAiCredentials(accountId.trim().toLowerCase(), key.trim());
 	} else {
 		// Reject only a key that clearly belongs to ANOTHER provider. Requiring the provider's
 		// own known prefix rots closed: Google now issues `AQ.…` keys while the old check still
@@ -317,11 +323,21 @@ keysRoutes.post("/:provider/verify", async (c) => {
 	if (!model) {
 		throw new HttpError(400, `Verification not available for ${providerId}`);
 	}
-	// `runUserWorkersAi` picks the provider from what the user has stored, Anthropic first — so a
-	// verify addressed to Anthropic must fail plainly when there is no Anthropic key to test, rather
-	// than silently probing Workers AI and reporting that as the answer.
+	// The probe is PINNED to the provider the route names (#892). Unpinned, `runUserWorkersAi` picks
+	// Anthropic first whenever an Anthropic key is stored, so `verify cloudflare` spent Anthropic
+	// tokens and reported Cloudflare OK whatever the Cloudflare credentials were. Pinned, a missing
+	// credential would surface as the mid-turn sentence the pin was written for, so it is answered
+	// here first, plainly.
 	if (providerId === "anthropic" && !(await getUserProviderKey(c.env, session.uid, "anthropic"))) {
 		throw new HttpError(404, "No Anthropic key stored. Add one in Profile → API Keys → Anthropic");
+	}
+	if (providerId === "cloudflare") {
+		const stored = await getUserCloudflareAiCredentials(c.env, session.uid).catch((e: unknown) => e);
+		if (stored instanceof UserAiCredentialsError) {
+			const missing = stored.message === new UserAiCredentialsError().message;
+			throw new HttpError(missing ? 404 : 400, missing ? "No Cloudflare Workers AI credentials stored. Add your account ID and API token in Profile → API Keys → Cloudflare Workers AI" : stored.message);
+		}
+		if (stored instanceof Error) throw stored;
 	}
 
 	try {
@@ -337,6 +353,8 @@ keysRoutes.post("/:provider/verify", async (c) => {
 				max_tokens: 4,
 				maxTokens: 4,
 			},
+			undefined,
+			{ provider: providerId as AiProvider },
 		);
 		return c.json({ ok: true, provider: providerId, checkedAt: new Date().toISOString() });
 	} catch (err) {

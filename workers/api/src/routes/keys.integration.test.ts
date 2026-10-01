@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "../lib/auth.js";
 import { signSession } from "../lib/session.js";
 import { keysRoutes } from "./keys.js";
@@ -63,7 +63,9 @@ function buildApp() {
 							},
 							async first() {
 								if (sql.includes("SELECT key_ciphertext")) {
-									const [uid, provider] = args as [string, string];
+									// The Cloudflare read names its provider in the SQL and binds only the user.
+									const uid = args[0] as string;
+									const provider = sql.includes("provider = 'cloudflare'") ? "cloudflare" : (args[1] as string);
 									const row = find(uid, provider);
 									return row ? { key_ciphertext: row.key_ciphertext, dek_wrapped: row.dek_wrapped, iv: row.iv, account_id: row.account_id, key_hint: row.key_hint } : null;
 								}
@@ -307,5 +309,94 @@ describe("key hint on /v1/keys/status (integration)", () => {
 
 		const after = await jsonBody(await app.request("/v1/keys/status", { headers: { Authorization: `Bearer ${tok}` } }, env));
 		expect(rows(after.providers).find((p) => p.id === "openai")?.keyHint).toBe("4f2a");
+	});
+});
+
+// Self-labelling fixtures: a Cloudflare account ID is 32 hex characters, the token anything else.
+const CF_ACCOUNT_ID = "0123456789abcdef0123456789abcdef";
+const CF_TOKEN = "cf-token-fixture-not-a-real-token-000000";
+const ANTHROPIC_KEY = "sk-ant-integration-fixture-anthropic";
+
+describe("PUT /v1/keys/cloudflare — account-ID shape (#893)", () => {
+	it("400s a swapped token/account-ID pair, stores nothing, and quotes neither value", async () => {
+		const { app, env, keys } = buildApp();
+		const res = await json(app, env, "PUT", "/v1/keys/cloudflare", { accountId: CF_TOKEN, key: CF_ACCOUNT_ID }, await tokenFor("u1"));
+		expect(res.status).toBe(400);
+		const text = await res.text();
+		expect(text).toMatch(/swapped/);
+		expect(text).not.toContain(CF_TOKEN);
+		expect(text).not.toContain(CF_ACCOUNT_ID);
+		expect(keys).toHaveLength(0);
+	});
+
+	it("stores a well-formed pair", async () => {
+		const { app, env, keys } = buildApp();
+		const res = await json(app, env, "PUT", "/v1/keys/cloudflare", { accountId: CF_ACCOUNT_ID, key: CF_TOKEN }, await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		expect(keys).toHaveLength(1);
+	});
+});
+
+describe("POST /v1/keys/cloudflare/verify probes Cloudflare, not Anthropic (#892)", () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	/** Every outbound request, so a test can say which provider was asked. */
+	function stubUpstreams(cloudflare: () => Response) {
+		const calls: string[] = [];
+		vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+			const url = String(input instanceof Request ? input.url : input);
+			calls.push(url);
+			if (url.startsWith("https://api.cloudflare.com/")) return cloudflare();
+			// Anything reaching Anthropic is the defect; answer as a working key would, so the old
+			// code path reports "ok" and the test fails on the assertion rather than on a crash.
+			return new Response(JSON.stringify({ content: [{ type: "text", text: "ok" }], usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200 });
+		}));
+		return calls;
+	}
+
+	async function withBothKeys(accountId: string) {
+		const { app, env } = buildApp();
+		const tok = await tokenFor("u1");
+		expect((await json(app, env, "PUT", "/v1/keys/anthropic", { key: ANTHROPIC_KEY }, tok)).status).toBe(200);
+		expect((await json(app, env, "PUT", "/v1/keys/cloudflare", { accountId, key: CF_TOKEN }, tok)).status).toBe(200);
+		return { app, env, tok };
+	}
+
+	it("reports bad Cloudflare credentials as NOT ok, with an Anthropic key also stored, and never calls Anthropic", async () => {
+		const { app, env, tok } = await withBothKeys(CF_ACCOUNT_ID);
+		const calls = stubUpstreams(() => new Response(JSON.stringify({
+			success: false,
+			errors: [{ code: 7003, message: `Could not route to /client/v4/accounts/${CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.2-3b-instruct, perhaps your object identifier is invalid?` }],
+		}), { status: 404 }));
+
+		const res = await json(app, env, "POST", "/v1/keys/cloudflare/verify", undefined, tok);
+		const text = await res.text();
+		const body = JSON.parse(text) as Record<string, unknown>;
+		expect(body.ok).toBe(false);
+		expect(body.upstreamStatus).toBe(404);
+		expect(calls.length).toBeGreaterThan(0);
+		expect(calls.every((u) => u.startsWith(`https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/run/`))).toBe(true);
+		// Cloudflare's own error text comes back in `details`, with the account path masked.
+		expect(text).toContain("/accounts/••••/");
+		expect(text).not.toContain(CF_ACCOUNT_ID);
+		expect(text).not.toContain(CF_TOKEN);
+	});
+
+	it("reports good Cloudflare credentials as ok, from Cloudflare's answer", async () => {
+		const { app, env, tok } = await withBothKeys(CF_ACCOUNT_ID);
+		const calls = stubUpstreams(() => new Response(JSON.stringify({ success: true, result: { response: "ok" } }), { status: 200 }));
+		const res = await json(app, env, "POST", "/v1/keys/cloudflare/verify", undefined, tok);
+		expect(((await res.json()) as Record<string, unknown>).ok).toBe(true);
+		expect(calls.every((u) => u.startsWith("https://api.cloudflare.com/"))).toBe(true);
+	});
+
+	it("404s plainly when no Cloudflare credentials are stored, rather than verifying the Anthropic key", async () => {
+		const { app, env } = buildApp();
+		const tok = await tokenFor("u1");
+		await json(app, env, "PUT", "/v1/keys/anthropic", { key: ANTHROPIC_KEY }, tok);
+		const calls = stubUpstreams(() => new Response("{}", { status: 500 }));
+		const res = await json(app, env, "POST", "/v1/keys/cloudflare/verify", undefined, tok);
+		expect(res.status).toBe(404);
+		expect(calls).toHaveLength(0);
 	});
 });

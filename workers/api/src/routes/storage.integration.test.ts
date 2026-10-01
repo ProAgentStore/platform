@@ -459,9 +459,12 @@ describe("instance storage routes (owner-scoped, different D1 table)", () => {
 				const { status, body, sent } = await put("@cf/meta/llama-4-scout-17b-16e-instruct", {}, ["u1"]);
 				expect(status).toBe(400);
 				expect(String(body.error)).toMatch(new RegExp(`Cloudflare rejected your stored Workers AI credentials \\(HTTP ${code}: `));
-				expect(String(body.error)).toContain(message);
+				// Cloudflare's reason is surfaced, with the account path masked (#893): when a token was saved
+				// as the account ID, that path segment IS the token.
+				expect(String(body.error)).toContain(message.replace("/accounts/acct123/", "/accounts/••••/"));
 				expect(String(body.error)).toMatch(/Profile → API Keys/);
 				expect(String(body.error)).not.toContain("cf-token-abc");
+				expect(String(body.error)).not.toContain("acct123");
 				expect(sent).toBeUndefined();
 			}
 		});

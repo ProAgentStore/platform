@@ -4,6 +4,7 @@
  */
 import type { Env } from "../types.js";
 import { getUserCloudflareAiCredentials, type StoredCloudflareAiCredentials } from "./user-ai.js";
+import { redactCloudflareUpstream } from "./cloudflare-redact.js";
 
 /** The Cloudflare statuses that mean "these credentials do not work" — 400 is its bad-token answer, 404 a bad account id. */
 const CLOUDFLARE_CREDENTIAL_REFUSALS = new Set([400, 401, 403, 404]);
@@ -37,15 +38,17 @@ export async function cloudflareAiCredentialProblem(env: Env, userId: string): P
 	} catch (e) {
 		return {
 			status: 502,
-			error: `Could not reach Cloudflare to check your Workers AI credentials (${e instanceof Error ? e.message : String(e)}) — nothing was changed. Pick the model again in a moment.`,
+			error: `Could not reach Cloudflare to check your Workers AI credentials (${redactCloudflareUpstream(e instanceof Error ? e.message : String(e), credentials)}) — nothing was changed. Pick the model again in a moment.`,
 		};
 	}
 	if (res.ok) return null;
 	if (!CLOUDFLARE_CREDENTIAL_REFUSALS.has(res.status)) {
 		return { status: 502, error: `Cloudflare answered HTTP ${res.status} when checking your Workers AI credentials — nothing was changed. Pick the model again in a moment.` };
 	}
+	// Redacted before it is read (#893): Cloudflare's 404 quotes the account path, and when a token was
+	// saved as the account ID that path IS the token.
 	const said = await (res.json() as Promise<{ errors?: Array<{ message?: string }> }>)
-		.then((d) => d.errors?.map((x) => x.message).filter(Boolean).join("; ") ?? "")
+		.then((d) => redactCloudflareUpstream(d.errors?.map((x) => x.message).filter(Boolean).join("; ") ?? "", credentials))
 		.catch(() => "");
 	return {
 		status: 400,
