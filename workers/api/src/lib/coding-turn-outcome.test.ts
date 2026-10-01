@@ -132,3 +132,56 @@ describe("what the brain and the human are told", () => {
 		expect(engineFailureNote(s)).not.toContain("code null");
 	});
 });
+
+describe("the engine's own output reaches the failure summary (#889)", () => {
+	const failedWith = (at: number, tail: string[] | undefined, detail?: string) => ({ ...failedAt(at, detail), ...(tail ? { tail } : {}) });
+	const threeOf = (tail: string[] | undefined, detail?: string) => {
+		let s = EMPTY_STREAK;
+		for (let i = 1; i <= MAX_ENGINE_FAILURES; i++) s = observeTurn(s, failedWith(i, tail, detail)).streak;
+		return s;
+	};
+	const TAIL_401 = [
+		"Reading additional input from stdin...",
+		"2026-09-30T23:02:02.526180Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://api.openai.com/v1/responses",
+		"error: Reconnecting... 2/5 (unexpected status 401 Unauthorized)",
+		"[error] unexpected status 401 Unauthorized: Missing bearer or basic authentication in header",
+	];
+
+	it("an engine that died WITH output: the human's detail quotes it verbatim, newest line included", () => {
+		const detail = engineFailureDetail(threeOf(TAIL_401, "[error] unexpected status 401 Unauthorized"), "HeartFull-online/platform");
+		expect(detail).toContain("The engine's own output on its last turn (4 lines, verbatim):");
+		for (const line of TAIL_401) expect(detail).toContain(`  ${line}`);
+		// …and the brain's note carries it too, so the Pilot is not left to guess either.
+		expect(engineFailureNote(threeOf(TAIL_401))).toContain("ERROR codex_api");
+	});
+
+	it("an engine that died with NO output says so in as many words — never a silent blank", () => {
+		const detail = engineFailureDetail(threeOf([]));
+		expect(detail).toMatch(/printed nothing at all on stdout or stderr/);
+		expect(engineFailureNote(threeOf([]))).toMatch(/printed nothing at all/);
+	});
+
+	it("a runner that predates the tail is not reported as silent — absence is not a measurement", () => {
+		expect(engineFailureDetail(threeOf(undefined))).not.toMatch(/printed nothing/);
+	});
+
+	it("fits the stored detail's 2,000 characters, keeping the NEWEST lines", () => {
+		const long = Array.from({ length: 60 }, (_, i) => `line ${i} ${"x".repeat(300)}`);
+		const detail = engineFailureDetail(threeOf(long), "aipa");
+		expect(detail.length).toBeLessThanOrEqual(2000);
+		expect(detail).toContain("line 59 ");
+		expect(detail).not.toContain("line 0 ");
+		expect(detail).toMatch(/last \d+ of 60 lines/);
+	});
+
+	it("masks a secret the engine printed, and ignores what is not a line of text", () => {
+		const s = threeOf(["Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123", 42 as unknown as string, ""]);
+		expect(s.lastTail).toHaveLength(1);
+		expect(engineFailureDetail(s)).not.toContain("abcdefghijklmnopqrstuvwxyz0123");
+	});
+
+	it("a later SUCCESS clears it — a recovered engine carries no stale output", () => {
+		const s = observeTurn(threeOf(TAIL_401), okAt(99)).streak;
+		expect(s.lastTail).toBeUndefined();
+	});
+});

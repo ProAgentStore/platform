@@ -22,6 +22,27 @@
 export const MAX_TURN_DETAIL = 240;
 
 /**
+ * How much of a turn's own output rides on its report as {@link EngineTurnReport.tail} (#889).
+ *
+ * The last LINES, because the actionable part of a failure is at the end — Codex retried a 401 five
+ * times and then said so in `turn.failed`. Bounded three ways (lines, per-line, total) because the
+ * report is re-sent on every snapshot and a runaway line must not grow it.
+ */
+export const MAX_TURN_TAIL_LINES = 60;
+export const MAX_TURN_TAIL_LINE = 400;
+export const MAX_TURN_TAIL_CHARS = 8000;
+
+/** Append one line of the turn's own output to its tail, keeping the newest within the bounds above. */
+export function appendTurnTail(tail: string[], line: string): void {
+	const text = line.trim();
+	if (!text) return;
+	tail.push(text.length > MAX_TURN_TAIL_LINE ? `${text.slice(0, MAX_TURN_TAIL_LINE)}…` : text);
+	while (tail.length > MAX_TURN_TAIL_LINES) tail.shift();
+	let total = tail.reduce((n, l) => n + l.length + 1, 0);
+	while (total > MAX_TURN_TAIL_CHARS && tail.length > 1) total -= (tail.shift() as string).length + 1;
+}
+
+/**
  * Each engine mechanism reports only what it can honestly know:
  *   * a RAW one-shot engine's turn IS a process, so its exit code is the turn's own verdict;
  *   * Claude's stream-json turn ends with a `result` event carrying `is_error`, which is the same
@@ -52,6 +73,16 @@ export interface EngineTurnReport {
 	 * is that a regex over an engine's prose is the class of guess #391 removed from `runState`.
 	 */
 	detail?: string;
+	/**
+	 * The turn's own output, last lines first-to-last, verbatim (#889): stdout AND stderr, including
+	 * lines a structured engine printed outside its protocol — which is where Codex wrote
+	 * `401 Unauthorized` while its report said only "failed".
+	 *
+	 * Carried on a FAILED turn only — a working turn's output is in the pane, and the report is
+	 * re-sent on every snapshot. On a failed turn it is present even when empty, so `[]` is the
+	 * statement "the engine printed nothing this turn"; absent there means a runner that predates it.
+	 */
+	tail?: string[];
 }
 
 /**
@@ -61,14 +92,16 @@ export interface EngineTurnReport {
  * 15-minute wedge ceiling and `interrupt()` both land here, and counting either as an engine
  * failure would let three slow builds read as a broken CLI.
  */
-export function turnReportFromExit(code: number | null, signal: string | null, lastLine = "", now = Date.now()): EngineTurnReport {
-	const detail = lastLine.trim().slice(0, MAX_TURN_DETAIL);
+export function turnReportFromExit(code: number | null, signal: string | null, lastLine = "", now = Date.now(), tail: readonly string[] = []): EngineTurnReport {
+	const detail = (lastLine.trim() || tail.at(-1) || "").slice(0, MAX_TURN_DETAIL);
+	const verdict = signal !== null ? "killed" : code === 0 ? "ok" : "failed";
 	return {
-		verdict: signal !== null ? "killed" : code === 0 ? "ok" : "failed",
+		verdict,
 		exitCode: code,
 		signal,
 		at: now,
 		...(detail ? { detail } : {}),
+		...(verdict === "failed" ? { tail: [...tail] } : {}),
 	};
 }
 
@@ -79,7 +112,7 @@ export function turnReportFromExit(code: number | null, signal: string | null, l
  * the shape of gap that makes a platform-wide claim ("we notice a failed turn") false in the one
  * case that runs most.
  */
-export function turnReportFromResult(isError: boolean, detail = "", now = Date.now()): EngineTurnReport {
+export function turnReportFromResult(isError: boolean, detail = "", now = Date.now(), tail: readonly string[] = []): EngineTurnReport {
 	const text = detail.trim().slice(0, MAX_TURN_DETAIL);
 	return {
 		verdict: isError ? "failed" : "ok",
@@ -87,5 +120,6 @@ export function turnReportFromResult(isError: boolean, detail = "", now = Date.n
 		signal: null,
 		at: now,
 		...(text ? { detail: text } : {}),
+		...(isError ? { tail: [...tail] } : {}),
 	};
 }

@@ -9,7 +9,9 @@ export type NormalizedEngineEvent =
 	| { kind: "assistant_text"; text: string }
 	| { kind: "tool_use"; block: Record<string, unknown>; id: string; name: string; input: unknown }
 	| { kind: "tool_result"; block: Record<string, unknown>; toolUseId: string; content: unknown }
-	| { kind: "turn_end"; raw: Record<string, unknown>; isError: boolean; result: string };
+	| { kind: "turn_end"; raw: Record<string, unknown>; isError: boolean; result: string }
+	/** The engine reporting a problem mid-turn — Codex's `{"type":"error"}` (#889), e.g. each retry of a 401. */
+	| { kind: "engine_error"; text: string };
 
 export interface EngineAdapter {
 	readonly mode: EngineMode;
@@ -176,9 +178,23 @@ function parseCodexLine(line: string): NormalizedEngineEvent[] {
 	const item = record(ev.item);
 	if (type === "thread.started" && typeof ev.thread_id === "string" && ev.thread_id) return [{ kind: "session", sessionId: ev.thread_id }];
 	if (type === "turn.completed" || type === "turn.failed") {
+		// Codex sends `error` as an OBJECT — `{"type":"turn.failed","error":{"message":"…401…"}}` — and
+		// reading only the string form reduced a 401 to the word "failed" (#889).
 		const result =
-			typeof ev.error === "string" ? ev.error : typeof ev.message === "string" ? ev.message : type === "turn.failed" ? "failed" : "";
+			typeof ev.error === "string"
+				? ev.error
+				: typeof record(ev.error)?.message === "string"
+					? (record(ev.error)?.message as string)
+					: typeof ev.message === "string"
+						? ev.message
+						: type === "turn.failed"
+							? "failed"
+							: "";
 		return [{ kind: "turn_end", raw: ev, isError: type === "turn.failed", result }];
+	}
+	if (type === "error") {
+		const text = typeof ev.message === "string" ? ev.message : typeof record(ev.error)?.message === "string" ? (record(ev.error)?.message as string) : "";
+		return text.trim() ? [{ kind: "engine_error", text: text.trim() }] : [];
 	}
 	if (!item) return [];
 

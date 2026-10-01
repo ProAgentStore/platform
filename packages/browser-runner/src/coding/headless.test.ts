@@ -1552,3 +1552,64 @@ describe("HeadlessSession — a tool result records whether the call FAILED (#59
 		s.stop();
 	}, 15_000);
 });
+
+/**
+ * A failed turn carries the engine's own output (#889).
+ *
+ * The production shape, from HeartFull-online/platform (#882): `codex exec --json` logged
+ * `ERROR codex_api…: 401 Unauthorized` on stderr, sent five `{"type":"error"}` retries, and ended
+ * with a `turn.failed` whose `error` is an OBJECT. The runner dropped the stderr line (not JSON),
+ * dropped the `error` events, read the object as the bare word "failed" — and then the exit
+ * report overwrote even that with an empty line. The run's summary could only guess.
+ */
+describe("HeadlessSession — a failed turn reports the engine's own output (#889)", () => {
+	let dir: string;
+	const FAKE_CODEX_401 = `#!/usr/bin/env node
+const out = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
+out({ type: "thread.started", thread_id: "codex-401" });
+out({ type: "turn.started" });
+process.stderr.write("2026-09-30T23:02:02.526180Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://api.openai.com/v1/responses\\n");
+out({ type: "error", message: "Reconnecting... 2/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header)" });
+out({ type: "turn.failed", error: { message: "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses" } });
+setTimeout(() => process.exit(1), 30);
+`;
+	const FAKE_CODEX_SILENT = "#!/bin/sh\nexit 1\n";
+
+	beforeAll(() => {
+		dir = mkdtempSync(join(tmpdir(), "pags-turn-tail-"));
+		writeFileSync(join(dir, "codex-401"), FAKE_CODEX_401);
+		writeFileSync(join(dir, "codex-silent"), FAKE_CODEX_SILENT);
+		chmodSync(join(dir, "codex-401"), 0o755);
+		chmodSync(join(dir, "codex-silent"), 0o755);
+	});
+	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+	it("a Codex 401 reaches the report and the pane: the stderr line, the retries and the turn.failed message", async () => {
+		const s = new HeadlessSession({ id: "tail-401", workDir: dir, clientType: "codex", command: "codex exec --json", bin: join(dir, "codex-401") });
+		s.start();
+		s.input("hi");
+		await until(() => s.lastTurn !== null && s.lastTurn.exitCode !== null, 8000, "the failing turn to exit");
+		const turn = s.lastTurn;
+		expect(turn).toMatchObject({ verdict: "failed", exitCode: 1 });
+		const tail = turn?.tail ?? [];
+		expect(tail.some((l) => l.includes("ERROR codex_api") && l.includes("401 Unauthorized"))).toBe(true);
+		expect(tail.some((l) => l.startsWith("error: Reconnecting... 2/5"))).toBe(true);
+		expect(tail.at(-1)).toContain("[error] unexpected status 401 Unauthorized");
+		expect(turn?.detail).toContain("401 Unauthorized");
+		// Protocol events stay out of it: the tail is the engine talking, not its JSON framing.
+		expect(tail.some((l) => l.includes("thread.started"))).toBe(false);
+		// …and the pane shows what the report says, rather than nothing at all.
+		expect(s.snapshot()).toContain("ERROR codex_api");
+		s.stop();
+	}, 15_000);
+
+	it("an engine that dies printing NOTHING reports an EMPTY tail — measured, not missing", async () => {
+		const s = new HeadlessSession({ id: "tail-silent", workDir: dir, clientType: "codex", command: "codex exec --json", bin: join(dir, "codex-silent") });
+		s.start();
+		s.input("hi");
+		await until(() => s.lastTurn !== null, 8000, "the silent turn to exit");
+		expect(s.lastTurn).toMatchObject({ verdict: "failed", exitCode: 1, tail: [] });
+		expect(s.lastTurn?.detail).toBeUndefined();
+		s.stop();
+	}, 15_000);
+});

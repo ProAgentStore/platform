@@ -21,6 +21,7 @@
  *
  * Pure, so the table below is testable without a runner, a Workflow or an LLM.
  */
+import { redactText } from "./redact.js";
 
 /** The runner's report, widened to what arrives over HTTP from a machine we do not control. */
 export interface EngineTurnReport {
@@ -29,6 +30,8 @@ export interface EngineTurnReport {
 	signal?: string | null;
 	at?: number;
 	detail?: string;
+	/** The turn's own last lines of output (#889) — `[]` when it printed nothing; absent from an older runner. */
+	tail?: string[];
 }
 
 /**
@@ -89,6 +92,12 @@ export interface TurnStreak {
 	lastDetail?: string;
 	/** The exit code of the most recent failure, when there was one. */
 	lastExitCode?: number | null;
+	/**
+	 * The engine's own last lines on the most recent failure, redacted (#889). `[]` is the runner
+	 * stating the engine printed nothing; absent means the runner did not measure it (CLI < the
+	 * release that sends `tail`), which is a different claim and is worded differently.
+	 */
+	lastTail?: string[];
 }
 
 export const EMPTY_STREAK: TurnStreak = { lastAt: null, consecutive: 0 };
@@ -120,11 +129,48 @@ export function observeTurn(streak: TurnStreak, report: EngineTurnReport | null 
 		streak: {
 			lastAt: at,
 			consecutive: streak.consecutive + 1,
-			...(report?.detail ? { lastDetail: report.detail } : {}),
+			...(report?.detail ? { lastDetail: redactText(report.detail) } : {}),
 			lastExitCode: typeof report?.exitCode === "number" ? report.exitCode : null,
+			...(Array.isArray(report?.tail) ? { lastTail: tailLines(report.tail as unknown[]) } : {}),
 		},
 		newFailure: true,
 	};
+}
+
+/** Most lines of a tail ever kept, and the longest one — the runner bounds it too, but it is a machine we do not control. */
+const MAX_TAIL_LINES = 60;
+const MAX_TAIL_LINE = 400;
+
+/** A reported tail made safe to quote: strings only, bounded, and secret-shaped values masked. */
+function tailLines(tail: unknown[]): string[] {
+	return tail
+		.filter((l): l is string => typeof l === "string" && l.trim() !== "")
+		.slice(-MAX_TAIL_LINES)
+		.map((l) => redactText(l.length > MAX_TAIL_LINE ? `${l.slice(0, MAX_TAIL_LINE)}…` : l));
+}
+
+/**
+ * The newest lines of the tail that fit in `budget` characters, as an indented verbatim block —
+ * or the explicit "printed nothing" sentence when the runner measured an empty one (#889).
+ *
+ * NEWEST lines, because the end is where an engine says why it stopped. Bounded by a character
+ * budget because the run's detail is stored in a column the store cuts at 2,000 characters
+ * (`finishLoopRun`), and a cut there would remove the end of the block — the part that matters.
+ */
+function quotedTail(streak: TurnStreak, budget: number): string {
+	const tail = streak.lastTail;
+	if (!tail) return "";
+	if (tail.length === 0) return "\n\nThe engine printed nothing at all on stdout or stderr on its last turn — there is no error text to show; the exit code is the only evidence.";
+	const kept: string[] = [];
+	let used = 0;
+	for (let i = tail.length - 1; i >= 0; i--) {
+		const cost = tail[i].length + 3; // the indent and the newline
+		if (kept.length > 0 && used + cost > budget) break;
+		kept.unshift(tail[i].length + 3 > budget ? `${tail[i].slice(0, Math.max(0, budget - 4))}…` : tail[i]);
+		used += cost;
+	}
+	const of = kept.length < tail.length ? `last ${kept.length} of ${tail.length} lines` : `${kept.length} line${kept.length === 1 ? "" : "s"}`;
+	return `\n\nThe engine's own output on its last turn (${of}, verbatim):\n${kept.map((l) => `  ${l}`).join("\n")}`;
 }
 
 /** How the engine's exit reads in a sentence. `exit 1` when it exited; vaguer when it did not. */
@@ -147,7 +193,7 @@ function howItEnded(exitCode: number | null | undefined): string {
 export function engineFailureNote(streak: TurnStreak): string {
 	const said = streak.lastDetail ? ` It said: "${streak.lastDetail}"` : "";
 	const count = streak.consecutive === 1 ? "" : ` — ${streak.consecutive} consecutive failed turns now`;
-	return `the engine ${howItEnded(streak.lastExitCode)} and produced no result${count}.${said} This is the ENGINE refusing to run, not an answer to your instruction — rephrasing or re-pathing the same instruction will not change it. Address why the engine cannot run, or finish with status "failed".`;
+	return `the engine ${howItEnded(streak.lastExitCode)} and produced no result${count}.${said} This is the ENGINE refusing to run, not an answer to your instruction — rephrasing or re-pathing the same instruction will not change it. Address why the engine cannot run, or finish with status "failed".${quotedTail(streak, NOTE_TAIL_BUDGET)}`;
 }
 
 /**
@@ -162,5 +208,11 @@ export function engineFailureNote(streak: TurnStreak): string {
 export function engineFailureDetail(streak: TurnStreak, repo?: string): string {
 	const where = repo ? ` in ${repo}` : "";
 	const said = streak.lastDetail ? ` Its last words were: "${streak.lastDetail}".` : "";
-	return `The coding engine${where} ${howItEnded(streak.lastExitCode)} on ${streak.consecutive} consecutive turns, with no successful turn in between.${said} Nothing a further instruction can say will change that — fix why the engine cannot run on this checkout, then start the run again.`;
+	const head = `The coding engine${where} ${howItEnded(streak.lastExitCode)} on ${streak.consecutive} consecutive turns, with no successful turn in between.${said} Nothing a further instruction can say will change that — fix why the engine cannot run on this checkout, then start the run again.`;
+	return head + quotedTail(streak, Math.max(200, DETAIL_BUDGET - head.length - 80));
 }
+
+/** What the brain's per-failure note may spend on the tail: it rides in the action log on every later step. */
+const NOTE_TAIL_BUDGET = 2500;
+/** The stored run detail's ceiling (`finishLoopRun` keeps 2,000 characters), less headroom. */
+const DETAIL_BUDGET = 1950;

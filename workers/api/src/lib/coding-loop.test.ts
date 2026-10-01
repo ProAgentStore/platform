@@ -716,7 +716,7 @@ describe("runCodingLoop — a failing engine turn is a signal, not prose (#545)"
 	 * A session whose engine refuses every turn. `alive`/`ready`/`runState` are the values
 	 * production actually reported — the point is that they are RIGHT and were never the problem.
 	 */
-	function refusingEngine(decisions: CodingDecision[], opts: { failEvery?: boolean } = {}) {
+	function refusingEngine(decisions: CodingDecision[], opts: { failEvery?: boolean; tail?: string[]; detail?: string } = {}) {
 		let turnAt = 1_000;
 		let lastTurn: CodingPaneSnapshot["lastTurn"];
 		const seen: string[][] = [];
@@ -740,7 +740,7 @@ describe("runCodingLoop — a failing engine turn is a signal, not prose (#545)"
 				turnAt += 1000;
 				lastTurn = opts.failEvery === false
 					? { verdict: "ok", exitCode: 0, signal: null, at: turnAt }
-					: { verdict: "failed", exitCode: 1, signal: null, at: turnAt, detail: REFUSAL };
+					: { verdict: "failed", exitCode: 1, signal: null, at: turnAt, detail: opts.detail ?? REFUSAL, ...(opts.tail ? { tail: opts.tail } : {}) };
 				return snap();
 			},
 			decide: async (p) => {
@@ -793,6 +793,30 @@ describe("runCodingLoop — a failing engine turn is a signal, not prose (#545)"
 		// three too — this one STOPS there instead of handing off and waiting a quarter of an hour.
 		expect(sent).toHaveLength(3);
 		expect(r.steps).toBeLessThan(5);
+	});
+
+	it("the FAILED run's detail carries the engine's own output, verbatim (#889)", async () => {
+		const tail = ["Error loading config.toml: unknown variant `danger-full-access`, expected one of `read-only`, `workspace-write`", "[codex exited with code 1]"];
+		const { deps } = refusingEngine([
+			{ action: { kind: "message", text: "one" } },
+			{ action: { kind: "message", text: "two" } },
+			{ action: { kind: "message", text: "three" } },
+		], { tail, detail: tail[1] });
+		const r = await runCodingLoop(deps, GOAL, { maxSteps: 30 });
+		expect(r.outcome).toBe("failed");
+		expect(r.detail).toContain("Error loading config.toml: unknown variant `danger-full-access`");
+		expect(r.detail).toContain("The engine's own output on its last turn");
+	});
+
+	it("a run whose engine printed NOTHING says so, rather than ending on a guess (#889)", async () => {
+		const { deps } = refusingEngine([
+			{ action: { kind: "message", text: "one" } },
+			{ action: { kind: "message", text: "two" } },
+			{ action: { kind: "message", text: "three" } },
+		], { tail: [], detail: "" });
+		const r = await runCodingLoop(deps, GOAL, { maxSteps: 30 });
+		expect(r.outcome).toBe("failed");
+		expect(r.detail).toMatch(/printed nothing at all on stdout or stderr/);
 	});
 
 	it("does NOT end a run on ONE failed turn — a CLI can exit and be relaunched", async () => {

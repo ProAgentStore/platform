@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { classifyCommand, commandFromToolInput, type EngineActRecord, fillTargetFromResult, toolCallOk, toolResultMark } from "./engine-acts.js";
 import { type EngineUsageRecord, parseEngineUsage } from "./engine-usage.js";
-import { type EngineTurnReport, turnReportFromExit, turnReportFromResult } from "./engine-turn.js";
+import { appendTurnTail, type EngineTurnReport, turnReportFromExit, turnReportFromResult } from "./engine-turn.js";
 import { renderToolResult, shortInput, stripAnsi } from "./transcript-lines.js";
 import { authoredTurn, authorTag, type TurnAuthor } from "./turn-author.js";
 import { engineSpawnEnv, mergeEnv } from "./engine-env.js";
@@ -184,6 +184,8 @@ export class HeadlessSession {
 	 * carry a previous turn's line.
 	 */
 	private turnLastLine = "";
+	/** This turn's own output, newest last and bounded — reported on a failed turn (#889). */
+	private turnTail: string[] = [];
 	/** True once this session has retried an old Codex CLI without its unsupported `--json` flag. */
 	private fellBackToRaw = false;
 	/** Structured events observed in the current one-shot process. */
@@ -509,7 +511,10 @@ export class HeadlessSession {
 			this.lastOutputAt = Date.now();
 			this.sawOutputSinceInput = true;
 			const text = d.toString("utf8").trim();
-			if (text) this.push(`[${this.binName}] ${stripAnsi(text)}`);
+			if (text) {
+				this.push(`[${this.binName}] ${stripAnsi(text)}`);
+				for (const l of stripAnsi(text).split("\n")) appendTurnTail(this.turnTail, l);
+			}
 		});
 		proc.on("exit", (code) => {
 			// A stop() + re-start() on the SAME session object can leave this old process's
@@ -568,6 +573,7 @@ export class HeadlessSession {
 		this.lastOutputAt = now;
 		this.turnStartedAt = now;
 		this.sawOutputSinceInput = false; // arm the persistent-raw idle heuristic for THIS turn
+		this.turnTail = []; // a one-shot turn re-arms it at its spawn too (a --json fallback re-runs the turn)
 		try {
 			// Brief first, instruction second, and never the other way round: it is background for
 			// the request, and an engine that reads the request last acts on the request.
@@ -606,6 +612,7 @@ export class HeadlessSession {
 		// Arm the per-turn line capture BEFORE the spawn, so a report can only ever carry a line
 		// this turn produced (#545).
 		this.turnLastLine = "";
+		this.turnTail = [];
 		this.sawStructuredEvent = false;
 		this.structuredOutputRejected = false;
 		const resumedCodexThreadId = this.codexResumeThreadId;
@@ -640,6 +647,7 @@ export class HeadlessSession {
 		proc.on("error", (err: Error) => {
 			if (this.proc !== proc) return; // stale: a newer turn owns the session now
 			this.push(`[${this.config.clientType}] failed to start: ${err.message}`);
+			appendTurnTail(this.turnTail, `failed to start: ${err.message}`);
 			this.run = "idle";
 			this.proc = null;
 			// The command itself is unrunnable — report the session dead so the loop stops with a
@@ -700,7 +708,7 @@ export class HeadlessSession {
 			//
 			// A signal means WE ended it (the wedge ceiling, an interrupt), which is the `killed`
 			// verdict: evidence about this platform's timers, not about the engine's health.
-			this.turnReport = turnReportFromExit(code, signal, this.turnLastLine);
+			this.turnReport = turnReportFromExit(code, signal, this.turnLastLine, Date.now(), this.turnTail);
 			this.run = "idle";
 			this.proc = null;
 		});
@@ -755,7 +763,10 @@ export class HeadlessSession {
 			if (!line) continue;
 			if (this.mode === "stream-json") {
 				if (this.handle(line)) this.sawStructuredEvent = true;
-				else if (this.adapter.rejectsStructuredOutput?.(line)) this.structuredOutputRejected = true;
+				else {
+					if (this.adapter.rejectsStructuredOutput?.(line)) this.structuredOutputRejected = true;
+					this.pushUnframed(line);
+				}
 			} else this.pushRaw(line); // raw engine — the line IS the terminal output
 		}
 		// A TUI/raw engine may render without newlines; surface the partial output and cap
@@ -776,11 +787,33 @@ export class HeadlessSession {
 		return this.config.clientType === "codex" && this.mode === "stream-json" && isCodexThreadId(this.codexThreadId) ? this.codexThreadId : null;
 	}
 
+	/**
+	 * A line a STRUCTURED engine printed outside its protocol — not JSON at all (#889).
+	 *
+	 * A one-shot turn's stderr shares this stream, and it is where the diagnosis lives: Codex logged
+	 * `ERROR codex_api…: 401 Unauthorized` there on every retry. It was dropped, which is how a turn
+	 * that failed for a stated reason reached the pane and the report as no output at all. JSON this
+	 * build does not recognise is still skipped — that is protocol noise, not the engine talking.
+	 */
+	private pushUnframed(line: string): void {
+		try {
+			JSON.parse(line);
+			return;
+		} catch {
+			/* not JSON — the engine's own words */
+		}
+		const clean = stripAnsi(line).trim();
+		if (!clean) return;
+		this.push(`[${this.binName}] ${clean}`);
+		appendTurnTail(this.turnTail, clean);
+	}
+
 	/** Raw-engine stdout: strip ANSI control codes and append to the transcript. */
 	private pushRaw(line: string): void {
 		const clean = stripAnsi(line);
 		if (clean.trim()) {
 			this.push(clean);
+			appendTurnTail(this.turnTail, clean);
 			// The engine's own words, kept for the turn's report (#545) — captured on the way in,
 			// never scraped back out of the rendered pane.
 			this.turnLastLine = clean.trim();
@@ -821,14 +854,21 @@ export class HeadlessSession {
 				this.settleAct(ev.block);
 				break;
 			}
+			case "engine_error":
+				this.push(`[${this.binName}] error: ${ev.text}`);
+				appendTurnTail(this.turnTail, `error: ${ev.text}`);
+				break;
 			case "turn_end": {
 				const failure = ev.isError ? ev.result : "";
-				if (failure) this.push(`[error] ${failure}`);
+				if (failure) {
+					this.push(`[error] ${failure}`);
+					appendTurnTail(this.turnTail, `[error] ${failure}`);
+				}
 				// The structured path's ANALOGUE of a non-zero exit (#545). Claude has no process
 				// per turn, so `exitCode` is honestly null and the verdict comes from the protocol's
 				// own `is_error` — the same claim, in the words the engine states it in. Without
 				// this the field would exist for three engines and silently not for the flagship.
-				this.turnReport = turnReportFromResult(ev.isError, failure);
+				this.turnReport = turnReportFromResult(ev.isError, failure, Date.now(), this.turnTail);
 				// The same event that ends the turn also reports what the turn COST (#267). It was
 				// parsed and thrown away, which is why Engine spend was absent from the ledger.
 				// An errored turn still burned tokens, so this is recorded regardless of is_error.
