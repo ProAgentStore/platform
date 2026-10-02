@@ -130,14 +130,14 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 	private async initPinned(instanceId: string): Promise<void> {
 		const surface = await loadPinnedSurface(this.env, this.userToken, instanceId);
 		this.installRegistrationPipeline(riskMetadata(pinnedRiskFor(surface)), instanceId);
-		registerServerInfoTool(this.server);
+		registerServerInfoTool(this.server, this.env);
 		registerPinnedTools(this.server, { env: this.env, tokenFor: (p) => this.token(p), safetyFor: (p) => this.safety(p) }, surface);
 	}
 	/** A session pinned to one AGENT TYPE (#771): its declared tools, each with `instance_id`. See `type-pinned.ts`. */
 	private async initTypePinned(agentType: string): Promise<void> {
 		const surface = await loadTypeSurface(this.env, this.userToken, agentType);
 		this.installRegistrationPipeline(riskMetadata(typeRiskFor(surface)));
-		registerServerInfoTool(this.server);
+		registerServerInfoTool(this.server, this.env);
 		registerTypeTools(this.server, { env: this.env, tokenFor: (p) => this.token(p), safetyFor: (p) => this.safety(p) }, surface);
 	}
 
@@ -254,7 +254,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		// Must precede every registration below — it wraps the registrar itself.
 		this.installRegistrationPipeline();
-		registerServerInfoTool(this.server);
+		registerServerInfoTool(this.server, this.env);
 
 		this.server.tool(
 			"list_agents",

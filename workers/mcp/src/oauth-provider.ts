@@ -1,4 +1,5 @@
 import type { AuthRequest, OAuthHelpers } from "@cloudflare/workers-oauth-provider";
+import { serverInfo } from "./tools/server-info.js";
 import { probeHealth, renderStatusHtml } from "./health.js";
 import { apiBase, type McpEnv } from "./http.js";
 import { parseScopes } from "./safety.js";
@@ -52,15 +53,13 @@ export const loginHandler: ExportedHandler<LoginEnv> = {
 			return oauthCallback(request, env, issuer);
 		}
 		if (path === "/health") {
-			// `tools` is the only size signal this server publishes. It read a
-			// hardcoded 41 while 124 were registered — see tool-count.ts for why the
-			// number now comes from a constant that a test and a docs check both hold
-			// to the real registration count.
+			// Public build identity lets clients diagnose deployments even with a stale tool catalog.
 			return new Response(
-				JSON.stringify({ ok: true, service: "proagentstore-mcp", tools: MCP_TOOL_COUNT }),
+				JSON.stringify({ ok: true, service: "proagentstore-mcp", tools: MCP_TOOL_COUNT, ...serverInfo(env) }),
 				{
 					headers: {
 						"Content-Type": "application/json",
+						"Cache-Control": "no-store",
 						"Access-Control-Allow-Origin": "https://proagentstore.online",
 					},
 				},

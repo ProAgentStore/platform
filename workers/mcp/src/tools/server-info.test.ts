@@ -33,6 +33,11 @@ describe("mcp_server_info", () => {
 		expect(serverInfo().deployed_at).toBe("2026-10-03T00:00:00Z");
 	});
 
+	it("uses Worker bindings before process metadata", () => {
+		vi.stubGlobal("process", { env: { GIT_COMMIT_SHA: "process-sha" } });
+		expect(serverInfo({ GIT_COMMIT_SHA: "worker-sha", DEPLOY_TIMESTAMP: "worker-time" })).toMatchObject({ build_commit: "worker-sha", deployed_at: "worker-time" });
+	});
+
 	it("falls back to Pages commit or unknown for absent/empty build variables", () => {
 		vi.stubGlobal("process", { env: { GIT_COMMIT_SHA: "", CF_PAGES_COMMIT_SHA: "pages-sha" } });
 		expect(serverInfo().build_commit).toBe("pages-sha");
@@ -47,7 +52,8 @@ describe("mcp_server_info", () => {
 			gate: async () => null,
 			metadata: (name) => ({ annotations: annotationsFor(name) }),
 		});
-		registerServerInfoTool(server);
+		const env = { GIT_COMMIT_SHA: "registered-worker-sha", DEPLOY_TIMESTAMP: "worker-time" };
+		registerServerInfoTool(server, env);
 		const client = new Client({ name: "test", version: "1" });
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 		try {
@@ -59,7 +65,7 @@ describe("mcp_server_info", () => {
 			expect(tools[0].annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false });
 			const result = await client.callTool({ name: "mcp_server_info", arguments: {} });
 			expect(result.structuredContent).toBeUndefined();
-			expect(JSON.parse((result.content as Array<{ text: string }>)[0].text)).toEqual(serverInfo());
+			expect(JSON.parse((result.content as Array<{ text: string }>)[0].text)).toEqual(serverInfo(env));
 		} finally {
 			await client.close();
 			await server.close();

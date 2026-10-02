@@ -5,6 +5,7 @@ on:
     paths:
       - 'workers/mcp/**'
       - '.github/workflows/deploy-mcp.yml'
+      - 'scripts/smoke-mcp-deployment.mjs'
   # Manual trigger — see ci.yml. A stuck push event must not mean an unshippable repo.
   workflow_dispatch:
 
@@ -33,22 +34,16 @@ jobs:
       - name: Typecheck MCP worker
         run: pnpm --filter proagentstore-mcp typecheck
 
+      - name: Record deployment identity
+        run: echo "DEPLOY_TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
       - name: Deploy MCP worker
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: workers/mcp
-          command: deploy
+          command: deploy --var GIT_COMMIT_SHA:${{ github.sha }} --var DEPLOY_TIMESTAMP:${{ env.DEPLOY_TIMESTAMP }}
 
-      - name: Smoke test
-        run: |
-          for i in 1 2 3 4 5; do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://mcp.proagentstore.online/health)
-            if [ "$STATUS" = "200" ]; then
-              exit 0
-            fi
-            sleep 5
-          done
-          echo "MCP health check failed"
-          exit 1
+      - name: Smoke test deployment identity
+        run: node scripts/smoke-mcp-deployment.mjs

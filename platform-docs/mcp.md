@@ -308,6 +308,37 @@ server instructions. `tool_count` reports the full platform catalog; use this co
 revision describes the catalog contract; the server version identifies the application release.
 Compare these fields with a cached catalog before refreshing stale schemas.
 
+Public `GET /health` includes the same identity fields alongside `ok`, `service`, and
+the legacy `tools` count. Deployment records the Git commit and UTC timestamp in Worker
+bindings, then checks the live version, count, schema revision and commit against the
+checked-out build. This identifies the deployment even when a host omits the diagnostic
+tool; it does not establish which tools an authenticated connection receives.
+
+### Missing Tools After Reconnect
+
+A new chat or a working account call does not establish that a host refreshed its tool
+metadata. Compare the exact endpoint (`/mcp`, `/mcp/i/<id>`, or `/mcp/t/<slug>`), connected
+account, and actual `tools/list` first. Smaller lists can be correct: subscriptions gate
+console-surface tools and pinned endpoints expose their own subsets.
+
+`mcp_server_info` is published on all endpoints. `coding_engine_reauth` is published on
+`/mcp` when the account has an instance with the `coding` console surface; invocation
+still requires runtime permission. If the diagnostic itself is missing from the host's
+catalog, call the older `platform_guide` tool: its live result includes the current server
+version and schema revision. Compare that with discovery and public server metadata;
+do not label a catalog stale solely because its count is below the full catalog total.
+
+For ChatGPT developer-mode connections, explicitly refresh the connection's tool metadata,
+confirm that the advertised tools changed, then test in a new conversation. Published
+plugins have a separate update review path. See OpenAI's
+[connection refresh procedure](https://developers.openai.com/plugins/deploy/connect-chatgpt).
+A server cannot inspect or force refresh an external host's imported catalog. If current
+server discovery and the host's advertised tools disagree after refresh, preserve both
+inventories, endpoint, version, schema revision and timestamp for host support.
+
+Investigation evidence and remaining limits for #905 are recorded in
+[`docs/mcp-discovery-905.md`](../docs/mcp-discovery-905.md).
+
 ## Result And Error Shape
 
 Every tool returns a text content block. Two tools **also** return `structuredContent`,

@@ -6,6 +6,7 @@ import type {
 } from "@cloudflare/workers-oauth-provider";
 import { describe, expect, it, vi } from "vitest";
 import { type LoginEnv, loginHandler } from "./oauth-provider.js";
+import { serverInfo } from "./tools/server-info.js";
 import { MCP_TOOL_COUNT } from "./tool-count.js";
 import { PLATFORM_GUIDE } from "./platform-guide.js";
 import { SERVER_INSTRUCTIONS } from "./tool-metadata.js";
@@ -81,6 +82,7 @@ describe("loginHandler health + root", () => {
 	it("serves a health probe", async () => {
 		const res = await run(makeEnv(), "https://mcp.proagentstore.online/health");
 		expect(res.status).toBe(200);
+		expect(res.headers.get("Cache-Control")).toBe("no-store");
 		// `tools` was asserted here as a literal 41 while the server registered 124 —
 		// the test locked the wrong number in rather than catching it. It now reads the
 		// same constant the handler does, and `index.test.ts` holds that constant to the
@@ -89,7 +91,14 @@ describe("loginHandler health + root", () => {
 			ok: true,
 			service: "proagentstore-mcp",
 			tools: MCP_TOOL_COUNT,
+			...serverInfo(),
 		});
+	});
+
+	it("publishes deployed Worker identity without OAuth or an account lookup", async () => {
+		const env = { ...makeEnv(), GIT_COMMIT_SHA: "deployed-sha", DEPLOY_TIMESTAMP: "2026-10-03T00:00:00Z" };
+		const res = await run(env, "https://mcp.proagentstore.online/health");
+		expect(await res.json()).toMatchObject(serverInfo(env));
 	});
 
 	it("serves the human-readable landing page to a browser at /", async () => {

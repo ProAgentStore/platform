@@ -3,6 +3,9 @@ import { recordLatency } from "./latency.js";
 const API = "https://api.proagentstore.online";
 
 export type McpEnv = {
+	GIT_COMMIT_SHA?: string;
+	CF_PAGES_COMMIT_SHA?: string;
+	DEPLOY_TIMESTAMP?: string;
 	API_BASE?: string;
 	AUTH_START?: string;
 	GITHUB_ORG?: string;

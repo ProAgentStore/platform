@@ -27,7 +27,7 @@ const REGISTERED = new Set(["agent_trace", "list_errors", "coding_timeline", "co
 /** A guide shaped the way the fixed one is: interpolated, enumerating, naming real tools. */
 const GOOD = [
 	"## Tools: ${MCP_TOOL_COUNT} tools registered — ${MCP_TOOL_ALWAYS_ON} are always on, ${MCP_TOOL_GATED} are gated.",
-	"Call tools/list for the current set. If tools/list gave you fewer than ${MCP_TOOL_COUNT} tools, your list is CACHED AND STALE.",
+	"Call tools/list for the current set. Subscription gating may publish fewer tools.",
 	"## Coding: coding_timeline, coding_terminal.",
 	"## Observability: agent_trace, list_errors, usage_summary, my_instances.",
 ].join("\n");
@@ -44,7 +44,7 @@ describe("checkPlatformGuide", () => {
 		const res = run(GOOD);
 		expect(res.failures).toEqual([]);
 		expect(res.notes).toEqual([
-			"MCP platform guide: 6 tool name(s) all registered, 4 count claim(s) == 143/122/21, interpolated from tool-count.ts (0 exempt token(s))",
+			"MCP platform guide: 6 tool name(s) all registered, 3 count claim(s) == 143/122/21, interpolated from tool-count.ts (0 exempt token(s))",
 		]);
 	});
 

@@ -1,3 +1,5 @@
+import { MCP_SERVER_VERSION } from "./server-version.js";
+import { SURFACE_LOCK } from "./surface-lock.js";
 import { DIRECT_BEFORE_RUN, NESTED_TOOL_SEQUENCE } from "./instance-tool-guidance.js";
 import { MCP_TOOL_ALWAYS_ON, MCP_TOOL_COUNT, MCP_TOOL_GATED } from "./tool-count.js";
 
@@ -17,17 +19,13 @@ import { MCP_TOOL_ALWAYS_ON, MCP_TOOL_COUNT, MCP_TOOL_GATED } from "./tool-count
  * list is gone: what remains is the SHAPE of the surface, interpolated from `tool-count.ts` so it
  * cannot drift, plus the instruction to enumerate the real set with `tools/list`.
  *
- * ── The sentence this document exists for
+ * ── Diagnostics through an already-discovered tool (#905)
  *
- * "If `tools/list` gave you fewer than N tools, it is cached and stale." MCP gives a server no way
- * to invalidate a cache across sessions — `tools/list_changed` is a notification to a CONNECTED
- * client, and the client that needs this warning is by definition one that was disconnected when
- * the surface grew. `SERVER_INSTRUCTIONS` cannot carry it either: instructions are delivered at
- * `initialize`, the same moment a fresh list would be, so a client stale enough to need the
- * warning is stale enough not to have re-read it. It has to ride on a tool that was ALREADY in the
- * cache, and `platform_guide` has been on the surface since long before any current cache was
- * taken. That makes this the only sentence in the system that can reach a model THROUGH a stale
- * list and tell it the list is stale.
+ * A host may keep an older tool catalog even while calls reach a newer deployment. This
+ * already-discovered guide carries current server identity so that missing new diagnostics
+ * does not prevent comparison. A count below the full catalog cannot prove stale discovery:
+ * subscription gating and pinned endpoints intentionally publish smaller surfaces. Compare
+ * endpoint, account, served version and the actual tools/list instead.
  *
  * ── What may and may not be written here
  *
@@ -48,7 +46,9 @@ Marketplace for server-powered AI agents. Creators build agent templates, client
 
 ## Agent Types: Agents | Workers | Tools
 ## CLI: pags init <name> --template worker|cron|api, pags check, pags publish
-## Tools: ${MCP_TOOL_COUNT} tools registered — ${MCP_TOOL_ALWAYS_ON} are always on, ${MCP_TOOL_GATED} are gated to the console surfaces of the agents you are subscribed to (apply, repo, coding). Call tools/list for the current set; the groups below name entry points, not the whole surface. If tools/list gave you fewer than ${MCP_TOOL_COUNT} tools, your list is CACHED AND STALE — refresh it before concluding a capability is missing.
+## Tools: ${MCP_TOOL_COUNT} tools registered — ${MCP_TOOL_ALWAYS_ON} are always on, ${MCP_TOOL_GATED} are gated to the console surfaces of the agents you are subscribed to (apply, repo, coding). Call tools/list for this connection’s actual set; subscription gating and pinned endpoints can legitimately expose fewer tools than the full catalog. A smaller count alone does not prove stale discovery; the groups below name entry points, not the whole surface.
+## Server identity: ProAgentStore version ${MCP_SERVER_VERSION}; schema revision ${SURFACE_LOCK[MCP_SERVER_VERSION]}. These are served live by this guide, even when a host’s discovered catalog lacks newer tools.
+## Discovery diagnostics: mcp_server_info is available on every endpoint. coding_engine_reauth is published on the platform endpoint only when your subscribed agents include the coding console surface; runtime permission is checked when called. If an expected tool is absent, compare the endpoint, account and tools/list with this live identity. Explicitly refresh the host connection’s tool metadata and confirm the advertised tools before testing in a new chat; reconnecting or starting a new chat alone does not establish that discovery refreshed.
 ## Creator: scaffold an agent from a template, read and write the files in its repo, configure its board, publish it and watch the deploy.
 ## Subscriber runtime: subscribe_agent then my_instances for what you own, or recent_instances for the few you drove last and how their latest runs stand; chat_with_instance to talk to one; add documents, settings, triggers and connector tools per instance; register a local machine and queue work on it.
 ## Instance tools — an agent's OWN tools are one level down from this surface, and are usually the DIRECT path: list_instance_tools names what one instance may actually run (its GitHub, HTTP and search connectors as well as its own memory, files and knowledge) with a per-tool verdict, and call_instance_tool invokes one. Check there BEFORE reaching for coding_session_message: making a terminal shell out for something an instance tool already does returns a truncated pane instead of structured data, and is the fallback rather than the first path. ${NESTED_TOOL_SEQUENCE} ${DIRECT_BEFORE_RUN}

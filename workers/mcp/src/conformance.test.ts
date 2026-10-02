@@ -113,7 +113,10 @@ type WireTool = {
  * Every surface is gated on (`apply`, `repo`, `coding`) so the denominator is the whole
  * registrable surface — `MCP_TOOL_COUNT` — rather than the always-on subset.
  */
-async function listPublishedTools(): Promise<WireTool[]> {
+async function listPublishedTools(
+	surfaces = ["apply", "repo", "coding"],
+	scopes = ["read", "write", "runtime", "destructive"],
+): Promise<WireTool[]> {
 	const store = new Map<string, string>();
 	const kv = {
 		get: async (k: string) => store.get(k) ?? null,
@@ -125,7 +128,7 @@ async function listPublishedTools(): Promise<WireTool[]> {
 	vi.stubGlobal("fetch", async (input: string | URL | Request) => {
 		const url = typeof input === "string" ? input : input.toString();
 		const body = new URL(url).pathname === "/v1/instances/my/instances"
-			? { instances: ["apply", "repo", "coding"].map((s) => ({ capabilities: { surfaces: [s] } })) }
+			? { instances: surfaces.map((s) => ({ capabilities: { surfaces: [s] } })) }
 			: {};
 		return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 	});
@@ -135,7 +138,7 @@ async function listPublishedTools(): Promise<WireTool[]> {
 	inst.env = { API_BASE: "https://api.test", OAUTH_KV: kv, GITHUB_ORG: "ProAgentStore" };
 	inst.props = {
 		authToken: "session-token",
-		mcpScopes: ["read", "write", "runtime", "destructive"],
+		mcpScopes: scopes,
 		mcpSubject: "user-1",
 	};
 	await inst.init();
@@ -198,6 +201,31 @@ async function withClient(
 		vi.unstubAllGlobals();
 	}
 }
+
+describe("fresh MCP discovery (#905)", () => {
+	it("publishes diagnostics and engine reauth for a coding account on each fresh connection", async () => {
+		for (let connection = 0; connection < 2; connection++) {
+			// Permission scopes govern invocation, not discovery: reconnecting a coding account
+			// with read-only consent must still describe the runtime action it can request.
+			const tools = await listPublishedTools(["coding"], ["read"]);
+			const info = tools.find((tool) => tool.name === "mcp_server_info");
+			expect(info).toBeDefined();
+			expect(info!.inputSchema.properties).toEqual({});
+			expect(info!.annotations?.readOnlyHint).toBe(true);
+			const reauth = tools.find((tool) => tool.name === "coding_engine_reauth");
+			expect(reauth).toBeDefined();
+			expect(reauth!.inputSchema.required).toContain("instance_id");
+			expect(reauth!.inputSchema.required).toContain("action");
+			expect(reauth!.annotations?.readOnlyHint).toBe(false);
+		}
+	});
+
+	it("keeps server diagnostics visible without coding subscriptions while preserving the reauth surface gate", async () => {
+		const tools = await listPublishedTools([], ["read"]);
+		expect(tools.some((tool) => tool.name === "mcp_server_info")).toBe(true);
+		expect(tools.some((tool) => tool.name === "coding_engine_reauth")).toBe(false);
+	});
+});
 
 const specSchema = JSON.parse(
 	readFileSync(fileURLToPath(new URL(`./mcp-schema-${SPEC_REVISION}.json`, import.meta.url).href), "utf8"),
