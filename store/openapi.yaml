@@ -8361,6 +8361,17 @@ paths:
               type: object
               required: [objective]
               properties:
+                requestId:
+                  type: string
+                  pattern: '^[A-Za-z0-9_-]{1,128}$'
+                  description: >
+                    Optional idempotency key scoped to this owner and instance. Persisted before
+                    provisioning starts. Repeat the same key and arguments to read an in-flight
+                    receipt (202) or replay its settled response without starting again. Changed
+                    arguments under the same key are refused. Receipts describe dispatched server
+                    work; client-owned interactive approval occurs before dispatch and cannot be
+                    observed by the platform. Poll GET /loop?include_starts=true after an uncertain
+                    response; do not submit another key to infer whether the first start landed.
                 objective: { type: string, maxLength: 2000 }
                 maxIterations: { type: integer, description: Clamped to the platform ceiling. }
                 repoId:
@@ -8409,16 +8420,25 @@ paths:
                   budgetId: { type: string }
                   maxIterations: { type: integer }
                   status: { type: string, example: running }
+                  startState: { type: string, enum: [started] }
+                  requestId: { type: string }
+                  approval: { type: string, enum: [dispatched] }
         "202":
           description: >
-            The repo was busy and `queueIfBusy` was set, so the objective was queued rather than
-            started. Nothing is running yet; `entry.id` is the handle for reading or withdrawing it.
+            Either an objective queued behind a busy repo (`queued:true`, `entry.id`) or the same
+            requestId is still provisioning (`startState:provisioning`). An unresolved receipt older
+            than five minutes reports unknown and requires reconciliation, never automatic retry.
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   queued: { type: boolean, example: true }
+                  startState: { type: string, enum: [queued, provisioning, unknown] }
+                  requestId: { type: string }
+                  approval: { type: string, enum: [dispatched] }
+                  polling: { type: object, additionalProperties: true }
+                  guidance: { type: string }
                   entry: { $ref: "#/components/schemas/ObjectiveQueueEntry" }
                   blocked:
                     type: string
@@ -8444,6 +8464,14 @@ paths:
                 type: object
                 properties:
                   error: { type: string }
+                  startState: { type: string, enum: [not_started, provisioning, started, queued, unknown] }
+                  submissionState: { type: string, enum: [not_started] }
+                  originalStart:
+                    type: object
+                    additionalProperties: true
+                    description: On request_key_conflict, the original receipt; startState describes that receipt and submissionState describes the refused changed submission.
+                  reason: { type: string }
+                  requestId: { type: string }
                   stopReason:
                     type: string
                     enum: [engine_auth]
@@ -8455,11 +8483,32 @@ paths:
                     type: string
                     nullable: true
                     description: The refused run, recorded as finished with `stopReason: engine_auth` and continuable once the engine is signed in.
+        "503":
+          description: >
+            A dispatched start could not be confirmed. With requestId its receipt is retained as
+            unknown and repeated calls replay the uncertainty without re-executing. Poll status and
+            reconcile the receipt before submitting another start.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+                  requestId: { type: string }
+                  startState: { type: string, enum: [unknown] }
+                  approval: { type: string, enum: [dispatched] }
+                  polling: { type: object, additionalProperties: true }
+                  guidance: { type: string }
     get:
       summary: List this instance's loop runs
       operationId: listLoopRuns
       tags: [Tools]
-      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - name: include_starts
+          in: query
+          schema: { type: boolean, default: false }
+          description: Include the 20 most recent durable start receipts, separate from run health.
       responses:
         "200":
           description: Loop runs, most recent first
@@ -8472,6 +8521,18 @@ paths:
                     type: array
                     items: { type: object, additionalProperties: true }
                   repoCi: { $ref: "#/components/schemas/InstanceRepoCi" }
+                  starts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        requestId: { type: string }
+                        startState: { type: string, enum: [provisioning, started, queued, not_started, unknown] }
+                        approval: { type: string, enum: [dispatched] }
+                        ageMs: { type: integer }
+                        createdAt: { type: integer }
+                        updatedAt: { type: integer }
+                        result: { type: object, additionalProperties: true }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 

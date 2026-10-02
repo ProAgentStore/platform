@@ -959,4 +959,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// run on a multi-repo instance can be targeted at one repo; omitted there, it is refused with the
 	// registered repo_ids rather than guessed. Appended, never edited in place: 0.1.68 is published.
 	"0.1.69": "sha256:76953d5b3f254c69b42d8967ec0ba236a90597ffe4cd64f647abfc5b0cc67c0d",
+	// 0.1.70 (#886): coding_loop_start gains a durable request_id for safe start reconciliation.
+	"0.1.70": "sha256:f51158bd49cb82d29501a6f2b64fe9f25d2d8420c1d0e1b18b0a69af632466a2",
 };

@@ -360,6 +360,7 @@ const READBACK: Record<string, string | null> = {
 	// `coding_loop_queue` until it becomes a run — at which point this reader is the right one
 	// again. One entry per argument, so the reader named is the one for the started case (#788).
 	"coding_loop_start.objective": "coding_loop_status",
+	"coding_loop_start.request_id": "coding_loop_status",
 	"coding_loop_start.max_iterations": "coding_loop_status",
 	// A repair run's record carries the platform's fixed objective label, which is what the status
 	// tool reads back (#804).

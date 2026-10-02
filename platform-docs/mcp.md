@@ -151,7 +151,7 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
-- `serverInfo.version`: `0.1.69`
+- `serverInfo.version`: `0.1.70`
 
 That is the same value the published MCP-registry manifest (`server.json`) carries, and both
 are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —
@@ -626,3 +626,17 @@ timed out may still have happened. What to do:
 The scope, read-only, confirmation, dry-run, audit, and redaction logic all live in one
 module — `workers/mcp/src/safety.ts` — which is the reference implementation other OFO
 stores vendor.
+
+### Coding start receipts
+
+`coding_loop_start` accepts a stable `request_id`. Once dispatched, its durable receipt
+reports `provisioning`, `started`, `queued`, `not_started`, or `unknown`. Slow provisioning
+returns within 15 seconds and continues on the server. Reusing the same key and arguments
+joins that attempt; changed arguments are refused. `coding_loop_status` lists start receipts
+beside runs, including run or queue ids once known. A lost reply does not justify a new key.
+
+Interactive approval occurs in the MCP client before dispatch. The platform cannot observe
+`approval_pending` or a client approval timeout; a receipt's `approval: "dispatched"` states
+only that the request reached the handler. No receipt does not prove a delayed dispatch
+cannot arrive. Unresolved receipts older than five minutes report `unknown` and require
+reconciliation rather than automatic re-execution.

@@ -108,6 +108,7 @@ export async function apiCall(
 	path: string,
 	opts?: RequestInit,
 	env?: McpEnv,
+	onResponse?: (response: Response) => void,
 ): Promise<unknown> {
 	// Every API hop is an `api` latency sample (#198), named by path without its query so an
 	// id or a cursor never lands in a log line. A thrown fetch is a failed sample and rethrows.
@@ -123,6 +124,7 @@ export async function apiCall(
 		throw err;
 	}
 	recordLatency({ stage: "api", name: path.split("?")[0] ?? path, ms: Date.now() - started, ok: res.status < 500 });
+	onResponse?.(res);
 	const raw = await res.text();
 	let json: unknown = {};
 	try {
@@ -145,9 +147,10 @@ export async function authedCall(
 	token: string,
 	opts?: RequestInit,
 	env?: McpEnv,
+	onResponse?: (response: Response) => void,
 ): Promise<unknown> {
 	return apiCall(path, {
 		...opts,
 		headers: { Authorization: `Bearer ${token}`, ...opts?.headers },
-	}, env);
+	}, env, onResponse);
 }

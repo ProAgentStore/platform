@@ -430,8 +430,8 @@ immediately instead of a whole transcript.
 | `get_instance_loop_presets` | The saved objectives the loop form offers, and whose list it is (`instance` / `agent` / `default`) (#613) | read | | |
 | `set_instance_loop_presets` | Replace the instance's own presets — the whole list; `[]` goes back to inheriting. An out-of-limit list is refused, not trimmed | write | yes | |
 | `stop_instance_loop` | Cooperative stop — the in-flight step finishes | write | no ([why](#tools-with-no-dry-run)) | |
-| `coding_loop_start` | Same run, started for a coding instance — returns a run id, keeps going after the call. `repo_id` (from `coding_repos_list`) targets one repo of a multi-repo instance; omitted there, it is refused with the registered repo_ids (a single-repo instance needs none). The run lock and `queue_if_busy` are per repo | runtime | yes | |
-| `coding_loop_status` | Status of that run from the server's record (omit `run_id` to list runs) | read | | |
+| `coding_loop_start` | Same run, started for a coding instance — durable `request_id` receipts distinguish provisioning, started, queued, not_started and unknown; reuse the same key after a lost reply. Client approval is outside the server; poll `coding_loop_status` before retrying. `repo_id` (from `coding_repos_list`) targets one repo of a multi-repo instance; omitted there, it is refused with the registered repo_ids (a single-repo instance needs none). The run lock and `queue_if_busy` are per repo | runtime | yes | |
+| `coding_loop_status` | Status of that run from the server's record (omit `run_id` to list runs and start receipts) | read | | |
 | `coding_loop_stop` | Cooperative stop; omit `run_id` to stop the newest running one | write | no ([why](#tools-with-no-dry-run)) | |
 | `coding_loop_queue` | The objectives queued behind the current run (`coding_loop_start` with `queue_if_busy`), FIFO — the top one starts automatically when the active run ends | read | | |
 | `coding_loop_queue_cancel` | Withdraw a queued objective before it starts; only a pending entry can be withdrawn | write | no ([why](#tools-with-no-dry-run)) | |

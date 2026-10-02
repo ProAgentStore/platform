@@ -42,6 +42,7 @@ import { getLoopRun, listLoopRuns, requestCancel } from "../lib/agent-loop-store
 // The run verdict, imported rather than re-derived — see `withHealth` (#580 AC3).
 import { runHealth, waitClause } from "../lib/work-report.js";
 import { loopDriverFor } from "../lib/loop-drivers.js";
+import { dispatchLoopStartReceipt, listLoopStarts } from "../lib/loop-start-receipts.js";
 import { instanceRepoCi } from "../lib/repo-ci-health.js";
 import { REPAIR_RUN_OBJECTIVE } from "../lib/repo-sync-gate.js";
 import { enqueueObjective } from "../lib/objective-queue.js";
@@ -1136,6 +1137,7 @@ toolRoutes.post("/:id/loop", async (c) => {
 	const instanceId = c.req.param("id");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	const body = (await c.req.json().catch(() => ({}))) as {
+		requestId?: string;
 		objective?: string;
 		maxIterations?: number;
 		repoId?: string;
@@ -1144,14 +1146,15 @@ toolRoutes.post("/:id/loop", async (c) => {
 		repairCheckout?: boolean;
 		budget?: { costMicros?: number; delegations?: number; maxDepth?: number };
 	};
+	if (body.requestId !== undefined && (typeof body.requestId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(body.requestId))) throw new HttpError(400, "requestId must contain 1–128 letters, numbers, underscores or hyphens");
 	// A REPAIR run needs no words from the caller (#804): the Pilot's objective is the platform's
 	// brief either way, and the run record carries a fixed label when none were given.
 	const repairCheckout = body.repairCheckout === true;
 	const objective = String(body.objective ?? "").trim() || (repairCheckout ? REPAIR_RUN_OBJECTIVE : "");
-	if (!objective) throw new HttpError(400, "objective is required");
+	if (!objective) return c.json({ error: "objective is required", startState: "not_started" }, 400);
 	const loopLimits = await readLoopLimits(c.env, instanceId, session.uid).catch(() => ({})); // the objective cap (#854), then iterations (#820)
 	const tooLong = objectiveTooLong(objective, effectiveMaxObjectiveChars(loopLimits));
-	if (tooLong) throw new HttpError(400, tooLong);
+	if (tooLong) return c.json({ error: tooLong, startState: "not_started" }, 400);
 	// Which repo, when the caller knows (#374). Optional because it is driver-specific: a
 	// supervisor delegating a goal names an agent, not a checkout, and the chat driver ignores it
 	// entirely — but the Coding tab is open on ONE session and `repos[0]` is the wrong engine for
@@ -1162,11 +1165,7 @@ toolRoutes.post("/:id/loop", async (c) => {
 	// Absent everywhere else, so the console's Loop and supervisors keep "absent means you pick".
 	const requireRepoChoice = body.requireRepoChoice === true;
 
-	// Resolve the per-account loop-iterations ceiling before clamping the caller's request (#477),
-	// then the instance's own floor and ceiling on top (#820). The driver clamps again with the
-	// same function over the same inputs; it is repeated here so the number RETURNED below is the
-	// number that will actually run — a caller told "10" while a floor of 30 was applied would be
-	// left wondering why the run went longer than it asked for, which is AC4.
+	// Match the driver clamp so the returned iteration limit equals the limit actually run (#477, #820).
 	const ceilings = await resolveAccountCeilings(c.env, session.uid);
 	const maxIterations = clampIterations(
 		sanitizeMaxIterations(body.maxIterations, ceilings.loopMaxIterations),
@@ -1181,52 +1180,52 @@ toolRoutes.post("/:id/loop", async (c) => {
 	const driver = loopDriverFor(caps);
 	// Only a coding run has a checkout to repair; a chat driver given the flag would loop its chat
 	// on a brief about git, which is a run that can only fail.
-	if (repairCheckout && driver.id !== "coding") throw new HttpError(400, "repairCheckout needs a coding agent — this agent's runs drive its chat, and there is no checkout to repair");
+	if (repairCheckout && driver.id !== "coding") return c.json({ error: "repairCheckout needs a coding agent — this agent's runs drive its chat, and there is no checkout to repair", startState: "not_started" }, 400);
 	// A coding run drives the owner's local runner, which is a Pro feature (#868) — refused here,
 	// before a pool is opened, rather than after it reaches a machine the paywall let it register.
-	if (driver.id === "coding") await requirePro(c.env, session);
+	if (driver.id === "coding") {
+		try { await requirePro(c.env, session); }
+		catch (error) {
+			if (error instanceof HttpError) return c.json({ error: error.message, startState: "not_started" }, error.status as 402);
+			throw error;
+		}
+	}
 
 	// Every server-driven loop gets a budget, even an unconfigured one — an autonomous run with
 	// no spend bound is the failure #184 exists to prevent, and "we'll set a limit later" is how
 	// the first runaway happens. sanitizeLimits clamps a request to the ceiling.
-	const budget = await openBudget(c.env, session.uid, instanceId, body.budget);
-	const started = await driver.start({
-		env: c.env,
-		instanceId,
-		userId: session.uid,
-		objective,
-		maxIterations,
-		repoId,
-		requireRepoChoice,
-		budgetId: budget.id,
-		depth: 0,
-		repairCheckout,
-	});
-	if (!started.ok) {
-		// QUEUE INSTEAD OF FAIL, but only on the refusal waiting actually fixes (#788).
-		//
-		// Opt-in, and it stays opt-in: a caller that did not ask still gets today's 409, because
-		// silently parking an objective is how a request the user thinks failed runs an hour later
-		// against a repo they have since changed. `reason === "busy"` and not `status === 409` — the
-		// other 409s here are "this agent has no repository", "no runner", "that checkout failed
-		// admission", and queueing behind any of them parks work that can never drain.
-		//
-		// The pool `openBudget` opened above is NOT reused when the objective finally starts: the
-		// drain opens its own, per #184's rule that every autonomous entry point admits separately.
-		// It is left open rather than closed, because `closed` is dead vocabulary in
-		// `delegation-budget-store.ts` and an unspent pool is not `exhausted` — the same state every
-		// finished run's pool is already in.
-		if (body.queueIfBusy === true && started.reason === "busy") {
-			const entry = await enqueueObjective(c.env, { instanceId, repoId, userId: session.uid, objective, maxIterations: body.maxIterations ?? null });
-			// 202, not 201: nothing was created that is running. The `blocked` sentence is the driver's
-			// own refusal, kept so the caller can see WHAT it is waiting behind rather than only that
-			// it is waiting.
-			return c.json({ queued: true, entry, blocked: started.error }, 202);
+	const start = async () => {
+		const budget = await openBudget(c.env, session.uid, instanceId, body.budget);
+		const started = await driver.start({
+			env: c.env,
+			instanceId,
+			userId: session.uid,
+			objective,
+			maxIterations,
+			repoId,
+			requireRepoChoice,
+			budgetId: budget.id,
+			depth: 0,
+			repairCheckout,
+		});
+		if (!started.ok) {
+			// Queue only busy refusals: no runner or unusable checkout cannot be fixed by waiting.
+			// The drain opens its own budget; this unspent pool is not reused.
+			if (body.queueIfBusy === true && started.reason === "busy") {
+				const entry = await enqueueObjective(c.env, { instanceId, repoId, userId: session.uid, objective, maxIterations: body.maxIterations ?? null });
+				// 202, not 201: nothing was created that is running. The `blocked` sentence is the driver's
+				// own refusal, kept so the caller can see WHAT it is waiting behind rather than only that
+				// it is waiting.
+				return c.json({ queued: true, entry, blocked: started.error }, 202);
+			}
+			if (started.reason === "engine_auth") return c.json({ error: started.error, stopReason: "engine_auth", needsReauth: true, runId: started.runId ?? null }, 409); // #891: see lib/engine-auth-refusal.ts
+			return c.json({ error: started.error, reason: started.reason ?? "refused", startState: "not_started" }, started.status as 409);
 		}
-		if (started.reason === "engine_auth") return c.json({ error: started.error, stopReason: "engine_auth", needsReauth: true, runId: started.runId ?? null }, 409); // #891: see lib/engine-auth-refusal.ts
-		throw new HttpError(started.status, started.error);
-	}
-	return c.json({ runId: started.runId, driver: started.driver, budgetId: budget.id, maxIterations, status: "running" }, 201);
+		return c.json({ runId: started.runId, driver: started.driver, budgetId: budget.id, maxIterations, status: "running", startState: "started" }, 201);
+	};
+	return body.requestId
+		? dispatchLoopStartReceipt(c.env, session.uid, instanceId, body.requestId, { objective, maxIterations: body.maxIterations ?? 10, repoId: repoId ?? null, requireRepoChoice, queueIfBusy: body.queueIfBusy === true, repairCheckout, budget: body.budget ?? null }, start, (operation) => c.executionCtx.waitUntil(operation))
+		: start();
 });
 
 // Registered HERE, above `GET /:id/loop/:runId` — Hono matches in order, and `/loop/queue` would
@@ -1322,7 +1321,8 @@ toolRoutes.get("/:id/loop", async (c) => {
 	const runs = await listLoopRuns(c.env, session.uid, instanceId);
 	// The repository's pipeline, BESIDE the runs' `health` and never folded into it (#903).
 	const repoCi = await instanceRepoCi(c.env, instanceId, session.uid);
-	return c.json({ runs: runs.map((run) => withHealth(run, now)), ...(repoCi ? { repoCi } : {}) });
+	const starts = c.req.query("include_starts") === "true" ? await listLoopStarts(c.env, session.uid, instanceId) : undefined;
+	return c.json({ runs: runs.map((run) => withHealth(run, now)), ...(repoCi ? { repoCi } : {}), ...(starts ? { starts } : {}) });
 });
 
 toolRoutes.get("/:id/loop/:runId", async (c) => {

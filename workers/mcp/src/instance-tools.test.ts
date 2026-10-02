@@ -915,7 +915,7 @@ describe("coding loop tools drive the server's durable, budgeted run (#502)", ()
 		// request rather than about whichever side happens to default it.
 		// No repo_id → none sent, and `requireRepoChoice` asks the API to REFUSE rather than guess on a
 		// multi-repo instance (#877); a single-repo instance is unaffected.
-		expect(JSON.parse(started?.body ?? "{}")).toEqual({ objective: "do the thing", maxIterations: 5, requireRepoChoice: true, queueIfBusy: false, repairCheckout: false });
+		expect(JSON.parse(started?.body ?? "{}")).toEqual({ requestId: expect.any(String), objective: "do the thing", maxIterations: 5, requireRepoChoice: true, queueIfBusy: false, repairCheckout: false });
 		// It must NOT reimplement the loop here any more.
 		expect(h.fetchStub.calls.some((c) => c.url.includes("/loop-decide"))).toBe(false);
 		expect(h.fetchStub.calls.some((c) => c.url.endsWith("/i1/chat"))).toBe(false);
@@ -935,6 +935,30 @@ describe("coding loop tools drive the server's durable, budgeted run (#502)", ()
 		const res = await h.tools.get("coding_loop_start")!.handler({ instance_id: "coder", objective: "x" });
 
 		expect(JSON.parse(res.content[0].text).error).toBeDefined();
+		expect(h.auditEvents().some((e) => e.tool === "coding_loop_start" && e.action === "completed")).toBe(false);
+	});
+
+	it("joins a provisioning receipt without reporting or auditing a started run (#886)", async () => {
+		const h = setup();
+		withInstance(h);
+		h.fetchStub.respond((u, m) => u.endsWith("/i1/loop") && m === "POST", { status: 202, body: { requestId: "req-1", startState: "provisioning" } });
+		const res = await h.tools.get("coding_loop_start")!.handler({ instance_id: "coder", objective: "x", request_id: "req-1" });
+		expect(JSON.parse(res.content[0].text)).toMatchObject({ requestId: "req-1", startState: "provisioning" });
+		const sent = JSON.parse(h.fetchStub.calls.find((c) => c.method === "POST")?.body ?? "{}");
+		expect(sent.requestId).toBe("req-1");
+		expect(h.auditEvents().some((e) => e.tool === "coding_loop_start" && e.action === "completed")).toBe(false);
+	});
+
+	it("a lost start response returns uncertainty with the same safe retry key (#886)", async () => {
+		const h = setup();
+		withInstance(h);
+		const originalFetch = globalThis.fetch;
+		vi.stubGlobal("fetch", (input: string | URL | Request, init?: RequestInit) => {
+			if (init?.method === "POST") return Promise.reject(new Error("connection lost"));
+			return originalFetch(input, init);
+		});
+		const res = await h.tools.get("coding_loop_start")!.handler({ instance_id: "coder", objective: "x", request_id: "req-lost" });
+		expect(JSON.parse(res.content[0].text)).toMatchObject({ startState: "unknown", requestId: "req-lost", poll: { tool: "coding_loop_status" }, retry: { input: { request_id: "req-lost" } } });
 		expect(h.auditEvents().some((e) => e.tool === "coding_loop_start" && e.action === "completed")).toBe(false);
 	});
 
