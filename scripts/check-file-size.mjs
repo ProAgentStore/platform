@@ -984,7 +984,8 @@ const PINS = {
 	// New entry at #878: 797 → 808 for the repo-less terminal path in coding_session_capture/_message — an import, a bound caller and one branch in each; the logic is src/terminal-fallback.ts, not here.
 	"workers/mcp/src/coding-tools.ts": 811, // +3 at #881: import + registration of `coding_engine_reauth`, whose body lives in its own coding-reauth-tools.ts.
 	// Pinned at #878 at its size on main: #874 (2b0ca68) grew it past the 800-line default without an entry, which left this ratchet failing for every commit after it. Recorded as it stands — not grown here.
-	"workers/api/src/lib/user-ai.ts": 803,
+	// +3 at #893: `runCloudflareAi` redacts Cloudflare's error body before it becomes `details` — an import and one call with its two-line why. The redaction is lib/cloudflare-redact.ts.
+	"workers/api/src/lib/user-ai.ts": 806,
 	// +3 at #878: the terminal record hook — an import and a one-line call with its comment after the handler. It belongs HERE for the reason the gates do: every surface dispatches through this function, and recording anywhere else would record one surface. The storage is lib/terminal-record.ts.
 	"workers/api/src/lib/tool-registry.ts": 899,
 	// +8 for the #312 stats prompt block. Deliberately not split: the block is two statements
@@ -1265,7 +1266,8 @@ const PINS = {
 	// consumed once, and why the cloud does not decide it, will do one of those. The COMPOSITION —
 	// what a brief says, what it must never claim, and its budget — is not here at all: it is pure,
 	// tested, and in workers/api/src/lib/coding-seed-brief.ts.
-	"packages/browser-runner/src/coding/headless.ts": 1005,
+	// +40 at #889: a failed turn's own output — the per-turn tail, `pushUnframed` (a structured engine's non-JSON lines, where Codex wrote its 401) and the `engine_error` case. They are the stream handlers' own branches, so they live where the stream is read; the bounds and the report are in engine-turn.ts.
+	"packages/browser-runner/src/coding/headless.ts": 1045,
 	// New entry at #687 — 629 → 964, crossing LIMIT by 164. The repo-detail slice
 	// (#687) adds three new types (GithubIssueEntry, GithubPullEntry, GithubBranchEntry),
 	// their input/output interfaces, an in-process LRU cache, three projection helpers
@@ -1840,7 +1842,8 @@ const PINS = {
 	// +3 at #771: the mcp/index.ts and routes/tools.ts raises above (two lines of why) and this one.
 	// +6 at #878: the tool-registry raise and the coding-tools.ts and user-ai.ts entries above, each with its reason, and this line.
 	// +7 at #879: the coding-store.ts raise and the new repo-local.ts entry above, each with its reason, and this line.
-	"scripts/check-file-size.mjs": 1924,
+	// +3 at #889/#893: the headless.ts and user-ai.ts raises above (one line of why each) and this one — both landed without their raise and left CI red until this.
+	"scripts/check-file-size.mjs": 1927,
 };
 
 /**
