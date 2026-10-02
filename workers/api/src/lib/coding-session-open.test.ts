@@ -862,6 +862,7 @@ describe("the machine is asked whether it can run the engine before a fresh laun
 		answer({ checked: true, bin: "codex", binaryFound: false, login: "unknown" });
 		const res = await ensureActiveSession(env, "inst", "u", repo);
 		expect(res.ok).toBe(false);
+		if (res.ok) throw new Error("expected a refusal"); // narrows to the refusal arm, which carries startError
 		expect(res.startError).toMatch(/Codex is not installed on machine "mac"/);
 		expect(res.startError).toContain("npm i -g @openai/codex");
 		expect(res.startError).not.toMatch(/api[ _-]?key/i);
@@ -874,6 +875,7 @@ describe("the machine is asked whether it can run the engine before a fresh laun
 		answer({ checked: true, bin: "codex", binaryFound: true, login: "missing" });
 		const res = await ensureActiveSession(env, "inst", "u", repo);
 		expect(res.ok).toBe(false);
+		if (res.ok) throw new Error("expected a refusal"); // narrows to the refusal arm, which carries startError
 		expect(res.startError).toMatch(/Codex is installed on machine "mac" but not signed in/);
 		expect(res.startError).toContain("codex login");
 		expect(res.startError).toContain("coding_engine_reauth");

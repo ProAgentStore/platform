@@ -204,6 +204,7 @@ describe("describeLoopRun", () => {
 			engine_limit: true,
 			provider_credit: true,
 			interrupted: true,
+			engine_auth: true,
 		};
 		const statuses = Object.keys(DOMAIN) as Array<LoopRunStatus | "running">;
 		const closed = statuses.filter((s) => s !== "running");

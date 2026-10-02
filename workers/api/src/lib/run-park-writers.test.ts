@@ -48,6 +48,9 @@ function pauseDeps(over: Partial<PauseDeps> = {}): PauseDeps {
 		announce: vi.fn(async () => undefined),
 		card: vi.fn(async () => undefined),
 		tick: vi.fn(async () => true),
+		// #881's sign-in park; no test in this file parks on sign-in, so it never completes or restarts.
+		reauthCompletedSince: vi.fn(async () => false),
+		restartEngine: vi.fn(async () => undefined),
 		now: () => 1_000_000,
 		...over,
 	};
