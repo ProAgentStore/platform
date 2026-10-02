@@ -1,3 +1,4 @@
+import { authedAsyncCall } from "../async-outcome.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authRequired, authedCall, jsonText, text } from "../http.js";
@@ -164,7 +165,7 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"set_instance_runner_node",
-		'Pin one instance to a specific machine, so its runner calls (chat tools, apply, coding) route there — and MOVE it there in the same call: when that machine\'s `pags up` is connected, it attaches the agent now and any other machine still holding it lets go, so no `pags up` is needed anywhere. The reply\'s `attachment` says what happened: `attached` (this agent\'s socket is live on the new machine), `detachedFrom`, `stillAttachedOn`, `unconfirmed` when a slow machine kept the move from being confirmed within 25s (the pin is saved either way; instance_runner_node shows where it attached), and a `detail` naming the remedy when it could not attach — usually force_runner_attach, which takes the agent\'s slot over on that machine when a stale or duplicate socket stands in the way. Can take several seconds. Pass an empty `runner_node` to CLEAR the pin and let it route to whichever machine holds a live socket. Read instance_runner_node first: the name must be one the machine registered under. Applies to any agent with a runtime, not only coding agents.',
+		'Pin one instance to a specific machine, so its runner calls (chat tools, apply, coding) route there — and MOVE it there in the same call: when that machine\'s `pags up` is connected, it attaches the agent now and any other machine still holding it lets go, so no `pags up` is needed anywhere. The reply\'s `attachment` says what happened: `attached` (this agent\'s socket is live on the new machine), `detachedFrom`, `stillAttachedOn`, `unconfirmed` when a slow machine kept the move from being confirmed within 15s (the pin is saved either way; instance_runner_node shows where it attached), and a `detail` naming the remedy when it could not attach — usually force_runner_attach, which takes the agent\'s slot over on that machine when a stale or duplicate socket stands in the way. If confirmation is interrupted or exceeds 20s, answers `{outcome: unknown, possibleOutcomes, poll}`: the pin may or may not be saved; poll instance_runner_node before retrying. Can take several seconds. Pass an empty `runner_node` to CLEAR the pin and let it route to whichever machine holds a live socket. Read instance_runner_node first: the name must be one the machine registered under. Applies to any agent with a runtime, not only coding agents.',
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID or slug"),
@@ -190,13 +191,14 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 			// The write goes through the same route the console uses, which records the change to
 			// the trace in `lib/runner-node-pin.ts` (#533) — deliberately not reimplemented here,
 			// because a pin changed without an audit entry is one nobody can explain afterwards.
-			const data = (await authedCall(
+			const data = (await authedAsyncCall(
 				`/v1/instances/${encodeURIComponent(instance_id)}/runner-node`,
 				sessionToken,
 				{ method: "PUT", body: JSON.stringify({ runnerNode: runner_node }) },
 				env,
-			)) as { runnerNode?: string | null; error?: string };
-			if (!data.error) await audit(safetyFor(token), { tool: "set_instance_runner_node", action: "completed", input, result: data });
+				{ tool: "set_instance_runner_node", possibleOutcomes: ["not-started", "pin-saved-attachment-pending", "attached"], poll: { tool: "instance_runner_node", input: { instance_id } } },
+			)) as { runnerNode?: string | null; error?: string; outcome?: string };
+			if (!data.error) await audit(safetyFor(token), { tool: "set_instance_runner_node", action: data.outcome === "unknown" ? "unconfirmed" : "completed", input, result: data });
 			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
 		},
 	);

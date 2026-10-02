@@ -802,7 +802,7 @@ describe("coding_session_fresh", () => {
 		expect(posts[1]).toEqual({ repoId: "repo-1", engineId: "codex", fresh: true });
 	});
 
-	it("does not create or audit a fresh session when ending the current one fails (#831)", async () => {
+	it("does not create or audit a fresh session when ending the current one is unconfirmed (#831, #887)", async () => {
 		const h = await setup({ groups: ["coding"] });
 		h.fetchStub.respond((u, m) => u.endsWith("/coding/sessions") && m === "GET", {
 			body: { sessions: [{ id: "sess-1", status: "active", repoId: "repo-1" }] },
@@ -813,7 +813,7 @@ describe("coding_session_fresh", () => {
 		});
 
 		const res = await h.tools.get("coding_session_fresh")!.handler({ instance_id: "i1" });
-		expect(JSON.parse(res.content[0].text)).toMatchObject({ error: "runner offline" });
+		expect(JSON.parse(res.content[0].text)).toMatchObject({ outcome: "unknown", poll: { tool: "coding_sessions_list", input: { instance_id: "i1" } } });
 		expect(h.fetchStub.calls.some((c) => c.url.endsWith("/coding/sessions") && c.method === "POST")).toBe(false);
 		expect(h.auditEvents().some((e) => e.tool === "coding_session_fresh")).toBe(false);
 	});

@@ -135,7 +135,7 @@ async function addRepo(body: Record<string, unknown>, bindings: Binding[] = []) 
 	);
 	return {
 		status: res.status,
-		body: (await res.json()) as { repo?: Record<string, unknown>; warning?: string; error?: string; existingId?: string; existingName?: string; code?: string; required?: string; found?: string | null },
+		body: (await res.json()) as { repo?: Record<string, unknown>; warning?: string; detail?: string; error?: string; existingId?: string; existingName?: string; code?: string; required?: string; found?: string | null },
 		row: insertedRepo(),
 		issued,
 	};
@@ -618,7 +618,7 @@ describe("POST /coding/repos requireGithub + clone — the cold start (#857)", (
 	 * `cloneFails`. `legacy` is a pre-#858 runner: no jobs (404), only the synchronous `/coding/clone`.
 	 * Every runner call is recorded so a test can say exactly what was asked.
 	 */
-	function machine(opts: { initial: Record<string, unknown>; origin?: string | null; cloneFails?: string; finishAfter?: number; legacy?: boolean; ancient?: boolean; via?: "https" | "ssh" }) {
+	function machine(opts: { initial: Record<string, unknown>; origin?: string | null; cloneFails?: string; finishAfter?: number; legacy?: boolean; ancient?: boolean; via?: "https" | "ssh"; dispatchError?: Error }) {
 		const asked: Array<{ path: string; body: unknown }> = [];
 		/** The URL the machine cloned from — a fresh clone's `origin`. */
 		let clonedFrom: string | null = null;
@@ -639,6 +639,7 @@ describe("POST /coding/repos requireGithub + clone — the cold start (#857)", (
 			if (path === "/coding/clone-start" || path === "/coding/clone-status") {
 				if (opts.legacy) throw new Error(`Runner ${path} → 404: {"error":"Not found"}`);
 				if (path === "/coding/clone-start") {
+					if (opts.dispatchError) throw opts.dispatchError;
 					const b = body as { workDir: string; slug: string };
 					job = { path: b.workDir, slug: b.slug, state: "cloning", attempts: [], startedAt: Date.now() };
 					return { ...job };
@@ -767,10 +768,28 @@ describe("POST /coding/repos requireGithub + clone — the cold start (#857)", (
 			expect(inserted(issued)).toBe(false);
 		});
 
+		it.each(["Relay command timed out", "Runner disconnected", "fetch failed"])("a lost clone dispatch reply (%s) is unknown, with same-argument polling guidance", async (reason) => {
+			machine({ initial: MISSING, dispatchError: new Error(`Runner /coding/clone-start → 504: ${reason}`) });
+			const { status, body, issued } = await add({ githubRepo: "acme/grass-karma", clone: true });
+			expect(status).toBe(202);
+			expect(body).toMatchObject({ outcome: "unknown", poll: { tool: "coding_repos_list", input: { instance_id: INSTANCE } }, cloning: null, unconfirmed: true, job: { path: "~/dev/grass-karma", slug: "acme/grass-karma", state: "unknown" } });
+			expect(body.detail).toMatch(/Call coding_repo_add again with the same arguments/);
+			expect(inserted(issued)).toBe(false);
+		});
+
+		it("an explicit clone rejection stays a failure even when its detail mentions a network", async () => {
+			machine({ initial: MISSING, dispatchError: new Error("Runner /coding/clone-start → 400: network transport not supported") });
+			const { status, body, issued } = await add({ githubRepo: "acme/grass-karma", clone: true });
+			expect(status).toBe(400);
+			expect(body.error).toMatch(/network transport not supported/);
+			expect(body).not.toHaveProperty("unconfirmed");
+			expect(inserted(issued)).toBe(false);
+		});
+
 		it("the REPEATED call joins the clone in flight — no second clone — and binds once it finishes", async () => {
 			fakeClock();
-			// First call: the clone outlives the wait (it finishes on the 30th status read, ~60s in).
-			const asked = machine({ initial: MISSING, finishAfter: 30 });
+			// First call: the clone outlives the wait (it finishes on the 10th status read, ~20s in).
+			const asked = machine({ initial: MISSING, finishAfter: 10 });
 			expect((await settle(add({ githubRepo: "acme/grass-karma", clone: true }))).status).toBe(202);
 			// Second call, same arguments: it must not read the half-written folder as a checkout, nor clone again.
 			const { status, row } = await settle(add({ githubRepo: "acme/grass-karma", clone: true }));

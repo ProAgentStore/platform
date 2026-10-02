@@ -282,7 +282,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `rename_instance` | Set or clear the display name | write | yes | |
 | `set_instance_model` | Pick the instance's brain model — Sonnet or a cheap tool-capable Cloudflare model, with cost hints; refuses a non-tool model or a Cloudflare pick without Cloudflare credentials | write | yes | |
 | `get_instance_state` | Read DO state (identity, guardrails, permissions) — read-only | — | | |
-| `pause_instance` | Temporarily stop an instance without unsubscribing — blocks new runs, asks live ones to stop; everything is kept (#825) | write | yes | |
+| `pause_instance` | Temporarily stop an instance without unsubscribing — blocks new runs, asks live ones to stop; everything is kept (#825); lost confirmation returns `outcome: unknown`; poll my_instances including paused instances and check_instance_loop | write | yes | |
 | `resume_instance` | Put a paused instance back to work. Does not restart the runs the pause stopped (#825) | write | yes | |
 | `cancel_instance` | Cancel the subscription, deactivating the instance | destructive | yes | `cancel_instance` |
 
@@ -375,9 +375,9 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `list_runner_nodes` | Every machine running a CLI, across all agents | — | | |
 | `instance_runner_node` | Which machine one instance is pinned to, and the alternatives | — | | |
 | `runner_setup` | A coding agent's local runner setup checklist — CLI and `pags up`, attachment, GitHub App, bound repository, engine sign-in — each with a live verdict | — | | |
-| `set_instance_runner_node` | Pin an instance to a machine and move it there — the connected `pags up` attaches it now and the old machine lets go (empty clears the pin) | write | yes | |
-| `force_runner_attach` | Force a machine's connected `pags up` to (re)attach one agent now — the remote `pags up --force` for that agent: clears a stale socket from its relay slot and takes the slot over. Does not change the pin | runtime | yes | |
-| `runner_update` | Update a machine's `pags` CLI to the latest release and restart it in place — waits for busy engines so no run is cut off, then checks every agent it held is attached again (re-attaching stragglers). `pags up` restarts itself on the new release; a runner under launchd/systemd (`PAGS_SERVICE=1`) or with `PAGS_RESTART_COMMAND` is restarted by that. The first update of a CLI older than 0.4.62 still needs the machine | runtime | yes | |
+| `set_instance_runner_node` | Pin an instance to a machine and move it there — the connected `pags up` attaches it now and the old machine lets go (empty clears the pin); lost/slow confirmation returns `outcome: unknown` with `instance_runner_node` polling guidance | write | yes | |
+| `force_runner_attach` | Force a machine's connected `pags up` to (re)attach one agent now — the remote `pags up --force` for that agent: clears a stale socket from its relay slot and takes the slot over. Does not change the pin; lost/slow confirmation returns `outcome: unknown` with `instance_runner_node` polling guidance | runtime | yes | |
+| `runner_update` | Update a machine's `pags` CLI to the latest release and restart it in place — waits for busy engines so no run is cut off, then checks every agent it held is attached again (re-attaching stragglers). `pags up` restarts itself on the new release; a runner under launchd/systemd (`PAGS_SERVICE=1`) or with `PAGS_RESTART_COMMAND` is restarted by that. The first update of a CLI older than 0.4.62 still needs the machine; lost/slow confirmation returns `outcome: unknown` with `list_runner_nodes` polling guidance | runtime | yes | |
 | `get_instance_terminal_session` | Saved Tmux-tab terminal target for one instance | read | | |
 | `set_instance_terminal_session` | Save or clear that target; does not operate a terminal | write | yes | |
 | `runner_node_forget_preflight` | Every alias and blocker before a machine registration is forgotten | read | | |
@@ -393,8 +393,8 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `coding_engine_get` | Which coding CLI the instance opens sessions with and which model it runs; plus the model the last measured engine turn actually ran (#792) | read | | |
 | `coding_engine_set` | Choose the instance's coding CLI and optionally pin its model (`--model` in the preset's own command). Next session only; a running one keeps its engine (#792) | write | yes | |
 | `coding_engine_reauth` | Sign a coding engine back in from any device: runs its subscription login on the runner (Claude paste-code, Codex device-code) and relays the URL, code and result; never an API key. Resumes a run parked on sign-in (#881) | runtime | yes | |
-| `coding_repo_add` | Add a repo as BOTH its local checkout (`path`) and its GitHub identity (from the checkout's origin, or asserted with `github_repo`) in one call; refused with nothing stored when either half is missing. With `clone: true` + `github_repo`, a missing or empty `path` is first cloned on the connected machine with its own git credentials — https, or SSH when https is refused and the machine has a key (`clone_protocol` pins one). A long clone runs in the background: a 202 `{cloning: true}` stores nothing, and repeating the call joins the same clone and binds it when done | write | | |
-| `coding_repo_remove` | Detach a repo from a coding instance — the counterpart to `coding_repo_add`; stops any active engine on it first, and deletes no code | destructive | yes | `coding_repo_remove` |
+| `coding_repo_add` | Add a repo as BOTH its local checkout (`path`) and its GitHub identity (from the checkout's origin, or asserted with `github_repo`) in one call; refused with nothing stored when either half is missing. With `clone: true` + `github_repo`, a missing or empty `path` is first cloned on the connected machine with its own git credentials — https, or SSH when https is refused and the machine has a key (`clone_protocol` pins one). A long clone runs in the background: a 202 `{cloning: true}` stores nothing, and repeating the call joins the same clone and binds it when done; lost/slow confirmation returns `outcome: unknown`, `coding_repos_list` polling guidance, and the exact same-argument retry | write | | |
+| `coding_repo_remove` | Detach a repo from a coding instance — the counterpart to `coding_repo_add`; stops any active engine on it first, and deletes no code; lost confirmation returns `outcome: unknown`; poll coding_repos_list and coding_sessions_list | destructive | yes | `coding_repo_remove` |
 | `coding_sessions_list` | All sessions, active and ended | — | | |
 | `coding_session_capture` | Live terminal output + run state (LIVE sessions only — an ended one answers with an empty pane) | — | | |
 | `coding_timeline` | What a run is doing, cursored by `since_seq` — objective, each instruction driven, pane tails, outcome. Works on a finished run too | read | | |
@@ -403,8 +403,8 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `coding_session_open` | Open a repo's conversation, CONTINUING the last one (#408's four-day window); says which one it got | runtime | | |
 | `coding_session_message` | Say something to the CLI on the runner node; wakes a sleeping repo instead of refusing | runtime | | |
 | `coding_session_restart` | Restart the CLI, same session id | runtime | | |
-| `coding_session_end` | End the session, stopping the CLI | runtime | | |
-| `coding_session_fresh` | End and start clean (no `--resume`) | runtime | | |
+| `coding_session_end` | End the session, stopping the CLI; lost confirmation returns `outcome: unknown`; poll coding_sessions_list before retrying | runtime | | |
+| `coding_session_fresh` | End and start clean (no `--resume`); lost confirmation returns `outcome: unknown`; poll coding_sessions_list before retrying | runtime | | |
 | `coding_overseer` | Cross-repo coordinator; can drive a specific engine | runtime | | |
 | `coding_instance_deploy_status` | Latest GitHub Actions workflow runs for a coding instance's registered repo; optionally filter by commit SHA | read | | |
 

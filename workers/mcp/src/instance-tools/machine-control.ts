@@ -1,6 +1,7 @@
+import { authedAsyncCall } from "../async-outcome.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { authRequired, authedCall, jsonText, text } from "../http.js";
+import { authRequired, jsonText, text } from "../http.js";
 import { audit, dryRun, requirePermission } from "../safety.js";
 import type { InstanceToolsCtx } from "./shared.js";
 
@@ -24,7 +25,7 @@ export function registerMachineControlTools(server: McpServer, ctx: InstanceTool
 	// slot, and the machine's connected `pags up` is told to attach this agent and take its slot over.
 	server.tool(
 		"force_runner_attach",
-		"Force a machine's connected `pags up` to (re)attach ONE agent now — the remote equivalent of `pags up --force`, scoped to this instance. Use it when instance_runner_node shows the machine online (`nodeOnline: true`) but this agent not connected, when a start fails with \"another runner on it may already hold this agent\", or when set_instance_runner_node's `attachment.detail` names this tool. It clears a stale socket from the agent's relay slot (only one that answers no ping — a live one is taken over by the runner, not killed), then asks the machine's runner, over a socket that answers there, to attach this agent with force. Targets the machine the agent is pinned to unless `runner_node` names another; it does NOT change the pin (set_instance_runner_node does). Answers `{node, attached, evicted, detail?}` from the relay's own view; when `attached` is false, `detail` is the specific reason — e.g. every socket on that machine is frozen, or the machine may not run this agent. Needs a `pags up` running on the machine; it cannot start one.",
+		"Force a machine's connected `pags up` to (re)attach ONE agent now — the remote equivalent of `pags up --force`, scoped to this instance. Use it when instance_runner_node shows the machine online (`nodeOnline: true`) but this agent not connected, when a start fails with \"another runner on it may already hold this agent\", or when set_instance_runner_node's `attachment.detail` names this tool. It clears a stale socket from the agent's relay slot (only one that answers no ping — a live one is taken over by the runner, not killed), then asks the machine's runner, over a socket that answers there, to attach this agent with force. Targets the machine the agent is pinned to unless `runner_node` names another; it does NOT change the pin (set_instance_runner_node does). Answers `{node, attached, evicted, detail?}` from the relay's own view; when `attached` is false, `detail` is the specific reason — e.g. every socket on that machine is frozen, or the machine may not run this agent. An interrupted or slow confirmation answers `{outcome: unknown, possibleOutcomes, poll}`; eviction or attachment may already have happened, so poll instance_runner_node before retrying. Needs a `pags up` running on the machine; it cannot start one.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID or slug"),
@@ -46,11 +47,12 @@ export function registerMachineControlTools(server: McpServer, ctx: InstanceTool
 					effect: `${runner_node || "The machine this agent is pinned to"} would have any stale socket cleared from this agent's slot and its \`pags up\` told to attach the agent now, taking the slot over.`,
 				});
 			}
-			const data = (await authedCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify({ runnerNode: runner_node || undefined }) }, env)) as {
+			const data = (await authedAsyncCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify({ runnerNode: runner_node || undefined }) }, env, { tool: "force_runner_attach", possibleOutcomes: ["not-started", "evicted", "attaching", "attached"], poll: { tool: "instance_runner_node", input: { instance_id } } })) as {
 				attached?: boolean;
 				error?: string;
+				outcome?: string;
 			};
-			if (!data.error) await audit(safetyFor(token), { tool: "force_runner_attach", action: "completed", input, result: data });
+			if (!data.error) await audit(safetyFor(token), { tool: "force_runner_attach", action: data.outcome === "unknown" ? "unconfirmed" : "completed", input, result: data });
 			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
 		},
 	);
@@ -63,7 +65,7 @@ export function registerMachineControlTools(server: McpServer, ctx: InstanceTool
 	// every agent the machine held is attached again, re-attaching stragglers through #856's path.
 	server.tool(
 		"runner_update",
-		"Update a machine's `pags` CLI to the latest release and restart it in place — entirely remotely. Use it when list_runner_nodes or instance_runner_node shows a machine `behind` on a feature, or when an error names runner_update (e.g. coding_repo_add \"too old to clone\"). The machine installs `@proagentstore/cli@latest` with npm and restarts — `pags up` restarts itself on the new release (an older `pags up` restarts only the runner, and the answer's `supervisor` says so), and a runner not under `pags up` restarts through its launchd/systemd unit (PAGS_SERVICE=1) or its PAGS_RESTART_COMMAND; if any coding engine is mid-turn it WAITS until those turns finish (answer `scheduled`, with `waitingFor`), so a run is paused across the restart and resumed — never cut off. After a restart the answer says which agents it held, which came back, which had to be re-attached (the force_runner_attach path), and any still `missing` with the reason. Other answers: `up-to-date`, `refused` (with why — e.g. nothing on the machine would restart it), `unsupported` (a CLI too old to update itself: the FIRST update needs the machine, later ones do not), `unreachable`. Pass dry_run to see what would be asked without contacting the machine; list_runner_nodes shows its current version and what it is behind on.",
+		"Update a machine's `pags` CLI to the latest release and restart it in place — entirely remotely. Use it when list_runner_nodes or instance_runner_node shows a machine `behind` on a feature, or when an error names runner_update (e.g. coding_repo_add \"too old to clone\"). The machine installs `@proagentstore/cli@latest` with npm and restarts — `pags up` restarts itself on the new release (an older `pags up` restarts only the runner, and the answer's `supervisor` says so), and a runner not under `pags up` restarts through its launchd/systemd unit (PAGS_SERVICE=1) or its PAGS_RESTART_COMMAND; if any coding engine is mid-turn it WAITS until those turns finish (answer `scheduled`, with `waitingFor`), so a run is paused across the restart and resumed — never cut off. After a restart the answer says which agents it held, which came back, which had to be re-attached (the force_runner_attach path), and any still `missing` with the reason. Other answers: `up-to-date`, `refused` (with why — e.g. nothing on the machine would restart it), `unsupported` (a CLI too old to update itself: the FIRST update needs the machine, later ones do not), `unreachable`. An interrupted or slow confirmation answers `{outcome: unknown, possibleOutcomes, poll}`; an update may already be scheduled or restarting, so poll list_runner_nodes before retrying. Pass dry_run to see what would be asked without contacting the machine; list_runner_nodes shows its current version and what it is behind on.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			runner_node: z.string().describe("Machine (node) name to update, from list_runner_nodes or instance_runner_node's `nodes`."),
@@ -84,8 +86,8 @@ export function registerMachineControlTools(server: McpServer, ctx: InstanceTool
 					effect: `${runner_node} would install the latest @proagentstore/cli and restart — after any engine mid-turn finishes — and every agent it holds would be checked back in, re-attaching any that did not return.`,
 				});
 			}
-			const data = (await authedCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify({}) }, env)) as { action?: string; error?: string };
-			if (!data.error) await audit(safetyFor(token), { tool: "runner_update", action: "completed", input, result: { action: data.action } });
+			const data = (await authedAsyncCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify({}) }, env, { tool: "runner_update", possibleOutcomes: ["not-started", "scheduled", "restarting", "restarted", "refused", "unsupported", "unreachable", "up-to-date", "failed"], poll: { tool: "list_runner_nodes", input: {} } })) as { action?: string; error?: string; outcome?: string };
+			if (!data.error) await audit(safetyFor(token), { tool: "runner_update", action: data.outcome === "unknown" ? "unconfirmed" : "completed", input, result: { action: data.action } });
 			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
 		},
 	);

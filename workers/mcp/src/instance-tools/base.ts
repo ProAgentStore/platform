@@ -1,3 +1,4 @@
+import { authedAsyncCall } from "../async-outcome.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authRequired, authedCall, jsonResult, jsonText, structuredText, text } from "../http.js";
@@ -436,7 +437,7 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 	 */
 	server.tool(
 		"pause_instance",
-		"Temporarily stop one private instance WITHOUT unsubscribing: blocks new runs from starting, and asks any run in flight to stop. Everything is kept — the subscription, config, repos, documents, memory, timeline and run history — and resume_instance puts it straight back. This is the reversible alternative to cancel_instance, which gives the agent up. Background work is stopped too (cron triggers, the agent-to-agent pump, delivery retries, inbound webhooks). Chat still works, deliberately, so you can ask a paused agent what went wrong. `runs_asked_to_stop` counts runs ASKED to stop, not runs that have stopped — each ends at the top of its next iteration; watch them with check_instance_loop. Pausing an already-paused instance succeeds with `changed:false`.",
+		"Temporarily stop one private instance WITHOUT unsubscribing: blocks new runs from starting, and asks any run in flight to stop. Everything is kept — the subscription, config, repos, documents, memory, timeline and run history — and resume_instance puts it straight back. This is the reversible alternative to cancel_instance, which gives the agent up. Background work is stopped too (cron triggers, the agent-to-agent pump, delivery retries, inbound webhooks). Chat still works, deliberately, so you can ask a paused agent what went wrong. `runs_asked_to_stop` counts runs ASKED to stop, not runs that have stopped — each ends at the top of its next iteration; watch them with check_instance_loop. A lost/slow confirmation returns `outcome: unknown`; poll my_instances with include_paused and check_instance_loop for runs before retrying. Pausing an already-paused instance succeeds with `changed:false`.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Private instance ID from my_instances. Not the public agent_id from list_agents."),
@@ -455,7 +456,7 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 					effect: `${instance_id} would stop starting new runs and any run in flight would be asked to stop. Nothing is unsubscribed or deleted, and resume_instance reverses it.`,
 				});
 			}
-			const data = (await authedCall(`/v1/instances/${instance_id}/pause`, sessionToken, { method: "POST" }, env)) as {
+			const data = (await authedAsyncCall(`/v1/instances/${instance_id}/pause`, sessionToken, { method: "POST" }, env, { tool: "pause_instance", possibleOutcomes: ["not-started", "paused-stop-requested", "paused-runs-ended"], poll: { tool: "my_instances", input: { include_paused: true } } })) as {
 				success?: boolean;
 				error?: string;
 			};

@@ -378,13 +378,13 @@ function buildApp(opts: {
 const tokenFor = (uid: string) => signSession(uid, SECRET, { roles: ["user"] });
 
 async function post(app: Hono<{ Bindings: Env }>, env: Env, path: string, body: unknown, tok: string) {
-	return app.request(path, { method: "POST", headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" }, body: JSON.stringify(body) }, env);
+	return app.request(path, { method: "POST", headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" }, body: JSON.stringify(body) }, env, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} });
 }
 async function put(app: Hono<{ Bindings: Env }>, env: Env, path: string, body: unknown, tok: string) {
-	return app.request(path, { method: "PUT", headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" }, body: JSON.stringify(body) }, env);
+	return app.request(path, { method: "PUT", headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" }, body: JSON.stringify(body) }, env, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} });
 }
 async function get(app: Hono<{ Bindings: Env }>, env: Env, path: string, tok?: string) {
-	return app.request(path, { headers: tok ? { Authorization: `Bearer ${tok}` } : {} }, env);
+	return app.request(path, { headers: tok ? { Authorization: `Bearer ${tok}` } : {} }, env, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} });
 }
 
 describe("POST /v1/instances/:id/runtime (integration — register a node)", () => {
@@ -544,7 +544,7 @@ describe("GET /v1/instances/:id/runtime/status (integration — #380, the pin-bl
 describe("POST /v1/instances/:id/runner-attach — the remote `pags up --force` (#856)", () => {
 	const attach = async (body: unknown, uid = "u1") => {
 		const { app, env } = buildApp({ owns: [["inst-1", "u1"]] });
-		return app.request("/v1/instances/inst-1/runner-attach", { method: "POST", headers: { Authorization: `Bearer ${await tokenFor(uid)}`, "Content-Type": "application/json" }, body: JSON.stringify(body) }, env);
+		return app.request("/v1/instances/inst-1/runner-attach", { method: "POST", headers: { Authorization: `Bearer ${await tokenFor(uid)}`, "Content-Type": "application/json" }, body: JSON.stringify(body) }, env, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} });
 	};
 
 	it("refuses an unpinned agent with no machine named, saying how to name one", async () => {

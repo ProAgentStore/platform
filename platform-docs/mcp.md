@@ -640,3 +640,23 @@ Interactive approval occurs in the MCP client before dispatch. The platform cann
 only that the request reached the handler. No receipt does not prove a delayed dispatch
 cannot arrive. Unresolved receipts older than five minutes report `unknown` and require
 reconciliation rather than automatic re-execution.
+
+### Async mutation confirmation
+
+`set_instance_runner_node`, `force_runner_attach`, `runner_update`, and
+`coding_repo_add` preserve their confirmed replies, including in-flight/partial
+outcomes. If the API reply is interrupted or cannot be confirmed within 20 seconds,
+they return JSON `{outcome: "unknown", tool, possibleOutcomes, poll, detail}`.
+This is uncertainty, not proof of failure or success. Explicit API refusals remain
+errors. Poll the supplied tool and arguments: `instance_runner_node` for pin/attach,
+`list_runner_nodes` for updates, and `coding_repos_list` for repository bindings.
+A repository-add response also supplies `retry` with the exact original arguments;
+if no binding appears, use those arguments to join the same background clone.
+A clone dispatch whose reply is lost reports `outcome: "unknown"`, `cloning: null`,
+and `unconfirmed: true`; it never claims the machine rejected or accepted it.
+Pin and attach confirmation replies omit eviction/detachment counts that could not
+be observed. Their confirmed partial replies return within 15 seconds while the
+operation continues.
+Do not change clone arguments or automatically repeat updates after a lost reply.
+A complete loss of the MCP connection can prevent even this response arriving;
+the same polling guidance applies.

@@ -3,8 +3,9 @@
  * Split out of `coding-repos.ts`, which registers the route that calls into it.
  */
 import type { Context } from "hono";
+import { CONFIRMATION_WINDOW_MS } from "../lib/confirmation-window.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../lib/runner-client.js";
-import { RunnerUnreachableError } from "../lib/runner-unreachable.js";
+import { NO_SOCKET_MARKER, RunnerUnreachableError } from "../lib/runner-unreachable.js";
 import { attachGithubIdentity, findRepoByWorkdir } from "../lib/coding-repo-folder.js";
 import { createRepo, findExistingRepoBinding, updateRepoClone } from "../lib/coding-store.js";
 import { checkWorkdirVia } from "../lib/coding-workdir.js";
@@ -51,6 +52,7 @@ export async function addPairedRepo(
 	clone = false,
 	protocol: CloneProtocol = "auto",
 ) {
+	const deadline = Date.now() + CONFIRMATION_WINDOW_MS;
 	const refuse = (error: string) => c.json({ error }, 400);
 	if (!localPath) {
 		return refuse(
@@ -68,8 +70,9 @@ export async function addPairedRepo(
 	if (clone) {
 		const inFlight = await readCloneJob(conn, localPath);
 		if (inFlight?.state === "cloning") {
-			const outcome = await awaitClone(conn, localPath, inFlight);
+			const outcome = await awaitClone(conn, localPath, inFlight, deadline);
 			if (outcome.kind === "pending") return stillCloning(c, outcome.job);
+		if (outcome.kind === "unconfirmed") return unconfirmedClone(c, localPath, githubRepoIn);
 			if (outcome.kind === "failed") return refuse(outcome.error);
 		}
 	}
@@ -82,8 +85,9 @@ export async function addPairedRepo(
 		// Refused BEFORE the clone, so a repo already bound here is not cloned a second time for nothing.
 		const bound = await findExistingRepoBinding(c.env, instanceId, githubRepoIn);
 		if (bound) return duplicateBinding(c, githubRepoIn, bound);
-		const outcome = await cloneOnMachine(conn, localPath, githubRepoIn, protocol);
+		const outcome = await cloneOnMachine(conn, localPath, githubRepoIn, protocol, deadline);
 		if (outcome.kind === "pending") return stillCloning(c, outcome.job);
+		if (outcome.kind === "unconfirmed") return unconfirmedClone(c, localPath, githubRepoIn);
 		if (outcome.kind === "too-old") return tooOldToClone(c, conn, outcome.ssh);
 		if (outcome.kind === "failed") return refuse(outcome.error);
 		verdict = await checkWorkdirVia(conn, localPath);
@@ -177,14 +181,14 @@ interface CloneJobView {
 	startedAt?: number;
 }
 
-type CloneOutcome = { kind: "done" } | { kind: "pending"; job: CloneJobView } | { kind: "failed"; error: string } | { kind: "too-old"; ssh: boolean };
+type CloneOutcome = { kind: "unconfirmed" } | { kind: "done" } | { kind: "pending"; job: CloneJobView } | { kind: "failed"; error: string } | { kind: "too-old"; ssh: boolean };
 
 /**
- * How long one call waits on a background clone before answering "still cloning" (#858). Under the
- * relay's two-minute command ceiling and a typical MCP client's own timeout; a small repository is
- * cloned and bound inside it exactly as #857's synchronous clone was.
+ * How long one request confirms a background clone before answering "still cloning" (#887).
+ * The window includes initial runner reads; each poll uses only the remaining time, so a slow
+ * status read cannot swallow the known accepted-job response before the MCP deadline.
  */
-const CLONE_WAIT_MS = 45_000;
+const CLONE_WAIT_MS = CONFIRMATION_WINDOW_MS;
 const CLONE_POLL_MS = 2_000;
 /** A pre-#858 runner's synchronous clone is one relay command, capped by the relay at two minutes. */
 const LEGACY_CLONE_TIMEOUT_MS = 120_000;
@@ -196,6 +200,14 @@ function runnerTrouble(e: unknown): string | null {
 	return null;
 }
 
+/** An explicit runner rejection is definitive; a lost dispatch reply is not. */
+function dispatchUnconfirmed(message: string): boolean {
+	if (message.includes(NO_SOCKET_MARKER)) return false;
+	const status = /→ (\d{3}):/.exec(message)?.[1];
+	if (status && status !== "502" && status !== "504") return false;
+	return /timed out|disconnected|WebSocket error|fetch failed|network/i.test(message);
+}
+
 const errorText = (e: unknown) =>
 	(e instanceof Error ? e.message : String(e)).replace(/^Runner \/coding\/[a-z-]+ → \d+: /, "").replace(/^\{"error":"(.*)"\}$/s, "$1");
 
@@ -205,12 +217,14 @@ async function readCloneJob(conn: RunnerConn, localPath: string): Promise<CloneJ
 }
 
 /** Wait on a running clone for up to {@link CLONE_WAIT_MS}, reading it back every couple of seconds. */
-async function awaitClone(conn: RunnerConn, localPath: string, job: CloneJobView): Promise<CloneOutcome> {
-	const until = Date.now() + CLONE_WAIT_MS;
+async function awaitClone(conn: RunnerConn, localPath: string, job: CloneJobView, deadline: number): Promise<CloneOutcome> {
+	const until = Math.min(deadline, Date.now() + CLONE_WAIT_MS);
 	let current = job;
 	while (current.state === "cloning" && Date.now() < until) {
-		await new Promise<void>((r) => setTimeout(r, CLONE_POLL_MS));
-		current = (await readCloneJob(conn, localPath)) ?? current;
+		await new Promise<void>((r) => setTimeout(r, Math.min(CLONE_POLL_MS, Math.max(0, until - Date.now()))));
+		const left = until - Date.now();
+		if (left <= 0) break;
+		current = (await callRunner<CloneJobView>(conn, "/coding/clone-status", { workDir: localPath }, { timeoutMs: Math.min(READ_TIMEOUT_MS, left) }).catch(() => null)) ?? current;
 	}
 	if (current.state === "cloning") return { kind: "pending", job: current };
 	if (current.state === "failed") return { kind: "failed", error: `Could not clone ${current.slug ?? "the repository"} into \`${localPath}\`: ${current.error ?? "git failed"}` };
@@ -226,17 +240,19 @@ async function awaitClone(conn: RunnerConn, localPath: string, job: CloneJobView
  * https first, SSH next when https is refused and the machine has a key github.com accepts (`protocol`
  * pins one). A runner that predates jobs gets #857's synchronous https clone.
  */
-async function cloneOnMachine(conn: RunnerConn, localPath: string, slug: string, protocol: CloneProtocol): Promise<CloneOutcome> {
+async function cloneOnMachine(conn: RunnerConn, localPath: string, slug: string, protocol: CloneProtocol, deadline: number): Promise<CloneOutcome> {
 	let job: CloneJobView;
 	try {
 		job = await callRunner<CloneJobView>(conn, "/coding/clone-start", { workDir: localPath, slug, protocol }, { timeoutMs: READ_TIMEOUT_MS });
 	} catch (e) {
+		const message = e instanceof Error ? e.message : String(e);
+		if (dispatchUnconfirmed(message)) return { kind: "unconfirmed" };
 		const trouble = runnerTrouble(e);
 		if (trouble) return { kind: "failed", error: trouble };
 		if (/→ 404/.test(e instanceof Error ? e.message : String(e))) return legacyClone(conn, localPath, slug, protocol);
 		return { kind: "failed", error: `Could not start a clone of ${slug} into \`${localPath}\`: ${errorText(e).slice(0, 300)}` };
 	}
-	return awaitClone(conn, localPath, job);
+	return awaitClone(conn, localPath, job, deadline);
 }
 
 /** #857's synchronous clone, for a runner that has no clone jobs yet — https only, one relay command. */
@@ -247,12 +263,10 @@ async function legacyClone(conn: RunnerConn, localPath: string, slug: string, pr
 		return { kind: "done" };
 	} catch (e) {
 		const message = e instanceof Error ? e.message : String(e);
+		if (dispatchUnconfirmed(message)) return { kind: "unconfirmed" };
 		const trouble = runnerTrouble(e);
 		if (trouble) return { kind: "failed", error: trouble };
 		if (/→ 404/.test(message)) return { kind: "too-old", ssh: false };
-		if (/timed out/i.test(message)) {
-			return { kind: "failed", error: `The clone of ${slug} did not finish within 2 minutes on this older CLI and may still be running. Call runner_update for this machine to get background clones, or once \`${localPath}\` holds the checkout, call coding_repo_add again without clone.` };
-		}
 		return {
 			kind: "failed",
 			error: `Could not clone ${slug} into \`${localPath}\`: ${errorText(e).slice(0, 400)} — the machine clones with its OWN git credentials, so for a private repository sign in there (\`gh auth login\` sets up https access), then add the repo again.`,
@@ -293,4 +307,17 @@ function stillCloning(c: Context, job: CloneJobView) {
 		},
 		202,
 	);
+}
+
+/** Dispatch lost its reply: neither success nor failure is known, and no binding is stored. */
+function unconfirmedClone(c: Context, localPath: string, slug: string | undefined) {
+	return c.json({
+		outcome: "unknown",
+		possibleOutcomes: ["not-started", "cloning", "completed"],
+		poll: { tool: "coding_repos_list", input: { instance_id: c.req.param("instanceId") } },
+		cloning: null,
+		unconfirmed: true,
+		job: { path: localPath, slug, state: "unknown" },
+		detail: `The clone request's outcome is not confirmed. It may have started or completed on the machine. Nothing is stored yet. Call coding_repo_add again with the same arguments to check the checkout or join the same background clone; do not choose a different path or repository while the outcome is unknown.`,
+	}, 202);
 }

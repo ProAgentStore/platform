@@ -1,3 +1,4 @@
+import { authedAsyncCall } from "./async-outcome.js";
 /**
  * The coding-surface MCP tools — opening a repo's conversation, watching it, and driving it.
  *
@@ -444,15 +445,14 @@ export function registerCodingSessionTools(
 		},
 	);
 
-	// The instance's standing engine + model choice (#792) — its own file, registered HERE so the
-	// published order is unchanged.
+	// The instance's standing engine/model tools retain their published order (#792).
 	registerCodingEngineTools(server, env, tokenFor, safetyFor);
 	// Sign an engine back in from any device (#881) — beside the engine choice it signs in.
 	registerCodingReauthTools(server, env, tokenFor, safetyFor);
 
 	server.tool(
 		"coding_repo_add",
-		"Add a repo to a coding instance. A coding repo is BOTH a local checkout the engine runs in AND its GitHub identity, set together in this one call: `path` is the checkout's folder on the connected machine (~/dev/...), and its GitHub owner/repo is read from that checkout's `origin` — pass `github_repo` to assert which repo it must be. Refused, with nothing stored, when either half is missing: an owner/repo or URL with no local folder, a folder that is not a checkout, or a checkout whose origin is not a GitHub repo. The machine must be connected (`pags up`) so the folder can be verified. A folder this instance already binds WITHOUT a GitHub repo gets the GitHub half attached to that binding in place (answer 200, same id) rather than a second binding; a folder bound to a different repo is refused. COLD START: with `clone: true` and `github_repo`, a `path` that does not exist yet (or is an empty folder) is first cloned there on the connected machine, using that machine's own git credentials, and then bound through the same checks — so a fresh instance needs no terminal step. Credentials: https first (the machine's credential helper, e.g. `gh auth login`); if that is refused and the machine has an SSH key github.com accepts, it clones over SSH — `clone_protocol` pins one. LONG CLONES run in the background on the machine: if one is still running after ~45s the reply is `{cloning: true, job, detail}` with NOTHING stored yet — call coding_repo_add again with the same arguments to join that same clone (never a second one) and bind it once it finishes. Without `clone`, a missing folder is refused as always; a folder that already exists is never cloned into.",
+		"Add a repo to a coding instance. A coding repo is BOTH a local checkout the engine runs in AND its GitHub identity, set together in this one call: `path` is the checkout's folder on the connected machine (~/dev/...), and its GitHub owner/repo is read from that checkout's `origin` — pass `github_repo` to assert which repo it must be. Refused, with nothing stored, when either half is missing: an owner/repo or URL with no local folder, a folder that is not a checkout, or a checkout whose origin is not a GitHub repo. The machine must be connected (`pags up`) so the folder can be verified. A folder this instance already binds WITHOUT a GitHub repo gets the GitHub half attached to that binding in place (answer 200, same id) rather than a second binding; a folder bound to a different repo is refused. COLD START: with `clone: true` and `github_repo`, a `path` that does not exist yet (or is an empty folder) is first cloned there on the connected machine, using that machine's own git credentials, and then bound through the same checks — so a fresh instance needs no terminal step. Credentials: https first (the machine's credential helper, e.g. `gh auth login`); if that is refused and the machine has an SSH key github.com accepts, it clones over SSH — `clone_protocol` pins one. LONG CLONES run in the background on the machine: if one is still running after ~15s the reply is `{cloning: true, job, detail}` with NOTHING stored yet — call coding_repo_add again with the same arguments to join that same clone (never a second one) and bind it once it finishes. An interrupted or slow confirmation answers `{outcome: unknown, possibleOutcomes, poll, retry}`: check coding_repos_list, then re-call with the EXACT same arguments to join the clone if no binding appears; never assume a lost reply means cloning failed. Without `clone`, a missing folder is refused as always; a folder that already exists is never cloned into.",
 		{
 			instance_id: z.string().describe("Instance ID"),
 			path: z.string().describe("Local folder of the checkout on the connected machine (~/dev/my-repo or an absolute path)"),
@@ -484,8 +484,8 @@ export function registerCodingSessionTools(
 			if (clone === true && !githubRepo) return text("Error: clone needs github_repo — which GitHub repository to clone into `path`.");
 			const transport = clone_protocol && clone_protocol !== "auto" ? { cloneProtocol: clone_protocol } : {};
 			const body = { localPath, requireGithub: true, ...(githubRepo ? { githubRepo } : {}), ...(clone === true ? { clone: true, ...transport } : {}) };
-			const r = await authedCall(`/v1/instances/${instance_id}/coding/repos`, sessionToken, { method: "POST", body: JSON.stringify(body) }, env);
-			await audit(safetyFor(token), { tool: "coding_repo_add", action: "completed", input: { instance_id, path, github_repo, clone: clone === true } });
+			const r = await authedAsyncCall(`/v1/instances/${instance_id}/coding/repos`, sessionToken, { method: "POST", body: JSON.stringify(body) }, env, { tool: "coding_repo_add", possibleOutcomes: ["not-started", "cloning", "bound", "refused"], poll: { tool: "coding_repos_list", input: { instance_id } }, retry: { tool: "coding_repo_add", input: { instance_id, path, github_repo, clone, clone_protocol } } });
+			await audit(safetyFor(token), { tool: "coding_repo_add", action: (r as { outcome?: string; cloning?: boolean }).outcome === "unknown" ? "unconfirmed" : (r as { cloning?: boolean }).cloning === true ? "cloning" : (r as { error?: string }).error ? "failed" : "completed", input: { instance_id, path, github_repo, clone: clone === true } });
 			return jsonText(r);
 		},
 	);
@@ -513,11 +513,8 @@ export function registerCodingSessionTools(
 	// That warning is passed through verbatim below: it is the half a caller must act on, and
 	// swallowing it would recreate the orphaned-process problem one layer up.
 	//
-	// The parity guard never flagged the gap because it inventories `store/console/src`, and this
-	// endpoint's only caller is `agents/coder/web`.
-	//
-	// ── Why it takes a NAME as well as an id
-	//
+	// The parity guard inventories store/console; this route was called only by agents/coder/web.
+	// Why it takes a name as well as an id:
 	// The issue asks for "repo id or name". A caller that has just listed repos has the id; a caller
 	// acting on the owner's words has "the platform one". Resolving the name goes through
 	// `filterReposByInstance` — the same guard #692's other half added — so a mis-routed listing
@@ -526,7 +523,7 @@ export function registerCodingSessionTools(
 	// deleting it is not recoverable.
 	server.tool(
 		"coding_repo_remove",
-		"Detach a repo from a coding instance — the counterpart to coding_repo_add, and the way to clean up a binding that was added in error or whose local checkout no longer exists. Identify the repo by `repo_id` (from coding_repos_list) or by `repo_name`; a name that matches more than one repo is refused rather than guessed. Any ACTIVE coding session on that repo is asked to stop first, because removing the binding is the last handle on the engine process; if one does not confirm it stopped, the removal still completes and the reply carries a `warning` naming how many may still be running on the owner's machine — act on that. This does NOT delete the repository itself, any code, or anything on GitHub: it removes the agent's binding to it, and the same repo can be added again with coding_repo_add. It is also NOT remove_repo, which detaches a repo from repo-chat vector ingestion — a different object entirely.",
+		"Detach a repo from a coding instance — the counterpart to coding_repo_add, and the way to clean up a binding that was added in error or whose local checkout no longer exists. Identify the repo by `repo_id` (from coding_repos_list) or by `repo_name`; a name that matches more than one repo is refused rather than guessed. Any ACTIVE coding session on that repo is asked to stop first, because removing the binding is the last handle on the engine process; if one does not confirm it stopped, the removal still completes and the reply carries a `warning` naming how many may still be running on the owner's machine — act on that. A lost/slow confirmation returns `outcome: unknown`; poll coding_repos_list and coding_sessions_list before retrying. This does NOT delete the repository itself, any code, or anything on GitHub: it removes the agent's binding to it, and the same repo can be added again with coding_repo_add. It is also NOT remove_repo, which detaches a repo from repo-chat vector ingestion — a different object entirely.",
 		{
 			instance_id: z.string().describe("Instance ID or slug"),
 			repo_id: z.string().optional().describe("Repo ID from coding_repos_list. Preferred — it is unambiguous. Give this OR repo_name."),
@@ -584,11 +581,11 @@ export function registerCodingSessionTools(
 			const unconfirmed = await requireConfirmation(safetyFor(token), "coding_repo_remove", confirm, "coding_repo_remove", input);
 			if (unconfirmed) return unconfirmed;
 
-			const data = await authedCall(endpoint, sessionToken, { method: "DELETE" }, env);
+			const data = await authedAsyncCall(endpoint, sessionToken, { method: "DELETE" }, env, { tool: "coding_repo_remove", possibleOutcomes: ["not-started", "sessions-stop-requested", "removed"], poll: { tool: "coding_repos_list", input: { instance_id } } });
 			// `authedCall` RETURNS a non-2xx as `{error}` rather than throwing — the same trap #788
 			// names on `coding_loop_start`. Auditing without looking is how a 404 gets recorded as a
 			// completed deletion.
-			if ((data as { error?: string }).error) return jsonText(data);
+			if ((data as { error?: string; outcome?: string }).error || (data as { outcome?: string }).outcome === "unknown") return jsonText(data);
 			await audit(safetyFor(token), {
 				tool: "coding_repo_remove",
 				action: "completed",
@@ -617,7 +614,7 @@ export function registerCodingSessionTools(
 
 	server.tool(
 		"coding_session_end",
-		"End a coding session completely. Stops the CLI process/session on the runner.",
+		"End a coding session completely. Stops the CLI process/session on the runner. A lost/slow confirmation returns `outcome: unknown`; poll coding_sessions_list before retrying.",
 		{
 			instance_id: z.string().describe("Instance ID"),
 			session_id: z.string().optional().describe("Session ID. If omitted, uses the first active session."),
@@ -632,7 +629,8 @@ export function registerCodingSessionTools(
 			if (r.error) return jsonText(r);
 			const sid = session_id || (r.sessions || []).find((s) => s.status === "active")?.id;
 			if (!sid) return text("No active coding session found.");
-			const ended = (await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/end`, sessionToken, { method: "POST" }, env)) as { error?: string };
+			const ended = (await authedAsyncCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/end`, sessionToken, { method: "POST" }, env, { tool: "coding_session_end", possibleOutcomes: ["not-started", "stopping", "ended"], poll: { tool: "coding_sessions_list", input: { instance_id } } })) as { error?: string; outcome?: string };
+			if (ended.outcome === "unknown") return jsonText(ended);
 			if (ended?.error) return text(`Error ending session ${sid}: ${ended.error}`);
 			await audit(safetyFor(token), { tool: "coding_session_end", action: "completed", input: { instance_id, session_id: sid } });
 			return text(`Session ${sid} ended.`);
@@ -641,7 +639,7 @@ export function registerCodingSessionTools(
 
 	server.tool(
 		"coding_session_fresh",
-		"End the current session and start a brand new one (clean state, no --resume). Fixes corrupted CLI state.",
+		"End the current session and start a brand new one (clean state, no --resume). Fixes corrupted CLI state. A lost/slow confirmation returns `outcome: unknown`; poll coding_sessions_list before retrying. If stopping the old session is unconfirmed, no new one is started.",
 		{
 			instance_id: z.string().describe("Instance ID"),
 			repo_id: z.string().optional().describe("Repo ID. If omitted, uses the repo of the first active session."),
@@ -659,7 +657,8 @@ export function registerCodingSessionTools(
 			const repoId = repo_id || active?.repoId;
 			if (!repoId) return text("No repo specified and no active session to infer from.");
 			if (active) {
-				const ended = (await authedCall(`/v1/instances/${instance_id}/coding/sessions/${active.id}/end`, sessionToken, { method: "POST" }, env)) as { error?: string };
+				const ended = (await authedAsyncCall(`/v1/instances/${instance_id}/coding/sessions/${active.id}/end`, sessionToken, { method: "POST" }, env, { tool: "coding_session_fresh", possibleOutcomes: ["not-started", "stopping-old-session", "old-session-ended"], poll: { tool: "coding_sessions_list", input: { instance_id } } })) as { error?: string; outcome?: string };
+				if (ended.outcome === "unknown") return jsonText(ended);
 				if (ended.error) return jsonText(ended);
 			}
 			// `fresh: true` (#408): a new session now CONTINUES the repo's recent conversation by
@@ -669,7 +668,8 @@ export function registerCodingSessionTools(
 			// sent `"claude"` — the constant `openConversation` above records burning an owner's Claude
 			// limit after he switched to Codex (#549) — which made the one tool that STARTS an engine
 			// clean also the one that ignored which engine the owner had chosen.
-			const d = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, { method: "POST", body: JSON.stringify(engine_id ? { repoId, engineId: engine_id, fresh: true } : { repoId, fresh: true }) }, env)) as { error?: string };
+			const d = (await authedAsyncCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, { method: "POST", body: JSON.stringify(engine_id ? { repoId, engineId: engine_id, fresh: true } : { repoId, fresh: true }) }, env, { tool: "coding_session_fresh", possibleOutcomes: ["old-session-ended", "new-session-provisioning", "new-session-started"], poll: { tool: "coding_sessions_list", input: { instance_id } } })) as { error?: string; outcome?: string };
+			if (d.outcome === "unknown") return jsonText(d);
 			if (d.error) return jsonText(d);
 			await audit(safetyFor(token), { tool: "coding_session_fresh", action: "completed", input: { instance_id, repoId } });
 			return jsonText(d);

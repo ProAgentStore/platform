@@ -15,7 +15,7 @@ import { registerBehaviourRoutes } from "./instances-behaviour.js";
 import { registerBrowseRoutes } from "./instances-browse.js";
 import { registerChatRoutes } from "./instances-chat.js";
 import { registerGuideRoutes } from "./instances-guide.js";
-import { registerRunnerAttachRoutes } from "./instances-runner-attach.js";
+import { registerRunnerAttachRoutes, registerRunnerPinRoutes } from "./instances-runner-attach.js";
 import { registerRunnerSetupRoutes } from "./instances-runner-setup.js";
 import { registerInstanceLifecycleRoutes } from "./instances-lifecycle.js";
 import { registerKnowledgeRoutes } from "./instances-knowledge.js";
@@ -74,8 +74,6 @@ import { foldNodesByMachine, normalizeMachineId, sanitizeMachineNames } from "..
 import { parseBoundRunnerNode } from "../lib/runtime-nodes.js";
 import { diagnoseAttachment, heartbeatFresh } from "../lib/runtime-attachment.js";
 import { instanceListView, patchInstanceConfig, removeInstanceConfigKey } from "../lib/instance-config.js";
-import { setRunnerNodePin } from "../lib/runner-node-pin.js";
-import { attachOnRepin } from "../lib/runner-repin.js";
 import { runnerVersionView } from "../lib/runner-features.js";
 
 export const instanceRoutes = new Hono<{ Bindings: Env }>();
@@ -623,19 +621,7 @@ instanceRoutes.get("/:instanceId/runner-node", async (c) => {
 	return c.json({ runnerNode: runnerNode || null, nodes: available, nodesDetail, resolvedNode });
 });
 
-/** Pin (or clear, with an empty/null value) the node this instance runs on.
- *
- *  The write itself lives in `lib/runner-node-pin.ts`, which records the change to the trace (#533).
- *  It is there rather than here because this key decides whether every runner call routes anywhere,
- *  and an audit a route remembers is one the next writer forgets — see that module's header. */
-instanceRoutes.put("/:instanceId/runner-node", async (c) => {
-	const session = await requireUser(c);
-	const instanceId = c.req.param("instanceId");
-	await requireOwnedInstance(c.env, instanceId, session.uid);
-	const body = (await c.req.json().catch(() => ({}))) as { runnerNode?: unknown };
-	const { to } = await setRunnerNodePin(c.env, instanceId, session.uid, body.runnerNode, { via: "api" });
-	return c.json(to ? { runnerNode: to, attachment: await attachOnRepin(c.env, instanceId, session.uid, to) } : { runnerNode: null }); // a pin also MOVES the agent (#850)
-});
+registerRunnerPinRoutes(instanceRoutes); // preserve the runner-node route order after extraction (#887)
 
 /** Read which terminal session was last selected in the UI for this instance (#491) — and, beside it,
  *  the one last DRIVEN through its tools (#878), which survives the tmux session ending: `lib/terminal-record.ts`. */
