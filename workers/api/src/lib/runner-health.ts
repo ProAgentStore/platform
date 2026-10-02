@@ -33,8 +33,8 @@ export type HealthCheckState = "ok" | "timeout" | "unresponsive" | "disconnected
  * The single runner status every surface of a diagnostics report agrees with.
  *
  * `online` — relay socket live AND the health responder answered.
- * `unresponsive` — relay socket live, health responder did not answer: the machine is there and a
- *   process on it is wedged. Reconnecting does not fix this; restarting the runner does.
+ * `unresponsive` — the relay reported a socket, but the health responder did not answer.
+ *   This can be stale relay state or a wedged local responder; a reconnect may recover it.
  * `offline` — registered, but no live relay socket.
  * `unregistered` — no runner has ever registered for this instance.
  */
@@ -73,4 +73,16 @@ export function classifyHealthProbeFailure(e: unknown): HealthCheckFailure {
 export function runnerLiveStatus(input: { registered: boolean; relayConnected: boolean; healthCheck: HealthCheckState }): RunnerLiveStatus {
 	if (!input.relayConnected) return input.registered ? "offline" : "unregistered";
 	return input.healthCheck === "ok" ? "online" : "unresponsive";
+}
+
+/** Recovery guidance from observed health, without assuming a timeout proves a frozen process (#901).
+ * Diagnostics only recommends recovery: force attach is an explicit takeover, never a read-side effect.
+ */
+export function runnerHealthRemedy(status: RunnerLiveStatus, healthCheck: HealthCheckState): string | null {
+	if (status === "online") return null;
+	if (status === "unregistered") return "Run `pags up` on the machine to register and connect this instance";
+	if (status === "offline" || healthCheck === "disconnected") {
+		return "The relay socket is absent or closed. If another of your agents has a responding runner on the same machine, try `force_runner_attach` for this instance and recheck `coding_diagnostics`. Otherwise check `pags up` on the machine and start or restart it if it does not reconnect";
+	}
+	return "Try `force_runner_attach` for this instance on its pinned machine (or specify `runner_node` if unpinned) to reconnect its relay socket. This can recover a stale connection even when `evicted` is 0. Then run `coding_diagnostics` again: `attached: true` confirms the socket, not a healthy responder. If attachment is unconfirmed, check `instance_runner_node` before retrying; if reattachment fails or the health check still fails, restart `pags up` on the machine";
 }

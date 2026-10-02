@@ -3,7 +3,7 @@
  * same on every call, and `runnerStatus` must never contradict `runnerOnline`.
  */
 import { describe, expect, it } from "vitest";
-import { classifyHealthProbeFailure, type HealthCheckState, runnerLiveStatus } from "./runner-health.js";
+import { classifyHealthProbeFailure, type HealthCheckState, runnerHealthRemedy, runnerLiveStatus } from "./runner-health.js";
 import { NO_SOCKET_MARKER, RunnerUnreachableError } from "./runner-unreachable.js";
 
 describe("classifyHealthProbeFailure", () => {
@@ -52,5 +52,29 @@ describe("runnerLiveStatus", () => {
 					const status = runnerLiveStatus({ registered, relayConnected, healthCheck });
 					expect(status === "online").toBe(relayConnected && healthCheck === "ok");
 				}
+	});
+});
+
+describe("runnerHealthRemedy (#901)", () => {
+	it("recommends explicit remote recovery before restarting for failed live health probes", () => {
+		for (const state of ["timeout", "unresponsive", "failed"] as const) {
+			const remedy = runnerHealthRemedy("unresponsive", state)!;
+			expect(remedy).toContain("force_runner_attach");
+			expect(remedy.indexOf("force_runner_attach")).toBeLessThan(remedy.indexOf("restart `pags up`"));
+			expect(remedy).toContain("`evicted` is 0");
+			expect(remedy).toContain("`attached: true` confirms the socket, not a healthy responder");
+			expect(remedy).toContain("check `instance_runner_node` before retrying");
+		}
+	});
+
+	it("distinguishes a missing or closed socket and an unregistered runner", () => {
+		for (const [status, state] of [["offline", "not_attempted"], ["unresponsive", "disconnected"]] as const) {
+			const remedy = runnerHealthRemedy(status, state)!;
+			expect(remedy).toContain("socket is absent or closed");
+			expect(remedy).toContain("If another of your agents has a responding runner on the same machine");
+			expect(remedy).toContain("Otherwise check `pags up`");
+		}
+		expect(runnerHealthRemedy("unregistered", "not_attempted")).toContain("register and connect");
+		expect(runnerHealthRemedy("online", "ok")).toBeNull();
 	});
 });

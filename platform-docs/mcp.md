@@ -641,12 +641,37 @@ only that the request reached the handler. No receipt does not prove a delayed d
 cannot arrive. Unresolved receipts older than five minutes report `unknown` and require
 reconciliation rather than automatic re-execution.
 
+### Recovering an unresponsive runner
+
+`coding_diagnostics` separates `relayConnected` (the relay holds a socket) from
+`healthCheck` (the runner answered `/health`). `runnerStatus: "unresponsive"` with
+a connected relay does not establish that the process is frozen: a stale socket
+or a blocked health responder can produce the same result.
+
+Try `force_runner_attach` for the affected instance first, targeting its pinned
+machine or an explicit `runner_node` from `instance_runner_node`. This explicit
+recovery probes and clears stale sockets and asks a responding runner belonging
+to the owner on that machine to reattach the agent. It can recover remotely even
+when no socket was evicted; `attached: true` confirms attachment, not a successful
+health check. Run `coding_diagnostics` again to verify health and sessions.
+
+If no runner socket on the target machine can answer the recovery command, or
+health still fails after reattachment, restart `pags up` on that machine. A
+disconnected relay needs `pags up` started or reconnected; recovery can still be
+remote if another agent's runner on the same machine responds. `runner_update`
+also needs a responding carrier and is not a substitute for stale-slot recovery.
+Diagnostics remain read-only: they do not evict sockets or force attachment
+automatically.
+
 ### Async mutation confirmation
 
 `set_instance_runner_node`, `force_runner_attach`, `runner_update`, and
 `coding_repo_add` preserve their confirmed replies, including in-flight/partial
 outcomes. If the API reply is interrupted or cannot be confirmed within 20 seconds,
 they return JSON `{outcome: "unknown", tool, possibleOutcomes, poll, detail}`.
+The additional `confirmation.reason` identifies `deadline-exceeded`,
+`gateway-error`, or `transport-error`; `confirmation.httpStatus` preserves a
+received HTTP status when available. The detail names the polling tool.
 This is uncertainty, not proof of failure or success. Explicit API refusals remain
 errors. Poll the supplied tool and arguments: `instance_runner_node` for pin/attach,
 `list_runner_nodes` for updates, and `coding_repos_list` for repository bindings.

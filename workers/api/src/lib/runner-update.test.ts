@@ -150,6 +150,23 @@ describe("runner_update — every other outcome says what happened (#859)", () =
 		expect(out.detail).toMatch(/predates runner_update.*Update it once at the machine.*the last update anyone does by hand.*runner_update does it remotely/);
 	});
 
+	it("connected sockets that do not answer suggest explicit stale-socket recovery before a machine restart (#901)", async () => {
+		for (const id of [CODER, OTHER, THIRD]) frozen.add(id);
+		const out = await update();
+		expect(out.action).toBe("unreachable");
+		expect(out.detail).toMatch(/force_runner_attach.*coding_diagnostics.*list_runner_nodes.*If remote attachment cannot recover it, restart/);
+		expect(out.detail).not.toMatch(/runner there is frozen/);
+	});
+
+	it("a relay command timeout preserves uncertainty and names remote recovery (#901)", async () => {
+		reply = () => new Error("Runner /pags/runner/update → 504: Relay command timed out");
+		const out = await update();
+		expect(out.action).toBe("failed");
+		expect(out.detail).toMatch(/may still be in flight; poll list_runner_nodes before retrying/);
+		expect(out.detail).toMatch(/force_runner_attach.*check coding_diagnostics again.*If remote recovery fails, restart/);
+		expect(sent).toHaveLength(1);
+	});
+
 	it("a frozen socket is skipped for the next one; no connected runner at all is unreachable", async () => {
 		frozen.add(CODER);
 		reply = () => ({ action: "up-to-date", current: "0.4.63" });

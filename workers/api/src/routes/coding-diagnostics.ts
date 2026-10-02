@@ -24,7 +24,7 @@ import { refusingEngineIssue } from "../lib/coding-run-state.js";
 import { listRepos, listSessions, reconcileOrphanedSessions } from "../lib/coding-store.js";
 import { readProviderAccountHealth } from "../lib/provider-account-health.js";
 import { relayNameForInstance } from "../lib/runtime-nodes.js";
-import { classifyHealthProbeFailure, type HealthCheckState, runnerLiveStatus } from "../lib/runner-health.js";
+import { classifyHealthProbeFailure, type HealthCheckState, runnerHealthRemedy, runnerLiveStatus } from "../lib/runner-health.js";
 import { latestRunRow, readReauthState, signInBlockFrom } from "../lib/engine-reauth-store.js";
 import { reauthExpiryView } from "../lib/engine-reauth-expiry.js";
 import { getLiveRuntime } from "./instances-runtime.js";
@@ -419,6 +419,8 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		runner.healthCheck = healthCheck;
 		runner.reachable = effectivelyReachable;
 		runner.health = runnerHealth;
+		const healthRemedy = runnerHealthRemedy(liveStatus, healthCheck);
+		runner.remedy = healthRemedy;
 
 		// 3. D1 sessions + repos + the engine presets (needed to name each session's sign-in MODE,
 		//    which is half of the auth report — the runner supplies the other half).
@@ -641,16 +643,16 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		if (!runtimeRow) {
 			issues.push({ severity: "error", message: "No runner registered for this instance", fix: "Run `pags up` to connect your machine" });
 		} else if (runtimeRow.status === "offline" && !relayIsConnected) {
-			issues.push({ severity: "error", message: "Runner status is offline", fix: "Restart `pags up` to reconnect" });
+			issues.push({ severity: "error", message: "Runner status is offline", fix: healthRemedy! });
 		} else if (!relayIsConnected) {
-			issues.push({ severity: "error", message: "Runner registered but not reachable", fix: "Restart `pags up` to reconnect" });
+			issues.push({ severity: "error", message: "Runner registered but not reachable", fix: healthRemedy! });
 		} else if (liveStatus === "unresponsive") {
-			// The socket is live, so "reconnect" is the wrong remedy (#880): something on the machine
-			// is wedged, and only restarting the runner process there clears it.
+			// A live socket does not prove that the local responder is wedged (#901).
+			// Explicit force attach can drop/reopen a stale handle without restarting the machine.
 			issues.push({
 				severity: "error",
 				message: `Runner is connected but not responding (health check: ${healthCheck})`,
-				fix: "Restart `pags up` on the machine — the relay socket is live, so reconnecting alone will not help",
+				fix: healthRemedy!,
 			});
 		}
 

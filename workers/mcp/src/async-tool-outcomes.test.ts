@@ -49,6 +49,18 @@ describe("async tools retain actionable outcomes", () => {
 		expect(fetch).toHaveBeenCalledTimes(1);
 		if (tool === "coding_repo_add") expect(payload.retry).toEqual({ tool, input });
 	});
+
+	it.each([
+		["force_runner_attach", { instance_id: "i1" }, "instance_runner_node"],
+		["runner_update", { runner_node: "mac" }, "list_runner_nodes"],
+	] as const)("%s returns gateway failure detail instead of a bare MCP exception (#901)", async (tool, input, pollTool) => {
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("Relay command timed out", { status: 504 })));
+		const result = await handlers().get(tool)?.(input);
+		const payload = JSON.parse(result?.content[0].text ?? "{}");
+		expect(payload).toMatchObject({ outcome: "unknown", tool, confirmation: { reason: "gateway-error", httpStatus: 504 }, poll: { tool: pollTool } });
+		expect(payload.detail).toContain(pollTool);
+		expect(payload.detail).toContain("does not prove failure");
+	});
 	it.each(["coding_session_end", "coding_session_fresh"])("%s stops after an unconfirmed end rather than claiming success or starting another session", async (tool) => {
 		const fetch = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ sessions: [{ id: "session-1", status: "active", repoId: "repo-1" }] }))).mockRejectedValue(new Error("reply lost"));
 		vi.stubGlobal("fetch", fetch);

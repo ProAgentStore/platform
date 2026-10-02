@@ -8,7 +8,7 @@ afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 describe("async operation confirmation", () => {
 	it.each([502, 504])("reports HTTP %s gateway replies as uncertainty even with a custom error body", async (status) => {
 		vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ error: "upstream interrupted" }), { status }));
-		expect(await call()).toMatchObject({ outcome: "unknown", poll: recovery.poll });
+		expect(await call()).toMatchObject({ outcome: "unknown", confirmation: { reason: "gateway-error", httpStatus: status }, poll: recovery.poll });
 	});
 	it("preserves explicit application failures rather than guessing they completed", async () => {
 		vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ error: "runner refused" }), { status: 500 }));
@@ -26,7 +26,7 @@ describe("async operation confirmation", () => {
 	it("reports uncertainty and polling after transport failure without retrying", async () => {
 		const fetch = vi.fn().mockRejectedValue(new Error("socket lost"));
 		vi.stubGlobal("fetch", fetch);
-		expect(await call()).toMatchObject({ outcome: "unknown", ...recovery });
+		expect(await call()).toMatchObject({ outcome: "unknown", confirmation: { reason: "transport-error" }, ...recovery });
 		expect(fetch).toHaveBeenCalledTimes(1);
 	});
 	it("bounds a hung request even when fetch ignores abort", async () => {
@@ -35,11 +35,11 @@ describe("async operation confirmation", () => {
 		vi.stubGlobal("fetch", (_url: string, init: RequestInit) => { signal = init.signal as AbortSignal; return new Promise(() => {}); });
 		const pending = call();
 		await vi.advanceTimersByTimeAsync(20_000);
-		expect(await pending).toMatchObject({ outcome: "unknown", poll: recovery.poll });
+		expect(await pending).toMatchObject({ outcome: "unknown", confirmation: { reason: "deadline-exceeded" }, poll: recovery.poll });
 		expect(signal?.aborted).toBe(true);
 	});
 	it("handles a response interrupted while its body is being read", async () => {
 		vi.stubGlobal("fetch", async () => ({ status: 200, text: () => Promise.reject(new Error("body interrupted")) }));
-		expect(await call()).toMatchObject({ outcome: "unknown" });
+		expect(await call()).toMatchObject({ outcome: "unknown", confirmation: { reason: "transport-error", httpStatus: 200 } });
 	});
 });

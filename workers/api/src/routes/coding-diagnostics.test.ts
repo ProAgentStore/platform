@@ -335,7 +335,15 @@ describe("a live relay with a hung health responder reads one way (#880)", () =>
 
 			const issue = (body.issues as Array<Record<string, unknown>>).find((i) => i.severity === "error");
 			expect(String(issue?.message)).toContain("connected but not responding");
-			expect(String(issue?.fix)).toContain("reconnecting alone will not help");
+			expect(issue?.fix).toBe(runner.remedy);
+			expect(String(issue?.fix)).not.toContain("reconnecting alone will not help");
+			if (health.state === "disconnected") {
+				expect(String(issue?.fix)).toContain("socket is absent or closed");
+			} else {
+				expect(String(issue?.fix)).toContain("force_runner_attach");
+				expect(String(issue?.fix)).toContain("coding_diagnostics");
+				expect(String(issue?.fix)).toContain("restart `pags up`");
+			}
 		});
 	}
 
@@ -353,13 +361,16 @@ describe("a live relay with a hung health responder reads one way (#880)", () =>
 		const { body } = await getDiag(app, env);
 		const summary = body.summary as Record<string, unknown>;
 		expect(summary).toMatchObject({ runnerOnline: true, runnerStatus: "online", relayConnected: true, healthCheck: "ok" });
+		expect((body.runner as Record<string, unknown>).remedy).toBeNull();
 	});
 
 	it("reports offline, with the health check not attempted, when there is no socket", async () => {
 		getBoundRunnerConn.mockResolvedValue(null);
 		const { app, env } = buildApp({ staleNode: NEW_NODE });
-		const summary = (await getDiag(app, env)).body.summary as Record<string, unknown>;
+		const { body } = await getDiag(app, env);
+		const summary = body.summary as Record<string, unknown>;
 		expect(summary).toMatchObject({ runnerOnline: false, runnerStatus: "offline", relayConnected: false, healthCheck: "not_attempted" });
+		expect(String((body.runner as Record<string, unknown>).remedy)).toContain("socket is absent or closed");
 	});
 });
 

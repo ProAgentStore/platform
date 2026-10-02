@@ -109,11 +109,14 @@ export async function updateRunnerNode(env: Env, userId: string, rawNode: string
 					detail: `The \`pags\` CLI on ${node} predates runner_update, so it cannot update itself. Update it once at the machine — \`npm i -g @proagentstore/cli\` — and restart \`pags up\` there; that installs the self-updating stub (#862), so it is the last update anyone does by hand: every \`pags up\` then moves onto the latest release by itself, and runner_update does it remotely.`,
 				};
 			}
+			if (/→ 504:.*Relay command timed out/.test(message)) {
+				return { node, action: "failed", held, detail: `${node}'s relay is connected but the update command timed out. The update may still be in flight; poll list_runner_nodes before retrying. If coding_diagnostics still reports an unresponsive runner, try force_runner_attach for an affected instance on this node to recover a stale agent socket, then check coding_diagnostics again. If remote recovery fails, restart \`pags up\` at the machine.` };
+			}
 			return { node, action: "failed", held, detail: `${node} could not update: ${message.replace(/^Runner \/pags\/runner\/update → \d+: /, "").slice(0, 400)}` };
 		}
 	}
 	if (!reply) {
-		return { node, action: "unreachable", held, detail: `Every relay socket on ${node} is connected but not answering — the runner there is frozen, so it cannot be asked to update. Restart \`pags up\` at the machine.` };
+		return { node, action: "unreachable", held, detail: `Every relay socket on ${node} is connected but not answering, so the update could not be confirmed. A stale agent socket may be recoverable: try force_runner_attach for an affected instance on this node, then check coding_diagnostics and list_runner_nodes before deciding whether to retry the update. If remote attachment cannot recover it, restart \`pags up\` at the machine.` };
 	}
 
 	const base = { node, held, current: reply.current, latest: reply.latest };
