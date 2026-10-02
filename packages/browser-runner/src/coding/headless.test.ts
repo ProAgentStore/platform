@@ -1594,7 +1594,9 @@ setTimeout(() => process.exit(1), 30);
 		const tail = turn?.tail ?? [];
 		expect(tail.some((l) => l.includes("ERROR codex_api") && l.includes("401 Unauthorized"))).toBe(true);
 		expect(tail.some((l) => l.startsWith("error: Reconnecting... 2/5"))).toBe(true);
-		expect(tail.at(-1)).toContain("[error] unexpected status 401 Unauthorized");
+		// Membership, not position: stderr and stdout are separate pipes, so the stderr line may land
+		// before or after the JSON events — CI saw it arrive last.
+		expect(tail.some((l) => l.startsWith("[error] unexpected status 401 Unauthorized"))).toBe(true);
 		expect(turn?.detail).toContain("401 Unauthorized");
 		// Protocol events stay out of it: the tail is the engine talking, not its JSON framing.
 		expect(tail.some((l) => l.includes("thread.started"))).toBe(false);
