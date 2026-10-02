@@ -61,6 +61,7 @@ import { routeRunEvents } from "./lib/run-event-routing.js";
 import { runTicketQueue } from "./lib/ticket-queue.js";
 import { runCommitCloseWatch } from "./lib/commit-close-watch.js";
 import { runDeployWatch } from "./lib/deploy-watch.js";
+import { runCiHealthWatch } from "./lib/repo-ci-health.js";
 import { runStaleRunSweep } from "./lib/run-sweeper.js";
 import { runCodingSessionSweep } from "./lib/coding-session-sweeper.js";
 import { runReauthExpiryWatch } from "./lib/engine-reauth-expiry.js";
@@ -311,5 +312,8 @@ export default {
 		ctx.waitUntil(
 			runCommitCloseWatch(env).catch((err) => logUnhandled(env, err, { path: "scheduled:commit-close-watch", method: "CRON" })),
 		);
+		// Default-branch CI/deploy health for coding repos (#903): reads GitHub, notifies once per red
+		// streak. Its own failure domain for the deploy watcher's reasons.
+		ctx.waitUntil(runCiHealthWatch(env).catch((err) => logUnhandled(env, err, { path: "scheduled:ci-health", method: "CRON" })));
 	},
 };

@@ -228,6 +228,22 @@ export function runHealthSentence(): string {
 }
 
 /**
+ * The repository pipeline beside a run's `health` (#903) — one sentence, rendered into every tool
+ * that reads the loop endpoint, so the two verdicts are never described as one.
+ */
+export function repoCiSentence(): string {
+	const chain = REPO_CI_STATES.map((s) => `\`${s}\``).join("/");
+	return `\`repoCi\`, when present, is a SEPARATE verdict on the instance's repositories' latest default-branch CI/deploy workflow conclusions — its \`state\` is one of ${chain}, worst repo first, with \`attention\` set when something is red. It says nothing about the run, and the run's \`health\` says nothing about it; unknown means GitHub could not be read (no access, rate limit), not green.`;
+}
+
+/**
+ * A COPY of `CI_STATES` in `workers/api/src/lib/repo-ci-health.ts` (#903), worst first — the MCP
+ * worker cannot import from `workers/api`; `state-vocabulary.test.ts` reads the source and fails if
+ * the two drift.
+ */
+export const REPO_CI_STATES = ["failing", "unknown", "pending", "passing", "none"] as const;
+
+/**
  * The statuses `clear_finished_tasks` actually sweeps.
  *
  * ── The defect (#609)
@@ -328,6 +344,11 @@ export const BACKED_VOCABULARIES: Record<string, StateVocabulary> = {
 	"agent chat status": {
 		sources: ["workers/api/src/agent-types.ts"],
 		values: AGENT_CHAT_STATUSES,
+	},
+	// #903. The repository pipeline beside a run's `health` — published by the same two loop tools.
+	"repository ci state": {
+		sources: ["workers/api/src/lib/repo-ci-health.ts"],
+		values: REPO_CI_STATES,
 	},
 };
 

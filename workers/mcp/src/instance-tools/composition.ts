@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authRequired, authedCall, jsonText, text } from "../http.js";
 import { audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
-import { runHealthSentence } from "../state-vocabulary.js";
+import { repoCiSentence, runHealthSentence } from "../state-vocabulary.js";
 import type { InstanceToolsCtx } from "./shared.js";
 
 /**
@@ -678,7 +678,7 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 	// `work-report.ts`'s `RUN_HEALTH_LEGEND`; those two are the only place to change the wording.
 	server.tool(
 		"check_instance_loop",
-		`Check an autonomous run: status, how many steps it has taken, and why it stopped. Omit run_id to list recent runs for the instance — most of them will be CLOSED, because this listing has no status filter. Read \`health\` first. ${runHealthSentence()} Do not derive your own from the timestamps: \`lastAliveAt\` is the orchestrator's heartbeat and \`lastProgressAt\` is the last actual advance, and a fresh heartbeat beside a stale advance is equally what a long engine turn, a park and a stall look like — that inference has told an owner a run was stuck while the engine was mid-edit. None of these fields speaks for the ENGINE, whatever they say; for that use coding_timeline (its \`run_state\`, plus the events since your last poll) or coding_session_capture.`,
+		`Check an autonomous run: status, how many steps it has taken, and why it stopped. Omit run_id to list recent runs for the instance — most of them will be CLOSED, because this listing has no status filter. Read \`health\` first. ${runHealthSentence()} ${repoCiSentence()} Do not derive your own from the timestamps: \`lastAliveAt\` is the orchestrator's heartbeat and \`lastProgressAt\` is the last actual advance, and a fresh heartbeat beside a stale advance is equally what a long engine turn, a park and a stall look like — that inference has told an owner a run was stuck while the engine was mid-edit. None of these fields speaks for the ENGINE, whatever they say; for that use coding_timeline (its \`run_state\`, plus the events since your last poll) or coding_session_capture.`,
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),

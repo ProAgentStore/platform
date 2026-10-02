@@ -55,6 +55,17 @@ The engine's own state lives behind `/capture`, on the coding surface. The two g
 
 So a fresh heartbeat is not an all-clear about the engine. If the question is "what is the CLI doing right now", read the capture; `health` cannot answer it, and treating it as though it can replaces a false stall with a false all-clear.
 
+## `repoCi` — The Repository's Pipeline, Not The Run
+
+A coding instance can read perfectly healthy — idle, last run done — while its repository's CI on the default branch is red. So the two loop reads (`coding_loop_status`, `check_instance_loop`) also carry `repoCi` for an instance with GitHub repos: a separate verdict on each repo's latest **default-branch** CI and deploy workflows (#903).
+
+- `state` is the worst across the instance's repos: `failing`, `unknown`, `pending`, `passing`, `none`. `attention` is set, naming the repo and workflow, whenever one is red.
+- It counts `push`, `schedule` and `workflow_run` runs on the default branch. Per workflow, the newest **decisive** run decides: `success` passes; `failure`, `timed_out` and `startup_failure` fail. `cancelled`, `skipped`, `neutral` and `action_required` are passed over, never counted as failures, and manually triggered runs are ignored. A run still going is `pending`. A workflow with no decisive run in 30 days drops out.
+- `unknown` means GitHub could not be read — no access, a rate limit, GitHub down. It is neither green nor red; `lastKnown` keeps the verdict before it.
+- The verdict is refreshed by a background sweep, not by the read, so it costs no GitHub quota; `checkedAt` says how fresh it is. When a workflow turns red the owner gets **one** notification, not one per red push, and the next one only after it has been green again.
+
+`repoCi` and `health` never speak for each other: red CI does not make a run stalled, and a stalled run says nothing about CI.
+
 ## Parks — What A Run Is Waiting For, And What Its Clock Means
 
 A park is a run that is **not advancing on purpose**. `waitingReason` is a short platform enum, never free text, and `waitingUntil` is **the instant this park's clock runs out**.

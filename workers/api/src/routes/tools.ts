@@ -42,6 +42,7 @@ import { getLoopRun, listLoopRuns, requestCancel } from "../lib/agent-loop-store
 // The run verdict, imported rather than re-derived — see `withHealth` (#580 AC3).
 import { runHealth, waitClause } from "../lib/work-report.js";
 import { loopDriverFor } from "../lib/loop-drivers.js";
+import { instanceRepoCi } from "../lib/repo-ci-health.js";
 import { REPAIR_RUN_OBJECTIVE } from "../lib/repo-sync-gate.js";
 import { enqueueObjective } from "../lib/objective-queue.js";
 import { registerLoopQueueRoutes } from "./loop-queue-routes.js";
@@ -1319,7 +1320,9 @@ toolRoutes.get("/:id/loop", async (c) => {
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	const now = Date.now();
 	const runs = await listLoopRuns(c.env, session.uid, instanceId);
-	return c.json({ runs: runs.map((run) => withHealth(run, now)) });
+	// The repository's pipeline, BESIDE the runs' `health` and never folded into it (#903).
+	const repoCi = await instanceRepoCi(c.env, instanceId, session.uid);
+	return c.json({ runs: runs.map((run) => withHealth(run, now)), ...(repoCi ? { repoCi } : {}) });
 });
 
 toolRoutes.get("/:id/loop/:runId", async (c) => {
@@ -1327,7 +1330,8 @@ toolRoutes.get("/:id/loop/:runId", async (c) => {
 	await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
 	const run = await getLoopRun(c.env, session.uid, c.req.param("runId"));
 	if (!run) throw new HttpError(404, "loop run not found");
-	return c.json(withHealth(run, Date.now()));
+	const repoCi = await instanceRepoCi(c.env, c.req.param("id"), session.uid);
+	return c.json({ ...withHealth(run, Date.now()), ...(repoCi ? { repoCi } : {}) });
 });
 
 toolRoutes.post("/:id/loop/:runId/cancel", async (c) => {

@@ -281,6 +281,30 @@ components:
             additionalProperties: true
 
   schemas:
+    InstanceRepoCi:
+      type: object
+      description: >
+        Default-branch CI/deploy health of the instance's GitHub repos (#903) — a SEPARATE verdict
+        from a run's `health`. Present only when the instance has GitHub repos. Refreshed by a
+        background sweep; `unknown` means GitHub could not be read (no access, rate limit), not green.
+      properties:
+        state: { type: string, enum: [failing, unknown, pending, passing, none], description: The worst state across the repos. }
+        attention: { type: string, description: Set when a default-branch workflow is failing, naming the repo and workflow. }
+        repos:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            properties:
+              repoId: { type: string }
+              name: { type: string }
+              githubRepo: { type: string }
+              state: { type: string, enum: [failing, unknown, pending, passing, none, unchecked] }
+              branch: { type: string, nullable: true }
+              workflows: { type: array, items: { type: object, additionalProperties: true } }
+              reason: { type: string, description: "Why the state is `unknown`." }
+              checkedAt: { type: string }
+              lastKnown: { type: object, additionalProperties: true, description: "On `unknown`, the last known verdict and its failing workflows." }
     Error:
       type: object
       required: [error]
@@ -8447,6 +8471,7 @@ paths:
                   runs:
                     type: array
                     items: { type: object, additionalProperties: true }
+                  repoCi: { $ref: "#/components/schemas/InstanceRepoCi" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
@@ -8526,7 +8551,7 @@ paths:
         - { name: runId, in: path, required: true, schema: { type: string } }
       responses:
         "200":
-          description: The run
+          description: The run, with `repoCi` beside its `health` when the instance has GitHub repos.
           content:
             application/json:
               schema: { type: object, additionalProperties: true }

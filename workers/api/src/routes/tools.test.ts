@@ -65,6 +65,8 @@ function testApp(
 		 * mailbox exercises it. `"unreadable"` is the same failure with the binding present.
 		 */
 		emailPermission?: boolean | "unreadable";
+		/** `coding_repos` rows carrying a stored CI verdict (#903) — read by the loop routes' `repoCi`. */
+		ciRepos?: Array<{ id: string; name: string; github_repo: string; ci_health: string | null }>;
 	} = { owned: true },
 ) {
 	const app = new Hono();
@@ -128,6 +130,7 @@ function testApp(
 							// pipeline_runs query, empty otherwise.
 							all: async () => {
 								if (sql.includes("FROM pipeline_runs")) return { results: opts.runs ?? [] };
+								if (sql.includes("FROM coding_repos") && sql.includes("ci_health")) return { results: opts.ciRepos ?? [] };
 								// The loop LIST route (#580) — same fixture row the `.first()` branch above
 								// returns, so the list and the detail read cannot describe different runs.
 								if (sql.includes("FROM agent_loop_runs")) {
@@ -1377,6 +1380,41 @@ describe("POST /v1/instances/:id/mcp/test (connection diagnostics)", () => {
  * writing the expected string out by hand. That is the assertion: the route quotes the platform's
  * verdict rather than growing a second one that can drift from it.
  */
+describe("the loop routes carry the repository pipeline BESIDE the run's health (#903)", () => {
+	const tok = () => signSession("u1", SECRET, { roles: ["user"] });
+	const red = JSON.stringify({
+		state: "failing",
+		branch: "main",
+		checkedAt: "2026-10-02T12:00:00.000Z",
+		workflows: [{ workflow: "CI", path: ".github/workflows/ci.yml", kind: "ci", state: "failing", conclusion: "failure", runId: "9", url: "u", sha: "abc", at: "t", running: false }],
+	});
+	const ciRepos = [
+		{ id: "cr1", name: "api", github_repo: "o/api", ci_health: JSON.stringify({ state: "passing", branch: "main", checkedAt: "t", workflows: [] }) },
+		{ id: "cr2", name: "web", github_repo: "o/web", ci_health: red },
+	];
+
+	it("the list and the detail both report a red default branch, and the run's own health is untouched by it", async () => {
+		const loopRun = { last_alive_at: Date.now(), last_progress_at: Date.now(), started_at: Date.now() };
+		const { app, env } = testApp({ loopRun, ciRepos });
+		const list = await jsonBody(await app.request("/v1/instances/i1/loop", { headers: { Authorization: `Bearer ${await tok()}` } }, env));
+		const repoCi = list.repoCi as { state: string; attention: string; repos: unknown[] };
+		expect(repoCi.state).toBe("failing");
+		expect(repoCi.attention).toContain("o/web: CI");
+		expect(repoCi.repos).toHaveLength(2);
+		expect((list.runs as Array<{ health: string }>)[0].health).toBe("working");
+
+		const detail = await jsonBody(await app.request("/v1/instances/i1/loop/r1", { headers: { Authorization: `Bearer ${await tok()}` } }, env));
+		expect((detail.repoCi as { state: string }).state).toBe("failing");
+		expect(detail.health).toBe("working");
+	});
+
+	it("an instance with no GitHub repos carries no repoCi at all", async () => {
+		const { app, env } = testApp({ loopRun: {} });
+		const list = await jsonBody(await app.request("/v1/instances/i1/loop", { headers: { Authorization: `Bearer ${await tok()}` } }, env));
+		expect(list).not.toHaveProperty("repoCi");
+	});
+});
+
 describe("a loop run carries its health verdict (#580)", () => {
 	const tok = () => signSession("u1", SECRET, { roles: ["user"] });
 	const NOW = 1_800_000_000_000;
