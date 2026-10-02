@@ -3,7 +3,7 @@
  *
  * Reads HTTP call sites out of TypeScript source: which API route a file calls, with which
  * method. Two consumers ask the same question of two trees — the console (`api()`/`useApi()`)
- * and the MCP worker (`authedCall()`/`apiCall()`) — and the parity check is the diff.
+ * and the MCP worker (`authedCall()`/`authedAsyncCall()`/`apiCall()`) — and the parity check is the diff.
  *
  * Nothing here touches the filesystem. The shapes worth testing are the ones this repo's source
  * does NOT contain and must not have to (a call whose path is a variable, a nested template, a
@@ -20,6 +20,11 @@
  * already exists, and the second false one gets the check deleted — so the literal reader below
  * tracks `${…}` nesting properly, including nested templates inside it.
  */
+
+// The async confirmation wrapper reaches the same API as authedCall. Keep the inventory's
+// call names shared with its regression tests so migrating a tool to that wrapper cannot
+// silently make an existing capability disappear from the parity measurement.
+export const MCP_API_CALL_FUNCTIONS = ["authedCall", "authedAsyncCall", "apiCall"];
 
 /**
  * Read the string/template literal starting at `src[i]`, collapsing every `${…}` to `{}`.

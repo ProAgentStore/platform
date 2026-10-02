@@ -151,7 +151,7 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
-- `serverInfo.version`: `0.1.70`
+- `serverInfo.version`: `0.1.71`
 
 That is the same value the published MCP-registry manifest (`server.json`) carries, and both
 are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —
@@ -277,7 +277,7 @@ The two published hints are **derived, not hand-maintained per tool**.
 `workers/mcp/src/tool-metadata.ts` classifies every tool `read` / `write` / `runtime` /
 `destructive` in one table, and `annotationsFor()` maps that classification onto the two
 hints. The classification is then derived **back out of the handlers** by `index.test.ts`,
-which drives all 242 tools under two different scope sets and reads the required scope out
+which drives all 243 tools under two different scope sets and reads the required scope out
 of each refusal — so a tool announced read-only that enforces a write gate fails the build
 rather than reaching a host. `conformance.test.ts` asserts the same thing against a real
 `tools/list` response.
@@ -291,6 +291,22 @@ Use `mcp_audit_log` to inspect recent MCP write, runtime, dry-run, denied, and d
 **It is a call ledger, not a transcript.** An event records what a call carried — argument key names, byte counts, status — and the id of the record that holds the content (`traceId`, `session_id`, `runId`), never the content itself: no message text, no file contents, no argument values, no response body. Any string longer than an identifier is stored as a byte count under a `…Bytes` key. That applies to refused and dry-run calls exactly as it does to completed ones; until #701 those two paths stored the caller's whole payload verbatim, so the log kept the file it declined to write and four bytes for the one it wrote. To read what was actually sent, follow the id: `traceId` joins an audited `chat_with_instance` to its rows in `GET /v1/instances/:id/messages` and to the `chat.in`/`chat.out` pair in `agent_trace`, which also carry `origin: "mcp"` so an MCP turn is distinguishable from a console one. The rule and its reasoning are ADR 0004.
 
 The same events are readable over HTTP at `GET /v1/mcp-audit` (`?limit=`, max 200; `?tool=`), scoped to the calling account and needing no MCP connection — which matters precisely when the MCP connection is the thing that broke. The console surfaces it under **Profile → MCP activity**.
+
+## Server And Tool Catalog Diagnostics
+
+Call `mcp_server_info {}` to identify the connected MCP server and its advertised version,
+latest supported MCP protocol version, and tool catalog. This read-only tool reads local server metadata and
+makes no platform API request. It is available on platform, pinned-instance, and agent-type
+connections.
+
+The JSON response includes `server_name`, `server_version`, `mcp_protocol_version`,
+`tool_count`, `build_commit`, `schema_revision`, and `deployed_at`. `schema_revision` is the
+deterministic SHA-256 fingerprint of the versioned platform tool schemas, annotations, and
+server instructions. `tool_count` reports the full platform catalog; use this connection's
+`tools/list` for its actual exposed tools, including subscription gating and pinned surfaces.
+`build_commit` and `deployed_at` are `"unknown"` when deployment metadata is unavailable. The schema
+revision describes the catalog contract; the server version identifies the application release.
+Compare these fields with a cached catalog before refreshing stale schemas.
 
 ## Result And Error Shape
 
@@ -440,7 +456,7 @@ More recipes, with real argument names, are in
 
 ## Tool Surface
 
-The server registers **242 tools**. 215 are always present. The remaining 27 are gated to
+The server registers **243 tools**. 216 are always present. The remaining 27 are gated to
 the console surfaces of the connected user's own subscribed agents, so the surface is
 per-connection:
 

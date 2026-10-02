@@ -214,6 +214,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	list_supervision: "read",
 	list_stats_sources: "read",
 	mcp_audit_log: "read",
+	mcp_server_info: "read",
 	my_agents: "read",
 	my_instances: "read",
 	platform_guide: "read",
@@ -562,7 +563,8 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// +1 read at #198: `platform_health`, the read-only diagnostic — every verdict in it is derived
 	// from public probes and this session's own latency ring; nothing is written.
 	// +1 read at #868: `runner_setup`, the local runner setup checklist — derived from recorded state.
-	read: 114,
+	// +1 read at #904: mcp_server_info reads local server and catalog metadata.
+	read: 115,
 	// +2 write at #825: `pause_instance` / `resume_instance`. `write` rather than `destructive` —
 	// nothing is deleted and nothing is unsubscribed, and classing the OFF switch as destructive
 	// would put RESUME behind a scope the caller may not hold, which is the wrong failure mode for

@@ -59,7 +59,7 @@
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { extractCalls } from "./lib/api-calls.mjs";
+import { extractCalls, MCP_API_CALL_FUNCTIONS } from "./lib/api-calls.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DOC = join(ROOT, "platform-docs/mcp.md");
@@ -203,7 +203,7 @@ function inventory(dir, fns) {
 }
 
 const consoleSide = inventory("store/console/src", ["api", "useApi"]);
-const mcpSide = inventory("workers/mcp/src", ["authedCall", "apiCall"]);
+const mcpSide = inventory("workers/mcp/src", MCP_API_CALL_FUNCTIONS);
 
 // G1/G3 — an extractor that stopped working must fail as a broken guard, not pass as a clean
 // tree. Floors, not equalities: both surfaces grow, and only a COLLAPSE is a defect.

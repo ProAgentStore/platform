@@ -9,7 +9,8 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { expandTablePrefix, extractCalls, normalisePath, readLiteral } from "./api-calls.mjs";
+import { readFileSync } from "node:fs";
+import { expandTablePrefix, extractCalls, MCP_API_CALL_FUNCTIONS, normalisePath, readLiteral } from "./api-calls.mjs";
 
 describe("readLiteral", () => {
 	it("reads a plain template and collapses its interpolations", () => {
@@ -58,6 +59,17 @@ describe("normalisePath", () => {
 });
 
 describe("extractCalls", () => {
+	it.each([
+		["base.ts", "POST /v1/instances/{}/pause"],
+		["runtime.ts", "PUT /v1/instances/{}/runner-node"],
+	])("measures existing async-wrapped MCP capabilities in %s", (file, expectedRoute) => {
+		// CI 37042293503 reported these as gaps after #887 changed their call helper.
+		// They already have MCP tools; exclusions would hide a broken inventory.
+		const src = readFileSync(new URL(`../../workers/mcp/src/instance-tools/${file}`, import.meta.url), "utf8");
+		const { calls } = extractCalls(src, MCP_API_CALL_FUNCTIONS);
+		expect(calls.map((c) => `${c.method} ${c.path}`)).toContain(expectedRoute);
+	});
+
 	it("reads the method out of the options object, defaulting to GET", () => {
 		const src = `
 			await api(\`/v1/instances/\${id}/board\`);

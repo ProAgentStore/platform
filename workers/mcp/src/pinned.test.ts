@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // different surface with a different contract, and it is held here: which rows become tools,
 // that `instance_id` is nowhere in any schema, that annotations follow each row's `mutates`,
 // that a mutating pinned tool is gated as `write` and a read as `read`, that an unreadable pin
-// registers exactly one explanatory tool, and that the transport wrapper touches nothing but
+// registers the explanatory tool and server diagnostic, and that the transport wrapper touches nothing but
 // `/mcp/i/<id>`.
 
 type ToolContent = { content: { type: string; text: string }[] };
@@ -145,6 +145,14 @@ afterEach(() => {
 });
 
 describe("the pinned path (#783)", () => {
+	it("publishes the platform server diagnostic with no inputs and read-only metadata", async () => {
+		const { tools } = await setup({ pinned: "inst-1" });
+		const info = tools.get("mcp_server_info")!;
+		expect(info.schema).toEqual({});
+		expect(info.config.annotations).toEqual({ readOnlyHint: true, destructiveHint: false });
+		expect(JSON.parse((await info.handler({})).content[0].text).server_name).toBe("ProAgentStore");
+	});
+
 	it("reads the instance id off /mcp/i/<id> and nothing else", () => {
 		expect(pinnedInstanceFromPath("/mcp/i/inst-123")).toBe("inst-123");
 		expect(pinnedInstanceFromPath("/mcp/i/inst-123/")).toBe("inst-123");
@@ -190,9 +198,9 @@ describe("the pinned path (#783)", () => {
 });
 
 describe("PagsMcp.init on a pinned session", () => {
-	it("registers the instance's invocable tools under their real names plus chat/guide/messages, and NOTHING platform-wide", async () => {
+	it("registers the instance's tools plus chat/guide/messages and server diagnostics", async () => {
 		const { tools, fetchStub } = await setup({ pinned: "inst-1" });
-		expect([...tools.keys()].sort()).toEqual(["chat", "github_create_issue", "github_read_issue", "guide", "messages"]);
+		expect([...tools.keys()].sort()).toEqual(["chat", "github_create_issue", "github_read_issue", "guide", "mcp_server_info", "messages"]);
 		// The whole platform-wide surface is absent — not gated, absent.
 		for (const name of ["my_instances", "list_agents", "list_instance_tools", "call_instance_tool", "chat_with_instance", "create_agent", "platform_guide"]) {
 			expect(tools.has(name), name).toBe(false);
@@ -297,10 +305,10 @@ describe("PagsMcp.init on a pinned session", () => {
 		expect(call.url).toBe("https://api.test/v1/instances/inst-1/messages?limit=5&before=msg%3A2026%3Ax%20y");
 	});
 
-	it("registers exactly one explanatory tool when the instance is not the caller's (403/404)", async () => {
+	it("registers the explanatory tool and server diagnostic when the instance is not the caller's (403/404)", async () => {
 		for (const status of [403, 404]) {
 			const h = await setup({ pinned: "not-mine", listing: { status, body: { error: "Not found" } } });
-			expect([...h.tools.keys()]).toEqual(["pinned_instance_unavailable"]);
+			expect([...h.tools.keys()]).toEqual(["mcp_server_info", "pinned_instance_unavailable"]);
 			const res = await h.tools.get("pinned_instance_unavailable")!.handler({});
 			expect(res.content[0].text).toMatch(/^Error: /);
 			expect(res.content[0].text).toContain("not-mine");
@@ -309,9 +317,9 @@ describe("PagsMcp.init on a pinned session", () => {
 		}
 	});
 
-	it("registers only the explanatory tool when the session has no token at all", async () => {
+	it("registers diagnostics and an explanatory tool when the session has no token", async () => {
 		const h = await setup({ pinned: "inst-1", authToken: null });
-		expect([...h.tools.keys()]).toEqual(["pinned_instance_unavailable"]);
+		expect([...h.tools.keys()]).toEqual(["mcp_server_info", "pinned_instance_unavailable"]);
 		expect(h.fetchStub.calls).toHaveLength(0);
 	});
 

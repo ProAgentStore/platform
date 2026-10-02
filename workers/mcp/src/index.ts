@@ -12,6 +12,7 @@ import { installRegistrationPipeline, type RegistrationTarget } from "./registra
 import { PLATFORM_GUIDE } from "./platform-guide.js";
 import { timed, withRequestTiming } from "./latency.js";
 import { MCP_SERVER_VERSION } from "./server-version.js";
+import { registerServerInfoTool } from "./tools/server-info.js";
 import { newTokenSubjectCache, tokenSubjectResolver } from "./audit-subject.js";
 import { annotationsFor, annotationsForRisk, outputSchemaFor, SERVER_INSTRUCTIONS } from "./tool-metadata.js";
 import { newTouchThrottle, recordInstanceTouch, touchedInstance } from "./recent-instances.js";
@@ -55,7 +56,7 @@ type Env = McpEnv;
 
 /** Per-tool metadata for a pinned surface (#783, #771): annotations from each name's risk class — the names are data, outside `TOOL_RISK`. */
 const riskMetadata = (risk: (name: string) => McpScope | undefined) => (name: string): Record<string, unknown> => {
-	const annotations = annotationsForRisk(risk(name));
+	const annotations = name === "mcp_server_info" ? annotationsFor(name) : annotationsForRisk(risk(name));
 	return annotations ? { annotations } : {};
 };
 
@@ -82,7 +83,6 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 	private scopes: string[] | null = null;
 	private subject: string | undefined;
 	private toolsRegistered = false;
-
 	private token(provided?: string): string | null {
 		return provided || this.userToken;
 	}
@@ -106,7 +106,6 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				: {}),
 		};
 	}
-
 	/**
 	 * Route EVERY registration through the shared pipeline (`registration.ts`), once,
 	 * before any registration happens: it carries the operator-suspension gate (#273) and
@@ -123,24 +122,24 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 	}
 
 	/**
-	 * A session pinned to ONE instance (#783): the surface is that instance's own tools plus
-	 * chat/guide/messages, and nothing platform-wide. Annotations come from each policy row's
+	 * A session pinned to ONE instance (#783): its own tools plus chat/guide/messages and the
+	 * server diagnostic. Instance-tool annotations come from each policy row's
 	 * `mutates` rather than `TOOL_RISK`, because the names are data. Everything else — the
 	 * suspension gate, the safety layer, the audit — is the same pipeline. See `pinned.ts`.
 	 */
 	private async initPinned(instanceId: string): Promise<void> {
 		const surface = await loadPinnedSurface(this.env, this.userToken, instanceId);
 		this.installRegistrationPipeline(riskMetadata(pinnedRiskFor(surface)), instanceId);
+		registerServerInfoTool(this.server);
 		registerPinnedTools(this.server, { env: this.env, tokenFor: (p) => this.token(p), safetyFor: (p) => this.safety(p) }, surface);
 	}
-
 	/** A session pinned to one AGENT TYPE (#771): its declared tools, each with `instance_id`. See `type-pinned.ts`. */
 	private async initTypePinned(agentType: string): Promise<void> {
 		const surface = await loadTypeSurface(this.env, this.userToken, agentType);
 		this.installRegistrationPipeline(riskMetadata(typeRiskFor(surface)));
+		registerServerInfoTool(this.server);
 		registerTypeTools(this.server, { env: this.env, tokenFor: (p) => this.token(p), safetyFor: (p) => this.safety(p) }, surface);
 	}
-
 
 	/**
 	 * The console-surface groups (apply / coding / repo …) across the connected
@@ -235,7 +234,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 			this.toolsRegistered = true;
 			return this.initPinned(this.props.pinnedInstance);
 		}
-		// Same for a `/mcp/t/<agentSlug>` session (#771): only that type's surface.
+		// Same for a `/mcp/t/<agentSlug>` session (#771): that type's surface and the server diagnostic.
 		if (this.props?.pinnedType) {
 			this.toolsRegistered = true;
 			return this.initTypePinned(this.props.pinnedType);
@@ -255,6 +254,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		// Must precede every registration below — it wraps the registrar itself.
 		this.installRegistrationPipeline();
+		registerServerInfoTool(this.server);
 
 		this.server.tool(
 			"list_agents",

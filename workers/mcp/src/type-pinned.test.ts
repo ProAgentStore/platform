@@ -133,6 +133,14 @@ afterEach(() => {
 });
 
 describe("the agent-type path (#771)", () => {
+	it("publishes the platform server diagnostic with no inputs and read-only metadata", async () => {
+		const { tools } = await setup({ type: "coder" });
+		const info = tools.get("mcp_server_info")!;
+		expect(info.schema).toEqual({});
+		expect(info.config.annotations).toEqual({ readOnlyHint: true, destructiveHint: false });
+		expect(JSON.parse((await info.handler({})).content[0].text).server_name).toBe("ProAgentStore");
+	});
+
 	it("reads a slug off /mcp/t/<slug> and nothing else", () => {
 		expect(pinnedTypeFromPath("/mcp/t/coder")).toBe("coder");
 		expect(pinnedTypeFromPath("/mcp/t/repo-coder/")).toBe("repo-coder");
@@ -156,9 +164,9 @@ describe("the agent-type path (#771)", () => {
 });
 
 describe("PagsMcp.init on an agent-type session (#771)", () => {
-	it("registers the type's invocable tools plus call_instance_tool — nothing platform-wide, no chat/guide/messages", async () => {
+	it("registers the type's tools plus call_instance_tool and server diagnostics", async () => {
 		const { tools, fetchStub } = await setup({ type: "coder" });
-		expect([...tools.keys()].sort()).toEqual(["call_instance_tool", "github_create_issue", "github_read_issue"]);
+		expect([...tools.keys()].sort()).toEqual(["call_instance_tool", "github_create_issue", "github_read_issue", "mcp_server_info"]);
 		for (const name of ["my_instances", "list_instance_tools", "chat", "guide", "messages", "chat_with_instance"]) expect(tools.has(name), name).toBe(false);
 		expect(fetchStub.calls.filter((c) => c.url.includes("/v1/agents/coder/tools?allowed=true&schemas=true"))).toHaveLength(1);
 		expect(fetchStub.calls.some((c) => new URL(c.url).pathname === "/v1/instances/my/instances")).toBe(false);
@@ -214,9 +222,9 @@ describe("PagsMcp.init on an agent-type session (#771)", () => {
 		expect(JSON.parse(call.body!)).toEqual({ q: "x" });
 	});
 
-	it("an unknown or unreadable type registers exactly one explanatory tool", async () => {
+	it("an unknown or unreadable type registers the explanatory tool and server diagnostic", async () => {
 		const h = await setup({ type: "coder", listing: { status: 404, body: { error: "Agent type not found" } } });
-		expect([...h.tools.keys()]).toEqual(["agent_type_unavailable"]);
+		expect([...h.tools.keys()]).toEqual(["mcp_server_info", "agent_type_unavailable"]);
 		expect((await h.tools.get("agent_type_unavailable")!.handler({})).content[0].text).toMatch(/^Error: .*coder/);
 	});
 });
@@ -224,7 +232,7 @@ describe("PagsMcp.init on an agent-type session (#771)", () => {
 describe("the other surfaces are unchanged (#771)", () => {
 	it("a /mcp/i/<id> session still publishes no instance_id and its own instance's tools", async () => {
 		const { tools } = await setup({ instance: "inst-1" });
-		expect([...tools.keys()].sort()).toEqual(["chat", "github_read_issue", "guide", "messages"]);
+		expect([...tools.keys()].sort()).toEqual(["chat", "github_read_issue", "guide", "mcp_server_info", "messages"]);
 		expect(Object.keys(tools.get("github_read_issue")!.schema)).toEqual(["repo", "number"]);
 	});
 

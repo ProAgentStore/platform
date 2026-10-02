@@ -364,13 +364,13 @@ describe("PagsMcp.init — tool registration", () => {
 		expect(MCP_TOOL_ALWAYS_ON + MCP_TOOL_GATED).toBe(MCP_TOOL_COUNT);
 	});
 
-	it("registers NONE of the platform-wide tools on a session pinned to one instance (#783)", async () => {
+	it("registers only the server diagnostic from the platform catalog on an instance-pinned session (#783)", async () => {
 		// The pinned surface's own contract lives in pinned.test.ts; what belongs HERE is the
 		// negative half — that pinning does not merely add tools but replaces the surface, so a
 		// caller who asked for the minimal schema never sees `my_instances` or `create_agent`.
 		const h = await setup({ groups: ["apply", "repo", "coding"], pinnedInstance: "inst-1" });
 		const platform = (await setup({ groups: ["apply", "repo", "coding"] })).tools;
-		for (const name of platform.keys()) expect(h.tools.has(name), `${name} leaked onto the pinned session`).toBe(false);
+		for (const name of platform.keys()) expect(h.tools.has(name), `${name} leaked onto the pinned session`).toBe(name === "mcp_server_info");
 		expect(h.tools.size).toBeGreaterThan(0);
 	});
 
