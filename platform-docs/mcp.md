@@ -337,7 +337,7 @@ server discovery and the host's advertised tools disagree after refresh, preserv
 inventories, endpoint, version, schema revision and timestamp for host support.
 
 Investigation evidence and remaining limits for #905 are recorded in
-[`docs/mcp-discovery-905.md`](../docs/mcp-discovery-905.md).
+[`mcp-discovery-905.md`](mcp-discovery-905.md).
 
 ## Result And Error Shape
 

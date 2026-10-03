@@ -12,6 +12,7 @@ nav = [
   { "Agent Behaviour" = "agent-behaviour.md" },
   { "Triggers" = "triggers.md" },
   { "MCP" = "mcp.md" },
+  { "MCP Discovery (#905)" = "mcp-discovery-905.md" },
   { "Voice" = "voice.md" },
   { "Browser Runtime" = "browser-runtime.md" },
   { "Coder Multi-Machine" = "coder-multi-machine.md" },
