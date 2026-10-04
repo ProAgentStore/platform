@@ -29,6 +29,7 @@ import {
 } from "./coding-wait.js";
 import type { LoopStopReason } from "./agent-loop.js";
 import type { CodingOutcome, CodingResult } from "./coding-loop.js";
+import { instanceRunLink, codingSessionLink } from "./console-links.js";
 
 /** Max polls for a human to resolve a stuck/needs-input handoff. 180 × 5s = 15 min. */
 export const HANDOFF_WAIT_POLLS = 180;
@@ -165,8 +166,8 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 	// The Engine is stopped until someone answers — `alert`, so muting "Coder" silences the
 	// finished/stopped updates and never this.
 	const notificationUrl = deps.taskId
-		? `/console/instances/${encodeURIComponent(deps.instanceId)}/tasks/${encodeURIComponent(deps.taskId)}`
-		: `/console/instances/${encodeURIComponent(deps.instanceId)}/coding`;
+		? instanceRunLink(deps.instanceId, deps.taskId)
+		: codingSessionLink(deps.instanceId);
 	const body = `${deps.repo}: ${label}. You have ${HANDOFF_GIVE_UP_MS / 60_000} minutes to respond before the run gives up.`;
 	await deps.notify("🙋 Coder needs you", body, `coding-handoff:${reason}:${round}`, true, notificationUrl);
 	// …AND in the thread the run was started from (#541 item d). A runner disconnect has always been
@@ -285,8 +286,8 @@ async function waitForSignIn(deps: PauseDeps, input: { round: number; result: Co
 	const since = deps.now();
 	await deps.card("needs_human");
 	const notificationUrl = deps.taskId
-		? `/console/instances/${encodeURIComponent(deps.instanceId)}/tasks/${encodeURIComponent(deps.taskId)}`
-		: `/console/instances/${encodeURIComponent(deps.instanceId)}/coding`;
+		? instanceRunLink(deps.instanceId, deps.taskId)
+		: codingSessionLink(deps.instanceId);
 	const body = `${deps.repo}: the coding engine is not signed in. You have ${HANDOFF_GIVE_UP_MS / 60_000} minutes to sign in before the run gives up.`;
 	await deps.notify("🔑 Coder needs you to sign in", body, `coding-reauth:${round}`, true, notificationUrl);
 	await deps.announce(
