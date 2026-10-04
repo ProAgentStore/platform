@@ -18,7 +18,7 @@ export const secureInputRoutes = new Hono<{ Bindings: Env }>();
 async function requireOwned(c: Context<{ Bindings: Env }>): Promise<{ uid: string; instanceId: string }> {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId") ?? c.req.param("id") ?? "";
-	const owned = await c.env.DB.prepare("SELECT id FROM agents WHERE id = ?1 AND user_id = ?2").bind(instanceId, session.uid).first();
+	const owned = await c.env.DB.prepare("SELECT id FROM agent_instances WHERE id = ?1 AND user_id = ?2").bind(instanceId, session.uid).first();
 	if (!owned) throw new HttpError(404, "Instance not found");
 	return { uid: session.uid, instanceId };
 }
