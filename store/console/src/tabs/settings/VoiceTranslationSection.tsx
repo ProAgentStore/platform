@@ -5,7 +5,6 @@ import Card from "../../components/Card";
 import { voiceSummary } from "../../lib/voiceSummary";
 
 interface Props {
-	instanceId: string;
 	voiceSettings: Record<string, unknown> | null;
 	voiceOverride: boolean;
 	hasOpenAiKey: boolean | null;
@@ -32,7 +31,6 @@ interface Props {
 }
 
 export default function VoiceTranslationSection({
-	instanceId,
 	voiceSettings,
 	voiceOverride,
 	hasOpenAiKey,

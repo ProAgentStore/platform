@@ -5,23 +5,19 @@ import RepoConnectPanel from "../../components/RepoConnectPanel";
 
 interface Props {
 	instanceId: string;
-	instanceName?: string;
 	instName: string;
 	instNameMsg: string;
 	isRepo?: boolean;
 	onInstNameChange: (value: string) => void;
-	onInstNameMsg: (msg: string) => void;
 	onSaveInstName: () => Promise<void>;
 }
 
 export default function InstanceInfo({
 	instanceId,
-	instanceName,
 	instName,
 	instNameMsg,
 	isRepo,
 	onInstNameChange,
-	onInstNameMsg,
 	onSaveInstName,
 }: Props) {
 	const [instanceIdCopied, setInstanceIdCopied] = useState(false);

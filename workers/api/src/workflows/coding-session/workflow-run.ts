@@ -15,13 +15,10 @@ import { makeRunnerGuard, noRunnerDetail, RUNNER_PROBE_INTERVAL, type RunStep } 
 import { releaseSessionDriver, touchSessionActivity, touchSessionDriver } from "../../lib/coding-store.js";
 import { setCodingSessionCardStatus } from "../../lib/coding-board.js";
 import { startSessionOnRunnerConn } from "../../lib/coding-session-relaunch.js";
-import { resolvePause, runSucceeded, stopReasonFor, type PauseDeps } from "../../lib/coding-pause.js";
+import { resolvePause, stopReasonFor, type PauseDeps } from "../../lib/coding-pause.js";
 import { awaitEngineIdle, durableIdleDeps, idleWaitIsDurable, shouldTouchActivity } from "../../lib/coding-idle-poll.js";
 import { accountTimeZone } from "../../lib/account-timezone.js";
 import type { EngineWaitState } from "../../lib/coding-wait.js";
-import { describeRepoState } from "../../lib/repo-state.js";
-import { describeRepoSync } from "../../lib/repo-sync.js";
-import { repairCheckoutObjective } from "../../lib/repo-sync-gate.js";
 import { normalizeRunnerNode } from "../../lib/runtime-nodes.js";
 import { appendTimeline } from "../../lib/coding-timeline.js";
 import { delegationTaskRecord } from "../../lib/delegation.js";

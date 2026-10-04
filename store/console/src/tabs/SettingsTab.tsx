@@ -383,12 +383,10 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 
 			<InstanceInfo
 				instanceId={instanceId}
-				instanceName={instanceName}
 				instName={instName}
 				instNameMsg={instNameMsg}
 				isRepo={isRepo}
 				onInstNameChange={setInstName}
-				onInstNameMsg={setInstNameMsg}
 				onSaveInstName={saveInstName}
 			/>
 
@@ -434,7 +432,6 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 			<TriggersSection instanceId={instanceId} driveGrants={driveGrants} workdriveGrants={workdriveGrants} />
 
 			<VoiceTranslationSection
-				instanceId={instanceId}
 				voiceSettings={voiceSettings}
 				voiceOverride={voiceOverride}
 				hasOpenAiKey={hasOpenAiKey}
