@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { AlertCircle, Loader2, CheckCircle } from "lucide-react";
 import Button from "./Button";
-import type { SecureInputView } from "../lib/types";
+import type { ListSecureInputsResponse, SecureInputView } from "../lib/types";
 
 export default function SecureInputRequests({ instanceId }: { instanceId: string }) {
 	const [requests, setRequests] = useState<SecureInputView[]>([]);
@@ -13,7 +13,7 @@ export default function SecureInputRequests({ instanceId }: { instanceId: string
 
 	const load = useCallback(async () => {
 		try {
-			const res = await api<{ requests: SecureInputView[] }>(`/v1/instances/${instanceId}/secure-inputs`);
+			const res = await api<ListSecureInputsResponse>(`/v1/instances/${instanceId}/secure-inputs`);
 			const pending = (res.requests ?? []).filter((r) => r.status === "pending" || r.status === "ready");
 			setRequests(pending);
 			setDrafts((prev) => {

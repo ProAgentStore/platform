@@ -494,3 +494,7 @@ export interface SecureInputView {
 	createdAt: string;
 	consumedAt?: string;
 }
+
+export interface ListSecureInputsResponse {
+	requests?: SecureInputView[];
+}
