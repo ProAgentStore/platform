@@ -11,7 +11,7 @@ import { api } from "@proagentstore/sdk/client";
 import { invalidateVoiceConfig } from "@proagentstore/sdk/hooks";
 import type { SettingsField } from "../lib/types";
 import type { ConnectorReach, InstanceConnectorPolicy } from "../lib/connectorState";
-import { unsubscribeScope, type RosterInstance } from "../lib/unsubscribeScope";
+import type { RosterInstance } from "../lib/unsubscribeScope";
 import { MY_INSTANCES_WITH_PAUSED } from "../lib/instancePause";
 
 // Import refactored modules
