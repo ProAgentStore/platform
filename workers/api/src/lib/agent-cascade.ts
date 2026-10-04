@@ -91,6 +91,7 @@ export const INSTANCE_CHILD_TABLES = [
 	"instance_connector_consent",
 	"instance_mcp_consent",
 	"mcp_input_requests",
+	"secure_input_requests",
 ] as const;
 
 /**
