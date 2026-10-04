@@ -18,7 +18,7 @@ interface Spy {
 	deps: PauseDeps;
 	slept: number[];
 	announced: string[];
-	notified: Array<{ title: string; alert: boolean }>;
+	notified: Array<{ title: string; alert: boolean; url?: string }>;
 	ticks: number;
 	takeovers: number;
 	endTakeovers: number;
@@ -28,7 +28,7 @@ interface Spy {
 	restarts: number;
 }
 
-function spy(over: Partial<{ resolveAfter: number; cancelAfterTicks: number; timeZone: string; signedInAfter: number; restartFails: boolean }> = {}): Spy {
+function spy(over: Partial<{ resolveAfter: number; cancelAfterTicks: number; timeZone: string; signedInAfter: number; restartFails: boolean; instanceId?: string; taskId?: string }> = {}): Spy {
 	const s: Spy = {
 		slept: [],
 		announced: [],
@@ -50,6 +50,8 @@ function spy(over: Partial<{ resolveAfter: number; cancelAfterTicks: number; tim
 		},
 		repo: "heartfull/platform",
 		timeZone: over.timeZone,
+		instanceId: over.instanceId ?? "test-instance",
+		taskId: over.taskId,
 		now: () => NOW,
 		takeover: async () => {
 			s.takeovers++;
@@ -61,8 +63,8 @@ function spy(over: Partial<{ resolveAfter: number; cancelAfterTicks: number; tim
 		sleep: async (_label, ms) => {
 			s.slept.push(ms);
 		},
-		notify: async (title, _body, _key, alert) => {
-			s.notified.push({ title, alert });
+		notify: async (title, _body, _key, alert, url) => {
+			s.notified.push({ title, alert, url });
 		},
 		announce: async (m) => {
 			s.announced.push(m);
@@ -132,7 +134,9 @@ describe("resolvePause — the Engine's usage limit parks the run instead of kil
 		expect(s.announced.at(-1)).toMatch(/Resuming/);
 		// Nothing is being asked of him — a park that pings like a question is how people learn to
 		// stop reading these.
-		expect(s.notified).toEqual([{ title: "⏸ Coder is waiting on the CLI's usage limit", alert: false }]);
+		expect(s.notified).toHaveLength(1);
+		expect(s.notified[0].title).toBe("⏸ Coder is waiting on the CLI's usage limit");
+		expect(s.notified[0].alert).toBe(false);
 	});
 
 	it("never opens a takeover for a limit no human can resolve", async () => {
@@ -197,7 +201,10 @@ describe("resolvePause — a human handoff still times out, and is reported as w
 		const s = spy({ resolveAfter: 1 });
 		await resolvePause(s.deps, { round: 0, result: stuck, state: { waits: 0, spentMs: 0 } });
 		expect(s.announced.some((m) => m.includes("Coder needs you"))).toBe(true);
-		expect(s.notified).toEqual([{ title: "🙋 Coder needs you", alert: true }]);
+		expect(s.notified).toHaveLength(1);
+		expect(s.notified[0].title).toBe("🙋 Coder needs you");
+		expect(s.notified[0].alert).toBe(true);
+		expect(s.notified[0].url).toBeDefined();
 	});
 
 	it("tells the owner BY WHEN, because a handoff deadline they cannot see is one they cannot beat (#596 AC2)", async () => {
@@ -247,6 +254,28 @@ describe("resolvePause — a human handoff still times out, and is reported as w
 		const s = spy({ resolveAfter: 2 });
 		await resolvePause(s.deps, { round: 0, result: stuck, state: { waits: 0, spentMs: 0 } });
 		expect(s.cards).toEqual(["needs_human", "running"]);
+	});
+
+	it("includes deadline in notification and deep-links to the run (#899)", async () => {
+		// The notification must state the deadline and link to the run where the owner answers.
+		// When a taskId is present, the link points to the specific run; otherwise to the coding session.
+		const s = spy({ resolveAfter: 1, taskId: "task-123" });
+		await resolvePause(s.deps, { round: 0, result: stuck, state: { waits: 0, spentMs: 0 } });
+		expect(s.notified).toHaveLength(1);
+		const notif = s.notified[0];
+		expect(notif.title).toBe("🙋 Coder needs you");
+		expect(notif.alert).toBe(true);
+		// URL should point to the specific task
+		expect(notif.url).toContain("/instances/test-instance/tasks/task-123");
+	});
+
+	it("deep-links to coding session when taskId is absent (#899)", async () => {
+		// Fallback behavior when no task ID is available
+		const s = spy({ resolveAfter: 1 });
+		await resolvePause(s.deps, { round: 0, result: stuck, state: { waits: 0, spentMs: 0 } });
+		expect(s.notified).toHaveLength(1);
+		const notif = s.notified[0];
+		expect(notif.url).toContain("/instances/test-instance/coding");
 	});
 
 	it("writes the card BEFORE the two pushes, so a later throw cannot lose the durable half", async () => {
@@ -338,7 +367,9 @@ describe("resolvePause — an engine blocked on its own sign-in parks for the re
 		expect(s.takeovers).toBe(0);
 		expect(s.slept).toHaveLength(3);
 		expect(s.cards).toEqual(["needs_human", "running"]);
-		expect(s.notified[0]).toEqual({ title: "🔑 Coder needs you to sign in", alert: true });
+		expect(s.notified[0].title).toBe("🔑 Coder needs you to sign in");
+		expect(s.notified[0].alert).toBe(true);
+		expect(s.notified[0].url).toBeDefined();
 		expect(s.announced[0]).toContain("coding_engine_reauth");
 		expect(s.announced.at(-1)).toContain("Signed in");
 		// A NEW engine process: the old one holds the stale env, or is dead with the old message on screen.

@@ -600,6 +600,8 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		const pauseDeps = (round: number, wait: RunWaitReason): PauseDeps => ({
 			repo: goal.repo,
 			timeZone: goal.timeZone,
+			instanceId,
+			taskId: event.payload.boardTaskId,
 			now: () => Date.now(),
 			takeover: (label, reason) => runRetry(`handoff-${round}`, () => callRunner(conn, "/coding/takeover", { sessionId, label, reason })).then(() => undefined),
 			takeoverStatus: () =>
@@ -608,10 +610,10 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			reauthCompletedSince: (since) => reauthCompletedSince(env, instanceId, userId, since),
 			restartEngine: () => runRetry(`reauth-end-${round}`, () => callRunner(conn, "/coding/end", { sessionId })).then(() => runRetry(`reauth-start-${round}`, () => startOnRunner())).then(() => undefined),
 			sleep: (label, ms) => step.sleep(label, ms),
-			notify: (title, body, key, alert) =>
+			notify: (title, body, key, alert, url) =>
 				runRetry(`notify-${key}-${round}`, async () => {
 					const opts = { key: `${key}:${sessionId}`, kind: alert ? ("alert" as const) : undefined, instanceId };
-					return await notifyUser(env, userId, "coding", title, body, codingSessionLink(instanceId, sessionId), opts).then(() => null, () => null);
+					return await notifyUser(env, userId, "coding", title, body, url ?? codingSessionLink(instanceId, sessionId), opts).then(() => null, () => null);
 				}).then(() => undefined),
 			announce: postToChat,
 			// The board, which is where the owner would look for "does anything want me?" (#553).

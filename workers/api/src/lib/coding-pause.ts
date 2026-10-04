@@ -58,6 +58,10 @@ export interface PauseDeps {
 	repo: string;
 	/** The owner's IANA zone, or undefined. Rendered as UTC, out loud, when unset. */
 	timeZone?: string;
+	/** The instance ID, for building deep-links to the run (#899). */
+	instanceId: string;
+	/** The board task ID, for deep-linking to the stuck run (#899). When absent, falls back to coding session. */
+	taskId?: string;
 	/** Open the console takeover on the runner. */
 	takeover: (label: string, reason: "stuck" | "needs_input") => Promise<void>;
 	/** Has the human resolved it, and with what value? */
@@ -85,7 +89,7 @@ export interface PauseDeps {
 	 * which STOPS the engine until someone answers. A usage-limit park needs nothing from anyone
 	 * and must not ping like a question, or people learn to stop reading these.
 	 */
-	notify: (title: string, body: string, key: string, alert: boolean) => Promise<void>;
+	notify: (title: string, body: string, key: string, alert: boolean, url?: string) => Promise<void>;
 	/** One line into the owner's chat thread. A pause nobody can see looks like a hang (#252). */
 	announce: (message: string) => Promise<void>;
 	/**
@@ -160,7 +164,11 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 	await deps.card("needs_human");
 	// The Engine is stopped until someone answers — `alert`, so muting "Coder" silences the
 	// finished/stopped updates and never this.
-	await deps.notify("🙋 Coder needs you", `${deps.repo}: ${label}`, `coding-handoff:${reason}:${round}`, true);
+	const notificationUrl = deps.taskId
+		? `/console/instances/${encodeURIComponent(deps.instanceId)}/tasks/${encodeURIComponent(deps.taskId)}`
+		: `/console/instances/${encodeURIComponent(deps.instanceId)}/coding`;
+	const body = `${deps.repo}: ${label}. You have ${HANDOFF_GIVE_UP_MS / 60_000} minutes to respond before the run gives up.`;
+	await deps.notify("🙋 Coder needs you", body, `coding-handoff:${reason}:${round}`, true, notificationUrl);
 	// …AND in the thread the run was started from (#541 item d). A runner disconnect has always been
 	// announced in chat; a handoff never was, so the conversation the owner started the run from said
 	// nothing at all while the run waited on him, and then reported that it had failed.
@@ -276,7 +284,11 @@ async function waitForSignIn(deps: PauseDeps, input: { round: number; result: Co
 	const { result, round } = input;
 	const since = deps.now();
 	await deps.card("needs_human");
-	await deps.notify("🔑 Coder needs you to sign in", `${deps.repo}: the coding engine is not signed in`, `coding-reauth:${round}`, true);
+	const notificationUrl = deps.taskId
+		? `/console/instances/${encodeURIComponent(deps.instanceId)}/tasks/${encodeURIComponent(deps.taskId)}`
+		: `/console/instances/${encodeURIComponent(deps.instanceId)}/coding`;
+	const body = `${deps.repo}: the coding engine is not signed in. You have ${HANDOFF_GIVE_UP_MS / 60_000} minutes to sign in before the run gives up.`;
+	await deps.notify("🔑 Coder needs you to sign in", body, `coding-reauth:${round}`, true, notificationUrl);
 	await deps.announce(
 		`🔑 **Coder needs you to sign in** — paused on ${deps.repo}: ${result.detail ?? "the coding engine is not signed in."} Sign it in from any device with coding_engine_reauth; the run continues by itself once it succeeds. If nobody signs it in within ${HANDOFF_GIVE_UP_MS / 60_000} minutes the run stops, and can be continued after signing in.`,
 	);
