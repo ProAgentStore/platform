@@ -18,6 +18,7 @@ import Feedback from "./pages/Feedback";
 import Diagnostics from "./pages/Diagnostics";
 import Preferences from "./pages/Preferences";
 import RunDetail from "./pages/RunDetail";
+import SecureInputDetail from "./pages/SecureInputDetail";
 import { landingRoute, landingRouteFromMemory, type TopLevelRoute } from "./lib/lastRoute";
 import { readLandingCounts } from "./lib/landing";
 
@@ -83,6 +84,7 @@ function AuthGate() {
 				<Route path="agents/:id/:tab" element={<AgentDetail />} />
 				<Route path="instances" element={<Dashboard />} />
 				<Route path="instances/:id/tasks/:taskId" element={<RunDetail />} />
+				<Route path="instances/:id/secure-inputs/:requestId" element={<SecureInputDetail />} />
 				<Route path="instances/:id/*" element={<InstanceDetail />} />
 				<Route path="dashboard" element={<Dashboard />} />
 				<Route path="tools" element={<Dashboard />} />
