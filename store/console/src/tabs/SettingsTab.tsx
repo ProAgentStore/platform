@@ -67,6 +67,8 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 	// Owner-initiated personality resync (#496 AC2) — brings the DO's stored personality up to
 	// the agent's current seed without touching guardrails/goal/welcomeMessage.
 	const [resyncMsg, setResyncMsg] = useState("");
+	// Instance ID copy-to-clipboard feedback state (#909).
+	const [instanceIdCopied, setInstanceIdCopied] = useState(false);
 	// Agent-declared settings: filled by the GET /settings fetch (fields always come from the server).
 	const [agentFields, setAgentFields] = useState<SettingsField[]>([]);
 	const [agentSettings, setAgentSettings] = useState<Record<string, string | number | boolean>>({});
@@ -402,6 +404,13 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 		}
 	};
 
+	const copyInstanceId = () => {
+		void navigator.clipboard?.writeText(instanceId).then(() => {
+			setInstanceIdCopied(true);
+			setTimeout(() => setInstanceIdCopied(false), 2000);
+		});
+	};
+
 	const resyncIdentity = async () => {
 		setResyncMsg("Syncing…");
 		try {
@@ -460,6 +469,19 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 					/>
 				</div>
 			)}
+
+			{/* Instance ID — unique identifier for deep links (#909) */}
+			<Card className="mb-3 sm:mb-4">
+				<h3 className="text-base font-bold mb-1">Instance ID</h3>
+				<p className="text-sm text-muted mb-3">
+					Your instance's unique identifier — use it to construct deep links like <code className="text-xs bg-paper px-1 py-0.5 rounded">/instances/{'{'}{'{id}'}{'}'}​/secure-inputs/{'{request_id}'}</code>.
+				</p>
+				<div className="flex gap-2 items-center flex-wrap">
+					<code className="bg-paper border border-line rounded px-2 py-1.5 text-xs font-mono text-muted" data-testid="instance-id-value">{instanceId}</code>
+					<Button size="sm" onClick={copyInstanceId} data-testid="instance-id-copy-button">{instanceIdCopied ? "Copied!" : "Copy ID"}</Button>
+				</div>
+			</Card>
+
 			{/* Instance name — distinguishes multiple instances of the same agent */}
 			<Card className="mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-1" id="inst-name-label">Instance name</h3>
