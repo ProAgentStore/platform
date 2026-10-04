@@ -1842,9 +1842,7 @@ const PINS = {
 	// +6 at #878: the tool-registry raise and the coding-tools.ts and user-ai.ts entries above, each with its reason, and this line.
 	// +7 at #879: the coding-store.ts raise and the new repo-local.ts entry above, each with its reason, and this line.
 	// +3 at #889/#893: the headless.ts and user-ai.ts raises above (one line of why each) and this one — both landed without their raise and left CI red until this.
-	// #912: split coding-session.ts into submodule; thin re-export leaves old file under threshold
-	"workers/api/src/workflows/coding-session/index.ts": 1085,
-	"scripts/check-file-size.mjs": 1928,
+	"scripts/check-file-size.mjs": 1927,
 };
 
 /**
