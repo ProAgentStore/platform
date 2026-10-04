@@ -10,7 +10,7 @@ import TriggersSection from "./TriggersSection";
 import { api } from "@proagentstore/sdk/client";
 import { invalidateVoiceConfig } from "@proagentstore/sdk/hooks";
 import type { SettingsField } from "../lib/types";
-import { showsFileConnector, type ConnectorReach, type InstanceConnectorPolicy } from "../lib/connectorState";
+import type { ConnectorReach, InstanceConnectorPolicy } from "../lib/connectorState";
 import { unsubscribeScope, type RosterInstance } from "../lib/unsubscribeScope";
 import { MY_INSTANCES_WITH_PAUSED } from "../lib/instancePause";
 
