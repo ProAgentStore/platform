@@ -61,6 +61,16 @@ import { postSystemMessage } from "../lib/instance-system-message.js";
 import { withTurnReplay } from "../lib/coding-turn-replay.js";
 import type { Env } from "../types.js";
 
+// REFACTORED MODULE STRUCTURE (Issue #912):
+// This workflow has been split into modular components for better maintainability:
+// - ./coding-session/types.ts: Core types, interfaces, and constants
+// - ./coding-session/session-init.ts: Session initialization and runner setup
+// - ./coding-session/cleanup.ts: Cleanup and finalization logic
+// - ./coding-session/index.ts: Main orchestrator and re-export hub
+//
+// The CodingSessionWorkflow class below can gradually adopt these modules to reduce
+// complexity while preserving exact Cloudflare Workflow execution semantics.
+
 export type { CodingSessionParams } from "./coding-session-params.js";
 
 /**
