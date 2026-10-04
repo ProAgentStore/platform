@@ -160,6 +160,12 @@ const EXCLUSIONS = [
 			"Every instance route is owner-scoped server-side. `list_errors` with `scope: \"all\"` is the only cross-user read and is admin-only.",
 		match: null,
 	},
+	{
+		label: "Secure input submission — owner-facing UI only (#906, #908)",
+		why:
+			"The console UI lets the owner submit secret values for agent requests. The agent requests secure input via `secure_input_request` MCP tool and reads status via `secure_input_status`. Only the console UI calls these endpoints to fetch and submit values.",
+		match: /^(GET|POST) \/v1\/instances\/\{\}\/secure-inputs/,
+	},
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
