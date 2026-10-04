@@ -553,6 +553,7 @@ looking and tells the user which console screen to use instead.
 | Under-message translation and durable system-message injection | `translate` is an under-message UI gloss: it invokes AI and persists a cache solely to render translated transcript text. `system-message` is console-only status persistence, but its arbitrary content becomes durable `role:system` history forwarded into later model prompts. MCP exposes the translation configuration and reads cached glosses with messages, but exposes neither renderer-only work nor a prompt/provenance injection channel. #613 owner guidance (2026-09-20). | `check-mcp-parity.mjs` |
 | User deletion | Not modelled. | — |
 | Another user's data | Every instance route is owner-scoped server-side. `list_errors` with `scope: "all"` is the only cross-user read and is admin-only. | — |
+| Secure input submission — owner-facing UI only (#906, #908) | The console UI lets the owner submit secret values for agent requests. The agent requests secure input via `secure_input_request` MCP tool and reads status via `secure_input_status`. Only the console UI calls these endpoints to fetch and submit values. | `check-mcp-parity.mjs` |
 
 A row with no enforcer is a statement about the surface rather than a rule about routes —
 there is no console call for the check to compare it against. The rows that name the check
