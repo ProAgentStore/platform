@@ -481,3 +481,16 @@ export interface RecordQueryResponse {
 	records?: DataRecord[];
 	total?: number;
 }
+
+/** Secure input request, as `GET /v1/instances/:id/secure-inputs` returns it. Metadata only, never the secret. */
+export interface SecureInputView {
+	id: string;
+	status: "pending" | "ready" | "consumed" | "expired";
+	label: string;
+	purpose?: string;
+	destinationScope: string;
+	oneShot: boolean;
+	expiresAt: string;
+	createdAt: string;
+	consumedAt?: string;
+}

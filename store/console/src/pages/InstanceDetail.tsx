@@ -30,6 +30,7 @@ import SystemMessage from "../components/SystemMessage";
 import MessageActions from "../components/MessageActions";
 import FabricatedNotice from "../components/FabricatedNotice";
 import McpInputRequests from "../components/McpInputRequests";
+import SecureInputRequests from "../components/SecureInputRequests";
 import { useScrapLastTurn } from "../lib/deleteTurn";
 import { isPinnedToBottom, shouldScrollAfterLoad } from "../lib/chatScroll";
 import { resolveInstanceRoute } from "../lib/instanceRoute";
@@ -1055,6 +1056,8 @@ function InstancePage() {
 						    mid-conversation — the agent has just said it is waiting on you — and a form
 						    nobody finds inside the 30-minute deadline is the same as no form. */}
 						{id && <McpInputRequests instanceId={id} />}
+						{/* #906: agent-requested secure input (credentials, auth codes) submitted via console UI. */}
+						{id && <SecureInputRequests instanceId={id} />}
 						{/* The thread, and the two things that overlay it. This wrapper exists so the
 						    jump-to-latest button and the voice pill stay anchored to the BOTTOM OF THE
 						    THREAD (#365): `bottom-3` used to resolve against the tab container, whose

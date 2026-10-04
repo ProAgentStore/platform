@@ -49,7 +49,8 @@ secureInputRoutes.post("/:instanceId/secure-inputs", async (c) => {
 		oneShot: body.oneShot !== false,
 	});
 
-	return c.json({ id: requestId }, 201);
+	const consoleUrl = `/instances/${instanceId}/secure-inputs/${requestId}`;
+	return c.json({ id: requestId, consoleUrl }, 201);
 });
 
 /**

@@ -60,9 +60,9 @@ export function registerSecureInputTools(server: McpServer, ctx: InstanceToolsCt
 				sessionToken,
 				{ method: "POST", body: JSON.stringify({ label, purpose, destinationScope: destination_scope, oneShot: one_shot }) },
 				env,
-			);
+			) as { error?: string; id?: string; consoleUrl?: string };
 
-			if (!(data as { error?: string }).error) {
+			if (!data.error) {
 				await audit(safetyFor(token), { tool: "secure_input_request", action: "completed", input, result: data });
 			}
 
