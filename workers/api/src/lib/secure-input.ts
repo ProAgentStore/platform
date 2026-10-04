@@ -4,6 +4,9 @@
 // by opaque request ID. The plaintext exists only during atomic one-shot consumption and
 // is never returned by any API route, logged, or visible in chat/traces/audit.
 // Metadata audit only: who, when, status, success/failure — never the value.
+//
+// Note: instance_id references agent_instances (the user's subscription), not agents (the template).
+// See migration 0170 for the FK correction from agents → agent_instances.
 
 import type { Env } from "../types.js";
 import { decryptKey, encryptKey } from "./crypto.js";

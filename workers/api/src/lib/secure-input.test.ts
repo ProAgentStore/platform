@@ -364,4 +364,33 @@ describe("secure_input", () => {
 			// This test would be more complete with a real crypto mock
 		});
 	});
+
+	describe("Foreign key constraint (#907, #170)", () => {
+		it("documents that instance_id references agent_instances, not agents", async () => {
+			// Regression test for FK constraint migration 0170.
+			// The secure_input_requests table FK was originally (incorrectly):
+			//   FOREIGN KEY (instance_id) REFERENCES agents (id)
+			// But route handler validates against agent_instances, not agents.
+			// This caused FK violations when instance_id was in agent_instances but not agents.
+			//
+			// Migration 0170 fixed it to:
+			//   FOREIGN KEY (instance_id) REFERENCES agent_instances (id)
+			//
+			// This test documents the correct relationship and ensures future developers
+			// understand that instance_id is the user's subscription instance, not the template.
+
+			// The mock environment doesn't enforce FK constraints, so this just documents
+			// the correct relationship. Real FK validation happens in the D1 database.
+			const input = {
+				instanceId: "some-instance-id-from-agent_instances",
+				userId: "some-user-id",
+				label: "Test",
+				destinationScope: "tmux" as const,
+			};
+
+			// This should succeed with the corrected FK
+			const id = await createSecureInputRequest(mockEnv as Env, input);
+			expect(id).toBeTruthy();
+		});
+	});
 });
