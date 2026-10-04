@@ -26,6 +26,7 @@ import { registerObservabilityTools } from "./observability.js";
 import { registerRecentTools } from "./recent.js";
 import { registerRepoTools } from "./repo.js";
 import { registerRuntimeTools } from "./runtime.js";
+import { registerSecureInputTools } from "./secure-input.js";
 import { registerSettingsTools } from "./settings.js";
 import type { InstanceToolsCtx, SafetyResolver, TokenResolver } from "./shared.js";
 import { registerStatsTools } from "./stats.js";
@@ -73,6 +74,9 @@ export function registerInstanceTools(
 	// PAGS as an MCP CLIENT — the outbound connections an instance makes to someone else's
 	// server. Ungated: an outbound connection is config on any instance, not a console surface.
 	registerMcpConnectionTools(server, ctx);
+	// Secure input / one-time secret handoff (#906) — ungated: every instance may need to receive
+	// secrets (Firebase codes, OTPs, passwords) from the owner outside the chat.
+	registerSecureInputTools(server, ctx);
 	registerApplyTools(server, ctx);
 	registerRepoTools(server, ctx);
 	registerCodingTools(server, ctx);
