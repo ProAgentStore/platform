@@ -13,7 +13,6 @@ export default function SecureInputDetail() {
 	const [loading, setLoading] = useState(true);
 	const [submitting, setSubmitting] = useState(false);
 	const [error, setError] = useState("");
-	const [success, setSuccess] = useState(false);
 
 	useEffect(() => {
 		const load = async () => {
@@ -40,7 +39,6 @@ export default function SecureInputDetail() {
 				method: "POST",
 				body: JSON.stringify({ value }),
 			});
-			setSuccess(true);
 			setRequest((prev) => (prev ? { ...prev, status: "ready" } : null));
 		} catch (e) {
 			setError(e instanceof Error ? e.message : "Failed to submit");
@@ -70,7 +68,7 @@ export default function SecureInputDetail() {
 		<div className="flex flex-col min-h-[80dvh]">
 			<div className="border-b border-line p-4 flex items-center justify-between">
 				<div className="flex items-center gap-3">
-					<button onClick={() => navigate(`/instances/${instanceId}`)} className="p-1 hover:bg-panel rounded">
+					<button type="button" onClick={() => navigate(`/instances/${instanceId}`)} className="p-1 hover:bg-panel rounded">
 						<ArrowLeft size={20} />
 					</button>
 					<div>
