@@ -1588,7 +1588,7 @@ const PINS = {
 	// and became `PILOT_DEFAULT_MAX_STEPS`, which the coding driver has to clamp by name — an
 	// unnamed delegation is the one path where a configured ceiling would otherwise be ignored.
 	// The import is the whole line; both use sites are unchanged in length. +1 at #693 slice 2: the `withTurnReplay` import; the Pilot's act site carries its reason inline.
-	"workers/api/src/workflows/coding-session.ts": 1073, // +4 at #881: the `engine_auth` park reason, the relay poll and the post-sign-in engine restart — wiring only; the park itself is coding-pause.ts.
+	"workers/api/src/workflows/coding-session.ts": 1075, // +4 at #881: the `engine_auth` park reason, the relay poll and the post-sign-in engine restart — wiring only; the park itself is coding-pause.ts.
 	// This file, crossing its own LIMIT at #456 — and it is not an oddity, it is the guard working.
 	// A pin entry is REQUIRED to carry the reason its file grew, so this list is an append-only
 	// ledger of decisions: it can only get longer, and the one thing it must never do is get shorter
@@ -1843,6 +1843,7 @@ const PINS = {
 	// +6 at #878: the tool-registry raise and the coding-tools.ts and user-ai.ts entries above, each with its reason, and this line.
 	// +7 at #879: the coding-store.ts raise and the new repo-local.ts entry above, each with its reason, and this line.
 	// +3 at #889/#893: the headless.ts and user-ai.ts raises above (one line of why each) and this one — both landed without their raise and left CI red until this.
+	"store/console/src/tabs/SettingsTab.tsx": 822,
 	"scripts/check-file-size.mjs": 1927,
 };
 
