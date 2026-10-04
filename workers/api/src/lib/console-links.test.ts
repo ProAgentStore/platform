@@ -20,7 +20,7 @@ describe("every console link this Worker builds resolves to a real page", () => 
 	const builders = Object.entries(links).filter(([, v]) => typeof v === "function") as [string, (...a: string[]) => string][];
 
 	it("has builders to check (a silently empty sweep is the failure mode of this shape of test)", () => {
-		expect(builders.length).toBeGreaterThanOrEqual(7);
+		expect(builders.length).toBeGreaterThanOrEqual(8);
 	});
 
 	for (const [name, build] of builders) {

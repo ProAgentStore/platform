@@ -10,6 +10,7 @@
 import { Hono, type Context } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { consumeSecureInput, createSecureInputRequest, getSecureInputStatus, listSecureInputRequests, storeSecretValue } from "../lib/secure-input.js";
+import { secureInputLink } from "../lib/console-links.js";
 import type { Env } from "../types.js";
 
 export const secureInputRoutes = new Hono<{ Bindings: Env }>();
@@ -49,7 +50,7 @@ secureInputRoutes.post("/:instanceId/secure-inputs", async (c) => {
 		oneShot: body.oneShot !== false,
 	});
 
-	const consoleUrl = `/instances/${instanceId}/secure-inputs/${requestId}`;
+	const consoleUrl = secureInputLink(instanceId, requestId);
 	return c.json({ id: requestId, consoleUrl }, 201);
 });
 

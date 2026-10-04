@@ -109,3 +109,21 @@ export function codingBuildsLink(instanceId: string, repoId: string): string {
 export function agentLink(agentId: string): string {
 	return `${BASE}/agents/${encodeURIComponent(agentId)}`;
 }
+
+/**
+ * A pending secure input request — the page where the owner submits a credential or auth code (#908, #910).
+ *
+ * Unlike other console links, this returns a DIRECT navigation URL (not a notification link),
+ * so it does NOT include the /console prefix. The agent returns this URL directly to the user
+ * for them to click, and it must work on all deployments:
+ * - console.proagentstore.online (basename "/") → /instances/...
+ * - Other hosts (basename "/console") → /instances/... (React Router prepends basename)
+ *
+ * Satisfies the #338 rule: the `secure_input_requests` row is written when the agent calls the
+ * tool, before it blocks on the input, and it outlives the request (until consumed or expired).
+ * So the same link works when the request is created, while the owner is submitting, and
+ * after the input has been consumed.
+ */
+export function secureInputLink(instanceId: string, requestId: string): string {
+	return `/instances/${encodeURIComponent(instanceId)}/secure-inputs/${encodeURIComponent(requestId)}`;
+}
