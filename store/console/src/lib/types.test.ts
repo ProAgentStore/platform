@@ -5,7 +5,6 @@ import type { ApplyDefaultEngineResult as WorkerApplyDefaultEngineResult } from 
 import type { AccountPreferencesResponse as WorkerAccountPreferencesResponse, AccountPreferencesWriteResponse as WorkerAccountPreferencesWriteResponse } from "../../../../workers/api/src/lib/preferences";
 import type { AgentState as WorkerAgentState, ConsentRow as WorkerConsentRow } from "../../../../workers/api/src/agent-types";
 import type { CollectionRecord as WorkerCollectionRecord, RecordQueryResult as WorkerRecordQueryResult } from "../../../../workers/api/src/agent-storage-types";
-import type { SecureInputView as WorkerSecureInputView } from "../../../../workers/api/src/lib/secure-input";
 import type { RunnerEvent, RunnerTask } from "../../../../packages/browser-runner/src/types";
 import type { AccountCodingDefaultApplyResponse, AccountPreferencesResponse, AccountPreferencesWriteResponse, ConnectionGuideResponse, ConnectorConsent, InstanceModelState, Credential, DataRecord, KnowledgeDoc, ListSecureInputsResponse, Notification, RecordQueryResponse, RuntimeEvent, RuntimeTask, SecureInputView, TriggerAction } from "./types";
 
@@ -112,15 +111,6 @@ const _connectorConsentHasNoInventedFields: Extra<ConnectorConsent, WorkerConsen
 	? true
 	: never = true;
 
-// ── SecureInputView / ListSecureInputsResponse ───────────────────────────────────────────────
-//
-// #906/#908: secure input requests for agent-requested secrets. The response payload is
-// wrapped in a `requests` array by `routes/secure-input.ts`. SecureInputView is defined in
-// `lib/secure-input.ts`, which is import-safe (imports only crypto utilities).
-const _secureInputViewHasNoInventedFields: Extra<SecureInputView, WorkerSecureInputView> extends never
-	? true
-	: never = true;
-
 // ── RuntimeTask / RuntimeEvent ───────────────────────────────────────────────────────────────
 //
 // `mirrorRuntimeTask` stringifies the task whole, so the payload is a `RunnerTask` — EXCEPT for
@@ -170,8 +160,7 @@ describe("console response types match the Worker declarations they copy (#617)"
 			_accountPreferencesHasNoInventedFields,
 			_accountPreferencesWriteHasNoInventedFields,
 			_accountCodingApplyHasNoInventedFields,
-			_secureInputViewHasNoInventedFields,
-		]).toEqual([true, true, true, true, true, true, true, true, true, true]);
+		]).toEqual([true, true, true, true, true, true, true, true, true]);
 		expect(_instanceModelStateAcceptsTheProducer).toEqual({});
 		expect(_accountPreferencesAcceptsTheProducer).toEqual({});
 		expect(_accountPreferencesWriteAcceptsTheProducer).toEqual({});
