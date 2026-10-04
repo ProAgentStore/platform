@@ -297,6 +297,13 @@ const READBACK: Record<string, string | null> = {
 	// A takeover event is a CDP mouse/key dispatch against a live page. Nothing stores it — the
 	// readback is the page itself, via the takeover frame, which is not an MCP reader.
 	"send_instance_takeover_input.type": null,
+
+	// ── #906: secure input / one-time secret handoff ──
+	// The four fields written by `secure_input_request` are stored and come back from `secure_input_status`.
+	"secure_input_request.label": "secure_input_status",
+	"secure_input_request.purpose": "secure_input_status",
+	"secure_input_request.destination_scope": "secure_input_status",
+	"secure_input_request.one_shot": "secure_input_status",
 	"send_instance_takeover_input.x": null,
 	"send_instance_takeover_input.y": null,
 	"send_instance_takeover_input.delta_x": null,

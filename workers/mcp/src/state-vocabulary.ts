@@ -472,6 +472,13 @@ export const UNBACKED_CLAIMS: Record<string, UnbackedClaim> = {
 		source: "workers/api/src/routes/budget.ts",
 		symbol: "CeilingTier",
 	},
+	"env|file|stdin|tmux": {
+		reason:
+			"secure input injection destination — the values are a static enum defined inline in the " +
+			"tool schema (z.enum in secure_input_request handler), not runtime state. The values are " +
+			"not separately exported as a named symbol, so there is no declaration to cite.",
+		source: null,
+	},
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
