@@ -58,7 +58,7 @@ const VIEW_COLUMNS =
 	"id, instance_id, user_id, status, label, purpose, destination_scope, one_shot, expires_at, created_at, updated_at, consumed_at";
 
 function rowToView(row: Omit<SecureInputRow, "secret_ciphertext" | "dek_wrapped" | "iv">, now: number): SecureInputView {
-	let status: "pending" | "ready" | "consumed" | "expired" = (row.status as any) || "pending";
+	let status: "pending" | "ready" | "consumed" | "expired" = (row.status as "pending" | "ready" | "consumed" | "expired") || "pending";
 	if (status !== "consumed" && new Date(row.expires_at).getTime() < now) {
 		status = "expired";
 	}
@@ -154,7 +154,7 @@ export async function storeSecretValue(
 		.bind(requestId, instanceId, userId)
 		.first<{ id: string; status: string }>();
 
-	if (!existing || existing.status !== "pending") {
+	if (existing?.status !== "pending") {
 		return false; // Not found or already consumed
 	}
 

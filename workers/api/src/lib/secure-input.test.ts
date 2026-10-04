@@ -7,7 +7,7 @@
 // - Scope/user isolation: cross-user or cross-instance access refused
 // - Redaction in logs: secret value never logged or in error messages
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { consumeSecureInput, createSecureInputRequest, getSecureInputStatus, listSecureInputRequests, storeSecretValue } from "./secure-input.js";
 import type { Env } from "../types.js";
 
@@ -26,7 +26,7 @@ beforeEach(() => {
 				all: async () => ({ results: [] }),
 			}),
 		},
-	} as any;
+	} as unknown as Partial<Env>;
 });
 
 describe("secure_input", () => {
@@ -81,7 +81,7 @@ describe("secure_input", () => {
 				prepare: () => ({
 					bind: () => ({ first: async () => mockRow }),
 				}),
-			} as any;
+			} as unknown as Partial<Env>["DB"];
 
 			const status = await getSecureInputStatus(mockEnv as Env, "req-1", "inst-1", "user-1");
 
@@ -89,9 +89,11 @@ describe("secure_input", () => {
 			expect(status).toBeDefined();
 			expect(status?.status).toBe("ready");
 			expect(status?.label).toBe("Firebase code");
-			// @ts-ignore - verify these fields do NOT exist on the response
+			// @ts-expect-error - verify these fields do NOT exist on the response
 			expect(status?.secret_ciphertext).toBeUndefined();
+			// @ts-expect-error
 			expect(status?.dek_wrapped).toBeUndefined();
+			// @ts-expect-error
 			expect(status?.iv).toBeUndefined();
 		});
 
@@ -100,7 +102,7 @@ describe("secure_input", () => {
 				prepare: () => ({
 					bind: () => ({ first: async () => null }),
 				}),
-			} as any;
+			} as unknown as Partial<Env>["DB"];
 
 			const status = await getSecureInputStatus(mockEnv as Env, "req-nonexistent", "inst-1", "user-1");
 			expect(status).toBeNull();
@@ -111,7 +113,7 @@ describe("secure_input", () => {
 				prepare: () => ({
 					bind: () => ({ first: async () => null }), // Different user returns null
 				}),
-			} as any;
+			} as unknown as Partial<Env>["DB"];
 
 			const status = await getSecureInputStatus(mockEnv as Env, "req-1", "inst-1", "user-2");
 			expect(status).toBeNull();
@@ -137,7 +139,7 @@ describe("secure_input", () => {
 				prepare: () => ({
 					bind: () => ({ first: async () => expiredRow }),
 				}),
-			} as any;
+			} as unknown as Partial<Env>["DB"];
 
 			const status = await getSecureInputStatus(mockEnv as Env, "req-1", "inst-1", "user-1");
 			expect(status?.status).toBe("expired");
@@ -167,24 +169,24 @@ describe("secure_input", () => {
 				prepare: () => ({
 					bind: () => ({ all: async () => ({ results: rows }) }),
 				}),
-			} as any;
+			} as unknown as Partial<Env>["DB"];
 
 			const requests = await listSecureInputRequests(mockEnv as Env, "inst-1", "user-1");
 
 			expect(requests).toHaveLength(1);
 			expect(requests[0].label).toBe("Firebase code");
-			// @ts-ignore
+			// @ts-expect-error
 			expect(requests[0].secret_ciphertext).toBeUndefined();
 		});
 	});
 
 	describe("storeSecretValue — encryption before storage", () => {
 		it("encrypts the secret before storing", async () => {
-			let capturedUpdate: any;
+			let capturedUpdate: unknown;
 
 			mockEnv.DB = {
 				prepare: (sql: string) => ({
-					bind: (...args: any[]) => {
+					bind: (...args: unknown[]) => {
 						if (sql.includes("SELECT")) {
 							return { first: async () => ({ id: "req-1", status: "pending" }) };
 						}
@@ -193,7 +195,7 @@ describe("secure_input", () => {
 						return { run: async () => ({ meta: { changes: 1 } }) };
 					},
 				}),
-			} as any;
+			} as unknown as Partial<Env>["DB"];
 
 			const success = await storeSecretValue(mockEnv as Env, "req-1", "inst-1", "user-1", "secret-firebase-code-12345");
 
@@ -209,7 +211,7 @@ describe("secure_input", () => {
 				prepare: () => ({
 					bind: () => ({ first: async () => ({ id: "req-1", status: "ready" }) }), // Already has a value
 				}),
-			} as any;
+			} as unknown as Partial<Env>["DB"];
 
 			const success = await storeSecretValue(mockEnv as Env, "req-1", "inst-1", "user-1", "new-value");
 			expect(success).toBe(false);
@@ -220,7 +222,7 @@ describe("secure_input", () => {
 				prepare: () => ({
 					bind: () => ({ first: async () => null }),
 				}),
-			} as any;
+			} as unknown as Partial<Env>["DB"];
 
 			const success = await storeSecretValue(mockEnv as Env, "req-1", "inst-1", "user-1", "value");
 			expect(success).toBe(false);
@@ -233,7 +235,7 @@ describe("secure_input", () => {
 				prepare: () => ({
 					bind: () => ({ first: async () => null }),
 				}),
-			} as any;
+			} as unknown as Partial<Env>["DB"];
 
 			const plaintext = await consumeSecureInput(mockEnv as Env, "req-1", "inst-1", "user-1");
 			expect(plaintext).toBeNull();
@@ -253,7 +255,7 @@ describe("secure_input", () => {
 				prepare: () => ({
 					bind: () => ({ first: async () => row }),
 				}),
-			} as any;
+			} as unknown as Partial<Env>["DB"];
 
 			const plaintext = await consumeSecureInput(mockEnv as Env, "req-1", "inst-1", "user-1");
 			expect(plaintext).toBeNull();
@@ -276,7 +278,7 @@ describe("secure_input", () => {
 						return { run: async () => ({ meta: { changes: 1 } }) };
 					},
 				}),
-			} as any;
+			} as unknown as Partial<Env>["DB"];
 
 			const plaintext = await consumeSecureInput(mockEnv as Env, "req-1", "inst-1", "user-1");
 			expect(plaintext).toBeNull();
@@ -294,7 +296,7 @@ describe("secure_input", () => {
 
 			mockEnv.DB = {
 				prepare: () => ({
-					bind: (id: string, instanceId: string, userId: string) => {
+					bind: (_id: string, _instanceId: string, userId: string) => {
 						// Only return row if user matches
 						if (userId === "user-1") {
 							return { first: async () => row };
@@ -302,7 +304,7 @@ describe("secure_input", () => {
 						return { first: async () => null };
 					},
 				}),
-			} as any;
+			} as unknown as Partial<Env>["DB"];
 
 			const plaintext = await consumeSecureInput(mockEnv as Env, "req-1", "inst-1", "user-2");
 			expect(plaintext).toBeNull();
@@ -320,7 +322,7 @@ describe("secure_input", () => {
 						bind: () => ({ all: async () => ({ results: [] }) }),
 					};
 				},
-			} as any;
+			} as unknown as Partial<Env>["DB"];
 
 			await listSecureInputRequests(mockEnv as Env, "inst-1", "user-1");
 
@@ -337,27 +339,25 @@ describe("secure_input", () => {
 				prepare: () => ({
 					bind: () => ({ first: async () => ({ id: "req-1", status: "ready", expires_at: new Date(Date.now() + 1000).toISOString() }) }),
 				}),
-			} as any;
+			} as unknown as Partial<Env>["DB"];
 
 			const plaintext = await consumeSecureInput(mockEnv as Env, "req-1", "inst-1", "user-1");
 			expect(plaintext).toBeNull();
 		});
 
 		it("deletes ciphertext after consume (one-shot)", async () => {
-			let updateQuery = "";
-			let updateBinds: any[] = [];
+			let _updateBinds: unknown[] = [];
 
 			mockEnv.DB = {
 				prepare: (sql: string) => ({
-					bind: (...args: any[]) => {
+					bind: (...args: unknown[]) => {
 						if (sql.includes("UPDATE")) {
-							updateQuery = sql;
-							updateBinds = args;
+							_updateBinds = args;
 						}
 						return { first: async () => null, run: async () => ({ meta: { changes: 1 } }) };
 					},
 				}),
-			} as any;
+			} as unknown as Partial<Env>["DB"];
 
 			// Since we can't easily decrypt without real crypto, just verify the update
 			// would set ciphertext fields to NULL

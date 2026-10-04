@@ -35,14 +35,25 @@ export function registerSecureInputTools(server: McpServer, ctx: InstanceToolsCt
 					"Where this secret will be injected: 'tmux' = send to tmux session prompt, 'env' = environment variable, 'stdin' = stdin of a process, 'file' = ephemeral file (cleaned up after use).",
 				),
 			one_shot: z.boolean().optional().default(true).describe("If true, the secret is consumed exactly once and deleted. If false, reusable (future feature)."),
+			dry_run: z.boolean().optional().describe("Preview what would be created without actually creating the request."),
 		},
-		async ({ token, instance_id, label, purpose, destination_scope, one_shot }) => {
+		async ({ token, instance_id, label, purpose, destination_scope, one_shot, dry_run }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 
 			const input = { instance_id, label, purpose, destinationScope: destination_scope, oneShot: one_shot };
 			const denied = await requirePermission(safetyFor(token), "write", "secure_input_request", input);
 			if (denied) return denied;
+
+			if (dry_run) {
+				return dryRun(
+					safetyFor(token),
+					"secure_input_request",
+					`create a secure input request for "${label}"`,
+					input,
+					{ endpoint: `/v1/instances/${instance_id}/secure-inputs`, method: "POST" },
+				);
+			}
 
 			const data = await authedCall(
 				`/v1/instances/${instance_id}/secure-inputs`,
@@ -71,6 +82,10 @@ export function registerSecureInputTools(server: McpServer, ctx: InstanceToolsCt
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 
+			const input = { instance_id, request_id };
+			const denied = await requirePermission(safetyFor(token), "read", "secure_input_status", input);
+			if (denied) return denied;
+
 			const data = await authedCall(`/v1/instances/${instance_id}/secure-inputs/${request_id}`, sessionToken, {}, env);
 			return jsonText(data);
 		},
@@ -83,14 +98,25 @@ export function registerSecureInputTools(server: McpServer, ctx: InstanceToolsCt
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly."),
 			request_id: z.string().describe("The secure input request ID. Copy it exactly."),
+			dry_run: z.boolean().optional().describe("Preview what would be injected without actually consuming the secret."),
 		},
-		async ({ token, instance_id, request_id }) => {
+		async ({ token, instance_id, request_id, dry_run }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 
 			const input = { instance_id, request_id };
 			const denied = await requirePermission(safetyFor(token), "runtime", "secure_input_inject", input);
 			if (denied) return denied;
+
+			if (dry_run) {
+				return dryRun(
+					safetyFor(token),
+					"secure_input_inject",
+					`inject secure input to destination`,
+					input,
+					{ endpoint: `/v1/instances/${instance_id}/secure-inputs/${request_id}/consume`, method: "POST" },
+				);
+			}
 
 			const data = await authedCall(
 				`/v1/instances/${instance_id}/secure-inputs/${request_id}/consume`,
@@ -110,7 +136,7 @@ export function registerSecureInputTools(server: McpServer, ctx: InstanceToolsCt
 			// The pattern is: call this tool → get plaintext → IMMEDIATELY inject to tmux/process stdin
 			// → discard → return "injected" status to model (NOT the value).
 
-			if ((data as any).error) {
+			if ((data as { error?: string }).error) {
 				return jsonText(data);
 			}
 
