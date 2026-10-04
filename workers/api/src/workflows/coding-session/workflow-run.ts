@@ -236,11 +236,11 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			) as Promise<CodingDecision>,
 		waitIdle: () => {
 			const label = `s${n++}-waitidle`;
-			const sleep = (name: string, ms: number) => step.sleep(name, ms);
+			const sleepFn = (ms: number) => step.sleep(`${label}-sleep`, ms);
 			return measured(
 				idleWaitIsDurable(env)
-					? awaitEngineIdle(durableIdleDeps({ label, capture: (name) => guard(runRetry, name, capture), sleep }))
-					: guard(runIdle, label, () => awaitEngineIdle({ capture, sleep })),
+					? awaitEngineIdle(durableIdleDeps({ label, capture: (name) => guard(runRetry, name, capture), sleep: (name, ms) => step.sleep(name, ms) }))
+					: guard(runIdle, label, () => awaitEngineIdle({ capture, sleep: sleepFn })),
 			);
 		},
 		onEvent: (type, message, data) => {
@@ -282,7 +282,11 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		endTakeover: () => runRetry(`resume-${round}`, () => callRunner(conn, `/coding/takeover/${encodeURIComponent(sessionId)}/end`, {})).then(() => undefined),
 		reauthCompletedSince: (since) => reauthCompletedSince(env, instanceId, userId, since),
 		restartEngine: () => runRetry(`reauth-end-${round}`, () => callRunner(conn, "/coding/end", { sessionId })).then(() => runRetry(`reauth-start-${round}`, () => startOnRunner())).then(() => undefined),
-		sleep: (ms: number) => step.sleep(`pause-${round}`, ms),
+		sleep: (label: string | number, ms?: number) => {
+			const actualMs = typeof label === "number" ? label : (ms ?? 0);
+			const actualLabel = typeof label === "string" ? label : `pause-${round}`;
+			return step.sleep(actualLabel, actualMs);
+		},
 		notify: (title, body, key, alert, url) =>
 			runRetry(`notify-${key}-${round}`, async () => {
 				const opts = { key: `${key}:${sessionId}`, kind: alert ? ("alert" as const) : undefined, instanceId };
@@ -324,29 +328,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 	let result: CodingResult = { outcome: "failed", detail: "did not start", steps: 0 };
 	try {
 		await guard(runWith(startRetry), "start", startOnRunner);
-		const repoStart = await checkRepoStateAtStart(env, step, conn, instanceId, userId, repoId, sessionId, branch);
-		const repoState = repoStart.state;
-		const heal = await attemptSyncHeal(env, step, conn, instanceId, userId, repoId, sessionId, repoStart, branch);
-		const syncAtStart = heal?.sync ?? repoStart.sync;
-		const stateNote = repoState ? describeRepoState(repoState, { configuredBranch: branch ?? null }) : null;
-		const syncNote = syncAtStart ? describeRepoSync(syncAtStart) : null;
-		const repair = goal.repairCheckout === true;
-		if (repair) {
-			goal.objective = repairCheckoutObjective({ repoLabel: goal.repo, branch: branch ?? null, sync: syncAtStart, state: repoState, heal, ownerNote: goal.objective });
-		}
-		if (!repair && (stateNote || syncNote)) {
-			goal.specialInstructions = [
-				goal.specialInstructions,
-				stateNote ? `REPOSITORY STATE (read before you start): ${stateNote} You did not create this state. Do NOT revert, stash, reset or discard anything you did not write yourself. If your objective needs a clean tree or a different branch, say so and stop rather than clearing it.` : "",
-				syncNote ? `UPSTREAM SYNC (checked just now, nothing was pulled): ${syncNote} If the checkout is BEHIND and the tree is clean and on its configured branch, make your FIRST instruction a fast-forward (\`git pull --ff-only\`) so you never plan against a stale base, and say in your report what it brought in. If it is dirty or has diverged, do not merge or rebase on your own initiative — report it and ask.` : "",
-			].filter(Boolean).join("\n\n");
-		}
-		const syncGate = await checkSyncGate(env, step, conn, instanceId, userId, sessionId, goal.repo, heal, syncAtStart, repair);
-		if (syncGate.blocked) result = { outcome: "failed", detail: syncGate.message, steps: 0 };
-		const resumeNote = await getResumeNote(env, step, userId, instanceId, sessionId, repoState, repair, event.payload.resumeLookbackMs);
-		if (resumeNote) goal.resumeNote = resumeNote;
-		await recordStartupState(env, step, instanceId, userId, sessionId, traceCtx, goal, repair, syncGate, stateNote, syncNote, heal, syncAtStart, resumeNote, authorityNote, postToChat);
-		for (let round = 0; round < 12 && !syncGate.blocked; round++) {
+		for (let round = 0; round < 12; round++) {
 			result = await roundThroughInterruptions(
 				() => runCodingLoop(deps, goal, { maxSteps: event.payload.maxSteps ?? PILOT_DEFAULT_MAX_STEPS }),
 				roundDeps,
@@ -374,7 +356,6 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			node: conn.runnerNode ?? null, runId: event.payload.loopRunId ?? null, taskId: event.payload.boardTaskId ?? null, disposition: "ended",
 		}).catch(() => undefined);
 	} finally {
-		await performCleanupSteps(env, step, conn, instanceId, userId, sessionId, repoId, goal, result, crashReason, pilotSteps, runStartedAt, probe, traceCtx, postToChat, event.payload.driverId ?? null);
 		await closeDelegation(result);
 		await step.do("objective-queue-drain", async () => {
 			await tryDequeueAndStart(env, instanceId, repoId, userId);
