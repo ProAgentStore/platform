@@ -475,6 +475,14 @@ immediately instead of a whole transcript.
 | `get_instance_connector_account` | Which of your accounts the instance uses per connector (e.g. Gmail): `pinned`, what a call `resolves` to, and `blocked` when it would use none | read | | |
 | `set_instance_connector_account` | Pin the instance to one connected account; answers with the row read back. A blank `account_id` is refused — it never clears a pin | write | yes | |
 
+### Secure input (one-time ephemeral secrets)
+
+| Tool | Purpose | Scope | Dry | Confirm |
+|---|---|---|---|---|
+| `secure_input_request` | Request a secure input from the instance owner (e.g., auth code, OTP, password). Owner submits the plaintext via console UI; agent receives an opaque request ID and metadata only — never the secret. The plaintext is envelope-encrypted at rest and deleted immediately after one-shot consumption | write | yes | |
+| `secure_input_status` | Check whether the owner has supplied the secure input — returns pending/ready/consumed/expired status (metadata only, never the plaintext) | read | | |
+| `secure_input_inject` | Atomically retrieve the plaintext secret and inject it to a destination (env/file/stdin/tmux) in one operation. The plaintext is deleted immediately after injection and NEVER returned to the model, logged, or visible in traces | runtime | yes | |
+
 ### Agent-to-agent
 
 | Tool | Purpose | Scope | Dry | Confirm |

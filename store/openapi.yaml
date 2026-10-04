@@ -41,11 +41,11 @@ info:
 
     **Documented with request/response schemas** — auth, agents (CRUD, capabilities,
     settings-schema, versions, export/import, analytics, ops, deploy), chat, instances
-    (subscribe, chat, messages, knowledge, board, board-config, settings, instructions,
-    rename, runner-node, runtime registration, tasks), apply (`/apply`, `/input`,
-    `/apply-tips`, résumé, takeover), trace, voice settings + recordings, translation,
-    credentials vault, storage (collections, records, files, multipart upload, vectors,
-    search, activity, memory, state), repo ingestion, tools + connectors + connections,
+    (subscribe, chat, messages, knowledge, secure input/one-time secrets, board, board-config,
+    settings, instructions, rename, runner-node, runtime registration, tasks), apply
+    (`/apply`, `/input`, `/apply-tips`, résumé, takeover), trace, voice settings + recordings,
+    translation, credentials vault, storage (collections, records, files, multipart upload,
+    vectors, search, activity, memory, state), repo ingestion, tools + connectors + connections,
     triggers, relay, terminals, usage, errors, push, profile, preferences, keys,
     dashboard, notifications, batch, agent-builder, billing, GitHub App, Google Drive,
     Zoho WorkDrive, Gmail.
@@ -2821,6 +2821,245 @@ paths:
                 $ref: "#/components/schemas/KnowledgeDocument"
         "404":
           description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/instances/{instanceId}/secure-inputs:
+    post:
+      summary: Request a secure input from instance owner
+      description: |
+        Request an ephemeral secret (auth code, OTP, password) from the instance owner.
+        The owner submits the plaintext via the console UI; agent receives an opaque request ID only.
+        The plaintext is envelope-encrypted at rest and deleted immediately after one-shot consumption.
+        The value is never returned to the model, visible in logs, or included in traces.
+      operationId: createSecureInputRequest
+      tags: [Instances]
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label, destinationScope]
+              properties:
+                label:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                  description: Short label for the console UI (e.g., "Firebase auth code")
+                purpose:
+                  type: string
+                  maxLength: 500
+                  description: Optional description of why this secret is needed
+                destinationScope:
+                  type: string
+                  enum: [tmux, env, stdin, file]
+                  description: Where the secret will be injected
+                oneShot:
+                  type: boolean
+                  default: true
+                  description: If true, consumed exactly once and deleted
+      responses:
+        "201":
+          description: Request created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+        "404":
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    get:
+      summary: List secure input requests for an instance
+      description: List pending/ready secure input requests (metadata only, never plaintext)
+      operationId: listSecureInputRequests
+      tags: [Instances]
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Requests listed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  requests:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        status:
+                          type: string
+                          enum: [pending, ready, consumed, expired]
+                        label:
+                          type: string
+                        expiresAt:
+                          type: string
+                          format: date-time
+        "404":
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/instances/{instanceId}/secure-inputs/{requestId}:
+    get:
+      summary: Get status of a secure input request
+      description: Check if owner has supplied the secret (metadata only, never plaintext)
+      operationId: getSecureInputStatus
+      tags: [Instances]
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: requestId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Status retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  status:
+                    type: string
+                    enum: [pending, ready, consumed, expired]
+                  label:
+                    type: string
+        "404":
+          description: Request not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/instances/{instanceId}/secure-inputs/{requestId}/submit:
+    post:
+      summary: Submit secret value for a pending request
+      description: |
+        Owner submits the plaintext secret via console UI.
+        The secret is encrypted and the request becomes ready for injection.
+      operationId: submitSecureInputValue
+      tags: [Instances]
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: requestId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value:
+                  type: string
+                  description: The plaintext secret value
+      responses:
+        "200":
+          description: Secret stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [ready]
+        "404":
+          description: Request not found or already consumed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/instances/{instanceId}/secure-inputs/{requestId}/consume:
+    post:
+      summary: Consume and inject a secure input to its destination
+      description: |
+        Atomically retrieve the plaintext secret and inject it to the configured destination
+        (env/file/stdin/tmux). The plaintext is deleted immediately after injection and is
+        NEVER returned in the response, logged, or visible in traces.
+
+        **SECURITY:** The runner/injection handler must:
+        1. NOT log the plaintext
+        2. NOT return it to the model
+        3. NOT put it in any tool result
+        4. Inject it directly to the destination only
+        5. Discard it from memory immediately after use
+      operationId: consumeSecureInput
+      tags: [Instances]
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: requestId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Secret injected (plaintext NOT in response)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  value:
+                    type: string
+                    description: Plaintext secret (MUST NOT be logged or returned to model)
+        "404":
+          description: Request not found, not ready, expired, or already consumed
           content:
             application/json:
               schema:

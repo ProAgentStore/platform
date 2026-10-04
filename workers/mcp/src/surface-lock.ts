@@ -963,4 +963,12 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.70": "sha256:f51158bd49cb82d29501a6f2b64fe9f25d2d8420c1d0e1b18b0a69af632466a2",
 	// 0.1.71 (#904): add always-on read-only mcp_server_info diagnostic metadata.
 	"0.1.71": "sha256:d3ab795e8a2dd97d55dcd2adfdda9a9689a72d60cd041f92e372e74bfabcf5fc",
+	// 0.1.72 (#906): three new always-on tools in `instance-tools/` for secure input / one-time secret
+	// handoff. `secure_input_request` (write), `secure_input_status` (read), `secure_input_inject`
+	// (runtime). 243 registrations become 246, `MCP_TOOL_ALWAYS_ON` 216 → 219, gated stays 27. The three
+	// tools gate access to a one-shot opaque secret handoff: owner supplies plaintext via console UI
+	// (encrypted at rest), agent gets request ID and status only, and injects to destination (env|file|
+	// stdin|tmux) without exposing plaintext to model/traces/logs. Appended, never edited in place:
+	// 0.1.71 is published.
+	"0.1.72": "sha256:895bbd99dd645517fb675e13f542ba5099e635f1ebad54b41a9c0a75c41863a9",
 };
