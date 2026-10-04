@@ -118,7 +118,7 @@ const KNOWN_ANONYMOUS = {
 	// ── SettingsTab ───────────────────────────────────────────────────────────
 	"d725def1": "{ instances?: RosterInstance[] }",
 	"736c7fb5": "{ settings?: Record<string, string | number | boolean>; fields?: SettingsField[] }",
-	"188eeb83": "{ translation?: { enabled: boolean; target: string; transliterate?: boolean; wordTap?: boolean; fontSize?: string }; languages?: Array<{ name: string; tag: string }>; hasOverride?: boolean }",
+	"0d888acc": "{ translation?: { enabled: boolean; target: string; transliterate?: boolean; wordTap?: boolean; fontSize?: string }; languages?: Array<{ name: string; tag: string }>; hasOverride?: boolean }",
 	"4f8f8740": "{ voiceSettings?: Record<string, unknown>; hasOverride?: boolean }",
 	"a122f740": "{ providers?: Array<{ id: string; hasKey: boolean }> }",
 	"84086d7e": "{ permissions?: { email?: boolean } }",
