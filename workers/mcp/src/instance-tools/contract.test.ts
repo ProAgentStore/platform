@@ -20,6 +20,7 @@ import { registerRecentTools } from "./recent.js";
 import { registerRepoTools } from "./repo.js";
 import { registerRuntimeTools } from "./runtime.js";
 import { registerMachineControlTools } from "./machine-control.js";
+import { registerSecureInputTools } from "./secure-input.js";
 import { registerSettingsTools } from "./settings.js";
 import type { InstanceToolsCtx } from "./shared.js";
 import { registerStatsTools } from "./stats.js";
@@ -421,6 +422,9 @@ const TABLE: Record<string, Row> = {
 	remove_repo: ["repo", "write", null, "envelope", "confirm,dry_run,instance_id,repo_url,token"],
 	rename_instance: ["settings", "write", null, "envelope", "dry_run,instance_id,name,token"],
 	run_instance_task: ["runtime", "runtime", null, "envelope", "approval_prompt,dry_run,input,instance_id,requires_approval,token,type"],
+	secure_input_inject: ["secureInput", "runtime", null, "envelope", "dry_run,instance_id,request_id,token"],
+	secure_input_request: ["secureInput", "write", null, "envelope", "destination_scope,dry_run,instance_id,label,one_shot,purpose,token"],
+	secure_input_status: ["secureInput", "read", null, null, "instance_id,request_id,token"],
 	run_instance_trigger: ["triggers", "runtime", null, "envelope", "dry_run,payload,token,trigger_id"],
 	search_instance_knowledge: ["knowledge", "none", null, null, "instance_id,query,token,top_k"],
 	set_account_preferences: ["account", "write", null, "envelope", "coding,dry_run,notifications,timezone,token,translation,voice"],
@@ -533,6 +537,7 @@ const REGISTRARS: Record<string, (s: unknown, c: InstanceToolsCtx) => void> = {
 	recent: registerRecentTools as any,
 	repo: registerRepoTools as any,
 	runtime: registerRuntimeTools as any,
+	secureInput: registerSecureInputTools as any,
 	settings: registerSettingsTools as any,
 	stats: registerStatsTools as any,
 	triggers: registerTriggerTools as any,

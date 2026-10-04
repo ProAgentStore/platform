@@ -229,6 +229,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	// fails if either of them stops POSTing (a stale exemption is a hole).
 	search_agent_knowledge: "read",
 	search_instance_knowledge: "read",
+	secure_input_status: "read",
 	system_status: "read",
 	ticket_thread: "read",
 	usage_summary: "read",
@@ -263,6 +264,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	rename_instance: "write",
 	resolve_feedback: "write",
 	scaffold_agent: "write",
+	secure_input_request: "write",
 	set_account_preferences: "write",
 	set_agent_settings_schema: "write",
 	set_agent_stats_schema: "write",
@@ -350,6 +352,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	register_instance_runtime: "runtime",
 	run_instance_task: "runtime",
 	run_instance_trigger: "runtime",
+	secure_input_inject: "runtime",
 	// STRICTER than its gate (`write`): starting a loop hands the agent an objective and
 	// lets it act unattended until it stops.
 	start_instance_loop: "runtime",
@@ -564,13 +567,15 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// from public probes and this session's own latency ring; nothing is written.
 	// +1 read at #868: `runner_setup`, the local runner setup checklist — derived from recorded state.
 	// +1 read at #904: mcp_server_info reads local server and catalog metadata.
-	read: 115,
+	// +1 read at #906: `secure_input_status` — metadata-only check of secret request status.
+	read: 116,
 	// +2 write at #825: `pause_instance` / `resume_instance`. `write` rather than `destructive` —
 	// nothing is deleted and nothing is unsubscribed, and classing the OFF switch as destructive
 	// would put RESUME behind a scope the caller may not hold, which is the wrong failure mode for
 	// a safety toggle (the reasoning `set_instance_connector_consent` already records). Not `read`
 	// either: switching an agent off is a real change.
-	write: 69, // +1 at #757: promote_board_item
+	// +1 write at #906: `secure_input_request`, agent creates a secure input request for a secret.
+	write: 70, // +1 at #757: promote_board_item
 	// +1 runtime at #806: `continue_instance_run`. `runtime` rather than `write` for the reason
 	// `start_instance_loop` is — it starts an autonomous run that spends on its own — and the
 	// two must agree, because a caller holding the scope to start one holding a narrower one to
@@ -582,7 +587,8 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// so they launch with the account default engine. It is account-scoped state applied to machines.
 	// +1 runtime at #881: `coding_engine_reauth`, the remote engine sign-in. `runtime`, not `write`:
 	// it opens a terminal on the machine and drives the engine's login CLI there.
-	runtime: 28,
+	// +1 runtime at #906: `secure_input_inject`, injects a secret to tmux/env/stdin on the runner machine.
+	runtime: 29,
 	// +1 read, +8 destructive at #613 (agent-template authoring, write half): builder planning
 	// only computes a proposal; the other eight can delete, overwrite, run a billable template
 	// turn, create an enduring version, or create/scaffold a template. They all require the
