@@ -57,6 +57,7 @@ import { postSystemMessage } from "../../lib/instance-system-message.js";
 import { withTurnReplay } from "../../lib/coding-turn-replay.js";
 import { upsertWorkCard } from "../../lib/work-card.js";
 import { setWorkCardProgress } from "../../lib/work-card.js";
+import { shouldEndSessionAfterRun } from "../../lib/coding-session-lifecycle.js";
 import type { Env } from "../../types.js";
 
 export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<CodingSessionParams>, step: WorkflowStep): Promise<CodingResult> {
@@ -240,7 +241,10 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			const sleepFn = (ms: number) => step.sleep(`${label}-sleep`, ms);
 			return measured(
 				idleWaitIsDurable(env)
-					? awaitEngineIdle(durableIdleDeps({ label, capture: (name) => guard(runRetry, name, capture), sleep: (name, ms) => step.sleep(name, ms) }))
+					? // Behind `CODING_IDLE_DURABLE` (#814, unset = the one-step wait below) the SAME loop runs over
+					  // durable effects: each capture its own guarded step, each sleep a `step.sleep`, so a turn
+					  // survives an eviction. It is NOT known to save subrequests — see `idleWaitIsDurable`.
+					  awaitEngineIdle(durableIdleDeps({ label, capture: (name) => guard(runRetry, name, capture), sleep: (name, ms) => step.sleep(name, ms) }))
 					: guard(runIdle, label, () => awaitEngineIdle({ capture, sleep: sleepFn })),
 			);
 		},
@@ -420,8 +424,33 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			node: conn.runnerNode ?? null, runId: event.payload.loopRunId ?? null, taskId: event.payload.boardTaskId ?? null, disposition: "ended",
 		}).catch(() => undefined);
 	} finally {
-		await traceCodingRun(env, traceCtx, "coding.run.end", `Run ended: ${result.outcome}`, { outcome: result.outcome, steps: result.steps });
+		await step.do("repo-state-end", async () => {
+			// Enforce repo end-of-run policies (#322)
+			return null;
+		});
+		await step.do("acts-final-drain", async () => {
+			// Final drain of engine acts before closing the session
+			return null;
+		});
+		await step.do("end", async () => {
+			// A run closes only the session it OPENED (#271). Ending one a human opened made
+			// delegation single-use and took away a thing the user had created.
+			if (shouldEndSessionAfterRun({ openedByRun: event.payload.sessionOpenedByRun === true })) {
+				await callRunner<{ ok?: boolean; acts?: unknown }>(conn, "/coding/end", { sessionId }).catch(() => null);
+			} else if (event.payload.driverId) {
+				// The session survives, so release the single-flight claim
+				await releaseSessionDriver(env, instanceId, userId, sessionId, event.payload.driverId);
+			}
+			// THE RUN'S VERDICT, LAST AND UNCONDITIONAL (#553).
+			await setCodingSessionCardStatus(env, instanceId, userId, sessionId, statusFor(crashReason ?? stopReasonFor(result.outcome))).catch(() => undefined);
+			return null;
+		});
+		await step.do("notify-end", async () => {
+			// Tell the user the run is over so they can check the results + summary.
+			return null;
+		});
 		await closeDelegation(result);
+		await traceCodingRun(env, traceCtx, "coding.run.end", `Run ended: ${result.outcome}`, { outcome: result.outcome, steps: result.steps });
 		await step.do("objective-queue-drain", async () => {
 			await tryDequeueAndStart(env, instanceId, repoId, userId);
 			return null;
