@@ -493,6 +493,10 @@ export interface SecureInputView {
 	expiresAt: string;
 	createdAt: string;
 	consumedAt?: string;
+	/** The runner node a machine deposit (`tmux_secure_put`, #918) was read on. Absent = typed in the console. */
+	sourceNode?: string;
+	/** The runner node that wrote the value out (`tmux_secure_get`). */
+	consumedNode?: string;
 }
 
 export interface ListSecureInputsResponse {

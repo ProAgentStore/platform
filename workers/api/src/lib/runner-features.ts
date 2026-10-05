@@ -8,6 +8,7 @@
  */
 import { TURN_REPORT_MIN_CLI, TURN_TAIL_MIN_CLI } from "./coding-turn-outcome.js";
 import { REPO_SEARCH_MIN_CLI } from "./connectors/repo-local.js";
+import { SECURE_HANDOFF_MIN_CLI } from "./connectors/tmux.js";
 import { RESULT_LINES_MIN_CLI, TOOL_OUTCOME_MIN_CLI } from "./engine-tool-calls.js";
 import { MACHINE_ID_MIN_CLI } from "./machine-identity.js";
 import { SWITCH_BRANCH_MIN_CLI } from "./repo-policy-act.js";
@@ -33,6 +34,7 @@ export interface RunnerFeature {
 }
 
 export const RUNNER_FEATURES: readonly RunnerFeature[] = [
+	{ feature: "tmux_secure_put / tmux_secure_get (machine-to-machine secret files)", minCli: SECURE_HANDOFF_MIN_CLI },
 	{ feature: "the engine's own output in a failed run's detail", minCli: TURN_TAIL_MIN_CLI },
 	{ feature: "engine check before launch (installed + signed in), required by apply-now", minCli: ENGINE_CHECK_MIN_CLI },
 	{ feature: "runner_update restarts pags up itself, and service-managed runners", minCli: SUPERVISOR_RESTART_MIN_CLI },

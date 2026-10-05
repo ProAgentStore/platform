@@ -62,6 +62,10 @@ const MACHINE = new Set<string>([
 	"tmux_send_message",
 	"tmux_new_session",
 	"tmux_kill_session",
+	// #918: a file on the owner's machine is read (put) or written (get) over the relay; the value
+	// goes only to the platform's own encrypted store, never anywhere on the internet.
+	"tmux_secure_put",
+	"tmux_secure_get",
 	// repo-local connector — reads the checkout on the machine; nothing is copied to the platform
 	"repo_tree",
 	"repo_read_file",

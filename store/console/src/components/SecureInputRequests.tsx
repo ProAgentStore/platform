@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
-import { AlertCircle, Loader2, CheckCircle } from "lucide-react";
+import { Link } from "react-router-dom";
+import { AlertCircle, Loader2, CheckCircle, KeyRound } from "lucide-react";
 import Button from "./Button";
 import type { ListSecureInputsResponse, SecureInputView } from "../lib/types";
+import { isMachineDeposit, secureInputStatusLine } from "../lib/secureInput";
 
 export default function SecureInputRequests({ instanceId }: { instanceId: string }) {
 	const [requests, setRequests] = useState<SecureInputView[]>([]);
@@ -69,13 +71,27 @@ export default function SecureInputRequests({ instanceId }: { instanceId: string
 
 	return (
 		<div className="flex flex-col gap-2 px-2 pt-2 border-t border-line">
-			{requests.map((req) => (
+			{requests.map((req) =>
+				isMachineDeposit(req) ? (
+					// A machine deposit (#918): nothing for the owner to type — say where it is in transit.
+					<Link
+						key={req.id}
+						to={`/instances/${instanceId}/secure-inputs/${req.id}`}
+						className="flex items-start gap-2 border border-line bg-panel rounded-xl p-3 text-sm hover:border-accent"
+					>
+						<KeyRound size={15} className="text-muted shrink-0 mt-0.5" />
+						<div className="min-w-0">
+							<p className="font-semibold">{req.label}</p>
+							<p className="text-2xs text-muted">{secureInputStatusLine(req)}</p>
+						</div>
+					</Link>
+				) : (
 				<div key={req.id} className="border border-warning-line bg-panel rounded-xl p-3 text-sm">
 					<div className="flex items-start gap-2 mb-2">
 						<AlertCircle size={15} className="text-warning shrink-0 mt-0.5" />
 						<div className="min-w-0">
 							<p className="font-semibold">{req.label}</p>
-							<p className="text-2xs text-muted">{req.status === "ready" ? "Ready for injection" : "Waiting for value"}</p>
+							<p className="text-2xs text-muted">{secureInputStatusLine(req)}</p>
 						</div>
 					</div>
 
@@ -115,7 +131,8 @@ export default function SecureInputRequests({ instanceId }: { instanceId: string
 						</div>
 					)}
 				</div>
-			))}
+				),
+			)}
 			{note && <p className="text-xs text-muted px-1">{note}</p>}
 		</div>
 	);

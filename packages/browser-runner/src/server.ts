@@ -549,6 +549,19 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		return json(res, 200, { session, created: true, workDir });
 	}
 
+	// ── secret handoff (#918) ──────────────────────────────────────────────
+	// Machine-to-machine secret transfer for `tmux_secure_put` / `tmux_secure_get`. The value moves
+	// only between this process and the cloud's encrypted store — never through a pane, a shell or
+	// a subprocess. See coding/secret-file.ts.
+	if (req.method === "POST" && path === "/secure/read") {
+		const { readSecretFile } = await import("./coding/secret-file.js");
+		return json(res, 200, readSecretFile(await readJson<{ path?: string }>(req)));
+	}
+	if (req.method === "POST" && path === "/secure/write") {
+		const { writeSecretFile } = await import("./coding/secret-file.js");
+		return json(res, 200, writeSecretFile(await readJson<{ path?: string; value?: string; mode?: string; overwrite?: boolean }>(req)));
+	}
+
 	// ── generic terminal connector ──────────────────────────────────────────
 	// One local-terminal vocabulary over backend-specific adapters. tmux is fully
 	// controllable; kitty needs remote control enabled; iTerm2 needs macOS Automation access.

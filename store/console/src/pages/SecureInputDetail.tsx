@@ -4,6 +4,7 @@ import { api } from "@proagentstore/sdk/client";
 import { AlertCircle, Loader2, CheckCircle, ArrowLeft } from "lucide-react";
 import Button from "../components/Button";
 import type { SecureInputView } from "../lib/types";
+import { isMachineDeposit, secureInputStatusLine } from "../lib/secureInput";
 
 export default function SecureInputDetail() {
 	const { id: instanceId, requestId } = useParams<{ id: string; requestId: string }>();
@@ -73,7 +74,7 @@ export default function SecureInputDetail() {
 					</button>
 					<div>
 						<h1 className="text-lg font-semibold">{request.label}</h1>
-						<p className="text-sm text-muted">{request.status}</p>
+						<p className="text-sm text-muted">{secureInputStatusLine(request)}</p>
 					</div>
 				</div>
 			</div>
@@ -85,7 +86,17 @@ export default function SecureInputDetail() {
 					</div>
 				)}
 
-				{request.status === "ready" ? (
+				{isMachineDeposit(request) && request.status !== "expired" ? (
+					// A machine deposit (#918): there is no form — the value went from one machine to the
+					// encrypted store, and (when consumed) on to another, without passing through here.
+					<div className="flex flex-col items-center justify-center gap-4 py-12">
+						<CheckCircle size={48} className={request.status === "consumed" ? "text-success" : "text-muted"} />
+						<div className="text-center">
+							<p className="font-semibold mb-1">{secureInputStatusLine(request)}</p>
+							<p className="text-sm text-muted">The value is encrypted and is never shown here, in chat, or in any tool result.</p>
+						</div>
+					</div>
+				) : request.status === "ready" ? (
 					<div className="flex flex-col items-center justify-center gap-4 py-12">
 						<CheckCircle size={48} className="text-success" />
 						<div className="text-center">
@@ -106,7 +117,7 @@ export default function SecureInputDetail() {
 						<AlertCircle size={48} className="text-warning" />
 						<div className="text-center">
 							<p className="font-semibold mb-1">Request expired</p>
-							<p className="text-sm text-muted">This request exceeded its 24-hour TTL and is no longer valid.</p>
+							<p className="text-sm text-muted">This request passed its expiry unused, and the value was deleted.</p>
 						</div>
 					</div>
 				) : (
@@ -156,6 +167,18 @@ export default function SecureInputDetail() {
 					<p className="text-xs text-muted">
 						<strong>Destination:</strong> {request.destinationScope}
 						<br />
+						{request.sourceNode && (
+							<>
+								<strong>Read on:</strong> {request.sourceNode}
+								<br />
+							</>
+						)}
+						{request.consumedNode && (
+							<>
+								<strong>Written on:</strong> {request.consumedNode}
+								<br />
+							</>
+						)}
 						<strong>One-shot:</strong> {request.oneShot ? "Yes, deleted after use" : "Reusable"}
 						<br />
 						<strong>Expires:</strong> {new Date(request.expiresAt).toLocaleString()}

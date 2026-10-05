@@ -107,12 +107,19 @@ describe("migration 0123 — what the tmux Coder declares", () => {
 		expect(CAPS.workflow).toBeNull();
 	});
 
-	it("declares the whole tmux connector — the seven the Operator has after 0117", () => {
+	it("declares every terminal-driving tmux tool — the seven the Operator has after 0117", () => {
 		// Both directions. A name that does not exist is a tool the agent never gets; a tmux tool
 		// left undeclared is a capability quietly removed from an agent whose driver IS that
 		// connector.
-		expect([...DECLARED.filter((t) => t.startsWith("tmux_"))].sort()).toEqual([...TMUX_TOOLS].sort());
-		expect(TMUX_TOOLS).toHaveLength(7);
+		//
+		// The secret handoff (#918) is the one exception, by decision: it moves secret files between
+		// the owner's machines, which is the Operator's job (0172), not a coder's — a coder that can
+		// lift `.env` files off the machine is reach nobody asked it to have.
+		const HANDOFF = ["tmux_secure_put", "tmux_secure_get"];
+		const driving = TMUX_TOOLS.filter((t) => !HANDOFF.includes(t));
+		expect([...DECLARED.filter((t) => t.startsWith("tmux_"))].sort()).toEqual([...driving].sort());
+		expect(driving).toHaveLength(7);
+		expect(DECLARED.filter((t) => HANDOFF.includes(t))).toEqual([]);
 	});
 
 	it("declares the eight GitHub tools the Repo Coder holds after 0120/0121", () => {

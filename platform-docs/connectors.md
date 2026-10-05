@@ -36,7 +36,7 @@ resolved before the run and is refused at dispatch instead.
 | `web-search` | vault API key | read | `web_search` (Google Custom Search) |
 | `meta` | platform token (`META_ACCESS_TOKEN`) | write | `whatsapp_send_message`, `instagram_send_dm` |
 | `terminal` | none (runner relay) | read + write | `terminal_list_targets`, `terminal_capture`, `terminal_run_command` (write), `terminal_send_keys` (write), `terminal_send_message` (write — type text + Enter + settle + confirm) |
-| `tmux` | none (runner relay) | read + write | Legacy compatibility: `tmux_list_sessions`, `tmux_capture_pane`, `tmux_run_command` (write), `tmux_send_message` (write — type text + Enter + settle + confirm) |
+| `tmux` | none (runner relay) | read + write | Legacy compatibility: `tmux_list_sessions`, `tmux_capture_pane`, `tmux_run_command` (write), `tmux_send_message` (write — type text + Enter + settle + confirm), `tmux_secure_put` / `tmux_secure_get` (write — [move a secret file between machines](#moving-a-secret-file-between-machines)) |
 | `browser` | none (runner relay) | read + write | `browser_snapshot`, `browser_navigate` (write), `browser_act` (write) — experimental |
 | `repo-local` | none (runner relay) | read | `repo_tree`, `repo_read_file`, `repo_find`, `repo_grep`, `repo_git` (`status`/`diff`/`diff-stat`/`log`/`ls-files`/`show`, fixed argv, optional validated `ref`), `repo_remote`. Every read checks the checkout against its upstream (runner fetches remote-tracking refs, cached a minute, never pulls) and appends a `STALE CHECKOUT` note when it is behind; `repo_git status` always states the sync position. |
 | `supervision` | none (internal) | read + write | `list_subordinates`, `subordinate_status`, `delegate_goal` (write), `check_delegation`, `set_direction` (write), `transfer_conversation` (write) |
@@ -57,6 +57,39 @@ driven through a pane produces no cost row and no `$` figure on the Usage page �
 *not measured*, not *free*. This is the deliberate trade for a real attachable terminal; see
 [ADR 0003](https://github.com/ProAgentStore/platform/blob/main/docs/adr/0003-a-coder-engine-reports-its-own-turns.md)
 and [Browser Runtime](browser-runtime.md#coder-agents).
+
+### Moving a secret file between machines
+
+`tmux_secure_put` and `tmux_secure_get` (#918) move a secret file — a filled-in `.env`, a key
+file, a credentials JSON — from one of your machines to another when you can reach both only
+through their tmux Operators, and without the value ever entering the conversation.
+
+1. On machine A's Operator: `tmux_secure_put { path: "app/.env.prod", label: "heartfull .env.prod" }`.
+   The runner reads the file, the platform encrypts it into the same store the
+   `secure_input_request` tools use, and the tool returns only a `handle`, a byte count, the
+   machine it was read on, an expiry (`ttl_minutes`, default 60, max 1440) and a `consoleUrl`.
+2. On machine B's Operator: `tmux_secure_get { handle, path: "app/.env.prod" }`. The platform
+   decrypts it, the runner writes it (mode `600` unless `mode` says otherwise; an existing file is
+   kept unless `overwrite: true`), and the tool returns only the path and a byte count.
+
+The rules:
+
+- **The value is in no tool result, trace, pane or shell command.** It travels runner → Worker →
+  encrypted D1 → Worker → runner and nowhere else. Neither tool touches tmux; that is the point of
+  not doing this with `tmux_run_command` and `cat`. Runner errors name the path, never the bytes.
+- **One-shot.** The first successful get spends the handle; a second get, or a racing one, gets
+  nothing. If the write fails (the file exists, a bad mode, a full disk) the handle is put back
+  to `ready` so you can fix the destination and retry.
+- **Same owner only.** A handle deposited on one of your instances can be retrieved by any other
+  instance you own, and by no one else's.
+- **Text files up to 64 KiB.** A file that is not valid UTF-8 is refused rather than altered.
+- **Both are writes** on the `tmux` connector, so each instance needs tmux write-consent, like the
+  Operator's other writes. The runner needs CLI `0.4.69` or newer; an older one is named, with its
+  version, instead of failing with a raw 404.
+- **What the console shows.** The handle appears in the depositing instance's secure-input banner
+  and at its `consoleUrl` as *metadata only*: the label, "Deposited from `mac-mini`", then "Moved
+  from `mac-mini` to `pink-laptop`" once it is retrieved. There is no input box and no way to view
+  the value. `secure_input_status` reports the same status (`ready` → `consumed`, or `expired`).
 
 **Write-consent gating (#90).** Every `scope:"write"` connector tool is refused unless the
 instance has explicit write-consent for that connector (`instance_connector_consent`, migration

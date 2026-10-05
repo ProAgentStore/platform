@@ -11,7 +11,7 @@
 import type { Env } from "../types.js";
 import { decryptKey, encryptKey } from "./crypto.js";
 import { logError } from "./error-log.js";
-import { sqlTime, sqlTimeToIso } from "./sql-time.js";
+import { sqlTime, sqlTimeMs, sqlTimeToIso } from "./sql-time.js";
 
 const TTL_MS = 24 * 60 * 60_000; // 24 hours for one-time input
 
@@ -32,6 +32,8 @@ interface SecureInputRow {
 	created_at: string;
 	updated_at: string;
 	consumed_at: string | null;
+	source_node: string | null;
+	consumed_node: string | null;
 }
 
 /** What a client (console or agent) sees — metadata only, never the secret. */
@@ -45,6 +47,10 @@ export interface SecureInputView {
 	expiresAt: string;
 	createdAt: string;
 	consumedAt?: string;
+	/** The runner node a machine deposit (`tmux_secure_put`, #918) was read on. Absent = typed in the console. */
+	sourceNode?: string;
+	/** The runner node that wrote the value out (`tmux_secure_get`). */
+	consumedNode?: string;
 }
 
 /** Input to create a new secure input request. */
@@ -57,12 +63,15 @@ export interface CreateSecureInputInput {
 	oneShot?: boolean;
 }
 
+/** The longest a machine deposit may wait for its retrieval. Shorter than the console path's day on purpose. */
+export const DEPOSIT_MAX_TTL_MS = TTL_MS;
+
 const VIEW_COLUMNS =
-	"id, instance_id, user_id, status, label, purpose, destination_scope, one_shot, expires_at, created_at, updated_at, consumed_at";
+	"id, instance_id, user_id, status, label, purpose, destination_scope, one_shot, expires_at, created_at, updated_at, consumed_at, source_node, consumed_node";
 
 function rowToView(row: Omit<SecureInputRow, "secret_ciphertext" | "dek_wrapped" | "iv">, now: number): SecureInputView {
 	let status: "pending" | "ready" | "consumed" | "expired" = (row.status as "pending" | "ready" | "consumed" | "expired") || "pending";
-	if (status !== "consumed" && new Date(row.expires_at).getTime() < now) {
+	if (status !== "consumed" && sqlTimeMs(row.expires_at) < now) {
 		status = "expired";
 	}
 
@@ -78,6 +87,8 @@ function rowToView(row: Omit<SecureInputRow, "secret_ciphertext" | "dek_wrapped"
 
 	if (row.purpose) view.purpose = row.purpose;
 	if (row.consumed_at) view.consumedAt = row.consumed_at;
+	if (row.source_node) view.sourceNode = row.source_node;
+	if (row.consumed_node) view.consumedNode = row.consumed_node;
 
 	return view;
 }
@@ -177,14 +188,69 @@ export async function storeSecretValue(
 }
 
 /**
+ * Deposit a value that a MACHINE read (#918 — `tmux_secure_put`), straight into `ready`.
+ *
+ * The console path is two steps (request, then the owner submits); a machine deposit has no human
+ * in it, so the row is born encrypted. Returns the opaque handle — the only thing the caller may
+ * hand back to the model.
+ */
+export async function depositSecureInput(
+	env: Env,
+	input: { instanceId: string; userId: string; label: string; purpose?: string; sourceNode: string | null; ttlMs: number; value: string },
+): Promise<{ id: string; expiresAt: string }> {
+	if (!env.KEY_ENCRYPTION_KEY) throw new Error("Key encryption not configured");
+	const id = crypto.randomUUID();
+	const expiresAt = sqlTime(Date.now() + Math.min(Math.max(input.ttlMs, 60_000), DEPOSIT_MAX_TTL_MS));
+	const { ciphertext, dekWrapped, iv } = await encryptKey(input.value, env.KEY_ENCRYPTION_KEY);
+	await env.DB.prepare(
+		`INSERT INTO secure_input_requests (
+      id, instance_id, user_id, status, label, purpose, destination_scope, secret_ciphertext, dek_wrapped, iv,
+      one_shot, expires_at, created_at, updated_at, source_node
+    ) VALUES (?1, ?2, ?3, 'ready', ?4, ?5, 'file', ?6, ?7, ?8, 1, ?9, datetime('now'), datetime('now'), ?10)`,
+	)
+		.bind(id, input.instanceId, input.userId, input.label, input.purpose ?? null, ciphertext, dekWrapped, iv, expiresAt, input.sourceNode)
+		.run();
+	return { id, expiresAt: sqlTimeToIso(expiresAt) };
+}
+
+/**
+ * Put a consumed value back to `ready` when the destination could not be written (#918).
+ *
+ * A one-shot handle that is spent on a failed write leaves the owner nothing to retry with. Only a
+ * row THIS consume emptied qualifies (`consumed` with no ciphertext), and its expiry is untouched.
+ */
+export async function restoreConsumedSecureInput(env: Env, requestId: string, userId: string, value: string): Promise<boolean> {
+	if (!env.KEY_ENCRYPTION_KEY) return false;
+	const { ciphertext, dekWrapped, iv } = await encryptKey(value, env.KEY_ENCRYPTION_KEY);
+	const res = await env.DB.prepare(
+		`UPDATE secure_input_requests
+     SET status = 'ready', secret_ciphertext = ?1, dek_wrapped = ?2, iv = ?3, consumed_at = NULL, consumed_node = NULL, updated_at = datetime('now')
+     WHERE id = ?4 AND user_id = ?5 AND status = 'consumed' AND secret_ciphertext IS NULL`,
+	)
+		.bind(ciphertext, dekWrapped, iv, requestId, userId)
+		.run();
+	return res.meta.changes === 1;
+}
+
+/**
  * Atomically consume a secure input request: retrieve the plaintext secret and delete the row.
  * This is the ONLY place the plaintext is exposed. It is never returned to the model,
  * never logged, never put in a tool result — the caller (runner/tmux handler) injects it
  * directly into the destination and the plaintext is immediately discarded.
  *
+ * `instanceId: null` consumes any of the OWNER's handles — the machine-to-machine handoff (#918),
+ * where machine B's operator retrieves what machine A's operator deposited. Same owner is the
+ * authorization: `user_id` is matched either way, and handles are unguessable UUIDs.
+ *
  * Returns the plaintext secret, or null if not found / not ready / already consumed / expired.
  */
-export async function consumeSecureInput(env: Env, requestId: string, instanceId: string, userId: string): Promise<string | null> {
+export async function consumeSecureInput(
+	env: Env,
+	requestId: string,
+	instanceId: string | null,
+	userId: string,
+	opts: { consumedNode?: string | null } = {},
+): Promise<string | null> {
 	if (!env.KEY_ENCRYPTION_KEY) {
 		await logError(env, {
 			source: "secure_input",
@@ -196,7 +262,7 @@ export async function consumeSecureInput(env: Env, requestId: string, instanceId
 	// Fetch the row with all encrypted columns
 	const row = await env.DB.prepare(
 		`SELECT id, status, secret_ciphertext, dek_wrapped, iv, expires_at FROM secure_input_requests
-     WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3`,
+     WHERE id = ?1 AND user_id = ?3 AND (?2 IS NULL OR instance_id = ?2)`,
 	)
 		.bind(requestId, instanceId, userId)
 		.first<SecureInputRow>();
@@ -205,7 +271,7 @@ export async function consumeSecureInput(env: Env, requestId: string, instanceId
 
 	// Validate status and expiry
 	if (row.status !== "ready") return null;
-	if (new Date(row.expires_at).getTime() < Date.now()) {
+	if (sqlTimeMs(row.expires_at) < Date.now()) {
 		// Expired — mark as such and clean up
 		await env.DB.prepare(
 			`UPDATE secure_input_requests SET status = 'expired' WHERE id = ?1`,
@@ -215,18 +281,24 @@ export async function consumeSecureInput(env: Env, requestId: string, instanceId
 		return null;
 	}
 
-	// Decrypt the secret
+	if (!row.secret_ciphertext || !row.dek_wrapped || !row.iv) return null;
+	const sealed = { c: new Uint8Array(row.secret_ciphertext), d: new Uint8Array(row.dek_wrapped), i: new Uint8Array(row.iv) };
+
+	// CLAIM first, conditionally: the one-shot guarantee is this predicate. Two concurrent consumers
+	// both read `ready` above; only one of them moves the row, and the other gets null (#918 — a
+	// handle on two machines' operators is exactly the case where two gets can race).
+	const claimed = await env.DB.prepare(
+		`UPDATE secure_input_requests SET status = 'consumed', consumed_at = datetime('now'), consumed_node = ?2,
+     secret_ciphertext = NULL, dek_wrapped = NULL, iv = NULL
+     WHERE id = ?1 AND status = 'ready'`,
+	)
+		.bind(requestId, opts.consumedNode ?? null)
+		.run();
+	if (claimed.meta.changes !== 1) return null;
+
 	let plaintext: string;
 	try {
-		if (!row.secret_ciphertext || !row.dek_wrapped || !row.iv) {
-			return null;
-		}
-		plaintext = await decryptKey(
-			new Uint8Array(row.secret_ciphertext),
-			new Uint8Array(row.dek_wrapped),
-			new Uint8Array(row.iv),
-			env.KEY_ENCRYPTION_KEY,
-		);
+		plaintext = await decryptKey(sealed.c, sealed.d, sealed.i, env.KEY_ENCRYPTION_KEY);
 	} catch (e) {
 		await logError(env, {
 			source: "secure_input",
@@ -234,15 +306,6 @@ export async function consumeSecureInput(env: Env, requestId: string, instanceId
 		}).catch(() => undefined);
 		return null;
 	}
-
-	// Atomically mark as consumed and delete ciphertext (one-shot)
-	await env.DB.prepare(
-		`UPDATE secure_input_requests SET status = 'consumed', consumed_at = datetime('now'),
-     secret_ciphertext = NULL, dek_wrapped = NULL, iv = NULL
-     WHERE id = ?1`,
-	)
-		.bind(requestId)
-		.run();
 
 	// Return plaintext (caller must not log it or put it in any response)
 	return plaintext;

@@ -327,9 +327,13 @@ describe("tmux connector — the single-session binding (#447)", () => {
 		expect(def.kind).toBe("binding");
 		const arg = def.kind === "binding" ? def.arg : "";
 		expect(arg).toBe("session");
-		// Every tmux tool EXCEPT the lister addresses a session, and each must declare it.
+		// Every tmux tool addresses a session and must declare it, EXCEPT the lister and the secret
+		// handoff (#918). The handoff never touches tmux — reading the value through a pane is the
+		// leak it exists to avoid — so a session binding has nothing to bind there; it is gated by
+		// tmux write-consent and declared only on the Operator.
+		const SESSIONLESS = ["tmux_list_sessions", "tmux_secure_put", "tmux_secure_get"];
 		for (const t of TMUX_TOOLS) {
-			if (t.name === "tmux_list_sessions") {
+			if (SESSIONLESS.includes(t.name)) {
 				expect(t.jsonSchema.properties, t.name).not.toHaveProperty(arg);
 				continue;
 			}

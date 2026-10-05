@@ -17,6 +17,33 @@ import type { ToolDef, RegistryToolCtx } from "./types.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../runner-client.js";
 import { noteUnmeteredDrive } from "../engine-metering.js";
 import { observeDeviceAuth } from "../engine-reauth-expiry.js";
+import { consumeSecureInput, depositSecureInput, restoreConsumedSecureInput } from "../secure-input.js";
+import { secureInputLink } from "../console-links.js";
+import { runnerUpgradeMessage, runnerUpgradeRefusal } from "../runner-upgrade.js";
+
+/** The CLI release whose runner serves `/secure/read` + `/secure/write` (#918). */
+export const SECURE_HANDOFF_MIN_CLI = "0.4.69";
+
+/**
+ * A runner error, safe to show the model. The runner never puts the value in an error (coding/
+ * secret-file.ts names paths only), and an older runner 404s the endpoint — that becomes the
+ * upgrade sentence naming the machine, not a raw "→ 404".
+ */
+async function handoffRunnerError(ctx: RegistryToolCtx, e: unknown, what: string): Promise<string> {
+	const message = e instanceof Error ? e.message : String(e);
+	// The secure endpoints never answer 404 themselves, so a 404 is the runner not knowing them.
+	if (/→ 404/.test(message)) {
+		const facts = { what, minCli: SECURE_HANDOFF_MIN_CLI };
+		if (!ctx.instanceId || !ctx.userId) return runnerUpgradeMessage(facts);
+		return runnerUpgradeRefusal(ctx.env, ctx.instanceId, ctx.userId, facts).catch(() => runnerUpgradeMessage(facts));
+	}
+	const body = message.replace(/^Runner \/secure\/(read|write) → \d+: /, "");
+	try {
+		return String((JSON.parse(body) as { error?: unknown }).error ?? body);
+	} catch {
+		return body;
+	}
+}
 
 /**
  * A device-code sign-in typed into the owner's own tmux session is recorded so it can be warned
@@ -231,6 +258,117 @@ export const TMUX_TOOLS: ToolDef[] = [
 			// returning (#481), so "ready" is verified rather than assumed.
 			const readyNote = input.command ? ` (startup command "${input.command}" ran; pane settled)` : "";
 			return { content: `Created tmux session "${session}"${res.workDir ? ` in ${res.workDir}` : ""}${readyNote}.`, success: true };
+		},
+	},
+	// ── Secret handoff (#918) ──────────────────────────────────────────────────────────────────
+	// Machine A's operator PUTs a file into the encrypted secure-input store and gets a handle;
+	// machine B's operator GETs that handle into a file. The value moves runner → this Worker →
+	// encrypted D1 → this Worker → runner, inside the handlers below: it is never in a tool result,
+	// a pane, a shell command or an error, which is why these are not `tmux_run_command` + `cat`.
+	{
+		name: "tmux_secure_put",
+		tier: "connector",
+		connector: "tmux",
+		scope: "write",
+		mutates: true,
+		untrustedOutput: false,
+		description:
+			"Deposit a secret FILE from this machine (e.g. `app/.env.prod`, a key file) into the encrypted secure-input store WITHOUT the value ever entering this conversation. The runner reads the file and the platform encrypts it; you get back only an opaque `handle`. Hand the handle to `tmux_secure_get` on another of the owner's machines (another tmux operator instance) to write it there. One-shot: the first successful get spends it. WRITE: reads a file on the user's machine. Text files up to 64 KiB.",
+		jsonSchema: {
+			type: "object",
+			properties: {
+				path: { type: "string", description: "File to deposit. Absolute, `~/…`, or relative to the home directory." },
+				label: { type: "string", description: "Short name the owner sees in the console, e.g. \"heartfull .env.prod\". Never put the value here." },
+				ttl_minutes: { type: "number", description: "How long the handle stays retrievable (default 60, max 1440)." },
+			},
+			required: ["path", "label"],
+		},
+		handler: async (ctx, input) => {
+			const r = await resolveRunner(ctx);
+			if ("error" in r) return { content: r.error, success: false };
+			const path = String(input.path ?? "").trim();
+			const label = String(input.label ?? "").trim().slice(0, 200);
+			if (!path || !label) return { content: "Both `path` and `label` are required.", success: false };
+			const ttlMinutes = Math.min(Math.max(Number(input.ttl_minutes) || 60, 1), 1440);
+			let read: { path?: string; value?: unknown; bytes?: number };
+			try {
+				read = await callRunner<{ path?: string; value?: unknown; bytes?: number }>(r.conn, "/secure/read", { path }, { timeoutMs: READ_TIMEOUT_MS });
+			} catch (e) {
+				return { content: await handoffRunnerError(ctx, e, "the secure file handoff"), success: false };
+			}
+			if (typeof read.value !== "string" || !read.value) return { content: `The runner returned nothing for ${path}.`, success: false };
+			const node = r.conn.runnerNode ?? null;
+			const deposit = await depositSecureInput(ctx.env, {
+				instanceId: ctx.instanceId as string,
+				userId: ctx.userId as string,
+				label,
+				purpose: `Deposited from ${read.path ?? path}${node ? ` on ${node}` : ""} by tmux_secure_put.`,
+				sourceNode: node,
+				ttlMs: ttlMinutes * 60_000,
+				value: read.value,
+			});
+			return {
+				content: JSON.stringify({
+					handle: deposit.id,
+					status: "ready",
+					bytes: read.bytes ?? null,
+					sourceNode: node,
+					expiresAt: deposit.expiresAt,
+					consoleUrl: secureInputLink(ctx.instanceId as string, deposit.id),
+					next: "Call tmux_secure_get with this handle on the destination machine's operator.",
+				}),
+				success: true,
+			};
+		},
+	},
+	{
+		name: "tmux_secure_get",
+		tier: "connector",
+		connector: "tmux",
+		scope: "write",
+		mutates: true,
+		untrustedOutput: false,
+		description:
+			"Write a secret from the encrypted secure-input store to a FILE on this machine, by the opaque `handle` from `tmux_secure_put` (on any of the owner's operator instances) or a ready `secure_input_request`. The value never enters this conversation: you get back only the path and a byte count. One-shot: the handle is spent by a successful write, and restored if the write fails. Created with mode 600 unless `mode` says otherwise; refuses to replace an existing file unless `overwrite` is true. WRITE: writes a file on the user's machine.",
+		jsonSchema: {
+			type: "object",
+			properties: {
+				handle: { type: "string", description: "The handle returned by tmux_secure_put (copy it exactly)." },
+				path: { type: "string", description: "Destination file. Absolute, `~/…`, or relative to the home directory. Parent directories are created." },
+				mode: { type: "string", description: "Octal file mode, default \"600\". Never group/world-writable or executable." },
+				overwrite: { type: "boolean", description: "Replace the file if it already exists (default false)." },
+			},
+			required: ["handle", "path"],
+		},
+		handler: async (ctx, input) => {
+			const r = await resolveRunner(ctx);
+			if ("error" in r) return { content: r.error, success: false };
+			const handle = String(input.handle ?? "").trim();
+			const path = String(input.path ?? "").trim();
+			if (!handle || !path) return { content: "Both `handle` and `path` are required.", success: false };
+			const node = r.conn.runnerNode ?? null;
+			// Same owner is the authorization: the handle may come from ANOTHER of this owner's
+			// instances (machine A's operator), never from anyone else's.
+			const value = await consumeSecureInput(ctx.env, handle, null, ctx.userId as string, { consumedNode: node });
+			if (value == null) {
+				return { content: `Handle ${handle} is not ready: unknown, not yours, already used, or expired. Check it with secure_input_status.`, success: false };
+			}
+			try {
+				const res = await callRunner<{ path?: string; bytes?: number; replaced?: boolean }>(r.conn, "/secure/write", {
+					path,
+					value,
+					mode: input.mode,
+					overwrite: input.overwrite === true,
+				});
+				return {
+					content: JSON.stringify({ handle, status: "consumed", path: res.path ?? path, bytes: res.bytes ?? null, replaced: res.replaced === true, node }),
+					success: true,
+				};
+			} catch (e) {
+				const restored = await restoreConsumedSecureInput(ctx.env, handle, ctx.userId as string, value).catch(() => false);
+				const why = await handoffRunnerError(ctx, e, "the secure file handoff");
+				return { content: `${why} ${restored ? "The handle is still ready — fix the destination and retry." : "The handle could not be restored; deposit it again."}`, success: false };
+			}
 		},
 	},
 	{

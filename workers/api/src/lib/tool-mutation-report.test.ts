@@ -83,6 +83,9 @@ const MUTATING = new Set<string>([
 	"tmux_send_message",
 	"tmux_new_session",
 	"tmux_kill_session",
+	// #918: put reads a file into a new encrypted secure-input row; get spends that row and writes a file.
+	"tmux_secure_put",
+	"tmux_secure_get",
 	"browser_navigate",
 	"browser_act",
 	"delegate_goal",
