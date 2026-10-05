@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Opt-in (#902): active only after `bash scripts/install-hooks.sh`. CI enforces all of it anyway.
+set -euo pipefail
+exec node "$(git rev-parse --show-toplevel)/scripts/pre-push.mjs"

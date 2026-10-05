@@ -35,6 +35,12 @@ Do not hand-roll it (#920). Each of these produced a false green:
   zsh (the shell here); zsh spells it `${pipestatus[1]}`. Redirect to a file instead of
   piping, as above.
 
+## Local git hooks (optional)
+
+`bash scripts/install-hooks.sh` opts a checkout into a fast pre-commit (staged lint) and pre-push
+(CI guards, touched-project typecheck, related tests) trip-wire. It is never a substitute for the
+full-suite command above or for CI. See CONTRIBUTING.md.
+
 ## Writing a guard test
 
 Lock an invariant by testing what the code DOES, never by reading a source file and matching its

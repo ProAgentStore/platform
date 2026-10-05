@@ -30,6 +30,34 @@ Branch names are deleted after merge. If you reference a branch (`feat/some-bran
 
 ---
 
+## Local git hooks (optional)
+
+Not active on a clone. To opt in for your checkout:
+
+```sh
+bash scripts/install-hooks.sh             # activate (sets core.hooksPath to .githooks)
+bash scripts/install-hooks.sh --uninstall # deactivate
+```
+
+The installer only touches this checkout's `core.hooksPath`, and it will not replace one you set
+yourself unless you pass `--force`.
+
+- **pre-commit** (about a second): refuses whitespace errors in what is staged and refuses a
+  checked file that also has unstaged edits, so the check sees exactly what you commit. Then it
+  runs CI's Biome lint (`--error-on-warnings`) over the staged files CI lints.
+- **pre-push** (typically 30-60 s): runs CI's guard scripts with CI's arguments, plus
+  `docs:drift`. Then it typechecks each workspace project the push touches, as CI does: its
+  `typecheck` script, plus `tsconfig.test.json` where one exists. Last, it runs
+  `vitest related` over the pushed source files. That is the unit tests importing them, not the
+  full suite.
+
+These hooks are a trip-wire, never a gate. CI enforces every one of these checks, and the full
+suite, on every push whether or not the hooks ran. So `git commit --no-verify` /
+`git push --no-verify` bypass only the early warning; say so if you use them. Run either check
+by hand with `node scripts/pre-commit.mjs` or `node scripts/pre-push.mjs` (the latter compares
+against `origin/main`). What each hook runs is decided in `scripts/lib/hook-plan.mjs`, and its
+test fails if the guard list stops matching CI's (#902).
+
 ## Tests that lock an invariant
 
 Test the behaviour, not the spelling: call the code and assert what it does, or — for a genuine
