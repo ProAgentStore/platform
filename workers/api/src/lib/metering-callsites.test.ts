@@ -78,8 +78,9 @@ describe("every engine-usage ledger write carries the payer observation (#554)",
 
 	it("finds the call sites at all — a rename must fail loudly, not silently pass", () => {
 		// A guard that greps for a name is only as good as the name still existing. Zero hits is
-		// the failure mode where this file reports success forever.
-		expect(SITES.length).toBeGreaterThanOrEqual(4);
+		// the failure mode where this file reports success forever. Three call sites: workflow-run.ts,
+		// coding-session-end.ts, and routes/coding-sessions-open.ts.
+		expect(SITES.length).toBeGreaterThanOrEqual(3);
 	});
 
 	it("passes `authResolved` at every one of them", () => {
