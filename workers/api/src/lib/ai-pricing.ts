@@ -94,13 +94,16 @@ export function priceFor(model: string | null | undefined): ModelPrice {
  */
 export const CACHE_READ_MULTIPLIER = 0.1;
 export const CACHE_WRITE_MULTIPLIER = 1.25;
+/** A write to the 1-hour cache (#914) — a longer life, at twice the input price rather than 1.25x. */
+export const CACHE_WRITE_1H_MULTIPLIER = 2;
 
 export function estimateCostMicros(
 	model: string | null | undefined,
 	inputTokens: number | null | undefined,
 	outputTokens: number | null | undefined,
 	/** Cached tokens, priced at their own rates. Omit for providers without a prompt cache. */
-	cache?: { read?: number | null; write?: number | null },
+	/** `write1h` is the part of `write` that went to the 1-hour cache, priced at its own rate. */
+	cache?: { read?: number | null; write?: number | null; write1h?: number | null },
 ): number {
 	const p = priceFor(model);
 	const n = (v: number | null | undefined) => Math.max(0, Math.floor(Number(v) || 0));
@@ -111,7 +114,8 @@ export function estimateCostMicros(
 		inTok * p.inputPerM +
 		outTok * p.outputPerM +
 		n(cache?.read) * p.inputPerM * CACHE_READ_MULTIPLIER +
-		n(cache?.write) * p.inputPerM * CACHE_WRITE_MULTIPLIER;
+		Math.max(0, n(cache?.write) - n(cache?.write1h)) * p.inputPerM * CACHE_WRITE_MULTIPLIER +
+		Math.min(n(cache?.write1h), n(cache?.write)) * p.inputPerM * CACHE_WRITE_1H_MULTIPLIER;
 	return Math.round(micros);
 }
 

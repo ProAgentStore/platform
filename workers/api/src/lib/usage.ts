@@ -50,6 +50,8 @@ export interface UsageTokens {
 	 */
 	cacheRead?: number;
 	cacheWrite?: number;
+	/** The part of `cacheWrite` written to the 1-hour cache — priced at 2x, not 1.25x (#914). */
+	cacheWrite1h?: number;
 }
 
 interface RecordArgs extends UsageContext {
@@ -83,7 +85,7 @@ export async function recordUsage(
 		// A fully-cached call can legitimately have input 0 — dropping it would hide exactly the
 		// calls we most want to see, and undercount spend (a cache read is not free).
 		if (input === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0) return;
-		const cost = estimateCostMicros(args.model, input, output, { read: cacheRead, write: cacheWrite });
+		const cost = estimateCostMicros(args.model, input, output, { read: cacheRead, write: cacheWrite, write1h: n(usage.cacheWrite1h) });
 		await env.DB.prepare(
 			`INSERT INTO ai_usage (id, user_id, agent_id, instance_id, provider, model, kind, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_micros, payer, created_at)
 			 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'byok-api', datetime('now'))`,

@@ -80,6 +80,26 @@ describe("AnthropicStreamAssembler", () => {
 		});
 	});
 
+	it("keeps the write count's split by TTL, so a 1-hour write can be priced as one (#914)", () => {
+		const body = assembleAnthropicStream([
+			{
+				type: "message_start",
+				message: {
+					usage: {
+						input_tokens: 3,
+						cache_creation_input_tokens: 2_000,
+						cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 2_000 },
+					},
+				},
+			},
+			{ type: "message_delta", delta: {}, usage: { output_tokens: 7 } },
+			{ type: "message_stop" },
+		]);
+		expect(body.usage["cache_creation.ephemeral_1h_input_tokens"]).toBe(2_000);
+		expect(body.usage["cache_creation.ephemeral_5m_input_tokens"]).toBe(0);
+		expect(body.usage).not.toHaveProperty("cache_creation");
+	});
+
 	it("reassembles a tool call from its argument fragments", () => {
 		const body = assembleAnthropicStream([
 			{ type: "message_start", message: { usage: {} } },

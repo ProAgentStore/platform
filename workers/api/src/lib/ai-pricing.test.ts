@@ -60,6 +60,14 @@ describe("estimateCostMicros", () => {
 		// 10k in @ $3/M = $0.03 = 30_000 micros; 2k out @ $15/M = $0.03 = 30_000 → 60_000
 		expect(estimateCostMicros("claude-sonnet-4-6", 10_000, 2_000)).toBe(60_000);
 	});
+	it("prices a 1-hour cache write at 2x input, a 5-minute one at 1.25x (#914)", () => {
+		// Sonnet 4.6 input is $3/M: 1M written for 5 minutes is $3.75, for an hour $6.
+		expect(estimateCostMicros("claude-sonnet-4-6", 0, 0, { write: 1_000_000 })).toBe(3_750_000);
+		expect(estimateCostMicros("claude-sonnet-4-6", 0, 0, { write: 1_000_000, write1h: 1_000_000 })).toBe(6_000_000);
+		expect(estimateCostMicros("claude-sonnet-4-6", 0, 0, { write: 1_000_000, write1h: 400_000 })).toBe(600_000 * 3.75 + 400_000 * 6);
+		// A 1-hour count larger than the total cannot price phantom tokens.
+		expect(estimateCostMicros("claude-sonnet-4-6", 0, 0, { write: 100, write1h: 1_000_000 })).toBe(600);
+	});
 	it("is zero for Workers AI (per-neuron, not per-token)", () => {
 		expect(estimateCostMicros("@cf/meta/llama-4-scout-17b", 50_000, 10_000)).toBe(0);
 	});

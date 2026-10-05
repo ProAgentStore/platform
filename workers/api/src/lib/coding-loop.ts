@@ -1,4 +1,4 @@
-import { runUserWorkersAi } from "./user-ai.js";
+import { runUserWorkersAi, systemPromptSections, systemPromptText, type SystemPromptBlock } from "./user-ai.js";
 import { hitOutputCap } from "./reply-truncation.js";
 import { authorityInstruction, screenInstruction, type MergePolicy } from "./coding-authority.js";
 import {
@@ -598,6 +598,21 @@ export const CODING_TOOLS = [
  * the only thing that can hold them is an assertion that they are still in the prompt.
  */
 export function systemPrompt(goal: CodingGoal): string {
+	return systemPromptText(systemPromptBlocks(goal));
+}
+
+/**
+ * The Pilot's system prompt as cache blocks (#914) — the same text {@link systemPrompt} returns,
+ * split where it stops being stable.
+ *
+ * Everything up to the run's own settings is fixed for the WHOLE run, and is cached with the 1-hour
+ * TTL: the Pilot decides once per engine turn, measured at a median of 5.6 minutes apart (28 runs,
+ * 57% averaging over five), so the default 5-minute entry had usually expired by the next decision
+ * and the prefix was written again — the account's cache writes nearly equalled its reads. The
+ * tail, the platform's resume note and the owner's latest hint, changes between rounds and is sent
+ * uncached after the breakpoint, so a new round re-reads the prefix instead of rewriting it.
+ */
+export function systemPromptBlocks(goal: CodingGoal): SystemPromptBlock[] {
 	const lines: string[] = [];
 	if (goal.specialInstructions) lines.push(`USER RULES (highest priority):\n${goal.specialInstructions}\n`);
 	lines.push(
@@ -666,10 +681,15 @@ export function systemPrompt(goal: CodingGoal): string {
 	const authority = authorityInstruction(goal.mergePolicy ?? "merge");
 	if (authority) lines.push(`\n${authority}`);
 	if (goal.dryRun) lines.push("\nTEST MODE: avoid destructive or irreversible instructions; prefer read-only/plan steps.");
+	const round: string[] = [];
 	// Attributed to the PLATFORM, never folded into `userHint` — see CodingGoal.resumeNote.
-	if (goal.resumeNote) lines.push(`\n${goal.resumeNote}`);
-	if (goal.userHint) lines.push(`\nThe user just told you: ${goal.userHint}`);
-	return lines.join("\n");
+	if (goal.resumeNote) round.push(`\n${goal.resumeNote}`);
+	if (goal.userHint) round.push(`\nThe user just told you: ${goal.userHint}`);
+	// Joined exactly as one list would have been, so the flattened text is byte-identical.
+	return [
+		{ text: lines.join("\n"), cache: true, ttl: "1h", label: "run" },
+		{ text: round.map((r) => `\n${r}`).join(""), label: "round" },
+	];
 }
 
 export async function decideCodingAction(
@@ -678,7 +698,7 @@ export async function decideCodingAction(
 	params: { goal: CodingGoal; actionLog: string[]; snapshot: CodingPaneSnapshot },
 	usageCtx?: UsageContext,
 ): Promise<CodingDecision> {
-	const system = systemPrompt(params.goal);
+	const system = systemPromptBlocks(params.goal);
 	const clock = clockLine(Date.now(), params.goal.timeZone);
 	const steps = params.actionLog.length ? params.actionLog.map((a, i) => `${i + 1}. ${a}`).join("\n") : "(none yet)";
 	const terminal = renderPaneForPilot(params.snapshot.pane);
@@ -707,7 +727,7 @@ export async function decideCodingAction(
 				promptSource: "coding",
 				promptPhase: "pilot_decide",
 				promptSections: [
-					{ label: "pilot.system", value: system },
+					...systemPromptSections("pilot.system", system),
 					{ label: "pilot.objective", value: params.goal.objective },
 					{ label: "pilot.steps", value: steps },
 					{ label: "pilot.terminal", value: terminal },

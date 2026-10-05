@@ -985,7 +985,12 @@ const PINS = {
 	"workers/mcp/src/coding-tools.ts": 811, // +3 at #881: import + registration of `coding_engine_reauth`, whose body lives in its own coding-reauth-tools.ts.
 	// Pinned at #878 at its size on main: #874 (2b0ca68) grew it past the 800-line default without an entry, which left this ratchet failing for every commit after it. Recorded as it stands — not grown here.
 	// +3 at #893: `runCloudflareAi` redacts Cloudflare's error body before it becomes `details` — an import and one call with its two-line why. The redaction is lib/cloudflare-redact.ts.
-	"workers/api/src/lib/user-ai.ts": 806,
+	// +11 at #914: a system block may ask for the 1-hour cache, and the longer-TTL-first rule is
+	// enforced where the blocks are built; the 1-hour write count is read for its 2x price.
+	"workers/api/src/lib/user-ai.ts": 817,
+	// New entry at #914, crossing LIMIT by 6: the Pilot's prompt split into a 1-hour-cached run prefix
+	// and an uncached round tail, with the measurement that justified it in its doc comment.
+	"workers/api/src/lib/coding-loop.ts": 806,
 	// +3 at #878: the terminal record hook — an import and a one-line call with its comment after the handler. It belongs HERE for the reason the gates do: every surface dispatches through this function, and recording anywhere else would record one surface. The storage is lib/terminal-record.ts.
 	"workers/api/src/lib/tool-registry.ts": 899,
 	// +8 for the #312 stats prompt block. Deliberately not split: the block is two statements
@@ -1848,7 +1853,8 @@ const PINS = {
 	// +7 at #879: the coding-store.ts raise and the new repo-local.ts entry above, each with its reason, and this line.
 	// +3 at #889/#893: the headless.ts and user-ai.ts raises above (one line of why each) and this one — both landed without their raise and left CI red until this.
 	// +5 at #921: the restored workflow-run.ts entry above (four lines of why + pin) and this line, less one line of slack.
-	"scripts/check-file-size.mjs": 1932,
+	// +6 at #914: the user-ai.ts raise and the new coding-loop.ts entry above (two lines of why each) and this line.
+	"scripts/check-file-size.mjs": 1938,
 };
 
 /**

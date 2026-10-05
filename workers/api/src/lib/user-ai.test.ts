@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { classifyCodingFailure } from "./coding-failure.js";
+import { decideCodingAction, systemPrompt } from "./coding-loop.js";
 import { encryptKey } from "./crypto.js";
 import {
 	anthropicSystemBlocks,
@@ -414,6 +415,49 @@ describe("system prompt blocks — the cacheable half and the per-turn half (#76
 		});
 		expect(sentBody.system).toEqual(anthropicSystemBlocks(BLOCKS));
 		expect(sentBody.messages).toEqual([{ role: "user", content: "hi" }]);
+	});
+
+	it("asks for the 1-hour cache where a block says so, and never after a 5-minute breakpoint (#914)", () => {
+		expect(anthropicSystemBlocks([{ text: "rules", cache: true, ttl: "1h" }, { text: "tail" }])).toEqual([
+			{ type: "text", text: "rules", cache_control: { type: "ephemeral", ttl: "1h" } },
+			{ type: "text", text: "tail" },
+		]);
+		// The provider requires longer-lived entries FIRST: a 1h request after a 5m breakpoint is sent as
+		// 5m, never as a request it rejects.
+		expect(anthropicSystemBlocks([{ text: "a", cache: true }, { text: "b", cache: true, ttl: "1h" }])?.map((b) => b.cache_control)).toEqual([
+			{ type: "ephemeral" },
+			{ type: "ephemeral" },
+		]);
+		expect(anthropicSystemBlocks([{ text: "a", cache: true, ttl: "1h" }, { text: "b", cache: true }])?.map((b) => b.cache_control)).toEqual([
+			{ type: "ephemeral", ttl: "1h" },
+			{ type: "ephemeral" },
+		]);
+	});
+
+	it("the Pilot's decision sends its run prefix on the 1-hour cache and its round tail uncached (#914)", async () => {
+		const env = await envWithAnthropicKey("sk-ant-live-key-9abc");
+		const sent: Array<{ system: Array<{ text: string; cache_control?: unknown }> }> = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: string, init: RequestInit) => {
+				sent.push(JSON.parse(init.body as string));
+				return anthropicSse({ content: [{ type: "tool_use", id: "t1", name: "finish", input: { status: "done", detail: "ok" } }], usage: { input_tokens: 1, output_tokens: 1 } });
+			}),
+		);
+		const goal = { objective: "fix the build", repo: "owner/repo", clientType: "claude" as const, specialInstructions: "UPSTREAM SYNC: level." };
+		const snapshot = { pane: "$ ", runState: "idle" as const, ready: true, alive: true };
+		await decideCodingAction(env, "user-1", { goal: { ...goal, resumeNote: "A previous run pushed X." }, actionLog: [], snapshot });
+		await decideCodingAction(env, "user-1", { goal: { ...goal, userHint: "otp: 1234" }, actionLog: ["1. did a thing"], snapshot });
+		const [round0, round1] = sent;
+		expect(round0.system[0].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+		expect(round0.system[1].cache_control).toBeUndefined();
+		// The cached prefix is byte-identical across rounds — only the uncached tail moved.
+		expect(round1.system[0].text).toBe(round0.system[0].text);
+		expect(round0.system[1].text).toContain("A previous run pushed X.");
+		expect(round1.system[1].text).toContain("The user just told you: otp: 1234");
+		expect(round0.system[0].text).not.toContain("previous run");
+		// …and the model still reads exactly the prompt it read before the split.
+		expect(round0.system.map((b) => b.text).join("")).toBe(systemPrompt({ ...goal, resumeNote: "A previous run pushed X." }));
 	});
 
 	it("reaches Workers AI as one plain string — that API has no blocks", async () => {

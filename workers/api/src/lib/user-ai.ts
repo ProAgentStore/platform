@@ -222,11 +222,13 @@ function normalizeForAnthropic(
  * be read back instead.
  *
  * `cache` places a breakpoint at the END of the block. `label` names the block in prompt-section
- * traces and is never sent.
+ * traces and is never sent. `ttl: "1h"` asks for the 1-hour cache instead of the 5-minute one (#914)
+ * — for a prefix whose callers are further apart than five minutes, which the Pilot's are.
  */
 export interface SystemPromptBlock {
 	text: string;
 	cache?: boolean;
+	ttl?: "1h";
 	label?: string;
 }
 
@@ -264,8 +266,12 @@ export function systemPromptSections(label: string, content: unknown): Array<{ l
  * breakpoint goes on each block marked `cache`, keeping the LAST four when more are asked for —
  * a later breakpoint already covers the prefix before it, so it is the earlier ones that are
  * redundant. Returns undefined when nothing is left to send.
+ *
+ * A breakpoint asks for the 1-hour TTL only while no 5-minute one precedes it: the provider requires
+ * longer-lived entries to come first, so a 1h request after a 5m breakpoint is sent as 5m rather
+ * than as a request the API rejects.
  */
-type AnthropicSystemBlock = { type: "text"; text: string; cache_control?: { type: "ephemeral" } };
+type AnthropicSystemBlock = { type: "text"; text: string; cache_control?: { type: "ephemeral"; ttl?: "1h" } };
 
 export function anthropicSystemBlocks(content: unknown): AnthropicSystemBlock[] | undefined {
 	if (!isSystemPromptBlocks(content)) {
@@ -276,9 +282,13 @@ export function anthropicSystemBlocks(content: unknown): AnthropicSystemBlock[] 
 	if (!kept.length) return undefined;
 	const cached = kept.filter((b) => b.cache);
 	const breakpoints = new Set(cached.slice(-MAX_CACHE_BREAKPOINTS));
-	return kept.map((b): AnthropicSystemBlock =>
-		breakpoints.has(b) ? { type: "text", text: b.text, cache_control: { type: "ephemeral" } } : { type: "text", text: b.text },
-	);
+	let shortSeen = false;
+	return kept.map((b): AnthropicSystemBlock => {
+		if (!breakpoints.has(b)) return { type: "text", text: b.text };
+		const long = b.ttl === "1h" && !shortSeen;
+		if (!long) shortSeen = true;
+		return { type: "text", text: b.text, cache_control: long ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" } };
+	});
 }
 
 async function runAnthropic(
@@ -428,6 +438,7 @@ async function runAnthropic(
 		output: u.output_tokens || 0,
 		cacheRead: u.cache_read_input_tokens || 0,
 		cacheWrite: u.cache_creation_input_tokens || 0,
+		cacheWrite1h: u["cache_creation.ephemeral_1h_input_tokens"] || 0,
 	};
 
 	// Ledger the call for the Usage page. Best-effort: recordUsage swallows all errors,

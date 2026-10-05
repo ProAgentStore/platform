@@ -232,6 +232,15 @@ export class AnthropicStreamAssembler {
 	private mergeUsage(usage: Record<string, unknown> | undefined): void {
 		if (!usage || typeof usage !== "object") return;
 		for (const [key, value] of Object.entries(usage)) {
+			// `cache_creation` is the one nested object: the write count split by TTL (#914). Kept as
+			// dotted keys so a 1-hour write — billed at 2x, not 1.25x — can be priced as one.
+			if (key === "cache_creation" && value && typeof value === "object") {
+				for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+					const n = num(v);
+					if (n !== undefined) this.usageAcc[`cache_creation.${k}`] = n;
+				}
+				continue;
+			}
 			const n = num(value);
 			if (n !== undefined) this.usageAcc[key] = n;
 		}
