@@ -65,7 +65,7 @@ function callableSource(file: string): string {
 const NOT_A_DRIVER: Record<string, string> = {
 	"coding-session-params.ts": "a params type — no run() and no I/O",
 	"coding-session.ts": "a re-export stub; the implementation is in coding-session/",
-	"coding-session/workflow-run.ts": "internal implementation; the driver is coding-session/index.ts",
+	"coding-session/index.ts": "a dispatcher; the driver is coding-session/workflow-run.ts",
 	"coding-watch.ts": "a mode of CodingSessionWorkflow, dispatched from its run(); its host owns the catch",
 };
 
@@ -83,7 +83,7 @@ interface CancelPath {
  * entry cannot credit a driver with a consumer it does not reach.
  */
 const CANCEL_PATHS: Record<string, CancelPath> = {
-	"coding-session/index.ts": {
+	"coding-session/workflow-run.ts": {
 		reads: "isCancelRequested",
 		mintedBy: "lib/loop-drivers.ts codingDriver",
 		latency: "one Pilot round, or one 5-minute tick while parked (#541)",
