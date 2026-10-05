@@ -58,7 +58,7 @@ const DIR = dirname(fileURLToPath(import.meta.url));
 const NOT_A_DRIVER: Record<string, string> = {
 	"coding-session-params.ts": "a params type — no run() and no I/O",
 	"coding-session.ts": "a re-export stub; the implementation is in coding-session/",
-	"coding-session/index.ts": "a dispatcher; the verdict is consumed in coding-session/workflow-run.ts",
+	"coding-session/index.ts": "a dispatcher; the driver is coding-session/workflow-run.ts",
 	"coding-watch.ts": "a mode of CodingSessionWorkflow, dispatched from its run(); its host owns the catch",
 };
 
