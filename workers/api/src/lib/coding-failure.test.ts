@@ -1,5 +1,4 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connectionLostMessage, deadlineMessage } from "./ai-deadlines.js";
 import { classifyCodingFailure, CodingRunProbe, codingFailureLevel, recordCodingFailure, splitCfReference } from "./coding-failure.js";
@@ -327,33 +326,8 @@ describe("recordCodingFailure — the durable record itself", () => {
 	});
 });
 
-describe("the CODING_SESSION throw path writes it (#529 AC 4)", () => {
-	const source = readFileSync(join(__dirname, "../workflows/coding-session/workflow-run.ts"), "utf8");
-
-	it("records the failure inside the catch block, not only on the happy path", () => {
-		// The measurement the ticket was filed on was `grep -c logError … → 0` while every peer
-		// workflow had 3-5. Asserted over the SOURCE because the workflow class cannot be
-		// constructed here — it imports `cloudflare:workers`, which vitest does not resolve — and a
-		// test that only exercised `recordCodingFailure` would prove the writer works while the
-		// crash path still called nobody, which is exactly the state this ticket describes.
-		const region = /\}\s*catch\s*\(e\)\s*\{([\s\S]*?)\n\t\} finally \{/.exec(source);
-		expect(region, "the run's try/catch/finally shape changed — re-check this guard").not.toBeNull();
-		expect(region![1]).toContain("recordCodingFailure(env, {");
-		// The four fields that make a record diagnosable rather than merely present.
-		for (const field of ["probe", "steps: pilotSteps", "sessionId", "startedAt: runStartedAt"]) {
-			expect(region![1], `catch block does not pass ${field}`).toContain(field);
-		}
-	});
-
-	it("names the step it is about to run, so a death reports where it happened", () => {
-		// `probe.at(name)` returns the name, so the step wrapper is the single place this is
-		// recorded — every guarded runner call and the decide step go through it.
-		expect(source).toContain("(step.do as unknown as LooseDo)(probe.at(name), opts, fn)");
-		// Assembled rather than written out: a literal `${…}` inside a plain string trips
-		// `noTemplateCurlyInString`, and the placeholder is the part that has to match.
-		expect(source).toContain(["step.do(probe.at(`s$", "{n++}-decide`)"].join(""));
-	});
-});
+// That the run's catch files this record, with the step it died in is asserted by RUNNING the workflow in `workflows/coding-session/workflow-run.test.ts` (#915),
+// not by reading its source.
 
 describe("WorkflowInternalError — the largest live class, and it was `unknown` (#546)", () => {
 	// The two wordings, verbatim from production. The first is what five `agent_loop_runs.detail`
@@ -613,41 +587,8 @@ describe("per-run token keeps retried deaths as one row and distinct runs as sep
 });
 
 describe("the probe measures what a REPLAY re-measures (#546)", () => {
-	const source = readFileSync(join(__dirname, "../workflows/coding-session/workflow-run.ts"), "utf8");
-
-	/**
-	 * Every `probe.<setter>(` call site in the workflow, and whether it sits inside a `step.do`
-	 * callback. Depth is counted over braces from the last `step.do(` opening before the call —
-	 * crude, and deliberately so: it is the same shape the #529 guard above uses, and the thing it
-	 * has to notice is a setter moving back INSIDE a callback, which changes that nesting.
-	 *
-	 * G1: the denominator is asserted below. A regex that matched nothing would otherwise pass.
-	 */
-	const calls = [...source.matchAll(/probe\.(saw|drove|at)\(/g)].map((m) => ({ setter: m[1], at: m.index }));
-
-	it("has the call sites this guard exists to watch", () => {
-		// 1 × saw (inside `measured`), 1 × drove (in `onEvent`, before its step), 2 × at (the step
-		// wrapper and the decide step). If this number moves, the guard below is measuring a
-		// different program and has to be re-read, not re-pinned.
-		expect(calls.map((c) => c.setter).sort().join(",")).toBe("at,at,drove,saw");
-	});
-
-	it("keeps `saw` and `drove` out of the journalled callbacks", () => {
-		// The defect: `probe.saw(pane.pane)` sat inside `capture`, the snapshot step's body. A
-		// replay returns the journalled result WITHOUT running the body, so a resumed attempt filed
-		// `paneChars: 0` — production row 82739cb6-B — which reads as "it died on an empty pane".
-		//
-		// Both setters now run on the step's RESULT: `measured()` awaits the guarded promise and
-		// `onEvent` reads `driven` before `step.do`. Move either back inside and this goes red.
-		expect(source).toContain("const measured = async (p: Promise<unknown>): Promise<CodingPaneSnapshot> => {");
-		expect(source).not.toContain("probe.saw(pane.pane)");
-		const onEvent = source.slice(source.indexOf("onEvent: (type, message, data) => {"));
-		const drove = onEvent.indexOf("probe.drove(driven)");
-		const firstStep = onEvent.indexOf("return step.do(");
-		expect(drove, "probe.drove no longer appears in onEvent").toBeGreaterThan(-1);
-		expect(drove, "probe.drove moved back inside the journalled step").toBeLessThan(firstStep);
-	});
-
+	// That the WORKFLOW keeps both setters outside its journalled callbacks is asserted by replaying a
+	// real run in `workflows/coding-session/workflow-run.test.ts` (#915). This is the probe's half.
 	it("re-measures a journalled pane on replay", async () => {
 		// The behaviour the two source assertions above stand for, exercised directly: a replay
 		// hands back the recorded result and runs no callback.

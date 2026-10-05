@@ -203,51 +203,5 @@ describe("the RUN outranks the SESSION — which is how three dead runs read as 
 	});
 });
 
-describe("the Pilot moves its card at all THREE points of a run (#553)", () => {
-	// Asserted over the SOURCE because the workflow class cannot be constructed here — it imports
-	// `cloudflare:workers`, which vitest does not resolve — and this is the assertion the issue
-	// asks for by name: "assert board state at three points of one Pilot run (start → handoff →
-	// terminal) rather than only at the end. No current test observes the mid-run card, which is
-	// why this survived." The pause machine's own two points are exercised for real in
-	// `coding-pause.test.ts`; what only the workflow can say is that they are WIRED.
-	const source = readFileSync(join(__dirname, "../workflows/coding-session/workflow-run.ts"), "utf8");
-	const calls = [...source.matchAll(/setCodingSessionCardStatus\(/g)];
-
-	it("has exactly the three writes this guard is about", () => {
-		// G1/G2: the denominator, stated. A fourth writer is a second authority over one card and
-		// must be read rather than absorbed; a missing one is the bug coming back.
-		expect(calls.length, "setCodingSessionCardStatus call sites in the Pilot").toBe(3);
-	});
-
-	it("claims the card when the run starts, so a second run on one session is not born Failed", () => {
-		// Since #271 a session outlives its run, and `createSession` only opens a card for a session
-		// it CREATES — so without this a run on a reused session inherits the previous run's verdict.
-		const start = source.slice(source.indexOf('step.do("tl-start"'), source.indexOf("for (let round = 0"));
-		expect(start).toContain('setCodingSessionCardStatus(env, instanceId, userId, sessionId, "running")');
-	});
-
-	it("hands the handoff transitions to the pause machine rather than duplicating them", () => {
-		const deps = source.slice(source.indexOf("const pauseDeps ="), source.indexOf("let result: CodingResult"));
-		expect(deps).toMatch(/card: \(status\) => setCodingSessionCardStatus\(env, instanceId, userId, sessionId, status\)/);
-	});
-
-	it("writes the run's verdict from `statusFor`, OUTSIDE the end-the-session branch", () => {
-		// Both halves of the fix. Inside the branch it would only run for a session the run owned —
-		// which is why `csess_22d08431` sat "running" 16 hours — and derived from anything but
-		// `statusFor` it could disagree with the loop-run row describing the same run.
-		const endStep = source.slice(source.indexOf('step.do("end"'), source.indexOf('step.do("notify-end"'));
-		const branch = endStep.indexOf("shouldEndSessionAfterRun");
-		const verdict = endStep.indexOf("setCodingSessionCardStatus");
-		expect(verdict, "the terminal card write is missing from the end step").toBeGreaterThan(-1);
-		// After the whole if/else, not inside it: the closing brace of the else sits between them.
-		expect(endStep.slice(branch, verdict)).toContain("releaseSessionDriver");
-		expect(endStep).toContain("statusFor(crashReason ?? stopReasonFor(result.outcome))");
-	});
-
-	it("gives the delegation card the same status, so one run cannot be in two columns", () => {
-		// It read `runSucceeded(outcome)` → completed/failed while the loop-run row said
-		// `needs_human`. #541 made that reachable and #546 added a second way in.
-		const task = source.slice(source.indexOf("delegationTaskRecord({"), source.indexOf("upsertWorkCard(env, { instanceId, userId, id: event.payload.boardTaskId"));
-		expect(task).toContain("status: statusFor(crashReason ?? stopReasonFor(outcome.outcome))");
-	});
-});
+// That the Pilot moves this card at all three points of a run — start, handoff, terminal — is asserted by RUNNING the workflow in `workflows/coding-session/workflow-run.test.ts` (#915),
+// not by reading its source.

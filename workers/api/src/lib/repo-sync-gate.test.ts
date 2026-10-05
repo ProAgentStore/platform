@@ -1,5 +1,4 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { logError, runnerUpgradeRefusal, runnerUpgradeClause, callRunner, readRepoSync } = vi.hoisted(() => ({
@@ -463,72 +462,5 @@ describe("the repair run — the way out that needs no hands on the machine (#80
 	});
 });
 
-/**
- * The WIRING, asserted from source.
- *
- * `coding-session.ts` is a Cloudflare Workflow and a Workflow can only be tested by running one,
- * so the call shape is read off the file — the way `coding-resume-note.test.ts` and
- * `coding-run-report.test.ts` assert theirs. Everything above proves the gate DECIDES correctly;
- * this is the half that proves the run actually obeys it, which is the entire point of #801 and
- * the thing #785 was missing.
- */
-describe("the wiring — a blocked run does not reach the loop (#801)", () => {
-	const source = readFileSync(join(__dirname, "..", "workflows", "coding-session", "workflow-run.ts"), "utf8");
-
-	it("read the workflow at all — so a rename fails loudly instead of passing empty", () => {
-		expect(source.length, "read no workflow source — this guard is measuring nothing").toBeGreaterThan(10_000);
-	});
-
-	it("asks the gate in its own durable step, against the start-of-run verdict", () => {
-		expect(source).toContain('step.do("repo-sync-gate"');
-		expect(source).toContain("repoStart.sync");
-	});
-
-	it("SETS the result rather than throwing — a thrown gate would read as a crash and be replayed", () => {
-		// `codingCrashReport` turns a thrown error into "run error:", which is exactly the
-		// indistinguishable-from-a-real-failure problem #523 closed. And `driverResumePlan` would
-		// replay the run against the same unconfirmed base it was just stopped for.
-		expect(source).toContain('if (syncGate.blocked) result = { outcome: "failed", detail: syncGate.message, steps: 0 };');
-		expect(source).not.toContain("throw new SyncGate");
-	});
-
-	it("stops the round loop from running at all", () => {
-		// The assignment alone is not the fix: without this the loop overwrites `result` on its
-		// first round and the run proceeds exactly as #800 did.
-		expect(source).toContain("for (let round = 0; round < 12 && !syncGate.blocked; round++)");
-	});
-
-	it("decides BEFORE the loop, not inside it", () => {
-		expect(source.indexOf('step.do("repo-sync-gate"')).toBeLessThan(source.indexOf("for (let round = 0; round < 12"));
-	});
-
-	it("tries the self-heal in its own step, BETWEEN the read and the gate, and gates on the re-read (#802)", () => {
-		expect(source).toContain('step.do("repo-self-heal"');
-		expect(source.indexOf('step.do("repo-state-start"')).toBeLessThan(source.indexOf('step.do("repo-self-heal"'));
-		expect(source.indexOf('step.do("repo-self-heal"')).toBeLessThan(source.indexOf('step.do("repo-sync-gate"'));
-		// The verdict the gate sees is the checkout as it IS after the heal, never the pre-heal read.
-		expect(source).toContain("const syncAtStart = heal?.sync ?? repoStart.sync;");
-		expect(source).toContain("heal, repair }, syncAtStart)");
-	});
-
-	it("a repair run gets the brief INSTEAD of its objective, and not the advisory notes that would tell it to stop (#804)", () => {
-		expect(source).toContain("const repair = goal.repairCheckout === true;");
-		expect(source).toContain("goal.objective = repairCheckoutObjective({");
-		expect(source).toContain("if (!repair && (stateNote || syncNote))");
-		// The brief is composed BEFORE the gate reads `repair`, and the gate is told.
-		expect(source.indexOf("const repair = goal.repairCheckout")).toBeLessThan(source.indexOf('step.do("repo-sync-gate"'));
-	});
-
-	it("tells the owner a pointer moved on their checkout, with the undo, on every surface (#802)", () => {
-		expect(source).toContain("describeSyncHeal(heal)");
-		expect(source).toContain('"coding.run.self_heal"');
-		expect(source).toContain("**Repository fast-forwarded**");
-	});
-
-	it("tells the owner on every surface, not just in the outcome field", () => {
-		// #800's whole failure mode was that the fact existed only in a raw log nobody read.
-		expect(source).toContain("content: syncGate.message");
-		expect(source).toContain('"coding.run.blocked"');
-		expect(source).toContain("**Run stopped — unconfirmed base**");
-	});
-});
+// That the run obeys the gate — decided before the loop, after the self-heal, never thrown, told on every surface — is asserted by RUNNING the workflow in `workflows/coding-session/workflow-run.test.ts` (#915),
+// not by reading its source.

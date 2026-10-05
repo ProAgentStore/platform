@@ -73,30 +73,53 @@ Don't mass-delete existing guards. Convert them case-by-case:
 
 4. **Verify with a refactor:** Move the code that was being guarded and confirm the behavioural test still passes.
 
-## Inventory of Existing Source-Assertion Guards in workers/api
+## The Pilot's run: tested by running it
 
-These guards currently read source files and check for text patterns. They should be converted to behavioural tests over time:
+The largest family of text guards read `workflows/coding-session/workflow-run.ts` (formerly
+`coding-session.ts`) because "a Cloudflare Workflow cannot be constructed under vitest". That was
+never true of the run itself: `runCodingSessionWorkflow` imports `cloudflare:workers` for TYPES only.
+`workflows/coding-session/workflow-run.test.ts` runs it — the real function, over the real D1 schema
+(`realSchemaD1`), with only its two edges faked: the machine (`runner-client`) and the BYOK brain
+(`decideCodingAction`). Its fake `step` is a journal, and handing a journal back REPLAYS a run the
+way Cloudflare does, so replay-sensitive invariants are testable too.
 
-| File | Reads | Guards | Invariant | Status |
-|------|-------|--------|-----------|--------|
-| `run-attribution.test.ts` | `workflow-run.ts` | `goal.ownerTurns =` | Resume counter written alongside user hint | TODO: Convert |
-| `coding-board.test.ts` | `workflow-run.ts` | `setCodingSessionCardStatus` calls (count = 3) | Workflow writes card status at 3 points | TODO: Convert |
-| `coding-idle-poll.test.ts` | `workflow-run.ts` | Durable idle poll wiring | Idle polling uses step.sleep for durability | TODO: Convert |
-| `coding-resume-note.test.ts` | `workflow-run.ts` | Multiple (resume-note step, lookbackMs, resumeNote assignments, appendTimeline) | Resume note flow is wired through workflow | TODO: Convert |
-| `coding-resume.test.ts` | `workflow-run.ts` | `roundThroughInterruptions` call, sleep signature | Round retry and interruption handling | TODO: Convert |
-| `coding-run-report.test.ts` | `workflow-run.ts` | `outcome: outcomeWord` assignment | Run outcome is derived from stop reason | TODO: Convert |
-| `repo-sync-gate.test.ts` | `workflow-run.ts` | `step.do("repo-sync-gate"`, gate result reading | Sync gate blocks runs when repo is unconfirmed | TODO: Convert |
-| `coding-turn-replay.test.ts` | `workflow-run.ts` | `withTurnReplay(` call | Every critical operation replays turns for recovery | TODO: Convert |
-| `run-park-writers.test.ts` | `workflow-run.ts`, `lib/coding-interrupt.ts` | `recordLiveness` calls (count = 1) | Liveness is recorded exactly once per interruption | TODO: Convert |
-| `autonomous-budget.test.ts` | Workflow class discovery | Workflow file list (includes `workflows/coding-session/index.ts`) | All autonomous workflows declare budgets | TODO: Convert |
-| `coding-failure.test.ts` | `workflow-run.ts` | `logError` calls, probe reader | Failures are logged and timestamped | TODO: Convert |
+Each of its tests was checked by mutation: breaking the invariant in `workflow-run.ts` turns at
+least one test red. Put a new Pilot invariant there, as a run.
 
-## Roadmap
+## Inventory (#915)
 
-1. **Phase 1 (done):** Inventory and document the problem
-2. **Phase 2 (in progress):** Convert simple guards (import existence, function availability)
-3. **Phase 3 (future):** Convert medium guards (call counts, wiring presence)
-4. **Phase 4 (future):** Convert complex guards (orchestration ordering, state flow)
+Converted to behaviour, in `workflow-run.test.ts` — the source guards were removed from:
+
+| Was in | Invariant now asserted by running the workflow |
+|--------|-----------------------------------------------|
+| `coding-board.test.ts` | The card is claimed `running` at the start, is `needs_human` during a handoff and `running` after it, gets the run's verdict at the end even when the run does not end the session, and the delegation card agrees (#553) |
+| `run-attribution.test.ts` | An answered handoff reaches the next decision as `goal.ownerTurns`, and a report claiming an owner decision is stamped only when the owner never spoke (#505) |
+| `coding-failure.test.ts` (#529, #546 arms) | A crash files an `ended` record naming the step it died in, its steps and start; a REPLAY re-measures the journalled pane and the driven instruction |
+| `coding-resume.test.ts` | An interruption is resumed in the workflow: filed `resumed`, parked `platform_interrupt` with its retry instant, journalled once (a replay does not count it twice); teardown runs on every ending (#855) |
+| `coding-resume-note.test.ts` | The predecessor's note reaches the FIRST decision only, in platform voice, and the timeline; a continue's lookback is honoured; the start-of-run tree count is passed, but not to a repair run (#523, #806) |
+| `coding-run-report.test.ts` | An interrupted run's row and report both say `interrupted`, never the `failed` placeholder (#523) |
+| `repo-sync-gate.test.ts` | An unconfirmed base stops the run before any decision, as a refusal (no crash record), on the timeline and the trace; a behind checkout is fast-forwarded and gated on the re-read; a repair run gets the brief and passes (#801, #802, #804) |
+| `coding-idle-poll.test.ts` | Both idle-wait modes work, and later step names are identical whichever ran (#814) |
+| `coding-turn-replay.test.ts` (Pilot door) | A turn sent to an engine with no memory carries the platform's record (#693) |
+| `run-park-writers.test.ts` (call-site scan) | A capturing run clears its park while it works; an owner wait parks with reason and `until` (#580, #591) |
+| `driver-failure.test.ts` (Pilot arm), `workflow-trace.test.ts` (lifecycle arm) | Resumed vs ended dispositions; `coding.run.start` and `coding.run.end` on the trace |
+
+Made structure-aware rather than path-bound: `agent-workflows.test.ts` reads a workflow's file AND
+its module directory, so a split — or the re-export stub #912 left behind — cannot hide its runner use.
+
+Kept, deliberately — these are STRUCTURAL rules over a whole directory or the import graph, which the
+standard allows: the driver registries in `driver-cancel.test.ts` / `driver-failure.test.ts` /
+`workflow-trace.test.ts` (every file in `workflows/` is classified), `metering-callsites.test.ts`
+(every caller in the tree), `autonomous-budget.test.ts` (import-graph reachability).
+
+## Remaining text guards — convert them when you touch that code
+
+158 test files still call `readFileSync` (measured at #915) — over console and admin components, prompts,
+routes, migrations. Many are legitimate (reading a MIGRATION or a fixture is data, not spelling).
+The ones that match a line of production code are to be converted **opportunistically**: when you
+change the code a text guard reads, replace that guard with a behavioural test of the invariant
+it names, in the same commit. Not in one sweep — each needs its invariant understood first, and a
+bulk rewrite is how intent gets lost.
 
 ---
 

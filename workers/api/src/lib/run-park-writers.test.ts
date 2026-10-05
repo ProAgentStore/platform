@@ -1,39 +1,10 @@
-/**
- * Every field of a park is written by a PRODUCTION call site, not only by a helper test (#591 AC4).
- *
- * ── The defect class, which has now shipped twice
- *
- * `recordLiveness`'s `until` parameter was implemented, bound into the UPDATE, and covered by
- * `run-liveness.test.ts:166`. All three production call sites passed a `reason` and no `until`, so
- * `agent_loop_runs.waiting_until` read **null on 89 of 89 runs** — including one parked 6h51m by its
- * own wall clock — while `planEngineWait` had already computed the instant and `coding-wait.ts` was
- * already printing it into the owner's chat. The column read as implemented; nothing populated it.
- *
- * #570 is the same shape (a helper taking an argument its callers never pass) and #583 is the same
- * shape one level up (a verdict computed and recorded for a reader that does not exist). A test that
- * supplies an argument by hand cannot see any of them: it is the one caller that always passes it.
- *
- * ── So the guard is TWO-SIDED, and neither side is sufficient alone
- *
- * 1. **The module that KNOWS the instant hands it over.** `coding-pause.ts` is the only place
- *    `plan.until` exists, so the seam is `deps.tick`. Driven for real below, through `resolvePause`,
- *    with every effect stubbed — the same way the pause machine is already tested.
- * 2. **The production call site CONSUMES it**, with the denominator stated per ADR 0002. Sources are
- *    read from disk and every `recordLiveness` call site is enumerated; a site that parks without an
- *    `until` has to be NAMED, with the reason there is no knowable end. That is the arm a hand-written
- *    fixture cannot fake, and it is the one that was missing.
- */
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+
 import { describe, expect, it, vi } from "vitest";
 import { recordLiveness } from "./agent-loop-store.js";
 import { HANDOFF_GIVE_UP_MS, resolvePause, type PauseDeps } from "./coding-pause.js";
 import { realSchemaD1, seedTenant } from "./d1-sqlite.js";
 import type { Env } from "../types.js";
 
-const SRC = dirname(fileURLToPath(import.meta.url));
-const read = (rel: string) => readFileSync(join(SRC, "..", rel), "utf8");
 
 // ── 1. The module that knows the instant hands it over ───────────────────────
 
@@ -109,80 +80,13 @@ describe("the pause machine hands the park's END to the heartbeat", () => {
 	});
 });
 
-// ── 2. The production call sites consume it, over the whole enumerated set ────
-
-/**
- * Files that call `recordLiveness` in production. Read from disk, and the count is ASSERTED — a
- * moved or renamed driver must fail as "this guard stopped measuring", never as a clean tree.
- */
-// `lib/coding-interrupt.ts` since #855: the interruption park moved out of the workflow's catch.
-const LIVENESS_SOURCES = ["workflows/coding-session/workflow-run.ts", "lib/coding-interrupt.ts"];
-
-/** One `recordLiveness(...)` call, as written. Every site in this repo is a single line. */
-function livenessCallSites(): { file: string; line: number; text: string }[] {
-	const out: { file: string; line: number; text: string }[] = [];
-	for (const file of LIVENESS_SOURCES) {
-		read(file)
-			.split("\n")
-			.forEach((text, i) => {
-				if (text.includes("recordLiveness(") && !text.trimStart().startsWith("*")) out.push({ file, line: i + 1, text });
-			});
-	}
-	return out;
-}
-
-/**
- * Call sites that park WITHOUT a knowable end, each with the reason. A named list, not a pattern:
- * adding a park must not be able to exempt itself, which is exactly how `until` went unwritten.
- */
-const NO_KNOWN_END: Record<string, string> = {
-	// Empty since #855. `platform_interrupt` was here — "Cloudflare replays the journal when it replays
-	// it, and there is no instant to state" — and that replay never came: the workflow now retries the
-	// round itself after a backoff it chose, so the park states the instant it resumes like any other.
-};
-
-describe("every park field has a production writer", () => {
-	it("measures every recordLiveness call site, and says how many", () => {
-		const sites = livenessCallSites();
-		// The denominator. Three sites today: one clear, and two parks that both state their end — the
-		// handoff/usage-limit tick, and the interruption's scheduled retry (#855).
-		expect(sites.length, `${sites.length} recordLiveness call site(s) across ${LIVENESS_SOURCES.length} source file(s)`).toBe(3);
-	});
-
-	it("a site that parks either states its end or is named as having none", () => {
-		const sites = livenessCallSites();
-		const parks = sites.filter((s) => s.text.includes("reason:"));
-		expect(parks.length, `${parks.length} of ${sites.length} sites park (the rest clear)`).toBe(2);
-		for (const site of parks) {
-			const exempt = Object.keys(NO_KNOWN_END).find((k) => site.text.includes(k));
-			if (exempt) continue;
-			expect(site.text, `${site.file}:${site.line} parks without an \`until\` and is not named in NO_KNOWN_END`).toContain("until:");
-		}
-	});
-
-	it("EVERY optional park field is supplied by at least one production call site", () => {
-		// The general property #591 AC4 states, and the one a helper test cannot check: a field that
-		// only ever receives a value from a test is a field with no production writer. `until` had
-		// exactly that status, and this arm is what fails on the tree that shipped it.
-		const text = livenessCallSites()
-			.map((s) => s.text)
-			.join("\n");
-		const PARK_FIELDS = ["reason", "until"] as const;
-		for (const field of PARK_FIELDS) {
-			expect(text, `no production call site ever supplies \`${field}\``).toContain(`${field}:`);
-		}
-		expect(PARK_FIELDS.length, `${PARK_FIELDS.length} optional park fields measured`).toBe(2);
-	});
-
-	it("every exemption names a reason that appears in the code it exempts", () => {
-		const text = livenessCallSites()
-			.map((s) => s.text)
-			.join("\n");
-		for (const reason of Object.keys(NO_KNOWN_END)) {
-			expect(text, `exemption for a park nothing writes: ${reason}`).toContain(reason);
-		}
-	});
-});
+// ── 2. The production call sites consume it ─────────────────────────────────────
+//
+// That a working run CLEARS its park, and that each park a run actually takes — waiting on the owner,
+// backing off a platform interruption — writes both its reason AND its `until`, is asserted by RUNNING
+// the workflow in `workflows/coding-session/workflow-run.test.ts` (#915). It used to be a scan of two
+// hard-coded source files for one-line `recordLiveness(` calls, which a moved park would have
+// satisfied by vanishing from the list.
 
 // ── 3. …and the column actually takes it, against the real schema ────────────
 

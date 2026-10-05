@@ -77,13 +77,6 @@ describe("the durable drivers all record what they did", () => {
 		const found = TRACE_WRITERS.filter((w) => src.includes(w));
 		expect(found.length, `${file} calls none of ${TRACE_WRITERS.join(", ")}`).toBeGreaterThan(0);
 	});
-
-	it("the coding driver records a run's LIFECYCLE, not only its crashes", () => {
-		// The distinction #580 measured. `recordCodingFailure` alone is not enough: it fires on a
-		// classified crash, and run 70ea298e neither crashed nor recorded anything for 4.35 hours.
-		// A start and an end are what make "what happened to this run" answerable without the pane.
-		const src = readFileSync(join(DIR, "coding-session", "workflow-run.ts"), "utf8");
-		expect(src).toContain("coding.run.start");
-		expect(src).toContain("coding.run.end");
-	});
+	// That the coding driver records a run's LIFECYCLE (a start and an end, not only its crashes) is asserted
+	// by running it in `coding-session/workflow-run.test.ts` (#915).
 });

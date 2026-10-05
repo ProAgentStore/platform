@@ -1,21 +1,4 @@
-/**
- * The `retryable` verdict has a consumer, and every class has a stated decision (#583, #758).
- *
- * The defect was not a missing retry. It was a verdict computed on every death, recorded in every
- * error row, and read by nobody — `coding-failure.ts:364` said so in a comment and treated it as an
- * observation. A test that only proved "infra_transient resumes" would leave the shape of that
- * defect intact for the next class; the denominator assertion is what does not.
- *
- * ── The next class arrived (#758), and the denominator is why this file changed rather than grew
- *
- * `provider_stall` sat at `resume: false` on a reason that was wrong about the MECHANISM — that a
- * resume would "re-drive the engine from where it stood", which describes re-dispatching a run and
- * not replaying a journal. Nine days and at least three killed runs later it was still false. The
- * arms below therefore assert the resuming set as a LIST and assert what the widening must NOT
- * imply, because "one more class resumes" is the shape that quietly becomes "everything resumes".
- */
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 import {
 	DRIVER_RESUME_POLICY,
@@ -225,53 +208,8 @@ describe("driverResumePlan — a run cut off by something other than its objecti
 	});
 });
 
-describe("the Pilot CONSUMES the verdict — the property #518 was written to prove", () => {
-	/**
-	 * Read as source, deliberately, and the limitation is stated rather than hidden.
-	 *
-	 * #518 made consumption provable by writing `thinkWithAutoResume` as a function OVER `think`,
-	 * *"because the property worth proving is that the stored round is consumed, and a branch inside
-	 * a DO method can only be proved by inspection — which is how #442 shipped correct and
-	 * unreachable"*. The same argument applies here and the same trick does not: the Pilot's resume
-	 * is not a wrapper around a call, it is the ABSENCE of a teardown and the presence of a rethrow
-	 * inside a Cloudflare Workflow's own try/finally. There is no seam to inject.
-	 *
-	 * So the decision was extracted instead — `driverResumePlan` is unit-tested above against real
-	 * rows — and what remains in the workflow is three structural facts. These assertions are what
-	 * stops #442's failure mode: a correct decision that nothing reaches. `probe-outside-steps` in
-	 * `coding-failure.test.ts` guards its invariant the same way and for the same reason.
-	 */
-	const workflow = readFileSync(fileURLToPath(new URL("../workflows/coding-session/workflow-run.ts", import.meta.url).href), "utf8");
-
-	it("resumes IN the workflow — the round is retried after a durable sleep, never rethrown for a replay (#855)", () => {
-		// The #855 defect: an error escaping `run()` ends a Workflow instance, it does not replay it. The
-		// round loop now runs each round through `roundThroughInterruptions`, whose waits are `step.sleep`.
-		expect(workflow).toContain("result = await roundThroughInterruptions(");
-		expect(workflow).toContain("sleep: (label: string, ms: number) => step.sleep(label, ms)");
-		const terminal = workflow.slice(workflow.indexOf("} catch (e) {\n\t\t\t// A step exhausted"), workflow.indexOf("} finally {"));
-		expect(terminal).not.toContain("throw e;");
-	});
-
-	it("the bookkeeping is one JOURNALLED step per interruption, so a replay cannot count it twice", () => {
-		expect(workflow).toMatch(/step\.do\(`interrupt-\$\{k\}`, \(\) =>/);
-		expect(workflow).toContain("planInterruptionResume(e, {");
-	});
-
-	it("the teardown is unconditional — a run that reaches the finally has ended", () => {
-		// `resuming` gated the teardown for a replay that never came; the retry now happens before the
-		// finally is reached, so nothing about an in-flight resume can pass through it.
-		expect(workflow).not.toMatch(/\bresuming\b/);
-		const teardown = workflow.slice(workflow.indexOf("} finally {"));
-		for (const terminal of ["repo-state-end", "acts-final-drain", 'step.do("end"', "notify-end", "closeDelegation(result)"]) {
-			expect(teardown, `${terminal} must be in the teardown`).toContain(terminal);
-		}
-	});
-
-	it("marks the run as WAITING with the instant it retries — a SCHEDULED resume, not a claimed one", () => {
-		const helper = readFileSync(fileURLToPath(new URL("./coding-interrupt.ts", import.meta.url).href), "utf8");
-		expect(helper).toContain('{ reason: "platform_interrupt", until: at + delayMs }');
-	});
-});
+// That the Pilot resumes an interruption IN the workflow — journalled once, parked with its retry instant, teardown unconditional — is asserted by RUNNING the workflow in `workflows/coding-session/workflow-run.test.ts` (#915),
+// not by reading its source.
 
 describe("one retryable rule, two drivers", () => {
 	it("the chat path and the Pilot gate on the SAME predicate", () => {

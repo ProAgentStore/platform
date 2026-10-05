@@ -30,6 +30,14 @@ Branch names are deleted after merge. If you reference a branch (`feat/some-bran
 
 ---
 
+## Tests that lock an invariant
+
+Test the behaviour, not the spelling: call the code and assert what it does, or — for a genuine
+architectural rule such as "this layer must not import that one" — use a structure-aware check
+that survives a file move. Never assert that a hard-coded source file contains particular text.
+Name the invariant the test protects. The full standard, and the remaining text guards still to
+convert, are in [`docs/testing-standards.md`](docs/testing-standards.md) (#915).
+
 ## Docs citations (`docs/` and `platform-docs/`)
 
 The CI guard `check-doc-citations.mjs` enforces that every backtick-quoted `file:N` reference in `docs/` and `platform-docs/` resolves to exactly one file in the repo tree. A cited path that matches zero files, or that matches more than one (ambiguous), fails the build.

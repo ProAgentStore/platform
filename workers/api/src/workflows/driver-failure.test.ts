@@ -254,30 +254,19 @@ describe("no driver files a run as dead before deciding to resume it (#546)", ()
 		expect(resuming.sort(), "drivers reaching driverResumePlan").toEqual(["agent-loop.ts", "coding-session/workflow-run.ts"]);
 	});
 
-	it.each(resuming)("%s asks the bounded decision BEFORE it writes its terminal account of the run", (file) => {
+	it.each(resuming.filter((f) => !f.startsWith("coding-session/")))("%s asks the bounded decision BEFORE it writes its terminal account of the run", (file) => {
 		const src = readFileSync(join(DIR, file), "utf8");
 		// The terminal write differs per driver — one files an error row, the other sets the stop
 		// reason the run is closed with — so the marker is named per driver rather than assumed.
-		const terminal = file === "coding-session/workflow-run.ts" ? "recordCodingFailure(env, {" : 'stop = { reason: "failed"';
+		const terminal = 'stop = { reason: "failed"';
 		const decide = src.indexOf(`${CONSUMERS[file].reads}(`);
 		expect(decide, `${file} never calls ${CONSUMERS[file].reads}`).toBeGreaterThan(-1);
 		expect(decide, `${file} writes "${terminal}" before it knows whether the run is resumed`).toBeLessThan(src.indexOf(terminal));
 	});
 
-	it("the Pilot's record is TOLD which of the two it is, rather than inferring it", () => {
-		// Order alone is not enough: deciding first and then writing the same row regardless would
-		// satisfy the arm above and change nothing in production. The disposition has to reach the
-		// record, and it has to come from the plan — a literal would pass a naive `toContain`.
-		// Since #855 the two are two call sites, each certain of what it is: the interruption the round
-		// loop resumes files `resumed` from inside its bookkeeping step, and the terminal catch — which
-		// no resumable interruption reaches any more — files `ended`.
-		const src = readFileSync(join(DIR, "coding-session", "workflow-run.ts"), "utf8");
-		const plan = src.slice(src.indexOf("planInterruptionResume(e, {"), src.indexOf("sleep: (label: string, ms: number)"));
-		expect(plan).toContain('disposition: "resumed"');
-		const terminal = src.slice(src.indexOf("} catch (e) {\n\t\t// A step exhausted"), src.indexOf("} finally {"));
-		expect(terminal).toContain('disposition: "ended"');
-		expect(terminal, "the terminal catch must not resume — a rethrow out of run() ends the instance").not.toContain("throw e;");
-	});
+	// The Pilot's half — that an interruption it resumes is filed `resumed` and a death it does not is
+	// filed `ended`, deciding before it writes — is asserted by RUNNING the workflow in
+	// `coding-session/workflow-run.test.ts` (#915), so the source-order arm below covers the other driver.
 
 	it("agent-loop's interruption is recorded as an interruption, at warn", () => {
 		// The peer that already had this right, pinned so it stays the reference the arm above is

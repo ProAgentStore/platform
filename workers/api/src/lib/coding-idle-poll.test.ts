@@ -1,5 +1,4 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 import {
 	IDLE_SETTLE_MS,
@@ -18,7 +17,6 @@ import {
 	idleSubrequestsForRun,
 	shouldTouchActivity,
 } from "./coding-idle-poll.js";
-import { stripCommentsAndLiterals } from "./source-guard.js";
 import { ACTIVITY_TOUCH_MS } from "./coding-store.js";
 
 /**
@@ -317,51 +315,6 @@ describe("the durable idle wait (#814)", () => {
 		expect(idleSubrequestsForRun(Array(DIED_AFTER_STEPS).fill(TURN_MS))).toBe(3_978);
 	});
 
-	// Source assertions, in this package's established style: the wiring is one expression inside a
-	// Workflow that cannot be run here, and what matters is that each half of it EXISTS.
-	describe("the workflow's wiring", () => {
-		const workflow = readFileSync(join(__dirname, "../workflows/coding-session/workflow-run.ts"), "utf-8");
-
-		it("reads the flag, and keeps the one-step wait as the other branch", () => {
-			expect(workflow).toContain("idleWaitIsDurable(env)");
-			expect(workflow).toContain(": guard(runIdle, label, () => awaitEngineIdle({ capture, sleep })),");
-		});
-
-		it("derives the step label ONCE, outside the branch — the counter cannot depend on which wait ran", () => {
-			// Both arms used to spell `s${n++}-waitidle` for themselves. That advanced `n` by one
-			// either way only because the two happened to match; a replay taking the other arm after
-			// the flag moved would look up a journal that no longer lines up, and every LATER step
-			// name would shift with it. One increment, above the ternary, removes the whole class.
-			const wiring = workflow.slice(workflow.indexOf("waitIdle: () => {"), workflow.indexOf("onEvent: (type, message, data)"));
-			// In two halves, the idiom this block already used: the label is a template literal, and a
-			// plain string cannot quote its placeholder without tripping `noTemplateCurlyInString`.
-			expect(wiring).toContain("const label = `s");
-			expect(wiring).toContain("-waitidle`;");
-			// Counted over CODE, not prose — the comment above the line quotes the old spelling, and a
-			// raw text count would read that as a second increment. `stripCommentsAndLiterals` is the
-			// same lexer `fetch-deadline.test.ts` scans with, so this counts what the engine sees.
-			expect(stripCommentsAndLiterals(wiring).match(/n\+\+/g) ?? []).toHaveLength(1);
-			// …and both arms consume that label rather than building their own.
-			expect(wiring).toContain("durableIdleDeps({ label,");
-			expect(wiring).toContain("guard(runIdle, label,");
-		});
-
-		it("says the chunking is for eviction survival, not for subrequests", () => {
-			// The one claim #814 made that is still unmeasured must not be restated as fact at the
-			// call site — `scratch/subrequest-reset-probe` has never been run. Matched over
-			// whitespace-collapsed text, because a comment rewraps and a phrase that spans two lines
-			// is the same statement; pinning the line breaks would fail on an edit that changed nothing.
-			const prose = workflow.replace(/^\s*\/\/\s?/gm, " ").replace(/\s+/g, " ");
-			expect(prose).toContain("NOT known to save subrequests");
-			expect(prose).toContain("survives an eviction rather than restarting");
-		});
-
-		it("routes every durable capture through the runner guard — a disconnect mid-wait must still pause, not end, the run (#341)", () => {
-			expect(workflow).toContain("capture: (name) => guard(runRetry, name, capture)");
-		});
-
-		it("sleeps durably, not on a setTimeout", () => {
-			expect(workflow).toContain("sleep: (name, ms) => step.sleep(name, ms)");
-		});
-	});
+	// That the workflow reads this flag, keeps both waits, and derives one step label for either is asserted by RUNNING the workflow in `workflows/coding-session/workflow-run.test.ts` (#915),
+	// not by reading its source.
 });

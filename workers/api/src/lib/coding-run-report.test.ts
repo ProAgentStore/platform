@@ -282,19 +282,6 @@ describe("the note does not lead with `outcome: failed` for a run the platform c
 		// A URL that is NOT Cloudflare's docs is content, not boilerplate, and stays.
 		expect(withoutVendorAdvice("clone failed: https://github.com/owner/repo.git not found")).toContain("github.com/owner/repo.git");
 	});
-
-	it("is what the workflow actually composes — the placeholder cannot come back", () => {
-		// The rule lives in this module, but the ONE caller is a Workflow, and a Workflow's report
-		// can only be tested by running one. So the call shape is asserted from source, the way
-		// `coding-resume.test.ts` asserts the teardown it cannot execute.
-		const source = readFileSync(join(__dirname, "..", "workflows", "coding-session", "workflow-run.ts"), "utf8");
-		expect(source.length, "read no workflow source — this guard is measuring nothing").toBeGreaterThan(10_000);
-		expect(source).toContain("outcome: outcomeWord(outcome.outcome, reason),");
-		// `outcome: outcome.outcome` is the raw placeholder every death carries. Its return is the
-		// only way `outcome: failed` gets back onto an interrupted run's card.
-		expect(source).not.toContain("outcome: outcome.outcome,");
-		// …and the word is derived from the SAME `reason` the row is finished with.
-		expect(source).toContain("const reason = crashReason ?? stopReasonFor(outcome.outcome);");
-		expect(source).toContain("finishLoopRun(env, event.payload.loopRunId as string, reason, note, Date.now())");
-	});
+	// That the workflow composes its report from this word, with the reason it finishes the row with, is
+	// asserted by running it in `workflows/coding-session/workflow-run.test.ts` (#915).
 });

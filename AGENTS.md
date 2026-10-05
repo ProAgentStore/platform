@@ -35,6 +35,14 @@ Do not hand-roll it (#920). Each of these produced a false green:
   zsh (the shell here); zsh spells it `${pipestatus[1]}`. Redirect to a file instead of
   piping, as above.
 
+## Writing a guard test
+
+Lock an invariant by testing what the code DOES, never by reading a source file and matching its
+text (#915, `docs/testing-standards.md`). A text match cannot tell "someone broke it" from "someone
+moved it", and #912's file move turned ~30 of them red with nothing broken. When adding a guard,
+say which invariant it protects. Invariants of the Pilot's run belong in
+`workers/api/src/workflows/coding-session/workflow-run.test.ts`, which runs the real workflow.
+
 ## ProAgentStore Access Rules
 
 Use ProAgentStore account state only through the configured MCP server.

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { AGENT_WORKFLOWS, isAgentWorkflow, workflowChoices, workflowRequiredRuntime, workflowRuntimeDenial } from "./agent-workflows.js";
@@ -118,12 +118,16 @@ describe("every workflow states whether it needs hands (#705)", () => {
 		// runtime by construction; declaring `requiresRuntime: null` for it would restore exactly
 		// the accepted-and-unrunnable combination this table now refuses.
 		for (const w of AGENT_WORKFLOWS) {
-			let file = join(__dirname, "../workflows", `${w.value.toLowerCase().replaceAll("_", "-")}.ts`);
-			// Special case for CODING_SESSION which is split into a directory
-			if (w.value === "CODING_SESSION") {
-				file = join(__dirname, "../workflows/coding-session/workflow-run.ts");
-			}
-			const src = readFileSync(file, "utf8");
+			// A workflow is `<name>.ts`, a `<name>/` module directory, or both — #912 left `coding-session.ts`
+			// as a re-export of `coding-session/`, and reading only the file measured the stub. Both are read
+			// WHOLE, so how the code is divided among files cannot move the answer (#915).
+			const base = join(__dirname, "../workflows", w.value.toLowerCase().replaceAll("_", "-"));
+			const files = [
+				...(existsSync(`${base}.ts`) ? [`${base}.ts`] : []),
+				...(existsSync(base) ? readdirSync(base).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts")).map((f) => join(base, f)) : []),
+			];
+			expect(files.length, `${w.value}: no implementation found at ${base}(.ts|/)`).toBeGreaterThan(0);
+			const src = files.map((f) => readFileSync(f, "utf8")).join("\n");
 			const usesRunner = /\bcallRunner\b|\bcallRuntime\b|\brequireLiveRuntime\b/.test(src);
 			expect(usesRunner, `${w.value}: implementation ${usesRunner ? "does" : "does not"} drive a runner`).toBe(w.requiresRuntime !== null);
 		}
