@@ -40,6 +40,7 @@
 		"docs:build": "zensical build --strict && node scripts/clean-generated-docs.mjs",
 		"typecheck": "pnpm --filter @proagentstore/sdk build && pnpm -r typecheck",
 		"test": "vitest run",
+		"test:full": "node scripts/test-full.mjs",
 		"test:unit": "vitest run --project unit",
 		"test:integration": "vitest run --project integration",
 		"test:coverage": "vitest run --coverage",

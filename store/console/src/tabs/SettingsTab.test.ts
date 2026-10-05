@@ -2,9 +2,16 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const SRC = readFileSync(join(__dirname, "SettingsTab.tsx"), "utf8");
+// The card moved into settings/InstanceInfo.tsx at #911; the tab still has to mount it.
+const TAB = readFileSync(join(__dirname, "SettingsTab.tsx"), "utf8");
+const SRC = readFileSync(join(__dirname, "settings", "InstanceInfo.tsx"), "utf8");
 
 describe("SettingsTab displays the instance ID for deep links (#909)", () => {
+	it("mounts the InstanceInfo card that holds it", () => {
+		expect(TAB).toContain('import InstanceInfo from "./settings/InstanceInfo"');
+		expect(TAB).toContain("<InstanceInfo");
+	});
+
 	it("renders an Instance ID card with the instanceId", () => {
 		expect(SRC).toContain('data-testid="instance-id-value"');
 		expect(SRC).toContain("{instanceId}");

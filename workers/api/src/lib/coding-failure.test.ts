@@ -336,7 +336,7 @@ describe("the CODING_SESSION throw path writes it (#529 AC 4)", () => {
 		// constructed here — it imports `cloudflare:workers`, which vitest does not resolve — and a
 		// test that only exercised `recordCodingFailure` would prove the writer works while the
 		// crash path still called nobody, which is exactly the state this ticket describes.
-		const region = /\}\s*catch\s*\(e\)\s*\{([\s\S]*?)\n\t\t\} finally \{/.exec(source);
+		const region = /\}\s*catch\s*\(e\)\s*\{([\s\S]*?)\n\t\} finally \{/.exec(source);
 		expect(region, "the run's try/catch/finally shape changed — re-check this guard").not.toBeNull();
 		expect(region![1]).toContain("recordCodingFailure(env, {");
 		// The four fields that make a record diagnosable rather than merely present.

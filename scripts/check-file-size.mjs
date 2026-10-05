@@ -1771,6 +1771,11 @@ const PINS = {
 	// +5 at #741: one NEW entry (scripts/docs-drift.mjs, which crossed 800 adding the skill-copies
 	// check and wiring the operator skill into confirm-gate check 7) and this note.
 	"scripts/docs-drift.mjs": 829,
+	// New entry at #921 — the Pilot's run body, RESTORED verbatim. #912 "split" the 1,084-line
+	// coding-session.ts by deleting ~700 lines of behaviour to get under LIMIT (end-of-run policies,
+	// sync, closing drain, notify, endSession, the "running" card claim, the sync-gate stop). A real
+	// split must MOVE code without changing it; until then this is the honest size.
+	"workers/api/src/workflows/coding-session/workflow-run.ts": 1070,
 	// +5 at #754: one new entry for triggers.ts (3 comment lines + 1 pin line) + agent-do raise comment + this.
 	// +7 at #744: 6-line rationale comment for use-voice.ts raise + this note.
 	// +4 at #739: two raised pins (tool-registry, agent-think) + this note + blank line.
@@ -1842,7 +1847,8 @@ const PINS = {
 	// +6 at #878: the tool-registry raise and the coding-tools.ts and user-ai.ts entries above, each with its reason, and this line.
 	// +7 at #879: the coding-store.ts raise and the new repo-local.ts entry above, each with its reason, and this line.
 	// +3 at #889/#893: the headless.ts and user-ai.ts raises above (one line of why each) and this one — both landed without their raise and left CI red until this.
-	"scripts/check-file-size.mjs": 1927,
+	// +5 at #921: the restored workflow-run.ts entry above (four lines of why + pin) and this line, less one line of slack.
+	"scripts/check-file-size.mjs": 1932,
 };
 
 /**

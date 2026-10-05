@@ -11,6 +11,30 @@
   Delegate codebase exploration, documentation research, testing, and reviews where appropriate.
   Wait for relevant agents and consolidate their results before finishing.
 
+## Running the full test suite
+
+Use one command, from any directory, and read its last line:
+
+```bash
+pnpm -w test:full > /tmp/suite.log 2>&1; echo "exit=$?"; tail -15 /tmp/suite.log
+```
+
+The last line is `SUITE GREEN …` or `SUITE RED …` with the file and test counts; the same
+summary is in `test-results/vitest-summary.txt`. The exit code is non-zero unless vitest's
+own JSON report (`test-results/vitest.json`) shows more than 0 tests and 0 failures.
+Never claim green from an exit code without that line.
+
+Do not hand-roll it (#920). Each of these produced a false green:
+
+- `cd workers/api && pnpm test` — that package has no `test` script, so pnpm falls back to
+  the POSIX `test` utility: zero output, exit 0 or 1 depending on the arguments. Only the
+  root `package.json` defines the suite; `pnpm -w` runs it from anywhere.
+- `npx vitest run` from a package dir — the include globs are rooted at the repo root, so it
+  collects nothing.
+- `cmd | tee log; echo $?` — that is `tee`'s status. And `${PIPESTATUS[0]}` is empty in
+  zsh (the shell here); zsh spells it `${pipestatus[1]}`. Redirect to a file instead of
+  piping, as above.
+
 ## ProAgentStore Access Rules
 
 Use ProAgentStore account state only through the configured MCP server.

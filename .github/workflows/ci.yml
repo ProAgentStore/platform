@@ -244,7 +244,11 @@ jobs:
         run: cd store/admin && npx vite build
       - name: Build host pages
         run: cd workers/host && node build.js
-      - run: pnpm test
+      - name: Unit + integration tests (verdict from the JSON report, #920)
+        # Not bare `pnpm test`: test:full fails unless vitest's own JSON report exists, counts
+        # >0 tests and records 0 failures — so a lost report or an empty collection is red
+        # here instead of a green that looks like every other green.
+        run: pnpm test:full
       - name: E2E projects still select the tests they claim to (#740)
         # `playwright.config.ts` scopes the WebKit project with `grep: /mobile — /` and
         # nothing counted what that matched. Measured 2026-08-23: neuter the regex and

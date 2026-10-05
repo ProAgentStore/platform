@@ -66,6 +66,8 @@ describe("isPaused", () => {
 describe("the control is wired in", () => {
 	const card = readFileSync(join(import.meta.dirname, "..", "components", "PauseCard.tsx"), "utf8");
 	const tab = readFileSync(join(import.meta.dirname, "..", "tabs", "SettingsTab.tsx"), "utf8");
+	// The card and the Danger zone both moved into settings/MiscellaneousSection.tsx at #911.
+	const misc = readFileSync(join(import.meta.dirname, "..", "tabs", "settings", "MiscellaneousSection.tsx"), "utf8");
 
 	it("renders the panel rather than composing its own sentence", () => {
 		expect(card).toContain("pausePanel(status)");
@@ -101,8 +103,11 @@ describe("the control is wired in", () => {
 		// Anchored on the HEADING, not the words "Danger zone" — two doc comments upstream mention
 		// it, and indexOf would have measured a comment rather than the card.
 		const heading = 'text-danger">Danger zone';
-		expect(tab).toContain("<PauseCard instanceId={instanceId}");
-		expect(tab.indexOf("<PauseCard")).toBeLessThan(tab.indexOf(heading));
+		expect(tab).toContain('import MiscellaneousSection from "./settings/MiscellaneousSection"');
+		expect(tab).toContain("<MiscellaneousSection");
+		expect(misc).toContain("<PauseCard instanceId={instanceId}");
+		expect(misc).toContain(heading);
+		expect(misc.indexOf("<PauseCard")).toBeLessThan(misc.indexOf(heading));
 	});
 
 	it("keeps paused instances available to detail and Settings views (#826)", () => {

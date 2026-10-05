@@ -581,9 +581,13 @@ describe("AccountConnections' sentence is now true (#736 AC6)", () => {
 		const prefs = readFileSync(new URL("../components/AccountConnections.tsx", import.meta.url), "utf-8");
 		expect(prefs).toContain("on its own Settings tab");
 
+		// The control lives in the Connectors section since #911; the tab mounts that section.
 		const settings = readFileSync(new URL("../tabs/SettingsTab.tsx", import.meta.url), "utf-8");
-		expect(settings).toContain('import AgentAccountChoice from "../components/AgentAccountChoice"');
-		expect(settings).toContain("<AgentAccountChoice instanceId={instanceId} />");
+		expect(settings).toContain('import ConnectorsSection from "./settings/ConnectorsSection"');
+		expect(settings).toContain("<ConnectorsSection");
+		const section = readFileSync(new URL("../tabs/settings/ConnectorsSection.tsx", import.meta.url), "utf-8");
+		expect(section).toContain('import AgentAccountChoice from "../../components/AgentAccountChoice"');
+		expect(section).toContain("<AgentAccountChoice instanceId={instanceId} />");
 	});
 });
 

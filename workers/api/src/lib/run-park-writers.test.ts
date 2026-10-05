@@ -40,6 +40,7 @@ const read = (rel: string) => readFileSync(join(SRC, "..", rel), "utf8");
 function pauseDeps(over: Partial<PauseDeps> = {}): PauseDeps {
 	return {
 		repo: "demo",
+		instanceId: "inst-1",
 		takeover: vi.fn(async () => undefined),
 		takeoverStatus: vi.fn(async () => ({ resolved: true, value: "ok" })),
 		endTakeover: vi.fn(async () => undefined),

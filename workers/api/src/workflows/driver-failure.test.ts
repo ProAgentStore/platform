@@ -274,7 +274,7 @@ describe("no driver files a run as dead before deciding to resume it (#546)", ()
 		const src = readFileSync(join(DIR, "coding-session", "workflow-run.ts"), "utf8");
 		const plan = src.slice(src.indexOf("planInterruptionResume(e, {"), src.indexOf("sleep: (label: string, ms: number)"));
 		expect(plan).toContain('disposition: "resumed"');
-		const terminal = src.slice(src.indexOf("} catch (e) {\n\t\t\t// A step exhausted"), src.indexOf("} finally {"));
+		const terminal = src.slice(src.indexOf("} catch (e) {\n\t\t// A step exhausted"), src.indexOf("} finally {"));
 		expect(terminal).toContain('disposition: "ended"');
 		expect(terminal, "the terminal catch must not resume — a rethrow out of run() ends the instance").not.toContain("throw e;");
 	});
