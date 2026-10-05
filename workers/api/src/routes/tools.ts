@@ -43,6 +43,7 @@ import { getLoopRun, listLoopRuns, requestCancel } from "../lib/agent-loop-store
 import { runHealth, waitClause } from "../lib/work-report.js";
 import { loopDriverFor } from "../lib/loop-drivers.js";
 import { dispatchLoopStartReceipt, listLoopStarts } from "../lib/loop-start-receipts.js";
+import { findDuplicateObjective } from "../lib/objective-dedupe.js";
 import { instanceRepoCi } from "../lib/repo-ci-health.js";
 import { REPAIR_RUN_OBJECTIVE } from "../lib/repo-sync-gate.js";
 import { enqueueObjective } from "../lib/objective-queue.js";
@@ -1212,6 +1213,10 @@ toolRoutes.post("/:id/loop", async (c) => {
 			// Queue only busy refusals: no runner or unusable checkout cannot be fixed by waiting.
 			// The drain opens its own budget; this unspent pool is not reused.
 			if (body.queueIfBusy === true && started.reason === "busy") {
+				// Same issue already waiting or running on this repo (#925): hand THAT back, not a second entry.
+				const dup = await findDuplicateObjective(c.env, { userId: session.uid, instanceId, repoId, objective });
+				if (dup?.kind === "queued") return c.json({ queued: true, entry: dup.entry, duplicate_of: dup.entry.id, blocked: started.error }, 202);
+				if (dup) return c.json({ runId: dup.runId, status: "running", duplicate_of: dup.runId, objective: dup.objective }, 200);
 				const entry = await enqueueObjective(c.env, { instanceId, repoId, userId: session.uid, objective, maxIterations: body.maxIterations ?? null });
 				// 202, not 201: nothing was created that is running. The `blocked` sentence is the driver's
 				// own refusal, kept so the caller can see WHAT it is waiting behind rather than only that
