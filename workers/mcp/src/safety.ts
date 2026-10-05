@@ -157,10 +157,26 @@ function summarize(value: unknown, depth = 0): unknown {
 	return out;
 }
 
+/**
+ * Record a tool call in the MCP audit log. BEST-EFFORT: it never throws (#885).
+ *
+ * Every write tool audits AFTER its write has landed, so an audit that threw turned a completed
+ * action into a bare "tool call failed" — the caller then told its user a pin move had failed while
+ * the pin was saved. The action's own result is what the caller must see; a lost audit entry is
+ * logged, not surfaced in its place.
+ */
 export async function audit(
 	ctx: SafetyContext,
 	event: Record<string, unknown>,
 ): Promise<void> {
+	try {
+		await writeAudit(ctx, event);
+	} catch (e) {
+		console.warn(JSON.stringify({ event: "mcp.audit_failed", tool: event.tool ?? null, error: e instanceof Error ? e.message : String(e) }));
+	}
+}
+
+async function writeAudit(ctx: SafetyContext, event: Record<string, unknown>): Promise<void> {
 	if (!ctx.env.OAUTH_KV) return;
 	const subject = await subjectFor(ctx);
 	if (!subject) return;
