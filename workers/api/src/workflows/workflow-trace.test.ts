@@ -25,6 +25,8 @@ const DIR = dirname(fileURLToPath(import.meta.url));
  */
 const NOT_A_DRIVER: Record<string, string> = {
 	"coding-session-params.ts": "a params type — no run() and no I/O",
+	"coding-session.ts": "a re-export stub; the implementation is in coding-session/",
+	"coding-session/workflow-run.ts": "internal implementation; the driver is coding-session/index.ts",
 	"coding-watch.ts": "a mode of CodingSessionWorkflow, dispatched from its run(); traced by its host",
 };
 
@@ -66,7 +68,7 @@ describe("the durable drivers all record what they did", () => {
 		// The distinction #580 measured. `recordCodingFailure` alone is not enough: it fires on a
 		// classified crash, and run 70ea298e neither crashed nor recorded anything for 4.35 hours.
 		// A start and an end are what make "what happened to this run" answerable without the pane.
-		const src = readFileSync(join(DIR, "coding-session.ts"), "utf8");
+		const src = readFileSync(join(DIR, "coding-session", "workflow-run.ts"), "utf8");
 		expect(src).toContain("coding.run.start");
 		expect(src).toContain("coding.run.end");
 	});

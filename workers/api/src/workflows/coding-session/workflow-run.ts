@@ -390,7 +390,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			}
 			return null;
 		});
-		for (let round = 0; round < 12; round++) {
+		for (let round = 0; round < 12 && !syncGate.blocked; round++) {
 			result = await roundThroughInterruptions(
 				() => runCodingLoop(deps, goal, { maxSteps: event.payload.maxSteps ?? PILOT_DEFAULT_MAX_STEPS }),
 				roundDeps,

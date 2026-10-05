@@ -118,7 +118,11 @@ describe("every workflow states whether it needs hands (#705)", () => {
 		// runtime by construction; declaring `requiresRuntime: null` for it would restore exactly
 		// the accepted-and-unrunnable combination this table now refuses.
 		for (const w of AGENT_WORKFLOWS) {
-			const file = join(__dirname, "../workflows", `${w.value.toLowerCase().replaceAll("_", "-")}.ts`);
+			let file = join(__dirname, "../workflows", `${w.value.toLowerCase().replaceAll("_", "-")}.ts`);
+			// Special case for CODING_SESSION which is split into a directory
+			if (w.value === "CODING_SESSION") {
+				file = join(__dirname, "../workflows/coding-session/workflow-run.ts");
+			}
 			const src = readFileSync(file, "utf8");
 			const usesRunner = /\bcallRunner\b|\bcallRuntime\b|\brequireLiveRuntime\b/.test(src);
 			expect(usesRunner, `${w.value}: implementation ${usesRunner ? "does" : "does not"} drive a runner`).toBe(w.requiresRuntime !== null);

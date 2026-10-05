@@ -57,6 +57,8 @@ const DIR = dirname(fileURLToPath(import.meta.url));
  */
 const NOT_A_DRIVER: Record<string, string> = {
 	"coding-session-params.ts": "a params type — no run() and no I/O",
+	"coding-session.ts": "a re-export stub; the implementation is in coding-session/",
+	"coding-session/workflow-run.ts": "internal implementation; the driver is coding-session/index.ts",
 	"coding-watch.ts": "a mode of CodingSessionWorkflow, dispatched from its run(); its host owns the catch",
 };
 
@@ -75,7 +77,7 @@ interface Consumer {
  * must equal the drivers found on disk, and each `reads` must appear in the file it names.
  */
 const CONSUMERS: Record<string, Consumer> = {
-	"coding-session.ts": {
+	"coding-session/index.ts": {
 		// Through `lib/coding-interrupt.ts` since #855, which resumes in the workflow instead of
 		// rethrowing; it calls `driverResumePlan` itself (asserted below), so the bound is the same one.
 		reads: "planInterruptionResume",
@@ -105,15 +107,33 @@ const BOUNDED_READERS = ["driverResumePlan", "planInterruptionResume"];
 const files = readdirSync(DIR)
 	.filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
 	.sort();
-const drivers = files.filter((f) => !NOT_A_DRIVER[f]);
+// Also include driver files from subdirectories (e.g., coding-session/workflow-run.ts)
+const subdirFiles = readdirSync(DIR)
+	.filter((f) => !f.endsWith(".ts")) // subdirectory names
+	.flatMap((subdir) => {
+		try {
+			return readdirSync(join(DIR, subdir))
+				.filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
+				.map((f) => `${subdir}/${f}`);
+		} catch {
+			return [];
+		}
+	})
+	.sort();
+const allFiles = [...files, ...subdirFiles].sort();
+const drivers = allFiles.filter((f) => !NOT_A_DRIVER[f]);
 
 describe("every driver consumes the retryable verdict", () => {
 	it("measures the whole workflows/ directory, and says how much", () => {
 		// The denominator. Seven files today, five of them drivers — and the guard fails if it finds
 		// fewer, so a split that halves the set reports itself instead of halving the measurement.
-		expect(files.length, `workflows/ holds ${files.length} source files`).toBeGreaterThanOrEqual(7);
+		expect(allFiles.length, `workflows/ holds ${allFiles.length} source files`).toBeGreaterThanOrEqual(7);
 		expect(drivers.length, `of which ${drivers.length} are durable drivers`).toBeGreaterThanOrEqual(5);
-		for (const f of Object.keys(NOT_A_DRIVER)) expect(files, `exemption for a missing file: ${f}`).toContain(f);
+		for (const f of Object.keys(NOT_A_DRIVER)) {
+			const inTopLevel = files.includes(f);
+			const inSubdirs = subdirFiles.includes(f);
+			expect(inTopLevel || inSubdirs, `exemption for a missing file: ${f}`).toBe(true);
+		}
 	});
 
 	it("the registry covers exactly the drivers on disk — no more, no fewer", () => {
@@ -251,7 +271,7 @@ describe("no driver files a run as dead before deciding to resume it (#546)", ()
 		// Since #855 the two are two call sites, each certain of what it is: the interruption the round
 		// loop resumes files `resumed` from inside its bookkeeping step, and the terminal catch — which
 		// no resumable interruption reaches any more — files `ended`.
-		const src = readFileSync(join(DIR, "coding-session.ts"), "utf8");
+		const src = readFileSync(join(DIR, "coding-session", "workflow-run.ts"), "utf8");
 		const plan = src.slice(src.indexOf("planInterruptionResume(e, {"), src.indexOf("sleep: (label: string, ms: number)"));
 		expect(plan).toContain('disposition: "resumed"');
 		const terminal = src.slice(src.indexOf("} catch (e) {\n\t\t\t// A step exhausted"), src.indexOf("} finally {"));

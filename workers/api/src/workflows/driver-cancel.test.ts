@@ -64,6 +64,8 @@ function callableSource(file: string): string {
 /** Files in `workflows/` that are NOT durable drivers, each with the reason it is exempt. */
 const NOT_A_DRIVER: Record<string, string> = {
 	"coding-session-params.ts": "a params type — no run() and no I/O",
+	"coding-session.ts": "a re-export stub; the implementation is in coding-session/",
+	"coding-session/workflow-run.ts": "internal implementation; the driver is coding-session/index.ts",
 	"coding-watch.ts": "a mode of CodingSessionWorkflow, dispatched from its run(); its host owns the catch",
 };
 
@@ -81,7 +83,7 @@ interface CancelPath {
  * entry cannot credit a driver with a consumer it does not reach.
  */
 const CANCEL_PATHS: Record<string, CancelPath> = {
-	"coding-session.ts": {
+	"coding-session/index.ts": {
 		reads: "isCancelRequested",
 		mintedBy: "lib/loop-drivers.ts codingDriver",
 		latency: "one Pilot round, or one 5-minute tick while parked (#541)",
@@ -118,16 +120,34 @@ const NO_CANCEL_PATH: Record<string, string> = {};
 const files = readdirSync(DIR)
 	.filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
 	.sort();
-const drivers = files.filter((f) => !NOT_A_DRIVER[f]);
+// Also include driver files from subdirectories (e.g., coding-session/workflow-run.ts)
+const subdirFiles = readdirSync(DIR)
+	.filter((f) => !f.endsWith(".ts")) // subdirectory names
+	.flatMap((subdir) => {
+		try {
+			return readdirSync(join(DIR, subdir))
+				.filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
+				.map((f) => `${subdir}/${f}`);
+		} catch {
+			return [];
+		}
+	})
+	.sort();
+const allFiles = [...files, ...subdirFiles].sort();
+const drivers = allFiles.filter((f) => !NOT_A_DRIVER[f]);
 
 describe("every durable driver can be stopped", () => {
 	it("measures the whole workflows/ directory, and says how much", () => {
 		// The denominator. Seven files today, five of them drivers, all five stoppable (#619) — and
 		// the guard fails if it finds fewer, so a split that halves the set reports itself instead
 		// of halving the measurement.
-		expect(files.length, `workflows/ holds ${files.length} source files`).toBeGreaterThanOrEqual(7);
+		expect(allFiles.length, `workflows/ holds ${allFiles.length} source files`).toBeGreaterThanOrEqual(7);
 		expect(drivers.length, `of which ${drivers.length} are durable drivers`).toBeGreaterThanOrEqual(5);
-		for (const f of Object.keys(NOT_A_DRIVER)) expect(files, `exemption for a missing file: ${f}`).toContain(f);
+		for (const f of Object.keys(NOT_A_DRIVER)) {
+			const inTopLevel = files.includes(f);
+			const inSubdirs = subdirFiles.includes(f);
+			expect(inTopLevel || inSubdirs, `exemption for a missing file: ${f}`).toBe(true);
+		}
 	});
 
 	it("classifies exactly the drivers on disk — every one either stoppable or a named gap", () => {
