@@ -241,9 +241,9 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			const sleepFn = (ms: number) => step.sleep(`${label}-sleep`, ms);
 			return measured(
 				idleWaitIsDurable(env)
-					? // Behind `CODING_IDLE_DURABLE` (#814, unset = the one-step wait below) the SAME loop runs over
-					  // durable effects: each capture its own guarded step, each sleep a `step.sleep`, so a turn
-					  // survives an eviction. It is NOT known to save subrequests — see `idleWaitIsDurable`.
+					? // DURABLE BY DEFAULT since #814: each capture its own guarded step, each sleep a `step.sleep`,
+					  // so a turn survives an eviction rather than restarting its whole 480-second window. NOT known
+					  // to save subrequests (`idleWaitIsDurable`); `CODING_IDLE_DURABLE=0` restores the one-step wait.
 					  awaitEngineIdle(durableIdleDeps({ label, capture: (name) => guard(runRetry, name, capture), sleep: (name, ms) => step.sleep(name, ms) }))
 					: guard(runIdle, label, () => awaitEngineIdle({ capture, sleep: sleepFn })),
 			);
