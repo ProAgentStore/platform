@@ -26,7 +26,7 @@ const DIR = dirname(fileURLToPath(import.meta.url));
 const NOT_A_DRIVER: Record<string, string> = {
 	"coding-session-params.ts": "a params type — no run() and no I/O",
 	"coding-session.ts": "a re-export stub; the implementation is in coding-session/",
-	"coding-session/workflow-run.ts": "internal implementation; the driver is coding-session/index.ts",
+	"coding-session/index.ts": "a dispatcher; the trace writes are in coding-session/workflow-run.ts",
 	"coding-watch.ts": "a mode of CodingSessionWorkflow, dispatched from its run(); traced by its host",
 };
 
@@ -43,19 +43,33 @@ const TRACE_WRITERS = ["logEvent(", "logError(", "traceCodingRun("];
 const files = readdirSync(DIR)
 	.filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
 	.sort();
+// Also include driver files from subdirectories (e.g., coding-session/index.ts)
+const subdirFiles = readdirSync(DIR)
+	.filter((f) => !f.endsWith(".ts")) // subdirectory names
+	.flatMap((subdir) => {
+		try {
+			return readdirSync(join(DIR, subdir))
+				.filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
+				.map((f) => `${subdir}/${f}`);
+		} catch {
+			return [];
+		}
+	})
+	.sort();
+const allFiles = [...files, ...subdirFiles].sort();
 
 describe("the durable drivers all record what they did", () => {
 	it("measures the whole workflows/ directory, and says how much", () => {
 		// G1/G2. The number is the evidence: seven files today, five of them drivers. A future split
 		// that halves this list fails here instead of quietly halving the guard.
-		expect(files.length, `workflows/ holds ${files.length} source files`).toBeGreaterThanOrEqual(7);
-		const drivers = files.filter((f) => !NOT_A_DRIVER[f]);
+		expect(allFiles.length, `workflows/ holds ${allFiles.length} source files`).toBeGreaterThanOrEqual(7);
+		const drivers = allFiles.filter((f) => !NOT_A_DRIVER[f]);
 		expect(drivers.length, `of which ${drivers.length} are durable drivers`).toBeGreaterThanOrEqual(5);
 		// Every exemption names a file that exists. An exemption for a deleted file is a hole.
-		for (const f of Object.keys(NOT_A_DRIVER)) expect(files, `exemption for a missing file: ${f}`).toContain(f);
+		for (const f of Object.keys(NOT_A_DRIVER)) expect(allFiles, `exemption for a missing file: ${f}`).toContain(f);
 	});
 
-	it.each(files.filter((f) => !NOT_A_DRIVER[f]))("%s writes to the trace", (file) => {
+	it.each(allFiles.filter((f) => !NOT_A_DRIVER[f]))("%s writes to the trace", (file) => {
 		// `coding-session.ts` is the case this was written for: it held ZERO trace writes while
 		// browser-task held 6, job-apply 6, pipeline-run 7 and agent-loop 3, so a coding run that
 		// merely stopped left no durable record at all and the pane was the only account of it.

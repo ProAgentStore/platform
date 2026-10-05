@@ -373,6 +373,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		const resumeNote = (await step.do("resume-note", async () => (await pendingCodingResumeNote(env, { userId, instanceId, sessionId, uncommittedFiles: repair ? 0 : (repoState?.changedFiles ?? 0), lookbackMs: event.payload.resumeLookbackMs })) ?? null)) as string | null;
 		if (resumeNote) goal.resumeNote = resumeNote;
 		await step.do("tl-start", async () => {
+			await traceCodingRun(env, traceCtx, "coding.run.start", `Starting run: ${goal.objective}`, { repo: goal.repo, objective: goal.objective });
 			if (resumeNote) await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: resumeNote });
 			if (heal && heal.status !== "skipped") {
 				await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: describeSyncHeal(heal) });
@@ -386,7 +387,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			if (syncGate.blocked) {
 				await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: syncGate.message });
 				await traceCodingRun(env, traceCtx, "coding.run.blocked", syncGate.message);
-				await postToChat(`**Cannot start run** — ${syncGate.message}`);
+				await postToChat(`**Run stopped — unconfirmed base**: ${syncGate.message}`);
 			}
 			return null;
 		});
@@ -410,6 +411,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			goal.resumeNote = pause.resumeNote;
 		}
 	} catch (e) {
+			// A step exhausted or crashed unexpectedly. This is a terminal failure, not an interruption.
 		const crash = codingCrashReport(e);
 		crashReason = crash.stopReason;
 		result = { outcome: "failed", detail: crash.detail, steps: result.steps, transcript: result.transcript };
@@ -418,6 +420,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			node: conn.runnerNode ?? null, runId: event.payload.loopRunId ?? null, taskId: event.payload.boardTaskId ?? null, disposition: "ended",
 		}).catch(() => undefined);
 	} finally {
+		await traceCodingRun(env, traceCtx, "coding.run.end", `Run ended: ${result.outcome}`, { outcome: result.outcome, steps: result.steps });
 		await closeDelegation(result);
 		await step.do("objective-queue-drain", async () => {
 			await tryDequeueAndStart(env, instanceId, repoId, userId);

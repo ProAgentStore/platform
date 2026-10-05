@@ -58,7 +58,7 @@ const DIR = dirname(fileURLToPath(import.meta.url));
 const NOT_A_DRIVER: Record<string, string> = {
 	"coding-session-params.ts": "a params type — no run() and no I/O",
 	"coding-session.ts": "a re-export stub; the implementation is in coding-session/",
-	"coding-session/workflow-run.ts": "internal implementation; the driver is coding-session/index.ts",
+	"coding-session/index.ts": "a dispatcher; the verdict is consumed in coding-session/workflow-run.ts",
 	"coding-watch.ts": "a mode of CodingSessionWorkflow, dispatched from its run(); its host owns the catch",
 };
 
@@ -77,7 +77,7 @@ interface Consumer {
  * must equal the drivers found on disk, and each `reads` must appear in the file it names.
  */
 const CONSUMERS: Record<string, Consumer> = {
-	"coding-session/index.ts": {
+	"coding-session/workflow-run.ts": {
 		// Through `lib/coding-interrupt.ts` since #855, which resumes in the workflow instead of
 		// rethrowing; it calls `driverResumePlan` itself (asserted below), so the bound is the same one.
 		reads: "planInterruptionResume",
@@ -251,14 +251,14 @@ describe("no driver files a run as dead before deciding to resume it (#546)", ()
 	const resuming = Object.keys(CONSUMERS).filter((f) => BOUNDED_READERS.includes(CONSUMERS[f].reads));
 
 	it("measures both of them — a driver dropping out of this set is the guard going quiet", () => {
-		expect(resuming.sort(), "drivers reaching driverResumePlan").toEqual(["agent-loop.ts", "coding-session.ts"]);
+		expect(resuming.sort(), "drivers reaching driverResumePlan").toEqual(["agent-loop.ts", "coding-session/workflow-run.ts"]);
 	});
 
 	it.each(resuming)("%s asks the bounded decision BEFORE it writes its terminal account of the run", (file) => {
 		const src = readFileSync(join(DIR, file), "utf8");
 		// The terminal write differs per driver — one files an error row, the other sets the stop
 		// reason the run is closed with — so the marker is named per driver rather than assumed.
-		const terminal = file === "coding-session.ts" ? "recordCodingFailure(env, {" : 'stop = { reason: "failed"';
+		const terminal = file === "coding-session/workflow-run.ts" ? "recordCodingFailure(env, {" : 'stop = { reason: "failed"';
 		const decide = src.indexOf(`${CONSUMERS[file].reads}(`);
 		expect(decide, `${file} never calls ${CONSUMERS[file].reads}`).toBeGreaterThan(-1);
 		expect(decide, `${file} writes "${terminal}" before it knows whether the run is resumed`).toBeLessThan(src.indexOf(terminal));
