@@ -115,3 +115,43 @@ describe("POST /:id/loop — a retried queued start is not queued twice (#925)",
 		expect(await res.json()).not.toHaveProperty("duplicate_of");
 	});
 });
+
+describe("POST /:id/loop — a busy refusal names what holds the repo (#886)", () => {
+	const startedRun = (runId: string, requestId: string) => {
+		d1.exec(`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id) VALUES ('s-${runId}', 'i1', 'r1', 'u1')`);
+		d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at, session_id)
+		  VALUES ('${runId}', 'u1', 'i1', 'slice 1 of epic #48', 'running', 10, ${Date.now()}, 's-${runId}')`);
+		d1.exec(`INSERT INTO loop_start_receipts (user_id, instance_id, request_id, input_json, state, response_json, created_at, updated_at)
+		  VALUES ('u1', 'i1', '${requestId}', '{}', 'started', '{"runId":"${runId}"}', ${Date.now()}, ${Date.now()})`);
+	};
+
+	it("the incident: an earlier start landed, a retry with a NEW request_id is told it is that run", async () => {
+		// The caller's first start timed out in its own approval gate, was approved and sent as req-A,
+		// and its run is working. The retry used req-B. "already being worked on" used to be all it got.
+		startedRun("run-A", "req-A");
+		const res = await post({ requestId: "req-B", objective: "slice 1 of epic #48", repoId: "r1" });
+		expect(res.status).toBe(409);
+		const body = (await res.json()) as Record<string, unknown>;
+		expect(body).toMatchObject({ reason: "busy", startState: "not_started", activeRun: { runId: "run-A", requestId: "req-A" } });
+		// …and the retry's OWN receipt, provisioning while it was refused, is not reported as in flight.
+		expect(body.inFlightStarts).toEqual([]);
+	});
+
+	it("names an accepted start still provisioning, before its run row exists", async () => {
+		d1.exec(`INSERT INTO loop_start_receipts (user_id, instance_id, request_id, input_json, state, created_at, updated_at)
+		  VALUES ('u1', 'i1', 'req-A', '{"objective":"slice 1","repoId":"r1"}', 'provisioning', ${Date.now()}, ${Date.now()})`);
+		const body = (await (await post({ requestId: "req-B", objective: "slice 1", repoId: "r1" })).json()) as { activeRun: unknown; inFlightStarts: Array<{ requestId: string }> };
+		expect(body.activeRun).toBeNull();
+		expect(body.inFlightStarts.map((s) => s.requestId)).toEqual(["req-A"]);
+	});
+
+	it("a genuine refusal keeps its own shape — no holder fields on a failure waiting cannot fix", async () => {
+		driverStart.mockResolvedValue({ ok: false, status: 409, error: "No runner is connected for this agent" });
+		const res = await post({ requestId: "req-C", objective: "x", repoId: "r1" });
+		expect(res.status).toBe(409);
+		const body = (await res.json()) as Record<string, unknown>;
+		expect(body).toMatchObject({ error: "No runner is connected for this agent", reason: "refused", startState: "not_started" });
+		expect(body).not.toHaveProperty("activeRun");
+		expect(body).not.toHaveProperty("inFlightStarts");
+	});
+});
