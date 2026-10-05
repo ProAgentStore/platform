@@ -241,7 +241,7 @@ describe("the Pilot CONSUMES the verdict — the property #518 was written to pr
 	 * stops #442's failure mode: a correct decision that nothing reaches. `probe-outside-steps` in
 	 * `coding-failure.test.ts` guards its invariant the same way and for the same reason.
 	 */
-	const workflow = readFileSync(fileURLToPath(new URL("../workflows/coding-session.ts", import.meta.url).href), "utf8");
+	const workflow = readFileSync(fileURLToPath(new URL("../workflows/coding-session/workflow-run.ts", import.meta.url).href), "utf8");
 
 	it("resumes IN the workflow — the round is retried after a durable sleep, never rethrown for a replay (#855)", () => {
 		// The #855 defect: an error escaping `run()` ends a Workflow instance, it does not replay it. The

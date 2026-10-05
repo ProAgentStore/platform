@@ -210,7 +210,7 @@ describe("the Pilot moves its card at all THREE points of a run (#553)", () => {
 	// terminal) rather than only at the end. No current test observes the mid-run card, which is
 	// why this survived." The pause machine's own two points are exercised for real in
 	// `coding-pause.test.ts`; what only the workflow can say is that they are WIRED.
-	const source = readFileSync(join(__dirname, "../workflows/coding-session.ts"), "utf8");
+	const source = readFileSync(join(__dirname, "../workflows/coding-session/workflow-run.ts"), "utf8");
 	const calls = [...source.matchAll(/setCodingSessionCardStatus\(/g)];
 
 	it("has exactly the three writes this guard is about", () => {

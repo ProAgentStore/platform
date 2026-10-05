@@ -12,7 +12,7 @@ import { callRunner, getRunnerConnIgnoringLiveness, getBoundRunnerConn, relayCon
 import { runtimeConnectivity } from "../../lib/instance-connectivity.js";
 import type { CodingSessionParams } from "../coding-session-params.js";
 import { makeRunnerGuard, noRunnerDetail, RUNNER_PROBE_INTERVAL, type RunStep } from "../../lib/runner-availability.js";
-import { releaseSessionDriver, touchSessionActivity, touchSessionDriver } from "../../lib/coding-store.js";
+import { getRepo, releaseSessionDriver, touchSessionActivity, touchSessionDriver } from "../../lib/coding-store.js";
 import { setCodingSessionCardStatus } from "../../lib/coding-board.js";
 import { startSessionOnRunnerConn } from "../../lib/coding-session-relaunch.js";
 import { resolvePause, stopReasonFor, type PauseDeps } from "../../lib/coding-pause.js";
@@ -45,6 +45,10 @@ import { reauthCompletedSince } from "../../lib/engine-reauth-store.js";
 import { tryDequeueAndStart } from "../../lib/objective-queue-start.js";
 import { traceCodingRun } from "../../lib/coding-run-trace.js";
 import { codingCrashReport, outcomeWord, runOutcomeNote } from "../../lib/coding-run-report.js";
+import { pendingCodingResumeNote } from "../../lib/coding-resume-note.js";
+import { describeRepoState, readRepoWorkingState, type RepoWorkingState } from "../../lib/repo-state.js";
+import { describeRepoSync, readRepoSync, type RepoSyncVerdict } from "../../lib/repo-sync.js";
+import { attemptSyncSelfHeal, describeSyncHeal, gateRunOnSync, repairCheckoutObjective, skippedSyncHeal, syncSelfHealEligible, type SyncGateOutcome, type SyncHealOutcome } from "../../lib/repo-sync-gate.js";
 import { statusFor, type LoopStopReason } from "../../lib/agent-loop.js";
 import { PILOT_DEFAULT_MAX_STEPS } from "../../lib/loop-limits.js";
 import { CodingRunProbe, recordCodingFailure } from "../../lib/coding-failure.js";
@@ -325,6 +329,67 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 	let result: CodingResult = { outcome: "failed", detail: "did not start", steps: 0 };
 	try {
 		await guard(runWith(startRetry), "start", startOnRunner);
+		const repoStart = (await step.do("repo-state-start", async () => {
+			const repo = await getRepo(env, instanceId, userId, repoId).catch(() => null);
+			if (!repo) return { state: null, sync: null };
+			const [state, sync] = await Promise.all([
+				readRepoWorkingState(conn, { repo, sessionId }).catch(() => null),
+				readRepoSync(conn, { workDir: repo.workdir, sessionId, branch: repo.branch, forceFetch: true }).catch(() => null),
+			]);
+			return { state: state ?? null, sync: sync ?? null };
+		})) as { state: RepoWorkingState | null; sync: RepoSyncVerdict | null };
+		const repoState = repoStart.state;
+		const heal = (await step.do("repo-self-heal", async () => {
+			const eligible = syncSelfHealEligible(repoStart.sync, repoStart.state, branch ?? null);
+			if (!eligible.eligible || !eligible.branch) return skippedSyncHeal(eligible);
+			const repo = await getRepo(env, instanceId, userId, repoId).catch(() => null);
+			if (!repo) return null;
+			return attemptSyncSelfHeal(conn, { repo, sessionId, branch: eligible.branch });
+		})) as SyncHealOutcome | null;
+		const syncAtStart = heal?.sync ?? repoStart.sync;
+		const stateNote = repoState ? describeRepoState(repoState, { configuredBranch: branch ?? null }) : null;
+		const syncNote = syncAtStart ? describeRepoSync(syncAtStart) : null;
+		const repair = goal.repairCheckout === true;
+		if (repair) {
+			goal.objective = repairCheckoutObjective({ repoLabel: goal.repo, branch: branch ?? null, sync: syncAtStart, state: repoState, heal, ownerNote: goal.objective });
+		}
+		if (!repair && (stateNote || syncNote)) {
+			goal.specialInstructions = [
+				goal.specialInstructions,
+				stateNote
+					? `REPOSITORY STATE (read before you start): ${stateNote} You did not create this state. Do NOT revert, stash, reset or discard anything you did not write yourself. If your objective needs a clean tree or a different branch, say so and stop rather than clearing it.`
+					: "",
+				syncNote
+					? `UPSTREAM SYNC (checked just now, nothing was pulled): ${syncNote} If the checkout is BEHIND and the tree is clean and on its configured branch, make your FIRST instruction a fast-forward (\`git pull --ff-only\`) so you never plan against a stale base, and say in your report what it brought in. If it is dirty or has diverged, do not merge or rebase on your own initiative — report it and ask.`
+					: "",
+			]
+				.filter(Boolean)
+				.join("\n\n");
+		}
+		const syncGate = (await step.do("repo-sync-gate", async () =>
+			gateRunOnSync(env, { instanceId, userId, sessionId, node: conn.runnerNode ?? null, repo: goal.repo, heal, repair }, syncAtStart),
+		)) as SyncGateOutcome;
+		if (syncGate.blocked) result = { outcome: "failed", detail: syncGate.message, steps: 0 };
+		const resumeNote = (await step.do("resume-note", async () => (await pendingCodingResumeNote(env, { userId, instanceId, sessionId, uncommittedFiles: repair ? 0 : (repoState?.changedFiles ?? 0), lookbackMs: event.payload.resumeLookbackMs })) ?? null)) as string | null;
+		if (resumeNote) goal.resumeNote = resumeNote;
+		await step.do("tl-start", async () => {
+			if (resumeNote) await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: resumeNote });
+			if (heal && heal.status !== "skipped") {
+				await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: describeSyncHeal(heal) });
+				await traceCodingRun(env, traceCtx, "coding.run.self_heal", describeSyncHeal(heal), { status: heal.status, commits: heal.commits, from: heal.from, to: heal.to });
+				if (heal.status === "healed") await postToChat(`**Repository fast-forwarded** — ${describeSyncHeal(heal)}`);
+			}
+			if (syncNote) {
+				await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: `Upstream sync at start: ${syncNote}` });
+				if (syncAtStart?.state === "behind" || syncAtStart?.state === "diverged") await postToChat(`**Repository sync at start** — ${syncNote}`);
+			}
+			if (syncGate.blocked) {
+				await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: syncGate.message });
+				await traceCodingRun(env, traceCtx, "coding.run.blocked", syncGate.message);
+				await postToChat(`**Cannot start run** — ${syncGate.message}`);
+			}
+			return null;
+		});
 		for (let round = 0; round < 12; round++) {
 			result = await roundThroughInterruptions(
 				() => runCodingLoop(deps, goal, { maxSteps: event.payload.maxSteps ?? PILOT_DEFAULT_MAX_STEPS }),

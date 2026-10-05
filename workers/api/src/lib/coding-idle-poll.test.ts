@@ -320,7 +320,7 @@ describe("the durable idle wait (#814)", () => {
 	// Source assertions, in this package's established style: the wiring is one expression inside a
 	// Workflow that cannot be run here, and what matters is that each half of it EXISTS.
 	describe("the workflow's wiring", () => {
-		const workflow = readFileSync(join(__dirname, "../workflows/coding-session.ts"), "utf-8");
+		const workflow = readFileSync(join(__dirname, "../workflows/coding-session/workflow-run.ts"), "utf-8");
 
 		it("reads the flag, and keeps the one-step wait as the other branch", () => {
 			expect(workflow).toContain("idleWaitIsDurable(env)");

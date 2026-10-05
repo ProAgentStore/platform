@@ -328,7 +328,7 @@ describe("recordCodingFailure — the durable record itself", () => {
 });
 
 describe("the CODING_SESSION throw path writes it (#529 AC 4)", () => {
-	const source = readFileSync(join(__dirname, "../workflows/coding-session.ts"), "utf8");
+	const source = readFileSync(join(__dirname, "../workflows/coding-session/workflow-run.ts"), "utf8");
 
 	it("records the failure inside the catch block, not only on the happy path", () => {
 		// The measurement the ticket was filed on was `grep -c logError … → 0` while every peer
@@ -613,7 +613,7 @@ describe("per-run token keeps retried deaths as one row and distinct runs as sep
 });
 
 describe("the probe measures what a REPLAY re-measures (#546)", () => {
-	const source = readFileSync(join(__dirname, "../workflows/coding-session.ts"), "utf8");
+	const source = readFileSync(join(__dirname, "../workflows/coding-session/workflow-run.ts"), "utf8");
 
 	/**
 	 * Every `probe.<setter>(` call site in the workflow, and whether it sits inside a `step.do`

@@ -330,7 +330,7 @@ describe("the wiring — the defect a unit test of this module cannot see", () =
 	// A note composed perfectly and never injected is this ticket's bug intact. The ONE caller is a
 	// Workflow, and a Workflow can only be tested by running one, so the call shape is asserted from
 	// source — the way `coding-run-report.test.ts` and `coding-resume.test.ts` assert theirs.
-	const source = readFileSync(join(__dirname, "..", "workflows", "coding-session.ts"), "utf8");
+	const source = readFileSync(join(__dirname, "..", "workflows", "coding-session", "workflow-run.ts"), "utf8");
 
 	it("read the workflow at all — so a rename fails loudly instead of passing empty", () => {
 		expect(source.length, "read no workflow source — this guard is measuring nothing").toBeGreaterThan(10_000);

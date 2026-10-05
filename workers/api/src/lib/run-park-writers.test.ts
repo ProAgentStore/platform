@@ -115,7 +115,7 @@ describe("the pause machine hands the park's END to the heartbeat", () => {
  * moved or renamed driver must fail as "this guard stopped measuring", never as a clean tree.
  */
 // `lib/coding-interrupt.ts` since #855: the interruption park moved out of the workflow's catch.
-const LIVENESS_SOURCES = ["workflows/coding-session.ts", "lib/coding-interrupt.ts"];
+const LIVENESS_SOURCES = ["workflows/coding-session/workflow-run.ts", "lib/coding-interrupt.ts"];
 
 /** One `recordLiveness(...)` call, as written. Every site in this repo is a single line. */
 function livenessCallSites(): { file: string; line: number; text: string }[] {

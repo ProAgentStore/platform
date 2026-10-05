@@ -473,7 +473,7 @@ describe("the repair run — the way out that needs no hands on the machine (#80
  * the thing #785 was missing.
  */
 describe("the wiring — a blocked run does not reach the loop (#801)", () => {
-	const source = readFileSync(join(__dirname, "..", "workflows", "coding-session.ts"), "utf8");
+	const source = readFileSync(join(__dirname, "..", "workflows", "coding-session", "workflow-run.ts"), "utf8");
 
 	it("read the workflow at all — so a rename fails loudly instead of passing empty", () => {
 		expect(source.length, "read no workflow source — this guard is measuring nothing").toBeGreaterThan(10_000);

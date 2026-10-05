@@ -121,7 +121,7 @@ describe("every door that sends a turn composes it through withTurnReplay (#693 
 	// only reachable with a live relay. A new `/coding/act` sender that forgets the replay leaves one
 	// engine forgetting between turns on one path, which is exactly the qualifier this issue removes.
 	const SRC = new URL("../", import.meta.url).pathname;
-	for (const rel of ["routes/coding-drive.ts", "routes/coding-brains.ts", "lib/storage-tools.ts", "workflows/coding-session.ts"]) {
+	for (const rel of ["routes/coding-drive.ts", "routes/coding-brains.ts", "lib/storage-tools.ts", "workflows/coding-session/workflow-run.ts"]) {
 		it(rel, () => {
 			const code = stripCommentsAndLiterals(readFileSync(join(SRC, rel), "utf-8"));
 			expect(code).toMatch(/withTurnReplay\(/);

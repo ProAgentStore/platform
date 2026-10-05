@@ -289,7 +289,7 @@ describe("a workflow that can spend the user's tokens draws on a pool (#516)", (
 		expect(WORKFLOWS.map(rel).sort()).toEqual([
 			"workflows/agent-loop.ts",
 			"workflows/browser-task.ts",
-			"workflows/coding-session.ts",
+			"workflows/coding-session/index.ts",
 			"workflows/job-apply.ts",
 			"workflows/pipeline-run.ts",
 		]);
@@ -326,7 +326,7 @@ describe("a workflow that can spend the user's tokens draws on a pool (#516)", (
 		expect(driving).toEqual([
 			"workflows/agent-loop.ts",
 			"workflows/browser-task.ts",
-			"workflows/coding-session.ts",
+			"workflows/coding-session/index.ts",
 			"workflows/job-apply.ts",
 			"workflows/pipeline-run.ts",
 		]);

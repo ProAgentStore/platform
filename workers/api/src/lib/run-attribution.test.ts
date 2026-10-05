@@ -160,7 +160,7 @@ describe("the workflow writes the counter both stamps read", () => {
 	// `fileURLToPath`, not a bare `new URL` — the Worker `lib` makes the global `URL` structurally
 	// incompatible with node's, which `tsc -p tsconfig.test.json` (#599) rejects and vitest would
 	// have run anyway. That gate exists for exactly this, and it caught it.
-	const SESSION = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../workflows/coding-session.ts"), "utf8");
+	const SESSION = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../workflows/coding-session/workflow-run.ts"), "utf8");
 
 	it("sets goal.ownerTurns beside goal.userHint on every resume", () => {
 		expect(SESSION, "coding-session.ts no longer writes goal.ownerTurns — the instruction stamp is unwired again").toMatch(/goal\.ownerTurns\s*=/);
