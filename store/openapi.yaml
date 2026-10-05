@@ -2430,17 +2430,17 @@ paths:
     get:
       summary: What every one of my instances is doing
       description: |
-        One call for the whole account, in two queries — the dashboard could otherwise only learn
-        this by calling `/v1/instances/:id/loop` once per card.
+        One call for the whole account, in three flat queries — the dashboard could otherwise only
+        learn this by calling `/v1/instances/:id/loop` once per card. Each row names its instance
+        (`name`, `slug`) the way `/v1/instances/my/instances` does (#923).
 
         `health` is the platform's own verdict, computed by `runHealth`, not re-derived from
         timestamps: `working` (ticking), `waiting` (deliberately parked, usually needs nothing),
         `stalled` (an OPEN run that has stopped ticking — the one to act on), `idle` (the latest
         run ended, or there has never been one). An open run row is NOT the same as `working`.
 
-        An instance with no run and no queued objective is OMITTED rather than listed as idle:
-        including it would need a third query for the roster, which every caller already holds.
-        So an empty list means the account is quiet.
+        An instance with no run and no queued objective is OMITTED rather than listed as idle,
+        so absence means idle and an empty list means the account is quiet.
       operationId: getMyInstanceActivity
       tags: [Instances]
       responses:
@@ -2460,6 +2460,8 @@ paths:
                       type: object
                       properties:
                         instanceId: { type: string }
+                        name: { type: string, nullable: true, description: "The instance's display name when one is set, else its agent's — the same name /v1/instances/my/instances gives it." }
+                        slug: { type: string, nullable: true, description: The agent's slug. }
                         health: { type: string, enum: [working, waiting, stalled, idle] }
                         queueDepth: { type: integer, description: Objectives parked behind this instance. }
                         lastOutcome:

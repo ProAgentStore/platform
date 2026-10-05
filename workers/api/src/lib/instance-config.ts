@@ -152,6 +152,17 @@ export interface InstanceListView {
 }
 
 /** Parse the list-safe view of an instance config. Malformed JSON reads as "nothing set". */
+/**
+ * The name an instance is listed under: its own display name when the owner set one, else its
+ * agent's — the rule `/my/instances` applies (`displayName` over the agent's `name`). `/my/activity`
+ * answers with it too (#923), so `my_instances`, `recent_instances` and `account_activity` cannot
+ * call one instance two different things; `instances-activity-names.test.ts` holds the two routes
+ * to agreeing.
+ */
+export function instanceListName(rawInstanceConfig: string | null | undefined, agentName: string | null | undefined): string | null {
+	return instanceListView(rawInstanceConfig).displayName ?? agentName ?? null;
+}
+
 export function instanceListView(raw: string | null | undefined): InstanceListView {
 	const cfg = parseConfigBlob(raw);
 	const displayName = typeof cfg.displayName === "string" ? cfg.displayName.trim() : "";

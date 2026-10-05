@@ -73,7 +73,7 @@ export {
 import { foldNodesByMachine, normalizeMachineId, sanitizeMachineNames } from "../lib/machine-identity.js";
 import { parseBoundRunnerNode } from "../lib/runtime-nodes.js";
 import { diagnoseAttachment, heartbeatFresh } from "../lib/runtime-attachment.js";
-import { instanceListView, patchInstanceConfig, removeInstanceConfigKey } from "../lib/instance-config.js";
+import { instanceListName, instanceListView, patchInstanceConfig, removeInstanceConfigKey } from "../lib/instance-config.js";
 import { runnerVersionView } from "../lib/runner-features.js";
 
 export const instanceRoutes = new Hono<{ Bindings: Env }>();
@@ -386,14 +386,14 @@ const ACTIVITY_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
  * reason `/loop/queue` had to be (#788): Hono matches in order, and a literal that arrives after a
  * parameter is read as a value for it.
  *
- * TWO queries, whatever the instance count. The console previously had to call
+ * THREE flat queries, whatever the instance count — runs, queue depths, and names (#923). The console previously had to call
  * `GET /v1/instances/:id/loop` per card to learn this, which is why `recent_instances` is capped at
  * a handful — at 43 instances a per-card fan-out is not a slow feature, it is a reason not to ship
  * one. The composition is pure in `lib/instance-activity.ts`; this handler only fetches.
  *
  * An instance with NO run and NO queued objective is absent from the response rather than listed
- * as idle. Including it would need a third query for the roster, which the console already holds —
- * so absence means idle, and the cost stays flat in the number of instances never used.
+ * as idle — absence means idle, and the response stays the size of what is happening, however many
+ * instances were never used.
  */
 instanceRoutes.get("/my/activity", async (c) => {
 	const session = await requireUser(c);
@@ -403,7 +403,7 @@ instanceRoutes.get("/my/activity", async (c) => {
 	// OR'd in rather than AND'd: an open run is never missed however old it is, which is exactly
 	// the run an owner most needs to see on this screen.
 	const since = now - ACTIVITY_LOOKBACK_MS;
-	const [runRows, queueRows] = await Promise.all([
+	const [runRows, queueRows, nameRows] = await Promise.all([
 		c.env.DB.prepare(
 			`SELECT run_id, instance_id, status, stop_reason, started_at, finished_at,
 			        last_alive_at, last_progress_at, waiting_reason, waiting_until, parked_since
@@ -427,7 +427,15 @@ instanceRoutes.get("/my/activity", async (c) => {
 		)
 			.bind(session.uid)
 			.all<Record<string, unknown>>(),
+		// Name and slug (#923): a bare id is unreadable on a roster of dozens, and `recent_instances`
+		// already names each entry. One flat query over the caller's instances, whatever has activity.
+		c.env.DB.prepare(
+			`SELECT i.id, i.config, a.name, a.slug FROM agent_instances i JOIN agents a ON a.id = i.agent_id WHERE i.user_id = ?1`,
+		)
+			.bind(session.uid)
+			.all<{ id: string; config: string | null; name: string | null; slug: string | null }>(),
 	]);
+	const names = new Map((nameRows.results ?? []).map((r) => [r.id, { name: instanceListName(r.config, r.name), slug: r.slug ?? null }] as const));
 
 	const runs: ActivityRunRow[] = (runRows.results ?? []).map((r) => ({
 		instanceId: String(r.instance_id),
@@ -448,7 +456,13 @@ instanceRoutes.get("/my/activity", async (c) => {
 
 	// `asOf` is not decoration: every value here is time-relative, so a poll that failed and left
 	// the last response on screen is indistinguishable from a fresh one without it (#291).
-	return c.json({ asOf: now, instances: composeInstanceActivity(runs, queueDepths, now) });
+	const instances = composeInstanceActivity(runs, queueDepths, now).map(({ instanceId, ...rest }) => ({
+		instanceId,
+		name: names.get(instanceId)?.name ?? null,
+		slug: names.get(instanceId)?.slug ?? null,
+		...rest,
+	}));
+	return c.json({ asOf: now, instances });
 });
 
 /** Register or update the local/managed runtime for my instance. */
