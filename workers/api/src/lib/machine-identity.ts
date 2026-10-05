@@ -247,6 +247,13 @@ export function machineNamesFor(target: string, rows: readonly NodeRegistration[
  */
 export const MACHINE_ID_MIN_CLI = "0.4.40";
 
+/**
+ * The first CLI whose relay sockets keep the name it registered and heartbeats under (#922). An older one
+ * re-read the hostname on every reconnect, so after macOS renamed the machine its sockets could open under a
+ * name no registration carries — invisible to every status read, which then call a live machine offline.
+ */
+export const RELAY_NAME_STABLE_MIN_CLI = "0.4.70";
+
 /** Numeric-part compare, -1/0/1. Unparseable → null, so a caller must decide what to say. */
 export function compareCliVersions(a: string, b: string): number | null {
 	const parse = (v: string): number[] | null => {

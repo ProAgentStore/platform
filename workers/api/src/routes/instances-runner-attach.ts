@@ -15,7 +15,7 @@ import type { Hono } from "hono";
 import { withinConfirmationWindow } from "../lib/confirmation-window.js";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { setRunnerNodePin } from "../lib/runner-node-pin.js";
-import { attachOnRepin, attachAgentOnNode } from "../lib/runner-repin.js";
+import { attachedOnMachine, attachOnRepin, attachAgentOnNode } from "../lib/runner-repin.js";
 import { normalizeRunnerNode, readInstanceRunnerNode } from "../lib/runtime-nodes.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import type { Env } from "../types.js";
@@ -51,7 +51,10 @@ export function registerRunnerPinRoutes(router: Hono<{ Bindings: Env }>): void {
 		if (!to) return c.json({ runnerNode: null });
 		const attachment = await withinConfirmationWindow(
 			attachSettled(attachOnRepin(c.env, instanceId, session.uid, to), to, (why) => `The pin to ${to} is saved, but whether it attached there could not be confirmed (${why}). Call instance_runner_node to check current placement before retrying.`),
-			() => ({ node: to, attached: false, unconfirmed: true as const, detail: `The pin to ${to} is saved; attachment and release of other machines are not yet confirmed. Call instance_runner_node to check current placement.` }),
+			async () => (await attachedOnMachine(c.env, instanceId, session.uid, to).catch(() => false))
+				// Attached already — what is still open is only the OLD machine letting go, which a frozen one can take the whole window to not do (#922).
+				? { node: to, attached: true, unconfirmed: true as const, detail: `Attached on ${to}. Whether every other machine has let it go is not yet confirmed — each drops it on its own poll, since the pin moved; instance_runner_node shows where it is attached.` }
+				: { node: to, attached: false, unconfirmed: true as const, detail: `The pin to ${to} is saved; attachment and release of other machines are not yet confirmed. Call instance_runner_node to check current placement.` },
 			(operation) => c.executionCtx.waitUntil(operation),
 		);
 		return c.json({ runnerNode: to, attachment });
@@ -69,7 +72,9 @@ export function registerRunnerAttachRoutes(router: Hono<{ Bindings: Env }>): voi
 		if (!node) throw new HttpError(400, "This agent is not pinned to a machine — name one with runnerNode (see instance_runner_node's `nodes`), or pin it with set_instance_runner_node.");
 		const attachment = await withinConfirmationWindow(
 			attachSettled(attachAgentOnNode(c.env, instanceId, session.uid, node, { force: body.force !== false }), node, (why) => `The attach request on ${node} could not be confirmed (${why}). Call instance_runner_node to check whether this agent is attached before retrying force_runner_attach.`),
-			() => ({ node, attached: false, unconfirmed: true as const, detail: `The attach request on ${node} has not yet been confirmed. Call instance_runner_node to check whether this agent is attached before retrying force_runner_attach.` }),
+			async () => (await attachedOnMachine(c.env, instanceId, session.uid, node).catch(() => false))
+				? { node, attached: true }
+				: { node, attached: false, unconfirmed: true as const, detail: `The attach request on ${node} has not yet been confirmed. Call instance_runner_node to check whether this agent is attached before retrying force_runner_attach.` },
 			(operation) => c.executionCtx.waitUntil(operation),
 		);
 		return c.json(attachment);

@@ -5385,7 +5385,9 @@ paths:
         slot, and the machine's connected `pags up` is told, over a socket that answers there, to attach
         this agent and take its slot over. Targets the pinned machine unless `runnerNode` names another;
         the pin itself is not changed. The answer is the relay's view afterwards, with the specific
-        reason when the agent could not be attached. Needs a `pags up` running on the machine.
+        reason when the agent could not be attached. When the machine has not confirmed within 15s the
+        relay is asked once more, so a socket already live there answers `{node, attached: true}`
+        rather than `unconfirmed` (#922). Needs a `pags up` running on the machine.
       operationId: forceRunnerAttach
       tags: [Runtime]
       parameters: [{ $ref: "#/components/parameters/InstanceId" }]
@@ -9950,8 +9952,9 @@ paths:
         A platform-level view of every machine running `pags up`, across ALL agents — a node is
         owned by the user, not by any one agent. Agents that never touch a local runner
         (`runtime: null`) are excluded, and so are machines that end up with no runner-using
-        agents and no sessions. `connected` is live-checked against the relay sockets, not read
-        from a status column (which is not cleared on disconnect).
+        agents and no sessions. `connected` is live-checked against the relay sockets under every
+        name the machine is known by (`node` and `aka`, #922), not read from a status column (which
+        is not cleared on disconnect). `lastSeenAt` is the machine's last heartbeat, not a socket.
       operationId: listTerminalNodes
       tags: [Terminals]
       responses:

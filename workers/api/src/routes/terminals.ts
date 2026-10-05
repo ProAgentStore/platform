@@ -409,8 +409,20 @@ terminalRoutes.get("/nodes", async (c) => {
 	// every agent, and "is there a socket here" is the question it exists to answer. What it must
 	// not do is let a reader take the answer for routing — so the pin rides along per instance
 	// (`pinnedNode`) and the console says which of the two facts it is showing (#531).
+	//
+	// Under EVERY name the machine is known by, not only its freshest (#922). The relay slot is keyed
+	// by the name the runner CONNECTED under, and a CLI before 0.4.70 re-read the hostname on each
+	// reconnect while its heartbeat kept the startup name — so after macOS renamed the machine its
+	// sockets sat under an alias while the freshest (heartbeated) name held none, and every agent on a
+	// machine seen seconds ago read `connected: false`. `coding_diagnostics` resolves the same aliases
+	// (`getBoundRunnerConn`), which is how the two came to disagree about one runner.
 	await Promise.all(nodes.map(async (n) => {
-		const checks = await Promise.all(n.instances.slice(0, 25).map((i) => relayConnected(c.env, i.instanceId, n.node).catch(() => false)));
+		const names = [n.node, ...n.aka];
+		const anyName = async (instanceId: string) => {
+			for (const name of names) if (await relayConnected(c.env, instanceId, name).catch(() => false)) return true;
+			return false;
+		};
+		const checks = await Promise.all(n.instances.slice(0, 25).map((i) => anyName(i.instanceId)));
 		n.instances.forEach((i, idx) => { i.connected = checks[idx] ?? false; });
 		n.connected = checks.some(Boolean);
 	}));

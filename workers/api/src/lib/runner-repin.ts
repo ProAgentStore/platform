@@ -247,6 +247,18 @@ export async function attachAgentOnNode(env: Env, instanceId: string, userId: st
 	};
 }
 
+/**
+ * Does this agent hold a live socket on `node`'s machine — under any name it is provably known by — right
+ * now (#922)? The question a confirmation window asks when it expires, rather than answering "not yet
+ * confirmed" blind: in both live reports the move had ALREADY landed — the repin was waiting on the OLD
+ * machine to let go, not on the new one to take it — and the caller was told nothing it could act on.
+ */
+export async function attachedOnMachine(env: Env, instanceId: string, userId: string, node: string): Promise<boolean> {
+	const targetNames = new Set([node, ...aliasNodesFor(node, await nodeRegistrations(env, userId))]);
+	for (const n of targetNames) if (await relayConnected(env, instanceId, n)) return true;
+	return false;
+}
+
 export async function attachOnRepin(env: Env, instanceId: string, userId: string, node: string, deps: RepinDeps = {}): Promise<RepinAttachment> {
 	const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 	const now = deps.now ?? Date.now;

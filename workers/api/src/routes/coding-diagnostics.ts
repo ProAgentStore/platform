@@ -23,11 +23,11 @@ import { codingRunsForSessions, type CodingRunFact } from "../lib/board-runs.js"
 import { refusingEngineIssue } from "../lib/coding-run-state.js";
 import { listRepos, listSessions, reconcileOrphanedSessions } from "../lib/coding-store.js";
 import { readProviderAccountHealth } from "../lib/provider-account-health.js";
-import { relayNameForInstance } from "../lib/runtime-nodes.js";
+import { readInstanceRunnerNode, relayNameForInstance } from "../lib/runtime-nodes.js";
 import { classifyHealthProbeFailure, type HealthCheckState, runnerHealthRemedy, runnerLiveStatus } from "../lib/runner-health.js";
 import { latestRunRow, readReauthState, signInBlockFrom } from "../lib/engine-reauth-store.js";
 import { reauthExpiryView } from "../lib/engine-reauth-expiry.js";
-import { getLiveRuntime } from "./instances-runtime.js";
+import { getLiveRuntime, getRuntimeNode, updateRuntimeStatus } from "./instances-runtime.js";
 import { getDefaultRunnerConn, requireOwned } from "./coding-shared.js";
 import { MAX_SSH_HOSTS, httpsLoginFrom, sshHostGroups, sshIdentityIssues } from "../lib/ssh-identity.js";
 import type { Env } from "../types.js";
@@ -364,8 +364,14 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		// stale shared row's.  `getLiveRuntime` returns the per-node row when the conn resolved to
 		// a named node; falls back to the shared row otherwise (single-machine + old-client path).
 		const liveRuntimeRow = conn ? await getLiveRuntime(env, instanceId, uid).catch(() => null) : null;
-		// What we report in the `runner` section: prefer the live node's row over the stale default.
-		const reportedRow = liveRuntimeRow ?? runtimeRow;
+		// No live machine: describe the one the agent is PINNED to (#922). The shared `instance_runtimes`
+		// row holds the LAST REGISTRANT — on a multi-machine account, often a different machine — so an
+		// offline pinned agent reported another machine's `lastSeenAt` and stored status beside its own
+		// verdict. The shared row stays the fallback for an unpinned agent, which has nothing better.
+		const pinned = conn ? "" : await readInstanceRunnerNode(env, instanceId, uid).catch(() => "");
+		const pinnedRow = pinned ? await getRuntimeNode(env, instanceId, uid, pinned).catch(() => null) : null;
+		// What we report in the `runner` section: the live node's row, else the pinned node's, else the default.
+		const reportedRow = liveRuntimeRow ?? pinnedRow ?? runtimeRow;
 
 		const runner: Record<string, unknown> = {
 			registered: !!runtimeRow,
@@ -395,6 +401,12 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 				runnerHealth = await callRunner<unknown>(conn, "/health", undefined, { timeoutMs: READ_TIMEOUT_MS });
 				runnerReachable = true;
 				healthCheck = "ok";
+				// The runner just answered — that IS hearing from it, so it moves `last_seen_at` (#922).
+				// Only the heartbeat used to, and the heartbeat stamps the name the process STARTED under:
+				// a socket under another name of the same machine read healthy beside a `lastSeenAt` weeks
+				// old, on the one field a reader uses to judge whether "connected" is real.
+				await updateRuntimeStatus(env, instanceId, uid, "online", liveNode).catch(() => undefined);
+				runner.lastSeenAt = new Date().toISOString().replace("T", " ").slice(0, 19);
 			} catch (e) {
 				const failure = classifyHealthProbeFailure(e);
 				runnerHealth = failure;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SECURE_HANDOFF_MIN_CLI } from "./connectors/tmux.js";
 import { ENGINE_CHECK_MIN_CLI } from "./engine-preflight.js";
+import { RELAY_NAME_STABLE_MIN_CLI } from "./machine-identity.js";
 import { BOOTSTRAP_MIN_CLI, RUNNER_CONTROL_MIN_CLI, RUNNER_FEATURES, runnerFeatureGaps, runnerVersionView } from "./runner-features.js";
 
 describe("what a runner version is too old for (#859)", () => {
@@ -11,7 +12,7 @@ describe("what a runner version is too old for (#859)", () => {
 	});
 
 	it("a current runner is behind on nothing; an unknown version is not judged", () => {
-		expect(runnerFeatureGaps(SECURE_HANDOFF_MIN_CLI)).toEqual([]);
+		expect(runnerFeatureGaps(RELAY_NAME_STABLE_MIN_CLI)).toEqual([]);
 		expect(runnerFeatureGaps("")).toBeNull();
 		expect(runnerVersionView(null)).toEqual({ runnerVersion: null, behind: null });
 	});
@@ -25,8 +26,9 @@ describe("what a runner version is too old for (#859)", () => {
 		expect(runnerFeatureGaps(RUNNER_CONTROL_MIN_CLI)?.map((g) => g.feature)).toContain("self-updating pags up (never needs a manual install again)");
 	});
 
-	it("a machine on 0.4.63 is behind only on the secret handoff (#918), the failed-turn output (#889), the supervisor restart (#860) and the engine check (#879)", () => {
+	it("a machine on 0.4.63 is behind only on stable relay names (#922), the secret handoff (#918), the failed-turn output (#889), the supervisor restart (#860) and the engine check (#879)", () => {
 		expect(runnerFeatureGaps(BOOTSTRAP_MIN_CLI)?.map((g) => g.feature)).toEqual([
+			"relay sockets that keep their machine name when the hostname changes",
 			"tmux_secure_put / tmux_secure_get (machine-to-machine secret files)",
 			"the engine's own output in a failed run's detail",
 			"engine check before launch (installed + signed in), required by apply-now",
@@ -36,17 +38,26 @@ describe("what a runner version is too old for (#859)", () => {
 
 	it("a machine one release behind the engine check is told so, and a current one is not (#879)", () => {
 		expect(runnerVersionView("0.4.66").behind).toEqual([
+			"relay sockets that keep their machine name when the hostname changes (needs 0.4.70)",
 			"tmux_secure_put / tmux_secure_get (machine-to-machine secret files) (needs 0.4.69)",
 			"the engine's own output in a failed run's detail (needs 0.4.68)",
 			"engine check before launch (installed + signed in), required by apply-now (needs 0.4.67)",
 		]);
 		expect(runnerFeatureGaps(ENGINE_CHECK_MIN_CLI)?.map((g) => g.feature)).toEqual([
+			"relay sockets that keep their machine name when the hostname changes",
 			"tmux_secure_put / tmux_secure_get (machine-to-machine secret files)",
 			"the engine's own output in a failed run's detail",
 		]);
 	});
 
-	it("a machine on 0.4.68 is behind only on the secret handoff (#918)", () => {
-		expect(runnerVersionView("0.4.68").behind).toEqual(["tmux_secure_put / tmux_secure_get (machine-to-machine secret files) (needs 0.4.69)"]);
+	it("a machine on 0.4.68 is behind only on stable relay names (#922) and the secret handoff (#918)", () => {
+		expect(runnerVersionView("0.4.68").behind).toEqual([
+			"relay sockets that keep their machine name when the hostname changes (needs 0.4.70)",
+			"tmux_secure_put / tmux_secure_get (machine-to-machine secret files) (needs 0.4.69)",
+		]);
+	});
+
+	it("a machine on 0.4.69 is behind only on stable relay names (#922)", () => {
+		expect(runnerFeatureGaps(SECURE_HANDOFF_MIN_CLI)?.map((g) => g.feature)).toEqual(["relay sockets that keep their machine name when the hostname changes"]);
 	});
 });

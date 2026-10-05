@@ -234,6 +234,7 @@ export async function connectViaRelay(
 					reportRegistration();
 				},
 				answerControl,
+				runnerNode,
 			),
 		);
 		if (label) writeLine(`Attached agent: ${label}`);
@@ -419,6 +420,12 @@ export function openRelaySocket(
 	onOpen?: (instanceId: string, reconnect: boolean) => void | Promise<void>,
 	/** Answers a cloud → CLI control command (#850) instead of forwarding it to the local runner. */
 	onControl?: (path: string, body?: unknown) => Promise<{ status: number; result: unknown }>,
+	/** The node name this socket connects under — the SAME one the process registers and heartbeats
+	 *  under (#922). Read once, not per connect: `os.hostname()` moves under a machine (#379), and a
+	 *  socket that followed it opened in a relay slot no registration names, so every status read
+	 *  probed the registered name, found no socket, and reported a live machine as disconnected while
+	 *  its heartbeat kept `lastSeenAt` fresh — and the slot it was in never had its own row stamped. */
+	runnerNode: string = hostname(),
 ): RelaySocketHandle {
 	let backoffMs = 1000;
 	let reconnecting = false;
@@ -449,7 +456,7 @@ export function openRelaySocket(
 			backoffMs = Math.min(backoffMs * 2, 30_000);
 			return;
 		}
-		const params = new URLSearchParams({ token: relayToken, node: hostname() });
+		const params = new URLSearchParams({ token: relayToken, node: runnerNode });
 		if (force) params.set("force", "1");
 		const url = `${wsBase}/v1/relay/${encodeURIComponent(instanceId)}/connect?${params.toString()}`;
 		const ws = new WebSocket(url);

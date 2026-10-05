@@ -176,7 +176,10 @@ describe("coding_diagnostics live-reachability (#691)", () => {
 		// Must report the LIVE node, not the stale DB row.
 		expect(runner.runnerNode).toBe(NEW_NODE);
 		expect(runner.runnerVersion).toBe("0.4.54");
-		expect(runner.lastSeenAt).toBe("2026-08-16 09:03:48");
+		// Not the stale default row's — and, since the runner just answered its health check, not even
+		// the live row's stored value: that answer is the newest contact (#922).
+		expect(runner.lastSeenAt).not.toBe("2026-08-16 09:00:29");
+		expect(Date.parse(`${String(runner.lastSeenAt).replace(" ", "T")}Z`)).toBeGreaterThan(Date.parse("2026-08-16T09:03:48Z"));
 		expect(runner.reachable).toBe(true);
 
 		// relay should name the live node too.
