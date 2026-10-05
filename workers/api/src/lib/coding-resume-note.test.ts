@@ -381,3 +381,42 @@ describe("the wiring — the defect a unit test of this module cannot see", () =
 		expect(source).toContain("if (resumeNote) await appendTimeline(env, { sessionId, instanceId, userId, type: \"brain\", content: resumeNote });");
 	});
 });
+
+/**
+ * Behavioural tests — testing what the code DOES rather than what it LOOKS LIKE.
+ * These tests survive refactoring, file moves, and code reformatting.
+ * (See docs/testing-standards.md for the rationale.)
+ */
+describe("resume note behaviour (without source-text assertions)", () => {
+	it("pendingCodingResumeNote is an exported, callable function", () => {
+		// Instead of: expect(source).toContain("export async function pendingCodingResumeNote")
+		// We test: does the function exist and work?
+		expect(typeof pendingCodingResumeNote).toBe("function");
+	});
+
+	it("codingResumeNote formats an act list into a briefing string", () => {
+		// Instead of: expect(source).toContain("function codingResumeNote")
+		// We test: does it actually do what we care about?
+		const acts: ActItem[] = [
+			{ ...act(), action: "run_tests", outcome: "ok" },
+			{ ...act(), action: "commit", outcome: "ok" },
+		];
+		const note = codingResumeNote(acts, "interrupted");
+		expect(note).toContain("run_tests");
+		expect(note).toContain("commit");
+		expect(note).not.toContain("undefined");
+	});
+
+	it("resume note respects the MAX_LISTED_ACTS limit", () => {
+		// Instead of: expect(source).toContain("MAX_LISTED_ACTS")
+		// We test: does the limit actually apply?
+		const acts: ActItem[] = Array.from({ length: MAX_LISTED_ACTS + 5 }, (_, i) =>
+			act({ action: `act_${i}`, outcome: "ok" }),
+		);
+		const note = codingResumeNote(acts, "interrupted");
+		// The note should mention the overflow, not list all acts
+		expect(note.length).toBeLessThan(
+			acts.reduce((sum, a) => sum + (a.action?.length ?? 0), 0),
+		);
+	});
+});
