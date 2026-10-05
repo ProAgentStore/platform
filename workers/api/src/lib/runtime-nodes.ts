@@ -22,6 +22,8 @@ export interface RuntimeRow {
 	/** Stable machine identity (#379). Only on `instance_runtime_nodes`, and null until the
 	 *  machine has registered with a CLI that mints one. */
 	machine_id?: string | null;
+	/** The machine's last resource sample, JSON (#924). Only on `instance_runtime_nodes`; null from a CLI before 0.4.71. */
+	resources?: string | null;
 	status: string;
 	last_seen_at: string | null;
 	created_at: string;

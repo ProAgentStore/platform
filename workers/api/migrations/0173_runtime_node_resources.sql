@@ -1,0 +1,11 @@
+-- The machine's resource sample, carried by the runner's heartbeat (#924).
+--
+-- A relay drop or "connected but not responding" could only be read from its symptoms: nothing on
+-- the platform said whether the machine was out of CPU or memory when it happened. Each heartbeat
+-- (every 30s) now carries `{loadAvg, cpus, memTotalBytes, memFreeBytes, platform, sampledAt}` —
+-- in-process `os` reads on the runner, no new timer and no exec — stored as JSON on the per-machine
+-- row and surfaced by list_runner_nodes and coding_diagnostics.
+--
+-- NULLABLE: every existing row, and every heartbeat from a CLI before 0.4.71, keeps NULL, which the
+-- readers report as `resources: null` ("this runner does not report it"), never as a zero reading.
+ALTER TABLE instance_runtime_nodes ADD COLUMN resources TEXT;

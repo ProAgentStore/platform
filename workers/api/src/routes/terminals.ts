@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
+import { parseResourceSample, type RunnerResourceSample, type RunnerResourcesView, resourcesView } from "../lib/runner-resources.js";
 import { relayConnected } from "../lib/runner-client.js";
 import { lastTerminal } from "../lib/coding-timeline.js";
 import { normalizeRunnerNode, parseBoundRunnerNode } from "../lib/runtime-nodes.js";
@@ -28,6 +29,8 @@ interface NodeRow {
 	updated_at: string;
 	/** The stable identity (#379), NULL for a row written before it existed or by an older CLI. */
 	machine_id: string | null;
+	/** The machine's last resource sample, JSON (#924); null from a CLI before 0.4.71. */
+	resources?: string | null;
 	instance_config: string | null;
 	agent_name: string | null;
 	agent_slug: string | null;
@@ -122,6 +125,13 @@ export interface TerminalNode {
 	/** Features this runner is too old for (#859) — `[]` when current, null when it reported no version. Fix: runner_update. */
 	runnerBehind: string[] | null;
 	lastSeenAt: string | null;
+	/**
+	 * What the machine itself is doing (#924): CPU load, memory, active coding sessions, and
+	 * `warnings` past a high-water mark — from the freshest heartbeat sample across its rows. Null
+	 * when its CLI predates the sample (see `runnerBehind`). `sampledAt` going stale means the
+	 * heartbeat stopped, not that the machine went idle.
+	 */
+	resources: RunnerResourcesView | null;
 	/** Live: any (instance,node) relay socket is up. */
 	connected: boolean;
 	/** Agents/instances this machine serves. */
@@ -175,6 +185,8 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 	const keyForName = new Map<string, string>();
 	/** Freshness of the row that named each group, so a later row can rename it. */
 	const nameStamp = new Map<string, number>();
+	/** Freshest resource sample per group (#924). */
+	const sampleFor = new Map<string, RunnerResourceSample>();
 
 	// An UNIDENTIFIED row adopts the identity of its hostname — but only when that hostname is
 	// unambiguous.
@@ -216,6 +228,7 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 				runnerVersion: r.runner_version,
 				runnerBehind: null,
 				lastSeenAt: r.last_seen_at,
+				resources: null,
 				connected: false,
 				instances: [],
 				sessions: [],
@@ -239,6 +252,10 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 			}
 		}
 		keyForName.set(r.runner_node, key);
+		// The freshest sample on ANY of the machine's rows, by the runner's own clock — every agent's
+		// heartbeat carries the same machine reading, under whichever name it registered (#924).
+		const sample = parseResourceSample(r.resources);
+		if (sample && sample.sampledAt > (sampleFor.get(key)?.sampledAt ?? 0)) sampleFor.set(key, sample);
 
 		if (!n.instances.some((i) => i.instanceId === r.instance_id)) {
 			// Only list agents that actually USE a local runner. `pags up` (multiplexed)
@@ -280,7 +297,8 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 	// Why an unidentified machine has no id, said out loud (#393). Computed against the group's
 	// FRESHEST registration, which is the version actually running there — an old row left behind
 	// by a CLI the machine has since upgraded past must not keep prescribing an upgrade.
-	for (const n of byKey.values()) {
+	for (const [key, n] of byKey) {
+		n.resources = resourcesView(sampleFor.get(key) ?? null, n.sessions.filter((s) => s.status === "active").length);
 		n.identityHint = identityHint(n.machineId, n.runnerVersion);
 		n.runnerBehind = runnerFeatureGaps(n.runnerVersion)?.map((g) => `${g.feature} (needs ${g.minCli})`) ?? null;
 	}
@@ -382,7 +400,7 @@ terminalRoutes.get("/nodes", async (c) => {
 
 	const nodeRows = (await c.env.DB.prepare(
 		`SELECT n.instance_id, n.runner_node, n.placement, n.runner_version, n.status, n.last_seen_at, n.updated_at,
-		        n.machine_id,
+		        n.machine_id, n.resources,
 		        i.config AS instance_config, a.name AS agent_name, a.slug AS agent_slug,
 		        a.category AS agent_category, a.config AS agent_config
 		 FROM instance_runtime_nodes n

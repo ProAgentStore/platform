@@ -15,6 +15,7 @@ import { SWITCH_BRANCH_MIN_CLI } from "./repo-policy-act.js";
 import { REPO_SYNC_MIN_CLI } from "./repo-sync.js";
 import { ENGINE_CHECK_MIN_CLI } from "./engine-preflight.js";
 import { FAST_FORWARD_MIN_CLI } from "./repo-sync-gate.js";
+import { RESOURCES_MIN_CLI } from "./runner-resources.js";
 import { cliAtLeast } from "./runner-upgrade.js";
 
 /**
@@ -34,6 +35,7 @@ export interface RunnerFeature {
 }
 
 export const RUNNER_FEATURES: readonly RunnerFeature[] = [
+	{ feature: "machine CPU load and memory in list_runner_nodes / coding_diagnostics", minCli: RESOURCES_MIN_CLI },
 	{ feature: "relay sockets that keep their machine name when the hostname changes", minCli: RELAY_NAME_STABLE_MIN_CLI },
 	{ feature: "tmux_secure_put / tmux_secure_get (machine-to-machine secret files)", minCli: SECURE_HANDOFF_MIN_CLI },
 	{ feature: "the engine's own output in a failed run's detail", minCli: TURN_TAIL_MIN_CLI },

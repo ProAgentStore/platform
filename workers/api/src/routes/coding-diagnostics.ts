@@ -24,6 +24,7 @@ import { refusingEngineIssue } from "../lib/coding-run-state.js";
 import { listRepos, listSessions, reconcileOrphanedSessions } from "../lib/coding-store.js";
 import { readProviderAccountHealth } from "../lib/provider-account-health.js";
 import { readInstanceRunnerNode, relayNameForInstance } from "../lib/runtime-nodes.js";
+import { activeSessionsOn, resourcesView } from "../lib/runner-resources.js";
 import { classifyHealthProbeFailure, type HealthCheckState, runnerHealthRemedy, runnerLiveStatus } from "../lib/runner-health.js";
 import { latestRunRow, readReauthState, signInBlockFrom } from "../lib/engine-reauth-store.js";
 import { reauthExpiryView } from "../lib/engine-reauth-expiry.js";
@@ -385,6 +386,11 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 			lastSeenAt: reportedRow?.last_seen_at ?? null,
 			registeredAt: runtimeRow?.created_at ?? null,
 		};
+		// What the machine itself is doing (#924) — CPU load, memory, its active coding sessions — from
+		// its last heartbeat, beside the socket state. Null on a CLI too old to send it.
+		const resourceNode = liveNode ?? reportedRow?.runner_node ?? null;
+		const resourceRow = reportedRow as { resources?: string | null } | null;
+		runner.resources = resourcesView(resourceRow?.resources ?? null, resourceNode ? await activeSessionsOn(env, uid, [resourceNode]) : null);
 
 		let runnerHealth: unknown = null;
 		let runnerDiag: unknown = null;
@@ -666,6 +672,10 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 				message: `Runner is connected but not responding (health check: ${healthCheck})`,
 				fix: healthRemedy!,
 			});
+		}
+		// The machine is past a high-water mark (#924) — the usual reason a live runner answers late.
+		for (const warning of (runner.resources as { warnings?: string[] } | null)?.warnings ?? []) {
+			issues.push({ severity: "warn", message: warning, fix: "Move some agents to another machine (set_instance_runner_node), or stop the work running beside them." });
 		}
 
 		if (signInBlock) {

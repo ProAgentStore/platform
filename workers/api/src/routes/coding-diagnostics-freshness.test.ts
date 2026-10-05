@@ -93,3 +93,36 @@ describe("coding_diagnostics freshness (#922)", () => {
 		});
 	});
 });
+
+describe("coding_diagnostics reports the machine's resources (#924)", () => {
+	const live = () => getBoundRunnerConn.mockResolvedValue({ runnerNode: "Macmini", instanceId: "i1", userId: "u1", relayName: "i1:node:Macmini", endpointUrl: "relay://", token: "", env: {} });
+	const store = (load1: number) =>
+		d1.exec(`UPDATE instance_runtime_nodes SET resources = '${JSON.stringify({ loadAvg: [load1, 4, 2], cpus: 4, memTotalBytes: 8e9, memFreeBytes: 2e9, platform: "darwin", sampledAt: Date.UTC(2026, 9, 5, 6) })}' WHERE runner_node = 'Macmini'`);
+
+	it("reports the live machine's last sample and its active coding sessions", async () => {
+		live();
+		store(2);
+		d1.exec(`INSERT INTO coding_repos (id, instance_id, user_id, name) VALUES ('r1', 'i1', 'u1', 'platform')`);
+		d1.exec(`INSERT INTO coding_sessions (id, instance_id, user_id, repo_id, runner_node, client_type, status) VALUES ('s1', 'i1', 'u1', 'r1', 'Macmini', 'claude', 'active')`);
+		const runner = await diag();
+		expect(runner.resources).toMatchObject({ load1: 2, cpus: 4, loadPerCpu: 0.5, memUsedPct: 75, activeSessions: 1, warnings: [] });
+	});
+
+	it("raises a saturated machine as an issue, beside the socket state", async () => {
+		live();
+		store(9);
+		const routes = new Hono<{ Bindings: Env }>();
+		registerDiagnosticsRoutes(routes);
+		const app = new Hono<{ Bindings: Env }>();
+		app.route("/v1/instances", routes);
+		const token = await signSession("u1", SECRET, { roles: [] });
+		const res = await app.request("/v1/instances/i1/coding/diagnostics", { headers: { Authorization: `Bearer ${token}` } }, { DB: d1.DB, SESSION_SIGNING_KEY: SECRET } as unknown as Env);
+		const body = (await res.json()) as { issues: Array<{ severity: string; message: string }> };
+		expect(body.issues).toContainEqual(expect.objectContaining({ severity: "warn", message: expect.stringMatching(/^CPU saturated: 1-minute load 9 on 4 cores/) }));
+	});
+
+	it("is null for a runner that sends no sample", async () => {
+		live();
+		expect((await diag()).resources).toBeNull();
+	});
+});

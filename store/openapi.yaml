@@ -3322,6 +3322,11 @@ paths:
   /v1/instances/{instanceId}/runtime/heartbeat:
     post:
       summary: Mark ProAgentStore browser runtime online
+      description: |
+        Sent by `pags up` every 30s for each agent it serves. From CLI 0.4.71 the body also carries
+        the machine's `resources` sample (#924), stored on the machine's row and reported by
+        `GET /v1/terminals/nodes` and coding diagnostics. Omitted or malformed, it is ignored and
+        the heartbeat still succeeds.
       operationId: heartbeatInstanceRuntime
       tags: [Instances]
       parameters:
@@ -3331,6 +3336,24 @@ paths:
           schema:
             type: string
             format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                runnerNode: { type: string, description: "The machine name this runner registered under." }
+                resources:
+                  type: object
+                  description: In-process `os` readings, once per heartbeat.
+                  properties:
+                    loadAvg: { type: array, items: { type: number }, minItems: 3, maxItems: 3 }
+                    cpus: { type: integer }
+                    memTotalBytes: { type: number }
+                    memFreeBytes: { type: number }
+                    platform: { type: string }
+                    sampledAt: { type: number, description: "Epoch ms, the runner's clock." }
       responses:
         "200":
           description: Runtime marked online
@@ -9955,6 +9978,9 @@ paths:
         agents and no sessions. `connected` is live-checked against the relay sockets under every
         name the machine is known by (`node` and `aka`, #922), not read from a status column (which
         is not cleared on disconnect). `lastSeenAt` is the machine's last heartbeat, not a socket.
+        `resources` (#924) is the machine's own state from its freshest heartbeat sample — CPU load
+        (1/5/15-min and per core), memory, its active coding sessions, and `warnings` past a
+        high-water mark — or null for a CLI before 0.4.71.
       operationId: listTerminalNodes
       tags: [Terminals]
       responses:

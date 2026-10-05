@@ -336,7 +336,12 @@ describe("credential storage has exactly one scheme", () => {
 		// file would be unused and would imply it handles a secret. The claim is not taken on
 		// trust — the assertion below pins that the file touches NO envelope column, and
 		// key-hint.test.ts pins the 4-character bound.
-		const SAFE_NON_CRYPTO_WRITERS = new Set(["routes/terminals.ts", "lib/key-hint-backfill.ts"]);
+		//
+		// Known-safe exception: lib/runner-resources.ts UPDATEs instance_runtime_nodes only to set
+		// `resources`, the machine's CPU/memory heartbeat sample (#924, migration 0173) — load
+		// averages and byte counts, nothing secret. The token_* columns are never named there, and
+		// the assertion below measures that rather than trusting this sentence.
+		const SAFE_NON_CRYPTO_WRITERS = new Set(["routes/terminals.ts", "lib/key-hint-backfill.ts", "lib/runner-resources.ts"]);
 		const offenders = writers.filter((w) => !SAFE_NON_CRYPTO_WRITERS.has(w.f.rel) && !/from ["'][^"']*\/crypto\.js["']/.test(w.f.raw)).map((w) => `${w.f.rel} → ${w.writes.join(", ")}`);
 		expect(
 			offenders,
@@ -354,7 +359,7 @@ describe("credential storage has exactly one scheme", () => {
 		// The day one of them starts writing a secret without the envelope, this fails and the
 		// exemption stops covering it — which is the failure mode a bare allowlist has.
 		const ENVELOPE_COLUMN = /\b\w*(?:ciphertext|dek|dek_wrapped)\w*\b|\biv\b/i;
-		for (const rel of ["routes/terminals.ts", "lib/key-hint-backfill.ts"]) {
+		for (const rel of ["routes/terminals.ts", "lib/key-hint-backfill.ts", "lib/runner-resources.ts"]) {
 			const file = ALL.find((f) => f.rel === rel);
 			expect(file, `${rel} is exempted from the crypto-import rule but no longer exists — drop the entry`).toBeDefined();
 			const sqlText = (file?.raw ?? "").match(/["'`][^"'`]*\b(?:INSERT\s+INTO|UPDATE)\s+\w+[^"'`]*["'`]/gi) ?? [];

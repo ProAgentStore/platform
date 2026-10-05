@@ -1,4 +1,5 @@
 import { hostname } from "node:os";
+import { sampleResources } from "./resources.js";
 import { loadSession } from "../login.js";
 import { loadMachineIdentity } from "../../machine.js";
 import { writeError, writeLine } from "../../output.js";
@@ -280,9 +281,11 @@ export async function connectViaRelay(
 			// The live set, not the startup array — a heartbeat for a detached instance would
 			// keep it looking online, and a newly attached one would look offline until restart.
 			let failure: string | null = null;
+			// One machine reading per beat, sent with every agent's heartbeat (#924).
+			const resources = sampleResources();
 			for (const id of [...attached.keys()]) {
 				try {
-					await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime/heartbeat`, opts, { runnerNode });
+					await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime/heartbeat`, opts, { runnerNode, resources });
 				} catch (e) {
 					failure = e instanceof Error ? e.message : String(e);
 				}

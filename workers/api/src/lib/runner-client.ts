@@ -1,4 +1,6 @@
 import { decryptKey } from "./crypto.js";
+import { logError } from "./error-log.js";
+import { latestResourceSample, resourcesView } from "./runner-resources.js";
 import { aliasNodesFor, type NodeRegistration } from "./machine-identity.js";
 import { NO_SOCKET_MARKER, relayFailureIsDisconnect, RunnerUnreachableError } from "./runner-unreachable.js";
 import { normalizeRunnerNode, readInstanceRunnerNode, relayNameForInstance } from "./runtime-nodes.js";
@@ -306,6 +308,7 @@ export async function callRunner<T = unknown>(conn: RunnerConn, path: string, bo
 			// verifies that with a bounded ping before accepting a command (#846); retain that
 			// distinction here so a coding-start failure says what actually needs attention.
 			const unresponsive = detail.includes("RUNNER_RELAY_UNRESPONSIVE");
+			if (unresponsive) await recordUnresponsive(conn, path);
 			throw new RunnerUnreachableError(
 				unresponsive
 					? `Runner relay is connected but not responding — ${NO_SOCKET_MARKER} for this agent.`
@@ -315,4 +318,29 @@ export async function callRunner<T = unknown>(conn: RunnerConn, path: string, bo
 		throw new Error(`Runner ${path} → ${res.status}: ${detail.slice(0, 200)}`);
 	}
 	return (await res.json()) as T;
+}
+
+/**
+ * Stamp a "connected but not responding" dispatch with what the machine was doing (#924).
+ *
+ * The failure ends Pilot runs (#913) and its cause is usually the machine, not the network — a
+ * runner too loaded to answer its relay ping in time. Recording the machine's latest heartbeat
+ * sample beside the failure makes that checkable in a postmortem (MCP `list_errors`) instead of
+ * inferred. Only on this failure path, and never throws: it must not change what the caller sees.
+ */
+async function recordUnresponsive(conn: RunnerConn, path: string): Promise<void> {
+	try {
+		const node = conn.runnerNode ?? "";
+		const sample = node ? await latestResourceSample(conn.env, conn.userId, [node]) : null;
+		const view = resourcesView(sample, null);
+		await logError(conn.env, {
+			source: "runner",
+			level: "warn",
+			userId: conn.userId,
+			message: `Runner relay connected but not responding on ${node || "the default machine"} (${path}).${view ? ` Machine at last heartbeat: load ${view.load1} on ${view.cpus} cores, ${view.memUsedPct}% memory in use.` : " The machine reports no resource sample (CLI before 0.4.71)."}`,
+			context: { instanceId: conn.instanceId, runnerNode: node || null, path, resources: view },
+		});
+	} catch {
+		/* best-effort */
+	}
 }

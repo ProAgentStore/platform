@@ -73,6 +73,7 @@ export {
 import { foldNodesByMachine, normalizeMachineId, sanitizeMachineNames } from "../lib/machine-identity.js";
 import { parseBoundRunnerNode } from "../lib/runtime-nodes.js";
 import { diagnoseAttachment, heartbeatFresh } from "../lib/runtime-attachment.js";
+import { saveResourceSample } from "../lib/runner-resources.js";
 import { instanceListName, instanceListView, patchInstanceConfig, removeInstanceConfigKey } from "../lib/instance-config.js";
 import { runnerVersionView } from "../lib/runner-features.js";
 
@@ -670,8 +671,10 @@ instanceRoutes.post("/:instanceId/runtime/heartbeat", async (c) => {
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	await requireRuntime(c.env, instanceId, session.uid);
-	const body = (await c.req.json().catch(() => ({}))) as { runnerNode?: unknown };
-	await updateRuntimeStatus(c.env, instanceId, session.uid, "online", normalizeRunnerNode(body.runnerNode));
+	const body = (await c.req.json().catch(() => ({}))) as { runnerNode?: unknown; resources?: unknown };
+	const node = normalizeRunnerNode(body.runnerNode);
+	await updateRuntimeStatus(c.env, instanceId, session.uid, "online", node);
+	await saveResourceSample(c.env, instanceId, session.uid, node, body.resources).catch(() => undefined); // #924, best-effort: never fails a heartbeat
 	return c.json({ success: true, status: "online" });
 });
 
