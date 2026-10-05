@@ -39,6 +39,17 @@ export async function signIn(provider: "google" | "github" = "github") {
 	window.location.href = `${oauthUrl}?app_id=${config.app_id}&response_mode=${config.response_mode}&return_to=${returnTo}`;
 }
 
+/**
+ * The address to show once the sign-in token is off the URL: the same path, query and hash, minus
+ * `session` alone (#897). It used to keep the path only, so a signed-out tap on a deploy notification
+ * (`…/coding?builds=<repo>`) signed in and then opened the plain Coding tab instead of that repo's builds.
+ */
+export function withoutSessionParam(href: string): string {
+	const u = new URL(href);
+	u.searchParams.delete("session");
+	return `${u.pathname}${u.search}${u.hash}`;
+}
+
 export async function handleOAuthCallback(): Promise<string | null> {
 	const params = new URLSearchParams(window.location.search);
 
@@ -47,7 +58,7 @@ export async function handleOAuthCallback(): Promise<string | null> {
 	const session = params.get("session");
 	if (session) {
 		setToken(session);
-		window.history.replaceState({}, "", window.location.pathname);
+		window.history.replaceState({}, "", withoutSessionParam(window.location.href));
 		return session;
 	}
 	return null;

@@ -35,6 +35,19 @@ export function profileLink(): string {
 	return `${BASE}/profile`;
 }
 
+/** The notification feed — every row readable, each with its own link (#897). */
+export function notificationsLink(): string {
+	return `${BASE}/notifications`;
+}
+
+/**
+ * The instance list — the one page that covers a notification about SEVERAL instances (#897). The
+ * idle-sleep batch used to send no link at all when it spanned agents, and landed on the console home.
+ */
+export function instancesLink(): string {
+	return `${BASE}/instances`;
+}
+
 /** An instance with no tab named — `InstanceDetail` opens the Assistant. */
 export function instanceLink(instanceId: string): string {
 	return `${BASE}/instances/${encodeURIComponent(instanceId)}`;

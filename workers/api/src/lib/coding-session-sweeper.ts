@@ -44,7 +44,7 @@ import { appendTimeline } from "./coding-timeline.js";
 import { logUnhandled } from "./on-error.js";
 import { accountTimeZone } from "./account-timezone.js";
 import { RESUME_WINDOW_MS, resolveSessionContinuity } from "./coding-session-continuity.js";
-import { codingSessionLink } from "./console-links.js";
+import { codingSessionLink, instancesLink } from "./console-links.js";
 import { notifyUser } from "../routes/push.js";
 import type { Env } from "../types.js";
 
@@ -255,7 +255,7 @@ function joinNames(names: string[], max = 3): string {
 export function sleepNotification(
 	slept: SleptRepo[],
 	timeZone?: string,
-): { title: string; body: string; url?: string } | null {
+): { title: string; body: string; url: string } | null {
 	if (slept.length === 0) return null;
 
 	const instances = [...new Set(slept.map((s) => s.instanceId))];
@@ -285,8 +285,8 @@ export function sleepNotification(
 		title,
 		body: `${joinNames(repos)}.${kept}${strayClause}`,
 		// There is no page that shows every sleeping repo across agents, so a batch spanning several
-		// instances gets no link rather than an arbitrary one.
-		url: instances.length === 1 ? codingSessionLink(instances[0]) : undefined,
+		// instances opens the instance list (#897) — it used to carry no link and land on the console home.
+		url: instances.length === 1 ? codingSessionLink(instances[0]) : instancesLink(),
 	};
 }
 

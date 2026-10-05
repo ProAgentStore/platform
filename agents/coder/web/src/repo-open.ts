@@ -80,6 +80,8 @@ export function shouldAutoOpenSoloSession(input: {
 	/** This mount has already tried. Latched, so a failure is not retried on every render. */
 	alreadyTried: boolean;
 	opening: boolean;
+	/** Arrived on a `?builds=` deep link — opening the engine would replace the Builds view it named (#897). */
+	buildsDeepLink?: boolean;
 }): boolean {
-	return input.hasRepo && !input.hasActiveSession && input.runnerOnline === true && !input.alreadyTried && !input.opening;
+	return !input.buildsDeepLink && input.hasRepo && !input.hasActiveSession && input.runnerOnline === true && !input.alreadyTried && !input.opening;
 }

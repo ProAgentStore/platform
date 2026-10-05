@@ -132,3 +132,11 @@ describe("the console no longer asks the user to start a session (#408)", () => 
 		expect(list).not.toContain("active session{");
 	});
 });
+
+describe("shouldAutoOpenSoloSession on a ?builds= deep link (#897)", () => {
+	it("does not start the engine over the Builds view a deploy notification opened", () => {
+		const ready = { hasRepo: true, hasActiveSession: false, runnerOnline: true, alreadyTried: false, opening: false };
+		expect(shouldAutoOpenSoloSession(ready)).toBe(true);
+		expect(shouldAutoOpenSoloSession({ ...ready, buildsDeepLink: true })).toBe(false);
+	});
+});

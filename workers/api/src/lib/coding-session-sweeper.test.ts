@@ -251,9 +251,9 @@ describe("the sleep notification (#698)", () => {
 		);
 		expect(n?.title).toBe("😴 2 agents went to sleep");
 		expect(n?.body).toContain("chess-academy, site-monitor and platform");
-		// Several instances have no single page to link, so it links nowhere rather than somewhere
-		// arbitrary.
-		expect(n?.url).toBeUndefined();
+		// Several instances have no single page to link, so it opens the instance list (#897) — it used
+		// to link nowhere, and a tap landed on the console home.
+		expect(n?.url).toBe("/console/instances");
 	});
 
 	it("counts agents, not repos, and links the one there is", () => {

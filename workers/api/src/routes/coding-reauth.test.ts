@@ -16,7 +16,7 @@ const { callRunner, getBoundRunnerConn, readEngines, hasUserProviderKey, upsertU
 	hasUserProviderKey: vi.fn(),
 	upsertUserProviderKey: vi.fn(),
 	notifyUser: vi.fn(),
-	store: { state: null as EngineReauthState | null },
+	store: { state: null as EngineReauthState | null, waitingSession: null as string | null },
 }));
 vi.mock("../lib/runner-client.js", async (orig) => ({ ...(await orig<typeof import("../lib/runner-client.js")>()), callRunner, getBoundRunnerConn }));
 vi.mock("../lib/coding-engines.js", async (orig) => ({ ...(await orig<typeof import("../lib/coding-engines.js")>()), readEngines }));
@@ -25,6 +25,7 @@ vi.mock("./push.js", () => ({ notifyUser }));
 vi.mock("../lib/engine-reauth-store.js", async (orig) => ({
 	...(await orig<typeof import("../lib/engine-reauth-store.js")>()),
 	readReauthState: async () => store.state,
+	signInSessionId: async () => store.waitingSession,
 	writeReauthState: async (_e: unknown, _i: unknown, _u: unknown, s: EngineReauthState) => {
 		store.state = s;
 	},
@@ -78,6 +79,7 @@ async function call(method: string, path: string, body?: unknown) {
 beforeEach(() => {
 	for (const m of [callRunner, getBoundRunnerConn, readEngines, hasUserProviderKey, upsertUserProviderKey, notifyUser]) m.mockReset();
 	store.state = null;
+	store.waitingSession = null;
 	calls.length = 0;
 	pane = "";
 	getBoundRunnerConn.mockResolvedValue(conn);
@@ -122,6 +124,18 @@ describe("the re-auth relay (#881)", () => {
 		expect(JSON.stringify(body)).not.toContain(TOKEN);
 		expect(store.state?.status).toBe("succeeded");
 		expect(notifyUser).toHaveBeenCalledOnce();
+		// No run waits on it: the instance's Coding tab, never the console home (#897).
+		expect(notifyUser.mock.calls[0]?.[5]).toBe(`/console/instances/${INSTANCE}/coding`);
+	});
+
+	it("the 'signed in' notification opens the run the sign-in unblocks (#897)", async () => {
+		store.waitingSession = "csess_stopped";
+		pane = `${CLAUDE_URL}\nPaste code here if prompted >`;
+		await call("POST", "", {});
+		pane = `Paste code here if prompted > abc#def\n\nYour OAuth token (valid for 1 year):\n${TOKEN}\nStore this token securely.`;
+		await call("POST", "/input", { text: "abc#def" });
+		expect(notifyUser).toHaveBeenCalledOnce();
+		expect(notifyUser.mock.calls[0]?.[5]).toBe(`/console/instances/${INSTANCE}/coding/csess_stopped`);
 	});
 
 	it("status: Codex device flow reports the code to enter, and success without anything sent back", async () => {

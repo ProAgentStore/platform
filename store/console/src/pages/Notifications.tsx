@@ -6,7 +6,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { Notification } from "../lib/types";
 import { pushSupported, pushPermission, enablePush, sendTestPush } from "../lib/push";
-import { notificationRoute } from "../lib/deepLink";
+import { notificationClick } from "../lib/deepLink";
 
 /**
  * When it arrived — reading the field the API actually sends.
@@ -83,23 +83,11 @@ export default function Notifications() {
 							className={`p-3 text-left bg-panel border border-line rounded-lg cursor-pointer hover:border-accent transition-all ${n.read ? "opacity-60" : ""}`}
 							onClick={async () => {
 								if (!n.read) await markRead(n.id);
-								// The row's own deep link first — it is the specific place the notification is
-								// about (#338). A deploy has no `instanceId` on the row, so before this the
-								// only clickable outcome for one was a silent reload.
-								const route = notificationRoute(n.url);
-								if (route) navigate(route);
-								// An `else if (n.instanceId) navigate(...)` used to sit here and was DEAD (#617):
-								// the notifications table has no `instance_id` — its column is `agent_id`, and
-								// it holds an agent id, so even reading the right name would have routed
-								// `/instances/<an agent id>`. Removing it changes no behaviour; it stops the
-								// chain claiming a fallback it never had.
-								// A pre-#338 row points at GitHub Actions: open it where it lives.
-								else if (n.url?.startsWith("https://")) window.open(n.url, "_blank", "noopener");
-								// Pre-#338 rows have no `url` but do carry `agent_id` — route to the agent
-								// detail page as the best available destination (#622). New rows written by
-								// the "new subscriber" call site also get a `/console/agents/:id` url, so
-								// they take the first branch; this only fires for historical rows.
-								else if (n.agent_id) navigate(`/agents/${n.agent_id}`);
+								// Its own deep link, else the instance or agent it concerns (#338, #622, #897) —
+								// `notificationClick` holds the order and why.
+								const target = notificationClick(n);
+								if (target && "route" in target) navigate(target.route);
+								else if (target) window.open(target.external, "_blank", "noopener");
 								else load();
 							}}
 						>

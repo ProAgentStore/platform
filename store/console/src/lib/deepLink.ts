@@ -47,3 +47,24 @@ export function notificationRoute(url?: string | null): string | null {
 	if (url === "/console" || url === "/console/") return "/";
 	return url.startsWith("/console/") ? url.slice("/console".length) : url;
 }
+
+/** What clicking a notification row does: route in the app, open an outside page, or nothing to open. */
+export type NotificationClick = { route: string } | { external: string } | null;
+
+/**
+ * The click target for an in-app notification row, most specific first (#897).
+ *
+ *  1. Its own deep link (#338) — the exact run, session, builds view or page it is about.
+ *  2. A pre-#338 GitHub Actions url — opened where it lives.
+ *  3. The instance it concerns (`instance_id`, migration 0147) — a row whose producer sent no link.
+ *     Clicking one used to do nothing but reload the list.
+ *  4. A pre-#338 row's agent (#622).
+ */
+export function notificationClick(n: { url?: string | null; instance_id?: string | null; agent_id?: string | null }): NotificationClick {
+	const route = notificationRoute(n.url);
+	if (route) return { route };
+	if (n.url?.startsWith("https://")) return { external: n.url };
+	if (n.instance_id) return { route: `/instances/${encodeURIComponent(n.instance_id)}` };
+	if (n.agent_id) return { route: `/agents/${encodeURIComponent(n.agent_id)}` };
+	return null;
+}

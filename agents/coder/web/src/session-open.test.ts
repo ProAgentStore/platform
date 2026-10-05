@@ -124,3 +124,14 @@ describe("which repo an open session belongs to", () => {
 		expect(repoForSession(repos, s("x", "repo-gone", "active"))).toBeNull();
 	});
 });
+
+describe("a deploy notification's ?builds= deep link lands on Builds (#897)", () => {
+	it("restores no session — the last repo's, or a single-repo agent's — over the Builds view", () => {
+		expect(pickAutoOpenSession({ sessions: SESSIONS, lastRepoId: "repo-a", buildsDeepLink: true })).toBeNull();
+		expect(pickAutoOpenSession({ sessions: SESSIONS, singleRepo: true, buildsDeepLink: true })).toBeNull();
+	});
+
+	it("without it, the last repo's live session still restores", () => {
+		expect(pickAutoOpenSession({ sessions: SESSIONS, lastRepoId: "repo-a" })).not.toBeNull();
+	});
+});

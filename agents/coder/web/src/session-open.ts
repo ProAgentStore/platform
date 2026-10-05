@@ -55,6 +55,8 @@ export interface AutoOpenInput {
 	singleRepo?: boolean;
 	/** `localStorage` — the repo this instance was last worked in. */
 	lastRepoId?: string | null;
+	/** Arrived on a `?builds=` deep link (a deploy notification) — the Builds view is the destination. */
+	buildsDeepLink?: boolean;
 }
 
 export function pickAutoOpenSession({
@@ -62,8 +64,12 @@ export function pickAutoOpenSession({
 	initialSessionId,
 	singleRepo = false,
 	lastRepoId = null,
+	buildsDeepLink = false,
 }: AutoOpenInput): CodingSession | null {
 	if (!sessions.length) return null;
+	// A deploy notification opens that repo's Builds (#897). Restoring the last session here
+	// navigated to `/coding/:sessionId` — dropping `?builds=` — and replaced the page it promised.
+	if (buildsDeepLink && !initialSessionId) return null;
 	// A named session, in whatever state it is in. An ended one still has its transcript.
 	if (initialSessionId) return sessions.find((s) => s.id === initialSessionId) ?? null;
 	if (singleRepo) return sessions.find((s) => s.status === "active") ?? null;

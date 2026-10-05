@@ -415,13 +415,13 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			sessions,
 			initialSessionId,
 			singleRepo,
-			lastRepoId: loadLastRepo(instanceId),
+			lastRepoId: loadLastRepo(instanceId), buildsDeepLink: !!initialBuildsRepoId,
 		});
 		if (target) {
 			autoOpenedRef.current = true;
 			openTerminal(target);
 		}
-	}, [sessions, initialSessionId, instanceId, openTerminal, singleRepo]);
+	}, [sessions, initialSessionId, instanceId, openTerminal, singleRepo, initialBuildsRepoId]);
 
 	const closeTerminal = useCallback(() => {
 		autoOpenedRef.current = true; // stay on the list — don't let a sessions refresh re-open
@@ -590,7 +590,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			hasActiveSession: !!activeSessionFor(sessions, only.id),
 			runnerOnline,
 			alreadyTried: soloAutoOpenRef.current || autoOpenedRef.current,
-			opening: openingRepoId !== null,
+			opening: openingRepoId !== null, buildsDeepLink: !!initialBuildsRepoId,
 		});
 		if (!go) return;
 		soloAutoOpenRef.current = true;

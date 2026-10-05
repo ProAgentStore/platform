@@ -172,7 +172,7 @@ describe("notifyUser", () => {
 		const { env, inserted } = notifyEnv({ preferences: { notifications: { muted: ["deploy"] } } });
 		const fetchSpy = vi.fn();
 		vi.stubGlobal("fetch", fetchSpy);
-		await notifyUser(env, "u1", "deploy", "✅ Deployed", "live");
+		await notifyUser(env, "u1", "deploy", "✅ Deployed", "live", "/console/instances/i1/coding?builds=r1");
 		expect(inserted[0].pushedAt).toBeNull();
 		expect(fetchSpy).not.toHaveBeenCalled();
 	});
@@ -182,7 +182,7 @@ describe("notifyUser", () => {
 		const { env, inserted } = notifyEnv({ preferences: { notifications: { muted: [], instances: ["inst-a"] } } });
 		const fetchSpy = vi.fn();
 		vi.stubGlobal("fetch", fetchSpy);
-		await notifyUser(env, "u1", "coding", "✅ Coder finished", "done", undefined, { instanceId: "inst-b" });
+		await notifyUser(env, "u1", "coding", "✅ Coder finished", "done", "/console/instances/inst-b/coding/s1", { instanceId: "inst-b" });
 		expect(inserted).toHaveLength(1);
 		expect(inserted[0].pushedAt).toBeNull();
 		expect(fetchSpy).not.toHaveBeenCalled();
@@ -194,7 +194,7 @@ describe("notifyUser", () => {
 		const envWithVapid = { ...(env as object), ...(await vapidEnvKeys()) } as unknown as Env;
 		const fetchSpy = vi.fn(async () => new Response(null, { status: 201 }));
 		vi.stubGlobal("fetch", fetchSpy);
-		await notifyUser(envWithVapid, "u1", "apply", "✅ Résumé parsed", "saved");
+		await notifyUser(envWithVapid, "u1", "apply", "✅ Résumé parsed", "saved", "/console/profile");
 		expect(inserted[0].pushedAt).not.toBeNull();
 		expect(fetchSpy).toHaveBeenCalledTimes(1);
 	});
@@ -219,7 +219,7 @@ describe("notifyUser", () => {
 		const { env, inserted } = notifyEnv({ preferences: { notifications: { muted: ["subscribe"] } } });
 		const fetchSpy = vi.fn();
 		vi.stubGlobal("fetch", fetchSpy);
-		await notifyUser(env, "creator1", "subscribe", "New subscriber: alice", "alice subscribed to My Agent.");
+		await notifyUser(env, "creator1", "subscribe", "New subscriber: alice", "alice subscribed to My Agent.", "/console/agents/a1");
 		// Row stays (the bell list is a log) — but it must not buzz.
 		expect(inserted).toHaveLength(1);
 		expect(inserted[0].pushedAt).toBeNull();
@@ -232,7 +232,7 @@ describe("notifyUser", () => {
 		const envWithVapid = { ...(env as object), ...(await vapidEnvKeys()) } as unknown as Env;
 		const fetchSpy = vi.fn(async () => new Response(null, { status: 201 }));
 		vi.stubGlobal("fetch", fetchSpy);
-		await notifyUser(envWithVapid, "creator1", "subscribe", "New subscriber: alice", "alice subscribed to My Agent.");
+		await notifyUser(envWithVapid, "creator1", "subscribe", "New subscriber: alice", "alice subscribed to My Agent.", "/console/agents/a1");
 		expect(inserted).toHaveLength(1);
 		expect(inserted[0].pushedAt).toBeTypeOf("string"); // the window starts (phone buzzed)
 		expect(fetchSpy).toHaveBeenCalled();
@@ -258,7 +258,7 @@ describe("notifyUser", () => {
 		} as unknown as Env;
 		const fetchSpy = vi.fn(async () => new Response(null, { status: 201 }));
 		vi.stubGlobal("fetch", fetchSpy);
-		await notifyUser(broken, "u1", "deploy", "t", "b");
+		await notifyUser(broken, "u1", "deploy", "t", "b", "/console/notifications");
 		expect(fetchSpy).toHaveBeenCalled();
 	});
 });

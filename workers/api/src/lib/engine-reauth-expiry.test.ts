@@ -11,13 +11,14 @@ const { callRunner, getBoundRunnerConn, notifyUser, store } = vi.hoisted(() => (
 	callRunner: vi.fn(),
 	getBoundRunnerConn: vi.fn(),
 	notifyUser: vi.fn(async () => undefined),
-	store: { state: null as EngineReauthState | null, writes: 0 },
+	store: { state: null as EngineReauthState | null, writes: 0, waitingSession: null as string | null },
 }));
 vi.mock("./runner-client.js", () => ({ READ_TIMEOUT_MS: 15_000, callRunner, getBoundRunnerConn }));
 vi.mock("../routes/push.js", () => ({ notifyUser }));
 vi.mock("./engine-reauth-store.js", async (orig) => ({
 	...(await orig<typeof import("./engine-reauth-store.js")>()),
 	readReauthState: async () => store.state,
+	signInSessionId: async () => store.waitingSession,
 	writeReauthState: async (_e: unknown, _i: unknown, _u: unknown, s: EngineReauthState) => {
 		store.state = s;
 		store.writes++;
@@ -91,6 +92,7 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	store.state = null;
 	store.writes = 0;
+	store.waitingSession = null;
 	pane = DEVICE_PANE;
 	getBoundRunnerConn.mockResolvedValue(conn);
 	callRunner.mockImplementation(async (_c: unknown, path: string) => {
@@ -128,9 +130,18 @@ describe("the sweep warns ONCE about an unattended device code, while it still w
 		expect(body).toContain("https://auth.openai.com/codex/device");
 		expect(body).toContain("ABCD-EFGH2");
 		expect(opts).toMatchObject({ kind: "alert", instanceId: INSTANCE });
+		// No run waits on this sign-in, so it opens the instance's Coding tab — never the console home (#897).
+		expect((notifyUser.mock.calls[0] as unknown[] | undefined)?.[5]).toBe(`/console/instances/${INSTANCE}/coding`);
 		expect(store.state?.expiryWarnedAt).toBe(T0 + 10 * MIN + 5_000);
 		// The flag carries the same fact.
 		expect(reauthExpiryView(store.state, T0 + 11 * MIN)).toMatchObject({ expiringSoon: true, warnedAt: new Date(T0 + 10 * MIN + 5_000).toISOString() });
+	});
+
+	it("deep-links the run that is waiting on the sign-in (#897)", async () => {
+		store.state = flow();
+		store.waitingSession = "csess_parked";
+		await runReauthExpiryWatch(sweepEnv(), T0 + 11 * MIN);
+		expect((notifyUser.mock.calls[0] as unknown[] | undefined)?.[5]).toBe(`/console/instances/${INSTANCE}/coding/csess_parked`);
 	});
 
 	it("two overlapping sweeps still warn once: the marker is claimed before the notification", async () => {

@@ -167,6 +167,17 @@ export function signInBlockFrom(row: LatestRunRow | null, relay: EngineReauthSta
 	return block && !reauthSucceededSince(relay, block.since) ? block : null;
 }
 
+/**
+ * The coding session a sign-in notification is about (#897): the latest run's, when that run is parked
+ * on sign-in or was stopped by it — the page where the run waits, or where it is continued from. Null
+ * when the latest run has nothing to do with sign-in, and the caller links the instance's Coding tab.
+ */
+export async function signInSessionId(env: Env, instanceId: string, userId: string): Promise<string | null> {
+	const row = await latestRunRow(env, instanceId, userId).catch(() => null);
+	if (!row?.session_id) return null;
+	return row.waiting_reason === "engine_auth" || row.stop_reason === "engine_auth" ? row.session_id : null;
+}
+
 export async function latestRunRow(env: Env, instanceId: string, userId: string): Promise<LatestRunRow | null> {
 	return await env.DB.prepare(
 		"SELECT run_id, session_id, status, stop_reason, waiting_reason, started_at, finished_at FROM agent_loop_runs WHERE instance_id = ?1 AND user_id = ?2 ORDER BY started_at DESC LIMIT 1",

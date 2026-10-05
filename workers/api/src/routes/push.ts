@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
-import { consoleHomeLink } from "../lib/console-links.js";
+import { consoleHomeLink, instanceLink, notificationsLink } from "../lib/console-links.js";
+import { logError } from "../lib/error-log.js";
 import {
 	DUPLICATE_WINDOW_MINUTES,
 	type NotificationKind,
@@ -223,6 +224,29 @@ export interface NotifyOptions {
 }
 
 /**
+ * Where a notification opens when its producer named nowhere (#897). It used to be `/console/`, the
+ * home screen — a notification nobody can act on from where it lands. The instance it concerns is the
+ * nearest real page; an account-level one opens the feed, where its text is at least readable.
+ * `missing` is what the caller logs: a producer that ships without a deep link is a bug, never a default.
+ */
+export function notificationTarget(url: string | undefined, instanceId?: string): { url: string; missing: boolean } {
+	const given = url?.trim();
+	if (given) return { url: given, missing: false };
+	return { url: instanceId ? instanceLink(instanceId) : notificationsLink(), missing: true };
+}
+
+/**
+ * The OS notification's `tag` — WHICH tray entry this replaces (#897). It was the bare type, so a
+ * "✅ Coder finished" for one session silently replaced a "🙋 Coder needs you" for another still in the
+ * tray, link and all. The deep link names the subject (session, run, repo's builds, instance), so
+ * type + link gives one entry per subject: repeats about the same thing still collapse, different
+ * things coexist.
+ */
+export function notificationTag(type: string, url: string): string {
+	return `${type}:${url}`;
+}
+
+/**
  * In-app notification + Web Push to the user's phone, in one call — and the ONE place that
  * decides whether the user's phone is allowed to buzz (#361, #360).
  *
@@ -245,10 +269,15 @@ export async function notifyUser(
 	type: string,
 	title: string,
 	body: string,
-	url?: string,
+	/** Required (#897): the same-origin console link to exactly what this is about — see `console-links.ts`. */
+	url: string,
 	opts: NotifyOptions = {},
 ): Promise<void> {
 	const kind: NotificationKind = opts.kind === "alert" ? "alert" : "update";
+	const target = notificationTarget(url, opts.instanceId);
+	if (target.missing) {
+		await logError(env, { source: "push", level: "warn", userId, message: `Notification "${type}" ("${title.slice(0, 80)}") was sent with no deep link; it opens ${target.url}.`, context: { type, instanceId: opts.instanceId ?? null } }).catch(() => undefined);
+	}
 	const dedupeKey = notificationDedupeKey(type, opts.key, title, body);
 
 	let interrupt = true;
@@ -278,9 +307,9 @@ export async function notifyUser(
 		}
 	}
 
-	await createNotification(env.DB, userId, type, title, body, undefined, url, { dedupeKey, kind, interrupt, instanceId: opts.instanceId }).catch(
+	await createNotification(env.DB, userId, type, title, body, undefined, target.url, { dedupeKey, kind, interrupt, instanceId: opts.instanceId }).catch(
 		() => undefined,
 	);
 	if (!interrupt) return;
-	await sendPushToUser(env, userId, { title, body, url, tag: type }).catch(() => undefined);
+	await sendPushToUser(env, userId, { title, body, url: target.url, tag: notificationTag(type, target.url) }).catch(() => undefined);
 }
