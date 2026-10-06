@@ -19,7 +19,7 @@ import { compileConnector, type ConnectorManifest } from "./manifest.js";
 import type { Connector } from "./types.js";
 import { githubAppConfigured } from "../github-app.js";
 import { invalidateIssueCaches, invalidateIssuesCache, listIssueComments, listIssues, readIssue, searchIssues } from "../github-issues.js";
-import { listPulls, readPull } from "../github-prs.js";
+import { listPulls, readPull, searchPulls } from "../github-prs.js";
 import { fetchJobLog, fetchWorkflowJobs, fetchWorkflowRuns, JOB_LOG_FETCH_BYTES, mapWorkflowRun, pickJob, stripLogTimestamps } from "../github-actions.js";
 import { READ_MAX_CHARS, READ_MAX_LINES, renderRepoFileWindow, tailWindowStart } from "../repo-file-window.js";
 
@@ -221,6 +221,14 @@ const listPullsHandler: ToolDef["handler"] = async (ctx, input) => {
 	const r = await resolveRepo(ctx, repo);
 	if ("error" in r) return { content: r.error, success: false };
 	const state = ["open", "closed", "all"].includes(String(input.state)) ? (input.state as "open" | "closed" | "all") : "open";
+	// `search` (#937), as on github_list_issues (#936): GitHub's search over EVERY PR, never a filter of
+	// the recent page; a refused search is an error, never an empty list.
+	const search = typeof input.search === "string" ? input.search.trim() : "";
+	if (search) {
+		const found = await searchPulls(ctx.env, ctx.userId ?? "", repo, search, { state, limit: 30 });
+		if ("error" in found) return { content: found.error, success: false };
+		return { content: JSON.stringify(found, null, 2), success: true };
+	}
 	const pulls = await listPulls(ctx.env, ctx.userId ?? "", repo, { state, limit: 30 });
 	return { content: JSON.stringify(pulls, null, 2), success: true };
 };
@@ -442,11 +450,17 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 			name: "github_list_pulls",
 			untrustedOutput: true,
 			scope: "read",
-			description: "List a repo's pull requests — number, title, author, draft, branch, mergeable/conflicted, review state and CI status. Read-only; there is deliberately no merge tool (the repo's merge policy governs that).",
+			description:
+				"List a repo's pull requests — number, title, author, draft, branch, mergeable/conflicted, review state and CI status. Read-only; there is deliberately no merge tool (the repo's merge policy governs that). Without `search` it returns the 30 most recently updated PRs as an array. With `search` it uses GitHub's issue search API over ALL the repo's PRs (not just the 30 most recent) and returns `{total_count, incomplete_results, pulls}` — `total_count` is every match, `pulls` the 30 most recently updated of them; only the first 8 carry branch, head sha, mergeable and review state (the rest have an empty branch, mergeable null, review unknown). A refused search (e.g. GitHub's 30-searches-a-minute rate limit) is an error, never an empty list.",
 			handler: "github_list_pulls",
 			params: {
 				repo: { type: "string", required: true, description: 'The repository, "owner/name".' },
 				state: { type: "string", description: '"open" | "closed" | "all" (default open).' },
+				search: {
+					type: "string",
+					description:
+						"Optional text to find in PR titles and bodies, matched by GitHub's issue search API across ALL pull requests in the repo (not just the 30 most recent). Omit it to list PRs as before.",
+				},
 			},
 		},
 		{

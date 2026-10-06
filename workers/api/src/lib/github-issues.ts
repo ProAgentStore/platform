@@ -205,13 +205,6 @@ export interface SearchIssuesResult {
 	issues: IssueSummary[];
 }
 
-/** One `/search/issues` page. `body` is matched server-side; the result carries summaries only. */
-interface RawSearch {
-	total_count?: number;
-	incomplete_results?: boolean;
-	items?: RawIssue[];
-}
-
 /** Quote a qualifier value so a label with a space or a quote stays one value. */
 const quoted = (v: string) => `"${v.replace(/"/g, "")}"`;
 
@@ -246,8 +239,22 @@ export async function searchIssues(env: Env, userId: string, githubRepo: string,
 	const parsed = parseRepo(githubRepo);
 	if (!parsed) return { error: `"${githubRepo}" is not an "owner/name" repository.` };
 	const token = await installationTokenForOwner(env, userId, parsed.owner).catch(() => null);
-	const perPage = Math.min(Math.max(opts.limit ?? 30, 1), 100);
-	const q = searchIssuesQuery(parsed.owner, parsed.name, search, opts);
+	const found = await fetchGithubSearch<RawIssue>(searchIssuesQuery(parsed.owner, parsed.name, search, opts), token, opts.limit);
+	if ("error" in found) return found;
+	return { total_count: found.total_count, incomplete_results: found.incomplete_results, issues: found.items.filter((i) => !i.pull_request).map(toSummary) };
+}
+
+/**
+ * One page of GitHub's issue search, newest activity first — or the refusal, as an ERROR (#936, #937).
+ *
+ * Shared by `searchIssues` and `searchPulls` (github-prs.ts), because the part that must not drift
+ * is the refusal: a rate-limited, invalid or unauthorised search has to read as an error, never as
+ * "nothing matched". The search API allows 30 requests a minute authenticated (10 without) and
+ * answers 403/429 past that. Not routed through the conditional cache, which answers a failed
+ * request with its stale copy — the very refusal this must surface.
+ */
+export async function fetchGithubSearch<T>(q: string, token: string | null, limit = 30): Promise<{ total_count: number; incomplete_results: boolean; items: T[] } | { error: string }> {
+	const perPage = Math.min(Math.max(limit, 1), 100);
 	const url = `https://api.github.com/search/issues?${new URLSearchParams({ q, per_page: String(perPage), sort: "updated", order: "desc" })}`;
 	let res: Response;
 	try {
@@ -260,17 +267,13 @@ export async function searchIssues(env: Env, userId: string, githubRepo: string,
 		const wait = Number.isFinite(reset) && reset > 0 ? Math.max(1, Math.ceil(reset - Date.now() / 1000)) : 60;
 		return { error: `GitHub's search rate limit is used up (30 searches a minute) — try again in about ${wait}s. This is not "no matches".` };
 	}
-	const body = (await res.json().catch(() => null)) as (RawSearch & { message?: string }) | null;
+	const body = (await res.json().catch(() => null)) as { total_count?: number; incomplete_results?: boolean; items?: T[]; message?: string } | null;
 	if (!res.ok) {
 		// 422: an invalid query, or a repo this token cannot see (GitHub says the same for both).
 		return { error: `GitHub search refused the query (${res.status})${body?.message ? `: ${body.message}` : ""}.` };
 	}
 	const items = Array.isArray(body?.items) ? body.items : [];
-	return {
-		total_count: typeof body?.total_count === "number" ? body.total_count : items.length,
-		incomplete_results: body?.incomplete_results === true,
-		issues: items.filter((i) => !i.pull_request).map(toSummary),
-	};
+	return { total_count: typeof body?.total_count === "number" ? body.total_count : items.length, incomplete_results: body?.incomplete_results === true, items };
 }
 
 /** Read one issue's detail (with a capped body). Returns null if it's a PR or not found. */

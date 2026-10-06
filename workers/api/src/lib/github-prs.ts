@@ -18,6 +18,7 @@
  */
 import { githubConditionalJson, resolveGithubRead, type GithubAuthContext } from "./github-cache.js";
 import { fetchWorkflowRuns } from "./github-actions.js";
+import { fetchGithubSearch } from "./github-issues.js";
 import type { Env } from "../types.js";
 
 const GH_HEADERS = (token: string | null) => ({
@@ -330,6 +331,60 @@ export async function listPulls(env: Env, userId: string, githubRepo: string, op
 	} catch {
 		return [];
 	}
+}
+
+/** What `searchPulls` returns: the matches GitHub sent, and how many there are in all (#937). */
+export interface SearchPullsResult {
+	/** Every PR in the repo matching the query — may exceed `pulls.length`. */
+	total_count: number;
+	/** GitHub's own flag: the search timed out and the matches may be incomplete. */
+	incomplete_results: boolean;
+	pulls: PullSummary[];
+}
+
+/** A PR as the SEARCH endpoint returns it: issue-shaped, with merge state under `pull_request`. */
+type RawSearchPull = RawPull & { pull_request?: { merged_at?: string | null } | null };
+
+/** The `q` for a PR search, scoped to one repo and to pull requests only (#937). */
+export function searchPullsQuery(owner: string, name: string, search: string, state: "open" | "closed" | "all" = "open"): string {
+	return [`repo:${owner}/${name}`, "is:pr", state === "all" ? "" : `state:${state}`, "in:title,body", search.trim()].filter(Boolean).join(" ");
+}
+
+/**
+ * Search a repo's pull requests — title AND body, across EVERY PR, not just the recent page (#937).
+ *
+ * The same design as `searchIssues` (#936), and the same shared request (`fetchGithubSearch`), so a
+ * refusal is an ERROR and never `[]`. Search answers with ISSUE-shaped items — no head/base branch,
+ * head sha, mergeable or review state — so the first {@link PULLS_ENRICH_CAP} matches are completed
+ * from the PR endpoints `listPulls` already enriches with, and CI is attached with the same single
+ * workflow-runs read. The rest keep `toPullSummary`'s honest "not known" values: an empty branch and
+ * head sha, `mergeable: null`, `review: "unknown"` — never a guessed "conflicted" or "approved".
+ */
+export async function searchPulls(env: Env, userId: string, githubRepo: string, search: string, opts: Pick<ListPullsOpts, "state" | "limit"> = {}): Promise<SearchPullsResult | { error: string }> {
+	const parsed = parseRepo(githubRepo);
+	if (!parsed) return { error: `"${githubRepo}" is not an "owner/name" repository.` };
+	const { token, authContext } = await resolveGithubRead(env, userId, parsed.owner).catch(() => ({ token: null, authContext: null }));
+	const found = await fetchGithubSearch<RawSearchPull>(searchPullsQuery(parsed.owner, parsed.name, search, opts.state ?? "open"), token, opts.limit ?? PULLS_PAGE_SIZE);
+	if ("error" in found) return found;
+	let pulls = found.items.map((i) => toPullSummary({ ...i, merged_at: i.merged_at ?? i.pull_request?.merged_at ?? null }));
+
+	const ctx: ReadCtx = { env, userId, owner: parsed.owner, name: parsed.name, token, authContext };
+	const settled = await Promise.allSettled(
+		pulls.slice(0, PULLS_ENRICH_CAP).map(async (p) => {
+			const [detail, review] = await Promise.all([fetchPullRaw(ctx, p.number), fetchReviewState(ctx, p.number)]);
+			return { number: p.number, detail, review };
+		}),
+	);
+	const byNumber = new Map<number, { detail: RawPull | null; review: ReviewState }>();
+	for (const s of settled) if (s.status === "fulfilled") byNumber.set(s.value.number, { detail: s.value.detail, review: s.value.review });
+	pulls = pulls.map((p) => {
+		const extra = byNumber.get(p.number);
+		// A failed enrichment keeps the search row's "not known" values rather than inventing any.
+		return extra ? { ...(extra.detail ? toPullSummary(extra.detail) : p), review: extra.review } : p;
+	});
+	const runs = await fetchWorkflowRuns(`${parsed.owner}/${parsed.name}`, token ?? undefined, { perPage: 50, event: "pull_request" }, { env, identity: { userId, authContext } });
+	if (!("status" in runs)) pulls = attachChecks(pulls, runs.runs);
+	return { total_count: found.total_count, incomplete_results: found.incomplete_results, pulls };
 }
 
 /** One PR in full — body, diff size, mergeability and review state. `null` when not found. */

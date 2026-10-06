@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { attachChecks, listPulls, readPull, resolveReviewState, toPullSummary, type PullSummary } from "./github-prs.js";
+import { attachChecks, listPulls, PULLS_ENRICH_CAP, readPull, resolveReviewState, searchPulls, searchPullsQuery, toPullSummary, type PullSummary } from "./github-prs.js";
 import type { Env } from "../types.js";
 
 vi.mock("./github-cache.js", async (importOriginal) => {
@@ -198,5 +198,100 @@ describe("readPull", () => {
 		mockFetch(() => ({ status: 404, body: {} }));
 		expect(await readPull(env, "u1", "acme/widget", 999)).toBeNull();
 		expect(await readPull(env, "u1", "acme/widget", Number.NaN)).toBeNull();
+	});
+});
+
+/** A PR as GitHub's SEARCH endpoint returns it: issue-shaped, no head/base, merge state under pull_request. */
+const searchItem = (n: number, title: string, extra: Record<string, unknown> = {}) => ({
+	number: n,
+	title,
+	state: "open",
+	comments: 0,
+	created_at: "2025-01-01T00:00:00Z",
+	updated_at: "2025-01-02T00:00:00Z",
+	html_url: `https://github.com/acme/widget/pull/${n}`,
+	user: { login: "kim" },
+	labels: [],
+	pull_request: { merged_at: null },
+	...extra,
+});
+
+describe("searchPulls — GitHub's search over every PR (#937)", () => {
+	it("scopes the query to the repo, to PRs, to the state, and to title + body", () => {
+		expect(searchPullsQuery("acme", "widget", "flaky test", "open")).toBe("repo:acme/widget is:pr state:open in:title,body flaky test");
+		expect(searchPullsQuery("acme", "widget", "x", "all")).toBe("repo:acme/widget is:pr in:title,body x");
+	});
+
+	it("returns the matches with their total, enriched with branch, mergeable, review and CI", async () => {
+		const urls: string[] = [];
+		mockFetch((url) => {
+			urls.push(url);
+			if (url.includes("/search/issues")) return { status: 200, body: { total_count: 41, incomplete_results: false, items: [searchItem(42, "Fix the flake")] } };
+			if (url.includes("/actions/runs")) return { status: 200, body: { workflow_runs: [{ head_sha: "abc123def456", status: "completed", conclusion: "success", html_url: "r", name: "CI" }] } };
+			if (/\/pulls\/42\/reviews/.test(url)) return { status: 200, body: [{ state: "APPROVED", user: { login: "kim" } }] };
+			if (/\/pulls\/42$/.test(url)) return { status: 200, body: { ...RAW_PULL, mergeable: true, mergeable_state: "clean" } };
+			return { status: 404, body: {} };
+		});
+		const r = await searchPulls(env, "u1", "acme/widget", "flake", { state: "open" });
+		if ("error" in r) throw new Error(r.error);
+		expect(r.total_count).toBe(41);
+		expect(r.pulls).toHaveLength(1);
+		expect(r.pulls[0]).toMatchObject({ number: 42, branch: "fix/flake", baseBranch: "main", headSha: "abc123def456", mergeable: true, review: "approved", checks: { conclusion: "success" } });
+		const search = new URL(urls[0]);
+		expect(search.pathname).toBe("/search/issues");
+		expect(search.searchParams.get("q")).toBe("repo:acme/widget is:pr state:open in:title,body flake");
+	});
+
+	it("enriches only the first PULLS_ENRICH_CAP matches; the rest keep honest 'not known' values", async () => {
+		const items = Array.from({ length: PULLS_ENRICH_CAP + 2 }, (_, i) => searchItem(100 + i, `match ${i}`));
+		const detailCalls: string[] = [];
+		mockFetch((url) => {
+			if (url.includes("/search/issues")) return { status: 200, body: { total_count: items.length, incomplete_results: false, items } };
+			if (url.includes("/actions/runs")) return { status: 200, body: { workflow_runs: [] } };
+			if (/\/pulls\/\d+$/.test(url)) {
+				detailCalls.push(url);
+				const n = Number(url.split("/").pop());
+				return { status: 200, body: { ...RAW_PULL, number: n, mergeable: false } };
+			}
+			if (/\/reviews/.test(url)) return { status: 200, body: [] };
+			return { status: 404, body: {} };
+		});
+		const r = await searchPulls(env, "u1", "acme/widget", "match");
+		if ("error" in r) throw new Error(r.error);
+		expect(detailCalls).toHaveLength(PULLS_ENRICH_CAP);
+		const last = r.pulls[r.pulls.length - 1];
+		expect(last).toMatchObject({ number: 100 + PULLS_ENRICH_CAP + 1, branch: "", headSha: "", mergeable: null, review: "unknown" });
+		expect(r.pulls[0]).toMatchObject({ branch: "fix/flake", mergeable: false, review: "none" });
+	});
+
+	it("reads a merged PR's merge from the search item's pull_request.merged_at", async () => {
+		const items = Array.from({ length: PULLS_ENRICH_CAP + 1 }, (_, i) => searchItem(200 + i, "m", { state: "closed", pull_request: { merged_at: "2025-02-01T00:00:00Z" } }));
+		mockFetch((url) => {
+			if (url.includes("/search/issues")) return { status: 200, body: { total_count: items.length, incomplete_results: false, items } };
+			if (url.includes("/actions/runs")) return { status: 200, body: { workflow_runs: [] } };
+			return { status: 404, body: {} };
+		});
+		const r = await searchPulls(env, "u1", "acme/widget", "m", { state: "closed" });
+		if ("error" in r) throw new Error(r.error);
+		expect(r.pulls.every((p) => p.merged)).toBe(true);
+	});
+
+	it("an empty result means nothing matched", async () => {
+		mockFetch((url) => (url.includes("/search/issues") ? { status: 200, body: { total_count: 0, incomplete_results: false, items: [] } } : { status: 200, body: { workflow_runs: [] } }));
+		expect(await searchPulls(env, "u1", "acme/widget", "nothing")).toEqual({ total_count: 0, incomplete_results: false, pulls: [] });
+	});
+
+	it("a GitHub refusal is an ERROR, never an empty list — a 422 with GitHub's reason, and the rate limit", async () => {
+		mockFetch(() => ({ status: 422, body: { message: "Validation Failed" } }));
+		expect(await searchPulls(env, "u1", "acme/widget", "bug")).toEqual({ error: "GitHub search refused the query (422): Validation Failed." });
+		globalThis.fetch = vi.fn(async () => ({ ok: false, status: 429, headers: new Headers({}), json: async () => ({}) }) as unknown as Response) as unknown as typeof fetch;
+		expect(await searchPulls(env, "u1", "acme/widget", "bug")).toEqual({ error: expect.stringMatching(/rate limit is used up/) });
+	});
+
+	it("a malformed repo is an error, and GitHub is never called", async () => {
+		const spy = vi.fn();
+		globalThis.fetch = spy as unknown as typeof fetch;
+		expect(await searchPulls(env, "u1", "widget", "bug")).toHaveProperty("error");
+		expect(spy).not.toHaveBeenCalled();
 	});
 });

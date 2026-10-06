@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // serialise) without re-testing github-issues.ts. github_workflow_runs + github_create_issue
 // fetch api.github.com directly, so those go through the stubbed globalThis.fetch.
 // vi.hoisted so the fns exist when the hoisted vi.mock factory runs.
-const { listIssues, searchIssues, readIssue, listIssueComments, invalidateIssuesCache, invalidateIssueCaches, listPulls, readPull } = vi.hoisted(() => ({
+const { listIssues, searchIssues, readIssue, listIssueComments, invalidateIssuesCache, invalidateIssueCaches, listPulls, searchPulls, readPull } = vi.hoisted(() => ({
 	listIssues: vi.fn(),
 	// `github_list_issues` with `search` (#936) goes to GitHub's search over every issue instead.
 	searchIssues: vi.fn(),
@@ -22,10 +22,12 @@ const { listIssues, searchIssues, readIssue, listIssueComments, invalidateIssues
 	// would otherwise still report `state: open`.
 	invalidateIssueCaches: vi.fn(async () => undefined),
 	listPulls: vi.fn(),
+	// `github_list_pulls` with `search` (#937) goes to GitHub's search over every PR instead.
+	searchPulls: vi.fn(),
 	readPull: vi.fn(),
 }));
 vi.mock("../github-issues.js", () => ({ listIssues, searchIssues, readIssue, listIssueComments, invalidateIssuesCache, invalidateIssueCaches }));
-vi.mock("../github-prs.js", () => ({ listPulls, readPull }));
+vi.mock("../github-prs.js", () => ({ listPulls, searchPulls, readPull }));
 
 import { GITHUB_TOOLS } from "./github.js";
 import { getRegistryTool, registryConnectorGroups, registryToolNameSet, runRegistryTool } from "../tool-registry.js";
@@ -589,6 +591,47 @@ describe("github connector — pull request reads (#401)", () => {
 		expect(r.success).toBe(true);
 		expect(listPulls).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets", { state: "all", limit: 30 });
 		expect(JSON.parse(r.content)[0]).toMatchObject({ number: 3, title: "Fix the thing" });
+	});
+
+	it("github_list_pulls without search calls listPulls unchanged (#937)", async () => {
+		searchPulls.mockReset();
+		listPulls.mockReset().mockResolvedValue([{ number: 3, title: "Fix the thing", draft: false }]);
+		const r = await tool("github_list_pulls").handler(ctx(), { repo: "acme/widgets" });
+		expect(r.success).toBe(true);
+		expect(Array.isArray(JSON.parse(r.content))).toBe(true);
+		expect(listPulls).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets", { state: "open", limit: 30 });
+		expect(searchPulls).not.toHaveBeenCalled();
+	});
+
+	it("github_list_pulls with empty string search ignores search and calls listPulls (#937)", async () => {
+		searchPulls.mockReset();
+		listPulls.mockReset().mockResolvedValue([]);
+		for (const search of ["", "   "]) await tool("github_list_pulls").handler(ctx(), { repo: "acme/widgets", search });
+		expect(listPulls).toHaveBeenCalledTimes(2);
+		expect(listPulls).toHaveBeenLastCalledWith(APP_ENV, "u1", "acme/widgets", { state: "open", limit: 30 });
+		expect(searchPulls).not.toHaveBeenCalled();
+	});
+
+	it("github_list_pulls with search calls searchPulls and returns narrowed results with their total (#937)", async () => {
+		listPulls.mockReset();
+		searchPulls.mockReset().mockResolvedValue({ total_count: 5, incomplete_results: false, pulls: [{ number: 9, title: "fix flaky test", branch: "fix/flaky" }] });
+		const r = await tool("github_list_pulls").handler(ctx(), { repo: "acme/widgets", search: " flaky ", state: "closed" });
+		expect(r.success).toBe(true);
+		expect(JSON.parse(r.content)).toMatchObject({ total_count: 5, pulls: [{ number: 9, title: "fix flaky test" }] });
+		expect(searchPulls).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets", "flaky", { state: "closed", limit: 30 });
+		expect(listPulls).not.toHaveBeenCalled();
+	});
+
+	it("a refused PR search is a failed tool call, never an empty list (#937)", async () => {
+		searchPulls.mockReset().mockResolvedValue({ error: "GitHub's search rate limit is used up (30 searches a minute) — try again in about 30s." });
+		const r = await tool("github_list_pulls").handler(ctx(), { repo: "acme/widgets", search: "bug" });
+		expect(r).toEqual({ content: expect.stringMatching(/rate limit/), success: false });
+	});
+
+	it("the github_list_pulls schema declares search and says it covers every PR (#937)", () => {
+		const t = getRegistryTool("github_list_pulls") as unknown as { description: string };
+		expect(t.description).toMatch(/search API over ALL the repo's PRs/);
+		expect(JSON.stringify(t)).toContain("across ALL pull requests");
 	});
 
 	it("github_list_pulls falls back to open for a state it does not know", async () => {
