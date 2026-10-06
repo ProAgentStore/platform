@@ -502,3 +502,8 @@ export interface SecureInputView {
 export interface ListSecureInputsResponse {
 	requests?: SecureInputView[];
 }
+
+/** `GET /v1/instances/my/secure-inputs` (#934): per instance, the owner-facing requests still waiting. */
+export interface PendingOwnerInputsResponse {
+	instances: Array<{ instanceId: string; pending: number; requestId: string; label: string }>;
+}

@@ -28,3 +28,22 @@ export function secureInputStatusLine(r: Pick<SecureInputView, "status" | "sourc
 			return "Expired unused — the value was deleted";
 	}
 }
+
+/**
+ * The requests waiting on the OWNER, oldest first — the ones the banner must not let them miss (#934).
+ * A machine deposit is excluded: there is nothing to type, so it is not "waiting for you".
+ */
+export function ownerWaiting(requests: readonly SecureInputView[]): SecureInputView[] {
+	return requests
+		.filter((r) => r.status === "pending" && !isMachineDeposit(r))
+		.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+/** The banner's sentence for one or more waiting requests. Labels only — there is no value yet. */
+export function secureInputBannerText(waiting: readonly Pick<SecureInputView, "label">[]): string {
+	if (waiting.length === 0) return "";
+	const first = `“${waiting[0].label}”`;
+	return waiting.length === 1
+		? `This agent is waiting for you to enter a value: ${first}.`
+		: `This agent is waiting for you to enter ${waiting.length} values, starting with ${first}.`;
+}

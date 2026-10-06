@@ -140,3 +140,12 @@ export function agentLink(agentId: string): string {
 export function secureInputLink(instanceId: string, requestId: string): string {
 	return `/instances/${encodeURIComponent(instanceId)}/secure-inputs/${encodeURIComponent(requestId)}`;
 }
+
+/**
+ * A waiting secure-input request as a NOTIFICATION link (#934): `secureInputLink` with the console
+ * base, like every other notification target, so the service worker and the in-app list resolve it
+ * on both hosts (#897).
+ */
+export function secureInputNotificationLink(instanceId: string, requestId: string): string {
+	return `${BASE}${secureInputLink(instanceId, requestId)}`;
+}

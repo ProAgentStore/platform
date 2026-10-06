@@ -80,14 +80,20 @@ export function registerRecentTools(server: McpServer, ctx: InstanceToolsCtx): v
 	// "is anything wrong anywhere" rather than "where was I".
 	server.tool(
 		"account_activity",
-		"What every instance on this account is doing right now, in one call. Each entry names its instance the way recent_instances and my_instances do — `instanceId`, `name` (the display name when one is set, else the agent's) and `slug` — plus `health` (`working` | `waiting` | `stalled` | `idle`), `queueDepth`, and the latest run's `lastOutcome`. Computed by the platform's own `runHealth`, so it agrees with the console and with coding_loop_status rather than being a second opinion. `stalled` is the one to act on: the run is open but has stopped ticking. `waiting` is a deliberate park and usually needs nothing. An instance with no run and no queued objective is OMITTED — absence means idle — so an empty list means the account is quiet, not that the call failed. Unlike recent_instances this does not fan out per instance and is not capped.",
+		"What every instance on this account is doing right now, in one call. Each entry names its instance the way recent_instances and my_instances do — `instanceId`, `name` (the display name when one is set, else the agent's) and `slug` — plus `health` (`working` | `waiting` | `stalled` | `idle`), `queueDepth`, and the latest run's `lastOutcome`. Computed by the platform's own `runHealth`, so it agrees with the console and with coding_loop_status rather than being a second opinion. `stalled` is the one to act on: the run is open but has stopped ticking. `waiting` is a deliberate park and usually needs nothing. An instance with no run and no queued objective is OMITTED — absence means idle — so an empty list means the account is quiet, not that the call failed. Unlike recent_instances this does not fan out per instance and is not capped. `waitingOnOwner` lists the instances whose agent is blocked waiting for the OWNER to enter a secret value (#934): `instanceId`, `pending` count, and the oldest request's `requestId` + `label` (never a value) — only a person can unblock those, in the console at /instances/<instanceId>/secure-inputs/<requestId>.",
 		{ token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in.") },
 		async ({ token }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const denied = await requirePermission(safetyFor(token), "read", "account_activity", {});
 			if (denied) return denied;
-			return jsonText(await authedCall("/v1/instances/my/activity", sessionToken, {}, env));
+			const [activity, waiting] = await Promise.all([
+				authedCall("/v1/instances/my/activity", sessionToken, {}, env),
+				// Best-effort: a failed read of who waits on the owner must not fail the activity answer.
+				(authedCall("/v1/instances/my/secure-inputs", sessionToken, {}, env) as Promise<{ instances?: unknown }>).catch(() => null),
+			]);
+			const waitingOnOwner = Array.isArray(waiting?.instances) ? waiting.instances : [];
+			return jsonText(activity && typeof activity === "object" ? { ...(activity as object), waitingOnOwner } : activity);
 		},
 	);
 

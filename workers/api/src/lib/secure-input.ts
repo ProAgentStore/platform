@@ -132,6 +132,39 @@ export async function getSecureInputStatus(env: Env, requestId: string, instance
 	return rowToView(row, now);
 }
 
+/** One instance's owner-facing requests still waiting for a value (#934). */
+export interface PendingOwnerInputs {
+	instanceId: string;
+	pending: number;
+	/** The OLDEST waiting request — the one to answer first, and the card's deep link. */
+	requestId: string;
+	label: string;
+}
+
+/**
+ * Every instance of this user with an owner-facing request still waiting for a value (#934).
+ *
+ * Owner-facing = `status = 'pending'`: an owner request is created `pending` and turns `ready` when
+ * the owner enters it, while a machine deposit (#918) is created `ready` — nothing for the owner to
+ * type. Expired rows are excluded by time, because the stored status is not rewritten on expiry.
+ */
+export async function pendingOwnerInputs(env: Env, userId: string, now: number = Date.now()): Promise<PendingOwnerInputs[]> {
+	const res = await env.DB.prepare(
+		`SELECT id, instance_id, label FROM secure_input_requests
+		  WHERE user_id = ?1 AND status = 'pending' AND expires_at > ?2
+		  ORDER BY created_at ASC LIMIT 500`,
+	)
+		.bind(userId, sqlTime(now))
+		.all<{ id: string; instance_id: string; label: string }>();
+	const byInstance = new Map<string, PendingOwnerInputs>();
+	for (const r of res.results ?? []) {
+		const row = byInstance.get(r.instance_id);
+		if (row) row.pending++;
+		else byInstance.set(r.instance_id, { instanceId: r.instance_id, pending: 1, requestId: r.id, label: r.label });
+	}
+	return [...byInstance.values()];
+}
+
 /**
  * List secure input requests for an instance (metadata only).
  */

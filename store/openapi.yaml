@@ -2828,6 +2828,34 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /v1/instances/my/secure-inputs:
+    get:
+      summary: Instances with a secure input waiting on the owner
+      description: |
+        Per instance, the owner-facing requests still waiting for a value (#934) — `status: pending`
+        and not expired. Machine deposits (`tmux_secure_put`, created `ready`) are not counted: there
+        is nothing for the owner to type. One call for the whole account; the console's instance
+        cards read it. `requestId`/`label` name the OLDEST waiting request.
+      operationId: listPendingOwnerSecureInputs
+      tags: [Instances]
+      responses:
+        "200":
+          description: Instances with waiting requests (absent = none waiting)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  instances:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        instanceId: { type: string }
+                        pending: { type: integer }
+                        requestId: { type: string }
+                        label: { type: string }
+
   /v1/instances/{instanceId}/secure-inputs:
     post:
       summary: Request a secure input from instance owner
@@ -2836,6 +2864,8 @@ paths:
         The owner submits the plaintext via the console UI; agent receives an opaque request ID only.
         The plaintext is envelope-encrypted at rest and deleted immediately after one-shot consumption.
         The value is never returned to the model, visible in logs, or included in traces.
+        Creating a request also notifies the owner (#934): an `alert` of type `secure-input`
+        deep-linked to the request's entry page, carrying the label only.
       operationId: createSecureInputRequest
       tags: [Instances]
       parameters:

@@ -9,6 +9,7 @@ import { capabilityBadges, identityFor } from "../lib/identity";
 import { INSTANCE_SORTS, INSTANCE_SORT_LABEL, type InstanceSort, agentOptions, listInstances, parseSort, rememberSort, rememberedSort } from "../lib/instanceList";
 import { HEALTH_DOT, HEALTH_LABEL, HEALTH_TEXT, INSTANCE_HEALTHS, activityFor, healthCounts, outcomeLine, type InstanceHealth } from "../lib/instanceActivity";
 import { useActivity } from "../hooks/useActivity";
+import { usePendingSecureInputs } from "../hooks/usePendingSecureInputs";
 import { platformToolGroups } from "../lib/platformTools";
 
 type SurfaceDoc = {
@@ -43,6 +44,8 @@ export default function Dashboard() {
 	const [instanceHealth, setInstanceHealth] = useState<InstanceHealth | "">("");
 	// One call for the whole account, polled only while this tab is the one on screen (#815).
 	const activity = useActivity(tab === "instances");
+	// Instances with a secret value waiting on the owner (#934) — said on the card, not only inside it.
+	const waitingInputs = usePendingSecureInputs(tab === "instances");
 	const instanceAgents = agentOptions(instances);
 	const healthTotals = healthCounts(instances, activity.byInstance);
 	const visibleInstances = listInstances(instances, {
@@ -313,6 +316,7 @@ export default function Dashboard() {
 								const badges = capabilityBadges(inst);
 								const act = activityFor(activity.byInstance, inst.id);
 								const outcome = outcomeLine(act, activity.asOf || Date.now());
+								const waiting = waitingInputs.get(inst.id);
 								return (
 									<button key={inst.id} type="button" onClick={() => navigate(`/instances/${inst.id}`)}
 										className="text-left bg-panel border border-line rounded-xl p-3 sm:p-4 cursor-pointer transition-all hover:border-accent hover:-translate-y-px hover:shadow-lg">
@@ -347,6 +351,11 @@ export default function Dashboard() {
 													title={`${act.queueDepth} objective${act.queueDepth === 1 ? "" : "s"} waiting behind this instance`}
 												>
 													+{act.queueDepth} queued
+												</span>
+											)}
+											{waiting && (
+												<span data-testid="instance-secure-input-waiting" className="px-1.5 py-0.5 rounded font-semibold bg-warning-soft text-warning" title={`Waiting for you to enter: “${waiting.label}”${waiting.pending > 1 ? ` and ${waiting.pending - 1} more` : ""}`}>
+													🔐 {waiting.pending} waiting for you
 												</span>
 											)}
 										</div>

@@ -75,6 +75,12 @@ export const NOTIFICATION_TYPES: NotificationTypeSpec[] = [
 		alerts: false,
 	},
 	{
+		id: "secure-input",
+		label: "Secure inputs",
+		description: "An agent waiting for you to enter a secret value (#934).",
+		alerts: true,
+	},
+	{
 		id: "subscribe",
 		label: "New subscribers",
 		description: "Someone subscribing to an agent you publish.",

@@ -9,8 +9,10 @@
 
 import { Hono, type Context } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
-import { consumeSecureInput, createSecureInputRequest, getSecureInputStatus, listSecureInputRequests, storeSecretValue } from "../lib/secure-input.js";
-import { secureInputLink } from "../lib/console-links.js";
+import { consumeSecureInput, createSecureInputRequest, getSecureInputStatus, listSecureInputRequests, pendingOwnerInputs, storeSecretValue } from "../lib/secure-input.js";
+import { secureInputLink, secureInputNotificationLink } from "../lib/console-links.js";
+import { instanceListName } from "../lib/instance-config.js";
+import { notifyUser } from "./push.js";
 import type { Env } from "../types.js";
 
 export const secureInputRoutes = new Hono<{ Bindings: Env }>();
@@ -51,7 +53,35 @@ secureInputRoutes.post("/:instanceId/secure-inputs", async (c) => {
 	});
 
 	const consoleUrl = secureInputLink(instanceId, requestId);
+	// The owner is TOLD (#934): the URL above reaches only the agent, so a request used to sit unseen
+	// for up to a day while the run that asked for it waited. An alert — a blocked run is waiting on
+	// a human — deep-linked to the request. The label only; there is no value yet, and never would be.
+	// Best-effort: failing to notify must not fail the request the agent is about to wait on.
+	await notifyOwner(c.env, uid, instanceId, requestId, label).catch(() => undefined);
 	return c.json({ id: requestId, consoleUrl }, 201);
+});
+
+async function notifyOwner(env: Env, uid: string, instanceId: string, requestId: string, label: string): Promise<void> {
+	const row = await env.DB.prepare("SELECT i.config, a.name FROM agent_instances i JOIN agents a ON a.id = i.agent_id WHERE i.id = ?1 AND i.user_id = ?2")
+		.bind(instanceId, uid)
+		.first<{ config: string | null; name: string | null }>();
+	const agent = instanceListName(row?.config, row?.name) ?? "Your agent";
+	await notifyUser(env, uid, "secure-input", `🔐 ${agent} needs a value`, `“${label}” — enter it in the console. The agent never sees it.`, secureInputNotificationLink(instanceId, requestId), {
+		kind: "alert",
+		instanceId,
+		key: `secure-input:${requestId}`,
+	});
+}
+
+/**
+ * GET /my/secure-inputs
+ * Per instance, the owner-facing requests still waiting for a value (#934) — the instance cards'
+ * "waiting for you" count, in one call for the whole account. Registered BEFORE the
+ * `/:instanceId/…` routes so `my` is never read as an instance id.
+ */
+secureInputRoutes.get("/my/secure-inputs", async (c) => {
+	const session = await requireUser(c);
+	return c.json({ instances: await pendingOwnerInputs(c.env, session.uid) });
 });
 
 /**

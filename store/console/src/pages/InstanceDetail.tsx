@@ -32,6 +32,7 @@ import MessageActions from "../components/MessageActions";
 import FabricatedNotice from "../components/FabricatedNotice";
 import McpInputRequests from "../components/McpInputRequests";
 import SecureInputRequests from "../components/SecureInputRequests";
+import SecureInputBanner from "../components/SecureInputBanner";
 import { useScrapLastTurn } from "../lib/deleteTurn";
 import { isPinnedToBottom, shouldScrollAfterLoad } from "../lib/chatScroll";
 import { resolveInstanceRoute } from "../lib/instanceRoute";
@@ -1053,6 +1054,8 @@ function InstancePage() {
 
 	return (
 		<div className="flex flex-col flex-1 min-h-0">
+			{/* #934: a value an agent waits for, on every tab — chat already lists them in full. */}
+			{id && tab !== "chat" && <SecureInputBanner instanceId={id} />}
 			{/* Tab content */}
 			<div className="flex-1 overflow-hidden flex flex-col min-h-0">
 				{tab === "chat" && (
