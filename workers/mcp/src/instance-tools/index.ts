@@ -19,6 +19,7 @@ import { registerCodingTools } from "./coding.js";
 import { registerCompositionTools } from "./composition.js";
 import { registerConnectorAccountTools, registerConnectorGrantTools } from "./connectors.js";
 import { registerGuideTools } from "./guide.js";
+import { registerConsoleLinkTools } from "./console-link.js";
 import { registerKnowledgeTools } from "./knowledge.js";
 import { registerMachineControlTools } from "./machine-control.js";
 import { registerMcpConnectionTools } from "./mcp-connections.js";
@@ -52,6 +53,7 @@ export function registerInstanceTools(
 	// The per-instance connection guide (#772) — ungated: the discovery problem it solves
 	// belongs to every agent type, not only the ones with a console surface.
 	registerGuideTools(server, ctx);
+	registerConsoleLinkTools(server, ctx); // a precise console URL to hand the owner (#938)
 	// "What was I working on?" (#787) — ungated for the same reason as the guide: the question
 	// belongs to every agent type, and the run lookup answers for every instance.
 	registerRecentTools(server, ctx);

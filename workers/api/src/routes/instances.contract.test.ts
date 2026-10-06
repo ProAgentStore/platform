@@ -255,6 +255,7 @@ const ROUTES = [
 	"PUT /:instanceId/behaviour",
 	"DELETE /:instanceId/behaviour",
 	"GET /:instanceId/connection-guide",
+	"GET /:instanceId/console-link",
 	"POST /:instanceId/runner-attach",
 	"GET /:instanceId/runner-setup",
 	"POST /:instanceId/browse",
@@ -395,6 +396,7 @@ const OWNERSHIP: Record<string, string[]> = {
 		"DELETE /:instanceId/behaviour",
 	],
 	"instances-guide.ts": ["GET /:instanceId/connection-guide"],
+	"instances-console-link.ts": ["GET /:instanceId/console-link"],
 	"instances-runner-attach.ts": ["PUT /:instanceId/runner-node", "POST /:instanceId/runner-attach"],
 	"instances-runner-setup.ts": ["GET /:instanceId/runner-setup"],
 	"instances-lifecycle.ts": ["POST /:instanceId/pause", "POST /:instanceId/resume"],
@@ -594,6 +596,7 @@ const GATES: Record<string, [number, number]> = {
 	// the route opens with `requireOwnedInstance`, so a stranger gets the same 404 as every other
 	// per-instance read — not an empty guide, which would be a statement about an instance.
 	"GET /:instanceId/connection-guide": [401, 404],
+	"GET /:instanceId/console-link": [401, 404],
 	// Owner-scoped before it reads the pin or touches a relay (#856): a stranger learns nothing about the agent's machines.
 	"POST /:instanceId/runner-attach": [401, 404],
 	// Owner-scoped before it reads a heartbeat, an installation or a repo (#868): a stranger learns nothing about the owner's machines.

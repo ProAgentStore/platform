@@ -230,6 +230,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	search_agent_knowledge: "read",
 	search_instance_knowledge: "read",
 	secure_input_status: "read",
+	get_console_link: "read",
 	system_status: "read",
 	ticket_thread: "read",
 	usage_summary: "read",
@@ -568,7 +569,8 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// +1 read at #868: `runner_setup`, the local runner setup checklist — derived from recorded state.
 	// +1 read at #904: mcp_server_info reads local server and catalog metadata.
 	// +1 read at #906: `secure_input_status` — metadata-only check of secret request status.
-	read: 116,
+	// +1 read at #938: `get_console_link` — builds a URL to a page the caller already owns; writes nothing.
+	read: 117,
 	// +2 write at #825: `pause_instance` / `resume_instance`. `write` rather than `destructive` —
 	// nothing is deleted and nothing is unsubscribed, and classing the OFF switch as destructive
 	// would put RESUME behind a scope the caller may not hold, which is the wrong failure mode for

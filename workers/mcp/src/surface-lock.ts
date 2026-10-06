@@ -971,4 +971,9 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// stdin|tmux) without exposing plaintext to model/traces/logs. Appended, never edited in place:
 	// 0.1.71 is published.
 	"0.1.72": "sha256:895bbd99dd645517fb675e13f542ba5099e635f1ebad54b41a9c0a75c41863a9",
+	// 0.1.73 (#938): one new always-on read tool, `get_console_link`, in `instance-tools/console-link.ts` —
+	// a console URL for an instance, run, task, secret request or tab, built by the API from the
+	// builders the console's route table is tested against. 246 registrations become 247,
+	// `MCP_TOOL_ALWAYS_ON` 219 → 220, gated stays 27. Appended, never edited in place: 0.1.72 is published.
+	"0.1.73": "sha256:8afe0421b4ca463536de037bb3b345683d49d949218f92501439064442de97c3",
 };

@@ -12,6 +12,7 @@ import { registerCodingTools } from "./coding.js";
 import { registerCompositionTools } from "./composition.js";
 import { registerConnectorAccountTools, registerConnectorGrantTools } from "./connectors.js";
 import { registerGuideTools } from "./guide.js";
+import { registerConsoleLinkTools } from "./console-link.js";
 import { registerInstanceTools } from "./index.js";
 import { registerKnowledgeTools } from "./knowledge.js";
 import { registerMcpConnectionTools } from "./mcp-connections.js";
@@ -425,6 +426,7 @@ const TABLE: Record<string, Row> = {
 	secure_input_inject: ["secureInput", "runtime", null, "envelope", "dry_run,instance_id,request_id,token"],
 	secure_input_request: ["secureInput", "write", null, "envelope", "destination_scope,dry_run,instance_id,label,one_shot,purpose,token"],
 	secure_input_status: ["secureInput", "read", null, null, "instance_id,request_id,token"],
+	get_console_link: ["consoleLink", "read", null, null, "instance_id,run_id,section,secure_input_id,task_id,token"],
 	run_instance_trigger: ["triggers", "runtime", null, "envelope", "dry_run,payload,token,trigger_id"],
 	search_instance_knowledge: ["knowledge", "none", null, null, "instance_id,query,token,top_k"],
 	set_account_preferences: ["account", "write", null, "envelope", "coding,dry_run,notifications,timezone,token,translation,voice"],
@@ -530,6 +532,7 @@ const REGISTRARS: Record<string, (s: unknown, c: InstanceToolsCtx) => void> = {
 	connectors: registerConnectorGrantTools as any,
 	connectorAccounts: registerConnectorAccountTools as any,
 	guide: registerGuideTools as any,
+	consoleLink: registerConsoleLinkTools as any,
 	knowledge: registerKnowledgeTools as any,
 	machineControl: registerMachineControlTools as any,
 	mcpConnections: registerMcpConnectionTools as any,

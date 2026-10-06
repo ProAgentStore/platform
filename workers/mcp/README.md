@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**246 tool registrations.** 219 are always registered; 27 are gated to the console
+**247 tool registrations.** 220 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -317,6 +317,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `get_instance_instructions` | Read Special Instructions | — | | |
 | `set_instance_instructions` | Replace them (max 4000 chars) | write | yes | |
 | `get_instance_connection_guide` | The pasteable per-instance connection guide: id, agent type, repos, exposed tools with exact field names, worked `call_instance_tool` example | read | | |
+| `get_console_link` | A console URL for an instance, one of its loop runs, a task, a secret request or a tab — `url` for chat, `path` for a push; refuses a tab the instance does not show | read | | |
 | `get_instance_operator_manual` | Read the operator manual (caller-facing; echoes rules) | — | | |
 | `set_instance_operator_manual` | Replace the operator manual (max 16000 chars) | write | yes | |
 | `get_translation_config` | Read the translation display config | — | | |

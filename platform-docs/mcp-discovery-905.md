@@ -7,9 +7,9 @@ The host inventory was measured with `ALL_TOOLS.filter(t => t.name.startsWith("m
 ## Evidence
 
 - The configured ProAgentStore 2 connector advertised an inventory of 135 entries in the agent's tool registry. Neither `mcp_server_info` nor `coding_engine_reauth` was present.
-- Calling that connector's existing `platform_guide` returned live text describing 246 tools registered: 219 are always on and 27 are gated.
+- Calling that connector's existing `platform_guide` returned live text stating the same full catalog count as production health (below), with its always-on and gated split.
 - `my_instances` on the same connector confirmed instances with `coding`, `apply` and `repo` console surfaces. The coding subscription gate therefore does not explain the missing reauthentication tool on the platform endpoint.
-- Public production health reported 246 tools. The production server manifest advertised version `0.1.72`; the MCP deployment for commit `4f7f7fe0` succeeded.
+- Public production health reported a tool count of 246 (the count on 2026-10-03). The production server manifest advertised version `0.1.72`; the MCP deployment for commit `4f7f7fe0` succeeded.
 - Current source registers `mcp_server_info` on platform, instance-pinned and type-pinned endpoints. `coding_engine_reauth` is registered with the coding group on the platform endpoint; its runtime permission is checked on invocation.
 - There is no repository-managed ChatGPT ingress tool whitelist or OpenAPI schema. `store/openapi.yaml` documents the REST API, `store/manifest.json` is a PWA manifest, and platform connector manifests describe outbound agent integrations.
 

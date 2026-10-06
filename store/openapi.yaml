@@ -6310,6 +6310,40 @@ paths:
                   guide: { type: string, description: Markdown document }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/console-link:
+    get:
+      summary: Console deep link for an instance, run, task, secret request or tab
+      description: |
+        A console URL that opens exactly one place: the instance (no query), one of its tabs
+        (`section`), the coding session a loop run drives (`run_id`; a chat-driven run opens the
+        Assistant), a runtime task's page (`task_id`) or a secure-input entry page
+        (`secure_input_id`). Give at most one. Built from the same builders the console's route
+        table is tested against, so it lands where it says. A tab this instance does not show is
+        a 400 naming the tabs it does; a run, task or request that is not the caller's on this
+        instance is a 404. The console is a BrowserRouter, so there is no finer anchor than a
+        tab or a record page.
+      operationId: getInstanceConsoleLink
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: section, in: query, required: false, schema: { type: string, enum: [chat, apply, board, repo, coding, tmux, activity, stats, knowledge, behaviour, feedback, indexing, data, settings] } }
+        - { name: run_id, in: query, required: false, schema: { type: string } }
+        - { name: task_id, in: query, required: false, schema: { type: string } }
+        - { name: secure_input_id, in: query, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: The link
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: { type: string, description: Absolute URL, for a chat message }
+                  path: { type: string, description: "The same page as a console path (/console/...), for a push notification" }
+                  lands: { type: string, description: What the person lands on, in words }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/operator-manual:
     get:
       summary: Read operator manual
