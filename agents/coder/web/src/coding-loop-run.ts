@@ -31,6 +31,52 @@ export interface LoopRunSnapshot {
 	stopReason?: string | null;
 	detail?: string | null;
 	iteration?: number;
+	/** The SERVER's verdict on the run (`runHealth`, `routes/tools.ts` `withHealth`) — read it, never derive it (#930). */
+	health?: string | null;
+	/** What a parked run waits for, in the server's words. Present only when parked. */
+	waitNote?: string | null;
+}
+
+/** How a parked or stalled run shows on a live loop watcher (#930). */
+export interface LoopWatchBadge {
+	tone: "waiting" | "stalled";
+	/** The one word that fits beside the Stop control. */
+	word: "Waiting" | "Stalled";
+	/** The full sentence, for the tooltip and the screen reader. */
+	title: string;
+}
+
+/** The chip's colours per tone — one table for both watchers, so the two tabs cannot drift. */
+export const LOOP_WATCH_BADGE_CLASS: Record<LoopWatchBadge["tone"], string> = {
+	waiting: "border-warning bg-warning-soft text-warning",
+	stalled: "border-danger bg-danger-soft text-danger",
+};
+
+/**
+ * What a live loop watcher says about a run that is NOT simply working — or null when it is.
+ *
+ * Both watchers (the Assistant tab's Loop button and this tab's) showed only an iteration counter,
+ * so a run the platform had classified as parked or stalled looked exactly like one at work: the
+ * number just stopped moving (#930). The verdict is the server's (`health`), quoted, never derived
+ * from `status` — `running` covers a working, a parked AND a dead run since migration 0127 (#589).
+ *
+ * The ONE copy of these sentences: the console's `activityLabel` (store/console/src/lib/workInFlight.ts)
+ * delegates here, because the console depends on this package and not the other way round.
+ *
+ * `null` for `working`, `ended`, or no verdict at all: an older server or a cached payload must not
+ * be rendered as a liveness it never stated.
+ */
+export function loopWatchBadge(run: { health?: unknown; waitNote?: string | null } | null | undefined): LoopWatchBadge | null {
+	if (run?.health === "waiting") {
+		// The server's sentence names WHAT it waits for. No resume time is promised in the fallback:
+		// a HUMAN handoff's deadline is when the run gives up, not when it resumes (#591/#596).
+		const title = run.waitNote ? `Waiting — ${run.waitNote}` : "Waiting — deliberately parked, not stalled";
+		return { tone: "waiting", word: "Waiting", title };
+	}
+	if (run?.health === "stalled") {
+		return { tone: "stalled", word: "Stalled", title: "Stalled — nothing has ticked for a while; this run may have died" };
+	}
+	return null;
 }
 
 /** Has the run reached a terminal state? The one status the watcher must not treat as an ending. */

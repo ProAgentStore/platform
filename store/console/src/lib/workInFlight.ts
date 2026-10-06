@@ -12,6 +12,8 @@
  * The decisions live here, pure, so the polling glue in InstanceDetail stays dumb.
  */
 
+import { loopWatchBadge } from "@proagentstore/coder-web";
+
 /**
  * The platform's verdict on a run, sent by the server (`GET /loop`, `routes/tools.ts` `withHealth`).
  *
@@ -35,6 +37,9 @@ export interface LoopRunLike {
 	startedAt?: number;
 	/** A stop the server accepted but the run has not reached yet (#376, lib/loopStopState.ts). */
 	cancelRequested?: boolean;
+	/** Why it ended, and the server's note — present once the run is terminal. */
+	stopReason?: string | null;
+	detail?: string | null;
 }
 
 /**
@@ -69,25 +74,17 @@ export function runActivity(run: Pick<LoopRunLike, "status" | "health"> | null |
 	return h === "working" || h === "waiting" || h === "stalled" || h === "ended" ? h : null;
 }
 
-/** How the row says it, in the owner's words. Null for a run carrying no verdict, or a plain one. */
+/**
+ * How the row says it, in the owner's words. Null for a run carrying no verdict, or a plain one.
+ *
+ * The sentences live in ONE place — coder-web's `loopWatchBadge` — because the two live loop
+ * watchers (#930) say the same thing as this row; this console depends on that package, so the
+ * copy sits there. `working` gets no label (the row already says "step N/M · started X ago") and
+ * `ended` is covered by the status/stopReason the row already renders.
+ */
 export function activityLabel(run: Pick<LoopRunLike, "status" | "health" | "waitNote"> | null | undefined): string | null {
-	switch (runActivity(run)) {
-		case "waiting":
-			// The server's own sentence when it sent one: it names WHAT the run is waiting for,
-			// which is the part that turns a four-hour pause from alarming into expected. A resume
-			// time rides along only when one is knowable — `coding-pause.ts:146` writes none for a
-			// HUMAN handoff, because that park's deadline is when the run gives up rather than when
-			// it resumes (#591/#596). So the FALLBACK must not promise one either: "expected to
-			// resume on its own" would be a fabricated all-clear over a run waiting for this owner.
-			return run?.waitNote ? `Waiting — ${run.waitNote}` : "Waiting — deliberately parked, not stalled";
-		case "stalled":
-			return "Stalled — nothing has ticked for a while; this run may have died";
-		default:
-			// `working` gets no label: the row already says "step N/M · started X ago", and adding
-			// "Working" to a healthy run is noise. `ended` is covered by the status/stopReason
-			// the row already renders, and `null` has nothing to say.
-			return null;
-	}
+	const a = runActivity(run);
+	return a === "waiting" || a === "stalled" ? (loopWatchBadge(run)?.title ?? null) : null;
 }
 
 /**

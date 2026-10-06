@@ -22,6 +22,7 @@ import { SURFACES, visibleSurfaces, surfaceOwnsHeader } from "../lib/surfaces";
 import { useGloss } from "../lib/use-gloss";
 import type { LoopPreset } from "../lib/loopPresets";
 import { adoptableRun, isChatWorking, shouldAdopt, type InstanceStateLike, type LoopRunLike } from "../lib/workInFlight";
+import { LOOP_WATCH_BADGE_CLASS, loopWatchBadge, type LoopWatchBadge } from "@proagentstore/coder-web";
 import DynamicSurface from "../components/DynamicSurface";
 import HostedNode from "../components/HostedNode";
 import GlossedMessage from "../components/GlossedMessage";
@@ -186,6 +187,7 @@ function InstancePage() {
 	// itself, not remembered from the press, so a tab that never pressed Stop — or one reopened
 	// afterwards — shows the same pending state as the one that did.
 	const [loopCancelPending, setLoopCancelPending] = useState(false);
+	const [loopBadge, setLoopBadge] = useState<LoopWatchBadge | null>(null); // parked/stalled verdict on the watched run (#930)
 	const [showLoopForm, setShowLoopForm] = useState(false);
 	// The agent's loop presets (#234). Fetched when the form first opens rather than on mount —
 	// most visits to a chat never press Loop, and this is a request that would be wasted on them.
@@ -570,10 +572,9 @@ function InstancePage() {
 	const pollLoop = useCallback(async () => {
 		if (!id || !loopRunIdRef.current) return;
 		try {
-			const run = await api<{ status: string; iteration: number; stopReason?: string | null; detail?: string | null; cancelRequested?: boolean }>(
-				`/v1/instances/${id}/loop/${loopRunIdRef.current}`,
-			);
-			setLoopIteration(run.iteration);
+			const run = await api<LoopRunLike>(`/v1/instances/${id}/loop/${loopRunIdRef.current}`);
+			setLoopIteration(run.iteration ?? 0);
+			setLoopBadge(loopWatchBadge(run));
 			// The server's own answer, every poll — so a cancel requested from ANOTHER tab, or from
 			// the Settings run list, shows up here too (#376).
 			setLoopCancelPending(run.cancelRequested === true);
@@ -582,6 +583,7 @@ function InstancePage() {
 				setLoopOn(false);
 				setLoopRunId(null);
 				setLoopCancelPending(false);
+				setLoopBadge(null);
 				// Who narrates the end of a run, and into what — both rules and their reasoning
 				// live in lib/loopNotices.ts (null = the workflow already wrote it; persist:false =
 				// this tab merely adopted the run, so show it but don't add an Nth copy to the log).
@@ -863,6 +865,7 @@ function InstancePage() {
 			// Seeded here rather than left to the first poll: a run adopted mid-cancel would
 			// otherwise offer a live Stop button for up to three seconds (#376).
 			setLoopCancelPending(run.cancelRequested === true);
+			setLoopBadge(loopWatchBadge(run)); // adopted runs are often the parked ones (#589)
 			if (run.maxIterations) setLoopMax(run.maxIterations);
 			if (run.objective) setLoopObjective(run.objective);
 			setLoopOn(true); // resumes the watcher above — it only ever lacked its starting value
@@ -897,6 +900,7 @@ function InstancePage() {
 			setLoopOn(true);
 			setLoopIteration(0);
 			setLoopCancelPending(false);
+			setLoopBadge(null);
 			setLoopPaused(false);
 		} catch (e) {
 			emitSystemChat(loopStartFailureNotice(e));
@@ -1309,7 +1313,8 @@ function InstancePage() {
 							{/* Mute — reachable in EVERY phase, never disabled, never behind a disclosure: on a browser with no Web Speech API this is the ONLY way to mute. Read docs/adr/0001-mute-is-always-available.md (M1) before adding a condition here. */}
 							{voice.mode === "handsfree" && <button type="button" onClick={voice.toggleMute} title={voice.muted ? "Unmute the mic" : "Mute the mic (stay in hands-free)"} className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.muted ? "border-danger bg-danger text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}><MicOff size={16} /><span className="text-xs font-semibold hidden sm:inline">{voice.muted ? "Muted" : "Mute"}</span></button>}
 							{loopOn ? (
-								<button type="button" onClick={stopLoop} disabled={!loopControl.canStop} aria-label={loopControl.actionLabel} title={loopControl.hint ?? `Loop ${loopIteration}/${loopMax}`} className={`px-1.5 py-1.5 text-sm border rounded-lg relative disabled:opacity-60 ${LOOP_BUTTON_CLASS[loopControl.phase]}`}>{loopControl.phase === "stopping" ? <Loader2 size={13} className="animate-spin" /> : <Square size={13} />}<span className={`absolute -top-1 -right-1 text-2xs rounded-full px-1 font-bold leading-tight ${LOOP_BADGE_CLASS[loopControl.phase]}`}>{loopIteration}</span></button>
+								<>{loopBadge && <span role="status" data-testid="loop-activity" title={loopBadge.title} className={`px-1.5 py-0.5 text-2xs font-semibold border rounded-lg ${LOOP_WATCH_BADGE_CLASS[loopBadge.tone]}`}>{loopBadge.word}</span>}
+								<button type="button" onClick={stopLoop} disabled={!loopControl.canStop} aria-label={loopControl.actionLabel} title={loopControl.hint ?? loopBadge?.title ?? `Loop ${loopIteration}/${loopMax}`} className={`px-1.5 py-1.5 text-sm border rounded-lg relative disabled:opacity-60 ${LOOP_BUTTON_CLASS[loopControl.phase]}`}>{loopControl.phase === "stopping" ? <Loader2 size={13} className="animate-spin" /> : <Square size={13} />}<span className={`absolute -top-1 -right-1 text-2xs rounded-full px-1 font-bold leading-tight ${LOOP_BADGE_CLASS[loopControl.phase]}`}>{loopIteration}</span></button></>
 							) : (
 								<button type="button" onClick={toggleLoopForm} title="Loop" className={`px-1.5 py-1.5 text-sm border rounded-lg ${showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}><Repeat size={13} /></button>
 							)}

@@ -7,7 +7,9 @@ import {
 	loopRunEnded,
 	loopStartFailureNotice,
 	loopStartNotice,
+	loopWatchBadge,
 	type LoopRunSnapshot,
+	type LoopWatchBadge,
 } from "./coding-loop-run";
 
 /** The next issue proposed to work (issues-mode). Body included so we build a real objective. */
@@ -44,6 +46,8 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 	const [loopOn, setLoopOn] = useState(false);
 	const [loopObjective, setLoopObjective] = useState("");
 	const [loopIteration, setLoopIteration] = useState(0);
+	// The server's verdict when the watched run is NOT simply working — parked or stalled (#930).
+	const [loopBadge, setLoopBadge] = useState<LoopWatchBadge | null>(null);
 	const [loopMax, setLoopMax] = useState(10);
 	const [showLoopForm, setShowLoopForm] = useState(false);
 	// The run being watched. Null while starting, and again once it reaches a terminal state.
@@ -123,7 +127,9 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 		try {
 			const run = await api<LoopRunSnapshot>(`/v1/instances/${instanceId}/loop/${rid}`);
 			setLoopIteration(run.iteration ?? 0);
+			setLoopBadge(loopWatchBadge(run));
 			if (!loopRunEnded(run)) return;
+			setLoopBadge(null);
 			setLoopOn(false);
 			loopOnRef.current = false;
 			setRunId(null);
@@ -168,6 +174,7 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 		setLoopOn(true);
 		loopOnRef.current = true;
 		setLoopIteration(0);
+		setLoopBadge(null);
 		setShowLoopForm(false);
 		try {
 			const run = await api<{ runId: string; driver?: string }>(`/v1/instances/${instanceId}/loop`, {
@@ -277,6 +284,7 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 		if (!loopOnRef.current) return;
 		loopOnRef.current = false;
 		setLoopOn(false);
+		setLoopBadge(null);
 		setRunId(null);
 		runIdRef.current = null;
 		setProposedIssue(null);
@@ -285,7 +293,7 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 	}, [sessionId]);
 
 	return {
-		loopOn, loopObjective, setLoopObjective, loopIteration, loopMax, setLoopMax,
+		loopOn, loopObjective, setLoopObjective, loopIteration, loopBadge, loopMax, setLoopMax,
 		showLoopForm, setShowLoopForm,
 		start, stop,
 		// Issues-mode

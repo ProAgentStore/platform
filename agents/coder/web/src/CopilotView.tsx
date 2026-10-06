@@ -4,6 +4,7 @@ import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import { resolveComposer, resolveVoiceStatus } from "@proagentstore/sdk/hooks";
 import { API, getToken } from "@proagentstore/sdk/client";
 import type { LoopPreset } from "./types";
+import { LOOP_WATCH_BADGE_CLASS } from "./coding-loop-run";
 import { Trash2, Copy, Check, Repeat, Square, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, Wrench, Settings, Loader2, Pencil, CircleDot, ArrowDown, X } from "lucide-react";
 import Button from "./Button";
 
@@ -254,10 +255,14 @@ export default function CopilotView({
 					))}
 				</div>
 				{loop.loopOn ? (
-					<button type="button" onClick={loop.stop} title={`Loop ${loop.loopIteration}/${loop.loopMax}`} className="px-1.5 py-1.5 text-sm border border-success bg-success-soft text-success rounded-lg relative">
+					<>
+					{/* The server's verdict when the run is parked or stalled (#930) — a frozen counter said nothing. */}
+					{loop.loopBadge && <span role="status" data-testid="loop-activity" title={loop.loopBadge.title} className={`px-1.5 py-0.5 text-2xs font-semibold border rounded-lg ${LOOP_WATCH_BADGE_CLASS[loop.loopBadge.tone]}`}>{loop.loopBadge.word}</span>}
+					<button type="button" onClick={loop.stop} title={loop.loopBadge?.title ?? `Loop ${loop.loopIteration}/${loop.loopMax}`} className="px-1.5 py-1.5 text-sm border border-success bg-success-soft text-success rounded-lg relative">
 						<Square size={13} />
 						<span className="absolute -top-1 -right-1 text-2xs bg-success text-white rounded-full px-1 font-bold leading-tight">{loop.loopIteration}</span>
 					</button>
+					</>
 				) : (
 					<button type="button" onClick={() => { const next = !loop.showLoopForm; loop.setShowLoopForm(next); if (next && workMode === "issues" && !loop.proposedIssue) loop.proposeNextIssue(); }} title="Loop" className={`px-1.5 py-1.5 text-sm border rounded-lg ${loop.showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
 						<Repeat size={13} />

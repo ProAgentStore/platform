@@ -6,3 +6,4 @@
 // See ../../../PLAN-agent-os.md.
 
 export { default as CodingTab } from "./CodingTab";
+export { LOOP_WATCH_BADGE_CLASS, loopWatchBadge, type LoopWatchBadge } from "./coding-loop-run";
