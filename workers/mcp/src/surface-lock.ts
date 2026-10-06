@@ -980,4 +980,10 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// called (replaced by `coder-lead` + supervision, 0063). 247 registrations become 246, gated
 	// 27 → 26, always-on stays 220. Appended, never edited in place: 0.1.73 is published.
 	"0.1.74": "sha256:8f579da36cf7c04e39ff9e866578668f746f4857559332465c673013b798d5c3",
+	// 0.1.75 (#945): four always-on tools in `instance-tools/local-browser.ts` for local CLI browser
+	// research — `local_browser_preflight`, `get_instance_local_browser_settings`,
+	// `list_local_browser_runs` (read) and `set_instance_local_browser_settings` (write, dry-run).
+	// 246 registrations become 250, `MCP_TOOL_ALWAYS_ON` 220 → 224, gated stays 26. Starting a run
+	// joins with the runner half (#944). Appended, never edited in place: 0.1.74 is published.
+	"0.1.75": "sha256:40e3abcba700b8aa714d348f4891dd1dbd3ada4445b09e93267e94be7972f832",
 };

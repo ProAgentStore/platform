@@ -75,6 +75,10 @@ export const RUNTIME_TASK_OWNERS: Readonly<Record<string, RuntimeTaskOwner>> = {
 	escalation: "cloud", // workflows/agent-loop.ts — parked for a human, by a durable workflow
 	"pipeline.run": "cloud", // lib/pipeline-board.ts
 	"site_builder_runtime": "runner-durable", // local authoring task; PAGS owns durable run state
+	// #945: local CLI browser research. Its state is PAGS's own `local_browser_runs` row, ended only
+	// by the runner's result or the owner's cancel — never by this sweep, which reads board cards.
+	// The runner half (#944) must keep it across a restart the way it keeps the type above.
+	"local_browser.research": "runner-durable",
 	ticket: "cloud", // lib/tool-registry.ts create_ticket
 	// #864: a run the ticket queue started, on the board naming its ticket. The run is a durable loop
 	// in the cloud, and `run-events.ts` settles the row when it ends — never a runner's to expire.

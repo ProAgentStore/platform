@@ -6344,6 +6344,210 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/local-browser/settings:
+    get:
+      summary: Local CLI browser research settings
+      description: |
+        The instance's chosen settings, the effective policy a run would start with, the agent's
+        ceilings (`capability`) and the runner pin. `problem` is set when saved settings no longer fit
+        the agent. 409 for an agent whose runtime is not `local_browser`. Holds no credential.
+      operationId: getLocalBrowserSettings
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    put:
+      summary: Patch local CLI browser research settings
+      description: |
+        PATCH semantics: a field present replaces, `null` resets it to the agent default; `access` and
+        `limits` patch per key. Refused (400) with the reason when outside the agent's ceiling: an engine
+        it does not offer, `api-key` sign-in on a subscription-only agent, a workspace path not written
+        `~/…` under the runner's home, a site outside its list, a limit above its ceiling. The runner is
+        chosen with `PUT /runner-node`.
+      operationId: setLocalBrowserSettings
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /v1/instances/{instanceId}/local-browser/preflight:
+    get:
+      summary: Is the instance ready for a local browser run
+      description: |
+        `{ready, checks[]}`; each check is `ok: true | false | null` (null = not knowable before a run,
+        does not block) with the step that fixes it: settings, runner connected, runner supports
+        `local_browser.research`, engine sign-in (per run), signed-in-profile consent.
+      operationId: getLocalBrowserPreflight
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /v1/instances/{instanceId}/local-browser/consent:
+    get:
+      summary: Per-domain navigation consent
+      description: |
+        Live decisions; the signed-in-profile decision is stored under domain `*`.
+      operationId: listLocalBrowserConsent
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    put:
+      summary: Record or withdraw a consent decision
+      description: |
+        `{scope: navigate | signed_in_profile, domain, decision: allow | deny | null, ttlDays?}`. `null`
+        withdraws it. A `deny` binds the runner like the configured deny list.
+      operationId: setLocalBrowserConsent
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /v1/instances/{instanceId}/local-browser/runs:
+    get:
+      summary: Local browser runs, newest first
+      operationId: listLocalBrowserRuns
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100 } }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      summary: Start a local browser research run
+      description: |
+        `{objective, requestId?}`. Idempotent on `requestId` (200 with the existing run). 409 at the
+        effective `maxConcurrent`. The run is dispatched to the live runner; when it cannot be, it ends
+        `failed` with `errorCode` runner_offline, runner_unsupported, runner_unreachable or
+        runner_rejected (202 either way — read `status`).
+      operationId: startLocalBrowserRun
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [objective], properties: { objective: { type: string }, requestId: { type: string } } }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /v1/instances/{instanceId}/local-browser/runs/{runId}:
+    get:
+      summary: One local browser run
+      operationId: getLocalBrowserRun
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/local-browser/runs/{runId}/cancel:
+    post:
+      summary: Cancel an active local browser run
+      description: |
+        409 once the run has ended. The runner is told best-effort.
+      operationId: cancelLocalBrowserRun
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /v1/instances/{instanceId}/local-browser/runs/{runId}/events:
+    get:
+      summary: A run's redacted trace
+      description: |
+        Ordered by `seq`; page with `after` (the previous `nextAfter`).
+      operationId: listLocalBrowserRunEvents
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+        - { name: after, in: query, required: false, schema: { type: integer } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500 } }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      summary: Runner reports trace events
+      description: |
+        `{events: [...]}`, at most 100. Validated against the shared contract and redacted; invalid ones
+        are counted in `rejected`. `run.paused` and `run.resumed` move the run. 409 once it has ended.
+      operationId: reportLocalBrowserRunEvents
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /v1/instances/{instanceId}/local-browser/runs/{runId}/result:
+    post:
+      summary: Runner reports the result envelope
+      description: |
+        `{runId, outcome, findings[], sourceFailures[], summary, traceId, engineAuth, error?}`, validated
+        by the shared contract. Ends the run `completed` or `failed`. 409 once it has ended.
+      operationId: reportLocalBrowserRunResult
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /v1/instances/{instanceId}/operator-manual:
     get:
       summary: Read operator manual

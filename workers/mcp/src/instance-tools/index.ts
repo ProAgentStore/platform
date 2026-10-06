@@ -20,6 +20,7 @@ import { registerCompositionTools } from "./composition.js";
 import { registerConnectorAccountTools, registerConnectorGrantTools } from "./connectors.js";
 import { registerGuideTools } from "./guide.js";
 import { registerConsoleLinkTools } from "./console-link.js";
+import { registerLocalBrowserTools } from "./local-browser.js";
 import { registerKnowledgeTools } from "./knowledge.js";
 import { registerMachineControlTools } from "./machine-control.js";
 import { registerMcpConnectionTools } from "./mcp-connections.js";
@@ -54,6 +55,8 @@ export function registerInstanceTools(
 	// belongs to every agent type, not only the ones with a console surface.
 	registerGuideTools(server, ctx);
 	registerConsoleLinkTools(server, ctx); // a precise console URL to hand the owner (#938)
+	// Local CLI browser research (#945) — ungated; the API 409s an agent of another runtime.
+	registerLocalBrowserTools(server, ctx);
 	// "What was I working on?" (#787) — ungated for the same reason as the guide: the question
 	// belongs to every agent type, and the run lookup answers for every instance.
 	registerRecentTools(server, ctx);

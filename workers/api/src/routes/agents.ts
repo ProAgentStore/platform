@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { agentDeleteStatements, countAgentSubscribers, foreignSubscriberRefusal, hasForeignSubscriberRows, hasSubscriberRows } from "../lib/agent-cascade.js";
-import { customSurfacesEnabled, sanitizeCustomSurfaces, sanitizeDeclaredCapabilities, sanitizeSettingsSchema } from "../lib/agent-capabilities.js";
+import { customSurfacesEnabled, localBrowserDenial, sanitizeCustomSurfaces, sanitizeDeclaredCapabilities, sanitizeSettingsSchema } from "../lib/agent-capabilities.js";
 import { workflowChoices, workflowRuntimeDenial } from "../lib/agent-workflows.js";
 import { lintResolvedAgentClaims } from "../lib/agent-claims-resolve.js";
 import { AI_LEDGER_FOR_AGENT } from "./analytics.js";
@@ -354,7 +354,7 @@ agentRoutes.post("/", async (c) => {
 	// See the comment on the config write for what this block is and why settingsSchema rides
 	// along with it.
 	const declaredCaps = sanitizeDeclaredCapabilities(body.capabilities);
-	const capsDenial = workflowRuntimeDenial(declaredCaps.workflow, declaredCaps.runtime ?? null);
+	const capsDenial = workflowRuntimeDenial(declaredCaps.workflow, declaredCaps.runtime ?? null) ?? localBrowserDenial(declaredCaps);
 	if (capsDenial) throw new HttpError(400, capsDenial);
 
 	// Check slug uniqueness
@@ -513,7 +513,7 @@ agentRoutes.put("/:id", async (c) => {
 		// from either side — declaring a workflow onto an agent with no runtime, or clearing the
 		// runtime out from under a workflow that is already stored — and a patch-shaped check
 		// would only see one of them.
-		const denial = workflowRuntimeDenial(caps.workflow, caps.runtime ?? null);
+		const denial = workflowRuntimeDenial(caps.workflow, caps.runtime ?? null) ?? localBrowserDenial(caps);
 		if (denial) throw new HttpError(400, denial);
 		config.capabilities = caps;
 		resolvedConfig = JSON.stringify(config);
@@ -627,9 +627,10 @@ agentRoutes.put("/:id/capabilities", async (c) => {
 	if ("runtime" in declared) caps.runtime = declared.runtime;
 	if ("workflow" in declared) caps.workflow = declared.workflow;
 	if (declared.tools !== undefined) caps.tools = declared.tools;
+	if ("localBrowser" in declared) caps.localBrowser = declared.localBrowser;
 
 	// Same merged-block check as `PUT /:id` (#705) — this is the third door onto the same write.
-	const runtimeDenial = workflowRuntimeDenial(caps.workflow, caps.runtime ?? null);
+	const runtimeDenial = workflowRuntimeDenial(caps.workflow, caps.runtime ?? null) ?? localBrowserDenial(caps);
 	if (runtimeDenial) throw new HttpError(400, runtimeDenial);
 
 	config.capabilities = caps;

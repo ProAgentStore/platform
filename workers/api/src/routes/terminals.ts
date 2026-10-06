@@ -79,9 +79,9 @@ export interface TerminalInstance {
 	 * `bound:true` and this string is never read.
 	 */
 	pinnedNode: string | null;
-	/** The runner runtime this agent uses ("coding" | "browser"). Runner-less agents
+	/** The runner runtime this agent uses. Runner-less agents
 	 *  (runtime:null — chat/RAG/connector) are excluded from the list entirely. */
-	runtime: "browser" | "coding";
+	runtime: "browser" | "coding" | "local_browser";
 }
 
 export interface TerminalSession {

@@ -92,6 +92,10 @@ export const INSTANCE_CHILD_TABLES = [
 	"instance_mcp_consent",
 	"mcp_input_requests",
 	"secure_input_requests",
+	// #945 — events before their run (FK), consent beside them.
+	"local_browser_run_events",
+	"local_browser_runs",
+	"local_browser_domain_consent",
 ] as const;
 
 /**

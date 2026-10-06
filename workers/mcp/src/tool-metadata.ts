@@ -231,6 +231,10 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	search_instance_knowledge: "read",
 	secure_input_status: "read",
 	get_console_link: "read",
+	local_browser_preflight: "read",
+	get_instance_local_browser_settings: "read",
+	list_local_browser_runs: "read",
+	set_instance_local_browser_settings: "write",
 	system_status: "read",
 	ticket_thread: "read",
 	usage_summary: "read",
@@ -569,14 +573,16 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// +1 read at #904: mcp_server_info reads local server and catalog metadata.
 	// +1 read at #906: `secure_input_status` — metadata-only check of secret request status.
 	// +1 read at #938: `get_console_link` — builds a URL to a page the caller already owns; writes nothing.
-	read: 117,
+	// +3 read at #945: `local_browser_preflight`, `get_instance_local_browser_settings`,
+	// `list_local_browser_runs` — owner-scoped reads of settings, readiness and a run's redacted trace.
+	read: 120,
 	// +2 write at #825: `pause_instance` / `resume_instance`. `write` rather than `destructive` —
 	// nothing is deleted and nothing is unsubscribed, and classing the OFF switch as destructive
 	// would put RESUME behind a scope the caller may not hold, which is the wrong failure mode for
 	// a safety toggle (the reasoning `set_instance_connector_consent` already records). Not `read`
 	// either: switching an agent off is a real change.
 	// +1 write at #906: `secure_input_request`, agent creates a secure input request for a secret.
-	write: 70, // +1 at #757: promote_board_item
+	write: 71, // +1 at #945: set_instance_local_browser_settings (edits config, starts nothing); +1 at #757: promote_board_item
 	// +1 runtime at #806: `continue_instance_run`. `runtime` rather than `write` for the reason
 	// `start_instance_loop` is — it starts an autonomous run that spends on its own — and the
 	// two must agree, because a caller holding the scope to start one holding a narrower one to

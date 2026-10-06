@@ -23,12 +23,17 @@ import {
 } from "./surface-options.js";
 import { type AgentWorkflow, isAgentWorkflow } from "./agent-workflows.js";
 import { isAllowedBundleUrl } from "./origins.js";
+import { type LocalBrowserCapability, parseLocalBrowserCapability } from "./local-browser/policy.js";
 
 /** A console surface an agent opts into (drives tabs + which UI blocks render). */
 export type AgentSurface = "apply" | "coding" | "insurance" | "repo" | "tmux";
 
-/** Which local runner runtime the agent's hands use (null = no local runner). */
-export type AgentRuntimeKind = "browser" | "coding" | null;
+/**
+ * Which local runner runtime the agent's hands use (null = no local runner).
+ * `local_browser` (#945): a general agent whose browser research is driven by a Codex or Claude
+ * Code CLI signed in on the owner's machine — no repository, no Coding tab. See `localBrowser`.
+ */
+export type AgentRuntimeKind = "browser" | "coding" | "local_browser" | null;
 
 /** A custom (agent-published) console surface — its UI loads from a bundle URL. */
 export interface CustomSurface {
@@ -113,6 +118,8 @@ export interface AgentCapabilities {
 	boardColumns: BoardColumn[];
 	/** Typed per-instance settings the agent declares (subscriber sets values). */
 	settingsSchema?: SettingsField[];
+	/** Local CLI browser research (#945) — resolved, with defaults. Present only for `runtime: "local_browser"`. */
+	localBrowser?: LocalBrowserCapability;
 }
 
 /**
@@ -369,7 +376,7 @@ const KNOWN_SURFACES = new Set<AgentSurface>(["apply", "coding", "insurance", "r
  *  (unlike customSurfaces, which loads a code bundle and stays on its own guarded path). */
 /** The runtime vocabulary, exported so `agent-workflows.test.ts` can assert that the
  *  `requiresRuntime` values on the workflow table are drawn from exactly this set (#705). */
-export const KNOWN_RUNTIMES = new Set<Exclude<AgentRuntimeKind, null>>(["browser", "coding"]);
+export const KNOWN_RUNTIMES = new Set<Exclude<AgentRuntimeKind, null>>(["browser", "coding", "local_browser"]);
 // Workflows are NOT listed here: `isAgentWorkflow` asks the catalog that the picker is served
 // from, so the vocabulary a creator is offered and the vocabulary this validator accepts are one
 // list. They were two, and each had drifted the other way (#375).
@@ -384,6 +391,8 @@ export interface DeclaredCapabilities {
 	runtime?: AgentRuntimeKind;
 	workflow?: AgentCapabilities["workflow"];
 	tools?: string[];
+	/** The creator's local browser block as sent; `localBrowserDenial` validates it against the merged block. */
+	localBrowser?: Record<string, unknown> | null;
 }
 
 /**
@@ -420,7 +429,25 @@ export function sanitizeDeclaredCapabilities(input: unknown): DeclaredCapabiliti
 	}
 	// Presence of a tools array (even empty → clear) is honored; junk → [].
 	if (Array.isArray(o.tools)) out.tools = sanitizeToolList(o.tools) ?? [];
+	// Kept as sent and REFUSED, not dropped, when invalid: a silently dropped limit or engine list
+	// would read as accepted. `localBrowserDenial` is what the three write doors call.
+	if ("localBrowser" in o) out.localBrowser = o.localBrowser && typeof o.localBrowser === "object" && !Array.isArray(o.localBrowser) ? (o.localBrowser as Record<string, unknown>) : null;
 	return out;
+}
+
+/**
+ * Why a MERGED capability block's local browser declaration cannot be stored, or null (#945).
+ * Checked on the merged block for the reason `workflowRuntimeDenial` is: the invalid combination is
+ * reachable from either side — declaring the block on a non-local-browser agent, or changing the
+ * runtime out from under a stored block.
+ */
+export function localBrowserDenial(caps: { runtime?: unknown; localBrowser?: unknown }): string | null {
+	if (caps.localBrowser == null) return null;
+	if (caps.runtime !== "local_browser") {
+		return `capabilities.localBrowser configures local CLI browser research, so it requires capabilities.runtime "local_browser" — but capabilities.runtime is ${caps.runtime == null ? "null" : `"${String(caps.runtime)}"`}. Declare the runtime, or clear localBrowser.`;
+	}
+	const parsed = parseLocalBrowserCapability(caps.localBrowser);
+	return "error" in parsed ? parsed.error : null;
 }
 
 /** Minimal shape we need off an `agents` row to resolve capabilities. */
@@ -489,6 +516,7 @@ export function agentCapabilities(agent: AgentLike, env?: CustomSurfaceEnv | nul
 			...withOptions,
 			boardColumns: declaredColumns ?? defaultBoardColumns(surfaces),
 			settingsSchema,
+			...localBrowserFor(declared),
 		};
 	}
 
@@ -509,6 +537,16 @@ export function agentCapabilities(agent: AgentLike, env?: CustomSurfaceEnv | nul
 		base = { surfaces: [], runtime: null, workflow: null };
 	}
 	return { ...base, tools, customSurfaces, ...withOptions, boardColumns: declaredColumns ?? defaultBoardColumns(base.surfaces), settingsSchema };
+}
+
+/** The resolved local browser block — only for the runtime it belongs to, defaults filled in. */
+function localBrowserFor(declared: Partial<AgentCapabilities>): { localBrowser?: LocalBrowserCapability } {
+	if (declared.runtime !== "local_browser") return {};
+	const parsed = parseLocalBrowserCapability((declared as Record<string, unknown>).localBrowser);
+	// A stored block every write door refused would have to be a hand edit; it resolves to nothing
+	// rather than to defaults, so the routes report the capability as unconfigured instead of
+	// running on limits nobody declared.
+	return "error" in parsed ? {} : { localBrowser: parsed };
 }
 
 /** True if the agent opts into a given console surface. */
