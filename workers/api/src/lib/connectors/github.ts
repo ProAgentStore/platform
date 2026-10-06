@@ -174,15 +174,48 @@ const workflowRunLogsHandler: ToolDef["handler"] = async (ctx, input) => {
 	return { ...win, head: `${framing.join("\n")}\n${win.head}`, origin: `the GitHub Actions log of ${label}` };
 };
 
+/**
+ * A `search` that is only a number — "274" or "#274" — is a lookup, not a text query (#948).
+ * GitHub's search reads "274" as text and matches every issue that happens to contain it, while the
+ * one numbered 274 may not match at all (and, if closed, was filtered out by the open-only default).
+ */
+export function searchedNumber(search: string): number | null {
+	const m = search.match(/^#?\s*(\d{1,9})$/);
+	const n = m ? Number(m[1]) : 0;
+	return n > 0 ? n : null;
+}
+
+type ListState = "open" | "closed" | "all";
+
+/**
+ * The state filter: an explicit valid `state` always wins. Left out, a LISTING shows open items (the
+ * working set), while a text SEARCH covers every state (#948) — someone searching for text rarely
+ * knows whether the match is still open, and an open-only default made a closed match look absent.
+ */
+function listState(input: Record<string, unknown>, searching: boolean): ListState {
+	if (["open", "closed", "all"].includes(String(input.state))) return input.state as ListState;
+	return searching ? "all" : "open";
+}
+
 const listIssuesHandler: ToolDef["handler"] = async (ctx, input) => {
 	const repo = String(input.repo || "");
 	const r = await resolveRepo(ctx, repo);
 	if ("error" in r) return { content: r.error, success: false };
-	const state = ["open", "closed", "all"].includes(String(input.state)) ? (input.state as "open" | "closed" | "all") : "open";
 	const labels = input.labels ? String(input.labels) : undefined;
 	// `search` (#936) is answered by GitHub's own search over EVERY issue, title and body — never by
 	// filtering the 30-issue page below, which would silently miss every match not touched lately.
 	const search = typeof input.search === "string" ? input.search.trim() : "";
+	const state = listState(input, !!search);
+	const number = searchedNumber(search);
+	if (number) {
+		// A direct read by number, whatever its state — the same object github_read_issue returns,
+		// inside the search envelope so a caller parsing search results needs no second shape.
+		const issue = await readIssue(ctx.env, ctx.userId ?? "", repo, number);
+		if (issue) return { content: JSON.stringify({ matchedBy: "number", total_count: 1, incomplete_results: false, issues: [issue] }, null, 2), success: true };
+		const pull = await readPull(ctx.env, ctx.userId ?? "", repo, number);
+		const note = pull ? `#${number} in ${repo} is a pull request, not an issue — read it with github_read_pull.` : `There is no issue #${number} in ${repo}.`;
+		return { content: JSON.stringify({ matchedBy: "number", total_count: 0, incomplete_results: false, issues: [], note }, null, 2), success: true };
+	}
 	if (search) {
 		const found = await searchIssues(ctx.env, ctx.userId ?? "", repo, search, { state, labels, limit: 30 });
 		// A refused search (rate limit, invalid query, unseen repo) is an error, never an empty list.
@@ -220,10 +253,19 @@ const listPullsHandler: ToolDef["handler"] = async (ctx, input) => {
 	const repo = String(input.repo || "");
 	const r = await resolveRepo(ctx, repo);
 	if ("error" in r) return { content: r.error, success: false };
-	const state = ["open", "closed", "all"].includes(String(input.state)) ? (input.state as "open" | "closed" | "all") : "open";
 	// `search` (#937), as on github_list_issues (#936): GitHub's search over EVERY PR, never a filter of
 	// the recent page; a refused search is an error, never an empty list.
 	const search = typeof input.search === "string" ? input.search.trim() : "";
+	const state = listState(input, !!search);
+	const number = searchedNumber(search);
+	if (number) {
+		// As on github_list_issues (#948): a number is read directly, whatever its state.
+		const pull = await readPull(ctx.env, ctx.userId ?? "", repo, number);
+		if (pull) return { content: JSON.stringify({ matchedBy: "number", total_count: 1, incomplete_results: false, pulls: [pull] }, null, 2), success: true };
+		const issue = await readIssue(ctx.env, ctx.userId ?? "", repo, number);
+		const note = issue ? `#${number} in ${repo} is an issue, not a pull request — read it with github_read_issue.` : `There is no pull request #${number} in ${repo}.`;
+		return { content: JSON.stringify({ matchedBy: "number", total_count: 0, incomplete_results: false, pulls: [], note }, null, 2), success: true };
+	}
 	if (search) {
 		const found = await searchPulls(ctx.env, ctx.userId ?? "", repo, search, { state, limit: 30 });
 		if ("error" in found) return { content: found.error, success: false };
@@ -409,16 +451,16 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 			untrustedOutput: true,
 			scope: "read",
 			description:
-				"List issues for a repo (excludes pull requests). Filter by state and labels. Without `search` it returns the 30 most recently updated issues as an array. With `search` it uses GitHub's issue search API over ALL the repo's issues (not just the 30 most recent) and returns `{total_count, incomplete_results, issues}` — `total_count` is every match, `issues` the 30 most recently updated of them; a refused search (e.g. GitHub's 30-searches-a-minute rate limit) is an error, never an empty list.",
+				"List or search a repo's issues (excludes pull requests). Already have the issue NUMBER? Call github_read_issue — it reads one issue by number in any state. Without `search` this returns the 30 most recently updated issues as an array, open ones unless `state` says otherwise. With `search` it uses GitHub's issue search API over ALL the repo's issues (not just the 30 most recent) and, unless you pass `state`, over every state — open AND closed. It returns `{total_count, incomplete_results, issues}`: `total_count` is every match, `issues` the 30 most recently updated of them. A `search` that is only a number (\"274\" or \"#274\") is read directly by number instead, whatever its state, and returns `{matchedBy:\"number\", issues:[that issue]}` (or a note saying it is a pull request or does not exist). A refused search (e.g. GitHub's 30-searches-a-minute rate limit) is an error, never an empty list.",
 			handler: "github_list_issues",
 			params: {
 				repo: { type: "string", required: true, description: 'The repository, "owner/name".' },
-				state: { type: "string", description: '"open" | "closed" | "all" (default open).' },
+				state: { type: "string", description: '"open" | "closed" | "all". Default: open when listing, all when searching.' },
 				labels: { type: "string", description: "Comma-separated label filter." },
 				search: {
 					type: "string",
 					description:
-						"Optional text to find in issue titles and bodies, matched by GitHub's issue search API across ALL issues in the repo (not just the 30 most recent). Omit it to list issues as before.",
+						'Optional text to find in issue titles and bodies, matched by GitHub\'s issue search API across ALL issues in the repo (not just the 30 most recent), in every state unless `state` is given. A bare number ("274", "#274") reads that issue directly instead. Omit it to list issues.',
 				},
 			},
 		},
@@ -426,7 +468,7 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 			name: "github_read_issue",
 			untrustedOutput: true,
 			scope: "read",
-			description: "Read one issue (title, body, labels, state) by number. Use github_list_issue_comments to read the discussion underneath it.",
+			description: "Read one issue (title, body, labels, state) by its number, whatever its state, open or closed. The tool to use whenever you know the number — do not search for it. Use github_list_issue_comments to read the discussion underneath it.",
 			handler: "github_read_issue",
 			params: {
 				repo: { type: "string", required: true, description: 'The repository, "owner/name".' },
@@ -451,15 +493,15 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 			untrustedOutput: true,
 			scope: "read",
 			description:
-				"List a repo's pull requests — number, title, author, draft, branch, mergeable/conflicted, review state and CI status. Read-only; there is deliberately no merge tool (the repo's merge policy governs that). Without `search` it returns the 30 most recently updated PRs as an array. With `search` it uses GitHub's issue search API over ALL the repo's PRs (not just the 30 most recent) and returns `{total_count, incomplete_results, pulls}` — `total_count` is every match, `pulls` the 30 most recently updated of them; only the first 8 carry branch, head sha, mergeable and review state (the rest have an empty branch, mergeable null, review unknown). A refused search (e.g. GitHub's 30-searches-a-minute rate limit) is an error, never an empty list.",
+				"List or search a repo's pull requests — number, title, author, draft, branch, mergeable/conflicted, review state and CI status. Already have the PR NUMBER? Call github_read_pull — it reads one PR by number in any state. Read-only; there is deliberately no merge tool (the repo's merge policy governs that). Without `search` this returns the 30 most recently updated PRs as an array, open ones unless `state` says otherwise. With `search` it uses GitHub's issue search API over ALL the repo's PRs (not just the 30 most recent) and, unless you pass `state`, over every state — open, closed and merged. It returns `{total_count, incomplete_results, pulls}`: `total_count` is every match, `pulls` the 30 most recently updated of them; only the first 8 carry branch, head sha, mergeable and review state (the rest have an empty branch, mergeable null, review unknown). A `search` that is only a number (\"312\" or \"#312\") is read directly by number instead, whatever its state, and returns `{matchedBy:\"number\", pulls:[that PR]}` (or a note saying it is an issue or does not exist). A refused search (e.g. GitHub's 30-searches-a-minute rate limit) is an error, never an empty list.",
 			handler: "github_list_pulls",
 			params: {
 				repo: { type: "string", required: true, description: 'The repository, "owner/name".' },
-				state: { type: "string", description: '"open" | "closed" | "all" (default open).' },
+				state: { type: "string", description: '"open" | "closed" | "all". Default: open when listing, all when searching.' },
 				search: {
 					type: "string",
 					description:
-						"Optional text to find in PR titles and bodies, matched by GitHub's issue search API across ALL pull requests in the repo (not just the 30 most recent). Omit it to list PRs as before.",
+						'Optional text to find in PR titles and bodies, matched by GitHub\'s issue search API across ALL pull requests in the repo (not just the 30 most recent), in every state unless `state` is given. A bare number ("312", "#312") reads that PR directly instead. Omit it to list PRs.',
 				},
 			},
 		},
@@ -467,7 +509,7 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 			name: "github_read_pull",
 			untrustedOutput: true,
 			scope: "read",
-			description: "Read one pull request by number — body, diff size, mergeability, review state and whether its checks are green.",
+			description: "Read one pull request by its number, whatever its state, open, closed or merged — body, diff size, mergeability, review state and whether its checks are green. The tool to use whenever you know the number — do not search for it.",
 			handler: "github_read_pull",
 			params: {
 				repo: { type: "string", required: true, description: 'The repository, "owner/name".' },

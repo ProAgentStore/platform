@@ -476,6 +476,51 @@ describe("github connector — issue reads delegate to github-issues", () => {
 		expect(JSON.stringify(t)).toContain("not just the 30 most recent");
 	});
 
+	it("a bare-number search reads THAT issue directly, closed or not, ignoring state and never searching (#948)", async () => {
+		searchIssues.mockReset();
+		const closed = { number: 274, title: "Old crash", state: "closed", labels: [], comments: 3, updatedAt: "", url: "u274", body: "fixed" };
+		for (const search of ["274", "#274", " # 274 "]) {
+			readIssue.mockReset().mockResolvedValue(closed);
+			const r = await tool("github_list_issues").handler(ctx(), { repo: "acme/widgets", search, state: "open" });
+			expect(r.success).toBe(true);
+			expect(JSON.parse(r.content)).toEqual({ matchedBy: "number", total_count: 1, incomplete_results: false, issues: [closed] });
+			expect(readIssue).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets", 274);
+		}
+		expect(searchIssues).not.toHaveBeenCalled();
+	});
+
+	it("a bare number that is a PR, or nothing, says so and names the right tool (#948)", async () => {
+		readIssue.mockReset().mockResolvedValue(null);
+		readPull.mockReset().mockResolvedValue({ number: 274, title: "A PR" });
+		expect(JSON.parse((await tool("github_list_issues").handler(ctx(), { repo: "acme/widgets", search: "274" })).content)).toMatchObject({ issues: [], total_count: 0, note: expect.stringMatching(/is a pull request.*github_read_pull/) });
+		readPull.mockResolvedValue(null);
+		expect(JSON.parse((await tool("github_list_issues").handler(ctx(), { repo: "acme/widgets", search: "#9999" })).content).note).toBe("There is no issue #9999 in acme/widgets.");
+	});
+
+	it("a text search still uses GitHub's search — over every state unless state is given (#948)", async () => {
+		readIssue.mockReset();
+		searchIssues.mockReset().mockResolvedValue({ total_count: 0, incomplete_results: false, issues: [] });
+		for (const search of ["login 274", "v2", "274a", "#"]) {
+			await tool("github_list_issues").handler(ctx(), { repo: "acme/widgets", search });
+			expect(searchIssues).toHaveBeenLastCalledWith(APP_ENV, "u1", "acme/widgets", search, expect.objectContaining({ state: "all" }));
+		}
+		await tool("github_list_issues").handler(ctx(), { repo: "acme/widgets", search: "login", state: "open" });
+		expect(searchIssues).toHaveBeenLastCalledWith(APP_ENV, "u1", "acme/widgets", "login", expect.objectContaining({ state: "open" }));
+		expect(readIssue).not.toHaveBeenCalled();
+	});
+
+	it("the descriptions steer a caller with a number to the read tools, and state the search default (#948)", () => {
+		const d = (name: string) => JSON.stringify(getRegistryTool(name));
+		expect(d("github_list_issues")).toMatch(/Already have the issue NUMBER\? Call github_read_issue/);
+		expect(d("github_list_issues")).toMatch(/over every state — open AND closed/);
+		expect(d("github_list_issues")).toMatch(/only a number.*read directly by number/);
+		expect(d("github_read_issue")).toMatch(/whatever its state.*do not search for it/);
+		expect(d("github_list_pulls")).toMatch(/Already have the PR NUMBER\? Call github_read_pull/);
+		expect(d("github_list_pulls")).toMatch(/over every state — open, closed and merged/);
+		expect(d("github_read_pull")).toMatch(/whatever its state.*do not search for it/);
+		expect(d("github_list_issues")).toMatch(/Default: open when listing, all when searching/);
+	});
+
 	it("github_list_issues defaults an invalid state to open", async () => {
 		listIssues.mockResolvedValue([]);
 		await tool("github_list_issues").handler(ctx(), { repo: "acme/widgets", state: "banana" });
@@ -872,5 +917,42 @@ describe("github connector — github_update_issue dispatch", () => {
 		const d = tool("github_update_issue").description;
 		expect(d).toMatch(/REPLACE/);
 		expect(d).toMatch(/github_read_issue/);
+	});
+});
+
+describe("github_list_pulls — a number is a lookup, text is a search (#948)", () => {
+	it("reads a bare-number PR directly, merged or not, ignoring state and never searching", async () => {
+		searchPulls.mockReset();
+		const merged = { number: 312, title: "Ship it", state: "closed", merged: true };
+		for (const search of ["312", "#312"]) {
+			readPull.mockReset().mockResolvedValue(merged);
+			const r = await tool("github_list_pulls").handler(ctx(), { repo: "acme/widgets", search, state: "open" });
+			expect(r.success).toBe(true);
+			expect(JSON.parse(r.content)).toEqual({ matchedBy: "number", total_count: 1, incomplete_results: false, pulls: [merged] });
+			expect(readPull).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets", 312);
+		}
+		expect(searchPulls).not.toHaveBeenCalled();
+	});
+
+	it("says when the number is an issue, and names github_read_issue", async () => {
+		readPull.mockReset().mockResolvedValue(null);
+		readIssue.mockReset().mockResolvedValue({ number: 312, title: "An issue" });
+		expect(JSON.parse((await tool("github_list_pulls").handler(ctx(), { repo: "acme/widgets", search: "312" })).content).note).toMatch(/is an issue, not a pull request.*github_read_issue/);
+	});
+
+	it("searches text over every state unless state is given", async () => {
+		readPull.mockReset();
+		searchPulls.mockReset().mockResolvedValue({ total_count: 0, incomplete_results: false, pulls: [] });
+		await tool("github_list_pulls").handler(ctx(), { repo: "acme/widgets", search: "retry logic" });
+		expect(searchPulls).toHaveBeenLastCalledWith(APP_ENV, "u1", "acme/widgets", "retry logic", expect.objectContaining({ state: "all" }));
+		await tool("github_list_pulls").handler(ctx(), { repo: "acme/widgets", search: "retry logic", state: "closed" });
+		expect(searchPulls).toHaveBeenLastCalledWith(APP_ENV, "u1", "acme/widgets", "retry logic", expect.objectContaining({ state: "closed" }));
+		expect(readPull).not.toHaveBeenCalled();
+	});
+
+	it("still lists open PRs when there is no search", async () => {
+		listPulls.mockReset().mockResolvedValue([]);
+		await tool("github_list_pulls").handler(ctx(), { repo: "acme/widgets" });
+		expect(listPulls).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets", expect.objectContaining({ state: "open" }));
 	});
 });
