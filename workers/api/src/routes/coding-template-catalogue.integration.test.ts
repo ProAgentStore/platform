@@ -11,10 +11,13 @@ import { instanceRoutes } from "./instances.js";
  * The coding template's whole subscriber path, on the schema the migrations build (#830).
  *
  * The reported failure was `list_agents → subscribe_agent → my_instances` stopping at step one: an
- * empty catalogue, so nothing could be subscribed to. The template itself was never missing —
- * `coder` has been seeded published since migration 0021 — but the catalogue's COUNT query named
- * `a.visibility` without the alias, D1 rejected every read, and the MCP tool rendered the error as
- * `[]`. The recorded SQL stubs in the existing tests could not detect that production failure.
+ * empty catalogue, so nothing could be subscribed to. The template itself was never missing, but
+ * the catalogue's COUNT query named `a.visibility` without the alias, D1 rejected every read, and
+ * the MCP tool rendered the error as `[]`. The recorded SQL stubs in the existing tests could not
+ * detect that production failure.
+ *
+ * The coding template is `coder-repo` (0063). The legacy `coder` it replaced is a draft since
+ * 0174 (#941), so it must be neither listed nor subscribable.
  *
  * This drives the REST calls behind the MCP flow over `d1-sqlite.ts`: every migration applies to
  * real SQLite and no agent fixture is added. It also verifies the private instance can receive the
@@ -68,23 +71,27 @@ describe("the coding template is published and subscribable (#830)", () => {
 			const listRes = await app.request("/v1/agents?limit=500", {}, env);
 			expect(listRes.status).toBe(200);
 			const list = (await listRes.json()) as { agents: Array<{ id: string; slug: string; category: string; description: string }>; total: number };
-			const coder = list.agents.find((agent) => agent.slug === "coder");
-			expect(coder, "no `coder` in the public catalogue").toBeDefined();
+			const coder = list.agents.find((agent) => agent.slug === "coder-repo");
+			expect(coder, "no `coder-repo` in the public catalogue").toBeDefined();
 			expect(coder?.category).toBe("code");
-			expect(coder?.description).toMatch(/GitHub repo/i);
+			expect(coder?.description).toMatch(/ONE repository/);
 			expect(list.total).toBe(list.agents.length);
+			expect(list.agents.some((agent) => agent.slug === "coder"), "the legacy `coder` is still listed").toBe(false);
 
-			// Its runtime describes repository coding work and exposes `coding.session` tasks.
-			const cfgRow = d1.sqlite.prepare("SELECT config FROM agents WHERE slug = 'coder'").get() as { config: string };
-			const cfg = JSON.parse(cfgRow.config) as { runtime?: { kind?: string; taskTypes?: string[] }; repoAgnostic?: boolean };
-			expect(cfg.runtime?.kind).toBe("pags-coding-runtime");
-			expect(cfg.runtime?.taskTypes).toContain("coding.session");
-			expect(cfg.repoAgnostic).toBe(true);
+			// It declares the coding runtime and the Pilot workflow.
+			const cfgRow = d1.sqlite.prepare("SELECT config FROM agents WHERE slug = 'coder-repo'").get() as { config: string };
+			const cfg = JSON.parse(cfgRow.config) as { capabilities?: { surfaces?: string[]; runtime?: string; workflow?: string } };
+			expect(cfg.capabilities?.surfaces).toContain("coding");
+			expect(cfg.capabilities?.runtime).toBe("coding");
+			expect(cfg.capabilities?.workflow).toBe("CODING_SESSION");
 
 			const auth = { Authorization: `Bearer ${await signSession(USER, SECRET, { roles: ["user"] })}`, "Content-Type": "application/json" };
 
 			// 2. subscribe_agent — by the slug that list_agents returns.
-			const subRes = await app.request("/v1/instances/coder/subscribe", { method: "POST", headers: auth, body: "{}" }, env);
+			const legacyRes = await app.request("/v1/instances/coder/subscribe", { method: "POST", headers: auth, body: "{}" }, env);
+			expect(legacyRes.status, "the legacy `coder` still accepts subscriptions").toBe(404);
+
+			const subRes = await app.request("/v1/instances/coder-repo/subscribe", { method: "POST", headers: auth, body: "{}" }, env);
 			expect(subRes.status).toBe(201);
 			const sub = (await subRes.json()) as { instanceId: string; agentId: string; status: string };
 			expect(sub).toMatchObject({ agentId: coder?.id, status: "active" });

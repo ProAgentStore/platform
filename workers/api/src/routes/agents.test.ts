@@ -427,7 +427,8 @@ describe("GET /v1/agents — pagination (#661)", () => {
 			const res = await app.request("/v1/agents", {}, env);
 			expect(res.status).toBe(200);
 			const data = await res.json<{ agents: Array<{ slug: string }>; total: number }>();
-			expect(data.agents.some((agent) => agent.slug === "coder")).toBe(true);
+			expect(data.agents.some((agent) => agent.slug === "coder-repo")).toBe(true);
+			expect(data.agents.some((agent) => agent.slug === "coder"), "the legacy `coder` is a draft since 0174 (#941)").toBe(false);
 			expect(data.total).toBeGreaterThan(0);
 		} finally {
 			d1.close();
