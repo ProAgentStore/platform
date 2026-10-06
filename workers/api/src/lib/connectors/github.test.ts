@@ -7,8 +7,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // serialise) without re-testing github-issues.ts. github_workflow_runs + github_create_issue
 // fetch api.github.com directly, so those go through the stubbed globalThis.fetch.
 // vi.hoisted so the fns exist when the hoisted vi.mock factory runs.
-const { listIssues, readIssue, listIssueComments, invalidateIssuesCache, invalidateIssueCaches, listPulls, readPull } = vi.hoisted(() => ({
+const { listIssues, searchIssues, readIssue, listIssueComments, invalidateIssuesCache, invalidateIssueCaches, listPulls, readPull } = vi.hoisted(() => ({
 	listIssues: vi.fn(),
+	// `github_list_issues` with `search` (#936) goes to GitHub's search over every issue instead.
+	searchIssues: vi.fn(),
 	readIssue: vi.fn(),
 	listIssueComments: vi.fn(),
 	// The cache drop `github_create_issue` performs after a successful POST (#401) — mocked at the
@@ -22,7 +24,7 @@ const { listIssues, readIssue, listIssueComments, invalidateIssuesCache, invalid
 	listPulls: vi.fn(),
 	readPull: vi.fn(),
 }));
-vi.mock("../github-issues.js", () => ({ listIssues, readIssue, listIssueComments, invalidateIssuesCache, invalidateIssueCaches }));
+vi.mock("../github-issues.js", () => ({ listIssues, searchIssues, readIssue, listIssueComments, invalidateIssuesCache, invalidateIssueCaches }));
 vi.mock("../github-prs.js", () => ({ listPulls, readPull }));
 
 import { GITHUB_TOOLS } from "./github.js";
@@ -435,6 +437,41 @@ describe("github connector — issue reads delegate to github-issues", () => {
 			"acme/widgets",
 			expect.objectContaining({ state: "closed", labels: "p1,p2", limit: 30 }),
 		);
+	});
+
+	it("github_list_issues WITHOUT search lists exactly as before — no search reaches GitHub (#936)", async () => {
+		searchIssues.mockReset();
+		listIssues.mockResolvedValue([{ number: 1, title: "Bug", state: "open", labels: [], comments: 0, updatedAt: "", url: "u" }]);
+		for (const search of [undefined, "", "   "]) {
+			listIssues.mockClear();
+			const r = await tool("github_list_issues").handler(ctx(), { repo: "acme/widgets", ...(search === undefined ? {} : { search }) });
+			expect(r.success).toBe(true);
+			expect(Array.isArray(JSON.parse(r.content))).toBe(true);
+			expect(listIssues).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets", { state: "open", labels: undefined, limit: 30 });
+		}
+		expect(searchIssues).not.toHaveBeenCalled();
+	});
+
+	it("github_list_issues WITH search uses GitHub's search and returns the narrowed result with its total (#936)", async () => {
+		listIssues.mockReset();
+		searchIssues.mockResolvedValue({ total_count: 2, incomplete_results: false, issues: [{ number: 7, title: "bug in login", state: "open", labels: [], comments: 0, updatedAt: "", url: "u7" }] });
+		const r = await tool("github_list_issues").handler(ctx(), { repo: "acme/widgets", search: " bug ", state: "all", labels: "p1" });
+		expect(r.success).toBe(true);
+		expect(JSON.parse(r.content)).toMatchObject({ total_count: 2, issues: [{ number: 7 }] });
+		expect(searchIssues).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets", "bug", expect.objectContaining({ state: "all", labels: "p1", limit: 30 }));
+		expect(listIssues).not.toHaveBeenCalled();
+	});
+
+	it("a refused search (rate limit) is a failed tool call, never an empty list (#936)", async () => {
+		searchIssues.mockResolvedValue({ error: "GitHub's search rate limit is used up (30 searches a minute) — try again in about 40s." });
+		const r = await tool("github_list_issues").handler(ctx(), { repo: "acme/widgets", search: "bug" });
+		expect(r).toEqual({ content: expect.stringMatching(/rate limit/), success: false });
+	});
+
+	it("the schema declares search and says it covers every issue (#936)", () => {
+		const t = getRegistryTool("github_list_issues") as unknown as { params?: Record<string, { description?: string }>; input?: unknown; description: string };
+		expect(t.description).toMatch(/search API over ALL/);
+		expect(JSON.stringify(t)).toContain("not just the 30 most recent");
 	});
 
 	it("github_list_issues defaults an invalid state to open", async () => {

@@ -18,7 +18,7 @@ import type { ToolDef, RegistryToolCtx } from "./types.js";
 import { compileConnector, type ConnectorManifest } from "./manifest.js";
 import type { Connector } from "./types.js";
 import { githubAppConfigured } from "../github-app.js";
-import { invalidateIssueCaches, invalidateIssuesCache, listIssueComments, listIssues, readIssue } from "../github-issues.js";
+import { invalidateIssueCaches, invalidateIssuesCache, listIssueComments, listIssues, readIssue, searchIssues } from "../github-issues.js";
 import { listPulls, readPull } from "../github-prs.js";
 import { fetchJobLog, fetchWorkflowJobs, fetchWorkflowRuns, JOB_LOG_FETCH_BYTES, mapWorkflowRun, pickJob, stripLogTimestamps } from "../github-actions.js";
 import { READ_MAX_CHARS, READ_MAX_LINES, renderRepoFileWindow, tailWindowStart } from "../repo-file-window.js";
@@ -179,7 +179,17 @@ const listIssuesHandler: ToolDef["handler"] = async (ctx, input) => {
 	const r = await resolveRepo(ctx, repo);
 	if ("error" in r) return { content: r.error, success: false };
 	const state = ["open", "closed", "all"].includes(String(input.state)) ? (input.state as "open" | "closed" | "all") : "open";
-	const issues = await listIssues(ctx.env, ctx.userId ?? "", repo, { state, labels: input.labels ? String(input.labels) : undefined, limit: 30 });
+	const labels = input.labels ? String(input.labels) : undefined;
+	// `search` (#936) is answered by GitHub's own search over EVERY issue, title and body — never by
+	// filtering the 30-issue page below, which would silently miss every match not touched lately.
+	const search = typeof input.search === "string" ? input.search.trim() : "";
+	if (search) {
+		const found = await searchIssues(ctx.env, ctx.userId ?? "", repo, search, { state, labels, limit: 30 });
+		// A refused search (rate limit, invalid query, unseen repo) is an error, never an empty list.
+		if ("error" in found) return { content: found.error, success: false };
+		return { content: JSON.stringify(found, null, 2), success: true };
+	}
+	const issues = await listIssues(ctx.env, ctx.userId ?? "", repo, { state, labels, limit: 30 });
 	return { content: JSON.stringify(issues, null, 2), success: true };
 };
 
@@ -390,12 +400,18 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 			name: "github_list_issues",
 			untrustedOutput: true,
 			scope: "read",
-			description: "List issues for a repo (excludes pull requests). Filter by state and labels.",
+			description:
+				"List issues for a repo (excludes pull requests). Filter by state and labels. Without `search` it returns the 30 most recently updated issues as an array. With `search` it uses GitHub's issue search API over ALL the repo's issues (not just the 30 most recent) and returns `{total_count, incomplete_results, issues}` — `total_count` is every match, `issues` the 30 most recently updated of them; a refused search (e.g. GitHub's 30-searches-a-minute rate limit) is an error, never an empty list.",
 			handler: "github_list_issues",
 			params: {
 				repo: { type: "string", required: true, description: 'The repository, "owner/name".' },
 				state: { type: "string", description: '"open" | "closed" | "all" (default open).' },
 				labels: { type: "string", description: "Comma-separated label filter." },
+				search: {
+					type: "string",
+					description:
+						"Optional text to find in issue titles and bodies, matched by GitHub's issue search API across ALL issues in the repo (not just the 30 most recent). Omit it to list issues as before.",
+				},
 			},
 		},
 		{
@@ -493,6 +509,11 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 const compiled = compileConnector(GITHUB_MANIFEST, {
 	github_workflow_runs: workflowRunsHandler,
 	github_workflow_run_logs: workflowRunLogsHandler,
+	// FOLLOW-UP (#936): the registry does not validate input (`runRegistryTool`), so every github_*
+	// tool silently IGNORES a field it does not declare — before #936, `search` here was dropped and the
+	// unfiltered list came back as if it had been honoured. The other list-style tools
+	// (github_list_issue_comments, github_list_pulls, github_workflow_runs) behave the same and should
+	// refuse, or at least name, unknown fields. Out of scope for this change.
 	github_list_issues: listIssuesHandler,
 	github_read_issue: readIssueHandler,
 	github_list_issue_comments: listIssueCommentsHandler,

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listIssueComments, listIssues, readIssue } from "./github-issues.js";
+import { listIssueComments, listIssues, readIssue, searchIssues, searchIssuesQuery } from "./github-issues.js";
 import type { Env } from "../types.js";
 
 vi.mock("./github-app.js", () => ({
@@ -145,5 +145,79 @@ describe("listIssueComments", () => {
 	it("returns [] on a GitHub error", async () => {
 		mockFetch(() => ({ status: 404, body: { message: "Not Found" } }));
 		expect(await listIssueComments(env, "user1", "acme/widget", 99)).toEqual([]);
+	});
+});
+
+/** A fetch stub that also answers headers — the rate-limit refusal is read from them (#936). */
+function mockSearch(status: number, body: unknown, headers: Record<string, string> = {}) {
+	const seen: string[] = [];
+	globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+		seen.push(String(input));
+		return { ok: status >= 200 && status < 300, status, json: async () => body, headers: new Headers(headers) } as Response;
+	}) as unknown as typeof fetch;
+	return seen;
+}
+
+const issue = (n: number, title: string, updated: string, extra: Record<string, unknown> = {}) => ({ number: n, title, state: "open", comments: 0, updated_at: updated, html_url: `u${n}`, body: "", ...extra });
+
+describe("listIssues without a search — unchanged (#936)", () => {
+	it("still lists the recent page from /issues and never touches /search", async () => {
+		const seen: string[] = [];
+		mockFetch((url) => {
+			seen.push(url);
+			return { status: 200, body: [issue(1, "a", "2026-07-01T00:00:00Z"), issue(2, "b", "2026-07-02T00:00:00Z")] };
+		});
+		const issues = await listIssues(env, "user1", "acme/widget", { state: "open", limit: 30 });
+		expect(issues.map((i) => i.number)).toEqual([1, 2]);
+		expect(seen).toHaveLength(1);
+		expect(seen[0]).toContain("/repos/acme/widget/issues?");
+		expect(seen[0]).not.toContain("/search/");
+	});
+});
+
+describe("searchIssues — GitHub's search over every issue (#936)", () => {
+	it("scopes the query to the repo, to issues, to the state and labels, and to title + body", () => {
+		expect(searchIssuesQuery("acme", "widget", "flaky deploy", { state: "open", labels: "p1, needs triage" })).toBe(
+			'repo:acme/widget is:issue state:open label:"p1" label:"needs triage" in:title,body flaky deploy',
+		);
+		expect(searchIssuesQuery("acme", "widget", "x", { state: "all" })).toBe("repo:acme/widget is:issue in:title,body x");
+	});
+
+	it("returns only the matches, with the total — including one older than the newest 30", async () => {
+		const seen = mockSearch(200, {
+			total_count: 45,
+			incomplete_results: false,
+			items: [issue(3, "Flaky deploy on Fridays", "2025-01-02T00:00:00Z"), issue(9, "A PR about it", "2026-07-01T00:00:00Z", { pull_request: {} })],
+		});
+		const r = await searchIssues(env, "user1", "acme/widget", "flaky deploy", { state: "open", limit: 30 });
+		expect(r).toEqual({ total_count: 45, incomplete_results: false, issues: [expect.objectContaining({ number: 3, title: "Flaky deploy on Fridays" })] });
+		const url = new URL(seen[0]);
+		expect(url.pathname).toBe("/search/issues");
+		expect(url.searchParams.get("q")).toBe("repo:acme/widget is:issue state:open in:title,body flaky deploy");
+		expect(url.searchParams.get("per_page")).toBe("30");
+	});
+
+	it("an empty result means nothing matched", async () => {
+		mockSearch(200, { total_count: 0, incomplete_results: false, items: [] });
+		expect(await searchIssues(env, "user1", "acme/widget", "nothing")).toEqual({ total_count: 0, incomplete_results: false, issues: [] });
+	});
+
+	it("a rate-limit refusal is an ERROR, never an empty list — 429 and 403-with-no-remaining alike", async () => {
+		mockSearch(429, { message: "rate limited" }, { "x-ratelimit-reset": String(Math.ceil(Date.now() / 1000) + 40) });
+		const a = await searchIssues(env, "user1", "acme/widget", "bug");
+		expect(a).toEqual({ error: expect.stringMatching(/rate limit is used up .* try again in about \d+s\. This is not "no matches"\./) });
+		mockSearch(403, { message: "API rate limit exceeded" }, { "x-ratelimit-remaining": "0" });
+		expect(await searchIssues(env, "user1", "acme/widget", "bug")).toHaveProperty("error");
+	});
+
+	it("an invalid query or an unseen repo is an error that carries GitHub's reason", async () => {
+		mockSearch(422, { message: "The listed users and repositories cannot be searched" });
+		expect(await searchIssues(env, "user1", "acme/secret", "bug")).toEqual({ error: "GitHub search refused the query (422): The listed users and repositories cannot be searched." });
+	});
+
+	it("rejects a malformed repo without calling GitHub", async () => {
+		const seen = mockSearch(200, {});
+		expect(await searchIssues(env, "user1", "not-a-repo", "bug")).toHaveProperty("error");
+		expect(seen).toHaveLength(0);
 	});
 });

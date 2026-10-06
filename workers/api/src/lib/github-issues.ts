@@ -196,6 +196,83 @@ export async function listIssues(env: Env, userId: string, githubRepo: string, o
 	}
 }
 
+/** What `searchIssues` returns: the matches GitHub sent, and how many there are in all. */
+export interface SearchIssuesResult {
+	/** Every issue in the repo matching the query — may exceed `issues.length`. */
+	total_count: number;
+	/** GitHub's own flag: the search timed out and the matches may be incomplete. */
+	incomplete_results: boolean;
+	issues: IssueSummary[];
+}
+
+/** One `/search/issues` page. `body` is matched server-side; the result carries summaries only. */
+interface RawSearch {
+	total_count?: number;
+	incomplete_results?: boolean;
+	items?: RawIssue[];
+}
+
+/** Quote a qualifier value so a label with a space or a quote stays one value. */
+const quoted = (v: string) => `"${v.replace(/"/g, "")}"`;
+
+/** The `q` for GitHub's issue search, scoped to one repo and to issues only (#936). */
+export function searchIssuesQuery(owner: string, name: string, search: string, opts: Pick<ListIssuesOpts, "state" | "labels"> = {}): string {
+	const state = opts.state ?? "open";
+	const labels = (opts.labels ?? "").split(",").map((l) => l.trim()).filter(Boolean);
+	return [
+		`repo:${owner}/${name}`,
+		"is:issue",
+		state === "all" ? "" : `state:${state}`,
+		...labels.map((l) => `label:${quoted(l)}`),
+		"in:title,body",
+		search.trim(),
+	].filter(Boolean).join(" ");
+}
+
+/**
+ * Search a repo's issues — title AND body, across EVERY issue, not just the recent page (#936).
+ *
+ * `listIssues` reads one page: the 30 most recently updated. Filtering that page for a term would
+ * silently miss every matching issue nobody has touched lately — the silent-truncation class #898
+ * catalogues. GitHub's own search covers the whole repo, and says how many matched in all.
+ *
+ * A refusal is an ERROR, never `[]`, unlike `listIssues`: an empty search result has to mean "nothing
+ * matched", or a rate-limited search reads as "there is no such issue". The search API allows 30
+ * requests a minute authenticated (10 without), and answers 403/429 past that. Not routed through
+ * the conditional cache: search does not honour ETags reliably, and the cache answers a failed
+ * request with its stale copy, which is the refusal this must surface.
+ */
+export async function searchIssues(env: Env, userId: string, githubRepo: string, search: string, opts: ListIssuesOpts = {}): Promise<SearchIssuesResult | { error: string }> {
+	const parsed = parseRepo(githubRepo);
+	if (!parsed) return { error: `"${githubRepo}" is not an "owner/name" repository.` };
+	const token = await installationTokenForOwner(env, userId, parsed.owner).catch(() => null);
+	const perPage = Math.min(Math.max(opts.limit ?? 30, 1), 100);
+	const q = searchIssuesQuery(parsed.owner, parsed.name, search, opts);
+	const url = `https://api.github.com/search/issues?${new URLSearchParams({ q, per_page: String(perPage), sort: "updated", order: "desc" })}`;
+	let res: Response;
+	try {
+		res = await fetch(url, { headers: GH_HEADERS(token) });
+	} catch (e) {
+		return { error: `GitHub search could not be reached (${e instanceof Error ? e.message : String(e)}).` };
+	}
+	if (res.status === 429 || (res.status === 403 && res.headers?.get?.("x-ratelimit-remaining") === "0")) {
+		const reset = Number(res.headers?.get?.("x-ratelimit-reset"));
+		const wait = Number.isFinite(reset) && reset > 0 ? Math.max(1, Math.ceil(reset - Date.now() / 1000)) : 60;
+		return { error: `GitHub's search rate limit is used up (30 searches a minute) — try again in about ${wait}s. This is not "no matches".` };
+	}
+	const body = (await res.json().catch(() => null)) as (RawSearch & { message?: string }) | null;
+	if (!res.ok) {
+		// 422: an invalid query, or a repo this token cannot see (GitHub says the same for both).
+		return { error: `GitHub search refused the query (${res.status})${body?.message ? `: ${body.message}` : ""}.` };
+	}
+	const items = Array.isArray(body?.items) ? body.items : [];
+	return {
+		total_count: typeof body?.total_count === "number" ? body.total_count : items.length,
+		incomplete_results: body?.incomplete_results === true,
+		issues: items.filter((i) => !i.pull_request).map(toSummary),
+	};
+}
+
 /** Read one issue's detail (with a capped body). Returns null if it's a PR or not found. */
 export async function readIssue(env: Env, userId: string, githubRepo: string, number: number): Promise<IssueDetail | null> {
 	const parsed = parseRepo(githubRepo);
