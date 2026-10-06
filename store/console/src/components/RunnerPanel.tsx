@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
-import { type Machine, machinesToShow, machineTile, type NodeDetail, pinnedWarning, runnerReading } from "../lib/runnerPanel";
+import { type AttachResult, canReattach, type Machine, machinesToShow, machineTile, type MoveOutcome, type NodeDetail, type PinResponse, pinnedWarning, pinOutcome, reattachOutcome, runnerReading } from "../lib/runnerPanel";
 import Button from "./Button";
 import Card from "./Card";
 
@@ -33,7 +33,8 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 	// machine correctly and a hostname wrongly at the same time (#379). Server-computed — only it
 	// holds the machine id that proves two names are one machine.
 	const [resolvedNode, setResolvedNode] = useState<string | null>(null);
-	const [runnerNodeMsg, setRunnerNodeMsg] = useState("");
+	// What the last pin move or reattach ACTUALLY did (#932) — read off the API's answer, never assumed.
+	const [move, setMove] = useState<MoveOutcome | null>(null);
 	const [refreshing, setRefreshing] = useState(false);
 	const [machines, setMachines] = useState<Machine[]>([]);
 	// Does this agent use a local runtime (browser/coding)? Only then is this panel relevant.
@@ -85,14 +86,34 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 		// re-subscribed the listener twice for one change.
 	}, [refresh]);
 
+	/** Show what a move did, re-read the card, and re-check once more while it is unconfirmed. */
+	const settle = async (outcome: MoveOutcome) => {
+		setMove(outcome);
+		await refresh();
+		if (outcome.tone === "pending") setTimeout(() => void refresh(), 5_000);
+	};
+
 	const save = async (node: string) => {
 		setRunnerNode(node);
-		setRunnerNodeMsg("Saving…");
+		setMove({ tone: "pending", text: "Saving…", offerReattach: false });
 		try {
-			await api(`/v1/instances/${instanceId}/runner-node`, { method: "PUT", body: JSON.stringify({ runnerNode: node || null }) });
-			setRunnerNodeMsg(node ? `Pinned to ${node}` : "Set to automatic");
+			const resp = await api<PinResponse>(`/v1/instances/${instanceId}/runner-node`, { method: "PUT", body: JSON.stringify({ runnerNode: node || null }) });
+			await settle(pinOutcome(node, resp));
 		} catch (e) {
-			setRunnerNodeMsg(e instanceof Error ? e.message : "Failed");
+			setMove({ tone: "warn", text: e instanceof Error ? e.message : "Failed", offerReattach: false });
+		}
+	};
+
+	/** The remote `pags up --force` for this one agent (`force_runner_attach`, #856). */
+	const reattach = async () => {
+		const node = runnerNode;
+		if (!node) return;
+		setMove({ tone: "pending", text: `Asking ${node} to attach this agent…`, offerReattach: false });
+		try {
+			const a = await api<AttachResult>(`/v1/instances/${instanceId}/runner-attach`, { method: "POST", body: JSON.stringify({ runnerNode: node }) });
+			await settle(reattachOutcome(node, a));
+		} catch (e) {
+			setMove({ tone: "warn", text: e instanceof Error ? e.message : "Failed", offerReattach: false });
 		}
 	};
 
@@ -216,7 +237,7 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 				{/* Pinned machine not serving THIS agent → guidance (machine-online vs fully-offline). */}
 				{warning === "not_attached" && (
 					<p className="text-xs text-amber-500 mt-2">
-						⚠ <b>{runnerNode}</b> is online, but this agent isn't attached to it yet. Restart <code className="text-accent">pags up</code> on it (it attaches newly-subscribed agents on start).
+						⚠ <b>{runnerNode}</b> is online, but this agent isn't attached to it. Reattach takes the agent's slot there remotely; if that fails, restart <code className="text-accent">pags up</code> on it.
 					</p>
 				)}
 				{warning === "offline" && (
@@ -225,7 +246,10 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 					</p>
 				)}
 				{!runnerNode && tiles.length > 0 && <p className="text-xs text-amber-500 mt-2">Pick a machine above to run this agent on.</p>}
-				{runnerNodeMsg && <p className="text-xs text-muted mt-1">{runnerNodeMsg}</p>}
+				{move && <p role="status" data-testid="runner-move-outcome" className={`text-xs mt-1 ${move.tone === "warn" ? "text-warning" : move.tone === "ok" ? "text-success" : "text-muted"}`}>{move.text}</p>}
+				{canReattach(runnerNode, warning, move) && (
+					<Button size="sm" className="mt-2" onClick={reattach} disabled={move?.tone === "pending"} data-testid="runner-reattach">Reattach on {runnerNode}</Button>
+				)}
 			</div>
 		</Card>
 	);

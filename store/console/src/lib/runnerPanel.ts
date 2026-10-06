@@ -270,3 +270,84 @@ export function runnerReading(
 		pinnedNodeOnline: pinned?.nodeOnline === true,
 	};
 }
+
+// ── What a pin move or a reattach actually did (#932) ───────────────────────────────────────────
+//
+// `PUT …/runner-node` answers `{runnerNode, attachment}` and `POST …/runner-attach` answers the
+// attachment itself (workers/api/src/routes/instances-runner-attach.ts). The card discarded both and
+// printed "Pinned to X" for every outcome — including a pin that saved but did not attach, and one
+// whose confirmation timed out — so a move that had not happened read as done.
+
+/** The attachment either route answers with (`RepinAttachment` / `AgentAttachment`, both optional-heavy). */
+export interface AttachResult {
+	node?: string;
+	attached?: boolean;
+	/** The 15s confirmation window closed before the outcome was known (#887, #922). */
+	unconfirmed?: boolean;
+	/** The server's sentence: the cause when it did not attach, or what is still open. */
+	detail?: string;
+	/** Stale sockets cleared from the agent's slot (runner-attach only). */
+	evicted?: number;
+}
+
+export interface MoveOutcome {
+	/** `ok` = done; `pending` = not confirmed yet, re-check; `warn` = it did not attach. */
+	tone: "ok" | "pending" | "warn";
+	text: string;
+	/** Offer "Reattach on <node>" — the remote `pags up --force` for this one agent. */
+	offerReattach: boolean;
+}
+
+/**
+ * The server's `detail`, said to the person reading the card. It is written for MCP callers and
+ * names their tools; on this card the same actions are a button and a refresh.
+ */
+export function humanDetail(detail: string | undefined): string {
+	return (detail ?? "")
+		.replace(/\bCall force_runner_attach\b/g, "Use Reattach")
+		.replace(/\bforce_runner_attach\b/g, "Reattach")
+		.replace(/\bcall runner_update\b/g, "update its CLI")
+		.replace(/\s*Call instance_runner_node to [^.]*\.?/g, "")
+		.replace(/;?\s*instance_runner_node shows where it is attached\.?/g, ".")
+		.replace(/\s+\./g, ".")
+		.trim();
+}
+
+/** `PUT /v1/instances/:id/runner-node`'s answer: the saved pin and what the move did. */
+export interface PinResponse {
+	runnerNode: string | null;
+	attachment?: AttachResult | null;
+}
+
+/** What `PUT /v1/instances/:id/runner-node` did, for the line under the machine grid. */
+export function pinOutcome(node: string, resp: Partial<PinResponse> | null | undefined): MoveOutcome {
+	if (!node) return { tone: "ok", text: "Set to automatic — calls go to whichever machine holds a live runner.", offerReattach: false };
+	const a = resp?.attachment;
+	// An older API answered without `attachment`: the pin is saved and that is all it said.
+	if (!a) return { tone: "ok", text: `Pinned to ${node}.`, offerReattach: false };
+	if (a.attached && !a.unconfirmed) return { tone: "ok", text: `Moved to ${node} — this agent is attached there now.`, offerReattach: false };
+	if (a.attached) return { tone: "pending", text: `Attached on ${node}. Other machines still let go of it on their own poll — this card re-checks.`, offerReattach: false };
+	if (a.unconfirmed) return { tone: "pending", text: `Pinned to ${node}; not confirmed yet whether it attached — this card re-checks in a few seconds.`, offerReattach: false };
+	const why = humanDetail(a.detail);
+	return { tone: "warn", text: `Pinned to ${node}, but this agent didn't attach there.${why ? ` ${why}` : ""}`, offerReattach: true };
+}
+
+/** What `POST /v1/instances/:id/runner-attach` did. */
+export function reattachOutcome(node: string, a: AttachResult | null | undefined): MoveOutcome {
+	if (a?.attached) {
+		const cleared = a.evicted ? ` (cleared ${a.evicted} stale connection${a.evicted === 1 ? "" : "s"})` : "";
+		return { tone: "ok", text: `Reattached on ${node}${cleared}.`, offerReattach: false };
+	}
+	if (a?.unconfirmed) return { tone: "pending", text: `Asked ${node} to attach this agent; not confirmed yet — this card re-checks in a few seconds.`, offerReattach: false };
+	const why = humanDetail(a?.detail);
+	return { tone: "warn", text: `Couldn't attach on ${node}.${why ? ` ${why}` : ""}`, offerReattach: false };
+}
+
+/**
+ * Show the Reattach button? When the pinned machine is up but this agent is not attached to it —
+ * the case a stale or duplicate socket causes, and the one where "restart pags up" was the only
+ * advice even though the platform can do the takeover remotely — or when a move just said so.
+ */
+export function canReattach(runnerNode: string, warning: ReturnType<typeof pinnedWarning>, last: MoveOutcome | null): boolean {
+	return !!runnerNode && (warning === "not_attached" || last?.offerReattach === true);
+}
