@@ -39,7 +39,31 @@ const relay = {
 	}),
 };
 
+/** The instance's collections, behind a fake Agent DO: just enough of /collections/:name/records. */
+let collections: Record<string, Array<{ id: string; data: Record<string, unknown> }>>;
+const agentDO = {
+	idFromName: (n: string) => n,
+	get: () => ({
+		fetch: async (req: Request) => {
+			const url = new URL(req.url);
+			const name = decodeURIComponent(url.pathname.split("/")[2] ?? "");
+			if (req.method === "GET") {
+				if (!collections[name]) return Response.json({ error: `Collection "${name}" not found` }, { status: 500 });
+				const where = JSON.parse(url.searchParams.get("where") || "{}") as Record<string, unknown>;
+				const records = collections[name].filter((r) => Object.entries(where).every(([k, v]) => r.data[k] === v));
+				return Response.json({ records, total: records.length });
+			}
+			const { data } = (await req.json()) as { data: Record<string, unknown> };
+			const record = { id: `rec_${Object.values(collections).flat().length + 1}`, data };
+			if (!collections[name]) collections[name] = [];
+			collections[name].push(record);
+			return Response.json(record, { status: 201 });
+		},
+	}),
+};
+
 beforeEach(() => {
+	collections = {};
 	d1 = realSchemaD1();
 	d1.exec(`INSERT INTO users (id, github_login) VALUES ('u1', 'u1'), ('u2', 'u2')`);
 	d1.exec(`INSERT INTO agents (id, owner_id, slug, name, config) VALUES
@@ -59,7 +83,7 @@ async function call(method: string, path: string, body?: unknown) {
 	const app = new Hono<{ Bindings: Env }>();
 	app.route("/v1/instances", instanceRoutes);
 	app.onError((e, c) => (e instanceof HttpError ? c.json({ error: e.message }, e.status as 400) : c.json({ error: String(e) }, 500)));
-	const res = await app.request(`/v1/instances${path}`, { method, headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, { DB: d1.DB, RELAY: relay } as unknown as Env);
+	const res = await app.request(`/v1/instances${path}`, { method, headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, { DB: d1.DB, RELAY: relay, AGENT: agentDO } as unknown as Env);
 	// biome-ignore lint/suspicious/noExplicitAny: a JSON response read field by field in assertions.
 	return { status: res.status, body: (await res.json()) as Record<string, any> };
 }
@@ -273,5 +297,78 @@ describe("pulling state from the runner (#944)", () => {
 		d1.exec(`UPDATE local_browser_runs SET ended_at = 1 WHERE id = '${run.id}'`);
 		await syncActiveLocalBrowserRuns({ DB: d1.DB, RELAY: relay } as unknown as Env);
 		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM local_browser_run_events WHERE run_id = ?1").bind(run.id).first<{ n: number }>())?.n).toBe(0);
+	});
+});
+
+describe("the owner is told when a run pauses (#946)", () => {
+	it("sends a local-browser alert linked to the run's page", async () => {
+		const run = (await call("POST", "/i1/local-browser/runs", { objective: "Find TypeScript roles" })).body;
+		runner.paths = { "/local-browser/status": { status: 200, body: { runId: run.id, state: "paused", pauseReason: "captcha", lastSeq: 1, events: [{ seq: 1, type: "run.paused", at: "2026-10-07T01:00:00Z", pauseReason: "captcha" }] } } };
+		await call("GET", `/i1/local-browser/runs/${run.id}`);
+		const note = await d1.DB.prepare("SELECT type, title FROM notifications WHERE user_id = 'u1'").first<{ type: string; title: string }>();
+		expect(note).toEqual({ type: "local-browser", title: "⏸ Job Search Scout hit a captcha only a person can solve" });
+		// Reading it again does not notify again: the run is already paused.
+		await call("GET", `/i1/local-browser/runs/${run.id}`);
+		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM notifications").first<{ n: number }>())?.n).toBe(1);
+	});
+});
+
+describe("reviewing findings (#946)", () => {
+	const finding = (n: number) => ({ title: `Dev ${n}`, url: `https://seek.com.au/job/${n}`, evidence: `Dev ${n} — Sydney`, fields: { salary: 100 + n } });
+	async function finishedRun(collection: Record<string, unknown> | null = { name: "job_leads" }) {
+		if (collection) await call("PUT", "/i1/local-browser/settings", { collection });
+		const run = (await call("POST", "/i1/local-browser/runs", { objective: "x" })).body;
+		runner.paths = { "/local-browser/status": { status: 200, body: { runId: run.id, state: "ended", lastSeq: 0, events: [], result: { runId: run.id, outcome: "completed", traceId: run.id, engineAuth: "subscription", summary: "2", findings: [finding(1), finding(2)], sourceFailures: [] } } } };
+		await call("GET", `/i1/local-browser/runs/${run.id}`);
+		return run.id as string;
+	}
+
+	it("saves a finding to the run's collection with where it came from, and skips another without writing", async () => {
+		const runId = await finishedRun();
+		const saved = await call("POST", `/i1/local-browser/runs/${runId}/findings/0/save`);
+		expect(saved.body.findingReviews["0"]).toMatchObject({ decision: "saved", collection: "job_leads", recordId: "rec_1" });
+		expect(collections.job_leads[0].data).toEqual({ salary: 101, title: "Dev 1", url: "https://seek.com.au/job/1", evidence: "Dev 1 — Sydney", sourceRunId: runId });
+		const skipped = await call("POST", `/i1/local-browser/runs/${runId}/findings/1/skip`);
+		expect(skipped.body.findingReviews["1"]).toMatchObject({ decision: "skipped" });
+		expect(collections.job_leads).toHaveLength(1);
+		expect((await call("POST", `/i1/local-browser/runs/${runId}/findings/0/save`)).status).toBe(409);
+	});
+
+	it("reports a duplicate BEFORE writing, and saves it only when told to", async () => {
+		collections.job_leads = [{ id: "rec_old", data: { url: "https://seek.com.au/job/1" } }];
+		const runId = await finishedRun();
+		const dup = await call("POST", `/i1/local-browser/runs/${runId}/findings/0/save`);
+		expect(dup.body.findingReviews["0"]).toMatchObject({ decision: "duplicate", duplicateOf: "rec_old" });
+		expect(collections.job_leads).toHaveLength(1);
+		const forced = await call("POST", `/i1/local-browser/runs/${runId}/findings/0/save`, { force: true });
+		expect(forced.body.findingReviews["0"]).toMatchObject({ decision: "saved" });
+		expect(collections.job_leads).toHaveLength(2);
+	});
+
+	it("checks duplicates on the collection's own key field", async () => {
+		collections.job_leads = [{ id: "rec_old", data: { salary: 102 } }];
+		const runId = await finishedRun({ name: "job_leads", keyField: "salary" });
+		expect((await call("POST", `/i1/local-browser/runs/${runId}/findings/1/save`)).body.findingReviews["1"]).toMatchObject({ decision: "duplicate" });
+	});
+
+	it("refuses to save with no collection set, and a finding that does not exist", async () => {
+		const runId = await finishedRun(null);
+		expect((await call("POST", `/i1/local-browser/runs/${runId}/findings/0/save`)).body.error).toMatch(/No results collection/);
+		expect((await call("POST", `/i1/local-browser/runs/${runId}/findings/9/skip`)).status).toBe(404);
+		expect((await call("POST", `/i1/local-browser/runs/${runId}/findings/-1/skip`)).status).toBe(400);
+	});
+});
+
+describe("console links to research (#946)", () => {
+	it("links a research run id to its run page, and the Research tab only for a local browser agent", async () => {
+		const { instanceRoutes: routes } = await import("./instances.js");
+		const app = new Hono<{ Bindings: Env }>();
+		app.route("/v1/instances", routes);
+		app.onError((e, c) => (e instanceof HttpError ? c.json({ error: e.message }, e.status as 400) : c.json({ error: String(e) }, 500)));
+		const get = async (q: string, inst = "i1") => (await app.request(`/v1/instances/${inst}/console-link${q}`, {}, { DB: d1.DB } as unknown as Env)).json() as Promise<Record<string, string>>;
+		const run = (await call("POST", "/i1/local-browser/runs", { objective: "x" })).body;
+		expect((await get(`?run_id=${run.id}`)).path).toBe(`/console/instances/i1/research/${run.id}`);
+		expect((await get("?section=research")).path).toBe("/console/instances/i1/research");
+		expect((await get("?section=research", "ic")).error).toMatch(/does not show the Research tab/);
 	});
 });

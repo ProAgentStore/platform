@@ -21,7 +21,7 @@
  * The console is a BrowserRouter: a `#fragment` is ignored (`checkConsoleLink`), so there is no anchor
  * finer than a tab or a record page. A "field" is answered with the tab that holds it.
  */
-import { codingSessionLink, instanceLink, instanceRunLink, secureInputNotificationLink } from "./console-links.js";
+import { codingSessionLink, instanceLink, instanceRunLink, localBrowserRunLink, secureInputNotificationLink } from "./console-links.js";
 
 /** The console's public origin. `/console/…` paths resolve here (and on console.proagentstore.online without the prefix). */
 export const CONSOLE_ORIGIN = "https://proagentstore.online";
@@ -29,6 +29,8 @@ export const CONSOLE_ORIGIN = "https://proagentstore.online";
 /** What decides which tabs an instance shows — its resolved capabilities. */
 export interface LinkCaps {
 	surfaces: readonly string[];
+	/** The runner runtime the agent declares — `local_browser` shows the Research tab (#946). */
+	runtime?: string | null;
 	/** The declared tool allowlist; absent/null means "the surface default", which shows tool-gated tabs. */
 	tools?: readonly string[] | null;
 }
@@ -45,6 +47,7 @@ export const CONSOLE_SECTIONS: ReadonlyArray<{ id: string; label: string; shown:
 	{ id: "repo", label: "Repo", shown: (c) => c.surfaces.includes("repo"), needs: "the repo surface" },
 	{ id: "coding", label: "Coding", shown: (c) => c.surfaces.includes("coding"), needs: "the coding surface" },
 	{ id: "tmux", label: "Terminal", shown: (c) => c.surfaces.includes("tmux"), needs: "the tmux surface" },
+	{ id: "research", label: "Research", shown: (c) => c.runtime === "local_browser", needs: 'the "local_browser" runtime' },
 	{ id: "activity", label: "Activity", shown: () => true },
 	{ id: "stats", label: "Stats", shown: () => true },
 	{ id: "knowledge", label: "Knowledge", shown: () => true },
@@ -61,6 +64,8 @@ export type ConsoleTarget =
 	| { kind: "section"; section: string }
 	/** A loop run: its coding session when it drives one, else the Assistant where a chat-driven run reports. */
 	| { kind: "run"; runId: string; sessionId: string | null }
+	/** A local browser research run (#946) — its page on the Research tab. */
+	| { kind: "local_browser_run"; runId: string }
 	/** A runtime task (browser task, approval, takeover) — `RunDetail`. */
 	| { kind: "task"; taskId: string }
 	| { kind: "secure_input"; requestId: string };
@@ -93,6 +98,8 @@ export function buildConsoleLink(instanceId: string, target: ConsoleTarget, caps
 			return target.sessionId
 				? make(codingSessionLink(instanceId, target.sessionId), "the coding session this run drives — its Co-pilot and terminal")
 				: make(instanceLink(instanceId), "the Assistant tab, where this chat-driven run reports its steps (Settings → Autonomous runs lists it with Stop)");
+		case "local_browser_run":
+			return make(localBrowserRunLink(instanceId, target.runId), "this research run — its steps, any pause waiting on you, and its findings to save or skip");
 		case "task":
 			return make(instanceRunLink(instanceId, target.taskId), "this task's page — its status, screenshots and any takeover or input it waits on");
 		case "secure_input":

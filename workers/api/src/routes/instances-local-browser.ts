@@ -3,6 +3,7 @@ import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { LOCAL_BROWSER_CANCEL_PATH, LOCAL_BROWSER_RUN_PATH, LOCAL_BROWSER_TASK_TYPE, type LocalBrowserTaskEnvelope } from "../lib/local-browser/contract.js";
 import { applyRunnerResult, ingestRunnerEvents, resumeLocalBrowserRun, syncLocalBrowserRun } from "../lib/local-browser/sync.js";
+import { type FindingAction, reviewFinding } from "../lib/local-browser/findings.js";
 import {
 	type ConsentScope,
 	type LocalBrowserRun,
@@ -185,6 +186,23 @@ export function registerLocalBrowserRoutes(router: Hono<{ Bindings: Env }>): voi
 		const run = await runOr404(c, instanceId, uid);
 		return c.json(await syncLocalBrowserRun(c.env, instanceId, uid, run).catch(() => run));
 	});
+
+	/**
+	 * The owner's decision on one finding (#946): `save` writes it to the collection the run's
+	 * policy names — unless that collection already holds its key, which comes back as a
+	 * `duplicate` review instead; `{force: true}` saves it anyway. `skip` records the decision only.
+	 */
+	const review = (action: FindingAction) => async (c: C) => {
+		const { uid, instanceId } = await owned(c);
+		const run = await runOr404(c, instanceId, uid);
+		const index = Number(c.req.param("index"));
+		if (!Number.isInteger(index) || index < 0) throw new HttpError(400, "index must be the finding's position, from 0");
+		const force = action === "save" && (await body(c)).force === true;
+		return c.json(await reviewFinding(c.env, instanceId, uid, run, index, action, force));
+	};
+	// Two literal paths, not one template: the route and OpenAPI guards read registrations as text.
+	router.post("/:instanceId/local-browser/runs/:runId/findings/:index/save", review("save"));
+	router.post("/:instanceId/local-browser/runs/:runId/findings/:index/skip", review("skip"));
 
 	/** Release a paused run once the owner has acted — consent recorded, captcha solved, signed in. */
 	router.post("/:instanceId/local-browser/runs/:runId/resume", async (c) => {

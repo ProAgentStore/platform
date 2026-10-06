@@ -507,3 +507,186 @@ export interface ListSecureInputsResponse {
 export interface PendingOwnerInputsResponse {
 	instances: Array<{ instanceId: string; pending: number; requestId: string; label: string }>;
 }
+
+// ── Local CLI browser research (#946) — mirrors workers/api/src/lib/local-browser/* ──────────
+
+export type LocalBrowserEngine = "claude" | "codex";
+export type LocalBrowserAuthMode = "subscription" | "machine" | "api-key";
+export type LocalBrowserWorkspace = { kind: "scratch" } | { kind: "path"; path: string };
+export type LocalBrowserProfile = "isolated" | "default";
+export type LocalBrowserRunStatus = "queued" | "running" | "paused" | "completed" | "failed" | "cancelled";
+export type LocalBrowserPauseReason = "login_required" | "captcha" | "consent_required" | "access_blocked" | "paywall" | "write_affordance";
+
+export interface LocalBrowserLimits {
+	maxMinutes: number;
+	maxPages: number;
+	maxActions: number;
+	maxConcurrent: number;
+}
+
+export interface LocalBrowserCollection {
+	name: string;
+	keyField?: string;
+}
+
+/** The creator's block, resolved with defaults — the ceilings an instance may lower. */
+export interface LocalBrowserCapabilityView {
+	engines: LocalBrowserEngine[];
+	mode: "research_only";
+	subscriptionOnly: boolean;
+	resultSchema: { id: string; version: number };
+	limits: LocalBrowserLimits;
+	allowDomains: string[];
+	denyDomains: string[];
+	collection?: LocalBrowserCollection;
+}
+
+/** What the subscriber stored — every field optional, absent = the agent's default. */
+export interface LocalBrowserSettingsValues {
+	engine?: LocalBrowserEngine;
+	authMode?: LocalBrowserAuthMode;
+	workspace?: LocalBrowserWorkspace;
+	browserProfile?: LocalBrowserProfile;
+	access?: { mode?: "research_only"; allowDomains?: string[]; denyDomains?: string[] };
+	limits?: Partial<LocalBrowserLimits>;
+	traceRetentionDays?: number;
+	collection?: LocalBrowserCollection;
+}
+
+/** The policy a run would start with. */
+export interface LocalBrowserEffectivePolicy {
+	engine: LocalBrowserEngine;
+	authMode: LocalBrowserAuthMode;
+	workspace: LocalBrowserWorkspace;
+	browserProfile: LocalBrowserProfile;
+	mode: "research_only";
+	allowDomains: string[];
+	denyDomains: string[];
+	limits: LocalBrowserLimits;
+	traceRetentionDays: number;
+	resultSchema: { id: string; version: number };
+	collection: LocalBrowserCollection | null;
+}
+
+/** `GET /v1/instances/:id/local-browser/settings`. */
+export interface LocalBrowserSettingsResponse {
+	settings: LocalBrowserSettingsValues;
+	effective: LocalBrowserEffectivePolicy | null;
+	problem: string | null;
+	capability: LocalBrowserCapabilityView;
+	runnerNode: string | null;
+}
+
+/** `PUT …/local-browser/settings`. */
+export interface LocalBrowserSettingsSaved {
+	settings: LocalBrowserSettingsValues;
+	effective: LocalBrowserEffectivePolicy | { error: string };
+}
+
+/** One readiness check: ok true, false, or null when it cannot be known before a run. */
+export interface LocalBrowserPreflightCheck {
+	id: string;
+	ok: boolean | null;
+	detail: string;
+}
+
+/** `GET …/local-browser/preflight`. */
+export interface LocalBrowserPreflight {
+	ready: boolean;
+	checks: LocalBrowserPreflightCheck[];
+}
+
+export interface LocalBrowserFinding {
+	title: string;
+	url: string;
+	evidence: string;
+	fields: Record<string, string | number | boolean | null>;
+}
+
+export interface LocalBrowserSourceFailure {
+	url: string;
+	reason: string;
+	detail?: string;
+}
+
+export interface LocalBrowserFindingReview {
+	decision: "saved" | "skipped" | "duplicate";
+	collection?: string;
+	recordId?: string;
+	duplicateOf?: string;
+	at: number;
+}
+
+export interface LocalBrowserResult {
+	runId: string;
+	outcome: "completed" | "failed";
+	findings: LocalBrowserFinding[];
+	sourceFailures: LocalBrowserSourceFailure[];
+	summary: string;
+	traceId: string;
+	engineAuth: string;
+	error?: string;
+}
+
+/** One run, as `GET …/local-browser/runs/:runId` returns it. */
+export interface LocalBrowserRunView {
+	id: string;
+	instanceId: string;
+	requestId: string;
+	objective: string;
+	status: LocalBrowserRunStatus;
+	pauseReason: LocalBrowserPauseReason | null;
+	errorCode: string | null;
+	error: string | null;
+	policy: LocalBrowserEffectivePolicy;
+	result: LocalBrowserResult | null;
+	engineAuth: string | null;
+	runnerNode: string | null;
+	findingReviews: Record<string, LocalBrowserFindingReview>;
+	createdAt: number;
+	startedAt: number | null;
+	endedAt: number | null;
+	updatedAt: number;
+}
+
+/** `GET …/local-browser/runs`. */
+export interface LocalBrowserRunList {
+	runs: LocalBrowserRunView[];
+}
+
+export interface LocalBrowserTraceEvent {
+	seq: number;
+	type: string;
+	at: string;
+	recordedAt: number;
+	url?: string;
+	domain?: string;
+	pauseReason?: LocalBrowserPauseReason;
+	consentId?: string;
+	detail?: Record<string, unknown>;
+}
+
+/** `GET …/local-browser/runs/:runId/events`. */
+export interface LocalBrowserTrace {
+	events: LocalBrowserTraceEvent[];
+	nextAfter: number;
+}
+
+export interface LocalBrowserConsentEntry {
+	domain: string;
+	scope: "navigate" | "signed_in_profile";
+	decision: "allow" | "deny";
+	decidedAt: number;
+	expiresAt: number | null;
+}
+
+/** `GET`/`PUT …/local-browser/consent`. */
+export interface LocalBrowserConsentList {
+	consent: LocalBrowserConsentEntry[];
+}
+
+/** The two fields of `GET /v1/agents/:id/capabilities` the local browser card reads and writes. */
+export interface AgentLocalBrowserCapabilities {
+	runtime: string | null;
+	localBrowser: LocalBrowserCapabilityView | null;
+}

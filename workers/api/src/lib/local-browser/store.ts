@@ -10,6 +10,15 @@ import { ACTIVE_RUN_STATUSES, type EffectiveLocalBrowserPolicy, type LocalBrowse
 
 type DB = Pick<Env, "DB">;
 
+/** What the owner decided about one finding. `duplicate` is a stop, not an outcome: saving anyway is still possible. */
+export interface FindingReview {
+	decision: "saved" | "skipped" | "duplicate";
+	collection?: string;
+	recordId?: string;
+	duplicateOf?: string;
+	at: number;
+}
+
 /** A run as the API returns it. */
 export interface LocalBrowserRun {
 	id: string;
@@ -29,6 +38,8 @@ export interface LocalBrowserRun {
 	runnerSeq: number;
 	/** When the runner last answered for this run. */
 	lastSyncedAt: number | null;
+	/** The owner's save/skip decision per finding, keyed by its index in `result.findings` (#946). */
+	findingReviews: Record<string, FindingReview>;
 	createdAt: number;
 	startedAt: number | null;
 	endedAt: number | null;
@@ -51,6 +62,7 @@ interface RunRow {
 	runner_task_id: string | null;
 	runner_seq: number;
 	last_synced_at: number | null;
+	finding_reviews: string | null;
 	created_at: number;
 	started_at: number | null;
 	ended_at: number | null;
@@ -82,6 +94,7 @@ const present = (r: RunRow): LocalBrowserRun => ({
 	runnerTaskId: r.runner_task_id,
 	runnerSeq: Number(r.runner_seq ?? 0),
 	lastSyncedAt: r.last_synced_at ?? null,
+	findingReviews: json<Record<string, FindingReview>>(r.finding_reviews) ?? {},
 	createdAt: r.created_at,
 	startedAt: r.started_at,
 	endedAt: r.ended_at,
@@ -335,4 +348,14 @@ export async function pruneExpiredLocalBrowserTraces(env: DB, now: number): Prom
 		.bind(now)
 		.run();
 	return res.meta?.changes ?? 0;
+}
+
+/** Record the owner's decision on one finding — one json_set on one key, so two reviews cannot clobber each other. */
+export async function setFindingReview(env: DB, instanceId: string, userId: string, runId: string, index: number, review: FindingReview): Promise<void> {
+	await env.DB.prepare(
+		`UPDATE local_browser_runs SET finding_reviews = json_set(COALESCE(finding_reviews, '{}'), ?1, json(?2)), updated_at = ?3
+		  WHERE id = ?4 AND instance_id = ?5 AND user_id = ?6`,
+	)
+		.bind(`$."${index}"`, JSON.stringify(review), review.at, runId, instanceId, userId)
+		.run();
 }

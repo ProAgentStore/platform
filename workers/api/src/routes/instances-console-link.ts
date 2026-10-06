@@ -30,8 +30,12 @@ export function registerConsoleLinkRoutes(router: Hono<{ Bindings: Env }>): void
 			const run = await c.env.DB.prepare("SELECT session_id FROM agent_loop_runs WHERE run_id = ?1 AND instance_id = ?2 AND user_id = ?3")
 				.bind(q("run_id"), instanceId, session.uid)
 				.first<{ session_id: string | null }>();
-			if (!run) throw new HttpError(404, "Run not found on this instance");
-			target = { kind: "run", runId: q("run_id"), sessionId: run.session_id || null };
+			// A run id is a loop run or a local browser research run (#946); the two never share ids.
+			const research = run
+				? null
+				: await c.env.DB.prepare("SELECT id FROM local_browser_runs WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3").bind(q("run_id"), instanceId, session.uid).first();
+			if (!run && !research) throw new HttpError(404, "Run not found on this instance");
+			target = run ? { kind: "run", runId: q("run_id"), sessionId: run.session_id || null } : { kind: "local_browser_run", runId: q("run_id") };
 		} else if (q("task_id")) {
 			const task = await c.env.DB.prepare("SELECT id FROM instance_runtime_tasks WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3").bind(q("task_id"), instanceId, session.uid).first();
 			if (!task) throw new HttpError(404, "Task not found on this instance");
@@ -43,7 +47,7 @@ export function registerConsoleLinkRoutes(router: Hono<{ Bindings: Env }>): void
 		}
 
 		const caps = await capabilitiesForInstance(c.env, instanceId, session.uid);
-		const link = buildConsoleLink(instanceId, target, { surfaces: caps?.surfaces ?? [], tools: caps?.tools });
+		const link = buildConsoleLink(instanceId, target, { surfaces: caps?.surfaces ?? [], runtime: caps?.runtime ?? null, tools: caps?.tools });
 		if ("error" in link) throw new HttpError(400, link.error);
 		return c.json(link);
 	});

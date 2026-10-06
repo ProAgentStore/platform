@@ -14,7 +14,8 @@ import type { InstanceToolsCtx } from "./shared.js";
  */
 export function registerLocalBrowserTools(server: McpServer, ctx: InstanceToolsCtx): void {
 	const { env, tokenFor, safetyFor } = ctx;
-	const base = (id: string) => `/v1/instances/${encodeURIComponent(id)}/local-browser`;
+	// Every path below is written out in full, never built by a helper: the MCP-parity check reads
+	// these literals to prove each console capability has an MCP path (scripts/lib/api-calls.mjs).
 
 	server.tool(
 		"local_browser_preflight",
@@ -28,7 +29,7 @@ export function registerLocalBrowserTools(server: McpServer, ctx: InstanceToolsC
 			if (!sessionToken) return authRequired();
 			const denied = await requirePermission(safetyFor(token), "read", "local_browser_preflight", { instance_id });
 			if (denied) return denied;
-			const data = (await authedCall(`${base(instance_id)}/preflight`, sessionToken, {}, env)) as { error?: string };
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/local-browser/preflight`, sessionToken, {}, env)) as { error?: string };
 			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
 		},
 	);
@@ -45,7 +46,7 @@ export function registerLocalBrowserTools(server: McpServer, ctx: InstanceToolsC
 			if (!sessionToken) return authRequired();
 			const denied = await requirePermission(safetyFor(token), "read", "get_instance_local_browser_settings", { instance_id });
 			if (denied) return denied;
-			const data = (await authedCall(`${base(instance_id)}/settings`, sessionToken, {}, env)) as { error?: string };
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/local-browser/settings`, sessionToken, {}, env)) as { error?: string };
 			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
 		},
 	);
@@ -102,9 +103,9 @@ export function registerLocalBrowserTools(server: McpServer, ctx: InstanceToolsC
 			if (denied) return denied;
 			if (!Object.keys(patch).length) return text("Error: pass at least one setting to change.");
 			if (dry_run) {
-				return dryRun(safetyFor(token), "set_instance_local_browser_settings", `update local browser settings: ${Object.keys(patch).join(", ")}`, input, { endpoint: `${base(instance_id)}/settings`, method: "PUT" });
+				return dryRun(safetyFor(token), "set_instance_local_browser_settings", `update local browser settings: ${Object.keys(patch).join(", ")}`, input, { endpoint: `/v1/instances/${encodeURIComponent(instance_id)}/local-browser/settings`, method: "PUT" });
 			}
-			const data = (await authedCall(`${base(instance_id)}/settings`, sessionToken, { method: "PUT", body: JSON.stringify(patch) }, env)) as { error?: string };
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/local-browser/settings`, sessionToken, { method: "PUT", body: JSON.stringify(patch) }, env)) as { error?: string };
 			if (data.error) return text(`Error: ${data.error}`);
 			await audit(safetyFor(token), { tool: "set_instance_local_browser_settings", action: "completed", input, result: data });
 			return jsonText(data);
@@ -127,16 +128,15 @@ export function registerLocalBrowserTools(server: McpServer, ctx: InstanceToolsC
 			const denied = await requirePermission(safetyFor(token), "read", "list_local_browser_runs", { instance_id, run_id });
 			if (denied) return denied;
 			if (!run_id) {
-				const data = (await authedCall(`${base(instance_id)}/runs${limit ? `?limit=${limit}` : ""}`, sessionToken, {}, env)) as { error?: string };
+				const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/local-browser/runs${limit ? `?limit=${limit}` : ""}`, sessionToken, {}, env)) as { error?: string };
 				return data.error ? text(`Error: ${data.error}`) : jsonText(data);
 			}
-			const runPath = `${base(instance_id)}/runs/${encodeURIComponent(run_id)}`;
-			const run = (await authedCall(runPath, sessionToken, {}, env)) as { error?: string };
+			const run = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/local-browser/runs/${encodeURIComponent(run_id)}`, sessionToken, {}, env)) as { error?: string };
 			if (run.error) return text(`Error: ${run.error}`);
 			const q = new URLSearchParams();
 			if (after) q.set("after", String(after));
 			if (limit) q.set("limit", String(limit));
-			const trace = (await authedCall(`${runPath}/events${q.toString() ? `?${q}` : ""}`, sessionToken, {}, env)) as { error?: string };
+			const trace = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/local-browser/runs/${encodeURIComponent(run_id)}/events${q.toString() ? `?${q}` : ""}`, sessionToken, {}, env)) as { error?: string };
 			return jsonText({ run, trace: trace.error ? { error: trace.error } : trace });
 		},
 	);
@@ -157,8 +157,8 @@ export function registerLocalBrowserTools(server: McpServer, ctx: InstanceToolsC
 			const input = { instance_id, objective, request_id };
 			const denied = await requirePermission(safetyFor(token), "runtime", "start_local_browser_run", input);
 			if (denied) return denied;
-			if (dry_run) return dryRun(safetyFor(token), "start_local_browser_run", "start a local browser research run on the owner's machine", input, { endpoint: `${base(instance_id)}/runs`, method: "POST" });
-			const data = (await authedCall(`${base(instance_id)}/runs`, sessionToken, { method: "POST", body: JSON.stringify({ objective, ...(request_id ? { requestId: request_id } : {}) }) }, env)) as { error?: string };
+			if (dry_run) return dryRun(safetyFor(token), "start_local_browser_run", "start a local browser research run on the owner's machine", input, { endpoint: `/v1/instances/${encodeURIComponent(instance_id)}/local-browser/runs`, method: "POST" });
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/local-browser/runs`, sessionToken, { method: "POST", body: JSON.stringify({ objective, ...(request_id ? { requestId: request_id } : {}) }) }, env)) as { error?: string };
 			if (data.error) return text(`Error: ${data.error}`);
 			await audit(safetyFor(token), { tool: "start_local_browser_run", action: "completed", input, result: data });
 			return jsonText(data);
@@ -182,7 +182,7 @@ export function registerLocalBrowserTools(server: McpServer, ctx: InstanceToolsC
 			const input = { instance_id, run_id };
 			const denied = await requirePermission(safetyFor(token), "write", "cancel_local_browser_run", input);
 			if (denied) return denied;
-			const data = (await authedCall(`${base(instance_id)}/runs/${encodeURIComponent(run_id)}/cancel`, sessionToken, { method: "POST" }, env)) as { error?: string };
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/local-browser/runs/${encodeURIComponent(run_id)}/cancel`, sessionToken, { method: "POST" }, env)) as { error?: string };
 			if (data.error) return text(`Error: ${data.error}`);
 			await audit(safetyFor(token), { tool: "cancel_local_browser_run", action: "completed", input, result: data });
 			return jsonText(data);
@@ -204,11 +204,84 @@ export function registerLocalBrowserTools(server: McpServer, ctx: InstanceToolsC
 			const input = { instance_id, run_id };
 			const denied = await requirePermission(safetyFor(token), "runtime", "resume_local_browser_run", input);
 			if (denied) return denied;
-			const path = `${base(instance_id)}/runs/${encodeURIComponent(run_id)}/resume`;
-			if (dry_run) return dryRun(safetyFor(token), "resume_local_browser_run", "resume a paused local browser research run", input, { endpoint: path, method: "POST" });
-			const data = (await authedCall(path, sessionToken, { method: "POST" }, env)) as { error?: string };
+			if (dry_run) return dryRun(safetyFor(token), "resume_local_browser_run", "resume a paused local browser research run", input, { endpoint: `/v1/instances/${instance_id}/local-browser/runs/${run_id}/resume`, method: "POST" });
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/local-browser/runs/${encodeURIComponent(run_id)}/resume`, sessionToken, { method: "POST" }, env)) as { error?: string };
 			if (data.error) return text(`Error: ${data.error}`);
 			await audit(safetyFor(token), { tool: "resume_local_browser_run", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"get_local_browser_consent",
+		"The owner's live decisions for a local browser research agent: which sites a run may open without pausing (navigate, allow), which it must never open (deny), and whether research may use the owner's signed-in browser profile (scope signed_in_profile, domain *). Expired decisions are not listed. Read-only.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances. Copy it exactly."),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "get_local_browser_consent", { instance_id });
+			if (denied) return denied;
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/local-browser/consent`, sessionToken, {}, env)) as { error?: string };
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
+	server.tool(
+		"set_local_browser_consent",
+		"Record the owner's decision for local browser research: allow or deny opening a site (scope navigate, with domain — it covers the site's subdomains), or allow or deny using their signed-in browser profile (scope signed_in_profile). decision null withdraws a decision. A paused run does not pick this up by itself: call resume_local_browser_run after it. Only record a decision the owner actually made. Call with dry_run first.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances. Copy it exactly."),
+			scope: z.enum(["navigate", "signed_in_profile"]).describe("navigate is one site; signed_in_profile is the owner's own browser profile."),
+			domain: z.string().optional().describe('The site, e.g. "seek.com.au". Required for navigate.'),
+			decision: z.enum(["allow", "deny"]).nullable().describe("allow, deny, or null to withdraw the decision."),
+			ttl_days: z.coerce.number().int().optional().describe("Let the decision expire after this many days, 1 to 365. Omit to keep it until withdrawn."),
+			dry_run: z.boolean().optional().describe("Preview without recording anything."),
+		},
+		async ({ token, instance_id, scope, domain, decision, ttl_days, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const body = { scope, ...(domain ? { domain } : {}), decision, ...(ttl_days !== undefined ? { ttlDays: ttl_days } : {}) };
+			const input = { instance_id, ...body };
+			const denied = await requirePermission(safetyFor(token), "write", "set_local_browser_consent", input);
+			if (denied) return denied;
+			if (dry_run) return dryRun(safetyFor(token), "set_local_browser_consent", `record ${decision ?? "no"} decision for ${scope === "navigate" ? domain : "the signed-in profile"}`, input, { endpoint: `/v1/instances/${instance_id}/local-browser/consent`, method: "PUT" });
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/local-browser/consent`, sessionToken, { method: "PUT", body: JSON.stringify(body) }, env)) as { error?: string };
+			if (data.error) return text(`Error: ${data.error}`);
+			await audit(safetyFor(token), { tool: "set_local_browser_consent", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"review_local_browser_finding",
+		"Save or skip one finding of a finished local browser research run, as the owner decided. save writes it to the results collection the agent is set up with — unless that collection already holds the same key, which comes back as a duplicate review instead of a write; pass force true to save it anyway. skip records the decision and writes nothing. index is the finding's position in the run's result.findings, from 0. Call with dry_run first.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances. Copy it exactly."),
+			run_id: z.string().describe("The run's id, from list_local_browser_runs. Copy it exactly."),
+			index: z.coerce.number().int().min(0).describe("The finding's position in result.findings, from 0."),
+			decision: z.enum(["save", "skip"]).describe("save writes it to the collection; skip writes nothing."),
+			force: z.boolean().optional().describe("With save: save even though the collection already holds this key."),
+			dry_run: z.boolean().optional().describe("Preview without saving or skipping."),
+		},
+		async ({ token, instance_id, run_id, index, decision, force, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, run_id, index, decision, ...(force ? { force } : {}) };
+			const denied = await requirePermission(safetyFor(token), "write", "review_local_browser_finding", input);
+			if (denied) return denied;
+			if (dry_run) return dryRun(safetyFor(token), "review_local_browser_finding", `${decision} finding ${index}`, input, { endpoint: `/v1/instances/${instance_id}/local-browser/runs/${run_id}/findings/${index}/${decision}`, method: "POST" });
+			const data = (
+				decision === "save"
+					? await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/local-browser/runs/${encodeURIComponent(run_id)}/findings/${index}/save`, sessionToken, { method: "POST", body: JSON.stringify(force ? { force: true } : {}) }, env)
+					: await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/local-browser/runs/${encodeURIComponent(run_id)}/findings/${index}/skip`, sessionToken, { method: "POST" }, env)
+			) as { error?: string };
+			if (data.error) return text(`Error: ${data.error}`);
+			await audit(safetyFor(token), { tool: "review_local_browser_finding", action: "completed", input, result: data });
 			return jsonText(data);
 		},
 	);

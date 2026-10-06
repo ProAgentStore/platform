@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**253 tool registrations.** 227 are always registered; 26 are gated to the console
+**256 tool registrations.** 230 are always registered; 26 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -325,6 +325,9 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `start_local_browser_run` | Start a read-only research run: the Codex or Claude Code CLI signed in on the owner's machine researches in a real browser through the runner's policy bridge; idempotent on `request_id` | runtime | yes | |
 | `cancel_local_browser_run` | Stop an active research run; the findings already recorded stay | write | | |
 | `resume_local_browser_run` | Release a paused research run once the owner has allowed the site, solved the captcha or signed in | runtime | yes | |
+| `get_local_browser_consent` | The owner's live decisions for local browser research: sites allowed or denied, and the signed-in profile | read | | |
+| `set_local_browser_consent` | Record or withdraw the owner's decision on a site or on the signed-in profile; resume a paused run after it | write | yes | |
+| `review_local_browser_finding` | Save one finding of a finished research run to the results collection (a duplicate is reported before any write; `force` saves it anyway), or skip it | write | yes | |
 | `get_instance_operator_manual` | Read the operator manual (caller-facing; echoes rules) | — | | |
 | `set_instance_operator_manual` | Replace the operator manual (max 16000 chars) | write | yes | |
 | `get_translation_config` | Read the translation display config | — | | |

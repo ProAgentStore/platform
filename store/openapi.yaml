@@ -6480,6 +6480,43 @@ paths:
         "200": { $ref: "#/components/responses/OkObject" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/local-browser/runs/{runId}/findings/{index}/save:
+    post:
+      summary: Save one finding of a research run
+      description: |
+        Writes finding `index` of a finished run to the results collection the run's policy names, with
+        `sourceRunId` for provenance. When that collection already holds the finding's key (the
+        mapping's `keyField`, default `url`) nothing is written and the review comes back
+        `duplicate` — `{force: true}` saves it anyway. 409 with no collection set, or once saved.
+      operationId: saveLocalBrowserFinding
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+        - { name: index, in: path, required: true, schema: { type: integer, minimum: 0 } }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /v1/instances/{instanceId}/local-browser/runs/{runId}/findings/{index}/skip:
+    post:
+      summary: Skip one finding of a research run
+      description: |
+        Records that the owner skipped finding `index`. Writes nothing to the collection.
+      operationId: skipLocalBrowserFinding
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+        - { name: index, in: path, required: true, schema: { type: integer, minimum: 0 } }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /v1/instances/{instanceId}/local-browser/runs/{runId}/resume:
     post:
       summary: Resume a paused local browser run

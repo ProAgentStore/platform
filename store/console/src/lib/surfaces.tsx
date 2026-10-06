@@ -9,6 +9,7 @@ import IndexingTab from "../tabs/IndexingTab";
 import KnowledgeTab from "../tabs/KnowledgeTab";
 import RepoTab from "../tabs/RepoTab";
 import SettingsTab from "../tabs/SettingsTab";
+import ResearchTab from "../tabs/ResearchTab";
 import StatsTab from "../tabs/StatsTab";
 import TmuxTab from "../tabs/TmuxTab";
 import { deepLinkedBuildsRepo } from "./deepLink";
@@ -34,6 +35,7 @@ export type SurfaceId =
 	| "coding"
 	| "repo"
 	| "tmux"
+	| "research"
 	| "activity"
 	| "stats"
 	| "indexing"
@@ -122,6 +124,8 @@ export interface SurfaceCaps {
 	 * undeclared agent's tabs exactly as they were.
 	 */
 	tools?: string[];
+	/** The runner runtime the agent declares. `local_browser` is what shows the Research tab (#946). */
+	runtime?: string | null;
 }
 
 /** Does a DECLARED allowlist contain any of these? Undefined (not declared) ⇒ permissive. */
@@ -242,6 +246,16 @@ export const SURFACES: SurfaceDef[] = [
 		render: ({ instanceId, runner }) => <TmuxTab instanceId={instanceId} runner={runner} />,
 	},
 	{
+		id: "research",
+		label: "Research",
+		icon: "🔎",
+		// A RUNTIME, not a surface: local CLI browser research is what the agent's hands are, and it
+		// must never pull in the Coding tab or a repository (#946). `research/<runId>` opens one run.
+		show: ({ runtime }) => runtime === "local_browser",
+		scroll: true,
+		render: ({ instanceId, sessionId }) => <ResearchTab instanceId={instanceId} runId={sessionId} />,
+	},
+	{
 		id: "activity",
 		label: "Activity",
 		icon: "🪵",
@@ -333,8 +347,8 @@ export const SURFACES: SurfaceDef[] = [
 		icon: "⚙",
 		show: () => true,
 		scroll: true,
-		render: ({ instanceId, instanceName, isApply, isCoding, isRepo, onUnsubscribe }) => (
-			<SettingsTab instanceId={instanceId} instanceName={instanceName} isApply={isApply} isCoding={isCoding} isRepo={isRepo} onUnsubscribe={onUnsubscribe} />
+		render: ({ instanceId, instanceName, isApply, isCoding, isRepo, caps, onUnsubscribe }) => (
+			<SettingsTab instanceId={instanceId} instanceName={instanceName} isApply={isApply} isCoding={isCoding} isRepo={isRepo} isLocalBrowser={caps.runtime === "local_browser"} onUnsubscribe={onUnsubscribe} />
 		),
 	},
 ];

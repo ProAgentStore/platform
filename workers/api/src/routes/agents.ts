@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { agentDeleteStatements, countAgentSubscribers, foreignSubscriberRefusal, hasForeignSubscriberRows, hasSubscriberRows } from "../lib/agent-cascade.js";
-import { customSurfacesEnabled, localBrowserDenial, sanitizeCustomSurfaces, sanitizeDeclaredCapabilities, sanitizeSettingsSchema } from "../lib/agent-capabilities.js";
+import { customSurfacesEnabled, localBrowserDenial, localBrowserView, sanitizeCustomSurfaces, sanitizeDeclaredCapabilities, sanitizeSettingsSchema } from "../lib/agent-capabilities.js";
 import { workflowChoices, workflowRuntimeDenial } from "../lib/agent-workflows.js";
 import { lintResolvedAgentClaims } from "../lib/agent-claims-resolve.js";
 import { AI_LEDGER_FOR_AGENT } from "./analytics.js";
@@ -563,9 +563,11 @@ agentRoutes.get("/:id/capabilities", async (c) => {
 	let runtime: unknown = null;
 	let workflow: unknown = null;
 	let tools: unknown = [];
+	let localBrowser: unknown = null;
 	try {
 		const config = row.config ? (JSON.parse(row.config) as Record<string, unknown>) : {};
 		const caps = config.capabilities as Record<string, unknown> | undefined;
+		localBrowser = localBrowserView(caps);
 		customSurfaces = Array.isArray(caps?.customSurfaces) ? caps.customSurfaces : [];
 		surfaces = Array.isArray(caps?.surfaces) ? caps.surfaces : [];
 		runtime = caps?.runtime ?? null;
@@ -580,7 +582,8 @@ agentRoutes.get("/:id/capabilities", async (c) => {
 	// drifted both ways at once — it offered INSURANCE_QUOTES, bound to nothing, and omitted
 	// BROWSER_TASK, the only value the platform enforces. Annotated for THIS agent, so a stored
 	// value the platform no longer runs comes back visible instead of silently reading as "none".
-	return c.json({ customSurfaces, surfaces, runtime, workflow, tools, workflowOptions: workflowChoices(workflow), customSurfacesEnabled: customSurfacesEnabled(c.env) });
+	// `localBrowser` is the RESOLVED block (#946) — the limits and engines a run will actually get.
+	return c.json({ customSurfaces, surfaces, runtime, workflow, tools, localBrowser, workflowOptions: workflowChoices(workflow), customSurfacesEnabled: customSurfacesEnabled(c.env) });
 });
 
 /** Declare the agent's custom (published) console surfaces — owner only. Stored in
@@ -648,6 +651,7 @@ agentRoutes.put("/:id/capabilities", async (c) => {
 		runtime: caps.runtime ?? null,
 		workflow: caps.workflow ?? null,
 		tools: caps.tools ?? [],
+		localBrowser: localBrowserView(caps),
 		// Re-served on the write path too, so a save that clears a no-longer-runnable value also
 		// clears the row the editor was showing for it (#375).
 		workflowOptions: workflowChoices(caps.workflow),

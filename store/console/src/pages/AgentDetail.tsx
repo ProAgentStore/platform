@@ -6,6 +6,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { Agent, Instance, Message, KnowledgeDoc, MemoryEntry } from "../lib/types";
 import { type WorkflowChoice, workflowPickerRows } from "../lib/workflow-picker";
+import LocalBrowserCapabilityCard from "../components/LocalBrowserCapabilityCard";
 import { renderMd } from "@proagentstore/sdk/ui";
 import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import { Zap, ArrowLeft } from "lucide-react";
@@ -127,6 +128,7 @@ export default function AgentDetail() {
 		setCapWorkflowChoices(d.workflowOptions ?? []);
 		setCapToolsText((d.tools || []).join(" "));
 	}, []);
+	const [capsSaved, setCapsSaved] = useState(0); // remounts the local browser card once a runtime change is stored
 	const saveCapabilities = async () => {
 		const tools = capToolsText.split(/[\s,]+/).map((t) => t.trim()).filter(Boolean);
 		try {
@@ -137,6 +139,7 @@ export default function AgentDetail() {
 				body: JSON.stringify({ surfaces: capSurfaces, runtime: capRuntime || null, workflow: capWorkflow || null, tools }),
 			});
 			applyCaps(d);
+			setCapsSaved((n) => n + 1);
 			alert("Capabilities saved. New subscribers get them immediately; existing instances on their next load.");
 		} catch (e) {
 			alert(e instanceof Error ? e.message : String(e));
@@ -609,6 +612,7 @@ export default function AgentDetail() {
 										<option value="">none</option>
 										<option value="browser">browser</option>
 										<option value="coding">coding</option>
+										<option value="local_browser">local_browser — Codex / Claude Code researching in the owner's browser</option>
 									</select>
 								</label>
 								<label className="flex flex-col gap-1 text-xs font-semibold">
@@ -629,6 +633,7 @@ export default function AgentDetail() {
 							<Button variant="primary" onClick={saveCapabilities}>Save capabilities</Button>
 						</div>
 					</div>
+					{id && <LocalBrowserCapabilityCard key={capsSaved} agentId={id} runtime={capRuntime} />}
 
 					{/* Custom surfaces (Phase 3) */}
 					<div className="bg-panel border border-line rounded-xl p-4 mb-4">

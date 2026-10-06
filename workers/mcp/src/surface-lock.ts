@@ -991,4 +991,9 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// 250 registrations become 253, `MCP_TOOL_ALWAYS_ON` 224 → 227, gated stays 26. Appended, never
 	// edited in place: 0.1.75 is published.
 	"0.1.76": "sha256:c5ed2421f0af0ea594eadf2551ac386f5feb09b53f99f8d71b5af9b6300cd3e3",
+	// 0.1.77 (#946): `get_local_browser_consent` (read), `set_local_browser_consent` and
+	// `review_local_browser_finding` (write, dry-run); `set_agent_capabilities` gains `local_browser`
+	// and the `local_browser` runtime. 253 registrations become 256, `MCP_TOOL_ALWAYS_ON` 227 → 230,
+	// gated stays 26. Appended, never edited in place: 0.1.76 is published.
+	"0.1.77": "sha256:42cba6782bfb2e4f0c255d99d1b147d4ff55173537b0124e020a1c82bb3e10f1",
 };

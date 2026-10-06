@@ -121,7 +121,7 @@ function InstancePage() {
 	// this one sat two prose lines up, suppressed a COMMENT, and let the findings it answers back
 	// through unseen (#326). InstanceDetail.test.ts holds both memos to that shape.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: the deps ARE these values — joining is what makes the comparison by-value, and taking the lint's suggestion is what broke #309.
-	const surfaceCaps = useMemo(() => ({ surfaces, tools: declaredTools }), [surfaces.join(","), declaredTools?.join(",")]);
+	const surfaceCaps = useMemo(() => ({ surfaces, tools: declaredTools, runtime: instance?.capabilities?.runtime ?? null }), [surfaces.join(","), declaredTools?.join(","), instance?.capabilities?.runtime]);
 	// Phase 3: agent-published UIs, loaded dynamically (see DynamicSurface).
 	const customSurfaces = instance?.capabilities?.customSurfaces || [];
 

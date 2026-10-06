@@ -20,6 +20,7 @@ import AgentSettingsSection from "./settings/AgentSettingsSection";
 import ConnectorsSection from "./settings/ConnectorsSection";
 import VoiceTranslationSection from "./settings/VoiceTranslationSection";
 import MiscellaneousSection from "./settings/MiscellaneousSection";
+import LocalBrowserSection from "./settings/LocalBrowserSection";
 
 interface Props {
 	instanceId: string;
@@ -27,6 +28,8 @@ interface Props {
 	isApply: boolean;
 	isCoding?: boolean;
 	isRepo?: boolean;
+	/** A local CLI browser research agent (#946) — shows its own settings section. */
+	isLocalBrowser?: boolean;
 	onUnsubscribe: () => void;
 }
 
@@ -53,7 +56,7 @@ interface WorkdriveStatus {
 	reach?: ConnectorReach;
 }
 
-export default function SettingsTab({ instanceId, instanceName, isApply, isCoding, isRepo, onUnsubscribe }: Props) {
+export default function SettingsTab({ instanceId, instanceName, isApply, isCoding, isRepo, isLocalBrowser, onUnsubscribe }: Props) {
 	const [maintMsg, setMaintMsg] = useState("");
 	const [resyncMsg, setResyncMsg] = useState("");
 	const [agentFields, setAgentFields] = useState<SettingsField[]>([]);
@@ -400,6 +403,7 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 
 			<BrainModelCard instanceId={instanceId} />
 			{isCoding && <CodingEngineCard instanceId={instanceId} />}
+			{isLocalBrowser && <LocalBrowserSection instanceId={instanceId} />}
 
 			<RunnerPanel instanceId={instanceId} />
 

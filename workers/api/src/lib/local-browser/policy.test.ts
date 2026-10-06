@@ -91,6 +91,11 @@ describe("an instance's settings, within the capability", () => {
 		expect(mergeLocalBrowserSettings(stored, { access: { denyDomains: null }, limits: { maxPages: 20 } }, cap())).toEqual({ settings: { access: { allowDomains: ["seek.com.au"] }, limits: { maxPages: 20, maxMinutes: 5 } } });
 	});
 
+	it("clears one limit with a null inside limits, even when none was stored", () => {
+		expect(mergeLocalBrowserSettings({}, { limits: { maxPages: null, maxMinutes: 5 } }, cap())).toEqual({ settings: { limits: { maxMinutes: 5 } } });
+		expect(mergeLocalBrowserSettings({ limits: { maxPages: 9 } }, { limits: { maxPages: null } }, cap())).toEqual({ settings: { limits: {} } });
+	});
+
 	it("merges a patch: present replaces, null clears to the default, absent keeps", () => {
 		const stored = { engine: "codex", traceRetentionDays: 7 };
 		expect(mergeLocalBrowserSettings(stored, { traceRetentionDays: null, browserProfile: "default" }, cap())).toEqual({ settings: { engine: "codex", browserProfile: "default" } });

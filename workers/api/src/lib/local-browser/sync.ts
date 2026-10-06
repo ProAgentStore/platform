@@ -8,8 +8,11 @@
  * event or a result does to a run.
  */
 import { HttpError } from "../auth.js";
+import { localBrowserRunLink } from "../console-links.js";
+import { instanceListName } from "../instance-config.js";
 import type { Env } from "../../types.js";
 import { callRuntime, getLiveRuntime, runtimeJson } from "../../routes/instances-runtime.js";
+import { notifyUser } from "../../routes/push.js";
 import {
 	LOCAL_BROWSER_PAUSE_REASONS,
 	LOCAL_BROWSER_RESUME_PATH,
@@ -35,6 +38,33 @@ export const LOST_RUNNER_GRACE_MS = 10 * 60_000;
 /** How long a PAUSED run may go without its runner answering before it is ended. */
 export const PAUSED_RUNNER_GRACE_MS = 24 * 60 * 60_000;
 
+const PAUSE_WORDS: Record<LocalBrowserPauseReason, string> = {
+	consent_required: "wants your OK to open a new site",
+	captcha: "hit a captcha only a person can solve",
+	login_required: "reached a sign-in page",
+	access_blocked: "was blocked by a site",
+	paywall: "reached a paywall",
+	write_affordance: "stopped before acting on a page",
+};
+
+/**
+ * Tell the owner a run is waiting on them (#946), the way #934 does for a secret: a paused run
+ * makes no progress until a person acts, and only someone with the run page open would see it.
+ * Best-effort — a failed notification must not undo the pause it reports.
+ */
+async function notifyPaused(env: Env, uid: string, instanceId: string, run: LocalBrowserRun, reason: LocalBrowserPauseReason | null, now: number): Promise<void> {
+	const row = await env.DB.prepare("SELECT i.config, a.name FROM agent_instances i JOIN agents a ON a.id = i.agent_id WHERE i.id = ?1 AND i.user_id = ?2")
+		.bind(instanceId, uid)
+		.first<{ config: string | null; name: string | null }>();
+	const agent = instanceListName(row?.config, row?.name) ?? "Your agent";
+	const why = reason ? PAUSE_WORDS[reason] : "is waiting for you";
+	await notifyUser(env, uid, "local-browser", `⏸ ${agent} ${why}`, `Research run “${run.objective.slice(0, 80)}” is paused until you act.`, localBrowserRunLink(instanceId, run.id), {
+		kind: "alert",
+		instanceId,
+		key: `local-browser:${run.id}:${now}`,
+	});
+}
+
 /** Store a runner's events and apply the two that move a run: a pause, and its resume. */
 export async function ingestRunnerEvents(
 	env: Env,
@@ -49,7 +79,13 @@ export async function ingestRunnerEvents(
 	const stored = await appendLocalBrowserEvents(env, instanceId, uid, run.id, events, now, cursor);
 	let current = run;
 	for (const e of events) {
-		if (e.type === "run.paused" && current.status === "running") current = (await transitionLocalBrowserRun(env, instanceId, uid, run.id, { to: "paused", pauseReason: e.pauseReason }, now)) ?? current;
+		if (e.type === "run.paused" && current.status === "running") {
+			const paused = await transitionLocalBrowserRun(env, instanceId, uid, run.id, { to: "paused", pauseReason: e.pauseReason }, now);
+			if (paused) {
+				current = paused;
+				await notifyPaused(env, uid, instanceId, paused, e.pauseReason ?? null, now).catch(() => undefined);
+			}
+		}
 		else if (e.type === "run.resumed" && current.status === "paused") current = (await transitionLocalBrowserRun(env, instanceId, uid, run.id, { to: "running" }, now)) ?? current;
 	}
 	return { run: current, accepted: stored, rejected: raw.length - events.length, dropped: events.length - stored };
@@ -114,7 +150,11 @@ export async function syncLocalBrowserRun(env: Env, instanceId: string, uid: str
 	// Reconcile with the runner's own state, in case a pause/resume event was capped away.
 	if (body.state === "paused" && current.status === "running") {
 		const reason = LOCAL_BROWSER_PAUSE_REASONS.includes(body.pauseReason as LocalBrowserPauseReason) ? (body.pauseReason as LocalBrowserPauseReason) : null;
-		current = (await transitionLocalBrowserRun(env, instanceId, uid, run.id, { to: "paused", pauseReason: reason }, now)) ?? current;
+		const paused = await transitionLocalBrowserRun(env, instanceId, uid, run.id, { to: "paused", pauseReason: reason }, now);
+		if (paused) {
+			current = paused;
+			await notifyPaused(env, uid, instanceId, paused, reason, now).catch(() => undefined);
+		}
 	} else if (body.state === "running" && current.status === "paused") {
 		current = (await transitionLocalBrowserRun(env, instanceId, uid, run.id, { to: "running" }, now)) ?? current;
 	}

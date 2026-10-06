@@ -81,6 +81,12 @@ export const NOTIFICATION_TYPES: NotificationTypeSpec[] = [
 		alerts: true,
 	},
 	{
+		id: "local-browser",
+		label: "Browser research",
+		description: "A research run pausing for you — a new site to allow, a captcha, or a sign-in (#946).",
+		alerts: true,
+	},
+	{
 		id: "subscribe",
 		label: "New subscribers",
 		description: "Someone subscribing to an agent you publish.",

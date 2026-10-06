@@ -256,7 +256,7 @@ export function mergeLocalBrowserSettings(stored: unknown, patch: Record<string,
 	const base = isObj(stored) ? stored : {};
 	const merged = patchObject(base, patch);
 	for (const k of ["access", "limits"] as const) {
-		if (isObj(patch[k]) && isObj(base[k])) merged[k] = patchObject(base[k] as Record<string, unknown>, patch[k] as Record<string, unknown>);
+		if (isObj(patch[k])) merged[k] = patchObject(isObj(base[k]) ? (base[k] as Record<string, unknown>) : {}, patch[k] as Record<string, unknown>);
 	}
 	return validateLocalBrowserSettings(merged, cap);
 }

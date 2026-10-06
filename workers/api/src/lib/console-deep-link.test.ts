@@ -56,6 +56,12 @@ describe("buildConsoleLink", () => {
 		ok({ kind: "section", section: "data" }, { surfaces: [] });
 	});
 
+	it("shows the Research tab only for a local browser agent (#946)", () => {
+		expect(ok({ kind: "section", section: "research" }, { surfaces: [], runtime: "local_browser" }).path).toBe("/console/instances/inst_1/research");
+		expect(buildConsoleLink("inst_1", { kind: "section", section: "research" }, CODER)).toHaveProperty("error");
+		expect(ok({ kind: "local_browser_run", runId: "run 9" }).path).toBe("/console/instances/inst_1/research/run%209");
+	});
+
 	it("shows Index for repo chat by its surface, even with no write tools", () => {
 		expect(ok({ kind: "section", section: "indexing" }, REPO_CHAT).path).toBe("/console/instances/inst_1/indexing");
 	});

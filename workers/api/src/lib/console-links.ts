@@ -93,6 +93,12 @@ export function instanceKnowledgeLink(instanceId: string): string {
  * sent to that session. Without a session id (or if the id no longer resolves) the Coding tab
  * falls back to the repo list, which is a real page rather than a broken one.
  */
+/** A local browser research run (#946) — the Research tab, or one run on it. */
+export function localBrowserRunLink(instanceId: string, runId?: string): string {
+	const research = `${instanceLink(instanceId)}/research`;
+	return runId ? `${research}/${encodeURIComponent(runId)}` : research;
+}
+
 export function codingSessionLink(instanceId: string, sessionId?: string): string {
 	const coding = `${instanceLink(instanceId)}/coding`;
 	return sessionId ? `${coding}/${encodeURIComponent(sessionId)}` : coding;

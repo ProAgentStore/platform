@@ -215,7 +215,7 @@ export function sanitizeBoardColumns(value: unknown): BoardColumn[] | undefined 
  * fails when the console gains a tab that is not listed here.
  */
 export const RESERVED_SURFACE_IDS = new Set([
-	"chat", "apply", "board", "repo", "coding", "tmux", "activity", "stats", "behaviour", "feedback", "knowledge", "indexing", "data", "settings",
+	"chat", "apply", "board", "repo", "coding", "tmux", "research", "activity", "stats", "behaviour", "feedback", "knowledge", "indexing", "data", "settings",
 ]);
 const MAX_CUSTOM_SURFACES = 8;
 const CUSTOM_SURFACE_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
@@ -537,6 +537,17 @@ export function agentCapabilities(agent: AgentLike, env?: CustomSurfaceEnv | nul
 		base = { surfaces: [], runtime: null, workflow: null };
 	}
 	return { ...base, tools, customSurfaces, ...withOptions, boardColumns: declaredColumns ?? defaultBoardColumns(base.surfaces), settingsSchema };
+}
+
+/**
+ * The local browser block as the creator's editor shows it: resolved with defaults for a
+ * `local_browser` agent, null otherwise. The capabilities routes serve it so the editor edits the
+ * values the platform will actually use, not only what happened to be typed (#946).
+ */
+export function localBrowserView(caps: { runtime?: unknown; localBrowser?: unknown } | undefined): LocalBrowserCapability | null {
+	if (caps?.runtime !== "local_browser") return null;
+	const parsed = parseLocalBrowserCapability(caps.localBrowser);
+	return "error" in parsed ? null : parsed;
 }
 
 /** The resolved local browser block — only for the runtime it belongs to, defaults filled in. */

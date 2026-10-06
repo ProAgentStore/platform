@@ -63,6 +63,7 @@ export const INSTANCE_TABS = [
 	"repo",
 	"coding",
 	"tmux",
+	"research",
 	"activity",
 	"stats",
 	"knowledge",
