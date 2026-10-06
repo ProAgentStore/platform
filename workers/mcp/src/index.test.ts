@@ -339,7 +339,7 @@ describe("PagsMcp.init — tool registration", () => {
 	it("gates the coding session tools behind the user's coding surface", async () => {
 		const withoutCoding = (await setup({ groups: [] })).tools;
 		expect(withoutCoding.has("coding_session_capture")).toBe(false);
-		expect(withoutCoding.has("coding_overseer")).toBe(false);
+		expect(withoutCoding.has("coding_session_message")).toBe(false);
 
 		const withCoding = (await setup({ groups: ["coding"] })).tools;
 		expect(withCoding.has("coding_session_capture")).toBe(true);

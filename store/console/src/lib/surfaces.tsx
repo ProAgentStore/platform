@@ -224,8 +224,8 @@ export const SURFACES: SurfaceDef[] = [
 				singleRepo={surfaceOptions?.coding?.repos === "single"}
 				// One chat per agent. A configurable Repo Coder declares `copilot:false`, so its
 				// Coding tab is the terminal only and every conversation happens in the Assistant
-				// — which carries the same repo/git/issue read tools from the registry. The
-				// legacy hardcoded Coder declares nothing and keeps its Co-pilot.
+				// — which carries the same repo/git/issue read tools from the registry. An agent
+				// that declares nothing keeps its Co-pilot (the default, decided on #942).
 				copilot={surfaceOptions?.coding?.copilot !== false}
 				// Arriving from a deploy notification (#338). Read straight off the location rather
 				// than threaded through SurfaceContext: this is a deep link, so the surface is

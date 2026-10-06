@@ -12,7 +12,7 @@ import {
 	tabsForSurface,
 	TRIAL_DO_PREFIX,
 } from "./agent-self-description.js";
-import { CODER_LEAD, CODER_REPO, FIRST_PARTY_AGENTS, LEGACY_CODER, PLAIN_CHAT, REPO_CHAT } from "./first-party-agents.js";
+import { CODER_LEAD, CODER_REPO, FIRST_PARTY_AGENTS, UNDECLARED_CODER, PLAIN_CHAT, REPO_CHAT } from "./first-party-agents.js";
 
 /**
  * The five agents these assertions are about now live in `lib/first-party-agents.ts` (#315), shared
@@ -30,7 +30,7 @@ describe("resolveSelfModel — what the agent may say it is", () => {
 	});
 
 	it("the legacy Coder drives its own engine and owns many repos", () => {
-		const m = resolveSelfModel(LEGACY_CODER);
+		const m = resolveSelfModel(UNDECLARED_CODER);
 		expect(m.canDrive).toBe(true);
 		expect(m.canStartWork).toBe(true);
 		expect(m.singleRepo).toBe(false);
@@ -76,7 +76,7 @@ describe("tabsFor — an agent may only name tabs it actually has", () => {
 	});
 
 	it("every agent has the universal tabs", () => {
-		for (const caps of [CODER_REPO, LEGACY_CODER, REPO_CHAT, CODER_LEAD, PLAIN_CHAT]) {
+		for (const caps of [CODER_REPO, UNDECLARED_CODER, REPO_CHAT, CODER_LEAD, PLAIN_CHAT]) {
 			expect(tabsFor(caps)).toEqual(expect.arrayContaining(["Assistant", "Knowledge", "Settings", "Behaviour", "Activity"]));
 		}
 	});
@@ -99,7 +99,7 @@ describe("executionAuthorityPrompt — #254, the prompt must not forbid what sta
 	it("an agent with BOTH is told about both, not just the first branch", () => {
 		// The legacy Coder has an executor AND the drive tools. An if/else chain described half of
 		// its reach — the same class of error as describing none of it.
-		const p = executionAuthorityPrompt(resolveSelfModel(LEGACY_CODER));
+		const p = executionAuthorityPrompt(resolveSelfModel(UNDECLARED_CODER));
 		expect(p).toContain("send_to_cli");
 		expect(p).toContain("start_work");
 	});
@@ -165,7 +165,7 @@ describe("selfDescriptionPrompt — #255, ownership is a fact, not a memory stri
 	});
 
 	it("says nothing about ownership for a multi-repo agent", () => {
-		const p = selfDescriptionPrompt(resolveSelfModel(LEGACY_CODER), { attached: [{ name: "a" }, { name: "b" }] });
+		const p = selfDescriptionPrompt(resolveSelfModel(UNDECLARED_CODER), { attached: [{ name: "a" }, { name: "b" }] });
 		expect(p).not.toMatch(/exactly ONE repository/);
 	});
 

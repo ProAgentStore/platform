@@ -677,27 +677,6 @@ export function registerCodingSessionTools(
 	);
 
 	server.tool(
-		"coding_overseer",
-		"Ask the cross-repo Overseer agent. It sees all repos, their live sessions, and recent terminal output. Can answer questions and drive Claude Code on specific repos.",
-		{
-			instance_id: z.string().describe("Instance ID"),
-			message: z.string().describe("Question or instruction for the Overseer"),
-			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
-		},
-		async ({ instance_id, message, token }) => {
-			const sessionToken = tokenFor(token);
-			if (!sessionToken) return authRequired();
-			// The Overseer can drive Claude Code on any repo → runtime-scoped.
-			const denied = await requirePermission(safetyFor(token), "runtime", "coding_overseer", { instance_id });
-			if (denied) return denied;
-			const d = (await authedCall(`/v1/instances/${instance_id}/coding/overseer`, sessionToken, { method: "POST", body: JSON.stringify({ message }) }, env)) as { reply?: string; error?: string };
-			if (d?.error) return text(`Overseer error: ${d.error}`);
-			await audit(safetyFor(token), { tool: "coding_overseer", action: "completed", input: { instance_id, messageBytes: new TextEncoder().encode(message).length } });
-			return text(d.reply || "(no response)");
-		},
-	);
-
-	server.tool(
 		"coding_diagnostics",
 		"Full diagnostics for a coding instance: runner connectivity, terminal sessions, repos, issues. Runner state is two separate measurements — `relayConnected` (the relay holds a live socket) and `healthCheck` (the runner's health responder answered: ok | timeout | unresponsive | disconnected | failed | not_attempted) — and one status derived from both, `runnerStatus`: online | unresponsive (relay reported a socket, health responder did not answer — try force_runner_attach, then recheck diagnostics; restart pags up if recovery fails) | offline | unregistered. `runnerOnline` is exactly `runnerStatus === \"online\"`. The runner remedy and issues give situation-specific recovery guidance; attached:true only confirms a relay socket, not a healthy responder. `runnerStatus`/`runner.status` is the live verdict; `runner.reportedStatus` is only what the runner last wrote about itself, never cleared on disconnect, so it is not a claim about now. `runner.lastSeenAt` is the last contact (a heartbeat, or a health check that answered) from the machine reported — the live one, else the one the agent is pinned to. `runner.resources` is that machine's CPU load, memory and active coding sessions from its last heartbeat, with `warnings` past a high-water mark (also raised in `issues`); null when its CLI predates it. Diagnostics does not force a reconnect automatically. Use to debug why sessions are offline or stuck. For deploy and CI status — workflow run outcomes, whether a push passed or failed — use coding_instance_deploy_status instead; this tool covers the runner and session layer, not the GitHub Actions layer.",
 		{

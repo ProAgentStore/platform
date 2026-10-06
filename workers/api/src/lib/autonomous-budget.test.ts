@@ -159,7 +159,7 @@ describe("every autonomous entry point opens a budget pool (#184, #502)", () => 
 
 	it("both coding entry points that #502 fixed pass a pool", () => {
 		const coding = SITES.filter((s) => s.binding === "CODING_SESSION" && !isWatch(s));
-		expect(coding.length).toBeGreaterThanOrEqual(3);
+		expect(coding.length).toBeGreaterThanOrEqual(2); // the loop driver + `/run`; the Overseer's was the third, retired in #942
 		for (const s of coding) expect(s.args, `${s.rel} starts a Pilot with no pool`).toMatch(/\bbudgetId\b/);
 	});
 

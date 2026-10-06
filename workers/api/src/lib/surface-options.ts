@@ -88,8 +88,9 @@ export interface SurfaceSpec {
 	/**
 	 * Does this agent get a SECOND conversation — the Co-pilot, scoped to one coding session?
 	 *
-	 * Default true, because the legacy hardcoded Coder has one and removing it there is a
-	 * behaviour change nobody asked for. A configurable Repo Coder sets false.
+	 * Default true. It began as "the legacy hardcoded Coder has one"; when that agent was retired
+	 * (#942) the default was kept on purpose for coding agents that declare nothing. A Repo Coder
+	 * and a Local Coder set false.
 	 *
 	 * Why false is right for the new Coder: the Co-pilot exists to translate terminal output into
 	 * English for a human. That made sense when the pane held a compiler. It holds Claude Code —

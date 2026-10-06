@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**247 tool registrations.** 220 are always registered; 27 are gated to the console
+**246 tool registrations.** 220 are always registered; 26 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -406,7 +406,6 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `coding_session_restart` | Restart the CLI, same session id | runtime | | |
 | `coding_session_end` | End the session, stopping the CLI; lost confirmation returns `outcome: unknown`; poll coding_sessions_list before retrying | runtime | | |
 | `coding_session_fresh` | End and start clean (no `--resume`); lost confirmation returns `outcome: unknown`; poll coding_sessions_list before retrying | runtime | | |
-| `coding_overseer` | Cross-repo coordinator; can drive a specific engine | runtime | | |
 | `coding_instance_deploy_status` | Latest GitHub Actions workflow runs for a coding instance's registered repo; optionally filter by commit SHA | read | | |
 
 ### Autonomous loops

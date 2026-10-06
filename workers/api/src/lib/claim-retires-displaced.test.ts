@@ -14,10 +14,10 @@
  * ── What is asserted, and why the ORDER matters most
  *
  * The retire is scoped to runs on this session that are still `running`, and it is safe only because
- * all three callers claim BEFORE creating their own run row. A caller that ever creates its run row
+ * both callers claim BEFORE creating their own run row. A caller that ever creates its run row
  * first would retire itself the instant it started — a far worse bug than the one being fixed, and
  * invisible except as "my run ended immediately for no reason". The last test in this file reads the
- * three call sites and pins that ordering, because no unit test of this function can see it.
+ * two call sites and pins that ordering, because no unit test of this function can see it.
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
@@ -154,12 +154,6 @@ describe("every caller claims BEFORE it creates its run row", () => {
 			path: new URL("./loop-drivers.ts", import.meta.url).pathname,
 			from: "const codingDriver",
 			create: "createLoopRun(",
-		},
-		{
-			file: "routes/coding-brains.ts",
-			path: new URL("../routes/coding-brains.ts", import.meta.url).pathname,
-			from: "async function delegateToTarget",
-			create: "CODING_SESSION.create(",
 		},
 		{
 			file: "routes/coding-drive.ts",

@@ -496,7 +496,9 @@ export function agentCapabilities(agent: AgentLike, env?: CustomSurfaceEnv | nul
 	let base: Omit<AgentCapabilities, "customSurfaces" | "boardColumns">;
 	if (agent.slug === "job-application-assistant") {
 		base = { surfaces: ["apply"], runtime: "browser", workflow: "JOB_APPLY" };
-	} else if (agent.slug === "coder" || agent.category === "code") {
+	} else if (agent.category === "code") {
+		// Category, not slug: the `coder` slug branch went with that agent (#942), and it declared
+		// its capabilities anyway (0022), so it never reached this fallback.
 		base = { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" };
 		// There is no `insurance` branch (#375). It derived `workflow: "INSURANCE_QUOTES"`, which no
 		// `[[workflows]]` binding ever backed, alongside a surface the console registry renders no tab
@@ -517,9 +519,9 @@ export function hasSurface(agent: AgentLike, surface: AgentSurface): boolean {
 /**
  * Resolve an INSTANCE's capabilities — the join every caller was writing by hand.
  *
- * Three copies of this exact SELECT existed (`overseerDisabled`, `copilotDisabled`, and the
- * delegation dispatch), which is how a rule ends up enforced in two places out of three. One
- * helper, so "what does this agent declare" has a single answer.
+ * Three copies of this exact SELECT existed (the Overseer and Co-pilot gates, and the delegation
+ * dispatch), which is how a rule ends up enforced in two places out of three. One helper, so
+ * "what does this agent declare" has a single answer — the Co-pilot routes read it too (#942).
  *
  * `userId` scopes to the owner when supplied. Returns null when the instance isn't there.
  */

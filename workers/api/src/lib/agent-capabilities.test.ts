@@ -32,14 +32,13 @@ describe("agentCapabilities", () => {
 		expect(caps.workflow).toBe("JOB_APPLY");
 	});
 
-	it("falls back to coding for the coder slug or code category", () => {
-		expect(agentCapabilities({ slug: "coder" }).surfaces).toEqual(["coding"]);
+	it("falls back to coding for the code category, and no longer for the retired `coder` slug (#942)", () => {
 		expect(agentCapabilities({ category: "code" }).surfaces).toEqual(["coding"]);
+		expect(agentCapabilities({ slug: "coder" }).surfaces).toEqual([]);
 	});
 
 	it("the legacy fallback resolves the same brains a declared row would (#160)", () => {
 		expect(agentCapabilities({ slug: "job-application-assistant" })).toMatchObject({ runtime: "browser", workflow: "JOB_APPLY" });
-		expect(agentCapabilities({ slug: "coder" })).toMatchObject({ runtime: "coding", workflow: "CODING_SESSION" });
 		expect(agentCapabilities({ category: "code" })).toMatchObject({ runtime: "coding", workflow: "CODING_SESSION" });
 		// Anything else derives no brain — an undeclared agent gets the generic loop, never a Pilot.
 		expect(agentCapabilities({ slug: "data-analyst", category: "data" }).workflow).toBeNull();
@@ -48,7 +47,7 @@ describe("agentCapabilities", () => {
 	it("every fallback derivation satisfies the workflow/runtime guard it never passes through (#705, #160)", () => {
 		// The three declaring routes refuse an unsatisfiable pair; the fallback bypasses all three, so
 		// an edit here that paired a workflow with the wrong runtime would reach production unrefused.
-		for (const agent of [{ slug: "job-application-assistant" }, { slug: "coder" }, { category: "code" }, { slug: "anything-else" }]) {
+		for (const agent of [{ slug: "job-application-assistant" }, { category: "code" }, { slug: "anything-else" }]) {
 			const caps = agentCapabilities(agent);
 			expect(workflowRuntimeDenial(caps.workflow, caps.runtime ?? null), JSON.stringify(agent)).toBeNull();
 		}
@@ -83,12 +82,12 @@ describe("agentCapabilities", () => {
 	});
 
 	it("tolerates malformed config", () => {
-		expect(agentCapabilities({ slug: "coder", config: "{not json" }).surfaces).toEqual(["coding"]);
+		expect(agentCapabilities({ category: "code", config: "{not json" }).surfaces).toEqual(["coding"]);
 	});
 
 	it("hasSurface reflects the resolved surfaces", () => {
-		expect(hasSurface({ slug: "coder" }, "coding")).toBe(true);
-		expect(hasSurface({ slug: "coder" }, "apply")).toBe(false);
+		expect(hasSurface({ category: "code" }, "coding")).toBe(true);
+		expect(hasSurface({ category: "code" }, "apply")).toBe(false);
 	});
 
 	describe("boardColumns", () => {
@@ -103,7 +102,7 @@ describe("agentCapabilities", () => {
 		});
 
 		it("gives other agents the generic runtime columns (no pipeline stages)", () => {
-			const t = titles({ slug: "coder" });
+			const t = titles({ category: "code" });
 			expect(t).toContain("Running");
 			expect(t).toContain("Done");
 			expect(t).not.toContain("Interview");
@@ -186,7 +185,7 @@ describe("agentCapabilities", () => {
 		});
 
 		it("is undefined when no tools are declared", () => {
-			expect(agentCapabilities({ slug: "coder" }).tools).toBeUndefined();
+			expect(agentCapabilities({ category: "code" }).tools).toBeUndefined();
 			expect(agentCapabilities({ config: JSON.stringify({ capabilities: { surfaces: ["coding"] } }) }).tools).toBeUndefined();
 		});
 

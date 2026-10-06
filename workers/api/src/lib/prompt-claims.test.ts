@@ -23,7 +23,7 @@ import { resolveResponseStyle } from "./agent-behaviour.js";
 import { executionAuthorityPrompt, resolveSelfModel, selfDescriptionPrompt } from "./agent-self-description.js";
 import { indexedReposPrompt, noActiveSessionPrompt, runnerStatusPrompt, styleGuidance, voiceControlPrompt } from "./agent-style-prompt.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
-import { CODER_LEAD, CODER_REPO, FIRST_PARTY_AGENTS, LEGACY_CODER, PLAIN_CHAT, REPO_CHAT } from "./first-party-agents.js";
+import { CODER_LEAD, CODER_REPO, FIRST_PARTY_AGENTS, UNDECLARED_CODER, PLAIN_CHAT, REPO_CHAT } from "./first-party-agents.js";
 import {
 	DENIAL_RULES,
 	describeViolation,
@@ -253,7 +253,7 @@ describe("the incidents that motivated this", () => {
 		// does reaches the engine — which `start_work` contradicts.
 		expect(v.map((x) => x.claim)).toEqual(["cannot-act"]);
 		// For the legacy Coder, which really does drive its own pane, the second clause is the lie.
-		expect(promptClaimViolations("you do not drive the engine", LEGACY_CODER).map((x) => x.claim)).toEqual(["does-not-drive"]);
+		expect(promptClaimViolations("you do not drive the engine", UNDECLARED_CODER).map((x) => x.claim)).toEqual(["does-not-drive"]);
 	});
 
 	it("#318 — denying execution to a Lead, whose entire job is delegating", () => {
@@ -278,7 +278,7 @@ describe("the incidents that motivated this", () => {
 	});
 
 	it("#247 — describing a tmux pane to an agent whose engine is a child process", () => {
-		const v = promptClaimViolations("Read the tmux pane to see what the engine is doing.", LEGACY_CODER);
+		const v = promptClaimViolations("Read the tmux pane to see what the engine is doing.", UNDECLARED_CODER);
 		expect(v.map((x) => x.claim)).toEqual(["tmux"]);
 	});
 
@@ -375,7 +375,7 @@ describe("the incidents that motivated this", () => {
 		// never see, which is the failure `toolBlurbFor`'s comment describes.
 		const v = promptClaimViolations("steer the engine with send_to_cli", REPO_CHAT);
 		expect(v.map((x) => x.claim)).toEqual(["send_to_cli"]);
-		expect(promptClaimViolations("steer the engine with send_to_cli", LEGACY_CODER)).toEqual([]);
+		expect(promptClaimViolations("steer the engine with send_to_cli", UNDECLARED_CODER)).toEqual([]);
 	});
 });
 

@@ -23,7 +23,7 @@ import { describe, expect, it } from "vitest";
 import { resolveResponseStyle } from "./agent-behaviour.js";
 import { resolveSelfModel, type SelfModel } from "./agent-self-description.js";
 import { runnerStatusPrompt, styleGuidance } from "./agent-style-prompt.js";
-import { CODER_LEAD, CODER_REPO, FIRST_PARTY_AGENTS, LEGACY_CODER, PLAIN_CHAT, REPO_CHAT } from "./first-party-agents.js";
+import { CODER_LEAD, CODER_REPO, FIRST_PARTY_AGENTS, UNDECLARED_CODER, PLAIN_CHAT, REPO_CHAT } from "./first-party-agents.js";
 import { describeViolation, promptClaimViolations } from "./prompt-claims.js";
 import { describeFacts } from "./runner-availability.js";
 import type { RuntimeFacts } from "./instance-connectivity.js";
@@ -130,7 +130,7 @@ describe("the unset default is honest for the branch it is in (#430)", () => {
 		for (const [name, caps] of [
 			["repo-chat", REPO_CHAT],
 			["coder-repo", CODER_REPO],
-			["coder", LEGACY_CODER],
+			["undeclared coder", UNDECLARED_CODER],
 			["coder-lead", CODER_LEAD],
 		] as const) {
 			const block = styleGuidance(codingShape(caps));
@@ -186,7 +186,7 @@ describe("plain speech is reachable for a coding agent, and still tells it no li
 		// agents re-opens #254/#255 territory. Adjudicated by the guard rather than by reading.
 		for (const [name, caps, repoChatStyle, hasRepos] of [
 			["coder-repo", CODER_REPO, false, true],
-			["coder", LEGACY_CODER, false, true],
+			["undeclared coder", UNDECLARED_CODER, false, true],
 			["repo-chat", REPO_CHAT, true, false],
 			["coder-lead", CODER_LEAD, true, false],
 		] as const) {

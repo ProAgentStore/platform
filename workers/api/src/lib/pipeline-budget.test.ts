@@ -89,9 +89,6 @@ describe("BUDGET_OPENING_TOOLS", () => {
 			// same commitment as pressing Loop, through a narrower door. A root, so depth 0 (#502).
 			// Moved out of `routes/coding.ts` with the #775 split; `/run` is a drive route.
 			"routes/coding-drive.ts",
-			// The Overseer delegating to the Pilot. A MODEL decides to start this one, which makes
-			// it the least supervised of the three and the one that most needs a pool (#502).
-			"routes/coding-brains.ts",
 			// `startJobApply` — every application is a root and every application is unattended,
 			// so unlike the Pilot there is no human-is-watching path to leave unpooled (#516).
 			"routes/instances-apply.ts",

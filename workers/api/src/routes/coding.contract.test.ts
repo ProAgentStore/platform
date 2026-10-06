@@ -222,7 +222,6 @@ const ROUTES = [
 	"POST /:instanceId/coding/sessions/:sessionId/system-message",
 	"POST /:instanceId/coding/sessions/:sessionId/explain",
 	"POST /:instanceId/coding/sessions/:sessionId/agent",
-	"POST /:instanceId/coding/overseer",
 	"GET /:instanceId/coding/sessions/:sessionId/timeline",
 	"GET /:instanceId/coding/repos/:repoId/timeline",
 	"DELETE /:instanceId/coding/sessions/:sessionId/timeline",
@@ -317,12 +316,11 @@ const OWNERSHIP: Record<string, string[]> = {
 		"GET /:instanceId/coding/repos/:repoId/pulls",
 		"GET /:instanceId/coding/repos/:repoId/pulls/:number",
 	],
-	// The three routes that call a MODEL, and the only ones on this surface that can invent an
+	// The two routes that call a MODEL, and the only ones on this surface that can invent an
 	// action rather than execute one. Keeping them nameable as a set is the point of the module.
 	"coding-brains.ts": [
 		"POST /:instanceId/coding/sessions/:sessionId/explain",
 		"POST /:instanceId/coding/sessions/:sessionId/agent",
-		"POST /:instanceId/coding/overseer",
 	],
 	"coding-diagnostics.ts": [
 		"POST /:instanceId/coding/close-sessions",

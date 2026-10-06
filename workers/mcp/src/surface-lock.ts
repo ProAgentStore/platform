@@ -976,4 +976,8 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// builders the console's route table is tested against. 246 registrations become 247,
 	// `MCP_TOOL_ALWAYS_ON` 219 → 220, gated stays 27. Appended, never edited in place: 0.1.72 is published.
 	"0.1.73": "sha256:8afe0421b4ca463536de037bb3b345683d49d949218f92501439064442de97c3",
+	// 0.1.74 (#942): `coding_overseer` removed with the legacy Coder's cross-repo Overseer route it
+	// called (replaced by `coder-lead` + supervision, 0063). 247 registrations become 246, gated
+	// 27 → 26, always-on stays 220. Appended, never edited in place: 0.1.73 is published.
+	"0.1.74": "sha256:8f579da36cf7c04e39ff9e866578668f746f4857559332465c673013b798d5c3",
 };

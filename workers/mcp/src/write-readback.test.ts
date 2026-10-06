@@ -173,7 +173,6 @@ const READBACK: Record<string, string | null> = {
 	"chat_with_agent.message": "instance_messages",
 	"chat_with_instance.message": "instance_messages",
 	"coding_session_message.message": "coding_session_capture",
-	"coding_overseer.message": "instance_messages",
 
 	// ── memory / knowledge / files / collections ──
 	"write_instance_memory.key": "get_instance_memory",

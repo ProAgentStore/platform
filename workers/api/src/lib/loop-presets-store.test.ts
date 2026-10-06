@@ -35,7 +35,7 @@ function mockEnv(row: Record<string, unknown> | null) {
 	return { env: { DB } as unknown as Env, writes };
 }
 
-const codingAgent = { slug: "coder", category: "coding", config: JSON.stringify({ capabilities: { workflow: "CODING_SESSION" } }) };
+const codingAgent = { slug: "coder-repo", category: "code", config: JSON.stringify({ capabilities: { workflow: "CODING_SESSION" } }) };
 
 describe("readLoopPresets", () => {
 	it("hands a coding agent that never configured any the five defaults", async () => {
@@ -73,7 +73,7 @@ describe("readLoopPresets", () => {
 
 describe("writeLoopPresets", () => {
 	it("patches ONLY its own config key, never the whole blob (#231)", async () => {
-		const { env, writes } = mockEnv({ config: "{}", agent_config: codingAgent.config, slug: "coder", category: "coding" });
+		const { env, writes } = mockEnv({ config: "{}", agent_config: codingAgent.config, slug: "coder-repo", category: "code" });
 		await writeLoopPresets(env, "inst-1", "user-1", [{ label: "Ship", objective: "Ship it." }]);
 		expect(writes).toHaveLength(1);
 		expect(writes[0].sql).toContain("json_set");
@@ -83,7 +83,7 @@ describe("writeLoopPresets", () => {
 	});
 
 	it("stores the SANITIZED list, so a junk row cannot reach the loop form", async () => {
-		const { env, writes } = mockEnv({ config: "{}", agent_config: "{}", slug: "coder", category: "coding" });
+		const { env, writes } = mockEnv({ config: "{}", agent_config: "{}", slug: "coder-repo", category: "code" });
 		await writeLoopPresets(env, "inst-1", "user-1", [
 			{ label: "Ship", objective: "Ship it." },
 			{ label: "", objective: "unlabelled" },
@@ -98,7 +98,7 @@ describe("writeLoopPresets", () => {
 			capabilities: { workflow: "CODING_SESSION" },
 			loopPresets: [{ id: "ship", label: "Ship", objective: "Ship it." }],
 		});
-		const { env, writes } = mockEnv({ config: "{}", agent_config: templateConfig, slug: "coder", category: "coding" });
+		const { env, writes } = mockEnv({ config: "{}", agent_config: templateConfig, slug: "coder-repo", category: "code" });
 		const r = await writeLoopPresets(env, "inst-1", "user-1", []);
 		expect(writes[0].sql).toContain("json_remove");
 		// …and the creator's list is what it inherits again.

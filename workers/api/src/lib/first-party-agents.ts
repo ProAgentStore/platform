@@ -30,9 +30,14 @@ export const CODER_REPO: AgentCapabilities = agentCapabilities({
 	}),
 });
 
-/** The legacy hardcoded Coder: declares no tool allowlist, so it keeps the drive tools. */
-export const LEGACY_CODER: AgentCapabilities = agentCapabilities({
-	slug: "coder",
+/**
+ * A coding agent that declares the surface and nothing else — no tool allowlist, no
+ * `surfaceOptions` — so it gets `SURFACE_DEFAULTS`: the drive tools and the Co-pilot. This was the
+ * legacy hardcoded Coder until #942 retired it; the shape is still live (a creator's coding agent
+ * that declares nothing, e.g. `job-search-scout`), so the guards keep running against it.
+ */
+export const UNDECLARED_CODER: AgentCapabilities = agentCapabilities({
+	slug: "my-coding-agent",
 	config: JSON.stringify({ capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" } }),
 });
 
@@ -58,7 +63,7 @@ export const PLAIN_CHAT: AgentCapabilities = agentCapabilities({ slug: "language
 /** Every fixture, for guards that assert over all of them. */
 export const FIRST_PARTY_AGENTS: readonly { name: string; capabilities: AgentCapabilities }[] = [
 	{ name: "coder-repo", capabilities: CODER_REPO },
-	{ name: "coder (legacy)", capabilities: LEGACY_CODER },
+	{ name: "coding agent, nothing declared", capabilities: UNDECLARED_CODER },
 	{ name: "repo-chat", capabilities: REPO_CHAT },
 	{ name: "coder-lead", capabilities: CODER_LEAD },
 	{ name: "plain chat", capabilities: PLAIN_CHAT },

@@ -166,7 +166,7 @@ tags:
       Coverage. Live surface: `GET/POST/DELETE /v1/instances/{instanceId}/coding/repos`,
       `GET/PUT …/coding/engines`, `GET/POST …/coding/sessions`, and the per-session verbs
       (`start`, `capture`, `message`, `run`, `resume`, `explain`, `timeline`, `end`,
-      `restart`, `agent`), plus `…/coding/overseer`, `…/coding/work-mode`,
+      `restart`, `agent`), plus `…/coding/work-mode`,
       `…/coding/builds`, `…/coding/status`, `…/coding/browse`, `…/coding/diagnostics`.
       All are Bearer + owner-scoped. Shapes track the `@proagentstore/cli` runner version.
 

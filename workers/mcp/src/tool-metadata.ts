@@ -339,7 +339,6 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	force_runner_attach: "runtime",
 	// Installs software on a machine and restarts its runner (#859).
 	runner_update: "runtime",
-	coding_overseer: "runtime",
 	coding_session_end: "runtime",
 	coding_session_fresh: "runtime",
 	coding_session_message: "runtime",
@@ -590,7 +589,8 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// +1 runtime at #881: `coding_engine_reauth`, the remote engine sign-in. `runtime`, not `write`:
 	// it opens a terminal on the machine and drives the engine's login CLI there.
 	// +1 runtime at #906: `secure_input_inject`, injects a secret to tmux/env/stdin on the runner machine.
-	runtime: 29,
+	// -1 runtime at #942: `coding_overseer`, retired with the legacy Coder's cross-repo Overseer route.
+	runtime: 28,
 	// +1 read, +8 destructive at #613 (agent-template authoring, write half): builder planning
 	// only computes a proposal; the other eight can delete, overwrite, run a billable template
 	// turn, create an enduring version, or create/scaffold a template. They all require the
