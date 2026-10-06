@@ -163,3 +163,82 @@ export function loopRaceCancelFailureNotice(err: unknown): string {
 	const detail = err instanceof Error ? err.message : String(err);
 	return `You pressed Stop while the loop was starting, and it couldn't be cancelled — it's running. ${detail}\n\nIt's being watched again below, so press Stop to try once more.`.trim();
 }
+
+/**
+ * What holds a repo when a loop start was refused as busy (#931).
+ *
+ * The refusal names the holder (`routes/tools.ts` → `describeBusyHolder`, #886), but the console
+ * showed only the sentence — written for AGENTS, telling them to "stop it first with stop_work",
+ * a tool the console has no button for. A human reading it had no way to see the run, let alone
+ * stop it. This reads the holder out of the refusal so the page can link to it.
+ */
+export interface BusyHold {
+	/** The run working the repo now, when the platform recorded one. */
+	run: { runId: string; objective: string; startedAt: number; sessionId: string | null } | null;
+	/** A start for this repo that is still being set up — nothing to open yet. */
+	pendingStart: { objective: string | null; ageMs: number } | null;
+}
+
+const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
+
+/**
+ * The holder named by a busy refusal, or null when the error is not one.
+ *
+ * Reads `err.body` — the SDK's `ApiError` keeps the refusal's whole answer — structurally, so a
+ * plain `Error` (or an older SDK) simply yields null and the caller falls back to the message.
+ */
+export function busyHoldFrom(err: unknown): BusyHold | null {
+	const body = (err as { body?: unknown } | null)?.body as Record<string, unknown> | undefined;
+	if (body?.reason !== "busy") return null;
+	const a = body.activeRun as Record<string, unknown> | null | undefined;
+	const runId = str(a?.runId);
+	const run = runId
+		? { runId, objective: str(a?.objective) ?? "", startedAt: typeof a?.startedAt === "number" ? a.startedAt : 0, sessionId: str(a?.sessionId) }
+		: null;
+	const first = Array.isArray(body.inFlightStarts) ? (body.inFlightStarts[0] as Record<string, unknown> | undefined) : undefined;
+	const pendingStart = !run && first ? { objective: str(first.objective), ageMs: typeof first.ageMs === "number" ? first.ageMs : 0 } : null;
+	return run || pendingStart ? { run, pendingStart } : null;
+}
+
+/**
+ * The in-router path to the blocking run's live view: its coding session (Co-pilot + terminal).
+ * In-router, so the console's basename (`/console` on the apex, `/` on console.proagentstore.online)
+ * is supplied by the router, never written here. Null when the run has no session to open.
+ */
+export function busyHoldLink(instanceId: string, hold: BusyHold): string | null {
+	const sid = hold.run?.sessionId;
+	return sid ? `/instances/${encodeURIComponent(instanceId)}/coding/${encodeURIComponent(sid)}` : null;
+}
+
+/** Where every open run of this agent is listed: Settings → Autonomous runs. */
+export function busyHoldRunsLink(instanceId: string): string {
+	return `/instances/${encodeURIComponent(instanceId)}/settings`;
+}
+
+/** The API call that stops the blocking run — the same cooperative cancel the Stop buttons use. */
+export function busyHoldStopPath(instanceId: string, hold: BusyHold): string | null {
+	return hold.run ? `/v1/instances/${encodeURIComponent(instanceId)}/loop/${encodeURIComponent(hold.run.runId)}/cancel` : null;
+}
+
+/** What the notice says once its Stop was accepted: cooperative, so the current step finishes first (#376). */
+export const BUSY_HOLD_STOPPING = "Stop requested — the run's current step finishes first, then the repo is free. Start again once it has ended.";
+
+/** "3 min" / "2 h" / "just now" — how long ago a run started, for the notice. */
+function ago(ms: number): string {
+	const m = Math.floor(ms / 60_000);
+	if (m < 1) return "just now";
+	if (m < 60) return `${m} min ago`;
+	return `${Math.floor(m / 60)} h ago`;
+}
+
+/** The sentence the page shows instead of the agent-facing refusal. */
+export function busyHoldNotice(hold: BusyHold, now: number = Date.now()): string {
+	if (hold.run) {
+		const what = hold.run.objective ? `“${hold.run.objective.length > 120 ? `${hold.run.objective.slice(0, 117)}…` : hold.run.objective}”` : "another run";
+		const when = hold.run.startedAt ? ` (started ${ago(now - hold.run.startedAt)})` : "";
+		return `This repo is already being worked on by ${what}${when}. Open it to watch it, or stop it before starting again.`;
+	}
+	const p = hold.pendingStart;
+	const what = p?.objective ? ` for “${p.objective.length > 120 ? `${p.objective.slice(0, 117)}…` : p.objective}”` : "";
+	return `Another start${what} is still being set up (requested ${ago(p?.ageMs ?? 0)}). Wait for it rather than starting again.`;
+}

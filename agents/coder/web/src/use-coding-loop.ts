@@ -8,6 +8,8 @@ import {
 	loopStartFailureNotice,
 	loopStartNotice,
 	loopWatchBadge,
+	busyHoldFrom,
+	type BusyHold,
 	type LoopRunSnapshot,
 	type LoopWatchBadge,
 } from "./coding-loop-run";
@@ -48,6 +50,8 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 	const [loopIteration, setLoopIteration] = useState(0);
 	// The server's verdict when the watched run is NOT simply working — parked or stalled (#930).
 	const [loopBadge, setLoopBadge] = useState<LoopWatchBadge | null>(null);
+	// What holds the repo when a start was refused as busy — shown with a link to it (#931).
+	const [busyHold, setBusyHold] = useState<BusyHold | null>(null);
 	const [loopMax, setLoopMax] = useState(10);
 	const [showLoopForm, setShowLoopForm] = useState(false);
 	// The run being watched. Null while starting, and again once it reaches a terminal state.
@@ -175,6 +179,7 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 		loopOnRef.current = true;
 		setLoopIteration(0);
 		setLoopBadge(null);
+		setBusyHold(null);
 		setShowLoopForm(false);
 		try {
 			const run = await api<{ runId: string; driver?: string }>(`/v1/instances/${instanceId}/loop`, {
@@ -210,7 +215,11 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 			setLoopOn(false);
 			loopOnRef.current = false;
 			activeIssueRef.current = null;
-			emitSystem(loopStartFailureNotice(e));
+			// A busy repo is answered with WHAT holds it and a link to it, not the agent-facing
+			// sentence that names an MCP tool (#931). Every other refusal keeps its message.
+			const hold = busyHoldFrom(e);
+			if (hold) setBusyHold(hold);
+			else emitSystem(loopStartFailureNotice(e));
 		}
 	};
 
@@ -294,6 +303,7 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 
 	return {
 		loopOn, loopObjective, setLoopObjective, loopIteration, loopBadge, loopMax, setLoopMax,
+		busyHold, clearBusyHold: () => setBusyHold(null),
 		showLoopForm, setShowLoopForm,
 		start, stop,
 		// Issues-mode

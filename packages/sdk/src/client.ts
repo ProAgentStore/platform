@@ -152,9 +152,24 @@ export async function api<T = Record<string, unknown>>(
 		if ((res.status >= 500 || DIAGNOSTIC_STATUSES.has(res.status)) && !path.startsWith("/v1/errors")) {
 			reportClientError("api", `${opts.method || "GET"} ${path} → ${res.status}`, { body: text.slice(0, 300) }, res.status);
 		}
-		throw new Error((data as Record<string, string>)?.error || `HTTP ${res.status}`);
+		throw new ApiError((data as Record<string, string>)?.error || `HTTP ${res.status}`, res.status, data);
 	}
 	return data as T;
+}
+
+/**
+ * A refused request, with the WHOLE answer (#931).
+ *
+ * `api()` used to throw `new Error(body.error)`, so every structured field a refusal carried was
+ * gone before any page could read it: the run holding a busy repo (`activeRun`, #886), a start
+ * still provisioning, `needsReauth`, `duplicate_of`. The message is unchanged, so every existing
+ * `catch (e) { … e.message … }` reads exactly as before; `status` and `body` are what is new.
+ */
+export class ApiError extends Error {
+	constructor(message: string, readonly status: number, readonly body: unknown) {
+		super(message);
+		this.name = "ApiError";
+	}
 }
 
 export { API };

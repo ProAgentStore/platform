@@ -18,8 +18,11 @@ import type { Env } from "../types.js";
 const IN_FLIGHT_MS = 5 * 60_000;
 
 export interface BusyHolder {
-	/** The run working this repo now, if one is recorded. `requestId` is null for a run started without one. */
-	activeRun: { runId: string; objective: string; startedAt: number; requestId: string | null } | null;
+	/**
+	 * The run working this repo now, if one is recorded. `requestId` is null for a run started without
+	 * one; `sessionId` is the coding session it drives — its live view in the console (#931).
+	 */
+	activeRun: { runId: string; objective: string; startedAt: number; requestId: string | null; sessionId: string | null } | null;
 	/** Starts accepted on this repo that have not reached a terminal state yet, newest first. */
 	inFlightStarts: Array<{ requestId: string; objective: string | null; ageMs: number }>;
 }
@@ -34,7 +37,7 @@ export async function describeBusyHolder(
 ): Promise<BusyHolder> {
 	const now = input.now ?? Date.now();
 	const runs = await env.DB.prepare(
-		`SELECT r.run_id, r.objective, r.started_at, s.repo_id,
+		`SELECT r.run_id, r.objective, r.started_at, r.session_id, s.repo_id,
 		        (SELECT request_id FROM loop_start_receipts k
 		          WHERE k.user_id = r.user_id AND k.instance_id = r.instance_id AND json_extract(k.response_json, '$.runId') = r.run_id
 		          LIMIT 1) AS request_id
@@ -44,7 +47,7 @@ export async function describeBusyHolder(
 		  ORDER BY r.started_at DESC`,
 	)
 		.bind(input.userId, input.instanceId)
-		.all<{ run_id: string; objective: string; started_at: number; repo_id: string | null; request_id: string | null }>();
+		.all<{ run_id: string; objective: string; started_at: number; session_id: string | null; repo_id: string | null; request_id: string | null }>();
 	const run = (runs.results ?? []).find((r) => sameRepo(r.repo_id, input.repoId));
 
 	const receipts = await env.DB.prepare(
@@ -67,7 +70,7 @@ export async function describeBusyHolder(
 	});
 
 	return {
-		activeRun: run ? { runId: run.run_id, objective: run.objective, startedAt: run.started_at, requestId: run.request_id ?? null } : null,
+		activeRun: run ? { runId: run.run_id, objective: run.objective, startedAt: run.started_at, requestId: run.request_id ?? null, sessionId: run.session_id ?? null } : null,
 		inFlightStarts,
 	};
 }

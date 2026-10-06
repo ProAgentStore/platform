@@ -22,7 +22,7 @@ import { SURFACES, visibleSurfaces, surfaceOwnsHeader } from "../lib/surfaces";
 import { useGloss } from "../lib/use-gloss";
 import type { LoopPreset } from "../lib/loopPresets";
 import { adoptableRun, isChatWorking, shouldAdopt, type InstanceStateLike, type LoopRunLike } from "../lib/workInFlight";
-import { LOOP_WATCH_BADGE_CLASS, loopWatchBadge, type LoopWatchBadge } from "@proagentstore/coder-web";
+import { BusyHoldNotice, busyHoldFrom, type BusyHold, LOOP_WATCH_BADGE_CLASS, loopWatchBadge, type LoopWatchBadge } from "@proagentstore/coder-web";
 import DynamicSurface from "../components/DynamicSurface";
 import HostedNode from "../components/HostedNode";
 import GlossedMessage from "../components/GlossedMessage";
@@ -188,6 +188,7 @@ function InstancePage() {
 	// afterwards — shows the same pending state as the one that did.
 	const [loopCancelPending, setLoopCancelPending] = useState(false);
 	const [loopBadge, setLoopBadge] = useState<LoopWatchBadge | null>(null); // parked/stalled verdict on the watched run (#930)
+	const [busyHold, setBusyHold] = useState<BusyHold | null>(null); // what holds a busy repo, with a link to it (#931)
 	const [showLoopForm, setShowLoopForm] = useState(false);
 	// The agent's loop presets (#234). Fetched when the form first opens rather than on mount —
 	// most visits to a chat never press Loop, and this is a request that would be wasted on them.
@@ -901,9 +902,12 @@ function InstancePage() {
 			setLoopIteration(0);
 			setLoopCancelPending(false);
 			setLoopBadge(null);
+			setBusyHold(null);
 			setLoopPaused(false);
 		} catch (e) {
-			emitSystemChat(loopStartFailureNotice(e));
+			const hold = busyHoldFrom(e);
+			if (hold) setBusyHold(hold);
+			else emitSystemChat(loopStartFailureNotice(e));
 		}
 	};
 
@@ -1356,6 +1360,7 @@ function InstancePage() {
 								)}
 							</div>
 						</div>
+						{busyHold && id && <BusyHoldNotice instanceId={id} hold={busyHold} onDismiss={() => setBusyHold(null)} />}
 						{/* Loop form with presets (#234). The presets were wired to the Coder's Co-pilot
 						    view alone, so every other way of starting a loop — including the only one a
 						    `copilot:false` agent has, this one — meant retyping the objective. */}

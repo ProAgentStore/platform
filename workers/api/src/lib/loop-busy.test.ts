@@ -35,7 +35,8 @@ describe("describeBusyHolder — what a busy repo is busy WITH (#886)", () => {
 		run("run-1", "r1");
 		receipt("req-A", "started", { repoId: "r1", runId: "run-1" });
 		expect(await holder()).toEqual({
-			activeRun: { runId: "run-1", objective: "Work issue #48", startedAt: NOW - 60_000, requestId: "req-A" },
+			// `sessionId` is the run's live view — what the console links the refusal to (#931).
+			activeRun: { runId: "run-1", objective: "Work issue #48", startedAt: NOW - 60_000, requestId: "req-A", sessionId: "s-run-1" },
 			inFlightStarts: [],
 		});
 	});

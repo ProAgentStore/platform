@@ -5,6 +5,7 @@ import { resolveComposer, resolveVoiceStatus } from "@proagentstore/sdk/hooks";
 import { API, getToken } from "@proagentstore/sdk/client";
 import type { LoopPreset } from "./types";
 import { LOOP_WATCH_BADGE_CLASS } from "./coding-loop-run";
+import BusyHoldNotice from "./BusyHoldNotice";
 import { Trash2, Copy, Check, Repeat, Square, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, Wrench, Settings, Loader2, Pencil, CircleDot, ArrowDown, X } from "lucide-react";
 import Button from "./Button";
 
@@ -297,6 +298,7 @@ export default function CopilotView({
 						)}
 				</div>
 			</div>
+			{loop.busyHold && <div className="mx-2 mb-1"><BusyHoldNotice instanceId={instanceId} hold={loop.busyHold} onDismiss={loop.clearBusyHold} /></div>}
 			{/* Loop form — DIRECT mode: presets + a custom objective. */}
 			{loop.showLoopForm && !loop.loopOn && workMode === "direct" && (
 				<div className="bg-panel border border-line rounded-xl p-3 mx-2 mb-1 flex flex-col gap-2">
