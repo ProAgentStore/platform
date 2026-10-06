@@ -10,6 +10,7 @@
 
 import type { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
+import { describeBusyHolder } from "../lib/loop-busy.js";
 import { cancelQueueEntry, getQueueEntry, listQueue } from "../lib/objective-queue.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import type { Env } from "../types.js";
@@ -36,7 +37,12 @@ export function registerLoopQueueRoutes(router: Hono<{ Bindings: Env }>): void {
 		await requireOwnedInstance(c.env, instanceId, session.uid);
 		const repoParam = c.req.query("repo_id");
 		const entries = await listQueue(c.env, instanceId, repoParam === undefined ? undefined : repoParam || null);
-		return c.json({ entries });
+		// What the queue sits BEHIND, and the starts still on their way INTO it (#935). A start inside
+		// its confirmation window has not enqueued anything yet, so a caller that fanned out N
+		// `queue_if_busy` starts and then read this saw an empty queue — read as "none of them landed".
+		// `describeBusyHolder` is the reading the busy refusal already gives (#886), for the same repo.
+		const { activeRun, inFlightStarts } = await describeBusyHolder(c.env, { userId: session.uid, instanceId, repoId: repoParam || undefined }).catch(() => ({ activeRun: null, inFlightStarts: [] }));
+		return c.json({ entries, activeRun, inFlightStarts });
 	});
 
 	/**

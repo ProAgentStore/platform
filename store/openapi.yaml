@@ -8842,6 +8842,11 @@ paths:
 
         Pending entries only. Once an entry starts it becomes a run, and `GET /loop/{runId}` by its
         `runId` is where its account continues.
+
+        Beside the entries (#935): `activeRun`, the run the queue waits behind (null when none), and
+        `inFlightStarts`, starts accepted in the last five minutes that are still provisioning and so
+        have not enqueued anything yet — a fan-out of `queueIfBusy` starts never reads as an empty
+        queue while it is still landing.
       operationId: listObjectiveQueue
       tags: [Tools]
       parameters:
@@ -8865,6 +8870,23 @@ paths:
                   entries:
                     type: array
                     items: { $ref: "#/components/schemas/ObjectiveQueueEntry" }
+                  activeRun:
+                    type: object
+                    nullable: true
+                    properties:
+                      runId: { type: string }
+                      objective: { type: string }
+                      startedAt: { type: integer }
+                      requestId: { type: string, nullable: true }
+                      sessionId: { type: string, nullable: true }
+                  inFlightStarts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        requestId: { type: string }
+                        objective: { type: string, nullable: true }
+                        ageMs: { type: integer }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 

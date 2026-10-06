@@ -30,6 +30,9 @@ vi.mock("../lib/objective-queue.js", () => ({
 	getQueueEntry: (...a: unknown[]) => getQueueEntry(...a),
 }));
 vi.mock("./instances-runtime.js", () => ({ requireOwnedInstance: (...a: unknown[]) => requireOwnedInstance(...a) }));
+// What the queue sits behind and what is still on its way in (#935) — real behaviour in queue-fan-out.test.ts.
+const describeBusyHolder = vi.fn();
+vi.mock("../lib/loop-busy.js", () => ({ describeBusyHolder: (...a: unknown[]) => describeBusyHolder(...a) }));
 
 const { registerLoopQueueRoutes } = await import("./loop-queue-routes.js");
 
@@ -47,6 +50,7 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	requireOwnedInstance.mockResolvedValue(undefined);
 	listQueue.mockResolvedValue([]);
+	describeBusyHolder.mockResolvedValue({ activeRun: null, inFlightStarts: [] });
 });
 
 describe("GET /:id/loop/queue", () => {
@@ -54,7 +58,7 @@ describe("GET /:id/loop/queue", () => {
 		listQueue.mockResolvedValue([{ id: "objq-1" }]);
 		const res = await app().request("/i1/loop/queue", {}, {} as Env);
 		expect(res.status).toBe(200);
-		expect(await res.json()).toEqual({ entries: [{ id: "objq-1" }] });
+		expect(await res.json()).toEqual({ entries: [{ id: "objq-1" }], activeRun: null, inFlightStarts: [] });
 	});
 
 	it("returns everything pending when no repo is named", async () => {
