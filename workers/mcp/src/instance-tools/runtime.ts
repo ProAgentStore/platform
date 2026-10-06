@@ -135,7 +135,7 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"instance_runner_node",
-		"Read which machine ONE instance is pinned to, and which machines it could be pinned to. `runnerNode` is the pin (null means unpinned — calls go to whichever machine holds a live socket). `nodesDetail` reports two different facts per machine: `connected` is whether THIS agent has a socket open there, `nodeOnline` is whether the machine is up for any agent — a machine can be online while this agent has never attached to it. `resolvedNode` is where the pin actually lands when the pinned hostname has changed under the machine; when it is set, the agent is working and the pin's name is merely stale.",
+		"Read which machine ONE instance is pinned to, and which machines it could be pinned to. `runnerNode` is the pin (null means unpinned — calls go to whichever machine holds a live socket). `nodesDetail` reports two different facts per machine: `connected` is whether THIS agent has a socket open there, `nodeOnline` is whether the machine is up for any agent — a machine can be online while this agent has never attached to it. Both are read under EVERY name the machine is provably known by; `aka` lists the machine's other names when it has been renamed, and `runnerVersion` is its most recently seen one. `resolvedNode` is where the pin actually lands when the pinned hostname has changed under the machine; when it is set, the agent is working and the pin's name is merely stale.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID or slug"),

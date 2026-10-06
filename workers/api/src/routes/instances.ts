@@ -72,7 +72,7 @@ export {
 	UPSERT_INSTANCE_RUNTIME_SQL,
 	validateRuntimeEndpointUrl,
 } from "./instances-runtime.js";
-import { foldNodesByMachine, normalizeMachineId, sanitizeMachineNames } from "../lib/machine-identity.js";
+import { foldNodesByMachine, freshestVersion, namesOfMachine, normalizeMachineId, sanitizeMachineNames } from "../lib/machine-identity.js";
 import { parseBoundRunnerNode } from "../lib/runtime-nodes.js";
 import { diagnoseAttachment, heartbeatFresh } from "../lib/runtime-attachment.js";
 import { saveResourceSample } from "../lib/runner-resources.js";
@@ -602,29 +602,49 @@ instanceRoutes.get("/:instanceId/runner-node", async (c) => {
 	// "machine online but THIS agent isn't attached to it" (its `pags up` was started
 	// before this agent, so it never opened this instance's socket).
 	const allNodeRows = await c.env.DB.prepare(
-		"SELECT DISTINCT instance_id, runner_node, runner_version FROM instance_runtime_nodes WHERE user_id = ?1 ORDER BY updated_at",
-	).bind(session.uid).all<{ instance_id: string; runner_node: string; runner_version: string | null }>();
-	const versionOf = new Map((allNodeRows.results ?? []).map((r) => [normalizeRunnerNode(r.runner_node), r.runner_version])); // freshest wins (#859)
+		"SELECT DISTINCT instance_id, runner_node, runner_version, machine_id, last_seen_at FROM instance_runtime_nodes WHERE user_id = ?1 ORDER BY updated_at",
+	).bind(session.uid).all<{ instance_id: string; runner_node: string; runner_version: string | null; machine_id: string | null; last_seen_at: string | null }>();
+	const userRows = allNodeRows.results ?? [];
 	const idsByNode = new Map<string, string[]>();
-	for (const r of allNodeRows.results ?? []) {
+	for (const r of userRows) {
 		const nn = normalizeRunnerNode(r.runner_node);
 		if (!nn) continue;
 		(idsByNode.get(nn) ?? idsByNode.set(nn, []).get(nn)!).push(r.instance_id);
 	}
-	const nodeMachineOnline = async (node: string): Promise<boolean> => {
-		const ids = (idsByNode.get(node) ?? []).slice(0, 25);
-		const checks = await Promise.all(ids.map((id) => relayConnected(c.env, id, node).catch(() => false)));
+	// Every name the machine is provably known by (#949): sockets sit under the name the runner
+	// CONNECTED with, which after a rename is not the one this agent registered under.
+	const registrations = userRows.map((r) => ({ node: r.runner_node, machineId: r.machine_id, instanceId: r.instance_id, lastSeenAt: r.last_seen_at, version: r.runner_version }));
+	const namesOf = (node: string) => namesOfMachine(node, registrations);
+	const machineOnline = async (names: readonly string[]): Promise<boolean> => {
+		const probes = names.flatMap((name) => (idsByNode.get(name) ?? []).map((id) => [id, name] as const)).slice(0, 25);
+		const checks = await Promise.all(probes.map(([id, name]) => relayConnected(c.env, id, name).catch(() => false)));
 		return checks.some(Boolean);
 	};
 
 	// Report both flags per node: `connected` = THIS agent's own socket; `nodeOnline` =
-	// the machine is up for any agent. Include the pinned node even if this agent never
-	// registered on it, so the picker can label it correctly.
+	// the machine is up for any agent — each under ANY of the machine's names. Include the pinned
+	// node even if this agent never registered on it, so the picker can label it correctly.
 	const detailNodes = [...new Set([...available, ...(runnerNode ? [runnerNode] : [])])];
+	/** The exact name THIS agent's socket was found under, per node — the pin resolution below reads it. */
+	const socketName = new Map<string, string>();
 	const nodesDetail = await Promise.all(
 		detailNodes.slice(0, 25).map(async (node) => {
-			const connected = await relayConnected(c.env, instanceId, node).catch(() => false);
-			return { node, connected, nodeOnline: connected ? true : await nodeMachineOnline(node), ...runnerVersionView(versionOf.get(node)) };
+			const names = namesOf(node);
+			let connected = false;
+			for (const name of names) {
+				if (await relayConnected(c.env, instanceId, name).catch(() => false)) {
+					connected = true;
+					socketName.set(node, name);
+					break;
+				}
+			}
+			return {
+				node,
+				...(names.length > 1 ? { aka: names.slice(1) } : {}),
+				connected,
+				nodeOnline: connected ? true : await machineOnline(names),
+				...runnerVersionView(freshestVersion(names, registrations)),
+			};
 		}),
 	);
 	// Where the pin ACTUALLY resolves right now (#379). A pin names a hostname, and a hostname
@@ -632,7 +652,9 @@ instanceRoutes.get("/:instanceId/runner-node", async (c) => {
 	// console has to be told, or it prints "⚠ pinned machine offline" over an agent that is
 	// working. Null when the pin resolves to itself, or to nothing.
 	const pinnedDetail = nodesDetail.find((d) => d.node === runnerNode);
-	const resolvedNode = runnerNode && pinnedDetail && !pinnedDetail.connected
+	// Still "the pinned NAME holds no socket of this agent's", not "the machine is offline": the
+	// machine reading connected under an alias (#949) is exactly the case this exists to name.
+	const resolvedNode = runnerNode && pinnedDetail && socketName.get(runnerNode) !== runnerNode
 		? await liveAliasForPin(c.env, instanceId, session.uid, runnerNode).catch(() => null)
 		: null;
 	return c.json({ runnerNode: runnerNode || null, nodes: available, nodesDetail, resolvedNode });

@@ -235,6 +235,30 @@ export function machineNamesFor(target: string, rows: readonly NodeRegistration[
 	return { ok: true, names, machineId };
 }
 
+/**
+ * `node` first, then every other name the same machine is provably known by (#949).
+ *
+ * The relay slot is keyed by the name a runner CONNECTED under, which after a rename is not the
+ * name an agent registered under — so a liveness probe of one name reads a running machine as
+ * offline. `list_runner_nodes` folds every name (#922); `instance_runner_node` uses this to do the
+ * same. A name that cannot be proven (no id, or two ids) stays a machine of one name.
+ */
+export function namesOfMachine(node: string, rows: readonly NodeRegistration[]): string[] {
+	const set = machineNamesFor(node, rows);
+	return set.ok ? [node, ...set.names.filter((n) => n !== node)] : [node];
+}
+
+/** The runner version on the most recently seen of these names' rows — one machine, one version. */
+export function freshestVersion(names: readonly string[], rows: ReadonlyArray<NodeRegistration & { version?: string | null }>): string | null | undefined {
+	let best: { at: number; v: string | null | undefined } | null = null;
+	for (const r of rows) {
+		if (!names.includes(normalizeRunnerNode(r.node))) continue;
+		const at = stampMs(r.lastSeenAt);
+		if (!best || at >= best.at) best = { at, v: r.version };
+	}
+	return best?.v;
+}
+
 // ── "Why has nothing merged?" — an old CLI cannot be identified (#393) ──────────────────────
 
 /**
