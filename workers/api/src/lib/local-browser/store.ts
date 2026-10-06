@@ -293,6 +293,8 @@ export type ConsentScope = "navigate" | "signed_in_profile";
 export const PROFILE_CONSENT_DOMAIN = "*";
 
 export interface DomainConsent {
+	/** The decision's id (#947) — null only for a decision recorded before ids existed. */
+	id: string | null;
 	domain: string;
 	scope: ConsentScope;
 	decision: "allow" | "deny";
@@ -303,12 +305,12 @@ export interface DomainConsent {
 /** Live decisions — an expired one is as good as none, so it is not returned. */
 export async function listDomainConsent(env: DB, instanceId: string, userId: string, now: number): Promise<DomainConsent[]> {
 	const { results } = await env.DB.prepare(
-		`SELECT domain, scope, decision, decided_at, expires_at FROM local_browser_domain_consent
+		`SELECT id, domain, scope, decision, decided_at, expires_at FROM local_browser_domain_consent
 		  WHERE instance_id = ?1 AND user_id = ?2 AND (expires_at IS NULL OR expires_at > ?3) ORDER BY scope, domain`,
 	)
 		.bind(instanceId, userId, now)
-		.all<{ domain: string; scope: ConsentScope; decision: "allow" | "deny"; decided_at: number; expires_at: number | null }>();
-	return (results ?? []).map((r) => ({ domain: r.domain, scope: r.scope, decision: r.decision, decidedAt: r.decided_at, expiresAt: r.expires_at }));
+		.all<{ id: string | null; domain: string; scope: ConsentScope; decision: "allow" | "deny"; decided_at: number; expires_at: number | null }>();
+	return (results ?? []).map((r) => ({ id: r.id, domain: r.domain, scope: r.scope, decision: r.decision, decidedAt: r.decided_at, expiresAt: r.expires_at }));
 }
 
 export async function setDomainConsent(env: DB, instanceId: string, userId: string, c: { domain: string; scope: ConsentScope; decision: "allow" | "deny" | null; expiresAt: number | null }, now: number): Promise<void> {
@@ -317,11 +319,11 @@ export async function setDomainConsent(env: DB, instanceId: string, userId: stri
 		return;
 	}
 	await env.DB.prepare(
-		`INSERT INTO local_browser_domain_consent (instance_id, user_id, domain, scope, decision, decided_at, expires_at)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-		 ON CONFLICT(instance_id, domain, scope) DO UPDATE SET decision = excluded.decision, decided_at = excluded.decided_at, expires_at = excluded.expires_at`,
+		`INSERT INTO local_browser_domain_consent (instance_id, user_id, domain, scope, decision, decided_at, expires_at, id)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+		 ON CONFLICT(instance_id, domain, scope) DO UPDATE SET decision = excluded.decision, decided_at = excluded.decided_at, expires_at = excluded.expires_at, id = excluded.id`,
 	)
-		.bind(instanceId, userId, c.domain, c.scope, c.decision, now, c.expiresAt)
+		.bind(instanceId, userId, c.domain, c.scope, c.decision, now, c.expiresAt, crypto.randomUUID())
 		.run();
 }
 
@@ -358,4 +360,19 @@ export async function setFindingReview(env: DB, instanceId: string, userId: stri
 	)
 		.bind(`$."${index}"`, JSON.stringify(review), review.at, runId, instanceId, userId)
 		.run();
+}
+
+/** Decision ids keyed by domain — `*` for the signed-in profile — as the runner's envelope carries them (#947). */
+export function consentIdsOf(consent: readonly DomainConsent[]): Record<string, string> {
+	const out: Record<string, string> = {};
+	for (const c of consent) if (c.id) out[c.scope === "signed_in_profile" ? "*" : c.domain] = c.id;
+	return out;
+}
+
+/** The id of the decision covering this host, the most specific one first. */
+export function consentIdForHost(consent: readonly DomainConsent[], host: string): string | null {
+	const match = consent
+		.filter((c) => c.scope === "navigate" && c.id && (host === c.domain || host.endsWith(`.${c.domain}`)))
+		.sort((a, b) => b.domain.length - a.domain.length)[0];
+	return match?.id ?? null;
 }

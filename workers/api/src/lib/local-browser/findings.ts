@@ -11,7 +11,7 @@
 import { HttpError } from "../auth.js";
 import type { Env } from "../../types.js";
 import type { LocalBrowserFinding } from "./contract.js";
-import { type FindingReview, type LocalBrowserRun, getLocalBrowserRun, setFindingReview } from "./store.js";
+import { type FindingReview, type LocalBrowserRun, appendLocalBrowserEvents, consentIdForHost, getLocalBrowserRun, listDomainConsent, setFindingReview } from "./store.js";
 
 export type FindingAction = "save" | "skip";
 
@@ -25,6 +25,14 @@ export function findingKey(finding: LocalBrowserFinding, keyField: string): stri
 /** The record a saved finding becomes. Provenance rides along so a supervisor can trace it back. */
 export function findingRecord(finding: LocalBrowserFinding, runId: string): Record<string, unknown> {
 	return { ...finding.fields, title: finding.title, url: finding.url, evidence: finding.evidence, sourceRunId: runId };
+}
+
+function hostOf(url: string): string | null {
+	try {
+		return new URL(url).hostname.toLowerCase();
+	} catch {
+		return null;
+	}
 }
 
 function agentStub(env: Env, instanceId: string) {
@@ -70,5 +78,26 @@ export async function reviewFinding(env: Env, instanceId: string, uid: string, r
 		}
 	}
 	await setFindingReview(env, instanceId, uid, run.id, index, review);
+	// The supervisor's storage decision, on the run's own trace (#947) — with the owner's decision
+	// that let the run onto the finding's site, when one did.
+	const host = hostOf(finding.url);
+	const consentId = host ? consentIdForHost(await listDomainConsent(env, instanceId, uid, now), host) : null;
+	await appendLocalBrowserEvents(
+		env,
+		instanceId,
+		uid,
+		run.id,
+		[
+			{
+				type: "review.decision",
+				at: new Date(now).toISOString(),
+				url: finding.url,
+				...(host ? { domain: host } : {}),
+				...(consentId ? { consentId } : {}),
+				detail: { runId: run.id, findingId: `${run.id}#${index}`, findingIndex: index, decision: review.decision, ...(review.collection ? { collection: review.collection } : {}), ...(review.recordId ? { recordId: review.recordId } : {}), ...(review.duplicateOf ? { duplicateOf: review.duplicateOf } : {}) },
+			},
+		],
+		now,
+	);
 	return (await getLocalBrowserRun(env, instanceId, uid, run.id)) ?? run;
 }

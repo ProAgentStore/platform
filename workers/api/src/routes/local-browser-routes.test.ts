@@ -284,7 +284,7 @@ describe("pulling state from the runner (#944)", () => {
 		paths["/local-browser/resume"] = { status: 200, body: {}, onCall: () => (paths["/local-browser/status"] = { status: 200, body: { runId: run.id, state: "running", lastSeq: 2, events: [{ seq: 2, type: "run.resumed", at }] } }) };
 		const resumed = await call("POST", `/i1/local-browser/runs/${run.id}/resume`);
 		expect(resumed.body).toMatchObject({ status: "running" });
-		expect(sent.find((x) => x.path === "/local-browser/resume")?.body).toEqual({ runId: run.id, consentedDomains: ["indeed.com"], denyDomains: [], profileConsented: false });
+		expect(sent.find((x) => x.path === "/local-browser/resume")?.body).toEqual({ runId: run.id, consentedDomains: ["indeed.com"], denyDomains: [], profileConsented: false, consentIds: { "indeed.com": expect.stringMatching(/^[0-9a-f-]{36}$/) } });
 		expect((await call("POST", `/i1/local-browser/runs/${run.id}/resume`)).status).toBe(409);
 	});
 
@@ -370,5 +370,76 @@ describe("console links to research (#946)", () => {
 		expect((await get(`?run_id=${run.id}`)).path).toBe(`/console/instances/i1/research/${run.id}`);
 		expect((await get("?section=research")).path).toBe("/console/instances/i1/research");
 		expect((await get("?section=research", "ic")).error).toMatch(/does not show the Research tab/);
+	});
+});
+
+describe("#947 acceptance — the trace, end to end through the API", () => {
+	const at = "2026-10-07T01:00:00Z";
+	const SECRET = "sk-test-0123456789abcdefghijklmnopqrstuv";
+
+	/** A run that researched seek.com.au on the owner's consent, and the finding the owner then saved. */
+	async function researchedAndReviewed() {
+		await call("PUT", "/i1/local-browser/settings", { collection: { name: "job_leads" } });
+		const consent = (await call("PUT", "/i1/local-browser/consent", { scope: "navigate", domain: "seek.com.au", decision: "allow" })).body.consent[0];
+		const run = (await call("POST", "/i1/local-browser/runs", { objective: "Find roles" })).body;
+		// What the runner reports — including things it must never be able to get stored.
+		const events = [
+			{ seq: 1, type: "engine.auth_checked", at, detail: { engine: "claude", engineAuth: "subscription", password: "hunter2" } },
+			{ seq: 2, type: "engine.started", at },
+			{ seq: 3, type: "policy.decision", at, domain: "seek.com.au", consentId: consent.id, detail: { decision: "allowed", basis: "consent" } },
+			{ seq: 4, type: "browser.navigated", at, url: "https://seek.com.au/jobs", domain: "seek.com.au", detail: { title: `Jobs · Bearer ${SECRET}`, cookie: "sid=1", formValues: { email: "me@x.com" } } },
+			{ seq: 5, type: "finding.parsed", at, url: "https://seek.com.au/job/1", domain: "seek.com.au", detail: { title: "Dev" } },
+			{ seq: 6, type: "engine.ended", at, detail: { exitCode: 0 } },
+		];
+		const result = { runId: run.id, outcome: "completed", traceId: run.id, engineAuth: "subscription", summary: "1 lead", findings: [{ title: "Dev", url: "https://seek.com.au/job/1", evidence: "Dev — Sydney", fields: {} }], sourceFailures: [] };
+		runner.paths = { "/local-browser/status": { status: 200, body: { runId: run.id, state: "ended", lastSeq: 6, events, result } } };
+		await call("GET", `/i1/local-browser/runs/${run.id}`);
+		await call("POST", `/i1/local-browser/runs/${run.id}/findings/0/save`);
+		// biome-ignore lint/suspicious/noExplicitAny: trace rows read field by field in assertions.
+		const trace = (await call("GET", `/i1/local-browser/runs/${run.id}/events`)).body.events as Array<Record<string, any>>;
+		return { run, consent, trace };
+	}
+
+	it("records requested → dispatched → engine/auth → browser → parsed → ended → storage decision, in order, queryable", async () => {
+		const { trace } = await researchedAndReviewed();
+		expect(trace.map((e) => e.type)).toEqual(["run.requested", "runner.dispatched", "engine.auth_checked", "engine.started", "policy.decision", "browser.navigated", "finding.parsed", "engine.ended", "run.ended", "review.decision"]);
+		expect(trace.map((e) => e.seq)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+	});
+
+	it("gives every browser event its url, domain, type and time", async () => {
+		const { trace } = await researchedAndReviewed();
+		for (const e of trace.filter((x) => x.type.startsWith("browser.") || x.type === "finding.parsed")) {
+			expect(e, e.type).toMatchObject({ url: expect.stringMatching(/^https:\/\//), domain: "seek.com.au", type: expect.any(String), at: expect.any(String) });
+			expect(Number.isNaN(Date.parse(e.at))).toBe(false);
+		}
+	});
+
+	it("records the storage decision with the run, the finding, the decision and the consent that admitted the site", async () => {
+		const { run, consent, trace } = await researchedAndReviewed();
+		const review = trace.find((e) => e.type === "review.decision");
+		expect(review).toMatchObject({ url: "https://seek.com.au/job/1", domain: "seek.com.au", consentId: consent.id, detail: { runId: run.id, findingId: `${run.id}#0`, findingIndex: 0, decision: "saved", collection: "job_leads" } });
+		expect(trace.find((e) => e.type === "policy.decision")?.consentId).toBe(consent.id);
+	});
+
+	it("keeps no cookie, password, form value or key anywhere in the trace", async () => {
+		const { trace } = await researchedAndReviewed();
+		const all = JSON.stringify(trace);
+		for (const leaked of ["hunter2", "sid=1", "me@x.com", SECRET]) expect(all).not.toContain(leaked);
+		expect(trace.find((e) => e.type === "browser.navigated")?.detail).toEqual({ title: "Jobs · Bearer [REDACTED]" });
+	});
+
+	it("redacts a key in a failed run's error, whatever the runner sent", async () => {
+		const run = (await call("POST", "/i1/local-browser/runs", { objective: "x" })).body;
+		runner.paths = { "/local-browser/status": { status: 200, body: { runId: run.id, state: "ended", lastSeq: 0, events: [], result: { runId: run.id, outcome: "failed", traceId: run.id, engineAuth: "api-key", summary: "", findings: [], sourceFailures: [], error: `401: OPENAI_API_KEY=${SECRET}` } } } };
+		const got = (await call("GET", `/i1/local-browser/runs/${run.id}`)).body;
+		expect(JSON.stringify(got)).not.toContain(SECRET);
+		expect(got.error).toBe("401: OPENAI_API_KEY=[REDACTED]");
+	});
+
+	it("gives every owner decision an id, and a changed decision a new one", async () => {
+		const first = (await call("PUT", "/i1/local-browser/consent", { scope: "navigate", domain: "indeed.com", decision: "allow" })).body.consent[0];
+		const second = (await call("PUT", "/i1/local-browser/consent", { scope: "navigate", domain: "indeed.com", decision: "deny" })).body.consent[0];
+		expect(first.id).toMatch(/^[0-9a-f-]{36}$/);
+		expect(second.id).not.toBe(first.id);
 	});
 });

@@ -41,6 +41,8 @@ import {
 	type LocalBrowserStatusResponse,
 	type LocalBrowserTaskEnvelope,
 	redactDetail,
+	redactText,
+	secretEnvValues,
 } from "./contract.js";
 import { buildEngineSpec, finalText, missingLogin, observedEngineAuth, researchPrompt, signInHelp } from "./engine.js";
 
@@ -85,6 +87,10 @@ interface Run {
 	consented: Set<string>;
 	deny: Set<string>;
 	profileConsented: boolean;
+	/** The owner's decision ids, by domain (`*` = the signed-in profile) — named on the trace (#947). */
+	consentIds: Map<string, string>;
+	/** Credential values in the engine's env: never stored, whatever the CLI prints (#947). */
+	secrets: string[];
 	activeSince: number;
 	activeMs: number;
 	waiters: Array<(outcome: "resumed" | "stopped") => void>;
@@ -133,10 +139,26 @@ export function parseEnvelope(raw: unknown): LocalBrowserTaskEnvelope {
 		authMode: o.authMode as LocalBrowserTaskEnvelope["authMode"],
 		workspace: ws.kind === "path" ? { kind: "path", path: ws.path as string } : { kind: "scratch" },
 		browserProfile: o.browserProfile,
-		policy: { mode: "research_only", allowDomains: strList(p.allowDomains), denyDomains: strList(p.denyDomains), consentedDomains: strList(p.consentedDomains), profileConsented: p.profileConsented === true },
+		policy: {
+			mode: "research_only",
+			allowDomains: strList(p.allowDomains),
+			denyDomains: strList(p.denyDomains),
+			consentedDomains: strList(p.consentedDomains),
+			profileConsented: p.profileConsented === true,
+			consentIds: consentIdMap(p.consentIds),
+		},
 		limits,
 		resultSchema: { id: typeof schema.id === "string" ? schema.id : "findings", version: typeof schema.version === "number" ? schema.version : 1 },
 	};
+}
+
+/** Decision ids keyed by lowercase domain (or `*`), from an untrusted object. */
+function consentIdMap(raw: unknown): Record<string, string> {
+	const out: Record<string, string> = {};
+	if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+		for (const [k, v] of Object.entries(raw as Record<string, unknown>).slice(0, 200)) if (typeof v === "string" && SAFE_ID.test(v)) out[k.toLowerCase()] = v;
+	}
+	return out;
 }
 
 /**
@@ -196,6 +218,8 @@ export class LocalBrowserRuntime {
 			consented: new Set(envelope.policy.consentedDomains),
 			deny: new Set(envelope.policy.denyDomains),
 			profileConsented: envelope.policy.profileConsented,
+			consentIds: new Map(Object.entries(envelope.policy.consentIds ?? {})),
+			secrets: secretEnvValues(process.env),
 			activeSince: this.now(),
 			activeMs: 0,
 			waiters: [],
@@ -219,10 +243,12 @@ export class LocalBrowserRuntime {
 			const outcome = await this.pause(run, "consent_required", { scope: "signed_in_profile" });
 			if (outcome !== "resumed" || !run.profileConsented) throw new Error("The owner did not allow research in their signed-in browser profile.");
 		}
+		if (e.browserProfile === "default") this.emit(run, { type: "policy.decision", ...this.consentRef(run, "*"), detail: { scope: "signed_in_profile", decision: "consented" } });
 		run.browser = await this.deps.browserFor(e.browserProfile, run.dir);
 		run.bridge = new BrowserBridge(run.browser.tools, {
 			emit: (ev) => this.emit(run, ev),
 			pause: (reason, detail) => this.pause(run, reason, detail),
+			consentIdFor: (host) => this.consentRef(run, host).consentId,
 			isDenied: (host) => [...run.deny].some((d) => domainWithin(host, d)),
 			isPermitted: (host) => [...e.policy.allowDomains, ...run.consented].some((d) => domainWithin(host, d)),
 			allowListOnly: () => e.policy.allowDomains.length > 0,
@@ -240,6 +266,8 @@ export class LocalBrowserRuntime {
 			toolTimeoutMs: e.limits.maxMinutes * 60_000,
 		});
 		if (spec.mcpConfig) writeFileSync(spec.mcpConfig.path, spec.mcpConfig.json, { mode: 0o600 });
+		// The env the engine actually gets — a key the owner chose to pass (api-key mode) included.
+		run.secrets = secretEnvValues({ ...process.env, ...spec.env });
 		run.engineAuth = observedEngineAuth(e.engine, spec.env);
 		this.emit(run, { type: "engine.auth_checked", detail: { engine: e.engine, authMode: e.authMode, engineAuth: run.engineAuth } });
 
@@ -283,7 +311,7 @@ export class LocalBrowserRuntime {
 	private emit(run: Run, ev: Omit<LocalBrowserEvent, "at">): void {
 		if (run.events.length >= MAX_EVENTS) return;
 		const { detail: raw, ...rest } = ev;
-		const detail = redactDetail(raw);
+		const detail = redactDetail(raw, 0, run.secrets);
 		run.events.push({ ...rest, ...(detail && Object.keys(detail).length ? { detail } : {}), at: new Date(this.now()).toISOString(), seq: ++run.seq });
 	}
 
@@ -313,6 +341,7 @@ export class LocalBrowserRuntime {
 		const o = (raw && typeof raw === "object" ? raw : {}) as Partial<LocalBrowserResumeRequest>;
 		const run = this.get(String(o.runId ?? ""));
 		if (run.state === "ended") throw new RunnerInputError("The run has ended", 409);
+		for (const [d, id] of Object.entries(consentIdMap(o.consentIds))) run.consentIds.set(d, id);
 		for (const d of strList(o.consentedDomains)) run.consented.add(d);
 		for (const d of strList(o.denyDomains)) run.deny.add(d);
 		if (o.profileConsented === true) run.profileConsented = true;
@@ -359,6 +388,14 @@ export class LocalBrowserRuntime {
 		if (o.op === "list") return { tools: await run.bridge.listTools() };
 		if (o.op === "call" && typeof o.name === "string") return run.bridge.callTool(o.name, (o.args && typeof o.args === "object" ? o.args : {}) as Record<string, unknown>);
 		throw new RunnerInputError("op must be list or call");
+	}
+
+	/** The decision that covers this host (or `*`), as an event field — empty when none does. */
+	private consentRef(run: Run, host: string): { consentId?: string } {
+		if (host === "*") return run.consentIds.has("*") ? { consentId: run.consentIds.get("*") } : {};
+		let best: [string, string] | null = null;
+		for (const [d, id] of run.consentIds) if (d !== "*" && domainWithin(host, d) && (!best || d.length > best[0].length)) best = [d, id];
+		return best ? { consentId: best[1] } : {};
 	}
 
 	private get(runId: string): Run {
@@ -409,10 +446,11 @@ export class LocalBrowserRuntime {
 			outcome: r.outcome,
 			findings: run.bridge?.findings ?? [],
 			sourceFailures: run.bridge?.sourceFailures ?? [],
-			summary: (r.summary ?? "").slice(0, 4000),
+			summary: redactText((r.summary ?? "").slice(0, 4000), run.secrets),
 			traceId: run.envelope.runId,
 			engineAuth: r.engineAuth ?? run.engineAuth,
-			...(r.outcome === "failed" ? { error: (r.error ?? "The run failed without a reason.").slice(0, 1000) } : {}),
+			// CLI output becomes this text, and a CLI prints whatever it was given: redacted before it is kept.
+			...(r.outcome === "failed" ? { error: redactText((r.error ?? "The run failed without a reason.").slice(0, 1000), run.secrets) } : {}),
 		};
 		if (run.child && run.child.exitCode === null) this.kill(run);
 		void run.browser?.stop().catch(() => undefined);

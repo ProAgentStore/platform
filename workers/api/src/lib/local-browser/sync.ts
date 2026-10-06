@@ -27,6 +27,7 @@ import {
 	type LocalBrowserRun,
 	activeLocalBrowserRuns,
 	appendLocalBrowserEvents,
+	consentIdsOf,
 	getLocalBrowserRun,
 	listDomainConsent,
 	pruneExpiredLocalBrowserTraces,
@@ -184,6 +185,7 @@ export async function resumeLocalBrowserRun(env: Env, instanceId: string, uid: s
 			consentedDomains: navigate.filter((x) => x.decision === "allow").map((x) => x.domain),
 			denyDomains: navigate.filter((x) => x.decision === "deny").map((x) => x.domain),
 			profileConsented: consent.some((x) => x.scope === "signed_in_profile" && x.decision === "allow"),
+			consentIds: consentIdsOf(consent),
 		}),
 	}).catch(() => null);
 	if (!res) throw new HttpError(409, "The runner did not answer. Check `pags up` on that machine and try again.");

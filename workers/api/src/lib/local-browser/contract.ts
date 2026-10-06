@@ -86,6 +86,12 @@ export interface LocalBrowserTaskEnvelope {
 		consentedDomains: string[];
 		/** Has the owner consented to the signed-in profile? Only meaningful for `default`. */
 		profileConsented: boolean;
+		/**
+		 * The id of each owner decision the lists above came from (#947), keyed by domain — `*` for
+		 * the signed-in-profile decision — so the trace can name the decision that admitted or
+		 * refused a site. Optional: an envelope from before #947 carries none.
+		 */
+		consentIds?: Record<string, string>;
 	};
 	limits: LocalBrowserLimits;
 	resultSchema: LocalBrowserResultSchema;
@@ -133,8 +139,8 @@ export const LOCAL_BROWSER_EVENT_TYPES: readonly LocalBrowserEventType[] = [
  * Events PAGS itself records on the same trace: the request, the hand-off to the runner and the
  * end. Never accepted from a runner — a runner cannot claim a run was cancelled or dispatched.
  */
-export type LocalBrowserPlatformEventType = "run.requested" | "runner.dispatched" | "run.ended";
-export const LOCAL_BROWSER_PLATFORM_EVENT_TYPES: readonly LocalBrowserPlatformEventType[] = ["run.requested", "runner.dispatched", "run.ended"];
+export type LocalBrowserPlatformEventType = "run.requested" | "runner.dispatched" | "run.ended" | "review.decision";
+export const LOCAL_BROWSER_PLATFORM_EVENT_TYPES: readonly LocalBrowserPlatformEventType[] = ["run.requested", "runner.dispatched", "run.ended", "review.decision"];
 
 export interface LocalBrowserEvent {
 	type: LocalBrowserEventType;
@@ -207,26 +213,67 @@ export interface LocalBrowserResumeRequest {
 	consentedDomains: string[];
 	denyDomains: string[];
 	profileConsented: boolean;
+	/** As on the envelope: decision ids keyed by domain, `*` for the profile (#947). */
+	consentIds?: Record<string, string>;
 }
 
 export const LOCAL_BROWSER_CAPS = { findings: 200, sourceFailures: 200, text: 4000, fieldCount: 40 } as const;
 
 const SENSITIVE_KEY = /cookie|password|passwd|secret|token|authorization|api[_-]?key|otp|form[_-]?values?|credential/i;
 
+/** An env var NAME whose value is a credential. */
+const SECRET_ENV_NAME = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|COOKIE|SESSION|AUTH/i;
+
+/** Credential-shaped text, wherever it appears — the patterns a CLI or a page tends to print. */
+const SECRET_PATTERNS: ReadonlyArray<[RegExp, string]> = [
+	// NAME=value for a credential-named variable: keep the name, drop the value.
+	[/\b([A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)[A-Z0-9_]*)\s*[=:]\s*["']?[^\s"']+["']?/g, "$1=[REDACTED]"],
+	[/\b(Bearer|Basic|Token)\s+[A-Za-z0-9._~+/=-]{10,}/gi, "$1 [REDACTED]"],
+	[/\bsk-[A-Za-z0-9_-]{20,}/g, "[REDACTED]"],
+	[/\b(?:ghp|gho|ghs|ghu|github_pat|xox[abpr])_[A-Za-z0-9_]{20,}/g, "[REDACTED]"],
+	[/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, "[REDACTED]"],
+	// Base64-ish runs over 40 characters: keys, tokens, session blobs.
+	[/[A-Za-z0-9+/_-]{41,}={0,2}/g, "[REDACTED]"],
+];
+
 /**
- * Drop sensitive keys and bound sizes. A trace is for a supervisor to read, so nothing in it may
- * carry a cookie, a password, a form value or a key — whatever the runner sent.
+ * The values of credential-named variables in an environment, longest first — what `redactText`
+ * must never let through even when the value has no recognisable shape.
  */
-export function redactDetail(detail: unknown, depth = 0): Record<string, unknown> | undefined {
+export function secretEnvValues(env: Record<string, string | undefined>): string[] {
+	return Object.entries(env)
+		.filter(([k, v]) => SECRET_ENV_NAME.test(k) && typeof v === "string" && v.trim().length >= 8)
+		.map(([, v]) => (v as string).trim())
+		.sort((a, b) => b.length - a.length);
+}
+
+/**
+ * Remove credentials from free text before it is stored (#947): first every known secret value,
+ * verbatim, then anything credential-shaped. Used on CLI output that becomes an error, on result
+ * text, and on every string in a trace detail.
+ */
+export function redactText(text: string, secrets: readonly string[] = []): string {
+	let out = text;
+	for (const s of secrets) if (s.length >= 8) out = out.split(s).join("[REDACTED]");
+	for (const [re, sub] of SECRET_PATTERNS) out = out.replace(re, sub);
+	return out;
+}
+
+/**
+ * Drop sensitive keys, redact credential-shaped values and bound sizes. A trace is for a supervisor
+ * to read, so nothing in it may carry a cookie, a password, a form value or a key — whatever the
+ * runner sent.
+ */
+export function redactDetail(detail: unknown, depth = 0, secrets: readonly string[] = []): Record<string, unknown> | undefined {
 	if (!detail || typeof detail !== "object" || Array.isArray(detail) || depth > 3) return undefined;
 	const out: Record<string, unknown> = {};
 	for (const [k, v] of Object.entries(detail as Record<string, unknown>).slice(0, 40)) {
 		if (SENSITIVE_KEY.test(k)) continue;
-		if (typeof v === "string") out[k] = v.slice(0, 1000);
+		if (typeof v === "string") out[k] = redactText(v.slice(0, 1000), secrets);
 		else if (typeof v === "number" || typeof v === "boolean" || v === null) out[k] = v;
-		else if (Array.isArray(v)) out[k] = v.slice(0, 20).map((x) => (typeof x === "string" ? x.slice(0, 300) : typeof x === "number" || typeof x === "boolean" ? x : null));
+		else if (Array.isArray(v)) out[k] = v.slice(0, 20).map((x) => (typeof x === "string" ? redactText(x.slice(0, 300), secrets) : typeof x === "number" || typeof x === "boolean" ? x : null));
 		else if (typeof v === "object") {
-			const nested = redactDetail(v, depth + 1);
+			const nested = redactDetail(v, depth + 1, secrets);
 			if (nested) out[k] = nested;
 		}
 	}
@@ -304,8 +351,10 @@ export function parseLocalBrowserResult(raw: unknown): { result: LocalBrowserRes
 		const detail = str(r.detail, 1000);
 		sourceFailures.push(detail ? { url, reason, detail } : { url, reason });
 	}
-	const out: LocalBrowserResultEnvelope = { runId, outcome, findings, sourceFailures, summary: str(o.summary, LOCAL_BROWSER_CAPS.text) ?? "", traceId, engineAuth };
-	const error = str(o.error, 1000);
+	const out: LocalBrowserResultEnvelope = { runId, outcome, findings, sourceFailures, summary: redactText(str(o.summary, LOCAL_BROWSER_CAPS.text) ?? ""), traceId, engineAuth };
+	// Redacted again here, whatever the runner did: an error is CLI output, and CLIs print keys.
+	const rawError = str(o.error, 1000);
+	const error = rawError === null ? null : redactText(rawError);
 	if (outcome === "failed") out.error = error ?? "The run failed without a reason.";
 	return { result: out };
 }

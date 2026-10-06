@@ -159,7 +159,7 @@ describe("ending a run", () => {
 		const s = rt.status({ runId: "run-1", afterSeq: 2 });
 		expect(s.state).toBe("ended");
 		expect(s.result).toMatchObject({ outcome: "completed", summary: "1 role", engineAuth: "machine-login", findings: [{ title: "Dev" }], traceId: "run-1" });
-		expect(s.events.map((e) => e.type)).toEqual(["browser.navigated", "finding.parsed", "engine.ended"]);
+		expect(s.events.map((e) => e.type)).toEqual(["policy.decision", "browser.navigated", "finding.parsed", "engine.ended"]);
 		expect(browsersStopped).toBe(1);
 	});
 
@@ -205,7 +205,7 @@ describe("pauses", () => {
 		rt.resume({ runId: "run-1", consentedDomains: [], denyDomains: [], profileConsented: true });
 		await settle();
 		expect(spawned).toHaveLength(1);
-		expect(rt.status({ runId: "run-1" }).events.map((e) => e.type)).toEqual(["consent.requested", "run.paused", "run.resumed", "engine.auth_checked", "engine.started"]);
+		expect(rt.status({ runId: "run-1" }).events.map((e) => e.type)).toEqual(["consent.requested", "run.paused", "run.resumed", "policy.decision", "engine.auth_checked", "engine.started"]);
 	});
 
 	it("holds a navigation to a new site until resume, then lets it through", async () => {

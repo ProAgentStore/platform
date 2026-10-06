@@ -36,6 +36,8 @@ export interface BridgeHost {
 	isDenied(host: string): boolean;
 	/** Allowed without asking: on the allow list, or consented by the owner. */
 	isPermitted(host: string): boolean;
+	/** The id of the owner's decision covering this host, when one does (#947). */
+	consentIdFor(host: string): string | undefined;
 	/** Must every site be on the allow list (the creator or owner gave one)? */
 	allowListOnly(): boolean;
 	overTime(): boolean;
@@ -212,20 +214,35 @@ export class BrowserBridge {
 		return last ? { domain: last } : {};
 	}
 
-	private refuse(tool: string, reason: string): ToolResult {
-		this.host.emit({ type: "policy.decision", detail: { tool, decision: "refused", reason } });
+	/** Refuse, on the trace — naming the site and the owner's decision behind it when there is one. */
+	private refuse(tool: string, reason: string, host?: string): ToolResult {
+		const consentId = host ? this.host.consentIdFor(host) : undefined;
+		this.host.emit({ type: "policy.decision", ...(host ? { domain: host } : {}), ...(consentId ? { consentId } : {}), detail: { tool, decision: "refused", reason } });
 		return text(reason, true);
+	}
+
+	/** Hosts already admitted on this run — a site is recorded as allowed once, not on every page. */
+	private readonly admitted = new Set<string>();
+
+	private allowed(host: string, basis: "allow_list" | "consent"): void {
+		if (this.admitted.has(host)) return;
+		this.admitted.add(host);
+		const consentId = basis === "consent" ? this.host.consentIdFor(host) : undefined;
+		this.host.emit({ type: "policy.decision", domain: host, ...(consentId ? { consentId } : {}), detail: { decision: "allowed", basis } });
 	}
 
 	/** May the run be on this host — asking the owner, and waiting, when it is a new one. */
 	private async admit(host: string, url: string): Promise<string | null> {
 		if (this.host.isDenied(host)) return `${host} is on this run's deny list.`;
-		if (this.host.isPermitted(host)) return null;
+		if (this.host.isPermitted(host)) {
+			this.allowed(host, this.host.consentIdFor(host) ? "consent" : "allow_list");
+			return null;
+		}
 		if (this.host.allowListOnly()) return `${host} is not on this run's list of allowed sites.`;
 		this.host.emit({ type: "consent.requested", url, domain: host, detail: { scope: "navigate" } });
 		const outcome = await this.host.pause("consent_required", { domain: host });
 		if (outcome === "resumed" && this.host.isPermitted(host) && !this.host.isDenied(host)) {
-			this.host.emit({ type: "policy.decision", domain: host, detail: { decision: "consented" } });
+			this.allowed(host, "consent");
 			return null;
 		}
 		return `The owner did not allow ${host}. Skip it and record it with report_source_failure (access_denied).`;
@@ -236,7 +253,7 @@ export class BrowserBridge {
 		if (!host) return this.refuse("browser_navigate", "Only http(s) URLs can be opened.");
 		if (this.pages >= this.host.limits.maxPages) return this.refuse("browser_navigate", `The run's limit of ${this.host.limits.maxPages} pages is reached. Call finish_research now.`);
 		const refusal = await this.admit(host, url);
-		if (refusal) return this.refuse("browser_navigate", refusal);
+		if (refusal) return this.refuse("browser_navigate", refusal, host);
 		const res = await this.browser.callTool("browser_navigate", { url });
 		if (res.isError) return { content: [{ type: "text", text: textOf(res) }], isError: true };
 		// A redirect is a second navigation the CLI did not choose. Following one within the same

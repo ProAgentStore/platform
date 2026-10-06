@@ -673,6 +673,8 @@ export interface LocalBrowserTrace {
 }
 
 export interface LocalBrowserConsentEntry {
+	/** The decision's id (#947); null for one recorded before ids existed. */
+	id: string | null;
 	domain: string;
 	scope: "navigate" | "signed_in_profile";
 	decision: "allow" | "deny";

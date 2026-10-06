@@ -40,7 +40,7 @@ function fakeBrowser(pages: Record<string, PageFlags> = {}, opts: { redirect?: R
 
 const LIMITS: LocalBrowserLimits = { maxMinutes: 15, maxPages: 30, maxActions: 200, maxConcurrent: 1 };
 
-function fakeHost(o: { allow?: string[]; deny?: string[]; consented?: string[]; pause?: (reason: string) => "resumed" | "stopped"; onPause?: () => void; limits?: Partial<LocalBrowserLimits>; overTime?: boolean } = {}) {
+function fakeHost(o: { allow?: string[]; deny?: string[]; consented?: string[]; consentIds?: Record<string, string>; pause?: (reason: string) => "resumed" | "stopped"; onPause?: () => void; limits?: Partial<LocalBrowserLimits>; overTime?: boolean } = {}) {
 	const events: Array<Omit<LocalBrowserEvent, "at">> = [];
 	const consented = new Set(o.consented ?? []);
 	const within = (h: string, d: string) => h === d || h.endsWith(`.${d}`);
@@ -52,6 +52,7 @@ function fakeHost(o: { allow?: string[]; deny?: string[]; consented?: string[]; 
 			o.onPause?.();
 			return o.pause ? o.pause(reason) : "stopped";
 		},
+		consentIdFor: (h) => Object.entries(o.consentIds ?? {}).find(([d]) => within(h, d))?.[1],
 		isDenied: (h) => (o.deny ?? []).some((d) => within(h, d)),
 		isPermitted: (h) => [...(o.allow ?? []), ...consented].some((d) => within(h, d)),
 		allowListOnly: () => (o.allow ?? []).length > 0,

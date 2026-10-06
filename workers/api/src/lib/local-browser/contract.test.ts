@@ -82,6 +82,30 @@ describe("parseLocalBrowserEvent", () => {
 
 describe("redactDetail", () => {
 	it("drops credential-shaped keys at any depth and bounds strings", () => {
-		expect(redactDetail({ api_key: "x", apiKey: "x", formValues: { a: 1 }, otp: "1", text: "a".repeat(2000) })).toEqual({ text: "a".repeat(1000) });
+		expect(redactDetail({ api_key: "x", apiKey: "x", formValues: { a: 1 }, otp: "1", text: "ab ".repeat(700) })).toEqual({ text: "ab ".repeat(700).slice(0, 1000) });
+	});
+});
+
+describe("redactText (#947)", () => {
+	it("removes keys, bearer tokens, JWTs, credential assignments and long opaque strings", async () => {
+		const { redactText } = await import("./contract");
+		expect(redactText("key sk-proj-abcdefghijklmnopqrstuvwxyz0123")).toBe("key [REDACTED]");
+		expect(redactText("Authorization: Bearer abc.def-ghi_jkl012")).toBe("Authorization: Bearer [REDACTED]");
+		expect(redactText("ANTHROPIC_API_KEY=abc123 then GH_TOKEN: 'xyz'")).toBe("ANTHROPIC_API_KEY=[REDACTED] then GH_TOKEN=[REDACTED]");
+		expect(redactText("t eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.c2lnbmF0dXJlaGVyZQ")).toBe("t [REDACTED]");
+		expect(redactText(`blob ${"Zm9v".repeat(12)}== end`)).toBe("blob [REDACTED] end");
+		expect(redactText("ghp_0123456789abcdefghijABCDEFGHIJ")).toBe("[REDACTED]");
+	});
+
+	it("removes a known secret value verbatim, even with no recognisable shape", async () => {
+		const { redactText, secretEnvValues } = await import("./contract");
+		const secrets = secretEnvValues({ JOB_SITE_PASSWORD: "hunter2-horse", PATH: "/usr/bin:/bin", SHORT_TOKEN: "abc", HOME: "/Users/me" });
+		expect(secrets).toEqual(["hunter2-horse"]);
+		expect(redactText("login hunter2-horse failed", secrets)).toBe("login [REDACTED] failed");
+	});
+
+	it("leaves ordinary text alone", async () => {
+		const { redactText } = await import("./contract");
+		expect(redactText("Found 3 senior TypeScript roles in Sydney on seek.com.au")).toBe("Found 3 senior TypeScript roles in Sydney on seek.com.au");
 	});
 });
