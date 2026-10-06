@@ -16,6 +16,14 @@ import { listGithubOrgs, listGithubRepos, searchGithubRepos, getGithubRepoDetail
 export function createRunnerServer(runner: LocalRunner) {
 	return createServer(async (req, res) => {
 		try {
+			// The research CLI's bridge forwarder (#944) holds a run-scoped token, not the runner's —
+			// accepted for this one path and that one run only, and still never from a browser origin.
+			if (!req.headers.origin && req.method === "POST" && (req.url || "").split("?")[0] === "/local-browser/bridge") {
+				const body = await readJson<Record<string, unknown>>(req);
+				const token = String(req.headers["x-pags-bridge-token"] || "");
+				if (!runner.localBrowser.authorizeBridge(String(body.runId ?? ""), token)) return json(res, 401, { error: "Unauthorized" });
+				return json(res, 200, await runner.localBrowser.bridge(body));
+			}
 			if (!authorize(req, runner.config)) {
 				return json(res, 401, { error: "Unauthorized" });
 			}
@@ -41,6 +49,7 @@ export async function startRunnerServer(config: RunnerConfig): Promise<{
 	});
 	const address = server.address() as AddressInfo;
 	const actualPort = address.port;
+	runner.selfUrl = `http://${config.host}:${actualPort}`;
 	return {
 		runner,
 		url: `http://${config.host}:${actualPort}`,
@@ -181,6 +190,20 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 
 	// ── Brain-driven coding control (remote LLM drives a tmux coding CLI) ────
 	// The tmux analogue of the /browser/* surface: start → capture → act → end.
+	// Local CLI browser research (#944). The API pulls state with /status — the runner never pushes.
+	if (req.method === "POST" && path === "/local-browser/run") {
+		return json(res, 202, runner.localBrowser.start(await readJson(req)));
+	}
+	if (req.method === "POST" && path === "/local-browser/status") {
+		return json(res, 200, runner.localBrowser.status(await readJson(req)));
+	}
+	if (req.method === "POST" && path === "/local-browser/resume") {
+		return json(res, 200, runner.localBrowser.resume(await readJson(req)));
+	}
+	if (req.method === "POST" && path === "/local-browser/cancel") {
+		return json(res, 200, runner.localBrowser.cancel(await readJson(req)));
+	}
+
 	if (req.method === "POST" && path === "/coding/start") {
 		const b = await readJson<StartCodingInput>(req);
 		return json(res, 200, runner.coding.start(b));

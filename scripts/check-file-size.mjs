@@ -701,7 +701,8 @@ const PINS = {
 	// reads that label. Splitting the hook out of the method it must precede would put the ordering
 	// back in the reader's head.
 	// +29 at #847: bounded capture receipt updates one LocalRunner task, its durable store and its event log; splitting that command would fragment the state transition.
-	"packages/browser-runner/src/runner.ts": 1306,
+	// +19 at #944: constructs the local browser research runtime and picks its browser per profile (the shared signed-in one, or a throwaway one in the run folder); the runtime itself is local-browser/runtime.ts.
+	"packages/browser-runner/src/runner.ts": 1325,
 	// +45 at #263: `probeMcpSurface`, so the connection test can ask about resources and prompts
 	// on the one guarded path out of this Worker. Raised rather than split — the network belongs
 	// with the rest of the transport, and the reasoning it feeds is pure and lives in
@@ -834,7 +835,7 @@ const PINS = {
 	// +16 at #192 (proappstore-online/platform): the 0.1.50 record — recent_instances gains `limit`
 	// and a working-first order; the entry says why the cap had hidden a live run. Ledger, not drift.
 	// +59 at #847: 0.1.51–0.1.57 are published append-only surface records; moving them would defeat the history check that protects this ledger. +5 at #849: the 0.1.58 record. +5 at #854: the 0.1.59 record. +5 at #856: the 0.1.60 record. +4 at #857: the 0.1.61 record. +4 at #858: the 0.1.62 record. +4 at #859: the 0.1.63 record.
-	"workers/mcp/src/surface-lock.ts": 990, // +6 at #945: the 0.1.75 record (four local browser tools); +4 at #942: the 0.1.74 record (coding_overseer removed); +5 at #938: the 0.1.73 record (get_console_link); +8 at #906: the 0.1.72 record (three secure_input tools); +3 at #904: the 0.1.71 server-info schema record; +2 at #886: the 0.1.70 request_id schema record; +10 at #879: 0.1.66 + 0.1.67 records; +5 at #881: the 0.1.68 record; +4 at #877: the 0.1.69 record — append-only surface ledger, not drift.
+	"workers/mcp/src/surface-lock.ts": 995, // +5 at #944: the 0.1.76 record (start/cancel/resume local browser runs); +6 at #945: the 0.1.75 record (four local browser tools); +4 at #942: the 0.1.74 record (coding_overseer removed); +5 at #938: the 0.1.73 record (get_console_link); +8 at #906: the 0.1.72 record (three secure_input tools); +3 at #904: the 0.1.71 server-info schema record; +2 at #886: the 0.1.70 request_id schema record; +10 at #879: 0.1.66 + 0.1.67 records; +5 at #881: the 0.1.68 record; +4 at #877: the 0.1.69 record — append-only surface ledger, not drift.
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
@@ -1854,7 +1855,7 @@ const PINS = {
 	// +3 at #889/#893: the headless.ts and user-ai.ts raises above (one line of why each) and this one — both landed without their raise and left CI red until this.
 	// +5 at #921: the restored workflow-run.ts entry above (four lines of why + pin) and this line, less one line of slack.
 	// +6 at #914: the user-ai.ts raise and the new coding-loop.ts entry above (two lines of why each) and this line.
-	"scripts/check-file-size.mjs": 1938,
+	"scripts/check-file-size.mjs": 1939, // +1 at #944: the reason line for the runner.ts pin.
 };
 
 /**

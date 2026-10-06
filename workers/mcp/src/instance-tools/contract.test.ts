@@ -432,6 +432,9 @@ const TABLE: Record<string, Row> = {
 	get_instance_local_browser_settings: ["localBrowser", "read", null, null, "instance_id,token"],
 	set_instance_local_browser_settings: ["localBrowser", "write", null, "envelope", "allow_domains,auth_mode,browser_profile,collection,deny_domains,dry_run,engine,instance_id,limits,token,trace_retention_days,workspace_path"],
 	list_local_browser_runs: ["localBrowser", "read", null, null, "after,instance_id,limit,run_id,token"],
+	start_local_browser_run: ["localBrowser", "runtime", null, "envelope", "dry_run,instance_id,objective,request_id,token"],
+	cancel_local_browser_run: ["localBrowser", "write", null, null, "instance_id,run_id,token"],
+	resume_local_browser_run: ["localBrowser", "runtime", null, "envelope", "dry_run,instance_id,run_id,token"],
 	run_instance_trigger: ["triggers", "runtime", null, "envelope", "dry_run,payload,token,trigger_id"],
 	search_instance_knowledge: ["knowledge", "none", null, null, "instance_id,query,token,top_k"],
 	set_account_preferences: ["account", "write", null, "envelope", "coding,dry_run,notifications,timezone,token,translation,voice"],
@@ -686,8 +689,13 @@ describe("conventions the table has to keep", () => {
 		//                        by `list_connections` / `list_supervision`. Pausing is also the
 		//                        safe direction: it is reversible by the same call, which is the
 		//                        whole reason the tools exist rather than a delete.
+		//   cancel_local_browser_run
+		//                        on `stop_instance_loop`'s reasoning (#944): fully determined by one
+		//                        run id, "which run is that?" is answered by `list_local_browser_runs`,
+		//                        and stopping is the safe direction — research is read-only and the
+		//                        findings already recorded stay on the trace.
 		//
-		// All six carry that reasoning in a comment above their registration. Anything joining
+		// All seven carry that reasoning in a comment above their registration. Anything joining
 		// this list needs the same — the entry here is the index, not the argument.
 		expect(
 			rows.filter(([, r]) => ["write", "runtime", "destructive"].includes(r[1]) && r[3] === null).map(([n]) => n),
@@ -695,6 +703,7 @@ describe("conventions the table has to keep", () => {
 			"call_instance_tool",
 			"coding_loop_stop",
 			"coding_loop_queue_cancel",
+			"cancel_local_browser_run",
 			"set_connection_enabled",
 			"set_supervision_enabled",
 			"stop_instance_loop",

@@ -13,6 +13,8 @@ import { HumanHandoffError, RunnerInputError } from "./errors.js";
 import { resolveHandoffStatus } from "./handoff-status.js";
 import { RunnerStore } from "./store.js";
 import { CodingRuntime } from "./coding/runtime.js";
+import { LocalBrowserRuntime } from "./local-browser/runtime.js";
+import { LOCAL_BROWSER_TASK_TYPE } from "./local-browser/contract.js";
 import { WORKFLOW_DRIVEN_TASKS } from "./task-types.js";
 
 /** True for a plain object. */
@@ -91,6 +93,10 @@ export class LocalRunner {
 	readonly store: RunnerStore;
 	/** Local tmux coding sessions (the second runtime — AgentCoder port). */
 	readonly coding: CodingRuntime;
+	/** Local CLI browser research (#944): a signed-in Codex / Claude Code CLI researching through the policy bridge. */
+	readonly localBrowser: LocalBrowserRuntime;
+	/** This runner's own local URL, once the server listens — the bridge forwarder calls back to it. */
+	selfUrl: string | null = null;
 	/** Live human-takeover sessions, keyed by task id (the page is kept alive). */
 	private takeovers = new Map<
 		string,
@@ -101,6 +107,18 @@ export class LocalRunner {
 		mkdirSync(config.dataDir, { recursive: true });
 		this.store = new RunnerStore(config.dataDir);
 		this.coding = new CodingRuntime(join(config.dataDir, "repos"));
+		this.localBrowser = new LocalBrowserRuntime({
+			dataDir: config.dataDir,
+			selfUrl: () => this.selfUrl,
+			// `default` is the runner's own signed-in browser, shared and never closed by a run;
+			// `isolated` is a fresh profile inside the run's folder, removed with it.
+			browserFor: async (profile, runDir) => {
+				if (profile === "default") return { tools: await this.getMcp(), stop: async () => undefined };
+				const mcp = new McpRuntime();
+				await mcp.start({ userDataDir: join(runDir, "profile"), headless: config.headless });
+				return { tools: mcp, stop: () => mcp.stop() };
+			},
+		});
 		// Tasks paused/running on a previous process are orphaned now — their
 		// pages and takeover sessions are gone. Fail them so the board is clean.
 		const expired = this.store.expireInFlightTasks();
@@ -115,7 +133,7 @@ export class LocalRunner {
 			runtimePlane: "pags",
 			runnerRole: "tool-executor",
 			capabilities: [...CAPABILITIES, ...CodingRuntime.capabilities()],
-			taskTypes: ["echo", "browser.open", "job.apply_agent", "site_builder_runtime", ...CodingRuntime.taskTypes()],
+			taskTypes: ["echo", "browser.open", "job.apply_agent", "site_builder_runtime", LOCAL_BROWSER_TASK_TYPE, ...CodingRuntime.taskTypes()],
 			approvalRequiredFor: [...APPROVAL_REQUIRED_TASKS],
 		};
 	}
@@ -247,6 +265,7 @@ export class LocalRunner {
 	 * what orphans the browser, so an unswallowed error here MADE the leak.
 	 */
 	async close(): Promise<void> {
+		this.localBrowser.closeAll();
 		try {
 			this.coding.closeAll();
 		} catch (e) {

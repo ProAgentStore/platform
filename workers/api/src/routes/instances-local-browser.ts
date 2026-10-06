@@ -1,15 +1,8 @@
 import type { Context, Hono } from "hono";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { HttpError, requireUser } from "../lib/auth.js";
-import {
-	LOCAL_BROWSER_CANCEL_PATH,
-	LOCAL_BROWSER_RUN_PATH,
-	LOCAL_BROWSER_TASK_TYPE,
-	type LocalBrowserEvent,
-	type LocalBrowserTaskEnvelope,
-	parseLocalBrowserEvent,
-	parseLocalBrowserResult,
-} from "../lib/local-browser/contract.js";
+import { LOCAL_BROWSER_CANCEL_PATH, LOCAL_BROWSER_RUN_PATH, LOCAL_BROWSER_TASK_TYPE, type LocalBrowserTaskEnvelope } from "../lib/local-browser/contract.js";
+import { applyRunnerResult, ingestRunnerEvents, resumeLocalBrowserRun, syncLocalBrowserRun } from "../lib/local-browser/sync.js";
 import {
 	type ConsentScope,
 	type LocalBrowserRun,
@@ -32,14 +25,14 @@ import type { Env } from "../types.js";
 /**
  * Local CLI browser research (#945, epic #943) — settings, preflight, consent and the run lifecycle.
  *
- * The CONTRACT slice: everything PAGS owns. The runner half (`/local-browser/run` on the runner,
- * the CLI-to-browser bridge, enforcement on the machine) is #944, so until a runner advertises
- * `local_browser.research` a started run fails at once with `runner_unsupported` — an honest,
- * actionable state, never a run that sits queued forever.
+ * A start is dispatched to the runner (`/local-browser/run`); from then on PAGS PULLS the run's
+ * events and result from the runner (`lib/local-browser/sync.ts`) when a run or its trace is read
+ * and from the per-minute cron — the runner cannot reach the API (#944). A runner that predates the
+ * feature answers 404 and the run ends `runner_unsupported` at once, never queued forever.
  *
  * Owner-scoped throughout: every route 404s an instance the caller does not own, and every store
- * call is `user_id`-scoped as well. The runner reports with the owner's own session, as the
- * site-builder evidence route does.
+ * call is `user_id`-scoped as well. The two report routes (`…/events`, `…/result`) take a report
+ * pushed with the owner's own session; they run the same code as the pull.
  */
 type C = Context<{ Bindings: Env }>;
 
@@ -186,9 +179,18 @@ export function registerLocalBrowserRoutes(router: Hono<{ Bindings: Env }>): voi
 		return c.json(await dispatch(c, instanceId, uid, run), 202);
 	});
 
+	/** Reading a run brings it up to date from the runner first. */
 	router.get("/:instanceId/local-browser/runs/:runId", async (c) => {
 		const { uid, instanceId } = await owned(c);
-		return c.json(await runOr404(c, instanceId, uid));
+		const run = await runOr404(c, instanceId, uid);
+		return c.json(await syncLocalBrowserRun(c.env, instanceId, uid, run).catch(() => run));
+	});
+
+	/** Release a paused run once the owner has acted — consent recorded, captcha solved, signed in. */
+	router.post("/:instanceId/local-browser/runs/:runId/resume", async (c) => {
+		const { uid, instanceId } = await owned(c);
+		const run = await syncLocalBrowserRun(c.env, instanceId, uid, await runOr404(c, instanceId, uid));
+		return c.json(await resumeLocalBrowserRun(c.env, instanceId, uid, run));
 	});
 
 	router.post("/:instanceId/local-browser/runs/:runId/cancel", async (c) => {
@@ -210,6 +212,7 @@ export function registerLocalBrowserRoutes(router: Hono<{ Bindings: Env }>): voi
 	router.get("/:instanceId/local-browser/runs/:runId/events", async (c) => {
 		const { uid, instanceId } = await owned(c);
 		const run = await runOr404(c, instanceId, uid);
+		await syncLocalBrowserRun(c.env, instanceId, uid, run).catch(() => undefined);
 		const after = Math.max(Number(c.req.query("after")) || 0, 0);
 		const limit = Math.min(Math.max(Number(c.req.query("limit")) || 200, 1), 500);
 		const events = await listLocalBrowserEvents(c.env, instanceId, uid, run.id, after, limit);
@@ -223,39 +226,15 @@ export function registerLocalBrowserRoutes(router: Hono<{ Bindings: Env }>): voi
 		if (isTerminal(run.status)) throw new HttpError(409, `The run has ended (${run.status}); it takes no more events`);
 		const raw = (await body(c)).events;
 		if (!Array.isArray(raw) || raw.length > 100) throw new HttpError(400, "events must be an array of at most 100 events");
-		const events = raw.map(parseLocalBrowserEvent).filter((e): e is LocalBrowserEvent => e !== null);
-		const now = Date.now();
-		const stored = await appendLocalBrowserEvents(c.env, instanceId, uid, run.id, events, now);
-		// The only events that move the run: a pause (it now waits on a person) and its resume.
-		let current = run;
-		for (const e of events) {
-			if (e.type === "run.paused" && current.status === "running") current = (await transitionLocalBrowserRun(c.env, instanceId, uid, run.id, { to: "paused", pauseReason: e.pauseReason }, now)) ?? current;
-			else if (e.type === "run.resumed" && current.status === "paused") current = (await transitionLocalBrowserRun(c.env, instanceId, uid, run.id, { to: "running" }, now)) ?? current;
-		}
-		return c.json({ accepted: stored, rejected: raw.length - events.length, dropped: events.length - stored, status: current.status });
+		const r = await ingestRunnerEvents(c.env, instanceId, uid, run, raw, Date.now());
+		return c.json({ accepted: r.accepted, rejected: r.rejected, dropped: r.dropped, status: r.run.status });
 	});
 
 	/** The runner's final result envelope, validated by the shared contract. Ends the run. */
 	router.post("/:instanceId/local-browser/runs/:runId/result", async (c) => {
 		const { uid, instanceId } = await owned(c);
 		const run = await runOr404(c, instanceId, uid);
-		const parsed = parseLocalBrowserResult(await body(c));
-		if ("error" in parsed) throw new HttpError(400, `Invalid result: ${parsed.error}`);
-		if (parsed.runId !== run.id) throw new HttpError(400, "Invalid result: runId does not match this run");
-		if (isTerminal(run.status)) throw new HttpError(409, `The run has already ended (${run.status})`);
-		const now = Date.now();
-		const to = parsed.outcome === "completed" ? "completed" : "failed";
-		const moved = await transitionLocalBrowserRun(
-			c.env,
-			instanceId,
-			uid,
-			run.id,
-			{ to, result: parsed, engineAuth: parsed.engineAuth, ...(to === "failed" ? { errorCode: "engine_failed", error: parsed.error ?? null } : {}) },
-			now,
-		);
-		if (!moved) throw new HttpError(409, `The run cannot end from "${run.status}"`);
-		await appendLocalBrowserEvents(c.env, instanceId, uid, run.id, [{ type: "run.ended", at: new Date(now).toISOString(), detail: { status: to, findings: parsed.findings.length, sourceFailures: parsed.sourceFailures.length, engineAuth: parsed.engineAuth } }], now);
-		return c.json(moved);
+		return c.json(await applyRunnerResult(c.env, instanceId, uid, run, await body(c), Date.now()));
 	});
 }
 
@@ -293,7 +272,6 @@ async function dispatch(c: C, instanceId: string, uid: string, run: LocalBrowser
 		},
 		limits: p.limits,
 		resultSchema: p.resultSchema,
-		callback: { eventsPath: `/v1/instances/${instanceId}/local-browser/runs/${run.id}/events`, resultPath: `/v1/instances/${instanceId}/local-browser/runs/${run.id}/result` },
 	};
 	let res: Response;
 	try {

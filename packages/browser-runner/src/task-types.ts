@@ -19,4 +19,7 @@ export const WORKFLOW_DRIVEN_TASKS: ReadonlySet<string> = new Set([
 	"browser.handoff",
 	// #841: local Claude/Codex authors an FWS draft; PAGS retains the audit and deployment gate.
 	"site_builder_runtime",
+	// #944: local CLI browser research. Its state is the LocalBrowserRuntime's run, not a task the
+	// runner executes from its task list, so a restart must not expire a card for it.
+	"local_browser.research",
 ]);

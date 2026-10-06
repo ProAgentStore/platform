@@ -209,6 +209,7 @@ const READBACK: Record<string, string | null> = {
 	// ── settings / identity / behaviour ──
 	"rename_instance.name": "my_instances",
 	"set_instance_settings.settings": "get_instance_settings",
+	"start_local_browser_run.objective": "list_local_browser_runs",
 	"set_instance_local_browser_settings.engine": "get_instance_local_browser_settings",
 	"set_instance_local_browser_settings.auth_mode": "get_instance_local_browser_settings",
 	"set_instance_local_browser_settings.workspace_path": "get_instance_local_browser_settings",

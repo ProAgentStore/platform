@@ -986,4 +986,9 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// 246 registrations become 250, `MCP_TOOL_ALWAYS_ON` 220 → 224, gated stays 26. Starting a run
 	// joins with the runner half (#944). Appended, never edited in place: 0.1.74 is published.
 	"0.1.75": "sha256:40e3abcba700b8aa714d348f4891dd1dbd3ada4445b09e93267e94be7972f832",
+	// 0.1.76 (#944): `start_local_browser_run` and `resume_local_browser_run` (runtime, dry-run) and
+	// `cancel_local_browser_run` (write) — a run is now executed by the runner and pulled by PAGS.
+	// 250 registrations become 253, `MCP_TOOL_ALWAYS_ON` 224 → 227, gated stays 26. Appended, never
+	// edited in place: 0.1.75 is published.
+	"0.1.76": "sha256:c5ed2421f0af0ea594eadf2551ac386f5feb09b53f99f8d71b5af9b6300cd3e3",
 };

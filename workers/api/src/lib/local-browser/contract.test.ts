@@ -34,12 +34,18 @@ const RESULT = {
 describe("parseLocalBrowserResult", () => {
 	it("accepts a valid envelope and drops a sensitive field", () => {
 		const r = parseLocalBrowserResult(RESULT);
-		expect(r).toMatchObject({ runId: "r1", outcome: "completed", engineAuth: "subscription", sourceFailures: [{ url: "https://www.linkedin.com/jobs", reason: "login_required" }] });
-		expect("findings" in r && r.findings[0].fields).toEqual({ location: "Sydney", salary: 120000, remote: false });
+		expect(r).toMatchObject({ result: { runId: "r1", outcome: "completed", engineAuth: "subscription", sourceFailures: [{ url: "https://www.linkedin.com/jobs", reason: "login_required" }] } });
+		expect("result" in r && r.result.findings[0].fields).toEqual({ location: "Sydney", salary: 120000, remote: false });
 	});
 
 	it("gives a failed run a reason even when the runner sent none", () => {
-		expect(parseLocalBrowserResult({ ...RESULT, outcome: "failed", findings: [] })).toMatchObject({ outcome: "failed", error: "The run failed without a reason." });
+		expect(parseLocalBrowserResult({ ...RESULT, outcome: "failed", findings: [] })).toMatchObject({ result: { outcome: "failed", error: "The run failed without a reason." } });
+	});
+
+	it("accepts a failed envelope that carries its own error — the result is wrapped so the two are never confused", () => {
+		const r = parseLocalBrowserResult({ ...RESULT, outcome: "failed", findings: [], engineAuth: "missing_login", error: "Run `codex login`" });
+		expect(r).not.toHaveProperty("error");
+		expect(r).toMatchObject({ result: { outcome: "failed", engineAuth: "missing_login", error: "Run `codex login`" } });
 	});
 
 	it.each([

@@ -6467,6 +6467,10 @@ paths:
   /v1/instances/{instanceId}/local-browser/runs/{runId}:
     get:
       summary: One local browser run
+      description: |
+        Brought up to date from the runner first — PAGS pulls `/local-browser/status` (the runner
+        cannot push). A runner that no longer holds the run, or is silent well past its time limit,
+        ends it `failed` with `errorCode` runner_lost.
       operationId: getLocalBrowserRun
       tags: [Instances]
       parameters:
@@ -6476,6 +6480,23 @@ paths:
         "200": { $ref: "#/components/responses/OkObject" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/local-browser/runs/{runId}/resume:
+    post:
+      summary: Resume a paused local browser run
+      description: |
+        Sends the owner's current consent decisions to the runner and releases the pause (a new
+        site, a captcha, a sign-in), then reads the run back. 409 unless the run is paused or when
+        no runner is connected; a runner that no longer holds the run ends it `runner_lost`.
+      operationId: resumeLocalBrowserRun
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /v1/instances/{instanceId}/local-browser/runs/{runId}/cancel:
     post:
       summary: Cancel an active local browser run
@@ -6508,8 +6529,10 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
     post:
-      summary: Runner reports trace events
+      summary: Report trace events for a run
       description: |
+        A push alternative to the pull: the runner itself is read with `/local-browser/status`, and
+        both paths run the same code.
         `{events: [...]}`, at most 100. Validated against the shared contract and redacted; invalid ones
         are counted in `rejected`. `run.paused` and `run.resumed` move the run. 409 once it has ended.
       operationId: reportLocalBrowserRunEvents
@@ -6529,8 +6552,9 @@ paths:
         "409": { $ref: "#/components/responses/Conflict" }
   /v1/instances/{instanceId}/local-browser/runs/{runId}/result:
     post:
-      summary: Runner reports the result envelope
+      summary: Report a run's result envelope
       description: |
+        A push alternative to the pull; both paths run the same code.
         `{runId, outcome, findings[], sourceFailures[], summary, traceId, engineAuth, error?}`, validated
         by the shared contract. Ends the run `completed` or `failed`. 409 once it has ended.
       operationId: reportLocalBrowserRunResult

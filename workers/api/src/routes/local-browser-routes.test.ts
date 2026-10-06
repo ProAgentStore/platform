@@ -20,7 +20,7 @@ const { instanceRoutes } = await import("./instances.js");
 
 let d1: RealSchemaD1;
 /** What the fake runner answers, and every command it was sent. */
-let runner: { status: number; body: unknown; taskTypes: string[] | null };
+let runner: { status: number; body: unknown; taskTypes: string[] | null; paths?: Record<string, { status: number; body: unknown; onCall?: () => void }> };
 let sent: Array<{ method: string; path: string; body: unknown }>;
 const relay = {
 	idFromName: (n: string) => n,
@@ -29,6 +29,11 @@ const relay = {
 			const cmd = (await req.json()) as { method: string; path: string; body: unknown };
 			sent.push(cmd);
 			if (cmd.path === "/capabilities") return Response.json(runner.taskTypes ? { taskTypes: runner.taskTypes } : {});
+			const byPath = runner.paths?.[cmd.path];
+			if (byPath) {
+				byPath.onCall?.();
+				return new Response(JSON.stringify(byPath.body), { status: byPath.status });
+			}
 			return new Response(JSON.stringify(runner.body), { status: runner.status });
 		},
 	}),
@@ -125,8 +130,9 @@ describe("runs", () => {
 			authMode: "subscription",
 			workspace: { kind: "scratch" },
 			policy: { mode: "research_only", allowDomains: ["seek.com.au", "indeed.com"], denyDomains: ["indeed.com"], consentedDomains: ["seek.com.au"], profileConsented: false },
-			callback: { resultPath: `/v1/instances/i1/local-browser/runs/${r.body.id}/result` },
 		});
+		// Pull, not push (#944): the runner is never told where to report.
+		expect(dispatched?.body).not.toHaveProperty("callback");
 		const events = await call("GET", `/i1/local-browser/runs/${r.body.id}/events`);
 		expect(events.body.events.map((e: { type: string }) => e.type)).toEqual(["run.requested", "runner.dispatched"]);
 	});
@@ -202,5 +208,70 @@ describe("consent", () => {
 		const set = await call("PUT", "/i1/local-browser/consent", { scope: "navigate", domain: "Seek.com.au", decision: "allow", ttlDays: 30 });
 		expect(set.body.consent).toEqual([expect.objectContaining({ domain: "seek.com.au", scope: "navigate", decision: "allow", expiresAt: expect.any(Number) })]);
 		expect((await call("PUT", "/i1/local-browser/consent", { scope: "navigate", domain: "seek.com.au", decision: null })).body.consent).toEqual([]);
+	});
+});
+
+describe("pulling state from the runner (#944)", () => {
+	const at = "2026-10-07T01:00:00Z";
+	const result = (runId: string) => ({ runId, outcome: "completed", traceId: runId, engineAuth: "subscription", summary: "1 lead", findings: [{ title: "Dev", url: "https://seek.com.au/job/1", evidence: "Dev — Sydney", fields: {} }], sourceFailures: [] });
+
+	it("reading a run pulls its new events from the runner, from where the last pull stopped", async () => {
+		const run = (await call("POST", "/i1/local-browser/runs", { objective: "x" })).body;
+		runner.paths = { "/local-browser/status": { status: 200, body: { runId: run.id, state: "paused", pauseReason: "captcha", lastSeq: 2, events: [{ seq: 1, type: "browser.navigated", at, url: "https://seek.com.au/", domain: "seek.com.au" }, { seq: 2, type: "run.paused", at, pauseReason: "captcha" }] } } };
+		expect((await call("GET", `/i1/local-browser/runs/${run.id}`)).body).toMatchObject({ status: "paused", pauseReason: "captcha", runnerSeq: 2 });
+		expect(sent.filter((x) => x.path === "/local-browser/status").at(-1)?.body).toEqual({ runId: run.id, afterSeq: 0 });
+		await call("GET", `/i1/local-browser/runs/${run.id}`);
+		expect(sent.filter((x) => x.path === "/local-browser/status").at(-1)?.body).toEqual({ runId: run.id, afterSeq: 2 });
+	});
+
+	it("ends the run with the runner's result once the runner says it ended", async () => {
+		const run = (await call("POST", "/i1/local-browser/runs", { objective: "x" })).body;
+		runner.paths = { "/local-browser/status": { status: 200, body: { runId: run.id, state: "ended", lastSeq: 1, events: [{ seq: 1, type: "engine.ended", at }], result: result(run.id) } } };
+		const events = (await call("GET", `/i1/local-browser/runs/${run.id}/events`)).body.events;
+		expect(events.map((e: { type: string }) => e.type)).toEqual(["run.requested", "runner.dispatched", "engine.ended", "run.ended"]);
+		expect((await call("GET", `/i1/local-browser/runs/${run.id}`)).body).toMatchObject({ status: "completed", engineAuth: "subscription", result: { summary: "1 lead" } });
+	});
+
+	it("names a CLI that is not signed in", async () => {
+		const run = (await call("POST", "/i1/local-browser/runs", { objective: "x" })).body;
+		runner.paths = { "/local-browser/status": { status: 200, body: { runId: run.id, state: "ended", lastSeq: 0, events: [], result: { ...result(run.id), outcome: "failed", findings: [], engineAuth: "missing_login", error: "Run `codex login`" } } } };
+		const got = (await call("GET", `/i1/local-browser/runs/${run.id}`)).body;
+		expect(got).toMatchObject({ status: "failed", errorCode: "engine_not_signed_in", engineAuth: "missing_login" });
+	});
+
+	it("ends a run its runner no longer holds, rather than showing it running forever", async () => {
+		const run = (await call("POST", "/i1/local-browser/runs", { objective: "x" })).body;
+		runner.paths = { "/local-browser/status": { status: 404, body: { error: "No local browser run" } } };
+		expect((await call("GET", `/i1/local-browser/runs/${run.id}`)).body).toMatchObject({ status: "failed", errorCode: "runner_lost" });
+	});
+
+	it("leaves a run alone while its runner is briefly unreachable", async () => {
+		const run = (await call("POST", "/i1/local-browser/runs", { objective: "x" })).body;
+		getBoundRunnerConn.mockResolvedValue(null);
+		expect((await call("GET", `/i1/local-browser/runs/${run.id}`)).body.status).toBe("running");
+	});
+
+	it("resumes a paused run with the owner's current decisions", async () => {
+		const run = (await call("POST", "/i1/local-browser/runs", { objective: "x" })).body;
+		runner.paths = { "/local-browser/status": { status: 200, body: { runId: run.id, state: "paused", pauseReason: "consent_required", lastSeq: 1, events: [{ seq: 1, type: "run.paused", at, pauseReason: "consent_required" }] } } };
+		await call("GET", `/i1/local-browser/runs/${run.id}`);
+		await call("PUT", "/i1/local-browser/consent", { scope: "navigate", domain: "indeed.com", decision: "allow" });
+		const paths = runner.paths;
+		paths["/local-browser/resume"] = { status: 200, body: {}, onCall: () => (paths["/local-browser/status"] = { status: 200, body: { runId: run.id, state: "running", lastSeq: 2, events: [{ seq: 2, type: "run.resumed", at }] } }) };
+		const resumed = await call("POST", `/i1/local-browser/runs/${run.id}/resume`);
+		expect(resumed.body).toMatchObject({ status: "running" });
+		expect(sent.find((x) => x.path === "/local-browser/resume")?.body).toEqual({ runId: run.id, consentedDomains: ["indeed.com"], denyDomains: [], profileConsented: false });
+		expect((await call("POST", `/i1/local-browser/runs/${run.id}/resume`)).status).toBe(409);
+	});
+
+	it("is what the cron does for every active run, and it prunes traces past their retention", async () => {
+		const { syncActiveLocalBrowserRuns } = await import("../lib/local-browser/sync.js");
+		const run = (await call("POST", "/i1/local-browser/runs", { objective: "x" })).body;
+		runner.paths = { "/local-browser/status": { status: 200, body: { runId: run.id, state: "ended", lastSeq: 0, events: [], result: result(run.id) } } };
+		expect(await syncActiveLocalBrowserRuns({ DB: d1.DB, RELAY: relay } as unknown as Env)).toBe(1);
+		expect((await d1.DB.prepare("SELECT status FROM local_browser_runs WHERE id = ?1").bind(run.id).first<{ status: string }>())?.status).toBe("completed");
+		d1.exec(`UPDATE local_browser_runs SET ended_at = 1 WHERE id = '${run.id}'`);
+		await syncActiveLocalBrowserRuns({ DB: d1.DB, RELAY: relay } as unknown as Env);
+		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM local_browser_run_events WHERE run_id = ?1").bind(run.id).first<{ n: number }>())?.n).toBe(0);
 	});
 });

@@ -8,9 +8,9 @@ import type { InstanceToolsCtx } from "./shared.js";
  * Local CLI browser research (#945) — the settings and read-only status of a general agent whose
  * browser research is driven by a Codex or Claude Code CLI signed in on the owner's machine.
  *
- * Starting and cancelling a run are not here yet: the runner half (#944) does not exist, so a
- * started run could only fail `runner_unsupported`. They join this module with it. Ungated: the
- * API answers 409 for an agent that is not a local browser agent.
+ * Start, cancel and resume (#944) drive a run on the owner's machine; reading a run pulls its latest
+ * state from the runner first. Ungated: the API answers 409 for an agent that is not a local
+ * browser agent.
  */
 export function registerLocalBrowserTools(server: McpServer, ctx: InstanceToolsCtx): void {
 	const { env, tokenFor, safetyFor } = ctx;
@@ -138,6 +138,78 @@ export function registerLocalBrowserTools(server: McpServer, ctx: InstanceToolsC
 			if (limit) q.set("limit", String(limit));
 			const trace = (await authedCall(`${runPath}/events${q.toString() ? `?${q}` : ""}`, sessionToken, {}, env)) as { error?: string };
 			return jsonText({ run, trace: trace.error ? { error: trace.error } : trace });
+		},
+	);
+
+	server.tool(
+		"start_local_browser_run",
+		"Start a research run on the owner's machine: the Codex or Claude Code CLI signed in there researches the objective in a real browser, read-only, within the instance's sites and limits, and records findings with the page each came from. Returns the run; follow it with list_local_browser_runs. A run that cannot reach a runner ends at once with errorCode saying why — runner_offline, runner_unsupported (update the CLI) or runner_rejected. Pass request_id to make a retry safe: the same request_id returns the same run. Call local_browser_preflight first, and this with dry_run first.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances. Copy it exactly."),
+			objective: z.string().min(1).max(4000).describe("What to research, in plain words."),
+			request_id: z.string().max(100).optional().describe("Your idempotency key — letters, digits, _ . : or -."),
+			dry_run: z.boolean().optional().describe("Preview without starting anything."),
+		},
+		async ({ token, instance_id, objective, request_id, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, objective, request_id };
+			const denied = await requirePermission(safetyFor(token), "runtime", "start_local_browser_run", input);
+			if (denied) return denied;
+			if (dry_run) return dryRun(safetyFor(token), "start_local_browser_run", "start a local browser research run on the owner's machine", input, { endpoint: `${base(instance_id)}/runs`, method: "POST" });
+			const data = (await authedCall(`${base(instance_id)}/runs`, sessionToken, { method: "POST", body: JSON.stringify({ objective, ...(request_id ? { requestId: request_id } : {}) }) }, env)) as { error?: string };
+			if (data.error) return text(`Error: ${data.error}`);
+			await audit(safetyFor(token), { tool: "start_local_browser_run", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	// No dry run, on `stop_instance_loop`'s reasoning: the call is fully determined by one run id,
+	// `list_local_browser_runs` answers "which run is that?", and stopping is the safe direction —
+	// research is read-only, and findings already recorded stay on the trace.
+	server.tool(
+		"cancel_local_browser_run",
+		"Stop an active local browser research run: the run ends cancelled and the CLI on the owner's machine is told to stop. Findings already recorded stay on the run's trace. Refused once the run has ended.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances. Copy it exactly."),
+			run_id: z.string().describe("The run's id, from start_local_browser_run or list_local_browser_runs. Copy it exactly."),
+		},
+		async ({ token, instance_id, run_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, run_id };
+			const denied = await requirePermission(safetyFor(token), "write", "cancel_local_browser_run", input);
+			if (denied) return denied;
+			const data = (await authedCall(`${base(instance_id)}/runs/${encodeURIComponent(run_id)}/cancel`, sessionToken, { method: "POST" }, env)) as { error?: string };
+			if (data.error) return text(`Error: ${data.error}`);
+			await audit(safetyFor(token), { tool: "cancel_local_browser_run", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"resume_local_browser_run",
+		"Continue a paused local browser research run once the owner has done what it waited for: allowed the site (allow_domains in set_instance_local_browser_settings), solved the captcha, or signed in, in the browser on that machine. The runner gets the owner's current decisions and carries on; a site still not allowed is skipped. Refused unless the run is paused. Call with dry_run first.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances. Copy it exactly."),
+			run_id: z.string().describe("The paused run's id. Copy it exactly."),
+			dry_run: z.boolean().optional().describe("Preview without resuming."),
+		},
+		async ({ token, instance_id, run_id, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, run_id };
+			const denied = await requirePermission(safetyFor(token), "runtime", "resume_local_browser_run", input);
+			if (denied) return denied;
+			const path = `${base(instance_id)}/runs/${encodeURIComponent(run_id)}/resume`;
+			if (dry_run) return dryRun(safetyFor(token), "resume_local_browser_run", "resume a paused local browser research run", input, { endpoint: path, method: "POST" });
+			const data = (await authedCall(path, sessionToken, { method: "POST" }, env)) as { error?: string };
+			if (data.error) return text(`Error: ${data.error}`);
+			await audit(safetyFor(token), { tool: "resume_local_browser_run", action: "completed", input, result: data });
+			return jsonText(data);
 		},
 	);
 }

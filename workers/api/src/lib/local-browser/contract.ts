@@ -18,10 +18,18 @@
  * It must stay dependency-free (no imports) for the same reason.
  */
 
-/** The runner task type, and the runner endpoints PAGS calls. */
+/**
+ * The runner task type, and the runner endpoints PAGS calls.
+ *
+ * PULL, not push (#944): the relay carries only cloud→runner commands and their replies, and the
+ * runner process holds no API token. So the runner keeps each run's events and result, and PAGS
+ * reads them with `status` — when a run is read and from the per-minute cron.
+ */
 export const LOCAL_BROWSER_TASK_TYPE = "local_browser.research";
 export const LOCAL_BROWSER_RUN_PATH = "/local-browser/run";
 export const LOCAL_BROWSER_CANCEL_PATH = "/local-browser/cancel";
+export const LOCAL_BROWSER_STATUS_PATH = "/local-browser/status";
+export const LOCAL_BROWSER_RESUME_PATH = "/local-browser/resume";
 
 export type LocalBrowserEngine = "claude" | "codex";
 export const LOCAL_BROWSER_ENGINES: readonly LocalBrowserEngine[] = ["claude", "codex"];
@@ -81,8 +89,11 @@ export interface LocalBrowserTaskEnvelope {
 	};
 	limits: LocalBrowserLimits;
 	resultSchema: LocalBrowserResultSchema;
-	/** API paths (relative to the API origin) the runner reports to. */
-	callback: { eventsPath: string; resultPath: string };
+	/**
+	 * Unused since #944: the runner cannot reach the API (see the PULL note above). Kept optional so
+	 * an envelope from before the change still parses; PAGS no longer sends it.
+	 */
+	callback?: { eventsPath: string; resultPath: string };
 }
 
 /** Why a run stops and waits for a person. Each is a pause, never an obstacle to work around. */
@@ -172,6 +183,32 @@ export interface LocalBrowserResultEnvelope {
 	error?: string;
 }
 
+/** A runner event with its position in the run's trace, as `status` returns it. */
+export interface LocalBrowserRunnerEvent extends LocalBrowserEvent {
+	seq: number;
+}
+
+/** `POST /local-browser/status {runId, afterSeq}` — what the runner holds for one run. */
+export interface LocalBrowserStatusResponse {
+	runId: string;
+	state: "running" | "paused" | "ended";
+	pauseReason?: LocalBrowserPauseReason;
+	/** Events after `afterSeq`, in order. */
+	events: LocalBrowserRunnerEvent[];
+	/** The highest seq the runner holds — the next `afterSeq`. */
+	lastSeq: number;
+	/** Present once `state` is `ended`. */
+	result?: LocalBrowserResultEnvelope;
+}
+
+/** `POST /local-browser/resume` — the owner's current decisions, sent when they unblock a pause. */
+export interface LocalBrowserResumeRequest {
+	runId: string;
+	consentedDomains: string[];
+	denyDomains: string[];
+	profileConsented: boolean;
+}
+
 export const LOCAL_BROWSER_CAPS = { findings: 200, sourceFailures: 200, text: 4000, fieldCount: 40 } as const;
 
 const SENSITIVE_KEY = /cookie|password|passwd|secret|token|authorization|api[_-]?key|otp|form[_-]?values?|credential/i;
@@ -222,8 +259,13 @@ export function parseLocalBrowserEvent(raw: unknown): LocalBrowserEvent | null {
 	return event;
 }
 
-/** A validated result envelope, or the reason it is not one. */
-export function parseLocalBrowserResult(raw: unknown): LocalBrowserResultEnvelope | { error: string } {
+/**
+ * A validated result envelope, or the reason it is not one.
+ *
+ * Wrapped as `{ result }` on purpose: a FAILED envelope carries its own `error` field, so returning
+ * the envelope bare made `"error" in parsed` true for every failed run and rejected it as invalid.
+ */
+export function parseLocalBrowserResult(raw: unknown): { result: LocalBrowserResultEnvelope } | { error: string } {
 	if (!raw || typeof raw !== "object") return { error: "result must be an object" };
 	const o = raw as Record<string, unknown>;
 	const runId = str(o.runId, 100);
@@ -265,5 +307,5 @@ export function parseLocalBrowserResult(raw: unknown): LocalBrowserResultEnvelop
 	const out: LocalBrowserResultEnvelope = { runId, outcome, findings, sourceFailures, summary: str(o.summary, LOCAL_BROWSER_CAPS.text) ?? "", traceId, engineAuth };
 	const error = str(o.error, 1000);
 	if (outcome === "failed") out.error = error ?? "The run failed without a reason.";
-	return out;
+	return { result: out };
 }

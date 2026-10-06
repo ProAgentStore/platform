@@ -15,7 +15,12 @@ export class HumanHandoffError extends Error {
 	}
 }
 
-/** A bad client request to the runner (maps to HTTP 400). */
+/** A bad client request to the runner (HTTP 400 by default; 404/409 where the request names a missing or busy thing). */
 export class RunnerInputError extends Error {
-	readonly status = 400;
+	constructor(
+		message: string,
+		readonly status = 400,
+	) {
+		super(message);
+	}
 }

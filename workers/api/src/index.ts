@@ -58,6 +58,7 @@ import { mcpRoutes } from "./routes/mcp.js";
 import { cloudflareAccessGate, cloudflareAccessMode } from "./lib/cf-access.js";
 import { runDueTriggers } from "./lib/triggers.js";
 import { runDueDeliveries } from "./lib/connections.js";
+import { syncActiveLocalBrowserRuns } from "./lib/local-browser/sync.js";
 import { routeRunEvents } from "./lib/run-event-routing.js";
 import { runTicketQueue } from "./lib/ticket-queue.js";
 import { runCommitCloseWatch } from "./lib/commit-close-watch.js";
@@ -288,6 +289,9 @@ export default {
 		ctx.waitUntil(runCodingSessionSweep(env));
 		// Warn before an unattended device-code sign-in expires (#890). Swallows its own errors.
 		ctx.waitUntil(runReauthExpiryWatch(env));
+		// Pull local browser research runs from their runners (#944) — the runner cannot push — and
+		// end any whose runner lost them. Its own failure domain, like every sweep above.
+		ctx.waitUntil(syncActiveLocalBrowserRuns(env).catch((err) => logUnhandled(env, err, { path: "scheduled:local-browser", method: "CRON" })));
 		// Snapshot yesterday's stats for instances that were active (#313). A sixth independent
 		// failure domain, and the one with the weakest claim on the tick: a missed rollup leaves a
 		// GAP in a chart, which is a visible and honest outcome, where a missed delivery loses work.

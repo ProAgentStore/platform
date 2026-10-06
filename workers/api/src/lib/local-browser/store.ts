@@ -25,6 +25,10 @@ export interface LocalBrowserRun {
 	engineAuth: string | null;
 	runnerNode: string | null;
 	runnerTaskId: string | null;
+	/** The last runner event seq stored — the next pull's `afterSeq` (#944). */
+	runnerSeq: number;
+	/** When the runner last answered for this run. */
+	lastSyncedAt: number | null;
 	createdAt: number;
 	startedAt: number | null;
 	endedAt: number | null;
@@ -45,6 +49,8 @@ interface RunRow {
 	engine_auth: string | null;
 	runner_node: string | null;
 	runner_task_id: string | null;
+	runner_seq: number;
+	last_synced_at: number | null;
 	created_at: number;
 	started_at: number | null;
 	ended_at: number | null;
@@ -74,6 +80,8 @@ const present = (r: RunRow): LocalBrowserRun => ({
 	engineAuth: r.engine_auth,
 	runnerNode: r.runner_node,
 	runnerTaskId: r.runner_task_id,
+	runnerSeq: Number(r.runner_seq ?? 0),
+	lastSyncedAt: r.last_synced_at ?? null,
 	createdAt: r.created_at,
 	startedAt: r.started_at,
 	endedAt: r.ended_at,
@@ -216,9 +224,20 @@ export interface StoredLocalBrowserEvent extends TraceEvent {
 	recordedAt: number;
 }
 
-/** Append events after the run's current last seq. Returns how many were stored. */
-export async function appendLocalBrowserEvents(env: DB, instanceId: string, userId: string, runId: string, events: TraceEvent[], now: number): Promise<number> {
-	if (!events.length) return 0;
+/**
+ * Append events after the run's current last seq. Returns how many were stored.
+ *
+ * `cursor` records how far into the RUNNER's trace these events reach, in the same atomic batch —
+ * so a pull that stored its events also moved its cursor, and the next pull cannot store them twice.
+ */
+export async function appendLocalBrowserEvents(env: DB, instanceId: string, userId: string, runId: string, events: TraceEvent[], now: number, cursor?: { runnerSeq: number }): Promise<number> {
+	const cursorStmt = cursor
+		? env.DB.prepare("UPDATE local_browser_runs SET runner_seq = MAX(runner_seq, ?1), last_synced_at = ?2 WHERE id = ?3 AND instance_id = ?4 AND user_id = ?5").bind(cursor.runnerSeq, now, runId, instanceId, userId)
+		: null;
+	if (!events.length) {
+		if (cursorStmt) await cursorStmt.run();
+		return 0;
+	}
 	const last = await env.DB.prepare("SELECT COALESCE(MAX(seq), 0) AS seq, COUNT(*) AS n FROM local_browser_run_events WHERE run_id = ?1").bind(runId).first<{ seq: number; n: number }>();
 	const room = Math.max(0, MAX_EVENTS_PER_RUN - Number(last?.n ?? 0));
 	const take = events.slice(0, room);
@@ -229,6 +248,7 @@ export async function appendLocalBrowserEvents(env: DB, instanceId: string, user
 			 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)`,
 		).bind(runId, ++seq, instanceId, userId, e.type, e.url ?? null, e.domain ?? null, e.pauseReason ?? null, e.consentId ?? null, e.detail ? JSON.stringify(e.detail) : null, e.at, now),
 	);
+	if (cursorStmt) stmts.push(cursorStmt);
 	if (stmts.length) await env.DB.batch(stmts);
 	return take.length;
 }
@@ -290,4 +310,29 @@ export async function setDomainConsent(env: DB, instanceId: string, userId: stri
 	)
 		.bind(instanceId, userId, c.domain, c.scope, c.decision, now, c.expiresAt)
 		.run();
+}
+
+// ── The pull (#944) ──────────────────────────────────────────────────────────────────────────
+
+/** Active runs, least recently synced first — what the cron reads from the runners. */
+export async function activeLocalBrowserRuns(env: DB, limit: number): Promise<Array<{ id: string; instanceId: string; userId: string }>> {
+	const { results } = await env.DB.prepare(`SELECT id, instance_id, user_id FROM local_browser_runs WHERE status IN (${ACTIVE_SQL}) ORDER BY COALESCE(last_synced_at, 0) LIMIT ?1`)
+		.bind(limit)
+		.all<{ id: string; instance_id: string; user_id: string }>();
+	return (results ?? []).map((r) => ({ id: r.id, instanceId: r.instance_id, userId: r.user_id }));
+}
+
+/**
+ * Delete the trace of runs that ended longer ago than their own `traceRetentionDays` (the policy the
+ * run started with). The run row and its result stay; only the step-by-step trace goes.
+ */
+export async function pruneExpiredLocalBrowserTraces(env: DB, now: number): Promise<number> {
+	const res = await env.DB.prepare(
+		`DELETE FROM local_browser_run_events WHERE run_id IN (
+		   SELECT id FROM local_browser_runs
+		    WHERE ended_at IS NOT NULL AND ended_at < ?1 - COALESCE(json_extract(policy, '$.traceRetentionDays'), 30) * 86400000)`,
+	)
+		.bind(now)
+		.run();
+	return res.meta?.changes ?? 0;
 }
