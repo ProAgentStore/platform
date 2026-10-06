@@ -182,7 +182,6 @@ const KNOWN_ANONYMOUS = {
 	"019be6af": "{ message?: Message }",
 	"290f2895": "{ runId: string; driver?: string }",
 	"1244d58f": "{ messages: Message[] }",
-	"6d96f472": "{ runtime?: { runnerNode?: string | null }; relay?: { connected?: boolean; runnerNode?: string | null } }",
 
 	// ── RunDetail ─────────────────────────────────────────────────────────────
 	"941d3299": "{ events: RuntimeEvent[] }",

@@ -3,7 +3,7 @@ import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import type { CodingSession } from "./types";
 import { anyEngineBusy } from "./engine-busy";
-import { resolveRunnerOnline } from "./runner-online";
+import { isTransientStatus, relayVerdict, resolveRunnerOnline, type RuntimeStatusAnswer } from "./runner-online";
 import { type AttachmentAnswer, runnerOfflineNotice } from "./runner-offline-notice";
 
 /**
@@ -58,11 +58,12 @@ export function useRunnerStatus({ instanceId, sessions, openSession }: {
 	// Settings tab use, so the header and this body cannot report different things.
 	const checkRelay = useCallback(async () => {
 		try {
-			const d = await api<{ relay?: { connected?: boolean }; attachment?: AttachmentAnswer }>(`/v1/instances/${instanceId}/runtime/status`);
-			setRelayOnline(d.relay?.connected === true);
+			const d = await api<RuntimeStatusAnswer & { attachment?: AttachmentAnswer }>(`/v1/instances/${instanceId}/runtime/status`);
+			// A probe blip answers with no `relay` — keep what we last knew rather than call it offline (#933).
+			setRelayOnline((prev) => relayVerdict(prev, d));
 			// Already in this response and previously discarded — it is what names a stale "Runs on"
-			// pin, and the banner had no way to say that (#461/#537).
-			setRelayAttachment(d.attachment ?? null);
+			// pin, and the banner had no way to say that (#461/#537). A blip carries none, so keep it.
+			if (!isTransientStatus(d)) setRelayAttachment(d.attachment ?? null);
 		} catch {
 			setRelayOnline(false);
 			setRelayAttachment(null);

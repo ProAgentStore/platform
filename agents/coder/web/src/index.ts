@@ -8,3 +8,4 @@
 export { default as CodingTab } from "./CodingTab";
 export { default as BusyHoldNotice } from "./BusyHoldNotice";
 export { busyHoldFrom, type BusyHold, LOOP_WATCH_BADGE_CLASS, loopWatchBadge, type LoopWatchBadge } from "./coding-loop-run";
+export { isTransientStatus, relayVerdict, type RuntimeStatusAnswer } from "./runner-online";

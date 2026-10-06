@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
+import { isTransientStatus } from "@proagentstore/coder-web";
 import { type AttachResult, canReattach, type Machine, machinesToShow, machineTile, type MoveOutcome, type NodeDetail, type PinResponse, pinnedWarning, pinOutcome, reattachOutcome, runnerReading } from "../lib/runnerPanel";
 import Button from "./Button";
 import Card from "./Card";
@@ -53,7 +54,8 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 				api<RunnerNodeResp>(`/v1/instances/${instanceId}/runner-node`).catch(() => null),
 				api<{ nodes: Machine[] }>(`/v1/terminals/nodes`).catch(() => null),
 			]);
-			if (st) setRuntimeInfo(st);
+			// A probe blip carries no `relay` reading — keep the last real one rather than read "Offline" (#933).
+			if (st && !isTransientStatus(st)) setRuntimeInfo(st);
 			if (rn) {
 				setRunnerNode(rn.runnerNode || "");
 				setNodesDetail(rn.nodesDetail || []);

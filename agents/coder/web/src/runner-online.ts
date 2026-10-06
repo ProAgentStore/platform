@@ -39,3 +39,32 @@ export function resolveRunnerOnline({ relay, capture, hasActiveSessions }: Runne
 	// (null) — which renders as neither online nor a warning.
 	return hasActiveSessions ? capture : null;
 }
+
+/** The `/runtime/status` fields a presence reader uses. */
+export interface RuntimeStatusAnswer {
+	relay?: { connected?: boolean; runnerNode?: string | null } | null;
+	/** The probe threw, but the runner was seen recently — "nothing changed", not "offline" (#933). */
+	transient?: boolean;
+}
+
+/**
+ * Is this answer a probe BLIP rather than a reading? (#933)
+ *
+ * When the relay probe throws and the runner was seen within the recent window, the route answers
+ * `{runtime: {status: "online"}, transient: true}` with NO `relay` (workers/api/src/routes/
+ * instances.ts) — deliberately: it has no fresh socket reading, and inventing `relay.connected` there
+ * would assert something nobody observed. Every reader treated the missing `relay` as "offline", so
+ * one slow probe on a loaded machine (#913, #924) flipped the header dot for a poll cycle while the
+ * runner worked — the contradictory signal #922 removed from the MCP tools.
+ */
+export function isTransientStatus(d: RuntimeStatusAnswer | null | undefined): boolean {
+	return d?.transient === true && !d.relay;
+}
+
+/**
+ * The relay verdict after an answer: the answer's own when it carries one, else the previous one —
+ * which is `null` ("not known yet") before the first real reading, never a fabricated `false`.
+ */
+export function relayVerdict(prev: boolean | null, d: RuntimeStatusAnswer): boolean | null {
+	return isTransientStatus(d) ? prev : d.relay?.connected === true;
+}

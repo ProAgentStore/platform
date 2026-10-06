@@ -22,7 +22,7 @@ import { SURFACES, visibleSurfaces, surfaceOwnsHeader } from "../lib/surfaces";
 import { useGloss } from "../lib/use-gloss";
 import type { LoopPreset } from "../lib/loopPresets";
 import { adoptableRun, isChatWorking, shouldAdopt, type InstanceStateLike, type LoopRunLike } from "../lib/workInFlight";
-import { BusyHoldNotice, busyHoldFrom, type BusyHold, LOOP_WATCH_BADGE_CLASS, loopWatchBadge, type LoopWatchBadge } from "@proagentstore/coder-web";
+import { BusyHoldNotice, busyHoldFrom, type BusyHold, isTransientStatus, LOOP_WATCH_BADGE_CLASS, loopWatchBadge, type LoopWatchBadge, relayVerdict, type RuntimeStatusAnswer } from "@proagentstore/coder-web";
 import DynamicSurface from "../components/DynamicSurface";
 import HostedNode from "../components/HostedNode";
 import GlossedMessage from "../components/GlossedMessage";
@@ -385,12 +385,10 @@ function InstancePage() {
 			// from the relay DO, not a throw, so the route still answers 200.) The node name came
 			// from snake_case `runner_node`, but the response is camelCase, so it was always blank.
 			// SettingsTab fixed exactly this; the header was never updated.
-			const d = await api<{
-				runtime?: { runnerNode?: string | null };
-				relay?: { connected?: boolean; runnerNode?: string | null };
-				attachment?: RunnerPresence["attachment"];
-			}>(`/v1/instances/${id}/runtime/status`);
-			setRunnerOnline(d.relay?.connected === true);
+			const d = await api<RuntimeStatusAnswer & { runtime?: { runnerNode?: string | null }; attachment?: RunnerPresence["attachment"] }>(`/v1/instances/${id}/runtime/status`);
+			// A probe blip (`transient`, no `relay`) keeps the last reading — it is not "offline" (#933).
+			setRunnerOnline((prev) => relayVerdict(prev, d));
+			if (isTransientStatus(d)) return;
 			setRunnerNode(d.relay?.runnerNode || d.runtime?.runnerNode || "");
 			setRunnerAttachment(d.attachment ?? null);
 		} catch {
@@ -1018,9 +1016,9 @@ function InstancePage() {
 				<span
 					className="text-2xs font-bold px-1.5 py-0.5 rounded-full shrink-0"
 					style={{ background: "var(--color-line)", color: runnerOnline ? "var(--color-success)" : "var(--color-muted)" }}
-					title={runnerOnline ? `Runner online${runnerNode ? ` · ${runnerNode}` : ""}` : "Runner offline"}
+					title={runnerOnline ? `Runner online${runnerNode ? ` · ${runnerNode}` : ""}` : runnerOnline === null ? "Checking the runner…" : "Runner offline"}
 				>
-					{runnerOnline ? "●" : "○"}
+					{runnerOnline ? "●" : runnerOnline === null ? "◌" : "○"}
 				</span>
 			)}
 			<div className="flex border border-line rounded-lg overflow-x-auto overflow-y-hidden shrink min-w-0 scrollbar-none">
