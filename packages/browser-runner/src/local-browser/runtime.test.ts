@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserTools } from "./bridge.js";
 import type { LocalBrowserTaskEnvelope } from "./contract.js";
 import { LocalBrowserRuntime, parseEnvelope, resolveWorkspacePath } from "./runtime.js";
@@ -272,5 +272,54 @@ describe("retention", () => {
 		expect(existsSync(join(dir, "local-browser", "inst-1", "run-1"))).toBe(false);
 		expect(() => rt.status({ runId: "run-1" })).toThrow(/No local browser run/);
 		expect(rt.status({ runId: "run-live" }).state).toBe("running");
+	});
+});
+
+/**
+ * The run's time limit, enforced by the RUNNER (#947: "hard task limits at the runner layer, not only
+ * in model instructions"). The bridge refuses tools past `maxMinutes`; this is the backstop for a CLI
+ * that keeps thinking without calling one — it is stopped a minute after the limit. Only ACTIVE time
+ * counts: an hour waiting on the owner's consent must not spend the run's budget.
+ */
+describe("the time limit", () => {
+	beforeEach(() => {
+		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+	const tick = (ms: number) => {
+		now += ms;
+		vi.advanceTimersByTime(5_000);
+	};
+
+	it("stops a CLI that runs past the limit, and says so", async () => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		tick(15 * 60_000);
+		expect(spawned[0].child.killed).toEqual([]); // the grace minute: the bridge has already refused it more work
+		tick(60_000);
+		expect(spawned[0].child.killed).toEqual(["SIGTERM"]);
+		expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "failed", error: "Stopped at the 15-minute limit." });
+	});
+
+	it("does not count time the run spends waiting on the owner", async () => {
+		const rt = runtime();
+		rt.start(envelope({ policy: { ...envelope().policy, allowDomains: [] } }));
+		await settle();
+		tick(10 * 60_000);
+		// A new site: the bridge pauses the run for consent. Not awaited — it resolves on resume.
+		const asked = rt.bridge({ runId: "run-1", op: "call", name: "browser_navigate", args: { url: "https://indeed.com/" } });
+		await settle();
+		expect(rt.status({ runId: "run-1" })).toMatchObject({ state: "paused", pauseReason: "consent_required" });
+		tick(60 * 60_000); // an hour before the owner answers
+		expect(spawned[0].child.killed).toEqual([]);
+		rt.resume({ runId: "run-1", consentedDomains: ["indeed.com"], denyDomains: [], profileConsented: false });
+		await asked;
+		tick(5 * 60_000); // 15 active minutes — at the limit, inside the grace minute
+		expect(spawned[0].child.killed).toEqual([]);
+		tick(60_000);
+		expect(spawned[0].child.killed).toEqual(["SIGTERM"]);
 	});
 });
