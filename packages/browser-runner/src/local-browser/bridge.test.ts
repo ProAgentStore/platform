@@ -65,6 +65,12 @@ function fakeHost(o: { allow?: string[]; deny?: string[]; consented?: string[]; 
 const textOf = (r: { content: Array<{ text: string }> }) => r.content.map((c) => c.text).join("\n");
 
 describe("what the CLI is offered", () => {
+	it("lists nothing outside BRIDGE_TOOL_NAMES — the set Codex is told to trust (#952)", async () => {
+		const { BRIDGE_TOOL_NAMES } = await import("./bridge.js");
+		const listed = (await new BrowserBridge(fakeBrowser().tools, fakeHost().host).listTools()).map((t) => t.name);
+		for (const name of listed) expect(BRIDGE_TOOL_NAMES).toContain(name);
+	});
+
 	it("lists only the read-only browser tools plus the research tools", async () => {
 		const b = new BrowserBridge(fakeBrowser().tools, fakeHost().host);
 		expect((await b.listTools()).map((t) => t.name).sort()).toEqual(["browser_click", "browser_navigate", "browser_navigate_back", "browser_snapshot", "finish_research", "record_finding", "report_source_failure"]);

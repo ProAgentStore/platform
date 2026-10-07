@@ -12,6 +12,13 @@
  *  - Codex: `--sandbox read-only` (its shell cannot write, and per Codex's sandbox design has no
  *    network), `--ignore-user-config` (no MCP servers or providers from the user's own config — auth
  *    still comes from the login), web search switched off, and the bridge as its only MCP server.
+ *    `codex exec` runs with approval policy `never`, so an MCP tool that needs approval is simply
+ *    refused — a live run on 2026-10-07 opened no page for exactly that reason (#952). The bridge is
+ *    therefore pre-approved, and ONLY it: `default_tools_approval_mode="approve"` on the
+ *    `pags_browser` server, and `enabled_tools` pinned to the bridge's own tool names
+ *    (`BRIDGE_TOOL_NAMES`). Nothing else is approved — the shell stays read-only with no network,
+ *    there is no other server — and the bridge still enforces sites, consent, limits and the
+ *    research-only tool set in the runner, whatever the CLI is allowed to call.
  *    NOT VERIFIED END TO END on a live machine: that read-only shell commands get no network, and
  *    which of the two web-search keys a given Codex version honours. #947 holds that test.
  *
@@ -21,6 +28,7 @@
  * turns a subscription run into per-token billing.
  */
 import { mergeEnv } from "../coding/engine-env.js";
+import { BRIDGE_TOOL_NAMES } from "./bridge.js";
 import { resolveEngineAuth } from "../coding/engine-auth.js";
 import type { LocalBrowserAuthMode, LocalBrowserEngine, LocalBrowserEngineAuth, LocalBrowserTaskEnvelope } from "./contract.js";
 
@@ -115,6 +123,11 @@ export function buildEngineSpec(input: {
 			`${key}.env=${envTable}`,
 			"-c",
 			`${key}.tool_timeout_sec=${Math.ceil(input.toolTimeoutMs / 1000)}`,
+			// Pre-approve the bridge, and only its own tools (#952); see the note atop this file.
+			"-c",
+			`${key}.default_tools_approval_mode="approve"`,
+			"-c",
+			`${key}.enabled_tools=[${BRIDGE_TOOL_NAMES.map(toml).join(", ")}]`,
 			// Two spellings across Codex versions; an unknown key is ignored, so both are set.
 			"-c",
 			'web_search="disabled"',

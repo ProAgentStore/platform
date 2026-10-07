@@ -51,6 +51,8 @@ export interface ToolResult {
 
 /** The browser tools a research run may use. Everything else from the browser is not even listed. */
 const READ_TOOLS = new Set(["browser_navigate", "browser_navigate_back", "browser_snapshot", "browser_wait_for", "browser_click"]);
+/** The research tools the bridge adds; the CLI records its results through these. */
+const RESEARCH_TOOL_NAMES = ["record_finding", "report_source_failure", "finish_research"] as const;
 /** Refused BY NAME with the reason, so a CLI that guesses one is told why rather than "unknown tool". */
 const WRITE_TOOLS = new Set([
 	"browser_type",
@@ -68,6 +70,12 @@ const WRITE_TOOLS = new Set([
 /** Roles a click may target in research mode: moving between pages, never acting on one. */
 const CLICKABLE_ROLES = new Set(["link", "tab", "menuitem", "treeitem", "option"]);
 const PAGINATION_NAME = /^(next|previous|prev|more|load more|show more|see more|view more|older|newer|page \d+|\d+|›|»|‹|«)( page| results| jobs)?$/i;
+
+/**
+ * Every tool name the bridge can ever list (#952) — the exact set a CLI may be told to trust
+ * without asking. Write tools are not in it, so trusting this set cannot trust a write.
+ */
+export const BRIDGE_TOOL_NAMES: readonly string[] = [...READ_TOOLS, ...RESEARCH_TOOL_NAMES];
 
 const RESEARCH_TOOLS = [
 	{
