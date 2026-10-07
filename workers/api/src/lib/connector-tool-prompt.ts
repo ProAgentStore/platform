@@ -219,6 +219,25 @@ export const TERMINAL_CLI_PROTOCOL =
 	" Never report success when changed is false.";
 
 /**
+ * One clean interactive sign-in at a time (#967). A PKCE login (`gcloud auth login
+ * --no-launch-browser`, any "open this link, paste the code" flow) prints its own link per attempt,
+ * and a code only works in the attempt that printed its link; a second login started in the same pane
+ * leaves the owner holding a superseded link, and its code fails with "Invalid code verifier".
+ *
+ * Unnumbered on purpose: the three numbered rules above are mirrored in the operator seeds and
+ * parity-tested heading by heading. This one rides only the per-turn CONNECTED TOOLS block, which
+ * reaches every instance with terminal tools on its next message, with no migration. The tmux tools
+ * back it with a pane check (`oauthPaneNotice`) that names the newest link when several are visible.
+ */
+export const TERMINAL_SIGN_IN_RULE =
+	"\nINTERACTIVE SIGN-IN (a CLI login that prints a link and asks for a code, e.g. `gcloud auth login" +
+	" --no-launch-browser`): run ONE attempt at a time in a pane. Before starting, stop any login still" +
+	" waiting there (C-c) and `clear`, then run the command ONCE. Give the user only the link that attempt" +
+	" printed, never an earlier one from scrollback — each attempt's code works only with its own link." +
+	" If the login fails with \"Invalid code verifier\", the code came from a superseded link, not a" +
+	" typo: say so plainly, then start one clean login and hand over only its new link.";
+
+/**
  * The whole block, or "" when this agent has no connector tools.
  *
  * `grantedWriteConnectors` is the instance's consent rows, read at prompt-build time. Reading them
@@ -248,6 +267,6 @@ export function connectorToolsPrompt(tools: readonly PromptTool[], grantedWriteC
 		// naming a console location and TOOL_LIST_CLOSED forbids naming one, and neither says which
 		// applies to a tool that is present, was called, and was refused for a third reason (#517).
 		TOOL_REFUSAL_RELAY +
-		(hasTerminalTools ? TERMINAL_CLI_PROTOCOL : "")
+		(hasTerminalTools ? TERMINAL_CLI_PROTOCOL + TERMINAL_SIGN_IN_RULE : "")
 	);
 }

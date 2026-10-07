@@ -91,6 +91,28 @@ The rules:
   from `mac-mini` to `pink-laptop`" once it is retrieved. There is no input box and no way to view
   the value. `secure_input_status` reports the same status (`ready` → `consumed`, or `expired`).
 
+### Interactive sign-ins in a tmux pane — one clean attempt at a time
+
+A login that prints a link and asks for a code (`gcloud auth login --no-launch-browser`, any
+PKCE "open this link, paste the code" flow) prints a **different** link on every attempt, and a
+code only works in the attempt whose link produced it. Start a second login in the same pane
+before the first finishes and the owner can end up holding the older link; its code then fails
+with `(invalid_grant) Invalid code verifier`, which looks like a mistyped code but isn't (#967).
+
+Operator rule — also given to every terminal agent each turn (`TERMINAL_SIGN_IN_RULE`):
+
+1. Stop any login still waiting in the pane (`C-c`) and `clear`.
+2. Run the login command **once**.
+3. Give the owner only the link that attempt printed — never one from scrollback.
+4. On `Invalid code verifier`, say the code came from a superseded link, then repeat 1–3.
+
+The tmux tools check this on every pane they return (`lib/oauth-pane.ts`). When a pane carries
+more than one distinct sign-in link (told apart by `state` / `code_challenge`), the result's
+platform note says how many there are and names the **newest** as the only live one. When
+`Invalid code verifier` / `invalid_grant` appears after the newest link, the note replaces the raw
+error with the plain explanation and the clean-retry steps. The check reads the pane; it can't see
+a login running in a different pane or machine.
+
 **Write-consent gating (#90).** Every `scope:"write"` connector tool is refused unless the
 instance has explicit write-consent for that connector (`instance_connector_consent`, migration
 0051). `runRegistryTool` checks consent *before* dispatch, fail-closed; read-only connectors

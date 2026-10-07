@@ -21,6 +21,7 @@ import { observeDeviceAuth } from "../engine-reauth-expiry.js";
 import { consumeSecureInput, depositSecureInput, restoreConsumedSecureInput } from "../secure-input.js";
 import { secureInputLink } from "../console-links.js";
 import { runnerUpgradeMessage, runnerUpgradeRefusal } from "../runner-upgrade.js";
+import { oauthPaneNotice } from "../oauth-pane.js";
 
 /** The CLI release whose runner serves `/secure/read` + `/secure/write` (#918). */
 export const SECURE_HANDOFF_MIN_CLI = "0.4.69";
@@ -61,6 +62,11 @@ async function resolveRunner(ctx: RegistryToolCtx): Promise<{ conn: RunnerConn }
 	const conn = await getBoundRunnerConn(ctx.env, ctx.instanceId, ctx.userId).catch(() => null);
 	if (!conn) return { error: "No runner is connected for this agent — run `pags up` on the machine whose tmux you want to control." };
 	return { conn };
+}
+
+/** The platform's notes on a pane, joined: whether input landed, and any sign-in confusion on it (#967). */
+function paneTail(pane: unknown, ...notes: string[]): string {
+	return [...notes, oauthPaneNotice(pane)].filter(Boolean).join("\n");
 }
 
 function requireSession(input: Record<string, unknown>): string {
@@ -117,7 +123,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 				{ timeoutMs: READ_TIMEOUT_MS },
 			);
 			await watchForDeviceAuth(ctx, r.conn, session, res.pane);
-			return { content: res.pane ?? "", success: true, origin: `the tmux session "${session}" on your machine` };
+			return { content: res.pane ?? "", success: true, tail: paneTail(res.pane), origin: `the tmux session "${session}" on your machine` };
 		},
 	},
 	{
@@ -149,7 +155,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 			// The landed note is the PLATFORM's judgement about the pane, not the pane — it rides in
 			// `tail`, outside the fence, or the model reads our diagnosis as terminal output.
 			const landed = res.changed === false ? "(pane did not change — the command may not have landed; is the CLI ready?)" : "";
-			return { content: res.pane ?? `Ran in ${session}.`, success: true, tail: landed, origin: `the tmux session "${session}" on your machine` };
+			return { content: res.pane ?? `Ran in ${session}.`, success: true, tail: paneTail(res.pane, landed), origin: `the tmux session "${session}" on your machine` };
 		},
 	},
 	{
@@ -181,7 +187,7 @@ export const TMUX_TOOLS: ToolDef[] = [
 			await noteUnmeteredDrive(ctx.env, ctx, { driver: "terminal", target: `tmux:${session}`, activeCommand: res.activeCommand });
 			await watchForDeviceAuth(ctx, r.conn, session, res.pane);
 			const landed = res.changed === false ? "(pane did not change — the input may not have landed; is the CLI at its input prompt?)" : "";
-			return { content: res.pane ?? `Sent to ${session}.`, success: true, tail: landed, origin: `the tmux session "${session}" on your machine` };
+			return { content: res.pane ?? `Sent to ${session}.`, success: true, tail: paneTail(res.pane, landed), origin: `the tmux session "${session}" on your machine` };
 		},
 	},
 	{
@@ -220,11 +226,11 @@ export const TMUX_TOOLS: ToolDef[] = [
 				return {
 					content: res.pane ?? "",
 					success: false,
-					tail: "(pane did not change — message may not have landed; is the CLI at its input prompt? Wait for the prompt and retry.)",
+					tail: paneTail(res.pane, "(pane did not change — message may not have landed; is the CLI at its input prompt? Wait for the prompt and retry.)"),
 					origin: `the tmux session "${session}" on your machine`,
 				};
 			}
-			return { content: res.pane ?? "Message sent.", success: true, origin: `the tmux session "${session}" on your machine` };
+			return { content: res.pane ?? "Message sent.", success: true, tail: paneTail(res.pane), origin: `the tmux session "${session}" on your machine` };
 		},
 	},
 	{

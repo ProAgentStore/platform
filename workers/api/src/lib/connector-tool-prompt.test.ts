@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	CONSENT_RULE,
 	TERMINAL_CLI_PROTOCOL,
+	TERMINAL_SIGN_IN_RULE,
 	TOOL_LIST_CLOSED,
 	TOOL_REFUSAL_RELAY,
 	connectorToolsPrompt,
@@ -241,6 +242,15 @@ describe("#483 — TERMINAL_CLI_PROTOCOL injected for terminal/tmux agents", () 
 		const tmuxTool: PromptTool = { name: "tmux_list_sessions", description: "List sessions.", connector: "tmux", scope: "read", jsonSchema: {} };
 		const prompt = connectorToolsPrompt([tmuxTool], []);
 		expect(prompt).toContain(TERMINAL_CLI_PROTOCOL);
+	});
+
+	it("carries the one-clean-sign-in rule for a terminal agent, and not for a github-only one (#967)", () => {
+		const tmuxTool: PromptTool = { name: "tmux_list_sessions", description: "List sessions.", connector: "tmux", scope: "read", jsonSchema: {} };
+		expect(connectorToolsPrompt([tmuxTool], [])).toContain(TERMINAL_SIGN_IN_RULE);
+		expect(TERMINAL_SIGN_IN_RULE).toMatch(/ONE attempt at a time/);
+		expect(TERMINAL_SIGN_IN_RULE).toMatch(/Invalid code verifier/);
+		const githubTool: PromptTool = { name: "github_create_issue", description: "Create issue.", connector: "github", scope: "write", jsonSchema: {} };
+		expect(connectorToolsPrompt([githubTool], ["github"])).not.toContain("INTERACTIVE SIGN-IN");
 	});
 
 	it("is NOT injected for agents with only non-terminal tools (e.g. github)", () => {

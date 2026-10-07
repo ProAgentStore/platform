@@ -151,6 +151,29 @@ describe("tmux connector — dispatch to the runner", () => {
 		expect(r.content).toMatch(/input prompt/);
 	});
 
+	it("a pane with two sign-in links: the tool's tail names the newest as the only live one (#967)", async () => {
+		const link = (s: string) => `https://accounts.google.com/o/oauth2/auth?response_type=code&client_id=c&state=${s}&code_challenge=ch${s}`;
+		callRunner.mockResolvedValue({ pane: `${link("OLD")}\nenter code: ^C\n${link("NEW")}\nenter code: `, changed: true });
+		for (const [name, input] of [
+			["tmux_capture_pane", { session: "gc" }],
+			["tmux_run_command", { session: "gc", command: "gcloud auth login --no-launch-browser" }],
+			["tmux_send_keys", { session: "gc", keys: "Enter" }],
+			["tmux_send_message", { session: "gc", message: "y" }],
+		] as const) {
+			const raw = await tool(name).handler(ctx(), input);
+			expect(raw.tail, name).toMatch(/2 different sign-in links/);
+			expect(raw.tail, name).toContain(link("NEW"));
+			expect(raw.tail, name).not.toContain(link("OLD"));
+		}
+	});
+
+	it("an Invalid code verifier on the pane comes back explained, beside the landed warning (#967)", async () => {
+		callRunner.mockResolvedValue({ pane: "ERROR: (gcloud.auth.login) (invalid_grant) Invalid code verifier.\n$ ", changed: false });
+		const raw = await tool("tmux_send_message").handler(ctx(), { session: "gc", message: "4/0code" });
+		expect(raw.tail).toMatch(/pane did not change/);
+		expect(raw.tail).toMatch(/superseded/);
+	});
+
 	it("send_message rejects an empty message without calling the runner", async () => {
 		const r = await tool("tmux_send_message").handler(ctx(), { session: "main", message: "" });
 		expect(r.success).toBe(false);
