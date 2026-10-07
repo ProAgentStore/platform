@@ -60,6 +60,7 @@ import { runDueTriggers } from "./lib/triggers.js";
 import { runDueDeliveries } from "./lib/connections.js";
 import { syncActiveLocalBrowserRuns } from "./lib/local-browser/sync.js";
 import { syncActiveTailorRuns } from "./lib/local-artifact/tailor.js";
+import { syncActiveApplyRuns } from "./lib/local-apply/apply.js";
 import { routeRunEvents } from "./lib/run-event-routing.js";
 import { runTicketQueue } from "./lib/ticket-queue.js";
 import { runCommitCloseWatch } from "./lib/commit-close-watch.js";
@@ -295,6 +296,8 @@ export default {
 		ctx.waitUntil(syncActiveLocalBrowserRuns(env).catch((err) => logUnhandled(env, err, { path: "scheduled:local-browser", method: "CRON" })));
 		// The same pull for Application Tailor runs (#956), plus the materials_ready outbox backstop.
 		ctx.waitUntil(syncActiveTailorRuns(env).catch((err) => logUnhandled(env, err, { path: "scheduled:application-tailor", method: "CRON" })));
+		// The same pull for Application Runner fills (#957).
+		ctx.waitUntil(syncActiveApplyRuns(env).catch((err) => logUnhandled(env, err, { path: "scheduled:application-runner", method: "CRON" })));
 		// Snapshot yesterday's stats for instances that were active (#313). A sixth independent
 		// failure domain, and the one with the weakest claim on the tick: a missed rollup leaves a
 		// GAP in a chart, which is a visible and honest outcome, where a missed delivery loses work.

@@ -82,6 +82,8 @@ export const RUNTIME_TASK_OWNERS: Readonly<Record<string, RuntimeTaskOwner>> = {
 	// #956: Application Tailor. Its state is PAGS's own `local_artifact_runs` row, ended by the
 	// pull when the runner no longer holds the run — never by the reconnect sweep.
 	"local_artifact.generate": "runner-durable",
+	// #957: Application Runner. Its state is PAGS's own `local_apply_runs` row, ended by the pull.
+	"local_browser.apply": "runner-durable",
 	ticket: "cloud", // lib/tool-registry.ts create_ticket
 	// #864: a run the ticket queue started, on the board naming its ticket. The run is a durable loop
 	// in the cloud, and `run-events.ts` settles the row when it ends — never a runner's to expire.

@@ -88,6 +88,8 @@ const ACTION_KEYS: Record<TriggerAction, readonly string[]> = {
 	run_local_browser: ["objective", "mapping"],
 	// #956: the payload IS the approved lead event; there is nothing to configure.
 	generate_application_materials: [],
+	// #957: the payload IS the materials_ready event; the policy lives in the instance settings.
+	start_application_fill: [],
 };
 
 /** Config that belongs to the SCHEDULE rather than the action, so it is cron-only. */
@@ -108,6 +110,7 @@ export const MAPPING_TARGETS: Record<TriggerAction, readonly string[]> = {
 	// A webhook can say what to research (#962); a cron says it in config.objective.
 	run_local_browser: ["objective"],
 	generate_application_materials: [],
+	start_application_fill: [],
 };
 
 export const MAX_MAPPING_ENTRIES = 12;
@@ -262,6 +265,7 @@ export function validateTriggerConfig(action: TriggerAction, type: TriggerType, 
 		if (action === "run_browse" && !/^https?:\/\//i.test(strValue(raw.url))) problems.push("A scheduled browser run needs a start URL beginning with http:// or https://.");
 		if (action === "run_local_browser" && !strValue(raw.objective)) problems.push("A scheduled research run needs an objective — what it should find.");
 		if (action === "generate_application_materials") problems.push("Tailoring needs an approved lead to work on, which a schedule cannot supply — connect the Scout's job.lead.apply_requested event to this agent instead.");
+		if (action === "start_application_fill") problems.push("Filling needs an application whose materials are ready, which a schedule cannot supply — connect the Tailor's job.application.materials_ready event to this agent instead.");
 	}
 	return problems;
 }

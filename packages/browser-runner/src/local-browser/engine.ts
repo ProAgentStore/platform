@@ -76,6 +76,8 @@ export function buildEngineSpec(input: {
 	mcpConfigPath: string;
 	toolTimeoutMs: number;
 	baseEnv?: NodeJS.ProcessEnv;
+	/** The bridge tools Codex may call without asking — the application bridge's own set (#957). */
+	toolNames?: readonly string[];
 }): EngineSpec {
 	const env = engineEnv(input.authMode, input.engine, input.toolTimeoutMs, input.baseEnv);
 	if (input.engine === "claude") {
@@ -127,7 +129,7 @@ export function buildEngineSpec(input: {
 			"-c",
 			`${key}.default_tools_approval_mode="approve"`,
 			"-c",
-			`${key}.enabled_tools=[${BRIDGE_TOOL_NAMES.map(toml).join(", ")}]`,
+			`${key}.enabled_tools=[${(input.toolNames ?? BRIDGE_TOOL_NAMES).map(toml).join(", ")}]`,
 			// Two spellings across Codex versions; an unknown key is ignored, so both are set.
 			"-c",
 			'web_search="disabled"',

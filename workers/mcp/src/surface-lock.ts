@@ -1033,4 +1033,7 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// 0.1.86 (#956): runtime `local_artifact` (update_agent / create_agent) and the
 	// `generate_application_materials` trigger + connection action. No tool added. Appended.
 	"0.1.86": "sha256:6790f6c6e1969a4add028b4e9f19b2f978572160234a6228cdcf7354f302b6fb",
+	// 0.1.87 (#957): runtime `local_apply` (update_agent / create_agent) and the
+	// `start_application_fill` trigger + connection action. No tool added. Appended.
+	"0.1.87": "sha256:e1e0fc00ec0a13113521c2bd5c594649a426cc9d7974c4c1510b8e9cf7f6b773",
 };

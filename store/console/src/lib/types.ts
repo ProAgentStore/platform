@@ -44,6 +44,7 @@ export type TriggerAction =
 	| "run_browse"
 	| "run_local_browser"
 	| "generate_application_materials"
+	| "start_application_fill"
 	| "log_event";
 
 export interface CustomSurface {

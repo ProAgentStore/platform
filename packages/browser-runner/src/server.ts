@@ -21,7 +21,10 @@ export function createRunnerServer(runner: LocalRunner) {
 			if (!req.headers.origin && req.method === "POST" && (req.url || "").split("?")[0] === "/local-browser/bridge") {
 				const body = await readJson<Record<string, unknown>>(req);
 				const token = String(req.headers["x-pags-bridge-token"] || "");
-				if (!runner.localBrowser.authorizeBridge(String(body.runId ?? ""), token)) return json(res, 401, { error: "Unauthorized" });
+				const runId = String(body.runId ?? "");
+				// The same forwarder serves application runs (#957); each runtime knows only its own tokens.
+				if (runner.localApply.authorizeBridge(runId, token)) return json(res, 200, await runner.localApply.bridge(body));
+				if (!runner.localBrowser.authorizeBridge(runId, token)) return json(res, 401, { error: "Unauthorized" });
 				return json(res, 200, await runner.localBrowser.bridge(body));
 			}
 			if (!authorize(req, runner.config)) {
@@ -213,6 +216,20 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	}
 	if (req.method === "POST" && path === "/local-artifact/cancel") {
 		return json(res, 200, runner.localArtifact.cancel(await readJson(req)));
+	}
+
+	// Local application execution (#957) — run, status, resume, cancel; PULL like research.
+	if (req.method === "POST" && path === "/local-apply/run") {
+		return json(res, 202, runner.localApply.start(await readJson(req)));
+	}
+	if (req.method === "POST" && path === "/local-apply/status") {
+		return json(res, 200, runner.localApply.status(await readJson(req)));
+	}
+	if (req.method === "POST" && path === "/local-apply/resume") {
+		return json(res, 200, runner.localApply.resume(await readJson(req)));
+	}
+	if (req.method === "POST" && path === "/local-apply/cancel") {
+		return json(res, 200, runner.localApply.cancel(await readJson(req)));
 	}
 
 	if (req.method === "POST" && path === "/coding/start") {

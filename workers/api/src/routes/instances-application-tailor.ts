@@ -15,6 +15,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { readInstanceConfigPair, patchInstanceConfig } from "../lib/instance-config.js";
 import { cancelTailoring, startTailoring, syncTailorRun } from "../lib/local-artifact/tailor.js";
 import {
+	APPLICATION_STATUSES,
 	type ApplicationStatus,
 	TAILOR_DEFAULTS,
 	TAILOR_SETTINGS_KEY,
@@ -36,7 +37,6 @@ async function owned(c: C): Promise<{ uid: string; instanceId: string }> {
 	return { uid: session.uid, instanceId };
 }
 
-const STATUSES: readonly ApplicationStatus[] = ["tailoring", "materials_ready", "blocked", "failed", "cancelled"];
 
 async function storedSettings(c: C, instanceId: string, uid: string): Promise<unknown> {
 	const pair = await readInstanceConfigPair(c.env, instanceId, uid);
@@ -63,7 +63,7 @@ export function registerApplicationTailorRoutes(router: Hono<{ Bindings: Env }>)
 	router.get("/:instanceId/applications", async (c) => {
 		const { uid, instanceId } = await owned(c);
 		const status = c.req.query("status");
-		if (status && !STATUSES.includes(status as ApplicationStatus)) return c.json({ error: `status must be one of ${STATUSES.join(", ")}` }, 400);
+		if (status && !APPLICATION_STATUSES.includes(status as ApplicationStatus)) return c.json({ error: `status must be one of ${APPLICATION_STATUSES.join(", ")}` }, 400);
 		const limit = Math.min(Math.max(Number(c.req.query("limit")) || 50, 1), 200);
 		const applications = await listApplications(c.env, instanceId, uid, { status: status as ApplicationStatus | undefined, limit });
 		return c.json({ applications, limit, ...(applications.length === limit ? { note: `Showing the newest ${limit}; pass ?limit= (max 200) or ?status= to see others.` } : {}) });

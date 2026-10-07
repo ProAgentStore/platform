@@ -34,6 +34,7 @@ const ACTION_LABELS: Record<TriggerAction, string> = {
 	run_browse: "Run browser task",
 	run_local_browser: "Run browser research",
 	generate_application_materials: "Tailor application materials",
+	start_application_fill: "Fill the application",
 };
 
 /**
@@ -60,6 +61,7 @@ const REQUIREMENTS: Partial<Record<TriggerAction, ActionRequirement>> = {
 	run_browse: { workflow: "BROWSER_TASK", does: "drive a browser" },
 	run_local_browser: { runtime: "local_browser", does: "run local browser research" },
 	generate_application_materials: { runtime: "local_artifact", does: "tailor application materials" },
+	start_application_fill: { runtime: "local_apply", does: "fill job applications" },
 };
 
 /** The capability an action needs, as one short phrase — null when it needs nothing declared. */

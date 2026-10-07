@@ -98,6 +98,10 @@ export const INSTANCE_CHILD_TABLES = [
 	"local_browser_domain_consent",
 	// #956 — the run before the application it references (FK).
 	"local_artifact_runs",
+	// #957 — the Runner's fill runs (no FK: their application is on the Tailor's instance) and the
+	// lifecycle audit, keyed to the application's instance and deleted before it (FK).
+	"local_apply_runs",
+	"job_application_events",
 	"job_applications",
 ] as const;
 

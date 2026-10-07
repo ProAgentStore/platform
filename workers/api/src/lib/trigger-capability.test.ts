@@ -45,7 +45,7 @@ describe("triggerActionDenial — the wiring-time gate (#358)", () => {
 	// Being an instance IS the requirement for these — they dispatch into the instance's own DO.
 	it("allows every action that needs no declared capability", () => {
 		for (const action of TRIGGER_ACTIONS) {
-			if (action === "run_browse" || action === "run_local_browser" || action === "generate_application_materials") continue;
+			if (action === "run_browse" || action === "run_local_browser" || action === "generate_application_materials" || action === "start_application_fill") continue;
 			expect(triggerActionDenial(action, caps({}))).toBeNull();
 			expect(triggerActionRequirement(action)).toBeNull();
 		}
@@ -73,12 +73,12 @@ describe("triggerActionOffers — what the console picker renders", () => {
 		expect(browse?.requires).toContain("BROWSER_TASK");
 		// …and local browser research, which needs runtime "local_browser" (#962), and tailoring,
 		// which needs runtime "local_artifact" (#956).
-		expect(offers.filter((o) => !o.available).map((o) => o.action).sort()).toEqual(["generate_application_materials", "run_browse", "run_local_browser"]);
+		expect(offers.filter((o) => !o.available).map((o) => o.action).sort()).toEqual(["generate_application_materials", "run_browse", "run_local_browser", "start_application_fill"]);
 	});
 
 	it("marks everything but the local CLI actions available on a browser-task agent", () => {
 		const offers = triggerActionOffers(caps({ workflow: "BROWSER_TASK", runtime: "browser" }));
-		expect(offers.filter((o) => !o.available).map((o) => o.action)).toEqual(["run_local_browser", "generate_application_materials"]);
+		expect(offers.filter((o) => !o.available).map((o) => o.action)).toEqual(["run_local_browser", "generate_application_materials", "start_application_fill"]);
 	});
 
 	it("carries a label for every action, so the console needs no list of its own", () => {
@@ -134,5 +134,13 @@ describe("generate_application_materials is gated on capabilities.runtime \"loca
 		expect(triggerActionDenial("generate_application_materials", caps({ runtime: "local_artifact" }))).toBeNull();
 		expect(triggerActionDenial("generate_application_materials", caps({ runtime: "local_browser" }))).toContain('capabilities.runtime = "local_artifact"');
 		expect(triggerActionRequirement("generate_application_materials")).toBe('capabilities.runtime = "local_artifact"');
+	});
+});
+
+describe("start_application_fill is gated on capabilities.runtime \"local_apply\" (#957)", () => {
+	it("is allowed on an Application Runner and refused elsewhere, naming the runtime", () => {
+		expect(triggerActionDenial("start_application_fill", caps({ runtime: "local_apply" }))).toBeNull();
+		expect(triggerActionDenial("start_application_fill", caps({ runtime: "local_artifact" }))).toContain('capabilities.runtime = "local_apply"');
+		expect(triggerActionRequirement("start_application_fill")).toBe('capabilities.runtime = "local_apply"');
 	});
 });

@@ -97,7 +97,9 @@ export function sourcesOf(s: ApplicationTailorSettings): LocalArtifactSource[] {
 
 // ── Applications ─────────────────────────────────────────────────────────────────────────────
 
-export type ApplicationStatus = "tailoring" | "materials_ready" | "blocked" | "failed" | "cancelled";
+/** Tailoring (#956), then execution (#957): filling → awaiting_review | submitted, and the owner's deferred / archived. */
+export type ApplicationStatus = "tailoring" | "materials_ready" | "blocked" | "failed" | "cancelled" | "filling" | "awaiting_review" | "submitted" | "deferred" | "archived";
+export const APPLICATION_STATUSES: readonly ApplicationStatus[] = ["tailoring", "materials_ready", "filling", "awaiting_review", "submitted", "blocked", "deferred", "failed", "cancelled", "archived"];
 
 export interface JobApplication {
 	id: string;
@@ -119,6 +121,14 @@ export interface JobApplication {
 	readyEmittedAt: number | null;
 	createdAt: number;
 	updatedAt: number;
+	/** The compare-and-set token for lifecycle moves (#957). */
+	stateVersion: number;
+	fillRunId: string | null;
+	/** Set once a final submit MAY have happened — including "unknown" — and never cleared. */
+	submitAttemptedAt: number | null;
+	/** Only from a confirmed submit. */
+	submittedAt: string | null;
+	submittedUrl: string | null;
 }
 
 interface AppRow {
@@ -142,6 +152,11 @@ interface AppRow {
 	ready_emitted_at: number | null;
 	created_at: number;
 	updated_at: number;
+	state_version: number;
+	fill_run_id: string | null;
+	submit_attempted_at: number | null;
+	submitted_at: string | null;
+	submitted_url: string | null;
 }
 
 const json = <T>(s: string | null): T | null => {
@@ -173,7 +188,18 @@ const presentApp = (r: AppRow): JobApplication => ({
 	readyEmittedAt: r.ready_emitted_at,
 	createdAt: r.created_at,
 	updatedAt: r.updated_at,
+	stateVersion: Number(r.state_version ?? 0),
+	fillRunId: r.fill_run_id ?? null,
+	submitAttemptedAt: r.submit_attempted_at ?? null,
+	submittedAt: r.submitted_at ?? null,
+	submittedUrl: r.submitted_url ?? null,
 });
+
+/** By id and owner only — the Application Runner (#957) acts on an application another of the owner's instances holds. */
+export async function getOwnedApplication(env: DB, userId: string, id: string): Promise<JobApplication | null> {
+	const row = await env.DB.prepare("SELECT * FROM job_applications WHERE id = ?1 AND user_id = ?2").bind(id, userId).first<AppRow>();
+	return row ? presentApp(row) : null;
+}
 
 export async function getApplication(env: DB, instanceId: string, userId: string, id: string): Promise<JobApplication | null> {
 	const row = await env.DB.prepare("SELECT * FROM job_applications WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3").bind(id, instanceId, userId).first<AppRow>();

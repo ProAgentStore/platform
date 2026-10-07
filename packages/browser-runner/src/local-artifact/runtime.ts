@@ -134,7 +134,7 @@ export function parseArtifactEnvelope(raw: unknown): ParsedEnvelope {
 const sha256 = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
 
 /** A source file resolved on the real disk, strictly inside the workspace. */
-function resolveSource(workspace: string, rel: string): string {
+export function resolveSource(workspace: string, rel: string): string {
 	const real = realpathSync(resolve(workspace, rel));
 	if (!real.startsWith(workspace + sep)) throw new Error("outside the workspace");
 	if (real.slice(workspace.length + 1).split(sep)[0] === "applications") throw new Error("inside applications/");

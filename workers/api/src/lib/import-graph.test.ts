@@ -89,6 +89,8 @@ const EXPECTED_DEFERRED = new Set([
 	// #956: the Application Tailor is started by a trigger/connection action and emits its own
 	// materials_ready through the pump; triggers.ts defers the import.
 	"lib/local-artifact/tailor.ts",
+	// #957: the Application Runner is started by a connection action, the same way.
+	"lib/local-apply/apply.ts",
 ]);
 
 describe("workers/api import graph", () => {

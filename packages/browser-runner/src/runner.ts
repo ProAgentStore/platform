@@ -17,6 +17,8 @@ import { LocalBrowserRuntime } from "./local-browser/runtime.js";
 import { LOCAL_BROWSER_TASK_TYPE } from "./local-browser/contract.js";
 import { LocalArtifactRuntime } from "./local-artifact/runtime.js";
 import { LOCAL_ARTIFACT_TASK_TYPE } from "./local-artifact/contract.js";
+import { LocalApplyRuntime } from "./local-apply/runtime.js";
+import { LOCAL_APPLY_TASK_TYPE } from "./local-apply/contract.js";
 import { WORKFLOW_DRIVEN_TASKS } from "./task-types.js";
 
 /** True for a plain object. */
@@ -99,6 +101,8 @@ export class LocalRunner {
 	readonly localBrowser: LocalBrowserRuntime;
 	/** Local artifact generation (#956): the Application Tailor's résumé + cover letter, from the owner's own files. */
 	readonly localArtifact: LocalArtifactRuntime;
+	/** Local application execution (#957): a signed-in CLI filling one application through the apply bridge. */
+	readonly localApply: LocalApplyRuntime;
 	/** This runner's own local URL, once the server listens — the bridge forwarder calls back to it. */
 	selfUrl: string | null = null;
 	/** Live human-takeover sessions, keyed by task id (the page is kept alive). */
@@ -111,19 +115,17 @@ export class LocalRunner {
 		mkdirSync(config.dataDir, { recursive: true });
 		this.store = new RunnerStore(config.dataDir);
 		this.coding = new CodingRuntime(join(config.dataDir, "repos"));
-		this.localBrowser = new LocalBrowserRuntime({
-			dataDir: config.dataDir,
-			selfUrl: () => this.selfUrl,
-			// `default` is the runner's own signed-in browser, shared and never closed by a run;
-			// `isolated` is a fresh profile inside the run's folder, removed with it.
-			browserFor: async (profile, runDir) => {
-				if (profile === "default") return { tools: await this.getMcp(), stop: async () => undefined };
-				const mcp = new McpRuntime();
-				await mcp.start({ userDataDir: join(runDir, "profile"), headless: config.headless });
-				return { tools: mcp, stop: () => mcp.stop() };
-			},
-		});
+		// `default` is the runner's own signed-in browser, shared and never closed by a run;
+		// `isolated` is a fresh profile inside the run's folder, removed with it.
+		const browserFor = async (profile: "isolated" | "default", runDir: string) => {
+			if (profile === "default") return { tools: await this.getMcp(), stop: async () => undefined };
+			const mcp = new McpRuntime();
+			await mcp.start({ userDataDir: join(runDir, "profile"), headless: config.headless });
+			return { tools: mcp, stop: () => mcp.stop() };
+		};
+		this.localBrowser = new LocalBrowserRuntime({ dataDir: config.dataDir, selfUrl: () => this.selfUrl, browserFor });
 		this.localArtifact = new LocalArtifactRuntime({ dataDir: config.dataDir });
+		this.localApply = new LocalApplyRuntime({ dataDir: config.dataDir, selfUrl: () => this.selfUrl, browserFor });
 		// Tasks paused/running on a previous process are orphaned now — their
 		// pages and takeover sessions are gone. Fail them so the board is clean.
 		const expired = this.store.expireInFlightTasks();
@@ -138,7 +140,7 @@ export class LocalRunner {
 			runtimePlane: "pags",
 			runnerRole: "tool-executor",
 			capabilities: [...CAPABILITIES, ...CodingRuntime.capabilities()],
-			taskTypes: ["echo", "browser.open", "job.apply_agent", "site_builder_runtime", LOCAL_BROWSER_TASK_TYPE, LOCAL_ARTIFACT_TASK_TYPE, ...CodingRuntime.taskTypes()],
+			taskTypes: ["echo", "browser.open", "job.apply_agent", "site_builder_runtime", LOCAL_BROWSER_TASK_TYPE, LOCAL_ARTIFACT_TASK_TYPE, LOCAL_APPLY_TASK_TYPE, ...CodingRuntime.taskTypes()],
 			approvalRequiredFor: [...APPROVAL_REQUIRED_TASKS],
 		};
 	}
@@ -272,6 +274,7 @@ export class LocalRunner {
 	async close(): Promise<void> {
 		this.localBrowser.closeAll();
 		this.localArtifact.closeAll();
+		this.localApply.closeAll();
 		try {
 			this.coding.closeAll();
 		} catch (e) {

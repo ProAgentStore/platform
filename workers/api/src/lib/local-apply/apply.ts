@@ -1,0 +1,327 @@
+/**
+ * The Application Runner (#957): materials ready → a local CLI fills the application in a real
+ * browser → the outcome written back to the application, by compare-and-set, with an audit row.
+ *
+ *   job.application.materials_ready (#956, via the connection outbox)
+ *     → startApplicationFill: claim the run on the event id (replay = the same run), evaluate the
+ *       submit gate, move the application materials_ready → filling, dispatch `local_browser.apply`
+ *     → syncApplyRun (on read + per-minute cron): pull events; a pause mirrors to `blocked`, a
+ *       resume back to `filling`; the result settles the application exactly once
+ *     → awaiting_review | submitted (only with the site's confirmation) | blocked | failed.
+ *
+ * Not `JOB_APPLY` (a PAGS-brain workflow): its own runtime (`local_apply`), task, run table and
+ * policy. The API owns state; the runner holds only the task.
+ *
+ * Never twice: a replayed event returns the existing run; an application leaves `materials_ready`
+ * once; a submit attempt — confirmed, unconfirmed, or unknowable because the runner was lost
+ * mid-run — sets `submit_attempted_at`, and nothing starts another fill after that.
+ */
+import { HttpError } from "../auth.js";
+import { capabilitiesForInstance } from "../agent-capabilities.js";
+import { readInstanceConfigPair } from "../instance-config.js";
+import { type JobApplication, getOwnedApplication } from "../local-artifact/store.js";
+import type { Env } from "../../types.js";
+import { callRuntime, getLiveRuntime, runtimeJson } from "../../routes/instances-runtime.js";
+import {
+	LOCAL_APPLY_CANCEL_PATH,
+	LOCAL_APPLY_PAUSE_REASONS,
+	LOCAL_APPLY_RESUME_PATH,
+	LOCAL_APPLY_RUN_PATH,
+	LOCAL_APPLY_STATUS_PATH,
+	LOCAL_APPLY_TASK_TYPE,
+	type LocalApplyPause,
+	type LocalApplyResultEnvelope,
+	type LocalApplyTaskEnvelope,
+	parseLocalApplyEvent,
+	parseLocalApplyResult,
+} from "./contract.js";
+import { RUNNER_SETTINGS_KEY, effectiveRunnerSettings, evaluateSubmitGate, hostOfUrl } from "./policy.js";
+import {
+	type ApplicationMove,
+	type ApplyRun,
+	type ApplyRunPolicy,
+	type ApplyTraceEvent,
+	activeApplyRuns,
+	applyRunCounts,
+	getApplyRun,
+	getApplyRunByRequest,
+	insertApplyRun,
+	isTerminalApplyRun,
+	markSubmitAttempted,
+	moveApplication,
+	updateApplyRun,
+} from "./store.js";
+
+/** The event the Runner consumes — #956's readiness event. */
+export const MATERIALS_READY_EVENT = "job.application.materials_ready";
+export const LOST_RUNNER_GRACE_MS = 10 * 60_000;
+export const PAUSED_RUNNER_GRACE_MS = 24 * 60 * 60_000;
+
+export function notRunnerMessage(runtime: string | null | undefined): string {
+	return `This agent is not an Application Runner (its capabilities.runtime is ${runtime ? `"${runtime}"` : "null"}). The creator declares capabilities.runtime "local_apply" to enable it.`;
+}
+
+const iso = (now: number) => new Date(now).toISOString();
+const str = (v: unknown) => (typeof v === "string" ? v : "");
+
+export type StartFillOutcome = { kind: "started" | "existing"; application: JobApplication; run: ApplyRun | null };
+
+/** Move the application, re-reading it first — false when it is not where the move starts. */
+async function move(env: Env, uid: string, applicationId: string, from: readonly string[], m: ApplicationMove, now: number): Promise<boolean> {
+	const app = await getOwnedApplication(env, uid, applicationId);
+	if (!app || !from.includes(app.status)) return false;
+	return moveApplication(env, app, uid, m, now);
+}
+
+/**
+ * Start filling one application — the ONE start path, for the connection action and the owner's
+ * route. Throws 409 when this is not a Runner or the input is not a materials_ready event for one
+ * of the owner's applications, and 503 when no runner is connected — before anything is recorded,
+ * so the outbox retries.
+ */
+export async function startApplicationFill(env: Env, instanceId: string, uid: string, rawEvent: unknown, source: "connection" | "owner"): Promise<StartFillOutcome> {
+	const caps = await capabilitiesForInstance(env, instanceId, uid);
+	if (caps?.runtime !== "local_apply") throw new HttpError(409, notRunnerMessage(caps?.runtime));
+	const ev = rawEvent && typeof rawEvent === "object" && !Array.isArray(rawEvent) ? (rawEvent as Record<string, unknown>) : null;
+	const key = str(ev?.eventId).trim();
+	const applicationId = str(ev?.applicationId).trim();
+	if (!ev || !key || key.length > 300 || !applicationId) throw new HttpError(400, `Not a ${MATERIALS_READY_EVENT} event: eventId and applicationId are required.`);
+
+	const existing = await getApplyRunByRequest(env, instanceId, uid, key);
+	const app = await getOwnedApplication(env, uid, applicationId);
+	// Everything about the application comes from the owner's own record, never from the payload.
+	if (!app || app.instanceId !== str(ev.tailorInstanceId)) throw new HttpError(404, "That application does not exist, or is not one of yours.");
+	if (existing) return { kind: "existing", application: app, run: existing };
+	if (app.status !== "materials_ready") {
+		const run = app.fillRunId ? await getApplyRun(env, instanceId, uid, app.fillRunId) : null;
+		return { kind: "existing", application: app, run };
+	}
+	if (app.submitAttemptedAt) throw new HttpError(409, "A final submit was already attempted for this application; it will not be filled again automatically.");
+
+	const pair = await readInstanceConfigPair(env, instanceId, uid);
+	const settings = effectiveRunnerSettings((pair?.config as Record<string, unknown> | undefined)?.[RUNNER_SETTINGS_KEY]);
+	if ("error" in settings) throw new HttpError(409, `The Application Runner settings are invalid: ${settings.error}`);
+	const s = settings.settings;
+	const lead = (app.lead ?? {}) as { leadUrl?: string; lead?: { title?: string; company?: string; location?: string; match_rationale?: string } };
+	const leadUrl = str(lead.leadUrl);
+	const jobHost = hostOfUrl(leadUrl);
+	if (!jobHost) throw new HttpError(409, "The application's lead has no http(s) URL to apply at.");
+	const runtime = await getLiveRuntime(env, instanceId, uid);
+	if (!runtime) throw new HttpError(503, "No runner is connected. Run `pags up` on the machine that holds your job materials; the application will be filled when it connects.");
+
+	const now = Date.now();
+	const counts = await applyRunCounts(env, instanceId, uid, now);
+	const gate = evaluateSubmitGate({
+		settings: s,
+		application: {
+			profileVersion: app.profileVersion,
+			resumeSha: app.resumeArtifact?.sha256 ?? null,
+			coverLetterSha: app.coverLetterArtifact?.sha256 ?? null,
+			blockReason: app.blockReason,
+			submitAttemptedAt: app.submitAttemptedAt,
+			leadUrl,
+			lead: lead.lead ?? {},
+		},
+		autoSubmitsToday: counts.autoSubmitsToday,
+		activeRuns: counts.active,
+	});
+	const gateId = gate.allowed ? crypto.randomUUID() : null;
+	const mode = gate.allowed ? "auto_submit" : "fill_and_review";
+	const runId = crypto.randomUUID();
+	const policy: ApplyRunPolicy = {
+		engine: s.engine,
+		authMode: s.authMode,
+		browserProfile: s.browserProfile,
+		mode,
+		allowDomains: [...new Set([jobHost, ...s.allowDomains])],
+		limits: { maxMinutes: s.maxMinutes, maxPages: s.maxPages, maxActions: s.maxActions },
+		gate: { allowed: gate.allowed, gateId, checks: gate.checks },
+	};
+	const failing = gate.checks.filter((c) => !c.ok).map((c) => c.check);
+	const trace: ApplyTraceEvent[] = [
+		{ type: "run.requested", at: iso(now), detail: { engine: s.engine, authMode: s.authMode, status: source } },
+		{ type: "policy.submit_gate", at: iso(now), detail: { mode, decision: gate.allowed ? "allowed" : "refused", ...(gateId ? { gateId } : { reason: failing.join(",").slice(0, 300) }) } },
+	];
+
+	// The application leaves materials_ready exactly once: the move IS the claim.
+	const claimed = await moveApplication(env, app, uid, { to: "filling", actor: "runner", actorInstanceId: instanceId, runId, bindRun: runId, reason: mode }, now);
+	if (!claimed) {
+		const fresh = (await getOwnedApplication(env, uid, applicationId)) ?? app;
+		return { kind: "existing", application: fresh, run: fresh.fillRunId ? await getApplyRun(env, instanceId, uid, fresh.fillRunId) : null };
+	}
+	await insertApplyRun(env, { id: runId, instanceId, userId: uid, applicationId, requestId: key, policy, trace, now });
+	let run = (await getApplyRun(env, instanceId, uid, runId)) as ApplyRun;
+
+	const envelope: LocalApplyTaskEnvelope = {
+		type: LOCAL_APPLY_TASK_TYPE,
+		runId,
+		requestId: key,
+		instanceId,
+		applicationId,
+		engine: s.engine,
+		authMode: s.authMode,
+		browserProfile: s.browserProfile,
+		applicationUrl: leadUrl,
+		job: { title: str(lead.lead?.title) || "the job", ...(lead.lead?.company ? { company: lead.lead.company } : {}), ...(lead.lead?.location ? { location: lead.lead.location } : {}) },
+		workspace: s.workspace,
+		sources: (["profile", "answers"] as const).filter((r) => s.sources[r]).map((role) => ({ role, path: s.sources[role] as string })),
+		artifacts: [app.resumeArtifact, app.coverLetterArtifact].filter((a): a is NonNullable<typeof a> => !!a).map((a) => ({ kind: a.kind, path: a.path, sha256: a.sha256 })),
+		policy: { mode, allowDomains: policy.allowDomains, ...(gateId ? { submitGate: { gateId } } : {}) },
+		limits: policy.limits,
+	};
+	const fail = async (errorCode: string, error: string) => {
+		run = (await updateApplyRun(env, run, { to: "failed", errorCode, error, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: errorCode } }] }, now)) ?? run;
+		await move(env, uid, applicationId, ["filling"], { to: "blocked", actor: "system", actorInstanceId: instanceId, runId, expectRun: runId, reason: errorCode, questions: [error] }, now);
+	};
+	let res: Response | null = null;
+	try {
+		res = await callRuntime(env, runtime, LOCAL_APPLY_RUN_PATH, { method: "POST", body: JSON.stringify(envelope) });
+	} catch (err) {
+		await fail("runner_unreachable", `The runner did not answer: ${err instanceof Error ? err.message.slice(0, 300) : "unknown error"}`);
+	}
+	if (res) {
+		const payload = (await runtimeJson(res)) as Record<string, unknown>;
+		if (res.status === 404) await fail("runner_unsupported", "The connected runner cannot fill applications yet. Update the CLI (npm i -g @proagentstore/cli) and run `pags up` again.");
+		else if (!res.ok) await fail("runner_rejected", `The runner refused the run: ${typeof payload.error === "string" ? payload.error.slice(0, 500) : `HTTP ${res.status}`}`);
+		else run = (await updateApplyRun(env, run, { to: "running", runnerNode: runtime.runner_node || null, events: [{ type: "runner.dispatched", at: iso(now), detail: { status: "running", mode } }] }, now)) ?? run;
+	}
+	return { kind: "started", application: (await getOwnedApplication(env, uid, applicationId)) as JobApplication, run };
+}
+
+/** End a run's application from its result — exactly once, by compare-and-set. */
+async function settleFromResult(env: Env, uid: string, run: ApplyRun, rawResult: unknown, now: number): Promise<ApplyRun> {
+	const checked = parseLocalApplyResult(rawResult);
+	const attempted = run.trace.some((e) => e.type === "submit.attempted") || (rawResult as { submitAttempted?: unknown } | null)?.submitAttempted === true;
+	if (attempted) await markSubmitAttempted(env, run.applicationId, uid, now);
+	const base = { actor: "runner" as const, actorInstanceId: run.instanceId, runId: run.id, expectRun: run.id };
+	if ("error" in checked || checked.result.runId !== run.id) {
+		const error = "error" in checked ? `The runner sent a result PAGS cannot accept: ${checked.error}` : "The runner's result names another run.";
+		const failed = await updateApplyRun(env, run, { to: "failed", errorCode: "runner_result_invalid", error, pause: null, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: "runner_result_invalid" } }] }, now);
+		if (failed) await move(env, uid, run.applicationId, ["filling", "blocked"], { ...base, to: "blocked", reason: attempted ? "submit_state_unknown" : "runner_result_invalid", questions: [error] }, now);
+		return failed ?? run;
+	}
+	let r: LocalApplyResultEnvelope = checked.result;
+	// A submit PAGS did not gate is not a submission PAGS records — whatever the runner says.
+	if (r.outcome === "submitted" && (run.policy.mode !== "auto_submit" || r.submitted?.gateId !== run.policy.gate.gateId)) {
+		r = { ...r, outcome: "blocked", blockReason: "submit_unconfirmed", questions: ["The runner reported a submission this run's policy did not permit. Check the employer's site before anything else is done."], submitted: undefined };
+	}
+	const to = r.outcome;
+	const moved = await updateApplyRun(
+		env,
+		run,
+		{ to, pause: null, result: r, engineAuth: r.engineAuth, ...(to === "failed" ? { errorCode: "engine_failed", error: r.error ?? null } : {}), events: [{ type: "run.ended", at: iso(now), detail: { status: to, engineAuth: r.engineAuth, count: r.filled, ...(r.blockReason ? { reason: r.blockReason } : {}) } }] },
+		now,
+	);
+	if (!moved) return run;
+	const from = ["filling", "blocked"] as const;
+	if (to === "submitted" && r.submitted) await move(env, uid, run.applicationId, from, { ...base, to: "submitted", submitted: { at: r.submitted.at, url: r.submitted.url } }, now);
+	else if (to === "awaiting_review") await move(env, uid, run.applicationId, from, { ...base, to: "awaiting_review" }, now);
+	else if (to === "blocked") await move(env, uid, run.applicationId, from, { ...base, to: "blocked", reason: r.blockReason ?? "incomplete", questions: r.questions ?? [] }, now);
+	else await move(env, uid, run.applicationId, from, { ...base, to: "failed", reason: r.engineAuth === "missing_login" ? "engine_not_signed_in" : "engine_failed" }, now);
+	return moved;
+}
+
+/**
+ * The runner lost the run. If it was allowed to submit, nobody can say whether it did — so the
+ * application is marked as a possible submit and blocked, never left looking like it is safe to retry.
+ */
+async function endLost(env: Env, uid: string, run: ApplyRun, error: string, now: number): Promise<ApplyRun> {
+	const unknown = run.policy.mode === "auto_submit";
+	const failed = await updateApplyRun(env, run, { to: "failed", errorCode: "runner_lost", error, pause: null, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: "runner_lost" } }] }, now);
+	if (!failed) return run;
+	if (unknown) await markSubmitAttempted(env, run.applicationId, uid, now);
+	await move(
+		env,
+		uid,
+		run.applicationId,
+		["filling", "blocked"],
+		{ actor: "system", actorInstanceId: run.instanceId, runId: run.id, expectRun: run.id, to: "blocked", reason: unknown ? "submit_state_unknown" : "runner_lost", questions: [unknown ? `${error} It was allowed to submit, so check the employer's site before anything is retried.` : error] },
+		now,
+	);
+	return failed;
+}
+
+/** Bring one run up to date from its runner, mirroring a pause onto the application. */
+export async function syncApplyRun(env: Env, uid: string, run: ApplyRun, now = Date.now()): Promise<ApplyRun> {
+	// A run recorded but never handed over (the Worker died between the two) is not left queued forever.
+	if (run.status === "queued") return now - run.createdAt > LOST_RUNNER_GRACE_MS ? endLost(env, uid, run, "The run was never handed to the runner.", now) : run;
+	if (run.status !== "running" && run.status !== "paused") return run;
+	const silentSince = run.lastSyncedAt ?? run.startedAt ?? run.createdAt;
+	const lostByTime = run.status === "running" ? now - silentSince > run.policy.limits.maxMinutes * 60_000 + LOST_RUNNER_GRACE_MS : now - silentSince > PAUSED_RUNNER_GRACE_MS;
+	const runtime = await getLiveRuntime(env, run.instanceId, uid).catch(() => null);
+	if (!runtime) return lostByTime ? endLost(env, uid, run, "The runner went offline during the application and did not come back in time.", now) : run;
+	let res: Response;
+	try {
+		res = await callRuntime(env, runtime, LOCAL_APPLY_STATUS_PATH, { method: "POST", body: JSON.stringify({ runId: run.id, afterSeq: run.runnerSeq }) });
+	} catch {
+		return run;
+	}
+	if (res.status === 404) return endLost(env, uid, run, "The runner no longer holds this run — it was restarted or updated.", now);
+	if (!res.ok) return lostByTime ? endLost(env, uid, run, "The runner stopped answering for this run.", now) : run;
+	const body = (await runtimeJson(res)) as { state?: unknown; pause?: unknown; events?: unknown; lastSeq?: unknown; result?: unknown };
+	const events = (Array.isArray(body.events) ? body.events : []).map(parseLocalApplyEvent).filter((e): e is NonNullable<typeof e> => e !== null) as ApplyTraceEvent[];
+	const lastSeq = typeof body.lastSeq === "number" && body.lastSeq >= run.runnerSeq ? body.lastSeq : run.runnerSeq;
+	// A submit attempt is recorded the moment PAGS sees it, before anything else can go wrong.
+	if (events.some((e) => e.type === "submit.attempted")) await markSubmitAttempted(env, run.applicationId, uid, now);
+
+	const p = body.pause && typeof body.pause === "object" ? (body.pause as Record<string, unknown>) : null;
+	const pause: LocalApplyPause | null =
+		body.state === "paused" && p && LOCAL_APPLY_PAUSE_REASONS.includes(p.reason as never)
+			? { reason: p.reason as LocalApplyPause["reason"], ...(typeof p.url === "string" ? { url: p.url.slice(0, 2000) } : {}), ...(typeof p.domain === "string" ? { domain: p.domain.slice(0, 253) } : {}), ...(typeof p.question === "string" ? { question: p.question.slice(0, 300) } : {}) }
+			: null;
+	const to = body.state === "paused" && pause ? "paused" : body.state === "running" ? "running" : run.status;
+	let current = (await updateApplyRun(env, run, { to, events, runnerSeq: lastSeq, ...(to !== run.status || to === "paused" ? { pause: to === "paused" ? pause : null } : {}) }, now)) ?? (await getApplyRun(env, run.instanceId, uid, run.id)) ?? run;
+	const base = { actor: "runner" as const, actorInstanceId: run.instanceId, runId: run.id, expectRun: run.id };
+	if (current.status === "paused" && run.status !== "paused" && pause) {
+		await move(env, uid, run.applicationId, ["filling"], { ...base, to: "blocked", reason: pause.reason, questions: pause.question ? [pause.question] : [] }, now);
+	} else if (current.status === "running" && run.status === "paused") {
+		await move(env, uid, run.applicationId, ["blocked"], { ...base, to: "filling", reason: "resumed" }, now);
+	}
+	if (body.state === "ended" && body.result !== undefined && !isTerminalApplyRun(current.status)) current = await settleFromResult(env, uid, current, body.result, now);
+	return current;
+}
+
+/** The owner handled the pause: send their answers / newly allowed sites, release the run, read it back. */
+export async function resumeApplyRun(env: Env, uid: string, run: ApplyRun, body: unknown, now = Date.now()): Promise<ApplyRun> {
+	if (run.status !== "paused") throw new HttpError(409, `Only a paused run can be resumed; this one is ${run.status}`);
+	const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+	// Refused, not cut: a truncated answer would be grounding the owner never wrote.
+	const rawAnswers = Array.isArray(b.answers) ? b.answers : [];
+	const answers = rawAnswers.filter((a): a is { question: string; answer: string } => !!a && typeof a === "object" && typeof (a as Record<string, unknown>).question === "string" && typeof (a as Record<string, unknown>).answer === "string");
+	if (answers.length !== rawAnswers.length || answers.length > 20 || answers.some((a) => a.question.length > 300 || a.answer.length > 2000)) {
+		throw new HttpError(400, "answers must be up to 20 { question (≤300 chars), answer (≤2000 chars) } objects");
+	}
+	const rawDomains = Array.isArray(b.allowDomains) ? b.allowDomains : [];
+	const allowDomains = rawDomains.map((d) => (typeof d === "string" ? hostOfUrl(`https://${d}`) : null));
+	if (rawDomains.length > 10 || allowDomains.some((d) => !d)) throw new HttpError(400, "allowDomains must be up to 10 hostnames");
+	const runtime = await getLiveRuntime(env, run.instanceId, uid).catch(() => null);
+	if (!runtime) throw new HttpError(409, "No runner is connected. Run `pags up` on that machine, then resume.");
+	const res = await callRuntime(env, runtime, LOCAL_APPLY_RESUME_PATH, { method: "POST", body: JSON.stringify({ runId: run.id, answers, allowDomains: allowDomains as string[] }) }).catch(() => null);
+	if (!res) throw new HttpError(409, "The runner did not answer. Check `pags up` on that machine and try again.");
+	if (res.status === 404) return endLost(env, uid, run, "The runner no longer holds this run — it was restarted or updated.", now);
+	if (!res.ok) throw new HttpError(409, `The runner refused to resume: HTTP ${res.status}`);
+	return syncApplyRun(env, uid, (await getApplyRun(env, run.instanceId, uid, run.id)) ?? run, now);
+}
+
+/** Stop the run. Touches PAGS records and the local CLI only — nothing on the employer's site. */
+export async function cancelApplyRun(env: Env, uid: string, run: ApplyRun, now = Date.now()): Promise<ApplyRun> {
+	if (isTerminalApplyRun(run.status)) throw new HttpError(409, `The run has already ended (${run.status})`);
+	const runtime = await getLiveRuntime(env, run.instanceId, uid).catch(() => null);
+	if (runtime) await callRuntime(env, runtime, LOCAL_APPLY_CANCEL_PATH, { method: "POST", body: JSON.stringify({ runId: run.id }) }).catch(() => null);
+	const cancelled = await updateApplyRun(env, run, { to: "cancelled", errorCode: "cancelled", error: "Cancelled by the owner", pause: null, events: [{ type: "run.ended", at: iso(now), detail: { status: "cancelled" } }] }, now);
+	if (!cancelled) throw new HttpError(409, "The run changed while cancelling — reload it.");
+	await move(env, uid, run.applicationId, ["filling", "blocked"], { actor: "owner", actorInstanceId: run.instanceId, runId: run.id, expectRun: run.id, to: "blocked", reason: "cancelled_by_owner", questions: ["You cancelled this application run."] }, now);
+	return cancelled;
+}
+
+export async function syncActiveApplyRuns(env: Env, limit = 25): Promise<number> {
+	const now = Date.now();
+	let synced = 0;
+	for (const r of await activeApplyRuns(env, limit)) {
+		const run = await getApplyRun(env, r.instanceId, r.userId, r.id);
+		if (!run) continue;
+		await syncApplyRun(env, r.userId, run, now).catch(() => undefined);
+		synced++;
+	}
+	return synced;
+}

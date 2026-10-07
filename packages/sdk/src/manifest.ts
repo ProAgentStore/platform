@@ -14,7 +14,7 @@
 export type AgentCapabilitySurface = "apply" | "coding" | "repo" | "tmux" | (string & {});
 
 /** Which local runner runtime the agent's hands use (null = no local runner). */
-export type AgentRuntimeKind = "browser" | "coding" | "local_browser" | "local_artifact" | null;
+export type AgentRuntimeKind = "browser" | "coding" | "local_browser" | "local_artifact" | "local_apply" | null;
 
 export interface AgentCapabilities {
 	/** Capability surfaces this agent opts into (drives which tabs/UI show). */
