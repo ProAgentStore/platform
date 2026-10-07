@@ -273,22 +273,53 @@ export function systemPromptSections(label: string, content: unknown): Array<{ l
  */
 type AnthropicSystemBlock = { type: "text"; text: string; cache_control?: { type: "ephemeral"; ttl?: "1h" } };
 
-export function anthropicSystemBlocks(content: unknown): AnthropicSystemBlock[] | undefined {
-	if (!isSystemPromptBlocks(content)) {
-		const text = String(content ?? "");
-		return text ? [{ type: "text", text, cache_control: { type: "ephemeral" } }] : undefined;
-	}
-	const kept = content.filter((b) => b.text.length > 0);
-	if (!kept.length) return undefined;
-	const cached = kept.filter((b) => b.cache);
-	const breakpoints = new Set(cached.slice(-MAX_CACHE_BREAKPOINTS));
-	let shortSeen = false;
+/**
+ * The provider's cache rules, held across ONE request (#914): at most four breakpoints in all, and a
+ * 1-hour entry may not follow a 5-minute one. The system prompt and a user message's prompt blocks
+ * draw on the same budget, in request order — tools, system, then messages.
+ */
+interface CacheBudget {
+	left: number;
+	shortSeen: boolean;
+}
+
+function toAnthropicBlocks(blocks: readonly SystemPromptBlock[], budget: CacheBudget): AnthropicSystemBlock[] {
+	const kept = blocks.filter((b) => b.text.length > 0);
+	// The LAST breakpoints asked for are kept: a later one already covers the prefix before it.
+	const breakpoints = new Set(kept.filter((b) => b.cache).slice(-Math.max(0, budget.left)));
+	budget.left -= breakpoints.size;
 	return kept.map((b): AnthropicSystemBlock => {
 		if (!breakpoints.has(b)) return { type: "text", text: b.text };
-		const long = b.ttl === "1h" && !shortSeen;
-		if (!long) shortSeen = true;
+		const long = b.ttl === "1h" && !budget.shortSeen;
+		if (!long) budget.shortSeen = true;
 		return { type: "text", text: b.text, cache_control: long ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" } };
 	});
+}
+
+export function anthropicSystemBlocks(content: unknown, budget: CacheBudget = { left: MAX_CACHE_BREAKPOINTS, shortSeen: false }): AnthropicSystemBlock[] | undefined {
+	if (!isSystemPromptBlocks(content)) {
+		const text = String(content ?? "");
+		if (!text) return undefined;
+		budget.left -= 1;
+		budget.shortSeen = true;
+		return [{ type: "text", text, cache_control: { type: "ephemeral" } }];
+	}
+	const out = toAnthropicBlocks(content, budget);
+	return out.length ? out : undefined;
+}
+
+/**
+ * A USER message written as prompt blocks (#914) — the same `{text, cache?, ttl?, label?}` a system
+ * prompt uses, and nothing else: an array carrying a `type` is already in the provider's own block
+ * shape (a PDF `document`, a `tool_result`) and passes through untouched.
+ */
+export function isUserPromptBlocks(content: unknown): content is SystemPromptBlock[] {
+	return isSystemPromptBlocks(content) && content.length > 0 && content.every((b) => !("type" in b));
+}
+
+/** A message list with every user prompt-block message as provider text blocks, within the request's budget. */
+function anthropicUserBlocks<M extends { role: string; content: unknown }>(messages: readonly M[], budget: CacheBudget): M[] {
+	return messages.map((m) => (m.role === "user" && isUserPromptBlocks(m.content) ? { ...m, content: toAnthropicBlocks(m.content, budget) } : m));
 }
 
 async function runAnthropic(
@@ -298,8 +329,11 @@ async function runAnthropic(
 	body: { messages: Array<{ role: string; content: unknown }>; tools?: unknown[]; toolChoice?: "auto" | "none"; maxTokens?: number; timeoutMs?: number },
 	ctx?: UsageContext,
 ): Promise<unknown> {
-	const messages = normalizeForAnthropic((body.messages || []).filter((m) => m.role !== "system"));
 	const systemMsg = (body.messages || []).find((m) => m.role === "system");
+	// The system prompt's breakpoints first, then the messages' — one budget, in request order (#914).
+	const budget: CacheBudget = { left: MAX_CACHE_BREAKPOINTS, shortSeen: false };
+	const system = systemMsg ? anthropicSystemBlocks(systemMsg.content, budget) : undefined;
+	const messages = normalizeForAnthropic(anthropicUserBlocks((body.messages || []).filter((m) => m.role !== "system"), budget));
 
 	const anthropicBody: Record<string, unknown> = {
 		model: "claude-sonnet-4-6",
@@ -314,10 +348,7 @@ async function runAnthropic(
 	// — the apply loop fires one per step — reprocess it from cache instead of
 	// re-paying for it each time. Makes the per-step cost flat instead of growing.
 	// A caller whose prompt mixes stable text with per-turn facts sends BLOCKS instead (#768).
-	if (systemMsg) {
-		const system = anthropicSystemBlocks(systemMsg.content);
-		if (system) anthropicBody.system = system;
-	}
+	if (system) anthropicBody.system = system;
 
 	// Convert tools to Anthropic format (deduplicate by name)
 	if (body.tools && Array.isArray(body.tools) && body.tools.length > 0) {
@@ -607,10 +638,12 @@ async function readAnthropicStream(
 function withFlatSystemPrompt(body: unknown): unknown {
 	const messages = (body as { messages?: unknown })?.messages;
 	if (!Array.isArray(messages)) return body;
-	if (!messages.some((m) => m?.role === "system" && isSystemPromptBlocks(m.content))) return body;
+	// A provider with no cache reads the same text: system blocks and user prompt blocks (#914) flattened.
+	const flat = (m: { role?: string; content?: unknown }) => (m?.role === "system" && isSystemPromptBlocks(m.content)) || (m?.role === "user" && isUserPromptBlocks(m.content));
+	if (!messages.some(flat)) return body;
 	return {
 		...(body as Record<string, unknown>),
-		messages: messages.map((m) => (m?.role === "system" && isSystemPromptBlocks(m.content) ? { ...m, content: systemPromptText(m.content) } : m)),
+		messages: messages.map((m) => (flat(m) ? { ...m, content: systemPromptText(m.content) } : m)),
 	};
 }
 

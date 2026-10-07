@@ -735,20 +735,9 @@ export async function decideCodingAction(
 	usageCtx?: UsageContext,
 ): Promise<CodingDecision> {
 	const system = systemPromptBlocks(params.goal);
-	const clock = clockLine(Date.now(), params.goal.timeZone);
 	const steps = params.actionLog.length ? params.actionLog.map((a, i) => `${i + 1}. ${a}`).join("\n") : "(none yet)";
 	const terminal = renderPaneForPilot(params.snapshot.pane, undefined, params.snapshot.paneChars);
-	const userMsg = [
-		// The clock, per decision rather than per run (#541): a run that parks for an hour and
-		// resumes must convert the CLI's stated local reset time against the time it is NOW. In the
-		// user message for that reason — the system prompt is built once and would go stale.
-		clock,
-		`Steps so far:\n${steps}`,
-		`\nTERMINAL (run-state: ${params.snapshot.runState}):`,
-		// Not a bare `slice(-6000)`: the tail is labelled with what it is a tail OF (#522, cause B).
-		terminal,
-		"\nDecide the next move toward the objective. Call exactly one tool.",
-	].join("\n");
+	const userMsg = pilotUserBlocks({ actionLog: params.actionLog, clock: clockLine(Date.now(), params.goal.timeZone), runState: params.snapshot.runState, terminal });
 
 	const res = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", {
 		messages: [
@@ -764,6 +753,7 @@ export async function decideCodingAction(
 				promptPhase: "pilot_decide",
 				promptSections: [
 					...systemPromptSections("pilot.system", system),
+					// `pilot.steps` below is the steps part of `pilot.user`; listed apart, as it always was.
 					{ label: "pilot.objective", value: params.goal.objective },
 					{ label: "pilot.steps", value: steps },
 					{ label: "pilot.terminal", value: terminal },
@@ -794,6 +784,34 @@ export async function decideCodingAction(
 		return { thought: res.response, stuck: { why }, usage: res.usage, truncated };
 	}
 	return { ...toDecision(call), usage: res.usage, thought: res.response, truncated };
+}
+
+/**
+ * The Pilot's per-decision message, as prompt blocks (#914).
+ *
+ * "Steps so far" is append-only within a round, so it comes FIRST, one block per step, with a 1-hour
+ * breakpoint after the newest: the next decision's prefix extends this one by a step, and the provider
+ * finds the previous entry at the earlier block boundary — so only the newest step is written, and the
+ * rest is read at a tenth of the price. Before this the message opened with the clock, which changes
+ * every call, so the whole list was paid in full on every decision (~2.4k uncached tokens a call).
+ *
+ * The clock, the terminal tail and the instruction change every call and follow the breakpoint. 1 hour
+ * for the reason the system prefix is (#914): decisions are minutes apart, past a 5-minute entry. The
+ * clock is still per decision rather than per run (#541): a run that parks for an hour must convert the
+ * CLI's stated local reset time against the time it is NOW.
+ */
+export function pilotUserBlocks(input: { actionLog: readonly string[]; clock: string; runState: string; terminal: string }): SystemPromptBlock[] {
+	const tail = [
+		input.clock,
+		`\nTERMINAL (run-state: ${input.runState}):`,
+		// Not a bare `slice(-6000)`: the tail is labelled with what it is a tail OF (#522, cause B).
+		input.terminal,
+		"\nDecide the next move toward the objective. Call exactly one tool.",
+	].join("\n");
+	if (!input.actionLog.length) return [{ text: `Steps so far:\n(none yet)\n${tail}`, label: "turn" }];
+	const steps = input.actionLog.map((a, i): SystemPromptBlock => ({ text: `${i === 0 ? "Steps so far:\n" : "\n"}${i + 1}. ${a}`, label: "step" }));
+	steps[steps.length - 1] = { ...steps[steps.length - 1], cache: true, ttl: "1h" };
+	return [...steps, { text: `\n${tail}`, label: "turn" }];
 }
 
 export function toDecision(call: { name: string; arguments: Record<string, unknown> }): CodingDecision {

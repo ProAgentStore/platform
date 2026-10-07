@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { classifyCodingFailure } from "./coding-failure.js";
-import { decideCodingAction, systemPrompt } from "./coding-loop.js";
+import { decideCodingAction, pilotUserBlocks, systemPrompt } from "./coding-loop.js";
 import { encryptKey } from "./crypto.js";
 import {
 	anthropicSystemBlocks,
@@ -458,6 +458,95 @@ describe("system prompt blocks — the cacheable half and the per-turn half (#76
 		expect(round0.system[0].text).not.toContain("previous run");
 		// …and the model still reads exactly the prompt it read before the split.
 		expect(round0.system.map((b) => b.text).join("")).toBe(systemPrompt({ ...goal, resumeNote: "A previous run pushed X." }));
+	});
+
+	it("the Pilot's steps so far are a cached prefix: each decision pays in full only for its newest step (#914)", async () => {
+		const env = await envWithAnthropicKey("sk-ant-live-key-9abc");
+		type Block = { type: string; text: string; cache_control?: unknown };
+		const sent: Array<{ system: Block[]; messages: Array<{ role: string; content: Block[] }> }> = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: string, init: RequestInit) => {
+				sent.push(JSON.parse(init.body as string));
+				return anthropicSse({ content: [{ type: "tool_use", id: "t1", name: "finish", input: { status: "done", detail: "ok" } }], usage: { input_tokens: 1, output_tokens: 1 } });
+			}),
+		);
+		const goal = { objective: "fix the build", repo: "owner/repo", clientType: "claude" as const };
+		await decideCodingAction(env, "user-1", { goal, actionLog: ["send: run the tests", "send: fix x.ts"], snapshot: { pane: "$ npm test\nFAIL", runState: "idle" as const, ready: true, alive: true } });
+		await decideCodingAction(env, "user-1", { goal, actionLog: ["send: run the tests", "send: fix x.ts", "send: rerun"], snapshot: { pane: "$ npm test\nPASS", runState: "idle" as const, ready: true, alive: true } });
+		const [a, b] = sent.map((r) => r.messages[0].content);
+		// One block per step, ONE breakpoint — on the newest step — at the 1-hour TTL the system prefix uses.
+		expect(a.map((x) => x.cache_control ?? null)).toEqual([null, { type: "ephemeral", ttl: "1h" }, null]);
+		expect(b.map((x) => x.cache_control ?? null)).toEqual([null, null, { type: "ephemeral", ttl: "1h" }, null]);
+		// The next decision's prefix EXTENDS this one block by block — the provider finds the earlier entry
+		// at that block boundary. Byte-identical, or it is a write, not a read.
+		expect(b.slice(0, 2)).toEqual(a.slice(0, 2).map(({ cache_control: _c, ...rest }) => rest));
+		// What changes every call — the clock and the terminal — is after the breakpoint.
+		expect(a.at(-1)?.text).toMatch(/TERMINAL \(run-state: idle\)[\s\S]*FAIL/);
+		expect(a.at(-1)?.text).toMatch(/Current time: /);
+		expect(a.slice(0, -1).some((x) => /TERMINAL|Current time/.test(x.text))).toBe(false);
+		// Two breakpoints in all (system + steps), within the provider's four, 1h never after 5m.
+		expect([...sent[0].system, ...a].filter((x) => x.cache_control).length).toBe(2);
+	});
+
+	it("the Pilot's message reads as before — steps, then the clock, the terminal and the instruction", () => {
+		const blocks = pilotUserBlocks({ actionLog: ["one", "two"], clock: "It is now 10:00.", runState: "idle", terminal: "$ ls" });
+		expect(blocks.map((b) => b.text).join("")).toBe("Steps so far:\n1. one\n2. two\nIt is now 10:00.\n\nTERMINAL (run-state: idle):\n$ ls\n\nDecide the next move toward the objective. Call exactly one tool.");
+		// No steps yet: nothing worth caching, so no breakpoint at all.
+		expect(pilotUserBlocks({ actionLog: [], clock: "c", runState: "idle", terminal: "t" })).toEqual([{ text: expect.stringMatching(/^Steps so far:\n\(none yet\)\nc\n/), label: "turn" }]);
+	});
+
+	it("a user message's blocks share the request's four breakpoints with the system prompt — the LAST are kept", async () => {
+		const env = await envWithAnthropicKey();
+		let sentBody: { system: Array<{ cache_control?: unknown }>; messages: Array<{ content: Array<{ cache_control?: unknown }> }> } = { system: [], messages: [] };
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: string, init: RequestInit) => {
+				sentBody = JSON.parse(init.body as string);
+				return anthropicSse({ content: [{ type: "text", text: "ok" }], usage: { input_tokens: 1, output_tokens: 1 } });
+			}),
+		);
+		await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", {
+			messages: [
+				{ role: "system", content: [{ text: "s1", cache: true, ttl: "1h" }, { text: "s2", cache: true }, { text: "s3", cache: true }] },
+				{ role: "user", content: [{ text: "u1", cache: true, ttl: "1h" }, { text: "u2", cache: true }, { text: "u3" }] },
+			],
+		});
+		const marks = [...sentBody.system, ...sentBody.messages[0].content].map((b) => b.cache_control ?? null);
+		// 3 asked for in the system prompt take 3 of 4; the user message gets its LAST one only. And a 1h
+		// asked for after a 5-minute breakpoint is sent as 5m — the provider rejects the other order.
+		expect(marks.filter(Boolean)).toHaveLength(4);
+		expect(marks).toEqual([{ type: "ephemeral", ttl: "1h" }, { type: "ephemeral" }, { type: "ephemeral" }, null, { type: "ephemeral" }, null]);
+	});
+
+	it("passes a provider-shaped content array (a PDF, a tool result) through untouched", async () => {
+		const env = await envWithAnthropicKey();
+		let sentBody: { messages: Array<{ content: unknown }> } = { messages: [] };
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: string, init: RequestInit) => {
+				sentBody = JSON.parse(init.body as string);
+				return anthropicSse({ content: [{ type: "text", text: "ok" }], usage: { input_tokens: 1, output_tokens: 1 } });
+			}),
+		);
+		const content = [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: "AAAA" } }, { type: "text", text: "parse this" }];
+		await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content }] });
+		expect(sentBody.messages[0].content).toEqual(content);
+	});
+
+	it("a user message's blocks reach Workers AI as one string", async () => {
+		const { env } = envWithCloudflareKey(await encryptedCloudflareRow());
+		let sentBody: { messages: Array<{ role: string; content: unknown }> } = { messages: [] };
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: string, init: RequestInit) => {
+				sentBody = JSON.parse(init.body as string);
+				return Response.json({ success: true, result: { response: "ok" } });
+			}),
+		);
+		const user = pilotUserBlocks({ actionLog: ["one"], clock: "c", runState: "idle", terminal: "t" });
+		await runUserWorkersAi(env, "user-1", "@cf/meta/llama-3.2-3b-instruct", { messages: [{ role: "user", content: user }] });
+		expect(sentBody.messages).toEqual([{ role: "user", content: systemPromptText(user) }]);
 	});
 
 	it("reaches Workers AI as one plain string — that API has no blocks", async () => {

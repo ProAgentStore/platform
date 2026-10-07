@@ -992,10 +992,10 @@ const PINS = {
 	// +3 at #893: `runCloudflareAi` redacts Cloudflare's error body before it becomes `details` — an import and one call with its two-line why. The redaction is lib/cloudflare-redact.ts.
 	// +11 at #914: a system block may ask for the 1-hour cache, and the longer-TTL-first rule is
 	// enforced where the blocks are built; the 1-hour write count is read for its 2x price.
-	"workers/api/src/lib/user-ai.ts": 817,
+	"workers/api/src/lib/user-ai.ts": 850, // +33 at #914: a user message may be prompt blocks, cached within ONE breakpoint budget shared with the system prompt (≤4, 1h never after 5m), flattened for Workers AI.
 	// New entry at #914, crossing LIMIT by 6: the Pilot's prompt split into a 1-hour-cached run prefix
 	// and an uncached round tail, with the measurement that justified it in its doc comment.
-	"workers/api/src/lib/coding-loop.ts": 869, // +56 at #960: the `ask_owner` decision verb — its tool, prompt rule, decision case and option bounds. +7 at #898: the Pilot step log marks the instruction it shortens; `paneChars` rides on the snapshot.
+	"workers/api/src/lib/coding-loop.ts": 887, // +18 at #914: pilotUserBlocks — the steps-so-far prefix cached, the clock and terminal after it. +56 at #960: the `ask_owner` decision verb — its tool, prompt rule, decision case and option bounds. +7 at #898: the Pilot step log marks the instruction it shortens; `paneChars` rides on the snapshot.
 	// +3 at #878: the terminal record hook — an import and a one-line call with its comment after the handler. It belongs HERE for the reason the gates do: every surface dispatches through this function, and recording anywhere else would record one surface. The storage is lib/terminal-record.ts.
 	"workers/api/src/lib/tool-registry.ts": 902, // +3 at #898: truncation made visible (paging, marked cuts, refused over-length writes).
 	// +8 for the #312 stats prompt block. Deliberately not split: the block is two statements
