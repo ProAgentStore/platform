@@ -16,6 +16,12 @@ import type { AgentStorageEngine } from "./agent-storage.js";
 import { decodeBase64Upload, guessMimeType } from "./agent-storage-utils.js";
 import type { ActivityEvent, CollectionField } from "./agent-storage-types.js";
 import { json } from "./lib/do-json.js";
+import {
+	JOB_LEAD_COLLECTION,
+	JOB_LEAD_TRIAGE_ACTIONS,
+	planJobLeadTriage,
+	type JobLeadTriageAction,
+} from "./lib/job-lead-triage.js";
 
 // ── Collections ─────────────────────────────────────────────────────────────
 
@@ -116,6 +122,37 @@ export async function deleteRecord(
 		decodeURIComponent(id),
 	);
 	return deleted ? json({ success: true }) : json({ error: "Not found" }, 404);
+}
+
+/**
+ * Apply one explicit human triage decision to a Job Search Scout lead.
+ *
+ * This is deliberately not folded into `updateRecord`: an ordinary collection update must never
+ * create an application handoff. Because it runs inside the instance's Durable Object, the
+ * read → lifecycle validation → write is serialized with every other write to that instance.
+ */
+export async function triageJobLead(
+	engine: Pick<AgentStorageEngine, "recordGet" | "recordUpdate">,
+	id: string,
+	request: Request,
+): Promise<Response> {
+	const body = await request.json<{ action?: unknown; defer_until?: unknown; note?: unknown }>();
+	if (typeof body.action !== "string" || !JOB_LEAD_TRIAGE_ACTIONS.includes(body.action as JobLeadTriageAction)) {
+		return json({ error: `action must be one of ${JOB_LEAD_TRIAGE_ACTIONS.join(", ")}` }, 400);
+	}
+	const record = await engine.recordGet(JOB_LEAD_COLLECTION, decodeURIComponent(id));
+	if (!record) return json({ error: "Not found" }, 404);
+	const plan = planJobLeadTriage(record, {
+		action: body.action as JobLeadTriageAction,
+		deferUntil: typeof body.defer_until === "string" ? body.defer_until : undefined,
+		note: typeof body.note === "string" ? body.note : undefined,
+	});
+	if (!plan.ok) return json({ error: plan.error }, 409);
+	const updated = plan.patch
+		? await engine.recordUpdate(JOB_LEAD_COLLECTION, record.id, plan.patch)
+		: record;
+	if (!updated) return json({ error: "Not found" }, 404);
+	return json({ record: updated, action: body.action, transitioned: plan.transitioned, event: plan.event });
 }
 
 // ── Files ───────────────────────────────────────────────────────────────────

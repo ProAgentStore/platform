@@ -207,6 +207,11 @@ const READBACK: Record<string, string | null> = {
 	"insert_instance_record.data": "query_instance_records",
 	"update_instance_record.collection": "query_instance_records",
 	"update_instance_record.data": "query_instance_records",
+	// #955: triage fields are stored on the Job Search Scout record. The action is
+	// represented as `triage_action` in the record, while defer/note retain their names.
+	"triage_job_lead.action": "query_instance_records",
+	"triage_job_lead.defer_until": "query_instance_records",
+	"triage_job_lead.note": "query_instance_records",
 
 	// ── settings / identity / behaviour ──
 	"rename_instance.name": "my_instances",

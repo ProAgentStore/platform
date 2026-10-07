@@ -264,6 +264,47 @@ export function registerStorageTools(
 		},
 	);
 
+	// Job Search Scout's triage boundary (#955). This is intentionally a distinct tool instead
+	// of teaching update_instance_record about status values: only an explicit Apply may emit the
+	// durable job.lead.apply_requested handoff; arbitrary table edits must remain inert.
+	server.tool(
+		"triage_job_lead",
+		"Record an explicit human decision for one Job Search Scout lead. apply writes a durable job.lead.apply_requested handoff to configured downstream agents; skip, defer, and archive never emit it. Repeating apply is safe: the same stable handoff is deduplicated by the connection outbox.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Job Search Scout instance ID from my_instances."),
+			record_id: z.string().describe("Lead record ID from query_instance_records on the job_leads collection."),
+			action: z.enum(["apply", "skip", "defer", "archive"]).describe("Your explicit triage decision. Only apply starts the downstream handoff."),
+			defer_until: z.string().optional().describe("Optional ISO date/time or reminder text when action is defer."),
+			note: z.string().optional().describe("Optional reason for this triage decision, stored on the lead."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, record_id, action, defer_until, note, dry_run }) => {
+			const t = tokenFor(token);
+			if (!t) return authRequired();
+			const input = { instance_id, record_id, action };
+			const denied = await requirePermission(safetyFor(token), "write", "triage_job_lead", input);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/job-leads/${encodeURIComponent(record_id)}/triage`;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "triage_job_lead", "record one explicit job-lead triage decision", input, {
+					endpoint,
+					method: "POST",
+					effect:
+						action === "apply"
+							? "The lead would move to apply_requested and its stable handoff would be delivered through configured job.lead.apply_requested connections."
+							: `The lead would be marked ${action === "defer" ? "deferred" : action === "skip" ? "skipped" : "archived"}; no downstream application event would be emitted.`,
+				});
+			}
+			const result = (await authedCall(endpoint, t, {
+				method: "POST",
+				body: JSON.stringify({ action, ...(defer_until ? { defer_until } : {}), ...(note ? { note } : {}) }),
+			}, env)) as { error?: string };
+			if (!result.error) await audit(safetyFor(token), { tool: "triage_job_lead", action: "completed", input });
+			return jsonText(result);
+		},
+	);
+
 	server.tool(
 		"create_instance_ticket",
 		"Put a ticket on an instance's kanban board — WITHOUT a runner. Each ticket carries a `reasoning` (the why behind the work), shown as the card's 'Why:' block. Use this to surface an agent's work as browsable, discrete tickets (vs. an infinite activity log). `status` maps to a board column (default 'completed' → Done).",

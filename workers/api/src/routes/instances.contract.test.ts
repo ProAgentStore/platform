@@ -68,6 +68,7 @@ import { registerTerminalHistoryRoutes } from "./instances-terminal-history.js";
 import { CONNECTOR_CONSTRAINTS } from "../lib/surface-options.js";
 import { registerTranslationRoutes } from "./instances-translation.js";
 import { registerIdentityResyncRoutes } from "./instances-identity.js";
+import { registerJobLeadRoutes } from "./instances-job-leads.js";
 import { instanceRoutes } from "./instances.js";
 
 const SECRET = "instances-contract-secret";
@@ -139,6 +140,7 @@ const PARAMS: Record<string, string> = {
 	uploadId: "upload-1",
 	seq: "1",
 	jobKey: "job-key-1",
+	recordId: "lead-record-1",
 };
 
 function concrete(pattern: string): string {
@@ -291,6 +293,7 @@ const ROUTES = [
 	"GET /:instanceId/deploy-history",
 	"PUT /:instanceId/deploy-status",
 	"POST /:instanceId/resync-identity",
+	"POST /:instanceId/job-leads/:recordId/triage",
 	"DELETE /:instanceId/runtime",
 	"GET /:instanceId/tasks",
 	"GET /:instanceId/board",
@@ -378,6 +381,7 @@ const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
 	"instances-site-builder.ts": registerRuntimeBuilderRoutes,
 	"instances-deploy.ts": registerDeployStatusRoutes,
 	"instances-identity.ts": registerIdentityResyncRoutes,
+	"instances-job-leads.ts": registerJobLeadRoutes,
 	"instances-terminal.ts": registerConnectorBindingRoutes,
 	"instances-terminal-history.ts": registerTerminalHistoryRoutes,
 	"instances-translation.ts": registerTranslationRoutes,
@@ -433,6 +437,7 @@ const OWNERSHIP: Record<string, string[]> = {
 	"instances-runner-attach.ts": ["PUT /:instanceId/runner-node", "POST /:instanceId/runner-attach"],
 	"instances-runner-setup.ts": ["GET /:instanceId/runner-setup"],
 	"instances-lifecycle.ts": ["POST /:instanceId/pause", "POST /:instanceId/resume"],
+	"instances-job-leads.ts": ["POST /:instanceId/job-leads/:recordId/triage"],
 	"instances-browse.ts": ["POST /:instanceId/browse"],
 	"instances-chat.ts": [
 		"POST /:instanceId/chat",
@@ -676,6 +681,9 @@ const GATES: Record<string, [number, number]> = {
 	// Owner-initiated seed-personality resync (#496 AC2). Owner-only: only the instance owner
 	// may pull an updated personality from the agent template into their instance DO.
 	"POST /:instanceId/resync-identity": [401, 404],
+	// The explicit human triage boundary (#955) opens with the instance owner check before it
+	// reads the lead or can enqueue a downstream application handoff.
+	"POST /:instanceId/job-leads/:recordId/triage": [401, 404],
 	"DELETE /:instanceId/runtime": [401, 404],
 	"GET /:instanceId/tasks": [401, 404],
 	"GET /:instanceId/board": [401, 404],

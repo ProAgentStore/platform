@@ -212,6 +212,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	list_pipeline_runs: "read",
 	list_runner_nodes: "read",
 	runner_resource_history: "read",
+	triage_job_lead: "write",
 	runner_node_forget_preflight: "read",
 	list_supervision: "read",
 	list_stats_sources: "read",
@@ -585,6 +586,9 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// `list_local_browser_runs` — owner-scoped reads of settings, readiness and a run's redacted trace.
 	// +1 read at #946: `get_local_browser_consent` — the owner's live site and profile decisions.
 	// +1 read at #924: `runner_resource_history` — a machine's stored resource samples.
+	// +1 write at #955: `triage_job_lead` is the sole explicit human decision boundary that
+	// can hand a Scout lead to another agent; its Apply path changes durable state and emits an
+	// application request, while skip/defer/archive only change the lead lifecycle.
 	read: 122,
 	// +2 write at #825: `pause_instance` / `resume_instance`. `write` rather than `destructive` —
 	// nothing is deleted and nothing is unsubscribed, and classing the OFF switch as destructive
@@ -592,7 +596,7 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// a safety toggle (the reasoning `set_instance_connector_consent` already records). Not `read`
 	// either: switching an agent off is a real change.
 	// +1 write at #906: `secure_input_request`, agent creates a secure input request for a secret.
-	write: 74, // +2 at #946: set_local_browser_consent (a decision, withdrawable) and review_local_browser_finding (saves one reviewed finding to the owner's own collection); +1 at #944: cancel_local_browser_run (stops a run; deletes nothing); +1 at #945: set_instance_local_browser_settings (edits config, starts nothing); +1 at #757: promote_board_item
+	write: 75, // +1 at #955: triage_job_lead; +2 at #946: set_local_browser_consent (a decision, withdrawable) and review_local_browser_finding (saves one reviewed finding to the owner's own collection); +1 at #944: cancel_local_browser_run (stops a run; deletes nothing); +1 at #945: set_instance_local_browser_settings (edits config, starts nothing); +1 at #757: promote_board_item
 	// +1 runtime at #806: `continue_instance_run`. `runtime` rather than `write` for the reason
 	// `start_instance_loop` is — it starts an autonomous run that spends on its own — and the
 	// two must agree, because a caller holding the scope to start one holding a narrower one to

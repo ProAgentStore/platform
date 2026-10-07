@@ -1016,4 +1016,9 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// registrations become 257, `MCP_TOOL_ALWAYS_ON` 230 → 231, gated stays 26. Appended, never
 	// edited in place: 0.1.80 is published.
 	"0.1.81": "sha256:50848db5b1442999f69ff269bab939f989f90b08a9d5e2251686a4777e2d8884",
+	// 0.1.82 (#955): `triage_job_lead` (write) is the only explicit Job Search Scout
+	// lifecycle boundary. It can emit the durable application handoff after an owner selects
+	// Apply. 257 registrations become 258, `MCP_TOOL_ALWAYS_ON` 231 → 232, gated stays 26.
+	// Appended, never edited in place: 0.1.81 is published.
+	"0.1.82": "sha256:7745996d1686a1638160a30185b76292d54b1bf3a6e2936dbd9f08d709c6afc0",
 };

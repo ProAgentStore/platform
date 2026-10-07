@@ -7176,6 +7176,49 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{instanceId}/job-leads/{recordId}/triage:
+    post:
+      summary: Record an explicit Job Search Scout lead decision
+      description: |
+        The human triage boundary for a `job_leads` record. Generic record updates never start an
+        application. `apply` moves the lead to `apply_requested`, snapshots the approved lead, and
+        delivers its stable `job.lead.apply_requested` event through configured downstream
+        connections. Repeating `apply` replays that same idempotent handoff. `skip`, `defer`, and
+        `archive` change only the lead lifecycle and emit no downstream event.
+      operationId: triageJobLead
+      tags: [Storage]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: recordId, in: path, required: true, description: A `job_leads` record ID., schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [apply, skip, defer, archive] }
+                defer_until: { type: string, description: Optional date/time or reminder text for `defer`. }
+                note: { type: string, description: Optional owner reason stored on the lead. }
+      responses:
+        "200":
+          description: The updated lead, lifecycle transition result, durable event (when applying), and its connection delivery outcome.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  record: { type: object, additionalProperties: true }
+                  action: { type: string, enum: [apply, skip, defer, archive] }
+                  transitioned: { type: boolean }
+                  event: { type: object, nullable: true, additionalProperties: true }
+                  delivery: { nullable: true, additionalProperties: true }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   # ── Instance storage: files ───────────────────────────────────────────────
 
   /v1/instances/{instanceId}/files:

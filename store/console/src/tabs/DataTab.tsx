@@ -22,6 +22,13 @@ interface Collection {
 type Rec = DataRecord;
 
 const PIPELINE = ["new", "contacted", "won", "dead"];
+// Job Search Scout has an explicit human triage boundary. These are deliberately
+// not written through the generic record-update path: Apply is what emits the
+// durable downstream handoff, while the other choices are terminal or deferred.
+const JOB_LEAD_COLLECTION = "job_leads";
+const JOB_LEAD_PIPELINE = ["found", "deferred", "apply_requested", "skipped", "archived"];
+const JOB_LEAD_ACTIONS = ["apply", "skip", "defer", "archive"] as const;
+type JobLeadAction = (typeof JOB_LEAD_ACTIONS)[number];
 const FILTERABLE = new Set(["status", "country", "state", "city", "suburb", "website_status"]);
 const DATETIME = new Set(["found_at", "checked_at", "created_at", "createdAt", "updatedAt"]);
 const PAGE_SIZES = [25, 50, 100] as const;
@@ -103,6 +110,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 	const [runs, setRuns] = useState<Run[]>([]);
 	const [runsLoading, setRunsLoading] = useState(false);
 	const [openRun, setOpenRun] = useState<string | null>(null);
+	const [triaging, setTriaging] = useState<string | null>(null);
 	const recordsRequest = useRef(0);
 
 	const loadCollections = useCallback(async () => {
@@ -183,6 +191,8 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 	);
 	const columns = useMemo(() => baseColumns.filter((c) => !hidden.has(c)), [baseColumns, hidden]);
 	const hasStatus = allColumns.includes("status");
+	const isJobLeads = selected === JOB_LEAD_COLLECTION;
+	const statusPipeline = isJobLeads ? JOB_LEAD_PIPELINE : PIPELINE;
 
 	const facetValues = useMemo(() => {
 		const out: Record<string, string[]> = {};
@@ -230,6 +240,32 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 		}
 	};
 
+	const triageJobLead = async (rec: Rec, action: JobLeadAction) => {
+		let deferUntil: string | undefined;
+		if (action === "defer") {
+			const value = window.prompt("Defer until (date/time or reminder text):");
+			if (value === null) return;
+			deferUntil = value.trim() || undefined;
+		}
+		setTriaging(rec.id);
+		setError("");
+		try {
+			const result = await api<{ record?: Rec; error?: string }>(
+				`/v1/instances/${instanceId}/job-leads/${encodeURIComponent(rec.id)}/triage`,
+				{ method: "POST", body: JSON.stringify({ action, ...(deferUntil ? { defer_until: deferUntil } : {}) }) },
+			);
+			if (result.error) throw new Error(result.error);
+			if (result.record) {
+				setRecords((current) => current.map((item) => (item.id === rec.id ? result.record as Rec : item)));
+				setDetail((current) => (current?.id === rec.id ? result.record as Rec : current));
+			}
+		} catch (e) {
+			setError(e instanceof Error ? e.message : "Failed to save job-lead decision");
+		} finally {
+			setTriaging(null);
+		}
+	};
+
 	const exportCsv = () => {
 		const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
 		const lines = [columns.map((c) => esc(columnLabel(c))).join(","), ...rows.map((r) => columns.map((c) => esc(recordValue(r, c))).join(","))];
@@ -272,13 +308,30 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 			onChange={(e) => setStatus(rec, e.target.value)}
 			className="border border-line rounded text-xs px-1 py-0.5"
 		>
-			{PIPELINE.map((s) => (
+			{statusPipeline.map((s) => (
 				<option key={s} value={s}>
 					{s}
 				</option>
 			))}
 		</select>
 	);
+
+	const JobLeadActions = ({ rec }: { rec: Rec }) => {
+		const status = String(rec.data.status ?? "found");
+		const busy = triaging === rec.id;
+		return (
+			<div className="flex flex-wrap gap-1 mt-1" aria-label={`Triage actions for ${String(rec.data.title ?? rec.data.name ?? rec.id)}`}>
+				{JOB_LEAD_ACTIONS.map((action) => {
+					const disabled = busy || (action === "apply" && status === "apply_requested") || (action !== "apply" && (status === "apply_requested" || status === "archived"));
+					return (
+						<Button key={action} size="sm" onClick={() => triageJobLead(rec, action)} disabled={disabled}>
+							{busy ? "Saving…" : action === "apply" ? "Apply" : action === "skip" ? "Skip" : action === "defer" ? "Defer" : "Archive"}
+						</Button>
+					);
+				})}
+			</div>
+		);
+	};
 
 	return (
 		<div className="text-sm">
@@ -477,7 +530,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 				<p className="text-muted-soft py-5">{hasActiveFilters ? "No records match these filters." : "No records in this collection yet."}</p>
 			) : view === "board" && hasStatus ? (
 				<div className="flex gap-3 overflow-auto pb-2">
-					{PIPELINE.map((st) => {
+					{statusPipeline.map((st) => {
 						const cards = rows.filter((r) => String(r.data.status ?? "new") === st);
 						return (
 							<div key={st} className="min-w-56 flex-1">
@@ -495,7 +548,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 											{r.data.website_status ? <div className="mt-1">{cell("website_status", r.data.website_status)}</div> : null}
 											{r.data.phone ? <div className="text-xs mt-1">{cell("phone", r.data.phone)}</div> : null}
 											<div className="mt-1 flex items-center gap-2">
-												<StatusSelect rec={r} />
+												{isJobLeads ? <JobLeadActions rec={r} /> : <StatusSelect rec={r} />}
 												<button type="button" onClick={() => setDetail(r)} className="text-accent text-xs underline">
 													log
 												</button>
@@ -539,7 +592,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 									</td>
 									{columns.map((c) => (
 										<td key={c} className="px-2 py-1 whitespace-nowrap align-top">
-											{c === "status" ? <StatusSelect rec={r} /> : cell(c, recordValue(r, c))}
+											{c === "status" ? (isJobLeads ? <div><Badge value={String(r.data.status ?? "found")} /><JobLeadActions rec={r} /></div> : <StatusSelect rec={r} />) : cell(c, recordValue(r, c))}
 										</td>
 									))}
 								</tr>

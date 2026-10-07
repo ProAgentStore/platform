@@ -30,6 +30,7 @@ import { registerTerminalHistoryRoutes } from "./instances-terminal-history.js";
 import { lastTerminalTargetOf, rememberTerminalTarget } from "../lib/terminal-record.js";
 import { registerDeployStatusRoutes } from "./instances-deploy.js";
 import { registerIdentityResyncRoutes } from "./instances-identity.js";
+import { registerJobLeadRoutes } from "./instances-job-leads.js";
 import { instanceCapFor, isEntitled, isPaywallEnforced, requirePro } from "../lib/billing.js";
 import { retireSubscriptionSql } from "../lib/subscription-standing.js";
 import { liveAliasForPin, liveNodeIgnoringPin, relayConnected } from "../lib/runner-client.js";
@@ -1090,6 +1091,7 @@ registerConnectorBindingRoutes(instanceRoutes);
 registerDeployStatusRoutes(instanceRoutes);
 // Owner-initiated seed-personality resync (#496 AC2). Mounted from its own module.
 registerIdentityResyncRoutes(instanceRoutes);
+registerJobLeadRoutes(instanceRoutes); // explicit human job-lead triage → durable connection handoff (#955)
 
 /** Remove my registered runtime. */
 instanceRoutes.delete("/:instanceId/runtime", async (c) => {

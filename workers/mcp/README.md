@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**257 tool registrations.** 231 are always registered; 26 are gated to the console
+**258 tool registrations.** 232 are always registered; 26 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -344,6 +344,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `query_instance_records` | Query records | read | | |
 | `insert_instance_record` | Insert a record (respects unique/dedup constraints) | write | | |
 | `update_instance_record` | Merge fields into one existing record — omitted fields kept; schema and unique constraints enforced (#613) | write | yes | |
+| `triage_job_lead` | Record a Job Search Scout lead decision. Only explicit `apply` emits its durable application handoff; `skip`, `defer`, and `archive` do not. | write | yes | |
 | `create_instance_ticket` | Put a ticket on the board without a runner | write | | |
 
 ### Board and runtime tasks

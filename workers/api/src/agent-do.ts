@@ -359,6 +359,10 @@ export class AgentDO extends DurableObject<Env> {
 				return this.withEngine((e) => storageRoutes.updateRecord(e, path.split("/")[2], path.split("/")[4], request));
 			if (path.match(/^\/collections\/[^/]+\/records\/[^/]+$/) && request.method === "DELETE")
 				return this.withEngine((e) => storageRoutes.deleteRecord(e, path.split("/")[2], path.split("/")[4]));
+			// Explicit human triage is a separate DO operation, never a side effect of the generic
+			// collection update route. Its internal read/validate/write is serialized by this DO.
+			if (path.match(/^\/job-leads\/[^/]+\/triage$/) && request.method === "POST")
+				return this.withEngine((e) => storageRoutes.triageJobLead(e, path.split("/")[2], request));
 
 			// Files
 			if (path === "/files" && request.method === "GET")

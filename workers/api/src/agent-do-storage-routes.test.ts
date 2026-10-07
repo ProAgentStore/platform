@@ -147,6 +147,48 @@ describe("record routes", () => {
 	});
 });
 
+describe("job lead triage route", () => {
+	it("writes an explicit apply lifecycle patch and returns its handoff", async () => {
+		let patch: Record<string, unknown> | undefined;
+		const record = { id: "lead-1", collection: "job_leads", data: { title: "Head of Engineering" }, createdAt: "x", updatedAt: "x" };
+		const res = await routes.triageJobLead(
+			fakeEngine<"recordGet" | "recordUpdate">({
+				recordGet: async () => record,
+				recordUpdate: async (_collection: string, _id: string, data: Record<string, unknown>) => {
+					patch = data;
+					return { ...record, data: { ...record.data, ...data } };
+				},
+			}),
+			"lead-1",
+			post({ action: "apply" }),
+		);
+		expect(res.status).toBe(200);
+		expect(patch).toMatchObject({ status: "apply_requested", apply_handoff: { eventType: "job.lead.apply_requested" } });
+		expect((await res.json()) as Record<string, unknown>).toMatchObject({ transitioned: true, event: { eventType: "job.lead.apply_requested" } });
+	});
+
+	it("does not create a handoff for skip/defer/archive", async () => {
+		for (const action of ["skip", "defer", "archive"]) {
+			let patch: Record<string, unknown> | undefined;
+			const record = { id: "lead-1", collection: "job_leads", data: {}, createdAt: "x", updatedAt: "x" };
+			const res = await routes.triageJobLead(
+				fakeEngine<"recordGet" | "recordUpdate">({
+					recordGet: async () => record,
+					recordUpdate: async (_collection: string, _id: string, data: Record<string, unknown>) => {
+						patch = data;
+						return { ...record, data };
+					},
+				}),
+				"lead-1",
+				post({ action }),
+			);
+			expect(res.status).toBe(200);
+			expect(patch?.apply_handoff).toBeUndefined();
+			expect((await res.json()) as Record<string, unknown>).toMatchObject({ event: null });
+		}
+	});
+});
+
 describe("file routes", () => {
 	it("drops an empty tags param rather than filtering on ['']", async () => {
 		let opts: Record<string, unknown> = {};

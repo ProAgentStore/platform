@@ -54,11 +54,24 @@ describe("instance-scoped collection tools", () => {
 		vi.mocked(requirePermission).mockClear();
 	});
 
-	it("registers the three instance collection tools", () => {
+	it("registers the instance collection tools and explicit job-lead triage", () => {
 		const tools = collectTools();
 		expect(tools.has("list_instance_collections")).toBe(true);
 		expect(tools.has("query_instance_records")).toBe(true);
 		expect(tools.has("insert_instance_record")).toBe(true);
+		expect(tools.has("triage_job_lead")).toBe(true);
+	});
+
+	it("triage_job_lead uses the dedicated lifecycle route, never a generic record update", async () => {
+		const tools = collectTools();
+		await tools.get("triage_job_lead")!.handler({ instance_id: "inst 1", record_id: "lead/1", action: "apply" });
+		expect(requirePermission).toHaveBeenCalledWith(expect.anything(), "write", "triage_job_lead", {
+			instance_id: "inst 1", record_id: "lead/1", action: "apply",
+		});
+		expect(calls).toHaveLength(1);
+		expect(calls[0].path).toBe("/v1/instances/inst%201/job-leads/lead%2F1/triage");
+		expect(calls[0].opts?.method).toBe("POST");
+		expect(JSON.parse(calls[0].opts?.body as string)).toEqual({ action: "apply" });
 	});
 
 	it("list_instance_collections GETs the instance collections route (read scope)", async () => {
