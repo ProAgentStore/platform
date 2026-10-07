@@ -280,6 +280,14 @@ export async function executeTriggerAction(
 		const objective = (mapped.objective || stringValue(payloadRecord(payload).objective) || config.objective || "").trim();
 		if (!objective) throw new Error("run_local_browser requires config.objective (what to research)");
 		resultPayload = await runLocalBrowserTrigger(env, target, objective);
+	} else if (target.action === "generate_application_materials") {
+		// #956: the payload is the approved lead (#955's job.lead.apply_requested). Replay-safe — the
+		// application is keyed on the event id. No runner connected throws (503), so the outbox
+		// retries with backoff instead of parking an application nothing can run.
+		// Deferred: tailor.ts emits through connections.ts, which imports this module.
+		const { startTailoring } = await import("./local-artifact/tailor.js");
+		const out = await startTailoring(env, target.instance_id, target.user_id, payload, "connection");
+		resultPayload = { applicationId: out.application.id, status: out.application.status, runId: out.run?.id ?? null, outcome: out.kind };
 	} else if (target.action === "run_browse") {
 		// #172: schedule a generic browser task — fire the BROWSER_TASK workflow at the
 		// configured start URL. Runner-offline (503) or a run already active (409) aren't
@@ -493,6 +501,7 @@ function successMessage(action: TriggerAction, payload: unknown): string {
 	if (action === "run_pipeline") return `started pipeline "${stringValue(result.pipeline) || "?"}" (run ${stringValue(result.runId).slice(0, 8)})`;
 	if (action === "insert_record") return `inserted a record into "${stringValue(result.collection) || "?"}"`;
 	if (action === "run_local_browser") return result.skipped ? `research run skipped — ${stringValue(result.reason) || "runner offline / busy"}` : `started research run ${stringValue(result.runId).slice(0, 8)}`;
+	if (action === "generate_application_materials") return `application ${stringValue(result.applicationId).slice(0, 8)} ${stringValue(result.outcome) || "started"} (${stringValue(result.status) || "?"})`;
 	if (action === "run_browse") return result.skipped ? `browser run skipped — ${stringValue(result.reason) || "runner offline / busy"}` : `started browser run (task ${stringValue(result.taskId).slice(0, 8)})`;
 	if (action === "log_event" && stringValue(result.message)) return stringValue(result.message).slice(0, 300);
 	return `${action} dispatched`;

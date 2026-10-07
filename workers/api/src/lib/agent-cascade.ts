@@ -96,6 +96,9 @@ export const INSTANCE_CHILD_TABLES = [
 	"local_browser_run_events",
 	"local_browser_runs",
 	"local_browser_domain_consent",
+	// #956 — the run before the application it references (FK).
+	"local_artifact_runs",
+	"job_applications",
 ] as const;
 
 /**

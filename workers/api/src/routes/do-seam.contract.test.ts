@@ -213,6 +213,7 @@ const PARAMS: Record<string, string> = {
 	instanceId: "instance-1",
 	name: "jobs",
 	recordId: "rec-1",
+	applicationId: "app-1",
 	fileId: "file-1",
 	docId: "doc-1",
 	taskId: "task-1",

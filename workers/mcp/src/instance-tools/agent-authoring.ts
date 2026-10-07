@@ -198,7 +198,7 @@ export function registerAgentAuthoringTools(server: McpServer, ctx: InstanceTool
 			token: tokenArg,
 			agent_id: templateIdArg,
 			surfaces: z.array(z.string()).optional().describe("Console surfaces to declare. Omit to preserve them."),
-			runtime: z.enum(["browser", "coding", "local_browser"]).nullable().optional().describe("Template runtime, or null to clear it. Omit to preserve it."),
+			runtime: z.enum(["browser", "coding", "local_browser", "local_artifact"]).nullable().optional().describe("Template runtime, or null to clear it. Omit to preserve it."),
 			workflow: z.string().nullable().optional().describe("Workflow name, or null to clear it. Omit to preserve it."),
 			tools: z.array(z.string()).optional().describe("Allowed runtime tool names. Omit to preserve them."),
 			custom_surfaces: z.array(z.record(z.string(), z.unknown())).optional().describe("Custom console-surface entries, mapped to the API's customSurfaces field. Omit to preserve them."),

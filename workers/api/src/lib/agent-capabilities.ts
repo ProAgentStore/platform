@@ -32,8 +32,11 @@ export type AgentSurface = "apply" | "coding" | "insurance" | "repo" | "tmux";
  * Which local runner runtime the agent's hands use (null = no local runner).
  * `local_browser` (#945): a general agent whose browser research is driven by a Codex or Claude
  * Code CLI signed in on the owner's machine — no repository, no Coding tab. See `localBrowser`.
+ * `local_artifact` (#956): the Application Tailor — a Codex or Claude Code CLI signed in on the
+ * owner's machine writes a tailored résumé + cover letter from the owner's own files. No browser,
+ * no repository.
  */
-export type AgentRuntimeKind = "browser" | "coding" | "local_browser" | null;
+export type AgentRuntimeKind = "browser" | "coding" | "local_browser" | "local_artifact" | null;
 
 /** A custom (agent-published) console surface — its UI loads from a bundle URL. */
 export interface CustomSurface {
@@ -376,7 +379,7 @@ const KNOWN_SURFACES = new Set<AgentSurface>(["apply", "coding", "insurance", "r
  *  (unlike customSurfaces, which loads a code bundle and stays on its own guarded path). */
 /** The runtime vocabulary, exported so `agent-workflows.test.ts` can assert that the
  *  `requiresRuntime` values on the workflow table are drawn from exactly this set (#705). */
-export const KNOWN_RUNTIMES = new Set<Exclude<AgentRuntimeKind, null>>(["browser", "coding", "local_browser"]);
+export const KNOWN_RUNTIMES = new Set<Exclude<AgentRuntimeKind, null>>(["browser", "coding", "local_browser", "local_artifact"]);
 // Workflows are NOT listed here: `isAgentWorkflow` asks the catalog that the picker is served
 // from, so the vocabulary a creator is offered and the vocabulary this validator accepts are one
 // list. They were two, and each had drifted the other way (#375).

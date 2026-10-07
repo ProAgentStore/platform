@@ -1030,4 +1030,7 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.84": "sha256:67b01d0594e608395de78429b352d2ccde26134db81f0a0dfebddc680508982c",
 	// 0.1.85 (#955): `triage_job_lead` gains compare-and-set `expected_status` / `expected_version`. Appended.
 	"0.1.85": "sha256:c1db461d825feb86b878643c3ae65a6a9686c7f13f736c3a819eae168b2c2c03",
+	// 0.1.86 (#956): runtime `local_artifact` (update_agent / create_agent) and the
+	// `generate_application_materials` trigger + connection action. No tool added. Appended.
+	"0.1.86": "sha256:6790f6c6e1969a4add028b4e9f19b2f978572160234a6228cdcf7354f302b6fb",
 };

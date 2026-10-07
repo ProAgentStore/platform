@@ -15,6 +15,8 @@ import { RunnerStore } from "./store.js";
 import { CodingRuntime } from "./coding/runtime.js";
 import { LocalBrowserRuntime } from "./local-browser/runtime.js";
 import { LOCAL_BROWSER_TASK_TYPE } from "./local-browser/contract.js";
+import { LocalArtifactRuntime } from "./local-artifact/runtime.js";
+import { LOCAL_ARTIFACT_TASK_TYPE } from "./local-artifact/contract.js";
 import { WORKFLOW_DRIVEN_TASKS } from "./task-types.js";
 
 /** True for a plain object. */
@@ -95,6 +97,8 @@ export class LocalRunner {
 	readonly coding: CodingRuntime;
 	/** Local CLI browser research (#944): a signed-in Codex / Claude Code CLI researching through the policy bridge. */
 	readonly localBrowser: LocalBrowserRuntime;
+	/** Local artifact generation (#956): the Application Tailor's résumé + cover letter, from the owner's own files. */
+	readonly localArtifact: LocalArtifactRuntime;
 	/** This runner's own local URL, once the server listens — the bridge forwarder calls back to it. */
 	selfUrl: string | null = null;
 	/** Live human-takeover sessions, keyed by task id (the page is kept alive). */
@@ -119,6 +123,7 @@ export class LocalRunner {
 				return { tools: mcp, stop: () => mcp.stop() };
 			},
 		});
+		this.localArtifact = new LocalArtifactRuntime({ dataDir: config.dataDir });
 		// Tasks paused/running on a previous process are orphaned now — their
 		// pages and takeover sessions are gone. Fail them so the board is clean.
 		const expired = this.store.expireInFlightTasks();
@@ -133,7 +138,7 @@ export class LocalRunner {
 			runtimePlane: "pags",
 			runnerRole: "tool-executor",
 			capabilities: [...CAPABILITIES, ...CodingRuntime.capabilities()],
-			taskTypes: ["echo", "browser.open", "job.apply_agent", "site_builder_runtime", LOCAL_BROWSER_TASK_TYPE, ...CodingRuntime.taskTypes()],
+			taskTypes: ["echo", "browser.open", "job.apply_agent", "site_builder_runtime", LOCAL_BROWSER_TASK_TYPE, LOCAL_ARTIFACT_TASK_TYPE, ...CodingRuntime.taskTypes()],
 			approvalRequiredFor: [...APPROVAL_REQUIRED_TASKS],
 		};
 	}
@@ -266,6 +271,7 @@ export class LocalRunner {
 	 */
 	async close(): Promise<void> {
 		this.localBrowser.closeAll();
+		this.localArtifact.closeAll();
 		try {
 			this.coding.closeAll();
 		} catch (e) {

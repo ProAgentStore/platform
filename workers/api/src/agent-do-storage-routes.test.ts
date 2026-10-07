@@ -194,10 +194,10 @@ describe("job lead triage — compare-and-set and the instance it speaks for (#9
 		const record = { id: "lead-1", collection: "job_leads", data, createdAt: "x", updatedAt: "x" };
 		const writes: Record<string, unknown>[] = [];
 		const engine = fakeEngine<"recordGet" | "recordUpdate">({
-			recordGet: async () => ({ ...record, data: writes.reduce((d, w) => ({ ...d, ...w }), record.data) }),
+			recordGet: async () => ({ ...record, data: Object.assign({}, record.data, ...writes) }),
 			recordUpdate: async (_c: string, _id: string, patch: Record<string, unknown>) => {
 				writes.push(patch);
-				return { ...record, data: writes.reduce((d, w) => ({ ...d, ...w }), record.data) };
+				return { ...record, data: Object.assign({}, record.data, ...writes) };
 			},
 		});
 		return { engine, writes };

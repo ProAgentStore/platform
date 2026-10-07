@@ -327,7 +327,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 		const status = jobLeadStatus(rec.data);
 		const busy = triaging === rec.id;
 		return (
-			<div className="flex flex-wrap gap-1 mt-1" aria-label={`Triage actions for ${String(rec.data.title ?? rec.data.name ?? rec.id)}`}>
+			<fieldset className="flex flex-wrap gap-1 mt-1 border-0 p-0 m-0 min-w-0" aria-label={`Triage actions for ${String(rec.data.title ?? rec.data.name ?? rec.id)}`}>
 				{JOB_LEAD_ACTIONS.map((action) => {
 					const disabled = busy || !canTriage(status, action);
 					return (
@@ -336,7 +336,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 						</Button>
 					);
 				})}
-			</div>
+			</fieldset>
 		);
 	};
 

@@ -625,6 +625,7 @@ export default function AgentDetail() {
 										<option value="browser">browser</option>
 										<option value="coding">coding</option>
 										<option value="local_browser">local_browser — Codex / Claude Code researching in the owner's browser</option>
+										<option value="local_artifact">local_artifact — Codex / Claude Code writing application materials from the owner's files</option>
 									</select>
 								</label>
 								<label className="flex flex-col gap-1 text-xs font-semibold">

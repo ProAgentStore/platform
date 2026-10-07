@@ -43,6 +43,7 @@ export type TriggerAction =
 	| "insert_record"
 	| "run_browse"
 	| "run_local_browser"
+	| "generate_application_materials"
 	| "log_event";
 
 export interface CustomSurface {

@@ -204,6 +204,17 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		return json(res, 200, runner.localBrowser.cancel(await readJson(req)));
 	}
 
+	// Local artifact generation (#956) — the same PULL shape: run, status, cancel.
+	if (req.method === "POST" && path === "/local-artifact/run") {
+		return json(res, 202, runner.localArtifact.start(await readJson(req)));
+	}
+	if (req.method === "POST" && path === "/local-artifact/status") {
+		return json(res, 200, runner.localArtifact.status(await readJson(req)));
+	}
+	if (req.method === "POST" && path === "/local-artifact/cancel") {
+		return json(res, 200, runner.localArtifact.cancel(await readJson(req)));
+	}
+
 	if (req.method === "POST" && path === "/coding/start") {
 		const b = await readJson<StartCodingInput>(req);
 		return json(res, 200, runner.coding.start(b));

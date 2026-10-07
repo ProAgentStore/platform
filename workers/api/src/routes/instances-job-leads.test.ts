@@ -73,9 +73,15 @@ describe("no other write path emits job.lead.apply_requested (#955)", () => {
 		const root = join(__dirname, "..");
 		const walk = (d: string): string[] => readdirSync(d).flatMap((f) => { const p = join(d, f); return statSync(p).isDirectory() ? walk(p) : p.endsWith(".ts") && !/\.test\.ts$/.test(p) ? [p] : []; });
 		const naming = walk(root).filter((f) => /JOB_LEAD_APPLY_EVENT|job\.lead\.apply_requested/.test(readFileSync(f, "utf8"))).map((f) => f.slice(root.length + 1)).sort();
-		const allowed = ["lib/job-lead-triage.ts", "routes/instances-job-leads.ts"];
+		// The Application Tailor (#956) CONSUMES the event — it is the payload its connection action
+		// receives — so it names it; it never emits it. Each consumer is listed, not pattern-matched.
+		const consumers = ["lib/local-artifact/contract.ts", "lib/local-artifact/tailor.ts", "lib/trigger-config.ts", "lib/triggers.ts", "routes/instances-application-tailor.ts"];
+		const allowed = ["lib/job-lead-triage.ts", "routes/instances-job-leads.ts", ...consumers];
 		expect(naming.filter((f) => !allowed.includes(f)), "a new place names the apply event — only the triage path may").toEqual([]);
 		expect(naming).toContain("routes/instances-job-leads.ts");
+		// Emitting it — handing it to the outbox — is the triage route's alone.
+		const emits = walk(root).filter((f) => /deliverEvent\([^;]*?(JOB_LEAD_APPLY_EVENT|job\.lead\.apply_requested)/s.test(readFileSync(f, "utf8"))).map((f) => f.slice(root.length + 1));
+		expect(emits).toEqual(["routes/instances-job-leads.ts"]);
 		// The generic record routes (Data-tab edits, update_record) never reach the outbox.
 		for (const f of ["routes/storage.ts", "agent-do-storage-routes.ts"]) {
 			const src = readFileSync(join(root, f), "utf8");

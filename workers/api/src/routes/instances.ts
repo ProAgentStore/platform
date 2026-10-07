@@ -32,6 +32,7 @@ import { lastTerminalTargetOf, rememberTerminalTarget } from "../lib/terminal-re
 import { registerDeployStatusRoutes } from "./instances-deploy.js";
 import { registerIdentityResyncRoutes } from "./instances-identity.js";
 import { registerJobLeadRoutes } from "./instances-job-leads.js";
+import { registerApplicationTailorRoutes } from "./instances-application-tailor.js";
 import { registerFleetRoutes } from "./instances-fleet.js";
 import { instanceCapFor, isEntitled, isPaywallEnforced, requirePro } from "../lib/billing.js";
 import { retireSubscriptionSql } from "../lib/subscription-standing.js";
@@ -1055,6 +1056,7 @@ registerDeployStatusRoutes(instanceRoutes);
 // Owner-initiated seed-personality resync (#496 AC2). Mounted from its own module.
 registerIdentityResyncRoutes(instanceRoutes);
 registerJobLeadRoutes(instanceRoutes); // explicit human job-lead triage → durable connection handoff (#955)
+registerApplicationTailorRoutes(instanceRoutes); // approved lead → local tailored résumé + cover letter → materials_ready (#956)
 
 /** Remove my registered runtime. */
 instanceRoutes.delete("/:instanceId/runtime", async (c) => {

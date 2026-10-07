@@ -69,6 +69,7 @@ import { CONNECTOR_CONSTRAINTS } from "../lib/surface-options.js";
 import { registerTranslationRoutes } from "./instances-translation.js";
 import { registerIdentityResyncRoutes } from "./instances-identity.js";
 import { registerJobLeadRoutes } from "./instances-job-leads.js";
+import { registerApplicationTailorRoutes } from "./instances-application-tailor.js";
 import { instanceRoutes } from "./instances.js";
 
 const SECRET = "instances-contract-secret";
@@ -141,6 +142,7 @@ const PARAMS: Record<string, string> = {
 	seq: "1",
 	jobKey: "job-key-1",
 	recordId: "lead-record-1",
+	applicationId: "application-1",
 };
 
 function concrete(pattern: string): string {
@@ -297,6 +299,12 @@ const ROUTES = [
 	"PUT /:instanceId/deploy-status",
 	"POST /:instanceId/resync-identity",
 	"POST /:instanceId/job-leads/:recordId/triage",
+	"GET /:instanceId/application-tailor/settings",
+	"PUT /:instanceId/application-tailor/settings",
+	"GET /:instanceId/applications",
+	"POST /:instanceId/applications",
+	"GET /:instanceId/applications/:applicationId",
+	"POST /:instanceId/applications/:applicationId/cancel",
 	"DELETE /:instanceId/runtime",
 	"GET /:instanceId/tasks",
 	"GET /:instanceId/board",
@@ -385,6 +393,7 @@ const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
 	"instances-deploy.ts": registerDeployStatusRoutes,
 	"instances-identity.ts": registerIdentityResyncRoutes,
 	"instances-job-leads.ts": registerJobLeadRoutes,
+	"instances-application-tailor.ts": registerApplicationTailorRoutes,
 	"instances-terminal.ts": registerConnectorBindingRoutes,
 	"instances-terminal-history.ts": registerTerminalHistoryRoutes,
 	"instances-translation.ts": registerTranslationRoutes,
@@ -441,6 +450,14 @@ const OWNERSHIP: Record<string, string[]> = {
 	"instances-runner-setup.ts": ["GET /:instanceId/runner-setup"],
 	"instances-lifecycle.ts": ["POST /:instanceId/pause", "POST /:instanceId/resume"],
 	"instances-job-leads.ts": ["POST /:instanceId/job-leads/:recordId/triage"],
+	"instances-application-tailor.ts": [
+		"GET /:instanceId/application-tailor/settings",
+		"PUT /:instanceId/application-tailor/settings",
+		"GET /:instanceId/applications",
+		"POST /:instanceId/applications",
+		"GET /:instanceId/applications/:applicationId",
+		"POST /:instanceId/applications/:applicationId/cancel",
+	],
 	"instances-browse.ts": ["POST /:instanceId/browse"],
 	"instances-chat.ts": [
 		"POST /:instanceId/chat",
@@ -694,6 +711,13 @@ const GATES: Record<string, [number, number]> = {
 	// The explicit human triage boundary (#955) opens with the instance owner check before it
 	// reads the lead or can enqueue a downstream application handoff.
 	"POST /:instanceId/job-leads/:recordId/triage": [401, 404],
+	// Application Tailor (#956): every route opens with the instance-owner check.
+	"GET /:instanceId/application-tailor/settings": [401, 404],
+	"PUT /:instanceId/application-tailor/settings": [401, 404],
+	"GET /:instanceId/applications": [401, 404],
+	"POST /:instanceId/applications": [401, 404],
+	"GET /:instanceId/applications/:applicationId": [401, 404],
+	"POST /:instanceId/applications/:applicationId/cancel": [401, 404],
 	"DELETE /:instanceId/runtime": [401, 404],
 	"GET /:instanceId/tasks": [401, 404],
 	"GET /:instanceId/board": [401, 404],

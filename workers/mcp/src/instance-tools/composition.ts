@@ -199,7 +199,7 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 			instance_id: z.string().describe("Source instance — the one that emits the event."),
 			event_type: z.string().describe("The emitted fact, e.g. lead.created or site.live."),
 			target_instance_id: z.string().describe("Instance that receives the payload."),
-			action: z.string().describe("What the target does: run_pipeline | insert_record | create_task | add_knowledge."),
+			action: z.string().describe("What the target does: run_pipeline | insert_record | create_task | add_knowledge | generate_application_materials (an approved job lead → an Application Tailor instance)."),
 			config: z.record(z.unknown()).optional().describe("Action config (pipeline name, collection, filter, params)."),
 			dry_run: z.boolean().optional().describe("Describe the route that would be created, in the direction it would run, without creating it."),
 		},

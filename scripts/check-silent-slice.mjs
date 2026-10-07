@@ -30,9 +30,9 @@ const ROOT = resolve(import.meta.dirname, "..");
 const PINNED = {
 	// Pinned at #898's landing. Most of what remains is ids, labels and display previews; the
 	// agent-read cuts the audit found were removed or marked before these numbers were taken.
-	"workers/api/src": 432, // +2 at #962 (run_local_browser: the 8-char run id in its event summary, and parseConfig's 4000-char bound on `objective`, which the write path already refuses past); −1 at #959 (the PR enrichment cap is one cut, and only the no-token fallback now); +1 at #924 (`topSessions`, the three heaviest, named as such); −1 at #954 (a cut line names the column that reads its rest); +1 at #961 (the fleet snapshot's repo cap — every repo past it is reported unread, and the response says how many).
+	"workers/api/src": 443, // +11 at #956 (Application Tailor: 7 are the vendored local-artifact contract's parse-time bounds on what a runner may report — the same cuts the runner copy makes; the 200-event trace cap, which the run row's runner_seq exposes; two id labels on a malformed lead's record; two runner error messages bounded as local-browser's are); +2 at #962 (run_local_browser: the 8-char run id in its event summary, and parseConfig's 4000-char bound on `objective`, which the write path already refuses past); −1 at #959 (the PR enrichment cap is one cut, and only the no-token fallback now); +1 at #924 (`topSessions`, the three heaviest, named as such); −1 at #954 (a cut line names the column that reads its rest); +1 at #961 (the fleet snapshot's repo cap — every repo past it is reported unread, and the response says how many).
 	"workers/mcp/src": 9, // −2 at #959: the terminal fallback's liveError and the audit preview are clipMarked.
-	"packages/browser-runner/src": 57,
+	"packages/browser-runner/src": 66, // +9 at #956 (the vendored local-artifact contract's 7 parse-time bounds; the CLI output-line cap and the failed-run error bound, as local-browser/runtime.ts has; the profile-version hash prefix, an id; a claim quoted inside a question to the owner)
 };
 
 /** `.slice(0, 200)` / `.slice(0, MAX_X)` / `.slice(0, CAPS.git)` — a fixed head-cut. */

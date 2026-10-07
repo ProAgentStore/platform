@@ -85,7 +85,7 @@ export interface TerminalInstance {
 	pinnedNode: string | null;
 	/** The runner runtime this agent uses. Runner-less agents
 	 *  (runtime:null — chat/RAG/connector) are excluded from the list entirely. */
-	runtime: "browser" | "coding" | "local_browser";
+	runtime: "browser" | "coding" | "local_browser" | "local_artifact";
 }
 
 export interface TerminalSession {

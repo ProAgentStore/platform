@@ -702,7 +702,7 @@ const PINS = {
 	// back in the reader's head.
 	// +29 at #847: bounded capture receipt updates one LocalRunner task, its durable store and its event log; splitting that command would fragment the state transition.
 	// +19 at #944: constructs the local browser research runtime and picks its browser per profile (the shared signed-in one, or a throwaway one in the run folder); the runtime itself is local-browser/runtime.ts.
-	"packages/browser-runner/src/runner.ts": 1325,
+	"packages/browser-runner/src/runner.ts": 1331, // +6 at #956: the local-artifact runtime is constructed, advertised and shut down beside local-browser's.
 	// New pin at #946: the local browser capability is validated at the three agent write doors (#945) and served back resolved by both capabilities routes (#946) — four lines over the line; splitting the agents router is its own change.
 	"workers/api/src/routes/agents.ts": 804,
 	// +45 at #263: `probeMcpSurface`, so the connection test can ask about resources and prompts
@@ -837,7 +837,7 @@ const PINS = {
 	// +16 at #192 (proappstore-online/platform): the 0.1.50 record — recent_instances gains `limit`
 	// and a working-first order; the entry says why the cap had hidden a live run. Ledger, not drift.
 	// +59 at #847: 0.1.51–0.1.57 are published append-only surface records; moving them would defeat the history check that protects this ledger. +5 at #849: the 0.1.58 record. +5 at #854: the 0.1.59 record. +5 at #856: the 0.1.60 record. +4 at #857: the 0.1.61 record. +4 at #858: the 0.1.62 record. +4 at #859: the 0.1.63 record.
-	"workers/mcp/src/surface-lock.ts": 1034, // +4 at #951: the 0.1.79 record (update_agent local_browser); +5 at #927: the 0.1.78 record (pending-call instruction); +5 at #946: the 0.1.77 record (consent + finding review tools); +5 at #944: the 0.1.76 record (start/cancel/resume local browser runs); +6 at #945: the 0.1.75 record (four local browser tools); +4 at #942: the 0.1.74 record (coding_overseer removed); +5 at #938: the 0.1.73 record (get_console_link); +8 at #906: the 0.1.72 record (three secure_input tools); +3 at #904: the 0.1.71 server-info schema record; +2 at #886: the 0.1.70 request_id schema record; +10 at #879: 0.1.66 + 0.1.67 records; +5 at #881: the 0.1.68 record; +4 at #877: the 0.1.69 record — append-only surface ledger, not drift. +7 at #898: truncation made visible (paging, marked cuts, refused over-length writes). +4 at #924: the 0.1.81 entry. +5 at #955 (b547ec47; pin raised at #954): the 0.1.82 record (triage_job_lead). +4 at #961: the 0.1.83 record (fleet_snapshot, set_instance_tags). +3 at #962: the 0.1.84 record (run_local_browser trigger action). +2 at #955: the 0.1.85 record (triage_job_lead compare-and-set).
+	"workers/mcp/src/surface-lock.ts": 1037, // +3 at #956: the 0.1.86 record (local_artifact runtime, generate_application_materials action). +4 at #951: the 0.1.79 record (update_agent local_browser); +5 at #927: the 0.1.78 record (pending-call instruction); +5 at #946: the 0.1.77 record (consent + finding review tools); +5 at #944: the 0.1.76 record (start/cancel/resume local browser runs); +6 at #945: the 0.1.75 record (four local browser tools); +4 at #942: the 0.1.74 record (coding_overseer removed); +5 at #938: the 0.1.73 record (get_console_link); +8 at #906: the 0.1.72 record (three secure_input tools); +3 at #904: the 0.1.71 server-info schema record; +2 at #886: the 0.1.70 request_id schema record; +10 at #879: 0.1.66 + 0.1.67 records; +5 at #881: the 0.1.68 record; +4 at #877: the 0.1.69 record — append-only surface ledger, not drift. +7 at #898: truncation made visible (paging, marked cuts, refused over-length writes). +4 at #924: the 0.1.81 entry. +5 at #955 (b547ec47; pin raised at #954): the 0.1.82 record (triage_job_lead). +4 at #961: the 0.1.83 record (fleet_snapshot, set_instance_tags). +3 at #962: the 0.1.84 record (run_local_browser trigger action). +2 at #955: the 0.1.85 record (triage_job_lead compare-and-set).
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
@@ -1480,7 +1480,7 @@ const PINS = {
 	// bug presented as two. The decision is a pure `subscribeActionFor` with its own tests rather
 	// than a condition in JSX, because this console has no component harness and a verdict embedded
 	// in markup is a verdict nothing checks.
-	"store/console/src/pages/AgentDetail.tsx": 968, // +6 at #894: a link to a deleted agent says so (MissingSubject) instead of loading forever.
+	"store/console/src/pages/AgentDetail.tsx": 969, // +1 at #956: the local_artifact runtime option. +6 at #894: a link to a deleted agent says so (MissingSubject) instead of loading forever.
 	// First entry at #477: supervision.ts crossed 800 lines before this PR — the ratchet did not
 	// catch it because it was not tracked. Adding the entry to record the current state; the right
 	// split is the connector-level supervision vs. the agent-direction store, when this file grows

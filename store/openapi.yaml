@@ -281,6 +281,50 @@ components:
             additionalProperties: true
 
   schemas:
+    ApplicationTailorSettings:
+      type: object
+      properties:
+        engine: { type: string, enum: [claude, codex] }
+        authMode: { type: string, enum: [machine, subscription], description: No provider-API-key mode exists. }
+        workspace: { type: string, example: "~/jobs" }
+        sources: { type: object, properties: { resume: { type: string }, profile: { type: string }, answers: { type: string } } }
+        retainDays: { type: integer, minimum: 0, maximum: 3650, description: Days to keep a generated folder; 0 = until the owner deletes it. }
+        maxMinutes: { type: integer, minimum: 1, maximum: 60 }
+    ApplicationArtifact:
+      type: object
+      properties:
+        kind: { type: string, enum: [resume, cover_letter] }
+        path: { type: string, description: Owner-visible path on the runner machine, e.g. ~/jobs/applications/<leadId>/<runId>/resume.md. }
+        sha256: { type: string }
+        bytes: { type: integer }
+    JobApplication:
+      type: object
+      properties:
+        id: { type: string }
+        instanceId: { type: string }
+        sourceInstanceId: { type: string }
+        leadId: { type: string }
+        lifecycleVersion: { type: integer }
+        idempotencyKey: { type: string, description: The approved lead event's id. }
+        status: { type: string, enum: [tailoring, materials_ready, blocked, failed, cancelled] }
+        lead: { type: object, additionalProperties: true }
+        tailoringRunId: { type: string, nullable: true }
+        resumeArtifact: { allOf: [{ $ref: "#/components/schemas/ApplicationArtifact" }], nullable: true }
+        coverLetterArtifact: { allOf: [{ $ref: "#/components/schemas/ApplicationArtifact" }], nullable: true }
+        profileVersion: { type: string, nullable: true }
+        generatedAt: { type: string, nullable: true }
+        blockReason: { type: string, nullable: true }
+        blockQuestions: { type: array, items: { type: string } }
+        readyEvent: { type: object, nullable: true, additionalProperties: true }
+        readyEmittedAt: { type: integer, nullable: true }
+        createdAt: { type: integer }
+        updatedAt: { type: integer }
+    JobApplicationStart:
+      type: object
+      properties:
+        outcome: { type: string, enum: [started, existing, blocked] }
+        application: { $ref: "#/components/schemas/JobApplication" }
+        run: { type: object, nullable: true, additionalProperties: true }
     InstanceRepoCi:
       type: object
       description: >
@@ -7333,6 +7377,132 @@ paths:
                   event: { type: object, nullable: true, additionalProperties: true }
                   delivery: { nullable: true, additionalProperties: true }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  # ── Application Tailor (#956) ─────────────────────────────────────────────
+
+  /v1/instances/{instanceId}/application-tailor/settings:
+    get:
+      summary: Read the Application Tailor settings
+      description: |
+        Where the owner's job materials live and which locally signed-in CLI tailors them. Stored at
+        `agent_instances.config.applicationTailor`; absent fields take the defaults (`claude`,
+        `machine`, `~/jobs`, `resume.md` + `profile.md`, keep forever, 10 minutes). A stored block
+        that no longer validates is returned as the defaults plus `error`.
+      operationId: getApplicationTailorSettings
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200":
+          description: The effective settings.
+          content:
+            application/json:
+              schema: { type: object, properties: { settings: { $ref: "#/components/schemas/ApplicationTailorSettings" }, error: { type: string } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Update the Application Tailor settings
+      description: |
+        Patch semantics; a source set to `null` or `""` is removed. Refused (400, never clamped):
+        any `authMode` but `machine`/`subscription` — there is no provider-API-key mode; a workspace
+        not written `~/…`; a source path that is absolute, contains `..`, or lies under
+        `applications/` (where generated material lives); out-of-range `retainDays` / `maxMinutes`.
+      operationId: updateApplicationTailorSettings
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApplicationTailorSettings" }
+      responses:
+        "200":
+          description: The stored settings.
+          content:
+            application/json:
+              schema: { type: object, properties: { settings: { $ref: "#/components/schemas/ApplicationTailorSettings" } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/applications:
+    get:
+      summary: List job applications
+      description: Application records the Tailor holds, newest first. Artifact handles (owner-visible path + sha256) only — never document content.
+      operationId: listJobApplications
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: status, in: query, schema: { type: string, enum: [tailoring, materials_ready, blocked, failed, cancelled] } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200":
+          description: The applications.
+          content:
+            application/json:
+              schema: { type: object, properties: { applications: { type: array, items: { $ref: "#/components/schemas/JobApplication" } }, limit: { type: integer }, note: { type: string } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      summary: Tailor application materials for an approved lead
+      description: |
+        The same start path a `generate_application_materials` connection uses: the body is the
+        `job.lead.apply_requested` event (#955), bare or as `{event}`. Keyed on its `eventId`, so a
+        replay returns the existing application (200, `outcome: existing`) and never starts a second
+        run. Dispatches `local_artifact.generate` to the owner's runner, where a locally signed-in
+        Codex or Claude Code CLI (machine login / subscription — never a provider API key) writes a
+        résumé and cover letter under `<workspace>/applications/<leadId>/<runId>/`. A malformed lead
+        or invalid settings is recorded `blocked` without dispatching. 503 when no runner is connected
+        (nothing is recorded, so a connection delivery is retried). On completion the application
+        moves to `materials_ready` and emits `job.application.materials_ready` exactly once.
+      operationId: startJobApplication
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200": { description: "The existing application for this event.", content: { application/json: { schema: { $ref: "#/components/schemas/JobApplicationStart" } } } }
+        "201": { description: "A new application (started, or blocked with its reason).", content: { application/json: { schema: { $ref: "#/components/schemas/JobApplicationStart" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { description: No runner is connected. }
+
+  /v1/instances/{instanceId}/applications/{applicationId}:
+    get:
+      summary: Read a job application and its tailoring run
+      description: Pulls a running tailoring run from the runner first, so the answer is current. The run's trace holds handles (role, path, sha256, counts) only.
+      operationId: getJobApplication
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: applicationId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "The application and its run.", content: { application/json: { schema: { $ref: "#/components/schemas/JobApplicationStart" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/applications/{applicationId}/cancel:
+    post:
+      summary: Cancel tailoring
+      description: Stops the CLI on the runner and marks the run and application `cancelled`. Touches nothing external.
+      operationId: cancelJobApplication
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: applicationId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "The cancelled application and run.", content: { application/json: { schema: { $ref: "#/components/schemas/JobApplicationStart" } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }

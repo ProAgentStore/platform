@@ -45,7 +45,8 @@ function statusOf(err: unknown): number | undefined {
 
 /** Actions a connection may deliver. `sync_connector` is deliberately excluded — a connection
  *  carries data between agents, it does not run an external connector sync. */
-export const CONNECTION_ACTIONS: readonly TriggerAction[] = ["insert_record", "run_pipeline", "create_task", "add_knowledge"];
+/** `generate_application_materials` (#956): an approved lead → the Application Tailor. */
+export const CONNECTION_ACTIONS: readonly TriggerAction[] = ["insert_record", "run_pipeline", "create_task", "add_knowledge", "generate_application_materials"];
 
 export interface ConnectionRow {
 	id: string;

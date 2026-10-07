@@ -86,6 +86,9 @@ const EXPECTED_DEFERRED = new Set([
 	// Runtime Website Builder calls FWS through the registry so OAuth/tool grants remain
 	// authoritative; it defers that dependency to keep the trigger/registry cycle runtime-safe.
 	"lib/runtime-builder/workflow.ts",
+	// #956: the Application Tailor is started by a trigger/connection action and emits its own
+	// materials_ready through the pump; triggers.ts defers the import.
+	"lib/local-artifact/tailor.ts",
 ]);
 
 describe("workers/api import graph", () => {

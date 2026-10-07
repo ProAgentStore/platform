@@ -662,7 +662,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 							// CANONICAL SOURCE: `KNOWN_RUNTIMES` in workers/api/src/lib/agent-capabilities.ts.
 							// `local_browser` was missing here (#951) while set_agent_capabilities had it, so
 							// update_agent refused it at the client before the API — which accepts it — ever saw it.
-							runtime: z.enum(["browser", "coding", "local_browser"]).nullable().optional(),
+							runtime: z.enum(["browser", "coding", "local_browser", "local_artifact"]).nullable().optional(),
 							// Declared or zod strips it: an object schema drops unknown keys, so a localBrowser
 							// block sent through update_agent never reached the API's validator (#951).
 							localBrowser: z.record(z.unknown()).nullable().optional(),
