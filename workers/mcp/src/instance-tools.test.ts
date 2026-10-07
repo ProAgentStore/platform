@@ -490,21 +490,9 @@ describe("dry-run mode", () => {
 		expect(h.auditEvents().some((e) => e.action === "dry_run")).toBe(true);
 	});
 
-	it("apply_to_job dry-run previews its default real submission and does not hit /apply", async () => {
+	it("apply_to_job exposes no fill-only or dry-run controls and always starts a real submission", async () => {
 		const h = setup({ groups: ["apply"] });
-		const res = await h.tools.get("apply_to_job")!.handler({
-			instance_id: "i1",
-			url: "https://jobs.example/apply/1",
-			dry_run: true,
-		});
-		const body = JSON.parse(res.content[0].text);
-		expect(body.dryRun).toBe(true);
-		expect(body.action).toContain("SUBMIT");
-		expect(h.fetchStub.calls).toHaveLength(0);
-	});
-
-	it("apply_to_job submits by default and sends dryRun false to the apply route", async () => {
-		const h = setup({ groups: ["apply"] });
+		expect(Object.keys(h.tools.get("apply_to_job")!.schema).sort()).toEqual(["instance_id", "token", "url"]);
 		await h.tools.get("apply_to_job")!.handler({
 			instance_id: "i1",
 			url: "https://jobs.example/apply/1",
@@ -516,7 +504,6 @@ describe("dry-run mode", () => {
 		});
 		expect(JSON.parse(h.fetchStub.calls[0].body ?? "{}")).toEqual({
 			url: "https://jobs.example/apply/1",
-			dryRun: false,
 		});
 	});
 

@@ -42,7 +42,7 @@ export const SERVER_INSTRUCTIONS = [
 	NESTED_TOOL_SEQUENCE,
 	DIRECT_BEFORE_RUN,
 	"To debug what an agent did, call agent_trace first (chat turns, steps and errors on one timeline), then instance_messages or list_errors for detail. usage_summary reports spend.",
-	"Tool annotations are accurate: readOnlyHint true means the tool only reads. A tool that changes state takes dry_run — call it that way first to see what would happen. The most consequential tools also require an exact confirm string and a connection holding the destructive scope; those refusals are real and cannot be argued past.",
+	"Tool annotations are accurate: readOnlyHint true means the tool only reads. Most tools that change state take dry_run — call it that way first to see what would happen. The most consequential tools require a connection holding the destructive scope and, where their schema asks for it, an exact confirm string; those refusals are real and cannot be argued past.",
 	"If you already know the one instance you will drive for this whole session, connect to /mcp/i/<instance_id> instead: that session publishes only that instance's own tools under their real names with no instance_id argument, plus chat, guide and messages, and none of the platform-wide tools above.",
 	"A call your client reports as still in progress is still running: wait for its result. Do not call the tool again to resume or join it, and never invent an argument the schema does not list (such as _deferred_result_for) — there is no such mechanism, and an unlisted argument is rejected. Retry only after a call FAILED or its response was LOST, and only the way that tool's description says (request_id where it has one).",
 ].join(" ");
@@ -395,13 +395,14 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	trigger_agent_deploy: "runtime",
 
 	// ── destructive: deletes, overwrites, or commits an irreversible external action.
-	//    Announced `destructiveHint: true`. Every one of these also demands a `confirm`
-	//    string and a connection holding the `destructive` scope. ──
+//    Announced `destructiveHint: true`. They all demand a connection holding the
+//    `destructive` scope; most also demand a confirmation string. ──
 	// STRICTER than its gate on one path: `write` for one repo, `destructive` for all
 	// (contract.test.ts). An annotation has one value per tool, so it takes the worse one.
 	remove_repo: "destructive",
-	// Gated `runtime` for a dry run and `destructive` for a real submit — a real submit
-	// sends an application to a third party and cannot be recalled.
+	// Always destructive: it sends an application to a third party and cannot be recalled.
+	// The destructive scope is the caller's explicit delegation; the public MCP schema has
+	// no fill-only or dry-run alternative and therefore no separate confirmation string.
 	apply_to_job: "destructive",
 	// Gated `write`, but both overwrite a file in a GitHub repo, which is why they were
 	// given confirmation strings. The confirm requirement is the honest discriminator here,

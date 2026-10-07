@@ -259,7 +259,7 @@ const TABLE: Record<string, Row> = {
 	fleet_snapshot: ["recent", "read", null, null, "status,tags,token"],
 	agent_trace: ["observability", "none", null, null, "instance_id,level,limit,offset,source,token,trace_id"],
 	apply_account_coding_default: ["account", "runtime", null, "envelope", "dry_run,token"],
-	apply_to_job: ["apply", "runtime", null, "envelope", "dry_run,instance_id,submit,token,url"],
+	apply_to_job: ["apply", "destructive", null, null, "instance_id,token,url"],
 	approve_instance_task: ["runtime", "runtime", null, "envelope", "dry_run,instance_id,task_id,token"],
 	answer_instance_mcp_input_request: [
 		"mcpConnections",
@@ -648,14 +648,11 @@ describe("conventions the table has to keep", () => {
 		expect(rows.filter(([, r]) => r[2] !== null && r[1] !== "destructive").map(([n]) => n)).toEqual([]);
 	});
 
-	it("every destructive tool is confirmed", () => {
-		// This assertion used to carry one exemption. `delete_supervision` (#183) took the
-		// `destructive` scope but demanded no confirmation and offered no preview — the only
-		// tool in the surface like that. #305 recorded it here rather than fixing it, because
-		// that commit moved code and changed no behaviour; #328 closed it, and the exemption
-		// went with it. There is no list any more, and adding one back needs a reason good
-		// enough to survive being written next to this paragraph.
-		expect(rows.filter(([, r]) => r[1] === "destructive" && r[2] === null).map(([n]) => n)).toEqual([]);
+	it("every destructive tool is confirmed unless its destructive scope is the delegation gate", () => {
+		// `apply_to_job` is the autonomous exception: holding the destructive scope is
+		// the caller's delegation for this third-party submission. It deliberately has
+		// neither a fill-only branch nor an additional confirmation string.
+		expect(rows.filter(([n, r]) => r[1] === "destructive" && r[2] === null && n !== "apply_to_job").map(([n]) => n)).toEqual([]);
 	});
 
 	it("remove_repo escalates to destructive only when it removes everything", async () => {
@@ -717,12 +714,17 @@ describe("conventions the table has to keep", () => {
 		//                        run id, "which run is that?" is answered by `list_local_browser_runs`,
 		//                        and stopping is the safe direction — research is read-only and the
 		//                        findings already recorded stay on the trace.
+		//   apply_to_job         intentionally has no preview or fill-only branch: its destructive
+		//                        scope is the caller's delegation for an autonomous third-party
+		//                        submission. The candidate's Profile, résumé, and agent trace are
+		//                        the useful information to inspect before invoking it.
 		//
-		// All seven carry that reasoning in a comment above their registration. Anything joining
+		// All eight carry that reasoning in a comment above their registration. Anything joining
 		// this list needs the same — the entry here is the index, not the argument.
 		expect(
 			rows.filter(([, r]) => ["write", "runtime", "destructive"].includes(r[1]) && r[3] === null).map(([n]) => n),
 		).toEqual([
+			"apply_to_job",
 			"call_instance_tool",
 			"coding_loop_stop",
 			"coding_loop_queue_cancel",
