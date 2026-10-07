@@ -69,12 +69,16 @@ errorRoutes.get("/", async (c) => {
 	const session = await requireUser(c);
 	const all = c.req.query("scope") === "all" && session.roles.includes("admin");
 	const source = c.req.query("source") || undefined;
-	const limit = Number(c.req.query("limit")) || 100;
+	const limit = Math.max(1, Math.min(Number(c.req.query("limit")) || 100, 500));
+	const offset = Math.max(0, Math.trunc(Number(c.req.query("offset")) || 0));
 	// `?level=error` is how you ask for bugs only. Unfiltered is deliberately EVERYTHING: a warn
 	// that is invisible by default is a warn nobody reads, which is the state #424 was filed about.
 	const level = c.req.query("level") === "warn" ? "warn" : c.req.query("level") === "error" ? "error" : undefined;
-	const errors = await listErrors(c.env, { userId: session.uid, all, source, limit, level });
-	return c.json({ scope: all ? "all" : "me", count: errors.length, errors });
+	// One past the page, to say whether there is more (#898): a full page used to read as the whole log.
+	const rows = await listErrors(c.env, { userId: session.uid, all, source, limit: limit + 1, offset, level });
+	const errors = rows.slice(0, limit);
+	const hasMore = rows.length > limit;
+	return c.json({ scope: all ? "all" : "me", count: errors.length, errors, offset, hasMore, nextOffset: hasMore ? offset + limit : null });
 });
 
 /**

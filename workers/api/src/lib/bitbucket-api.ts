@@ -62,6 +62,7 @@
  * And, as on GitLab, the pipeline's single state is WIDENED into GitHub's `(status, conclusion)`
  * pair rather than teaching the console a third vocabulary.
  */
+import { clipMarked } from "./clip-marked.js";
 import { readConnectorRefreshToken } from "./connector-oauth.js";
 import type { BuildRun } from "./build-history.js";
 import type { IssueDetail, IssueSummary, ListIssuesOpts } from "./github-issues.js";
@@ -76,8 +77,11 @@ import type { Env } from "../types.js";
 const API_BASE = "https://api.bitbucket.org/2.0";
 const WEB_BASE = "https://bitbucket.org";
 
-/** Same cap the other two readers apply, for the same reason: a body goes into a model prompt. */
-const BODY_CAP = 8 * 1024;
+/**
+ * GitHub's own body limit. A longer description (GitLab allows 1 MB) is cut VISIBLY — with both
+ * numbers in the text (#898) — never silently, which is how a comment once ended at "…4. O".
+ */
+const BODY_CAP = 65_536;
 
 /**
  * A Bitbucket workspace / repository slug segment. Validating the charset here is defence in
@@ -208,7 +212,8 @@ export async function listBitbucketIssues(env: Env, userId: string, slug: string
 	const path = bitbucketRepoPath(slug);
 	if (!path) return [];
 	const pagelen = Math.min(Math.max(opts.limit ?? 30, 1), 100);
-	const params = new URLSearchParams({ pagelen: String(pagelen), sort: "-updated_on" });
+	const params = new URLSearchParams({ pagelen: String(pagelen), sort: opts.order === "oldest" ? "created_on" : "-updated_on" });
+	if ((opts.page ?? 1) > 1) params.set("page", String(Math.trunc(opts.page ?? 1)));
 	const q = stateQuery(opts.state ?? "open");
 	if (q) params.set("q", q);
 	const data = await getJson<{ values?: RawIssue[] }>(`${API_BASE}/repositories/${path.workspace}/${path.repo}/issues?${params}`, await bitbucketToken(env, userId));
@@ -229,7 +234,7 @@ export async function readBitbucketIssue(env: Env, userId: string, slug: string,
 	if (!path || !Number.isFinite(number) || number <= 0) return null;
 	const raw = await getJson<RawIssue>(`${API_BASE}/repositories/${path.workspace}/${path.repo}/issues/${Math.floor(number)}`, await bitbucketToken(env, userId));
 	if (!raw || typeof raw !== "object" || typeof raw.id !== "number") return null;
-	return { ...toSummary(raw), body: (raw.content?.raw ?? "").slice(0, BODY_CAP) };
+	return { ...toSummary(raw), body: clipMarked(raw.content?.raw ?? "", BODY_CAP) };
 }
 
 interface RawPipeline {

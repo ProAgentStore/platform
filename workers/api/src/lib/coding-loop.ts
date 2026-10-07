@@ -101,6 +101,8 @@ export interface CodingGoal {
 /** What the orchestrator "sees": the current pane plus the CLI's run-state. */
 export interface CodingPaneSnapshot {
 	pane: string;
+	/** The session's output length before the runner's 64 KiB cut (#898); absent from older runners. */
+	paneChars?: number;
 	runState: "idle" | "thinking" | "responding";
 	ready: boolean;
 	alive: boolean;
@@ -493,10 +495,15 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 	return { outcome: "max_steps", detail: `gave up after ${maxSteps} steps`, steps: maxSteps, transcript };
 }
 
+/** How much of each instruction the step log keeps — short on purpose (#822), and marked. */
+const STEP_LOG_CHARS = 120;
+
 function describe(a: CodingActionKind): string {
 	switch (a.kind) {
 		case "message":
-			return `message: ${a.text.slice(0, 120)}`;
+			// Marked (#898): the Pilot re-reads this log on every decision, and a silent 120-char
+			// cut made its own earlier instruction look like the whole of what it sent.
+			return `message: ${a.text.length > STEP_LOG_CHARS ? `${a.text.slice(0, STEP_LOG_CHARS)}… [${a.text.length} chars in all]` : a.text}`;
 		case "interrupt":
 			return "interrupt (Ctrl-C)";
 	}
@@ -701,7 +708,7 @@ export async function decideCodingAction(
 	const system = systemPromptBlocks(params.goal);
 	const clock = clockLine(Date.now(), params.goal.timeZone);
 	const steps = params.actionLog.length ? params.actionLog.map((a, i) => `${i + 1}. ${a}`).join("\n") : "(none yet)";
-	const terminal = renderPaneForPilot(params.snapshot.pane);
+	const terminal = renderPaneForPilot(params.snapshot.pane, undefined, params.snapshot.paneChars);
 	const userMsg = [
 		// The clock, per decision rather than per run (#541): a run that parks for an hour and
 		// resumes must convert the CLI's stated local reset time against the time it is NOW. In the

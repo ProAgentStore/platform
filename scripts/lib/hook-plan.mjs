@@ -24,6 +24,7 @@ export const CI_GUARDS = [
 	["scripts/check-console-types.mjs"],
 	["scripts/check-design-tokens.mjs"],
 	["scripts/check-bare-catch.mjs"],
+	["scripts/check-silent-slice.mjs"],
 	["scripts/check-typecheck-coverage.mjs"],
 	["scripts/check-test-isolation.mjs"],
 	["scripts/check-doc-citations.mjs"],

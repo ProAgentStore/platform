@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
 import { parseResourceSample, type RunnerResourceSample, type RunnerResourcesView, resourcesView } from "../lib/runner-resources.js";
 import { relayConnected } from "../lib/runner-client.js";
+import { mapWithConcurrency } from "../lib/map-concurrency.js";
 import { lastTerminal } from "../lib/coding-timeline.js";
 import { normalizeRunnerNode, parseBoundRunnerNode } from "../lib/runtime-nodes.js";
 import { adoptableIdByName, identityHint, machineNamesFor, normalizeMachineId } from "../lib/machine-identity.js";
@@ -18,6 +19,9 @@ import type { Env } from "../types.js";
  * grouped by `runner_node`. Read-only transparency: status, sessions, tmux tail, logs.
  */
 export const terminalRoutes = new Hono<{ Bindings: Env }>();
+
+/** How many relay probes run at once. Bounds concurrency only — every instance is probed (#898). */
+const PROBE_CONCURRENCY = 10;
 
 interface NodeRow {
 	instance_id: string;
@@ -440,16 +444,20 @@ terminalRoutes.get("/nodes", async (c) => {
 			for (const name of names) if (await relayConnected(c.env, instanceId, name).catch(() => false)) return true;
 			return false;
 		};
-		const checks = await Promise.all(n.instances.slice(0, 25).map((i) => anyName(i.instanceId)));
-		n.instances.forEach((i, idx) => { i.connected = checks[idx] ?? false; });
+		// EVERY instance (#898 N1). This probed the first 25 and stamped the rest `connected: false`,
+		// so seven agents pinned to live machines read as disconnected purely by list position.
+		// Each probe is one hibernated-DO `/status`; the bound is on concurrency, never on coverage.
+		const checks = await mapWithConcurrency(n.instances, PROBE_CONCURRENCY, (i) => anyName(i.instanceId));
+		n.instances.forEach((i, idx) => { i.connected = checks[idx]; });
 		n.connected = checks.some(Boolean);
 	}));
 
-	// Cheap tmux peek: the last terminal snapshot tail for ACTIVE sessions (from the timeline,
-	// no runner call), capped so a busy account can't fan out unboundedly.
-	const active = nodes.flatMap((n) => n.sessions.filter((s) => s.status === "active")).slice(0, 12);
+	// Cheap tmux peek: the last terminal snapshot tail for ACTIVE sessions (from the timeline, no
+	// runner call). For every active session (#898 N3): a cap left later ones `null`, which reads
+	// the same as "no output yet".
+	const active = nodes.flatMap((n) => n.sessions.filter((s) => s.status === "active"));
 	const tails = new Map<string, string | null>();
-	await Promise.all(active.map(async (s) => { tails.set(s.sessionId, await lastTerminal(c.env, s.sessionId).catch(() => null)); }));
+	await mapWithConcurrency(active, PROBE_CONCURRENCY, async (s) => { tails.set(s.sessionId, await lastTerminal(c.env, s.sessionId).catch(() => null)); });
 	for (const n of nodes) for (const s of n.sessions) s.terminalTail = tails.get(s.sessionId) ?? null;
 
 	return c.json({ nodes });
@@ -510,11 +518,13 @@ export async function preflightForgetNode(env: Env, uid: string, rawTarget: stri
 
 	// Live, not the DB `status` column — which is never cleared on disconnect and would refuse to
 	// forget a machine that has been off for weeks.
-	const probeIds = [...new Set(rows.filter((r) => names.has(normalizeRunnerNode(r.runner_node))).map((r) => r.instance_id))].slice(0, 25);
-	const probes = await Promise.all(probeIds.map(async (id) => {
+	// Every instance (#898 N2): a machine whose only live socket was past the 25th read "not
+	// connected", and the safety check this probe exists for was skipped.
+	const probeIds = [...new Set(rows.filter((r) => names.has(normalizeRunnerNode(r.runner_node))).map((r) => r.instance_id))];
+	const probes = await mapWithConcurrency(probeIds, PROBE_CONCURRENCY, async (id) => {
 		for (const name of names) if (await relayConnected(env, id, name).catch(() => false)) return true;
 		return false;
-	}));
+	});
 
 	return { ok: true, target, names: [...names], connected: probes.some(Boolean), blockers, verdict: diagnoseForget(probes.some(Boolean), blockers) };
 }
@@ -658,8 +668,9 @@ terminalRoutes.delete("/nodes/:node/claim", async (c) => {
 	}
 
 	// Live check: refuse if this node is connected (the next heartbeat would re-stamp).
-	const probeIds = [...new Set(nodeRows.map((r) => r.instance_id))].slice(0, 25);
-	const probes = await Promise.all(probeIds.map((id) => relayConnected(c.env, id, target).catch(() => false)));
+	// Every instance (#898 N2), for the reason the forget preflight probes every one.
+	const probeIds = [...new Set(nodeRows.map((r) => r.instance_id))];
+	const probes = await mapWithConcurrency(probeIds, PROBE_CONCURRENCY, (id) => relayConnected(c.env, id, target).catch(() => false));
 	const connected = probes.some(Boolean);
 
 	const verdict = diagnoseUnclaim(connected, blockers);

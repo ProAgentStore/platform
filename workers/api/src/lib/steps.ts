@@ -17,6 +17,7 @@
 // `runRegistryTool`. That mutual need is real, so the calls below use a deferred
 // `await import("./tool-registry.js")`: by the time one runs, both modules are initialised.
 // Import it statically and the two initialise against each other. See lib/import-graph.ts.
+import { mapWithConcurrency } from "./map-concurrency.js";
 import type { ToolDef } from "./connectors/types.js";
 import { getPath } from "./connectors/http.js";
 import { JSON_STEP_TOOLS } from "./steps-json.js";
@@ -255,22 +256,6 @@ function gridCells(center: { lat: number; lng: number }, extentKm: number, stepK
 		}
 	}
 	return cells;
-}
-
-// ── concurrency-capped map (used by paginate/fan_out) ─────────────────────────
-async function mapWithConcurrency<T, R>(items: T[], cap: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
-	const limit = Math.max(1, Math.min(cap || 1, 20));
-	const results: R[] = new Array(items.length);
-	let next = 0;
-	async function worker(): Promise<void> {
-		for (;;) {
-			const i = next++;
-			if (i >= items.length) return;
-			results[i] = await fn(items[i], i);
-		}
-	}
-	await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
-	return results;
 }
 
 // ── 5. reachability probe (via safeFetch, #95) ────────────────────────────────

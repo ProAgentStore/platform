@@ -122,15 +122,17 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 
 	server.tool(
 		"instance_activity",
-		"Read a subscribed instance's activity log (chat, tool calls, file uploads, record mutations — append-only).",
+		"Read a subscribed instance's activity log (chat, tool calls, file uploads, record mutations — append-only), newest first. The reply's `total` counts every retained event; pass `nextOffset` as `offset` for older ones.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
+			limit: z.coerce.number().int().min(1).max(200).optional().describe("Events per page (default 50)."),
+			offset: z.coerce.number().int().min(0).optional().describe("Skip this many of the newest events — the previous reply's `nextOffset`."),
 		},
-		async ({ token, instance_id }) => {
+		async ({ token, instance_id, limit, offset }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const data = await authedCall(`/v1/instances/${instance_id}/activity`, sessionToken, {}, env);
+			const data = await authedCall(`/v1/instances/${instance_id}/activity?limit=${limit ?? 50}&offset=${offset ?? 0}`, sessionToken, {}, env);
 			return jsonText(data);
 		},
 	);
@@ -143,14 +145,16 @@ export function registerObservabilityTools(server: McpServer, ctx: InstanceTools
 			scope: z.enum(["me", "all"]).optional().describe('"all" = every user\'s errors (admin only); default your own.'),
 			source: z.string().optional().describe("Filter by source, e.g. keys-proxy | auth | job-apply | coding."),
 			limit: z.coerce.number().int().min(1).max(500).optional(),
+			offset: z.coerce.number().int().min(0).optional().describe("Skip this many of the newest rows — the previous reply's `nextOffset` while `hasMore` is true."),
 		},
-		async ({ token, scope, source, limit }) => {
+		async ({ token, scope, source, limit, offset }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const qs = new URLSearchParams();
 			if (scope === "all") qs.set("scope", "all");
 			if (source) qs.set("source", source);
 			if (limit) qs.set("limit", String(limit));
+			if (offset) qs.set("offset", String(offset));
 			const data = await authedCall(`/v1/errors${qs.toString() ? `?${qs.toString()}` : ""}`, sessionToken, {}, env);
 			return jsonText(data);
 		},

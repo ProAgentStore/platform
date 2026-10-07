@@ -56,9 +56,18 @@ export const SNAPSHOT_THROTTLE_MS = 20_000;
  */
 export const TERMINAL_SNAPSHOT_CHARS = 8000;
 
+/**
+ * Leads a stored snapshot that is only the TAIL of its pane (#898), so the row does not read as the
+ * whole terminal. Fixed text, deliberately without the pane's length: the length changes whenever
+ * output scrolls above the tail, and a marker carrying it would make every capture a "change" —
+ * the duplicate-row bug #466 fixed.
+ */
+export const SNAPSHOT_CUT_MARKER = `[earlier output not stored — this is the last ${TERMINAL_SNAPSHOT_CHARS} characters of the terminal]\n`;
+
 /** The exact string a `terminal` row stores for this pane. Empty when there is nothing to store. */
 export function terminalSnapshotContent(pane: string): string {
-	return pane.trim() ? pane.slice(-TERMINAL_SNAPSHOT_CHARS) : "";
+	if (!pane.trim()) return "";
+	return pane.length > TERMINAL_SNAPSHOT_CHARS ? `${SNAPSHOT_CUT_MARKER}${pane.slice(-TERMINAL_SNAPSHOT_CHARS)}` : pane;
 }
 
 /**

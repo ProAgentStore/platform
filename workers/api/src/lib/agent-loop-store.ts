@@ -3,6 +3,7 @@
 // Shape and vocabulary mirror `pipeline-runs.ts` on purpose: a user should not have to learn two
 // mental models for "what did my agent do", and #19/#182 want both histories rendered from one.
 
+import { clipMarked } from "./clip-marked.js";
 import { statusFor, type LoopStopReason } from "./agent-loop.js";
 import type { Env } from "../types.js";
 import { recordRunEvent } from "./run-events.js";
@@ -229,13 +230,19 @@ export async function getLoopRun(env: Env, userId: string, runId: string): Promi
 	return row ? toLoopRunView(row) : null;
 }
 
-export async function listLoopRuns(env: Env, userId: string, instanceId: string, limit = 50): Promise<LoopRunView[]> {
+export async function listLoopRuns(env: Env, userId: string, instanceId: string, limit = 50, offset = 0): Promise<LoopRunView[]> {
 	const res = await env.DB.prepare(
-		"SELECT * FROM agent_loop_runs WHERE user_id = ?1 AND instance_id = ?2 ORDER BY started_at DESC LIMIT ?3",
+		"SELECT * FROM agent_loop_runs WHERE user_id = ?1 AND instance_id = ?2 ORDER BY started_at DESC, run_id DESC LIMIT ?3 OFFSET ?4",
 	)
-		.bind(userId, instanceId, Math.max(1, Math.min(200, limit)))
+		.bind(userId, instanceId, Math.max(1, Math.min(200, limit)), Math.max(0, Math.trunc(offset) || 0))
 		.all<LoopRunRow>();
 	return (res.results ?? []).map(toLoopRunView);
+}
+
+/** How many runs an instance has in all — so a page of {@link listLoopRuns} can say it is one (#898). */
+export async function countLoopRuns(env: Env, userId: string, instanceId: string): Promise<number> {
+	const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM agent_loop_runs WHERE user_id = ?1 AND instance_id = ?2").bind(userId, instanceId).first<{ n: number }>();
+	return Number(row?.n ?? 0);
 }
 
 /**
@@ -566,7 +573,7 @@ export async function finishLoopRun(
 		    SET status = ?2, stop_reason = ?3, detail = ?4, finished_at = ?5
 		  WHERE run_id = ?1`,
 	)
-		.bind(runId, statusFor(stopReason), stopReason, detail.slice(0, 2000), finishedAt)
+		.bind(runId, statusFor(stopReason), stopReason, clipMarked(detail, 2000), finishedAt) // marked, never silent (#898)
 		.run();
 	// Announce it (#579): every driver closes through here, so this is the one `run.finished` producer.
 	await recordRunEvent(env, runId, "run.finished", finishedAt);

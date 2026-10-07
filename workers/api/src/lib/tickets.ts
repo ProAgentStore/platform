@@ -22,6 +22,8 @@
  *
  * This module must not import `board.ts` (the board imports it).
  */
+import { clipMarked } from "./clip-marked.js";
+import { TICKET_LIMITS, assertJobKey } from "./write-limits.js";
 import { HttpError } from "./auth.js";
 import { mirrorRuntimeTask } from "../routes/instances-runtime.js";
 import type { Env } from "../types.js";
@@ -74,18 +76,19 @@ export async function recordTicket(
 	userId: string,
 	input: { jobKey: string; title: string; description?: string; createdBy: "human" | "agent" },
 ): Promise<{ ticket: Ticket; created: boolean }> {
+	assertJobKey(input.jobKey);
 	const id = `tkt_${crypto.randomUUID()}`;
 	const res = await env.DB.prepare(
 		`INSERT INTO tickets (id, instance_id, user_id, job_key, title, description, created_by)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
      ON CONFLICT(instance_id, job_key) DO NOTHING`,
 	)
-		.bind(id, instanceId, userId, input.jobKey.slice(0, 400), input.title.slice(0, 200) || input.jobKey.slice(0, 200), (input.description ?? "").slice(0, 2000), input.createdBy)
+		.bind(id, instanceId, userId, input.jobKey, clipMarked(input.title || input.jobKey, TICKET_LIMITS.title), clipMarked(input.description ?? "", TICKET_LIMITS.description), input.createdBy)
 		.run();
 	const row = await env.DB.prepare(
 		"SELECT id, instance_id, job_key, title, description, created_by, created_at FROM tickets WHERE instance_id = ?1 AND user_id = ?2 AND job_key = ?3",
 	)
-		.bind(instanceId, userId, input.jobKey.slice(0, 400))
+		.bind(instanceId, userId, input.jobKey)
 		.first<TicketRow>();
 	// Another tenant cannot hold this instance's job key (instance ids are owner-scoped by the caller),
 	// so a missing row after the insert is a genuine failure, not a conflict to paper over.

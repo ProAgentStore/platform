@@ -104,6 +104,8 @@ const CONTROL_ARGS: ReadonlySet<string> = new Set([
 	"message_id",
 	// read-shaping on a tool that also writes
 	"limit",
+	// #898: which page of an oversized `call_instance_tool` result to return — never stored.
+	"offset",
 	"before",
 	"trace_id",
 	"source",

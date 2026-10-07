@@ -252,15 +252,19 @@ export async function vectorStats(
 // ── Activity log ────────────────────────────────────────────────────────────
 
 export async function getActivity(
-	engine: Pick<AgentStorageEngine, "getEvents">,
+	engine: Pick<AgentStorageEngine, "getEventsPage">,
 	url: URL,
 ): Promise<Response> {
-	const events = await engine.getEvents({
-		limit: Number(url.searchParams.get("limit")) || 50,
+	const limit = Number(url.searchParams.get("limit")) || 50;
+	const offset = Math.max(0, Math.trunc(Number(url.searchParams.get("offset")) || 0));
+	const { events, total } = await engine.getEventsPage({
+		limit,
+		offset,
 		type: url.searchParams.get("type") as ActivityEvent["type"] | undefined,
 		userId: url.searchParams.get("user_id") || undefined,
 	});
-	return json({ events });
+	// `total` and `nextOffset` (#898): the newest 50 read as the whole log, and the rest was unreachable.
+	return json({ events, total, offset, nextOffset: offset + events.length < total ? offset + events.length : null });
 }
 
 // ── Summaries ───────────────────────────────────────────────────────────────

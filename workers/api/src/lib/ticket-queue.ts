@@ -30,6 +30,7 @@
  * already attaches a run to its ticket; `run-events.ts` settles that row's status when the run ends.
  */
 import { capabilitiesForInstance } from "./agent-capabilities.js";
+import { clipMarked } from "./clip-marked.js";
 import { sanitizeMaxIterations } from "./agent-loop.js";
 import { codingRunRefusal } from "./billing.js";
 import { buildInstanceBoard } from "./board.js";
@@ -40,7 +41,7 @@ import { logError } from "./error-log.js";
 import { listHostedBuilds, type HostedRepoRef } from "./hosted-repo.js";
 import { readInstanceConfigPair } from "./instance-config.js";
 import { type LoopStartInput, type LoopStartResult, loopDriverFor } from "./loop-drivers.js";
-import { clampIterations } from "./loop-limits.js";
+import { DEFAULT_MAX_OBJECTIVE_CHARS, clampIterations } from "./loop-limits.js";
 import { readLoopLimits } from "./loop-limits-store.js";
 import { ensureTicketBudget } from "./ticket-budget.js";
 import { appendTicketProgress, dollars } from "./ticket-progress.js";
@@ -63,7 +64,12 @@ export type TicketAuthority = "human" | "agent";
 
 /** A claimed ticket whose run never came back to record itself is re-offered after this. */
 const LEASE_MS = 2 * 60_000;
-const MAX_OBJECTIVE = 2000;
+/**
+ * The objective a ticket becomes: "Ticket: " + title (≤200) + description (≤2,000) — up to ~2,210
+ * chars, which a 2,000 cap cut from the END, where a ticket keeps its acceptance criteria (#898).
+ * The default objective cap holds any ticket whole; past it the cut is marked, never silent.
+ */
+const MAX_OBJECTIVE = DEFAULT_MAX_OBJECTIVE_CHARS;
 
 // ── Deploy gate ──────────────────────────────────────────────────────────────────────────────────
 
@@ -286,7 +292,7 @@ export async function pickupNextTicket(env: Env, instanceId: string, userId: str
 			return { started: false, reason: "budget", ticketId: next.id, detail: note };
 		}
 
-		const objective = `Ticket: ${next.title}${next.description ? `\n\n${next.description}` : ""}`.slice(0, MAX_OBJECTIVE);
+		const objective = clipMarked(`Ticket: ${next.title}${next.description ? `\n\n${next.description}` : ""}`, MAX_OBJECTIVE);
 		const start = deps.start ?? ((input: LoopStartInput) => loopDriverFor(caps).start(input));
 		const started = await start({ env, instanceId, userId, objective, maxIterations, budgetId, depth: 0 });
 

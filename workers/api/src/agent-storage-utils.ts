@@ -1,3 +1,4 @@
+import { overLimit } from "./lib/write-limits.js";
 import type { CollectionField, CollectionSchema } from "./agent-storage-types.js";
 import { extractText as extractPdfTextWithPdfJs } from "unpdf";
 
@@ -39,6 +40,9 @@ export function chunkText(text: string, size: number): string[] {
 	return result.filter((c) => c.length > 20); // Skip tiny (sentence-split) fragments
 }
 
+/** A string field's limit in a collection record. */
+export const RECORD_STRING_MAX_CHARS = 10_000;
+
 export function validateRecord(
 	schema: CollectionSchema,
 	data: Record<string, unknown>,
@@ -58,9 +62,13 @@ export function validateRecord(
 
 		// Type coercion/validation
 		switch (field.type) {
-			case "string":
-				result[field.name] = String(value).slice(0, 10_000);
+			case "string": {
+				// Refused past the limit, never cut (#898) — the same treatment a bad number gets.
+				const tooLong = overLimit({ [field.name]: [String(value), RECORD_STRING_MAX_CHARS] });
+				if (tooLong) throw new Error(tooLong);
+				result[field.name] = String(value);
 				break;
+			}
 			case "number": {
 				const num = Number(value);
 				if (Number.isNaN(num)) throw new Error(`Field "${field.name}" must be a number`);

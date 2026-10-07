@@ -75,8 +75,11 @@ describe("logError", () => {
 	it("bounds oversized message and context", async () => {
 		const { env, inserts } = mockDb();
 		await logError(env, { source: "s", message: "m".repeat(5000), context: { big: "c".repeat(9000) } });
-		expect((inserts[0].args[4] as string).length).toBe(2000);
-		expect((inserts[0].args[5] as string).length).toBe(4000);
+		// Bounded, MARKED, and the context still parses (#898) — a sliced one failed json_valid
+		// and error_summary's instance filter dropped the row.
+		expect(inserts[0].args[4] as string).toMatch(/^m{2000}\n\[cut: showing the first 2000 of 5000 characters\]$/);
+		expect((inserts[0].args[5] as string).length).toBeLessThanOrEqual(4000);
+		expect(JSON.parse(inserts[0].args[5] as string)).toMatchObject({ truncated: true, chars: JSON.stringify({ big: "c".repeat(9000) }).length });
 	});
 
 	it("opportunistically prunes old rows (retention)", async () => {

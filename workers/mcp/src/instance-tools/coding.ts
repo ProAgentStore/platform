@@ -6,6 +6,17 @@ import { audit, dryRun, requirePermission } from "../safety.js";
 import { repoCiSentence, runHealthSentence } from "../state-vocabulary.js";
 import { type InstanceToolsCtx, findInstanceForAgent } from "./shared.js";
 import { MAX_CONFIGURABLE_OBJECTIVE_CHARS, OBJECTIVE_CAP_NOTE } from "./composition.js";
+import { loopRunsPage } from "./loop-runs-page.js";
+import { pageText } from "../wire-budget.js";
+
+/** One timeline event read whole (#898), its text paged when it would not fit one response. */
+export function pagedTimelineEntry(data: unknown, offset?: number): string {
+	const d = data as { entry?: { content?: unknown } } | null;
+	const content = d?.entry?.content;
+	if (!d?.entry || typeof content !== "string") return JSON.stringify(data);
+	const entry = d.entry;
+	return pageText({ text: content, offset, build: (slice, meta) => (meta ? { ...d, entry: { ...entry, content: slice }, contentPage: meta } : d) }).text;
+}
 
 /** Coding tools — the surface-gated system_status plus the always-on Agent Loop tools. */
 export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): void {
@@ -79,7 +90,7 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 		// made it.
 		server.tool(
 			"coding_timeline",
-			"Read what a coding run is DOING, while it is still running — the objective it was given, each instruction sent to the engine, terminal snapshots and the outcome. Call it with no cursor and you get the NEWEST page (rows within a page always read oldest→newest), which is what you want when asking what a run just did or where it stopped. Poll it: pass the previous reply's `next_seq` as `since_seq` and you get only what is new, so nothing is re-delivered or skipped. Walk back through history with `before`: pass the previous reply's `oldest_seq`, and `has_more` says whether anything older still exists. Omit `session_id` and it picks the newest active session, or the most recent one if the run has ended — which is how you audit a finished run whose session coding_session_capture now answers with an empty pane. Read `run_state` with the events: no new events plus `thinking`/`responding` is a long step, no new events plus `idle`/`offline` is an engine that has stopped. Terminal snapshots carry `toolCalls` — every tool the engine called in that snapshot with its argument and its result — de-duplicated against the previous snapshot, so a poll returns only calls you have not seen; a `toolCallGap` says continuity was lost and some calls are missing. The snapshot's own text is also returned as a 400-character TAIL with `chars` giving the true length (that is where an engine error prints, which is not a tool call); for the whole pane use coding_session_capture on a LIVE session and coding_terminal on one that has ENDED — coding_terminal reads the same stored snapshots this feed tails, uncut. Each call carries `ok`: true or false is the engine's own verdict, and null means NOT OBSERVED — the call had no result yet, or the snapshot was written by a runner older than the outcome marker, so treat null as unknown and never as success; for a consequential act's verdict use agent_trace(source:\"coding\").",
+			"Read what a coding run is DOING, while it is still running — the objective it was given, each instruction sent to the engine, terminal snapshots and the outcome. Call it with no cursor and you get the NEWEST page (rows within a page always read oldest→newest), which is what you want when asking what a run just did or where it stopped. Poll it: pass the previous reply's `next_seq` as `since_seq` and you get only what is new, so nothing is re-delivered or skipped. Walk back through history with `before`: pass the previous reply's `oldest_seq`, and `has_more` says whether anything older still exists. Omit `session_id` and it picks the newest active session, or the most recent one if the run has ended — which is how you audit a finished run whose session coding_session_capture now answers with an empty pane. Read `run_state` with the events: no new events plus `thinking`/`responding` is a long step, no new events plus `idle`/`offline` is an engine that has stopped. Terminal snapshots carry `toolCalls` — every tool the engine called in that snapshot with its argument and its result — de-duplicated against the previous snapshot, so a poll returns only calls you have not seen; a `toolCallGap` says continuity was lost and some calls are missing. The snapshot's own text is also returned as a 400-character TAIL with `chars` giving the true length (that is where an engine error prints, which is not a tool call); for the whole pane use coding_session_capture on a LIVE session and coding_terminal on one that has ENDED — coding_terminal reads the same stored snapshots this feed tails, uncut. Each call carries `ok`: true or false is the engine's own verdict, and null means NOT OBSERVED — the call had no result yet, or the snapshot was written by a runner older than the outcome marker, so treat null as unknown and never as success; for a consequential act's verdict use agent_trace(source:\"coding\"). A narrative row cut to fit a page says `truncated`; pass its `seq` to read it whole.",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				instance_id: z.string().describe("Instance ID or slug"),
@@ -87,8 +98,10 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 				since_seq: z.coerce.number().int().min(0).optional().describe("Exclusive `seq` cursor — returns only events NEWER than it, oldest-first. Pass the previous reply's `nextSeq` to poll a live run. Cannot be combined with `before`."),
 				before: z.coerce.number().int().min(1).optional().describe("Exclusive `seq` cursor for walking BACK — returns the page of events OLDER than it. Pass the previous reply's `oldestSeq`. Cannot be combined with `since_seq`."),
 				limit: z.coerce.number().int().min(1).max(200).optional().describe("Events per page (default 40). Not the payload bound: a page also stops at a byte budget, and `hasMore` says so — raising this cannot make one call return more bytes."),
+				seq: z.coerce.number().int().min(1).optional().describe("Read ONE event whole, by the `seq` a page gave — the way to the rest of a row the page marks `truncated`. Returns `{entry, chars}`; a long one comes in parts with `contentPage.nextOffset`."),
+				offset: z.coerce.number().int().min(0).optional().describe("With `seq`: where to resume a long event — the previous reply's `contentPage.nextOffset`."),
 			},
-			async ({ token, instance_id, session_id, since_seq, before, limit }) => {
+			async ({ token, instance_id, session_id, since_seq, before, limit, seq, offset }) => {
 				const sessionToken = tokenFor(token);
 				if (!sessionToken) return authRequired();
 				const denied = await requirePermission(safetyFor(token), "read", "coding_timeline", { instance_id, session_id });
@@ -96,6 +109,10 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 				const id = await resolveId(sessionToken, instance_id);
 				const qs = new URLSearchParams();
 				if (session_id) qs.set("session_id", session_id);
+				if (seq !== undefined) {
+					qs.set("seq", String(seq));
+					return text(pagedTimelineEntry(await authedCall(`/v1/instances/${encodeURIComponent(id)}/coding/timeline?${qs.toString()}`, sessionToken, {}, env), offset));
+				}
 				if (since_seq !== undefined) qs.set("since", String(since_seq));
 				if (before !== undefined) qs.set("before", String(before));
 				if (limit !== undefined) qs.set("limit", String(limit));
@@ -165,7 +182,7 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 		// `before` carry the rest at no risk of a reply the host refuses whole.
 		server.tool(
 			"coding_terminal",
-			"Read a coding session's terminal snapshots in FULL — the engine's own output, uncut. This is the tool for a run that has ENDED: coding_session_capture reads the live pane off the runner, so a finished session answers it with an empty pane, and coding_timeline serves the same snapshots as a 400-character tail (~5% of an 8,000-character pane) because a page of forty events cannot carry forty whole panes. Omit session_id and it resolves the same session coding_timeline would — the newest active one, or the most recently updated when the run has ended. One snapshot per call by default, newest first: pass the reply's `oldestSeq` back as `before` to walk into the history, and `hasMore` says whether anything older is left. Consecutive snapshots overlap heavily by design (each is the tail of the same scrolling pane), so read them newest-first and stop when you have what you need. For the run's narrative — objective, instructions, tool calls, outcome — read coding_timeline; this tool returns only the pane text.",
+			"Read a coding session's stored terminal snapshots whole — each is the last 8,000 characters of the pane when it was taken (a longer pane's snapshot says so on its first line), never cut further here. This is the tool for a run that has ENDED: coding_session_capture reads the live pane off the runner, so a finished session answers it with an empty pane, and coding_timeline serves the same snapshots as a 400-character tail (~5% of an 8,000-character pane) because a page of forty events cannot carry forty whole panes. Omit session_id and it resolves the same session coding_timeline would — the newest active one, or the most recently updated when the run has ended. One snapshot per call by default, newest first: pass the reply's `oldestSeq` back as `before` to walk into the history, and `hasMore` says whether anything older is left. Consecutive snapshots overlap heavily by design (each is the tail of the same scrolling pane), so read them newest-first and stop when you have what you need. For the run's narrative — objective, instructions, tool calls, outcome — read coding_timeline; this tool returns only the pane text.",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				instance_id: z.string().describe("Instance ID or slug"),
@@ -315,17 +332,16 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID or slug"),
 			run_id: z.string().optional().describe("A run id from coding_loop_start. Omit to list recent runs."),
+			offset: z.coerce.number().int().min(0).optional().describe("Listing only: runs come back newest first in pages that fit one response, with `page.of` (all runs) and `page.nextOffset`; pass it to continue."),
 		},
-		async ({ token, instance_id, run_id }) => {
+		async ({ token, instance_id, run_id, offset }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const denied = await requirePermission(safetyFor(token), "read", "coding_loop_status", { instance_id, run_id });
 			if (denied) return denied;
 			const id = await resolveId(sessionToken, instance_id);
-			const path = run_id
-				? `/v1/instances/${encodeURIComponent(id)}/loop/${encodeURIComponent(run_id)}`
-				: `/v1/instances/${encodeURIComponent(id)}/loop?include_starts=true`;
-			return jsonText(await authedCall(path, sessionToken, {}, env));
+			if (run_id) return jsonText(await authedCall(`/v1/instances/${encodeURIComponent(id)}/loop/${encodeURIComponent(run_id)}`, sessionToken, {}, env));
+			return text(loopRunsPage(await authedCall(`/v1/instances/${encodeURIComponent(id)}/loop?include_starts=true&offset=${offset ?? 0}`, sessionToken, {}, env)));
 		},
 	);
 

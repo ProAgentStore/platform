@@ -1005,4 +1005,11 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// had it since 0.1.77) and the object declares `localBrowser`, which zod otherwise stripped. No
 	// tool added or removed. Appended, never edited in place: 0.1.78 is published.
 	"0.1.79": "sha256:cddc6a5eeb6d200081a517ed9c1588bb756f13e36170f9744d90715d522f1173",
+	// 0.1.80 (#898): paging instead of silent truncation. `offset` on call_instance_tool (and its
+	// type-pinned twin), coding_loop_status, check_instance_loop, list_runner_nodes, instance_activity
+	// (+`limit`), list_errors, list_notifications, instance_task_events, list_instance_triggers,
+	// query_records, query_instance_records and coding_session_capture; `seq` + `offset` on
+	// coding_timeline (one event whole). No tool added or removed. Appended, never edited in place:
+	// 0.1.79 is published.
+	"0.1.80": "sha256:2aab2234c1b065b3bcc8659def32e41b11aae848a6a4b42909924d3e451f5478",
 };

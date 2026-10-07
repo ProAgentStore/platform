@@ -236,6 +236,14 @@ describe("quoted tool-call JSON is never executed on Workers AI (#853)", () => {
 		script = [{ response: "Part one of a long answer", usage: { prompt_tokens: 100, completion_tokens: CHAT_MAX_TOKENS } }];
 		const out = await think(LLAMA);
 		expect(out.toolCalls.join("\n")).toMatch(/cut off at the/);
+		// …and the turn itself says so (#898), because an MCP caller reads the reply, not the tool log.
+		expect(out.truncated).toBe(true);
+	});
+
+	it("a reply that finished carries no truncated flag (#898)", async () => {
+		script = [{ response: "Done.", usage: { prompt_tokens: 100, completion_tokens: 3 } }];
+		const out = await think(LLAMA);
+		expect(out.truncated).toBeUndefined();
 	});
 
 	it("Llama's <function=NAME>{…}</function> markup is not run, not shown, and reported as written-but-never-run (#853 finding 3)", async () => {

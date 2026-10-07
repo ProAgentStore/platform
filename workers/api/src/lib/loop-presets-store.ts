@@ -1,8 +1,9 @@
+import { HttpError } from "./auth.js";
 import type { Env } from "../types.js";
 import { agentCapabilities } from "./agent-capabilities.js";
 import { patchInstanceConfig, removeInstanceConfigKey } from "./instance-config.js";
 import { loopDriverFor } from "./loop-drivers.js";
-import { resolveLoopPresets, sanitizeLoopPresets, type LoopPreset, type LoopPresetSource } from "./loop-presets.js";
+import { resolveLoopPresets, loopPresetsRefusal, sanitizeLoopPresets, type LoopPreset, type LoopPresetSource } from "./loop-presets.js";
 
 /**
  * D1 access for loop presets (#234) — the mirror of `behaviour-store.ts`, and split from the pure
@@ -51,6 +52,8 @@ export async function writeLoopPresets(
 	userId: string,
 	raw: unknown,
 ): Promise<ResolvedLoopPresets | null> {
+	const refused = loopPresetsRefusal(raw);
+	if (refused) throw new HttpError(400, refused);
 	const presets = sanitizeLoopPresets(raw);
 	const ok = presets.length
 		? await patchInstanceConfig(env, instanceId, userId, KEY, presets)

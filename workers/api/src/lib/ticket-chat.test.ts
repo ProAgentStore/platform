@@ -169,9 +169,27 @@ describe("normalizeTicketQuestion", () => {
 		expect(normalizeTicketQuestion(42)).toEqual({ error: "message required" });
 	});
 
-	it("trims and caps, so one paste cannot blow the prompt budget", () => {
+	it("trims, and REFUSES a question past the limit rather than answering its first half (#898)", () => {
 		const long = "x".repeat(9000);
 		const out = normalizeTicketQuestion(`  ${long}  `);
-		expect("question" in out && out.question.length).toBe(4000);
+		expect(out).toEqual({ error: expect.stringMatching(/`message` is 9,000 characters; the limit is 4,000\. .*nothing was saved/) });
+		expect(normalizeTicketQuestion(`  ${"y".repeat(4000)}  `)).toEqual({ question: "y".repeat(4000) });
+	});
+});
+
+describe("the ticket thread says what it left out (#898)", () => {
+	it("counts activity lines outside the window instead of letting the model deny them", () => {
+		const events = Array.from({ length: 45 }, (_, i) => ({ type: "agent.step", message: `step ${i}`, createdAt: `2026-10-07T00:00:${String(i).padStart(2, "0")}Z` }));
+		expect(ticketActivityBlock(events)).toContain("(5 earlier activity lines not shown)");
+	});
+
+	it("marks a cut activity line and a cut result with both lengths", () => {
+		const block = ticketActivityBlock([{ type: "agent.step", message: "y".repeat(1000), createdAt: "2026-10-07T00:00:00Z" }]);
+		expect(block).toMatch(/\[cut: showing the first 400 of \d+ characters\]/);
+		expect(ticketFactsBlock({ title: "t", result: { log: "z".repeat(3000) } })).toMatch(/\[cut: showing the first 2000 of \d+ characters\]/);
+	});
+
+	it("tells the model a gap in a cut record is not evidence that nothing happened", () => {
+		expect(TICKET_CHAT_SYSTEM).toMatch(/never \\"it did not happen\\"|never "it did not happen"/);
 	});
 });

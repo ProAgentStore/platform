@@ -18,7 +18,7 @@ import type { ToolDef, RegistryToolCtx } from "./types.js";
 import { compileConnector, type ConnectorManifest } from "./manifest.js";
 import type { Connector } from "./types.js";
 import { githubAppConfigured } from "../github-app.js";
-import { invalidateIssueCaches, invalidateIssuesCache, listIssueComments, listIssues, readIssue, searchIssues } from "../github-issues.js";
+import { invalidateIssueCaches, invalidateIssuesCache, listIssueComments, listIssuesPage, readIssue, searchIssues } from "../github-issues.js";
 import { listPulls, readPull, searchPulls } from "../github-prs.js";
 import { fetchJobLog, fetchWorkflowJobs, fetchWorkflowRuns, JOB_LOG_FETCH_BYTES, mapWorkflowRun, pickJob, stripLogTimestamps } from "../github-actions.js";
 import { READ_MAX_CHARS, READ_MAX_LINES, renderRepoFileWindow, tailWindowStart } from "../repo-file-window.js";
@@ -94,12 +94,14 @@ const workflowRunsHandler: ToolDef["handler"] = async (ctx, input) => {
 	const r = await resolveRepo(ctx, repo);
 	if ("error" in r) return { content: r.error, success: false };
 	const n = Math.min(Math.max(Number(input.per_page) || 5, 1), 20);
-	const res = await fetchWorkflowRuns(repo, r.token, { perPage: n });
+	const page = Math.max(1, Math.trunc(Number(input.page)) || 1);
+	const res = await fetchWorkflowRuns(repo, r.token, { perPage: n, page });
 	if ("status" in res) {
 		return { content: res.status != null ? `GitHub returned ${res.status} for ${repo}` : `Could not reach GitHub for ${repo}`, success: false };
 	}
 	const runs = res.runs.map(mapWorkflowRun);
-	return { content: JSON.stringify(runs, null, 2), success: true };
+	// Paged (#898): clamped to 20 with no `page`, an older run was unreachable.
+	return { content: JSON.stringify({ runs, ...paging(page, n, runs.length === n) }, null, 2), success: true };
 };
 
 const num = (n: number): string => n.toLocaleString("en-US");
@@ -188,6 +190,30 @@ export function searchedNumber(search: string): number | null {
 type ListState = "open" | "closed" | "all";
 
 /**
+ * GitHub's own reason for refusing a write (#898) — e.g. that a body is over its 65,536-character
+ * limit. The bare status said only that it failed, so the caller could not tell what to change.
+ */
+async function githubReason(res: Response): Promise<string> {
+	const body = (await res.json().catch(() => null)) as { message?: unknown; errors?: Array<{ message?: unknown; field?: unknown; code?: unknown }> } | null;
+	const details = (body?.errors ?? []).map((e) => (typeof e?.message === "string" ? e.message : [e?.field, e?.code].filter((x) => typeof x === "string").join(" "))).filter(Boolean);
+	const parts = [typeof body?.message === "string" ? body.message : "", ...details].filter(Boolean);
+	return parts.length ? `: ${parts.join("; ").slice(0, 500)}` : "";
+}
+
+/**
+ * Which page of a listing or search, and how big (#898). Both tools answered the 30 most recently
+ * updated items with no way to ask for more, so an older issue was simply unreachable.
+ */
+function pageArgs(input: Record<string, unknown>): { page: number; perPage: number } {
+	return { page: Math.max(1, Math.trunc(Number(input.page)) || 1), perPage: Math.min(Math.max(Math.trunc(Number(input.per_page)) || 30, 1), 100) };
+}
+
+/** The paging fields every list/search reply carries, so a first page never reads as the whole set. */
+function paging(page: number, perPage: number, hasMore: boolean) {
+	return { page, per_page: perPage, hasMore, nextPage: hasMore ? page + 1 : null };
+}
+
+/**
  * The state filter: an explicit valid `state` always wins. Left out, a LISTING shows open items (the
  * working set), while a text SEARCH covers every state (#948) — someone searching for text rarely
  * knows whether the match is still open, and an open-only default made a closed match look absent.
@@ -216,14 +242,15 @@ const listIssuesHandler: ToolDef["handler"] = async (ctx, input) => {
 		const note = pull ? `#${number} in ${repo} is a pull request, not an issue — read it with github_read_pull.` : `There is no issue #${number} in ${repo}.`;
 		return { content: JSON.stringify({ matchedBy: "number", total_count: 0, incomplete_results: false, issues: [], note }, null, 2), success: true };
 	}
+	const { page, perPage } = pageArgs(input);
 	if (search) {
-		const found = await searchIssues(ctx.env, ctx.userId ?? "", repo, search, { state, labels, limit: 30 });
+		const found = await searchIssues(ctx.env, ctx.userId ?? "", repo, search, { state, labels, limit: perPage, page });
 		// A refused search (rate limit, invalid query, unseen repo) is an error, never an empty list.
 		if ("error" in found) return { content: found.error, success: false };
-		return { content: JSON.stringify(found, null, 2), success: true };
+		return { content: JSON.stringify({ ...found, ...paging(page, perPage, page * perPage < found.total_count) }, null, 2), success: true };
 	}
-	const issues = await listIssues(ctx.env, ctx.userId ?? "", repo, { state, labels, limit: 30 });
-	return { content: JSON.stringify(issues, null, 2), success: true };
+	const listed = await listIssuesPage(ctx.env, ctx.userId ?? "", repo, { state, labels, limit: perPage, page });
+	return { content: JSON.stringify({ issues: listed.issues, ...paging(page, perPage, listed.hasMore) }, null, 2), success: true };
 };
 
 const readIssueHandler: ToolDef["handler"] = async (ctx, input) => {
@@ -266,13 +293,14 @@ const listPullsHandler: ToolDef["handler"] = async (ctx, input) => {
 		const note = issue ? `#${number} in ${repo} is an issue, not a pull request — read it with github_read_issue.` : `There is no pull request #${number} in ${repo}.`;
 		return { content: JSON.stringify({ matchedBy: "number", total_count: 0, incomplete_results: false, pulls: [], note }, null, 2), success: true };
 	}
+	const { page, perPage } = pageArgs(input);
 	if (search) {
-		const found = await searchPulls(ctx.env, ctx.userId ?? "", repo, search, { state, limit: 30 });
+		const found = await searchPulls(ctx.env, ctx.userId ?? "", repo, search, { state, limit: perPage, page });
 		if ("error" in found) return { content: found.error, success: false };
-		return { content: JSON.stringify(found, null, 2), success: true };
+		return { content: JSON.stringify({ ...found, ...paging(page, perPage, page * perPage < found.total_count) }, null, 2), success: true };
 	}
-	const pulls = await listPulls(ctx.env, ctx.userId ?? "", repo, { state, limit: 30 });
-	return { content: JSON.stringify(pulls, null, 2), success: true };
+	const pulls = await listPulls(ctx.env, ctx.userId ?? "", repo, { state, limit: perPage, page });
+	return { content: JSON.stringify({ pulls, ...paging(page, perPage, pulls.length === perPage) }, null, 2), success: true };
 };
 
 const readPullHandler: ToolDef["handler"] = async (ctx, input) => {
@@ -297,7 +325,7 @@ const createIssueHandler: ToolDef["handler"] = async (ctx, input) => {
 		headers: { ...GH(r.token), "Content-Type": "application/json" },
 		body: JSON.stringify({ title, body: input.body ? String(input.body) : undefined, ...(labels.length ? { labels } : {}) }),
 	});
-	if (!res.ok) return { content: `GitHub returned ${res.status} creating the issue in ${repo}`, success: false };
+	if (!res.ok) return { content: `GitHub returned ${res.status} creating the issue in ${repo}${await githubReason(res)}`, success: false };
 	const data = (await res.json()) as { number?: number; html_url?: string };
 	// The platform just changed this list, so this user's cached copy of it is wrong (#401). An
 	// agent that opens an issue and then calls github_list_issues would otherwise read its own
@@ -336,7 +364,7 @@ const commentIssueHandler: ToolDef["handler"] = async (ctx, input) => {
 		headers: { ...GH(r.token), "Content-Type": "application/json" },
 		body: JSON.stringify({ body }),
 	});
-	if (!res.ok) return { content: `GitHub returned ${res.status} commenting on issue #${num} in ${repo}`, success: false };
+	if (!res.ok) return { content: `GitHub returned ${res.status} commenting on issue #${num} in ${repo}${await githubReason(res)}`, success: false };
 	const data = (await res.json()) as { html_url?: string };
 	// A comment changes the issue's `comments` count and its `updated_at`, both of which the cached
 	// list AND the cached single read carry. Same reasoning as the create path (#401), one resource
@@ -383,7 +411,7 @@ const updateIssueHandler: ToolDef["handler"] = async (ctx, input) => {
 		headers: { ...GH(r.token), "Content-Type": "application/json" },
 		body: JSON.stringify(patch),
 	});
-	if (!res.ok) return { content: `GitHub returned ${res.status} updating issue #${num} in ${repo}`, success: false };
+	if (!res.ok) return { content: `GitHub returned ${res.status} updating issue #${num} in ${repo}${await githubReason(res)}`, success: false };
 	const data = (await res.json()) as {
 		state?: string;
 		html_url?: string;
@@ -424,11 +452,12 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 			name: "github_workflow_runs",
 			untrustedOutput: true,
 			scope: "read",
-			description: "List recent GitHub Actions workflow runs for a repo (status, conclusion, branch, url) — check CI / deploy status.",
+			description: "List recent GitHub Actions workflow runs for a repo (status, conclusion, branch, url) — check CI / deploy status. Paged by `nextPage`.",
 			handler: "github_workflow_runs",
 			params: {
 				repo: { type: "string", required: true, description: 'The repository, "owner/name".' },
 				per_page: { type: "number", description: "How many recent runs to return (default 5, max 20)." },
+				page: { type: "number", description: "The reply's `nextPage`." },
 			},
 		},
 		{
@@ -451,7 +480,7 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 			untrustedOutput: true,
 			scope: "read",
 			description:
-				"List or search a repo's issues (excludes pull requests). Already have the issue NUMBER? Call github_read_issue — it reads one issue by number in any state. Without `search` this returns the 30 most recently updated issues as an array, open ones unless `state` says otherwise. With `search` it uses GitHub's issue search API over ALL the repo's issues (not just the 30 most recent) and, unless you pass `state`, over every state — open AND closed. It returns `{total_count, incomplete_results, issues}`: `total_count` is every match, `issues` the 30 most recently updated of them. A `search` that is only a number (\"274\" or \"#274\") is read directly by number instead, whatever its state, and returns `{matchedBy:\"number\", issues:[that issue]}` (or a note saying it is a pull request or does not exist). A refused search (e.g. GitHub's 30-searches-a-minute rate limit) is an error, never an empty list.",
+				"List or search a repo's issues (excludes pull requests). Already have the issue NUMBER? Call github_read_issue — it reads one issue by number in any state. Without `search` this returns `{issues, hasMore, nextPage}`, most recently updated first, open ones unless `state` says otherwise; pass `page: nextPage` for more. With `search` it uses GitHub's issue search API over ALL the repo's issues (not just the 30 most recent) and, unless you pass `state`, over every state — open AND closed. It returns `{total_count, incomplete_results, issues}`: `total_count` is every match, `issues` one page of them. A `search` that is only a number (\"274\" or \"#274\") is read directly by number instead, whatever its state, and returns `{matchedBy:\"number\", issues:[that issue]}` (or a note saying it is a pull request or does not exist). A refused search (e.g. GitHub's 30-searches-a-minute rate limit) is an error, never an empty list.",
 			handler: "github_list_issues",
 			params: {
 				repo: { type: "string", required: true, description: 'The repository, "owner/name".' },
@@ -462,6 +491,7 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 					description:
 						'Optional text to find in issue titles and bodies, matched by GitHub\'s issue search API across ALL issues in the repo (not just the 30 most recent), in every state unless `state` is given. A bare number ("274", "#274") reads that issue directly instead. Omit it to list issues.',
 				},
+				page: { type: "number", description: "The reply's `nextPage`." },
 			},
 		},
 		{
@@ -493,7 +523,7 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 			untrustedOutput: true,
 			scope: "read",
 			description:
-				"List or search a repo's pull requests — number, title, author, draft, branch, mergeable/conflicted, review state and CI status. Already have the PR NUMBER? Call github_read_pull — it reads one PR by number in any state. Read-only; there is deliberately no merge tool (the repo's merge policy governs that). Without `search` this returns the 30 most recently updated PRs as an array, open ones unless `state` says otherwise. With `search` it uses GitHub's issue search API over ALL the repo's PRs (not just the 30 most recent) and, unless you pass `state`, over every state — open, closed and merged. It returns `{total_count, incomplete_results, pulls}`: `total_count` is every match, `pulls` the 30 most recently updated of them; only the first 8 carry branch, head sha, mergeable and review state (the rest have an empty branch, mergeable null, review unknown). A `search` that is only a number (\"312\" or \"#312\") is read directly by number instead, whatever its state, and returns `{matchedBy:\"number\", pulls:[that PR]}` (or a note saying it is an issue or does not exist). A refused search (e.g. GitHub's 30-searches-a-minute rate limit) is an error, never an empty list.",
+				"List or search a repo's pull requests — number, title, author, draft, branch, mergeable/conflicted, review state and CI status. Already have the PR NUMBER? Call github_read_pull — it reads one PR by number in any state. Read-only; there is deliberately no merge tool (the repo's merge policy governs that). Without `search` this returns `{pulls, hasMore, nextPage}`, most recently updated first, open ones unless `state` says otherwise; pass `page: nextPage` for more. With `search` it uses GitHub's issue search API over ALL the repo's PRs (not just the 30 most recent) and, unless you pass `state`, over every state — open, closed and merged. It returns `{total_count, incomplete_results, pulls}`: `total_count` is every match, `pulls` one page of them; only the first 8 carry branch, head sha, mergeable and review state (the rest have an empty branch, mergeable null, review unknown). A `search` that is only a number (\"312\" or \"#312\") is read directly by number instead, whatever its state, and returns `{matchedBy:\"number\", pulls:[that PR]}` (or a note saying it is an issue or does not exist). A refused search (e.g. GitHub's 30-searches-a-minute rate limit) is an error, never an empty list.",
 			handler: "github_list_pulls",
 			params: {
 				repo: { type: "string", required: true, description: 'The repository, "owner/name".' },
@@ -503,6 +533,7 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 					description:
 						'Optional text to find in PR titles and bodies, matched by GitHub\'s issue search API across ALL pull requests in the repo (not just the 30 most recent), in every state unless `state` is given. A bare number ("312", "#312") reads that PR directly instead. Omit it to list PRs.',
 				},
+				page: { type: "number", description: "The reply's `nextPage`." },
 			},
 		},
 		{

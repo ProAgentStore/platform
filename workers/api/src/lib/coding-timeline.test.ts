@@ -37,7 +37,8 @@ describe("appendTimeline", () => {
 	it("caps overlong content at 100_000 chars", async () => {
 		const { env, writes } = mockEnv();
 		await appendTimeline(env, { sessionId: "s1", instanceId: "i1", userId: "u1", type: "terminal", content: "x".repeat(150_000) });
-		expect((writes[0].args[4] as string).length).toBe(100_000);
+		// Bounded AND marked (#898): the row says it is the first 100,000 of 150,000.
+		expect(writes[0].args[4] as string).toBe(`${"x".repeat(100_000)}\n[cut: showing the first 100000 of 150000 characters]`);
 	});
 
 	it("no-ops on empty content (no write)", async () => {

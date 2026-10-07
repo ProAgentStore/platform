@@ -378,6 +378,9 @@ describe("trigger actions: create_task (#754 — provenance + fencing)", () => {
 		const body = await agentRequests[0].clone().json() as { title: string; description: string };
 		expect(body.title.length).toBeLessThanOrEqual(200);
 		expect(body.description.length).toBeLessThanOrEqual(2000);
+		// …and SAYS so (#898): a webhook's text cut at a limit names both lengths.
+		expect(body.title).toMatch(/\[cut: showing the first \d+ of 300 characters\]$/);
+		expect(body.description).toMatch(/\[cut: showing the first \d+ of 3000 characters\]$/);
 	});
 });
 

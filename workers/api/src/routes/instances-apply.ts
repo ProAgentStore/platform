@@ -1,3 +1,4 @@
+import { overLimit } from "../lib/write-limits.js";
 import type { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { requirePro } from "../lib/billing.js";
@@ -268,12 +269,13 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
  * Maximum length of the operator manual in characters.
  *
  * Exported as a named constant (not a bare `.slice(0, N)`) so every caller can cite it
- * by name; the bare truncate in the `specialInstructions` path at :435 is the bug this
- * constant class exists to avoid. The `PUT` route rejects above this cap rather than
- * silently truncating — open question 1 in #739 resolved in favour of a 400 naming the
- * submitted length.
+ * by name. The `PUT` route rejects above this cap rather than silently truncating — open
+ * question 1 in #739 resolved in favour of a 400 naming the submitted length.
  */
 export const OPERATOR_MANUAL_MAX_CHARS = 16_000;
+
+/** Special Instructions (Rules & Tips): refused above this, never cut (#898). */
+export const SPECIAL_INSTRUCTIONS_MAX_CHARS = 4000;
 
 /** Read the instance's JSON config (client-side settings incl. specialInstructions). */
 export async function readInstanceConfig(env: Env, instanceId: string, userId: string): Promise<Record<string, unknown>> {
@@ -443,7 +445,12 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		const body = (await c.req.json().catch(() => ({}))) as { instructions?: unknown };
 		// Patch just this key (#231). Rules & Tips is edited in the console while other
 		// settings are open; a whole-blob write would silently drop whichever landed first.
-		await patchInstanceConfig(c.env, instanceId, session.uid, "specialInstructions", String(body.instructions ?? "").slice(0, 4000));
+		// Refused past the limit, as the operator manual is (#898): this sliced to 4,000 and said `ok`,
+		// so the rules the owner wrote last were the ones silently gone.
+		const instructions = String(body.instructions ?? "");
+		const tooLong = overLimit({ instructions: [instructions, SPECIAL_INSTRUCTIONS_MAX_CHARS] });
+		if (tooLong) return c.json({ error: tooLong }, 400);
+		await patchInstanceConfig(c.env, instanceId, session.uid, "specialInstructions", instructions);
 		return c.json({ ok: true });
 	});
 

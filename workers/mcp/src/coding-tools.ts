@@ -1,3 +1,4 @@
+import { pageText } from "./wire-budget.js";
 import { authedAsyncCall } from "./async-outcome.js";
 /**
  * The coding-surface MCP tools — opening a repo's conversation, watching it, and driving it.
@@ -276,13 +277,14 @@ export function registerCodingSessionTools(
 		// emit — the runner's union is `idle | thinking | responding` — and `offline` was, at the
 		// time, produced only by the timeline route. `state-vocabulary.test.ts` measures this
 		// sentence against the code that emits it, over every tool that publishes a state enum.
-		`Capture the live terminal output from a coding session (what the CLI is showing right now), plus WHY it looks that way. ${runStateSentence()} Only the first three come from an engine — the rest mean nobody looked at one, so read \`runnerConnected\`, \`alive\` and \`ready\` alongside: a stopped engine, an absent machine and a failed probe are different problems with the same look. \`authPrompt\` means the engine is blocked on sign-in, which otherwise looks exactly like a hang. LIVE sessions only — the pane lives on the runner, so an ENDED session answers with an empty pane. That empty pane is not evidence the run did nothing: every snapshot taken while it ran is stored, and coding_terminal returns them in full for a session that has ended. To read what a run DID, use coding_timeline for the narrative and coding_terminal for the pane text; to find out whether the work is stuck, use coding_diagnostics. An agent with NO repo (a bare terminal) has no coding session: this reads its selected or last-used terminal instead — live when it is still there, else the last pane the platform stored for it, marked \`source: "stored"\` with \`capturedAt\`.`,
+		`Capture the live terminal output from a coding session (what the CLI is showing right now), plus WHY it looks that way. ${runStateSentence()} Only the first three come from an engine — the rest mean nobody looked at one, so read \`runnerConnected\`, \`alive\` and \`ready\` alongside: a stopped engine, an absent machine and a failed probe are different problems with the same look. \`authPrompt\` means the engine is blocked on sign-in, which otherwise looks exactly like a hang. The pane is the runner's last 64 KiB; when the session printed more it starts with a \`[cut: …]\` line and \`paneChars\` gives the whole length. LIVE sessions only — the pane lives on the runner, so an ENDED session answers with an empty pane. That empty pane is not evidence the run did nothing: every snapshot taken while it ran is stored, and coding_terminal returns them in full for a session that has ended. To read what a run DID, use coding_timeline for the narrative and coding_terminal for the pane text; to find out whether the work is stuck, use coding_diagnostics. An agent with NO repo (a bare terminal) has no coding session: this reads its selected or last-used terminal instead — live when it is still there, else the last pane the platform stored for it, marked \`source: "stored"\` with \`capturedAt\`.`,
 		{
 			instance_id: z.string().describe("Instance ID"),
 			session_id: z.string().optional().describe("Session ID. If omitted, uses the first active session."),
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			offset: z.coerce.number().int().min(0).optional().describe("A pane too large for one response comes back in parts (`panePage.nextOffset`); pass it here to read on."),
 		},
-		async ({ instance_id, session_id, token }) => {
+		async ({ instance_id, session_id, token, offset }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, env)) as { sessions?: Array<{ id: string; status: string }>; error?: string };
@@ -295,6 +297,7 @@ export function registerCodingSessionTools(
 			const d = (await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/capture`, sessionToken, {}, env)) as {
 				runState?: string;
 				pane?: string;
+				paneChars?: number;
 				runnerConnected?: boolean;
 				alive?: boolean;
 				ready?: boolean;
@@ -313,15 +316,19 @@ export function registerCodingSessionTools(
 			// later (2026-08-04) and nobody came back. The decisive evidence that size was not the
 			// reason is that the projection KEPT `pane` — up to 64 KB — while dropping four
 			// booleans.
-			return jsonText({
+			// Paged (#898): the runner returns up to 64 KiB, which JSON-escaped can exceed a host's 64 KiB
+			// limit. `paneChars` is the session's output BEFORE the runner's own cut, so a reader can tell
+			// the pane it got from the whole of what the engine printed.
+			const head = {
 				sessionId: sid,
 				runState: d.runState,
 				runnerConnected: d.runnerConnected,
 				alive: d.alive,
 				ready: d.ready,
-				pane: d.pane,
+				...(typeof d.paneChars === "number" ? { paneChars: d.paneChars } : {}),
 				...(d.authPrompt ? { authPrompt: d.authPrompt } : {}),
-			});
+			};
+			return text(pageText({ text: d.pane ?? "", offset, build: (slice, meta) => ({ ...head, pane: slice, ...(meta ? { panePage: meta } : {}) }) }).text);
 		},
 	);
 

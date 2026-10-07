@@ -4,6 +4,24 @@ import { z } from "zod";
 import { authRequired, authedCall, jsonText, text } from "../http.js";
 import { audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
 import { isRec, type InstanceToolsCtx } from "./shared.js";
+import { fitPage } from "../wire-budget.js";
+
+/**
+ * `list_runner_nodes` over MCP (#898): measured live at 279,297 chars in one response, because each
+ * machine carries every coding session it ever ran. The machines page (`fitPage`), and each one
+ * lists its OPEN sessions with `endedSessions` counting the rest — history that coding_sessions_list
+ * returns per instance. Counted, never dropped silently.
+ */
+export function runnerNodesPage(data: unknown, offset?: number): string {
+	const nodes = isRec(data) && Array.isArray(data.nodes) ? (data.nodes as unknown[]) : null;
+	if (!nodes) return JSON.stringify(data);
+	const rows = nodes.map((n) => {
+		if (!isRec(n) || !Array.isArray(n.sessions)) return n;
+		const open = n.sessions.filter((s) => isRec(s) && (s.status === "active" || s.status === "suspended"));
+		return { ...n, sessions: open, endedSessions: n.sessions.length - open.length };
+	});
+	return fitPage({ rows, offset, build: (page, meta) => ({ nodes: page, page: meta, ...(rows.some((r) => isRec(r) && Number(r.endedSessions) > 0) ? { endedSessionsNote: "Ended sessions are counted per machine (`endedSessions`), not listed; coding_sessions_list lists them per instance." } : {}) }) }).text;
+}
 
 /**
  * The local browser runtime + its task queue: registering the machine running `pags up`,
@@ -122,14 +140,15 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"list_runner_nodes",
-		"List every machine of yours running a ProAgentStore CLI (`pags up`), across ALL your agents, with whether each is connected right now. This is the platform view — use it to see what a machine could be pinned to. `connected` is whether a relay socket is open under any of the machine's names (`node` or `aka`), not whether any particular agent is routed there; for one agent's actual routing use instance_runner_node. `lastSeenAt` is the machine's last heartbeat — `pags up` is running and reaching the platform — and says nothing about sockets: fresh `lastSeenAt` with `connected: false` means the CLI is up but holds no socket for those agents. `resources` is the machine itself, from its last heartbeat: CPU load (`load1`/`load5`/`load15`, `loadPerCpu`), memory (`memUsedPct` — on macOS cached memory counts as used, so it never alarms there), `activeSessions`, and `warnings` past a high-water mark (load of 1.5 per core; 90% memory on Linux). An overloaded machine answers its relay late, which is how a live runner reads \"connected but not responding\" — move agents off it. `resources: null` means the CLI is too old to report it (see `runnerBehind`).",
+		"List every machine of yours running a ProAgentStore CLI (`pags up`), across ALL your agents, with whether each is connected right now. This is the platform view — use it to see what a machine could be pinned to. `connected` is whether a relay socket is open under any of the machine's names (`node` or `aka`), not whether any particular agent is routed there; for one agent's actual routing use instance_runner_node. `lastSeenAt` is the machine's last heartbeat — `pags up` is running and reaching the platform — and says nothing about sockets: fresh `lastSeenAt` with `connected: false` means the CLI is up but holds no socket for those agents. `resources` is the machine itself, from its last heartbeat: CPU load (`load1`/`load5`/`load15`, `loadPerCpu`), memory (`memUsedPct` — on macOS cached memory counts as used, so it never alarms there), `activeSessions`, and `warnings` past a high-water mark (load of 1.5 per core; 90% memory on Linux). An overloaded machine answers its relay late, which is how a live runner reads \"connected but not responding\" — move agents off it. `resources: null` means the CLI is too old to report it (see `runnerBehind`). Each machine lists its open (active or suspended) coding sessions; `endedSessions` counts the rest, which coding_sessions_list returns per instance. Machines are paged to fit one response: continue with `offset` = `page.nextOffset`.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			offset: z.coerce.number().int().min(0).optional().describe("Machines come back in pages that fit one response; pass `page.nextOffset` to continue."),
 		},
-		async ({ token }) => {
+		async ({ token, offset }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			return jsonText(await authedCall("/v1/terminals/nodes", sessionToken, {}, env));
+			return text(runnerNodesPage(await authedCall("/v1/terminals/nodes", sessionToken, {}, env), offset));
 		},
 	);
 
@@ -507,12 +526,13 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),
 			limit: z.coerce.number().int().min(1).max(500).optional().describe("Maximum recent task events to return, 1-500. Omit for 100."),
+			offset: z.coerce.number().int().min(0).optional().describe("Skip this many of the newest — the previous reply's `nextOffset` while `hasMore` is true."),
 		},
-		async ({ token, instance_id, limit }) => {
+		async ({ token, instance_id, limit, offset }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const data = await authedCall(
-				`/v1/instances/${instance_id}/task-events?limit=${limit || 100}`,
+				`/v1/instances/${instance_id}/task-events?limit=${limit || 100}&offset=${offset ?? 0}`,
 				sessionToken,
 				{},
 				env,

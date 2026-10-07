@@ -12,6 +12,7 @@
  * A leaf — it imports nothing but types — because `run-events.ts` (the one run-end writer every
  * driver passes through) writes to it, and must not grow a dependency on the board or the queue.
  */
+import { clipMarked } from "./clip-marked.js";
 import type { Env } from "../types.js";
 
 export type TicketProgressKind = "started" | "finished" | "parked" | "stalled" | "resumed";
@@ -42,7 +43,7 @@ export async function appendTicketProgress(
 			  WHERE EXISTS (SELECT 1 FROM tickets WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3)
 			 ON CONFLICT DO NOTHING`,
 		)
-			.bind(note.ticketId, note.instanceId, note.userId, note.runId, note.kind, note.body.slice(0, MAX_BODY))
+			.bind(note.ticketId, note.instanceId, note.userId, note.runId, note.kind, clipMarked(note.body, MAX_BODY))
 			.run();
 		return (res.meta?.changes ?? 0) > 0;
 	} catch {
@@ -50,16 +51,29 @@ export async function appendTicketProgress(
 	}
 }
 
-/** The ticket's notes, oldest first — the order the work happened in. Owner-scoped. */
+/**
+ * The ticket's NEWEST notes, returned oldest first — the order the work happened in. Owner-scoped.
+ *
+ * Selected newest-first so the LIMIT keeps the latest (#898): `seq ASC LIMIT 200` kept the oldest
+ * and hid exactly the notes a reader opens a busy ticket to see. {@link countTicketProgress} says
+ * how many there are in all.
+ */
 export async function listTicketProgress(env: Env, instanceId: string, userId: string, ticketId: string, limit = 200): Promise<TicketProgressNote[]> {
 	const { results } = await env.DB.prepare(
 		`SELECT seq, run_id, kind, body, created_at FROM ticket_progress
 		  WHERE ticket_id = ?1 AND instance_id = ?2 AND user_id = ?3
-		  ORDER BY seq ASC LIMIT ?4`,
+		  ORDER BY seq DESC LIMIT ?4`,
 	)
 		.bind(ticketId, instanceId, userId, Math.min(Math.max(1, limit), 500))
 		.all<{ seq: number; run_id: string | null; kind: TicketProgressKind; body: string; created_at: string }>();
-	return (results ?? []).map((r) => ({ seq: r.seq, runId: r.run_id, kind: r.kind, body: r.body, createdAt: r.created_at }));
+	return (results ?? []).map((r) => ({ seq: r.seq, runId: r.run_id, kind: r.kind, body: r.body, createdAt: r.created_at })).reverse();
+}
+
+export async function countTicketProgress(env: Env, instanceId: string, userId: string, ticketId: string): Promise<number> {
+	const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM ticket_progress WHERE ticket_id = ?1 AND instance_id = ?2 AND user_id = ?3")
+		.bind(ticketId, instanceId, userId)
+		.first<{ n: number }>();
+	return Number(row?.n ?? 0);
 }
 
 /** Micros as dollars, the unit a person reads. Kept here so this module stays a leaf. */

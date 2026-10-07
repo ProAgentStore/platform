@@ -51,6 +51,12 @@ describe("describeBusyHolder — what a busy repo is busy WITH (#886)", () => {
 		expect(await holder()).toEqual({ activeRun: null, inFlightStarts: [{ requestId: "req-A", objective: "objective of req-A", ageMs: 10_000 }] });
 	});
 
+	it("finds this repo's start behind more than ten newer starts for other repos (#898)", async () => {
+		receipt("req-mine", "provisioning", { repoId: "r1", ageMs: 60_000 });
+		for (let i = 0; i < 12; i++) receipt(`req-other-${i}`, "provisioning", { repoId: "r2", ageMs: 1_000 + i });
+		expect((await holder("r1")).inFlightStarts.map((s) => s.requestId)).toEqual(["req-mine"]);
+	});
+
 	it("never lists the asking start's own receipt, a stale one, a settled one, or another repo's", async () => {
 		receipt("req-self", "provisioning", { repoId: "r1" });
 		receipt("req-stale", "provisioning", { repoId: "r1", ageMs: 6 * 60_000 });

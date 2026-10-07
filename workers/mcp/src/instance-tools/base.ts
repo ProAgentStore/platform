@@ -1,8 +1,9 @@
 import { authedAsyncCall } from "../async-outcome.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { authRequired, authedCall, jsonResult, jsonText, structuredText, text } from "../http.js";
+import { authRequired, authedCall, chatReplyText, jsonResult, jsonText, structuredText, text } from "../http.js";
 import { audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
+import { pagedToolResult } from "../wire-budget.js";
 import { findInstanceForAgent, type InstanceSummary, type InstanceToolsCtx } from "./shared.js";
 
 /**
@@ -232,8 +233,14 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 			instance_id: z.string().describe("Instance ID from my_instances"),
 			tool: z.string().describe("Exact connector/built-in tool name from list_instance_tools, e.g. github_list_issues. Copy the name exactly."),
 			input: z.record(z.any()).optional().describe("The nested tool's argument object exactly as list_instance_tools(schemas:true) declares it. Example: if the nested schema has `repo` and `state`, pass {\"repo\":\"owner/repo\",\"state\":\"open\"}; do not wrap it as {\"input\":{...}}."),
+			offset: z
+				.coerce.number()
+				.int()
+				.min(0)
+				.optional()
+				.describe("A result too large for one response comes back in pages, with `contentPage.hasMore` and `contentPage.nextOffset` (characters of `content`). Call again with the same tool and input and `offset` set to `nextOffset` to read the rest. Calling again RUNS the tool again, so page only a read tool (mutates:false in list_instance_tools)."),
 		},
-		async ({ token, instance_id, tool, input }) => {
+		async ({ token, instance_id, tool, input, offset }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			// Gated as a write: this is a generic invoker that will include write connector
@@ -279,7 +286,7 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 				// non-2xx, which carry no `success` field at all.
 				result: { ok: auditOk(data) },
 			});
-			return jsonText(data);
+			return text(pagedToolResult(data, offset));
 		},
 	);
 
@@ -405,6 +412,8 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 			)) as {
 				message?: { content?: string; traceId?: string };
 				error?: string;
+				truncated?: boolean;
+				notice?: string;
 			};
 			// `traceId` is the turn id the API mints before the DO is asked, and every
 			// `instance_messages` row and `agent_events` row for this turn carries it. Recording
@@ -421,7 +430,7 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 						...(data.message?.traceId ? { traceId: data.message.traceId } : {}),
 					},
 				});
-			return text(data.message?.content || data.error || "No response");
+			return text(chatReplyText(data));
 		},
 	);
 

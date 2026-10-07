@@ -1,3 +1,4 @@
+import { clipMarked } from "../lib/clip-marked.js";
 import type { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
@@ -126,13 +127,15 @@ export function registerChatRoutes(router: Hono<{ Bindings: Env }>): void {
 			// log's job, and changing that alongside the id would confuse two fixes (#514).
 			const reply = isRecord(data) && isRecord(data.message) ? String(data.message.content ?? "") : "";
 			const tools = isRecord(data) && isRecord(data.toolMessage) ? String(data.toolMessage.content ?? "") : "";
+			// Each row is a summary, its cut MARKED (#898); the whole text is in instance_messages,
+			// joined by this turn id.
 			// `chat.in` carries the time the request ARRIVED, not the time the reply finished, so it
 			// lands within a few ms of the user message's own createdAt and the two are matchable.
 			// `startedAt < now` always, so listEvents' ts ordering still reads in → tools → out.
 			const now = Date.now();
-			await logEvent(c.env, { source: "chat", event: "chat.in", message: message.slice(0, 200), userId: session.uid, instanceId, traceId: turnId, ts: startedAt, context: { origin: chatOrigin } });
-			if (tools) await logEvent(c.env, { source: "chat", event: "tool.call", message: tools.replace(/\s+/g, " ").slice(0, 200), userId: session.uid, instanceId, traceId: turnId, ts: now });
-			await logEvent(c.env, { source: "chat", event: "chat.out", message: reply.replace(/\s+/g, " ").slice(0, 200), userId: session.uid, instanceId, traceId: turnId, ts: now + 1, context: { origin: chatOrigin } });
+			await logEvent(c.env, { source: "chat", event: "chat.in", message: clipMarked(message, 200), userId: session.uid, instanceId, traceId: turnId, ts: startedAt, context: { origin: chatOrigin } });
+			if (tools) await logEvent(c.env, { source: "chat", event: "tool.call", message: clipMarked(tools.replace(/\s+/g, " "), 200), userId: session.uid, instanceId, traceId: turnId, ts: now });
+			await logEvent(c.env, { source: "chat", event: "chat.out", message: clipMarked(reply.replace(/\s+/g, " "), 200), userId: session.uid, instanceId, traceId: turnId, ts: now + 1, context: { origin: chatOrigin } });
 			// Bump last_activity_at — chat is the primary signal for "used recently".
 			// Fire-and-forget: a write failure must not surface as a request error.
 			void touchInstanceActivity(c.env, instanceId, session.uid);

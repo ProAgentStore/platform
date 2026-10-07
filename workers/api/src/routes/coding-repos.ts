@@ -11,6 +11,7 @@
  * registration ORDER, so moving a block past a sibling pattern is a behaviour change even when
  * the route set is unchanged. `coding.contract.test.ts` pins the order for that reason.
  */
+import { overLimit } from "../lib/write-limits.js";
 import type { Hono } from "hono";
 import { HttpError } from "../lib/auth.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../lib/runner-client.js";
@@ -68,10 +69,20 @@ async function readWorkMode(env: Env, instanceId: string, userId: string): Promi
  * business, and issues-mode is now sourced identically from a GitHub backlog and a GitLab one.
  */
 async function nextOpenIssue(env: Env, userId: string, repo: HostedRepoRef, opts: { labels?: string; exclude: Set<number> }): Promise<IssueDetail | null> {
-	const issues = await listHostedIssues(env, userId, repo, { state: "open", labels: opts.labels });
-	const next = pickNextIssue(issues, opts.exclude);
-	return next ? readHostedIssue(env, userId, repo, next.number) : null;
+	// The OLDEST open issues, not the 30 most recently updated (#898): "lowest number first" over a
+	// recency window never reached an old issue nobody had touched lately. A full page with every
+	// issue excluded moves on to the next, so a long exclude list cannot read as an empty backlog.
+	for (let page = 1; page <= NEXT_ISSUE_MAX_PAGES; page++) {
+		const issues = await listHostedIssues(env, userId, repo, { state: "open", labels: opts.labels, order: "oldest", limit: 100, page });
+		const next = pickNextIssue(issues, opts.exclude);
+		if (next) return readHostedIssue(env, userId, repo, next.number);
+		if (issues.length === 0) return null;
+	}
+	return null;
 }
+
+/** How far the picker walks before concluding every open issue is excluded. */
+const NEXT_ISSUE_MAX_PAGES = 5;
 
 /** No runner to ask — a fact about the CONNECTION, never about the path (see coding-workdir). */
 function unverified(workDir: string): WorkdirVerdict {
@@ -460,7 +471,10 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		const { uid, instanceId } = await requireOwned(c);
 		const repoId = c.req.param("repoId");
 		const body = await c.req.json<{ instructions?: string }>();
-		const instructions = String(body.instructions || "").slice(0, 5000);
+		// Refused past the limit, never cut (#898): these are injected into every brain's prompt.
+		const instructions = String(body.instructions || "");
+		const tooLong = overLimit({ instructions: [instructions, 5000] });
+		if (tooLong) throw new HttpError(400, tooLong);
 		await c.env.DB.prepare(
 			"UPDATE coding_repos SET instructions = ?1, updated_at = datetime('now') WHERE id = ?2 AND instance_id = ?3 AND user_id = ?4",
 		)

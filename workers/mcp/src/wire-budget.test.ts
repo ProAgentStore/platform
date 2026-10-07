@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { WIRE_BUDGET_BYTES, WIRE_LIMIT_BYTES, fitPage, wireBytes } from "./wire-budget.js";
+import { WIRE_BUDGET_BYTES, WIRE_LIMIT_BYTES, fitPage, pagedToolResult, wireBytes } from "./wire-budget.js";
 
 const rows = (n: number, size = 400) =>
 	Array.from({ length: n }, (_, i) => ({ id: `row-${i}`, text: "x".repeat(size) }));
@@ -114,5 +114,37 @@ describe("fitPage — a row bigger than the whole budget", () => {
 
 	it("carries no note when nothing was oversized", () => {
 		expect(page(rows(10), 0, undefined, 20_000).meta.note).toBeUndefined();
+	});
+});
+
+describe("pagedToolResult — a long tool result pages instead of spilling (#898)", () => {
+	// A 65 KB GitHub body, now returned whole by the connector, must still fit a host's limit.
+	const body = `${"漢字 and ascii ".repeat(6000)}THE END`;
+	const data = { success: true, content: body };
+
+	it("returns a result that fits unchanged, with no page meta", () => {
+		expect(pagedToolResult({ success: true, content: "short" })).toBe(JSON.stringify({ success: true, content: "short" }));
+	});
+
+	it("pages an oversized content inside the budget and reassembles to the whole value", () => {
+		let offset: number | undefined;
+		let joined = "";
+		let pages = 0;
+		do {
+			const text = pagedToolResult(data, offset);
+			expect(wireBytes(text)).toBeLessThanOrEqual(WIRE_BUDGET_BYTES);
+			const page = JSON.parse(text) as { content: string; success: boolean; contentPage: { of: number; nextOffset: number | null } };
+			expect(page.success).toBe(true);
+			expect(page.contentPage.of).toBe(body.length);
+			joined += page.content;
+			offset = page.contentPage.nextOffset ?? undefined;
+			pages++;
+		} while (offset !== undefined && pages < 50);
+		expect(joined).toBe(body);
+		expect(pages).toBeGreaterThan(1);
+	});
+
+	it("leaves a result without string content alone", () => {
+		expect(pagedToolResult({ error: "x" })).toBe('{"error":"x"}');
 	});
 });

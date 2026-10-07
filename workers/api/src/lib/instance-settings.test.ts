@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SettingsField } from "./agent-capabilities.js";
-import { applySettingsPatch, paramsWithDefaults, resolveSettingsValues, settingsPromptBlock } from "./instance-settings.js";
+import { applySettingsPatch, paramsWithDefaults, resolveSettingsValues, settingsPatchRefusal, settingsPromptBlock } from "./instance-settings.js";
 
 const SCHEMA: SettingsField[] = [
 	{
@@ -65,9 +65,9 @@ describe("applySettingsPatch", () => {
 		expect(settings.target_language).toBeUndefined();
 	});
 
-	it("caps text at 500 chars", () => {
-		const { settings } = applySettingsPatch(SCHEMA, {}, { nickname: "a".repeat(600) });
-		expect((settings.nickname as string).length).toBe(500);
+	it("REFUSES text past 500 chars, naming the field, instead of storing a cut value (#898)", () => {
+		expect(settingsPatchRefusal(SCHEMA, { nickname: "a".repeat(600) })).toMatch(/`nickname` is 600 characters; the limit is 500/);
+		expect(settingsPatchRefusal(SCHEMA, { nickname: "a".repeat(500) })).toBeNull();
 	});
 
 	it("returns voiceLanguageValue only when a voiceLanguage field is in the patch", () => {

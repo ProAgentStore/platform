@@ -914,6 +914,13 @@ describe("the Pilot keeps what it learned, because nothing else survives a decis
 		expect(acted).toEqual([{ kind: "message", text: "Run the tests." }]);
 	});
 
+	it("marks an instruction the step log shortens, with its full length (#898)", async () => {
+		const text = `${"Implement the change carefully. ".repeat(10)}Then push.`;
+		const { deps, logs } = replay([{ action: { kind: "message", text } }, FINISH]);
+		await runCodingLoop(deps, GOAL);
+		expect(logs[1]).toEqual([`message: ${text.slice(0, 120)}… [${text.length} chars in all]`]);
+	});
+
 	it("adds nothing to the log when nothing was learned", async () => {
 		const { deps, logs } = replay([{ action: { kind: "message", text: "Run the tests." } }, FINISH]);
 		await runCodingLoop(deps, GOAL);

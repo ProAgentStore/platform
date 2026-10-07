@@ -4,6 +4,7 @@ import { authRequired, authedCall, jsonText, text } from "../http.js";
 import { audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
 import { repoCiSentence, runHealthSentence } from "../state-vocabulary.js";
 import type { InstanceToolsCtx } from "./shared.js";
+import { loopRunsPage } from "./loop-runs-page.js";
 
 /**
  * How agents are wired to each other, and how one is given an objective.
@@ -683,16 +684,16 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
 			run_id: z.string().optional(),
+			offset: z.coerce.number().int().min(0).optional().describe("Listing only: runs come back newest first in pages that fit one response, with `page.of` (all runs) and `page.nextOffset`; pass it to continue."),
 		},
-		async ({ token, instance_id, run_id }) => {
+		async ({ token, instance_id, run_id, offset }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const denied = await requirePermission(safetyFor(token), "read", "check_instance_loop", { instance_id, run_id });
 			if (denied) return denied;
-			const path = run_id
-				? `/v1/instances/${encodeURIComponent(instance_id)}/loop/${encodeURIComponent(run_id)}`
-				: `/v1/instances/${encodeURIComponent(instance_id)}/loop`;
-			return jsonText(await authedCall(path, sessionToken, {}, env));
+			if (run_id) return jsonText(await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/loop/${encodeURIComponent(run_id)}`, sessionToken, {}, env));
+			// The same paged listing coding_loop_status returns (#898) — one endpoint, one shape.
+			return text(loopRunsPage(await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/loop?offset=${offset ?? 0}`, sessionToken, {}, env)));
 		},
 	);
 

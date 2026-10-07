@@ -72,15 +72,18 @@ export function registerStorageTools(
 			collection: z.string().describe("Collection name"),
 			where: z.string().optional().describe('JSON filter: {"status":"submitted"}'),
 			order_by: z.string().optional(),
-			limit: z.coerce.number().optional(),
+			limit: z.coerce.number().optional().describe("Records per page (default 50, max 200)."),
+			offset: z.coerce.number().int().min(0).optional().describe("Skip this many matching records. The reply's `total` is every match; page with offset += limit until you have them all."),
 		},
-		async ({ token, agent_id, collection, where, order_by, limit }) => {
+		async ({ token, agent_id, collection, where, order_by, limit, offset }) => {
 			const t = tokenFor(token);
 			if (!t) return authRequired();
 			const params = new URLSearchParams();
 			if (where) params.set("where", where);
 			if (order_by) params.set("order_by", order_by);
 			if (limit) params.set("limit", String(limit));
+			// The API always took `offset`; this tool never sent it, so record 201 was unreachable (#898).
+			if (offset) params.set("offset", String(offset));
 			const q = params.toString() ? `?${params}` : "";
 			const data = await authedCall(`/v1/agents/${agent_id}/collections/${collection}/records${q}`, t, {}, env);
 			return jsonText(data);
@@ -171,9 +174,10 @@ export function registerStorageTools(
 			collection: z.string().describe("Collection name"),
 			where: z.string().optional().describe('JSON filter: {"status":"submitted"}'),
 			order_by: z.string().optional(),
-			limit: z.coerce.number().optional(),
+			limit: z.coerce.number().optional().describe("Records per page (default 50, max 200)."),
+			offset: z.coerce.number().int().min(0).optional().describe("Skip this many matching records. The reply's `total` is every match; page with offset += limit until you have them all."),
 		},
-		async ({ token, instance_id, collection, where, order_by, limit }) => {
+		async ({ token, instance_id, collection, where, order_by, limit, offset }) => {
 			const t = tokenFor(token);
 			if (!t) return authRequired();
 			const denied = await requirePermission(safetyFor(token), "read", "query_instance_records", { instance_id, collection });
@@ -182,6 +186,8 @@ export function registerStorageTools(
 			if (where) params.set("where", where);
 			if (order_by) params.set("order_by", order_by);
 			if (limit) params.set("limit", String(limit));
+			// The API always took `offset`; this tool never sent it, so record 201 was unreachable (#898).
+			if (offset) params.set("offset", String(offset));
 			const q = params.toString() ? `?${params}` : "";
 			const data = await authedCall(`/v1/instances/${instance_id}/collections/${collection}/records${q}`, t, {}, env);
 			return jsonText(data);

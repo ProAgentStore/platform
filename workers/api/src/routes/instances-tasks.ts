@@ -1,3 +1,6 @@
+import { overLimit, ticketOverLimit } from "../lib/write-limits.js";
+import { clipMarked } from "../lib/clip-marked.js";
+import { hitOutputCap } from "../lib/reply-truncation.js";
 import type { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
@@ -20,6 +23,7 @@ import { logEvent } from "../lib/events.js";
 import { heartbeatFresh } from "../lib/runtime-attachment.js";
 import {
 	MAX_TICKET_ANSWER_CHARS,
+	TICKET_ANSWER_MAX_TOKENS,
 	TICKET_ANSWER_EVENT,
 	TICKET_QUESTION_EVENT,
 	buildTicketChatMessages,
@@ -47,6 +51,7 @@ import {
 	mirroredRuntimeEvents,
 	mirroredRuntimeTask,
 	mirroredRuntimeTasks,
+	countTaskEvents,
 	mirroredTaskEvents,
 	normalizeRunnerTaskBody,
 	requireLiveRuntime,
@@ -434,6 +439,8 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 			}>()
 			.catch(() => ({}) as Record<string, never>);
 		if (!body.title || typeof body.title !== "string") return c.json({ error: "title required" }, 400);
+		const tooLong = ticketOverLimit(body);
+		if (tooLong) return c.json({ error: tooLong }, 400);
 		// An ACTIONABLE ticket carries the work it stands for, so approving it can carry that
 		// work out (see lib/actionable-ticket.ts). Without this a runner-less agent could raise
 		// a ticket and nothing could ever act on it.
@@ -447,9 +454,9 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 			// An actionable ticket defaults to needs_approval (it's waiting on you), while a plain
 			// informational ticket stays completed — it's a record, not pending work.
 			status: typeof body.status === "string" && body.status ? body.status.slice(0, 80) : ticketAction ? "needs_approval" : "completed",
-			title: body.title.slice(0, 200),
-			description: typeof body.description === "string" ? body.description.slice(0, 2000) : "",
-			reasoning: typeof body.reasoning === "string" ? body.reasoning.slice(0, 8000) : "",
+			title: body.title,
+			description: typeof body.description === "string" ? body.description : "",
+			reasoning: typeof body.reasoning === "string" ? body.reasoning : "",
 			...(ticketAction ? { action: ticketAction } : {}),
 			createdAt: now,
 			updatedAt: now,
@@ -493,22 +500,24 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 			.json<{ title?: unknown; description?: unknown; reasoning?: unknown }>()
 			.catch(() => ({}) as Record<string, never>);
 
-		// Same caps as `/tasks/direct`, so a field cannot be grown past its create limit by
-		// editing it afterwards.
+		// Same limits as `/tasks/direct`, so a field cannot be grown past its create limit by
+		// editing it afterwards — and REFUSED past them, never cut (#898).
+		const tooLong = ticketOverLimit(body as { title?: unknown; description?: unknown; reasoning?: unknown });
+		if (tooLong) return c.json({ error: tooLong }, 400);
 		const patch: Record<string, unknown> = {};
 		if (body.title !== undefined) {
 			if (typeof body.title !== "string" || !body.title.trim()) {
 				return c.json({ error: "title must be a non-empty string" }, 400);
 			}
-			patch.title = body.title.slice(0, 200);
+			patch.title = body.title;
 		}
 		if (body.description !== undefined) {
 			if (typeof body.description !== "string") return c.json({ error: "description must be a string" }, 400);
-			patch.description = body.description.slice(0, 2000);
+			patch.description = body.description;
 		}
 		if (body.reasoning !== undefined) {
 			if (typeof body.reasoning !== "string") return c.json({ error: "reasoning must be a string" }, 400);
-			patch.reasoning = body.reasoning.slice(0, 8000);
+			patch.reasoning = body.reasoning;
 		}
 		// An empty patch is a 400, not a cheerful 200. A caller that sent only unrecognised
 		// keys has a bug, and answering "ok" would hide it behind an unchanged card.
@@ -554,8 +563,10 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 		const instanceId = c.req.param("instanceId");
 		const taskId = c.req.param("taskId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
-		const events = await mirroredTaskEvents(c.env, instanceId, session.uid, taskId);
-		return c.json({ turns: ticketThreadFromEvents(events) });
+		const [events, total] = await Promise.all([mirroredTaskEvents(c.env, instanceId, session.uid, taskId), countTaskEvents(c.env, instanceId, session.uid, taskId)]);
+		// Said, not silent (#898): the thread is built from the newest 200 events.
+		const olderEventsNotLoaded = Math.max(0, total - events.length);
+		return c.json({ turns: ticketThreadFromEvents(events), ...(olderEventsNotLoaded ? { olderEventsNotLoaded } : {}) });
 	});
 
 	/**
@@ -582,7 +593,7 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 		const task = await mirroredRuntimeTask(c.env, instanceId, session.uid, taskId);
 		if (!task || !isRecord(task)) return c.json({ error: "Task not found" }, 404);
 
-		const events = await mirroredTaskEvents(c.env, instanceId, session.uid, taskId);
+		const [events, totalEvents] = await Promise.all([mirroredTaskEvents(c.env, instanceId, session.uid, taskId), countTaskEvents(c.env, instanceId, session.uid, taskId)]);
 		const askedAt = new Date().toISOString();
 		const questionEvent = {
 			id: `ticketq_${crypto.randomUUID()}`,
@@ -601,15 +612,19 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 			events,
 			question: parsed.question,
 			specialInstructions: typeof cfg.specialInstructions === "string" ? cfg.specialInstructions : "",
+			olderEventsNotLoaded: Math.max(0, totalEvents - events.length),
 		});
 
 		let answer = "";
 		try {
-			const res = (await runUserWorkersAi(c.env, session.uid, "claude-sonnet-4-6", { messages, maxTokens: 700 }, {
+			const res = (await runUserWorkersAi(c.env, session.uid, "claude-sonnet-4-6", { messages, maxTokens: TICKET_ANSWER_MAX_TOKENS }, {
 				kind: "chat",
 				instanceId,
-			})) as { response?: string };
-			answer = (res.response || "").slice(0, MAX_TICKET_ANSWER_CHARS);
+			})) as { response?: string; stopReason?: string };
+			// A cut answer says so (#898): the stop reason was never read, so an answer the provider
+			// stopped mid-sentence was stored on the ticket as the whole of it.
+			const capped = hitOutputCap(res.stopReason) ? "\n\n[This answer was cut off at the length limit — ask a narrower question for the rest.]" : "";
+			answer = clipMarked(`${res.response || ""}${res.response ? capped : ""}`, MAX_TICKET_ANSWER_CHARS);
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			const status = isRecord(err) && typeof err.status === "number" ? err.status : 502;
@@ -706,8 +721,10 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 		const taskId = c.req.param("taskId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
 		const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
-		const hint = String(body.hint ?? "").trim().slice(0, 2000);
+		const hint = String(body.hint ?? "").trim();
 		if (!hint) return c.json({ error: "hint required" }, 400);
+		const tooLong = overLimit({ hint: [hint, 2000] }); // refused, never cut (#898)
+		if (tooLong) return c.json({ error: tooLong }, 400);
 		await c.env.DB.prepare("UPDATE instance_runtime_tasks SET user_hint = ?1 WHERE id = ?2 AND instance_id = ?3 AND user_id = ?4")
 			.bind(hint, taskId, instanceId, session.uid)
 			.run();
@@ -775,13 +792,21 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 		await requireOwnedInstance(c.env, instanceId, session.uid);
 		const rawLimit = Number(c.req.query("limit") || "100");
 		const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(500, Math.trunc(rawLimit))) : 100;
+		// Paged (#898): the newest `limit` (≤500) were all there was, and nothing said more existed.
+		const offset = Math.max(0, Math.trunc(Number(c.req.query("offset")) || 0));
+		const page = async () => {
+			const rows = await mirroredRuntimeEvents(c.env, instanceId, session.uid, limit + 1, offset);
+			const hasMore = rows.length > limit;
+			return { events: rows.slice(0, limit), paging: { offset, hasMore, nextOffset: hasMore ? offset + limit : null } };
+		};
 		// Live node or the mirror — never the stale default row (#218).
 		const runtime = await getLiveRuntime(c.env, instanceId, session.uid);
 		if (!runtime) {
-			const events = await mirroredRuntimeEvents(c.env, instanceId, session.uid, limit);
-			const tasks = events.length ? [] : await mirroredRuntimeTasks(c.env, instanceId, session.uid, limit);
+			const { events, paging } = await page();
+			const tasks = events.length || offset ? [] : await mirroredRuntimeTasks(c.env, instanceId, session.uid, limit);
 			return c.json({
-				events: events.length ? events : syntheticEventsFromTasks(tasks.length ? tasks : [runtimeSetupTask(instanceId)]),
+				events: events.length || offset ? events : syntheticEventsFromTasks(tasks.length ? tasks : [runtimeSetupTask(instanceId)]),
+				...paging,
 				runtimeUnavailable: true,
 				error: "Runtime not registered",
 			});
@@ -806,8 +831,8 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 			}
 		})();
 		try { c.executionCtx.waitUntil(revalidate); } catch { await revalidate; }
-		const events = await mirroredRuntimeEvents(c.env, instanceId, session.uid, limit);
-		const tasks = events.length ? [] : await mirroredRuntimeTasks(c.env, instanceId, session.uid, limit);
-		return c.json({ events: events.length ? events : syntheticEventsFromTasks(tasks) }, 200);
+		const { events, paging } = await page();
+		const tasks = events.length || offset ? [] : await mirroredRuntimeTasks(c.env, instanceId, session.uid, limit);
+		return c.json({ events: events.length || offset ? events : syntheticEventsFromTasks(tasks), ...paging }, 200);
 	});
 }

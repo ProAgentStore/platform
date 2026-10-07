@@ -83,12 +83,11 @@ const CAPS = {
 	 * have a different unit again — `log`, the one with a natural count, already bounds by it (`n`,
 	 * default 20, max 200).
 	 *
-	 * So the only question is how large a prefix is worth buying, and the answer is "not a large
-	 * one". A cut `repo_git` result is NOT resumable: this tool has no `startLine` and no offset, so
-	 * a bigger slice buys a longer prefix of an answer the model still cannot continue from, while
-	 * spending budget on the round that the productive move needs — the move the truncation note
-	 * already names, `diff-stat` and then `diff` one file at a time. Half the ceiling leaves room
-	 * for that second call in the same round; the whole ceiling would not.
+	 * So the only question is how large a window is worth buying, and the answer is "not a large
+	 * one". Since #898 a cut result IS resumable — `offset` walks the machine's output — so a bigger
+	 * window buys nothing a second call cannot, while spending budget on the round that the
+	 * productive move needs (often `diff-stat`, then `diff` one file at a time). Half the ceiling
+	 * leaves room for that second call in the same round; the whole ceiling would not.
 	 *
 	 * Rejected: cutting at a line boundary so a diff never ends mid-line. Honest and cheap, but a
 	 * different change — the note ABOVE the output already says the output is a prefix, which is
@@ -439,7 +438,7 @@ async function workdirProblem(conn: RunnerConn, workDir: string): Promise<string
 const GIT_CMDS = ["status", "diff", "diff-stat", "log", "ls-files", "show"] as const;
 type GitCmd = (typeof GIT_CMDS)[number];
 /** The inputs `repo_git` reads. Anything else is refused by name — see the handler. */
-const GIT_INPUTS = new Set(["cmd", "path", "n", "ref"]);
+const GIT_INPUTS = new Set(["cmd", "path", "n", "ref", "offset"]);
 
 /**
  * The refusal for an input `repo_git` has no slot for (#785). Pure, exported for its test.
@@ -477,7 +476,7 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 			const t = await resolveTarget(ctx);
 			if ("error" in t) return { content: t.error, success: false };
 			const sync = syncVerdictFor(t);
-			const res = await callRunner<{ entries?: Array<{ path: string; type: string; size?: number; deeper?: boolean }>; truncated?: boolean; truncatedByDepth?: boolean; error?: string }>(
+			const res = await callRunner<{ entries?: Array<{ path: string; type: string; size?: number; deeper?: boolean }>; truncated?: boolean; truncatedByDepth?: boolean; skipped?: string[]; error?: string }>(
 				t.conn,
 				"/coding/tree",
 				{ workDir: t.workDir, path: input.path, maxDepth: input.maxDepth },
@@ -496,6 +495,8 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 			const notes = [
 				res.truncated ? "(truncated — narrow with `path`)" : "",
 				res.truncatedByDepth ? `(this listing stopped at ${TREE_DEPTH_CAP} levels; the folders marked above have contents that are NOT shown — they are not empty)` : "",
+				// Named, so a skipped folder is never read as an absent one (#898).
+				res.skipped?.length ? `(not listed, by design: ${res.skipped.join(", ")})` : "",
 			].filter(Boolean);
 			// The notes are the PLATFORM's disclosure about the listing, not part of it — they ride
 			// in `tail`, outside the fence `untrustedOutput` puts around the paths (ADR 0006 F2).
@@ -589,6 +590,7 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 					description:
 						"A commit sha, branch, tag or revision, e.g. `6da7c9a1`, `origin/main`, `HEAD~3`. For `show` it is the commit to describe (required); for `log` the point to list from; for `diff` and `diff-stat` what to compare the working tree against. It is a revision, never a flag — it cannot start with `-`.",
 				},
+				offset: { type: "number", description: "Where to resume a long output — the character the previous reply says to continue from." },
 			},
 			required: ["cmd"],
 		},
@@ -635,12 +637,17 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 			// — the #503 failure, and a diff's tail is where the interesting hunks are. Both cuts are
 			// named, and the note goes ABOVE the output for the reason repo_read_file's header does:
 			// the note explaining a cut must not be the first thing a second cut removes.
+			// Resumable now (#898): `offset` walks the machine's output in windows, so a long diff can be
+			// read to its end. Past the machine's own 64KB cut nothing can be resumed, and the note says so.
 			const raw = res.output ?? "";
-			const out = raw.slice(0, CAPS.git);
-			const cutHere = raw.length > CAPS.git;
+			const from = Math.max(0, Math.min(Math.trunc(Number(input.offset) || 0), raw.length));
+			const out = raw.slice(from, from + CAPS.git);
+			const end = from + out.length;
+			const cutHere = end < raw.length || from > 0;
+			const fmt = (n: number) => n.toLocaleString("en-US");
 			const cutNote =
 				cutHere || res.truncated
-					? `(TRUNCATED: this is the FIRST ${CAPS.git.toLocaleString("en-US")} characters of the output${res.truncated ? ", and your machine had already cut it at its own 64KB limit" : ""} — there is more that is NOT shown. Narrow it with \`path\`, or run \`diff-stat\` to see which files changed and then \`diff\` one file at a time.)\n\n`
+					? `(TRUNCATED: this is characters ${fmt(from)}–${fmt(end)} of ${fmt(raw.length)}${res.truncated ? ", and your machine had already cut the output at its own 64KB limit — what follows that cannot be read here" : ""}.${end < raw.length ? ` Continue with \`offset: ${end}\`,` : ""} or narrow it with \`path\` — \`diff-stat\` shows which files changed, then \`diff\` one file at a time.)\n\n`
 					: "";
 			// Four of the five commands used to drop `path` silently (#508), and the answer — the
 			// WHOLE repository, truncated mid-list — was indistinguishable from a correct one. Fixed
@@ -710,7 +717,7 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 				const pattern = String(input.pattern ?? "").trim();
 				if (!pattern) return { content: "A `pattern` is required — the text or file name to look for.", success: false };
 				const sync = syncVerdictFor(t);
-				let res: { matches?: Array<{ path: string; line?: number; text?: string }>; shown?: number; total?: number; truncated?: boolean; error?: string };
+				let res: { matches?: Array<{ path: string; line?: number; text?: string }>; shown?: number; total?: number; truncated?: boolean; omittedPerFile?: Record<string, number>; error?: string };
 				try {
 					res = await callRunner(t.conn, "/coding/search", { workDir: t.workDir, pattern, path: input.path, mode: isFind ? "path" : "content" }, { timeoutMs: READ_TIMEOUT_MS });
 				} catch (e) {
@@ -759,7 +766,13 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 				// the HEAD, so a count at the tail is the FIRST thing a second cut removes and a
 				// count at the head is the last. One number, covering both cuts, counted from what
 				// this result actually carries rather than from what some other layer had.
-				const note = cut ? `(showing ${kept.length.toLocaleString("en-US")} of ${res.total === undefined ? "?" : res.total.toLocaleString("en-US")} — narrow with \`path\` or a more specific \`pattern\`)\n` : "";
+				// A file with more matches than the per-file cap names how many were not shown (#898):
+				// they were dropped unseen before, and a file with 200 hits read as one with 5.
+				const perFile = Object.entries(res.omittedPerFile ?? {});
+				const perFileNote = perFile.length
+					? `(only the first matches per file are shown; not shown: ${perFile.slice(0, 10).map(([p, n]) => `${p} +${n}`).join(", ")}${perFile.length > 10 ? `, and ${perFile.length - 10} more file(s)` : ""} — search that file with \`path\`)\n`
+					: "";
+				const note = `${cut ? `(showing ${kept.length.toLocaleString("en-US")} of ${res.total === undefined ? "?" : res.total.toLocaleString("en-US")} — narrow with \`path\` or a more specific \`pattern\`)\n` : ""}${perFileNote}`;
 				return {
 					head: note.trim(),
 					content: kept.join("\n"),

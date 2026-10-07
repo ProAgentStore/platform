@@ -144,13 +144,16 @@ describe("PATCH a board ticket (PAS #137)", () => {
 		expect(stored.title).toBe(TICKET.title);
 	});
 
-	it("caps a field at its create-time limit, so editing cannot grow it", async () => {
+	it("REFUSES a field past its create-time limit, naming it — and stores nothing (#898)", async () => {
 		const { app, env, token } = await setup();
+		const before = (await mirroredRuntimeTask(env, INSTANCE, USER, TASK)) as Record<string, unknown>;
 
-		await patch(app, env, token, { title: "x".repeat(500) });
+		const res = await patch(app, env, token, { title: "x".repeat(500) });
+		expect(res.status).toBe(400);
+		expect(((await res.json()) as { error: string }).error).toMatch(/`title` is 500 characters; the limit is 200/);
 
 		const stored = (await mirroredRuntimeTask(env, INSTANCE, USER, TASK)) as Record<string, unknown>;
-		expect((stored.title as string).length).toBe(200);
+		expect(stored.title).toBe(before.title);
 	});
 
 	it("404s for a task id that is not on this instance", async () => {

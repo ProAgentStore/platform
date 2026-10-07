@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
-import {
+import { SNAPSHOT_CUT_MARKER,
 	parseTimelineTimestamp,
 	shouldPersistSnapshot,
 	SNAPSHOT_THROTTLE_MS,
 	TERMINAL_SNAPSHOT_CHARS,
 	terminalSnapshotChanged,
-	terminalSnapshotContent,
-} from "./terminal-snapshot.js";
+	terminalSnapshotContent, } from "./terminal-snapshot.js";
 
 const NOW = Date.parse("2026-08-09T07:00:00Z");
 
@@ -84,7 +83,8 @@ describe("shouldPersistSnapshot — a busy session must leave a record too (#432
 		const pane = `${"x".repeat(12_000)}${"tail".repeat(2_000)}`;
 		expect(pane.length).toBeGreaterThan(TERMINAL_SNAPSHOT_CHARS);
 		const stored = terminalSnapshotContent(pane);
-		expect(stored).toHaveLength(TERMINAL_SNAPSHOT_CHARS);
+		// The tail, led by a FIXED marker saying it is one (#898) — fixed so it cannot defeat this dedup.
+		expect(stored).toBe(`${SNAPSHOT_CUT_MARKER}${pane.slice(-TERMINAL_SNAPSHOT_CHARS)}`);
 		expect(shouldPersistSnapshot({ ...base, pane, lastContent: stored })).toBe(false);
 		// …including on the busy path, where the throttle would otherwise have licensed it.
 		expect(shouldPersistSnapshot({ ...base, pane, lastContent: stored, runState: "thinking", lastAt: null })).toBe(false);
@@ -94,9 +94,10 @@ describe("shouldPersistSnapshot — a busy session must leave a record too (#432
 		// The deliberate behaviour change. Only the tail is stored, so a scrollback edit outside it
 		// would append a byte-identical duplicate — which is 95% of what is in the table today.
 		const tail = "y".repeat(TERMINAL_SNAPSHOT_CHARS);
-		expect(shouldPersistSnapshot({ ...base, pane: `OLD HEADER\n${tail}`, lastContent: tail })).toBe(false);
+		const stored = terminalSnapshotContent(`OLDER HEADER\n${tail}`);
+		expect(shouldPersistSnapshot({ ...base, pane: `OLD HEADER\n${tail}`, lastContent: stored })).toBe(false);
 		// A change WITHIN the tail still writes, which is the whole feature.
-		expect(shouldPersistSnapshot({ ...base, pane: `${tail}z`, lastContent: tail })).toBe(true);
+		expect(shouldPersistSnapshot({ ...base, pane: `${tail}z`, lastContent: stored })).toBe(true);
 	});
 
 	it("stores the empty string for a blank pane, so a writer's guard and the gate agree", () => {

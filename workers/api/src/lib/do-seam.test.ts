@@ -135,7 +135,7 @@ describe("the real AgentDO dispatch table", () => {
 			"limit",
 			"offset",
 		]);
-		expect(doQueryParams(DO_SOURCES, AGENT_DO, "GET", "/activity")).toEqual(["limit", "type", "user_id"]);
+		expect(doQueryParams(DO_SOURCES, AGENT_DO, "GET", "/activity")).toEqual(["limit", "offset", "type", "user_id"]);
 	});
 
 	it("distinguishes an unrouted path from a routed one that takes nothing", () => {

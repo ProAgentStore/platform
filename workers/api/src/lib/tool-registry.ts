@@ -3,6 +3,7 @@
 // API (routes/tools), and (later) MCP, so a new connector is declared in one place
 // instead of the current triple-definition. Additive: the legacy AGENT_TOOLS /
 // STORAGE_TOOLS catalog is untouched; registry tools are dispatched alongside them.
+import { ticketOverLimit } from "./write-limits.js";
 import { consentInstanceOf, describeAuthority, isDelegated } from "./execution-authority.js";
 import { logEvent } from "./events.js";
 import { connectorTools, getConnector } from "./connectors/registry.js";
@@ -548,15 +549,17 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 			const { buildTicketAction, validateTicketAction } = await import("./actionable-ticket.js");
 			const invalid = validateTicketAction(input.action, input.config, input.params);
 			if (invalid) return { content: invalid, success: false };
+			const tooLong = ticketOverLimit(input);
+			if (tooLong) return { content: tooLong, success: false };
 			const action = input.action ? buildTicketAction(String(input.action), input.config, input.params) : null;
 			const now = new Date().toISOString();
 			const task = {
 				id: crypto.randomUUID(),
 				type: "ticket",
 				status: action ? "needs_approval" : input.status === "needs_human" ? "needs_human" : "completed",
-				title: title.slice(0, 200),
-				description: typeof input.description === "string" ? input.description.slice(0, 2000) : "",
-				reasoning: typeof input.reasoning === "string" ? input.reasoning.slice(0, 8000) : "",
+				title,
+				description: typeof input.description === "string" ? input.description : "",
+				reasoning: typeof input.reasoning === "string" ? input.reasoning : "",
 				...(action ? { action } : {}),
 				createdAt: now,
 				updatedAt: now,

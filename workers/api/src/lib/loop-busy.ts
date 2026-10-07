@@ -50,10 +50,12 @@ export async function describeBusyHolder(
 		.all<{ run_id: string; objective: string; started_at: number; session_id: string | null; repo_id: string | null; request_id: string | null }>();
 	const run = (runs.results ?? []).find((r) => sameRepo(r.repo_id, input.repoId));
 
+	// No LIMIT (#898): it applied BEFORE the per-repo filter below, so ten in-flight starts for
+	// other repos hid this repo's own. The in-flight window already bounds the rows.
 	const receipts = await env.DB.prepare(
 		`SELECT request_id, input_json, created_at FROM loop_start_receipts
 		  WHERE user_id = ?1 AND instance_id = ?2 AND state = 'provisioning' AND created_at >= ?3
-		  ORDER BY created_at DESC LIMIT 10`,
+		  ORDER BY created_at DESC`,
 	)
 		.bind(input.userId, input.instanceId, now - IN_FLIGHT_MS)
 		.all<{ request_id: string; input_json: string; created_at: number }>();

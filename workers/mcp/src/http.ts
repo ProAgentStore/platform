@@ -157,3 +157,15 @@ export async function authedCall(
 		headers: { Authorization: `Bearer ${token}`, ...opts?.headers },
 	}, env, onResponse);
 }
+
+/**
+ * A chat reply as MCP returns it (#898): the text, and — when the provider stopped at the output
+ * cap — the platform's notice that it is not the whole answer. The API reports it as
+ * `truncated`/`notice` beside `message`; without this an MCP caller read a reply that ended
+ * mid-sentence as complete, because the console's notice lives in a separate tool-log message.
+ */
+export function chatReplyText(data: { message?: { content?: string }; error?: string; truncated?: boolean; notice?: string }): string {
+	const reply = data.message?.content || data.error || "No response";
+	if (!data.truncated) return reply;
+	return `${reply}\n\n${data.notice || "[platform: this reply was cut off at the output length limit — it is not the whole answer. Ask the agent to continue.]"}`;
+}

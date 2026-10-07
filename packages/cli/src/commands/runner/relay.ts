@@ -509,7 +509,8 @@ export function openRelaySocket(
 				});
 				const text = await res.text().catch(() => "");
 				let result: unknown;
-				try { result = text ? JSON.parse(text) : {}; } catch { result = { raw: text.slice(0, 500) }; }
+				// Marked (#898): a non-JSON reply cut silently read as the runner's whole answer.
+				try { result = text ? JSON.parse(text) : {}; } catch { result = text.length > 500 ? { raw: text.slice(0, 500), rawChars: text.length, truncated: true } : { raw: text }; }
 				try { ws.send(JSON.stringify({ id: cmd.id, status: res.status, result })); } catch { /* WS closed mid-flight */ }
 			} catch (err) {
 				try { ws.send(JSON.stringify({ id: cmd.id, status: 500, error: err instanceof Error ? err.message : String(err) })); } catch { /* WS closed */ }

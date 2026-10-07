@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { authRequired, authedCall, jsonText, type McpEnv, text } from "./http.js";
+import { authRequired, authedCall, type McpEnv, text } from "./http.js";
+import { pagedToolResult } from "./wire-budget.js";
 import { auditOk } from "./instance-tools/base.js";
 import {
 	type FetchHandler,
@@ -114,8 +115,14 @@ export function registerTypeTools(server: McpServer, ctx: PinnedCtx, surface: Ty
 			[INSTANCE_ID_FIELD]: z.string().describe(`Which of your ${type} instances — an id from my_instances.`),
 			tool: z.string().describe("The tool's exact name, as list_instance_tools on /mcp reports it."),
 			input: z.union([z.record(z.unknown()), z.string()]).optional().describe("The tool's arguments, as an object (or its JSON)."),
+			offset: z
+				.coerce.number()
+				.int()
+				.min(0)
+				.optional()
+				.describe("A result too large for one response comes back in pages (`contentPage.nextOffset`). Call again with the same tool and input and `offset` set to `nextOffset` to read the rest. Calling again runs the tool again."),
 		},
-		async ({ instance_id, tool, input }: { instance_id: string; tool: string; input?: Record<string, unknown> | string }) => {
+		async ({ instance_id, tool, input, offset }: { instance_id: string; tool: string; input?: Record<string, unknown> | string; offset?: number }) => {
 			const sessionToken = tokenFor();
 			if (!sessionToken) return authRequired();
 			const denied = await requirePermission(safetyFor(), "write", call.name, { instance_id, tool, agentType: type });
@@ -138,7 +145,7 @@ export function registerTypeTools(server: McpServer, ctx: PinnedCtx, surface: Ty
 				input: { instance_id, tool, agentType: type, argKeys: Object.keys(args), argBytes: new TextEncoder().encode(JSON.stringify(args)).length },
 				result: { ok: auditOk(data) },
 			});
-			return jsonText(data);
+			return text(pagedToolResult(data, offset));
 		},
 	);
 }

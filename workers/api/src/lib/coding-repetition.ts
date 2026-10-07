@@ -227,12 +227,15 @@ export function repeatCaution(instruction: string): string {
  * whole session up to its own 3000-record trim), so the marker states a fact rather than an estimate.
  * Under the limit nothing is added and the Pilot's input is unchanged.
  */
-export function renderPaneForPilot(pane: string, limit = PILOT_PANE_CHARS): string {
+export function renderPaneForPilot(pane: string, limit = PILOT_PANE_CHARS, total?: number): string {
 	if (pane.length <= limit) return pane;
-	const hidden = pane.length - limit;
+	// `total` is the session's output BEFORE the runner cut it to 64 KiB (#898); measuring the
+	// pane alone understated how much was hidden, sometimes by an order of magnitude.
+	const whole = Math.max(pane.length, total ?? 0);
+	const hidden = whole - limit;
 	return (
 		`[${hidden.toLocaleString("en-US")} earlier characters of this terminal are NOT shown — you are reading the last ` +
-		`${limit.toLocaleString("en-US")} of ${pane.length.toLocaleString("en-US")}. Output longer than that can never be read in full here, ` +
+		`${limit.toLocaleString("en-US")} of ${whole.toLocaleString("en-US")}. Output longer than that can never be read in full here, ` +
 		// NOT "ask for a bounded slice" any more (#700): a narrower shell command changes nothing,
 		// because the runner has already cut the tool result to 240 characters. Pointing at the
 		// channel that does work keeps this banner from contradicting the system prompt above it.

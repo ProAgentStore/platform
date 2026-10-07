@@ -38,6 +38,7 @@
  * would mean changing every consumer to serve the provider that has fewer users. GitLab's ten
  * statuses fold cleanly: five are terminal (they carry the conclusion), the rest are not.
  */
+import { clipMarked } from "./clip-marked.js";
 import { readConnectorRefreshToken } from "./connector-oauth.js";
 import type { BuildRun } from "./build-history.js";
 import type { IssueDetail, IssueSummary, ListIssuesOpts } from "./github-issues.js";
@@ -51,8 +52,11 @@ import type { Env } from "../types.js";
  */
 const API_BASE = "https://gitlab.com/api/v4";
 
-/** Same cap the GitHub reader applies, for the same reason: a body goes into a model prompt. */
-const BODY_CAP = 8 * 1024;
+/**
+ * GitHub's own body limit. A longer description (GitLab allows 1 MB) is cut VISIBLY — with both
+ * numbers in the text (#898) — never silently, which is how a comment once ended at "…4. O".
+ */
+const BODY_CAP = 65_536;
 
 /**
  * A GitLab namespace segment. GitLab permits letters, digits, `_`, `-`, `.` and requires the
@@ -146,7 +150,8 @@ export async function listGitlabIssues(env: Env, userId: string, slug: string, o
 	const project = gitlabProjectId(slug);
 	if (!project) return [];
 	const perPage = Math.min(Math.max(opts.limit ?? 30, 1), 100);
-	const params = new URLSearchParams({ per_page: String(perPage), order_by: "updated_at", sort: "desc" });
+	const params = new URLSearchParams({ per_page: String(perPage), ...(opts.order === "oldest" ? { order_by: "created_at", sort: "asc" } : { order_by: "updated_at", sort: "desc" }) });
+	if ((opts.page ?? 1) > 1) params.set("page", String(Math.trunc(opts.page ?? 1)));
 	// `all` is expressed by OMITTING the filter, not by a value — GitLab rejects `state=all`
 	// with a 400, which would arrive here as a silent empty list.
 	const state = opts.state ?? "open";
@@ -166,7 +171,7 @@ export async function readGitlabIssue(env: Env, userId: string, slug: string, nu
 	if (!project || !Number.isFinite(number) || number <= 0) return null;
 	const raw = await getJson<RawIssue>(`${API_BASE}/projects/${project}/issues/${Math.floor(number)}`, await gitlabToken(env, userId));
 	if (!raw || typeof raw !== "object" || typeof raw.iid !== "number") return null;
-	return { ...toSummary(raw), body: (raw.description ?? "").slice(0, BODY_CAP) };
+	return { ...toSummary(raw), body: clipMarked(raw.description ?? "", BODY_CAP) };
 }
 
 interface RawPipeline {

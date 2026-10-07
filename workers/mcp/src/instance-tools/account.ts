@@ -266,11 +266,12 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			unread_only: z.boolean().optional().describe("Only unread notifications."),
 			limit: z.coerce.number().optional().describe("How many to return, newest first (default 50, max 200)."),
+			offset: z.coerce.number().int().min(0).optional().describe("Skip this many of the newest — the previous reply's `nextOffset` while `hasMore` is true."),
 		},
-		async ({ token, unread_only, limit }) => {
+		async ({ token, unread_only, limit, offset }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const qs = [unread_only ? "unread=true" : "", limit !== undefined ? `limit=${encodeURIComponent(String(limit))}` : ""].filter(Boolean).join("&");
+			const qs = [unread_only ? "unread=true" : "", limit !== undefined ? `limit=${encodeURIComponent(String(limit))}` : "", offset ? `offset=${offset}` : ""].filter(Boolean).join("&");
 			const data = await authedCall(`/v1/notifications${qs ? `?${qs}` : ""}`, sessionToken, {}, env);
 			return jsonText(data);
 		},

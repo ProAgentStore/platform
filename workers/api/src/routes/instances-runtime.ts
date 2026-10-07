@@ -1,3 +1,4 @@
+import { overLimit } from "../lib/write-limits.js";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError } from "../lib/auth.js";
 import { decryptKey, encryptKey } from "../lib/crypto.js";
@@ -533,14 +534,15 @@ export async function mirroredRuntimeEvents(
 	instanceId: string,
 	userId: string,
 	limit = 100,
+	offset = 0,
 ): Promise<unknown[]> {
 	const { results } = await env.DB.prepare(
 		`SELECT payload FROM instance_runtime_task_events
      WHERE instance_id = ?1 AND user_id = ?2
      ORDER BY created_at DESC
-     LIMIT ?3`,
+     LIMIT ?3 OFFSET ?4`,
 	)
-		.bind(instanceId, userId, limit)
+		.bind(instanceId, userId, limit, Math.max(0, Math.trunc(offset)))
 		.all<RuntimeTaskEventMirrorRow>();
 	return results.map((row) => parsePayload(row.payload));
 }
@@ -588,6 +590,16 @@ export async function mirroredTaskEvents(
 	return results.map((row) => parsePayload(row.payload)).reverse();
 }
 
+/** How many events ONE ticket has in all — so a reader of {@link mirroredTaskEvents} can say what it did not load (#898). */
+export async function countTaskEvents(env: Env, instanceId: string, userId: string, taskIdValue: string): Promise<number> {
+	const row = await env.DB.prepare(
+		"SELECT COUNT(*) AS n FROM instance_runtime_task_events WHERE instance_id = ?1 AND user_id = ?2 AND task_id = ?3",
+	)
+		.bind(instanceId, userId, taskIdValue)
+		.first<{ n: number }>();
+	return Number(row?.n ?? 0);
+}
+
 export function syntheticEventsFromTasks(tasks: unknown[]): unknown[] {
 	return tasks
 		.filter(isRecord)
@@ -622,19 +634,29 @@ export function normalizeRunnerTaskBody(value: unknown): RunnerTaskBody {
 	if (!isRecord(value) || typeof value.type !== "string" || !value.type.trim()) {
 		throw new HttpError(400, "task type required");
 	}
-	const type = value.type.trim().slice(0, 120);
+	// Refused past a limit, never cut (#898): `type` selects the runner's handler, so a cut one is a
+	// different task; the rest is what the owner reads on the card.
+	const tooLong = overLimit({
+		type: [value.type.trim(), 120],
+		title: [typeof value.title === "string" ? value.title.trim() : undefined, 200],
+		subtitle: [typeof value.subtitle === "string" ? value.subtitle.trim() : undefined, 200],
+		description: [typeof value.description === "string" ? value.description.trim() : undefined, 500],
+		approvalPrompt: [value.approvalPrompt, 500],
+	});
+	if (tooLong) throw new HttpError(400, tooLong);
+	const type = value.type.trim();
 	const requiresApproval =
 		value.requiresApproval === true || APPROVAL_REQUIRED_RUNNER_TASKS.has(type);
-	const str = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : undefined);
+	const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
 	return {
 		type,
 		input: isRecord(value.input) ? value.input : {},
-		title: str(value.title, 200),
-		subtitle: str(value.subtitle, 200),
-		description: str(value.description, 500),
+		title: str(value.title),
+		subtitle: str(value.subtitle),
+		description: str(value.description),
 		requiresApproval,
 		approvalPrompt: typeof value.approvalPrompt === "string"
-			? value.approvalPrompt.slice(0, 500)
+			? value.approvalPrompt
 			: requiresApproval
 				? `Approve task ${type}`
 				: undefined,

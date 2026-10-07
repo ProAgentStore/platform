@@ -147,9 +147,14 @@ export async function getRepoFile(
 		`/repos/${org}/${repo}/contents/${encodeURIComponent(path).replaceAll("%2F", "/")}`,
 	);
 	if (!res.ok) return { error: res.text, status: res.status };
-	const data = res.data as { content?: string; sha?: string; type?: string };
+	const data = res.data as { content?: string; sha?: string; type?: string; encoding?: string; size?: number };
 	if (data.type !== "file" || data.content === undefined) {
 		return { error: `${path} is not a file`, status: 400 };
+	}
+	// GitHub's contents API answers a 1–100 MB file with `content: ""` and `encoding: "none"` — an
+	// empty string that read as an empty file (#898). Said instead.
+	if (data.encoding === "none" || (data.content === "" && (data.size ?? 0) > 0)) {
+		return { error: `${path} is ${(data.size ?? 0).toLocaleString("en-US")} bytes — too large for GitHub's contents API to return. Its content was NOT read.`, status: 413 };
 	}
 	return { content: fromB64(data.content), sha: data.sha };
 }

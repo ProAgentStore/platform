@@ -188,11 +188,11 @@ describe("a Bitbucket slug NEVER reaches another provider's API", () => {
 });
 
 describe("readBitbucketIssue", () => {
-	it("caps the body, which lives under content.raw and not `body`", async () => {
+	it("reads the body from content.raw, whole (#898: was silently cut at 8 KiB)", async () => {
 		stubFetch({ id: 72, title: "t", state: "new", kind: "bug", updated_on: "x", links: { html: { href: "u" } }, content: { raw: "z".repeat(9000) } });
 		const issue = await readBitbucketIssue(env, "u1", "atlassian/fugue", 72);
 		expect(issue?.number).toBe(72);
-		expect(issue?.body.length).toBe(8 * 1024);
+		expect(issue?.body).toBe("z".repeat(9000));
 	});
 
 	it("returns null for a body with no id, rather than an issue numbered 0", async () => {

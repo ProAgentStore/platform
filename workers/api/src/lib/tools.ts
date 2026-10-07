@@ -2,6 +2,7 @@
  * Agent tools — capabilities agents can invoke during their think loop.
  * Inspired by archagent's agent-tools.ts (update_task, read_memory, write_memory, etc.)
  */
+import { clipMarked } from "./clip-marked.js";
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
 import type { AgentTask, MemoryEntry } from "../agent-types.js";
 import { MAX_TASKS } from "./agent-tasks.js";
@@ -425,8 +426,8 @@ export async function executeTool(
 					return { name: call.name, content: e instanceof SsrfError ? e.message : `fetch failed: ${e instanceof Error ? e.message : String(e)}`, success: false };
 				}
 				const text = await res.text();
-				const truncated =
-					text.length > 4000 ? `${text.slice(0, 4000)}...[truncated]` : text;
+				// Counted (#898): "...[truncated]" alone never said whether a sentence or 95% was gone.
+				const truncated = clipMarked(text, 4000);
 				// #308: up to 4000 characters of an arbitrary page, straight onto the instruction
 				// path — and the URL routinely comes from a document the agent just read, so this is
 				// the most obviously attacker-authored text any tool returns. Fenced with the same

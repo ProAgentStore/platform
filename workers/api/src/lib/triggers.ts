@@ -1,3 +1,4 @@
+import { boundedJson, clipMarked } from "./clip-marked.js";
 import { HttpError } from "./auth.js";
 import { capabilitiesForInstance } from "./agent-capabilities.js";
 import { runnerSkipMessage } from "./trigger-capability.js";
@@ -82,8 +83,9 @@ export function makeTriggerSecret(): string {
 	return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** Bounded and still valid JSON (#898): a slice left an unparseable payload behind. */
 export function safeJson(value: unknown): string {
-	return JSON.stringify(value ?? {}).slice(0, MAX_PAYLOAD_CHARS);
+	return boundedJson(value ?? {}, MAX_PAYLOAD_CHARS);
 }
 
 /**
@@ -193,8 +195,9 @@ export async function executeTriggerAction(
 		const body = payloadRecord(payload);
 		// #754: cap at ingest, the same way /system-message does (agent-do.ts:293), so an uncapped
 		// webhook payload cannot write an unbounded system prompt.
-		const title = (mapped.title || stringValue(body.title) || config.title || `${target.name} trigger`).slice(0, 200);
-		const description = (mapped.description || stringValue(body.description) || stringValue(body.content) || config.description || stringifyPayload(payload)).slice(0, 2000);
+		// An inbound payload is cut where it must be, and MARKED (#898) — the sender cannot be asked to resend.
+		const title = clipMarked(mapped.title || stringValue(body.title) || config.title || `${target.name} trigger`, 200, { within: true });
+		const description = clipMarked(mapped.description || stringValue(body.description) || stringValue(body.content) || config.description || stringifyPayload(payload), 2000, { within: true });
 		const res = await stub.fetch(new Request("https://agent/tasks", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
@@ -212,7 +215,7 @@ export async function executeTriggerAction(
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
 				title,
-				content: content.slice(0, 100_000),
+				content: clipMarked(content, 100_000),
 				source: config.source || sourceType,
 				sourceUrl: mapped.sourceUrl || stringValue(body.sourceUrl) || config.sourceUrl,
 			}),

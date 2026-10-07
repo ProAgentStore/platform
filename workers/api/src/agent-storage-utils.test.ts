@@ -178,6 +178,11 @@ describe("agent storage utility helpers", () => {
 		});
 	});
 
+	it("REFUSES a string field past its limit instead of storing a cut value (#898)", () => {
+		expect(() => validateRecord(schema, { name: "n".repeat(10_001) })).toThrow(/`name` is 10,001 characters; the limit is 10,000/);
+		expect(validateRecord(schema, { name: "n".repeat(10_000) }).name).toHaveLength(10_000);
+	});
+
 	it("rejects invalid number fields", () => {
 		expect(() => validateRecord(schema, { score: "not-a-number" })).toThrow(
 			'Field "score" must be a number',

@@ -32,14 +32,38 @@ export const MAX_TURN_TAIL_LINES = 60;
 export const MAX_TURN_TAIL_LINE = 400;
 export const MAX_TURN_TAIL_CHARS = 8000;
 
-/** Append one line of the turn's own output to its tail, keeping the newest within the bounds above. */
+/** Leads a tail that has lost its oldest lines, with how many (#898). */
+const DROPPED_LINE = /^\[(\d+) earlier lines? of this turn not kept\]$/;
+
+/**
+ * Append one line of the turn's own output to its tail, keeping the newest within the bounds above.
+ *
+ * What falls off the front is COUNTED, in a first line that says so (#898): the cloud reports "the
+ * last N lines", and a tail that silently lost its head made N read as all the turn printed.
+ */
 export function appendTurnTail(tail: string[], line: string): void {
 	const text = line.trim();
 	if (!text) return;
+	const marked = tail.length ? DROPPED_LINE.exec(tail[0]) : null;
+	let dropped = marked ? Number(marked[1]) : 0;
+	if (marked) tail.shift();
 	tail.push(text.length > MAX_TURN_TAIL_LINE ? `${text.slice(0, MAX_TURN_TAIL_LINE)}…` : text);
-	while (tail.length > MAX_TURN_TAIL_LINES) tail.shift();
+	while (tail.length > MAX_TURN_TAIL_LINES - 1) {
+		tail.shift();
+		dropped++;
+	}
 	let total = tail.reduce((n, l) => n + l.length + 1, 0);
-	while (total > MAX_TURN_TAIL_CHARS && tail.length > 1) total -= (tail.shift() as string).length + 1;
+	// Room is kept for the count line itself, so the tail stays inside its total bound.
+	while (total > MAX_TURN_TAIL_CHARS - 48 && tail.length > 1) {
+		total -= (tail.shift() as string).length + 1;
+		dropped++;
+	}
+	if (dropped) tail.unshift(`[${dropped} earlier line${dropped === 1 ? "" : "s"} of this turn not kept]`);
+}
+
+/** The engine's last line within {@link MAX_TURN_DETAIL}, with an ellipsis when it was cut (#898). */
+function detailOf(text: string): string {
+	return text.length > MAX_TURN_DETAIL ? `${text.slice(0, MAX_TURN_DETAIL)}…` : text;
 }
 
 /**
@@ -93,7 +117,7 @@ export interface EngineTurnReport {
  * failure would let three slow builds read as a broken CLI.
  */
 export function turnReportFromExit(code: number | null, signal: string | null, lastLine = "", now = Date.now(), tail: readonly string[] = []): EngineTurnReport {
-	const detail = (lastLine.trim() || tail.at(-1) || "").slice(0, MAX_TURN_DETAIL);
+	const detail = detailOf(lastLine.trim() || tail.at(-1) || "");
 	const verdict = signal !== null ? "killed" : code === 0 ? "ok" : "failed";
 	return {
 		verdict,
@@ -113,7 +137,7 @@ export function turnReportFromExit(code: number | null, signal: string | null, l
  * case that runs most.
  */
 export function turnReportFromResult(isError: boolean, detail = "", now = Date.now(), tail: readonly string[] = []): EngineTurnReport {
-	const text = detail.trim().slice(0, MAX_TURN_DETAIL);
+	const text = detailOf(detail.trim());
 	return {
 		verdict: isError ? "failed" : "ok",
 		exitCode: null,

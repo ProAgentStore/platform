@@ -332,15 +332,16 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		const raw = (b.dir || "~").replace(/^~(?=$|\/)/, homedir());
 		const dir = resolve(raw);
 		try {
-			const entries = readdirSync(dir, { withFileTypes: true })
-				.filter((e) => !e.name.startsWith("."))
+			const visible = readdirSync(dir, { withFileTypes: true }).filter((e) => !e.name.startsWith("."));
+			const entries = visible
 				.slice(0, 200)
 				.map((e) => ({
 					name: e.name,
 					type: e.isDirectory() ? "dir" : "file",
 					size: e.isFile() ? statSync(resolve(dir, e.name)).size : undefined,
 				}));
-			return json(res, 200, { dir, entries });
+			// Said, not silent (#898): a folder of 500 entries read as one of 200.
+			return json(res, 200, { dir, entries, ...(visible.length > entries.length ? { total: visible.length, truncated: true } : {}) });
 		} catch (e: unknown) {
 			return json(res, 400, { error: e instanceof Error ? e.message : String(e), dir });
 		}

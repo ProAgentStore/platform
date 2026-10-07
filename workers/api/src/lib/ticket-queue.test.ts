@@ -79,6 +79,20 @@ describe("default OFF, and only a person releases a ticket (#757 §3, §7)", () 
 	});
 });
 
+describe("pickup — a ticket's whole description reaches the run (#898)", () => {
+	it("keeps the END of a full-length description, where the acceptance criteria are", async () => {
+		const { env } = setup();
+		await setTicketQueueEnabled(env, "i1", "u1", true);
+		const description = `${"context ".repeat(247)}ACCEPTANCE: tests pass`;
+		const t = await createTicketCard(env, "i1", "u1", { id: "long", type: "ticket", title: "T".repeat(200), description, status: "needs_approval", updatedAt: "2026-09-27T00:00:00Z" }, "human");
+		await setTicketAuthority(env, "i1", "u1", t.id, "agent");
+		const d = fakeStart();
+		await pickupNextTicket(env, "i1", "u1", { ...green, start: d.start });
+		expect(d.calls[0].objective.length).toBeGreaterThan(2000);
+		expect(d.calls[0].objective.endsWith("ACCEPTANCE: tests pass")).toBe(true);
+	});
+});
+
 describe("pickup — a released ticket becomes a run that names it (#864)", () => {
 	it("starts through the loop driver with its own budget, and the run carries ticketId onto the board", async () => {
 		const { env } = setup();

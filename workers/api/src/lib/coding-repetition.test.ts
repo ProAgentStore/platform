@@ -146,6 +146,13 @@ describe("renderPaneForPilot — the Pilot is told the size of its own blind spo
 		expect(out.endsWith("A".repeat(PILOT_PANE_CHARS))).toBe(true);
 	});
 
+	it("states the session's TRUE length when the runner already cut the pane (#898)", () => {
+		const pane = "A".repeat(PILOT_PANE_CHARS + 10);
+		const out = renderPaneForPilot(pane, undefined, 500_000);
+		expect(out).toContain(`${(500_000 - PILOT_PANE_CHARS).toLocaleString("en-US")} earlier characters`);
+		expect(out).toContain("of 500,000");
+	});
+
 	it("points at the reply channel, not at a bounded slice (#700)", () => {
 		// This banner rides in the same request as the system prompt, so its remedy has to be the
 		// same one. "Ask for a bounded slice" told the Pilot to narrow a shell command, which cannot

@@ -8,6 +8,7 @@
  * Like the error log, `logEvent` NEVER throws — instrumentation must not break the
  * path it observes — and every field is length-bounded.
  */
+import { boundedJson, clipMarked } from "./clip-marked.js";
 import type { Env } from "../types.js";
 import { toolLogLine } from "./tool-result-cap.js";
 
@@ -68,8 +69,9 @@ export async function logEvent(env: Pick<Env, "DB">, e: EventInput): Promise<voi
 				String(e.source).slice(0, 48),
 				e.level ?? "info",
 				String(e.event).slice(0, 64),
-				e.message != null ? String(e.message).slice(0, 2000) : null,
-				e.context ? JSON.stringify(e.context).slice(0, 4000) : null,
+				// Marked, and valid JSON (#898): a sliced context failed json_valid and its row vanished.
+				e.message != null ? clipMarked(e.message, 2000) : null,
+				e.context ? boundedJson(e.context, 4000) : null,
 			)
 			.run();
 		// Opportunistic retention: no cron, so ~1% of writes prune rows older than

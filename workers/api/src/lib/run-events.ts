@@ -25,6 +25,7 @@
  * Not here, deliberately: a user-registered outbound webhook. It needs HMAC signing, per-account
  * rate limits and `safeFetch`, none of which this groundwork has to decide (#579 phase 3).
  */
+import { clipMarked } from "./clip-marked.js";
 import { codingSessionLink, instanceLink } from "./console-links.js";
 import { appendTicketProgress, dollars } from "./ticket-progress.js";
 import type { Env } from "../types.js";
@@ -81,7 +82,7 @@ export function runEventPayload(row: RunRow & { finished_at: number }, event: Ru
 		instanceId: row.instance_id,
 		status: row.status,
 		stopReason: row.stop_reason,
-		detail: (row.detail ?? "").slice(0, DETAIL_CHARS),
+		detail: clipMarked(row.detail ?? "", DETAIL_CHARS), // marked (#898); the run row holds the rest
 		iterations: row.iteration,
 		maxIterations: row.max_iterations,
 		sessionId: row.session_id,

@@ -349,7 +349,17 @@ describe("repo-local — tool behaviour", () => {
 
 		callRunner.mockResolvedValue({ cmd: "git diff", output: "short", truncated: true, pathApplied: false });
 		const machine = await tool("repo_git").handler(ctx(), { cmd: "diff" });
-		expect(machine.content).toContain("your machine had already cut it");
+		expect(machine.content).toContain("your machine had already cut the output");
+	});
+
+	it("repo_git output can be read to its end with `offset` (#898)", async () => {
+		const output = `${"a".repeat(12 * 1024)}${"b".repeat(5000)}END`;
+		callRunner.mockResolvedValue({ cmd: "git diff", output, pathApplied: false });
+		const first = await tool("repo_git").handler(ctx(), { cmd: "diff" });
+		expect(first.content).toContain(`Continue with \`offset: ${12 * 1024}\``);
+		const second = await tool("repo_git").handler(ctx(), { cmd: "diff", offset: 12 * 1024 });
+		expect(second.content).toContain("END");
+		expect(second.content).not.toContain("Continue with");
 	});
 
 	it("repo_git stays byte-for-byte unchanged when nothing was cut", async () => {
@@ -368,6 +378,18 @@ describe("repo-local — tool behaviour", () => {
 		const r = await tool("repo_grep").handler(ctx(), { pattern: "x" });
 		expect(r.content).toContain("showing 50 of 812");
 		expect(r.content.split("\n").filter((l) => l.includes("file")).length).toBe(50);
+	});
+
+	it("repo_grep names the files whose extra matches were not shown (#898)", async () => {
+		callRunner.mockResolvedValue({ matches: [{ path: "a.ts", line: 1, text: "x" }], shown: 1, total: 8, truncated: true, omittedPerFile: { "a.ts": 7 } });
+		const r = await tool("repo_grep").handler(ctx(), { pattern: "x" });
+		expect(r.content).toMatch(/not shown: a\.ts \+7/);
+	});
+
+	it("repo_tree names what it skipped on purpose (#898)", async () => {
+		callRunner.mockResolvedValue({ entries: [{ path: "src", type: "dir" }], skipped: [".git", "node_modules"] });
+		const r = await tool("repo_tree").handler(ctx(), {});
+		expect(r.content).toContain("not listed, by design: .git, node_modules");
 	});
 
 	// The count is the one part of a truncated search result the model must act on, so it goes

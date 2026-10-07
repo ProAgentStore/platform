@@ -188,9 +188,9 @@ describe("the response is the only channel a transfer can travel on", () => {
 		for (const [line] of uses) {
 			// Two forms only: destructuring it off `think`, and spreading it onto the turn's `json`.
 			expect(
-				/const \{ response, toolCalls, transfer \}/.test(line) ||
+				/const \{ response, toolCalls, transfer(, truncated)? \}/.test(line) ||
 					/Promise<\{ response: string; toolCalls: string\[\]; transfer\?/.test(line) ||
-					/return json\(\{ message: assistantMsg, toolMessage: toolMsg, \.\.\.\(transfer \? \{ transfer \} : \{\}\) \}\)/.test(line),
+					/return json\(\{ message: assistantMsg, toolMessage: toolMsg, \.\.\.\(transfer \? \{ transfer \} : \{\}\)[,)]/.test(line),
 				`agent-do.ts uses a transfer somewhere other than the chat turn's response:\n  ${line.trim()}`,
 			).toBe(true);
 		}

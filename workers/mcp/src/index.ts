@@ -3,7 +3,7 @@ import { McpAgent } from "agents/mcp";
 import { OAuthProvider, type OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import { z } from "zod";
 import { buildAgentListing } from "./agent-listing.js";
-import { apiCall, authedCall, authRequired, INVALID_JSON, type McpEnv, jsonResult, jsonText, parseJsonArg, text } from "./http.js";
+import { apiCall, authedCall, authRequired, chatReplyText, INVALID_JSON, type McpEnv, jsonResult, jsonText, parseJsonArg, text } from "./http.js";
 import { registerCodingSessionTools } from "./coding-tools.js";
 import { registerInstanceTools } from "./instance-tools/index.js";
 import { registerStorageTools } from "./storage-tools.js";
@@ -302,12 +302,14 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 					message?: { content: string };
 					sessionId?: string;
 					error?: string;
+					truncated?: boolean;
+					notice?: string;
 				};
 				return {
 					content: [
 						{
 							type: "text" as const,
-							text: `${data.message?.content || data.error || "No response"}\n\nSession: ${data.sessionId || "none"}`,
+							text: `${chatReplyText(data)}\n\nSession: ${data.sessionId || "none"}`,
 						},
 					],
 				};

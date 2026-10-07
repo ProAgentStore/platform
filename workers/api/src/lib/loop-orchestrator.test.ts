@@ -8,7 +8,7 @@ vi.mock("./user-ai.js", async (importOriginal) => ({
 }));
 
 import { nextStep, readAgentReply } from "./agent-loop.js";
-import { runLoopDecide, settledDecision } from "./loop-orchestrator.js";
+import { buildLoopUserContent, runLoopDecide, settledDecision } from "./loop-orchestrator.js";
 import { UserAiCredentialsError } from "./user-ai.js";
 import type { Env } from "../types.js";
 
@@ -146,5 +146,15 @@ describe("runLoopDecide — the second model call is skipped only when it cannot
 			maxIterations: 10,
 		});
 		expect(runUserWorkersAi).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("buildLoopUserContent marks what it leaves out (#898)", () => {
+	it("keeps each message's end, marks the cut, and counts omitted earlier messages", () => {
+		const messages = Array.from({ length: 8 }, (_, i) => ({ role: "assistant", content: `${"x".repeat(3000)} END-${i}` }));
+		const out = buildLoopUserContent({ objective: "ship it", messages } as Parameters<typeof buildLoopUserContent>[0]);
+		expect(out).toContain("(2 earlier messages not shown)");
+		expect(out).toContain("END-7");
+		expect(out).toMatch(/\[cut: showing the last 2000 of 3006 characters\]/);
 	});
 });

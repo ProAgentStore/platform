@@ -213,7 +213,8 @@ describe("PagsMcp.init on a pinned session", () => {
 	it("publishes the row's real field names and no instance_id anywhere", async () => {
 		const { tools } = await setup({ pinned: "inst-1" });
 		const read = tools.get("github_read_issue")!;
-		expect(Object.keys(read.schema).sort()).toEqual(["number", "repo"]);
+		// …plus `result_offset` (#898), the platform's own page cursor, never forwarded to the tool.
+		expect(Object.keys(read.schema).sort()).toEqual(["number", "repo", "result_offset"]);
 		expect((read.schema.repo as { description?: string }).description).toBe('The repository, "owner/name".');
 		for (const [name, t] of tools) {
 			expect(Object.keys(t.schema), `${name} publishes instance_id`).not.toContain("instance_id");

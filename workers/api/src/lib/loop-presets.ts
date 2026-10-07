@@ -11,6 +11,8 @@
 // subscriber's override. Pure here, D1 in `loop-presets-store.ts`, for the usual reason — the
 // rules that decide what a user sees are worth testing without a database.
 
+import { overLimit } from "./write-limits.js";
+
 /** One shortcut button in a loop form. */
 export interface LoopPreset {
 	/** Stable slug — the React key, and what an edit is matched on. */
@@ -81,6 +83,23 @@ export function defaultLoopPresets(driverId: string): readonly LoopPreset[] {
  * Dropping a malformed entry rather than rejecting the whole list matters here: these are stored in
  * a shared JSON blob, and one bad row must not make the loop form unusable.
  */
+/**
+ * Why a preset list sent to be SAVED is refused, or null (#898). The sanitizer below cut a label to
+ * 60, an objective to 1,000 and the list to 12 — and the save answered with the cut list as if it
+ * were what was sent. Reading a stored list still sanitizes (one bad row must not break the form);
+ * a WRITE says what is over, by how much.
+ */
+export function loopPresetsRefusal(raw: unknown): string | null {
+	if (!Array.isArray(raw)) return null;
+	if (raw.length > MAX_LOOP_PRESETS) return `${raw.length} presets were sent; the limit is ${MAX_LOOP_PRESETS}. Remove some and save again — nothing was saved.`;
+	for (const [i, entry] of raw.entries()) {
+		const e = (entry && typeof entry === "object" ? entry : {}) as Record<string, unknown>;
+		const tooLong = overLimit({ [`presets[${i}].label`]: [String(e.label ?? "").trim(), MAX_PRESET_LABEL], [`presets[${i}].objective`]: [String(e.objective ?? "").trim(), MAX_PRESET_OBJECTIVE] });
+		if (tooLong) return tooLong;
+	}
+	return null;
+}
+
 export function sanitizeLoopPresets(raw: unknown): LoopPreset[] {
 	if (!Array.isArray(raw)) return [];
 	const seen = new Set<string>();

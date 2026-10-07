@@ -20,6 +20,8 @@
  *   agent-do-knowledge.ts      the `kb:` documents and their vectors
  *   lib/repo-ingest-runner.ts  the repo-ingest state machine the alarm advances
  */
+import { overLimit } from "./lib/write-limits.js";
+import { clipMarked } from "./lib/clip-marked.js";
 import { DurableObject } from "cloudflare:workers";
 import { AgentStorageEngine } from "./agent-storage.js";
 import type {
@@ -94,6 +96,8 @@ import { logError } from "./lib/error-log.js";
 import { resolveMeterIds } from "./lib/meter-ids.js";
 import { platformAiBinding } from "./lib/platform-settings.js";
 import { isTransientInfraError } from "./lib/on-error.js";
+import { truncationNotice } from "./lib/reply-truncation.js";
+import { historyWindow } from "./lib/history-window.js";
 import type { Env } from "./types.js";
 
 export type {
@@ -291,7 +295,7 @@ export class AgentDO extends DurableObject<Env> {
 					await this.appendMessage({
 						id: crypto.randomUUID(),
 						role: "system",
-						content: String(content).slice(0, 2000),
+						content: clipMarked(content, 2000),
 						channel: "chat",
 						createdAt: new Date().toISOString(),
 					});
@@ -570,7 +574,7 @@ export class AgentDO extends DurableObject<Env> {
 			// the provider itself called retryable qualifies, so the deterministic `total` deadline —
 			// whose message says a retry fails identically — still fails once and stays failed.
 			// The event row is the measurement: a recovery nobody can count is one nobody trusts.
-			const { response, toolCalls, transfer } = await thinkWithAutoResume(
+			const { response, toolCalls, transfer, truncated } = await thinkWithAutoResume(
 				(r) => this.think(state, engine, userId, delegation, r),
 				{
 					resume,
@@ -629,7 +633,9 @@ export class AgentDO extends DurableObject<Env> {
 			// system message, not on the message list — because a channel a client polls could deliver
 			// a move nobody asked for, and this one physically cannot: it exists only as the answer to
 			// a sentence the user just spoke. See lib/conversation-transfer.ts.
-			return json({ message: assistantMsg, toolMessage: toolMsg, ...(transfer ? { transfer } : {}) });
+			// `truncated` travels with the reply (#898): the notice above lives in the tool-log message,
+			// which an MCP caller reading `message.content` never sees.
+			return json({ message: assistantMsg, toolMessage: toolMsg, ...(transfer ? { transfer } : {}), ...(truncated ? { truncated, notice: truncationNotice() } : {}) });
 		} catch (err) {
 			const errMsg = err instanceof Error ? err.message : String(err);
 			const status =
@@ -754,8 +760,9 @@ export class AgentDO extends DurableObject<Env> {
 		userId?: string,
 		delegation?: { budgetId?: string | null; onBehalfOf?: string | null; traceId?: string | null },
 		resume?: ResumableRound,
-	): Promise<{ response: string; toolCalls: string[]; transfer?: ConversationTransfer }> {
-		const messages = await this.getRecentMessages(MAX_CONTEXT_MESSAGES);
+	): Promise<{ response: string; toolCalls: string[]; transfer?: ConversationTransfer; truncated?: true }> {
+		// One past the window, to KNOW whether anything is older (#898) — see historyWindow.
+		const messages = historyWindow(await this.getRecentMessages(MAX_CONTEXT_MESSAGES + 1), MAX_CONTEXT_MESSAGES, (text) => systemMessage(text, undefined));
 		const memory = await this.getAllMemory();
 		const tasks = await this.getAllTasks();
 		return runAgentThink({
@@ -1021,10 +1028,16 @@ export class AgentDO extends DurableObject<Env> {
 		// from the body; anything else is treated as an owner write. Cap title/description at ingest
 		// to bound the system-prompt size (same limit /system-message uses at agent-do.ts:293).
 		const assignedBy: AgentTask["assignedBy"] = rawAssignedBy === "trigger" ? "trigger" : "user";
+		// An owner write past a limit is REFUSED; a webhook's payload is not the owner's to shorten, so
+		// a trigger's is cut and MARKED instead (#898). Neither is silent.
+		if (assignedBy === "user") {
+			const tooLong = overLimit({ title: [String(title), 200], description: [String(description || ""), 2000] });
+			if (tooLong) return json({ error: tooLong }, 400);
+		}
 		const task: AgentTask = {
 			id: crypto.randomUUID(),
-			title: String(title).slice(0, 200),
-			description: String(description || "").slice(0, 2000),
+			title: clipMarked(title, 200),
+			description: clipMarked(description || "", 2000),
 			status: "pending",
 			assignedBy,
 			createdAt: new Date().toISOString(),

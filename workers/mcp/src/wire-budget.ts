@@ -166,3 +166,56 @@ export function fitPage<Row>(input: {
 	}
 	return render(best);
 }
+
+/**
+ * The same budget for ONE long string rather than a list of rows (#898): a tool result whose
+ * `content` is a 65 KB issue body, a pane, a log. Pages by character offset, so a caller walks it
+ * with `offset = nextOffset` exactly as it walks a {@link fitPage} list — and the result says how
+ * much exists, so the first page can never be mistaken for the whole value.
+ *
+ * `build` renders the whole payload around the slice, because the wrapper is part of the budget.
+ * A value that fits is returned unpaged: `meta` is then `null` and the payload is untouched.
+ */
+export function pageText(input: {
+	text: string;
+	offset?: number;
+	budget?: number;
+	build: (slice: string, meta: PageMeta | null) => unknown;
+}): { text: string; meta: PageMeta | null } {
+	const budget = input.budget ?? WIRE_BUDGET_BYTES;
+	const total = input.text.length;
+	const offset = Math.max(0, Math.min(Math.trunc(input.offset ?? 0), total));
+	if (offset === 0) {
+		const whole = JSON.stringify(input.build(input.text, null));
+		if (wireBytes(whole) <= budget) return { text: whole, meta: null };
+	}
+	const render = (keep: number) => {
+		const end = offset + keep;
+		const hasMore = end < total;
+		const meta: PageMeta = { offset, count: keep, of: total, nextOffset: hasMore ? end : null, hasMore };
+		return { text: JSON.stringify(input.build(input.text.slice(offset, end), meta)), meta };
+	};
+	let lo = 0;
+	let hi = total - offset;
+	let best = 0;
+	while (lo <= hi) {
+		const mid = (lo + hi) >> 1;
+		if (wireBytes(render(mid).text) <= budget) {
+			best = mid;
+			lo = mid + 1;
+		} else hi = mid - 1;
+	}
+	// Always advance, as fitPage does: a page that carried nothing would leave a caller looping.
+	return render(Math.max(best, Math.min(1, total - offset)));
+}
+
+/**
+ * A registry tool's result over MCP (`call_instance_tool`): `{ content, success, … }` where
+ * `content` is whatever the tool returned — a whole issue body, a file window, a listing. Returned
+ * unchanged when it fits; otherwise `content` is paged and `contentPage` says where it stands.
+ */
+export function pagedToolResult(data: unknown, offset?: number): string {
+	const d = data as Record<string, unknown> | null;
+	if (!d || typeof d !== "object" || typeof d.content !== "string") return JSON.stringify(data);
+	return pageText({ text: d.content, offset, build: (slice, meta) => (meta ? { ...d, content: slice, contentPage: meta } : d) }).text;
+}

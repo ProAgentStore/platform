@@ -145,6 +145,8 @@ export class HeadlessSession {
 	private proc: ChildProcess | null = null;
 	private buf = "";
 	private transcript: string[] = [];
+	/** Records trimmed off the front of {@link transcript} — said in the pane, never silent (#898). */
+	private droppedRecords = 0;
 	private run: Run = "idle";
 	/** Claude Code's own session id (from the init event) — used to --resume. */
 	private claudeSessionId: string | null = null;
@@ -451,7 +453,8 @@ export class HeadlessSession {
 
 	/** The rendered conversation the brain/console reads (Claude's real output). */
 	snapshot(): string {
-		return this.transcript.join("\n");
+		const text = this.transcript.join("\n");
+		return this.droppedRecords > 0 ? `[${this.droppedRecords} earlier lines of this session's output are no longer kept]\n${text}` : text;
 	}
 
 	/** Launch (or resume) the agent process. Idempotent if already alive. */
@@ -778,6 +781,9 @@ export class HeadlessSession {
 		const cap = this.mode === "raw" ? 16 * 1024 : 4 * 1024 * 1024;
 		if (this.buf.length > cap) {
 			if (this.mode === "raw") this.pushRaw(this.buf);
+			// Said in the pane (#898): an event this size was discarded whole, and a reader could not
+			// tell a dropped tool result from one that never came.
+			else this.push(`[a ${this.buf.length.toLocaleString("en-US")}-character line of engine output was too large to keep and was dropped]`);
 			this.buf = "";
 		}
 	}
@@ -818,7 +824,14 @@ export class HeadlessSession {
 			// never scraped back out of the rendered pane.
 			this.turnLastLine = clean.trim();
 		}
-		if (this.transcript.length > 4000) this.transcript = this.transcript.slice(-3000);
+		this.trimTranscript();
+	}
+
+	/** Keep the newest 3,000 records once past 4,000, and COUNT what went (#898). */
+	private trimTranscript(): void {
+		if (this.transcript.length <= 4000) return;
+		this.droppedRecords += this.transcript.length - 3000;
+		this.transcript = this.transcript.slice(-3000);
 	}
 
 	private handle(line: string): boolean {
@@ -893,7 +906,7 @@ export class HeadlessSession {
 		// Keep the in-memory transcript bounded. Counts ENTRIES, and an entry may now be a
 		// multi-line block (a result, or a long assistant reply) rather than one line — the
 		// character bound that matters is `MAX_PANE` in runtime.ts, applied on the way out.
-		if (this.transcript.length > 4000) this.transcript = this.transcript.slice(-3000);
+		this.trimTranscript();
 		return events.length > 0;
 	}
 

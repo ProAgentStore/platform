@@ -57,8 +57,10 @@ describe("logEvent", () => {
 	it("bounds oversized message and context", async () => {
 		const { env, inserts } = mockDb();
 		await logEvent(env, { source: "s", event: "e", message: "m".repeat(5000), context: { big: "c".repeat(9000) }, ts: 1 });
-		expect((inserts[0].args[8] as string).length).toBe(2000);
-		expect((inserts[0].args[9] as string).length).toBe(4000);
+		// Bounded, MARKED, and the context still parses (#898) — a sliced one failed json_valid.
+		expect(inserts[0].args[8] as string).toMatch(/^m{2000}\n\[cut: showing the first 2000 of 5000 characters\]$/);
+		expect((inserts[0].args[9] as string).length).toBeLessThanOrEqual(4000);
+		expect(JSON.parse(inserts[0].args[9] as string)).toMatchObject({ truncated: true, chars: JSON.stringify({ big: "c".repeat(9000) }).length });
 	});
 
 	it("uses a supplied id and an OR IGNORE insert, so a re-report is a no-op (#294)", async () => {

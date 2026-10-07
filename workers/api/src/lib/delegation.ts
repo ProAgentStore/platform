@@ -2,6 +2,7 @@
 // "Overseer delegated on your behalf" card — used by both the route that CREATES it (running,
 // routes/coding.ts) and the durable Pilot that CLOSES it (workflows/coding-session.ts). Kept in
 // lib/ so the workflow doesn't import a routes module.
+import { clipMarked } from "./clip-marked.js";
 import { actHeadline, type CardAct, cardDetail } from "./card-detail.js";
 import type { LoopRunStatus } from "./agent-loop.js";
 
@@ -41,7 +42,7 @@ export function delegationTaskRecord(opts: {
 	acts?: readonly CardAct[];
 }): Record<string, unknown> {
 	const label = opts.objective.length > 120 ? `${opts.objective.slice(0, 117)}…` : opts.objective;
-	const reasoning = `Overseer delegated on your behalf → ${opts.targetLabel}: ${opts.objective}${opts.note ? ` — ${opts.note}` : ""}`.slice(0, 8000);
+	const reasoning = clipMarked(`Overseer delegated on your behalf → ${opts.targetLabel}: ${opts.objective}${opts.note ? ` — ${opts.note}` : ""}`, 8000);
 	return {
 		id: opts.id,
 		type: "delegation",

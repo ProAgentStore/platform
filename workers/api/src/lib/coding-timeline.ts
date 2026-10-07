@@ -1,3 +1,4 @@
+import { clipMarked } from "./clip-marked.js";
 import { capToolCalls, type EngineToolCall, toolCallsForSnapshot } from "./engine-tool-calls.js";
 import type { EngineUsageReport } from "./engine-usage.js";
 import type { Env } from "../types.js";
@@ -66,7 +67,7 @@ export async function appendTimeline(
 	await env.DB.prepare(
 		"INSERT INTO coding_timeline (session_id, instance_id, user_id, type, content, audio_key) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
 	)
-		.bind(args.sessionId, args.instanceId, args.userId, args.type, args.content.slice(0, 100_000), audioKey)
+		.bind(args.sessionId, args.instanceId, args.userId, args.type, clipMarked(args.content, 100_000), audioKey) // marked, not silent (#898)
 		.run();
 }
 
@@ -116,6 +117,18 @@ export async function loadTimeline(env: Env, sessionId: string, limit = 500): Pr
 		.bind(sessionId, limit)
 		.all<Row>();
 	return (results ?? []).map(toEntry).reverse();
+}
+
+/**
+ * ONE event, whole (#898). The feed cuts a narrative row to `FEED_NARRATIVE_CHARS` and flags it
+ * (`truncated`, `chars`); this is the read that returns the rest, addressed by the `seq` the feed
+ * gave. Null when that session has no such row.
+ */
+export async function loadTimelineEntry(env: Env, sessionId: string, seq: number): Promise<TimelineEntry | null> {
+	const row = await env.DB.prepare("SELECT seq, type, content, created_at, audio_key FROM coding_timeline WHERE session_id = ?1 AND seq = ?2")
+		.bind(sessionId, seq)
+		.first<Row>();
+	return row ? toEntry(row) : null;
 }
 
 // ── The cursored feed: what a run is doing right now (#581), and what it did (#527) ──────────
@@ -776,7 +789,7 @@ export async function contextForCopilot(env: Env, sessionId: string, limit = 40)
 	return entries
 		.map((e) => {
 			// Terminal snapshots are long — keep only a tail in the rolling context.
-			const body = e.type === "terminal" ? e.content.slice(-1200) : e.content.slice(0, 2000);
+			const body = e.type === "terminal" ? clipMarked(e.content, 1200, { keep: "tail" }) : clipMarked(e.content, 2000);
 			return `[${label[e.type] ?? e.type}] ${body}`;
 		})
 		.join("\n");

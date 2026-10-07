@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
 import { composeInstanceActivity, type ActivityRunRow } from "../lib/instance-activity.js";
-import { applySettingsPatch, resolveSettingsValues } from "../lib/instance-settings.js";
+import { applySettingsPatch, settingsPatchRefusal, resolveSettingsValues } from "../lib/instance-settings.js";
 import { overrideVoiceBase, parseAccountPreferences, resolveVoice, sanitizeVoiceSettings, unknownVoiceField, type VoiceSettings } from "../lib/preferences.js";
 import { deriveVoiceVocabulary } from "../lib/voice-vocabulary.js";
 import { resumeSessionsForNode, suspendSessionsFromOtherNodes } from "../lib/coding-store.js";
@@ -924,6 +924,8 @@ instanceRoutes.put("/:instanceId/settings", async (c) => {
 	const schema = await settingsSchemaForInstance(c.env, instanceId, session.uid);
 	if (!schema.length) throw new HttpError(400, "This agent has no settings");
 	const body = (await c.req.json().catch(() => ({}))) as { settings?: unknown };
+	const refused = settingsPatchRefusal(schema, body.settings);
+	if (refused) throw new HttpError(400, refused);
 	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
 	const result = applySettingsPatch(schema, cfg.settings, body.settings);
 	// A field declared `voiceLanguage: true` is NOT copied into voiceSettings any more (#211).

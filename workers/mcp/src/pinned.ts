@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { authRequired, authedCall, jsonText, type McpEnv, text } from "./http.js";
+import { authRequired, authedCall, chatReplyText, jsonText, type McpEnv, text } from "./http.js";
+import { pagedToolResult } from "./wire-budget.js";
 import { auditOk } from "./instance-tools/base.js";
 import type { SafetyResolver, TokenResolver } from "./instance-tools/shared.js";
 import { jsonSchemaToZodShape } from "./json-schema-zod.js";
@@ -227,6 +228,18 @@ export type RowTarget = { instance: string } | { agentType: string };
 export const INSTANCE_ID_FIELD = "instance_id";
 
 /**
+ * Where to resume a result too large for one response (#898) — the same paging `call_instance_tool`
+ * offers, under a name no registry tool's own schema uses, and never forwarded to the tool.
+ */
+export const RESULT_OFFSET_FIELD = "result_offset";
+const resultOffset = z
+	.coerce.number()
+	.int()
+	.min(0)
+	.optional()
+	.describe("A result too large for one response comes back in pages (`contentPage.nextOffset`). Call again with the same arguments and this set to `nextOffset` to read the rest. Calling again runs the tool again.");
+
+/**
  * Register policy rows as tools under their real names and real field names, each proxied to
  * `POST /v1/instances/:id/tools/:name`, which re-checks ownership and the live policy on every call.
  * Every name is passed as a VARIABLE (see the module header).
@@ -244,14 +257,15 @@ export function registerToolRows(server: McpServer, ctx: PinnedCtx, rows: readon
 			? `${row.description || row.name} [${target.agentType} tool — name the instance in ${INSTANCE_ID_FIELD}]${note}`
 			: `${row.description || row.name} [pinned to instance ${target.instance}]${note}`;
 		const shape = byArgument
-			? { ...own, [INSTANCE_ID_FIELD]: z.string().describe(`Which of your ${target.agentType} instances to run it on — an id from my_instances.`) }
-			: own;
+			? { ...own, [RESULT_OFFSET_FIELD]: resultOffset, [INSTANCE_ID_FIELD]: z.string().describe(`Which of your ${target.agentType} instances to run it on — an id from my_instances.`) }
+			: { ...own, [RESULT_OFFSET_FIELD]: resultOffset };
 		server.tool(row.name, description, shape, async (input: Record<string, unknown>) => {
 			const sessionToken = tokenFor();
 			if (!sessionToken) return authRequired();
-			const { [INSTANCE_ID_FIELD]: named, ...rest } = input ?? {};
+			const { [INSTANCE_ID_FIELD]: named, [RESULT_OFFSET_FIELD]: pageAt, ...rest } = input ?? {};
 			const id = byArgument ? String(named ?? "") : target.instance;
-			const args = byArgument ? rest : (input ?? {});
+			const { [RESULT_OFFSET_FIELD]: _pageAt, ...unpinned } = input ?? {};
+			const args = byArgument ? rest : unpinned;
 			const denied = await requirePermission(safetyFor(), scope, row.name, { tool: row.name, ...(byArgument ? { instance_id: id, agentType: target.agentType } : { pinned: id }) });
 			if (denied) return denied;
 			// A type-pinned call names the type it expects, and the API refuses another type's instance (#771).
@@ -271,7 +285,7 @@ export function registerToolRows(server: McpServer, ctx: PinnedCtx, rows: readon
 				input: { instance_id: id, ...(byArgument ? { agentType: target.agentType } : { pinned: true }), argKeys: Object.keys(args), argBytes: new TextEncoder().encode(body).length },
 				result: { ok: auditOk(data) },
 			});
-			return jsonText(data);
+			return text(pagedToolResult(data, typeof pageAt === "number" ? pageAt : undefined));
 		});
 	}
 }
@@ -329,6 +343,8 @@ export function registerPinnedTools(server: McpServer, ctx: PinnedCtx, surface: 
 			const data = (await authedCall(path("/chat"), sessionToken, { method: "POST", body: JSON.stringify({ message, origin: "mcp" }) }, env)) as {
 				message?: { content?: string; traceId?: string };
 				error?: string;
+				truncated?: boolean;
+				notice?: string;
 			};
 			if (!data.error) {
 				await audit(safetyFor(), {
@@ -337,7 +353,7 @@ export function registerPinnedTools(server: McpServer, ctx: PinnedCtx, surface: 
 					input: { ...input, messageBytes: new TextEncoder().encode(message).length, ...(data.message?.traceId ? { traceId: data.message.traceId } : {}) },
 				});
 			}
-			return text(data.message?.content || data.error || "No response");
+			return text(chatReplyText(data));
 		},
 	);
 

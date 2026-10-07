@@ -63,7 +63,7 @@ export interface WorkflowRunsCache {
 export async function fetchWorkflowRuns(
 	repo: string,
 	token: string | undefined,
-	opts: { perPage?: number; page?: number; branch?: string; event?: string; status?: string } = {},
+	opts: { perPage?: number; page?: number; branch?: string; event?: string; status?: string; workflow?: string; headSha?: string } = {},
 	cache?: WorkflowRunsCache,
 ): Promise<WorkflowRunsResult> {
 	const perPage = opts.perPage ?? 1;
@@ -78,10 +78,15 @@ export async function fetchWorkflowRuns(
 		opts.branch ? `branch=${encodeURIComponent(opts.branch)}` : "",
 		opts.event ? `event=${encodeURIComponent(opts.event)}` : "",
 		opts.status ? `status=${encodeURIComponent(opts.status)}` : "",
+		opts.headSha ? `head_sha=${encodeURIComponent(opts.headSha)}` : "",
 	]
 		.filter(Boolean)
 		.join("&");
-	const url = `https://api.github.com/repos/${repo}/actions/runs?${qs}`;
+	// `workflow` (a file name or id) narrows to ONE workflow's runs (#898) — how a rarely-run workflow
+	// is read when it has fallen out of the repo-wide window.
+	const url = opts.workflow
+		? `https://api.github.com/repos/${repo}/actions/workflows/${encodeURIComponent(opts.workflow)}/runs?${qs}`
+		: `https://api.github.com/repos/${repo}/actions/runs?${qs}`;
 	try {
 		if (cache) {
 			// `qs` IS the variant: two reads of this resource differ only by their query, and the
@@ -99,7 +104,8 @@ export async function fetchWorkflowRuns(
 				identity: cache.identity,
 				repo,
 				resource: "runs",
-				variant: qs,
+				// One workflow's page is not the repo's page with the same query — they must not share a slot.
+				variant: opts.workflow ? `workflow=${opts.workflow}&${qs}` : qs,
 				url,
 				headers: actionsHeaders(token),
 			});
@@ -158,11 +164,19 @@ export function mapWorkflowJob(raw: Record<string, unknown>): WorkflowJob {
  * list is read once per log read, not polled.
  */
 export async function fetchWorkflowJobs(repo: string, token: string | undefined, runId: number): Promise<WorkflowJobsResult> {
+	// Every page (#898): a matrix run past 100 jobs lost the rest, including the failed one the log
+	// tool is meant to find. Bounded at 10 pages (1,000 jobs) — GitHub's own ceiling for a run.
+	const jobs: WorkflowJob[] = [];
 	try {
-		const res = await fetch(`https://api.github.com/repos/${repo}/actions/runs/${runId}/jobs?per_page=100`, { headers: actionsHeaders(token), signal: AbortSignal.timeout(15_000) });
-		if (!res.ok) return { status: res.status };
-		const data = (await res.json()) as { jobs?: Array<Record<string, unknown>> };
-		return { jobs: (data.jobs ?? []).map(mapWorkflowJob) };
+		for (let page = 1; page <= 10; page++) {
+			const res = await fetch(`https://api.github.com/repos/${repo}/actions/runs/${runId}/jobs?per_page=100${page > 1 ? `&page=${page}` : ""}`, { headers: actionsHeaders(token), signal: AbortSignal.timeout(15_000) });
+			if (!res.ok) return { status: res.status };
+			const data = (await res.json()) as { jobs?: Array<Record<string, unknown>>; total_count?: number };
+			const batch = (data.jobs ?? []).map(mapWorkflowJob);
+			jobs.push(...batch);
+			if (batch.length < 100 || (typeof data.total_count === "number" && jobs.length >= data.total_count)) break;
+		}
+		return { jobs };
 	} catch {
 		return { status: null };
 	}

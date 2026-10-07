@@ -315,10 +315,10 @@ describe("search, activity, summaries, context", () => {
 	it("defaults activity limit to 50 and summaries limit to 20", async () => {
 		let activityOpts: Record<string, unknown> = {};
 		await routes.getActivity(
-			fakeEngine<"getEvents">({
-				getEvents: async (o: Record<string, unknown>) => {
+			fakeEngine<"getEventsPage">({
+				getEventsPage: async (o: Record<string, unknown>) => {
 					activityOpts = o;
-					return [];
+					return { events: [], total: 0 };
 				},
 			}),
 			new URL("https://agent/activity"),

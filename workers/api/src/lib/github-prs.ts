@@ -116,8 +116,6 @@ interface RawReview {
 	user?: { login?: string } | null;
 }
 
-const BODY_CAP = 8 * 1024;
-
 /** How many open PRs a list answers with, and how many of them get the extra two calls. */
 export const PULLS_PAGE_SIZE = 30;
 export const PULLS_ENRICH_CAP = 8;
@@ -242,21 +240,38 @@ async function fetchPullRaw(ctx: ReadCtx, number: number): Promise<RawPull | nul
 	return res.ok && res.data && typeof res.data === "object" ? res.data : null;
 }
 
+/** Review pages read before the verdict is called `unknown` rather than guessed. */
+const REVIEW_MAX_PAGES = 5;
+
+/**
+ * Every review, not the first 100 (#898). GitHub lists reviews OLDEST first, so the first page of
+ * a long-reviewed PR is exactly the part that no longer decides anything — the latest approval or
+ * request for changes sat on a page nobody read. Past {@link REVIEW_MAX_PAGES} the answer is
+ * `unknown`, never a verdict drawn from a partial history.
+ */
 async function fetchReviewState(ctx: ReadCtx, number: number): Promise<ReviewState> {
-	const res = await githubConditionalJson<RawReview[]>(ctx.env, {
-		identity: { userId: ctx.userId, authContext: ctx.authContext },
-		repo: `${ctx.owner}/${ctx.name}`,
-		resource: "reviews",
-		variant: String(number),
-		url: `https://api.github.com/repos/${encodeURIComponent(ctx.owner)}/${encodeURIComponent(ctx.name)}/pulls/${number}/reviews?per_page=100`,
-		headers: GH_HEADERS(ctx.token),
-	});
-	return res.ok && Array.isArray(res.data) ? resolveReviewState(res.data) : "unknown";
+	const reviews: RawReview[] = [];
+	for (let page = 1; page <= REVIEW_MAX_PAGES; page++) {
+		const res = await githubConditionalJson<RawReview[]>(ctx.env, {
+			identity: { userId: ctx.userId, authContext: ctx.authContext },
+			repo: `${ctx.owner}/${ctx.name}`,
+			resource: "reviews",
+			variant: page === 1 ? String(number) : `${number}:p${page}`,
+			url: `https://api.github.com/repos/${encodeURIComponent(ctx.owner)}/${encodeURIComponent(ctx.name)}/pulls/${number}/reviews?per_page=100${page > 1 ? `&page=${page}` : ""}`,
+			headers: GH_HEADERS(ctx.token),
+		});
+		if (!res.ok || !Array.isArray(res.data)) return "unknown";
+		reviews.push(...res.data);
+		if (res.data.length < 100) return resolveReviewState(reviews);
+	}
+	return "unknown";
 }
 
 export interface ListPullsOpts {
 	state?: "open" | "closed" | "all";
 	limit?: number;
+	/** 1-based page (#898) — without it only the newest page was reachable. */
+	page?: number;
 	/**
 	 * Fetch `mergeable` + review state for the first `PULLS_ENRICH_CAP` rows (2 extra conditional
 	 * requests each). On by default because "can this merge, has anyone approved it" is most of
@@ -282,7 +297,9 @@ export async function listPulls(env: Env, userId: string, githubRepo: string, op
 		const ctx: ReadCtx = { env, userId, owner: parsed.owner, name: parsed.name, token, authContext };
 		const state = opts.state ?? "open";
 		const perPage = Math.min(Math.max(opts.limit ?? PULLS_PAGE_SIZE, 1), 100);
-		const qs = new URLSearchParams({ state, per_page: String(perPage), sort: "updated", direction: "desc" }).toString();
+		const params = new URLSearchParams({ state, per_page: String(perPage), sort: "updated", direction: "desc" });
+		if ((opts.page ?? 1) > 1) params.set("page", String(Math.trunc(opts.page ?? 1)));
+		const qs = params.toString();
 		const res = await githubConditionalJson<RawPull[]>(env, {
 			identity: { userId, authContext },
 			repo: `${parsed.owner}/${parsed.name}`,
@@ -360,11 +377,11 @@ export function searchPullsQuery(owner: string, name: string, search: string, st
  * workflow-runs read. The rest keep `toPullSummary`'s honest "not known" values: an empty branch and
  * head sha, `mergeable: null`, `review: "unknown"` — never a guessed "conflicted" or "approved".
  */
-export async function searchPulls(env: Env, userId: string, githubRepo: string, search: string, opts: Pick<ListPullsOpts, "state" | "limit"> = {}): Promise<SearchPullsResult | { error: string }> {
+export async function searchPulls(env: Env, userId: string, githubRepo: string, search: string, opts: Pick<ListPullsOpts, "state" | "limit" | "page"> = {}): Promise<SearchPullsResult | { error: string }> {
 	const parsed = parseRepo(githubRepo);
 	if (!parsed) return { error: `"${githubRepo}" is not an "owner/name" repository.` };
 	const { token, authContext } = await resolveGithubRead(env, userId, parsed.owner).catch(() => ({ token: null, authContext: null }));
-	const found = await fetchGithubSearch<RawSearchPull>(searchPullsQuery(parsed.owner, parsed.name, search, opts.state ?? "open"), token, opts.limit ?? PULLS_PAGE_SIZE);
+	const found = await fetchGithubSearch<RawSearchPull>(searchPullsQuery(parsed.owner, parsed.name, search, opts.state ?? "open"), token, opts.limit ?? PULLS_PAGE_SIZE, opts.page);
 	if ("error" in found) return found;
 	let pulls = found.items.map((i) => toPullSummary({ ...i, merged_at: i.merged_at ?? i.pull_request?.merged_at ?? null }));
 
@@ -397,18 +414,20 @@ export async function readPull(env: Env, userId: string, githubRepo: string, num
 		const raw = await fetchPullRaw(ctx, Number(number));
 		if (!raw) return null;
 		const review = await fetchReviewState(ctx, Number(number));
+		const summary = toPullSummary(raw);
+		// By THIS PR's head commit (#898), not by searching the repo's newest 50 PR runs: a PR whose
+		// run had scrolled out of that window read as having no CI at all.
 		const runs = await fetchWorkflowRuns(
 			`${parsed.owner}/${parsed.name}`,
 			token ?? undefined,
-			{ perPage: 50, event: "pull_request" },
+			summary.headSha ? { perPage: 5, event: "pull_request", headSha: summary.headSha } : { perPage: 50, event: "pull_request" },
 			{ env, identity: { userId, authContext } },
 		);
-		const summary = toPullSummary(raw);
 		const withChecks = "status" in runs ? [summary] : attachChecks([summary], runs.runs);
 		return {
 			...withChecks[0],
 			review,
-			body: (raw.body ?? "").slice(0, BODY_CAP),
+			body: raw.body ?? "", // whole (#898): GitHub caps a body at 65,536 itself
 			additions: typeof raw.additions === "number" ? raw.additions : 0,
 			deletions: typeof raw.deletions === "number" ? raw.deletions : 0,
 			changedFiles: typeof raw.changed_files === "number" ? raw.changed_files : 0,

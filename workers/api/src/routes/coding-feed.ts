@@ -4,7 +4,7 @@ import { HttpError } from "../lib/auth.js";
 import { resolveRunState } from "../lib/coding-run-state.js";
 import { listSessions } from "../lib/coding-store.js";
 import type { CodingSessionRecord } from "../lib/coding-types.js";
-import { budgetFeedEvent, loadTerminalSnapshots, loadTimelineFeed } from "../lib/coding-timeline.js";
+import { budgetFeedEvent, loadTerminalSnapshots, loadTimelineEntry, loadTimelineFeed } from "../lib/coding-timeline.js";
 import { lastTerminalTargetOf, loadTerminalHistory } from "../lib/terminal-record.js";
 import { readInstanceConfig } from "./instances-apply.js";
 import { callRunner, READ_TIMEOUT_MS } from "../lib/runner-client.js";
@@ -119,6 +119,14 @@ export function registerFeedRoutes(codingRoutes: Hono<{ Bindings: Env }>): void 
 		// caller pages by whole panes and `hasMore` says whether history remains. `after` is
 		// deliberately NOT plumbed: its tail/gap semantics belong to the console's snapshot cache
 		// (#550), and a reader walking backwards through history has no cache to extend.
+		// `?seq=N` — ONE event whole (#898): the feed flags a cut row with `truncated` and its `seq`,
+		// and this is where the rest of it is. An address, not a size flag (#578's rule stands).
+		const seq = num("seq");
+		if (seq !== undefined) {
+			const entry = await loadTimelineEntry(c.env, session.id, seq);
+			if (!entry) throw new HttpError(404, `No event with seq ${seq} in this session`);
+			return c.json({ runId: run?.runId ?? null, sessionId: session.id, entry, chars: entry.content.length });
+		}
 		if (c.req.query("terminal") === "1") {
 			const page = await loadTerminalSnapshots(c.env, { sessionId: session.id, before: num("before"), limit: num("limit") });
 			return c.json({

@@ -336,9 +336,9 @@ describe("readGitlabPull", () => {
 		expect(pull).toMatchObject({ additions: 0, deletions: 0, changedFiles: 5 });
 	});
 
-	it("caps the body, which lives under `description` and not `body`", async () => {
+	it("reads the body from `description`, whole (#898: was silently cut at 8 KiB)", async () => {
 		stubFetch({ ...MR, description: "z".repeat(9000) }, []);
-		expect((await readGitlabPull(env, "u1", "g/p", 6886))?.body.length).toBe(8 * 1024);
+		expect((await readGitlabPull(env, "u1", "g/p", 6886))?.body).toBe("z".repeat(9000));
 	});
 
 	it("returns null for a body with no iid, rather than a merge request numbered 0", async () => {

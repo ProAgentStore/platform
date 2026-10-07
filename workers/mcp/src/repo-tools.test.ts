@@ -4,6 +4,7 @@ import {
 	agentTemplateFiles,
 	b64,
 	fromB64,
+	getRepoFile,
 	repoNameFor,
 } from "./repo-tools.js";
 
@@ -69,5 +70,19 @@ describe("repo tool helpers", () => {
 		});
 		expect(cronFiles.get("wrangler.toml")).toContain("[triggers]");
 		expect(cronFiles.get("src/index.ts")).toContain("async scheduled");
+	});
+});
+
+describe("getRepoFile never returns a large file as an empty one (#898)", () => {
+	it("says the file is too large when GitHub answers with no content", async () => {
+		const prev = globalThis.fetch;
+		globalThis.fetch = (async () => new Response(JSON.stringify({ type: "file", content: "", encoding: "none", size: 5_000_000, sha: "s" }), { status: 200 })) as typeof fetch;
+		try {
+			const out = await getRepoFile({ GITHUB_TOKEN: "t" } as never, "org", "repo", "big.json");
+			expect(out.content).toBeUndefined();
+			expect(out.error).toMatch(/5,000,000 bytes — too large/);
+		} finally {
+			globalThis.fetch = prev;
+		}
 	});
 });

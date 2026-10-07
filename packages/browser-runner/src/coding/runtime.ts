@@ -132,6 +132,8 @@ export type CodingAction =
 export interface CodingSnapshot {
 	sessionId: string;
 	pane: string;
+	/** The pane's length BEFORE the 64 KiB cut (#898), so a reader can say "the last N of M". */
+	paneChars?: number;
 	ready: boolean;
 	runState: "idle" | "thinking" | "responding";
 	alive: boolean;
@@ -367,10 +369,12 @@ export class CodingRuntime {
 		// `[exited with code N]` / `[error]` lines recorded on exit. Blanking it when the
 		// process is dead lost exactly the output + failure reason the brain/console needs
 		// to diagnose a crash or read a one-shot CLI's final result.
-		const pane = clip(session.snapshot());
+		const full = session.snapshot();
+		const pane = clip(full);
 		return {
 			sessionId,
 			pane,
+			paneChars: full.length,
 			alive,
 			ready: alive ? session.ready : false,
 			runState: alive ? session.runState() : "idle",
@@ -597,6 +601,7 @@ export class CodingRuntime {
 	}
 }
 
+/** The tail, marked (#898): the head it drops is said, with both numbers, at the top. */
 function clip(pane: string): string {
-	return pane.length > MAX_PANE ? pane.slice(pane.length - MAX_PANE) : pane;
+	return pane.length > MAX_PANE ? `[cut: showing the last ${MAX_PANE} of ${pane.length} characters]\n${pane.slice(pane.length - MAX_PANE)}` : pane;
 }

@@ -10,7 +10,7 @@ import { realSchemaD1, type RealSchemaD1, seedTenant } from "./d1-sqlite.js";
 import type { LoopStartInput, LoopStartResult } from "./loop-drivers.js";
 import { recordRunEvent } from "./run-events.js";
 import { ensureTicketBudget, raiseTicketBudget, ticketBudgetView } from "./ticket-budget.js";
-import { appendTicketProgress, listTicketProgress } from "./ticket-progress.js";
+import { appendTicketProgress, countTicketProgress, listTicketProgress } from "./ticket-progress.js";
 import { pickupNextTicket, setTicketAuthority, setTicketQueueEnabled, ticketQueueState } from "./ticket-queue.js";
 import { createTicketCard } from "./tickets.js";
 import type { Env } from "../types.js";
@@ -141,6 +141,17 @@ describe("budget exhaustion — a runaway ticket parks on ITS limit (#865)", () 
 		const notes = await listTicketProgress(env, "i1", "u1", t.id);
 		expect(notes.map((n) => n.kind)).toEqual(["started", "parked"]);
 		expect(notes[1].body).toMatch(/budget ran out after 3 iteration\(s\) — raise it to resume/);
+	});
+});
+
+describe("ticket progress keeps the NEWEST notes (#898)", () => {
+	it("returns the latest window, oldest first, and counts the rest", async () => {
+		const env = setup();
+		const t = await ticket(env, "card-1");
+		for (let i = 0; i < 5; i++) await appendTicketProgress(env, { ticketId: t.id, instanceId: "i1", userId: "u1", runId: `r${i}`, kind: "started", body: `note ${i}` });
+		const notes = await listTicketProgress(env, "i1", "u1", t.id, 3);
+		expect(notes.map((n) => n.body)).toEqual(["note 2", "note 3", "note 4"]);
+		expect(await countTicketProgress(env, "i1", "u1", t.id)).toBe(5);
 	});
 });
 

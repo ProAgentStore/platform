@@ -63,6 +63,7 @@
  */
 import { PULLS_ENRICH_CAP, PULLS_PAGE_SIZE, type ListPullsOpts, type PullChecks, type PullDetail, type PullSummary, type ReviewState } from "./github-prs.js";
 import { bitbucketRepoPath } from "./bitbucket-api.js";
+import { clipMarked } from "./clip-marked.js";
 import { readConnectorRefreshToken } from "./connector-oauth.js";
 import type { Env } from "../types.js";
 
@@ -73,8 +74,11 @@ import type { Env } from "../types.js";
  */
 const API_BASE = "https://api.bitbucket.org/2.0";
 
-/** Same cap every reader on this seam applies: a body goes into a model prompt. */
-const BODY_CAP = 8 * 1024;
+/**
+ * GitHub's own body limit. A longer description (GitLab allows 1 MB) is cut VISIBLY — with both
+ * numbers in the text (#898) — never silently, which is how a comment once ended at "…4. O".
+ */
+const BODY_CAP = 65_536;
 
 /**
  * The stored access token, or null. A three-line read rather than an import because
@@ -335,7 +339,7 @@ export async function readBitbucketPull(env: Env, userId: string, slug: string, 
 		// `description` and `summary.raw` held the IDENTICAL text on every probed pull request;
 		// `description` is the documented field, and the other is the fallback rather than a
 		// second source of truth.
-		body: (raw.description || raw.summary?.raw || "").slice(0, BODY_CAP),
+		body: clipMarked(raw.description || raw.summary?.raw || "", BODY_CAP),
 		// The diff SIZE is not on this payload. `/diffstat` exists but paginates per FILE, so
 		// totalling it is a page-walk for three numbers the panel greys out. 0 is "unknown" —
 		// the representation this provider's issue client already uses for its absent count.

@@ -3,8 +3,7 @@
  *
  * ── What this is, and what it deliberately is not
  *
- * Most tools already cap themselves, and well: `github_read_issue` cuts a body at 8KB,
- * `repo_read_file` and `repo_git` at 8KB and 12KB, `fetch_url` at 4,000 characters, an MCP resource
+ * Most tools already cap themselves, and well: `repo_read_file` and `repo_git` at 8KB and 12KB, `fetch_url` at 4,000 characters, an MCP resource
  * read at `RESOURCE_MAX_CHARS`. Each of those is a per-tool judgement about that tool's data and
  * none of them should be overridden from here — which is why this ceiling sits ABOVE the largest of
  * them. It is not a policy about how much context a tool deserves. It is the answer to "what happens
@@ -87,14 +86,18 @@ export const TOOL_LOG_FAILURE_MAX_CHARS = 600;
  * One entry of the tool log: the outcome icon, the tool's name, and as much of its result as that
  * outcome's budget allows.
  *
- * A success is cut EXACTLY as before, with no ellipsis, because a pill that has always read this
- * way is not worth changing to fix a failure's problem — and #517's acceptance criteria say so.
- * A failure marks its cut, because the sentence it is cutting is an instruction and a silently
- * truncated instruction is how this started.
+ * A success keeps its 120-character preview, and since #898 MARKS it: these lines are replayed into
+ * the next turns' prompt as history, where an unmarked preview read as the tool's whole result — a
+ * file listing that "had" four entries, a body that "ended" mid-word. The marker names the length
+ * and the remedy. A failure marks its cut too, because the sentence it is cutting is an instruction
+ * and a silently truncated instruction is how #517 started.
  */
 export function toolLogLine(name: string, content: string, success: boolean): string {
 	const text = String(content ?? "");
-	if (success) return `✅ **${name}** ${text.slice(0, TOOL_LOG_MAX_CHARS)}`;
+	if (success) {
+		const shown = text.length <= TOOL_LOG_MAX_CHARS ? text : `${text.slice(0, TOOL_LOG_MAX_CHARS)}… [preview of ${text.length.toLocaleString("en-US")} chars — call the tool again for the full result]`;
+		return `✅ **${name}** ${shown}`;
+	}
 	const shown = text.length <= TOOL_LOG_FAILURE_MAX_CHARS ? text : `${text.slice(0, TOOL_LOG_FAILURE_MAX_CHARS)}…`;
 	return `❌ **${name}** ${shown}`;
 }

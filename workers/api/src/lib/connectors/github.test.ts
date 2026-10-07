@@ -26,7 +26,10 @@ const { listIssues, searchIssues, readIssue, listIssueComments, invalidateIssues
 	searchPulls: vi.fn(),
 	readPull: vi.fn(),
 }));
-vi.mock("../github-issues.js", () => ({ listIssues, searchIssues, readIssue, listIssueComments, invalidateIssuesCache, invalidateIssueCaches }));
+vi.mock("../github-issues.js", () => ({
+	listIssues,
+	// The handler reads a PAGE (#898): the old list, plus where it stands.
+	listIssuesPage: async (...a: unknown[]) => ({ issues: await listIssues(...a), page: 1, hasMore: false }), searchIssues, readIssue, listIssueComments, invalidateIssuesCache, invalidateIssueCaches }));
 vi.mock("../github-prs.js", () => ({ listPulls, searchPulls, readPull }));
 
 import { GITHUB_TOOLS } from "./github.js";
@@ -261,7 +264,8 @@ describe("github connector — github_workflow_runs dispatch", () => {
 		);
 		const r = await tool("github_workflow_runs").handler(ctx(), { repo: "acme/widgets", per_page: 3 });
 		expect(r.success).toBe(true);
-		const runs = JSON.parse(r.content);
+		const { runs, hasMore, nextPage } = JSON.parse(r.content);
+		expect({ hasMore, nextPage }).toEqual({ hasMore: false, nextPage: null }); // 1 run < per_page 3 (#898)
 		expect(runs).toHaveLength(1);
 		expect(runs[0]).toMatchObject({
 			status: "completed",
@@ -432,7 +436,7 @@ describe("github connector — issue reads delegate to github-issues", () => {
 		listIssues.mockResolvedValue([{ number: 1, title: "Bug", state: "open", labels: ["p1"], comments: 0, updatedAt: "", url: "u" }]);
 		const r = await tool("github_list_issues").handler(ctx(), { repo: "acme/widgets", state: "closed", labels: "p1,p2" });
 		expect(r.success).toBe(true);
-		expect(JSON.parse(r.content)[0]).toMatchObject({ number: 1, title: "Bug" });
+		expect(JSON.parse(r.content).issues[0]).toMatchObject({ number: 1, title: "Bug" });
 		expect(listIssues).toHaveBeenCalledWith(
 			APP_ENV,
 			"u1",
@@ -448,8 +452,8 @@ describe("github connector — issue reads delegate to github-issues", () => {
 			listIssues.mockClear();
 			const r = await tool("github_list_issues").handler(ctx(), { repo: "acme/widgets", ...(search === undefined ? {} : { search }) });
 			expect(r.success).toBe(true);
-			expect(Array.isArray(JSON.parse(r.content))).toBe(true);
-			expect(listIssues).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets", { state: "open", labels: undefined, limit: 30 });
+			expect(Array.isArray(JSON.parse(r.content).issues)).toBe(true);
+			expect(listIssues).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets", { state: "open", labels: undefined, limit: 30, page: 1 });
 		}
 		expect(searchIssues).not.toHaveBeenCalled();
 	});
@@ -634,8 +638,8 @@ describe("github connector — pull request reads (#401)", () => {
 		listPulls.mockResolvedValue([{ number: 3, title: "Fix the thing", draft: false }]);
 		const r = await tool("github_list_pulls").handler(ctx(), { repo: "acme/widgets", state: "all" });
 		expect(r.success).toBe(true);
-		expect(listPulls).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets", { state: "all", limit: 30 });
-		expect(JSON.parse(r.content)[0]).toMatchObject({ number: 3, title: "Fix the thing" });
+		expect(listPulls).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets", { state: "all", limit: 30, page: 1 });
+		expect(JSON.parse(r.content).pulls[0]).toMatchObject({ number: 3, title: "Fix the thing" });
 	});
 
 	it("github_list_pulls without search calls listPulls unchanged (#937)", async () => {
@@ -643,8 +647,8 @@ describe("github connector — pull request reads (#401)", () => {
 		listPulls.mockReset().mockResolvedValue([{ number: 3, title: "Fix the thing", draft: false }]);
 		const r = await tool("github_list_pulls").handler(ctx(), { repo: "acme/widgets" });
 		expect(r.success).toBe(true);
-		expect(Array.isArray(JSON.parse(r.content))).toBe(true);
-		expect(listPulls).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets", { state: "open", limit: 30 });
+		expect(Array.isArray(JSON.parse(r.content).pulls)).toBe(true);
+		expect(listPulls).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets", { state: "open", limit: 30, page: 1 });
 		expect(searchPulls).not.toHaveBeenCalled();
 	});
 
@@ -653,7 +657,7 @@ describe("github connector — pull request reads (#401)", () => {
 		listPulls.mockReset().mockResolvedValue([]);
 		for (const search of ["", "   "]) await tool("github_list_pulls").handler(ctx(), { repo: "acme/widgets", search });
 		expect(listPulls).toHaveBeenCalledTimes(2);
-		expect(listPulls).toHaveBeenLastCalledWith(APP_ENV, "u1", "acme/widgets", { state: "open", limit: 30 });
+		expect(listPulls).toHaveBeenLastCalledWith(APP_ENV, "u1", "acme/widgets", { state: "open", limit: 30, page: 1 });
 		expect(searchPulls).not.toHaveBeenCalled();
 	});
 
@@ -663,7 +667,7 @@ describe("github connector — pull request reads (#401)", () => {
 		const r = await tool("github_list_pulls").handler(ctx(), { repo: "acme/widgets", search: " flaky ", state: "closed" });
 		expect(r.success).toBe(true);
 		expect(JSON.parse(r.content)).toMatchObject({ total_count: 5, pulls: [{ number: 9, title: "fix flaky test" }] });
-		expect(searchPulls).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets", "flaky", { state: "closed", limit: 30 });
+		expect(searchPulls).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets", "flaky", { state: "closed", limit: 30, page: 1 });
 		expect(listPulls).not.toHaveBeenCalled();
 	});
 
@@ -682,7 +686,7 @@ describe("github connector — pull request reads (#401)", () => {
 	it("github_list_pulls falls back to open for a state it does not know", async () => {
 		listPulls.mockResolvedValue([]);
 		await tool("github_list_pulls").handler(ctx(), { repo: "acme/widgets", state: "merged-ish" });
-		expect(listPulls).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets", { state: "open", limit: 30 });
+		expect(listPulls).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets", { state: "open", limit: 30, page: 1 });
 	});
 
 	it("github_read_pull requires a number and never delegates without one", async () => {
@@ -954,5 +958,42 @@ describe("github_list_pulls — a number is a lookup, text is a search (#948)", 
 		listPulls.mockReset().mockResolvedValue([]);
 		await tool("github_list_pulls").handler(ctx(), { repo: "acme/widgets" });
 		expect(listPulls).toHaveBeenCalledWith(APP_ENV, "u1", "acme/widgets", expect.objectContaining({ state: "open" }));
+	});
+});
+
+describe("github list tools page instead of stopping at 30 (#898)", () => {
+	it("github_list_issues asks for the page it was given and says where the next one is", async () => {
+		listIssues.mockResolvedValue(Array.from({ length: 30 }, (_, i) => ({ number: i + 31, title: "t", state: "open", labels: [], comments: 0, updatedAt: "", url: "u" })));
+		const r = await tool("github_list_issues").handler(ctx(), { repo: "acme/widgets", page: 2, per_page: 30 });
+		expect(listIssues).toHaveBeenLastCalledWith(APP_ENV, "u1", "acme/widgets", expect.objectContaining({ page: 2, limit: 30 }));
+		expect(JSON.parse(r.content)).toMatchObject({ page: 2, per_page: 30 });
+	});
+
+	it("github_list_pulls reports hasMore on a full page", async () => {
+		listPulls.mockResolvedValue(Array.from({ length: 5 }, (_, i) => ({ number: i + 1, title: "p" })));
+		const r = await tool("github_list_pulls").handler(ctx(), { repo: "acme/widgets", per_page: 5 });
+		expect(JSON.parse(r.content)).toMatchObject({ page: 1, per_page: 5, hasMore: true, nextPage: 2 }); // per_page is honoured though undeclared (the listing budget, #569)
+	});
+
+	it("a search page says whether more matches exist beyond it", async () => {
+		searchIssues.mockResolvedValue({ total_count: 95, incomplete_results: false, issues: [] });
+		const r = await tool("github_list_issues").handler(ctx(), { repo: "acme/widgets", search: "bug", page: 3, per_page: 30 });
+		expect(searchIssues).toHaveBeenLastCalledWith(APP_ENV, "u1", "acme/widgets", "bug", expect.objectContaining({ page: 3, limit: 30 }));
+		expect(JSON.parse(r.content)).toMatchObject({ total_count: 95, hasMore: true, nextPage: 4 });
+	});
+
+	it("github_workflow_runs takes a page", async () => {
+		fetchMock.mockResolvedValue(jsonResponse({ workflow_runs: [] }));
+		await tool("github_workflow_runs").handler(ctx(), { repo: "acme/widgets", page: 3 });
+		expect(fetchMock.mock.calls[0][0]).toContain("page=3");
+	});
+});
+
+describe("a refused GitHub write says GitHub's reason (#898)", () => {
+	it("relays the message and field errors, e.g. a body over 65,536 characters", async () => {
+		fetchMock.mockResolvedValue(jsonResponse({ message: "Validation Failed", errors: [{ resource: "Issue", field: "body", code: "custom", message: "body is too long (maximum is 65536 characters)" }] }, false, 422));
+		const r = await tool("github_create_issue").handler(ctx(), { repo: "acme/widgets", title: "t", body: "x" });
+		expect(r.success).toBe(false);
+		expect(r.content).toMatch(/GitHub returned 422 creating the issue in acme\/widgets: Validation Failed; body is too long \(maximum is 65536 characters\)/);
 	});
 });

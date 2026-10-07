@@ -6,6 +6,15 @@ import type { RunnerConn } from "./runner-client.js";
 import { runUserWorkersAi } from "./user-ai.js";
 import type { Env } from "../types.js";
 import { fenceUntrusted } from "./untrusted-fence.js";
+import { clipMarked } from "./clip-marked.js";
+
+/**
+ * The terminal tail a Co-pilot reads, its cut marked (#898): a bare `slice(-6000)` read as the
+ * whole terminal, so an answer whose start had scrolled off looked like an answer that never came.
+ */
+export function terminalTail(pane: string): string {
+	return clipMarked(pane, 6000, { keep: "tail" });
+}
 
 /**
  * The coding co-pilot — a read-only observer that watches the CLI's terminal and
@@ -61,7 +70,7 @@ export async function copilotSummary(env: Env, userId: string | undefined, args:
 		lead +
 		(args.specialInstructions ? `USER INSTRUCTIONS (follow these):\n${args.specialInstructions}\n\n` : "") +
 		(args.memory ? `SESSION MEMORY (recent, oldest→newest):\n${args.memory}\n\n` : "") +
-		`TERMINAL (most recent output):\n${pane.slice(-6000) || "(no live terminal — the runner is offline or the session hasn't started)"}`;
+		`TERMINAL (most recent output):\n${terminalTail(pane) || "(no live terminal — the runner is offline or the session hasn't started)"}`;
 
 	const messages: Array<{ role: string; content: string }> = [
 		{ role: "system", content: SYSTEM },
@@ -87,7 +96,7 @@ export async function copilotSummary(env: Env, userId: string | undefined, args:
 				{ label: "copilot.lead", value: lead },
 				{ label: "copilot.instructions", value: args.specialInstructions },
 				{ label: "copilot.memory", value: args.memory },
-				{ label: "copilot.terminal", value: pane.slice(-6000) },
+				{ label: "copilot.terminal", value: terminalTail(pane) },
 			],
 		})) as { response?: string };
 		return scrubOneShotReply(res.response || "");

@@ -2,6 +2,7 @@
  * Durable error log (D1 `error_log`). Failures at the key hotspots write here so
  * a reason is never thrown away — readable via GET /v1/errors. See migration 0034.
  */
+import { boundedJson, clipMarked } from "./clip-marked.js";
 import type { Env } from "../types.js";
 import { logEvent } from "./events.js";
 import { sqlTime } from "./sql-time.js";
@@ -235,11 +236,13 @@ export async function logError(env: Pick<Env, "DB">, e: ErrorLogInput): Promise<
 	try {
 		const level: ErrorLevel = e.level === "warn" ? "warn" : "error";
 		const source = String(e.source).slice(0, 64);
-		const message = String(e.message ?? "").slice(0, 2000) || "(no message)";
+		const message = clipMarked(e.message ?? "", 2000) || "(no message)";
 		// Serialized ONCE: the same bytes go to the INSERT's `context` (a new row's first
 		// occurrence) or to the UPDATE's `last_context` (an absorbed one's latest). Two
 		// stringify calls would be two chances for the two columns to mean different things.
-		const context = e.context ? JSON.stringify(e.context).slice(0, 4000) : null;
+		// Valid JSON whatever its size (#898): a slice failed `json_valid`, and `error_summary`'s
+		// instance filter then dropped the row — the larger the context, the surer the loss.
+		const context = e.context ? boundedJson(e.context, 4000) : null;
 		// For client rows the caller supplies `e.build` (from the browser bundle's stamp, #539).
 		// For server rows `e.build` is always absent, so fall back to the isolate-level build id
 		// that `index.ts` sets from `env.API_BUILD` on the first request (#735). This is what stamps
@@ -360,9 +363,11 @@ export const ERROR_RECENCY = "COALESCE(last_seen_at, created_at)";
 /** Read recent errors — for one user, or all (admin). Newest first. */
 export async function listErrors(
 	env: Env,
-	opts: { userId?: string; all?: boolean; limit?: number; source?: string; level?: ErrorLevel },
+	opts: { userId?: string; all?: boolean; limit?: number; offset?: number; source?: string; level?: ErrorLevel },
 ): Promise<ErrorRow[]> {
-	const limit = Math.max(1, Math.min(opts.limit ?? 100, 500));
+	// `limit` may be one past a page (the route asks for 501 to learn whether more exist).
+	const limit = Math.max(1, Math.min(opts.limit ?? 100, 501));
+	const offset = Math.max(0, Math.trunc(opts.offset ?? 0));
 	const where: string[] = [];
 	const binds: unknown[] = [];
 	if (!opts.all) {
@@ -379,7 +384,7 @@ export async function listErrors(
 	}
 	const sql = `SELECT ${ERROR_COLUMNS} FROM error_log${
 		where.length ? ` WHERE ${where.join(" AND ")}` : ""
-	} ORDER BY ${ERROR_RECENCY} DESC LIMIT ${limit}`;
+	} ORDER BY ${ERROR_RECENCY} DESC, id DESC LIMIT ${limit} OFFSET ${offset}`;
 	const res = await env.DB.prepare(sql)
 		.bind(...binds)
 		.all<ErrorRow>();

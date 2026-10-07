@@ -38,7 +38,7 @@ import { listConnections, createConnection, deleteConnection, setConnectionEnabl
 import { listDeliveries, replayDelivery } from "../lib/connection-deliveries.js";
 import { listSupervision, createSupervision, deleteSupervision, setSupervisionDirection, setSupervisionEnabled } from "../lib/supervision.js";
 import { delegationDenial } from "../lib/supervision-capability.js";
-import { getLoopRun, listLoopRuns, requestCancel } from "../lib/agent-loop-store.js";
+import { countLoopRuns, getLoopRun, listLoopRuns, requestCancel } from "../lib/agent-loop-store.js";
 // The run verdict, imported rather than re-derived — see `withHealth` (#580 AC3).
 import { runHealth, waitClause } from "../lib/work-report.js";
 import { loopDriverFor } from "../lib/loop-drivers.js";
@@ -1326,11 +1326,16 @@ toolRoutes.get("/:id/loop", async (c) => {
 	const instanceId = c.req.param("id");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	const now = Date.now();
-	const runs = await listLoopRuns(c.env, session.uid, instanceId);
+	// A page with its place in the whole (#898): this returned the newest 50 and said nothing of
+	// the rest, so an older run was unreachable and its absence read as "never ran".
+	const limit = Math.max(1, Math.min(200, Number(c.req.query("limit")) || 50));
+	const offset = Math.max(0, Math.trunc(Number(c.req.query("offset")) || 0));
+	const [runs, total] = await Promise.all([listLoopRuns(c.env, session.uid, instanceId, limit, offset), countLoopRuns(c.env, session.uid, instanceId)]);
+	const nextOffset = offset + runs.length < total ? offset + runs.length : null;
 	// The repository's pipeline, BESIDE the runs' `health` and never folded into it (#903).
 	const repoCi = await instanceRepoCi(c.env, instanceId, session.uid);
 	const starts = c.req.query("include_starts") === "true" ? await listLoopStarts(c.env, session.uid, instanceId) : undefined;
-	return c.json({ runs: runs.map((run) => withHealth(run, now)), ...(repoCi ? { repoCi } : {}), ...(starts ? { starts } : {}) });
+	return c.json({ runs: runs.map((run) => withHealth(run, now)), total, offset, nextOffset, ...(repoCi ? { repoCi } : {}), ...(starts ? { starts } : {}) });
 });
 
 toolRoutes.get("/:id/loop/:runId", async (c) => {

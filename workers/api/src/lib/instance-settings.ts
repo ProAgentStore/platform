@@ -6,6 +6,7 @@
  * prompt builder (agent-think.ts), so validation and the injected prompt text
  * have exactly one implementation.
  */
+import { overLimit } from "./write-limits.js";
 import type { SettingsField } from "./agent-capabilities.js";
 
 export type SettingsValue = string | number | boolean;
@@ -68,6 +69,15 @@ export function paramsWithDefaults(
  * stored map, plus — when a `voiceLanguage` field was set in THIS patch — the
  * BCP-47 value the caller must sync into the instance's voice settings.
  */
+/** A text setting's limit — refused above it, never cut (#898). */
+export const SETTINGS_TEXT_MAX_CHARS = 500;
+
+/** Why a patch is refused, or null: a text value past {@link SETTINGS_TEXT_MAX_CHARS}, named. */
+export function settingsPatchRefusal(schema: SettingsField[], patch: unknown): string | null {
+	const p = patch && typeof patch === "object" ? (patch as Record<string, unknown>) : {};
+	return overLimit(Object.fromEntries(schema.filter((f) => f.type === "text" && f.id in p).map((f) => [f.id, [p[f.id], SETTINGS_TEXT_MAX_CHARS] as const])));
+}
+
 export function applySettingsPatch(
 	schema: SettingsField[],
 	current: unknown,
@@ -80,7 +90,6 @@ export function applySettingsPatch(
 	for (const field of schema) {
 		if (field.id in p) {
 			let value = p[field.id];
-			if (field.type === "text" && typeof value === "string") value = value.slice(0, 500);
 			if (valueFits(field, value)) {
 				next[field.id] = value;
 				if (field.voiceLanguage && typeof value === "string") voiceLanguageValue = value;

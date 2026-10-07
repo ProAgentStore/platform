@@ -16,6 +16,7 @@
 // `./sql.js` is the one other import and is not a domain: it is a dependency-free module holding
 // the measured D1 platform limits, and taking the constant from there rather than writing `5` here
 // is what stops the two copies drifting (#434).
+import { clipMarked } from "./clip-marked.js";
 import { D1_MAX_COMPOUND_TERMS } from "./sql.js";
 import type { Env } from "../types.js";
 
@@ -239,8 +240,8 @@ export async function recentWorkForInstances(
 			id: r.id,
 			kind: r.type,
 			status: r.status,
-			title: title.slice(0, 200),
-			detail: taskDetail(payload).slice(0, 300),
+			title: clipMarked(title, 200),
+			detail: clipMarked(taskDetail(payload), 300),
 			updatedAt: r.updated_at,
 		};
 	});
@@ -290,10 +291,10 @@ export async function recentRunsForInstances(
 	return rows.map((r) => ({
 		instanceId: r.instance_id,
 		runId: r.run_id,
-		objective: String(r.objective ?? "").slice(0, 300),
+		objective: clipMarked(r.objective ?? "", 300),
 		status: r.status,
 		stopReason: r.stop_reason,
-		detail: r.detail ? r.detail.slice(0, 300) : null,
+		detail: r.detail ? clipMarked(r.detail, 300) : null,
 		iteration: r.iteration ?? 0,
 		maxIterations: r.max_iterations ?? 0,
 		startedAt: r.started_at,
@@ -332,12 +333,12 @@ function toActItem(r: ActRow): ActItem {
 	return {
 		instanceId: r.instance_id,
 		kind: typeof ctx.act === "string" ? ctx.act : "unknown",
-		summary: (r.message ?? "").slice(0, 200),
+		summary: clipMarked(r.message ?? "", 200),
 		// Anything that is not an explicit boolean is `null` — NOT `false`. "We did not see" and
 		// "it failed" are different claims, the legend distinguishes them, and a corrupt or
 		// pre-#582 `context` must land on the one that asserts less.
 		ok: ctx.ok === true ? true : ctx.ok === false ? false : null,
-		command: (typeof ctx.command === "string" ? ctx.command : "").slice(0, 400),
+		command: clipMarked(typeof ctx.command === "string" ? ctx.command : "", 400),
 		irreversible: ctx.irreversible === true,
 		traceId: r.trace_id,
 		at: r.ts,

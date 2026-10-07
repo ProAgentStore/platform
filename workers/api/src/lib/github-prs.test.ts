@@ -194,6 +194,31 @@ describe("readPull", () => {
 		expect(pull?.checks).toMatchObject({ conclusion: "success" });
 	});
 
+	it("looks up the PR's checks by its head commit, not within the repo's newest runs (#898)", async () => {
+		const urls: string[] = [];
+		mockFetch((url) => {
+			urls.push(url);
+			if (url.includes("/actions/runs")) return { status: 200, body: { workflow_runs: [{ head_sha: "abc123def456", status: "completed", conclusion: "failure" }] } };
+			if (url.includes("/reviews")) return { status: 200, body: [] };
+			return { status: 200, body: { ...RAW_PULL, body: "b" } };
+		});
+		const pull = await readPull(env, "u1", "acme/widget", 42);
+		expect(urls.find((u) => u.includes("/actions/runs"))).toContain("head_sha=abc123def456");
+		expect(pull?.checks).toMatchObject({ conclusion: "failure" });
+	});
+
+	it("reads past the first 100 reviews, where a long PR's latest decision is (#898)", async () => {
+		// GitHub lists reviews oldest first: 100 comments, then the approval on page 2.
+		const comments = Array.from({ length: 100 }, () => ({ state: "COMMENTED", user: { login: "bot" } }));
+		mockFetch((url) => {
+			if (url.includes("/actions/runs")) return { status: 200, body: { workflow_runs: [] } };
+			if (url.includes("/reviews") && url.includes("page=2")) return { status: 200, body: [{ state: "APPROVED", user: { login: "kim" } }] };
+			if (url.includes("/reviews")) return { status: 200, body: comments };
+			return { status: 200, body: { ...RAW_PULL, body: "b" } };
+		});
+		expect((await readPull(env, "u1", "acme/widget", 42))?.review).toBe("approved");
+	});
+
 	it("returns null for a missing PR and for a non-numeric number", async () => {
 		mockFetch(() => ({ status: 404, body: {} }));
 		expect(await readPull(env, "u1", "acme/widget", 999)).toBeNull();

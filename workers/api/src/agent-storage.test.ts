@@ -211,6 +211,20 @@ describe("AgentStorageEngine", () => {
 			expect(filtered).toHaveLength(1);
 			expect(filtered[0].userId).toBe("user-1");
 		});
+
+		it("pages the whole log and counts it, past a filter that matches few of the newest (#898)", async () => {
+			const storage = mockDoStorage();
+			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1", null);
+			await engine.logEvent("chat.message", "user-1", { n: 0 });
+			for (let i = 0; i < 30; i++) await engine.logEvent("tool.called", "user-1", { n: i });
+			// The old `limit * 2` over-fetch read 20 rows, all tool calls, and found no chat message.
+			const page = await engine.getEventsPage({ type: "chat.message", limit: 10 });
+			expect(page).toMatchObject({ total: 1 });
+			expect(page.events).toHaveLength(1);
+			const second = await engine.getEventsPage({ type: "tool.called", limit: 10, offset: 10 });
+			expect(second.total).toBe(30);
+			expect(second.events).toHaveLength(10);
+		});
 	});
 
 	describe("user context", () => {

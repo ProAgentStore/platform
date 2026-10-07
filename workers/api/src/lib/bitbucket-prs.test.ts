@@ -282,7 +282,7 @@ describe("readBitbucketPull", () => {
 		expect((await readBitbucketPull(env, "u1", "atlassian/fugue", 139))?.body).toBe("from summary");
 		vi.unstubAllGlobals();
 		stubFetch({ ...PR, description: "z".repeat(9000) }, { values: [] });
-		expect((await readBitbucketPull(env, "u1", "atlassian/fugue", 139))?.body.length).toBe(8 * 1024);
+		expect((await readBitbucketPull(env, "u1", "atlassian/fugue", 139))?.body).toBe("z".repeat(9000)); // whole (#898)
 	});
 
 	it("returns null for a body with no id, rather than a pull request numbered 0", async () => {

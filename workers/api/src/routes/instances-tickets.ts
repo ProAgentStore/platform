@@ -9,7 +9,7 @@ import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
 import { buildInstanceBoard } from "../lib/board.js";
 import { raiseTicketBudget, ticketBudgetView } from "../lib/ticket-budget.js";
-import { listTicketProgress } from "../lib/ticket-progress.js";
+import { countTicketProgress, listTicketProgress } from "../lib/ticket-progress.js";
 import { setTicketAuthority, setTicketQueueEnabled, ticketQueueEnabled, ticketQueueState } from "../lib/ticket-queue.js";
 import { attachTicketRuns, getTicket, recordTicket, ticketsForInstance } from "../lib/tickets.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
@@ -28,7 +28,7 @@ ticketRoutes.post("/:instanceId/board/items/:jobKey/ticket", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
-	const jobKey = decodeURIComponent(c.req.param("jobKey")).slice(0, 400);
+	const jobKey = decodeURIComponent(c.req.param("jobKey"));
 	if (!jobKey) return c.json({ error: "jobKey required" }, 400);
 
 	const board = await buildInstanceBoard(c.env, instanceId, session.uid);
@@ -62,12 +62,15 @@ ticketRoutes.get("/:instanceId/tickets/:ticketId", async (c) => {
 		.filter((r) => r.ticketId === ticket.id)
 		.map((r) => ({ id: r.taskId, status: r.status, updatedAt: r.updatedAt }))
 		.sort((a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0));
-	const [queue, budget, progress] = await Promise.all([
+	const [queue, budget, progress, progressTotal] = await Promise.all([
 		ticketQueueState(c.env, instanceId, session.uid, ticket.id),
 		ticketBudgetView(c.env, instanceId, session.uid, ticket.id),
 		listTicketProgress(c.env, instanceId, session.uid, ticket.id),
+		countTicketProgress(c.env, instanceId, session.uid, ticket.id),
 	]);
-	return c.json({ ticket, attempts, queue, budget, progress });
+	// The newest notes, and how many earlier ones are not shown (#898).
+	const progressEarlierOmitted = Math.max(0, progressTotal - progress.length);
+	return c.json({ ticket, attempts, queue, budget, progress, ...(progressEarlierOmitted ? { progressEarlierOmitted } : {}) });
 });
 
 // ── The opt-in ticket queue (#864, #757 slice 3) ───────────────────────────────────────────────────

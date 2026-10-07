@@ -308,7 +308,19 @@ describe("readAgentReply — the AgentDO response shape", () => {
 		}
 	});
 
-	it("caps a runaway reply", () => {
-		expect(readAgentReply({ message: { content: "x".repeat(20000) } }).length).toBe(8000);
+	it("caps a runaway reply, keeping its END and saying how much was cut (#898)", () => {
+		const out = readAgentReply({ message: { content: `${"x".repeat(20000)}CONCLUSION: all tests pass` } });
+		expect(out).toMatch(/^\[cut: showing the last 8000 of 20026 characters\]/);
+		expect(out.endsWith("CONCLUSION: all tests pass")).toBe(true);
+	});
+
+	it("a long tool log can no longer push the reply's conclusion out of the prompt (#898)", () => {
+		const out = readAgentReply({ toolMessage: { content: "✅ tool ".repeat(3000) }, message: { content: "Done — the objective is met." } });
+		expect(out).toContain("Done — the objective is met.");
+		expect(out).toMatch(new RegExp(`\\[cut: showing the first \\d+ of ${"✅ tool ".length * 3000} characters\\]`));
+	});
+
+	it("says when the provider stopped the reply at its output cap (#898)", () => {
+		expect(readAgentReply({ message: { content: "Step 4. O" }, truncated: true })).toMatch(/not the whole answer/);
 	});
 });

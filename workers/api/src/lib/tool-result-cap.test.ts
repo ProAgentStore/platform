@@ -77,13 +77,14 @@ describe("toolLogLine (#517) — a FAILED tool result reaches the owner whole", 
 		expect(TMUX_CONSTRAINT_REFUSAL.length).toBeLessThanOrEqual(TOOL_LOG_FAILURE_MAX_CHARS);
 	});
 
-	it("leaves a SUCCESS pill byte-identical to what it was", () => {
-		// #517's acceptance criteria: no change to any successful tool call's transcript. A success
-		// pill is a preview of DATA and the answer above it carries the meaning — so it keeps the old
-		// number and, deliberately, the old absence of an ellipsis.
+	it("keeps a SUCCESS pill's 120-char preview and marks it when it is one (#898)", () => {
+		// #517 kept the success pill unmarked. #898 found that pill replayed into later prompts as
+		// history, where an unmarked 120-char preview read as the tool's whole result.
 		const data = "a".repeat(400);
-		expect(toolLogLine("tmux_capture_pane", data, true)).toBe(`✅ **tmux_capture_pane** ${data.slice(0, 120)}`);
+		expect(toolLogLine("tmux_capture_pane", data, true)).toBe(`✅ **tmux_capture_pane** ${data.slice(0, 120)}… [preview of 400 chars — call the tool again for the full result]`);
+		// A result that fits is untouched.
 		expect(toolLogLine("create_task", "done", true)).toBe("✅ **create_task** done");
+		expect(toolLogLine("x", "b".repeat(120), true)).toBe(`✅ **x** ${"b".repeat(120)}`);
 	});
 
 	it("survives a non-string result without throwing", () => {

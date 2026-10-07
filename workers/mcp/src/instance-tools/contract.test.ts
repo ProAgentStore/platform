@@ -282,7 +282,7 @@ const TABLE: Record<string, Row> = {
 		// field an MCP caller cannot set, and used to be one it silently cleared.
 		"charged_micros_ceiling,dry_run,loop_max_iterations,per_tree_cost_micros,per_tree_delegations,per_tree_max_depth,token,token_ceiling",
 	],
-	call_instance_tool: ["base", "write", null, null, "input,instance_id,token,tool"],
+	call_instance_tool: ["base", "write", null, null, "input,instance_id,offset,token,tool"],
 	cancel_instance: ["base", "destructive", "cancel_instance", "envelope", "confirm,dry_run,instance_id,token"],
 	pause_instance: ["base", "write", null, "envelope", "dry_run,instance_id,token"],
 	plan_agent_builder: ["agentAuthoring", "none", null, null, "prompt,token"],
@@ -290,7 +290,7 @@ const TABLE: Record<string, Row> = {
 	cancel_instance_task: ["runtime", "destructive", "cancel_instance_task", "envelope", "confirm,dry_run,instance_id,task_id,token"],
 	chat_with_instance: ["base", "runtime", null, "envelope", "dry_run,instance_id,message,token"],
 	chat_with_my_agent: ["agentAuthoring", "destructive", "chat_with_my_agent", "envelope", "agent_id,confirm,dry_run,message,token"],
-	check_instance_loop: ["composition", "read", null, null, "instance_id,run_id,token"],
+	check_instance_loop: ["composition", "read", null, null, "instance_id,offset,run_id,token"],
 	get_instance_connector_account: ["connectorAccounts", "read", null, null, "connector,instance_id,token"],
 	get_instance_loop_limits: ["composition", "read", null, null, "instance_id,token"],
 	get_instance_terminal_session: ["runtime", "read", null, null, "instance_id,token"],
@@ -299,7 +299,7 @@ const TABLE: Record<string, Row> = {
 	// default page stopped being the oldest one.
 	coding_terminal: ["coding", "read", null, null, "before,instance_id,limit,session_id,token"],
 	coding_loop_trace: ["coding", "read", null, null, "before,instance_id,limit,run_id,since_seq,token"],
-	coding_timeline: ["coding", "read", null, null, "before,instance_id,limit,session_id,since_seq,token"],
+	coding_timeline: ["coding", "read", null, null, "before,instance_id,limit,offset,seq,session_id,since_seq,token"],
 	clear_finished_tasks: ["board", "write", null, "envelope", "dry_run,instance_id,token"],
 	clear_instance_messages: ["observability", "destructive", "clear_instance_messages", "envelope", "confirm,dry_run,instance_id,token"],
 	clear_instance_voice_settings: ["settings", "write", null, "envelope", "dry_run,instance_id,token"],
@@ -308,7 +308,7 @@ const TABLE: Record<string, Row> = {
 	// Both were ungated ("none") while they read and mutated MCP-DO memory, which nothing else
 	// could see. Now they read and cancel the SERVER's run record, so they are scoped like every
 	// other read and every other write (#502).
-	coding_loop_status: ["coding", "read", null, null, "instance_id,run_id,token"],
+	coding_loop_status: ["coding", "read", null, null, "instance_id,offset,run_id,token"],
 	coding_loop_stop: ["coding", "write", null, null, "instance_id,run_id,token"],
 	coding_loop_queue: ["coding", "read", null, null, "instance_id,repo_id,token"],
 	coding_loop_queue_cancel: ["coding", "write", null, null, "entry_id,instance_id,token"],
@@ -358,7 +358,7 @@ const TABLE: Record<string, Row> = {
 	hint_instance_task: ["board", "write", null, "envelope", "dry_run,hint,instance_id,task_id,token"],
 	ingest_repo: ["repo", "write", null, "envelope", "branch,dry_run,instance_id,repo_url,token"],
 	ingest_repo_status: ["repo", "none", null, null, "instance_id,token"],
-	instance_activity: ["observability", "none", null, null, "instance_id,token"],
+	instance_activity: ["observability", "none", null, null, "instance_id,limit,offset,token"],
 	// `reasoning` (a BOOLEAN here, not the writer's string) added by #574: the field
 	// `create_instance_ticket` accepts had no reader, so this tool gained the argument that asks
 	// for it. Still ungated — it widens a read, and reads nothing the caller could not already see.
@@ -372,14 +372,14 @@ const TABLE: Record<string, Row> = {
 	instance_runner_node: ["runtime", "none", null, null, "instance_id,token"],
 	runner_setup: ["runtime", "none", null, null, "instance_id,token"],
 	instance_runtime_status: ["runtime", "none", null, null, "instance_id,probe,token"],
-	instance_task_events: ["runtime", "none", null, null, "instance_id,limit,token"],
+	instance_task_events: ["runtime", "none", null, null, "instance_id,limit,offset,token"],
 	keys_status: ["account", "none", null, null, "token"],
 	list_connections: ["composition", "read", null, null, "instance_id,token"],
 	list_agent_tasks: ["agentTasks", "none", null, null, "instance_id,token"],
 	agent_messages: ["agentAuthoring", "none", null, null, "agent_id,before,limit,token"],
 	list_connection_deliveries: ["composition", "none", null, null, "instance_id,limit,status,token"],
 	error_summary: ["observability", "none", null, null, "days,instance_id,level,limit,source,token"],
-	list_errors: ["observability", "none", null, null, "limit,scope,source,token"],
+	list_errors: ["observability", "none", null, null, "limit,offset,scope,source,token"],
 	list_instance_connector_grants: ["connectors", "none", null, null, "instance_id,provider,token"],
 	list_instance_drive_files: ["connectors", "none", null, null, "folder,grant_id,instance_id,limit,q,token"],
 	list_instance_files: ["knowledge", "none", null, null, "instance_id,token"],
@@ -401,15 +401,15 @@ const TABLE: Record<string, Row> = {
 		"action,config,count,instance_id,schedule,token,type",
 	],
 	list_instance_trigger_events: ["triggers", "read", null, null, "limit,token,trigger_id"],
-	list_instance_triggers: ["triggers", "read", null, null, "instance_id,token"],
+	list_instance_triggers: ["triggers", "read", null, null, "instance_id,offset,token"],
 	get_instance_pipeline: ["observability", "none", null, null, "instance_id,pipeline,token"],
 	list_feedback: ["observability", "none", null, null, "instance_id,limit,status,token"],
-	list_notifications: ["account", "none", null, null, "limit,token,unread_only"],
+	list_notifications: ["account", "none", null, null, "limit,offset,token,unread_only"],
 	mark_all_notifications_read: ["account", "write", null, "envelope", "dry_run,token"],
 	mark_notification_read: ["account", "write", null, "envelope", "dry_run,notification_id,token"],
 	list_pipeline_runs: ["observability", "none", null, null, "instance_id,limit,pipeline,token"],
 	// #671: the PLATFORM view — every machine across every agent. No instance_id, by design.
-	list_runner_nodes: ["runtime", "none", null, null, "token"],
+	list_runner_nodes: ["runtime", "none", null, null, "offset,token"],
 	runner_node_forget_preflight: ["runtime", "read", null, null, "node,token"],
 	list_supervision: ["composition", "read", null, null, "supervisor_instance_id,token"],
 	list_stats_sources: ["stats", "none", null, null, "token"],

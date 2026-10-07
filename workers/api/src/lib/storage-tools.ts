@@ -2,6 +2,7 @@
  * Storage tools — capabilities agents can invoke for files, collections, and vector search.
  * Extends the base AGENT_TOOLS with the new storage engine.
  */
+import { clipMarked } from "./clip-marked.js";
 import { AgentStorageEngine } from "../agent-storage.js";
 import { decodeBase64Upload, guessMimeType } from "../agent-storage-utils.js";
 import { confirmationLinkFound, confirmationLinkWithoutLinks } from "./confirmation-link-result.js";
@@ -698,7 +699,7 @@ export async function executeStorageTool(
 					// truthful answer to "what was it doing" — labelled with the real diagnosis, never
 					// presented as live.
 					const stale = ensured.session ? await lastTerminal(ctx.env as Env, ensured.session.id).catch(() => null) : null;
-					if (stale) return ok(call.name, `[last snapshot — not live. ${ensured.message}]\n${fenceUntrusted(stale.slice(-3000), TERMINAL_ORIGIN)}`);
+					if (stale) return ok(call.name, `[last snapshot — not live. ${ensured.message}]\n${fenceUntrusted(clipMarked(stale, 3000, { keep: "tail" }), TERMINAL_ORIGIN)}`);
 					return fail(call.name, ensured.message);
 				}
 				const session = ensured.session;
@@ -730,12 +731,12 @@ export async function executeStorageTool(
 						oneShot && state === "idle"
 							? " — one-shot engine: the turn has FINISHED (it exits after each turn); this is not a hang"
 							: "";
-					return ok(call.name, `${opening}[live · ${state}${note}]\n${fenceUntrusted((snap.pane || "(empty)").slice(-3000), TERMINAL_ORIGIN)}`);
+					return ok(call.name, `${opening}[live · ${state}${note}]\n${fenceUntrusted(clipMarked(snap.pane || "(empty)", 3000, { keep: "tail" }), TERMINAL_ORIGIN)}`);
 				}
 				// Runner offline / capture miss: fall back to the last saved snapshot, clearly labelled
 				// so the orchestrator never presents stale scrollback as live activity.
 				const tail = await lastTerminal(ctx.env as Env, session.id).catch(() => null);
-				if (tail) return ok(call.name, `${opening}[last snapshot — runner offline]\n${fenceUntrusted(tail.slice(-3000), TERMINAL_ORIGIN)}`);
+				if (tail) return ok(call.name, `${opening}[last snapshot — runner offline]\n${fenceUntrusted(clipMarked(tail, 3000, { keep: "tail" }), TERMINAL_ORIGIN)}`);
 				return fail(call.name, `${opening}Runner offline — no live terminal and no saved snapshot. Start it with \`pags up\`.`);
 			}
 

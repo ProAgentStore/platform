@@ -70,6 +70,7 @@
  */
 import { PULLS_ENRICH_CAP, PULLS_PAGE_SIZE, type ListPullsOpts, type PullChecks, type PullDetail, type PullSummary, type ReviewState } from "./github-prs.js";
 import { gitlabProjectId, mapPipelineStatus } from "./gitlab-api.js";
+import { clipMarked } from "./clip-marked.js";
 import { readConnectorRefreshToken } from "./connector-oauth.js";
 import type { Env } from "../types.js";
 
@@ -80,8 +81,11 @@ import type { Env } from "../types.js";
  */
 const API_BASE = "https://gitlab.com/api/v4";
 
-/** Same cap every reader on this seam applies: a body goes into a model prompt. */
-const BODY_CAP = 8 * 1024;
+/**
+ * GitHub's own body limit. A longer description (GitLab allows 1 MB) is cut VISIBLY — with both
+ * numbers in the text (#898) — never silently, which is how a comment once ended at "…4. O".
+ */
+const BODY_CAP = 65_536;
 
 /**
  * The stored PAT, or null. A three-line read rather than an import because `gitlab-api.ts`
@@ -382,7 +386,7 @@ export async function readGitlabPull(env: Env, userId: string, slug: string, num
 	return {
 		...toGitlabPullSummary(raw),
 		review,
-		body: (raw.description ?? "").slice(0, BODY_CAP),
+		body: clipMarked(raw.description ?? "", BODY_CAP),
 		// GitLab carries no per-MR line counts on any of these payloads, and fetching the diff to
 		// compute them would be a page-per-file walk for two numbers the panel greys out. 0 is
 		// "unknown" here — the same representation the Bitbucket client records for its absent

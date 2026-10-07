@@ -24,6 +24,9 @@ import type { Env } from "../types.js";
 
 export const triggerRoutes = new Hono<{ Bindings: Env }>();
 
+/** Triggers per page of the listing (#898). */
+const TRIGGER_PAGE = 200;
+
 interface OwnedInstance {
 	id: string;
 	agent_id: string;
@@ -250,15 +253,22 @@ triggerRoutes.get("/", async (c) => {
 		binds.push(instanceId);
 		where += ` AND instance_id = ?${binds.length}`;
 	}
-	const { results } = await c.env.DB.prepare(
-		`SELECT * FROM agent_triggers WHERE ${where} ORDER BY created_at DESC LIMIT 200`,
+	// Paged (#898): the newest 200 were all there was, and nothing said a 201st existed.
+	const offset = Math.max(0, Math.trunc(Number(c.req.query("offset")) || 0));
+	const { results: rows } = await c.env.DB.prepare(
+		`SELECT * FROM agent_triggers WHERE ${where} ORDER BY created_at DESC, id DESC LIMIT ${TRIGGER_PAGE + 1} OFFSET ${offset}`,
 	).bind(...binds).all<TriggerRow>();
+	const hasMore = (rows ?? []).length > TRIGGER_PAGE;
+	const results = (rows ?? []).slice(0, TRIGGER_PAGE);
 	const origin = publicOrigin(c.req.url);
-	const caps = await capabilitiesForTriggers(c.env, session.uid, results ?? []);
+	const caps = await capabilitiesForTriggers(c.env, session.uid, results);
 	return c.json({
-		triggers: (results ?? []).map((t) =>
+		triggers: results.map((t) =>
 			presentTrigger(t, origin, triggerActionDenial(t.action, caps.get(t.instance_id) ?? null)),
 		),
+		offset,
+		hasMore,
+		nextOffset: hasMore ? offset + TRIGGER_PAGE : null,
 	});
 });
 

@@ -21,14 +21,15 @@ export function registerTriggerTools(server: McpServer, ctx: InstanceToolsCtx): 
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
+			offset: z.coerce.number().int().min(0).optional().describe("Skip this many — the previous reply's `nextOffset` while `hasMore` is true."),
 		},
-		async ({ token, instance_id }) => {
+		async ({ token, instance_id, offset }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const denied = await requirePermission(safetyFor(token), "read", "list_instance_triggers", { instance_id });
 			if (denied) return denied;
 			const data = await authedCall(
-				`/v1/triggers?instanceId=${encodeURIComponent(instance_id)}`,
+				`/v1/triggers?instanceId=${encodeURIComponent(instance_id)}${offset ? `&offset=${offset}` : ""}`,
 				sessionToken,
 				{},
 				env,

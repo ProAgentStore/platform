@@ -1,3 +1,4 @@
+import { clipMarked } from "./clip-marked.js";
 import type { Env } from "../types.js";
 import { withinConfirmationWindow } from "./confirmation-window.js";
 
@@ -23,7 +24,7 @@ export async function listLoopStarts(env: Env, userId: string, instanceId: strin
 	const rows = await env.DB.prepare("SELECT * FROM loop_start_receipts WHERE user_id = ? AND instance_id = ? ORDER BY created_at DESC LIMIT 20").bind(userId, instanceId).all<ReceiptRow>();
 	return rows.results.map((row) => {
 		const result = row.response_json ? JSON.parse(row.response_json) as Record<string, unknown> : null;
-		return { ...receiptView(row), ...(result ? { result: { runId: result.runId ?? null, queueEntryId: (result.entry as { id?: string } | undefined)?.id ?? null, reason: result.reason ?? null, error: typeof result.error === "string" ? result.error.slice(0, 500) : null } } : {}) };
+		return { ...receiptView(row), ...(result ? { result: { runId: result.runId ?? null, queueEntryId: (result.entry as { id?: string } | undefined)?.id ?? null, reason: result.reason ?? null, error: typeof result.error === "string" ? clipMarked(result.error, 500) : null } } : {}) };
 	});
 }
 

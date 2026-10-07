@@ -24,7 +24,8 @@ describe("turnReportFromExit — the exit code becomes a verdict", () => {
 
 	it("carries the engine's own last line, capped, and omits the field when there is none", () => {
 		const long = turnReportFromExit(1, null, "x".repeat(MAX_TURN_DETAIL + 50));
-		expect(long.detail).toHaveLength(MAX_TURN_DETAIL);
+		// Capped and MARKED (#898): a silent cut read as the engine's whole last line.
+		expect(long.detail).toBe(`${"x".repeat(MAX_TURN_DETAIL)}…`);
 		// Absent, not "" — an empty string in a report reads as "the engine said nothing", which is
 		// a claim; the missing key is the honest shape for "nothing was captured".
 		expect(turnReportFromExit(1, null, "   ")).not.toHaveProperty("detail");
@@ -67,6 +68,9 @@ describe("the turn's tail (#889)", () => {
 		for (let i = 0; i < MAX_TURN_TAIL_LINES + 10; i++) appendTurnTail(tail, `line ${i}`);
 		expect(tail).toHaveLength(MAX_TURN_TAIL_LINES);
 		expect(tail.at(-1)).toBe(`line ${MAX_TURN_TAIL_LINES + 9}`);
+		// What fell off the front is COUNTED in the first line (#898), never silently gone.
+		expect(tail[0]).toBe("[11 earlier lines of this turn not kept]");
+		expect(tail[1]).toBe("line 11");
 
 		const long: string[] = [];
 		appendTurnTail(long, "x".repeat(MAX_TURN_TAIL_LINE * 2));

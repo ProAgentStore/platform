@@ -280,6 +280,8 @@ export interface RepoSearchResult {
 	shown: number;
 	total: number;
 	truncated: boolean;
+	/** Matches past the per-file cap, by file (#898) — counted, where `--max-count` dropped them unseen. */
+	omittedPerFile?: Record<string, number>;
 }
 
 export function repoSearch(workDir: string, opts: { pattern: string; path?: string; mode?: RepoSearchMode; maxResults?: number }): RepoSearchResult {
@@ -293,7 +295,9 @@ export function repoSearch(workDir: string, opts: { pattern: string; path?: stri
 
 	const argv =
 		mode === "content"
-			? ["grep", "-n", "-I", "-i", "-F", "--untracked", "--max-count", String(SEARCH_PER_FILE), "-e", pattern]
+			? // No `--max-count` (#898): git stopped at 5 per file and `total` counted only those, so a
+				// file with 200 matches read as one with 5. The per-file cap is applied below, COUNTED.
+				["grep", "-n", "-I", "-i", "-F", "--untracked", "-e", pattern]
 			: // Tracked PLUS untracked-not-ignored: a file created ten minutes ago is exactly the one
 				// somebody is trying to find, and `ls-files` alone would deny it exists.
 				["ls-files", "--cached", "--others", "--exclude-standard"];
@@ -314,13 +318,32 @@ export function repoSearch(workDir: string, opts: { pattern: string; path?: stri
 	}
 
 	const lines = out.split("\n").filter((l) => l !== "");
-	const all =
-		mode === "content"
-			? lines.map(parseGrepLine).filter((m): m is { path: string; line: number; text: string } => m !== null)
-			: // The pattern never reaches git here — the filter is a plain case-insensitive substring
-				// over the path, which is what "find the file called X" actually means.
-				lines.filter((p) => p.toLowerCase().includes(pattern.toLowerCase())).map((p) => ({ path: p }));
-	return { mode, pattern, matches: all.slice(0, limit), shown: Math.min(all.length, limit), total: all.length, truncated: all.length > limit };
+	if (mode === "path") {
+		// The pattern never reaches git here — the filter is a plain case-insensitive substring
+		// over the path, which is what "find the file called X" actually means.
+		const all = lines.filter((p) => p.toLowerCase().includes(pattern.toLowerCase())).map((p) => ({ path: p }));
+		return { mode, pattern, matches: all.slice(0, limit), shown: Math.min(all.length, limit), total: all.length, truncated: all.length > limit };
+	}
+	const all = lines.map(parseGrepLine).filter((m): m is { path: string; line: number; text: string } => m !== null);
+	const perFile = new Map<string, number>();
+	const omittedPerFile: Record<string, number> = {};
+	const capped = all.filter((m) => {
+		const n = (perFile.get(m.path) ?? 0) + 1;
+		perFile.set(m.path, n);
+		if (n <= SEARCH_PER_FILE) return true;
+		omittedPerFile[m.path] = (omittedPerFile[m.path] ?? 0) + 1;
+		return false;
+	});
+	const matches = capped.slice(0, limit);
+	return {
+		mode,
+		pattern,
+		matches,
+		shown: matches.length,
+		total: all.length,
+		truncated: matches.length < all.length,
+		...(Object.keys(omittedPerFile).length ? { omittedPerFile } : {}),
+	};
 }
 
 /** `path:line:text` — split on the FIRST two colons only, since code is full of them. */
@@ -331,7 +354,9 @@ function parseGrepLine(line: string): { path: string; line: number; text: string
 	if (second < 0) return null;
 	const n = Number.parseInt(line.slice(first + 1, second), 10);
 	if (!Number.isFinite(n)) return null;
-	return { path: line.slice(0, first), line: n, text: line.slice(second + 1).trim().slice(0, SEARCH_MAX_LINE) };
+	const text = line.slice(second + 1).trim();
+	// Marked (#898): a cut line read as the whole line. `repo_read_file` with `startLine` has the rest.
+	return { path: line.slice(0, first), line: n, text: text.length > SEARCH_MAX_LINE ? `${text.slice(0, SEARCH_MAX_LINE)}…` : text };
 }
 
 /** The deepest `maxDepth` this will honour. Named because the TOOL has to say it (#508). */
@@ -357,7 +382,7 @@ export function repoTree(
 	relPath = ".",
 	maxDepth = 3,
 	maxEntries = 500,
-): { root: string; entries: Array<{ path: string; type: string; size?: number; deeper?: boolean }>; truncated: boolean; truncatedByDepth: boolean; depthCap: number } {
+): { root: string; entries: Array<{ path: string; type: string; size?: number; deeper?: boolean }>; truncated: boolean; truncatedByDepth: boolean; depthCap: number; skipped?: string[] } {
 	const start = resolveInside(workDir, relPath, { checkSymlink: true });
 	const depthCap = Math.max(1, Math.min(TREE_MAX_DEPTH, maxDepth));
 	const entryCap = Math.max(1, Math.min(1000, maxEntries));
@@ -365,6 +390,10 @@ export function repoTree(
 	const queue: Array<{ dir: string; depth: number }> = [{ dir: start, depth: 0 }];
 	let truncated = false;
 	let truncatedByDepth = false;
+	// Dot-entries ARE listed now (#898): `.github/`, `.env.example`, `.claude/` were hidden with
+	// nothing saying so. What is still skipped is named in `skipped`, so absence is never a claim.
+	const skipped = new Set<string>();
+	const result = () => ({ root: relPath, entries, truncated, truncatedByDepth, depthCap, ...(skipped.size ? { skipped: [...skipped].sort() } : {}) });
 	while (queue.length) {
 		const { dir, depth } = queue.shift()!;
 		let items: import("node:fs").Dirent[];
@@ -374,10 +403,13 @@ export function repoTree(
 			continue;
 		}
 		for (const it of items) {
-			if (it.name.startsWith(".") || IGNORE_DIRS.has(it.name)) continue;
+			if (IGNORE_DIRS.has(it.name)) {
+				skipped.add(it.name);
+				continue;
+			}
 			if (entries.length >= entryCap) {
 				truncated = true;
-				return { root: relPath, entries, truncated, truncatedByDepth, depthCap };
+				return result();
 			}
 			const abs = resolve(dir, it.name);
 			const rel = relative(workDir, abs);
@@ -404,7 +436,7 @@ export function repoTree(
 			}
 		}
 	}
-	return { root: relPath, entries, truncated, truncatedByDepth, depthCap };
+	return result();
 }
 
 /**

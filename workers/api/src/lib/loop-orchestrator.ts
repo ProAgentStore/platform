@@ -6,6 +6,7 @@
 //
 // The parse lives in the pure `loop-decide.ts`; this adds the prompt and the BYOK call.
 
+import { clipMarked } from "./clip-marked.js";
 import { agentFailureOf } from "./agent-loop.js";
 import { classifyCodingFailure, DRIVER_RESUME_POLICY } from "./coding-failure.js";
 import { logEvent } from "./events.js";
@@ -52,10 +53,14 @@ Reply ONLY with JSON: { "decision": "continue"|"done"|"escalate"|"failed", "next
 
 /** The objective + transcript go in the USER turn, never interpolated into the system prompt. */
 export function buildLoopUserContent(input: LoopDecideInput): string {
-	const conversationText = input.messages
-		.slice(-6)
-		.map((m) => `${m.role}: ${(m.content || "").slice(0, 2000)}`)
-		.join("\n\n");
+	// The last 6 messages, each keeping its END — where a reply states its conclusion — and every
+	// cut marked (#898): a silent head-slice dropped exactly the part the decision is made on.
+	const recent = input.messages.slice(-6);
+	const omitted = input.messages.length - recent.length;
+	const conversationText = [
+		...(omitted > 0 ? [`(${omitted} earlier message${omitted === 1 ? "" : "s"} not shown)`] : []),
+		...recent.map((m) => `${m.role}: ${clipMarked(m.content || "", 2000, { keep: "tail" })}`),
+	].join("\n\n");
 	// The whole objective (#854): it was cut to 500 here, a quarter of what the route accepted, silently.
 	return `OBJECTIVE: ${input.objective}\n\nCONVERSATION:\n${conversationText || "(no messages yet)"}`;
 }

@@ -12,14 +12,23 @@ const github = vi.hoisted(() => ({
 	meta: { ok: true, data: { default_branch: "main" }, stale: false } as Record<string, unknown>,
 	runs: { runs: [] } as Record<string, unknown>,
 	token: "tok" as string | null,
+	workflows: [] as Array<{ path: string; state: string }>,
+	perWorkflow: {} as Record<string, unknown[]>,
 }));
 const notified = vi.hoisted(() => [] as Array<{ userId: string; title: string; body: string; key?: string }>);
 
 vi.mock("./github-cache.js", () => ({
 	resolveGithubRead: vi.fn(async () => ({ token: github.token, authContext: "ctx" })),
-	githubConditionalJson: vi.fn(async () => github.meta),
+	// The workflow LIST (#898) answers from `github.workflows`; every other read is the repo meta.
+	githubConditionalJson: vi.fn(async (_env: unknown, args: { url: string }) =>
+		args.url.includes("/actions/workflows?") ? { ok: true, data: { workflows: github.workflows }, stale: false } : github.meta,
+	),
 }));
-vi.mock("./github-actions.js", () => ({ fetchWorkflowRuns: vi.fn(async () => github.runs) }));
+vi.mock("./github-actions.js", () => ({
+	fetchWorkflowRuns: vi.fn(async (_repo: string, _token: unknown, opts: { workflow?: string }) =>
+		opts.workflow ? { runs: github.perWorkflow[opts.workflow] ?? [] } : github.runs,
+	),
+}));
 vi.mock("../routes/push.js", () => ({
 	notifyUser: vi.fn(async (_env: Env, userId: string, _type: string, title: string, body: string, _url: string, opts: { key?: string }) => {
 		notified.push({ userId, title, body, key: opts.key });
@@ -305,6 +314,32 @@ describe("checkRepoCi — what is stored and what is sent (#903)", () => {
 			expect(health.lastKnown).toBeUndefined();
 			expect(notified).toEqual([]);
 		});
+	});
+});
+
+describe("a workflow outside the newest-runs window is still read (#898)", () => {
+	beforeEach(() => {
+		notified.length = 0;
+		github.meta = { ok: true, data: { default_branch: "main" }, stale: false };
+		github.token = "tok";
+	});
+
+	it("a red, rarely-run workflow reads failing — not absent, and not passing", async () => {
+		const row = repoRow("r9", "o/rare");
+		// The window holds only the busy CI workflow; nightly.yml's last run is older than all of it.
+		github.runs = { runs: [raw(run())] };
+		github.workflows = [
+			{ path: ".github/workflows/ci.yml", state: "active" },
+			{ path: ".github/workflows/nightly.yml", state: "active" },
+			{ path: ".github/workflows/old.yml", state: "disabled_manually" },
+		];
+		github.perWorkflow = { "nightly.yml": [raw(run({ workflowName: "Nightly", workflowPath: ".github/workflows/nightly.yml", event: "schedule", conclusion: "failure", createdAt: iso(60 * 24) }))] };
+		const health = await checkRepoCi(fakeEnv([row]), asRow(row), now);
+		expect(health.state).toBe("failing");
+		expect(health.workflows.map((w) => [w.path, w.state])).toContainEqual([".github/workflows/nightly.yml", "failing"]);
+		expect(notified).toHaveLength(1);
+		github.workflows = [];
+		github.perWorkflow = {};
 	});
 });
 

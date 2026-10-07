@@ -159,7 +159,7 @@ export async function runAgentThink(opts: {
 	// Returns `transfer` (#279) only on a turn where `transfer_conversation` ran — which is the
 	// whole safety argument: there is no response to put it on unless the user just spoke, so this
 	// field cannot carry a move nobody asked for. See lib/conversation-transfer.ts.
-}): Promise<{ response: string; toolCalls: string[]; transfer?: ConversationTransfer }> {
+}): Promise<{ response: string; toolCalls: string[]; transfer?: ConversationTransfer; truncated?: true }> {
 	const { state, engine, messages, memory, tasks, userId, env, doStorage, broadcast, delegation, resume } = opts;
 	const lastUserMessage = messages.filter((m) => m.role === "user").pop()?.content || "";
 
@@ -479,7 +479,7 @@ export async function runAgentThink(opts: {
 		// is invention with no ambiguity left in it — and there is no correction round worth buying
 		// from a model that could not have called the tool in the first place (#395).
 		const honest = await honestReply({ reply: { text: result.response || "", calls: [] }, executed: [], log: [] });
-		return { response: honest.text, toolCalls: toolLogWithNotices([], withTruncation(honest.notices)) };
+		return { response: honest.text, toolCalls: toolLogWithNotices([], withTruncation(honest.notices)), ...(truncated ? { truncated: true as const } : {}) };
 	}
 
 	// The owner's per-tool off-switches (config.disabledTools). Applied to BOTH the
@@ -581,7 +581,7 @@ export async function runAgentThink(opts: {
 	 * Repo Coder's invented `<tool_response>` blocks reached the transcript: three GitHub issues
 	 * quoted by number and title from a tool that never ran, which the user then acted on.
 	 */
-	const deliver = async (reply: ParsedReply): Promise<{ response: string; toolCalls: string[]; transfer?: ConversationTransfer }> => {
+	const deliver = async (reply: ParsedReply): Promise<{ response: string; toolCalls: string[]; transfer?: ConversationTransfer; truncated?: true }> => {
 		const honest = await honestReply({
 			reply,
 			executed: executedTools,
@@ -613,7 +613,7 @@ export async function runAgentThink(opts: {
 		// round calls no tools and returns early. Null for every turn that did not run the tool,
 		// which is the property that keeps the response channel honest.
 		const transfer = transferFromToolResults(registryResults);
-		return { response: honest.text, toolCalls: toolLogWithNotices(allToolLog, withTruncation(honest.notices)), ...(transfer ? { transfer } : {}) };
+		return { response: honest.text, toolCalls: toolLogWithNotices(allToolLog, withTruncation(honest.notices)), ...(transfer ? { transfer } : {}), ...(truncated ? { truncated: true as const } : {}) };
 	};
 
 	/** What to hand a retry, evaluated at the moment of failure. Null when nothing ran. */

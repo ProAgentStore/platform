@@ -13,6 +13,7 @@
 // METERING: a pane is rendered text, so a coding CLI driven here spends tokens the platform
 // cannot measure (#348). Every write records an explicit "not measured" observation rather than
 // contributing nothing — a session missing from a ledger of dollars otherwise reads as free.
+import { overLimit } from "../write-limits.js";
 import type { ToolDef, RegistryToolCtx } from "./types.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../runner-client.js";
 import { noteUnmeteredDrive } from "../engine-metering.js";
@@ -287,8 +288,10 @@ export const TMUX_TOOLS: ToolDef[] = [
 			const r = await resolveRunner(ctx);
 			if ("error" in r) return { content: r.error, success: false };
 			const path = String(input.path ?? "").trim();
-			const label = String(input.label ?? "").trim().slice(0, 200);
+			const label = String(input.label ?? "").trim();
 			if (!path || !label) return { content: "Both `path` and `label` are required.", success: false };
+			const tooLong = overLimit({ label: [label, 200] }); // refused, never cut (#898)
+			if (tooLong) return { content: tooLong, success: false };
 			const ttlMinutes = Math.min(Math.max(Number(input.ttl_minutes) || 60, 1), 1440);
 			let read: { path?: string; value?: unknown; bytes?: number };
 			try {

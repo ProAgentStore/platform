@@ -174,8 +174,8 @@ describe("PagsMcp.init on an agent-type session (#771)", () => {
 
 	it("each tool publishes its real fields and instance_id LAST", async () => {
 		const { tools } = await setup({ type: "coder" });
-		expect(Object.keys(tools.get("github_read_issue")!.schema)).toEqual(["repo", "number", "instance_id"]);
-		expect(Object.keys(tools.get("call_instance_tool")!.schema)).toEqual(["instance_id", "tool", "input"]);
+		expect(Object.keys(tools.get("github_read_issue")!.schema)).toEqual(["repo", "number", "result_offset", "instance_id"]);
+		expect(Object.keys(tools.get("call_instance_tool")!.schema)).toEqual(["instance_id", "tool", "input", "offset"]);
 		expect(String(tools.get("call_instance_tool")!.config.description)).toMatch(/delegate_to \(has its own instance_id field/);
 	});
 
@@ -233,7 +233,7 @@ describe("the other surfaces are unchanged (#771)", () => {
 	it("a /mcp/i/<id> session still publishes no instance_id and its own instance's tools", async () => {
 		const { tools } = await setup({ instance: "inst-1" });
 		expect([...tools.keys()].sort()).toEqual(["chat", "github_read_issue", "guide", "mcp_server_info", "messages"]);
-		expect(Object.keys(tools.get("github_read_issue")!.schema)).toEqual(["repo", "number"]);
+		expect(Object.keys(tools.get("github_read_issue")!.schema)).toEqual(["repo", "number", "result_offset"]);
 	});
 
 	it("the platform-wide /mcp still has the two-step list_instance_tools → call_instance_tool, with instance_id", async () => {

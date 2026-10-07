@@ -162,14 +162,20 @@ describe("readRepoFile / runRepoGit / repoTree (on a real temp repo)", () => {
 		expect(out).toContain("src/app.ts");
 		expect(out).not.toContain("other/elsewhere.ts");
 	});
-	it("tree lists files, respects entry cap, skips ignored dirs", () => {
+	it("tree lists files, respects entry cap, skips ignored dirs — and NAMES what it skipped (#898)", () => {
 		mkdirSync(join(dir, "node_modules"));
 		writeFileSync(join(dir, "node_modules", "junk.js"), "x");
+		mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+		writeFileSync(join(dir, ".github", "workflows", "ci.yml"), "on: push\n");
 		const t = repoTree(dir);
 		const paths = t.entries.map((e) => e.path);
 		expect(paths).toContain("src");
 		expect(paths.some((p) => p.startsWith("node_modules"))).toBe(false);
-		expect(paths.some((p) => p.startsWith("."))).toBe(false);
+		// Dot-entries are listed (they were hidden with nothing saying so)…
+		expect(paths).toContain(".github");
+		expect(paths).toContain(join(".github", "workflows"));
+		// …and what is skipped on purpose is named, never silently absent.
+		expect(t.skipped).toEqual([".git", "node_modules"]);
 	});
 
 	describe("a depth stop is VISIBLE (#508)", () => {
@@ -220,6 +226,21 @@ describe("readRepoFile / runRepoGit / repoTree (on a real temp repo)", () => {
 			const r = repoSearch(dir, { pattern: "event_form", mode: "path" });
 			expect(r.matches.map((m) => m.path)).toContain(join("a", "b", "c", "d", "e", "event_form_dialog.ts"));
 			expect(r.mode).toBe("path");
+		});
+
+		it("counts matches past the per-file cap instead of dropping them unseen (#898)", () => {
+			writeFileSync(join(dir, "src", "many.ts"), Array.from({ length: 12 }, (_, i) => `const needleXYZ${i} = ${i};`).join("\n"));
+			const r = repoSearch(dir, { pattern: "needleXYZ", mode: "content" });
+			expect(r.total).toBe(12);
+			expect(r.matches).toHaveLength(5);
+			expect(r.omittedPerFile).toEqual({ [join("src", "many.ts")]: 7 });
+			expect(r.truncated).toBe(true);
+		});
+
+		it("marks a matched line it shortens", () => {
+			writeFileSync(join(dir, "src", "long.ts"), `const longLineMarker = "${"z".repeat(400)}";\n`);
+			const r = repoSearch(dir, { pattern: "longLineMarker", mode: "content" });
+			expect(r.matches[0]?.text?.endsWith("…")).toBe(true);
 		});
 
 		it("finds it by CONTENT too, with file and line number", () => {

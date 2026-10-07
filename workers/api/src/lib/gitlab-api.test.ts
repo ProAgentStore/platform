@@ -106,11 +106,18 @@ describe("listGitlabIssues", () => {
 });
 
 describe("readGitlabIssue", () => {
-	it("caps the body and keeps the iid", async () => {
+	it("returns a 20 KB body whole and keeps the iid (#898: was silently cut at 8 KiB)", async () => {
 		stubFetch({ iid: 7, title: "T", state: "opened", labels: [], user_notes_count: 0, updated_at: "", web_url: "u", description: "x".repeat(20_000) });
 		const issue = await readGitlabIssue(env, "u1", "group/p", 7);
 		expect(issue?.number).toBe(7);
-		expect(issue?.body.length).toBe(8 * 1024);
+		expect(issue?.body).toBe("x".repeat(20_000));
+	});
+
+	it("cuts a description past 65,536 chars VISIBLY, naming both lengths (#898)", async () => {
+		stubFetch({ iid: 7, title: "T", state: "opened", labels: [], user_notes_count: 0, updated_at: "", web_url: "u", description: "x".repeat(70_000) });
+		const body = (await readGitlabIssue(env, "u1", "group/p", 7))?.body ?? "";
+		expect(body.startsWith("x".repeat(65_536))).toBe(true);
+		expect(body).toMatch(/\[cut: showing the first 65536 of 70000 characters\]$/);
 	});
 
 	it("returns null for a body with no iid, rather than an issue numbered 0", async () => {

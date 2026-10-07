@@ -1,3 +1,5 @@
+import { clipMarked } from "./clip-marked.js";
+import { assertJobKey } from "./write-limits.js";
 import type { Env } from "../types.js";
 import { mirroredRuntimeTasks, isRecord } from "../routes/instances-runtime.js";
 import { agentCapabilities, sanitizeBoardColumns, type BoardColumn } from "./agent-capabilities.js";
@@ -644,6 +646,7 @@ export async function setBoardItemStatus(
 	status: string | null,
 	meta: BoardItemMeta = {},
 ): Promise<void> {
+	assertJobKey(jobKey);
 	if (!status) {
 		await env.DB.prepare("DELETE FROM board_items WHERE instance_id = ?1 AND user_id = ?2 AND job_key = ?3")
 			.bind(instanceId, userId, jobKey)
@@ -668,10 +671,10 @@ export async function setBoardItemStatus(
 		.bind(
 			instanceId,
 			userId,
-			jobKey.slice(0, 400),
+			jobKey,
 			status.slice(0, 80),
-			meta.title === undefined ? null : meta.title.slice(0, 300),
-			meta.subtitle === undefined ? null : meta.subtitle.slice(0, 300),
+			meta.title === undefined ? null : clipMarked(meta.title, 300),
+			meta.subtitle === undefined ? null : clipMarked(meta.subtitle, 300),
 			meta.url === undefined ? null : meta.url.slice(0, 1000),
 		)
 		.run();
@@ -727,7 +730,7 @@ export async function linkBoardItemGithubIssue(
        github_issue_number = excluded.github_issue_number,
        github_issue_cache   = excluded.github_issue_cache,
        updated_at           = excluded.updated_at`,
-	).bind(instanceId, userId, jobKey.slice(0, 400), issueNumber, cache).run();
+	).bind(instanceId, userId, jobKey, issueNumber, cache).run();
 
 	if (!fetched) {
 		return { ok: false, error: `Could not fetch issue #${issueNumber} from ${repo} — the number is stored but the cache is empty. Try refreshing later.` };

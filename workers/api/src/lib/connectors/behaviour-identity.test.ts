@@ -50,7 +50,7 @@ describe("github tools stay behaviour-identical through connectorClient", () => 
 		// messages are written by whoever pushed — so the dispatcher fences the payload. Unwrapped
 		// here the way the pipeline binder unwraps it (`parseOutput` in pipeline.ts), which is the
 		// production read path for a non-model consumer, so the SHAPE this test is about is unchanged.
-		expect(JSON.parse(unfenceUntrusted(r.content))[0]).toMatchObject({ status: "completed", conclusion: "success", branch: "main" });
+		expect(JSON.parse(unfenceUntrusted(r.content)).runs[0]).toMatchObject({ status: "completed", conclusion: "success", branch: "main" });
 	});
 
 	it("github_create_issue (write) still resolves the owner's token after the consent gate", async () => {

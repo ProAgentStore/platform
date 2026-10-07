@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listIssueComments, listIssues, readIssue, searchIssues, searchIssuesQuery } from "./github-issues.js";
+import { listIssueComments, listIssues, listIssuesPage, readIssue, searchIssues, searchIssuesQuery } from "./github-issues.js";
 import type { Env } from "../types.js";
 
 vi.mock("./github-app.js", () => ({
@@ -90,6 +90,24 @@ describe("readIssue", () => {
 	it("returns null on a GitHub error", async () => {
 		mockFetch(() => ({ status: 404, body: {} }));
 		expect(await readIssue(env, "user1", "acme/widget", 99)).toBeNull();
+	});
+});
+
+describe("bodies arrive whole (#898)", () => {
+	// The reported symptom: a comment that ended at "…4. O" because an 8 KiB slice cut it, with
+	// nothing in the result to say so. GitHub's own limit is 65,536, so a body is returned as is.
+	const long = `${"step\n".repeat(3000)}4. Ordering matters — the end of the comment.`;
+
+	it("readIssue returns a body past 8 KiB in full", async () => {
+		mockFetch(() => ({ status: 200, body: { number: 5, title: "t", state: "open", comments: 0, updated_at: "", html_url: "u", body: long, labels: [] } }));
+		expect((await readIssue(env, "user1", "acme/widget", 5))?.body).toBe(long);
+	});
+
+	it("listIssueComments returns every comment body in full", async () => {
+		mockFetch(() => ({ status: 200, body: [{ id: 1, user: { login: "a" }, body: long, created_at: "", updated_at: "", html_url: "c1" }] }));
+		const [c] = await listIssueComments(env, "user1", "acme/widget", 5);
+		expect(c.body).toBe(long);
+		expect(c.body.endsWith("the end of the comment.")).toBe(true);
 	});
 });
 
@@ -219,5 +237,41 @@ describe("searchIssues — GitHub's search over every issue (#936)", () => {
 		const seen = mockSearch(200, {});
 		expect(await searchIssues(env, "user1", "not-a-repo", "bug")).toHaveProperty("error");
 		expect(seen).toHaveLength(0);
+	});
+});
+
+describe("listIssuesPage (#898)", () => {
+	it("asks GitHub for the page, and a full raw page means there may be more even after PRs are removed", async () => {
+		let seen = "";
+		mockFetch((url) => {
+			seen = url;
+			return { status: 200, body: [
+				{ number: 5, title: "issue", state: "open", comments: 0, updated_at: "", html_url: "u5", labels: [] },
+				{ number: 6, title: "a PR", state: "open", comments: 0, updated_at: "", html_url: "u6", labels: [], pull_request: { url: "x" } },
+			] };
+		});
+		const out = await listIssuesPage(env, "user1", "acme/widget", { page: 3, limit: 2 });
+		expect(seen).toContain("page=3");
+		expect(out).toMatchObject({ page: 3, hasMore: true });
+		expect(out.issues.map((i) => i.number)).toEqual([5]);
+	});
+
+	it("a short page is the last one", async () => {
+		mockFetch(() => ({ status: 200, body: [{ number: 5, title: "issue", state: "open", comments: 0, updated_at: "", html_url: "u5", labels: [] }] }));
+		expect((await listIssuesPage(env, "user1", "acme/widget", { limit: 30 })).hasMore).toBe(false);
+	});
+});
+
+describe("the issues-mode backlog order (#898)", () => {
+	it('order "oldest" lists by creation, oldest first — not the 30 most recently updated', async () => {
+		let seen = "";
+		mockFetch((url) => {
+			seen = url;
+			return { status: 200, body: [] };
+		});
+		await listIssues(env, "user1", "acme/widget", { state: "open", order: "oldest", limit: 100 });
+		expect(seen).toContain("sort=created");
+		expect(seen).toContain("direction=asc");
+		expect(seen).toContain("per_page=100");
 	});
 });

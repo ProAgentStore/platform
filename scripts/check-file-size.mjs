@@ -161,7 +161,7 @@ const PINS = {
 	// `/loop/queue` paid for in #788. What is NOT here is the composition: `lib/instance-activity.ts`
 	// folds the two query results and maps `runHealth`, so the handler is a fetch and a shape.
 	// +8 at #847: flags stay with this shared list handler and the site-builder mount stays at the contract-locked composition point; route bodies already live in siblings.
-	"workers/api/src/routes/instances.ts": 1160, // +22 (#949): instance_runner_node probes this agent's socket and the machine under every name the machine is provably known by, and reports `aka`; the name/version resolution itself is in lib/machine-identity.ts. +2 (#945): mount the local browser routes — an import and one register call; the routes are instances-local-browser.ts. +2 (#938): mount the console-link route — an import and one register call; the route is instances-console-link.ts. +3 (#924): the heartbeat stores the machine resource sample — an import, the node const and one save call; the logic is lib/runner-resources.ts. +3 (#825): the pause/resume mount — an import, a registrar call and the one-line reason, which is exactly the shape this pin asks for; the routes themselves are routes/instances-lifecycle.ts. // +4 (#772): the connection-guide mount — an import and a registrar call, plus the two-line reason. Every route module this file composes costs the same two lines; the work itself went into routes/instances-guide.ts and lib/connection-guide.ts, which is what the pin is asking for. +1 at #850: attachOnRepin import — the repin that moves the agent lives in lib/runner-repin.ts. +2 at #856: the runner-attach mount — an import and the registrar call; the route lives in instances-runner-attach.ts. +2 at #859: instance_runner_node reports each node's runner version and what it is behind on (an import and the version map). +2 at #868: the runner-setup mount — an import and the registrar call; the route lives in instances-runner-setup.ts.
+	"workers/api/src/routes/instances.ts": 1162, // +22 (#949): instance_runner_node probes this agent's socket and the machine under every name the machine is provably known by, and reports `aka`; the name/version resolution itself is in lib/machine-identity.ts. +2 (#945): mount the local browser routes — an import and one register call; the routes are instances-local-browser.ts. +2 (#938): mount the console-link route — an import and one register call; the route is instances-console-link.ts. +3 (#924): the heartbeat stores the machine resource sample — an import, the node const and one save call; the logic is lib/runner-resources.ts. +3 (#825): the pause/resume mount — an import, a registrar call and the one-line reason, which is exactly the shape this pin asks for; the routes themselves are routes/instances-lifecycle.ts. // +4 (#772): the connection-guide mount — an import and a registrar call, plus the two-line reason. Every route module this file composes costs the same two lines; the work itself went into routes/instances-guide.ts and lib/connection-guide.ts, which is what the pin is asking for. +1 at #850: attachOnRepin import — the repin that moves the agent lives in lib/runner-repin.ts. +2 at #856: the runner-attach mount — an import and the registrar call; the route lives in instances-runner-attach.ts. +2 at #859: instance_runner_node reports each node's runner version and what it is behind on (an import and the version map). +2 at #868: the runner-setup mount — an import and the registrar call; the route lives in instances-runner-setup.ts. +2 at #898: truncation made visible (paging, marked cuts, refused over-length writes).
 	// +5 for #319: the send path now hands the live capture to the consumer alongside the audio
 	// key, so the two readings of a turn can be compared on the message. Raised rather than
 	// split — the whole change is one `storedDictation` call and the two `onSend` sites that
@@ -736,7 +736,7 @@ const PINS = {
 	"workers/api/src/lib/connectors/mcp.ts": 1371,
 	// New at #883: the no-repository refusal gained the coding_repo_add / coding_repo_remove remedies an
 	// MCP caller can act on. The refusal's branches are asserted together, so they stay in one place.
-	"workers/api/src/lib/connectors/repo-local.ts": 807,
+	"workers/api/src/lib/connectors/repo-local.ts": 820, // +13 at #898: truncation made visible (paging, marked cuts, refused over-length writes).
 	// New at #847: GitHub binding uniqueness is repo persistence, so findExistingRepoBinding stays with the D1 repo store rather than creating a one-query sibling. +12 at #579: retireDisplacedRuns announces the runs it closes as `run.stalled`; the read of which rows it closed belongs beside the write that closed them.
 	// +35 at #883/#879: `effectiveCloneStatus` (a folderless binding is `needs_path`, derived where rows are
 	// mapped so every reader agrees) and `claimFreeSessionDriver` (apply-now's never-steal claim, beside
@@ -827,7 +827,7 @@ const PINS = {
 	// the rest say why the order latch → pipeline → registrations must not change.
 	// +16 at #771: the `/mcp/t/<agentSlug>` session's props field, its init branch and method, and
 	// the risk→annotations helper both pinned surfaces now share; the surface itself is type-pinned.ts.
-	"workers/mcp/src/index.ts": 1061, // +6 at #951: update_agent declares the local_browser runtime and the localBrowser block, with why;
+	"workers/mcp/src/index.ts": 1063, // +6 at #951: update_agent declares the local_browser runtime and the localBrowser block, with why; +2 at #898: truncation made visible (paging, marked cuts, refused over-length writes).
 	// First entry, at #806: the 0.1.48 record took it from 786 to 802. Pinned rather than split
 	// because it is an APPEND-ONLY ledger — one hash per published version plus why the surface
 	// moved — and `check-surface-lock.mjs --require-history` reads THIS path's git history to prove
@@ -837,7 +837,7 @@ const PINS = {
 	// +16 at #192 (proappstore-online/platform): the 0.1.50 record — recent_instances gains `limit`
 	// and a working-first order; the entry says why the cap had hidden a live run. Ledger, not drift.
 	// +59 at #847: 0.1.51–0.1.57 are published append-only surface records; moving them would defeat the history check that protects this ledger. +5 at #849: the 0.1.58 record. +5 at #854: the 0.1.59 record. +5 at #856: the 0.1.60 record. +4 at #857: the 0.1.61 record. +4 at #858: the 0.1.62 record. +4 at #859: the 0.1.63 record.
-	"workers/mcp/src/surface-lock.ts": 1009, // +4 at #951: the 0.1.79 record (update_agent local_browser); +5 at #927: the 0.1.78 record (pending-call instruction); +5 at #946: the 0.1.77 record (consent + finding review tools); +5 at #944: the 0.1.76 record (start/cancel/resume local browser runs); +6 at #945: the 0.1.75 record (four local browser tools); +4 at #942: the 0.1.74 record (coding_overseer removed); +5 at #938: the 0.1.73 record (get_console_link); +8 at #906: the 0.1.72 record (three secure_input tools); +3 at #904: the 0.1.71 server-info schema record; +2 at #886: the 0.1.70 request_id schema record; +10 at #879: 0.1.66 + 0.1.67 records; +5 at #881: the 0.1.68 record; +4 at #877: the 0.1.69 record — append-only surface ledger, not drift.
+	"workers/mcp/src/surface-lock.ts": 1016, // +4 at #951: the 0.1.79 record (update_agent local_browser); +5 at #927: the 0.1.78 record (pending-call instruction); +5 at #946: the 0.1.77 record (consent + finding review tools); +5 at #944: the 0.1.76 record (start/cancel/resume local browser runs); +6 at #945: the 0.1.75 record (four local browser tools); +4 at #942: the 0.1.74 record (coding_overseer removed); +5 at #938: the 0.1.73 record (get_console_link); +8 at #906: the 0.1.72 record (three secure_input tools); +3 at #904: the 0.1.71 server-info schema record; +2 at #886: the 0.1.70 request_id schema record; +10 at #879: 0.1.66 + 0.1.67 records; +5 at #881: the 0.1.68 record; +4 at #877: the 0.1.69 record — append-only surface ledger, not drift. +7 at #898: truncation made visible (paging, marked cuts, refused over-length writes).
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
@@ -925,7 +925,8 @@ const PINS = {
 	// line harder to read, which is the opposite of what this ratchet is for.
 	// +5 for #754: accept assignedBy:"trigger" from the request body (1 line), cap title (1) and
 	// description (1) at ingest, the updated comment (1), and the AgentTask type annotation (1).
-	"workers/api/src/agent-do.ts": 1264, // +1 at #852: `modelChosen`, recorded only with a validated brain pick.
+	"workers/api/src/agent-do.ts": 1277, // +1 at #852: `modelChosen`, recorded only with a validated brain pick. +13 at #898: the `truncated` flag on the chat reply, the omitted-history window, and refusing an over-length owner task.
+	"workers/api/src/lib/board.ts": 801, // #898 crossed 800: a job key is REFUSED past its limit (an id cut would merge two cards), and card text is cut visibly.
 	// +3 for #308: an import plus the two lines saying why three steps unwrap the fence that the
 	// connectors now apply at the source. Raised rather than split — the growth is a comment and
 	// one import, and splitting the step catalog to absorb three lines would be the tail wagging.
@@ -993,9 +994,9 @@ const PINS = {
 	"workers/api/src/lib/user-ai.ts": 817,
 	// New entry at #914, crossing LIMIT by 6: the Pilot's prompt split into a 1-hour-cached run prefix
 	// and an uncached round tail, with the measurement that justified it in its doc comment.
-	"workers/api/src/lib/coding-loop.ts": 806,
+	"workers/api/src/lib/coding-loop.ts": 813, // +7 at #898: the Pilot step log marks the instruction it shortens; `paneChars` rides on the snapshot.
 	// +3 at #878: the terminal record hook — an import and a one-line call with its comment after the handler. It belongs HERE for the reason the gates do: every surface dispatches through this function, and recording anywhere else would record one surface. The storage is lib/terminal-record.ts.
-	"workers/api/src/lib/tool-registry.ts": 899,
+	"workers/api/src/lib/tool-registry.ts": 902, // +3 at #898: truncation made visible (paging, marked cuts, refused over-length writes).
 	// +8 for the #312 stats prompt block. Deliberately not split: the block is two statements
 	// and its comment, and it must sit inside the existing config read (`instanceCfg`/`agentCfg`
 	// are already in hand) or the prompt costs an extra query per turn. Everything else about
@@ -1203,7 +1204,7 @@ const PINS = {
 	// that had stopped moving. It is now DESC + reverse — invisible at both call sites, which get
 	// the order they always did, and therefore exactly the line someone "tidies" back to ASC. Not
 	// split: another lane holds this file and a structural move would collide for no gain.
-	"workers/api/src/routes/instances-runtime.ts": 914, // +22 at #868: the Runner setup card names every step (install, pags login, pags up) and, for a coding agent, the GitHub App and repository steps — it is the card's builder, and the live verdicts went to lib/runner-setup.ts.
+	"workers/api/src/routes/instances-runtime.ts": 936, // +22 at #868: the Runner setup card names every step (install, pags login, pags up) and, for a coding agent, the GitHub App and repository steps — it is the card's builder, and the live verdicts went to lib/runner-setup.ts. +22 at #898: truncation made visible (paging, marked cuts, refused over-length writes).
 	// +1 for #344: one import. The board link it builds is now `instanceBoardLink`, because a
 	// console link a Worker writes by hand is a link nothing checks against the router — two were
 	// found broken that way. The line it replaced was the same length; the import is the cost.
@@ -1225,7 +1226,7 @@ const PINS = {
 	// Raised rather than split — the growth is a comment and two small string operations, and
 	// splitting the dispatch module to absorb them would hide the rationale from the mechanism.
 	// +16 at #847: runtime selection is the trigger adapter that preserves delivery/retry/idempotency; workflow creation already owns the runtime mechanics.
-	"workers/api/src/lib/triggers.ts": 817,
+	"workers/api/src/lib/triggers.ts": 820, // +3 at #898: truncation made visible (paging, marked cuts, refused over-length writes).
 	// +55 at #391 (a constant, a config field, a timer, and the paragraphs saying why): one-shot
 	// turn boundaries moved from three inferred timers to the process's own exit, and the
 	// 15-minute backstop had to become an ENFORCED ceiling — a timer that ends the turn — rather
@@ -1275,7 +1276,7 @@ const PINS = {
 	// what a brief says, what it must never claim, and its budget — is not here at all: it is pure,
 	// tested, and in workers/api/src/lib/coding-seed-brief.ts.
 	// +40 at #889: a failed turn's own output — the per-turn tail, `pushUnframed` (a structured engine's non-JSON lines, where Codex wrote its 401) and the `engine_error` case. They are the stream handlers' own branches, so they live where the stream is read; the bounds and the report are in engine-turn.ts.
-	"packages/browser-runner/src/coding/headless.ts": 1045,
+	"packages/browser-runner/src/coding/headless.ts": 1058, // +13 at #898: the transcript counts what it trims, and says when it drops an oversized line.
 	// New entry at #687 — 629 → 964, crossing LIMIT by 164. The repo-detail slice
 	// (#687) adds three new types (GithubIssueEntry, GithubPullEntry, GithubBranchEntry),
 	// their input/output interfaces, an in-process LRU cache, three projection helpers
@@ -1400,7 +1401,7 @@ const PINS = {
 	// lets an agent restore dispatch-without-asking on a connector its owner put behind approval.
 	// The storage is in `lib/connector-consent.ts` and the gate in `lib/tool-registry.ts`, so this
 	// file took the route and none of the mechanism.
-	"workers/api/src/routes/tools.ts": 1386, // +3 at #886: a busy refusal carries what holds the repo — the import and two lines (the lookup lives in lib/loop-busy.ts). +5 at #925: POST /loop hands back the same-issue entry or run it already has instead of queueing a duplicate — the import, the lookup and its two answers (the matching lives in lib/objective-dedupe.ts). +4 at #903: the two loop reads carry `repoCi` beside `health` — an import and one line per route plus its why; the verdict, the sweep and the reader live in lib/repo-ci-health.ts. +1 at #891: POST /loop answers an engine_auth refusal with its stopReason and recorded runId (the refusal itself lives in lib/engine-auth-refusal.ts). +5 at #877: POST /loop reads `requireRepoChoice` and hands it to the driver (the decision lives in pickLoopRepo). +1 at #854: the per-instance objective cap check (the arithmetic lives in lib/loop-limits.ts). +4 at #771: the invoke route's opt-in `?agent=` type check (the check itself lives in routes/agent-type-tools.ts). +4 at #868: a coding run's start is Pro-gated before its budget pool opens — the import, the gate and its two-line reason.
+	"workers/api/src/routes/tools.ts": 1391, // +3 at #886: a busy refusal carries what holds the repo — the import and two lines (the lookup lives in lib/loop-busy.ts). +5 at #925: POST /loop hands back the same-issue entry or run it already has instead of queueing a duplicate — the import, the lookup and its two answers (the matching lives in lib/objective-dedupe.ts). +4 at #903: the two loop reads carry `repoCi` beside `health` — an import and one line per route plus its why; the verdict, the sweep and the reader live in lib/repo-ci-health.ts. +1 at #891: POST /loop answers an engine_auth refusal with its stopReason and recorded runId (the refusal itself lives in lib/engine-auth-refusal.ts). +5 at #877: POST /loop reads `requireRepoChoice` and hands it to the driver (the decision lives in pickLoopRepo). +1 at #854: the per-instance objective cap check (the arithmetic lives in lib/loop-limits.ts). +4 at #771: the invoke route's opt-in `?agent=` type check (the check itself lives in routes/agent-type-tools.ts). +4 at #868: a coding run's start is Pro-gated before its budget pool opens — the import, the gate and its two-line reason. +5 at #898: truncation made visible (paging, marked cuts, refused over-length writes).
 	// New entry at #722, crossing LIMIT from 799 to 810. The addition is the approval-time re-check
 	// on `runActionableTicket`: a `call_tool` ticket is re-validated against LIVE permissions before
 	// it is claimed, because the gate was evaluated when the card was written and the human clicks
@@ -1409,7 +1410,7 @@ const PINS = {
 	// `lib/tool-approval-run.ts`; the dispatch it guards is there too. Splitting this file is worth
 	// doing on its own terms (it is the board/ticket surface AND the runtime-task surface), but
 	// doing it inside a security fix would bury the fix in a move diff.
-	"workers/api/src/routes/instances-tasks.ts": 814, // +4 at #868: the no-runtime branch resolves the agent's capabilities so a coding agent's setup card names its GitHub and repository steps.
+	"workers/api/src/routes/instances-tasks.ts": 839, // +4 at #868: the no-runtime branch resolves the agent's capabilities so a coding agent's setup card names its GitHub and repository steps. +25 at #898: truncation made visible (paging, marked cuts, refused over-length writes).
 	// First entry at #477: Usage.tsx crossed 800 lines as BudgetPanel expanded to cover per-tree
 	// run knobs (perTreeCostMicros, perTreeDelegations, perTreeMaxDepth, loopMaxIterations) and
 	// their edit fields. The page is one coherent screen — usage data + the limits that bound it —
@@ -1857,7 +1858,7 @@ const PINS = {
 	// +3 at #889/#893: the headless.ts and user-ai.ts raises above (one line of why each) and this one — both landed without their raise and left CI red until this.
 	// +5 at #921: the restored workflow-run.ts entry above (four lines of why + pin) and this line, less one line of slack.
 	// +6 at #914: the user-ai.ts raise and the new coding-loop.ts entry above (two lines of why each) and this line.
-	"scripts/check-file-size.mjs": 1941, // +2 at #946: the agents.ts pin and its reason; +1 at #944: the reason line for the runner.ts pin.
+	"scripts/check-file-size.mjs": 1942, // +2 at #946: the agents.ts pin and its reason; +1 at #944: the reason line for the runner.ts pin; +1 at #898: the board.ts pin.
 };
 
 /**

@@ -10,18 +10,22 @@ notificationRoutes.get("/", async (c) => {
 	const session = await requireUser(c);
 	const unreadOnly = c.req.query("unread") === "true";
 	const limit = Math.min(Number(c.req.query("limit")) || 50, 200);
+	const offset = Math.max(0, Math.trunc(Number(c.req.query("offset")) || 0));
 
 	let sql = "SELECT * FROM notifications WHERE user_id = ?1";
 	if (unreadOnly) sql += " AND read = 0";
-	sql += " ORDER BY created_at DESC LIMIT ?2";
+	sql += " ORDER BY created_at DESC, id DESC LIMIT ?2 OFFSET ?3";
 
-	const { results } = await c.env.DB.prepare(sql).bind(session.uid, limit).all();
+	// One past the page, so the reply can say whether more exist (#898).
+	const { results: rows } = await c.env.DB.prepare(sql).bind(session.uid, limit + 1, offset).all();
+	const hasMore = rows.length > limit;
+	const results = rows.slice(0, limit);
 
 	const unreadCount = await c.env.DB.prepare(
 		"SELECT COUNT(*) as count FROM notifications WHERE user_id = ?1 AND read = 0",
 	).bind(session.uid).first<{ count: number }>();
 
-	return c.json({ notifications: results, unreadCount: unreadCount?.count || 0 });
+	return c.json({ notifications: results, unreadCount: unreadCount?.count || 0, offset, hasMore, nextOffset: hasMore ? offset + limit : null });
 });
 
 /**

@@ -31,7 +31,7 @@ import { codingBuildsLink } from "./console-links.js";
 import { isDeployWorkflow } from "./deploy-watch.js";
 import { logError } from "./error-log.js";
 import { fetchWorkflowRuns } from "./github-actions.js";
-import { githubConditionalJson, resolveGithubRead } from "./github-cache.js";
+import { type GithubCacheIdentity, githubConditionalJson, resolveGithubRead } from "./github-cache.js";
 import { notificationDedupeKey } from "./notifications.js";
 import { notifyUser } from "../routes/push.js";
 import type { Env } from "../types.js";
@@ -272,6 +272,30 @@ function toCiRun(raw: Record<string, unknown>): CiRun {
 	};
 }
 
+/** At most this many out-of-window workflows are looked up per repo per sweep. */
+export const CI_MISSING_WORKFLOW_LOOKUPS = 10;
+
+/**
+ * The file names of the repo's ACTIVE workflows that have no run in `runs`. Degrades to [] when the
+ * workflow list cannot be read — the window's own verdict still stands, exactly as before.
+ */
+async function workflowsOutsideWindow(env: Env, identity: GithubCacheIdentity, githubRepo: string, headers: Record<string, string>, runs: Array<Record<string, unknown>>): Promise<string[]> {
+	const listed = await githubConditionalJson<{ workflows?: Array<{ path?: string; state?: string }> }>(env, {
+		identity,
+		repo: githubRepo,
+		resource: "workflows",
+		variant: "list",
+		url: `https://api.github.com/repos/${githubRepo}/actions/workflows?per_page=100`,
+		headers,
+	}).catch(() => null);
+	if (!listed?.ok) return [];
+	const seen = new Set(runs.map((r) => (typeof r.path === "string" ? r.path.split("@")[0] : "")));
+	return (listed.data?.workflows ?? [])
+		.filter((w) => w.state === "active" && typeof w.path === "string" && w.path.startsWith(".github/workflows/") && !seen.has(w.path))
+		.map((w) => String(w.path).split("/").pop() ?? "")
+		.filter(Boolean);
+}
+
 /** Check one repo and store the verdict. Exported for the sweep's tests. */
 export async function checkRepoCi(env: Env, repo: RepoRow, now = new Date()): Promise<RepoCiHealth> {
 	const previous = parseJson<RepoCiHealth | null>(repo.ci_health, null);
@@ -307,7 +331,18 @@ export async function checkRepoCi(env: Env, repo: RepoRow, now = new Date()): Pr
 	// A stored page served while GitHub was unreachable can name an old run as the newest (#708).
 	if (res.stale || meta.stale) return unknown("GitHub could not be reached — only a stored copy was available");
 
-	const workflows = assessCiRuns(res.runs.map(toCiRun), branch, now.getTime());
+	// Every active workflow, not only those in the newest 50 runs (#898): a workflow that runs rarely
+	// fell out of that window, its alert was forgotten, and a red one could read as passing. Each one
+	// missing from the window gets its own latest default-branch runs — one extra conditional read,
+	// only for the workflows the window did not cover.
+	const missing = await workflowsOutsideWindow(env, identity, repo.github_repo, headers, res.runs);
+	const extra = await Promise.all(
+		missing.slice(0, CI_MISSING_WORKFLOW_LOOKUPS).map(async (file) => {
+			const one = await fetchWorkflowRuns(repo.github_repo, token ?? undefined, { perPage: 5, branch, workflow: file }, { env, identity });
+			return "runs" in one ? one.runs : [];
+		}),
+	);
+	const workflows = assessCiRuns([...res.runs, ...extra.flat()].map(toCiRun), branch, now.getTime());
 	const health: RepoCiHealth = { state: overallCiState(workflows), branch, workflows, checkedAt: now.toISOString() };
 	const decision = decideCiAlerts(workflows, parseJson<CiAlerted>(repo.ci_alerted, {}));
 	if (decision.newlyFailing.length) {

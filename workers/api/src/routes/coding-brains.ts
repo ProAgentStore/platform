@@ -22,7 +22,7 @@ import { callRunner, READ_TIMEOUT_MS, type RunnerConn } from "../lib/runner-clie
 import { runUserWorkersAi } from "../lib/user-ai.js";
 import { appendTimeline, contextForCopilot, lastTerminal } from "../lib/coding-timeline.js";
 import { terminalSnapshotChanged, terminalSnapshotContent } from "../lib/terminal-snapshot.js";
-import { copilotSummary } from "../lib/coding-copilot.js";
+import { copilotSummary, terminalTail } from "../lib/coding-copilot.js";
 import { getRepo, getSession, touchSessionActivity } from "../lib/coding-store.js";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { optionsFor, type SurfaceSpec } from "../lib/surface-options.js";
@@ -263,7 +263,7 @@ export function registerCopilotRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 			"Wrong: 'Fixed overflow in PuzzleSets.tsx line 99'. Right: 'Fixed the horizontal scroll on the puzzle page.' " +
 			"Only get technical when the user asks to elaborate, show code, or be more detailed.\n" +
 			"Keep it to 1-2 sentences. Never pad. After delegating, say 'On it' + what you asked the agent to do in plain English.";
-		const userMsg = `User: ${raw}\n\nSESSION MEMORY (recent):\n${memory || "(none)"}\n\nTERMINAL (recent):\n${pane.slice(-6000) || "(no live terminal)"}`;
+		const userMsg = `User: ${raw}\n\nSESSION MEMORY (recent):\n${memory || "(none)"}\n\nTERMINAL (recent):\n${terminalTail(pane) || "(no live terminal)"}`;
 		const tools = !mayDrive ? [] : [
 			{
 				type: "function",
@@ -291,7 +291,7 @@ export function registerCopilotRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 				{ label: "overseer.system", value: system },
 				{ label: "overseer.user", value: raw },
 				{ label: "overseer.memory", value: memory },
-				{ label: "overseer.terminal", value: pane.slice(-6000) },
+				{ label: "overseer.terminal", value: terminalTail(pane) },
 				{ label: "overseer.tools", value: tools },
 			],
 		}).catch(() => ({ response: "" }))) as { response?: string; tool_calls?: Array<{ name: string; arguments?: Record<string, unknown> }> };

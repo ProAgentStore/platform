@@ -9,6 +9,7 @@
 //
 // This module is the referee. The model proposes (`loop-decide`); these rules dispose.
 
+import { clipMarked } from "./clip-marked.js";
 import type { LoopDecision } from "./loop-decide.js";
 
 /** Why a run ended. Every one of these is a DIFFERENT thing to tell a human. */
@@ -247,6 +248,10 @@ export function statusFor(reason: LoopStopReason): LoopRunStatus {
  *
  * Tool output is prepended when present: a turn that only ran tools would otherwise look empty,
  * which the loop reads as no-progress and stops on.
+ *
+ * Each part is budgeted on its own and every cut is marked (#898). The two were joined and THEN cut
+ * at 8,000, so a long tool log pushed the reply — and its conclusion, which is what DONE/CONTINUE
+ * is decided on — off the end, silently. A reply the provider stopped at its output cap says so too.
  */
 export function readAgentReply(body: unknown): string {
 	const b = (body && typeof body === "object" ? body : {}) as {
@@ -254,6 +259,7 @@ export function readAgentReply(body: unknown): string {
 		toolMessage?: unknown;
 		response?: unknown;
 		error?: unknown;
+		truncated?: unknown;
 	};
 	if (typeof b.error === "string" && b.error) return `${AGENT_FAILED_PREFIX}${b.error.slice(0, 500)})`;
 	const textOf = (v: unknown): string => {
@@ -261,9 +267,18 @@ export function readAgentReply(body: unknown): string {
 		const c = (v as { content?: unknown } | null)?.content;
 		return typeof c === "string" ? c : "";
 	};
-	const parts = [textOf(b.toolMessage), textOf(b.message) || (typeof b.response === "string" ? b.response : "")].filter(Boolean);
-	return parts.join("\n\n").slice(0, 8000) || "(the agent returned nothing)";
+	const reply = textOf(b.message) || (typeof b.response === "string" ? b.response : "");
+	const tools = textOf(b.toolMessage);
+	// The reply keeps its tail — the conclusion — and the tool log its head, within one 8,000 budget.
+	const replyPart = clipMarked(reply, tools ? REPLY_BUDGET - TOOL_LOG_BUDGET : REPLY_BUDGET, { keep: "tail" });
+	const toolPart = clipMarked(tools, Math.max(TOOL_LOG_BUDGET, REPLY_BUDGET - replyPart.length));
+	const capped = b.truncated === true ? "\n[the provider stopped this reply at its output length limit — it is not the whole answer]" : "";
+	return [toolPart, replyPart ? `${replyPart}${capped}` : ""].filter(Boolean).join("\n\n") || "(the agent returned nothing)";
 }
+
+/** What one turn may add to the orchestrator's prompt, and the part of it the tool log may take. */
+const REPLY_BUDGET = 8000;
+const TOOL_LOG_BUDGET = 2000;
 
 /**
  * How `readAgentReply` frames a turn the AgentDO refused with `{ error }`. The platform writes it,

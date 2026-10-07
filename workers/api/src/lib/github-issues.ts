@@ -47,7 +47,27 @@ export interface ListIssuesOpts {
 	state?: "open" | "closed" | "all";
 	labels?: string;
 	limit?: number;
+	/** 1-based page of GitHub's listing (#898) — without it only the newest page was reachable. */
+	page?: number;
+	/**
+	 * `"oldest"` lists by creation, oldest first — the backlog order the issues-mode picker wants
+	 * (#898): it took the lowest number among the 30 most recently UPDATED issues, so an old,
+	 * untouched issue was never picked. Default is most recently updated first.
+	 */
+	order?: "updated" | "oldest";
 }
+
+/** One page of a listing, and whether GitHub has another (#898). */
+export interface IssuesPage {
+	issues: IssueSummary[];
+	page: number;
+	/** True when GitHub returned a full page, so a next one may exist. A page can hold FEWER than
+	 *  `per_page` issues and still have more: GitHub's issue listing includes pull requests, which
+	 *  are removed after the fetch. */
+	hasMore: boolean;
+}
+
+const pageOf = (page: unknown): number => Math.max(1, Math.trunc(Number(page)) || 1);
 
 export interface ListIssueCommentsOpts {
 	page?: number;
@@ -115,9 +135,6 @@ function toSummary(raw: RawIssue): IssueSummary {
 	};
 }
 
-const BODY_CAP = 8 * 1024;
-const COMMENT_BODY_CAP = 8 * 1024;
-
 /** The cache resources this module owns — named once so the write path can drop the right one. */
 export const ISSUES_RESOURCE = "issues";
 export const ISSUE_RESOURCE = "issue";
@@ -167,13 +184,21 @@ export async function invalidateIssueCaches(env: Env, userId: string, githubRepo
  * failure (no App, no install, GitHub error, malformed repo).
  */
 export async function listIssues(env: Env, userId: string, githubRepo: string, opts: ListIssuesOpts = {}): Promise<IssueSummary[]> {
+	return (await listIssuesPage(env, userId, githubRepo, opts)).issues;
+}
+
+/** {@link listIssues}, with the page it read and whether there is another. */
+export async function listIssuesPage(env: Env, userId: string, githubRepo: string, opts: ListIssuesOpts = {}): Promise<IssuesPage> {
+	const page = pageOf(opts.page);
+	const none: IssuesPage = { issues: [], page, hasMore: false };
 	const parsed = parseRepo(githubRepo);
-	if (!parsed) return [];
+	if (!parsed) return none;
 	try {
 		const token = await installationTokenForOwner(env, userId, parsed.owner);
 		const state = opts.state ?? "open";
 		const perPage = Math.min(Math.max(opts.limit ?? 30, 1), 100);
-		const params = new URLSearchParams({ state, per_page: String(perPage), sort: "updated", direction: "desc" });
+		const params = new URLSearchParams({ state, per_page: String(perPage), ...(opts.order === "oldest" ? { sort: "created", direction: "asc" } : { sort: "updated", direction: "desc" }) });
+		if (page > 1) params.set("page", String(page));
 		if (opts.labels) params.set("labels", opts.labels);
 		const qs = params.toString();
 		const res = await githubConditionalJson<RawIssue[]>(env, {
@@ -187,12 +212,12 @@ export async function listIssues(env: Env, userId: string, githubRepo: string, o
 			url: `https://api.github.com/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.name)}/issues?${qs}`,
 			headers: GH_HEADERS(token),
 		});
-		if (!res.ok) return [];
+		if (!res.ok) return none;
 		const data = res.data;
-		if (!Array.isArray(data)) return [];
-		return data.filter((i) => !i.pull_request).map(toSummary);
+		if (!Array.isArray(data)) return none;
+		return { issues: data.filter((i) => !i.pull_request).map(toSummary), page, hasMore: data.length === perPage };
 	} catch {
-		return [];
+		return none;
 	}
 }
 
@@ -239,7 +264,7 @@ export async function searchIssues(env: Env, userId: string, githubRepo: string,
 	const parsed = parseRepo(githubRepo);
 	if (!parsed) return { error: `"${githubRepo}" is not an "owner/name" repository.` };
 	const token = await installationTokenForOwner(env, userId, parsed.owner).catch(() => null);
-	const found = await fetchGithubSearch<RawIssue>(searchIssuesQuery(parsed.owner, parsed.name, search, opts), token, opts.limit);
+	const found = await fetchGithubSearch<RawIssue>(searchIssuesQuery(parsed.owner, parsed.name, search, opts), token, opts.limit, opts.page);
 	if ("error" in found) return found;
 	return { total_count: found.total_count, incomplete_results: found.incomplete_results, issues: found.items.filter((i) => !i.pull_request).map(toSummary) };
 }
@@ -253,9 +278,11 @@ export async function searchIssues(env: Env, userId: string, githubRepo: string,
  * answers 403/429 past that. Not routed through the conditional cache, which answers a failed
  * request with its stale copy — the very refusal this must surface.
  */
-export async function fetchGithubSearch<T>(q: string, token: string | null, limit = 30): Promise<{ total_count: number; incomplete_results: boolean; items: T[] } | { error: string }> {
+export async function fetchGithubSearch<T>(q: string, token: string | null, limit = 30, page = 1): Promise<{ total_count: number; incomplete_results: boolean; items: T[] } | { error: string }> {
 	const perPage = Math.min(Math.max(limit, 1), 100);
-	const url = `https://api.github.com/search/issues?${new URLSearchParams({ q, per_page: String(perPage), sort: "updated", order: "desc" })}`;
+	const params = new URLSearchParams({ q, per_page: String(perPage), sort: "updated", order: "desc" });
+	if (pageOf(page) > 1) params.set("page", String(pageOf(page)));
+	const url = `https://api.github.com/search/issues?${params}`;
 	let res: Response;
 	try {
 		res = await fetch(url, { headers: GH_HEADERS(token) });
@@ -276,7 +303,7 @@ export async function fetchGithubSearch<T>(q: string, token: string | null, limi
 	return { total_count: typeof body?.total_count === "number" ? body.total_count : items.length, incomplete_results: body?.incomplete_results === true, items };
 }
 
-/** Read one issue's detail (with a capped body). Returns null if it's a PR or not found. */
+/** Read one issue's detail, body whole. Returns null if it's a PR or not found. */
 export async function readIssue(env: Env, userId: string, githubRepo: string, number: number): Promise<IssueDetail | null> {
 	const parsed = parseRepo(githubRepo);
 	if (!parsed || !Number.isFinite(number)) return null;
@@ -294,8 +321,8 @@ export async function readIssue(env: Env, userId: string, githubRepo: string, nu
 		const raw = res.data;
 		if (!raw || typeof raw !== "object") return null;
 		if (raw.pull_request) return null; // it's a PR, not an issue
-		const body = (raw.body ?? "").slice(0, BODY_CAP);
-		return { ...toSummary(raw), body };
+		// Whole (#898): GitHub caps a body at 65,536 chars itself; an 8 KiB slice here cut comments mid-word.
+		return { ...toSummary(raw), body: raw.body ?? "" };
 	} catch {
 		return null;
 	}
@@ -305,7 +332,7 @@ function toComment(raw: RawIssueComment): IssueComment {
 	return {
 		id: raw.id,
 		author: raw.user?.login ?? "",
-		body: (raw.body ?? "").slice(0, COMMENT_BODY_CAP),
+		body: raw.body ?? "",
 		createdAt: raw.created_at ?? "",
 		updatedAt: raw.updated_at ?? "",
 		url: raw.html_url ?? "",
