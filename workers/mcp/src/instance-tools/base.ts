@@ -226,7 +226,7 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 	// guess made here.
 	server.tool(
 		"call_instance_tool",
-		"Invoke a connector tool (e.g. github_workflow_runs, github_list_issues) on one of your instances. This is a two-step wrapper: first call list_instance_tools with allowed_only:true and schemas:true, find the target tool, then pass `tool` as that exact name and `input` as exactly that nested tool's argument object. Do not wrap the nested arguments in another object and do not guess aliases. No dry run: list_instance_tools is the read-only preview.",
+		"Invoke a connector tool (e.g. github_workflow_runs, github_list_issues) on one of your instances. This is a two-step wrapper: first call list_instance_tools with allowed_only:true and schemas:true, find the target tool, then pass `tool` as that exact name and `input` as exactly that nested tool's argument object. Do not wrap the nested arguments in another object and do not guess aliases. No dry run: list_instance_tools is the read-only preview. While a call is still pending in your client, wait for its result: do not call again, and do not add an argument this schema does not list (e.g. _deferred_result_for) — there is no resume or join argument.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID from my_instances"),

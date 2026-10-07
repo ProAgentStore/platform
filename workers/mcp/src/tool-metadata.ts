@@ -44,6 +44,7 @@ export const SERVER_INSTRUCTIONS = [
 	"To debug what an agent did, call agent_trace first (chat turns, steps and errors on one timeline), then instance_messages or list_errors for detail. usage_summary reports spend.",
 	"Tool annotations are accurate: readOnlyHint true means the tool only reads. A tool that changes state takes dry_run — call it that way first to see what would happen. The most consequential tools also require an exact confirm string and a connection holding the destructive scope; those refusals are real and cannot be argued past.",
 	"If you already know the one instance you will drive for this whole session, connect to /mcp/i/<instance_id> instead: that session publishes only that instance's own tools under their real names with no instance_id argument, plus chat, guide and messages, and none of the platform-wide tools above.",
+	"A call your client reports as still in progress is still running: wait for its result. Do not call the tool again to resume or join it, and never invent an argument the schema does not list (such as _deferred_result_for) — there is no such mechanism, and an unlisted argument is rejected. Retry only after a call FAILED or its response was LOST, and only the way that tool's description says (request_id where it has one).",
 ].join(" ");
 
 /** Words that read wrong in sentence case — expanded rather than title-cased. */

@@ -996,4 +996,9 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// and the `local_browser` runtime. 253 registrations become 256, `MCP_TOOL_ALWAYS_ON` 227 → 230,
 	// gated stays 26. Appended, never edited in place: 0.1.76 is published.
 	"0.1.77": "sha256:42cba6782bfb2e4f0c255d99d1b147d4ff55173537b0124e020a1c82bb3e10f1",
+	// 0.1.78 (#927): SERVER_INSTRUCTIONS gains a last sentence — a call the client reports as still in
+	// progress is still running: wait for it, never re-call to resume or join it, never invent an
+	// unlisted argument (an agent sent `_deferred_result_for`). No tool, schema or annotation changed.
+	// Appended, never edited in place: 0.1.77 is published.
+	"0.1.78": "sha256:c4cbe838aa5934f649aff3e0e7362b78119bf6190190337bf5c4fca748042f05",
 };

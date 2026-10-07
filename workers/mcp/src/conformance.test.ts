@@ -1114,3 +1114,46 @@ describe("tool discovery — the right tool carries the words people search with
 		expect(missing, `${intended} does not mention: ${missing.join(", ")}`).toEqual([]);
 	});
 });
+
+/**
+ * A pending call is waited for, never "resumed" (#927). A host told an agent a call was still in
+ * progress, and the agent re-called the tool with an argument it invented, `_deferred_result_for`,
+ * to "join" it. Nothing in this repository produces that message or that name — they are the
+ * host's and the model's — but nothing here said what to do while a call is pending either, and
+ * coding_loop_start's "use request_id to safely join" read as an invitation to build a join.
+ */
+describe("a pending call is waited for, never resumed with an invented argument (#927)", () => {
+	const PENDING = /still in progress|still pending/;
+	const NO_INVENTED = /do not add an argument this schema does not list|never invent an argument the schema does not list/;
+
+	it("says so to every client, in the server instructions", () => {
+		expect(SERVER_INSTRUCTIONS).toMatch(PENDING);
+		expect(SERVER_INSTRUCTIONS).toMatch(/wait for its result\. Do not call the tool again to resume or join it/);
+		expect(SERVER_INSTRUCTIONS).toMatch(NO_INVENTED);
+		// After the id-first sentence, which must stay inside the first 512 characters.
+		expect(SERVER_INSTRUCTIONS.indexOf("still in progress")).toBeGreaterThan(512);
+	});
+
+	it.each(["coding_loop_start", "call_instance_tool"])("and on %s, where it happened", (name) => {
+		const tool = published.find((t) => t.name === name) as WireTool;
+		expect(tool.description).toMatch(PENDING);
+		expect(tool.description).toMatch(NO_INVENTED);
+		expect(tool.description).toMatch(/_deferred_result_for/);
+	});
+
+	it("coding_loop_start names request_id as the ONLY way to join, and only after a lost response", () => {
+		const d = (published.find((t) => t.name === "coding_loop_start") as WireTool).description ?? "";
+		expect(d).toMatch(/after a timeout or a LOST response/);
+		expect(d).toMatch(/request_id is the only join mechanism there is/);
+	});
+
+	it("no published tool accepts a resume argument, and every schema refuses unlisted ones", () => {
+		for (const t of published) {
+			const props = Object.keys((t.inputSchema.properties as Record<string, unknown> | undefined) ?? {});
+			expect(props.filter((p) => /deferred|resume_for|join_call/i.test(p)), t.name).toEqual([]);
+		}
+		for (const name of ["coding_loop_start", "call_instance_tool", "coding_loop_queue"]) {
+			expect((published.find((t) => t.name === name) as WireTool).inputSchema.additionalProperties, name).toBe(false);
+		}
+	});
+});
