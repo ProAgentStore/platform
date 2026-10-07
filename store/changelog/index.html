@@ -100,7 +100,7 @@ header nav>span{padding:0.8rem 0.25rem;border-bottom:1px solid var(--line,#1f1f1
       <span class="tag tag-feat">Feature</span>
       <p>Give the job-application agent a job URL and an LLM drives a real browser to fill and <strong>submit</strong> the application — no selectors, it acts on what it sees.</p>
       <ul>
-        <li><strong>Submit for real:</strong> the brain fills the ATS form and clicks Submit (with a dry-run guard for testing)</li>
+        <li><strong>Submit for real:</strong> the brain fills the ATS form and clicks Submit autonomously once it has grounded answers for the required fields</li>
         <li><strong>Retry + attempts:</strong> one card per job on the work board, each attempt tracked and re-runnable</li>
         <li><strong>Human takeover:</strong> captcha / needs-input handoffs pause the run, you resolve it, the agent resumes</li>
         <li><strong>Per-ATS learned tips:</strong> every run saves what worked and failed, keyed by ATS host, fed back next time</li>

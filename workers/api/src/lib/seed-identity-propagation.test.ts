@@ -147,6 +147,12 @@ const PROPAGATION: Record<string, string> = {
 	// #836 follow-up: FWS's rendered QA surface arrived after 0156, so 0159 replaces only
 	// the still-exact v2 instance copy, archives it, and adds the same-session site-refine path.
 	"0159_site_builder_rendered_qa_resume.sql": "site_builder_rendered_qa_resume.sql",
+	// 0186 corrects the Job Application Assistant's catalog identity from a prepare/fill-only
+	// assistant to an autonomous submitter. The public catalog row changes immediately, but an
+	// existing subscriber's identity is their Durable Object state. It must remain their editable
+	// copy rather than being silently overwritten by a catalog migration; an owner can resync it
+	// through the normal state route when they want the new wording.
+	"0186_job_application_assistant_autonomous_submission.sql": "owner-initiated PUT /v1/instances/:id/state — the catalog identity is corrected; the existing DO copy remains the subscriber's",
 };
 
 describe("seed config patches — each one records how it reaches an EXISTING instance (#496, #394)", () => {

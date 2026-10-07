@@ -156,7 +156,7 @@ The job-application agent runs on this runtime via the LLM-driven apply pipeline
 
 ### Job application agent (LLM-driven apply)
 
-The flagship apply flow: a **Brain** (Cloudflare Workflow `JobApplyWorkflow`, using the user's BYOK Claude) drives the **Hands** (the local browser runtime) to fill and submit a real application — snapshot the ARIA tree → pick one action → act → repeat. Durable + resumable (escapes the 30s Worker limit). Retry + attempt tracking per job. Three human-in-the-loop handoffs share one pause/resume machine: **captcha** (solve in a live takeover, auto-resumes), **stuck** (do one step + Resume), **needs_input** (supply a value → saved to Profile → resumes). Per-ATS tips are cached and fed back next run; "Open in Gmail" surfaces confirmation links. `dryRun:true` fills everything but a workflow-level guard blocks the final Submit click.
+The flagship apply flow: a **Brain** (Cloudflare Workflow `JobApplyWorkflow`, using the user's BYOK Claude) drives the **Hands** (the local browser runtime) to fill and submit a real application autonomously — snapshot the ARIA tree → pick one action → act → repeat. Durable + resumable (escapes the 30s Worker limit). Retry + attempt tracking per job. Three human-in-the-loop handoffs share one pause/resume machine: **captcha** (solve in a live takeover, auto-resumes), **stuck** (do one step + Resume), **needs_input** (supply a value → saved to Profile → resumes). Per-ATS tips are cached and fed back next run; "Open in Gmail" surfaces confirmation links. There is no final review or submit-confirmation gate: the workflow submits once it has grounded answers for the required form fields.
 
 ### Skills and plugins
 

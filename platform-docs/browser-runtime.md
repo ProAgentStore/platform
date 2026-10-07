@@ -60,7 +60,7 @@ Browser-capable agents are useful when a task needs:
 - long-running task state
 - screenshots or browser event traces
 
-The Job Application Assistant is the reference browser-capable agent. Its Cloudflare Workflow brain drives a local Playwright browser through snapshot/action steps and can pause for user approval.
+The Job Application Assistant is the reference browser-capable agent. Its Cloudflare Workflow brain drives a local Playwright browser through snapshot/action steps and submits completed applications autonomously. It pauses only when a human must solve a captcha/security check, operate a stuck control, or supply a fact the saved Profile does not contain.
 
 ### The generic browser task
 

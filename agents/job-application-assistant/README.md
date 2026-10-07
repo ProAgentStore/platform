@@ -1,8 +1,9 @@
 # Job Application Assistant
 
 A first-party ProAgentStore catalog agent. Give it a job URL and an LLM brain drives a real
-browser to fill — and, when you allow it, submit — the application, answering from your
-structured Profile and the résumé you uploaded.
+browser to complete and submit the application autonomously, answering only from your structured
+Profile and the résumé you uploaded. There is no review screen or final-submit prompt: when it
+has every required, grounded answer, it submits the application.
 
 **Architecture: remote brain, local hands.**
 
@@ -24,13 +25,13 @@ There is exactly one apply path. Every entry point below funnels into `startJobA
 `workers/api/src/routes/instances-apply.ts`, which creates the `job.apply_agent` runner task
 and starts `JobApplyWorkflow`.
 
-### Console / HTTP
+### HTTP
 
 ```http
 POST /v1/instances/{instanceId}/apply
 Authorization: Bearer <session token>
 
-{ "url": "https://boards.example.com/jobs/1234", "dryRun": true }
+{ "url": "https://boards.example.com/jobs/1234" }
 ```
 
 Returns `202 { workflowId, taskId, status: "running", url }`.
@@ -38,7 +39,6 @@ Returns `202 { workflowId, taskId, status: "running", url }`.
 | Field | Meaning |
 |---|---|
 | `url` | Required. The job posting / application URL (`http`/`https`). |
-| `dryRun` | `true` = fill everything, but a **runtime guard inside the workflow blocks the final submit click**. The brain cannot override it. Omit or `false` to really submit. |
 | `resumePath` | Optional and normally omitted. If a résumé has been uploaded to the platform the route hands the runner a short-lived signed download URL instead; a local path is only a legacy same-machine fallback. |
 | `candidate`, `coverNote` | Optional overrides. Anything absent comes from the saved Profile. |
 
@@ -56,23 +56,22 @@ insert, not a check-then-act race.
 ```text
 subscribe_agent
 upload_resume        # url= or content_base64=, or neither to re-parse the résumé on file
-apply_to_job         # submit=false (default) = fill-only test run
-apply_to_job         # submit=true = real submission — requires `destructive` scope
+apply_to_job         # starts an autonomous, real application submission
 instance_board       # watch progress and handoffs
 instance_task_events
 get_apply_tips       # what the agent has learned per ATS host
 get_profile
 ```
 
-`apply_to_job` maps `submit` to the route's `dryRun` inversely: `submit=false` sends
-`dryRun:true`. A fill-only run needs `runtime` scope; a real submission needs `destructive`
-scope. Both tools honour `dry_run`, which describes the call without performing it.
+`apply_to_job` starts a real submission under the caller's `destructive` scope. It is not a
+separate implementation: it starts the same durable workflow and browser task as the HTTP and
+chat paths.
 
 ### Chat tool
 
 The chat agent exposes `submit_job_application`. The **name** is legacy — it predates the
-workflow — but it is not a separate implementation: it calls the same `startJobApply()`. Note
-that it does **not** pass `dryRun`, so a chat-initiated apply is a real submission.
+workflow — but it is not a separate implementation: it calls the same `startJobApply()` and
+starts a real submission.
 
 ## Human handoffs
 
@@ -118,13 +117,17 @@ Rules & Tips) are free-text rules injected at the top of the prompt, overriding 
 *and* what failed — plus the outcome, keyed by ATS host, and feeds it back into the next run's
 prompt. Read it with `GET /v1/instances/{id}/apply-tips`.
 
-## Safety model
+## Autonomous submission boundaries
 
-- `dryRun` is enforced in the **workflow**, not in the prompt. `dryRunBlockReason()` refuses
-  the submit action regardless of what the brain decides, and the guard carries across handoff
-  rounds.
-- Real submission through MCP requires `destructive` scope; a fill-only run requires only
-  `runtime` scope.
+- The workflow clicks the application's final submit control automatically once it has completed
+  the form with grounded Profile, résumé, and explicit-instruction values. It does not wait for a
+  separate review or final-confirmation step.
+- The agent never invents employment history, education, qualifications, work authorisation,
+  compensation expectations, dates, or screening answers. A missing required value is a handoff,
+  not a guess.
+- CAPTCHA, login/security checks, and controls the browser cannot operate remain hard stops until
+  the subscriber resolves that specific obstacle; they are not a review gate for ordinary
+  submissions.
 - Single-flight per instance prevents duplicate submissions from a double-click or from the
   console racing the chat tool.
 - Every run is written to the unified trace (`GET /v1/instances/{id}/trace`, or the MCP
@@ -143,8 +146,7 @@ concurrent runs on one instance are prevented.
 "runtime": {
   "kind": "pags-browser-runtime",
   "taskTypes": ["job.apply_agent"],   // the task the workflow creates
-  "approvalRequiredFor": [],          // intentionally empty: the gate is dryRun + MCP scope,
-                                      // not a per-task approval step
+  "approvalRequiredFor": [],          // intentionally empty: the workflow submits autonomously
   "brainPlacement": "pags-control-plane",
   "runtimePlane": "pags"
 }
