@@ -76,6 +76,18 @@ describe("why a run is blocked, and the one step that unblocks it", () => {
 		expect(pauseBanner(run({ status: "paused", pauseReason: "login_required" }), [])?.title).toBe("Sign-in");
 	});
 
+	it("a bot check is the owner's to pass in that browser — or to leave; the run never gets past it (#947)", () => {
+		const b = pauseBanner(run({ status: "paused", pauseReason: "access_blocked" }), [ev(1, "browser.blocked", { domain: "indeed.com", detail: { reason: "access_blocked" } })]);
+		expect(b).toMatchObject({ title: "indeed.com is blocking automated browsing", actions: [{ kind: "done_in_browser" }] });
+		expect(b?.body).toMatch(/on Macmini.*does not work around it/);
+	});
+
+	it("a submit/pay/upload page asks only whether to READ it — nothing on it can be filled (#947)", () => {
+		const b = pauseBanner(run({ status: "paused", pauseReason: "write_affordance" }), [ev(1, "browser.blocked", { domain: "seek.com.au", detail: { reason: "write_affordance" } })]);
+		expect(b).toMatchObject({ title: "A page on seek.com.au asks for something to be submitted", actions: [{ kind: "keep_reading" }] });
+		expect(b?.body).toMatch(/cannot fill or submit anything/);
+	});
+
 	it("shows nothing for a run that is not paused", () => {
 		expect(pauseBanner(run(), [])).toBeNull();
 	});

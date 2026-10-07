@@ -11,7 +11,8 @@
  *    refused by name — a model cannot submit what it cannot fill;
  *  - every page it reaches is checked against the deny list, the allow list and the owner's
  *    consent; a new site pauses the run until the owner decides;
- *  - a captcha or a login wall pauses the run for a person; a paywall is reported, never bypassed;
+ *  - a captcha, a login wall, a bot check or an access-control page pauses the run for a person, and
+ *    so does a payment, upload or application form; a paywall is reported, never bypassed;
  *  - pages, actions and time are counted here and refused past their limits;
  *  - findings are recorded through `record_finding`, which only accepts a URL on a site the run
  *    actually opened — a finding must cite a page, not the model's memory.
@@ -109,14 +110,28 @@ const RESEARCH_TOOLS = [
 ];
 
 /** Runs inside the page, through the browser's own evaluate tool — privileged, never offered to the CLI. */
-const INSPECT_PAGE = `() => {
+export const INSPECT_PAGE = `() => {
 	const text = (document.body ? document.body.innerText : "").slice(0, 20000).toLowerCase();
 	const has = (s) => !!document.querySelector(s);
 	const captcha = has('iframe[src*="hcaptcha.com"], .h-captcha, iframe[src*="challenges.cloudflare.com"], .cf-turnstile, iframe[src*="arkoselabs"], .geetest_holder')
 		|| /confirm (that )?you('?re| are) not a robot|i'?m not a robot|verify (that )?you('?re| are) (a )?human|checking (if the site connection is secure|your browser)/.test(text);
 	const login = has('input[type=password]');
 	const paywall = /subscribe to (continue|read)|you('ve| have) reached your (free )?(article )?limit|sign in to (continue|read)/.test(text);
-	return { url: location.href, title: document.title.slice(0, 200), captcha, login, paywall };
+	// A bot check or an access-control page (#947). Read off the title, or off a SHORT body: these
+	// pages say little else, and a long article that merely contains "access denied" is not one.
+	const title = document.title.toLowerCase();
+	const blockedText = /access (is )?denied|403 forbidden|you don'?t have permission to access|(your )?request (was |has been )?blocked|unusual traffic from your (computer|network)|automated (queries|requests|access)|are you a (robot|human)|bot (detection|protection)|pardon our interruption|attention required/;
+	const accessBlocked = blockedText.test(title) || (text.length < 3000 && blockedText.test(text));
+	// A write affordance (#947): somewhere a run would pay, upload, or submit an application or an
+	// account. Search boxes and lone inputs are not; the fields are counted per form, search excluded.
+	const field = 'input:not([type=hidden]):not([type=search]):not([type=submit]):not([type=button]):not([type=checkbox]):not([type=radio]), textarea, select';
+	const payOrUpload = has('input[autocomplete^="cc-"], input[type=file]');
+	const submitForm = Array.from(document.querySelectorAll("form")).some((f) => {
+		if (f.getAttribute("role") === "search" || f.querySelector("input[type=search]")) return false;
+		const send = Array.from(f.querySelectorAll('button, input[type=submit]')).some((b) => /submit|apply|send|pay|place order|checkout|register|sign up|create account/i.test((b.textContent || b.getAttribute("value") || "").trim()));
+		return send && f.querySelectorAll(field).length >= 2;
+	});
+	return { url: location.href, title: document.title.slice(0, 200), captcha, login, paywall, accessBlocked, writeForm: payOrUpload || submitForm };
 }`;
 
 interface PageState {
@@ -125,6 +140,10 @@ interface PageState {
 	captcha: boolean;
 	login: boolean;
 	paywall: boolean;
+	/** A bot check or access-control page (#947). */
+	accessBlocked: boolean;
+	/** A payment, upload, or application/account form — something research must not act on (#947). */
+	writeForm: boolean;
 }
 
 /** A bare lowercase hostname, or null — the same rule the API applies to the lists it sends. */
@@ -157,6 +176,14 @@ export function evaluateResult(raw: string): unknown {
 		return null;
 	}
 }
+
+/** The pauses a person resolves in the browser itself, and how each is named and reported (#947). */
+type PersonBlocker = Extract<LocalBrowserPauseReason, "captcha" | "login_required" | "access_blocked">;
+const BLOCKER_WORDS: Record<PersonBlocker, { noun: string; failure: LocalBrowserSourceFailureReason }> = {
+	captcha: { noun: "a captcha", failure: "captcha" },
+	login_required: { noun: "a sign-in", failure: "login_required" },
+	access_blocked: { noun: "a bot check or access block", failure: "access_denied" },
+};
 
 /** The role and accessible name of a snapshot line holding this ref, e.g. `- link "Next" [ref=e12]`. */
 export function refRole(snapshot: string, ref: string): { role: string; name: string } | null {
@@ -305,14 +332,29 @@ export class BrowserBridge {
 		this.pages++;
 		this.noteNavigation(state);
 		const host = hostOf(state.url) ?? "";
-		const blocker: LocalBrowserPauseReason | null = state.captcha ? "captcha" : state.login ? "login_required" : null;
+		// Pauses, never obstacles (#947): a captcha, a sign-in, a bot check or an access-control page is
+		// for a PERSON in the browser on this machine — the run waits, and re-checks once resumed.
+		const blocker: PersonBlocker | null = state.captcha ? "captcha" : state.login ? "login_required" : state.accessBlocked ? "access_blocked" : null;
 		if (blocker) {
+			const what = BLOCKER_WORDS[blocker];
 			this.host.emit({ type: "browser.blocked", url: state.url, domain: host, detail: { reason: blocker } });
 			const outcome = await this.host.pause(blocker, { domain: host });
-			if (outcome !== "resumed") return text(`${host} needs a person (${blocker === "captcha" ? "a captcha" : "a sign-in"}) and nobody resolved it. Record it with report_source_failure (${blocker}) and move on.`, true);
+			if (outcome !== "resumed") return text(`${host} needs a person (${what.noun}) and nobody resolved it. Record it with report_source_failure (${what.failure}) and move on.`, true);
 			const after = await this.inspect();
-			if (after && (after.captcha || after.login)) return text(`${host} still shows ${blocker === "captcha" ? "a captcha" : "a sign-in"}. Record it with report_source_failure (${blocker}) and move on.`, true);
+			if (after && (after.captcha || after.login || after.accessBlocked)) return text(`${host} still shows ${what.noun}. Record it with report_source_failure (${what.failure}) and move on.`, true);
 			return text(`Resumed after the owner handled ${host}. Take a browser_snapshot to read the page.`);
+		}
+		// A page that pays, uploads, or submits an application or account is outside research. The
+		// tools to act on it do not exist here anyway; the pause is so the OWNER decides whether the run
+		// should be reading it at all, rather than the model wandering through a form it cannot fill.
+		if (state.writeForm) {
+			this.host.emit({ type: "browser.blocked", url: state.url, domain: host, detail: { reason: "write_affordance" } });
+			const outcome = await this.host.pause("write_affordance", { domain: host });
+			if (outcome !== "resumed") {
+				await this.browser.callTool("browser_navigate_back", {}).catch(() => undefined);
+				return text(`${state.url} is a page for submitting, paying or uploading, and the owner did not ask the run to read it. Went back; do not return to it.`, true);
+			}
+			return text("The owner let the run read this page. It is still research only: nothing here can be filled, submitted or uploaded. Take a browser_snapshot to read it.");
 		}
 		if (state.paywall) {
 			this.host.emit({ type: "browser.blocked", url: state.url, domain: host, detail: { reason: "paywall" } });
@@ -332,7 +374,7 @@ export class BrowserBridge {
 		const res = await this.browser.callTool("browser_evaluate", { function: INSPECT_PAGE }).catch(() => null);
 		const v = res && !res.isError ? (evaluateResult(textOf(res)) as Partial<PageState> | null) : null;
 		if (!v || typeof v.url !== "string") return null;
-		return { url: v.url, title: typeof v.title === "string" ? v.title : "", captcha: !!v.captcha, login: !!v.login, paywall: !!v.paywall };
+		return { url: v.url, title: typeof v.title === "string" ? v.title : "", captcha: !!v.captcha, login: !!v.login, paywall: !!v.paywall, accessBlocked: !!v.accessBlocked, writeForm: !!v.writeForm };
 	}
 
 	private recordFinding(args: Record<string, unknown>): ToolResult {

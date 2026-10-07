@@ -11,6 +11,8 @@ interface PageFlags {
 	captcha?: boolean;
 	login?: boolean;
 	paywall?: boolean;
+	accessBlocked?: boolean;
+	writeForm?: boolean;
 	title?: string;
 }
 
@@ -29,7 +31,7 @@ function fakeBrowser(pages: Record<string, PageFlags> = {}, opts: { redirect?: R
 			if (name === "browser_evaluate") {
 				const url = history[history.length - 1] ?? "about:blank";
 				const f = pages[url] ?? {};
-				return { content: [{ type: "text", text: `### Result\n${JSON.stringify({ url, title: f.title ?? "Page", captcha: !!f.captcha, login: !!f.login, paywall: !!f.paywall })}\n### Ran Playwright code` }] };
+				return { content: [{ type: "text", text: `### Result\n${JSON.stringify({ url, title: f.title ?? "Page", captcha: !!f.captcha, login: !!f.login, paywall: !!f.paywall, accessBlocked: !!f.accessBlocked, writeForm: !!f.writeForm })}\n### Ran Playwright code` }] };
 			}
 			if (name === "browser_snapshot") return { content: [{ type: "text", text: '- link "Job 1" [ref=e1]\n- button "Next" [ref=e2]\n- button "Apply now" [ref=e3]\n- textbox "Search" [ref=e4]' }] };
 			return { content: [{ type: "text", text: `${name} ok` }] };
@@ -174,6 +176,44 @@ describe("stopping for a person", () => {
 		const { host, events } = fakeHost({ allow: ["linkedin.com"] });
 		await new BrowserBridge(fakeBrowser({ "https://linkedin.com/jobs": { login: true } }).tools, host).callTool("browser_navigate", { url: "https://linkedin.com/jobs" });
 		expect(events).toContainEqual(expect.objectContaining({ type: "run.paused", pauseReason: "login_required" }));
+	});
+
+	it("pauses on a bot check or access block for a person — never an obstacle to get past (#947)", async () => {
+		const { host, events } = fakeHost({ allow: ["indeed.com"] });
+		const r = await new BrowserBridge(fakeBrowser({ "https://indeed.com/jobs": { accessBlocked: true } }).tools, host).callTool("browser_navigate", { url: "https://indeed.com/jobs" });
+		expect(events).toContainEqual(expect.objectContaining({ type: "browser.blocked", domain: "indeed.com", detail: { reason: "access_blocked" } }));
+		expect(events).toContainEqual(expect.objectContaining({ type: "run.paused", pauseReason: "access_blocked" }));
+		expect(textOf(r)).toMatch(/needs a person \(a bot check or access block\).*report_source_failure \(access_denied\)/);
+		expect(r.isError).toBe(true);
+	});
+
+	it("an access block still there after the owner resumes is reported, not retried", async () => {
+		const { host } = fakeHost({ allow: ["indeed.com"], pause: () => "resumed" });
+		const r = await new BrowserBridge(fakeBrowser({ "https://indeed.com/jobs": { accessBlocked: true } }).tools, host).callTool("browser_navigate", { url: "https://indeed.com/jobs" });
+		expect(textOf(r)).toMatch(/still shows a bot check or access block/);
+	});
+
+	it("stops before a page that submits, pays or uploads; without the owner's OK it goes back (#947)", async () => {
+		const f = fakeBrowser({ "https://seek.com.au/apply/1": { writeForm: true } });
+		const { host, events } = fakeHost({ allow: ["seek.com.au"] });
+		const r = await new BrowserBridge(f.tools, host).callTool("browser_navigate", { url: "https://seek.com.au/apply/1" });
+		expect(events).toContainEqual(expect.objectContaining({ type: "browser.blocked", detail: { reason: "write_affordance" } }));
+		expect(events).toContainEqual(expect.objectContaining({ type: "run.paused", pauseReason: "write_affordance" }));
+		expect(f.calls.at(-1)?.name).toBe("browser_navigate_back");
+		expect(textOf(r)).toMatch(/do not return to it/);
+		expect(r.isError).toBe(true);
+	});
+
+	it("with the owner's OK it may read that page — and still cannot fill or submit anything on it", async () => {
+		const f = fakeBrowser({ "https://seek.com.au/apply/1": { writeForm: true } });
+		const { host } = fakeHost({ allow: ["seek.com.au"], pause: () => "resumed" });
+		const b = new BrowserBridge(f.tools, host);
+		const r = await b.callTool("browser_navigate", { url: "https://seek.com.au/apply/1" });
+		expect(textOf(r)).toMatch(/still research only/);
+		expect(f.calls.some((c) => c.name === "browser_navigate_back")).toBe(false);
+		const typed = await b.callTool("browser_type", { ref: "e4", text: "me@example.com" });
+		expect(typed.isError).toBe(true);
+		expect(f.calls.some((c) => c.name === "browser_type")).toBe(false);
 	});
 
 	it("reports a paywall without pausing or working around it", async () => {

@@ -95,6 +95,19 @@ Two limits worth stating, because an unverifiable safety claim is worth nothing:
 
 Paired with a `run_browse` cron trigger it does the round unattended. A run that finds nothing new still costs a run — change detection and notify-on-change are deliberately **not** built here; the right shape for them is a `browse` pipeline step feeding `dedupe_upsert` with `emitOn: "update"` into the delivery pump, which belongs with opening the step vocabulary rather than in a bespoke branch of the workflow.
 
+### Local CLI browser research (`runtime: "local_browser"`)
+
+A separate runtime from the Workflow-driven browser task above. A locally signed-in Codex or Claude Code CLI drives the browser, using its subscription and no API key. It works through a bridge inside the runner that offers only read-only tools: open a page, go back, read the page, wait, and click links or pagination. It needs no repository. The runner enforces the rules itself, whatever the model asks for. A run stops for the owner on these pages:
+
+| Pause | What triggers it | What the owner does |
+| --- | --- | --- |
+| `consent_required` | A site that is not on the allow list, or the signed-in browser profile | Allow it and resume, or stop the run |
+| `captcha` / `login_required` | A captcha, or a page with a password field | Clear it in the browser on that machine, then resume. The run never signs in |
+| `access_blocked` | A bot check or access-control page ("unusual traffic", "Access Denied", 403) | Pass a human check in that browser and resume, or leave it. The run reports a block that is still there; it never retries past it |
+| `write_affordance` | A form that submits, pays or uploads: an application, card fields, a file input, or an account sign-up | Let it read the page and resume, or stop and it goes back. Nothing on the page can be filled or submitted in either case |
+
+A paywall is reported as a source failure and is not a pause. A run whose CLI exits without ever calling the bridge ends `failed`, saying no page was opened.
+
 ## Coder Agents
 
 Coder agents use the same runtime idea, but the local capability is a coding CLI rather than a browser.

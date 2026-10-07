@@ -88,7 +88,7 @@ export function runProblem(run: Pick<LocalBrowserRunView, "status" | "errorCode"
 
 // ── A pause, and the one thing that resolves it ──────────────────────────────────────────────
 
-export type PauseAction = { kind: "allow_site"; domain: string } | { kind: "allow_profile" } | { kind: "done_in_browser" };
+export type PauseAction = { kind: "allow_site"; domain: string } | { kind: "allow_profile" } | { kind: "done_in_browser" } | { kind: "keep_reading" };
 
 export interface PauseBanner {
 	title: string;
@@ -131,6 +131,10 @@ export function pauseBanner(run: Pick<LocalBrowserRunView, "status" | "pauseReas
 	}
 	if (reason === "captcha") return { title: `Captcha${domain ? ` on ${domain}` : ""}`, body: `Solve it in the browser ${machine}, then resume. The research never tries to get past it.`, actions: [{ kind: "done_in_browser" }] };
 	if (reason === "login_required") return { title: `Sign-in${domain ? ` on ${domain}` : ""}`, body: `Sign in yourself in the browser ${machine} if you want this site read, then resume.`, actions: [{ kind: "done_in_browser" }] };
+	// #947: a bot check or access block is a person's to clear in that browser, or to leave — never the run's to get past.
+	if (reason === "access_blocked") return { title: `${domain ?? "A site"} is blocking automated browsing`, body: `If it is a "verify you are human" check, pass it yourself in the browser ${machine}, then resume. If it is a hard block, stop — the research does not work around it.`, actions: [{ kind: "done_in_browser" }] };
+	// #947: a page that submits, pays or uploads. Nothing on it can be filled either way; the question is only whether to read it.
+	if (reason === "write_affordance") return { title: `${domain ? `A page on ${domain}` : "A page"} asks for something to be submitted`, body: "It is a form for applying, paying, uploading or creating an account. Research cannot fill or submit anything; let it read the page, or stop the run and it goes back.", actions: [{ kind: "keep_reading" }] };
 	return { title: "The run is waiting for you", body: `Check the browser ${machine}, then resume.`, actions: [{ kind: "done_in_browser" }] };
 }
 

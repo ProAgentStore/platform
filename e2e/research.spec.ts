@@ -19,7 +19,7 @@ interface Recorded {
 }
 
 /** A run that is waiting on the owner, or one that has failed — what the banner and the reason read. */
-type Pause = { reason: "consent_required" | "captcha" | "login_required"; domain: string };
+type Pause = { reason: "consent_required" | "captcha" | "login_required" | "access_blocked" | "write_affordance"; domain: string };
 type Failure = { errorCode: string; error: string };
 
 /** A signed-in owner with one local browser research agent, and a run that finishes on cue. */
@@ -222,6 +222,29 @@ test.describe("Research tab — a blocked run shows why, and offers only the ste
 		await expect(banner).toContainText("Sign-in on seek.com.au");
 		await expect(banner).toContainText("in the browser on my-machine");
 		await expect(banner.getByRole("button", { name: "I've done it — resume" })).toBeVisible();
+	});
+
+	test("a page that submits or pays asks only whether to read it — \"Let it read this page — resume\" (#947)", async ({ page }) => {
+		const { recorded } = await mockResearchAgent(page, { pause: { reason: "write_affordance", domain: "seek.com.au" } });
+		await page.goto(`/console/instances/inst-1/research/${RUN_ID}`);
+		const banner = page.getByRole("alert");
+		await expect(banner).toContainText("A page on seek.com.au asks for something to be submitted");
+		await expect(banner).toContainText("cannot fill or submit anything");
+		await expect(banner.getByRole("button", { name: /I've done it|^Allow/ })).toHaveCount(0);
+		await banner.getByRole("button", { name: "Let it read this page — resume" }).click();
+		await expect(page.getByRole("alert")).toHaveCount(0);
+		expect(recorded.consentPuts).toEqual([]);
+		expect(recorded.resumes).toBe(1);
+	});
+
+	test("a bot check is the owner's to pass in that browser, or to leave (#947)", async ({ page }) => {
+		await mockResearchAgent(page, { pause: { reason: "access_blocked", domain: "indeed.com" } });
+		await page.goto(`/console/instances/inst-1/research/${RUN_ID}`);
+		const banner = page.getByRole("alert");
+		await expect(banner).toContainText("indeed.com is blocking automated browsing");
+		await expect(banner).toContainText("does not work around it");
+		await expect(banner.getByRole("button", { name: "I've done it — resume" })).toBeVisible();
+		await expect(banner.getByRole("button", { name: "Stop the run instead" })).toBeVisible();
 	});
 
 	test("a run whose CLI never used the browser says so, with the fix — not \"Finished\" (#944)", async ({ page }) => {

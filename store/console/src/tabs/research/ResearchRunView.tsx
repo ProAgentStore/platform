@@ -99,7 +99,7 @@ export default function ResearchRunView({ instanceId, runId }: { instanceId: str
 					<div className="flex gap-2 flex-wrap">
 						{banner.actions.map((a) => (
 							<Button key={a.kind} variant="primary" disabled={!!busy} onClick={() => onPauseAction(a)}>
-								{a.kind === "allow_site" ? `Allow ${a.domain} and resume` : a.kind === "allow_profile" ? "Allow and resume" : "I've done it — resume"}
+								{a.kind === "allow_site" ? `Allow ${a.domain} and resume` : a.kind === "allow_profile" ? "Allow and resume" : a.kind === "keep_reading" ? "Let it read this page — resume" : "I've done it — resume"}
 							</Button>
 						))}
 						<Button variant="secondary" disabled={!!busy} onClick={() => act("cancel", () => api<LocalBrowserRunView>(`/v1/instances/${instanceId}/local-browser/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }))}>
