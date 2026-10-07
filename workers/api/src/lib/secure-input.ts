@@ -47,6 +47,12 @@ export interface SecureInputView {
 	expiresAt: string;
 	createdAt: string;
 	consumedAt?: string;
+	/**
+	 * Who supplies the value (#929): `owner` types it in the console; `deposit` was read off a machine
+	 * by `tmux_secure_put` (#918). Stated rather than inferred from `sourceNode`, which a deposit made
+	 * over a connection with no node name does not have.
+	 */
+	kind: "owner" | "deposit";
 	/** The runner node a machine deposit (`tmux_secure_put`, #918) was read on. Absent = typed in the console. */
 	sourceNode?: string;
 	/** The runner node that wrote the value out (`tmux_secure_get`). */
@@ -83,6 +89,8 @@ function rowToView(row: Omit<SecureInputRow, "secret_ciphertext" | "dek_wrapped"
 		oneShot: Boolean(row.one_shot),
 		expiresAt: sqlTimeToIso(row.expires_at),
 		createdAt: row.created_at,
+		// A deposit always writes `source_node` — `""` when its machine had no name — and an owner request never does.
+		kind: row.source_node === null ? "owner" : "deposit",
 	};
 
 	if (row.purpose) view.purpose = row.purpose;
@@ -166,13 +174,19 @@ export async function pendingOwnerInputs(env: Env, userId: string, now: number =
 }
 
 /**
+ * The open requests, or with `all` (#929 finding 8) the history too — consumed and expired rows,
+ * which is where "Moved from X to Y" lives once a handoff completes. Still metadata only.
+ */
+const statusFilter = (all: boolean) => (all ? "1 = 1" : "status IN ('pending', 'ready')");
+
+/**
  * List secure input requests for an instance (metadata only) — one page, newest first. Its total
  * is {@link countSecureInputRequests}, so a page never reads as every request (#954).
  */
-export async function listSecureInputRequests(env: Env, instanceId: string, userId: string, limit = 20, offset = 0): Promise<SecureInputView[]> {
+export async function listSecureInputRequests(env: Env, instanceId: string, userId: string, limit = 20, offset = 0, all = false): Promise<SecureInputView[]> {
 	const res = await env.DB.prepare(
 		`SELECT ${VIEW_COLUMNS} FROM secure_input_requests
-     WHERE instance_id = ?1 AND user_id = ?2 AND status IN ('pending', 'ready')
+     WHERE instance_id = ?1 AND user_id = ?2 AND ${statusFilter(all)}
      ORDER BY created_at DESC LIMIT ?3 OFFSET ?4`,
 	)
 		.bind(instanceId, userId, Math.min(Math.max(1, limit), 50), Math.max(0, Math.trunc(offset)))
@@ -183,10 +197,8 @@ export async function listSecureInputRequests(env: Env, instanceId: string, user
 }
 
 /** How many pending/ready requests the instance has in all — the denominator of a list page (#954). */
-export async function countSecureInputRequests(env: Env, instanceId: string, userId: string): Promise<number> {
-	const row = await env.DB.prepare(
-		"SELECT COUNT(*) AS n FROM secure_input_requests WHERE instance_id = ?1 AND user_id = ?2 AND status IN ('pending', 'ready')",
-	)
+export async function countSecureInputRequests(env: Env, instanceId: string, userId: string, all = false): Promise<number> {
+	const row = await env.DB.prepare(`SELECT COUNT(*) AS n FROM secure_input_requests WHERE instance_id = ?1 AND user_id = ?2 AND ${statusFilter(all)}`)
 		.bind(instanceId, userId)
 		.first<{ n: number }>();
 	return Number(row?.n ?? 0);
@@ -252,7 +264,7 @@ export async function depositSecureInput(
       one_shot, expires_at, created_at, updated_at, source_node
     ) VALUES (?1, ?2, ?3, 'ready', ?4, ?5, 'file', ?6, ?7, ?8, 1, ?9, datetime('now'), datetime('now'), ?10)`,
 	)
-		.bind(id, input.instanceId, input.userId, input.label, input.purpose ?? null, ciphertext, dekWrapped, iv, expiresAt, input.sourceNode)
+		.bind(id, input.instanceId, input.userId, input.label, input.purpose ?? null, ciphertext, dekWrapped, iv, expiresAt, input.sourceNode ?? "")
 		.run();
 	return { id, expiresAt: sqlTimeToIso(expiresAt) };
 }

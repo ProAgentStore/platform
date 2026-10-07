@@ -20,6 +20,7 @@
  * `persist:false` is not "don't show it" — the run still ENDED here and the reader must see
  * that. It is "show it locally, do not put it in the log".
  */
+import { engineSigninRefusal, loopEndLabel } from "@proagentstore/coder-web";
 
 /** A line for the thread, and whether it belongs in the durable log. */
 export interface LoopNotice {
@@ -53,7 +54,8 @@ export function loopStartNotice({ driver, objective, maxIterations }: LoopStart)
 
 /** A failed START is always this tab's to report — no server ever saw the run. */
 export function loopStartFailureNotice(err: unknown): string {
-	return `Could not start the loop: ${err instanceof Error ? err.message : String(err)}`;
+	// An unsigned-in coding CLI is said the same way on both tabs, with where to sign it in (#929).
+	return engineSigninRefusal(err) ?? `Could not start the loop: ${err instanceof Error ? err.message : String(err)}`;
 }
 
 export interface LoopEnd {
@@ -76,6 +78,6 @@ export interface LoopEnd {
  */
 export function loopCompletionNotice({ status, stopReason, detail, driver, adopted }: LoopEnd): LoopNotice | null {
 	if (driver === "coding") return null;
-	const label = stopReason === "done" ? "Loop complete" : `Loop stopped (${stopReason ?? status})`;
+	const label = loopEndLabel(stopReason ?? status);
 	return { text: `${label}: ${detail || ""}`.trim(), persist: !adopted };
 }

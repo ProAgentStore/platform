@@ -3,6 +3,7 @@ import LoadFailed from "../components/LoadFailed";
 import BrainModelCard from "../components/BrainModelCard";
 import CodingEngineCard from "../components/CodingEngineCard";
 import RunnerPanel from "../components/RunnerPanel";
+import SecureInputHistory from "../components/SecureInputHistory";
 import TeamworkSection from "./TeamworkSection";
 import LoopPresetsSection from "./LoopPresetsSection";
 import LoopRunsSection from "./LoopRunsSection";
@@ -406,6 +407,7 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 			{isLocalBrowser && <LocalBrowserSection instanceId={instanceId} />}
 
 			<RunnerPanel instanceId={instanceId} />
+			<SecureInputHistory instanceId={instanceId} />
 
 			<ConnectorsSection
 				instanceId={instanceId}

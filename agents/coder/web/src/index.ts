@@ -7,5 +7,6 @@
 
 export { default as CodingTab } from "./CodingTab";
 export { default as BusyHoldNotice } from "./BusyHoldNotice";
-export { busyHoldFrom, type BusyHold, LOOP_WATCH_BADGE_CLASS, loopWatchBadge, type LoopWatchBadge } from "./coding-loop-run";
+export { type LastLoopStart, postLoopStart } from "./loop-start";
+export { busyHoldFrom, type BusyHold, LOOP_WATCH_BADGE_CLASS, engineSigninRefusal, LOOP_START_PENDING, loopEndLabel, loopQueuedNotice, loopRequestKey, type LoopStartAnswer, loopWatchBadge, readLoopStart, type LoopWatchBadge } from "./coding-loop-run";
 export { isTransientStatus, relayVerdict, type RuntimeStatusAnswer } from "./runner-online";

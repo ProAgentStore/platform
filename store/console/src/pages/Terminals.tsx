@@ -7,11 +7,13 @@ import { renderTerminal, terminalTail } from "@proagentstore/sdk/ui";
 import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { terminalsBusy } from "../lib/pollBusy";
+import { behindLine, type MachineResources, resourceFacts, staleSample } from "../lib/machineHealth";
+import { type RunnerUpdateResponse, updateOutcome } from "../lib/runnerPanel";
 import { Terminal, RefreshCw, Bot, GitBranch, Circle, Pin, PinOff } from "lucide-react";
 
 interface TerminalInstance { instanceId: string; name: string; agentSlug: string | null; status: string; connected: boolean; bound: boolean; pinnedNode?: string | null }
 interface TerminalSession { sessionId: string; instanceId: string; repoId: string; repoName: string | null; engine: string; status: string; issueNumber?: number; issueTitle?: string; updatedAt: string; terminalTail?: string | null }
-interface TerminalNode { node: string; aka?: string[]; machineId?: string | null; identityHint?: string | null; placement: string; runnerVersion: string; lastSeenAt: string | null; connected: boolean; instances: TerminalInstance[]; sessions: TerminalSession[] }
+interface TerminalNode { node: string; aka?: string[]; machineId?: string | null; identityHint?: string | null; placement: string; runnerVersion: string; runnerBehind?: string[] | null; lastSeenAt: string | null; connected: boolean; resources?: MachineResources | null; instances: TerminalInstance[]; sessions: TerminalSession[] }
 
 function ago(iso: string | null): string {
 	if (!iso) return "never";
@@ -52,6 +54,8 @@ export default function Terminals() {
 	/** node name → why the last forget was refused, rendered on that machine's card. */
 	const [forgetError, setForgetError] = useState<Record<string, string>>({});
 	const [forgetting, setForgetting] = useState("");
+	/** node name → what the last update said (#929 finding 13), rendered on that machine's card. */
+	const [updateNote, setUpdateNote] = useState<Record<string, ReturnType<typeof updateOutcome>>>({});
 
 	const load = useCallback(async () => {
 		try {
@@ -81,6 +85,20 @@ export default function Terminals() {
 			setForgetError((e) => ({ ...e, [n.node]: err instanceof Error ? err.message : String(err) }));
 		}
 		setForgetting("");
+	}, [load]);
+
+	// Update a machine's CLI remotely (#859) — the console's runner_update. It waits for busy engines
+	// and restarts in place; its answer is the sentence shown on the card.
+	const updateCli = useCallback(async (n: TerminalNode) => {
+		if (!confirm(`Update the pags CLI on "${n.node}" and restart it?\n\nIt waits for running engines to finish their turn first, then re-attaches every agent it served.`)) return;
+		setUpdateNote((u) => ({ ...u, [n.node]: { tone: "pending", text: "Asking the machine to update…" } }));
+		try {
+			const res = await api<RunnerUpdateResponse>(`/v1/terminals/nodes/${encodeURIComponent(n.node)}/update`, { method: "POST", body: "{}" });
+			setUpdateNote((u) => ({ ...u, [n.node]: updateOutcome(res) }));
+			await load();
+		} catch (err) {
+			setUpdateNote((u) => ({ ...u, [n.node]: { tone: "warn", text: err instanceof Error ? err.message : String(err) } }));
+		}
 	}, [load]);
 
 	// The poll hook only fires on the interval (its catch-up fetch is for tier CHANGES, and first
@@ -161,6 +179,36 @@ export default function Terminals() {
 							    it did nothing. */}
 							{n.identityHint && (
 								<div className="px-4 py-2 text-xs text-warning border-b border-line/60">{n.identityHint}</div>
+							)}
+
+							{/* What the machine is doing (#924, #929): load, memory, sessions against its suggested
+							    ceiling, and every high-water warning — the answer to "why does this machine keep
+							    dropping", which only MCP could read before. */}
+							{n.resources && (
+								<div className="px-4 py-2 text-xs border-b border-line/60" data-testid="machine-resources">
+									<div className="text-muted">{resourceFacts(n.resources).join(" · ")}</div>
+									{staleSample(n.resources) && <div className="text-muted-soft mt-0.5">{staleSample(n.resources)}</div>}
+									{n.resources.warnings.map((w) => (
+										<div key={w} className="text-warning mt-0.5">⚠ {w}</div>
+									))}
+								</div>
+							)}
+
+							{/* A CLI too old for a feature (#859) — with the remote update, not just the version. */}
+							{(behindLine(n.runnerBehind) || updateNote[n.node]) && (
+								<div className="px-4 py-2 text-xs border-b border-line/60 flex flex-wrap items-center gap-2">
+									{behindLine(n.runnerBehind) && <span className="text-warning">{behindLine(n.runnerBehind)}</span>}
+									{behindLine(n.runnerBehind) && n.connected && (
+										<Button size="sm" onClick={() => void updateCli(n)} disabled={updateNote[n.node]?.tone === "pending"} data-testid="machine-update">
+											Update CLI
+										</Button>
+									)}
+									{updateNote[n.node] && (
+										<span role="status" className={`basis-full ${updateNote[n.node].tone === "warn" ? "text-warning" : updateNote[n.node].tone === "ok" ? "text-success" : "text-muted"}`}>
+											{updateNote[n.node].text}
+										</span>
+									)}
+								</div>
 							)}
 
 							{/* The refusal is the useful half — it names the pins or sessions to clear first. */}

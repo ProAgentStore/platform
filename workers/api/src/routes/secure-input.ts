@@ -92,7 +92,9 @@ secureInputRoutes.get("/:instanceId/secure-inputs", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
 	const limit = Math.max(1, Math.min(50, Number(c.req.query("limit")) || 20));
 	const offset = Math.max(0, Math.trunc(Number(c.req.query("offset")) || 0));
-	const [requests, total] = await Promise.all([listSecureInputRequests(c.env, instanceId, uid, limit, offset), countSecureInputRequests(c.env, instanceId, uid)]);
+	// `?status=all` (#929): the history as well as what is still open.
+	const all = c.req.query("status") === "all";
+	const [requests, total] = await Promise.all([listSecureInputRequests(c.env, instanceId, uid, limit, offset, all), countSecureInputRequests(c.env, instanceId, uid, all)]);
 	return c.json({ requests, total, offset, nextOffset: offset + requests.length < total ? offset + requests.length : null });
 });
 

@@ -10,7 +10,8 @@ export default function SecureInputRequests({ instanceId }: { instanceId: string
 	const [requests, setRequests] = useState<SecureInputView[]>([]);
 	const [drafts, setDrafts] = useState<Record<string, string>>({});
 	const [busy, setBusy] = useState("");
-	const [error, setError] = useState("");
+	// Per request (#929 finding 14): one shared error printed under EVERY card, so one failed submit read as all of them failing.
+	const [errors, setErrors] = useState<Record<string, string>>({});
 	const [note, setNote] = useState("");
 
 	const load = useCallback(async () => {
@@ -38,12 +39,12 @@ export default function SecureInputRequests({ instanceId }: { instanceId: string
 
 	const submit = async (req: SecureInputView) => {
 		setBusy(req.id);
-		setError("");
+		setErrors((prev) => ({ ...prev, [req.id]: "" }));
 		setNote("");
 		const value = drafts[req.id] ?? "";
 
 		if (!value) {
-			setError("Enter a value");
+			setErrors((prev) => ({ ...prev, [req.id]: "Enter a value" }));
 			setBusy("");
 			return;
 		}
@@ -60,14 +61,14 @@ export default function SecureInputRequests({ instanceId }: { instanceId: string
 				return next;
 			});
 		} catch (e) {
-			setError(e instanceof Error ? e.message : "Could not submit");
+			setErrors((prev) => ({ ...prev, [req.id]: e instanceof Error ? e.message : "Could not submit" }));
 		} finally {
 			setBusy("");
 			await load();
 		}
 	};
 
-	if (!requests.length) return note || error ? <p className={`text-xs px-3 py-2 ${error ? "text-danger" : "text-muted"}`}>{error || note}</p> : null;
+	if (!requests.length) return note ? <p className="text-xs px-3 py-2 text-muted">{note}</p> : null;
 
 	return (
 		<div className="flex flex-col gap-2 px-2 pt-2 border-t border-line">
@@ -121,7 +122,7 @@ export default function SecureInputRequests({ instanceId }: { instanceId: string
 						</div>
 					)}
 
-					{error && <p className="text-2xs text-danger mt-1">{error}</p>}
+					{errors[req.id] && <p className="text-2xs text-danger mt-1">{errors[req.id]}</p>}
 					{req.status !== "ready" && (
 						<div className="flex gap-2 mt-2">
 							<Button variant="primary" disabled={busy === req.id || !drafts[req.id]} onClick={() => void submit(req)}>

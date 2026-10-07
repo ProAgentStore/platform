@@ -92,10 +92,35 @@ export function loopRunEnded(run: { status: string }): boolean {
  * status would tell someone their objective was impossible when it merely ran out of steps.
  */
 export function loopOutcomeNotice(run: LoopRunSnapshot): string {
-	const reason = run.stopReason || run.status;
+	const head = loopEndLabel(run.stopReason || run.status);
 	const detail = (run.detail || "").trim();
-	const head = reason === "done" ? "Loop complete" : `Loop stopped (${reason})`;
 	return detail ? `${head}: ${detail}` : `${head}.`;
+}
+
+/**
+ * The end of a run in words (#929 finding 16). The notice used to print the raw reason —
+ * "Loop stopped (max_iterations)" — which is accurate and says nothing to an owner about whether
+ * to raise the cap, top up a key or sign in. One map, used by this tab and the Assistant's.
+ */
+const LOOP_END_LABEL: Record<string, string> = {
+	done: "Loop complete",
+	completed: "Loop complete",
+	max_iterations: "Loop hit its step limit",
+	no_progress: "Loop stopped — it was repeating itself",
+	budget: "Loop hit its spend limit",
+	engine_limit: "Loop stopped — the coding CLI hit its usage limit",
+	provider_credit: "Loop stopped — the Anthropic API key has no balance",
+	engine_auth: "Loop stopped — the coding CLI needs you to sign in",
+	interrupted: "Loop was cut off by the platform",
+	escalated: "Loop needs you",
+	needs_human: "Loop needs you",
+	cancelled: "Loop stopped by you",
+	failed: "Loop failed",
+};
+
+/** {@link LOOP_END_LABEL}, with the raw reason kept for one this map does not know yet. */
+export function loopEndLabel(reason: string | null | undefined): string {
+	return LOOP_END_LABEL[reason ?? ""] ?? `Loop stopped (${reason || "unknown"})`;
 }
 
 /**
@@ -138,7 +163,19 @@ export function loopStartNotice({ driver, objective, maxIterations }: LoopStart)
 
 /** A failed START is always this tab's to report — no server ever saw the run. */
 export function loopStartFailureNotice(err: unknown): string {
-	return `Couldn't start the loop: ${err instanceof Error ? err.message : String(err)}`;
+	return engineSigninRefusal(err) ?? `Couldn't start the loop: ${err instanceof Error ? err.message : String(err)}`;
+}
+
+/**
+ * A start refused because the coding CLI is not signed in (#929 finding 15) — `409 {needsReauth}`,
+ * read off the SDK's `ApiError.body`. The server's sentence is written for MCP callers and sends
+ * them to `continue_instance_run`; a person needs to know where the sign-in button is. Null for
+ * any other error, so the caller keeps its own wording.
+ */
+export function engineSigninRefusal(err: unknown): string | null {
+	const body = (err as { body?: unknown } | null)?.body as Record<string, unknown> | undefined;
+	if (body?.needsReauth !== true) return null;
+	return "Couldn't start the loop: the coding CLI on your machine isn't signed in, so nothing ran. Open the session in the Coding tab and use \"Open sign-in on my runner\", then start the loop again.";
 }
 
 /**
@@ -242,3 +279,45 @@ export function busyHoldNotice(hold: BusyHold, now: number = Date.now()): string
 	const what = p?.objective ? ` for “${p.objective.length > 120 ? `${p.objective.slice(0, 117)}…` : p.objective}”` : "";
 	return `Another start${what} is still being set up (requested ${ago(p?.ageMs ?? 0)}). Wait for it rather than starting again.`;
 }
+
+/**
+ * What `POST /loop` answered, as one of the three things it can mean (#929 findings 9 and 10).
+ *
+ * Both start paths read `run.runId` and said "Loop started" — so a 202 (a start still being set up,
+ * or an objective QUEUED behind a busy repo) became a run with no id and a watcher with nothing to
+ * watch. `duplicate` marks the #925 guard handing back what was already queued or running.
+ */
+export type LoopStartAnswer =
+	| { kind: "started"; runId: string; driver?: string; duplicate: boolean }
+	| { kind: "queued"; entryId: string | null; duplicate: boolean }
+	| { kind: "pending" };
+
+export function readLoopStart(body: unknown): LoopStartAnswer {
+	const b = (body ?? {}) as Record<string, unknown>;
+	const duplicate = typeof b.duplicate_of === "string" && b.duplicate_of !== "";
+	if (b.queued === true) return { kind: "queued", entryId: str((b.entry as Record<string, unknown> | undefined)?.id), duplicate };
+	const runId = str(b.runId);
+	if (runId) return { kind: "started", runId, driver: str(b.driver) ?? undefined, duplicate };
+	return { kind: "pending" };
+}
+
+/** The line for a start that was queued rather than run. */
+export function loopQueuedNotice(a: Extract<LoopStartAnswer, { kind: "queued" }>): string {
+	return a.duplicate
+		? "That objective is already queued for this repo — nothing new was added."
+		: "Queued — it starts on its own when the run holding this repo ends. It is listed under Settings → Autonomous runs, where you can cancel it.";
+}
+
+/** The line for a start the platform has not confirmed yet (a 202 with a receipt, #886). */
+export const LOOP_START_PENDING =
+	"The start reached the platform but isn't confirmed yet. It will appear under Settings → Autonomous runs; if no run appears, start it again with the same objective — the same start is picked up, never doubled.";
+
+/**
+ * The request key for a start (#929 finding 10): REUSED only while the last start with exactly these
+ * arguments is unconfirmed, so a retry replays it instead of starting a second run; fresh otherwise,
+ * because a replayed key returns the old answer — a finished run's — instead of starting a new one.
+ */
+export function loopRequestKey(last: { args: string; requestId: string } | null, args: string): { args: string; requestId: string } {
+	return last && last.args === args ? last : { args, requestId: crypto.randomUUID() };
+}
+

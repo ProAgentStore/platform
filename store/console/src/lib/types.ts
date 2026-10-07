@@ -499,7 +499,9 @@ export interface SecureInputView {
 	expiresAt: string;
 	createdAt: string;
 	consumedAt?: string;
-	/** The runner node a machine deposit (`tmux_secure_put`, #918) was read on. Absent = typed in the console. */
+	/** Who supplies the value — `deposit` = read off a machine (#918). Absent from an older API. */
+	kind?: "owner" | "deposit";
+	/** The runner node a machine deposit (`tmux_secure_put`, #918) was read on. */
 	sourceNode?: string;
 	/** The runner node that wrote the value out (`tmux_secure_get`). */
 	consumedNode?: string;
@@ -507,6 +509,10 @@ export interface SecureInputView {
 
 export interface ListSecureInputsResponse {
 	requests?: SecureInputView[];
+	/** Every request the filter matches, not just this page (#954). */
+	total?: number;
+	offset?: number;
+	nextOffset?: number | null;
 }
 
 /** `GET /v1/instances/my/secure-inputs` (#934): per instance, the owner-facing requests still waiting. */

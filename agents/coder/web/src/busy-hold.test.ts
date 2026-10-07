@@ -103,6 +103,6 @@ describe("the Coding tab catches a busy refusal as a hold, not a sentence", () =
 	});
 
 	it("renders the notice", () => {
-		expect(VIEW).toContain("<BusyHoldNotice instanceId={instanceId} hold={loop.busyHold} onDismiss={loop.clearBusyHold} />");
+		expect(VIEW).toContain("<BusyHoldNotice instanceId={instanceId} hold={loop.busyHold} onDismiss={loop.clearBusyHold} onQueue={loop.queueBehind} />");
 	});
 });

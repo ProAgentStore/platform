@@ -66,7 +66,7 @@ describe("the Assistant tab shows the hold instead of the bare refusal (#931)", 
 	});
 
 	it("renders the notice and clears it when a new start goes through", () => {
-		expect(PAGE).toContain("<BusyHoldNotice instanceId={id} hold={busyHold} onDismiss={() => setBusyHold(null)} />");
+		expect(PAGE).toContain("<BusyHoldNotice instanceId={id} hold={busyHold} onDismiss={() => setBusyHold(null)} onQueue={() => void startLoop(true)} />");
 		expect(PAGE).toMatch(/setLoopBadge\(null\);\s+setBusyHold\(null\);/);
 	});
 });

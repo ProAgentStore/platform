@@ -9,7 +9,7 @@ import { BUSY_HOLD_STOPPING, type BusyHold, busyHoldLink, busyHoldNotice, busyHo
  * a Stop for it — the two things the agent-facing sentence ("stop it first with stop_work") offered
  * no button for. Rendered by both live loop watchers: this tab and the console's Assistant tab.
  */
-export default function BusyHoldNotice({ instanceId, hold, onDismiss }: { instanceId: string; hold: BusyHold; onDismiss: () => void }) {
+export default function BusyHoldNotice({ instanceId, hold, onDismiss, onQueue }: { instanceId: string; hold: BusyHold; onDismiss: () => void; onQueue?: () => void }) {
 	const runLink = busyHoldLink(instanceId, hold);
 	const stopPath = busyHoldStopPath(instanceId, hold);
 	const [stop, setStop] = useState<{ state: "idle" | "sending" | "sent" } | { state: "failed"; error: string }>({ state: "idle" });
@@ -35,6 +35,13 @@ export default function BusyHoldNotice({ instanceId, hold, onDismiss }: { instan
 					</p>
 				)}
 				{stop.state === "failed" && <p className="mt-1 text-danger">Couldn't stop it: {stop.error}</p>}
+				{/* The third answer to a busy repo (#929 finding 9): wait in line. The platform starts it
+				    when the holder ends, and refuses a duplicate of something already queued or running. */}
+				{onQueue && stop.state !== "sent" && (
+					<p className="mt-1 font-semibold">
+						<button type="button" onClick={onQueue} data-testid="busy-hold-queue" className="underline hover:no-underline">Queue it to start after this run</button>
+					</p>
+				)}
 			</div>
 			<button type="button" onClick={onDismiss} aria-label="Dismiss" className="tap-target opacity-70 hover:opacity-100"><X size={13} /></button>
 		</div>

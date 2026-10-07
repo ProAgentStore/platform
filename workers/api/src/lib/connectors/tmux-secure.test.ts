@@ -113,7 +113,7 @@ describe("tmux_secure_put → tmux_secure_get across two of the owner's machines
 	it("shows the owner metadata only — where it came from, where it went — in the console's views", async () => {
 		const { handle } = JSON.parse((await put()).content) as { handle: string };
 		const listed = await listSecureInputRequests(env, "A", "owner");
-		expect(listed).toEqual([expect.objectContaining({ id: handle, status: "ready", label: "heartfull .env.prod", sourceNode: NODE.A })]);
+		expect(listed).toEqual([expect.objectContaining({ id: handle, status: "ready", label: "heartfull .env.prod", sourceNode: NODE.A, kind: "deposit" })]);
 		expectNoPlaintext(JSON.stringify(listed));
 
 		await run("B", "tmux_secure_get", { handle, path: "/x/.env" });
@@ -137,6 +137,20 @@ describe("tmux_secure_put → tmux_secure_get across two of the owner's machines
 		expect((await listSecureInputRequests(env, "A", "owner", 20, 20)).map((r) => r.id)).toEqual(["req-02", "req-01", "req-00"]);
 		// Another owner's instance is neither listed nor counted.
 		expect(await countSecureInputRequests(env, "C", "owner")).toBe(0);
+		// The history (#929 finding 8): a consumed request leaves the open list but not `all`.
+		d1.exec("UPDATE secure_input_requests SET status = 'consumed' WHERE id = 'req-22'");
+		expect(await countSecureInputRequests(env, "A", "owner")).toBe(22);
+		expect(await countSecureInputRequests(env, "A", "owner", true)).toBe(23);
+		expect((await listSecureInputRequests(env, "A", "owner", 1, 0, true))[0]).toMatchObject({ id: "req-22", status: "consumed" });
+	});
+
+	it("a deposit from a connection with no node name is still a deposit, and an owner request is not (#929)", async () => {
+		const { depositSecureInput, createSecureInputRequest } = await import("../secure-input.js");
+		const { id } = await depositSecureInput(env, { instanceId: "A", userId: "owner", label: "nameless", sourceNode: null, ttlMs: 60_000, value: "v" });
+		const owner = await createSecureInputRequest(env, { instanceId: "A", userId: "owner", label: "code", destinationScope: "tmux" });
+		expect(await getSecureInputStatus(env, id, "A", "owner")).toMatchObject({ kind: "deposit" });
+		expect((await getSecureInputStatus(env, id, "A", "owner"))?.sourceNode).toBeUndefined();
+		expect(await getSecureInputStatus(env, owner, "A", "owner")).toMatchObject({ kind: "owner" });
 	});
 
 	it("is one-shot: a second get of the same handle writes nothing", async () => {

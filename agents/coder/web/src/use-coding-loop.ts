@@ -9,10 +9,13 @@ import {
 	loopStartNotice,
 	loopWatchBadge,
 	busyHoldFrom,
+	LOOP_START_PENDING,
+	loopQueuedNotice,
 	type BusyHold,
 	type LoopRunSnapshot,
 	type LoopWatchBadge,
 } from "./coding-loop-run";
+import { type LastLoopStart, postLoopStart } from "./loop-start";
 
 /** The next issue proposed to work (issues-mode). Body included so we build a real objective. */
 export interface ProposedIssue {
@@ -164,8 +167,14 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 		return () => clearInterval(t);
 	}, [loopOn, runId]);
 
-	/** Start the loop with an explicit objective (issues-mode approves an issue this way). */
-	const startWith = async (objective: string) => {
+	/** The request key of the last UNCONFIRMED start — a retry of the same start reuses it (#929). */
+	const lastStartRef = useRef<LastLoopStart["current"]>(null);
+
+	/**
+	 * Start the loop with an explicit objective (issues-mode approves an issue this way). With
+	 * `queueIfBusy` a busy repo queues the objective behind its run instead of refusing (#929).
+	 */
+	const startWith = async (objective: string, queueIfBusy = false) => {
 		const obj = objective.trim();
 		// The REPO, not the session: the driver opens or reuses the session itself, and it is the
 		// repo id that tells it which engine the user means. On a multi-repo Coder, omitting it
@@ -182,10 +191,17 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 		setBusyHold(null);
 		setShowLoopForm(false);
 		try {
-			const run = await api<{ runId: string; driver?: string }>(`/v1/instances/${instanceId}/loop`, {
-				method: "POST",
-				body: JSON.stringify({ objective: obj, maxIterations: loopMaxRef.current, repoId: repoIdRef.current }),
-			});
+			const answer = await postLoopStart(instanceId, { objective: obj, maxIterations: loopMaxRef.current, repoId: repoIdRef.current, ...(queueIfBusy ? { queueIfBusy: true } : {}) }, lastStartRef);
+			// Queued, or not yet confirmed: there is no run to watch (#929). Saying "Loop started" here
+			// put a watcher on `undefined`.
+			if (answer.kind !== "started") {
+				setLoopOn(false);
+				loopOnRef.current = false;
+				activeIssueRef.current = null;
+				emitSystem(answer.kind === "queued" ? loopQueuedNotice(answer) : LOOP_START_PENDING);
+				return;
+			}
+			const run = answer;
 			// Stop pressed while the start was in flight. The run EXISTS now, so flipping a local
 			// flag would leave it driving the engine with nothing watching it — cancel it instead.
 			if (!loopOnRef.current) {
@@ -205,7 +221,8 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 				}
 				return;
 			}
-			emitSystem(loopStartNotice({ driver: run.driver, objective: obj, maxIterations: loopMaxRef.current }));
+			// #925's guard handed back the run already working this objective: watch it, do not announce a new one.
+			emitSystem(run.duplicate ? "That objective is already running on this repo — watching that run." : loopStartNotice({ driver: run.driver, objective: obj, maxIterations: loopMaxRef.current }));
 			setRunId(run.runId);
 			runIdRef.current = run.runId;
 		} catch (e) {
@@ -224,6 +241,12 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 	};
 
 	const start = () => startWith(loopObjectiveRef.current || loopObjective);
+
+	/** The busy notice's "queue it" (#929 finding 9): the same objective, waiting for the repo. */
+	const queueBehind = () => {
+		setBusyHold(null);
+		void startWith(loopObjectiveRef.current || loopObjective, true);
+	};
 
 	/** Approve the proposed issue → build its objective and run one issue. */
 	const approveProposedIssue = () => {
@@ -303,7 +326,7 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 
 	return {
 		loopOn, loopObjective, setLoopObjective, loopIteration, loopBadge, loopMax, setLoopMax,
-		busyHold, clearBusyHold: () => setBusyHold(null),
+		busyHold, clearBusyHold: () => setBusyHold(null), queueBehind,
 		showLoopForm, setShowLoopForm,
 		start, stop,
 		// Issues-mode

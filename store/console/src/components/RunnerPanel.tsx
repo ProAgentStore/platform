@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { isTransientStatus } from "@proagentstore/coder-web";
 import { type AttachResult, canReattach, type Machine, machinesToShow, machineTile, type MoveOutcome, type NodeDetail, type PinResponse, pinnedWarning, pinOutcome, reattachOutcome, runnerReading } from "../lib/runnerPanel";
+import { type CodingDiagnostics, consoleFix, diagnosticsHeadline, orderedIssues } from "../lib/runnerDiagnostics";
 import Button from "./Button";
 import Card from "./Card";
 
@@ -42,6 +43,18 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 	// Default true (show) until we learn it's cloud-only, so it never flickers off for a runner
 	// agent. Set from capabilities.runtime.
 	const [needsRunner, setNeedsRunner] = useState(true);
+	// The full diagnosis (#929 finding 7) — asked for, not polled: it probes the machine and the relay.
+	const [diag, setDiag] = useState<CodingDiagnostics | { error: string } | null>(null);
+	const [diagnosing, setDiagnosing] = useState(false);
+	const diagnose = async () => {
+		setDiagnosing(true);
+		try {
+			setDiag(await api<CodingDiagnostics>(`/v1/instances/${instanceId}/coding/diagnostics`));
+		} catch (e) {
+			setDiag({ error: e instanceof Error ? e.message : String(e) });
+		}
+		setDiagnosing(false);
+	};
 
 	// Re-check the runner (live RelayDO truth) on demand — used by the Refresh button and the
 	// tab-focus re-check, so a just-started/stopped `pags up` reflects without a reload. Also pulls
@@ -140,8 +153,32 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 		<Card className="mb-3 sm:mb-4">
 			<div className="flex items-center justify-between gap-2 mb-1">
 				<h3 className="text-base font-bold">Runner</h3>
-				<Button onClick={refresh} disabled={refreshing}>{refreshing ? "Refreshing…" : "Refresh"}</Button>
+				<div className="flex gap-2">
+					<Button onClick={diagnose} disabled={diagnosing} data-testid="runner-diagnose" title="Check the machine, the relay, the engine sign-in and every session, and say what to fix">
+						{diagnosing ? "Diagnosing…" : "Diagnose"}
+					</Button>
+					<Button onClick={refresh} disabled={refreshing}>{refreshing ? "Refreshing…" : "Refresh"}</Button>
+				</div>
 			</div>
+			{diag && (
+				<div className="mb-2 rounded-lg border border-line bg-paper px-3 py-2 text-xs" data-testid="runner-diagnosis">
+					{"error" in diag ? (
+						<div className="text-warning">Couldn't diagnose: {diag.error}</div>
+					) : (
+						<>
+							<div className={diag.summary.issueCount ? "text-warning font-semibold" : "text-success font-semibold"}>{diagnosticsHeadline(diag)}</div>
+							{orderedIssues(diag.issues).map((i) => (
+								<div key={`${i.severity}:${i.message}`} className="mt-1.5">
+									<div className={i.severity === "error" ? "text-danger" : i.severity === "warn" ? "text-warning" : "text-muted"}>
+										{i.severity === "info" ? "ℹ" : "⚠"} {i.message}
+									</div>
+									{i.fix && <div className="text-muted-soft ml-4">{consoleFix(i.fix)}</div>}
+								</div>
+							))}
+						</>
+					)}
+				</div>
+			)}
 			<div className="text-sm text-muted leading-relaxed">
 				{runtimeInfo ? (
 					<>
@@ -220,6 +257,11 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 									    is what a stranded pin literally says — and it is how the user recognises
 									    their own laptop under last week's name. */}
 									{t.alsoKnownAs && <div className="text-2xs text-muted-soft mt-0.5 truncate">{t.alsoKnownAs}</div>}
+									{/* What the machine is doing (#929): a tile about to drop its relays looked like
+									    any other. The full sentences and the update button are on Terminals. */}
+									{t.health && <div className="text-2xs text-muted-soft mt-0.5">{t.health}</div>}
+									{t.alerts.length > 0 && <div className="text-2xs text-warning mt-0.5 break-words">⚠ {t.alerts.join(" · ")}</div>}
+									{t.outdated && <div className="text-2xs text-warning mt-0.5">CLI out of date — update it from Terminals</div>}
 								</button>
 							);
 						})}

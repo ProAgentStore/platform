@@ -31,14 +31,18 @@ describe("loopOutcomeNotice", () => {
 		// `failed` and `max_iterations` both carry status `failed`. Reporting the status would tell
 		// someone their objective was impossible when it merely ran out of steps — two different
 		// things to do next.
-		expect(loopOutcomeNotice({ status: "failed", stopReason: "max_iterations", detail: "gave up after 10 steps" })).toContain(
-			"max_iterations",
-		);
-		expect(loopOutcomeNotice({ status: "failed", stopReason: "budget", detail: "hit its spend limit" })).toContain("budget");
+		// Said in words since #929 finding 16 — the reason's label, never the status's.
+		const steps = loopOutcomeNotice({ status: "failed", stopReason: "max_iterations", detail: "gave up after 10 steps" });
+		expect(steps).toBe("Loop hit its step limit: gave up after 10 steps");
+		expect(steps).not.toContain("Loop failed");
+		expect(loopOutcomeNotice({ status: "failed", stopReason: "budget", detail: "over" })).toBe("Loop hit its spend limit: over");
 	});
 
 	it("falls back to the status when the server reports no reason", () => {
-		expect(loopOutcomeNotice({ status: "cancelled" })).toBe("Loop stopped (cancelled).");
+		expect(loopOutcomeNotice({ status: "cancelled" })).toBe("Loop stopped by you.");
+		// #929 finding 16: the ending in words, and an unknown reason still named rather than dropped.
+		expect(loopOutcomeNotice({ status: "failed", stopReason: "max_iterations" })).toBe("Loop hit its step limit.");
+		expect(loopOutcomeNotice({ status: "failed", stopReason: "brand_new_reason" as never })).toBe("Loop stopped (brand_new_reason).");
 	});
 
 	it("never trails a bare colon when there is no detail", () => {

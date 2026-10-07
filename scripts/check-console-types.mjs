@@ -180,7 +180,6 @@ const KNOWN_ANONYMOUS = {
 	"c83f4514": "{ message?: Message; toolMessage?: Message; transfer?: unknown }",
 	"b050b6ba": "{ instanceId: string }",
 	"019be6af": "{ message?: Message }",
-	"290f2895": "{ runId: string; driver?: string }",
 	"1244d58f": "{ messages: Message[] }",
 
 	// ── RunDetail ─────────────────────────────────────────────────────────────

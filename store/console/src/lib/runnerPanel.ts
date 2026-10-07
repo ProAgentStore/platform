@@ -1,3 +1,5 @@
+import { type MachineResources, tileHealth, warningHead } from "./machineHealth";
+
 // What the Runner card SAYS about the machines an agent can run on.
 //
 // The card reads two endpoints that answer overlapping questions from different places:
@@ -66,6 +68,10 @@ export interface Machine {
 	lastSeenAt?: string | null;
 	connected: boolean;
 	instances?: Array<{ instanceId: string; connected: boolean; bound?: boolean }>;
+	/** What the machine is doing (#924); null when its CLI predates the sample. */
+	resources?: MachineResources | null;
+	/** Features its CLI is too old for (#859); `[]` when current. */
+	runnerBehind?: string[] | null;
 }
 
 /**
@@ -166,6 +172,12 @@ export interface MachineTile {
 	meta: string;
 	/** "also RLs-MacBook-Air.local", or "" when this machine has only ever had one name. */
 	alsoKnownAs: string;
+	/** "load 0.4/core · 2 of ~4 sessions", or "" when the machine reported no sample (#929). */
+	health: string;
+	/** Warning heads ("CPU saturated") — the full sentences are on the Terminals page. */
+	alerts: string[];
+	/** Its CLI is too old for a platform feature (#859). */
+	outdated: boolean;
 }
 
 /**
@@ -211,6 +223,10 @@ export function machineTile(m: Machine, instanceId: string, runnerNode: string, 
 		// user recognises their own laptop under last week's name instead of a machine they do not
 		// know — the fold is only trustworthy if what it folded stays visible.
 		alsoKnownAs: (m.aka || []).length ? `also ${(m.aka || []).join(" · ")}` : "",
+		// A machine about to drop its relays looks like any other green tile without these (#929).
+		health: tileHealth(m.resources),
+		alerts: (m.resources?.warnings ?? []).map(warningHead),
+		outdated: !!m.runnerBehind?.length,
 	};
 }
 
@@ -350,4 +366,23 @@ export function reattachOutcome(node: string, a: AttachResult | null | undefined
  */
 export function canReattach(runnerNode: string, warning: ReturnType<typeof pinnedWarning>, last: MoveOutcome | null): boolean {
 	return !!runnerNode && (warning === "not_attached" || last?.offerReattach === true);
+}
+
+/** `POST /v1/terminals/nodes/:node/update`'s answer (worker: `RunnerUpdateResult`). */
+export interface RunnerUpdateResponse {
+	action: "up-to-date" | "refused" | "scheduled" | "restarted" | "would-update" | "unsupported" | "unreachable" | "failed";
+	detail?: string;
+}
+
+/** The line under the card after an update — the server's own sentence, in the console's words. */
+export function updateOutcome(res: RunnerUpdateResponse): { tone: "ok" | "pending" | "warn"; text: string } {
+	// The update detail is written for MCP callers too; on this card "poll" and "call again" are a refresh.
+	const text =
+		humanDetail(res.detail)
+			.replace(/\bCall runner_update again afterwards\b/g, "Refresh afterwards")
+			.replace(/\bpoll list_runner_nodes\b/g, "refresh this page")
+			.replace(/\bcoding_diagnostics\b/g, "the agent's diagnostics") || res.action;
+	if (res.action === "restarted" || res.action === "up-to-date") return { tone: "ok", text };
+	if (res.action === "scheduled" || res.action === "would-update") return { tone: "pending", text };
+	return { tone: "warn", text };
 }

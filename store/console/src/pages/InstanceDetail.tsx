@@ -22,7 +22,7 @@ import { SURFACES, visibleSurfaces, surfaceOwnsHeader } from "../lib/surfaces";
 import { useGloss } from "../lib/use-gloss";
 import type { LoopPreset } from "../lib/loopPresets";
 import { adoptableRun, isChatWorking, shouldAdopt, type InstanceStateLike, type LoopRunLike } from "../lib/workInFlight";
-import { BusyHoldNotice, busyHoldFrom, type BusyHold, isTransientStatus, LOOP_WATCH_BADGE_CLASS, loopWatchBadge, type LoopWatchBadge, relayVerdict, type RuntimeStatusAnswer } from "@proagentstore/coder-web";
+import { BusyHoldNotice, busyHoldFrom, type BusyHold, isTransientStatus, type LastLoopStart, LOOP_START_PENDING, LOOP_WATCH_BADGE_CLASS, loopQueuedNotice, loopWatchBadge, postLoopStart, type LoopWatchBadge, relayVerdict, type RuntimeStatusAnswer } from "@proagentstore/coder-web";
 import DynamicSurface from "../components/DynamicSurface";
 import HostedNode from "../components/HostedNode";
 import GlossedMessage from "../components/GlossedMessage";
@@ -881,16 +881,21 @@ function InstancePage() {
 		return () => clearInterval(t);
 	}, [id, tab, checkWork]);
 
-	const startLoop = async () => {
+	const lastStartRef = useRef<LastLoopStart["current"]>(null);
+	const startLoop = async (queueIfBusy = false) => {
 		if (!loopObjective.trim() || !id) return;
 		setShowLoopForm(false);
 		try {
 			// The server owns the loop now (#158) — it survives this tab closing, and its spend
 			// is bounded by a budget the browser could never have enforced.
-			const run = await api<{ runId: string; driver?: string }>(`/v1/instances/${id}/loop`, {
-				method: "POST",
-				body: JSON.stringify({ objective: loopObjective.trim(), maxIterations: loopMax }),
-			});
+			const answer = await postLoopStart(id, { objective: loopObjective.trim(), maxIterations: loopMax, ...(queueIfBusy ? { queueIfBusy: true } : {}) }, lastStartRef);
+			// Queued behind a busy repo, or not confirmed yet: nothing to watch (#929).
+			if (answer.kind !== "started") {
+				setBusyHold(null);
+				emitSystemChat(answer.kind === "queued" ? loopQueuedNotice(answer) : LOOP_START_PENDING);
+				return;
+			}
+			const run = answer;
 			// Say that it started, and — crucially — WHERE the work will happen (lib/loopNotices.ts).
 			emitSystemChat(loopStartNotice({ driver: run.driver, objective: loopObjective, maxIterations: loopMax }));
 			setLoopRunId(run.runId);
@@ -1361,7 +1366,7 @@ function InstancePage() {
 								)}
 							</div>
 						</div>
-						{busyHold && id && <BusyHoldNotice instanceId={id} hold={busyHold} onDismiss={() => setBusyHold(null)} />}
+						{busyHold && id && <BusyHoldNotice instanceId={id} hold={busyHold} onDismiss={() => setBusyHold(null)} onQueue={() => void startLoop(true)} />}
 						{/* Loop form with presets (#234). The presets were wired to the Coder's Co-pilot
 						    view alone, so every other way of starting a loop — including the only one a
 						    `copilot:false` agent has, this one — meant retyping the objective. */}
@@ -1395,7 +1400,7 @@ function InstancePage() {
 									<label className="text-xs text-muted flex items-center gap-1.5">Max: <input type="number" value={loopMax} onChange={(e) => setLoopMax(Math.max(1, Math.min(50, parseInt(e.target.value, 10) || 10)))} className="w-14 bg-panel border border-line rounded px-2 py-1 text-xs" min={1} max={50} /></label>
 									<div className="flex gap-1.5">
 										<Button size="md" onClick={() => setShowLoopForm(false)}>Cancel</Button>
-										<Button variant="primary" size="md" onClick={startLoop} disabled={!loopObjective.trim()}>Start Loop</Button>
+										<Button variant="primary" size="md" onClick={() => void startLoop()} disabled={!loopObjective.trim()}>Start Loop</Button>
 									</div>
 								</div>
 							</div>

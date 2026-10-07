@@ -1,10 +1,16 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import { AlertCircle, Loader2, CheckCircle, ArrowLeft } from "lucide-react";
 import Button from "../components/Button";
 import type { SecureInputView } from "../lib/types";
 import { isMachineDeposit, secureInputStatusLine } from "../lib/secureInput";
+
+/** A stored `datetime('now')` (UTC, no zone) or an ISO time, in the reader's own clock. */
+function stamp(at: string): string {
+	const t = Date.parse(at.includes("T") ? at : `${at.replace(" ", "T")}Z`);
+	return Number.isNaN(t) ? at : new Date(t).toLocaleString();
+}
 
 export default function SecureInputDetail() {
 	const { id: instanceId, requestId } = useParams<{ id: string; requestId: string }>();
@@ -14,22 +20,35 @@ export default function SecureInputDetail() {
 	const [loading, setLoading] = useState(true);
 	const [submitting, setSubmitting] = useState(false);
 	const [error, setError] = useState("");
+	/** Why the request could not be read — shown as itself, not as "not found" (#929 finding 14). */
+	const [loadError, setLoadError] = useState("");
+
+	const load = useCallback(async () => {
+		if (!instanceId || !requestId) return;
+		try {
+			const res = await api<SecureInputView>(`/v1/instances/${instanceId}/secure-inputs/${requestId}`);
+			setRequest(res);
+			setLoadError("");
+		} catch (e) {
+			setLoadError(e instanceof Error ? e.message : "Failed to load request");
+		} finally {
+			setLoading(false);
+		}
+	}, [instanceId, requestId]);
 
 	useEffect(() => {
-		const load = async () => {
-			if (!instanceId || !requestId) return;
-			try {
-				setLoading(true);
-				const res = await api<SecureInputView>(`/v1/instances/${instanceId}/secure-inputs/${requestId}`);
-				setRequest(res);
-			} catch (e) {
-				setError(e instanceof Error ? e.message : "Failed to load request");
-			} finally {
-				setLoading(false);
-			}
-		};
 		void load();
-	}, [instanceId, requestId]);
+	}, [load]);
+
+	// Re-read while the request can still change under this page (#929 finding 14): an entered value
+	// is consumed by the agent, a deposit is retrieved on another machine — and the page used to keep
+	// saying "ready" until it was reloaded. The list on the chat tab already polls at this rate.
+	const open = request?.status === "pending" || request?.status === "ready";
+	useEffect(() => {
+		if (!open) return;
+		const t = setInterval(() => void load(), 20_000);
+		return () => clearInterval(t);
+	}, [open, load]);
 
 	const handleSubmit = async () => {
 		if (!instanceId || !requestId || !value) return;
@@ -59,7 +78,7 @@ export default function SecureInputDetail() {
 	if (!request) {
 		return (
 			<div className="flex flex-col items-center justify-center min-h-[80dvh] gap-4">
-				<p className="text-muted">Request not found</p>
+				<p className="text-muted">{loadError || "Request not found"}</p>
 				<Button onClick={() => navigate(`/instances/${instanceId}`)}>Back to instance</Button>
 			</div>
 		);
@@ -181,6 +200,14 @@ export default function SecureInputDetail() {
 						)}
 						<strong>One-shot:</strong> {request.oneShot ? "Yes, deleted after use" : "Reusable"}
 						<br />
+						<strong>Requested:</strong> {stamp(request.createdAt)}
+						<br />
+						{request.consumedAt && (
+							<>
+								<strong>Used:</strong> {stamp(request.consumedAt)}
+								<br />
+							</>
+						)}
 						<strong>Expires:</strong> {new Date(request.expiresAt).toLocaleString()}
 					</p>
 				</div>

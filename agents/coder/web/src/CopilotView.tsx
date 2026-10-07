@@ -298,7 +298,7 @@ export default function CopilotView({
 						)}
 				</div>
 			</div>
-			{loop.busyHold && <div className="mx-2 mb-1"><BusyHoldNotice instanceId={instanceId} hold={loop.busyHold} onDismiss={loop.clearBusyHold} /></div>}
+			{loop.busyHold && <div className="mx-2 mb-1"><BusyHoldNotice instanceId={instanceId} hold={loop.busyHold} onDismiss={loop.clearBusyHold} onQueue={loop.queueBehind} /></div>}
 			{/* Loop form — DIRECT mode: presets + a custom objective. */}
 			{loop.showLoopForm && !loop.loopOn && workMode === "direct" && (
 				<div className="bg-panel border border-line rounded-xl p-3 mx-2 mb-1 flex flex-col gap-2">

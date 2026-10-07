@@ -2935,6 +2935,10 @@ paths:
         - name: offset
           in: query
           schema: { type: integer, minimum: 0, default: 0 }
+        - name: status
+          in: query
+          schema: { type: string, enum: [all] }
+          description: "`all` lists consumed and expired requests as well — the handoff history. Omitted: pending and ready only."
       responses:
         "200":
           description: Requests listed — one page, newest first

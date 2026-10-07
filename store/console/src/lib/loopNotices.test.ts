@@ -47,16 +47,27 @@ describe("loopCompletionNotice", () => {
 
 	it("distinguishes finishing from being stopped, and names the reason", () => {
 		expect(loopCompletionNotice({ status: "complete", stopReason: "done", adopted: false })?.text).toBe("Loop complete:");
-		expect(loopCompletionNotice({ status: "cancelled", stopReason: "cancelled", adopted: false })?.text).toBe("Loop stopped (cancelled):");
+		expect(loopCompletionNotice({ status: "cancelled", stopReason: "cancelled", adopted: false })?.text).toBe("Loop stopped by you:");
 	});
 
 	it("falls back to the status when the server gives no stop reason", () => {
-		expect(loopCompletionNotice({ status: "failed", stopReason: null, adopted: false })?.text).toBe("Loop stopped (failed):");
-		expect(loopCompletionNotice({ status: "failed", adopted: false })?.text).toBe("Loop stopped (failed):");
+		expect(loopCompletionNotice({ status: "failed", stopReason: null, adopted: false })?.text).toBe("Loop failed:");
+		expect(loopCompletionNotice({ status: "failed", adopted: false })?.text).toBe("Loop failed:");
 	});
 
 	it("appends the server's detail when there is one", () => {
 		expect(loopCompletionNotice({ status: "complete", stopReason: "done", detail: "12 files changed", adopted: false })?.text)
 			.toBe("Loop complete: 12 files changed");
+	});
+});
+
+describe("a start refused for engine sign-in says where to sign in (#929 finding 15)", () => {
+	it("reads needsReauth off the refusal's body, and leaves every other error its own message", () => {
+		const refused = Object.assign(new Error("Refused before the first turn: … continue_instance_run …"), { status: 409, body: { needsReauth: true, stopReason: "engine_auth" } });
+		const text = loopStartFailureNotice(refused);
+		expect(text).toContain("isn't signed in");
+		expect(text).toContain("Open sign-in on my runner");
+		expect(text).not.toContain("continue_instance_run");
+		expect(loopStartFailureNotice(new Error("runner offline"))).toBe("Could not start the loop: runner offline");
 	});
 });

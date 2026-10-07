@@ -98,15 +98,29 @@ function when(ms: number): string {
 	return h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
 }
 
+/** One objective waiting behind a busy repo — `GET /loop/queue` (worker: `ObjectiveQueueEntry`). */
+interface QueuedObjective {
+	id: string;
+	objective: string;
+}
+type LoopQueueResponse = { entries?: QueuedObjective[] };
+
 export default function LoopRunsSection({ instanceId }: { instanceId: string }) {
 	const [runs, setRuns] = useState<LoopRun[]>([]);
+	// What waits behind the current run (#929 finding 9) — visible and cancellable here, where it used
+	// to be a bare "+N queued" chip on the dashboard.
+	const [queued, setQueued] = useState<QueuedObjective[]>([]);
 	const [msg, setMsg] = useState("");
 	const [busy, setBusy] = useState(false);
 
 	const load = useCallback(async () => {
 		try {
-			const r = await api<{ runs: LoopRun[] }>(`/v1/instances/${instanceId}/loop`);
+			const [r, q] = await Promise.all([
+				api<{ runs: LoopRun[] }>(`/v1/instances/${instanceId}/loop`),
+				api<LoopQueueResponse>(`/v1/instances/${instanceId}/loop/queue`).catch(() => null),
+			]);
 			setRuns(r.runs ?? []);
+			if (q) setQueued(q.entries ?? []);
 		} catch {
 			// Never blank the list on a transient read — a run in flight is unaffected by our
 			// ability to see it.
@@ -117,7 +131,7 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 
 	// Poll only while something is still OPEN, so an idle settings page is quiet. Openness, not
 	// liveness: a parked or stalled run is the one whose state most needs to keep refreshing.
-	const anyRunning = runs.some((r) => isOpen(r));
+	const anyRunning = runs.some((r) => isOpen(r)) || queued.length > 0;
 	useEffect(() => {
 		if (!anyRunning) return;
 		const t = setInterval(() => { void load(); }, 5000);
@@ -203,7 +217,18 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 		setPreviewing(null);
 	};
 
-	if (runs.length === 0) return null;
+	/** Withdraw a queued objective before it starts; one that already started says so (409). */
+	const cancelQueued = async (entryId: string) => {
+		setMsg("");
+		try {
+			await api(`/v1/instances/${instanceId}/loop/queue/${encodeURIComponent(entryId)}`, { method: "DELETE" });
+		} catch (e) {
+			setMsg(e instanceof Error ? e.message : "Couldn't cancel it");
+		}
+		await load();
+	};
+
+	if (runs.length === 0 && queued.length === 0) return null;
 
 	return (
 		<Card className="mb-3 sm:mb-4">
@@ -212,6 +237,17 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 				Objectives this agent worked on by itself. These run on the server, so they keep going
 				when you close this page.
 			</p>
+			{queued.length > 0 && (
+				<div className="mb-3" data-testid="loop-queue">
+					<div className="text-xs font-semibold text-muted mb-1">Queued — each starts on its own when the run ahead of it ends</div>
+					{queued.map((q) => (
+						<div key={q.id} className="flex items-center justify-between gap-2 border border-dashed border-line rounded-lg px-3 py-1.5 mb-1">
+							<span className="text-sm min-w-0 truncate" title={q.objective}>{q.objective}</span>
+							<Button size="sm" onClick={() => void cancelQueued(q.id)}>Cancel</Button>
+						</div>
+					))}
+				</div>
+			)}
 			{runs.slice(0, 10).map((r) => {
 				const ctl = loopStopControl(r);
 				return (
