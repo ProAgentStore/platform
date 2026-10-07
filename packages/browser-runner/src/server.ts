@@ -363,7 +363,7 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	// ── Read-only code inspection (the Co-pilot/Chat's "eyes" — no CLI driving) ──
 	// Confined to the session's workDir by inspect.ts; errors surface as 400.
 	if (req.method === "POST" && path === "/coding/read-file") {
-		const b = await readJson<{ sessionId?: string; workDir?: string; path: string; maxBytes?: number }>(req);
+		const b = await readJson<{ sessionId?: string; workDir?: string; path: string; maxBytes?: number; startLine?: number; startColumn?: number }>(req);
 		try {
 			return json(res, 200, runner.coding.readFile(b));
 		} catch (e: unknown) {

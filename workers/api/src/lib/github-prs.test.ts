@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { attachChecks, listPulls, PULLS_ENRICH_CAP, readPull, resolveReviewState, searchPulls, searchPullsQuery, toPullSummary, type PullSummary } from "./github-prs.js";
+import { attachChecks, listPulls, PULLS_ENRICH_CAP, readPull, readPullFiles, resolveReviewState, searchPulls, searchPullsQuery, toPullSummary, type PullSummary } from "./github-prs.js";
 import type { Env } from "../types.js";
 
 vi.mock("./github-cache.js", async (importOriginal) => {
@@ -223,6 +223,92 @@ describe("readPull", () => {
 		mockFetch(() => ({ status: 404, body: {} }));
 		expect(await readPull(env, "u1", "acme/widget", 999)).toBeNull();
 		expect(await readPull(env, "u1", "acme/widget", Number.NaN)).toBeNull();
+	});
+});
+
+// #954 (#898 T15): github_read_pull gave the diff's SIZE and never the diff. `files: true` pages it.
+describe("readPullFiles — a PR's diff, paged so a page is never cut", () => {
+	/** A PR with these files; `/files` answers 100 per page as GitHub does. */
+	function prWith(files: Array<{ filename: string; patch?: string }>, changedFiles = files.length) {
+		const urls: string[] = [];
+		mockFetch((url) => {
+			urls.push(url);
+			const m = /\/files\?per_page=100&page=(\d+)/.exec(url);
+			if (m) {
+				const page = Number(m[1]);
+				return { status: 200, body: files.slice((page - 1) * 100, page * 100).map((f) => ({ status: "modified", additions: 1, deletions: 1, ...f })) };
+			}
+			return { status: 200, body: { ...RAW_PULL, changed_files: changedFiles } };
+		});
+		return urls;
+	}
+	const read = (opts: { file?: number; patchOffset?: number; budget?: number } = {}) => readPullFiles(env, "u1", "acme/widget", 42, { budget: 2_000, ...opts });
+
+	it("returns small diffs whole, and says there is nothing more", async () => {
+		prWith([{ filename: "a.ts", patch: "@@ -1 +1 @@\n-a\n+b" }, { filename: "b.ts", patch: "@@ -1 +1 @@\n-c\n+d" }]);
+		const page = await read();
+		expect(page).toMatchObject({ number: 42, changedFiles: 2, hasMore: false, next: null });
+		expect(page?.files.map((f) => [f.filename, f.patch])).toEqual([["a.ts", "@@ -1 +1 @@\n-a\n+b"], ["b.ts", "@@ -1 +1 @@\n-c\n+d"]]);
+		expect(page?.files[0].patchFrom).toBeUndefined();
+	});
+
+	it("ends a page BEFORE a file that would not fit, and the cursor starts the next page there", async () => {
+		const mid = "x".repeat(900);
+		prWith([{ filename: "a.ts", patch: mid }, { filename: "b.ts", patch: mid }, { filename: "c.ts", patch: mid }]);
+		const first = await read();
+		expect(first?.files.map((f) => f.filename)).toEqual(["a.ts"]);
+		expect(first?.next).toEqual({ file: 1, patch_offset: 0 });
+		const second = await read({ file: 1 });
+		expect(second?.files[0]).toMatchObject({ filename: "b.ts", patch: mid });
+	});
+
+	it("slices ONE diff larger than the budget on line boundaries, and the slices rejoin to the whole diff", async () => {
+		const huge = Array.from({ length: 400 }, (_, i) => `+line ${i} "quoted" text`).join("\n");
+		prWith([{ filename: "huge.ts", patch: huge }, { filename: "after.ts", patch: "+z" }]);
+		let cursor: { file: number; patch_offset: number } | null = { file: 0, patch_offset: 0 };
+		let joined = "";
+		let pages = 0;
+		while (cursor && cursor.file === 0) {
+			const page = await read({ file: cursor.file, patchOffset: cursor.patch_offset });
+			const f = page?.files[0];
+			expect(f?.filename).toBe("huge.ts");
+			expect(f?.patchLength).toBe(huge.length);
+			expect(f?.patchFrom).toBe(joined.length);
+			// Measured as JSON: the escaped slice stays inside the budget.
+			expect(JSON.stringify(f?.patch).length).toBeLessThanOrEqual(2_000);
+			if ((f?.patchFrom ?? 0) + (f?.patch?.length ?? 0) < huge.length) expect(f?.patch?.endsWith("\n")).toBe(true);
+			joined += f?.patch ?? "";
+			cursor = page?.next ?? null;
+			pages++;
+		}
+		expect(joined).toBe(huge);
+		expect(pages).toBeGreaterThan(3);
+		expect(cursor).toEqual({ file: 1, patch_offset: 0 });
+	});
+
+	it("names a file GitHub sends no diff for instead of returning an empty one", async () => {
+		prWith([{ filename: "logo.png" }]);
+		const page = await read();
+		expect(page?.files[0]).toMatchObject({ filename: "logo.png", patch: null });
+		expect(page?.files[0].note).toMatch(/no diff for this file/);
+	});
+
+	it("reads the files past GitHub's first page of 100", async () => {
+		const urls = prWith(Array.from({ length: 150 }, (_, i) => ({ filename: `f${i}.ts`, patch: "+x" })));
+		const page = await read({ file: 120 });
+		expect(page?.files[0].filename).toBe("f120.ts");
+		expect(urls.some((u) => u.includes("/files?per_page=100&page=2"))).toBe(true);
+	});
+
+	it("says when a PR changes more files than GitHub will list", async () => {
+		prWith([{ filename: "a.ts", patch: "+a" }], 3_500);
+		const page = await read({ file: 2_999 });
+		expect(page?.note).toMatch(/changes 3,500 files; GitHub lists only the first 3,000/);
+	});
+
+	it("returns null for a PR it cannot read", async () => {
+		mockFetch(() => ({ status: 404, body: {} }));
+		expect(await read()).toBeNull();
 	});
 });
 

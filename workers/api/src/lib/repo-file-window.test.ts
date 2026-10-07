@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { capToolResult, TOOL_RESULT_MAX_CHARS } from "./tool-result-cap.js";
-import { MAX_LINE_CHARS, READ_MAX_CHARS, READ_MAX_LINES, renderRepoFileWindow } from "./repo-file-window.js";
+import { MAX_LINE_CHARS, READ_MAX_CHARS, READ_MAX_LINES, renderRepoFileWindow, runnerRange } from "./repo-file-window.js";
 import { getRegistryTool, renderToolContent } from "./tool-registry.js";
 
 /**
@@ -100,7 +100,8 @@ describe("renderRepoFileWindow — the window and what it says about itself (#53
 		const content = file(3_000);
 		const r = render({ path: "enormous.ts", content, fetchTruncated: true, size: 431_936 });
 		expect(r.content).toContain("of at least ");
-		expect(r.content).toContain("cannot be reached through this tool at all");
+		// An older runner (no `firstLine`) still cannot reach past its byte cap — and is told how to fix that (#954).
+		expect(r.content).toContain("cannot be reached until its `pags` CLI is updated (runner_update)");
 		expect(r.content).toContain("Do NOT state or imply that the file ends here");
 	});
 
@@ -126,7 +127,7 @@ describe("renderRepoFileWindow — the window and what it says about itself (#53
 	it("refuses a non-numeric range rather than silently reading from the top", () => {
 		const r = render({ path: "src/a.ts", content: file(50), startLine: "the eventCalls rule" });
 		expect(r.success).toBe(false);
-		expect(r.content).toContain("must be whole line numbers");
+		expect(r.content).toContain("must be whole numbers");
 	});
 
 	it("clamps a zero/negative startLine and SAYS it did", () => {
@@ -160,5 +161,75 @@ describe("renderRepoFileWindow — the window and what it says about itself (#53
 		const r = render({ path: "x.ts", content });
 		expect(r.content).not.toContain("[line truncated");
 		expect(r.content).toContain("2: second");
+	});
+});
+
+// #954: a runner that honours `startLine`/`startColumn` sends the bytes from THAT line, with the
+// file's line count, so no line is out of reach — the old 128 KiB ceiling was "the first 128 KiB".
+describe("renderRepoFileWindow over a RANGED runner — any line, any column (#954)", () => {
+	/** Lines `from`..`to` of a `total`-line file, as a ranged runner returns them. */
+	const slice = (from: number, to: number) => `${Array.from({ length: to - from + 1 }, (_, i) => `const x = 1; // ${from + i}`).join("\n")}\n`;
+
+	it("numbers the window from the runner's firstLine and states the file's real length", () => {
+		const r = render({ path: "big.ts", content: slice(5_000, 5_200), fetchTruncated: true, size: 900_000, startLine: 5_000, firstLine: 5_000, totalLines: 40_000 });
+		expect(r.success).toBe(true);
+		expect(r.content).toMatch(/--- big\.ts — lines 5,000-5,\d{3} of 40,000 ---/);
+		expect(r.content).toContain("5000: const x = 1; // 5000");
+		// The continuation is a real call, because the next window is fetched from that line too.
+		expect(r.content).toMatch(/To continue, call repo_read_file path="big\.ts" startLine=5,\d{3}/);
+		expect(r.content).not.toContain("cannot be reached");
+	});
+
+	it("says a startLine past the file's end is past it, with the real line count", () => {
+		const r = render({ path: "big.ts", content: "", startLine: 50_001, firstLine: 50_001, totalLines: 40_000, size: 900_000 });
+		expect(r.success).toBe(false);
+		expect(r.content).toContain("big.ts has 40,000 lines");
+	});
+
+	it("still says an empty file is empty", () => {
+		const r = render({ path: "e.ts", content: "", firstLine: 1, totalLines: 0, size: 0 });
+		expect(r.content).toContain("this file is empty");
+	});
+
+	it("a line too long to show names the startColumn that reads the rest of it", () => {
+		const long = "m".repeat(50_000);
+		const r = render({ path: "min.js", content: `${long}\nnext\n`, firstLine: 1, totalLines: 2, size: 50_006 });
+		expect(r.content).toContain(`[line truncated: it is 50,000 characters long — read on with repo_read_file path="min.js" startLine=1 startColumn=${MAX_LINE_CHARS + 1}]`);
+	});
+
+	it("startColumn reads the rest of that line with the window's budget, not the per-line cap", () => {
+		// What the runner returns for startLine=1 startColumn=2001: the line from that column on.
+		const rest = "m".repeat(48_000);
+		const r = render({ path: "min.js", content: `${rest}\nnext\n`, startLine: 1, startColumn: 2_001, firstLine: 1, totalLines: 2, size: 50_006 });
+		expect(r.success).toBe(true);
+		expect(r.content).toContain("1: [from column 2,001] mmm");
+		const shown = /1: \[from column 2,001\] (m+)/.exec(r.content)?.[1].length ?? 0;
+		expect(shown).toBeGreaterThan(MAX_LINE_CHARS * 5);
+		// …and its own marker carries the column after what it showed.
+		expect(r.content).toContain(`startLine=1 startColumn=${2_001 + shown}]`);
+		expect(r.content).toContain("it is 50,000 characters long");
+	});
+
+	it("a line the fetch itself cut says it is AT LEAST that long", () => {
+		const r = render({ path: "huge.js", content: "q".repeat(131_000), fetchTruncated: true, firstLine: 1, totalLines: 1, size: 9_000_000 });
+		expect(r.content).toContain("it is at least 131,000 characters long");
+	});
+
+	it("an OLDER runner (no firstLine) refuses startColumn and names runner_update", () => {
+		const r = render({ path: "min.js", content: "m".repeat(5_000), startColumn: 2_001 });
+		expect(r.success).toBe(false);
+		expect(r.content).toContain("runner_update");
+	});
+
+	it("an older runner's long line keeps the plain marker — there is no column to send it to", () => {
+		const r = render({ path: "min.js", content: "m".repeat(5_000) });
+		expect(r.content).toContain("[line truncated: it is 5,000 characters long]");
+	});
+
+	it("runnerRange sends only a real range — line 1 / column 1 are the runner's own default", () => {
+		expect(runnerRange({})).toEqual({});
+		expect(runnerRange({ startLine: 1, startColumn: 1 })).toEqual({});
+		expect(runnerRange({ startLine: "480", startColumn: 2001 })).toEqual({ startLine: 480, startColumn: 2001 });
+		expect(runnerRange({ startLine: "abc", startColumn: -3 })).toEqual({});
 	});
 });

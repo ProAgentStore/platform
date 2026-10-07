@@ -73,13 +73,35 @@ export const MAX_LINE_CHARS = 2_000;
  * ask for the most any runner will ever give and never more, because `readRepoFile` clamps with
  * `Math.min(maxBytes ?? DEFAULT, HARD_MAX)` and a larger number is silently the same request.
  *
- * `maxBytes` is honoured by every runner already in the wild, which is what lets the whole of this
- * work cloud-side with no CLI release: the slicing happens here, on text the machine already sent.
- * The residual cost is real and stated rather than hidden — up to 128KB crosses the relay for a
- * window of 20,000 characters. Pushing the range down to the runner is the follow-up, and it is
- * detectable by an absent `linesShown` field rather than by a version probe.
+ * Since #954 the runner also starts at `startLine`/`startColumn`, so this is a cap on one FETCH, not
+ * on how far into a file a read can reach. A runner that does is detected by the `firstLine` it
+ * reports; an older one ignores the range, starts at the top, and is told to update (runner_update).
+ * Up to 128KB still crosses the relay for a window of 20,000 characters — the slicing is here.
  */
 export const READ_FETCH_BYTES = 128 * 1024;
+
+/** What `/coding/read-file` answers — `firstLine`/`totalLines` only from a runner that honours the range (#954). */
+export interface RunnerFileRead {
+	content?: string;
+	binary?: boolean;
+	truncated?: boolean;
+	size?: number;
+	firstLine?: number;
+	totalLines?: number;
+}
+
+/**
+ * The range to ask the runner for (#954): the window's first line and column. A value the renderer
+ * would refuse or clamp is sent as-is — the runner clamps to line 1 — and the refusal is the renderer's.
+ */
+export function runnerRange(args: { startLine?: unknown; startColumn?: unknown }): { startLine?: number; startColumn?: number } {
+	const line = parseLineArg(args.startLine);
+	const column = parseLineArg(args.startColumn);
+	return {
+		...(line !== null && Number.isFinite(line) && line > 1 ? { startLine: line } : {}),
+		...(column !== null && Number.isFinite(column) && column > 1 ? { startColumn: column } : {}),
+	};
+}
 
 export interface RepoFileWindowInput {
 	/** The path as the caller asked for it — quoted back in the header and the next-call hint. */
@@ -92,6 +114,15 @@ export interface RepoFileWindowInput {
 	size?: number;
 	startLine?: unknown;
 	endLine?: unknown;
+	/** Read the window's FIRST line from this 1-based column — the rest of a line too long to show (#954). */
+	startColumn?: unknown;
+	/**
+	 * The line `content` begins at, as a runner that honours `startLine` reports it (#954). Absent
+	 * means an older runner, whose `content` always begins at line 1 and stops at its byte cap.
+	 */
+	firstLine?: number;
+	/** The whole file's line count — reported alongside `firstLine`. */
+	totalLines?: number;
 	/** Override the character budget (the Co-pilot's reader keeps its own, smaller one). */
 	maxChars?: number;
 	maxLines?: number;
@@ -156,11 +187,27 @@ export function renderRepoFileWindow(input: RepoFileWindowInput): RegistryToolRe
 	const jumpHint = input.jumpHint ?? " To jump straight to something instead of paging, use repo_grep and read a window around the line it reports.";
 	const fetchTruncated = Boolean(input.fetchTruncated);
 	const raw = input.content ?? "";
+	// A runner that honours the range (#954) says where its bytes begin and how long the file is, so
+	// every line is reachable. An older one always starts at line 1 and stops at its byte cap.
+	const ranged = typeof input.firstLine === "number";
+	const base = ranged ? (input.firstLine as number) : 1;
+	const fileLines = ranged ? (input.totalLines ?? 0) : null;
 
 	// An empty file is an answer, not a failure — and saying so plainly stops a model reading the
 	// blank result as "the read failed" and trying three more spellings of the path.
 	// Entirely our own sentence about an empty file — `head` with no body, so nothing is fenced.
-	if (raw === "") return { head: `--- ${path} — this file is empty (0 lines) ---`, content: "", success: true };
+	if (ranged ? fileLines === 0 : raw === "") return { head: `--- ${path} — this file is empty (0 lines) ---`, content: "", success: true };
+
+	const start = parseLineArg(input.startLine);
+	const end = parseLineArg(input.endLine);
+	const column = parseLineArg(input.startColumn);
+	if (Number.isNaN(start) || Number.isNaN(end) || Number.isNaN(column)) {
+		return { content: "`startLine`, `endLine` and `startColumn` must be whole numbers, 1-based (e.g. startLine=480, endLine=540).", success: false };
+	}
+	const fromColumn = column !== null && column > 1 ? column : 1;
+	if (fromColumn > 1 && !ranged) {
+		return { content: "Reading from a `startColumn` needs a newer `pags` CLI on this machine than the one connected. Call runner_update for this machine, then read again.", success: false };
+	}
 
 	const lines = raw.split("\n").map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l));
 	if (raw.endsWith("\n")) {
@@ -168,16 +215,13 @@ export function renderRepoFileWindow(input: RepoFileWindowInput): RegistryToolRe
 		lines.pop();
 	} else if (fetchTruncated && lines.length > 1) {
 		// A byte cap stops mid-line. Showing that fragment as if it were a whole line is the small
-		// dishonesty this whole change is against; the fetch note below says why it is missing.
+		// dishonesty this whole change is against; the next window starts on that line instead.
 		lines.pop();
 	}
-	const available = lines.length;
-
-	const start = parseLineArg(input.startLine);
-	const end = parseLineArg(input.endLine);
-	if (Number.isNaN(start) || Number.isNaN(end)) {
-		return { content: "`startLine` and `endLine` must be whole line numbers, 1-based and inclusive (e.g. startLine=480, endLine=540).", success: false };
-	}
+	/** The last line number this fetch holds — not the file's last line when the fetch was cut. */
+	const available = base + lines.length - 1;
+	/** The last line the model could ask for next: the whole file on a ranged runner. */
+	const reachable = fileLines ?? available;
 
 	const notes: string[] = [];
 	let from = start ?? 1;
@@ -190,12 +234,14 @@ export function renderRepoFileWindow(input: RepoFileWindowInput): RegistryToolRe
 	if (end !== null && end < from) {
 		return { content: `\`endLine\` ${num(end)} is before \`startLine\` ${num(from)} — a range reads forwards. Ask for startLine=${num(end)} and endLine=${num(from)} if that is what you meant.`, success: false };
 	}
-	if (from > available) {
+	if (from > available || from < base || (fileLines !== null && from > fileLines)) {
 		// Refuse with the number, rather than return an empty window that reads like "this part of
 		// the file is blank".
-		const reach = fetchTruncated
-			? `only its first ${num(available)} lines could be read from this machine (the runner returns at most ${num(READ_FETCH_BYTES)} bytes of the file's ${num(input.size ?? 0)})`
-			: `${path} has ${num(available)} lines`;
+		const reach = ranged
+			? `${path} has ${num(fileLines ?? 0)} lines`
+			: fetchTruncated
+				? `this machine's \`pags\` CLI reads only the first ${num(READ_FETCH_BYTES)} bytes of the file's ${num(input.size ?? 0)}, which is ${num(available)} lines — call runner_update for this machine and it reads any part of a file`
+				: `${path} has ${num(available)} lines`;
 		return { content: `\`startLine\` ${num(from)} is past the end of what this tool can read: ${reach}. Ask for a startLine within that${input.jumpHint === undefined ? ", or use repo_grep to find the line you actually want" : ""}.`, success: false };
 	}
 
@@ -204,9 +250,21 @@ export function renderRepoFileWindow(input: RepoFileWindowInput): RegistryToolRe
 	let used = 0;
 	let budgetBound = false;
 	for (let n = from; n <= wantedTo; n++) {
-		let text = lines[n - 1] ?? "";
-		if (text.length > MAX_LINE_CHARS) text = `${text.slice(0, MAX_LINE_CHARS)} … [line truncated: it is ${num(text.length)} characters long]`;
-		const rendered = `${n}: ${text}`;
+		let text = lines[n - base] ?? "";
+		// The window's first line, read from a column, is the rest of a line too long to have been
+		// shown — so it gets the window's budget rather than the per-line cap, or a 200KB line would
+		// take a hundred reads.
+		const col = n === from ? fromColumn : 1;
+		const lineCap = col > 1 ? Math.max(MAX_LINE_CHARS, maxChars - 200) : MAX_LINE_CHARS;
+		if (text.length > lineCap) {
+			const partial = fetchTruncated && n === available && lines.length === 1;
+			const length = col - 1 + text.length;
+			// Only a ranged runner can resume mid-line; anything else (a job log) keeps the plain marker,
+			// which `tailWindowStart` mirrors.
+			const resume = ranged ? ` — read on with ${nextCall} startLine=${n} startColumn=${col + lineCap}` : "";
+			text = `${text.slice(0, lineCap)} … [line truncated: it is ${partial ? "at least " : ""}${num(length)} characters long${resume}]`;
+		}
+		const rendered = `${n}: ${col > 1 ? `[from column ${num(col)}] ` : ""}${text}`;
 		if (body.length >= maxLines || (body.length > 0 && used + rendered.length + 1 > maxChars)) {
 			budgetBound = true;
 			break;
@@ -216,26 +274,25 @@ export function renderRepoFileWindow(input: RepoFileWindowInput): RegistryToolRe
 	}
 	const shownTo = from + body.length - 1;
 
-	const whole = !fetchTruncated && from === 1 && shownTo === available;
-	const total = fetchTruncated ? `at least ${num(available)}` : num(available);
+	const whole = from === 1 && fromColumn === 1 && shownTo === reachable && (ranged || !fetchTruncated);
+	const total = ranged || !fetchTruncated ? num(reachable) : `at least ${num(available)}`;
 	const head = `--- ${path} — lines ${num(from)}-${num(shownTo)} of ${total}${whole ? " (the whole file)" : ""} ---`;
 
-	if (shownTo < available) {
+	if (shownTo < reachable) {
 		const why = budgetBound ? ` (this window holds about ${num(maxChars)} characters or ${num(maxLines)} lines, whichever comes first)` : "";
 		notes.push(
-			`This is a WINDOW, not the whole file: lines ${num(shownTo + 1)}-${num(available)} were NOT returned${why}.` +
+			`This is a WINDOW, not the whole file: lines ${num(shownTo + 1)}-${num(reachable)} were NOT returned${why}.` +
 				` To continue, call ${nextCall} startLine=${num(shownTo + 1)}.${jumpHint}`,
 		);
 	}
-	if (fetchTruncated) {
+	if (fetchTruncated && !ranged) {
 		const ofSize = typeof input.size === "number" && input.size > 0 ? ` of this file's ${num(input.size)}` : "";
 		notes.push(
-			`This machine's runner stopped reading at its own byte cap${ofSize}, so lines past ${num(available)} cannot be reached through this tool at all` +
-				" — use repo_grep to find the line you need. Do NOT state or imply that the file ends here.",
+			`This machine's runner stopped reading at its own byte cap${ofSize}, so lines past ${num(available)} cannot be reached until its \`pags\` CLI is updated (runner_update) — until then use repo_grep to find the line you need. Do NOT state or imply that the file ends here.`,
 		);
 	}
 
-	const tail = shownTo < available ? `(continues — ${nextCall} startLine=${num(shownTo + 1)})` : "";
+	const tail = shownTo < reachable ? `(continues — ${nextCall} startLine=${num(shownTo + 1)})` : "";
 	// The disclosure and the continuation reminder are the PLATFORM's, and the file's lines are not.
 	// Returned as `head`/`content`/`tail` so `runRegistryTool` can fence the middle and leave ours
 	// outside it (#752, ADR 0006 F2) — a "call again with startLine=…" instruction inside a block

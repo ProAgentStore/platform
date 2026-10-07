@@ -26,7 +26,7 @@ import { runnerUpgradeMessage, runnerUpgradeRefusal } from "../runner-upgrade.js
 import { checkWorkdirVia, isWorkdirBroken } from "../coding-workdir.js";
 import { listRepoWorkdirs, type RepoWorkdirRow } from "../coding-store.js";
 import { agentCapabilities } from "../agent-capabilities.js";
-import { READ_FETCH_BYTES, renderRepoFileWindow } from "../repo-file-window.js";
+import { READ_FETCH_BYTES, renderRepoFileWindow, type RunnerFileRead, runnerRange } from "../repo-file-window.js";
 import { REPO_SYNC_MIN_CLI, statusSyncLine, syncReadNote, syncTailFor, syncVerdictFor } from "../repo-sync.js";
 
 /**
@@ -526,6 +526,7 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 				path: { type: "string", description: "File path relative to the repo root, e.g. src/App.tsx." },
 				startLine: { type: "number", description: "First line to return — 1-based and inclusive (default 1). Pair it with a repo_grep hit: to read around firestore.rules:511, ask for startLine 480." },
 				endLine: { type: "number", description: "Last line to return — 1-based and inclusive (optional). Omit it to get as much as one window holds, starting at startLine." },
+				startColumn: { type: "number", description: "Read startLine from this 1-based column — the rest of a line too long to show. The cut line's marker names the value to pass." },
 			},
 			required: ["path"],
 		},
@@ -535,13 +536,11 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 			const path = String(input.path ?? "").trim();
 			if (!path) return { content: "A `path` is required (use repo_tree to find one).", success: false };
 			const sync = syncVerdictFor(t);
-			const res = await callRunner<{ content?: string; binary?: boolean; truncated?: boolean; size?: number; error?: string }>(
+			const res = await callRunner<RunnerFileRead & { error?: string }>(
 				t.conn,
 				"/coding/read-file",
-				// Ask for everything the runner will give and slice HERE (#534). `maxBytes` has been
-				// honoured by every runner in the wild since long before this, which is what lets the
-				// window arrive with no CLI release; the runner-side range is the follow-up.
-				{ workDir: t.workDir, path, maxBytes: READ_FETCH_BYTES },
+				// The runner starts at the window's line/column (#954); the window is still cut HERE (#534).
+				{ workDir: t.workDir, path, maxBytes: READ_FETCH_BYTES, ...runnerRange(input) },
 				{ timeoutMs: READ_TIMEOUT_MS },
 			);
 			const err = failed(res);
@@ -559,6 +558,9 @@ export const REPO_LOCAL_TOOLS: ToolDef[] = [
 				fetchTruncated: res.truncated,
 				startLine: input.startLine,
 				endLine: input.endLine,
+				startColumn: input.startColumn,
+				firstLine: res.firstLine,
+				totalLines: res.totalLines,
 			});
 			// The file that was NOT on disk yet is the whole incident (#785): a read of an old tree
 			// carries the staleness note after the window's own "read on with startLine" reminder.

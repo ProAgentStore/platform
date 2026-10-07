@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { realSchemaD1, type RealSchemaD1 } from "./d1-sqlite.js";
-import { dispatchLoopStartReceipt, listLoopStarts, withLoopStartReceipt } from "./loop-start-receipts.js";
+import { countLoopStarts, dispatchLoopStartReceipt, listLoopStarts, LOOP_STARTS_PAGE, loopStartsPage, withLoopStartReceipt } from "./loop-start-receipts.js";
 import type { Env } from "../types.js";
 
 let d1: RealSchemaD1;
@@ -86,5 +86,26 @@ describe("durable loop start receipts (#886)", () => {
 		await receipt(start, "request-1", input, "u2");
 		await receipt(start, "request-1", input, "u1", "i2");
 		expect(start).toHaveBeenCalledTimes(3);
+	});
+});
+
+// #954: the newest 20 receipts were all a caller could see, with nothing saying there were more.
+describe("start receipts page with a total (#954)", () => {
+	it("pages newest first by offset, and the count is every receipt — not the page", async () => {
+		for (let i = 0; i < 25; i++) {
+			d1.exec(`INSERT INTO loop_start_receipts (user_id, instance_id, request_id, input_json, state, created_at, updated_at) VALUES ('u1', 'i1', 'req-${i}', '{}', 'started', ${1_000 + i}, ${1_000 + i})`);
+		}
+		d1.exec(`INSERT INTO loop_start_receipts (user_id, instance_id, request_id, input_json, state, created_at, updated_at) VALUES ('u2', 'i1', 'other-user', '{}', 'started', 5000, 5000)`);
+		const first = await listLoopStarts(env, "u1", "i1");
+		expect(first).toHaveLength(LOOP_STARTS_PAGE);
+		expect(first[0].requestId).toBe("req-24");
+		expect(await countLoopStarts(env, "u1", "i1")).toBe(25);
+		const second = await listLoopStarts(env, "u1", "i1", LOOP_STARTS_PAGE);
+		expect(second.map((r) => r.requestId)).toEqual(["req-4", "req-3", "req-2", "req-1", "req-0"]);
+		expect(await countLoopStarts(env, "u2", "i1")).toBe(1);
+		// What GET /loop?include_starts=true returns: the page, the total, and where the next page starts.
+		expect(await loopStartsPage(env, "u1", "i1", 0)).toMatchObject({ startsTotal: 25, startsOffset: 0, startsNextOffset: 20 });
+		expect(await loopStartsPage(env, "u1", "i1", 20)).toMatchObject({ startsOffset: 20, startsNextOffset: null });
+		expect((await loopStartsPage(env, "u1", "i1", Number.NaN)).startsOffset).toBe(0);
 	});
 });

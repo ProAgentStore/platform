@@ -166,19 +166,30 @@ export async function pendingOwnerInputs(env: Env, userId: string, now: number =
 }
 
 /**
- * List secure input requests for an instance (metadata only).
+ * List secure input requests for an instance (metadata only) — one page, newest first. Its total
+ * is {@link countSecureInputRequests}, so a page never reads as every request (#954).
  */
-export async function listSecureInputRequests(env: Env, instanceId: string, userId: string, limit = 20): Promise<SecureInputView[]> {
+export async function listSecureInputRequests(env: Env, instanceId: string, userId: string, limit = 20, offset = 0): Promise<SecureInputView[]> {
 	const res = await env.DB.prepare(
 		`SELECT ${VIEW_COLUMNS} FROM secure_input_requests
      WHERE instance_id = ?1 AND user_id = ?2 AND status IN ('pending', 'ready')
-     ORDER BY created_at DESC LIMIT ?3`,
+     ORDER BY created_at DESC LIMIT ?3 OFFSET ?4`,
 	)
-		.bind(instanceId, userId, Math.min(Math.max(1, limit), 50))
+		.bind(instanceId, userId, Math.min(Math.max(1, limit), 50), Math.max(0, Math.trunc(offset)))
 		.all<Omit<SecureInputRow, "secret_ciphertext" | "dek_wrapped" | "iv">>();
 
 	const now = Date.now();
 	return (res.results ?? []).map((r) => rowToView(r, now));
+}
+
+/** How many pending/ready requests the instance has in all — the denominator of a list page (#954). */
+export async function countSecureInputRequests(env: Env, instanceId: string, userId: string): Promise<number> {
+	const row = await env.DB.prepare(
+		"SELECT COUNT(*) AS n FROM secure_input_requests WHERE instance_id = ?1 AND user_id = ?2 AND status IN ('pending', 'ready')",
+	)
+		.bind(instanceId, userId)
+		.first<{ n: number }>();
+	return Number(row?.n ?? 0);
 }
 
 /**

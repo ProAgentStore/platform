@@ -436,3 +436,154 @@ export async function readPull(env: Env, userId: string, githubRepo: string, num
 		return null;
 	}
 }
+
+/** One changed file of a PR, as `github_read_pull files:true` returns it (#954). */
+export interface PullFile {
+	filename: string;
+	status: string;
+	previousFilename?: string;
+	additions: number;
+	deletions: number;
+	/** The unified diff, or the part of it this page carries — see `patchFrom`/`patchLength`. */
+	patch: string | null;
+	/** Where in the file's whole diff `patch` starts, when it is not the whole of it. */
+	patchFrom?: number;
+	/** The whole diff's length, when `patch` is only part of it. */
+	patchLength?: number;
+	/** Why there is no diff — GitHub sends none for a binary file or one too large for it to render. */
+	note?: string;
+}
+
+export interface PullFilesPage {
+	number: number;
+	/** Every file the PR changes, as GitHub counts them. */
+	changedFiles: number;
+	files: PullFile[];
+	hasMore: boolean;
+	/** The literal arguments of the next call, or null on the last page. */
+	next: { file: number; patch_offset: number } | null;
+	/** GitHub lists at most 3,000 files of a PR; set when this one has more. */
+	note?: string;
+}
+
+interface RawPullFile {
+	filename?: string;
+	status?: string;
+	previous_filename?: string;
+	additions?: number;
+	deletions?: number;
+	patch?: string;
+}
+
+const jsonLength = (text: string): number => JSON.stringify(text).length;
+
+/** GitHub's own page size for `/pulls/:n/files`, and the most files that endpoint will ever list. */
+const FILES_PER_PAGE = 100;
+const FILES_ENDPOINT_MAX = 3_000;
+
+/**
+ * The PR's diff, a page at a time (#954, #898 T15). Paged by a cursor — `file` (0-based index into
+ * the PR's changed files) and `patchOffset` (into that file's diff) — under a CHARACTER budget, so
+ * a page fits a tool result whole. Every file on a page is whole except when a single diff is larger
+ * than the budget by itself: then the page is that slice of it, and `next` continues it. Nothing is
+ * cut without the cursor that reaches the rest. `null` when the PR cannot be read.
+ */
+export async function readPullFiles(
+	env: Env,
+	userId: string,
+	githubRepo: string,
+	number: number,
+	opts: { file?: number; patchOffset?: number; budget: number },
+): Promise<PullFilesPage | null> {
+	const parsed = parseRepo(githubRepo);
+	if (!parsed || !Number.isFinite(number)) return null;
+	try {
+		const { token, authContext } = await resolveGithubRead(env, userId, parsed.owner);
+		const ctx: ReadCtx = { env, userId, owner: parsed.owner, name: parsed.name, token, authContext };
+		const raw = await fetchPullRaw(ctx, number);
+		if (!raw) return null;
+		const changedFiles = typeof raw.changed_files === "number" ? raw.changed_files : 0;
+		const listed = Math.min(changedFiles, FILES_ENDPOINT_MAX);
+		let index = Math.max(0, Math.trunc(opts.file ?? 0));
+		let offset = Math.max(0, Math.trunc(opts.patchOffset ?? 0));
+		const files: PullFile[] = [];
+		let used = 0;
+		let ghPage: RawPullFile[] = [];
+		let ghPageNo = 0;
+		while (index < listed) {
+			const wantPage = Math.floor(index / FILES_PER_PAGE) + 1;
+			if (wantPage !== ghPageNo) {
+				const res = await githubConditionalJson<RawPullFile[]>(env, {
+					identity: { userId, authContext },
+					repo: `${parsed.owner}/${parsed.name}`,
+					resource: "pull-files",
+					variant: `${number}:p${wantPage}`,
+					url: `https://api.github.com/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.name)}/pulls/${number}/files?per_page=${FILES_PER_PAGE}&page=${wantPage}`,
+					headers: GH_HEADERS(token),
+				});
+				if (!res.ok || !Array.isArray(res.data)) return null;
+				ghPage = res.data;
+				ghPageNo = wantPage;
+			}
+			const f = ghPage[index % FILES_PER_PAGE];
+			if (!f) break; // GitHub listed fewer than it counted — stop where the list stops
+			const whole = typeof f.patch === "string" ? f.patch : null;
+			const base: PullFile = {
+				filename: f.filename ?? "",
+				status: f.status ?? "",
+				...(f.previous_filename ? { previousFilename: f.previous_filename } : {}),
+				additions: f.additions ?? 0,
+				deletions: f.deletions ?? 0,
+				patch: null,
+			};
+			if (whole === null) {
+				files.push({ ...base, note: "GitHub sends no diff for this file — it is binary, or too large for GitHub to render one." });
+				used += base.filename.length + 120;
+				index++;
+				offset = 0;
+				continue;
+			}
+			// Measured as JSON — the reply is JSON, and escaping is what would push a page over the cap.
+			// …plus the entry's own fields, so what is checked is what is then spent.
+			const cost = jsonLength(whole) + base.filename.length + 120;
+			// A whole file fits — or, as the first thing on the page, it is sliced rather than skipped.
+			if (offset === 0 && used + cost <= opts.budget) {
+				files.push({ ...base, patch: whole });
+				used += cost;
+				index++;
+				continue;
+			}
+			if (files.length > 0) break; // the next file starts the next page, whole if it can
+			const room = Math.max(1_000, opts.budget - used);
+			let end = Math.min(whole.length, offset + room);
+			// Shrink until the ESCAPED slice fits, then end it on a line so no diff line spans two pages.
+			for (let cost = jsonLength(whole.slice(offset, end)); cost > room && end - offset > 1_000; cost = jsonLength(whole.slice(offset, end))) {
+				end = offset + Math.max(1_000, Math.floor(((end - offset) * room) / cost));
+			}
+			if (end < whole.length) {
+				const nl = whole.lastIndexOf("\n", end - 1);
+				if (nl > offset) end = nl + 1;
+			}
+			files.push({ ...base, patch: whole.slice(offset, end), patchFrom: offset, patchLength: whole.length });
+			if (end < whole.length) return page(files, { file: index, patch_offset: end });
+			index++;
+			break;
+		}
+		return page(files, index < listed ? { file: index, patch_offset: 0 } : null);
+
+		function page(out: PullFile[], next: PullFilesPage["next"]): PullFilesPage {
+			return {
+				number,
+				changedFiles,
+				files: out,
+				hasMore: next !== null,
+				next,
+				...(changedFiles > FILES_ENDPOINT_MAX
+					? { note: `This PR changes ${changedFiles.toLocaleString("en-US")} files; GitHub lists only the first ${FILES_ENDPOINT_MAX.toLocaleString("en-US")}, so the rest cannot be read here.` }
+					: {}),
+			};
+		}
+	} catch {
+		return null;
+	}
+}

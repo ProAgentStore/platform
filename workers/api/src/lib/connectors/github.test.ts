@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // serialise) without re-testing github-issues.ts. github_workflow_runs + github_create_issue
 // fetch api.github.com directly, so those go through the stubbed globalThis.fetch.
 // vi.hoisted so the fns exist when the hoisted vi.mock factory runs.
-const { listIssues, searchIssues, readIssue, listIssueComments, invalidateIssuesCache, invalidateIssueCaches, listPulls, searchPulls, readPull } = vi.hoisted(() => ({
+const { listIssues, searchIssues, readIssue, listIssueComments, invalidateIssuesCache, invalidateIssueCaches, listPulls, searchPulls, readPull, readPullFiles } = vi.hoisted(() => ({
 	listIssues: vi.fn(),
 	// `github_list_issues` with `search` (#936) goes to GitHub's search over every issue instead.
 	searchIssues: vi.fn(),
@@ -25,12 +25,14 @@ const { listIssues, searchIssues, readIssue, listIssueComments, invalidateIssues
 	// `github_list_pulls` with `search` (#937) goes to GitHub's search over every PR instead.
 	searchPulls: vi.fn(),
 	readPull: vi.fn(),
+	// `github_read_pull files:true` (#954) — the paged diff.
+	readPullFiles: vi.fn(),
 }));
 vi.mock("../github-issues.js", () => ({
 	listIssues,
 	// The handler reads a PAGE (#898): the old list, plus where it stands.
 	listIssuesPage: async (...a: unknown[]) => ({ issues: await listIssues(...a), page: 1, hasMore: false }), searchIssues, readIssue, listIssueComments, invalidateIssuesCache, invalidateIssueCaches }));
-vi.mock("../github-prs.js", () => ({ listPulls, searchPulls, readPull }));
+vi.mock("../github-prs.js", () => ({ listPulls, searchPulls, readPull, readPullFiles }));
 
 import { GITHUB_TOOLS } from "./github.js";
 import { getRegistryTool, registryConnectorGroups, registryToolNameSet, runRegistryTool } from "../tool-registry.js";
@@ -523,6 +525,20 @@ describe("github connector — issue reads delegate to github-issues", () => {
 		expect(d("github_list_pulls")).toMatch(/over every state — open, closed and merged/);
 		expect(d("github_read_pull")).toMatch(/whatever its state.*do not search for it/);
 		expect(d("github_list_issues")).toMatch(/Default: open when listing, all when searching/);
+	});
+
+	it("github_read_pull files:true returns the paged diff, passing the cursor through, under the tool-result cap (#954)", async () => {
+		readPullFiles.mockResolvedValue({ number: 7, changedFiles: 2, files: [{ filename: "a.ts", status: "modified", additions: 1, deletions: 0, patch: "+a" }], hasMore: true, next: { file: 1, patch_offset: 0 } });
+		const r = await tool("github_read_pull").handler(ctx(), { repo: "acme/widgets", number: 7, files: true, file: 1, patch_offset: 300 });
+		expect(r.success).toBe(true);
+		expect(JSON.parse(r.content)).toMatchObject({ files: [{ filename: "a.ts", patch: "+a" }], next: { file: 1, patch_offset: 0 } });
+		const [, , repo, num, opts] = readPullFiles.mock.calls[0];
+		expect([repo, num]).toEqual(["acme/widgets", 7]);
+		// The page budget sits under the cap that would otherwise head-cut the reply.
+		expect(opts).toMatchObject({ file: 1, patchOffset: 300 });
+		expect(opts.budget).toBeLessThan(24_000);
+		expect(readPull).not.toHaveBeenCalled();
+		expect(JSON.stringify(getRegistryTool("github_read_pull"))).toMatch(/`files: true` returns its changed files WITH their diffs/);
 	});
 
 	it("github_list_issues defaults an invalid state to open", async () => {

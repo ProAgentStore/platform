@@ -224,8 +224,8 @@ export class CodingRuntime {
 	}
 
 	/** Read one file inside the session's repo (traversal-guarded, size-capped). */
-	readFile(input: { sessionId?: string; workDir?: string; path: string; maxBytes?: number }) {
-		return readRepoFile(this.resolveWorkDir(input), input.path, input.maxBytes);
+	readFile(input: { sessionId?: string; workDir?: string; path: string; maxBytes?: number; startLine?: number; startColumn?: number }) {
+		return readRepoFile(this.resolveWorkDir(input), input.path, input.maxBytes, { startLine: input.startLine, startColumn: input.startColumn });
 	}
 
 	/** Run a whitelisted read-only git command in the session's repo. */

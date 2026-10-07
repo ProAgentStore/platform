@@ -42,7 +42,7 @@ import { countLoopRuns, getLoopRun, listLoopRuns, requestCancel } from "../lib/a
 // The run verdict, imported rather than re-derived — see `withHealth` (#580 AC3).
 import { runHealth, waitClause } from "../lib/work-report.js";
 import { loopDriverFor } from "../lib/loop-drivers.js";
-import { dispatchLoopStartReceipt, listLoopStarts } from "../lib/loop-start-receipts.js";
+import { dispatchLoopStartReceipt, loopStartsPage } from "../lib/loop-start-receipts.js";
 import { findDuplicateObjective } from "../lib/objective-dedupe.js";
 import { describeBusyHolder } from "../lib/loop-busy.js";
 import { instanceRepoCi } from "../lib/repo-ci-health.js";
@@ -1334,8 +1334,8 @@ toolRoutes.get("/:id/loop", async (c) => {
 	const nextOffset = offset + runs.length < total ? offset + runs.length : null;
 	// The repository's pipeline, BESIDE the runs' `health` and never folded into it (#903).
 	const repoCi = await instanceRepoCi(c.env, instanceId, session.uid);
-	const starts = c.req.query("include_starts") === "true" ? await listLoopStarts(c.env, session.uid, instanceId) : undefined;
-	return c.json({ runs: runs.map((run) => withHealth(run, now)), total, offset, nextOffset, ...(repoCi ? { repoCi } : {}), ...(starts ? { starts } : {}) });
+	const startsPage = c.req.query("include_starts") === "true" ? await loopStartsPage(c.env, session.uid, instanceId, Number(c.req.query("starts_offset"))) : {};
+	return c.json({ runs: runs.map((run) => withHealth(run, now)), total, offset, nextOffset, ...(repoCi ? { repoCi } : {}), ...startsPage });
 });
 
 toolRoutes.get("/:id/loop/:runId", async (c) => {

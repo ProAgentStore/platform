@@ -2929,14 +2929,23 @@ paths:
           schema:
             type: string
             format: uuid
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
       responses:
         "200":
-          description: Requests listed
+          description: Requests listed — one page, newest first
           content:
             application/json:
               schema:
                 type: object
                 properties:
+                  total: { type: integer, description: Every pending/ready request on the instance, not just this page. }
+                  offset: { type: integer }
+                  nextOffset: { type: integer, nullable: true, description: The offset of the next page, or null on the last. }
                   requests:
                     type: array
                     items:
@@ -9146,7 +9155,11 @@ paths:
         - name: include_starts
           in: query
           schema: { type: boolean, default: false }
-          description: Include the 20 most recent durable start receipts, separate from run health.
+          description: Include a page of 20 durable start receipts, newest first, separate from run health.
+        - name: starts_offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+          description: With include_starts, where the receipts page begins — startsNextOffset from the previous page.
       responses:
         "200":
           description: Loop runs, most recent first
@@ -9159,6 +9172,9 @@ paths:
                     type: array
                     items: { type: object, additionalProperties: true }
                   repoCi: { $ref: "#/components/schemas/InstanceRepoCi" }
+                  startsTotal: { type: integer, description: With include_starts, every receipt on the instance — not just this page. }
+                  startsOffset: { type: integer }
+                  startsNextOffset: { type: integer, nullable: true }
                   starts:
                     type: array
                     items:

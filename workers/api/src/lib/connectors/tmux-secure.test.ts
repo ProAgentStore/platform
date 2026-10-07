@@ -12,7 +12,7 @@ const { getBoundRunnerConn, callRunner } = vi.hoisted(() => ({ getBoundRunnerCon
 vi.mock("../runner-client.js", () => ({ getBoundRunnerConn, callRunner, READ_TIMEOUT_MS: 10_000 }));
 
 import { runRegistryTool } from "../tool-registry.js";
-import { consumeSecureInput, getSecureInputStatus, listSecureInputRequests } from "../secure-input.js";
+import { consumeSecureInput, countSecureInputRequests, getSecureInputStatus, listSecureInputRequests } from "../secure-input.js";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "../d1-sqlite.js";
 import { SECURE_HANDOFF_MIN_CLI } from "./tmux.js";
 import type { Env } from "../../types.js";
@@ -122,6 +122,21 @@ describe("tmux_secure_put → tmux_secure_get across two of the owner's machines
 		expectNoPlaintext(JSON.stringify(after));
 		// Consumed handles leave the pending list, which is what the console's banner reads.
 		expect(await listSecureInputRequests(env, "A", "owner")).toEqual([]);
+	});
+
+	it("lists a page of requests with the instance's total, so the newest 20 never read as all of them (#954)", async () => {
+		for (let i = 0; i < 23; i++) {
+			d1.exec(
+				`INSERT INTO secure_input_requests (id, instance_id, user_id, status, label, destination_scope, expires_at, created_at) VALUES ('req-${String(i).padStart(2, "0")}', 'A', 'owner', 'pending', 'code ${i}', 'tmux', '2999-01-01T00:00:00Z', '2026-10-07 00:00:${String(i).padStart(2, "0")}')`,
+			);
+		}
+		const first = await listSecureInputRequests(env, "A", "owner");
+		expect(first).toHaveLength(20);
+		expect(first[0].id).toBe("req-22");
+		expect(await countSecureInputRequests(env, "A", "owner")).toBe(23);
+		expect((await listSecureInputRequests(env, "A", "owner", 20, 20)).map((r) => r.id)).toEqual(["req-02", "req-01", "req-00"]);
+		// Another owner's instance is neither listed nor counted.
+		expect(await countSecureInputRequests(env, "C", "owner")).toBe(0);
 	});
 
 	it("is one-shot: a second get of the same handle writes nothing", async () => {

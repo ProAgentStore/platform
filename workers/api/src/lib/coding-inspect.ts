@@ -1,5 +1,5 @@
 import { callRunner, type RunnerConn } from "./runner-client.js";
-import { READ_FETCH_BYTES, renderRepoFileWindow } from "./repo-file-window.js";
+import { READ_FETCH_BYTES, renderRepoFileWindow, type RunnerFileRead, runnerRange } from "./repo-file-window.js";
 import { withFraming } from "./untrusted-fence.js";
 import { canReadHosted, hostedCoordinate, listHostedIssues, readHostedIssue, type HostedRepoRef } from "./hosted-repo.js";
 import type { Env } from "../types.js";
@@ -53,6 +53,7 @@ export function buildInspectTools(opts: { code?: boolean; issues?: boolean } = {
 				path: { type: "string", description: "File path relative to the repo root, e.g. src/App.tsx." },
 				startLine: { type: "number", description: "First line to return — 1-based and inclusive (default 1)." },
 				endLine: { type: "number", description: "Last line to return — 1-based and inclusive (optional)." },
+				startColumn: { type: "number", description: "Read startLine from this 1-based column — the rest of a cut line (its marker names the value)." },
 			}, ["path"]),
 			fn("git_status", "Show which files have uncommitted changes right now (git status).", {}),
 			fn("git_diff", "Show the actual uncommitted changes (git diff) — use this to confirm what did or didn't change before claiming it.", {
@@ -146,7 +147,7 @@ export async function executeInspectTool(target: InspectTarget, call: { name: st
 				// word "(truncated)" with no numbers — so the Co-pilot and the Assistant could
 				// disagree about what a file contains. It takes the same window, keeping its OWN
 				// smaller budget: the fix here is the range and the honest header, not more tokens.
-				const r = await callRunner<{ content?: string; binary?: boolean; truncated?: boolean; size?: number }>(conn, "/coding/read-file", { ...base, path, maxBytes: READ_FETCH_BYTES });
+				const r = await callRunner<RunnerFileRead>(conn, "/coding/read-file", { ...base, path, maxBytes: READ_FETCH_BYTES, ...runnerRange(call.arguments ?? {}) });
 				if (r.binary) return `${path} is a binary file (not shown).`;
 				// `renderRepoFileWindow` returns head/content/tail since #752, so that the REGISTRY
 				// reader (`repo_read_file`) can fence the file's lines and keep the platform's
@@ -161,6 +162,9 @@ export async function executeInspectTool(target: InspectTarget, call: { name: st
 					fetchTruncated: r.truncated,
 					startLine: call.arguments?.startLine,
 					endLine: call.arguments?.endLine,
+					startColumn: call.arguments?.startColumn,
+					firstLine: r.firstLine,
+					totalLines: r.totalLines,
 					maxChars: CAPS.read_file,
 				});
 				return withFraming(win.head, win.content, win.tail);

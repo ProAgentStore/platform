@@ -9,7 +9,7 @@
 
 import { Hono, type Context } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
-import { consumeSecureInput, createSecureInputRequest, getSecureInputStatus, listSecureInputRequests, pendingOwnerInputs, storeSecretValue } from "../lib/secure-input.js";
+import { consumeSecureInput, countSecureInputRequests, createSecureInputRequest, getSecureInputStatus, listSecureInputRequests, pendingOwnerInputs, storeSecretValue } from "../lib/secure-input.js";
 import { secureInputLink, secureInputNotificationLink } from "../lib/console-links.js";
 import { instanceListName } from "../lib/instance-config.js";
 import { notifyUser } from "./push.js";
@@ -86,12 +86,14 @@ secureInputRoutes.get("/my/secure-inputs", async (c) => {
 
 /**
  * GET /:instanceId/secure-inputs
- * List pending secure input requests (metadata only).
+ * List pending secure input requests (metadata only) — a page with its place in the whole (#954).
  */
 secureInputRoutes.get("/:instanceId/secure-inputs", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
-	const requests = await listSecureInputRequests(c.env, instanceId, uid);
-	return c.json({ requests });
+	const limit = Math.max(1, Math.min(50, Number(c.req.query("limit")) || 20));
+	const offset = Math.max(0, Math.trunc(Number(c.req.query("offset")) || 0));
+	const [requests, total] = await Promise.all([listSecureInputRequests(c.env, instanceId, uid, limit, offset), countSecureInputRequests(c.env, instanceId, uid)]);
+	return c.json({ requests, total, offset, nextOffset: offset + requests.length < total ? offset + requests.length : null });
 });
 
 /**

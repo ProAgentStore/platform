@@ -20,12 +20,30 @@ function receiptView(row: ReceiptRow) {
 	return { requestId: row.request_id, startState, approval: "dispatched", createdAt: row.created_at, updatedAt: row.updated_at, ageMs };
 }
 
-export async function listLoopStarts(env: Env, userId: string, instanceId: string) {
-	const rows = await env.DB.prepare("SELECT * FROM loop_start_receipts WHERE user_id = ? AND instance_id = ? ORDER BY created_at DESC LIMIT 20").bind(userId, instanceId).all<ReceiptRow>();
+/** One page of start receipts — {@link countLoopStarts} says how many there are in all (#954). */
+export const LOOP_STARTS_PAGE = 20;
+
+export async function listLoopStarts(env: Env, userId: string, instanceId: string, offset = 0) {
+	const rows = await env.DB.prepare("SELECT * FROM loop_start_receipts WHERE user_id = ? AND instance_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?")
+		.bind(userId, instanceId, LOOP_STARTS_PAGE, Math.max(0, Math.trunc(offset)))
+		.all<ReceiptRow>();
 	return rows.results.map((row) => {
 		const result = row.response_json ? JSON.parse(row.response_json) as Record<string, unknown> : null;
 		return { ...receiptView(row), ...(result ? { result: { runId: result.runId ?? null, queueEntryId: (result.entry as { id?: string } | undefined)?.id ?? null, reason: result.reason ?? null, error: typeof result.error === "string" ? clipMarked(result.error, 500) : null } } : {}) };
 	});
+}
+
+/** Every start receipt on the instance — so the newest page never reads as all of them (#954). */
+export async function countLoopStarts(env: Env, userId: string, instanceId: string): Promise<number> {
+	const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM loop_start_receipts WHERE user_id = ? AND instance_id = ?").bind(userId, instanceId).first<{ n: number }>();
+	return Number(row?.n ?? 0);
+}
+
+/** A page of receipts with its place in the whole (#954) — the newest 20 used to be all a caller saw. */
+export async function loopStartsPage(env: Env, userId: string, instanceId: string, offset: number) {
+	const startsOffset = Math.max(0, Math.trunc(offset) || 0);
+	const [starts, startsTotal] = await Promise.all([listLoopStarts(env, userId, instanceId, startsOffset), countLoopStarts(env, userId, instanceId)]);
+	return { starts, startsTotal, startsOffset, startsNextOffset: startsOffset + starts.length < startsTotal ? startsOffset + starts.length : null };
 }
 
 /** Bound confirmation without abandoning the durable start when the caller disconnects. */

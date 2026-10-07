@@ -134,6 +134,33 @@ describe("readRepoFile / runRepoGit / repoTree (on a real temp repo)", () => {
 		expect(r.content).toContain("export const x = 1;");
 		expect(r.binary).toBeUndefined();
 	});
+	// #954: before this a read always began at byte 0, so nothing past the 128 KiB cap was reachable.
+	it("reads from any line of a file larger than the byte cap, and reports where it started and the line count", () => {
+		const lines = Array.from({ length: 20_000 }, (_, i) => `line ${i + 1} ${"x".repeat(20)}`);
+		writeFileSync(join(dir, "big.txt"), `${lines.join("\n")}\n`);
+		const top = readRepoFile(dir, "big.txt", 128 * 1024);
+		expect(top).toMatchObject({ firstLine: 1, firstColumn: 1, totalLines: 20_000, truncated: true });
+		const deep = readRepoFile(dir, "big.txt", 128 * 1024, { startLine: 19_990 });
+		expect(deep.firstLine).toBe(19_990);
+		expect(deep.content?.startsWith("line 19990 ")).toBe(true);
+		expect(deep.content?.trimEnd().endsWith("line 20000 xxxxxxxxxxxxxxxxxxxx")).toBe(true);
+		expect(deep.truncated).toBe(false);
+	});
+	it("a startLine past the end returns no content and the real line count", () => {
+		writeFileSync(join(dir, "three.txt"), "a\nb\nc");
+		expect(readRepoFile(dir, "three.txt", undefined, { startLine: 9 })).toMatchObject({ content: "", totalLines: 3, firstLine: 9, truncated: false });
+	});
+	it("reads a long line from a CHARACTER column, never splitting a multi-byte character", () => {
+		// "é" is two bytes: column 4 is the 4th character, not the 4th byte.
+		writeFileSync(join(dir, "wide.txt"), "éééabcdef\nsecond\n");
+		const r = readRepoFile(dir, "wide.txt", undefined, { startLine: 1, startColumn: 4 });
+		expect(r.content).toBe("abcdef\nsecond\n");
+		expect(r.firstColumn).toBe(4);
+		// A cap that lands inside "é" backs off to the character boundary instead of emitting U+FFFD.
+		const cut = readRepoFile(dir, "wide.txt", 3);
+		expect(cut.content).toBe("é");
+		expect(cut.content).not.toContain("\uFFFD");
+	});
 	it("refuses traversal on read", () => {
 		expect(() => readRepoFile(dir, "../../../etc/passwd")).toThrow(InspectError);
 	});

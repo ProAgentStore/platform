@@ -167,8 +167,26 @@ export class InspectError extends Error {
 const DEFAULT_MAX_FILE_BYTES = 64 * 1024;
 const HARD_MAX_FILE_BYTES = 128 * 1024;
 
-/** Read a text file inside the repo. Rejects traversal, oversize, and binary files. */
-export function readRepoFile(workDir: string, relPath: string, maxBytes?: number): { path: string; size: number; truncated: boolean; content?: string; binary?: boolean } {
+/** Where a ranged read starts (#954) — 1-based line, and 1-based column within that line. */
+export interface ReadFrom {
+	startLine?: number;
+	startColumn?: number;
+}
+
+/**
+ * Read a text file inside the repo. Rejects traversal and binary files; returns at most `maxBytes`.
+ *
+ * Ranged from #954: `startLine`/`startColumn` say where the returned bytes begin, so no part of a file
+ * is out of reach — before it, a read always began at byte 0 and nothing past the cap could be read.
+ * `firstLine`/`firstColumn`/`totalLines` are always present, which is how the cloud tells a runner that
+ * honours the range from an older one that silently started at the top.
+ */
+export function readRepoFile(
+	workDir: string,
+	relPath: string,
+	maxBytes?: number,
+	from: ReadFrom = {},
+): { path: string; size: number; truncated: boolean; content?: string; binary?: boolean; firstLine?: number; firstColumn?: number; totalLines?: number } {
 	const abs = resolveInside(workDir, relPath, { checkSymlink: true });
 	const st = statSync(abs);
 	if (!st.isFile()) throw new InspectError(`not a regular file: ${relPath}`);
@@ -177,8 +195,29 @@ export function readRepoFile(workDir: string, relPath: string, maxBytes?: number
 	// Binary sniff: a NUL byte in the first 8KB → don't feed bytes to the model.
 	const head = buf.subarray(0, 8192);
 	if (head.includes(0)) return { path: relPath, size: st.size, truncated: false, binary: true };
-	const truncated = buf.length > cap;
-	return { path: relPath, size: st.size, truncated, content: buf.subarray(0, cap).toString("utf-8") };
+
+	let newlines = 0;
+	for (let i = buf.indexOf(10); i !== -1; i = buf.indexOf(10, i + 1)) newlines++;
+	const totalLines = newlines + (buf.length > 0 && buf[buf.length - 1] !== 10 ? 1 : 0);
+	const firstLine = Math.max(1, Math.trunc(Number(from.startLine) || 1));
+	const firstColumn = Math.max(1, Math.trunc(Number(from.startColumn) || 1));
+	const ranged = { firstLine, firstColumn, totalLines };
+	if (firstLine > totalLines) return { path: relPath, size: st.size, truncated: false, content: "", ...ranged };
+
+	// The byte where line `firstLine` begins…
+	let start = 0;
+	for (let line = 1; line < firstLine; line++) start = buf.indexOf(10, start) + 1;
+	// …and, for a column past the first, where that CHARACTER begins — counted on the decoded line, so
+	// a multi-byte character is never split.
+	if (firstColumn > 1) {
+		const eol = buf.indexOf(10, start);
+		const lineText = buf.subarray(start, eol === -1 ? buf.length : eol).toString("utf-8");
+		start += Buffer.byteLength(lineText.slice(0, firstColumn - 1), "utf-8");
+	}
+	let end = Math.min(buf.length, start + cap);
+	// Never end inside a multi-byte character: it would decode as U+FFFD at the cut.
+	while (end < buf.length && end > start && (buf[end] & 0xc0) === 0x80) end--;
+	return { path: relPath, size: st.size, truncated: end < buf.length, content: buf.subarray(start, end).toString("utf-8"), ...ranged };
 }
 
 /** Run a whitelisted read-only git command in the repo. Never uses a shell. */

@@ -19,7 +19,8 @@ import { compileConnector, type ConnectorManifest } from "./manifest.js";
 import type { Connector } from "./types.js";
 import { githubAppConfigured } from "../github-app.js";
 import { invalidateIssueCaches, invalidateIssuesCache, listIssueComments, listIssuesPage, readIssue, searchIssues } from "../github-issues.js";
-import { listPulls, readPull, searchPulls } from "../github-prs.js";
+import { listPulls, readPull, readPullFiles, searchPulls } from "../github-prs.js";
+import { TOOL_RESULT_MAX_CHARS } from "../tool-result-cap.js";
 import { fetchJobLog, fetchWorkflowJobs, fetchWorkflowRuns, JOB_LOG_FETCH_BYTES, mapWorkflowRun, pickJob, stripLogTimestamps } from "../github-actions.js";
 import { READ_MAX_CHARS, READ_MAX_LINES, renderRepoFileWindow, tailWindowStart } from "../repo-file-window.js";
 
@@ -303,12 +304,22 @@ const listPullsHandler: ToolDef["handler"] = async (ctx, input) => {
 	return { content: JSON.stringify({ pulls, ...paging(page, perPage, pulls.length === perPage) }, null, 2), success: true };
 };
 
+/**
+ * The diff characters one `files` page carries (#954) — JSON-measured, and under
+ * `TOOL_RESULT_MAX_CHARS` with room for the page's own fields, so a page is never head-cut.
+ */
+const PULL_FILES_BUDGET = TOOL_RESULT_MAX_CHARS - 6_000;
+
 const readPullHandler: ToolDef["handler"] = async (ctx, input) => {
 	const repo = String(input.repo || "");
 	const r = await resolveRepo(ctx, repo);
 	if ("error" in r) return { content: r.error, success: false };
 	const num = Number(input.number);
 	if (!num) return { content: "A pull request `number` is required.", success: false };
+	if (input.files === true || input.files === "true") {
+		const page = await readPullFiles(ctx.env, ctx.userId ?? "", repo, num, { file: Number(input.file) || 0, patchOffset: Number(input.patch_offset) || 0, budget: PULL_FILES_BUDGET });
+		return page ? { content: JSON.stringify(page), success: true } : { content: `Pull request #${num} not found in ${repo}, or its files could not be read.`, success: false };
+	}
 	const pull = await readPull(ctx.env, ctx.userId ?? "", repo, num);
 	return pull ? { content: JSON.stringify(pull, null, 2), success: true } : { content: `Pull request #${num} not found in ${repo}.`, success: false };
 };
@@ -540,11 +551,14 @@ export const GITHUB_MANIFEST: ConnectorManifest = {
 			name: "github_read_pull",
 			untrustedOutput: true,
 			scope: "read",
-			description: "Read one pull request by its number, whatever its state, open, closed or merged — body, diff size, mergeability, review state and whether its checks are green. The tool to use whenever you know the number — do not search for it.",
+			description: "Read one pull request by its number, whatever its state, open, closed or merged — body, diff size, mergeability, review state and whether its checks are green. The tool to use whenever you know the number — do not search for it. `files: true` returns its changed files WITH their diffs, a page at a time; pass back `next` as `file`/`patch_offset` for more.",
 			handler: "github_read_pull",
 			params: {
 				repo: { type: "string", required: true, description: 'The repository, "owner/name".' },
 				number: { type: "number", required: true, description: "The pull request number." },
+				files: { type: "boolean", description: "Return the changed files and their diffs instead of the summary (#954)." },
+				file: { type: "number", description: "With `files`: the 0-based index of the first file — `next.file` from the previous page." },
+				patch_offset: { type: "number", description: "With `files`: where in that file's diff to resume — `next.patch_offset` from the previous page." },
 			},
 		},
 		{
