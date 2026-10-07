@@ -319,6 +319,13 @@ export interface StateVocabulary {
 }
 
 /** Vocabularies checked against the code that emits them. */
+/**
+ * The fleet snapshot's per-instance verdict (#961) — mirrored from `FLEET_STATUSES` in
+ * `workers/api/src/lib/fleet-snapshot.ts` (`state-vocabulary.test.ts` holds the two equal), in the
+ * order the snapshot sorts by: most-needs-attention first.
+ */
+export const FLEET_STATUSES = ["decision_blocked", "idle_needs_work", "hard_blocked", "working", "unknown", "idle"] as const;
+
 export const BACKED_VOCABULARIES: Record<string, StateVocabulary> = {
 	"coding run state": {
 		sources: ["workers/api/src/lib/coding-run-state.ts"],
@@ -349,6 +356,11 @@ export const BACKED_VOCABULARIES: Record<string, StateVocabulary> = {
 	"repository ci state": {
 		sources: ["workers/api/src/lib/repo-ci-health.ts"],
 		values: REPO_CI_STATES,
+	},
+	// #961. `fleet_snapshot` publishes it; the API derives it in one pure function.
+	"fleet status": {
+		sources: ["workers/api/src/lib/fleet-snapshot.ts"],
+		values: FLEET_STATUSES,
 	},
 };
 

@@ -30,6 +30,7 @@ const { PagsMcp } = await import("./index.js");
 const { MCP_TOOL_COUNT } = await import("./tool-count.js");
 const {
 	BACKED_VOCABULARIES,
+	FLEET_STATUSES,
 	CLEARED_TASK_STATUSES,
 	AGENT_CHAT_STATUSES,
 	CODING_RUN_STATES,
@@ -647,3 +648,15 @@ describe("the inventory's own citations resolve (#600)", () => {
 		expect(citationProblem("disabled_by_owner|not_declared|ok", { source: "workers/api/src/lib/tool-refusal.ts", symbol: "ToolPolicyReason" })).toBeNull();
 	});
 });
+
+describe("the fleet status vocabulary (#961)", () => {
+	it("matches workers/api/src/lib/fleet-snapshot.ts, derived from its source, in its order", () => {
+		const src = readFileSync(join(import.meta.dirname, "../../api/src/lib/fleet-snapshot.ts"), "utf8");
+		const m = src.match(/export const FLEET_STATUSES = \[([^\]]+)\]/);
+		const members = m ? [...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]) : [];
+		expect(members.length, "parsed no fleet statuses — the guard has stopped measuring").toBeGreaterThanOrEqual(6);
+		// Order too: the snapshot sorts by it, and the published list says "most-needs-attention first".
+		expect([...FLEET_STATUSES]).toEqual(members);
+	});
+});
+

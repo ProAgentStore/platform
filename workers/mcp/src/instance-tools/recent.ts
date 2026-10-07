@@ -2,8 +2,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authRequired, authedCall, jsonText, text } from "../http.js";
 import { type InstanceTouch, listInstanceTouches, RECENT_INSTANCES_LIMIT } from "../recent-instances.js";
-import { requirePermission } from "../safety.js";
-import { runHealthSentence } from "../state-vocabulary.js";
+import { audit, dryRun, requirePermission } from "../safety.js";
+import { FLEET_STATUSES, runHealthSentence } from "../state-vocabulary.js";
 import type { InstanceSummary, InstanceToolsCtx } from "./shared.js";
 
 /**
@@ -94,6 +94,53 @@ export function registerRecentTools(server: McpServer, ctx: InstanceToolsCtx): v
 			]);
 			const waitingOnOwner = Array.isArray(waiting?.instances) ? waiting.instances : [];
 			return jsonText(activity && typeof activity === "object" ? { ...(activity as object), waitingOnOwner } : activity);
+		},
+	);
+
+	// #961: the status picture across a GROUP of instances in one call, instead of a
+	// get_instance_state and a GitHub issue list per instance.
+	server.tool(
+		"fleet_snapshot",
+		"Status of a group of my instances in ONE call — the fleet view: for every instance carrying a tag (or every instance, with no tag), its derived `status`, the `reason` for it, the run it is working on (`work`: objective, waitingReason, waitNote), the question waiting on me (`decision`), pending secret entries (`ownerSecrets`) and a summary of its open GitHub issues (`issues`: open, actionable, needsHuman and the `next` few to hand over). `status` is " +
+			FLEET_STATUSES.map((s) => `\`${s}\``).join("/") +
+			": `decision_blocked` (a question waits for my answer — answer with answer_instance_mcp_input_request), `idle_needs_work` (idle with open issues it could take), `hard_blocked` (needs a person's hands: a session takeover, a CLI sign-in, a stalled run, a secret to enter, or only needs-human issues left — a coding run's ask-for-a-value pause is reported here because it cannot be answered from chat, #960), `working`, `unknown` (idle, but its issues could not be read) and `idle` (nothing to do). Ordered most-needs-attention first, with `counts` per status. Tag instances with set_instance_tags; my_instances shows each instance's `tags`.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			tags: z.array(z.string()).optional().describe("Instances carrying ANY of these tags (case-insensitive). Omit for every instance."),
+			status: z.array(z.enum(FLEET_STATUSES)).optional().describe("Only these statuses — e.g. [\"decision_blocked\", \"idle_needs_work\"] to skip what needs nothing."),
+		},
+		async ({ token, tags, status }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "fleet_snapshot", { tags, status });
+			if (denied) return denied;
+			const q = new URLSearchParams();
+			for (const t of tags ?? []) q.append("tag", t);
+			if (status?.length) q.set("status", status.join(","));
+			return jsonText(await authedCall(`/v1/instances/my/snapshot${q.size ? `?${q}` : ""}`, sessionToken, {}, env));
+		},
+	);
+
+	server.tool(
+		"set_instance_tags",
+		"Tag an instance so it can be asked about as a group with fleet_snapshot — e.g. [\"store-coders\"]. REPLACES the instance's tags (pass the full list; [] clears them). Tags are matched case-insensitively and kept as written; up to 20 per instance, each up to 40 letters, digits, spaces or . _ : -.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Private instance ID from my_instances. Copy it exactly."),
+			tags: z.array(z.string()).describe("The instance's full tag list after this call."),
+			dry_run: z.boolean().optional().describe("Preview without changing the tags."),
+		},
+		async ({ token, instance_id, tags, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, tags };
+			const denied = await requirePermission(safetyFor(token), "write", "set_instance_tags", input);
+			if (denied) return denied;
+			const path = `/v1/instances/${encodeURIComponent(instance_id)}/tags`;
+			if (dry_run) return dryRun(safetyFor(token), "set_instance_tags", `set the tags of ${instance_id} to ${JSON.stringify(tags)}`, input, { endpoint: path, method: "PUT" });
+			const data = await authedCall(path, sessionToken, { method: "PUT", body: JSON.stringify({ tags }) }, env);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_instance_tags", action: "completed", input, result: data });
+			return jsonText(data);
 		},
 	);
 

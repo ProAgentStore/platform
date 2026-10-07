@@ -65,6 +65,9 @@ export interface IssuesPage {
 	 *  `per_page` issues and still have more: GitHub's issue listing includes pull requests, which
 	 *  are removed after the fetch. */
 	hasMore: boolean;
+	/** True when GitHub could not be read (no access, rate limit, network) — the empty `issues` is
+	 *  then NOT "no issues", and a caller that reports a count must say so (#961). */
+	unreadable?: boolean;
 }
 
 const pageOf = (page: unknown): number => Math.max(1, Math.trunc(Number(page)) || 1);
@@ -190,7 +193,7 @@ export async function listIssues(env: Env, userId: string, githubRepo: string, o
 /** {@link listIssues}, with the page it read and whether there is another. */
 export async function listIssuesPage(env: Env, userId: string, githubRepo: string, opts: ListIssuesOpts = {}): Promise<IssuesPage> {
 	const page = pageOf(opts.page);
-	const none: IssuesPage = { issues: [], page, hasMore: false };
+	const none: IssuesPage = { issues: [], page, hasMore: false, unreadable: true };
 	const parsed = parseRepo(githubRepo);
 	if (!parsed) return none;
 	try {

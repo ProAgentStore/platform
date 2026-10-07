@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**258 tool registrations.** 232 are always registered; 26 are gated to the console
+**260 tool registrations.** 234 are always registered; 26 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -274,6 +274,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `get_creator_dashboard` | Creator totals, subscribers, usage and per-agent ranking | — | | |
 | `get_usage_dashboard` | Subscriber usage totals and the last 30 days by day and agent | — | | |
 | `account_activity` | Every instance's live health (`working`/`waiting`/`stalled`/`idle`), queue depth and last outcome, in one call — two queries, uncapped, unlike `recent_instances` (#815) | read | | |
+| `fleet_snapshot` | Every instance carrying a tag (or all), each with one derived `status` (`decision_blocked`/`idle_needs_work`/`hard_blocked`/`working`/`unknown`/`idle`), its reason, the run it is working on, the question waiting on you and its open-issue summary — most-needs-attention first (#961) | read | | |
 | `recent_instances` | The instances you are driving or drove most recently over MCP — every instance with a run open comes first (`active-run`), then your own recency (`recent-touch`); `limit` (default 5, max 20) with `total` / `truncated` / `working` so a cut is never silent (#787, #192) | read | | |
 | `chat_with_instance` | The real runtime chat path (your state, your credentials) | runtime | yes | |
 | `instance_messages` | Recent messages, newest page first — page older ones with `before` = the previous call's `nextCursor` (#566) | — | | |
@@ -389,6 +390,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `instance_runner_node` | Which machine one instance is pinned to, and the alternatives | — | | |
 | `runner_setup` | A coding agent's local runner setup checklist — CLI and `pags up`, attachment, GitHub App, bound repository, engine sign-in — each with a live verdict | — | | |
 | `set_instance_runner_node` | Pin an instance to a machine and move it there — the connected `pags up` attaches it now and the old machine lets go (empty clears the pin); lost/slow confirmation returns `outcome: unknown` with `instance_runner_node` polling guidance | write | yes | |
+| `set_instance_tags` | Replace an instance's tags (`[]` clears them) so fleet_snapshot can ask about it as a group (#961) | write | yes | |
 | `force_runner_attach` | Force a machine's connected `pags up` to (re)attach one agent now — the remote `pags up --force` for that agent: clears a stale socket from its relay slot and takes the slot over. Does not change the pin; lost/slow confirmation returns `outcome: unknown` with `instance_runner_node` polling guidance | runtime | yes | |
 | `runner_update` | Update a machine's `pags` CLI to the latest release and restart it in place — waits for busy engines so no run is cut off, then checks every agent it held is attached again (re-attaching stragglers). `pags up` restarts itself on the new release; a runner under launchd/systemd (`PAGS_SERVICE=1`) or with `PAGS_RESTART_COMMAND` is restarted by that. The first update of a CLI older than 0.4.62 still needs the machine; lost/slow confirmation returns `outcome: unknown` with `list_runner_nodes` polling guidance | runtime | yes | |
 | `get_instance_terminal_session` | Saved Tmux-tab terminal target for one instance | read | | |

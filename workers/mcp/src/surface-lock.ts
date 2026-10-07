@@ -1021,4 +1021,8 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// Apply. 257 registrations become 258, `MCP_TOOL_ALWAYS_ON` 231 → 232, gated stays 26.
 	// Appended, never edited in place: 0.1.81 is published.
 	"0.1.82": "sha256:7745996d1686a1638160a30185b76292d54b1bf3a6e2936dbd9f08d709c6afc0",
+	// 0.1.83 (#961): `fleet_snapshot` (read) — every tagged instance's derived status in one call —
+	// and `set_instance_tags` (write). 258 registrations become 260, `MCP_TOOL_ALWAYS_ON` 232 → 234,
+	// gated stays 26. Appended, never edited in place: 0.1.82 is published.
+	"0.1.83": "sha256:40cad1d50ff90b1317699437a357a9e95542b60dcc0706b6b9377c7e8b0706a3",
 };

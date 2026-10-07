@@ -244,6 +244,8 @@ const READBACK: Record<string, string | null> = {
 	// #671. Readable by the tool added alongside it — the gap this closed was precisely that the
 	// pin could be neither read nor written here, so a reader had to exist for the writer to land.
 	"set_instance_runner_node.runner_node": "instance_runner_node",
+	// #961: the tags are read back on every my_instances entry, and by fleet_snapshot.
+	"set_instance_tags.tags": "my_instances",
 	"force_runner_attach.runner_node": "instance_runner_node",
 	"runner_update.runner_node": "list_runner_nodes",
 	// #613: terminal-tab selection is durable instance state, not ephemeral client state. The

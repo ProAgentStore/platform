@@ -125,21 +125,24 @@ describe("instanceListView", () => {
 		expect(instanceListView(null).runnerNode).toBeNull();
 	});
 
-	it("returns ONLY the two whitelisted keys — a secret in the blob has no way out", () => {
+	it("returns ONLY the whitelisted keys — a secret in the blob has no way out", () => {
 		const view = instanceListView(JSON.stringify({
 			displayName: " My Coder ",
 			runnerNode: "mac-mini",
+			tags: ["store-coders"],
 			credentials: { password: "hunter2" },
 			settings: { target_language: "zh" },
 			specialInstructions: "never say this out loud",
 		}));
-		expect(Object.keys(view).sort()).toEqual(["displayName", "runnerNode"]);
+		// `tags` joined at #961: an owner-written label, the field fleet_snapshot filters on.
+		expect(Object.keys(view).sort()).toEqual(["displayName", "runnerNode", "tags"]);
+		expect(view.tags).toEqual(["store-coders"]);
 		expect(view.displayName).toBe("My Coder");
 		expect(JSON.stringify(view)).not.toContain("hunter2");
 	});
 
 	it("treats a malformed blob as nothing set rather than throwing", () => {
-		expect(instanceListView("{not json")).toEqual({ displayName: null, runnerNode: null });
+		expect(instanceListView("{not json")).toEqual({ displayName: null, runnerNode: null, tags: [] });
 	});
 });
 

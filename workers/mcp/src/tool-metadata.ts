@@ -140,6 +140,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	email_status: "read",
 	get_agent_board_config: "read",
 	account_activity: "read",
+	fleet_snapshot: "read",
 	get_account_preferences: "read",
 	get_agent_settings_schema: "read",
 	get_agent_stats_schema: "read",
@@ -296,6 +297,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	set_instance_model: "write",
 	set_instance_operator_manual: "write",
 	set_instance_runner_node: "write",
+	set_instance_tags: "write",
 	set_instance_terminal_session: "write",
 	set_instance_settings: "write",
 	set_instance_stats: "write",
@@ -589,14 +591,16 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// +1 write at #955: `triage_job_lead` is the sole explicit human decision boundary that
 	// can hand a Scout lead to another agent; its Apply path changes durable state and emits an
 	// application request, while skip/defer/archive only change the lead lifecycle.
-	read: 122,
+	// +1 read at #961: `fleet_snapshot` — every tagged instance's derived status in one call; every
+	// query in it is `user_id`-scoped and its GitHub reads are the ones github_list_issues makes.
+	read: 123,
 	// +2 write at #825: `pause_instance` / `resume_instance`. `write` rather than `destructive` —
 	// nothing is deleted and nothing is unsubscribed, and classing the OFF switch as destructive
 	// would put RESUME behind a scope the caller may not hold, which is the wrong failure mode for
 	// a safety toggle (the reasoning `set_instance_connector_consent` already records). Not `read`
 	// either: switching an agent off is a real change.
 	// +1 write at #906: `secure_input_request`, agent creates a secure input request for a secret.
-	write: 75, // +1 at #955: triage_job_lead; +2 at #946: set_local_browser_consent (a decision, withdrawable) and review_local_browser_finding (saves one reviewed finding to the owner's own collection); +1 at #944: cancel_local_browser_run (stops a run; deletes nothing); +1 at #945: set_instance_local_browser_settings (edits config, starts nothing); +1 at #757: promote_board_item
+	write: 76, // +1 at #961: set_instance_tags (a label the owner writes; [] clears it); +1 at #955: triage_job_lead; +2 at #946: set_local_browser_consent (a decision, withdrawable) and review_local_browser_finding (saves one reviewed finding to the owner's own collection); +1 at #944: cancel_local_browser_run (stops a run; deletes nothing); +1 at #945: set_instance_local_browser_settings (edits config, starts nothing); +1 at #757: promote_board_item
 	// +1 runtime at #806: `continue_instance_run`. `runtime` rather than `write` for the reason
 	// `start_instance_loop` is — it starts an autonomous run that spends on its own — and the
 	// two must agree, because a caller holding the scope to start one holding a narrower one to

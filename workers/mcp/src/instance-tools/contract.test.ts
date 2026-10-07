@@ -255,6 +255,7 @@ type Row = [string, string, string | null, string | null, string];
 const TABLE: Record<string, Row> = {
 	add_instance_knowledge: ["knowledge", "write", null, "envelope", "content,dry_run,instance_id,source,source_url,title,token"],
 	account_activity: ["recent", "read", null, null, "token"],
+	fleet_snapshot: ["recent", "read", null, null, "status,tags,token"],
 	agent_trace: ["observability", "none", null, null, "instance_id,level,limit,offset,source,token,trace_id"],
 	apply_account_coding_default: ["account", "runtime", null, "envelope", "dry_run,token"],
 	apply_to_job: ["apply", "runtime", null, "envelope", "dry_run,instance_id,submit,token,url"],
@@ -469,6 +470,7 @@ const TABLE: Record<string, Row> = {
 	// #671: `write` rather than `runtime` — it changes where calls are ROUTED, it does not itself
 	// drive anything on the machine.
 	set_instance_runner_node: ["runtime", "write", null, "envelope", "dry_run,instance_id,runner_node,token"],
+	set_instance_tags: ["recent", "write", null, "envelope", "dry_run,instance_id,tags,token"],
 	force_runner_attach: ["machineControl", "runtime", null, "envelope", "dry_run,instance_id,runner_node,token"],
 	runner_update: ["machineControl", "runtime", null, "envelope", "dry_run,runner_node,token"],
 	set_instance_terminal_session: ["runtime", "write", null, "envelope", "active_terminal_target,dry_run,instance_id,token"],

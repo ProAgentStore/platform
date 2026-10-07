@@ -1,4 +1,5 @@
 import type { Env } from "../types.js";
+import { tagsOf } from "./instance-tags.js";
 import { normalizeRunnerNode } from "./runtime-nodes.js";
 import { isValidJsonPathKey, jsonPath } from "./sql.js";
 
@@ -149,6 +150,8 @@ export interface InstanceListView {
 	displayName: string | null;
 	/** `config.runnerNode`: the machine this instance is pinned to. Empty (= automatic) is null. */
 	runnerNode: string | null;
+	/** `config.tags` (#961): the owner's grouping labels. `[]` when none. */
+	tags: string[];
 }
 
 /** Parse the list-safe view of an instance config. Malformed JSON reads as "nothing set". */
@@ -166,7 +169,7 @@ export function instanceListName(rawInstanceConfig: string | null | undefined, a
 export function instanceListView(raw: string | null | undefined): InstanceListView {
 	const cfg = parseConfigBlob(raw);
 	const displayName = typeof cfg.displayName === "string" ? cfg.displayName.trim() : "";
-	return { displayName: displayName || null, runnerNode: normalizeRunnerNode(cfg.runnerNode) || null };
+	return { displayName: displayName || null, runnerNode: normalizeRunnerNode(cfg.runnerNode) || null, tags: tagsOf(cfg) };
 }
 
 interface ConfigRow {

@@ -216,6 +216,9 @@ const ROUTES = [
 	"POST /:agentId/subscribe",
 	"GET /my/instances",
 	"GET /my/activity",
+	"GET /:instanceId/tags",
+	"PUT /:instanceId/tags",
+	"GET /my/snapshot",
 	"POST /:instanceId/runtime",
 	"GET /:instanceId/runtime",
 	"GET /:instanceId/runner-node",
@@ -519,6 +522,9 @@ const INSTANCES_TS = [
 	"POST /:agentId/subscribe",
 	"GET /my/instances",
 	"GET /my/activity",
+	"GET /:instanceId/tags",
+	"PUT /:instanceId/tags",
+	"GET /my/snapshot",
 	"POST /:instanceId/runtime",
 	"GET /:instanceId/runtime",
 	"GET /:instanceId/runner-node",
@@ -578,6 +584,10 @@ const GATES: Record<string, [number, number]> = {
 	// Same shape, same reason: the activity read is `WHERE user_id = ?1` twice over, so a stranger
 	// gets 200 and an empty list rather than a 404 about someone else's instances.
 	"GET /my/activity": [401, 200],
+	// #961: the snapshot is the tenant query too — a stranger gets 200 and no instances.
+	"GET /:instanceId/tags": [401, 404],
+	"PUT /:instanceId/tags": [401, 404],
+	"GET /my/snapshot": [401, 200],
 	"POST /:instanceId/runtime": [401, 404],
 	"GET /:instanceId/runtime": [401, 404],
 	"GET /:instanceId/runner-node": [401, 404],
@@ -759,6 +769,7 @@ describe("what a stranger gets from every route", () => {
 	const ANSWERS_A_STRANGER: Record<string, string> = {
 		"GET /my/instances": "IS the tenant query (WHERE i.user_id = ?1) — answers with an empty list",
 		"GET /my/activity": "both its queries ARE the tenant query (WHERE user_id = ?1) — answers with an empty list",
+		"GET /my/snapshot": "every query is the tenant query (WHERE user_id = ?1) — answers with an empty list",
 		"GET /behaviour-schema": "the behaviour field table: the same static vocabulary for every agent, public by design",
 	};
 

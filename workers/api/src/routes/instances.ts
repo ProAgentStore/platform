@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
-import { composeInstanceActivity, type ActivityRunRow } from "../lib/instance-activity.js";
+import { composeInstanceActivity } from "../lib/instance-activity.js";
+import { readLatestRuns, readQueueDepths } from "../lib/instance-activity-read.js";
 import { applySettingsPatch, settingsPatchRefusal, resolveSettingsValues } from "../lib/instance-settings.js";
 import { overrideVoiceBase, parseAccountPreferences, resolveVoice, sanitizeVoiceSettings, unknownVoiceField, type VoiceSettings } from "../lib/preferences.js";
 import { deriveVoiceVocabulary } from "../lib/voice-vocabulary.js";
@@ -31,6 +32,7 @@ import { lastTerminalTargetOf, rememberTerminalTarget } from "../lib/terminal-re
 import { registerDeployStatusRoutes } from "./instances-deploy.js";
 import { registerIdentityResyncRoutes } from "./instances-identity.js";
 import { registerJobLeadRoutes } from "./instances-job-leads.js";
+import { registerFleetRoutes } from "./instances-fleet.js";
 import { instanceCapFor, isEntitled, isPaywallEnforced, requirePro } from "../lib/billing.js";
 import { retireSubscriptionSql } from "../lib/subscription-standing.js";
 import { liveAliasForPin, liveNodeIgnoringPin, relayConnected } from "../lib/runner-client.js";
@@ -365,6 +367,7 @@ instanceRoutes.get("/my/instances", async (c) => {
 			// Present ONLY when pinned, so an unpinned instance answers with no `config` key at
 			// all and the shipped runner's `inst.config?.runnerNode` reads undefined as before.
 			...(view.runnerNode ? { config: { runnerNode: view.runnerNode } } : {}),
+			...(view.tags.length ? { tags: view.tags } : {}),
 			lastActivityAt: last_activity_at ?? null,
 			// env carries the fail-closed custom-surface gate (#186) — this is the one response the
 			// console renders tabs from, so it is the path that must consult it.
@@ -403,34 +406,10 @@ instanceRoutes.get("/my/activity", async (c) => {
 	const session = await requireUser(c);
 	const now = Date.now();
 
-	// Bounded on `started_at` so a long-dormant instance costs nothing, but `status = 'running'` is
-	// OR'd in rather than AND'd: an open run is never missed however old it is, which is exactly
-	// the run an owner most needs to see on this screen.
 	const since = now - ACTIVITY_LOOKBACK_MS;
-	const [runRows, queueRows, nameRows] = await Promise.all([
-		c.env.DB.prepare(
-			`SELECT run_id, instance_id, status, stop_reason, started_at, finished_at,
-			        last_alive_at, last_progress_at, waiting_reason, waiting_until, parked_since
-			   FROM (
-			     SELECT r.*, ROW_NUMBER() OVER (
-			              PARTITION BY r.instance_id ORDER BY r.started_at DESC
-			            ) AS rn
-			       FROM agent_loop_runs r
-			      WHERE r.user_id = ?1
-			        AND (r.status = 'running' OR r.started_at >= ?2)
-			   )
-			  WHERE rn = 1`,
-		)
-			.bind(session.uid, since)
-			.all<Record<string, unknown>>(),
-		c.env.DB.prepare(
-			`SELECT instance_id, COUNT(*) AS depth
-			   FROM instance_objective_queue
-			  WHERE user_id = ?1 AND status = 'pending'
-			  GROUP BY instance_id`,
-		)
-			.bind(session.uid)
-			.all<Record<string, unknown>>(),
+	const [runs, queueDepths, nameRows] = await Promise.all([
+		readLatestRuns(c.env, session.uid, since),
+		readQueueDepths(c.env, session.uid),
 		// Name and slug (#923): a bare id is unreadable on a roster of dozens, and `recent_instances`
 		// already names each entry. One flat query over the caller's instances, whatever has activity.
 		c.env.DB.prepare(
@@ -440,23 +419,6 @@ instanceRoutes.get("/my/activity", async (c) => {
 			.all<{ id: string; config: string | null; name: string | null; slug: string | null }>(),
 	]);
 	const names = new Map((nameRows.results ?? []).map((r) => [r.id, { name: instanceListName(r.config, r.name), slug: r.slug ?? null }] as const));
-
-	const runs: ActivityRunRow[] = (runRows.results ?? []).map((r) => ({
-		instanceId: String(r.instance_id),
-		runId: String(r.run_id),
-		status: String(r.status),
-		stopReason: (r.stop_reason as string | null) ?? null,
-		finishedAt: (r.finished_at as number | null) ?? null,
-		startedAt: Number(r.started_at),
-		lastAliveAt: (r.last_alive_at as number | null) ?? null,
-		lastProgressAt: (r.last_progress_at as number | null) ?? null,
-		waitingReason: (r.waiting_reason as string | null) ?? null,
-		waitingUntil: (r.waiting_until as number | null) ?? null,
-		parkedSince: (r.parked_since as number | null) ?? null,
-	}));
-	const queueDepths = new Map<string, number>(
-		(queueRows.results ?? []).map((r) => [String(r.instance_id), Number(r.depth) || 0] as const),
-	);
 
 	// `asOf` is not decoration: every value here is time-relative, so a poll that failed and left
 	// the last response on screen is indistinguishable from a fresh one without it (#291).
@@ -468,6 +430,7 @@ instanceRoutes.get("/my/activity", async (c) => {
 	}));
 	return c.json({ asOf: now, instances });
 });
+registerFleetRoutes(instanceRoutes); // tags + the fleet snapshot (#961) — `/my/snapshot` must precede `/:instanceId/…`
 
 /** Register or update the local/managed runtime for my instance. */
 instanceRoutes.post("/:instanceId/runtime", async (c) => {
