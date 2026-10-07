@@ -2,7 +2,7 @@ import { decryptKey } from "./crypto.js";
 import { logError } from "./error-log.js";
 import { latestResourceSample, resourceHistory, resourcesView } from "./runner-resources.js";
 import { aliasNodesFor, type NodeRegistration } from "./machine-identity.js";
-import { NO_SOCKET_MARKER, relayFailureIsDisconnect, RunnerUnreachableError } from "./runner-unreachable.js";
+import { NO_SOCKET_MARKER, relayFailureIsDisconnect, RunnerUnreachableError, UNRESPONSIVE_MARKER } from "./runner-unreachable.js";
 import { normalizeRunnerNode, readInstanceRunnerNode, relayNameForInstance } from "./runtime-nodes.js";
 import type { Env } from "../types.js";
 import type { StaleSocketVerdict } from "./relay-liveness.js";
@@ -311,7 +311,7 @@ export async function callRunner<T = unknown>(conn: RunnerConn, path: string, bo
 			if (unresponsive) await recordUnresponsive(conn, path);
 			throw new RunnerUnreachableError(
 				unresponsive
-					? `Runner relay is connected but not responding — ${NO_SOCKET_MARKER} for this agent.`
+					? `Runner relay is ${UNRESPONSIVE_MARKER} — ${NO_SOCKET_MARKER} for this agent.`
 					: `No runner connected — ${NO_SOCKET_MARKER} for this agent.`,
 			);
 		}

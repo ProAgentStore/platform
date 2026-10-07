@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	isRunnerGone,
 	isRunnerUnreachable,
+	isRunnerUnresponsive,
 	makeRunnerGuard,
 	noRunnerDetail,
 	relayFailureIsDisconnect,
@@ -12,6 +13,7 @@ import {
 	waitForRunner,
 	NO_SOCKET_MARKER,
 	RECONNECT_ROUNDS,
+	UNRESPONSIVE_MARKER,
 	RUNNER_PROBE_INTERVAL_MS,
 	RUNNER_WAIT_MS,
 	RUNNER_WAIT_TOTAL_MS,
@@ -268,3 +270,97 @@ describe("noRunnerDetail", () => {
 		expect(noRunnerDetail(null)).toContain("No coding runner connected.");
 	});
 });
+
+// #913: a run on a loaded laptop died in seconds with "connected but not responding". The dispatch
+// requires a ping reply within 1.5s; the status read counts the failed dispatch's own fresh ping as
+// connected. So the wait asked status first, got "connected", returned after 0ms — and the reconnect
+// (itself a dispatch) failed the same way OUTSIDE the wait, ending a run with 10 minutes of budget.
+describe("a runner that is connected but not answering pauses the run, not ends it (#913)", () => {
+	/** The message `callRunner` throws for RUNNER_RELAY_UNRESPONSIVE — built from the same markers. */
+	const silent = () => new RunnerUnreachableError(`Runner relay is ${UNRESPONSIVE_MARKER} — ${NO_SOCKET_MARKER} for this agent.`);
+
+	const stepper = (): RunStep & { names: string[] } => {
+		const names: string[] = [];
+		const run = (async (name: string, fn: () => Promise<unknown>) => {
+			names.push(name);
+			return fn();
+		}) as RunStep & { names: string[] };
+		run.names = names;
+		return run;
+	};
+
+	it("classifies the silent runner apart from an absent one, across a step boundary too", () => {
+		expect(isRunnerUnresponsive(silent())).toBe(true);
+		expect(isRunnerUnresponsive(new Error(silent().message))).toBe(true);
+		expect(isRunnerUnresponsive(new RunnerUnreachableError(`No runner connected — ${NO_SOCKET_MARKER} for this agent.`))).toBe(false);
+		expect(isRunnerUnresponsive(new Error("typecheck failed"))).toBe(false);
+	});
+
+	it("does NOT trust the instant 'connected' read after an unanswered call — it waits one interval first", async () => {
+		const wait = waitDeps([ONLINE, ONLINE]);
+		const w = await waitForRunner(wait, { label: "s1", waitMs: RUNNER_WAIT_MS, unresponsive: true });
+		expect(w).toMatchObject({ returned: true, waitedMs: RUNNER_PROBE_INTERVAL_MS });
+		expect(wait.slept).toEqual(["s1-p0"]);
+		// Said as what it is — not the "attached" a socket-only diagnosis would print.
+		expect(wait.said[0]).toMatch(/Runner not answering — pausing, not stopping/);
+		// An ordinary disconnect that already healed still returns at once, silently.
+		const healed = waitDeps([ONLINE]);
+		expect(await waitForRunner(healed, { label: "s2", waitMs: RUNNER_WAIT_MS })).toMatchObject({ returned: true, waitedMs: 0 });
+		expect(healed.slept).toEqual([]);
+	});
+
+	it("a runner that stays frozen is waited out to the budget, then reported", async () => {
+		const wait = waitDeps([ONLINE, OFFLINE]);
+		const w = await waitForRunner(wait, { label: "s1", waitMs: 2 * RUNNER_PROBE_INTERVAL_MS, unresponsive: true });
+		expect(w.returned).toBe(false);
+		expect(wait.slept).toEqual(["s1-p0", "s1-p1"]);
+	});
+
+	it("the guard pauses a step that met a silent runner, reconnects, and resumes it", async () => {
+		const wait = waitDeps([], { probe: async () => ONLINE });
+		const reconnect = vi.fn(async () => undefined);
+		const guard = makeRunnerGuard({ wait, reconnect });
+		let attempts = 0;
+		const out = await guard(stepper(), "s3-snapshot", async () => {
+			if (attempts++ === 0) throw silent();
+			return "pane";
+		});
+		expect(out).toBe("pane");
+		expect(wait.slept.length).toBeGreaterThan(0);
+		expect(reconnect).toHaveBeenCalledTimes(1);
+	});
+
+	it("a reconnect that meets the same silence waits again inside the budget instead of escaping", async () => {
+		const wait = waitDeps([], { probe: async () => ONLINE });
+		let reconnects = 0;
+		const reconnect = vi.fn(async () => {
+			if (reconnects++ === 0) throw silent();
+		});
+		const guard = makeRunnerGuard({ wait, reconnect });
+		let attempts = 0;
+		await expect(guard(stepper(), "s4", async () => { if (attempts++ === 0) throw silent(); return "ok"; })).resolves.toBe("ok");
+		expect(reconnect).toHaveBeenCalledTimes(2);
+		// Two waits, each at least one interval, under distinct durable names.
+		expect(wait.slept).toEqual(["s4-w0-p0", "s4-w0-1-p0"]);
+		const names = reconnect.mock.calls.map((c) => c[0]);
+		expect(new Set(names).size).toBe(names.length);
+	});
+
+	it("a reconnect that never gets an answer is bounded — by the budget, then RunnerGone", async () => {
+		const wait = waitDeps([], { probe: async () => ONLINE });
+		const reconnect = vi.fn(async () => { throw silent(); });
+		const guard = makeRunnerGuard({ wait, reconnect, waitMsPerLoss: RUNNER_PROBE_INTERVAL_MS, totalWaitMs: 2 * RUNNER_PROBE_INTERVAL_MS });
+		const err = await guard(stepper(), "s5", async () => { throw silent(); }).then(() => null, (e) => e as Error);
+		expect(err).not.toBeNull();
+		expect(isRunnerGone(err) || isRunnerUnresponsive(err)).toBe(true);
+		expect(reconnect.mock.calls.length).toBeLessThanOrEqual(RECONNECT_ROUNDS + 1);
+		expect(wait.slept.length).toBeLessThanOrEqual(2);
+	});
+
+	it("a genuine failure from the reconnect still fails at once", async () => {
+		const wait = waitDeps([], { probe: async () => ONLINE });
+		const guard = makeRunnerGuard({ wait, reconnect: async () => { throw new Error("repo missing"); } });
+		await expect(guard(stepper(), "s6", async () => { throw silent(); })).rejects.toThrow("repo missing");
+	});
+});
+

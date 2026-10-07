@@ -46,7 +46,7 @@
 // `RuntimeFacts` is a TYPE-only import with `noRunnerDetail` taking facts rather than an Env, for
 // the same reason — `import-graph.test.ts` forbids a static cycle even when it is erased.
 import { diagnoseAttachment, type AttachmentDiagnosis, type AttachmentState } from "./runtime-attachment.js";
-import { isRunnerGone, isRunnerUnreachable, RunnerGoneError } from "./runner-unreachable.js";
+import { isRunnerGone, isRunnerUnreachable, isRunnerUnresponsive, RunnerGoneError } from "./runner-unreachable.js";
 import type { RuntimeFacts } from "./instance-connectivity.js";
 
 // Re-exported so a caller needs ONE import for "was it the runner, and what do I do about it".
@@ -145,6 +145,18 @@ export function pauseMessage(d: AttachmentDiagnosis, waitMs: number): string {
 	].join(" ");
 }
 
+/**
+ * The pause for a runner that is connected but not answering (#913). `describeFacts` would call it
+ * attached — its socket IS up — so this one says what was actually observed.
+ */
+export function slowRunnerMessage(waitMs: number): string {
+	return [
+		"⏸ **Runner not answering — pausing, not stopping.**",
+		"Its relay is connected but did not reply in time — usually a machine under heavy load, asleep, or a connection that stalled.",
+		`Waiting up to ${formatDuration(waitMs)} for it to answer again; the run resumes at the same step.`,
+	].join(" ");
+}
+
 export function resumeMessage(node: string | null, waitedMs: number): string {
 	return `▶️ **Runner is back**${node ? ` on ${node}` : ""} after ${formatDuration(waitedMs)} — resuming where it stopped.`;
 }
@@ -164,16 +176,20 @@ export function runnerGoneMessage(d: AttachmentDiagnosis, waitedMs: number): str
  * Pure over {@link RunnerWaitDeps} — no D1, no relay, no Workflow — so the whole pause/resume
  * machine unit-tests without any of them, the same way `runCodingLoop` does.
  */
-export async function waitForRunner(deps: RunnerWaitDeps, opts: { label: string; waitMs: number }): Promise<RunnerWaitResult> {
+export async function waitForRunner(deps: RunnerWaitDeps, opts: { label: string; waitMs: number; unresponsive?: boolean }): Promise<RunnerWaitResult> {
 	let facts = await deps.probe();
-	if (facts.relayConnected) {
+	// After a runner that did not ANSWER, the instant read is the one fact not to trust (#913): it
+	// counts the failed dispatch's own milliseconds-old ping as connected, so the wait returned after
+	// 0ms and the run re-dispatched straight into the same silence. Waiting one interval first is
+	// what lets a loaded machine catch up — and a frozen one read as disconnected by then.
+	if (facts.relayConnected && !opts.unresponsive) {
 		// Already healed between the failure and this probe — the common case for a blip shorter
 		// than the step's own retries. Nothing to announce; the run just carries on.
 		return { returned: true, waitedMs: 0, state: "attached", message: "", remedy: null };
 	}
 
 	const ticks = Math.max(0, Math.floor(opts.waitMs / RUNNER_PROBE_INTERVAL_MS));
-	if (ticks > 0) await deps.announce(pauseMessage(describeFacts(facts), opts.waitMs));
+	if (ticks > 0) await deps.announce(opts.unresponsive && facts.relayConnected ? slowRunnerMessage(opts.waitMs) : pauseMessage(describeFacts(facts), opts.waitMs));
 
 	for (let i = 0; i < ticks; i++) {
 		await deps.sleep(`${opts.label}-p${i}`);
@@ -187,6 +203,10 @@ export async function waitForRunner(deps: RunnerWaitDeps, opts: { label: string;
 	}
 
 	const waited = ticks * RUNNER_PROBE_INTERVAL_MS;
+	// Connected-but-silent with no budget left to wait: describing the socket would say "attached".
+	if (opts.unresponsive && facts.relayConnected) {
+		return { returned: false, waitedMs: waited, state: "attached", message: "The runner stayed connected but did not answer — usually a machine under heavy load. Free it up (fewer concurrent sessions), or move this agent to another machine.", remedy: null };
+	}
 	const d = describeFacts(facts);
 	return { returned: false, waitedMs: waited, state: d.state, message: runnerGoneMessage(d, waited), remedy: d.remedy };
 }
@@ -234,21 +254,40 @@ export function makeRunnerGuard(cfg: {
 				// the relay: a live socket means the runner is fine and this error is about something
 				// else. One cheap DO fetch buys the difference between waiting and mis-waiting.
 				if (!isRunnerUnreachable(e) && (await cfg.wait.probe().catch(() => null))?.relayConnected) throw e;
-
-				const budget = Math.min(perLoss, Math.max(0, total - spent));
-				const w = await waitForRunner(cfg.wait, { label: `${name}-w${round}`, waitMs: budget });
-				spent += w.waitedMs;
-				if (!w.returned) {
-					throw new RunnerGoneError(
-						budget <= 0
-							? `${w.message} This run has already spent its ${formatDuration(total)} of waiting for the runner.`
-							: w.message,
-					);
-				}
-				await cfg.reconnect(`${name}-rc${round}`);
+				await recover(name, round, isRunnerUnresponsive(e));
 			}
 		}
 	};
+
+	/**
+	 * Wait for the runner, then reconnect — and a reconnect that meets the same disconnect is one more
+	 * wait inside the SAME budget, not an error out of the guard (#913). The reconnect is a dispatch
+	 * like any other, so on a slow machine it hit the bar the step had just failed, and its error
+	 * escaped: the run died seconds into a ten-minute allowance. The budget still bounds it — every
+	 * wait after an unanswered call spends at least one interval — and so does RECONNECT_ROUNDS.
+	 */
+	async function recover(name: string, round: number, unresponsive: boolean): Promise<void> {
+		for (let attempt = 0; ; attempt++) {
+			const tag = attempt === 0 ? `${round}` : `${round}-${attempt}`;
+			const budget = Math.min(perLoss, Math.max(0, total - spent));
+			const w = await waitForRunner(cfg.wait, { label: `${name}-w${tag}`, waitMs: budget, unresponsive });
+			spent += w.waitedMs;
+			if (!w.returned) {
+				throw new RunnerGoneError(
+					budget <= 0
+						? `${w.message} This run has already spent its ${formatDuration(total)} of waiting for the runner.`
+						: w.message,
+				);
+			}
+			try {
+				await cfg.reconnect(`${name}-rc${tag}`);
+				return;
+			} catch (re) {
+				if (isRunnerGone(re) || !isRunnerUnreachable(re) || attempt >= RECONNECT_ROUNDS) throw re;
+				unresponsive = isRunnerUnresponsive(re);
+			}
+		}
+	}
 }
 
 /**

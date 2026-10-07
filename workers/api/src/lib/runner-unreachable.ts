@@ -17,6 +17,12 @@
 export const NO_SOCKET_MARKER = "the relay has no live socket";
 
 /**
+ * The marker for a runner whose socket is UP but did not answer the relay's ping in time (#846) —
+ * a slow or stalled machine, not an absent one. Same serialisation reason as {@link NO_SOCKET_MARKER}.
+ */
+export const UNRESPONSIVE_MARKER = "connected but not responding";
+
+/**
  * RelayDO reasons that mean the socket went away WHILE a command was in flight — the shape a
  * mid-run drop actually takes, and the one a 503 (no socket at dispatch) misses.
  *
@@ -53,6 +59,16 @@ export function isRunnerUnreachable(e: unknown): boolean {
 	if (err?.runnerUnreachable === true) return true;
 	const msg = typeof err?.message === "string" ? err.message : "";
 	return msg.includes(NO_SOCKET_MARKER) || DROPPED_REASONS.some((r) => msg.includes(r));
+}
+
+/**
+ * A disconnect whose socket is still there but silent (#913). The instant status read cannot be
+ * trusted right after one: the failed dispatch's own ping is milliseconds old, which that read
+ * counts as connected — so a wait that asks it first ends at once on a machine still not answering.
+ */
+export function isRunnerUnresponsive(e: unknown): boolean {
+	const msg = (e as { message?: unknown } | null)?.message;
+	return isRunnerUnreachable(e) && typeof msg === "string" && msg.includes(UNRESPONSIVE_MARKER);
 }
 
 export function isRunnerGone(e: unknown): boolean {
