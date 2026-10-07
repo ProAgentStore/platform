@@ -286,7 +286,7 @@ describe("storage tools", () => {
 		expect(result.success).toBe(true);
 	});
 
-	it("creates job application task with caller-provided candidate details", async () => {
+	it("starts a fill-only job workflow even when the tool call requests a real submission", async () => {
 		const engine = makeEngine();
 		const runtime = mockRuntimeEnv();
 		// Declared WITH fetch's arguments: a zero-arg `vi.fn` records a zero-length call tuple, and
@@ -310,6 +310,10 @@ describe("storage tools", () => {
 					linkedin: "https://linkedin.example/test-candidate",
 					work_authorization: "Authorized to work",
 					cover_note: "Interested in the role.",
+					// Tool schemas are advisory to an LLM. An attempted override must not
+					// turn a chat request into a real external application.
+					dryRun: false,
+					dry_run: false,
 				},
 			},
 			engine,
@@ -318,9 +322,17 @@ describe("storage tools", () => {
 
 		// New behavior: starts the LLM-driven JobApplyWorkflow (no legacy selector task).
 		expect(result.success).toBe(true);
-		expect(result.content).toContain("Application started");
+		expect(result.content).toContain("Application preparation started");
 		expect(result.content).toContain("task_123"); // runner task id
 		expect(runtime.create).toHaveBeenCalledTimes(1); // JOB_APPLY.create — the brain started
+		// The chat tool always starts the workflow in dry-run mode. The workflow and
+		// runner enforce this by blocking its final submit click, so the observable
+		// job cannot create an external application.
+		expect(runtime.create).toHaveBeenCalledWith(expect.objectContaining({
+			params: expect.objectContaining({
+				job: expect.objectContaining({ dryRun: true }),
+			}),
+		}));
 		// It creates the agent-driven task (job.apply_agent), not a legacy approval task.
 		expect(fetchMock).toHaveBeenCalledWith("https://runner.example.test/tasks", expect.any(Object));
 		const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -356,7 +368,7 @@ describe("storage tools", () => {
 		);
 
 		expect(result.success).toBe(true);
-		expect(result.content).toContain("Application started");
+		expect(result.content).toContain("Application preparation started");
 		expect(runtime.create).toHaveBeenCalledTimes(1);
 	});
 

@@ -202,7 +202,7 @@ export const STORAGE_TOOLS: ToolDef[] = [
 	},
 	{
 		name: "submit_job_application",
-		description: "Start the LLM-driven job application: an agent fills and submits the form in a real browser from the saved candidate Profile. Call it ONCE per job — it runs in the background and pauses on the console Board only for a captcha, a stuck widget or a missing value. Requires a connected runner (pags up). HONESTY: report an application as started only if THIS tool returns success with a real task id; on an error, tell the user that exact error and that nothing started. Never invent a task or workflow id, and never claim it was submitted from this result. ORDER: call this first, and only AFTER it succeeds insert_record the application into 'applications' — logging one that did not start shows phantom applications on the Board.",
+		description: "Prepare a job application in a real browser from the saved candidate Profile. This chat tool is fill-only: it NEVER submits to the employer. It runs in the background and pauses on the console Board only for a captcha, a stuck widget, or a missing value. Requires a connected runner (pags up). Call it ONCE per job. HONESTY: report it as started only if THIS tool returns success with a real task id; on an error, tell the user that exact error and that nothing started. Never invent a task or workflow id, and never claim it was submitted from this result. ORDER: call this first, and only AFTER it succeeds insert_record the application into 'applications' — logging one that did not start shows phantom applications on the Board. To submit, the user must use the explicit submission flow outside chat.",
 		parameters: {
 			url: { type: "string", description: "Job posting URL", required: true },
 			resume_path: { type: "string", description: "Optional. Leave empty — the apply uses the résumé the user uploaded in the console; the runner downloads it." },
@@ -539,9 +539,11 @@ export async function executeStorageTool(
 				// path is only a legacy fallback for a same-machine runner.
 				const resumePath = stringInput(call.input.resume_path) || stringInput(call.input.resumePath) || "";
 				const candidateInput = isPlainRecord(call.input.candidate) ? call.input.candidate : {};
-				// One apply path: start the LLM-driven JobApplyWorkflow (same as the
-				// console /apply). The brain drives the real browser; no selectors, no
-				// approval gate. It pauses for the user only on captcha/stuck/needs_input.
+				// Chat is fill-only. The only workflow it can start carries the durable
+				// dry-run guard, which blocks the final submit click at the worker and
+				// runner. Do not derive this from model input: an LLM tool call is not an
+				// explicit user confirmation to apply on their behalf. A real submission
+				// must use the separate, explicitly-confirmed UI flow.
 				try {
 					const { startJobApply } = await import("../routes/instances-apply.js");
 					// ctx.env is the full worker Env at runtime (the tool context types it
@@ -559,10 +561,11 @@ export async function executeStorageTool(
 							workAuthorization: optionalInput(candidateInput.workAuthorization) || optionalInput(candidateInput.work_authorization) || optionalInput(call.input.work_authorization) || optionalInput(call.input.workAuthorization),
 						},
 						coverNote: optionalInput(call.input.cover_note) || optionalInput(call.input.coverNote),
+						dryRun: true,
 					});
 					return ok(
 						call.name,
-						`Application started — the agent is now driving the browser (workflow ${workflowId}, task ${taskId}). It fills the form from the candidate Profile and pauses in the console Board only for a captcha, a stuck widget, or a missing value. Do NOT call submit_job_application again for this job, and do NOT say it's submitted — it completes when the workflow finishes.`,
+						`Application preparation started — the agent is now filling the browser form without submitting it (workflow ${workflowId}, task ${taskId}). It pauses in the console Board only for a captcha, a stuck widget, or a missing value. Do NOT call submit_job_application again for this job, and do NOT say it's submitted — this chat tool can only prepare the form.`,
 					);
 				} catch (e) {
 					const msg = e instanceof Error ? e.message : String(e);
