@@ -20,7 +20,7 @@ const { instanceRoutes } = await import("./instances.js");
 
 let d1: RealSchemaD1;
 /** What the fake runner answers, and every command it was sent. */
-let runner: { status: number; body: unknown; taskTypes: string[] | null; paths?: Record<string, { status: number; body: unknown; onCall?: () => void }> };
+let runner: { status: number; body: unknown; taskTypes: string[] | null; capabilitiesThrow?: boolean; paths?: Record<string, { status: number; body: unknown; onCall?: () => void }> };
 let sent: Array<{ method: string; path: string; body: unknown }>;
 const relay = {
 	idFromName: (n: string) => n,
@@ -28,6 +28,7 @@ const relay = {
 		fetch: async (req: Request) => {
 			const cmd = (await req.json()) as { method: string; path: string; body: unknown };
 			sent.push(cmd);
+			if (cmd.path === "/capabilities" && runner.capabilitiesThrow) throw new Error("Runner relay is connected but not responding");
 			if (cmd.path === "/capabilities") return Response.json(runner.taskTypes ? { taskTypes: runner.taskTypes } : {});
 			const byPath = runner.paths?.[cmd.path];
 			if (byPath) {
@@ -129,6 +130,16 @@ describe("preflight", () => {
 		const offline = await call("GET", "/i1/local-browser/preflight");
 		expect(offline.body.ready).toBe(false);
 		expect(offline.body.checks.find((c: { id: string }) => c.id === "runner")).toMatchObject({ ok: false, detail: expect.stringMatching(/pags up/) });
+	});
+
+	it("degrades to ok:null when the capabilities probe throws, and logs why instead of swallowing it", async () => {
+		runner.capabilitiesThrow = true;
+		const r = await call("GET", "/i1/local-browser/preflight");
+		expect(r.status).toBe(200);
+		expect(r.body.ready).toBe(true);
+		expect(r.body.checks.find((c: { id: string }) => c.id === "runner_support")).toMatchObject({ ok: null });
+		const logged = await d1.DB.prepare("SELECT source, level, message FROM error_log WHERE source = 'local-browser'").first<{ source: string; level: string; message: string }>();
+		expect(logged).toEqual({ source: "local-browser", level: "warn", message: "preflight /capabilities probe failed: Runner relay is connected but not responding" });
 	});
 
 	it("requires consent before the signed-in profile", async () => {

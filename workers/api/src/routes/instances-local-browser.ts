@@ -1,6 +1,7 @@
 import type { Context, Hono } from "hono";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { HttpError, requireUser } from "../lib/auth.js";
+import { logError } from "../lib/error-log.js";
 import { LOCAL_BROWSER_CANCEL_PATH, LOCAL_BROWSER_RUN_PATH, LOCAL_BROWSER_TASK_TYPE, type LocalBrowserTaskEnvelope } from "../lib/local-browser/contract.js";
 import { applyRunnerResult, ingestRunnerEvents, resumeLocalBrowserRun, syncLocalBrowserRun } from "../lib/local-browser/sync.js";
 import { type FindingAction, reviewFinding } from "../lib/local-browser/findings.js";
@@ -110,7 +111,11 @@ export function registerLocalBrowserRoutes(router: Hono<{ Bindings: Env }>): voi
 			try {
 				const res = await callRuntime(c.env, runtime, "/capabilities");
 				if (res.ok) taskTypes = ((await runtimeJson(res)) as { taskTypes?: unknown }).taskTypes;
-			} catch {}
+			} catch (err) {
+				// callRuntime or runtimeJson failed (relay timeout, unreadable body). Preflight still answers,
+				// degrading this check to ok:null below; the cause goes to the durable error log.
+				await logError(c.env, { source: "local-browser", level: "warn", userId: uid, message: `preflight /capabilities probe failed: ${err instanceof Error ? err.message : String(err)}`, context: { instanceId, runnerNode: runtime.runner_node || null } });
+			}
 			if (!Array.isArray(taskTypes)) checks.push({ id: "runner_support", ok: null, detail: "The runner did not say which task types it supports; a run will report it." });
 			else if (taskTypes.includes(LOCAL_BROWSER_TASK_TYPE)) checks.push({ id: "runner_support", ok: true, detail: "The runner supports local browser research" });
 			else checks.push({ id: "runner_support", ok: false, detail: "The connected runner does not support local browser research yet. Update the CLI (npm i -g @proagentstore/cli) and run `pags up` again." });
