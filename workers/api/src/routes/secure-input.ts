@@ -9,10 +9,11 @@
 
 import { Hono, type Context } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
-import { consumeSecureInput, countSecureInputRequests, createSecureInputRequest, getSecureInputStatus, listSecureInputRequests, pendingOwnerInputs, storeSecretValue } from "../lib/secure-input.js";
+import { countSecureInputRequests, createSecureInputRequest, getSecureInputStatus, listSecureInputRequests, pendingOwnerInputs, storeSecretValue } from "../lib/secure-input.js";
 import { deepLinkFor, secureInputLink } from "../lib/console-links.js";
 import { instanceListName } from "../lib/instance-config.js";
 import { notifyUser } from "./push.js";
+import { injectSecureInputToTmux } from "../lib/secure-input-inject.js";
 import type { Env } from "../types.js";
 
 export const secureInputRoutes = new Hono<{ Bindings: Env }>();
@@ -43,6 +44,10 @@ secureInputRoutes.post("/:instanceId/secure-inputs", async (c) => {
 		throw new HttpError(400, "label and destinationScope (tmux|env|stdin|file) are required");
 	}
 
+	const target = targetOf(body.target);
+	if (target === false) throw new HttpError(400, TARGET_RULE);
+	if (target && destinationScope !== "tmux") throw new HttpError(400, "target names a tmux session — only a tmux-scoped request takes one");
+
 	const requestId = await createSecureInputRequest(c.env, {
 		instanceId,
 		userId: uid,
@@ -50,6 +55,7 @@ secureInputRoutes.post("/:instanceId/secure-inputs", async (c) => {
 		purpose,
 		destinationScope: destinationScope as "tmux" | "env" | "stdin" | "file",
 		oneShot: body.oneShot !== false,
+		...(target ? { target } : {}),
 	});
 
 	const consoleUrl = secureInputLink(instanceId, requestId);
@@ -130,22 +136,33 @@ secureInputRoutes.post("/:instanceId/secure-inputs/:requestId/submit", async (c)
 	return c.json(status);
 });
 
+const TARGET_RULE = "target must be a tmux session name: 1-128 characters, no newlines";
+
+/** A tmux session name, `undefined` when none was given, `false` when one was given and is unusable. */
+function targetOf(raw: unknown): string | undefined | false {
+	if (raw === undefined || raw === null || raw === "") return undefined;
+	if (typeof raw !== "string") return false;
+	const t = raw.trim();
+	return t && t.length <= 128 && !/[\r\n]/.test(t) ? t : false;
+}
+
 /**
- * POST /:instanceId/secure-inputs/:requestId/consume
- * Consume the secret (agent calls this via MCP tool to get plaintext for injection).
+ * POST /:instanceId/secure-inputs/:requestId/inject  `{ target?, submit? }`
+ * Type a ready `tmux` value into the named session (`target`, else the one the request named) and,
+ * with `submit` (default true), press Enter — VERIFIED, and restored when not delivered (#966).
  *
- * SECURITY: This endpoint returns the plaintext ONCE. The caller (runner/tmux handler)
- * MUST NOT log it, return it to the model, or put it in any visible response.
- * The plaintext is injected directly to the destination and then discarded.
+ * Answers `{ delivered, reason?, submitted, consumedValue, target, status, length? }`. The value is
+ * never in the answer. This REPLACES `…/consume`, which returned the plaintext to its caller: the MCP
+ * worker dropped it and reported success while nothing was typed, and any holder of the owner's
+ * session could read a secret back out of it — the one route that broke this file's first rule.
  */
-secureInputRoutes.post("/:instanceId/secure-inputs/:requestId/consume", async (c) => {
+secureInputRoutes.post("/:instanceId/secure-inputs/:requestId/inject", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
 	const requestId = c.req.param("requestId") ?? "";
-
-	const plaintext = await consumeSecureInput(c.env, requestId, instanceId, uid);
-	if (!plaintext) throw new HttpError(404, "Request not found, not ready, expired, or already consumed");
-
-	// Return the plaintext. The MCP layer will NOT log this and will pass it
-	// directly to the runner for injection (not to the model or tool result).
-	return c.json({ value: plaintext });
+	const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+	const target = targetOf(body.target);
+	if (target === false) throw new HttpError(400, TARGET_RULE);
+	const result = await injectSecureInputToTmux(c.env, { instanceId, userId: uid, requestId, target, submit: body.submit !== false });
+	if (!result) throw new HttpError(404, "Request not found");
+	return c.json(result);
 });

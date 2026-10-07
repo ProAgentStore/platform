@@ -3234,53 +3234,39 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /v1/instances/{instanceId}/secure-inputs/{requestId}/consume:
+  /v1/instances/{instanceId}/secure-inputs/{requestId}/inject:
     post:
-      summary: Consume and inject a secure input to its destination
+      summary: Type a ready tmux secure input into a named session — verified
       description: |
-        Atomically retrieve the plaintext secret and inject it to the configured destination
-        (env/file/stdin/tmux). The plaintext is deleted immediately after injection and is
-        NEVER returned in the response, logged, or visible in traces.
-
-        **SECURITY:** The runner/injection handler must:
-        1. NOT log the plaintext
-        2. NOT return it to the model
-        3. NOT put it in any tool result
-        4. Inject it directly to the destination only
-        5. Discard it from memory immediately after use
-      operationId: consumeSecureInput
+        Types the value into the tmux session `target` (else the one the request named) over the
+        owner's runner and, with `submit` (default true), presses Enter (#966). VERIFIED: the value
+        must appear on the pane once more than before the typing. A value that did not land is
+        cleared from the line, not submitted, and NOT consumed — it stays `ready`. The answer is the
+        verdict and never the value: `{delivered, reason?, submitted, consumedValue, target, status,
+        length?}`. `tmux`-scoped requests only; a file destination uses `tmux_secure_get`. Replaces
+        `…/consume`, which returned the plaintext to its caller.
+      operationId: injectSecureInput
       tags: [Instances]
       parameters:
-        - name: instanceId
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
+        - { $ref: "#/components/parameters/InstanceId" }
         - name: requestId
           in: path
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                target: { type: string, maxLength: 128, description: "tmux session name" }
+                submit: { type: boolean, default: true }
       responses:
-        "200":
-          description: Secret injected (plaintext NOT in response)
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  value:
-                    type: string
-                    description: Plaintext secret (MUST NOT be logged or returned to model)
-        "404":
-          description: Request not found, not ready, expired, or already consumed
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
+        "200": { $ref: "#/components/responses/OkObject" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/pause:
     post:
       summary: Pause an instance (reversible)

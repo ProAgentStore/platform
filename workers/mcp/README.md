@@ -509,8 +509,8 @@ immediately instead of a whole transcript.
 | Tool | Purpose | Scope | Dry | Confirm |
 |---|---|---|---|---|
 | `secure_input_request` | Request a secure input from the instance owner (e.g., auth code, OTP, password). Owner submits the plaintext via console UI; agent receives an opaque request ID and metadata only — never the secret. The plaintext is envelope-encrypted at rest and deleted immediately after one-shot consumption | write | yes | |
-| `secure_input_status` | Check whether the owner has supplied the secure input — returns pending/ready/consumed/expired status (metadata only, never the plaintext) | read | | |
-| `secure_input_inject` | Atomically retrieve the plaintext secret and inject it to a destination (env/file/stdin/tmux) in one operation. The plaintext is deleted immediately after injection and NEVER returned to the model, logged, or visible in traces | runtime | yes | |
+| `secure_input_status` | Check whether the owner has supplied the secure input — returns pending/ready/consumed/expired status, and once ready `length`, `empty` and `hasLeadingTrailingWhitespace` (metadata only, never the plaintext, #966) | read | | |
+| `secure_input_inject` | Type a ready tmux secure input into the named session (`target`) and optionally press Enter (`submit`, default true) — VERIFIED on the pane. Answers `delivered` / `reason` / `consumedValue`; an unverified delivery is cleared, not submitted, and NOT consumed. Never returns the value (#966) | runtime | yes | |
 
 ### Agent-to-agent
 

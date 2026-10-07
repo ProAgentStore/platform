@@ -35,13 +35,14 @@ export function registerSecureInputTools(server: McpServer, ctx: InstanceToolsCt
 					"Where this secret will be injected: 'tmux' = send to tmux session prompt, 'env' = environment variable, 'stdin' = stdin of a process, 'file' = ephemeral file (cleaned up after use).",
 				),
 			one_shot: z.boolean().optional().default(true).describe("If true, the secret is consumed exactly once and deleted. If false, reusable (future feature)."),
+			target: z.string().max(128).optional().describe("tmux only: the session the value is for (from tmux_list_sessions). secure_input_inject types into it unless told another."),
 			dry_run: z.boolean().optional().describe("Preview what would be created without actually creating the request."),
 		},
-		async ({ token, instance_id, label, purpose, destination_scope, one_shot, dry_run }) => {
+		async ({ token, instance_id, label, purpose, destination_scope, one_shot, target, dry_run }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 
-			const input = { instance_id, label, purpose, destinationScope: destination_scope, oneShot: one_shot };
+			const input = { instance_id, label, purpose, destinationScope: destination_scope, oneShot: one_shot, ...(target ? { target } : {}) };
 			const denied = await requirePermission(safetyFor(token), "write", "secure_input_request", input);
 			if (denied) return denied;
 
@@ -58,7 +59,7 @@ export function registerSecureInputTools(server: McpServer, ctx: InstanceToolsCt
 			const data = await authedCall(
 				`/v1/instances/${instance_id}/secure-inputs`,
 				sessionToken,
-				{ method: "POST", body: JSON.stringify({ label, purpose, destinationScope: destination_scope, oneShot: one_shot }) },
+				{ method: "POST", body: JSON.stringify({ label, purpose, destinationScope: destination_scope, oneShot: one_shot, ...(target ? { target } : {}) }) },
 				env,
 			) as { error?: string; id?: string; consoleUrl?: string };
 
@@ -72,7 +73,7 @@ export function registerSecureInputTools(server: McpServer, ctx: InstanceToolsCt
 
 	server.tool(
 		"secure_input_status",
-		"Check the status of a secure input request (metadata only, never the secret value). Returns: 'pending' (waiting for user input), 'ready' (user has submitted, encrypted, waiting to inject), 'consumed' (already injected and deleted), or 'expired' (TTL elapsed). Use this to poll until ready, then call `secure_input_inject`.",
+		"Check the status of a secure input request (metadata only, never the secret value). Returns: 'pending' (waiting for user input), 'ready' (user has submitted, encrypted, waiting to inject), 'consumed' (already injected and deleted), or 'expired' (TTL elapsed). Once a value is stored it also gives `length` (characters), `empty` and `hasLeadingTrailingWhitespace` — enough to tell an empty or truncated submission (or a pasted trailing newline) from a failed delivery, never the value. Use this to poll until ready, then call `secure_input_inject`.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly."),
@@ -93,59 +94,30 @@ export function registerSecureInputTools(server: McpServer, ctx: InstanceToolsCt
 
 	server.tool(
 		"secure_input_inject",
-		"Inject a ready secure input to its destination (tmux/env/stdin/file) using the opaque request ID. This is a one-shot operation: the secret is retrieved, injected, and immediately deleted from encrypted storage. The plaintext never appears in the model, chat, traces, or terminal snapshots. IMPORTANT: the injected value must be redacted from any subprocess output and the process must be isolated (so the plaintext does not leak into logs, core dumps, or other processes). Use this only when the status shows 'ready'.",
+		"Type a ready `tmux` secure input into a tmux session's prompt line and, by default, press Enter — VERIFIED. The platform types it over the same path tmux_send_message uses and checks the value actually appeared on the pane; the value never enters this conversation, the result, or any log. Returns `delivered` (true only when verified on the pane), `submitted`, `consumedValue`, `target`, `status`, `length`, and a `reason` when not delivered. A value that did not land is cleared from the line, NOT submitted, and NOT consumed — it stays ready to retry. Name the session with `target` (tmux_list_sessions) unless the request already named one. A prompt that hides typing (a password prompt) cannot be verified this way. For a FILE destination use tmux_secure_get with the request id as the handle.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly."),
 			request_id: z.string().describe("The secure input request ID. Copy it exactly."),
-			dry_run: z.boolean().optional().describe("Preview what would be injected without actually consuming the secret."),
+			target: z.string().max(128).optional().describe("The tmux session to type into (from tmux_list_sessions). Required unless secure_input_request named one."),
+			submit: z.boolean().optional().describe("Press Enter once the value is verified on the prompt line. Default true — omit for a prompt waiting for the value."),
+			dry_run: z.boolean().optional().describe("Preview the injection without typing or consuming anything."),
 		},
-		async ({ token, instance_id, request_id, dry_run }) => {
+		async ({ token, instance_id, request_id, target, submit, dry_run }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 
-			const input = { instance_id, request_id };
+			const input = { instance_id, request_id, ...(target ? { target } : {}), submit: submit !== false };
 			const denied = await requirePermission(safetyFor(token), "runtime", "secure_input_inject", input);
 			if (denied) return denied;
 
-			if (dry_run) {
-				return dryRun(
-					safetyFor(token),
-					"secure_input_inject",
-					`inject secure input to destination`,
-					input,
-					{ endpoint: `/v1/instances/${instance_id}/secure-inputs/${request_id}/consume`, method: "POST" },
-				);
-			}
+			const endpoint = `/v1/instances/${instance_id}/secure-inputs/${request_id}/inject`;
+			if (dry_run) return dryRun(safetyFor(token), "secure_input_inject", `type the secure input into ${target ? `tmux session "${target}"` : "the request's tmux session"}${submit === false ? "" : " and press Enter"}`, input, { endpoint, method: "POST" });
 
-			const data = await authedCall(
-				`/v1/instances/${instance_id}/secure-inputs/${request_id}/consume`,
-				sessionToken,
-				{ method: "POST" },
-				env,
-			);
-
-			// SECURITY: The response contains { value: <plaintext> }. This is NEVER returned to the model.
-			// The MCP server layer (or calling agent framework) MUST:
-			// 1. NOT log the response
-			// 2. NOT include it in any tool result returned to the model
-			// 3. NOT put it in traces, events, or audit logs
-			// 4. Pass it ONLY to the runner for immediate injection to the destination
-			// 5. Discard it from memory immediately after use
-			//
-			// The pattern is: call this tool → get plaintext → IMMEDIATELY inject to tmux/process stdin
-			// → discard → return "injected" status to model (NOT the value).
-
-			if ((data as { error?: string }).error) {
-				return jsonText(data);
-			}
-
-			// CRITICALLY: Strip the plaintext from the response before returning to the model.
-			// The agent framework or runner MUST handle the plaintext independently.
-			await audit(safetyFor(token), { tool: "secure_input_inject", action: "completed", input, result: { success: true } });
-
-			// Return status only, never the value.
-			return jsonText({ success: true, note: "Secret injected. Plaintext is NOT in this response (handled by runner)." });
+			// The platform delivers and verifies (#966). The answer is the verdict — the value is never in it.
+			const data = (await authedCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify({ ...(target ? { target } : {}), submit: submit !== false }) }, env)) as { error?: string; delivered?: boolean };
+			if (!data.error) await audit(safetyFor(token), { tool: "secure_input_inject", action: data.delivered ? "completed" : "failed", input, result: data });
+			return jsonText(data);
 		},
 	);
 }

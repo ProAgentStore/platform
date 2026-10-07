@@ -348,6 +348,10 @@ const READBACK: Record<string, string | null> = {
 	"secure_input_request.purpose": "secure_input_status",
 	"secure_input_request.destination_scope": "secure_input_status",
 	"secure_input_request.one_shot": "secure_input_status",
+	"secure_input_request.target": "secure_input_status", // #966: the session a tmux request is for
+	// #966: inject's `target` and `submit` steer ONE delivery and are not stored; the verdict echoes the target.
+	"secure_input_inject.target": null,
+	"secure_input_inject.submit": null,
 	"send_instance_takeover_input.x": null,
 	"send_instance_takeover_input.y": null,
 	"send_instance_takeover_input.delta_x": null,

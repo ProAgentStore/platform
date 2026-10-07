@@ -1047,4 +1047,7 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// `sync_board_issues` (write), `instance_board` gains `repo`, `coding_loop_start` gains `issue`.
 	// 272 registrations become 275, `MCP_TOOL_ALWAYS_ON` 246 → 249, gated stays 26. Appended.
 	"0.1.90": "sha256:6775cf6b124c6e91326a4599c9a764d1db4411f2d94830d5cd54973c04efdc19",
+	// 0.1.91 (#966): `secure_input_inject` gains `target` + `submit` and answers a verified delivery
+	// verdict; `secure_input_request` gains `target`. No tool added. Appended.
+	"0.1.91": "sha256:157cf2d765d2f212fb55bf5b36c7d01b279859d2146348886cfeeb4f618b0753",
 };

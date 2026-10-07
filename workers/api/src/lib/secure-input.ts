@@ -34,6 +34,9 @@ interface SecureInputRow {
 	consumed_at: string | null;
 	source_node: string | null;
 	consumed_node: string | null;
+	value_length?: number | null;
+	value_edge_whitespace?: number | null;
+	target?: string | null;
 }
 
 /** What a client (console or agent) sees — metadata only, never the secret. */
@@ -57,6 +60,17 @@ export interface SecureInputView {
 	sourceNode?: string;
 	/** The runner node that wrote the value out (`tmux_secure_get`). */
 	consumedNode?: string;
+	/**
+	 * What can be known about the value without seeing it (#966), present once one was stored: its
+	 * character count, whether that is zero, and whether it starts or ends with whitespace (a pasted
+	 * code with a stray newline). Enough to tell an empty or truncated submission from a failed
+	 * delivery. NEVER the value, a prefix, or which character.
+	 */
+	length?: number;
+	empty?: boolean;
+	hasLeadingTrailingWhitespace?: boolean;
+	/** The tmux session this request is meant for, when the requester named one (#966). */
+	target?: string;
 }
 
 /** Input to create a new secure input request. */
@@ -67,13 +81,15 @@ export interface CreateSecureInputInput {
 	purpose?: string;
 	destinationScope: "tmux" | "env" | "stdin" | "file";
 	oneShot?: boolean;
+	/** `tmux` only: the session the value is for (#966). */
+	target?: string;
 }
 
 /** The longest a machine deposit may wait for its retrieval. Shorter than the console path's day on purpose. */
 export const DEPOSIT_MAX_TTL_MS = TTL_MS;
 
 const VIEW_COLUMNS =
-	"id, instance_id, user_id, status, label, purpose, destination_scope, one_shot, expires_at, created_at, updated_at, consumed_at, source_node, consumed_node";
+	"id, instance_id, user_id, status, label, purpose, destination_scope, one_shot, expires_at, created_at, updated_at, consumed_at, source_node, consumed_node, value_length, value_edge_whitespace, target";
 
 function rowToView(row: Omit<SecureInputRow, "secret_ciphertext" | "dek_wrapped" | "iv">, now: number): SecureInputView {
 	let status: "pending" | "ready" | "consumed" | "expired" = (row.status as "pending" | "ready" | "consumed" | "expired") || "pending";
@@ -97,8 +113,19 @@ function rowToView(row: Omit<SecureInputRow, "secret_ciphertext" | "dek_wrapped"
 	if (row.consumed_at) view.consumedAt = row.consumed_at;
 	if (row.source_node) view.sourceNode = row.source_node;
 	if (row.consumed_node) view.consumedNode = row.consumed_node;
+	if (typeof row.value_length === "number") {
+		view.length = row.value_length;
+		view.empty = row.value_length === 0;
+		view.hasLeadingTrailingWhitespace = row.value_edge_whitespace === 1;
+	}
+	if (row.target) view.target = row.target;
 
 	return view;
+}
+
+/** The value's non-secret shape (#966): its length and whether it has whitespace at either end. */
+export function valueShape(value: string): { length: number; edgeWhitespace: 0 | 1 } {
+	return { length: [...value].length, edgeWhitespace: value.length > 0 && value !== value.trim() ? 1 : 0 };
 }
 
 /**
@@ -114,10 +141,10 @@ export async function createSecureInputRequest(env: Env, input: CreateSecureInpu
 	await env.DB.prepare(
 		`INSERT INTO secure_input_requests (
       id, instance_id, user_id, status, label, purpose, destination_scope,
-      one_shot, expires_at, created_at, updated_at
-    ) VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6, ?7, ?8, datetime('now'), datetime('now'))`,
+      one_shot, expires_at, created_at, updated_at, target
+    ) VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6, ?7, ?8, datetime('now'), datetime('now'), ?9)`,
 	)
-		.bind(id, input.instanceId, input.userId, input.label, input.purpose ?? null, input.destinationScope, input.oneShot ? 1 : 0, expiresAt)
+		.bind(id, input.instanceId, input.userId, input.label, input.purpose ?? null, input.destinationScope, input.oneShot ? 1 : 0, expiresAt, input.target ?? null)
 		.run();
 
 	return id;
@@ -231,13 +258,14 @@ export async function storeSecretValue(
 	// Encrypt the secret
 	const { ciphertext, dekWrapped, iv } = await encryptKey(secretValue, env.KEY_ENCRYPTION_KEY);
 
-	// Update the request with encrypted secret and mark as 'ready'
+	// Update the request with encrypted secret and mark as 'ready' — with its non-secret shape (#966).
+	const shape = valueShape(secretValue);
 	await env.DB.prepare(
 		`UPDATE secure_input_requests
-     SET status = 'ready', secret_ciphertext = ?1, dek_wrapped = ?2, iv = ?3, updated_at = datetime('now')
+     SET status = 'ready', secret_ciphertext = ?1, dek_wrapped = ?2, iv = ?3, value_length = ?7, value_edge_whitespace = ?8, updated_at = datetime('now')
      WHERE id = ?4 AND instance_id = ?5 AND user_id = ?6`,
 	)
-		.bind(ciphertext, dekWrapped, iv, requestId, instanceId, userId)
+		.bind(ciphertext, dekWrapped, iv, requestId, instanceId, userId, shape.length, shape.edgeWhitespace)
 		.run();
 
 	return true;
@@ -261,10 +289,10 @@ export async function depositSecureInput(
 	await env.DB.prepare(
 		`INSERT INTO secure_input_requests (
       id, instance_id, user_id, status, label, purpose, destination_scope, secret_ciphertext, dek_wrapped, iv,
-      one_shot, expires_at, created_at, updated_at, source_node
-    ) VALUES (?1, ?2, ?3, 'ready', ?4, ?5, 'file', ?6, ?7, ?8, 1, ?9, datetime('now'), datetime('now'), ?10)`,
+      one_shot, expires_at, created_at, updated_at, source_node, value_length, value_edge_whitespace
+    ) VALUES (?1, ?2, ?3, 'ready', ?4, ?5, 'file', ?6, ?7, ?8, 1, ?9, datetime('now'), datetime('now'), ?10, ?11, ?12)`,
 	)
-		.bind(id, input.instanceId, input.userId, input.label, input.purpose ?? null, ciphertext, dekWrapped, iv, expiresAt, input.sourceNode ?? "")
+		.bind(id, input.instanceId, input.userId, input.label, input.purpose ?? null, ciphertext, dekWrapped, iv, expiresAt, input.sourceNode ?? "", valueShape(input.value).length, valueShape(input.value).edgeWhitespace)
 		.run();
 	return { id, expiresAt: sqlTimeToIso(expiresAt) };
 }
