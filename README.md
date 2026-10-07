@@ -235,13 +235,13 @@ never built or deployed.
 | `coder-lead` | Coder Lead | `0063` | none — declarative capabilities |
 | `local-repo-chat` | Local Repo Chat | `0066` | none — declarative capabilities |
 | `tmux-operator` | tmux Operator | `0072` | none — declarative capabilities |
+| `job-application-assistant` | Job Application Assistant | `0185` | `agents/job-application-assistant` |
 
 **Created through the API/console by the operator** — they exist only as D1 rows, so a fresh
 database will not have them. Treat this as known drift, not a design:
 
 | Slug | Name | Notes |
 |---|---|---|
-| `job-application-assistant` | Job Application Assistant | Manifest in `agents/`, but no seed migration. Migration `0022` only *updates* its capabilities if the row already exists. |
 | `language-buddy` | Language Buddy | Migration `0041` sets its `settingsSchema` if present; it does not create it. |
 | `doc-chat` | Doc Chat | |
 | `small-business-website-lead-finder` | Small Business Website Lead Finder | Standalone org repo, cloned to `pags/agents/`. |
