@@ -17,6 +17,7 @@ import { ENGINE_CHECK_MIN_CLI } from "./engine-preflight.js";
 import { FAST_FORWARD_MIN_CLI } from "./repo-sync-gate.js";
 import { RESOURCE_DETAIL_MIN_CLI, RESOURCES_MIN_CLI } from "./runner-resources.js";
 import { cliAtLeast } from "./runner-upgrade.js";
+import { LOCAL_BROWSER_CODEX_MIN_CLI } from "./local-browser/policy.js";
 
 /**
  * The runner's own control commands, answered by the CLI over the relay: the membership sync behind
@@ -36,6 +37,7 @@ export interface RunnerFeature {
 
 export const RUNNER_FEATURES: readonly RunnerFeature[] = [
 	{ feature: "disk, runner restarts, relay round trip and per-session usage in the resource history", minCli: RESOURCE_DETAIL_MIN_CLI },
+	{ feature: "Codex local browser research (the browser tools approved for codex exec, #952)", minCli: LOCAL_BROWSER_CODEX_MIN_CLI },
 	{ feature: "machine CPU load and memory in list_runner_nodes / coding_diagnostics", minCli: RESOURCES_MIN_CLI },
 	{ feature: "relay sockets that keep their machine name when the hostname changes", minCli: RELAY_NAME_STABLE_MIN_CLI },
 	{ feature: "tmux_secure_put / tmux_secure_get (machine-to-machine secret files)", minCli: SECURE_HANDOFF_MIN_CLI },

@@ -196,6 +196,31 @@ describe("runs", () => {
 		expect(events.body.events.map((e: { type: string }) => e.type)).toEqual(["run.requested", "runner.dispatched"]);
 	});
 
+	it("refuses a Codex run on a runner too old to let Codex use the browser — before anything reaches it (#952)", async () => {
+		const runnerAt = (v: string) => d1.exec(`UPDATE instance_runtime_nodes SET runner_version = '${v}' WHERE instance_id = 'i1'`);
+		const support = async () => (await call("GET", "/i1/local-browser/preflight")).body.checks.find((c: { id: string }) => c.id === "runner_support");
+		await call("PUT", "/i1/local-browser/settings", { engine: "codex" });
+		runnerAt("0.4.73");
+		// Preflight says so, naming the version, the floor and both fixes.
+		expect(await support()).toMatchObject({ ok: false, detail: expect.stringMatching(/mac is CLI 0\.4\.73, too old for Codex research.*0\.4\.74 or newer.*runner_update.*Claude Code/) });
+		expect((await call("GET", "/i1/local-browser/preflight")).body.ready).toBe(false);
+		// A start ends at once as runner_unsupported — the run is never handed to the runner, so it
+		// cannot come back "completed" with no page opened (what live run aac758dc did).
+		const r = await call("POST", "/i1/local-browser/runs", { objective: "x", requestId: "codex-old" });
+		expect(r.body).toMatchObject({ status: "failed", errorCode: "runner_unsupported", error: expect.stringMatching(/too old for Codex research/) });
+		expect(sent.filter((x) => x.path === "/local-browser/run")).toHaveLength(0);
+		// At the floor it is dispatched.
+		runnerAt("0.4.74");
+		expect(await support()).toMatchObject({ ok: true });
+		expect((await call("POST", "/i1/local-browser/runs", { objective: "x", requestId: "codex-new" })).body).toMatchObject({ status: "running" });
+		expect(sent.filter((x) => x.path === "/local-browser/run")).toHaveLength(1);
+	});
+
+	it("does not hold Claude Code to the Codex floor", async () => {
+		d1.exec(`UPDATE instance_runtime_nodes SET runner_version = '0.4.73' WHERE instance_id = 'i1'`);
+		expect((await call("POST", "/i1/local-browser/runs", { objective: "x", requestId: "claude-old" })).body).toMatchObject({ status: "running", runnerNode: "mac" });
+	});
+
 	it("is idempotent on requestId", async () => {
 		const a = await call("POST", "/i1/local-browser/runs", { objective: "x", requestId: "same" });
 		const b = await call("POST", "/i1/local-browser/runs", { objective: "x", requestId: "same" });

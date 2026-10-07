@@ -24,6 +24,13 @@ import {
 	type LocalBrowserWorkspace,
 } from "./contract.js";
 
+/**
+ * The first CLI whose runner lets a Codex subscription run call the browser bridge (#952, c00260e6):
+ * `codex exec` runs with approval policy `never`, so before it the bridge's tools were refused and no
+ * page could open. Claude Code has no such floor.
+ */
+export const LOCAL_BROWSER_CODEX_MIN_CLI = "0.4.74";
+
 /** Platform hard ceilings — no agent may declare above these. */
 export const PLATFORM_LIMITS: LocalBrowserLimits = { maxMinutes: 60, maxPages: 200, maxActions: 1000, maxConcurrent: 3 };
 /** What an agent that declares no limits gets (the #946 mock: 15 min · 30 pages · 1 concurrent). */

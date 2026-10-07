@@ -22,7 +22,7 @@ import {
 } from "../lib/local-browser/store.js";
 import { type LocalBrowserCapability, effectiveLocalBrowserPolicy, isTerminal, mergeLocalBrowserSettings, normalizeDomain } from "../lib/local-browser/policy.js";
 import { callRuntime, getLiveRuntime, requireOwnedInstance, runtimeJson } from "./instances-runtime.js";
-import { LOCAL_BROWSER_OBJECTIVE_MAX, localBrowserCapability, startLocalBrowserRun } from "../lib/local-browser/start.js";
+import { LOCAL_BROWSER_OBJECTIVE_MAX, engineRunnerProblem, localBrowserCapability, startLocalBrowserRun } from "../lib/local-browser/start.js";
 import type { Env } from "../types.js";
 
 /**
@@ -130,7 +130,11 @@ export function registerLocalBrowserRoutes(router: Hono<{ Bindings: Env }>): voi
 				await logError(c.env, { source: "local-browser", level: "warn", userId: uid, message: `preflight /capabilities probe failed: ${err instanceof Error ? err.message : String(err)}`, context: { instanceId, runnerNode: runtime.runner_node || null } });
 			}
 			if (!Array.isArray(taskTypes)) checks.push({ id: "runner_support", ok: null, detail: "The runner did not say which task types it supports; a run will report it." });
-			else if (taskTypes.includes(LOCAL_BROWSER_TASK_TYPE)) checks.push({ id: "runner_support", ok: true, detail: "The runner supports local browser research" });
+			else if (taskTypes.includes(LOCAL_BROWSER_TASK_TYPE)) {
+				// Supporting the task is not supporting it with THIS engine (#952): a Codex run needs a newer runner.
+				const tooOld = "error" in effective ? null : engineRunnerProblem(effective.engine, runtime.runner_version, runtime.runner_node);
+				checks.push(tooOld ? { id: "runner_support", ok: false, detail: tooOld } : { id: "runner_support", ok: true, detail: "The runner supports local browser research" });
+			}
 			else checks.push({ id: "runner_support", ok: false, detail: "The connected runner does not support local browser research yet. Update the CLI (npm i -g @proagentstore/cli) and run `pags up` again." });
 		}
 		const engineAuth = "error" in effective ? null : await lastObservedEngineAuth(c.env, instanceId, uid, effective.engine, effective.authMode);

@@ -107,7 +107,7 @@ A separate runtime from the Workflow-driven browser task above. A locally signed
 | `access_blocked` | A bot check or access-control page ("unusual traffic", "Access Denied", 403) | Pass a human check in that browser and resume, or leave it. The run reports a block that is still there; it never retries past it |
 | `write_affordance` | A form that submits, pays or uploads: an application, card fields, a file input, or an account sign-up | Let it read the page and resume, or stop and it goes back. Nothing on the page can be filled or submitted in either case |
 
-A run whose CLI exits without ever calling the bridge ends `failed`, saying no page was opened.
+A run whose CLI exits without ever calling the bridge ends `failed`, saying no page was opened. A Codex run needs a runner on CLI 0.4.74 or newer, because older runners cannot approve the bridge's tools for `codex exec`. Preflight flags an older runner, and a start on one ends at once as `runner_unsupported`, naming the update or the switch to Claude Code.
 
 ## Coder Agents
 

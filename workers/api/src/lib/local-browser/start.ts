@@ -11,7 +11,8 @@ import { capabilitiesForInstance } from "../agent-capabilities.js";
 import { getLiveRuntime, callRuntime, runtimeJson } from "../../routes/instances-runtime.js";
 import type { Env } from "../../types.js";
 import { LOCAL_BROWSER_RUN_PATH, LOCAL_BROWSER_TASK_TYPE, type LocalBrowserTaskEnvelope } from "./contract.js";
-import { effectiveLocalBrowserPolicy, type LocalBrowserCapability } from "./policy.js";
+import { LOCAL_BROWSER_CODEX_MIN_CLI, effectiveLocalBrowserPolicy, type LocalBrowserCapability } from "./policy.js";
+import { cliAtLeast } from "../runner-upgrade.js";
 import {
 	appendLocalBrowserEvents,
 	getLocalBrowserRun,
@@ -78,6 +79,17 @@ export async function startLocalBrowserRun(
 	return { kind: "started", run: await dispatch(env, instanceId, uid, run) };
 }
 
+/**
+ * Why this machine cannot run this engine, or null (#952). A Codex run on a runner older than
+ * {@link LOCAL_BROWSER_CODEX_MIN_CLI} opens no page at all — and such a runner also predates the check
+ * that fails a run which never touched the bridge (#944), so it would report that run "completed".
+ * Refused before dispatch instead, naming the fix. An unreported version is not judged.
+ */
+export function engineRunnerProblem(engine: string, runnerVersion: string | null | undefined, node: string | null | undefined): string | null {
+	if (engine !== "codex" || !runnerVersion?.trim() || cliAtLeast(runnerVersion, LOCAL_BROWSER_CODEX_MIN_CLI)) return null;
+	return `The runner on ${node || "that machine"} is CLI ${runnerVersion.trim()}, too old for Codex research — it cannot call the browser tools (needs ${LOCAL_BROWSER_CODEX_MIN_CLI} or newer). Update it (npm i -g @proagentstore/cli, or runner_update) and restart \`pags up\` — or switch this instance's engine to Claude Code.`;
+}
+
 /** Hand the run to the live runner. A dispatch that cannot happen ends the run `failed` with a code. */
 async function dispatch(env: Env, instanceId: string, uid: string, run: LocalBrowserRun): Promise<LocalBrowserRun> {
 	const now = Date.now();
@@ -88,6 +100,8 @@ async function dispatch(env: Env, instanceId: string, uid: string, run: LocalBro
 	};
 	const runtime = await getLiveRuntime(env, instanceId, uid);
 	if (!runtime) return fail("runner_offline", "No runner is connected. Run `pags up` on the machine that should do the research, then start the run again.");
+	const tooOld = engineRunnerProblem(run.policy.engine, runtime.runner_version, runtime.runner_node);
+	if (tooOld) return fail("runner_unsupported", tooOld);
 
 	const consent = await listDomainConsent(env, instanceId, uid, now);
 	const navigate = consent.filter((x) => x.scope === "navigate");
