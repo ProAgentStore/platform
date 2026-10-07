@@ -8,7 +8,7 @@ import { overrideVoiceBase, parseAccountPreferences, resolveVoice, sanitizeVoice
 import { deriveVoiceVocabulary } from "../lib/voice-vocabulary.js";
 import { resumeSessionsForNode, suspendSessionsFromOtherNodes } from "../lib/coding-store.js";
 import { notifyUser } from "./push.js";
-import { agentLink } from "../lib/console-links.js";
+import { deepLinkFor } from "../lib/console-links.js";
 import { listEvents } from "../lib/events.js";
 import { validatePipeline } from "../lib/pipeline.js";
 import { readInstanceConfig, registerApplyRoutes } from "./instances-apply.js";
@@ -307,7 +307,7 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 			c.env, creator.owner_id, "subscribe",
 			`New subscriber: ${subscriber?.github_login || "someone"}`,
 			`${subscriber?.github_login || "A user"} subscribed to ${agent.name}.`,
-			agentLink(agent.id),
+			deepLinkFor({ kind: "agent", agentId: agent.id }),
 		);
 	}
 

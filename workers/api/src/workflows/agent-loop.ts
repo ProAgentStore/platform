@@ -21,7 +21,7 @@ import { interruptedBy } from "../lib/coding-run-report.js";
 import { isCredentialsError, runLoopDecide, type LoopTurn } from "../lib/loop-orchestrator.js";
 import { markExhausted, reserve, settle } from "../lib/delegation-budget-store.js";
 import { instanceSpendMicros } from "../lib/usage.js";
-import { instanceLink } from "../lib/console-links.js";
+import { deepLinkFor } from "../lib/console-links.js";
 import { logEvent } from "../lib/events.js";
 import { logError } from "../lib/error-log.js";
 import { escalationNote, escalationTarget } from "../lib/escalation.js";
@@ -374,7 +374,7 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 					"loop",
 					"Your agent needs you",
 					stop.message.slice(0, 200),
-					instanceLink(instanceId),
+					deepLinkFor({ kind: "assistant", instanceId }),
 					// One run stops once. `alert` because the run has STOPPED and only a human
 					// restarts it — never muted (#360).
 					{ key: `loop:${runId}:${stop.reason}`, kind: "alert", instanceId },

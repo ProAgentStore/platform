@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeSessionFor, pickAutoOpenSession, repoForSession } from "./session-open";
+import { activeSessionFor, deepLinkedSessionGone, pickAutoOpenSession, repoForSession } from "./session-open";
 import type { CodingRepo, CodingSession } from "./types";
 
 const s = (id: string, repoId: string, status: CodingSession["status"]): CodingSession => ({ id, repoId, status });
@@ -135,3 +135,16 @@ describe("a deploy notification's ?builds= deep link lands on Builds (#897)", ()
 		expect(pickAutoOpenSession({ sessions: SESSIONS, lastRepoId: "repo-a" })).not.toBeNull();
 	});
 });
+
+describe("deepLinkedSessionGone — a link to a deleted session says so (#894)", () => {
+	const sessions = [{ id: "s1" }, { id: "s2" }] as unknown as Parameters<typeof deepLinkedSessionGone>[0];
+	it("is true only for a deep-linked id missing from a SUCCESSFUL load", () => {
+		expect(deepLinkedSessionGone(sessions, "s9", true)).toBe(true);
+		expect(deepLinkedSessionGone(sessions, "s1", true)).toBe(false);
+		// A failed or pending load is not evidence of deletion.
+		expect(deepLinkedSessionGone([], "s9", false)).toBe(false);
+		// No deep link, nothing to report.
+		expect(deepLinkedSessionGone(sessions, undefined, true)).toBe(false);
+	});
+});
+

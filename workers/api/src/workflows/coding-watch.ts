@@ -5,7 +5,7 @@ import { callRunner, getRunnerConnIgnoringLiveness, READ_TIMEOUT_MS } from "../l
 import { appendTimeline, contextForCopilot, lastTerminal } from "../lib/coding-timeline.js";
 import { terminalSnapshotChanged, terminalSnapshotContent } from "../lib/terminal-snapshot.js";
 import { copilotSummary } from "../lib/coding-copilot.js";
-import { codingSessionLink } from "../lib/console-links.js";
+import { deepLinkFor } from "../lib/console-links.js";
 import { notifyUser } from "../routes/push.js";
 import type { Env } from "../types.js";
 
@@ -109,7 +109,7 @@ export async function runWatchSession(env: Env, event: WorkflowEvent<CodingSessi
 			"coding",
 			"✅ Coder finished",
 			`${goal.repo}: ${reply ? reply.slice(0, 140) : "done — open to see what it did"}`,
-			codingSessionLink(instanceId, sessionId),
+			deepLinkFor({ kind: "coding-session", instanceId, sessionId }),
 			// One watcher, one completion. Migration 0024 already deduped the WATCHERS; this keys
 			// the notification on the same fact so a second watcher for a session cannot re-buzz.
 			{ key: `coding-watch-end:${sessionId}`, instanceId },

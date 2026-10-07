@@ -29,7 +29,7 @@ import { setWorkCardProgress, upsertWorkCard } from "../../lib/work-card.js";
 import { normalizeRunnerNode } from "../../lib/runtime-nodes.js";
 import { appendEngineUsageTimeline, appendTimeline } from "../../lib/coding-timeline.js";
 import { delegationTaskRecord } from "../../lib/delegation.js";
-import { codingSessionLink } from "../../lib/console-links.js";
+import { deepLinkFor } from "../../lib/console-links.js";
 import { notifyUser } from "../../routes/push.js";
 import { recordEngineUsage } from "../../lib/usage.js";
 import { decideWithinBudget } from "../../lib/coding-decide-budget.js";
@@ -598,6 +598,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		timeZone: goal.timeZone,
 		instanceId,
 		taskId: event.payload.boardTaskId,
+		sessionId,
 		now: () => Date.now(),
 		takeover: (label, reason) => runRetry(`handoff-${round}`, () => callRunner(conn, "/coding/takeover", { sessionId, label, reason })).then(() => undefined),
 		takeoverStatus: () =>
@@ -609,7 +610,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		notify: (title, body, key, alert, url) =>
 			runRetry(`notify-${key}-${round}`, async () => {
 				const opts = { key: `${key}:${sessionId}`, kind: alert ? ("alert" as const) : undefined, instanceId };
-				return await notifyUser(env, userId, "coding", title, body, url ?? codingSessionLink(instanceId, sessionId), opts).then(() => null, () => null);
+				return await notifyUser(env, userId, "coding", title, body, url ?? deepLinkFor({ kind: "coding-session", instanceId, sessionId }), opts).then(() => null, () => null);
 			}).then(() => undefined),
 		announce: postToChat,
 		// The board, which is where the owner would look for "does anything want me?" (#553).
@@ -1032,7 +1033,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			const body = `${goal.repo}: ${result.detail || result.outcome}`;
 			// A session ends once. `update` — nothing is waiting on the user, so this is what a
 			// "Coder" mute is for.
-			await notifyUser(env, userId, "coding", title, body, codingSessionLink(instanceId, sessionId), {
+			await notifyUser(env, userId, "coding", title, body, deepLinkFor({ kind: "coding-session", instanceId, sessionId }), {
 				key: `coding-end:${sessionId}`, instanceId,
 			}).catch(() => undefined);
 			return null;

@@ -35,7 +35,7 @@ import {
 	redactPane,
 	subscriptionMenuChoice,
 } from "../lib/engine-reauth.js";
-import { codingSessionLink } from "../lib/console-links.js";
+import { deepLinkFor } from "../lib/console-links.js";
 import { type EngineReauthState, readReauthState, signInSessionId, writeReauthState } from "../lib/engine-reauth-store.js";
 import type { EngineAuthResolved } from "../lib/usage-payer.js";
 import { logEvent } from "../lib/events.js";
@@ -184,7 +184,7 @@ async function advance(
 				: " A run parked on sign-in continues by itself.";
 			// The run it unblocks, where it continues — else the Coding tab (#897; this sent no link).
 			const sessionId = await signInSessionId(c.env, instanceId, uid);
-			await notifyUser(c.env, uid, "coding", "🔑 Coding engine signed in", `The ${state.clientType} engine is signed in again.${more}`, codingSessionLink(instanceId, sessionId ?? undefined), {
+			await notifyUser(c.env, uid, "coding", "🔑 Coding engine signed in", `The ${state.clientType} engine is signed in again.${more}`, deepLinkFor({ kind: "engine-sign-in", instanceId, sessionId }), {
 				key: `coding-reauth-done:${instanceId}:${next.completedAt}`,
 				instanceId,
 			}).catch(() => undefined);

@@ -8,7 +8,7 @@
  * event or a result does to a run.
  */
 import { HttpError } from "../auth.js";
-import { localBrowserRunLink } from "../console-links.js";
+import { deepLinkFor } from "../console-links.js";
 import { instanceListName } from "../instance-config.js";
 import type { Env } from "../../types.js";
 import { callRuntime, getLiveRuntime, runtimeJson } from "../../routes/instances-runtime.js";
@@ -59,7 +59,7 @@ async function notifyPaused(env: Env, uid: string, instanceId: string, run: Loca
 		.first<{ config: string | null; name: string | null }>();
 	const agent = instanceListName(row?.config, row?.name) ?? "Your agent";
 	const why = reason ? PAUSE_WORDS[reason] : "is waiting for you";
-	await notifyUser(env, uid, "local-browser", `⏸ ${agent} ${why}`, `Research run “${run.objective.slice(0, 80)}” is paused until you act.`, localBrowserRunLink(instanceId, run.id), {
+	await notifyUser(env, uid, "local-browser", `⏸ ${agent} ${why}`, `Research run “${run.objective.slice(0, 80)}” is paused until you act.`, deepLinkFor({ kind: "local-browser-run", instanceId, runId: run.id }), {
 		kind: "alert",
 		instanceId,
 		key: `local-browser:${run.id}:${now}`,

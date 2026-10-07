@@ -1,4 +1,4 @@
-import { codingBuildsLink } from "./console-links.js";
+import { type DeepLink, deepLinkFor } from "./console-links.js";
 import { logError } from "./error-log.js";
 import { fetchWorkflowRuns, mapWorkflowRun } from "./github-actions.js";
 import { resolveGithubRead } from "./github-cache.js";
@@ -72,7 +72,7 @@ export type DeployNotifyDecision =
 	  }
 	/** `seenAt` is nullable on this arm too: a run whose `updated_at` we cannot parse is still a
 	 *  real deploy worth announcing, it just leaves the order unknown for one more sweep. */
-	| { notify: true; seenId: string; seenAt: string | null; title: string; body: string; url: string };
+	| { notify: true; seenId: string; seenAt: string | null; title: string; body: string; url: DeepLink };
 
 /**
  * How many recent runs one repo's sweep reads.
@@ -134,8 +134,8 @@ export function isDeployWorkflow(name: string, path: string): boolean {
  * by `codingBuildsLink` with every other console link this Worker emits, so it is checked against
  * the router (#344); this stays as the name the deploy sweep and its tests already know it by.
  */
-export function deployDeepLink(instanceId: string, repoId: string): string {
-	return codingBuildsLink(instanceId, repoId);
+export function deployDeepLink(instanceId: string, repoId: string): DeepLink {
+	return deepLinkFor({ kind: "builds", instanceId, repoId });
 }
 
 /**
@@ -250,7 +250,7 @@ export function decideDeployNotification(
 	state: DeployWatchState,
 	repoName: string,
 	/** Same-origin click target — see `deployDeepLink`. The GitHub run URL is NOT usable here. */
-	deepLink: string,
+	deepLink: DeepLink,
 ): DeployNotifyDecision {
 	const { lastNotified, lastDeployAt, now } = state;
 	/** Neither half of the watermark moves. The shape every refusal returns. */

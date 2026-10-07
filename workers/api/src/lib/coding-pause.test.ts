@@ -28,7 +28,7 @@ interface Spy {
 	restarts: number;
 }
 
-function spy(over: Partial<{ resolveAfter: number; cancelAfterTicks: number; timeZone: string; signedInAfter: number; restartFails: boolean; instanceId?: string; taskId?: string }> = {}): Spy {
+function spy(over: Partial<{ resolveAfter: number; cancelAfterTicks: number; timeZone: string; signedInAfter: number; restartFails: boolean; instanceId?: string; taskId?: string; sessionId?: string }> = {}): Spy {
 	const s: Spy = {
 		slept: [],
 		announced: [],
@@ -52,6 +52,7 @@ function spy(over: Partial<{ resolveAfter: number; cancelAfterTicks: number; tim
 		timeZone: over.timeZone,
 		instanceId: over.instanceId ?? "test-instance",
 		taskId: over.taskId,
+		sessionId: over.sessionId,
 		now: () => NOW,
 		takeover: async () => {
 			s.takeovers++;
@@ -269,13 +270,19 @@ describe("resolvePause — a human handoff still times out, and is reported as w
 		expect(notif.url).toContain("/instances/test-instance/tasks/task-123");
 	});
 
-	it("deep-links to coding session when taskId is absent (#899)", async () => {
-		// Fallback behavior when no task ID is available
-		const s = spy({ resolveAfter: 1 });
+	it("deep-links to THE coding session when taskId is absent (#899, #894)", async () => {
+		// This used to assert only `toContain("/coding")` — which the repo LIST also satisfies, and the
+		// list is where it went: the pause had no session id to link. Exact, now.
+		const s = spy({ resolveAfter: 1, sessionId: "sess-9" });
 		await resolvePause(s.deps, { round: 0, result: stuck, state: { waits: 0, spentMs: 0 } });
 		expect(s.notified).toHaveLength(1);
-		const notif = s.notified[0];
-		expect(notif.url).toContain("/instances/test-instance/coding");
+		expect(s.notified[0].url).toBe("/console/instances/test-instance/coding/sess-9");
+	});
+
+	it("with neither a task nor a session, still opens the instance's Coding tab — never the console home", async () => {
+		const s = spy({ resolveAfter: 1 });
+		await resolvePause(s.deps, { round: 0, result: stuck, state: { waits: 0, spentMs: 0 } });
+		expect(s.notified[0].url).toBe("/console/instances/test-instance/coding");
 	});
 
 	it("writes the card BEFORE the two pushes, so a later throw cannot lose the durable half", async () => {
@@ -414,3 +421,16 @@ describe("resolvePause — an engine blocked on its own sign-in parks for the re
 		expect(runSucceeded("needs_reauth")).toBe(false);
 	});
 });
+
+describe("the sign-in pause opens the run's session, where the sign-in prompt is (#894)", () => {
+	const reauthResult: CodingResult = { outcome: "needs_reauth", detail: "not signed in", steps: 1, transcript: [] } as unknown as CodingResult;
+	it("links the session when there is no board task, and the task when there is", async () => {
+		const bySession = spy({ signedInAfter: 1, sessionId: "sess-9" });
+		await resolvePause(bySession.deps, { round: 0, result: reauthResult, state: { waits: 0, spentMs: 0 } });
+		expect(bySession.notified.find((n) => n.title.startsWith("🔑"))?.url).toBe("/console/instances/test-instance/coding/sess-9");
+		const byTask = spy({ signedInAfter: 1, taskId: "task-1", sessionId: "sess-9" });
+		await resolvePause(byTask.deps, { round: 0, result: reauthResult, state: { waits: 0, spentMs: 0 } });
+		expect(byTask.notified.find((n) => n.title.startsWith("🔑"))?.url).toBe("/console/instances/test-instance/tasks/task-1");
+	});
+});
+

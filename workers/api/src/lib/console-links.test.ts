@@ -17,7 +17,8 @@ import * as links from "./console-links";
  *     cannot avoid the check by being written somewhere else.
  */
 describe("every console link this Worker builds resolves to a real page", () => {
-	const builders = Object.entries(links).filter(([, v]) => typeof v === "function") as [string, (...a: string[]) => string][];
+	// `deepLinkFor` takes a subject, not ids — it has its own exhaustive check below.
+	const builders = Object.entries(links).filter(([name, v]) => typeof v === "function" && name !== "deepLinkFor") as [string, (...a: string[]) => string][];
 
 	it("has builders to check (a silently empty sweep is the failure mode of this shape of test)", () => {
 		expect(builders.length).toBeGreaterThanOrEqual(8);
@@ -40,6 +41,52 @@ describe("every console link this Worker builds resolves to a real page", () => 
 			expect(check.ok, `${name}() → ${url}: ${check.ok === false ? check.reason : ""}`).toBe(true);
 		});
 	}
+});
+
+// #894: every notification names its SUBJECT and gets its link from `deepLinkFor`. One sample per
+// kind — typed as a Record over every kind, so adding a kind fails to compile until it is here.
+describe("deepLinkFor — every notification subject opens a real page (#894)", () => {
+	const sample = (id: string, other: string): Record<links.NotificationSubjectKind, links.NotificationSubject> => ({
+		"coding-session": { kind: "coding-session", instanceId: id, sessionId: other },
+		"coding-tab": { kind: "coding-tab", instanceId: id },
+		"engine-sign-in": { kind: "engine-sign-in", instanceId: id, sessionId: other },
+		builds: { kind: "builds", instanceId: id, repoId: other },
+		task: { kind: "task", instanceId: id, taskId: other },
+		assistant: { kind: "assistant", instanceId: id },
+		triggers: { kind: "triggers", instanceId: id },
+		knowledge: { kind: "knowledge", instanceId: id },
+		"local-browser-run": { kind: "local-browser-run", instanceId: id, runId: other },
+		"secure-input": { kind: "secure-input", instanceId: id, requestId: other },
+		agent: { kind: "agent", agentId: id },
+		instances: { kind: "instances" },
+		profile: { kind: "profile" },
+	});
+
+	for (const [kind, subject] of Object.entries(sample("inst_1", "id_2"))) {
+		it(`${kind} lands on a page that exists`, () => {
+			const url = links.deepLinkFor(subject);
+			const check = checkConsoleLink(url);
+			expect(check.ok, `${kind} → ${url}: ${check.ok === false ? check.reason : ""}`).toBe(true);
+		});
+	}
+	for (const [kind, subject] of Object.entries(sample("a/b?c", "d/e&f=g"))) {
+		it(`${kind} survives an id that would otherwise change the path`, () => {
+			const check = checkConsoleLink(links.deepLinkFor(subject));
+			expect(check.ok, `${kind}: ${check.ok === false ? check.reason : ""}`).toBe(true);
+		});
+	}
+
+	it("opens the exact subject — the run, the session, the repo's builds, the trigger's settings", () => {
+		const s = sample("i1", "x2");
+		expect(links.deepLinkFor(s.task)).toBe("/console/instances/i1/tasks/x2");
+		expect(links.deepLinkFor(s["coding-session"])).toBe("/console/instances/i1/coding/x2");
+		expect(links.deepLinkFor(s.builds)).toBe("/console/instances/i1/coding?builds=x2");
+		// A skipped trigger opens where triggers are configured, not the Board.
+		expect(links.deepLinkFor(s.triggers)).toBe("/console/instances/i1/settings");
+		// A sign-in with no known run still opens the instance's Coding tab, never the console home.
+		expect(links.deepLinkFor({ kind: "engine-sign-in", instanceId: "i1", sessionId: null })).toBe("/console/instances/i1/coding");
+		expect(links.deepLinkFor(s["secure-input"])).toBe("/console/instances/i1/secure-inputs/x2");
+	});
 });
 
 describe("no producer escapes the check", () => {

@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import Button from "../components/Button";
 import LoadFailed from "../components/LoadFailed";
+import MissingSubject from "../components/MissingSubject";
+import { isNotFoundError } from "../lib/notFound";
 import Page from "../components/Page";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
@@ -80,6 +82,7 @@ export default function AgentDetail() {
 	const { id } = useParams<{ id: string }>();
 	const navigate = useNavigate();
 	const [agent, setAgent] = useState<Agent | null>(null);
+	const [agentMissing, setAgentMissing] = useState(false);
 	const [tab, setTab] = useState<Tab>("chat");
 
 	// Chat
@@ -252,7 +255,9 @@ export default function AgentDetail() {
 				setSWelcome(String(state.welcomeMessage || "")); setStateErr("");
 			} catch (e) { setStateErr(e instanceof Error ? e.message : String(e)); }
 		} catch (e) {
-			console.error(e);
+			// A link to a deleted agent (a creator's notification, #894) said "Loading agent..." forever.
+			if (isNotFoundError(e)) setAgentMissing(true);
+			else console.error(e);
 		}
 	}, [id]);
 
@@ -456,6 +461,13 @@ export default function AgentDetail() {
 	// Create mode — no id means /agents/new
 	if (!id) return <CreateAgent />;
 
+	if (agentMissing) {
+		return (
+			<MissingSubject title="This agent no longer exists" backTo="/agents" backLabel="Back to your agents" testId="agent-missing">
+				The agent this link points to was deleted, or it belongs to another sign-in.
+			</MissingSubject>
+		);
+	}
 	if (!agent) return <Page className="text-muted text-sm">Loading agent...</Page>;
 
 	const allTabs: { id: Tab; label: string }[] = [

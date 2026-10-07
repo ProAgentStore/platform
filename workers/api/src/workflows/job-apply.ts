@@ -7,7 +7,7 @@ import { commitGuardSpec } from "../lib/commit-guard.js";
 import { fabricationBlockReason } from "../lib/fabrication-guard.js";
 import { saveAskAndHoldAnswer } from "../lib/profile.js";
 import { decryptKey } from "../lib/crypto.js";
-import { instanceRunLink } from "../lib/console-links.js";
+import { deepLinkFor } from "../lib/console-links.js";
 import { logError } from "../lib/error-log.js";
 import { logEvent } from "../lib/events.js";
 import { isTransientInfraError } from "../lib/transient-error.js";
@@ -379,7 +379,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			await step.do(`notify-${round}`, async () => {
 				// The run, not the Board (#349): the Board shows a card SAYING it is waiting on you;
 				// the takeover overlay and the input box that answer the wait are on the run page.
-				const link = instanceRunLink(instanceId, taskId);
+				const link = deepLinkFor({ kind: "task", instanceId, taskId });
 				const host = atsHost(job.url) || "the job site";
 				const { title, body } =
 					reason === "needs_input"

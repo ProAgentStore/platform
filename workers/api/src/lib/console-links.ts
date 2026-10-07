@@ -83,6 +83,12 @@ export function instanceKnowledgeLink(instanceId: string): string {
 	return `${instanceLink(instanceId)}/knowledge`;
 }
 
+/** A local browser research run (#946) — the Research tab, or one run on it. */
+export function localBrowserRunLink(instanceId: string, runId?: string): string {
+	const research = `${instanceLink(instanceId)}/research`;
+	return runId ? `${research}/${encodeURIComponent(runId)}` : research;
+}
+
 /**
  * A coding session — the Co-pilot/Terminal view for one run.
  *
@@ -93,12 +99,6 @@ export function instanceKnowledgeLink(instanceId: string): string {
  * sent to that session. Without a session id (or if the id no longer resolves) the Coding tab
  * falls back to the repo list, which is a real page rather than a broken one.
  */
-/** A local browser research run (#946) — the Research tab, or one run on it. */
-export function localBrowserRunLink(instanceId: string, runId?: string): string {
-	const research = `${instanceLink(instanceId)}/research`;
-	return runId ? `${research}/${encodeURIComponent(runId)}` : research;
-}
-
 export function codingSessionLink(instanceId: string, sessionId?: string): string {
 	const coding = `${instanceLink(instanceId)}/coding`;
 	return sessionId ? `${coding}/${encodeURIComponent(sessionId)}` : coding;
@@ -154,4 +154,87 @@ export function secureInputLink(instanceId: string, requestId: string): string {
  */
 export function secureInputNotificationLink(instanceId: string, requestId: string): string {
 	return `${BASE}${secureInputLink(instanceId, requestId)}`;
+}
+
+/** An instance's Settings tab — where its triggers, runner and connectors are configured. */
+export function instanceSettingsLink(instanceId: string): string {
+	return `${instanceLink(instanceId)}/settings`;
+}
+
+// ── Notification links (#894) ────────────────────────────────────────────────
+
+/**
+ * A link a notification may carry, and ONLY one built by {@link deepLinkFor} (#894).
+ *
+ * `notifyUser` takes this type, not `string`, so a producer cannot pass a hand-written path, a
+ * GitHub URL, or nothing: it has to say WHAT the notification is about and let this module turn
+ * that into the page. Forgetting is a compile error, which is the "hard error in dev" the issue asks
+ * for; the runtime guard in `notifyUser` covers JavaScript that gets past the types.
+ */
+export type DeepLink = string & { readonly __notificationDeepLink: true };
+
+/** What a notification is about — every subject a producer sends today, each with its page. */
+export type NotificationSubject =
+	/** One coding run's Co-pilot/Terminal — the page where a handoff is answered. */
+	| { kind: "coding-session"; instanceId: string; sessionId: string }
+	/** The instance's Coding tab (repo list) — no single session is the subject. */
+	| { kind: "coding-tab"; instanceId: string }
+	/** A coding CLI's sign-in: the run it blocks or unblocks when one is known (#897), else the Coding tab. */
+	| { kind: "engine-sign-in"; instanceId: string; sessionId?: string | null }
+	/** A repo's deploys / CI: the Coding tab's Builds view for that repo (#338). */
+	| { kind: "builds"; instanceId: string; repoId: string }
+	/** One runtime task (browser task, job application): `RunDetail`, with takeover and the answer box (#349). */
+	| { kind: "task"; instanceId: string; taskId: string }
+	/** A chat-driven run that needs the owner: the Assistant, where it is answered (#894 Q2 default). */
+	| { kind: "assistant"; instanceId: string }
+	/** A trigger (a scheduled run skipped): Settings, where triggers are configured. */
+	| { kind: "triggers"; instanceId: string }
+	/** The instance's Knowledge — where the résumé lives. */
+	| { kind: "knowledge"; instanceId: string }
+	/** One local browser research run (#946). */
+	| { kind: "local-browser-run"; instanceId: string; runId: string }
+	/** A secure-input request waiting for the owner (#934). */
+	| { kind: "secure-input"; instanceId: string; requestId: string }
+	/** An agent template — notifications to its creator (#622). */
+	| { kind: "agent"; agentId: string }
+	/** Several instances at once (#897): the instance list. */
+	| { kind: "instances" }
+	/** Account-level: the Profile (candidate profile, API keys). */
+	| { kind: "profile" };
+
+export type NotificationSubjectKind = NotificationSubject["kind"];
+
+/** The page a notification about `subject` opens. Exhaustive: a new kind fails to compile until it has one. */
+export function deepLinkFor(subject: NotificationSubject): DeepLink {
+	const link = ((): string => {
+		switch (subject.kind) {
+			case "coding-session":
+				return codingSessionLink(subject.instanceId, subject.sessionId);
+			case "coding-tab":
+				return codingSessionLink(subject.instanceId);
+			case "engine-sign-in":
+				return codingSessionLink(subject.instanceId, subject.sessionId ?? undefined);
+			case "builds":
+				return codingBuildsLink(subject.instanceId, subject.repoId);
+			case "task":
+				return instanceRunLink(subject.instanceId, subject.taskId);
+			case "assistant":
+				return instanceLink(subject.instanceId);
+			case "triggers":
+				return instanceSettingsLink(subject.instanceId);
+			case "knowledge":
+				return instanceKnowledgeLink(subject.instanceId);
+			case "local-browser-run":
+				return localBrowserRunLink(subject.instanceId, subject.runId);
+			case "secure-input":
+				return secureInputNotificationLink(subject.instanceId, subject.requestId);
+			case "agent":
+				return agentLink(subject.agentId);
+			case "instances":
+				return instancesLink();
+			case "profile":
+				return profileLink();
+		}
+	})();
+	return link as DeepLink;
 }

@@ -3,7 +3,7 @@ import { describeAction, runApplyLoop, type ApplyDecision, type ApplyDeps, type 
 import { blockedActionReason, decideBrowserTask, type BrowserTaskJob } from "../lib/browser-task-loop.js";
 import { commitGuardSpec, commitModeFor } from "../lib/commit-guard.js";
 import { callRunner, getBoundRunnerConn } from "../lib/runner-client.js";
-import { instanceRunLink } from "../lib/console-links.js";
+import { deepLinkFor } from "../lib/console-links.js";
 import { logError } from "../lib/error-log.js";
 import { logEvent } from "../lib/events.js";
 import { isTransientInfraError } from "../lib/transient-error.js";
@@ -173,7 +173,7 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 			await step.do(`notify-${round}`, async () => {
 				// The run, not the Board (#349) — same reasoning as the apply workflow: the controls
 				// that resolve a handoff (take over / resume / supply the value) live on the run.
-				const link = instanceRunLink(instanceId, taskId);
+				const link = deepLinkFor({ kind: "task", instanceId, taskId });
 				const { title, body } =
 					reason === "needs_input"
 						? { title: "🙋 Your agent needs an answer", body: `${label} — open to provide it and it continues.` }

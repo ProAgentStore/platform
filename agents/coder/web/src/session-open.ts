@@ -76,3 +76,13 @@ export function pickAutoOpenSession({
 	if (!lastRepoId) return null;
 	return sessions.find((s) => s.repoId === lastRepoId && s.status === "active") ?? null;
 }
+
+/**
+ * Was this tab opened on a link to a session that no longer exists (#894)? Only a SUCCESSFUL load
+ * may say so — the session list is every session the instance has (`listSessions` is unbounded),
+ * so absence from it is a fact, while absence from a failed load (`loaded: false`) is not.
+ */
+export function deepLinkedSessionGone(sessions: readonly CodingSession[], initialSessionId: string | undefined, loaded: boolean): boolean {
+	return loaded && !!initialSessionId && !sessions.some((s) => s.id === initialSessionId);
+}
+

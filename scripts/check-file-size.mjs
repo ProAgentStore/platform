@@ -687,7 +687,7 @@ const PINS = {
 	// the wording and the control are ./repo-repair + ./RepoUnusableNotice, shared with ReposList
 	// so the two surfaces cannot report one directory differently — which is why this is +8 and
 	// not the +30 an inline banner would have cost.
-	"agents/coder/web/src/CodingTab.tsx": 983, // +3 at #869: the import and the two call sites of RunnerSetupChecklist (the card itself is its own file).
+	"agents/coder/web/src/CodingTab.tsx": 990, // +3 at #869: the import and the two call sites of RunnerSetupChecklist (the card itself is its own file). +7 at #894: a link to a deleted session says so above the repo list; the load records that it succeeded.
 	// +18 for #425: two Chrome launch flags, the args array reformatted one-per-line to fit them,
 	// and the paragraph saying why they are a PAIR. `--use-fake-ui-for-media-stream` on its own
 	// auto-GRANTS the real microphone to any page the agent drives — strictly worse than the prompt
@@ -1480,7 +1480,7 @@ const PINS = {
 	// bug presented as two. The decision is a pure `subscribeActionFor` with its own tests rather
 	// than a condition in JSX, because this console has no component harness and a verdict embedded
 	// in markup is a verdict nothing checks.
-	"store/console/src/pages/AgentDetail.tsx": 962,
+	"store/console/src/pages/AgentDetail.tsx": 968, // +6 at #894: a link to a deleted agent says so (MissingSubject) instead of loading forever.
 	// First entry at #477: supervision.ts crossed 800 lines before this PR — the ratchet did not
 	// catch it because it was not tracked. Adding the entry to record the current state; the right
 	// split is the connector-level supervision vs. the agent-direction store, when this file grows
@@ -1785,7 +1785,7 @@ const PINS = {
 	// coding-session.ts by deleting ~700 lines of behaviour to get under LIMIT (end-of-run policies,
 	// sync, closing drain, notify, endSession, the "running" card claim, the sync-gate stop). A real
 	// split must MOVE code without changing it; until then this is the honest size.
-	"workers/api/src/workflows/coding-session/workflow-run.ts": 1070,
+	"workers/api/src/workflows/coding-session/workflow-run.ts": 1071, // +1 at #894: the pause carries its session id, so "Coder needs you" opens the run, not the repo list.
 	// +5 at #754: one new entry for triggers.ts (3 comment lines + 1 pin line) + agent-do raise comment + this.
 	// +7 at #744: 6-line rationale comment for use-voice.ts raise + this note.
 	// +4 at #739: two raised pins (tool-registry, agent-think) + this note + blank line.

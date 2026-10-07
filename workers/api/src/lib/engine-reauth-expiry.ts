@@ -34,7 +34,7 @@
 
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS } from "./runner-client.js";
 import { readReauthPane, type ReauthMethod } from "./engine-reauth.js";
-import { codingSessionLink } from "./console-links.js";
+import { deepLinkFor } from "./console-links.js";
 import { claimExpiryWarning, finishReauthIfCurrent, parseReauthState, readReauthState, signInSessionId, writeReauthState, type EngineReauthState } from "./engine-reauth-store.js";
 import { notifyUser } from "../routes/push.js";
 import type { Env } from "../types.js";
@@ -159,7 +159,7 @@ export async function sweepReauthFlow(env: Env, instanceId: string, userId: stri
 	const text = expiryWarningText({ clientType: state.clientType, url: reading.url, deviceCode: reading.deviceCode, expiresAt, now, machine: state.runnerNode });
 	// The run waiting on this sign-in, else the Coding tab (#897; this sent no link).
 	const sessionId = await signInSessionId(env, instanceId, userId);
-	await notifyUser(env, userId, "coding", text.title, text.body, codingSessionLink(instanceId, sessionId ?? undefined), {
+	await notifyUser(env, userId, "coding", text.title, text.body, deepLinkFor({ kind: "engine-sign-in", instanceId, sessionId }), {
 		key: `coding-reauth-expiring:${instanceId}:${state.startedAt}`,
 		instanceId,
 		kind: "alert",

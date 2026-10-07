@@ -27,7 +27,7 @@
  *   * no token, no access, a rate limit, GitHub down, or a page served from cache while GitHub was
  *     unreachable is UNKNOWN: neither healthy nor failed, and it moves no alert state.
  */
-import { codingBuildsLink } from "./console-links.js";
+import { deepLinkFor } from "./console-links.js";
 import { isDeployWorkflow } from "./deploy-watch.js";
 import { logError } from "./error-log.js";
 import { fetchWorkflowRuns } from "./github-actions.js";
@@ -350,7 +350,7 @@ export async function checkRepoCi(env: Env, repo: RepoRow, now = new Date()): Pr
 		// Another row watching the same repository may already have said it (#709).
 		if (!(await alreadyNotified(env, repo.user_id, eventKey))) {
 			const { title, body } = ciFailureNotification(repo.name, branch, decision.newlyFailing);
-			await notifyUser(env, repo.user_id, "ci", title, body, codingBuildsLink(repo.instance_id, repo.id), {
+			await notifyUser(env, repo.user_id, "ci", title, body, deepLinkFor({ kind: "builds", instanceId: repo.instance_id, repoId: repo.id }), {
 				key: eventKey,
 				instanceId: repo.instance_id,
 			});

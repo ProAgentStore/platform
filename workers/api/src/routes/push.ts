@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
-import { consoleHomeLink, instanceLink, notificationsLink } from "../lib/console-links.js";
+import { consoleHomeLink, type DeepLink, instanceLink, notificationsLink } from "../lib/console-links.js";
 import { logError } from "../lib/error-log.js";
 import {
 	DUPLICATE_WINDOW_MINUTES,
@@ -269,14 +269,16 @@ export async function notifyUser(
 	type: string,
 	title: string,
 	body: string,
-	/** Required (#897): the same-origin console link to exactly what this is about — see `console-links.ts`. */
-	url: string,
+	/** Required (#897), and only from `deepLinkFor` (#894): the page for exactly what this is about. */
+	url: DeepLink,
 	opts: NotifyOptions = {},
 ): Promise<void> {
 	const kind: NotificationKind = opts.kind === "alert" ? "alert" : "update";
 	const target = notificationTarget(url, opts.instanceId);
 	if (target.missing) {
-		await logError(env, { source: "push", level: "warn", userId, message: `Notification "${type}" ("${title.slice(0, 80)}") was sent with no deep link; it opens ${target.url}.`, context: { type, instanceId: opts.instanceId ?? null } }).catch(() => undefined);
+		// `error`, not `warn` (#894): the types make this unreachable from TypeScript, so reaching it is
+		// a defect, and it must surface in the error summary rather than sit among warnings.
+		await logError(env, { source: "push", level: "error", userId, message: `Notification "${type}" ("${title.slice(0, 80)}") was sent with no deep link; it opens ${target.url}.`, context: { type, instanceId: opts.instanceId ?? null } }).catch(() => undefined);
 	}
 	const dedupeKey = notificationDedupeKey(type, opts.key, title, body);
 

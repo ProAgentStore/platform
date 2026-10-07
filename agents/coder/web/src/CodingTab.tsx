@@ -9,7 +9,7 @@ import { repoHasHostedPanel, repoIssuesUnavailable, repoPullsUnavailable, repoTi
 import { noticeSentence } from "./runner-offline-notice";
 import { resolveRepoState, repoStatusLabel, terminalPollBusy, type RepoState } from "./repo-status";
 import { parseRepoInput } from "./repo-input";
-import { activeSessionFor, pickAutoOpenSession } from "./session-open";
+import { activeSessionFor, deepLinkedSessionGone, pickAutoOpenSession } from "./session-open";
 import { openNotices, type OpenNotice } from "./open-notice";
 import OpenNoticeBanners from "./OpenNoticeBanners";
 import { repoOpenAction, shouldAutoOpenSoloSession } from "./repo-open";
@@ -86,6 +86,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	// What the last repos read managed to RE-CHECK, and why not when it did not — see ./repo-freshness (#440).
 	const [repoRecheck, setRepoRecheck] = useState<RecheckReport | undefined>(undefined);
 	const [sessions, setSessions] = useState<CodingSession[]>([]);
+	const [sessionsLoaded, setSessionsLoaded] = useState(false);
 	const [engines, setEngines] = useState<CodingEngine[]>([]);
 	const [defaultEngine, setDefaultEngine] = useState("claude");
 
@@ -256,6 +257,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			setRepos(repos);
 			setRepoRecheck(repoData.recheck);
 			setSessions(sessionData.sessions || []);
+			setSessionsLoaded(true);
 			setEngines(engineData.engines || []);
 			setLoopPresets(presetData.presets || []);
 			if (engineData.defaultEngineId) setDefaultEngine(engineData.defaultEngineId);
@@ -945,6 +947,11 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					{/* A text link, not a box: this package's button vocabulary is #366's remaining
 					    work, and a fourteenth hand-drawn control is not what an error banner owes. */}
 					<button type="button" onClick={() => void loadCoding()} className="underline font-semibold">Retry</button>
+				</div>
+			)}
+			{landingView === "repos" && deepLinkedSessionGone(sessions, initialSessionId, sessionsLoaded) && (
+				<div data-testid="coding-session-missing" className="bg-paper border border-line rounded-lg p-2.5 mx-2 mt-2 sm:mx-4 text-xs">
+					<span className="font-semibold">The session this link points to no longer exists</span> — it was ended and removed. Its repo is below if you want to start again.
 				</div>
 			)}
 			{landingView === "repos" && <RunnerSetupChecklist instanceId={instanceId} runnerOnline={runnerOnline} />}

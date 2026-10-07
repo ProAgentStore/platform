@@ -46,7 +46,8 @@ describe("notificationTarget — a missing link is a logged bug, never the home 
 		const row = await d1.DB.prepare("SELECT url FROM notifications WHERE user_id = 'u1'").first<{ url: string }>();
 		expect(row?.url).toBe("/console/instances/i1");
 		const logged = await d1.DB.prepare("SELECT source, level, message FROM error_log WHERE user_id = 'u1'").first<{ source: string; level: string; message: string }>();
-		expect(logged).toMatchObject({ source: "push", level: "warn" });
+		// `error` since #894: unreachable from TypeScript, so reaching it is a defect worth surfacing.
+		expect(logged).toMatchObject({ source: "push", level: "error" });
 		expect(logged?.message).toContain("no deep link");
 	});
 

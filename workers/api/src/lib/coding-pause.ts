@@ -29,7 +29,7 @@ import {
 } from "./coding-wait.js";
 import type { LoopStopReason } from "./agent-loop.js";
 import type { CodingOutcome, CodingResult } from "./coding-loop.js";
-import { instanceRunLink, codingSessionLink } from "./console-links.js";
+import { type DeepLink, deepLinkFor } from "./console-links.js";
 
 /** Max polls for a human to resolve a stuck/needs-input handoff. 180 × 5s = 15 min. */
 export const HANDOFF_WAIT_POLLS = 180;
@@ -54,6 +54,12 @@ export const HANDOFF_GIVE_UP_MS = HANDOFF_WAIT_POLLS * HANDOFF_POLL_MS;
  */
 export const HANDOFF_TICK_EVERY = 12;
 
+/** The run a handoff is about: its board task when it has one (#899), else its coding session (#894). */
+function handoffLink(deps: Pick<PauseDeps, "instanceId" | "taskId" | "sessionId">): DeepLink {
+	if (deps.taskId) return deepLinkFor({ kind: "task", instanceId: deps.instanceId, taskId: deps.taskId });
+	return deps.sessionId ? deepLinkFor({ kind: "coding-session", instanceId: deps.instanceId, sessionId: deps.sessionId }) : deepLinkFor({ kind: "coding-tab", instanceId: deps.instanceId });
+}
+
 export interface PauseDeps {
 	/** Repo label, for the notification body. */
 	repo: string;
@@ -61,8 +67,13 @@ export interface PauseDeps {
 	timeZone?: string;
 	/** The instance ID, for building deep-links to the run (#899). */
 	instanceId: string;
-	/** The board task ID, for deep-linking to the stuck run (#899). When absent, falls back to coding session. */
+	/** The board task ID, for deep-linking to the stuck run (#899). When absent, falls back to the coding session. */
 	taskId?: string;
+	/**
+	 * The session the run drives (#894) — what the fallback above links to. Without it the fallback was
+	 * the Coding tab's repo LIST, so a "Coder needs you" with no board task opened no particular run.
+	 */
+	sessionId?: string;
 	/** Open the console takeover on the runner. */
 	takeover: (label: string, reason: "stuck" | "needs_input") => Promise<void>;
 	/** Has the human resolved it, and with what value? */
@@ -90,7 +101,7 @@ export interface PauseDeps {
 	 * which STOPS the engine until someone answers. A usage-limit park needs nothing from anyone
 	 * and must not ping like a question, or people learn to stop reading these.
 	 */
-	notify: (title: string, body: string, key: string, alert: boolean, url?: string) => Promise<void>;
+	notify: (title: string, body: string, key: string, alert: boolean, url?: DeepLink) => Promise<void>;
 	/** One line into the owner's chat thread. A pause nobody can see looks like a hang (#252). */
 	announce: (message: string) => Promise<void>;
 	/**
@@ -165,9 +176,7 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 	await deps.card("needs_human");
 	// The Engine is stopped until someone answers — `alert`, so muting "Coder" silences the
 	// finished/stopped updates and never this.
-	const notificationUrl = deps.taskId
-		? instanceRunLink(deps.instanceId, deps.taskId)
-		: codingSessionLink(deps.instanceId);
+	const notificationUrl = handoffLink(deps);
 	const body = `${deps.repo}: ${label}. You have ${HANDOFF_GIVE_UP_MS / 60_000} minutes to respond before the run gives up.`;
 	await deps.notify("🙋 Coder needs you", body, `coding-handoff:${reason}:${round}`, true, notificationUrl);
 	// …AND in the thread the run was started from (#541 item d). A runner disconnect has always been
@@ -285,9 +294,8 @@ async function waitForSignIn(deps: PauseDeps, input: { round: number; result: Co
 	const { result, round } = input;
 	const since = deps.now();
 	await deps.card("needs_human");
-	const notificationUrl = deps.taskId
-		? instanceRunLink(deps.instanceId, deps.taskId)
-		: codingSessionLink(deps.instanceId);
+	// The sign-in prompt lives in the session view (#897), so with no board task the session is the sign-in screen.
+	const notificationUrl = deps.taskId ? handoffLink(deps) : deepLinkFor({ kind: "engine-sign-in", instanceId: deps.instanceId, sessionId: deps.sessionId });
 	const body = `${deps.repo}: the coding engine is not signed in. You have ${HANDOFF_GIVE_UP_MS / 60_000} minutes to sign in before the run gives up.`;
 	await deps.notify("🔑 Coder needs you to sign in", body, `coding-reauth:${round}`, true, notificationUrl);
 	await deps.announce(

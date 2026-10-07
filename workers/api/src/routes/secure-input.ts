@@ -10,7 +10,7 @@
 import { Hono, type Context } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { consumeSecureInput, countSecureInputRequests, createSecureInputRequest, getSecureInputStatus, listSecureInputRequests, pendingOwnerInputs, storeSecretValue } from "../lib/secure-input.js";
-import { secureInputLink, secureInputNotificationLink } from "../lib/console-links.js";
+import { deepLinkFor, secureInputLink } from "../lib/console-links.js";
 import { instanceListName } from "../lib/instance-config.js";
 import { notifyUser } from "./push.js";
 import type { Env } from "../types.js";
@@ -66,7 +66,7 @@ async function notifyOwner(env: Env, uid: string, instanceId: string, requestId:
 		.bind(instanceId, uid)
 		.first<{ config: string | null; name: string | null }>();
 	const agent = instanceListName(row?.config, row?.name) ?? "Your agent";
-	await notifyUser(env, uid, "secure-input", `🔐 ${agent} needs a value`, `“${label}” — enter it in the console. The agent never sees it.`, secureInputNotificationLink(instanceId, requestId), {
+	await notifyUser(env, uid, "secure-input", `🔐 ${agent} needs a value`, `“${label}” — enter it in the console. The agent never sees it.`, deepLinkFor({ kind: "secure-input", instanceId, requestId }), {
 		kind: "alert",
 		instanceId,
 		key: `secure-input:${requestId}`,
