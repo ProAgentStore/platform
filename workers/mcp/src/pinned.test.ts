@@ -358,3 +358,28 @@ describe("loadPinnedSurface / pinnedRiskFor (pure over a fetched listing)", () =
 		expect(surface.rows).toEqual([]);
 	});
 });
+
+describe("a Tailor's or Runner's pinned session carries the typed application tools (#958)", () => {
+	const APPS = ["application_trace", "cancel_application", "generate_application_materials", "get_application", "list_applications", "request_application_review", "resume_application", "retry_application", "start_application_fill", "triage_application"];
+
+	it("registers the ten tools bound to the pinned instance — no instance_id, scope from TOOL_RISK", async () => {
+		const h = await setup({ pinned: "runner-1", listing: { body: { ...LISTING, runtime: "local_apply" } } });
+		for (const n of APPS) {
+			const t = h.tools.get(n);
+			expect(t, n).toBeDefined();
+			expect(Object.keys(t?.schema ?? {})).not.toContain("instance_id");
+			expect(Object.keys(t?.schema ?? {})).not.toContain("token");
+		}
+		expect(h.tools.get("start_application_fill")?.config.annotations).toMatchObject({ readOnlyHint: false });
+		expect(h.tools.get("list_applications")?.config.annotations).toMatchObject({ readOnlyHint: true });
+		await h.tools.get("triage_application")!.handler({ action: "defer", application_id: "a1", expected_status: "materials_ready" });
+		const post = h.fetchStub.calls.find((c) => c.method === "POST");
+		expect(post?.url).toBe("https://api.test/v1/instances/runner-1/application-queue/actions");
+		expect(JSON.parse(post?.body ?? "{}")).toEqual({ action: "defer", application_id: "a1", expected_status: "materials_ready" });
+	});
+
+	it("a pinned session on any other kind of agent does not carry them", async () => {
+		const h = await setup({ pinned: "inst-1", listing: { body: { ...LISTING, runtime: "coding" } } });
+		for (const n of APPS) expect(h.tools.has(n), n).toBe(false);
+	});
+});

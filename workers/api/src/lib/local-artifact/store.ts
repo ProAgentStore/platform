@@ -263,7 +263,17 @@ export async function claimApplication(
 		)
 		.run();
 	const app = (await getApplicationByKey(env, a.instanceId, a.userId, a.key)) as JobApplication;
-	return { created: (res.meta?.changes ?? 0) > 0, app };
+	const created = (res.meta?.changes ?? 0) > 0;
+	// The lifecycle audit (#958) starts here: version 0, the application's creation from the approved lead.
+	if (created) {
+		await env.DB.prepare(
+			`INSERT OR IGNORE INTO job_application_events (id, application_id, instance_id, user_id, version, from_status, to_status, actor, actor_instance_id, run_id, reason, created_at)
+			 VALUES (?1, ?2, ?3, ?4, 0, 'apply_requested', ?5, 'system', ?3, NULL, ?6, ?7)`,
+		)
+			.bind(crypto.randomUUID(), app.id, a.instanceId, a.userId, a.status, a.blockReason ?? null, a.now)
+			.run();
+	}
+	return { created, app };
 }
 
 export interface ApplicationSettle {
@@ -282,13 +292,16 @@ export interface ApplicationSettle {
  * written with it) happens exactly once however many syncs observe the same finished run.
  */
 export async function settleApplication(env: DB, instanceId: string, userId: string, id: string, runId: string, s: ApplicationSettle, now: number): Promise<boolean> {
-	const res = await env.DB.prepare(
-		`UPDATE job_applications
-		    SET status = ?1, resume_artifact = ?2, cover_letter_artifact = ?3, profile_version = ?4, generated_at = ?5,
-		        block_reason = ?6, block_questions = ?7, ready_event = ?8, updated_at = ?9
-		  WHERE id = ?10 AND instance_id = ?11 AND user_id = ?12 AND status = 'tailoring' AND tailoring_run_id = ?13`,
-	)
-		.bind(
+	// The move bumps state_version and writes its audit row (#958) in the same batch; the audit row
+	// carrying OUR id is how success is read back — a repeat settle lands nothing.
+	const auditId = crypto.randomUUID();
+	await env.DB.batch([
+		env.DB.prepare(
+			`UPDATE job_applications
+			    SET status = ?1, resume_artifact = ?2, cover_letter_artifact = ?3, profile_version = ?4, generated_at = ?5,
+			        block_reason = ?6, block_questions = ?7, ready_event = ?8, updated_at = ?9, state_version = state_version + 1
+			  WHERE id = ?10 AND instance_id = ?11 AND user_id = ?12 AND status = 'tailoring' AND tailoring_run_id = ?13`,
+		).bind(
 			s.to,
 			s.resumeArtifact ? JSON.stringify(s.resumeArtifact) : null,
 			s.coverLetterArtifact ? JSON.stringify(s.coverLetterArtifact) : null,
@@ -302,9 +315,14 @@ export async function settleApplication(env: DB, instanceId: string, userId: str
 			instanceId,
 			userId,
 			runId,
-		)
-		.run();
-	return (res.meta?.changes ?? 0) > 0;
+		),
+		env.DB.prepare(
+			`INSERT OR IGNORE INTO job_application_events (id, application_id, instance_id, user_id, version, from_status, to_status, actor, actor_instance_id, run_id, reason, created_at)
+			 SELECT ?1, id, instance_id, user_id, state_version, 'tailoring', status, 'runner', instance_id, ?2, block_reason, ?3
+			   FROM job_applications WHERE id = ?4 AND instance_id = ?5 AND user_id = ?6 AND status = ?7 AND tailoring_run_id = ?2`,
+		).bind(auditId, runId, now, id, instanceId, userId, s.to),
+	]);
+	return !!(await env.DB.prepare("SELECT 1 AS ok FROM job_application_events WHERE id = ?1").bind(auditId).first<{ ok: number }>());
 }
 
 export async function markReadyEmitted(env: DB, id: string, now: number): Promise<void> {

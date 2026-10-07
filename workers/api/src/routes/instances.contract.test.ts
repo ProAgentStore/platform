@@ -71,6 +71,7 @@ import { registerIdentityResyncRoutes } from "./instances-identity.js";
 import { registerJobLeadRoutes } from "./instances-job-leads.js";
 import { registerApplicationTailorRoutes } from "./instances-application-tailor.js";
 import { registerApplicationRunnerRoutes } from "./instances-application-runner.js";
+import { registerApplicationsRoutes } from "./instances-applications.js";
 import { instanceRoutes } from "./instances.js";
 
 const SECRET = "instances-contract-secret";
@@ -313,6 +314,10 @@ const ROUTES = [
 	"GET /:instanceId/application-runs/:runId",
 	"POST /:instanceId/application-runs/:runId/resume",
 	"POST /:instanceId/application-runs/:runId/cancel",
+	"GET /:instanceId/application-queue",
+	"GET /:instanceId/application-queue/item",
+	"POST /:instanceId/application-queue/actions",
+	"GET /:instanceId/application-queue/:applicationId/trace",
 	"DELETE /:instanceId/runtime",
 	"GET /:instanceId/tasks",
 	"GET /:instanceId/board",
@@ -403,6 +408,7 @@ const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
 	"instances-job-leads.ts": registerJobLeadRoutes,
 	"instances-application-tailor.ts": registerApplicationTailorRoutes,
 	"instances-application-runner.ts": registerApplicationRunnerRoutes,
+	"instances-applications.ts": registerApplicationsRoutes,
 	"instances-terminal.ts": registerConnectorBindingRoutes,
 	"instances-terminal-history.ts": registerTerminalHistoryRoutes,
 	"instances-translation.ts": registerTranslationRoutes,
@@ -475,6 +481,12 @@ const OWNERSHIP: Record<string, string[]> = {
 		"GET /:instanceId/application-runs/:runId",
 		"POST /:instanceId/application-runs/:runId/resume",
 		"POST /:instanceId/application-runs/:runId/cancel",
+	],
+	"instances-applications.ts": [
+		"GET /:instanceId/application-queue",
+		"GET /:instanceId/application-queue/item",
+		"POST /:instanceId/application-queue/actions",
+		"GET /:instanceId/application-queue/:applicationId/trace",
 	],
 	"instances-browse.ts": ["POST /:instanceId/browse"],
 	"instances-chat.ts": [
@@ -744,6 +756,11 @@ const GATES: Record<string, [number, number]> = {
 	"GET /:instanceId/application-runs/:runId": [401, 404],
 	"POST /:instanceId/application-runs/:runId/resume": [401, 404],
 	"POST /:instanceId/application-runs/:runId/cancel": [401, 404],
+	// Applications control surface (#958): every route opens with the instance-owner check.
+	"GET /:instanceId/application-queue": [401, 404],
+	"GET /:instanceId/application-queue/item": [401, 404],
+	"POST /:instanceId/application-queue/actions": [401, 404],
+	"GET /:instanceId/application-queue/:applicationId/trace": [401, 404],
 	"DELETE /:instanceId/runtime": [401, 404],
 	"GET /:instanceId/tasks": [401, 404],
 	"GET /:instanceId/board": [401, 404],

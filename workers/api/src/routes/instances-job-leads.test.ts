@@ -75,7 +75,9 @@ describe("no other write path emits job.lead.apply_requested (#955)", () => {
 		const naming = walk(root).filter((f) => /JOB_LEAD_APPLY_EVENT|job\.lead\.apply_requested/.test(readFileSync(f, "utf8"))).map((f) => f.slice(root.length + 1)).sort();
 		// The Application Tailor (#956) CONSUMES the event — it is the payload its connection action
 		// receives — so it names it; it never emits it. Each consumer is listed, not pattern-matched.
-		const consumers = ["lib/local-artifact/contract.ts", "lib/local-artifact/tailor.ts", "lib/trigger-config.ts", "lib/triggers.ts", "routes/instances-application-tailor.ts"];
+		// The Applications control surface (#958) names it to FIND the Scout → Tailor connections; its
+		// Apply goes through `runJobLeadTriage` in the triage route, which stays the only emitter below.
+		const consumers = ["lib/applications/control.ts", "lib/local-artifact/contract.ts", "lib/local-artifact/tailor.ts", "lib/trigger-config.ts", "lib/triggers.ts", "routes/instances-application-tailor.ts"];
 		const allowed = ["lib/job-lead-triage.ts", "routes/instances-job-leads.ts", ...consumers];
 		expect(naming.filter((f) => !allowed.includes(f)), "a new place names the apply event — only the triage path may").toEqual([]);
 		expect(naming).toContain("routes/instances-job-leads.ts");

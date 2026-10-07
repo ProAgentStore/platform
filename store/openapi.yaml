@@ -7680,6 +7680,102 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /v1/instances/{instanceId}/application-queue:
+    get:
+      summary: The job-application queue (Applications control surface)
+      description: |
+        The whole queue across the owner's Scout → Tailor → Runner pipeline, found from any member
+        instance through the owner's connections (#958): leads with no application yet (new,
+        apply_requested, skipped, deferred, archived) and applications (tailoring through submitted,
+        blocked, failed). Each item carries its status and compare-and-set version, the actions it
+        allows, artifact handles, the submit-policy preview and pause reasons — never lead contact
+        data, document text or typed values. Also counts per status, today's auto-submit allowance per
+        Runner, and the outbox health of the connections that carry the flow. The same data the
+        `list_applications` MCP tool returns.
+      operationId: getApplicationQueue
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: status, in: query, schema: { type: string, enum: [new, apply_requested, tailoring, materials_ready, filling, awaiting_review, submitted, blocked, deferred, skipped, archived, failed] } }
+        - { name: sort, in: query, schema: { type: string, enum: [updated, title] } }
+      responses:
+        "200": { description: The queue., content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: The instance is not part of an application pipeline. }
+
+  /v1/instances/{instanceId}/application-queue/item:
+    get:
+      summary: One queue item, current
+      operationId: getApplicationQueueItem
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: application_id, in: query, schema: { type: string } }
+        - { name: scout_instance_id, in: query, schema: { type: string } }
+        - { name: record_id, in: query, schema: { type: string } }
+      responses:
+        "200": { description: "`{ item }`.", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/application-queue/actions:
+    post:
+      summary: Perform one typed action on a lead or application
+      description: |
+        apply · skip · defer · archive · generate_materials · retry_tailoring · start_fill ·
+        request_review · retry_fill · cancel · resume. Requires `expected_status` (and accepts
+        `expected_version`) as read: a stale or not-allowed move is refused (409) with nothing
+        written. Lead decisions are the Scout's own triage (#955); application moves are
+        compare-and-set with an audit row (#957). `start_fill` is accepted only when the Runner's
+        submit gate allows an automatic submit for that application; `request_review` always fills
+        and stops for review. Defer and archive change PAGS records only.
+      operationId: performApplicationAction
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action, expected_status]
+              properties:
+                action: { type: string, enum: [apply, skip, defer, archive, generate_materials, retry_tailoring, start_fill, request_review, retry_fill, cancel, resume] }
+                application_id: { type: string }
+                scout_instance_id: { type: string }
+                record_id: { type: string }
+                expected_status: { type: string }
+                expected_version: { type: integer, minimum: 0 }
+                runner_instance_id: { type: string }
+                note: { type: string }
+                defer_until: { type: string }
+                answers: { type: array, items: { type: object, properties: { question: { type: string }, answer: { type: string } } } }
+      responses:
+        "200": { description: "`{ item, result }` — the item as it now stands.", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { description: No runner is connected. }
+
+  /v1/instances/{instanceId}/application-queue/{applicationId}/trace:
+    get:
+      summary: One application's correlated trace
+      description: The Scout's triage of the lead, the outbox deliveries, the Tailor run, the Runner run(s) and every lifecycle move on one timeline, with the ids that correlate them. Classes, decisions and handles only.
+      operationId: getApplicationTrace
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: applicationId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "`{ applicationId, correlation, entries }`.", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   # ── Instance storage: files ───────────────────────────────────────────────
 
   /v1/instances/{instanceId}/files:
@@ -8355,6 +8451,7 @@ paths:
               schema:
                 type: object
                 properties:
+                  runtime: { type: string, nullable: true, description: "What the instance IS (`capabilities.runtime`). A session pinned to it reads this to decide which typed platform tools also belong on it — the Applications tools for a `local_artifact` / `local_apply` instance (#958)." }
                   tools:
                     type: array
                     items:

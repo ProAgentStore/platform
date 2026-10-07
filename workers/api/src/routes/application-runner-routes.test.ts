@@ -181,8 +181,10 @@ describe("end to end: approved lead → materials_ready → filled and awaiting 
 		const done = await call("GET", `/ap/application-runs/${runId}`);
 		expect(done.body.run).toMatchObject({ status: "awaiting_review", engineAuth: "machine-login" });
 		expect(done.body.application).toMatchObject({ status: "awaiting_review", submittedAt: null, submittedUrl: null, submitAttemptedAt: null });
-		expect(done.body.audit.map((a: { from: string; to: string }) => `${a.from}→${a.to}`)).toEqual(["materials_ready→filling", "filling→blocked", "blocked→filling", "filling→awaiting_review"]);
-		expect(done.body.audit.every((a: { actorInstanceId: string; runId: string }) => a.actorInstanceId === "ap" && a.runId === runId)).toBe(true);
+		// From the Tailor's creation of the application (#958) to the Runner's last move, one row per version.
+		expect(done.body.audit.map((a: { from: string; to: string }) => `${a.from}→${a.to}`)).toEqual(["apply_requested→tailoring", "tailoring→materials_ready", "materials_ready→filling", "filling→blocked", "blocked→filling", "filling→awaiting_review"]);
+		expect(done.body.audit.slice(2).every((a: { actorInstanceId: string; runId: string }) => a.actorInstanceId === "ap" && a.runId === runId)).toBe(true);
+		expect(done.body.audit.map((a: { version: number }) => a.version)).toEqual([0, 1, 2, 3, 4, 5]);
 	});
 
 	it("two starts racing on one application: one run, one dispatch", async () => {

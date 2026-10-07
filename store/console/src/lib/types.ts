@@ -707,3 +707,80 @@ export interface AgentLocalBrowserCapabilities {
 	runtime: string | null;
 	localBrowser: LocalBrowserCapabilityView | null;
 }
+
+// ── Applications control surface (#958) — copies of workers/api/src/lib/applications/control.ts ──
+
+export type ApplicationQueueStatus = "new" | "apply_requested" | "tailoring" | "materials_ready" | "filling" | "awaiting_review" | "submitted" | "blocked" | "deferred" | "skipped" | "archived" | "failed";
+export type ApplicationQueueAction = "apply" | "skip" | "defer" | "archive" | "generate_materials" | "retry_tailoring" | "start_fill" | "request_review" | "retry_fill" | "cancel" | "resume";
+
+export interface ApplicationArtifactHandle {
+	kind: "resume" | "cover_letter";
+	path: string;
+	sha256: string;
+	bytes: number;
+}
+
+export interface ApplicationQueueItem {
+	key: string;
+	kind: "lead" | "application";
+	status: ApplicationQueueStatus;
+	title: string;
+	company: string | null;
+	location: string | null;
+	url: string | null;
+	source: string | null;
+	postedDate: string | null;
+	matchRationale: string | null;
+	scoutInstanceId: string | null;
+	leadId: string;
+	leadVersion: number | null;
+	applicationId: string | null;
+	tailorInstanceId: string | null;
+	stateVersion: number | null;
+	blockReason: string | null;
+	questions: string[];
+	artifacts: { resume: ApplicationArtifactHandle | null; coverLetter: ApplicationArtifactHandle | null } | null;
+	profileVersion: string | null;
+	tailoringRunId: string | null;
+	fillRunId: string | null;
+	fillRun: { id: string; status: string; mode: string | null; pause: { reason: string; url?: string; domain?: string; question?: string } | null } | null;
+	submittedAt: string | null;
+	submittedUrl: string | null;
+	submitAttempted: boolean;
+	submitPolicy: { allowed: boolean; failing: string[] } | null;
+	updatedAt: string;
+	actions: ApplicationQueueAction[];
+}
+
+export interface ApplicationQueueView {
+	pipeline: { scouts: string[]; tailors: string[]; runners: string[] };
+	items: ApplicationQueueItem[];
+	counts: Record<ApplicationQueueStatus, number>;
+	limits: Array<{ runnerInstanceId: string; autoSubmitEnabled: boolean; dailyCap: number; usedToday: number; remaining: number }>;
+	connections: Array<{ id: string; eventType: string; sourceInstanceId: string; targetInstanceId: string; action: string; enabled: boolean; pending: number; delivered: number; dead: number }>;
+	notes: string[];
+}
+
+export interface ApplicationActionResponse {
+	item: ApplicationQueueItem;
+	result: Record<string, unknown>;
+}
+
+export interface ApplicationTraceEntry {
+	at: string;
+	source: "lead" | "delivery" | "tailor" | "runner" | "lifecycle";
+	type: string;
+	instanceId: string | null;
+	runId: string | null;
+	detail: Record<string, unknown>;
+}
+
+export interface ApplicationTraceView {
+	applicationId: string;
+	correlation: Record<string, unknown>;
+	entries: ApplicationTraceEntry[];
+}
+
+export interface ConnectionDeliveryList {
+	deliveries: Array<{ id: string; connectionId: string; status: string; eventType: string; lastError: string | null; createdAt: string }>;
+}

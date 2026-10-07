@@ -35,7 +35,7 @@ import {
 	parseLocalApplyEvent,
 	parseLocalApplyResult,
 } from "./contract.js";
-import { RUNNER_SETTINGS_KEY, effectiveRunnerSettings, evaluateSubmitGate, hostOfUrl } from "./policy.js";
+import { type ApplicationRunnerSettings, RUNNER_SETTINGS_KEY, effectiveRunnerSettings, evaluateSubmitGate, hostOfUrl } from "./policy.js";
 import {
 	type ApplicationMove,
 	type ApplyRun,
@@ -79,7 +79,40 @@ async function move(env: Env, uid: string, applicationId: string, from: readonly
  * of the owner's applications, and 503 when no runner is connected — before anything is recorded,
  * so the outbox retries.
  */
-export async function startApplicationFill(env: Env, instanceId: string, uid: string, rawEvent: unknown, source: "connection" | "owner"): Promise<StartFillOutcome> {
+/** The gate's verdict for one application on one Runner — what dispatch uses and what the console previews (#958). */
+export async function submitGateFor(env: Env, runnerInstanceId: string, uid: string, app: JobApplication, s: ApplicationRunnerSettings, now: number) {
+	const lead = (app.lead ?? {}) as { leadUrl?: string; lead?: { title?: string; company?: string; location?: string; match_rationale?: string } };
+	const counts = await applyRunCounts(env, runnerInstanceId, uid, now);
+	const gate = evaluateSubmitGate({
+		settings: s,
+		application: {
+			profileVersion: app.profileVersion,
+			resumeSha: app.resumeArtifact?.sha256 ?? null,
+			coverLetterSha: app.coverLetterArtifact?.sha256 ?? null,
+			blockReason: app.blockReason,
+			submitAttemptedAt: app.submitAttemptedAt,
+			leadUrl: str(lead.leadUrl),
+			lead: lead.lead ?? {},
+		},
+		autoSubmitsToday: counts.autoSubmitsToday,
+		activeRuns: counts.active,
+	});
+	return { ...gate, autoSubmitsToday: counts.autoSubmitsToday, dailyCap: s.autoSubmit.dailyCap };
+}
+
+/** The Runner's effective settings, or why they cannot be used. */
+export async function runnerSettingsFor(env: Env, runnerInstanceId: string, uid: string): Promise<ApplicationRunnerSettings> {
+	const pair = await readInstanceConfigPair(env, runnerInstanceId, uid);
+	const settings = effectiveRunnerSettings((pair?.config as Record<string, unknown> | undefined)?.[RUNNER_SETTINGS_KEY]);
+	if ("error" in settings) throw new HttpError(409, `The Application Runner settings are invalid: ${settings.error}`);
+	return settings.settings;
+}
+
+/**
+ * `review: true` (#958 "Request review") pins the run to fill_and_review whatever the policy says:
+ * the gate is still evaluated and recorded, with `review_requested` as a failing check.
+ */
+export async function startApplicationFill(env: Env, instanceId: string, uid: string, rawEvent: unknown, source: "connection" | "owner", opts: { review?: boolean } = {}): Promise<StartFillOutcome> {
 	const caps = await capabilitiesForInstance(env, instanceId, uid);
 	if (caps?.runtime !== "local_apply") throw new HttpError(409, notRunnerMessage(caps?.runtime));
 	const ev = rawEvent && typeof rawEvent === "object" && !Array.isArray(rawEvent) ? (rawEvent as Record<string, unknown>) : null;
@@ -98,10 +131,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	}
 	if (app.submitAttemptedAt) throw new HttpError(409, "A final submit was already attempted for this application; it will not be filled again automatically.");
 
-	const pair = await readInstanceConfigPair(env, instanceId, uid);
-	const settings = effectiveRunnerSettings((pair?.config as Record<string, unknown> | undefined)?.[RUNNER_SETTINGS_KEY]);
-	if ("error" in settings) throw new HttpError(409, `The Application Runner settings are invalid: ${settings.error}`);
-	const s = settings.settings;
+	const s = await runnerSettingsFor(env, instanceId, uid);
 	const lead = (app.lead ?? {}) as { leadUrl?: string; lead?: { title?: string; company?: string; location?: string; match_rationale?: string } };
 	const leadUrl = str(lead.leadUrl);
 	const jobHost = hostOfUrl(leadUrl);
@@ -110,21 +140,10 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	if (!runtime) throw new HttpError(503, "No runner is connected. Run `pags up` on the machine that holds your job materials; the application will be filled when it connects.");
 
 	const now = Date.now();
-	const counts = await applyRunCounts(env, instanceId, uid, now);
-	const gate = evaluateSubmitGate({
-		settings: s,
-		application: {
-			profileVersion: app.profileVersion,
-			resumeSha: app.resumeArtifact?.sha256 ?? null,
-			coverLetterSha: app.coverLetterArtifact?.sha256 ?? null,
-			blockReason: app.blockReason,
-			submitAttemptedAt: app.submitAttemptedAt,
-			leadUrl,
-			lead: lead.lead ?? {},
-		},
-		autoSubmitsToday: counts.autoSubmitsToday,
-		activeRuns: counts.active,
-	});
+	const verdict = await submitGateFor(env, instanceId, uid, app, s, now);
+	const gate = opts.review
+		? { allowed: false, checks: [...verdict.checks, { check: "review_requested", ok: false, why: "the owner asked to review the filled form before anything is sent" }] }
+		: { allowed: verdict.allowed, checks: verdict.checks };
 	const gateId = gate.allowed ? crypto.randomUUID() : null;
 	const mode = gate.allowed ? "auto_submit" : "fill_and_review";
 	const runId = crypto.randomUUID();
@@ -312,6 +331,21 @@ export async function cancelApplyRun(env: Env, uid: string, run: ApplyRun, now =
 	if (!cancelled) throw new HttpError(409, "The run changed while cancelling — reload it.");
 	await move(env, uid, run.applicationId, ["filling", "blocked"], { actor: "owner", actorInstanceId: run.instanceId, runId: run.id, expectRun: run.id, to: "blocked", reason: "cancelled_by_owner", questions: ["You cancelled this application run."] }, now);
 	return cancelled;
+}
+
+/**
+ * Retry a fill that stopped (#958): blocked or failed after a fill run, and NEVER after any submit
+ * attempt. The application goes back to `materials_ready` (audited), and a fresh run starts under a
+ * per-attempt key, so a repeated click finds the run it started.
+ */
+export async function retryFill(env: Env, runnerInstanceId: string, uid: string, app: JobApplication, opts: { review?: boolean } = {}): Promise<StartFillOutcome> {
+	if (!app.fillRunId || !["blocked", "failed"].includes(app.status)) throw new HttpError(409, `A fill can be retried only after a fill run stopped; this application is ${app.status}${app.fillRunId ? "" : " and has not been filled"}.`);
+	if (app.submitAttemptedAt) throw new HttpError(409, "A final submit was already attempted for this application; it will not be filled again. Check the employer's site.");
+	const ready = app.readyEvent as { eventId?: unknown } | null;
+	if (!ready || typeof ready.eventId !== "string") throw new HttpError(409, "The application has no materials_ready event to fill from.");
+	const moved = await moveApplication(env, app, uid, { to: "materials_ready", actor: "owner", actorInstanceId: runnerInstanceId, reason: "retry_fill" }, Date.now());
+	if (!moved) throw new HttpError(409, "The application changed while retrying — reload it.");
+	return startApplicationFill(env, runnerInstanceId, uid, { eventId: `${ready.eventId}:retry:${app.stateVersion + 1}`, applicationId: app.id, tailorInstanceId: app.instanceId }, "owner", opts);
 }
 
 export async function syncActiveApplyRuns(env: Env, limit = 25): Promise<number> {

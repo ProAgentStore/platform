@@ -48,6 +48,7 @@ export const CONSOLE_SECTIONS: ReadonlyArray<{ id: string; label: string; shown:
 	{ id: "coding", label: "Coding", shown: (c) => c.surfaces.includes("coding"), needs: "the coding surface" },
 	{ id: "tmux", label: "Terminal", shown: (c) => c.surfaces.includes("tmux"), needs: "the tmux surface" },
 	{ id: "research", label: "Research", shown: (c) => c.runtime === "local_browser", needs: 'the "local_browser" runtime' },
+	{ id: "applications", label: "Applications", shown: (c) => c.runtime === "local_artifact" || c.runtime === "local_apply", needs: 'the "local_artifact" or "local_apply" runtime' },
 	{ id: "activity", label: "Activity", shown: () => true },
 	{ id: "stats", label: "Stats", shown: () => true },
 	{ id: "knowledge", label: "Knowledge", shown: () => true },

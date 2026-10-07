@@ -14,6 +14,7 @@ import { registerConnectorAccountTools, registerConnectorGrantTools } from "./co
 import { registerGuideTools } from "./guide.js";
 import { registerConsoleLinkTools } from "./console-link.js";
 import { registerLocalBrowserTools } from "./local-browser.js";
+import { registerApplicationTools } from "./applications.js";
 import { registerInstanceTools } from "./index.js";
 import { registerKnowledgeTools } from "./knowledge.js";
 import { registerMcpConnectionTools } from "./mcp-connections.js";
@@ -430,6 +431,16 @@ const TABLE: Record<string, Row> = {
 	secure_input_request: ["secureInput", "write", null, "envelope", "destination_scope,dry_run,instance_id,label,one_shot,purpose,token"],
 	secure_input_status: ["secureInput", "read", null, null, "instance_id,request_id,token"],
 	get_console_link: ["consoleLink", "read", null, null, "instance_id,run_id,section,secure_input_id,task_id,token"],
+	list_applications: ["applications", "read", null, null, "instance_id,sort,status,token"],
+	get_application: ["applications", "read", null, null, "application_id,instance_id,record_id,scout_instance_id,token"],
+	application_trace: ["applications", "read", null, null, "application_id,instance_id,token"],
+	triage_application: ["applications", "write", null, "envelope", "action,application_id,defer_until,dry_run,expected_status,expected_version,instance_id,note,record_id,scout_instance_id,token"],
+	generate_application_materials: ["applications", "runtime", null, "envelope", "action,application_id,dry_run,expected_status,expected_version,instance_id,record_id,scout_instance_id,token"],
+	start_application_fill: ["applications", "runtime", null, "envelope", "application_id,dry_run,expected_status,expected_version,instance_id,record_id,runner_instance_id,scout_instance_id,token"],
+	request_application_review: ["applications", "runtime", null, "envelope", "application_id,dry_run,expected_status,expected_version,instance_id,record_id,runner_instance_id,scout_instance_id,token"],
+	retry_application: ["applications", "runtime", null, "envelope", "action,application_id,dry_run,expected_status,expected_version,instance_id,record_id,runner_instance_id,scout_instance_id,token"],
+	resume_application: ["applications", "runtime", null, "envelope", "answers,application_id,dry_run,expected_status,expected_version,instance_id,record_id,scout_instance_id,token"],
+	cancel_application: ["applications", "write", null, "envelope", "application_id,dry_run,expected_status,expected_version,instance_id,record_id,scout_instance_id,token"],
 	local_browser_preflight: ["localBrowser", "read", null, null, "instance_id,token"],
 	get_instance_local_browser_settings: ["localBrowser", "read", null, null, "instance_id,token"],
 	set_instance_local_browser_settings: ["localBrowser", "write", null, "envelope", "allow_domains,auth_mode,browser_profile,collection,deny_domains,dry_run,engine,instance_id,limits,token,trace_retention_days,workspace_path"],
@@ -548,6 +559,7 @@ const REGISTRARS: Record<string, (s: unknown, c: InstanceToolsCtx) => void> = {
 	guide: registerGuideTools as any,
 	consoleLink: registerConsoleLinkTools as any,
 	localBrowser: registerLocalBrowserTools as any,
+	applications: registerApplicationTools as any,
 	knowledge: registerKnowledgeTools as any,
 	machineControl: registerMachineControlTools as any,
 	mcpConnections: registerMcpConnectionTools as any,

@@ -12,6 +12,7 @@ import type { McpEnv } from "../http.js";
 import { registerAccountTools } from "./account.js";
 import { registerAgentAuthoringTools } from "./agent-authoring.js";
 import { registerAgentTaskTools } from "./agent-tasks.js";
+import { registerApplicationTools } from "./applications.js";
 import { registerApplyTools } from "./apply.js";
 import { registerBaseTools } from "./base.js";
 import { registerBoardTools } from "./board.js";
@@ -57,6 +58,7 @@ export function registerInstanceTools(
 	registerConsoleLinkTools(server, ctx); // a precise console URL to hand the owner (#938)
 	// Local CLI browser research (#945) — ungated; the API 409s an agent of another runtime.
 	registerLocalBrowserTools(server, ctx);
+	registerApplicationTools(server, ctx);
 	// "What was I working on?" (#787) — ungated for the same reason as the guide: the question
 	// belongs to every agent type, and the run lookup answers for every instance.
 	registerRecentTools(server, ctx);

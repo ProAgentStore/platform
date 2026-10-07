@@ -1036,4 +1036,8 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// 0.1.87 (#957): runtime `local_apply` (update_agent / create_agent) and the
 	// `start_application_fill` trigger + connection action. No tool added. Appended.
 	"0.1.87": "sha256:e1e0fc00ec0a13113521c2bd5c594649a426cc9d7974c4c1510b8e9cf7f6b773",
+	// 0.1.88 (#958): the Applications control surface — list_applications, get_application,
+	// application_trace, triage_application, generate_application_materials, start_application_fill,
+	// request_application_review, retry_application, resume_application, cancel_application. Appended.
+	"0.1.88": "sha256:2fe796a89445fe5d98b0ad479cff7052dd6de694844a7af684518fab16765933",
 };

@@ -34,6 +34,7 @@ import { registerIdentityResyncRoutes } from "./instances-identity.js";
 import { registerJobLeadRoutes } from "./instances-job-leads.js";
 import { registerApplicationTailorRoutes } from "./instances-application-tailor.js";
 import { registerApplicationRunnerRoutes } from "./instances-application-runner.js";
+import { registerApplicationsRoutes } from "./instances-applications.js";
 import { registerFleetRoutes } from "./instances-fleet.js";
 import { instanceCapFor, isEntitled, isPaywallEnforced, requirePro } from "../lib/billing.js";
 import { retireSubscriptionSql } from "../lib/subscription-standing.js";
@@ -1059,6 +1060,7 @@ registerIdentityResyncRoutes(instanceRoutes);
 registerJobLeadRoutes(instanceRoutes); // explicit human job-lead triage → durable connection handoff (#955)
 registerApplicationTailorRoutes(instanceRoutes); // approved lead → local tailored résumé + cover letter → materials_ready (#956)
 registerApplicationRunnerRoutes(instanceRoutes); // materials_ready → local CLI fills the application under a bounded write policy (#957)
+registerApplicationsRoutes(instanceRoutes); // the Applications queue, typed actions and trace across Scout → Tailor → Runner (#958)
 
 /** Remove my registered runtime. */
 instanceRoutes.delete("/:instanceId/runtime", async (c) => {

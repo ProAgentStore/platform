@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { CodingTab } from "@proagentstore/coder-web";
 import ActivityTab from "../tabs/ActivityTab";
+import ApplicationsTab from "../tabs/ApplicationsTab";
 import BehaviourTab from "../tabs/BehaviourTab";
 import BoardTab from "../tabs/BoardTab";
 import DataTab from "../tabs/DataTab";
@@ -36,6 +37,7 @@ export type SurfaceId =
 	| "repo"
 	| "tmux"
 	| "research"
+	| "applications"
 	| "activity"
 	| "stats"
 	| "indexing"
@@ -254,6 +256,16 @@ export const SURFACES: SurfaceDef[] = [
 		show: ({ runtime }) => runtime === "local_browser",
 		scroll: true,
 		render: ({ instanceId, sessionId }) => <ResearchTab instanceId={instanceId} runId={sessionId} />,
+	},
+	{
+		id: "applications",
+		label: "Applications",
+		icon: "📨",
+		// A RUNTIME, like Research (#958): the Application Tailor and Runner hold the queue. The Scout
+		// keeps its Data tab's triage buttons; this tab shows its leads too, joined by connections.
+		show: ({ runtime }) => runtime === "local_artifact" || runtime === "local_apply",
+		scroll: true,
+		render: ({ instanceId }) => <ApplicationsTab instanceId={instanceId} />,
 	},
 	{
 		id: "activity",

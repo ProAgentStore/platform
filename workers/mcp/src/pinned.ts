@@ -3,6 +3,7 @@ import { z } from "zod";
 import { authRequired, authedCall, chatReplyText, jsonText, type McpEnv, text } from "./http.js";
 import { pagedToolResult } from "./wire-budget.js";
 import { auditOk } from "./instance-tools/base.js";
+import { APPLICATION_TOOL_SCOPES, registerApplicationTools } from "./instance-tools/applications.js";
 import type { SafetyResolver, TokenResolver } from "./instance-tools/shared.js";
 import { jsonSchemaToZodShape } from "./json-schema-zod.js";
 import { audit, dryRun, type McpScope, requirePermission } from "./safety.js";
@@ -145,6 +146,11 @@ export interface PinnedSurface {
 	error?: string;
 	/** Names the listing carried that were NOT registered, with the reason — reported in `guide`. */
 	skipped: string[];
+	/**
+	 * Is this instance an Application Tailor or Runner (#958)? Then the session also carries the ten
+	 * typed application tools, bound to it — the queue a pinned connection must be able to work.
+	 */
+	applications?: boolean;
 }
 
 /** The three fixed tools, plus the one that stands in for all of them when the pin is unusable. */
@@ -154,6 +160,9 @@ const FIXED = {
 	messages: "messages",
 	unavailable: "pinned_instance_unavailable",
 } as const;
+
+/** The typed application tools (#958) a Tailor's or Runner's pinned session also carries. */
+const APPLICATION_TOOL_NAMES: readonly string[] = Object.keys(APPLICATION_TOOL_SCOPES);
 
 /** MCP names are ≤64 chars of `[A-Za-z0-9_-]`; the policy names are snake_case already. */
 const TOOL_NAME = /^[a-z0-9_]{1,64}$/;
@@ -165,11 +174,13 @@ export async function loadPinnedSurface(env: McpEnv, token: string | null, insta
 		token,
 		{},
 		env,
-	)) as { tools?: PinnedToolRow[]; error?: string };
+	)) as { tools?: PinnedToolRow[]; runtime?: string | null; error?: string };
 	if (data.error || !Array.isArray(data.tools)) {
 		return { instanceId, rows: [], skipped: [], error: data.error || "tool listing unavailable" };
 	}
-	return { instanceId, ...selectInvocableRows(data.tools, new Set<string>(Object.values(FIXED)), "on this instance") };
+	const applications = data.runtime === "local_artifact" || data.runtime === "local_apply";
+	const reserved = new Set<string>([...Object.values(FIXED), ...(applications ? APPLICATION_TOOL_NAMES : [])]);
+	return { instanceId, ...selectInvocableRows(data.tools, reserved, "on this instance"), ...(applications ? { applications } : {}) };
 }
 
 /**
@@ -208,6 +219,8 @@ export function pinnedRiskFor(surface: PinnedSurface): (name: string) => McpScop
 	return (name) => {
 		if (name === FIXED.chat) return "runtime";
 		if (name === FIXED.guide || name === FIXED.messages || name === FIXED.unavailable) return "read";
+		// The application tools are the platform-wide ones, bound: their scope is the one their handlers demand.
+		if (surface.applications && name in APPLICATION_TOOL_SCOPES) return APPLICATION_TOOL_SCOPES[name as keyof typeof APPLICATION_TOOL_SCOPES];
 		return byName.get(name);
 	};
 }
@@ -314,6 +327,9 @@ export function registerPinnedTools(server: McpServer, ctx: PinnedCtx, surface: 
 
 	// ── The instance's own tools, under their real names ──
 	registerToolRows(server, ctx, surface.rows, { instance: id });
+
+	// ── An Application Tailor or Runner: the typed application tools, bound to this instance (#958) ──
+	if (surface.applications) registerApplicationTools(server, ctx, { pinnedInstanceId: id });
 
 	// ── The fixed three: the conversation itself ──
 	const chat = {

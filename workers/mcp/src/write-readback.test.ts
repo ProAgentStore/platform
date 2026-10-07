@@ -88,6 +88,10 @@ const CONTROL_ARGS: ReadonlySet<string> = new Set([
 	"document_id",
 	"file_id",
 	"record_id",
+	// #958: which application / which Scout's lead / which Runner an application action addresses.
+	"application_id",
+	"scout_instance_id",
+	"runner_instance_id",
 	"session_id",
 	"connection_id",
 	"grant_id",
@@ -212,6 +216,15 @@ const READBACK: Record<string, string | null> = {
 	"update_instance_record.data": "query_instance_records",
 	// #955: triage fields are stored on the Job Search Scout record. The action is
 	// represented as `triage_action` in the record, while defer/note retain their names.
+	// #958: the decision is read back as the item's status and the lifecycle audit; the note is the
+	// audit row's reason (application) or the lead's triage_note; defer_until is stored on the lead.
+	"triage_application.action": "application_trace",
+	"triage_application.note": "application_trace",
+	"triage_application.defer_until": "query_instance_records",
+	"generate_application_materials.action": "application_trace",
+	"retry_application.action": "application_trace",
+	// The owner's answers go to the runner for that run only; PAGS stores none of them (by design).
+	"resume_application.answers": null,
 	"triage_job_lead.action": "query_instance_records",
 	"triage_job_lead.defer_until": "query_instance_records",
 	"triage_job_lead.note": "query_instance_records",

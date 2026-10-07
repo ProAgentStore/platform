@@ -12,17 +12,25 @@ type DB = Pick<Env, "DB">;
 // ── The application lifecycle ────────────────────────────────────────────────────────────────
 
 /**
- * Where an application may go once its materials are ready. `blocked` may also end in
- * `awaiting_review` / `submitted`: a run's own result can arrive after a pause PAGS mirrored and
- * before it saw the resume, and a confirmed submit is recorded whatever PAGS last thought.
+ * The application lifecycle, as data (#957, #958). `tailoring`'s exits are taken by the Tailor's
+ * own settle (`local-artifact/store.ts`); every other move goes through {@link moveApplication}.
+ *
+ *  - `blocked` may also end in `awaiting_review` / `submitted`: a run's own result can arrive after
+ *    a pause PAGS mirrored and before it saw the resume, and a confirmed submit is recorded whatever
+ *    PAGS last thought.
+ *  - Retry (#958): a stopped TAILORING goes back to `tailoring`; a stopped FILL goes back to
+ *    `materials_ready` and is started again. Which one applies is decided by the caller from
+ *    `fill_run_id`, and neither is allowed after any submit attempt.
  */
 export const APPLICATION_TRANSITIONS: Readonly<Partial<Record<ApplicationStatus, readonly ApplicationStatus[]>>> = {
+	tailoring: ["materials_ready", "blocked", "failed", "cancelled"],
 	materials_ready: ["filling", "deferred", "archived"],
 	filling: ["awaiting_review", "submitted", "blocked", "failed"],
-	blocked: ["filling", "awaiting_review", "submitted", "failed", "deferred", "archived"],
+	blocked: ["tailoring", "materials_ready", "filling", "awaiting_review", "submitted", "failed", "deferred", "archived"],
 	awaiting_review: ["deferred", "archived"],
 	deferred: ["materials_ready", "archived"],
-	failed: ["archived"],
+	failed: ["tailoring", "materials_ready", "archived"],
+	cancelled: ["tailoring", "archived"],
 };
 
 export function canMoveApplication(from: ApplicationStatus, to: ApplicationStatus): boolean {

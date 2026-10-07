@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**260 tool registrations.** 234 are always registered; 26 are gated to the console
+**270 tool registrations.** 244 are always registered; 26 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -319,6 +319,16 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `set_instance_instructions` | Replace them (max 4000 chars) | write | yes | |
 | `get_instance_connection_guide` | The pasteable per-instance connection guide: id, agent type, repos, exposed tools with exact field names, worked `call_instance_tool` example | read | | |
 | `get_console_link` | A console URL for an instance, one of its loop runs, a task, a secret request or a tab — `url` for chat, `path` for a push; refuses a tab the instance does not show | read | | |
+| `list_applications` | The job-application queue across the owner's Scout → Tailor → Runner pipeline: every state, each item's compare-and-set version, artifact handles, submit-policy verdict, pause reason and allowed actions; counts, auto-submit allowance, connection health (#958) | read | | |
+| `get_application` | One application, or one lead with no application yet, as it stands now | read | | |
+| `application_trace` | One application's correlated timeline: lead triage, deliveries, Tailor run, Runner run(s), lifecycle moves — handles and decisions only | read | | |
+| `triage_application` | apply / skip / defer / archive a lead or application, compare-and-set; defer and archive touch PAGS records only | write | yes | |
+| `generate_application_materials` | Tailor materials for an apply_requested lead, or retry tailoring that stopped | runtime | yes | |
+| `start_application_fill` | Fill under the Runner's policy, which may submit once — accepted only when the item's submit policy allows it | runtime | yes | |
+| `request_application_review` | Fill and stop before the final submit, whatever the policy allows | runtime | yes | |
+| `retry_application` | Retry a stopped fill (never after a submit attempt) or tailoring | runtime | yes | |
+| `resume_application` | Release a paused fill, optionally with answers used for that run only | runtime | yes | |
+| `cancel_application` | Stop a running tailoring or fill; nothing external is touched | write | yes | |
 | `local_browser_preflight` | Is a local CLI browser research agent ready to run: settings vs the agent's limits, runner connected, runner supports it, signed-in-profile consent — with the step that fixes each | read | | |
 | `get_instance_local_browser_settings` | A local browser research agent's chosen settings, the effective run policy, the agent's ceilings and the runner pin; no credentials | read | | |
 | `set_instance_local_browser_settings` | Patch engine, sign-in mode, workspace, browser profile, sites, limits, retention and result collection; refuses anything outside the agent's ceiling | write | yes | |

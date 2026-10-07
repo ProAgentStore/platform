@@ -163,6 +163,9 @@ toolRoutes.get("/:id/tools", async (c) => {
 			allowedOnly: c.req.query("allowed") === "true",
 			schemas: c.req.query("schemas") === "true",
 		}),
+		// What the instance IS (#958): a session pinned to it decides from this which typed
+		// platform tools also belong on it (the application tools, for a Tailor or Runner).
+		runtime: (await capabilitiesForInstance(c.env, instance.id, session.uid).catch(() => null))?.runtime ?? null,
 	});
 });
 

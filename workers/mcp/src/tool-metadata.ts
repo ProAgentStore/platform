@@ -214,6 +214,19 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	list_runner_nodes: "read",
 	runner_resource_history: "read",
 	triage_job_lead: "write",
+	// #958: the Applications control surface. Reads are the queue, one item and its trace; triage
+	// (a decision on PAGS records, plus the lead's handoff) and cancel (stops a run, deletes nothing)
+	// are writes; the five that start or continue a run on the owner's machine are runtime.
+	list_applications: "read",
+	get_application: "read",
+	application_trace: "read",
+	triage_application: "write",
+	cancel_application: "write",
+	generate_application_materials: "runtime",
+	start_application_fill: "runtime",
+	request_application_review: "runtime",
+	retry_application: "runtime",
+	resume_application: "runtime",
 	runner_node_forget_preflight: "read",
 	list_supervision: "read",
 	list_stats_sources: "read",
@@ -593,14 +606,16 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// application request, while skip/defer/archive only change the lead lifecycle.
 	// +1 read at #961: `fleet_snapshot` — every tagged instance's derived status in one call; every
 	// query in it is `user_id`-scoped and its GitHub reads are the ones github_list_issues makes.
-	read: 123,
+	// +3 read at #958: `list_applications`, `get_application`, `application_trace` — the owner's
+	// application queue, one item and its correlated trace; handles and verdicts, never content.
+	read: 126,
 	// +2 write at #825: `pause_instance` / `resume_instance`. `write` rather than `destructive` —
 	// nothing is deleted and nothing is unsubscribed, and classing the OFF switch as destructive
 	// would put RESUME behind a scope the caller may not hold, which is the wrong failure mode for
 	// a safety toggle (the reasoning `set_instance_connector_consent` already records). Not `read`
 	// either: switching an agent off is a real change.
 	// +1 write at #906: `secure_input_request`, agent creates a secure input request for a secret.
-	write: 76, // +1 at #961: set_instance_tags (a label the owner writes; [] clears it); +1 at #955: triage_job_lead; +2 at #946: set_local_browser_consent (a decision, withdrawable) and review_local_browser_finding (saves one reviewed finding to the owner's own collection); +1 at #944: cancel_local_browser_run (stops a run; deletes nothing); +1 at #945: set_instance_local_browser_settings (edits config, starts nothing); +1 at #757: promote_board_item
+	write: 78, // +2 at #958: triage_application (a decision on PAGS records; Apply emits the lead's handoff once) and cancel_application (stops a run, deletes nothing); +1 at #961: set_instance_tags (a label the owner writes; [] clears it); +1 at #955: triage_job_lead; +2 at #946: set_local_browser_consent (a decision, withdrawable) and review_local_browser_finding (saves one reviewed finding to the owner's own collection); +1 at #944: cancel_local_browser_run (stops a run; deletes nothing); +1 at #945: set_instance_local_browser_settings (edits config, starts nothing); +1 at #757: promote_board_item
 	// +1 runtime at #806: `continue_instance_run`. `runtime` rather than `write` for the reason
 	// `start_instance_loop` is — it starts an autonomous run that spends on its own — and the
 	// two must agree, because a caller holding the scope to start one holding a narrower one to
@@ -616,7 +631,9 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// -1 runtime at #942: `coding_overseer`, retired with the legacy Coder's cross-repo Overseer route.
 	// +2 runtime at #944: `start_local_browser_run` / `resume_local_browser_run` — a CLI researching in a
 	// browser on the owner's machine; runtime for the reason `coding_loop_start` is.
-	runtime: 30,
+	// +5 runtime at #958: generate_application_materials, start_application_fill, request_application_review,
+	// retry_application, resume_application — each starts or continues a run on the owner's machine.
+	runtime: 35,
 	// +1 read, +8 destructive at #613 (agent-template authoring, write half): builder planning
 	// only computes a proposal; the other eight can delete, overwrite, run a billable template
 	// turn, create an enduring version, or create/scaffold a template. They all require the

@@ -13,6 +13,7 @@
  * workflow), not `runtime: coding`: its own runtime, `local_artifact`, its own task and tables.
  */
 import { HttpError } from "../auth.js";
+import { moveApplication } from "../local-apply/store.js";
 import { capabilitiesForInstance } from "../agent-capabilities.js";
 import { deliverEvent } from "../connections.js";
 import { readInstanceConfigPair } from "../instance-config.js";
@@ -31,6 +32,7 @@ import {
 	parseLocalArtifactResult,
 } from "./contract.js";
 import {
+	type ApplicationTailorSettings,
 	type JobApplication,
 	TAILOR_SETTINGS_KEY,
 	type TailorRun,
@@ -129,16 +131,37 @@ export async function startTailoring(env: Env, instanceId: string, uid: string, 
 
 	const claim = await claimApplication(env, { ...base, lead, status: "tailoring" });
 	if (!claim.created) return { kind: "existing", application: claim.app, run: claim.app.tailoringRunId ? await getTailorRun(env, instanceId, uid, claim.app.tailoringRunId) : null };
+	const run = await dispatchTailoring(env, instanceId, uid, claim.app.id, lead, settings.settings, key, source, runtime, now);
+	return { kind: "started", application: (await getApplication(env, instanceId, uid, claim.app.id)) as JobApplication, run };
+}
 
-	const s = settings.settings;
+type LiveRuntime = NonNullable<Awaited<ReturnType<typeof getLiveRuntime>>>;
+
+/**
+ * Record a tailoring run for an application already in `tailoring`, and hand it to the runner.
+ * `requestId` is the run's idempotency key on the runner — the lead event id for the first run,
+ * a per-attempt key for a retry (#958).
+ */
+async function dispatchTailoring(
+	env: Env,
+	instanceId: string,
+	uid: string,
+	applicationId: string,
+	lead: LocalArtifactLead,
+	s: ApplicationTailorSettings,
+	requestId: string,
+	source: string,
+	runtime: LiveRuntime,
+	now: number,
+): Promise<TailorRun> {
 	const policy: TailorRunPolicy = { engine: s.engine, authMode: s.authMode, workspace: s.workspace, sources: sourcesOf(s), retainDays: s.retainDays, maxMinutes: s.maxMinutes };
 	const runId = crypto.randomUUID();
 	await createTailorRun(env, {
 		id: runId,
 		instanceId,
 		userId: uid,
-		applicationId: claim.app.id,
-		requestId: key,
+		applicationId,
+		requestId,
 		policy,
 		trace: [{ type: "run.requested", at: iso(now), detail: { engine: s.engine, authMode: s.authMode, status: source } }],
 		now,
@@ -147,7 +170,7 @@ export async function startTailoring(env: Env, instanceId: string, uid: string, 
 	const envelope: LocalArtifactTaskEnvelope = {
 		type: LOCAL_ARTIFACT_TASK_TYPE,
 		runId,
-		requestId: key,
+		requestId,
 		instanceId,
 		engine: s.engine,
 		authMode: s.authMode,
@@ -158,7 +181,7 @@ export async function startTailoring(env: Env, instanceId: string, uid: string, 
 	};
 	const fail = async (errorCode: string, error: string) => {
 		run = (await updateTailorRun(env, run, { to: "failed", errorCode, error, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: errorCode } }] }, now)) ?? run;
-		await settleApplication(env, instanceId, uid, claim.app.id, runId, { to: "blocked", blockReason: errorCode, blockQuestions: [error] }, now);
+		await settleApplication(env, instanceId, uid, applicationId, runId, { to: "blocked", blockReason: errorCode, blockQuestions: [error] }, now);
 	};
 	let res: Response | null = null;
 	try {
@@ -172,7 +195,29 @@ export async function startTailoring(env: Env, instanceId: string, uid: string, 
 		else if (!res.ok) await fail("runner_rejected", `The runner refused the run: ${typeof payload.error === "string" ? payload.error.slice(0, 500) : `HTTP ${res.status}`}`);
 		else run = (await updateTailorRun(env, run, { to: "running", runnerNode: runtime.runner_node || null, events: [{ type: "runner.dispatched", at: iso(now), detail: { status: "running" } }] }, now)) ?? run;
 	}
-	return { kind: "started", application: (await getApplication(env, instanceId, uid, claim.app.id)) as JobApplication, run };
+	return run;
+}
+
+/**
+ * Retry tailoring for an application whose tailoring ended without materials (#958) — blocked,
+ * failed or cancelled, never filled, never submitted. Compare-and-set back into `tailoring` (with an
+ * audit row), then a fresh run under a per-attempt key, so a repeated click finds the same run.
+ */
+export async function retryTailoring(env: Env, instanceId: string, uid: string, app: JobApplication, now = Date.now()): Promise<{ application: JobApplication; run: TailorRun }> {
+	if (!["blocked", "failed", "cancelled"].includes(app.status) || app.fillRunId || app.submitAttemptedAt) {
+		throw new HttpError(409, `Tailoring can be retried only for an application that stopped while tailoring; this one is ${app.status}${app.fillRunId ? " and has been filled" : ""}.`);
+	}
+	const parsed = parseLocalArtifactLead(app.lead);
+	if ("error" in parsed) throw new HttpError(409, `The application's lead cannot be read (${parsed.error}); re-approve it from the Scout.`);
+	const pair = await readInstanceConfigPair(env, instanceId, uid);
+	const settings = effectiveTailorSettings((pair?.config as Record<string, unknown> | undefined)?.[TAILOR_SETTINGS_KEY]);
+	if ("error" in settings) throw new HttpError(409, `The Application Tailor settings are invalid: ${settings.error}. Fix them, then retry.`);
+	const runtime = await getLiveRuntime(env, instanceId, uid);
+	if (!runtime) throw new HttpError(503, "No runner is connected. Run `pags up` on the machine that holds your job materials, then retry.");
+	const moved = await moveApplication(env, app, uid, { to: "tailoring", actor: "owner", actorInstanceId: instanceId, reason: "retry_tailoring" }, now);
+	if (!moved) throw new HttpError(409, "The application changed while retrying — reload it.");
+	const run = await dispatchTailoring(env, instanceId, uid, app.id, parsed.lead, settings.settings, `${app.idempotencyKey}:retry:${app.stateVersion + 1}`, "retry", runtime, now);
+	return { application: (await getApplication(env, instanceId, uid, app.id)) as JobApplication, run };
 }
 
 /** End a run's application when its result arrives — exactly once, by compare-and-set. */
