@@ -1025,4 +1025,7 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// and `set_instance_tags` (write). 258 registrations become 260, `MCP_TOOL_ALWAYS_ON` 232 → 234,
 	// gated stays 26. Appended, never edited in place: 0.1.82 is published.
 	"0.1.83": "sha256:40cad1d50ff90b1317699437a357a9e95542b60dcc0706b6b9377c7e8b0706a3",
+	// 0.1.84 (#962): `create_instance_trigger` and `preview_instance_trigger` accept action
+	// `run_local_browser` and `config.objective`. No tool added. Appended: 0.1.83 is published.
+	"0.1.84": "sha256:67b01d0594e608395de78429b352d2ccde26134db81f0a0dfebddc680508982c",
 };

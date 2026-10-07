@@ -1,7 +1,5 @@
 import { boundedJson, clipMarked } from "./clip-marked.js";
 import { HttpError } from "./auth.js";
-import { capabilitiesForInstance } from "./agent-capabilities.js";
-import { runnerSkipMessage } from "./trigger-capability.js";
 import { activeInstanceSql } from "./trigger-eligibility.js";
 import { requireConnectorGrant, type ConnectorProvider } from "./connector-grants.js";
 import { isValidTimeZone } from "./cron-time.js";
@@ -25,7 +23,6 @@ import {
 	mintDriveAccessToken,
 	type DriveFile,
 } from "./drive.js";
-import { deepLinkFor } from "./console-links.js";
 import { logEvent } from "./events.js";
 import { enqueueDelivery } from "./connection-deliveries.js";
 import { startPipelineRun } from "./pipeline-run-start.js";
@@ -38,7 +35,8 @@ import {
 	type WorkDriveFile,
 } from "./workdrive.js";
 import { startBrowserTask } from "../routes/instances-browse.js";
-import { notifyUser } from "../routes/push.js";
+import { runLocalBrowserTrigger } from "./local-browser/trigger.js";
+import { notifyTriggerSkip } from "./trigger-skip.js";
 import type { Env } from "../types.js";
 
 /** The trigger vocabulary moved to `./trigger-types.js` — a leaf, so a module that only
@@ -121,6 +119,7 @@ export function parseConfig(value: string | null | undefined): TriggerConfig {
 			collection: typeof parsed.collection === "string" ? parsed.collection.slice(0, 200) : undefined,
 			url: typeof parsed.url === "string" ? parsed.url.slice(0, 2000) : undefined,
 			dryRun: parsed.dryRun === true ? true : undefined,
+			objective: typeof parsed.objective === "string" ? parsed.objective.slice(0, 4000) : undefined,
 			jitterMinutes: typeof parsed.jitterMinutes === "number" ? Math.max(0, Math.min(Math.trunc(parsed.jitterMinutes), 720)) : undefined,
 			// #18: an unknown zone must NOT quietly become UTC on a schedule the user believes is
 			// local — the write path rejects it, and anything that got in before is dropped here
@@ -276,6 +275,11 @@ export async function executeTriggerAction(
 		}));
 		if (!res.ok) throw new Error(`record insert failed (${res.status})`);
 		resultPayload = { collection };
+	} else if (target.action === "run_local_browser") {
+		// #962: a scheduled local CLI browser research run, through the owner's own start path.
+		const objective = (mapped.objective || stringValue(payloadRecord(payload).objective) || config.objective || "").trim();
+		if (!objective) throw new Error("run_local_browser requires config.objective (what to research)");
+		resultPayload = await runLocalBrowserTrigger(env, target, objective);
 	} else if (target.action === "run_browse") {
 		// #172: schedule a generic browser task — fire the BROWSER_TASK workflow at the
 		// configured start URL. Runner-offline (503) or a run already active (409) aren't
@@ -291,26 +295,7 @@ export async function executeTriggerAction(
 			if (status !== 503 && status !== 409) throw e;
 			const offline = status === 503;
 			resultPayload = { skipped: true, reason: offline ? "runner offline" : "a run is already in progress", url };
-			// #358: the offline text used to name `pags up` unconditionally. For an agent whose
-			// capabilities declare no runtime that is a false remedy — `pags up` skips it — so the
-			// message is derived from what the agent actually declares.
-			const caps = offline ? await capabilitiesForInstance(env, target.instance_id, target.user_id).catch(() => null) : null;
-			await notifyUser(
-				env,
-				target.user_id,
-				"trigger",
-				"⏭️ Scheduled run skipped",
-				offline
-					? runnerSkipMessage(target.name, caps)
-					: `${target.name}: a run is already in progress; skipping this one.`,
-				deepLinkFor({ kind: "triggers", instanceId: target.instance_id }),
-				// Keyed on (trigger, condition), so a five-minute cron whose runner stayed offline
-				// all afternoon says so once per window instead of once per tick. That IS the
-				// event: "your machine is not ready" has not changed between ticks.
-				// A synthetic target (a manual run) carries no id — fall back to the instance so the
-				// key is still about a THING and never collapses two different agents together.
-				{ key: `trigger-skip:${target.id ?? target.instance_id}:${offline ? "offline" : "busy"}`, instanceId: target.instance_id },
-			).catch(() => undefined);
+			await notifyTriggerSkip(env, target, offline ? "offline" : "busy");
 		}
 	}
 	return resultPayload;
@@ -507,6 +492,7 @@ function successMessage(action: TriggerAction, payload: unknown): string {
 	}
 	if (action === "run_pipeline") return `started pipeline "${stringValue(result.pipeline) || "?"}" (run ${stringValue(result.runId).slice(0, 8)})`;
 	if (action === "insert_record") return `inserted a record into "${stringValue(result.collection) || "?"}"`;
+	if (action === "run_local_browser") return result.skipped ? `research run skipped — ${stringValue(result.reason) || "runner offline / busy"}` : `started research run ${stringValue(result.runId).slice(0, 8)}`;
 	if (action === "run_browse") return result.skipped ? `browser run skipped — ${stringValue(result.reason) || "runner offline / busy"}` : `started browser run (task ${stringValue(result.taskId).slice(0, 8)})`;
 	if (action === "log_event" && stringValue(result.message)) return stringValue(result.message).slice(0, 300);
 	return `${action} dispatched`;

@@ -6,6 +6,7 @@ import { applyJitter, nextRunAt, normalizeSchedule, previewRuns } from "./cron-s
 import { startPipelineRun } from "./pipeline-run-start.js";
 import { startBrowserTask } from "../routes/instances-browse.js";
 import { notifyUser } from "../routes/push.js";
+import { runLocalBrowserTrigger } from "./local-browser/trigger.js";
 import type { Env } from "../types.js";
 
 // #92: dispatchTrigger's run_pipeline branch calls startPipelineRun (which loads the pipeline
@@ -15,6 +16,8 @@ vi.mock("./pipeline-run-start.js", () => ({ startPipelineRun: vi.fn() }));
 // on a skip, notifyUser. Stub both to unit-test the wiring without the real browser stack.
 vi.mock("../routes/instances-browse.js", () => ({ startBrowserTask: vi.fn() }));
 vi.mock("../routes/push.js", () => ({ notifyUser: vi.fn(async () => undefined) }));
+// #962: the run_local_browser branch hands the objective to runLocalBrowserTrigger (tested on its own).
+vi.mock("./local-browser/trigger.js", () => ({ runLocalBrowserTrigger: vi.fn(async () => ({ runId: "run-9", status: "running" })) }));
 
 const TEST_KEK = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
 
@@ -270,6 +273,20 @@ describe("trigger actions: run_pipeline + insert_record (#92)", () => {
 
 	const pipelineTrigger = (config: Record<string, unknown>): TriggerRow => ({ ...trigger(config), action: "run_pipeline" });
 	const recordTrigger = (config: Record<string, unknown>): TriggerRow => ({ ...trigger(config), action: "insert_record" });
+
+	it("run_local_browser hands the objective to the local browser start — mapping, then payload, then config (#962)", async () => {
+		const { env } = baseEnv();
+		const research = (config: Record<string, unknown>): TriggerRow => ({ ...trigger(config), action: "run_local_browser" });
+		const run = runLocalBrowserTrigger as unknown as Mock;
+		run.mockClear();
+		await dispatchTrigger(env, research({ objective: "Senior roles on SEEK" }), "cron", {});
+		expect(run.mock.calls[0][2]).toBe("Senior roles on SEEK");
+		await dispatchTrigger(env, research({ objective: "fallback" }), "webhook", { objective: "From the payload" });
+		expect(run.mock.calls[1][2]).toBe("From the payload");
+		await dispatchTrigger(env, research({ objective: "fallback", mapping: { objective: "brief.text" } }), "webhook", { brief: { text: "Mapped brief" } });
+		expect(run.mock.calls[2][2]).toBe("Mapped brief");
+		await expect(dispatchTrigger(env, research({}), "cron", {})).rejects.toThrow(/requires config\.objective/);
+	});
 
 	it("run_pipeline kicks startPipelineRun with the configured pipeline + 'trigger' source", async () => {
 		const { env } = baseEnv();

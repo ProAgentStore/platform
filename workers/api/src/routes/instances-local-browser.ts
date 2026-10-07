@@ -1,8 +1,7 @@
 import type { Context, Hono } from "hono";
-import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { logError } from "../lib/error-log.js";
-import { LOCAL_BROWSER_CANCEL_PATH, LOCAL_BROWSER_RUN_PATH, LOCAL_BROWSER_TASK_TYPE, type LocalBrowserTaskEnvelope } from "../lib/local-browser/contract.js";
+import { LOCAL_BROWSER_CANCEL_PATH, LOCAL_BROWSER_TASK_TYPE } from "../lib/local-browser/contract.js";
 import { applyRunnerResult, ingestRunnerEvents, resumeLocalBrowserRun, syncLocalBrowserRun } from "../lib/local-browser/sync.js";
 import { type FindingAction, reviewFinding } from "../lib/local-browser/findings.js";
 import {
@@ -10,8 +9,6 @@ import {
 	type LocalBrowserRun,
 	PROFILE_CONSENT_DOMAIN,
 	appendLocalBrowserEvents,
-	claimLocalBrowserRun,
-	consentIdsOf,
 	getLocalBrowserRun,
 	listDomainConsent,
 	listLocalBrowserEvents,
@@ -23,6 +20,7 @@ import {
 } from "../lib/local-browser/store.js";
 import { type LocalBrowserCapability, effectiveLocalBrowserPolicy, isTerminal, mergeLocalBrowserSettings, normalizeDomain } from "../lib/local-browser/policy.js";
 import { callRuntime, getLiveRuntime, requireOwnedInstance, runtimeJson } from "./instances-runtime.js";
+import { LOCAL_BROWSER_OBJECTIVE_MAX, localBrowserCapability, startLocalBrowserRun } from "../lib/local-browser/start.js";
 import type { Env } from "../types.js";
 
 /**
@@ -48,11 +46,9 @@ async function owned(c: C): Promise<{ uid: string; instanceId: string }> {
 
 /** The agent's local browser capability, or a 409 saying this is not that kind of agent. */
 async function capabilityOf(c: C, instanceId: string, uid: string): Promise<LocalBrowserCapability> {
-	const caps = await capabilitiesForInstance(c.env, instanceId, uid);
-	if (caps?.runtime !== "local_browser" || !caps.localBrowser) {
-		throw new HttpError(409, `This agent does not use local CLI browser research (its capabilities.runtime is ${caps?.runtime ? `"${caps.runtime}"` : "null"}). The creator declares capabilities.runtime "local_browser" to enable it.`);
-	}
-	return caps.localBrowser;
+	const capability = await localBrowserCapability(c.env, instanceId, uid);
+	if ("error" in capability) throw new HttpError(409, capability.error);
+	return capability.cap;
 }
 
 async function runOr404(c: C, instanceId: string, uid: string): Promise<LocalBrowserRun> {
@@ -167,23 +163,15 @@ export function registerLocalBrowserRoutes(router: Hono<{ Bindings: Env }>): voi
 	 */
 	router.post("/:instanceId/local-browser/runs", async (c) => {
 		const { uid, instanceId } = await owned(c);
-		const cap = await capabilityOf(c, instanceId, uid);
 		const b = await body(c);
 		const objective = typeof b.objective === "string" ? b.objective.trim() : "";
-		if (!objective || objective.length > 4000) throw new HttpError(400, "objective is required (up to 4000 characters)");
+		if (!objective || objective.length > LOCAL_BROWSER_OBJECTIVE_MAX) throw new HttpError(400, `objective is required (up to ${LOCAL_BROWSER_OBJECTIVE_MAX} characters)`);
 		const requestId = b.requestId === undefined ? crypto.randomUUID() : typeof b.requestId === "string" && REQUEST_ID_RE.test(b.requestId) ? b.requestId : null;
 		if (!requestId) throw new HttpError(400, "requestId must be 1-100 characters of letters, digits, _ . : or -");
-		const { settings } = await readLocalBrowserSettings(c.env, instanceId, uid);
-		const policy = effectiveLocalBrowserPolicy(cap, settings);
-		if ("error" in policy) throw new HttpError(409, policy.error);
-
-		const now = Date.now();
-		const claim = await claimLocalBrowserRun(c.env, { id: crypto.randomUUID(), instanceId, userId: uid, requestId, objective, policy, now });
-		if (claim.kind === "existing") return c.json(claim.run, 200);
-		if (claim.kind === "at_capacity") throw new HttpError(409, `${claim.active} local browser run(s) already active and this instance allows ${policy.limits.maxConcurrent} at a time. Wait for one to finish, or cancel it.`);
-		const run = claim.run;
-		await appendLocalBrowserEvents(c.env, instanceId, uid, run.id, [{ type: "run.requested", at: new Date(now).toISOString(), detail: { engine: policy.engine, authMode: policy.authMode, browserProfile: policy.browserProfile, maxMinutes: policy.limits.maxMinutes, maxPages: policy.limits.maxPages } }], now);
-		return c.json(await dispatch(c, instanceId, uid, run), 202);
+		// The one start path (#962) — the run_local_browser trigger calls it too.
+		const out = await startLocalBrowserRun(c.env, instanceId, uid, { objective, requestId, source: "owner" });
+		if (out.kind === "refused" || out.kind === "at_capacity") throw new HttpError(409, out.error);
+		return c.json(out.run, out.kind === "existing" ? 200 : 202);
 	});
 
 	/** Reading a run brings it up to date from the runner first. */
@@ -260,57 +248,4 @@ export function registerLocalBrowserRoutes(router: Hono<{ Bindings: Env }>): voi
 		const run = await runOr404(c, instanceId, uid);
 		return c.json(await applyRunnerResult(c.env, instanceId, uid, run, await body(c), Date.now()));
 	});
-}
-
-/** Hand a queued run to the live runner, or end it with the reason it could not be handed over. */
-async function dispatch(c: C, instanceId: string, uid: string, run: LocalBrowserRun): Promise<LocalBrowserRun> {
-	const now = Date.now();
-	const fail = async (errorCode: string, error: string) => {
-		const failed = await transitionLocalBrowserRun(c.env, instanceId, uid, run.id, { to: "failed", errorCode, error }, now);
-		await appendLocalBrowserEvents(c.env, instanceId, uid, run.id, [{ type: "run.ended", at: new Date(now).toISOString(), detail: { status: "failed", errorCode } }], now);
-		return failed ?? run;
-	};
-	const runtime = await getLiveRuntime(c.env, instanceId, uid);
-	if (!runtime) return fail("runner_offline", "No runner is connected. Run `pags up` on the machine that should do the research, then start the run again.");
-
-	const consent = await listDomainConsent(c.env, instanceId, uid, now);
-	const navigate = consent.filter((x) => x.scope === "navigate");
-	const p = run.policy;
-	const envelope: LocalBrowserTaskEnvelope = {
-		type: LOCAL_BROWSER_TASK_TYPE,
-		runId: run.id,
-		requestId: run.requestId,
-		instanceId,
-		objective: run.objective,
-		engine: p.engine,
-		authMode: p.authMode,
-		workspace: p.workspace,
-		browserProfile: p.browserProfile,
-		policy: {
-			mode: p.mode,
-			allowDomains: p.allowDomains,
-			// An owner's "deny" on a domain is as binding as the configured deny list.
-			denyDomains: [...new Set([...p.denyDomains, ...navigate.filter((x) => x.decision === "deny").map((x) => x.domain)])],
-			consentedDomains: navigate.filter((x) => x.decision === "allow").map((x) => x.domain),
-			profileConsented: consent.some((x) => x.scope === "signed_in_profile" && x.decision === "allow"),
-			consentIds: consentIdsOf(consent),
-		},
-		limits: p.limits,
-		resultSchema: p.resultSchema,
-	};
-	let res: Response;
-	try {
-		res = await callRuntime(c.env, runtime, LOCAL_BROWSER_RUN_PATH, { method: "POST", body: JSON.stringify(envelope) });
-	} catch (err) {
-		return fail("runner_unreachable", `The runner did not answer: ${err instanceof Error ? err.message.slice(0, 300) : "unknown error"}`);
-	}
-	const payload = (await runtimeJson(res)) as Record<string, unknown>;
-	// The relay's own answers: 503 no socket at dispatch, 504 the socket went away mid-command.
-	if (res.status === 503 || res.status === 504) return fail("runner_unreachable", "The runner disconnected before it took the run. Check `pags up` on that machine, then start the run again.");
-	if (res.status === 404) return fail("runner_unsupported", "The connected runner does not support local browser research yet. Update the CLI (npm i -g @proagentstore/cli) and run `pags up` again.");
-	if (!res.ok) return fail("runner_rejected", `The runner refused the run: ${typeof payload.error === "string" ? payload.error.slice(0, 500) : `HTTP ${res.status}`}`);
-	const taskId = typeof payload.taskId === "string" ? payload.taskId : typeof payload.id === "string" ? payload.id : null;
-	const started = await transitionLocalBrowserRun(c.env, instanceId, uid, run.id, { to: "running", runnerNode: runtime.runner_node || null, runnerTaskId: taskId }, now);
-	await appendLocalBrowserEvents(c.env, instanceId, uid, run.id, [{ type: "runner.dispatched", at: new Date(now).toISOString(), detail: { runnerNode: runtime.runner_node || null, taskId } }], now);
-	return started ?? ((await getLocalBrowserRun(c.env, instanceId, uid, run.id)) as LocalBrowserRun);
 }

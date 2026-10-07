@@ -17,7 +17,7 @@
 import type { ConnectorProvider } from "./connector-grants.js";
 
 export type TriggerType = "webhook" | "cron";
-export type TriggerAction = "create_task" | "add_knowledge" | "log_event" | "sync_connector" | "run_pipeline" | "insert_record" | "run_browse";
+export type TriggerAction = "create_task" | "add_knowledge" | "log_event" | "sync_connector" | "run_pipeline" | "insert_record" | "run_browse" | "run_local_browser";
 export type TriggerEventType = TriggerType | "manual";
 
 /**
@@ -61,6 +61,7 @@ export const TRIGGER_ACTIONS: readonly TriggerAction[] = [
 	"run_pipeline",
 	"insert_record",
 	"run_browse",
+	"run_local_browser",
 	"log_event",
 ];
 
@@ -112,6 +113,8 @@ export interface TriggerConfig {
 	/** run_browse: the start URL for the scheduled browser task (#172), + optional dry-run. */
 	url?: string;
 	dryRun?: boolean;
+	/** run_local_browser (#962): what the scheduled research run should find — the run's objective. */
+	objective?: string;
 	/** cron: randomise the fire time by ± this many minutes so runs don't land exactly on
 	 *  the dot (an automation fingerprint). 0/absent = fire on schedule. */
 	jitterMinutes?: number;

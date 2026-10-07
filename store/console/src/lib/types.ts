@@ -42,6 +42,7 @@ export type TriggerAction =
 	| "run_pipeline"
 	| "insert_record"
 	| "run_browse"
+	| "run_local_browser"
 	| "log_event";
 
 export interface CustomSurface {

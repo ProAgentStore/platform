@@ -32,6 +32,7 @@ const ACTION_LABELS: Record<TriggerAction, string> = {
 	run_pipeline: "Run pipeline",
 	insert_record: "Insert record",
 	run_browse: "Run browser task",
+	run_local_browser: "Run browser research",
 };
 
 /**
@@ -46,20 +47,24 @@ const ACTION_LABELS: Record<TriggerAction, string> = {
  * so a second workflow-backed action is one entry here and needs no edit in the console.
  */
 interface ActionRequirement {
-	/** The `capabilities.workflow` value the executor requires. */
-	workflow: NonNullable<AgentCapabilities["workflow"]>;
+	/** The `capabilities.workflow` value the executor requires — or, for a runtime-backed action, */
+	workflow?: NonNullable<AgentCapabilities["workflow"]>;
+	/** the `capabilities.runtime` it requires (#962: `startLocalBrowserRun` checks the runtime). */
+	runtime?: NonNullable<AgentCapabilities["runtime"]>;
 	/** What the action does, phrased for a refusal sentence. */
 	does: string;
 }
 
 const REQUIREMENTS: Partial<Record<TriggerAction, ActionRequirement>> = {
 	run_browse: { workflow: "BROWSER_TASK", does: "drive a browser" },
+	run_local_browser: { runtime: "local_browser", does: "run local browser research" },
 };
 
 /** The capability an action needs, as one short phrase — null when it needs nothing declared. */
 export function triggerActionRequirement(action: TriggerAction): string | null {
 	const req = REQUIREMENTS[action];
-	return req ? `capabilities.workflow = "${req.workflow}"` : null;
+	if (!req) return null;
+	return req.runtime ? `capabilities.runtime = "${req.runtime}"` : `capabilities.workflow = "${req.workflow}"`;
 }
 
 /**
@@ -75,8 +80,9 @@ export function triggerActionRequirement(action: TriggerAction): string | null {
 export function triggerActionDenial(action: TriggerAction, capabilities: AgentCapabilities | null | undefined): string | null {
 	const req = REQUIREMENTS[action];
 	if (!req || !capabilities) return null;
-	if (capabilities.workflow === req.workflow) return null;
-	const declared = capabilities.workflow ? `"${capabilities.workflow}"` : "no workflow at all";
+	const field = req.runtime ? "runtime" : "workflow";
+	if (req.runtime ? capabilities.runtime === req.runtime : capabilities.workflow === req.workflow) return null;
+	const declared = capabilities[field] ? `${field} "${capabilities[field]}"` : `no ${field} at all`;
 	// The cloud-only half is said HERE rather than left for the user to discover at 3am, because
 	// the reflex for a runtime-shaped failure on this platform is `pags up` — and for an agent
 	// with no runtime that command is a false remedy (#321, #259). Same vocabulary as

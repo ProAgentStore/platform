@@ -207,6 +207,7 @@ describe("trigger config vocabulary (#645)", () => {
 		collection: "leads",
 		url: "https://example.test/start",
 		dryRun: true,
+		objective: "New senior roles in Sydney",
 		jitterMinutes: 7,
 		timezone: "Australia/Sydney",
 		mapping: { title: "lead.name" },
@@ -216,10 +217,10 @@ describe("trigger config vocabulary (#645)", () => {
 
 	it("covers every declared key, so a new one cannot be added without a sample", () => {
 		expect(Object.keys(SAMPLE).sort()).toEqual([...TRIGGER_CONFIG_KEYS].sort());
-		expect(TRIGGER_CONFIG_KEYS.length).toBe(21);
+		expect(TRIGGER_CONFIG_KEYS.length).toBe(22);
 	});
 
-	it("parseConfig keeps a value for all 21 keys — a whitelist that drops one is silent", () => {
+	it("parseConfig keeps a value for all 22 keys — a whitelist that drops one is silent", () => {
 		const parsed = parseConfig(JSON.stringify(SAMPLE)) as Record<string, unknown>;
 		const dropped = TRIGGER_CONFIG_KEYS.filter((key) => parsed[key] === undefined);
 		expect(dropped).toEqual([]);
@@ -236,3 +237,23 @@ describe("trigger config vocabulary (#645)", () => {
 		}
 	});
 });
+
+describe("run_local_browser config (#962)", () => {
+	it("a cron needs an objective; a webhook may supply it in the payload", () => {
+		expect(validateTriggerConfig("run_local_browser", "cron", {}).join(" ")).toContain("needs an objective");
+		expect(validateTriggerConfig("run_local_browser", "cron", { objective: "Senior roles on SEEK and Indeed", jitterMinutes: 30 })).toEqual([]);
+		expect(validateTriggerConfig("run_local_browser", "webhook", {})).toEqual([]);
+		expect(validateTriggerConfig("run_local_browser", "webhook", { mapping: { objective: "brief.text" } })).toEqual([]);
+	});
+
+	it("refuses an objective that is not text or is too long, and a key it does not read", () => {
+		expect(validateTriggerConfig("run_local_browser", "cron", { objective: 5 }).join(" ")).toContain("up to 4000 characters");
+		expect(validateTriggerConfig("run_local_browser", "cron", { objective: "x".repeat(4001) }).join(" ")).toContain("up to 4000 characters");
+		expect(validateTriggerConfig("run_local_browser", "cron", { objective: "x", url: "https://seek.com" }).join(" ")).toContain("not used by the run_local_browser action");
+	});
+
+	it("parseConfig keeps the objective", () => {
+		expect(parseConfig(JSON.stringify({ objective: "find roles" })).objective).toBe("find roles");
+	});
+});
+

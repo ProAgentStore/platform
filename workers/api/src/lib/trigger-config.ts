@@ -56,6 +56,7 @@ export const TRIGGER_CONFIG_KEYS = [
 	"collection",
 	"url",
 	"dryRun",
+	"objective",
 	"jitterMinutes",
 	"timezone",
 	"mapping",
@@ -84,6 +85,7 @@ const ACTION_KEYS: Record<TriggerAction, readonly string[]> = {
 	run_pipeline: ["pipeline", "params"],
 	insert_record: ["collection"],
 	run_browse: ["url", "dryRun"],
+	run_local_browser: ["objective", "mapping"],
 };
 
 /** Config that belongs to the SCHEDULE rather than the action, so it is cron-only. */
@@ -101,6 +103,8 @@ export const MAPPING_TARGETS: Record<TriggerAction, readonly string[]> = {
 	run_pipeline: [],
 	insert_record: [],
 	run_browse: [],
+	// A webhook can say what to research (#962); a cron says it in config.objective.
+	run_local_browser: ["objective"],
 };
 
 export const MAX_MAPPING_ENTRIES = 12;
@@ -243,6 +247,7 @@ export function validateTriggerConfig(action: TriggerAction, type: TriggerType, 
 	if (raw.recursive !== undefined && typeof raw.recursive !== "boolean") problems.push("recursive must be true or false.");
 	if (raw.versioned !== undefined && typeof raw.versioned !== "boolean") problems.push("versioned must be true or false.");
 	if (raw.mapping !== undefined) problems.push(...validateMapping(raw.mapping, action));
+	if (raw.objective !== undefined && (typeof raw.objective !== "string" || raw.objective.length > 4000)) problems.push("objective must be text of up to 4000 characters.");
 
 	if (type === "cron") {
 		if (action === "sync_connector") {
@@ -252,6 +257,7 @@ export function validateTriggerConfig(action: TriggerAction, type: TriggerType, 
 		if (action === "run_pipeline" && !strValue(raw.pipeline)) problems.push("A scheduled pipeline run needs the pipeline name.");
 		if (action === "insert_record" && !strValue(raw.collection)) problems.push("A scheduled record insert needs the target collection.");
 		if (action === "run_browse" && !/^https?:\/\//i.test(strValue(raw.url))) problems.push("A scheduled browser run needs a start URL beginning with http:// or https://.");
+		if (action === "run_local_browser" && !strValue(raw.objective)) problems.push("A scheduled research run needs an objective — what it should find.");
 	}
 	return problems;
 }

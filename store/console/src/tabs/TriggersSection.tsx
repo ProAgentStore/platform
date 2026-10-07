@@ -117,6 +117,7 @@ const MAPPABLE: Partial<Record<TriggerActionType, Array<{ id: string; label: str
 		{ id: "sourceUrl", label: "Source URL", hint: "doc.link" },
 	],
 	log_event: [{ id: "message", label: "Logged message", hint: "event.summary" }],
+	run_local_browser: [{ id: "objective", label: "Research objective", hint: "brief.text" }],
 };
 
 const inputClass = "text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full";
@@ -143,6 +144,7 @@ export default function TriggersSection({
 	const [pipeline, setPipeline] = useState("");
 	const [collection, setCollection] = useState("");
 	const [browseUrl, setBrowseUrl] = useState("");
+	const [objective, setObjective] = useState("");
 	const [mapping, setMapping] = useState<Record<string, string>>({});
 	const [showMapping, setShowMapping] = useState(false);
 	const [preview, setPreview] = useState<PreviewResp | null>(null);
@@ -192,6 +194,7 @@ export default function TriggersSection({
 		if (action === "run_pipeline" && pipeline.trim()) config.pipeline = pipeline.trim();
 		if (action === "insert_record" && collection.trim()) config.collection = collection.trim();
 		if (action === "run_browse" && browseUrl.trim()) config.url = browseUrl.trim();
+		if (action === "run_local_browser" && objective.trim()) config.objective = objective.trim();
 		if (mappableFields) {
 			const entries = Object.entries(mapping).filter(([field, path]) => path.trim() && mappableFields.some((f) => f.id === field));
 			if (entries.length) config.mapping = Object.fromEntries(entries.map(([f, p]) => [f, p.trim()]));
@@ -205,7 +208,7 @@ export default function TriggersSection({
 			if ("schedule" in built && scheduleUsesWallClock(built.schedule) && timezone) config.timezone = timezone;
 		}
 		return config;
-	}, [action, provider, grantId, grants, pipeline, collection, browseUrl, mapping, mappableFields, type, jitter, schedule, timezone]);
+	}, [action, provider, grantId, grants, pipeline, collection, browseUrl, objective, mapping, mappableFields, type, jitter, schedule, timezone]);
 
 	const built = useMemo(() => buildSchedule(schedule), [schedule]);
 	const localError = type === "cron" && "error" in built ? built.error : "";
@@ -238,6 +241,7 @@ export default function TriggersSection({
 			: action === "run_pipeline" ? `Run ${pipeline.trim() || "pipeline"}`
 				: action === "insert_record" ? `Insert into ${collection.trim() || "collection"}`
 					: action === "run_browse" ? "Scheduled browser run"
+					: action === "run_local_browser" ? "Scheduled research run"
 						: type === "webhook" ? "Inbound webhook" : "Scheduled run";
 
 	const createTrigger = async () => {
@@ -506,6 +510,14 @@ export default function TriggersSection({
 					<span className="text-xs font-semibold">Start URL</span>
 					<input value={browseUrl} onChange={(e) => setBrowseUrl(e.target.value)} placeholder="https://www.facebook.com/friends/requests" className={inputClass} />
 					<span className="text-2xs text-muted">On schedule, drives the browser (via <code>pags up</code>) toward this agent's objective from this URL. Runner must be online at run time, or the run is skipped.</span>
+				</label>
+			)}
+
+			{action === "run_local_browser" && (
+				<label className="flex flex-col gap-1 mb-3">
+					<span className="text-xs font-semibold">Research objective</span>
+					<textarea value={objective} onChange={(e) => setObjective(e.target.value)} maxLength={4000} rows={3} placeholder="New senior frontend roles in Sydney posted this week" className={inputClass} />
+					<span className="text-2xs text-muted">On schedule, starts a research run with this objective, under the same limits and site rules as a run you start yourself. If the runner is offline or a run is already going, that run is skipped.</span>
 				</label>
 			)}
 

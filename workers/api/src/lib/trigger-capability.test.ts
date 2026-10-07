@@ -45,7 +45,7 @@ describe("triggerActionDenial — the wiring-time gate (#358)", () => {
 	// Being an instance IS the requirement for these — they dispatch into the instance's own DO.
 	it("allows every action that needs no declared capability", () => {
 		for (const action of TRIGGER_ACTIONS) {
-			if (action === "run_browse") continue;
+			if (action === "run_browse" || action === "run_local_browser") continue;
 			expect(triggerActionDenial(action, caps({}))).toBeNull();
 			expect(triggerActionRequirement(action)).toBeNull();
 		}
@@ -71,11 +71,13 @@ describe("triggerActionOffers — what the console picker renders", () => {
 		expect(browse?.available).toBe(false);
 		expect(browse?.reason).toContain("BROWSER_TASK");
 		expect(browse?.requires).toContain("BROWSER_TASK");
-		expect(offers.filter((o) => !o.available)).toHaveLength(1);
+		// …and local browser research, which needs runtime "local_browser" (#962).
+		expect(offers.filter((o) => !o.available).map((o) => o.action).sort()).toEqual(["run_browse", "run_local_browser"]);
 	});
 
-	it("marks everything available on a browser-task agent", () => {
-		expect(triggerActionOffers(caps({ workflow: "BROWSER_TASK", runtime: "browser" })).every((o) => o.available)).toBe(true);
+	it("marks everything but local browser research available on a browser-task agent", () => {
+		const offers = triggerActionOffers(caps({ workflow: "BROWSER_TASK", runtime: "browser" }));
+		expect(offers.filter((o) => !o.available).map((o) => o.action)).toEqual(["run_local_browser"]);
 	});
 
 	it("carries a label for every action, so the console needs no list of its own", () => {
@@ -101,3 +103,27 @@ describe("runnerSkipMessage — the skip notification (#358, cf. #321/#259)", ()
 		expect(runnerSkipMessage("Nightly watch", null)).toContain("pags up");
 	});
 });
+
+// #962: a scheduled local browser research run needs the agent's RUNTIME, not a workflow — the
+// fact `startLocalBrowserRun` itself checks, so the picker and the executor read the same thing.
+describe("run_local_browser is gated on capabilities.runtime \"local_browser\" (#962)", () => {
+	it("is allowed on a local_browser agent (Job Search Scout's shape) and refused elsewhere, naming the runtime", () => {
+		expect(triggerActionDenial("run_local_browser", caps({ runtime: "local_browser" }))).toBeNull();
+		const coding = triggerActionDenial("run_local_browser", caps({ runtime: "coding", workflow: "CODING_SESSION" }));
+		expect(coding).toContain('capabilities.runtime = "local_browser"');
+		expect(coding).toContain('runtime "coding"');
+		expect(triggerActionRequirement("run_local_browser")).toBe('capabilities.runtime = "local_browser"');
+	});
+
+	it("tells a cloud-only agent that `pags up` cannot help", () => {
+		expect(triggerActionDenial("run_local_browser", caps({}))).toContain("no runtime at all");
+		expect(triggerActionDenial("run_local_browser", caps({}))).toContain("cannot make this work");
+	});
+
+	it("a local_browser agent can run local research but not the BROWSER_TASK workflow", () => {
+		const offers = triggerActionOffers(caps({ runtime: "local_browser" }));
+		expect(offers.find((o) => o.action === "run_local_browser")?.available).toBe(true);
+		expect(offers.find((o) => o.action === "run_browse")?.available).toBe(false);
+	});
+});
+
