@@ -25,7 +25,8 @@ export function registerJobLeadRoutes(router: Hono<{ Bindings: Env }>): void {
 			new Request(`https://agent/job-leads/${encodeURIComponent(c.req.param("recordId"))}/triage`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(body),
+				// The source instance is the authenticated route's, never the caller's to choose (#955).
+				body: JSON.stringify({ ...(body && typeof body === "object" ? body : {}), source_instance_id: instanceId }),
 			}),
 		);
 		const result = (await doResponse.json()) as TriageResponse;

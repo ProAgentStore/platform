@@ -160,10 +160,10 @@ describe("job lead triage route", () => {
 				},
 			}),
 			"lead-1",
-			post({ action: "apply" }),
+			post({ action: "apply", source_instance_id: "scout-1" }),
 		);
 		expect(res.status).toBe(200);
-		expect(patch).toMatchObject({ status: "apply_requested", apply_handoff: { eventType: "job.lead.apply_requested" } });
+		expect(patch).toMatchObject({ status: "apply_requested", apply_handoff: { eventType: "job.lead.apply_requested", sourceInstanceId: "scout-1" } });
 		expect((await res.json()) as Record<string, unknown>).toMatchObject({ transitioned: true, event: { eventType: "job.lead.apply_requested" } });
 	});
 
@@ -180,12 +180,51 @@ describe("job lead triage route", () => {
 					},
 				}),
 				"lead-1",
-				post({ action }),
+				post({ action, source_instance_id: "scout-1" }),
 			);
 			expect(res.status).toBe(200);
 			expect(patch?.apply_handoff).toBeUndefined();
 			expect((await res.json()) as Record<string, unknown>).toMatchObject({ event: null });
 		}
+	});
+});
+
+describe("job lead triage — compare-and-set and the instance it speaks for (#955)", () => {
+	const engineFor = (data: Record<string, unknown>) => {
+		const record = { id: "lead-1", collection: "job_leads", data, createdAt: "x", updatedAt: "x" };
+		const writes: Record<string, unknown>[] = [];
+		const engine = fakeEngine<"recordGet" | "recordUpdate">({
+			recordGet: async () => ({ ...record, data: writes.reduce((d, w) => ({ ...d, ...w }), record.data) }),
+			recordUpdate: async (_c: string, _id: string, patch: Record<string, unknown>) => {
+				writes.push(patch);
+				return { ...record, data: writes.reduce((d, w) => ({ ...d, ...w }), record.data) };
+			},
+		});
+		return { engine, writes };
+	};
+
+	it("answers a stale action 409 with stale:true, writing nothing", async () => {
+		const { engine, writes } = engineFor({ status: "deferred", lifecycle_version: 3 });
+		const res = await routes.triageJobLead(engine, "lead-1", post({ action: "skip", expected_status: "new", source_instance_id: "scout-1" }));
+		expect(res.status).toBe(409);
+		expect(await res.json()).toMatchObject({ stale: true });
+		expect(writes).toEqual([]);
+	});
+
+	it("two Apply clicks, serialised by the DO: one transition, one event identity", async () => {
+		const { engine, writes } = engineFor({ title: "Role" });
+		const click = () => routes.triageJobLead(engine, "lead-1", post({ action: "apply", expected_status: "new", expected_version: 0, source_instance_id: "scout-1" }));
+		const a = (await (await click()).json()) as { transitioned: boolean; event: { eventId: string } };
+		const b = (await (await click()).json()) as { transitioned: boolean; event: { eventId: string } };
+		expect([a.transitioned, b.transitioned]).toEqual([true, false]);
+		expect(b.event.eventId).toBe(a.event.eventId);
+		expect(writes).toHaveLength(1);
+	});
+
+	it("refuses a request that does not name its source instance, and a malformed version", async () => {
+		const { engine } = engineFor({});
+		expect((await routes.triageJobLead(engine, "lead-1", post({ action: "apply" }))).status).toBe(400);
+		expect((await routes.triageJobLead(engine, "lead-1", post({ action: "apply", source_instance_id: "s", expected_version: -1 }))).status).toBe(400);
 	});
 });
 

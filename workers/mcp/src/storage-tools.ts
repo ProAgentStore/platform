@@ -269,7 +269,7 @@ export function registerStorageTools(
 	// durable job.lead.apply_requested handoff; arbitrary table edits must remain inert.
 	server.tool(
 		"triage_job_lead",
-		"Record an explicit human decision for one Job Search Scout lead. apply writes a durable job.lead.apply_requested handoff to configured downstream agents; skip, defer, and archive never emit it. Repeating apply is safe: the same stable handoff is deduplicated by the connection outbox.",
+		"Record an explicit human decision for one Job Search Scout lead. apply writes a durable job.lead.apply_requested handoff to configured downstream agents; skip, defer, and archive never emit it. Repeating apply is safe: the same stable handoff is deduplicated by the connection outbox. Pass the lead's status and lifecycle_version as you read them (expected_status, expected_version): a lead that has changed since is refused as stale (409, stale:true) instead of being decided on a state nobody looked at.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Job Search Scout instance ID from my_instances."),
@@ -277,9 +277,11 @@ export function registerStorageTools(
 			action: z.enum(["apply", "skip", "defer", "archive"]).describe("Your explicit triage decision. Only apply starts the downstream handoff."),
 			defer_until: z.string().optional().describe("Optional ISO date/time or reminder text when action is defer."),
 			note: z.string().optional().describe("Optional reason for this triage decision, stored on the lead."),
+			expected_status: z.string().optional().describe("The lead's status as you read it (compare-and-set)."),
+			expected_version: z.coerce.number().int().min(0).optional().describe("The lead's lifecycle_version as you read it (compare-and-set; 0 for a lead never triaged)."),
 			dry_run: z.boolean().optional(),
 		},
-		async ({ token, instance_id, record_id, action, defer_until, note, dry_run }) => {
+		async ({ token, instance_id, record_id, action, defer_until, note, expected_status, expected_version, dry_run }) => {
 			const t = tokenFor(token);
 			if (!t) return authRequired();
 			const input = { instance_id, record_id, action };
@@ -298,7 +300,7 @@ export function registerStorageTools(
 			}
 			const result = (await authedCall(endpoint, t, {
 				method: "POST",
-				body: JSON.stringify({ action, ...(defer_until ? { defer_until } : {}), ...(note ? { note } : {}) }),
+				body: JSON.stringify({ action, ...(defer_until ? { defer_until } : {}), ...(note ? { note } : {}), ...(expected_status !== undefined ? { expected_status } : {}), ...(expected_version !== undefined ? { expected_version } : {}) }),
 			}, env)) as { error?: string };
 			if (!result.error) await audit(safetyFor(token), { tool: "triage_job_lead", action: "completed", input });
 			return jsonText(result);

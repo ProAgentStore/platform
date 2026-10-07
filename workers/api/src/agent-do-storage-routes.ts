@@ -136,18 +136,26 @@ export async function triageJobLead(
 	id: string,
 	request: Request,
 ): Promise<Response> {
-	const body = await request.json<{ action?: unknown; defer_until?: unknown; note?: unknown }>();
+	const body = await request.json<{ action?: unknown; defer_until?: unknown; note?: unknown; expected_status?: unknown; expected_version?: unknown; source_instance_id?: unknown }>();
 	if (typeof body.action !== "string" || !JOB_LEAD_TRIAGE_ACTIONS.includes(body.action as JobLeadTriageAction)) {
 		return json({ error: `action must be one of ${JOB_LEAD_TRIAGE_ACTIONS.join(", ")}` }, 400);
 	}
+	if (body.expected_version !== undefined && !(typeof body.expected_version === "number" && Number.isInteger(body.expected_version) && body.expected_version >= 0)) {
+		return json({ error: "expected_version must be the lead's lifecycle_version — a whole number from 0" }, 400);
+	}
+	// The instance this DO serves, named by the authenticated route (#955) — the event's source.
+	if (typeof body.source_instance_id !== "string" || !body.source_instance_id) return json({ error: "source_instance_id required" }, 400);
 	const record = await engine.recordGet(JOB_LEAD_COLLECTION, decodeURIComponent(id));
 	if (!record) return json({ error: "Not found" }, 404);
 	const plan = planJobLeadTriage(record, {
 		action: body.action as JobLeadTriageAction,
 		deferUntil: typeof body.defer_until === "string" ? body.defer_until : undefined,
 		note: typeof body.note === "string" ? body.note : undefined,
+		expectedStatus: typeof body.expected_status === "string" ? body.expected_status : undefined,
+		expectedVersion: typeof body.expected_version === "number" ? body.expected_version : undefined,
+		sourceInstanceId: body.source_instance_id,
 	});
-	if (!plan.ok) return json({ error: plan.error }, 409);
+	if (!plan.ok) return json({ error: plan.error, ...(plan.stale ? { stale: true } : {}) }, 409);
 	const updated = plan.patch
 		? await engine.recordUpdate(JOB_LEAD_COLLECTION, record.id, plan.patch)
 		: record;

@@ -4,6 +4,7 @@ import Button from "../components/Button";
 import PipelineRunDetails from "../components/PipelineRunDetails";
 import { statusBadgeClass } from "../lib/statusBadge";
 import { runHasErrors, type Run } from "../lib/pipelineRuns";
+import { canTriage, JOB_LEAD_ACTIONS, JOB_LEAD_PIPELINE, type JobLeadAction, jobLeadStatus } from "../lib/jobLeads";
 import type { DataRecord, JobLeadTriageResponse, RecordQueryResponse } from "../lib/types";
 
 // Spreadsheet + board view over an agent's structured collections:
@@ -26,9 +27,6 @@ const PIPELINE = ["new", "contacted", "won", "dead"];
 // not written through the generic record-update path: Apply is what emits the
 // durable downstream handoff, while the other choices are terminal or deferred.
 const JOB_LEAD_COLLECTION = "job_leads";
-const JOB_LEAD_PIPELINE = ["found", "deferred", "apply_requested", "skipped", "archived"];
-const JOB_LEAD_ACTIONS = ["apply", "skip", "defer", "archive"] as const;
-type JobLeadAction = (typeof JOB_LEAD_ACTIONS)[number];
 const FILTERABLE = new Set(["status", "country", "state", "city", "suburb", "website_status"]);
 const DATETIME = new Set(["found_at", "checked_at", "created_at", "createdAt", "updatedAt"]);
 const PAGE_SIZES = [25, 50, 100] as const;
@@ -252,7 +250,16 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 		try {
 			const result = await api<JobLeadTriageResponse>(
 				`/v1/instances/${instanceId}/job-leads/${encodeURIComponent(rec.id)}/triage`,
-				{ method: "POST", body: JSON.stringify({ action, ...(deferUntil ? { defer_until: deferUntil } : {}) }) },
+				{
+					method: "POST",
+					// Compare-and-set (#955): the decision is about the lead as shown; a lead that has moved since is refused, not overwritten.
+					body: JSON.stringify({
+						action,
+						...(deferUntil ? { defer_until: deferUntil } : {}),
+						...(typeof rec.data.status === "string" ? { expected_status: rec.data.status } : {}),
+						...(typeof rec.data.lifecycle_version === "number" ? { expected_version: rec.data.lifecycle_version } : {}),
+					}),
+				},
 			);
 			if (result.error) throw new Error(result.error);
 			if (result.record) {
@@ -317,12 +324,12 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 	);
 
 	const JobLeadActions = ({ rec }: { rec: Rec }) => {
-		const status = String(rec.data.status ?? "found");
+		const status = jobLeadStatus(rec.data);
 		const busy = triaging === rec.id;
 		return (
 			<div className="flex flex-wrap gap-1 mt-1" aria-label={`Triage actions for ${String(rec.data.title ?? rec.data.name ?? rec.id)}`}>
 				{JOB_LEAD_ACTIONS.map((action) => {
-					const disabled = busy || (action === "apply" && status === "apply_requested") || (action !== "apply" && (status === "apply_requested" || status === "archived"));
+					const disabled = busy || !canTriage(status, action);
 					return (
 						<Button key={action} size="sm" onClick={() => triageJobLead(rec, action)} disabled={disabled}>
 							{busy ? "Saving…" : action === "apply" ? "Apply" : action === "skip" ? "Skip" : action === "defer" ? "Defer" : "Archive"}
@@ -531,7 +538,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 			) : view === "board" && hasStatus ? (
 				<div className="flex gap-3 overflow-auto pb-2">
 					{statusPipeline.map((st) => {
-						const cards = rows.filter((r) => String(r.data.status ?? "new") === st);
+						const cards = rows.filter((r) => (isJobLeads ? jobLeadStatus(r.data) : String(r.data.status ?? "new")) === st);
 						return (
 							<div key={st} className="min-w-56 flex-1">
 								<div className="mb-2 flex items-center gap-2">
@@ -592,7 +599,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 									</td>
 									{columns.map((c) => (
 										<td key={c} className="px-2 py-1 whitespace-nowrap align-top">
-											{c === "status" ? (isJobLeads ? <div><Badge value={String(r.data.status ?? "found")} /><JobLeadActions rec={r} /></div> : <StatusSelect rec={r} />) : cell(c, recordValue(r, c))}
+											{c === "status" ? (isJobLeads ? <div><Badge value={jobLeadStatus(r.data)} /><JobLeadActions rec={r} /></div> : <StatusSelect rec={r} />) : cell(c, recordValue(r, c))}
 										</td>
 									))}
 								</tr>

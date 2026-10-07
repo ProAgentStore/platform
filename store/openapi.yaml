@@ -7292,6 +7292,15 @@ paths:
         delivers its stable `job.lead.apply_requested` event through configured downstream
         connections. Repeating `apply` replays that same idempotent handoff. `skip`, `defer`, and
         `archive` change only the lead lifecycle and emit no downstream event.
+
+        Lifecycle (#955): `new → apply_requested | skipped | deferred | archived`,
+        `deferred → apply_requested | skipped | archived`, `skipped → apply_requested | archived`,
+        `apply_requested → tailoring | blocked | archived`. Each transition bumps
+        `lifecycle_version` and appends to `lifecycle`. The event is `{eventId, sourceInstanceId,
+        leadId, leadUrl, lifecycleVersion, requestedAt, lead: {title, company, location, url, source,
+        posted_date, match_rationale}}` — `eventId` is `<instance>:<lead>:<lifecycleVersion>`.
+        Pass `expected_status` / `expected_version` to make the decision compare-and-set: a lead
+        that has changed since is refused 409 with `stale: true`.
       operationId: triageJobLead
       tags: [Storage]
       parameters:
@@ -7308,6 +7317,8 @@ paths:
                 action: { type: string, enum: [apply, skip, defer, archive] }
                 defer_until: { type: string, description: Optional date/time or reminder text for `defer`. }
                 note: { type: string, description: Optional owner reason stored on the lead. }
+                expected_status: { type: string, description: Compare-and-set — the status the caller read. }
+                expected_version: { type: integer, minimum: 0, description: Compare-and-set — the lifecycle_version the caller read. }
       responses:
         "200":
           description: The updated lead, lifecycle transition result, durable event (when applying), and its connection delivery outcome.

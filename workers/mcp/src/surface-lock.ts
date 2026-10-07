@@ -1028,4 +1028,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// 0.1.84 (#962): `create_instance_trigger` and `preview_instance_trigger` accept action
 	// `run_local_browser` and `config.objective`. No tool added. Appended: 0.1.83 is published.
 	"0.1.84": "sha256:67b01d0594e608395de78429b352d2ccde26134db81f0a0dfebddc680508982c",
+	// 0.1.85 (#955): `triage_job_lead` gains compare-and-set `expected_status` / `expected_version`. Appended.
+	"0.1.85": "sha256:c1db461d825feb86b878643c3ae65a6a9686c7f13f736c3a819eae168b2c2c03",
 };

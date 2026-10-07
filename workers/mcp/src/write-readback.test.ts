@@ -74,6 +74,9 @@ const CONTROL_ARGS: ReadonlySet<string> = new Set([
 	"token",
 	"dry_run",
 	"confirm",
+	// compare-and-set (#955): the state the caller READ, checked and never stored
+	"expected_status",
+	"expected_version",
 	// addressing: which record this call is about
 	"instance_id",
 	"agent_id",

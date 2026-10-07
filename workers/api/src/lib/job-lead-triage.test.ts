@@ -1,53 +1,115 @@
 import { describe, expect, it } from "vitest";
 import type { CollectionRecord } from "../agent-storage-types.js";
-import { JOB_LEAD_APPLY_EVENT, planJobLeadTriage } from "./job-lead-triage.js";
+import { JOB_LEAD_APPLY_EVENT, JOB_LEAD_TRANSITIONS, jobLeadStatus, planJobLeadTriage } from "./job-lead-triage.js";
 
 const lead = (data: Record<string, unknown> = {}): CollectionRecord => ({
 	id: "lead-1",
 	collection: "job_leads",
-	data: { title: "Head of Engineering", company: "Example", url: "https://example.test/job", ...data },
+	data: {
+		title: "Head of Engineering",
+		company: "Example",
+		location: "Sydney",
+		url: "https://example.test/job",
+		source: "seek",
+		posted_date: "2026-10-05",
+		match_rationale: "AI leadership",
+		// What must NEVER leave the lead (#955): contact details, notes, session state.
+		contact_email: "recruiter@example.test",
+		recruiter_phone: "+61 400 000 000",
+		cookies: "session=abc",
+		...data,
+	},
 	createdAt: "2026-10-07T00:00:00.000Z",
 	updatedAt: "2026-10-07T00:00:00.000Z",
 });
+const at = "2026-10-07T01:00:00.000Z";
+const plan = (r: CollectionRecord, input: Parameters<typeof planJobLeadTriage>[1] extends infer T ? Omit<T & object, "sourceInstanceId"> : never) =>
+	planJobLeadTriage(r, { ...input, sourceInstanceId: "scout-1" }, { now: at });
+/** The lead after a plan's patch was written. */
+const after = (r: CollectionRecord, p: ReturnType<typeof planJobLeadTriage>) => {
+	if (!p.ok || !p.patch) throw new Error("expected a transition");
+	return { ...r, data: { ...r.data, ...p.patch } };
+};
 
-describe("Job lead triage lifecycle", () => {
-	it("only an explicit apply transition creates a stable application handoff", () => {
-		const plan = planJobLeadTriage(lead(), { action: "apply", note: "Strong AI leadership match" }, {
-			now: "2026-10-07T01:00:00.000Z",
-			eventId: "apply-1",
-		});
-		expect(plan).toMatchObject({ ok: true, transitioned: true });
-		if (!plan.ok) throw new Error("expected plan");
-		expect(plan.patch).toMatchObject({ status: "apply_requested", apply_request_id: "apply-1" });
-		expect(plan.event).toMatchObject({
+describe("Job lead triage lifecycle (#955)", () => {
+	it("Apply emits the issue's envelope — and nothing outside it", () => {
+		const p = plan(lead(), { action: "apply", note: "Strong match" });
+		expect(p).toMatchObject({ ok: true, transitioned: true });
+		if (!p.ok) throw new Error("expected plan");
+		expect(p.event).toEqual({
 			eventType: JOB_LEAD_APPLY_EVENT,
-			eventId: "apply-1",
-			lead: { id: "lead-1", data: { status: "apply_requested", title: "Head of Engineering" } },
+			eventId: "scout-1:lead-1:1",
+			sourceInstanceId: "scout-1",
+			leadId: "lead-1",
+			leadUrl: "https://example.test/job",
+			lifecycleVersion: 1,
+			requestedAt: at,
+			lead: { title: "Head of Engineering", company: "Example", location: "Sydney", url: "https://example.test/job", source: "seek", posted_date: "2026-10-05", match_rationale: "AI leadership" },
 		});
-		expect((plan.event?.lead.data ?? {}).apply_handoff).toBeUndefined();
+		const wire = JSON.stringify(p.event);
+		for (const secret of ["recruiter@example.test", "+61 400", "session=abc", "Strong match"]) expect(wire).not.toContain(secret);
 	});
 
-	it.each(["skip", "defer", "archive"] as const)("%s changes state but emits no application event", (action) => {
-		const plan = planJobLeadTriage(lead(), { action }, { now: "2026-10-07T01:00:00.000Z" });
-		expect(plan).toMatchObject({ ok: true, transitioned: true, event: null });
-		if (!plan.ok) throw new Error("expected plan");
-		expect(plan.patch?.status).toBe(action === "skip" ? "skipped" : action === "defer" ? "deferred" : "archived");
+	it("writes the state, the version and an audit entry with the handoff, in one patch", () => {
+		const p = plan(lead(), { action: "apply" });
+		if (!p.ok) throw new Error("expected plan");
+		expect(p.patch).toMatchObject({
+			status: "apply_requested",
+			lifecycle_version: 1,
+			lifecycle: [{ from: "new", to: "apply_requested", action: "apply", version: 1, at }],
+			apply_request_id: "scout-1:lead-1:1",
+			apply_handoff: { eventId: "scout-1:lead-1:1" },
+		});
 	});
 
-	it("repeating apply returns the original stable snapshot without another transition", () => {
-		const first = planJobLeadTriage(lead(), { action: "apply" }, { now: "2026-10-07T01:00:00.000Z", eventId: "apply-1" });
-		if (!first.ok || !first.patch) throw new Error("expected initial apply plan");
-		const applied = lead({ ...lead().data, ...first.patch, company: "Changed later" });
-		const retry = planJobLeadTriage(applied, { action: "apply" });
-		expect(retry).toMatchObject({ ok: true, transitioned: false, event: { eventId: "apply-1" } });
-		if (!retry.ok) throw new Error("expected retry plan");
-		// The saved approval snapshot is immutable; unrelated later collection edits cannot change
-		// an outbox identity and turn an idempotent retry into a second application request.
-		expect(retry.event?.lead.data.company).toBe("Example");
+	it.each(["skip", "defer", "archive"] as const)("%s changes state, versions it, and emits no application event", (action) => {
+		const p = plan(lead(), { action });
+		expect(p).toMatchObject({ ok: true, transitioned: true, event: null });
+		if (!p.ok) throw new Error("expected plan");
+		expect(p.patch).toMatchObject({ lifecycle_version: 1 });
+		expect(p.patch?.apply_handoff).toBeUndefined();
 	});
 
-	it("refuses transition from an archived lead", () => {
-		const plan = planJobLeadTriage(lead({ status: "archived" }), { action: "apply" });
-		expect(plan).toEqual({ ok: false, error: "Cannot apply a lead in archived status." });
+	it("concurrent Apply clicks: the second, against the applied lead, returns the SAME event and no transition", () => {
+		const first = plan(lead(), { action: "apply", expectedStatus: "new", expectedVersion: 0 });
+		const applied = after(lead(), first);
+		// The DO serialises the two; the second sees the first's write, and its CAS is about the state
+		// it SAW — which the first click has already decided exactly as it asked.
+		const second = plan(applied, { action: "apply", expectedStatus: "new", expectedVersion: 0 });
+		expect(second).toMatchObject({ ok: true, transitioned: false });
+		if (!first.ok || !second.ok) throw new Error("expected plans");
+		expect(second.event?.eventId).toBe(first.event?.eventId);
+	});
+
+	it("a retry after an outbox failure re-delivers the stored handoff, unchanged by later edits", () => {
+		const applied = after(lead(), plan(lead(), { action: "apply" }));
+		const edited = { ...applied, data: { ...applied.data, company: "Renamed later" } };
+		const retry = plan(edited, { action: "apply" });
+		if (!retry.ok) throw new Error("expected plan");
+		expect(retry).toMatchObject({ transitioned: false, event: { eventId: "scout-1:lead-1:1", lead: { company: "Example" } } });
+	});
+
+	it("rejects a stale action — on status or on version — rather than deciding on a state nobody saw", () => {
+		const deferred = after(lead(), plan(lead(), { action: "defer" }));
+		expect(plan(deferred, { action: "skip", expectedStatus: "new" })).toMatchObject({ ok: false, stale: true, error: expect.stringContaining("now deferred") });
+		expect(plan(deferred, { action: "skip", expectedVersion: 0 })).toMatchObject({ ok: false, stale: true, error: expect.stringContaining("lifecycle version 1") });
+		// The current state and version: accepted.
+		expect(plan(deferred, { action: "skip", expectedStatus: "deferred", expectedVersion: 1 })).toMatchObject({ ok: true, transitioned: true });
+	});
+
+	it("follows the transition table — including apply_requested → archived, and nothing from archived", () => {
+		const applied = after(lead(), plan(lead(), { action: "apply" }));
+		const archived = plan(applied, { action: "archive" });
+		expect(archived).toMatchObject({ ok: true, transitioned: true, event: null });
+		expect(plan(applied, { action: "skip" })).toMatchObject({ ok: false, error: "Cannot skip a lead in apply_requested status." });
+		expect(plan(lead({ status: "archived" }), { action: "apply" })).toEqual({ ok: false, error: "Cannot apply a lead in archived status." });
+		expect(JOB_LEAD_TRANSITIONS.apply_requested).toEqual(["tailoring", "blocked", "archived"]);
+	});
+
+	it("reads a lead from before the lifecycle (`found`, or no status) as new, and its version as 0", () => {
+		expect(jobLeadStatus({ status: "found" })).toBe("new");
+		expect(jobLeadStatus({})).toBe("new");
+		const p = plan(lead({ status: "found" }), { action: "apply", expectedStatus: "found", expectedVersion: 0 });
+		expect(p).toMatchObject({ ok: true, transitioned: true, event: { lifecycleVersion: 1 } });
 	});
 });
