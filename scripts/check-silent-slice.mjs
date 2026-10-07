@@ -30,8 +30,8 @@ const ROOT = resolve(import.meta.dirname, "..");
 const PINNED = {
 	// Pinned at #898's landing. Most of what remains is ids, labels and display previews; the
 	// agent-read cuts the audit found were removed or marked before these numbers were taken.
-	"workers/api/src": 431, // +1 at #924 (`topSessions`, the three heaviest, named as such); −1 at #954 (a cut line names the column that reads its rest); +1 at #961 (the fleet snapshot's repo cap — every repo past it is reported unread, and the response says how many).
-	"workers/mcp/src": 11,
+	"workers/api/src": 430, // −1 at #959 (the PR enrichment cap is one cut, and only the no-token fallback now); +1 at #924 (`topSessions`, the three heaviest, named as such); −1 at #954 (a cut line names the column that reads its rest); +1 at #961 (the fleet snapshot's repo cap — every repo past it is reported unread, and the response says how many).
+	"workers/mcp/src": 9, // −2 at #959: the terminal fallback's liveError and the audit preview are clipMarked.
 	"packages/browser-runner/src": 57,
 };
 

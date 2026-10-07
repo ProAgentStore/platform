@@ -226,6 +226,104 @@ describe("readPull", () => {
 	});
 });
 
+// #959 (#954 item 4): only the first PULLS_ENRICH_CAP rows of a page carried mergeable, review and
+// branch — two REST requests per PR. One GraphQL request now completes every row.
+describe("PR enrichment — every row of a page, in one request (#959)", () => {
+	const raw = (n: number) => ({ ...RAW_PULL, number: n, head: { ref: "", sha: "" } });
+	/** A GraphQL node for PR `n`, with each reviewer's latest decision. */
+	const node = (opinions: Array<[string, string]>, extra: Record<string, unknown> = {}) => ({
+		mergeable: "MERGEABLE",
+		mergeStateStatus: "CLEAN",
+		headRefName: "feat/x",
+		headRefOid: "sha-x",
+		baseRefName: "main",
+		latestOpinionatedReviews: { totalCount: opinions.length, nodes: opinions.map(([login, state]) => ({ state, author: { login } })) },
+		commented: { totalCount: 0 },
+		...extra,
+	});
+	function github(pulls: Array<ReturnType<typeof raw>>, graph: Record<string, unknown> | null) {
+		const posts: string[] = [];
+		const gets: string[] = [];
+		globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			const reply = (status: number, body: unknown) => ({ ok: status < 300, status, headers: { get: () => null }, json: async () => body }) as unknown as Response;
+			if (url.endsWith("/graphql")) {
+				posts.push(String(init?.body ?? ""));
+				return graph ? reply(200, { data: { repository: graph } }) : reply(502, {});
+			}
+			gets.push(url);
+			if (url.includes("/actions/runs")) return reply(200, { workflow_runs: [] });
+			if (url.includes("/reviews")) return reply(200, [{ state: "APPROVED", user: { login: "rest" } }]);
+			const one = /\/pulls\/(\d+)$/.exec(url);
+			if (one) return reply(200, { ...raw(Number(one[1])), mergeable: true, mergeable_state: "clean" });
+			return reply(200, pulls);
+		}) as unknown as typeof fetch;
+		return { posts, gets };
+	}
+
+	it("enriches EVERY row past the old cap, with one GraphQL request and no per-PR REST reads", async () => {
+		const pulls = Array.from({ length: PULLS_ENRICH_CAP + 4 }, (_, i) => raw(i + 1));
+		const graph = Object.fromEntries(pulls.map((p) => [`p${p.number}`, node([["kim", "APPROVED"]])]));
+		const { posts, gets } = github(pulls, graph);
+		const out = await listPulls(env, "u1", "acme/widget");
+		expect(out).toHaveLength(PULLS_ENRICH_CAP + 4);
+		for (const p of out) expect(p).toMatchObject({ mergeable: true, mergeableState: "clean", review: "approved" });
+		expect(posts).toHaveLength(1);
+		expect(gets.filter((u) => /\/pulls\/\d+/.test(u))).toEqual([]);
+	});
+
+	it("reaches the verdict resolveReviewState reaches: a block beats an approval, a comment never clears one", async () => {
+		const graph = {
+			p1: node([["a", "APPROVED"], ["b", "CHANGES_REQUESTED"]]),
+			p2: node([], { commented: { totalCount: 3 } }),
+			p3: node([]),
+			p4: node([["a", "APPROVED"]], { commented: { totalCount: 2 } }),
+			p5: node([], { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" }),
+			p6: node([], { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" }),
+			// More reviews than one batch reads: "unknown", never a verdict from part of the history.
+			p7: node([["a", "APPROVED"]], { latestOpinionatedReviews: { totalCount: 101, nodes: [{ state: "APPROVED", author: { login: "a" } }] } }),
+		};
+		github([1, 2, 3, 4, 5, 6, 7].map(raw), graph);
+		const by = Object.fromEntries((await listPulls(env, "u1", "acme/widget")).map((p) => [p.number, p]));
+		expect([by[1].review, by[2].review, by[3].review, by[4].review, by[7].review]).toEqual(["changes_requested", "commented", "none", "approved", "unknown"]);
+		expect(by[5]).toMatchObject({ mergeable: false, mergeableState: "dirty" });
+		// GitHub has not computed it yet: "not known", not "conflicted".
+		expect(by[6]).toMatchObject({ mergeable: null });
+		expect(by[1]).toMatchObject({ branch: "feat/x", headSha: "sha-x", baseBranch: "main" });
+	});
+
+	it("falls back to the capped REST enrichment when GraphQL cannot be used", async () => {
+		const pulls = Array.from({ length: PULLS_ENRICH_CAP + 2 }, (_, i) => raw(i + 1));
+		github(pulls, null);
+		const out = await listPulls(env, "u1", "acme/widget");
+		expect(out.slice(0, PULLS_ENRICH_CAP).every((p) => p.review === "approved" && p.mergeable === true)).toBe(true);
+		// Past the cap the rows keep their honest "not known".
+		expect(out.slice(PULLS_ENRICH_CAP).every((p) => p.review === "unknown" && p.mergeable === null)).toBe(true);
+	});
+
+	it("does not ask GraphQL without a token — it refuses anonymous reads", async () => {
+		const { resolveGithubRead } = await import("./github-cache.js");
+		(resolveGithubRead as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ token: null, authContext: null });
+		const { posts } = github([raw(1)], { p1: node([]) });
+		await listPulls(env, "u1", "acme/widget");
+		expect(posts).toEqual([]);
+	});
+
+	it("completes SEARCH rows too — branch and head sha included, which search never returns", async () => {
+		globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+			const url = String(input);
+			const reply = (body: unknown) => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => body }) as unknown as Response;
+			if (url.endsWith("/graphql")) return reply({ data: { repository: Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`p${i + 1}`, node([["kim", "APPROVED"]])])) } });
+			if (url.includes("/search/issues")) return reply({ total_count: 10, incomplete_results: false, items: Array.from({ length: 10 }, (_, i) => searchItem(i + 1, `t${i + 1}`)) });
+			return reply({ workflow_runs: [] });
+		}) as unknown as typeof fetch;
+		const found = await searchPulls(env, "u1", "acme/widget", "flake");
+		if ("error" in found) throw new Error(found.error);
+		expect(found.pulls).toHaveLength(10);
+		for (const p of found.pulls) expect(p).toMatchObject({ branch: "feat/x", headSha: "sha-x", review: "approved", mergeable: true });
+	});
+});
+
 // #954 (#898 T15): github_read_pull gave the diff's SIZE and never the diff. `files: true` pages it.
 describe("readPullFiles — a PR's diff, paged so a page is never cut", () => {
 	/** A PR with these files; `/files` answers 100 per page as GitHub does. */

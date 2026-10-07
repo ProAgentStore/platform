@@ -116,7 +116,10 @@ interface RawReview {
 	user?: { login?: string } | null;
 }
 
-/** How many open PRs a list answers with, and how many of them get the extra two calls. */
+/**
+ * How many open PRs a list answers with, and — on the REST fallback only (no token for GraphQL,
+ * #959) — how many of them get the extra two calls each.
+ */
 export const PULLS_PAGE_SIZE = 30;
 export const PULLS_ENRICH_CAP = 8;
 
@@ -267,16 +270,140 @@ async function fetchReviewState(ctx: ReadCtx, number: number): Promise<ReviewSta
 	return "unknown";
 }
 
+/** What one PR's enrichment adds to its row. */
+interface PullExtra {
+	mergeable: boolean | null;
+	mergeableState: string;
+	review: ReviewState;
+	branch?: string;
+	baseBranch?: string;
+	headSha?: string;
+}
+
+/** GitHub's GraphQL merge-state words, as the REST `mergeable_state` spells them. */
+const GRAPH_MERGEABLE: Record<string, boolean | null> = { MERGEABLE: true, CONFLICTING: false, UNKNOWN: null };
+
+interface GraphPull {
+	mergeable?: string;
+	mergeStateStatus?: string;
+	headRefName?: string;
+	headRefOid?: string;
+	baseRefName?: string;
+	latestOpinionatedReviews?: { totalCount?: number; nodes?: Array<{ state?: string; author?: { login?: string } | null } | null> };
+	commented?: { totalCount?: number };
+}
+
+/** How long the one batch request may take before the page falls back to REST. */
+const GRAPH_TIMEOUT_MS = 10_000;
+
+/** Reviews read per PR in the batch; past it the verdict is `unknown`, never drawn from part of them. */
+const GRAPH_REVIEWS = 100;
+
+/**
+ * Mergeability, review state and branch for EVERY PR on a page, in ONE GraphQL request (#959).
+ *
+ * The REST path costs two requests per PR (the single-PR read for `mergeable`, the reviews for the
+ * verdict), which is why it stopped at {@link PULLS_ENRICH_CAP} rows and left the rest "unknown" —
+ * a partial answer per page. GraphQL takes one aliased `pullRequest(number:)` per row. The review
+ * verdict is NOT GitHub's `reviewDecision` (null on a repo with no required reviews, so it cannot
+ * say "approved" there); it is `latestOpinionatedReviews` — each reviewer's latest approve or
+ * request-changes, the rule `resolveReviewState` already applies — fed through that same function,
+ * so both paths reach the same verdict. Null when there is no token (GraphQL refuses anonymous
+ * reads) or the request fails, and the caller falls back to the REST path.
+ */
+async function fetchPullsGraph(ctx: ReadCtx, numbers: readonly number[]): Promise<Map<number, PullExtra> | null> {
+	if (!ctx.token || numbers.length === 0) return null;
+	const fields = `mergeable mergeStateStatus headRefName headRefOid baseRefName latestOpinionatedReviews(first: ${GRAPH_REVIEWS}) { totalCount nodes { state author { login } } } commented: reviews(states: COMMENTED) { totalCount }`;
+	// The numbers are GitHub's own integers from the page just read, so they are interpolated as such.
+	const query = `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ${numbers.map((n) => `p${Math.trunc(n)}: pullRequest(number: ${Math.trunc(n)}) { ${fields} }`).join(" ")} } }`;
+	try {
+		const res = await fetch("https://api.github.com/graphql", {
+			method: "POST",
+			headers: { ...GH_HEADERS(ctx.token), "Content-Type": "application/json" },
+			body: JSON.stringify({ query, variables: { owner: ctx.owner, name: ctx.name } }),
+			// Bounded (#438): a hung GitHub must not hold the page — the REST fallback still answers.
+			signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS),
+		});
+		if (!res.ok) return null;
+		const body = (await res.json()) as { data?: { repository?: Record<string, GraphPull | null> | null } };
+		const repo = body.data?.repository;
+		if (!repo) return null;
+		const out = new Map<number, PullExtra>();
+		for (const n of numbers) {
+			const g = repo[`p${Math.trunc(n)}`];
+			if (!g) continue;
+			const opinions = g.latestOpinionatedReviews;
+			const reviews: RawReview[] = (opinions?.nodes ?? []).filter((r) => !!r).map((r) => ({ state: r?.state, user: { login: r?.author?.login ?? "" } }));
+			if ((g.commented?.totalCount ?? 0) > 0) reviews.push({ state: "COMMENTED", user: { login: "" } });
+			out.set(n, {
+				mergeable: GRAPH_MERGEABLE[g.mergeable ?? "UNKNOWN"] ?? null,
+				mergeableState: (g.mergeStateStatus ?? "UNKNOWN").toLowerCase(),
+				review: (opinions?.totalCount ?? 0) > GRAPH_REVIEWS ? "unknown" : resolveReviewState(reviews),
+				...(g.headRefName ? { branch: g.headRefName } : {}),
+				...(g.baseRefName ? { baseBranch: g.baseRefName } : {}),
+				...(g.headRefOid ? { headSha: g.headRefOid } : {}),
+			});
+		}
+		return out;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Complete a page of PR rows: every row through GraphQL when it can be read that way, else the
+ * first {@link PULLS_ENRICH_CAP} through REST (two requests each). A row that was not enriched keeps
+ * its honest "not known" values — `mergeable: null`, `review: "unknown"` — never a guessed verdict.
+ */
+async function enrichPulls(ctx: ReadCtx, pulls: PullSummary[]): Promise<PullSummary[]> {
+	let extras = await fetchPullsGraph(ctx, pulls.map((p) => p.number));
+	if (!extras) {
+		extras = new Map();
+		const settled = await Promise.allSettled(
+			pulls.slice(0, PULLS_ENRICH_CAP).map(async (p) => {
+				const [detail, review] = await Promise.all([fetchPullRaw(ctx, p.number), fetchReviewState(ctx, p.number)]);
+				return { number: p.number, detail, review };
+			}),
+		);
+		for (const s of settled) {
+			if (s.status !== "fulfilled") continue;
+			const d = s.value.detail;
+			extras.set(s.value.number, {
+				// A failed detail read leaves mergeability unknown rather than downgrading the PR to "conflicted".
+				mergeable: d && typeof d.mergeable === "boolean" ? d.mergeable : null,
+				mergeableState: d?.mergeable_state || "unknown",
+				review: s.value.review,
+				...(d?.head?.ref ? { branch: d.head.ref } : {}),
+				...(d?.base?.ref ? { baseBranch: d.base.ref } : {}),
+				...(d?.head?.sha ? { headSha: d.head.sha } : {}),
+			});
+		}
+	}
+	return pulls.map((p) => {
+		const extra = extras.get(p.number);
+		if (!extra) return p;
+		return {
+			...p,
+			mergeable: extra.mergeable ?? p.mergeable,
+			mergeableState: extra.mergeableState !== "unknown" ? extra.mergeableState : p.mergeableState,
+			review: extra.review,
+			branch: p.branch || extra.branch || "",
+			baseBranch: p.baseBranch || extra.baseBranch || "",
+			headSha: p.headSha || extra.headSha || "",
+		};
+	});
+}
+
 export interface ListPullsOpts {
 	state?: "open" | "closed" | "all";
 	limit?: number;
 	/** 1-based page (#898) — without it only the newest page was reachable. */
 	page?: number;
 	/**
-	 * Fetch `mergeable` + review state for the first `PULLS_ENRICH_CAP` rows (2 extra conditional
-	 * requests each). On by default because "can this merge, has anyone approved it" is most of
-	 * why the panel exists; capped because a repo with sixty open PRs must not turn one panel poll
-	 * into a hundred and twenty requests.
+	 * Fetch `mergeable` + review state for every row in one GraphQL request (#959), or — without a
+	 * token — for the first `PULLS_ENRICH_CAP` rows over REST (2 requests each, capped so a repo with
+	 * sixty open PRs cannot turn one panel poll into a hundred and twenty requests). On by default
+	 * because "can this merge, has anyone approved it" is most of why the panel exists.
 	 */
 	enrich?: boolean;
 }
@@ -324,27 +451,7 @@ export async function listPulls(env: Env, userId: string, githubRepo: string, op
 		if (!("status" in runs)) pulls = attachChecks(pulls, runs.runs);
 
 		if (opts.enrich === false) return pulls;
-		const enrich = pulls.slice(0, PULLS_ENRICH_CAP);
-		const settled = await Promise.allSettled(
-			enrich.map(async (p) => {
-				const [detail, review] = await Promise.all([fetchPullRaw(ctx, p.number), fetchReviewState(ctx, p.number)]);
-				return { number: p.number, detail, review };
-			}),
-		);
-		const byNumber = new Map<number, { detail: RawPull | null; review: ReviewState }>();
-		for (const s of settled) if (s.status === "fulfilled") byNumber.set(s.value.number, { detail: s.value.detail, review: s.value.review });
-		return pulls.map((p) => {
-			const extra = byNumber.get(p.number);
-			if (!extra) return p;
-			return {
-				...p,
-				// A failed enrichment leaves the row's own honest "unknown"/null rather than
-				// downgrading a PR to "conflicted" because one request timed out.
-				mergeable: extra.detail && typeof extra.detail.mergeable === "boolean" ? extra.detail.mergeable : p.mergeable,
-				mergeableState: extra.detail?.mergeable_state || p.mergeableState,
-				review: extra.review,
-			};
-		});
+		return await enrichPulls(ctx, pulls);
 	} catch {
 		return [];
 	}
@@ -372,10 +479,10 @@ export function searchPullsQuery(owner: string, name: string, search: string, st
  *
  * The same design as `searchIssues` (#936), and the same shared request (`fetchGithubSearch`), so a
  * refusal is an ERROR and never `[]`. Search answers with ISSUE-shaped items — no head/base branch,
- * head sha, mergeable or review state — so the first {@link PULLS_ENRICH_CAP} matches are completed
- * from the PR endpoints `listPulls` already enriches with, and CI is attached with the same single
- * workflow-runs read. The rest keep `toPullSummary`'s honest "not known" values: an empty branch and
- * head sha, `mergeable: null`, `review: "unknown"` — never a guessed "conflicted" or "approved".
+ * head sha, mergeable or review state — so every match is completed by `enrichPulls` (one GraphQL
+ * request, #959; the first {@link PULLS_ENRICH_CAP} over REST without a token), and CI is attached
+ * with the same single workflow-runs read. A row not completed keeps `toPullSummary`'s honest "not
+ * known" values — never a guessed "conflicted" or "approved".
  */
 export async function searchPulls(env: Env, userId: string, githubRepo: string, search: string, opts: Pick<ListPullsOpts, "state" | "limit" | "page"> = {}): Promise<SearchPullsResult | { error: string }> {
 	const parsed = parseRepo(githubRepo);
@@ -386,19 +493,8 @@ export async function searchPulls(env: Env, userId: string, githubRepo: string, 
 	let pulls = found.items.map((i) => toPullSummary({ ...i, merged_at: i.merged_at ?? i.pull_request?.merged_at ?? null }));
 
 	const ctx: ReadCtx = { env, userId, owner: parsed.owner, name: parsed.name, token, authContext };
-	const settled = await Promise.allSettled(
-		pulls.slice(0, PULLS_ENRICH_CAP).map(async (p) => {
-			const [detail, review] = await Promise.all([fetchPullRaw(ctx, p.number), fetchReviewState(ctx, p.number)]);
-			return { number: p.number, detail, review };
-		}),
-	);
-	const byNumber = new Map<number, { detail: RawPull | null; review: ReviewState }>();
-	for (const s of settled) if (s.status === "fulfilled") byNumber.set(s.value.number, { detail: s.value.detail, review: s.value.review });
-	pulls = pulls.map((p) => {
-		const extra = byNumber.get(p.number);
-		// A failed enrichment keeps the search row's "not known" values rather than inventing any.
-		return extra ? { ...(extra.detail ? toPullSummary(extra.detail) : p), review: extra.review } : p;
-	});
+	// Search rows are issue-shaped — no branch or head sha — so enrichment fills those too.
+	pulls = await enrichPulls(ctx, pulls);
 	const runs = await fetchWorkflowRuns(`${parsed.owner}/${parsed.name}`, token ?? undefined, { perPage: 50, event: "pull_request" }, { env, identity: { userId, authContext } });
 	if (!("status" in runs)) pulls = attachChecks(pulls, runs.runs);
 	return { total_count: found.total_count, incomplete_results: found.incomplete_results, pulls };

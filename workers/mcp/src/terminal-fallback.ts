@@ -17,6 +17,7 @@
  * Only for an instance with NO repo: with one, the coding session is the thing to talk to, and the
  * callers keep their behaviour exactly.
  */
+import { clipMarked } from "./clip-marked.js";
 
 /** An authenticated API call — `authedCall` bound to one token and env. */
 export type ApiCall = (path: string, init?: RequestInit) => Promise<unknown>;
@@ -151,7 +152,8 @@ export async function captureTerminal(api: ApiCall, instanceId: string, repos: {
 		terminalTarget: ctx.target,
 		targetOrigin: ctx.origin,
 		live: false,
-		...(live ? { liveError: live.content.slice(0, 400) } : {}),
+		// Marked, not silently cut (#959): an agent reads this as the reason the live read failed.
+		...(live ? { liveError: clipMarked(live.content, 400) } : {}),
 		...(last
 			? {
 					capturedAt: last.createdAt,

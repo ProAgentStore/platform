@@ -1,4 +1,5 @@
 import { jsonText, text, type McpEnv, type TextResult } from "./http.js";
+import { clipMarked } from "./clip-marked.js";
 
 export const MCP_SCOPES = ["read", "write", "runtime", "destructive"] as const;
 export type McpScope = (typeof MCP_SCOPES)[number];
@@ -253,7 +254,8 @@ function redact(value: unknown, depth = 0): unknown {
 	if (depth > 8) return "[truncated]";
 	if (typeof value === "string") {
 		const masked = value.replace(SECRET_VALUE, "[redacted]");
-		return masked.length > 500 ? `${masked.slice(0, 500)}...` : masked;
+		// Marked with both lengths (#959): an audit entry read back must not pass for the whole value.
+		return clipMarked(masked, 500);
 	}
 	if (Array.isArray(value)) return value.map((item) => redact(item, depth + 1));
 	if (!value || typeof value !== "object") return value;
