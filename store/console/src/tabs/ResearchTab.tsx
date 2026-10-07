@@ -83,7 +83,8 @@ function ResearchHome({ instanceId }: { instanceId: string }) {
 							</span>
 							<span>
 								<span className="font-semibold">{c.label}</span>
-								{c.state !== "ok" && <span className="block text-xs text-muted">{c.detail}</span>}
+								{/* The engine sign-in stays visible when it passes: WHICH sign-in (subscription or machine) is the point (#945). */}
+								{(c.state !== "ok" || c.id === "engine_login") && <span className="block text-xs text-muted">{c.detail}</span>}
 							</span>
 						</li>
 					))}

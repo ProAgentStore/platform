@@ -331,7 +331,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `retry_application` | Retry a stopped fill (never after a submit attempt) or tailoring | runtime | yes | |
 | `resume_application` | Release a paused fill, optionally with answers used for that run only | runtime | yes | |
 | `cancel_application` | Stop a running tailoring or fill; nothing external is touched | write | yes | |
-| `local_browser_preflight` | Is a local CLI browser research agent ready to run: settings vs the agent's limits, runner connected, runner supports it, signed-in-profile consent — with the step that fixes each | read | | |
+| `local_browser_preflight` | Is a local CLI browser research agent ready to run: settings vs the agent's limits, runner connected, runner supports it, signed-in-profile consent, and the engine sign-in the runner last observed (`engineAuth`) — with the step that fixes each | read | | |
 | `get_instance_local_browser_settings` | A local browser research agent's chosen settings, the effective run policy, the agent's ceilings and the runner pin; no credentials | read | | |
 | `set_instance_local_browser_settings` | Patch engine, sign-in mode, workspace, browser profile, sites, limits, retention and result collection; refuses anything outside the agent's ceiling | write | yes | |
 | `list_local_browser_runs` | A local browser research agent's runs, or one run with its redacted trace (pages, consent, pauses, findings) | read | | |

@@ -337,6 +337,30 @@ export async function activeLocalBrowserRuns(env: DB, limit: number): Promise<Ar
 	return (results ?? []).map((r) => ({ id: r.id, instanceId: r.instance_id, userId: r.user_id }));
 }
 
+/** The engine's sign-in as the runner last OBSERVED it (#945) — never a credential, only its class. */
+export interface ObservedEngineAuth {
+	verdict: string;
+	runId: string;
+	observedAt: number;
+}
+
+/**
+ * The newest verdict the runner recorded for this instance's engine AND sign-in mode — a verdict
+ * observed under another engine or mode says nothing about the one selected now. `unknown` is not a
+ * verdict, so it is skipped rather than allowed to hide an older real one.
+ */
+export async function lastObservedEngineAuth(env: DB, instanceId: string, userId: string, engine: string, authMode: string): Promise<ObservedEngineAuth | null> {
+	const row = await env.DB.prepare(
+		`SELECT id, engine_auth, updated_at FROM local_browser_runs
+		  WHERE instance_id = ?1 AND user_id = ?2 AND engine_auth IS NOT NULL AND engine_auth != 'unknown'
+		    AND json_extract(policy, '$.engine') = ?3 AND json_extract(policy, '$.authMode') = ?4
+		  ORDER BY updated_at DESC LIMIT 1`,
+	)
+		.bind(instanceId, userId, engine, authMode)
+		.first<{ id: string; engine_auth: string; updated_at: number }>();
+	return row ? { verdict: row.engine_auth, runId: row.id, observedAt: row.updated_at } : null;
+}
+
 /**
  * Delete the trace of runs that ended longer ago than their own `traceRetentionDays` (the policy the
  * run started with). The run row and its result stay; only the step-by-step trace goes.

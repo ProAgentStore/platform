@@ -10,6 +10,8 @@ import {
 	PROFILE_CONSENT_DOMAIN,
 	appendLocalBrowserEvents,
 	getLocalBrowserRun,
+	lastObservedEngineAuth,
+	type ObservedEngineAuth,
 	listDomainConsent,
 	listLocalBrowserEvents,
 	listLocalBrowserRuns,
@@ -61,6 +63,21 @@ const body = async (c: C): Promise<Record<string, unknown>> => {
 	const b = await c.req.json().catch(() => ({}));
 	return b && typeof b === "object" && !Array.isArray(b) ? (b as Record<string, unknown>) : {};
 };
+
+/**
+ * The engine sign-in check (#945), from the verdict the runner last recorded — the runner checks it at
+ * the start of every run (`engine.auth_checked`); nothing can probe it between runs yet. Never
+ * `ok:false`: the console disables Start on a failed check, and a stale `missing_login` must not lock
+ * out the one run that would observe the owner has since signed in.
+ */
+export function engineLoginCheck(seen: ObservedEngineAuth | null, engine: string | null): { id: string; ok: boolean | null; detail: string } {
+	const id = "engine_login";
+	const when = seen ? ` (last checked ${new Date(seen.observedAt).toISOString().replace(/:\d\d\.\d+Z$/, "").replace("T", " ")} UTC, run ${seen.runId})` : "";
+	if (!seen || !engine) return { id, ok: null, detail: "Not observed yet — the runner checks the engine's sign-in at the start of each run and records it as engine.auth_checked on the run's trace." };
+	if (seen.verdict === "subscription" || seen.verdict === "machine-login") return { id, ok: true, detail: `${engine} was signed in (${seen.verdict})${when}.` };
+	if (seen.verdict === "missing_login") return { id, ok: null, detail: `${engine} was NOT signed in on the runner machine${when}. Sign it in there (${engine === "codex" ? "`codex login`" : "run `claude` and use /login"}), then start a run — it is checked again.` };
+	return { id, ok: null, detail: `${engine} last ran on ${seen.verdict}${when}.` };
+}
 
 const REQUEST_ID_RE = /^[A-Za-z0-9_.:-]{1,100}$/;
 
@@ -116,13 +133,14 @@ export function registerLocalBrowserRoutes(router: Hono<{ Bindings: Env }>): voi
 			else if (taskTypes.includes(LOCAL_BROWSER_TASK_TYPE)) checks.push({ id: "runner_support", ok: true, detail: "The runner supports local browser research" });
 			else checks.push({ id: "runner_support", ok: false, detail: "The connected runner does not support local browser research yet. Update the CLI (npm i -g @proagentstore/cli) and run `pags up` again." });
 		}
-		checks.push({ id: "engine_login", ok: null, detail: "Checked by the runner at the start of each run and recorded as engine.auth_checked on the run's trace." });
+		const engineAuth = "error" in effective ? null : await lastObservedEngineAuth(c.env, instanceId, uid, effective.engine, effective.authMode);
+		checks.push(engineLoginCheck(engineAuth, "error" in effective ? null : effective.engine));
 		if (!("error" in effective) && effective.browserProfile === "default") {
 			const consent = await listDomainConsent(c.env, instanceId, uid, Date.now());
 			const allowed = consent.some((x) => x.scope === "signed_in_profile" && x.decision === "allow");
 			checks.push(allowed ? { id: "profile_consent", ok: true, detail: "You allowed research in your signed-in browser profile" } : { id: "profile_consent", ok: false, detail: "Your signed-in browser profile is selected but not consented to. Allow it, or switch to the isolated profile." });
 		}
-		return c.json({ ready: checks.every((x) => x.ok !== false), checks });
+		return c.json({ ready: checks.every((x) => x.ok !== false), checks, engineAuth });
 	});
 
 	/** Live per-domain navigation decisions, and the signed-in-profile decision (domain "*"). */

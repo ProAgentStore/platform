@@ -19,7 +19,7 @@ export function registerLocalBrowserTools(server: McpServer, ctx: InstanceToolsC
 
 	server.tool(
 		"local_browser_preflight",
-		"Is this local browser research agent ready to run, and if not, the one step that fixes it? Checks the saved settings against the agent's limits, whether a runner is connected, whether that runner supports local browser research, and consent for the signed-in browser profile. Each check is ok true, false, or null when it cannot be known before a run — engine sign-in is checked by the runner per run. Read-only.",
+		"Is this local browser research agent ready to run, and if not, the one step that fixes it? Checks the saved settings against the agent's limits, whether a runner is connected, whether that runner supports local browser research, and consent for the signed-in browser profile. Each check is ok true, false, or null when unknowable before a run; engineAuth is the engine sign-in the runner last saw (subscription, machine-login, missing_login), never a credential. Read-only.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID from my_instances. Copy it exactly."),

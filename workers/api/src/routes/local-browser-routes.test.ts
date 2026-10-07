@@ -123,6 +123,30 @@ describe("preflight", () => {
 		expect(r.body.checks.map((c: { id: string; ok: boolean | null }) => [c.id, c.ok])).toEqual([["settings", true], ["runner", true], ["runner_support", true], ["engine_login", null]]);
 	});
 
+	it("reports the engine sign-in the runner last OBSERVED for this engine and mode — and never blocks Start on it (#945)", async () => {
+		const seed = (id: string, engine: string, authMode: string, auth: string, at: number) =>
+			d1.exec(`INSERT INTO local_browser_runs (id, instance_id, user_id, request_id, objective, status, policy, engine_auth, created_at, updated_at)
+			  VALUES ('${id}', 'i1', 'u1', '${id}', 'x', 'completed', '{"engine":"${engine}","authMode":"${authMode}"}', '${auth}', ${at}, ${at})`);
+		const login = async () => {
+			const r = await call("GET", "/i1/local-browser/preflight");
+			return { ready: r.body.ready, check: r.body.checks.find((c: { id: string }) => c.id === "engine_login"), engineAuth: r.body.engineAuth };
+		};
+		// Default settings: the agent's first engine (claude) on subscription.
+		expect(await login()).toMatchObject({ ready: true, check: { ok: null, detail: expect.stringMatching(/Not observed yet/) }, engineAuth: null });
+		seed("lbr_old", "claude", "subscription", "subscription", 1_000);
+		seed("lbr_other_engine", "codex", "subscription", "missing_login", 3_000);
+		seed("lbr_other_mode", "claude", "machine", "missing_login", 4_000);
+		seed("lbr_unknown", "claude", "subscription", "unknown", 5_000);
+		expect(await login()).toMatchObject({ ready: true, check: { ok: true, detail: expect.stringMatching(/claude was signed in \(subscription\).*run lbr_old/) }, engineAuth: { verdict: "subscription", runId: "lbr_old", observedAt: 1_000 } });
+		seed("lbr_new", "claude", "subscription", "missing_login", 6_000);
+		const missing = await login();
+		expect(missing.engineAuth).toMatchObject({ verdict: "missing_login", runId: "lbr_new" });
+		expect(missing.check).toMatchObject({ ok: null, detail: expect.stringMatching(/NOT signed in.*use \/login/) });
+		expect(missing.ready).toBe(true);
+		// A class, never a credential: the verdict object carries nothing but these three fields.
+		expect(Object.keys(missing.engineAuth).sort()).toEqual(["observedAt", "runId", "verdict"]);
+	});
+
 	it("names the one step that is missing", async () => {
 		runner.taskTypes = ["browser.task"];
 		expect((await call("GET", "/i1/local-browser/preflight")).body.checks.find((c: { id: string }) => c.id === "runner_support")).toMatchObject({ ok: false, detail: expect.stringMatching(/Update the CLI/) });

@@ -6570,9 +6570,13 @@ paths:
     get:
       summary: Is the instance ready for a local browser run
       description: |
-        `{ready, checks[]}`; each check is `ok: true | false | null` (null = not knowable before a run,
-        does not block) with the step that fixes it: settings, runner connected, runner supports
-        `local_browser.research`, engine sign-in (per run), signed-in-profile consent.
+        `{ready, checks[], engineAuth}`; each check is `ok: true | false | null` (null = not knowable
+        before a run, does not block) with the step that fixes it: settings, runner connected, runner
+        supports `local_browser.research`, engine sign-in, signed-in-profile consent. `engineAuth` is
+        `{verdict, runId, observedAt}` — the sign-in class (`subscription`, `machine-login`, `api-key`,
+        `missing_login`) the runner last recorded for the selected engine and auth mode — or null when
+        none has been observed. Never a credential. A `missing_login` verdict does not block a start:
+        the next run re-checks it.
       operationId: getLocalBrowserPreflight
       tags: [Instances]
       parameters:
