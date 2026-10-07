@@ -412,7 +412,7 @@ export const UNBACKED_CLAIMS: Record<string, UnbackedClaim> = {
 		source: "workers/api/src/lib/board.ts",
 		symbol: "BoardView",
 	},
-	"browser|coding|null": {
+	"browser|coding|local_browser|null": {
 		reason: "agent runtime kind — `null` is an unquoted member of the union",
 		source: "workers/api/src/lib/agent-capabilities.ts",
 		symbol: "AgentRuntimeKind",

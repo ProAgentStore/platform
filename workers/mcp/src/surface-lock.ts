@@ -1001,4 +1001,8 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// unlisted argument (an agent sent `_deferred_result_for`). No tool, schema or annotation changed.
 	// Appended, never edited in place: 0.1.77 is published.
 	"0.1.78": "sha256:c4cbe838aa5934f649aff3e0e7362b78119bf6190190337bf5c4fca748042f05",
+	// 0.1.79 (#951): update_agent's capabilities.runtime gains `local_browser` (set_agent_capabilities
+	// had it since 0.1.77) and the object declares `localBrowser`, which zod otherwise stripped. No
+	// tool added or removed. Appended, never edited in place: 0.1.78 is published.
+	"0.1.79": "sha256:cddc6a5eeb6d200081a517ed9c1588bb756f13e36170f9744d90715d522f1173",
 };

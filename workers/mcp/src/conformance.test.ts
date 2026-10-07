@@ -1157,3 +1157,69 @@ describe("a pending call is waited for, never resumed with an invented argument 
 		}
 	});
 });
+
+/**
+ * #951. A client must be able to configure the local-browser runtime from MCP: a linked client
+ * rejected `runtime: "local_browser"` before the API ever saw it. The live server already published
+ * it on set_agent_capabilities (0.1.77) — that client held an older cached catalog, which no server
+ * change can refresh — but update_agent still declared `runtime: browser | coding` and had no
+ * `localBrowser` key (so zod stripped one). These assert the PUBLISHED input schemas, the bytes a
+ * client validates against, accept the calls the acceptance criteria name, and that every
+ * documented local-browser tool is listed.
+ */
+const { KNOWN_RUNTIMES } = await import("../../api/src/lib/agent-capabilities.js");
+
+describe("the published schemas let a client configure local browser research (#951)", () => {
+	const validator = new Ajv2020({ strict: false, allErrors: true });
+	addFormats(validator);
+	const accepts = (name: string, input: unknown) => {
+		const tool = published.find((t) => t.name === name) as WireTool;
+		// The SDK stamps draft-07's `$schema`; the keywords these schemas use (enum, anyOf,
+		// properties, additionalProperties) mean the same under 2020-12, so validate the body.
+		const { $schema: _draft, ...schema } = tool.inputSchema;
+		const check = validator.compile(schema);
+		const ok = check(input);
+		return { ok, errors: JSON.stringify(check.errors ?? []) };
+	};
+	const block = { engines: ["codex", "claude"], subscriptionOnly: true, limits: { maxMinutes: 15 }, allowDomains: ["seek.com.au"] };
+
+	it.each([
+		["set_agent_capabilities", { agent_id: "a1", runtime: "local_browser", local_browser: block, dry_run: true }],
+		["update_agent", { agent_id: "a1", capabilities: { surfaces: [], runtime: "local_browser", localBrowser: block }, dry_run: true }],
+		["create_agent", { slug: "scout", name: "Scout", capabilities: { surfaces: [], runtime: "local_browser", localBrowser: block }, dry_run: true }],
+	])("%s accepts runtime local_browser with its block", (name, input) => {
+		const r = accepts(name, input);
+		expect(r.ok, r.errors).toBe(true);
+	});
+
+	it("every published runtime enum names every runtime the API knows", () => {
+		const enums: Array<{ tool: string; values: string[] }> = [];
+		const walk = (tool: string, node: unknown) => {
+			if (!node || typeof node !== "object") return;
+			const n = node as Record<string, unknown>;
+			if (Array.isArray(n.enum) && n.enum.includes("browser") && n.enum.includes("coding")) enums.push({ tool, values: n.enum as string[] });
+			for (const v of Object.values(n)) walk(tool, v);
+		};
+		for (const t of published) walk(t.name, t.inputSchema);
+		expect(enums.map((e) => e.tool).sort()).toEqual(expect.arrayContaining(["set_agent_capabilities", "update_agent"]));
+		for (const e of enums) expect([...e.values].sort(), e.tool).toEqual(expect.arrayContaining([...KNOWN_RUNTIMES]));
+	});
+
+	it("lists every documented local-browser tool", () => {
+		const names = new Set(published.map((t) => t.name));
+		for (const tool of [
+			"local_browser_preflight",
+			"get_instance_local_browser_settings",
+			"set_instance_local_browser_settings",
+			"start_local_browser_run",
+			"list_local_browser_runs",
+			"cancel_local_browser_run",
+			"resume_local_browser_run",
+			"get_local_browser_consent",
+			"set_local_browser_consent",
+			"review_local_browser_finding",
+		]) {
+			expect(names.has(tool), tool).toBe(true);
+		}
+	});
+});

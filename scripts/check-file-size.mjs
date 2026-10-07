@@ -827,7 +827,7 @@ const PINS = {
 	// the rest say why the order latch → pipeline → registrations must not change.
 	// +16 at #771: the `/mcp/t/<agentSlug>` session's props field, its init branch and method, and
 	// the risk→annotations helper both pinned surfaces now share; the surface itself is type-pinned.ts.
-	"workers/mcp/src/index.ts": 1055,
+	"workers/mcp/src/index.ts": 1061, // +6 at #951: update_agent declares the local_browser runtime and the localBrowser block, with why;
 	// First entry, at #806: the 0.1.48 record took it from 786 to 802. Pinned rather than split
 	// because it is an APPEND-ONLY ledger — one hash per published version plus why the surface
 	// moved — and `check-surface-lock.mjs --require-history` reads THIS path's git history to prove
@@ -837,7 +837,7 @@ const PINS = {
 	// +16 at #192 (proappstore-online/platform): the 0.1.50 record — recent_instances gains `limit`
 	// and a working-first order; the entry says why the cap had hidden a live run. Ledger, not drift.
 	// +59 at #847: 0.1.51–0.1.57 are published append-only surface records; moving them would defeat the history check that protects this ledger. +5 at #849: the 0.1.58 record. +5 at #854: the 0.1.59 record. +5 at #856: the 0.1.60 record. +4 at #857: the 0.1.61 record. +4 at #858: the 0.1.62 record. +4 at #859: the 0.1.63 record.
-	"workers/mcp/src/surface-lock.ts": 1005, // +5 at #927: the 0.1.78 record (pending-call instruction); +5 at #946: the 0.1.77 record (consent + finding review tools); +5 at #944: the 0.1.76 record (start/cancel/resume local browser runs); +6 at #945: the 0.1.75 record (four local browser tools); +4 at #942: the 0.1.74 record (coding_overseer removed); +5 at #938: the 0.1.73 record (get_console_link); +8 at #906: the 0.1.72 record (three secure_input tools); +3 at #904: the 0.1.71 server-info schema record; +2 at #886: the 0.1.70 request_id schema record; +10 at #879: 0.1.66 + 0.1.67 records; +5 at #881: the 0.1.68 record; +4 at #877: the 0.1.69 record — append-only surface ledger, not drift.
+	"workers/mcp/src/surface-lock.ts": 1009, // +4 at #951: the 0.1.79 record (update_agent local_browser); +5 at #927: the 0.1.78 record (pending-call instruction); +5 at #946: the 0.1.77 record (consent + finding review tools); +5 at #944: the 0.1.76 record (start/cancel/resume local browser runs); +6 at #945: the 0.1.75 record (four local browser tools); +4 at #942: the 0.1.74 record (coding_overseer removed); +5 at #938: the 0.1.73 record (get_console_link); +8 at #906: the 0.1.72 record (three secure_input tools); +3 at #904: the 0.1.71 server-info schema record; +2 at #886: the 0.1.70 request_id schema record; +10 at #879: 0.1.66 + 0.1.67 records; +5 at #881: the 0.1.68 record; +4 at #877: the 0.1.69 record — append-only surface ledger, not drift.
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.

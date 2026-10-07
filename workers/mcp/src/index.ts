@@ -448,7 +448,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 					.union([z.record(z.unknown()), z.string()])
 					.optional()
 					.describe(
-						"Declarative capabilities, validated server-side: surfaces[], runtime (browser|coding|null), workflow, tools[] allowlist (e.g. delegate_goal/list_subordinates for a supervisor, or the coding runtime for a repo agent). Object, or a JSON string of the same.",
+						"Declarative capabilities, validated server-side: surfaces[], runtime (browser|coding|local_browser|null), workflow, localBrowser (the local CLI browser research block for runtime local_browser), tools[] allowlist (e.g. delegate_goal/list_subordinates for a supervisor, or the coding runtime for a repo agent). Object, or a JSON string of the same.",
 					),
 				settings_schema: z
 					.union([z.array(z.unknown()), z.string()])
@@ -645,7 +645,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"update_agent",
-			"Update an agent's settings. `capabilities` declares the agent's power fields as data (#141): surfaces, runtime (browser|coding|null), workflow, and the tools[] allowlist (e.g. browser_navigate/browser_snapshot/browser_act to make it a browser agent). Patch-merged + validated server-side.",
+			"Update an agent's settings. `capabilities` declares the agent's power fields as data (#141): surfaces, runtime (browser|coding|local_browser|null), workflow, localBrowser (the local CLI browser research block, for runtime local_browser), and the tools[] allowlist (e.g. browser_navigate/browser_snapshot/browser_act to make it a browser agent). Patch-merged + validated server-side.",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				agent_id: z.string(),
@@ -657,7 +657,13 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 					.union([
 						z.object({
 							surfaces: z.array(z.string()).optional(),
-							runtime: z.enum(["browser", "coding"]).nullable().optional(),
+							// CANONICAL SOURCE: `KNOWN_RUNTIMES` in workers/api/src/lib/agent-capabilities.ts.
+							// `local_browser` was missing here (#951) while set_agent_capabilities had it, so
+							// update_agent refused it at the client before the API — which accepts it — ever saw it.
+							runtime: z.enum(["browser", "coding", "local_browser"]).nullable().optional(),
+							// Declared or zod strips it: an object schema drops unknown keys, so a localBrowser
+							// block sent through update_agent never reached the API's validator (#951).
+							localBrowser: z.record(z.unknown()).nullable().optional(),
 							// CANONICAL SOURCE: `workers/api/src/lib/agent-workflows.ts` `AGENT_WORKFLOWS`.
 							// A transport-side mirror (the API re-validates), kept honest by the drift
 							// test in `agent-workflows.test.ts` — this list carried INSURANCE_QUOTES,
