@@ -504,3 +504,49 @@ describe("liveness: a working run clears its park, a waiting one states when it 
 		expect(parked!.waiting_until).toBeGreaterThan(Date.now());
 	});
 });
+
+describe("a question parks the run on `decision`, on its card, and the answer comes back as one (#960)", () => {
+	it("publishes agent.needs_input with a `from:` list, stores the ask on the run, and hands the answer to the next decision", async () => {
+		seedLoopRun();
+		let parked: { waiting_reason: string | null; waiting_ask: string | null } | null = null;
+		runner["/coding/takeover-status"] = () => {
+			parked = one("SELECT waiting_reason, waiting_ask FROM agent_loop_runs WHERE run_id = 'run-1'");
+			return { resolved: true, value: "drop it" };
+		};
+		decisions = [
+			{ needsInput: { field: "Keep the old API or drop it?", why: "breaking change", options: ["keep it", "drop it"] } },
+			{ finish: { status: "done", detail: "ok" } },
+		];
+		await run(params({ loopRunId: "run-1" }));
+
+		expect(parked).toMatchObject({ waiting_reason: "decision" });
+		expect(JSON.parse(parked!.waiting_ask ?? "null")).toEqual({
+			question: "Keep the old API or drop it?",
+			options: ["keep it", "drop it"],
+			why: "breaking change",
+			field: "Keep the old API or drop it?",
+			taskId: "csess-s1",
+		});
+		// The console's RunDetail reads this exact shape off `/task-events` for its tap-to-answer box.
+		const ev = rows<{ task_id: string; type: string; payload: string }>("SELECT task_id, type, payload FROM instance_runtime_task_events WHERE type = 'agent.needs_input'");
+		expect(ev).toHaveLength(1);
+		expect(ev[0].task_id).toBe("csess-s1");
+		expect(JSON.parse(ev[0].payload).data).toMatchObject({ field: "Keep the old API or drop it?", why: "breaking change — from: keep it, drop it" });
+		// The takeover still opens on the runner — that map is what the answer resolves.
+		expect(runnerCalls.find((c) => c.path === "/coding/takeover")?.body).toMatchObject({ sessionId: "s1", reason: "needs_input" });
+		expect(decided[1].goal.userHint).toBe('The owner answered your question "Keep the old API or drop it?": drop it');
+	});
+
+	it("a takeover (`stuck`) still parks as `human`, with no ask and no needs_input event", async () => {
+		seedLoopRun();
+		let parked: { waiting_reason: string | null; waiting_ask: string | null } | null = null;
+		runner["/coding/takeover-status"] = () => {
+			parked = one("SELECT waiting_reason, waiting_ask FROM agent_loop_runs WHERE run_id = 'run-1'");
+			return { resolved: true };
+		};
+		decisions = [{ stuck: { why: "captcha" } }, { finish: { status: "done", detail: "ok" } }];
+		await run(params({ loopRunId: "run-1" }));
+		expect(parked).toEqual({ waiting_reason: "human", waiting_ask: null });
+		expect(rows("SELECT id FROM instance_runtime_task_events WHERE type = 'agent.needs_input'")).toEqual([]);
+	});
+});

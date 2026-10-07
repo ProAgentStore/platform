@@ -10,8 +10,9 @@
  * run is reported HARD-blocked here, because that is what it is in practice. The one pause that is
  * both recorded and answerable from a conversation is a remote MCP server's elicitation
  * (`mcp_input_requests`, answered with `answer_instance_mcp_input_request`), and that is the only
- * thing that makes an instance decision_blocked. When the Pilot gains a real decision verb (#960
- * scope), it becomes a second input here — not a guess made now.
+ * thing that made an instance decision_blocked until #960 gave the Pilot a real decision verb: a
+ * coding run parked on `decision` (its `ask_owner` / `request_user_info`, answered with
+ * answer_instance_input) is now the second input.
  */
 import type { InstanceHealth } from "./instance-activity.js";
 import type { IssueSummary } from "./github-issues.js";
@@ -77,6 +78,8 @@ export interface FleetFacts {
 	queueDepth: number;
 	/** Pending, unexpired MCP elicitations — the answerable-in-chat asks. */
 	decisions: number;
+	/** The open run's question when it is parked on `decision` (#960), or null. */
+	runQuestion?: { question: string; taskId: string } | null;
 	/** Pending owner secure inputs — a secret to type into the console, not a conversation. */
 	ownerSecrets: number;
 	/** Null when the instance has no GitHub repo bound — there is no backlog to report. */
@@ -91,6 +94,15 @@ const HARD_PARKS = new Set(["human", "engine_auth"]);
  * act: a question waiting on them, then anything stuck, then work in flight, then the backlog.
  */
 export function deriveFleetStatus(f: FleetFacts): { status: FleetStatus; reason: string } {
+	if (f.health === "waiting" && f.waitingReason === "decision") {
+		const q = f.runQuestion;
+		return {
+			status: "decision_blocked",
+			reason: q
+				? `The run is waiting for your answer: "${q.question}" — answer with answer_instance_input (task_id ${q.taskId}).`
+				: "The run is waiting for your answer to a question — open its board card, or answer with answer_instance_input.",
+		};
+	}
 	if (f.decisions > 0) {
 		return { status: "decision_blocked", reason: `${f.decisions} question${f.decisions === 1 ? "" : "s"} waiting for your answer — answer with answer_instance_mcp_input_request.` };
 	}

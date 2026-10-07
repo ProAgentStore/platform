@@ -80,6 +80,7 @@ What running out *means* is entailed by the reason, and the two kinds demand opp
 | `human` | it is waiting for YOU to answer a handoff | **gives up** — the run stops waiting, and the owner has until then to act |
 | `platform_interrupt` | it was interrupted by something other than the work and a retry is scheduled | **resumes** — the run continues by itself, and the owner does nothing |
 | `engine_auth` | the coding engine is not signed in — sign it in with coding_engine_reauth, from any device | **gives up** — the run stops waiting, and the owner has until then to act |
+| `decision` | it is waiting for YOUR ANSWER to a question | **gives up** — the run stops waiting, and the owner has until then to act |
 
 <!-- /generated:run-wait-reasons -->
 
@@ -89,6 +90,8 @@ Two consequences of the clock being one field with one meaning:
 
 - **A park with no knowable instant still parks.** `platform_interrupt` often has no time attached, because journal replay finishes when it finishes. The run is parked; there is simply no deadline to state.
 - **A deadline in the past renders as nothing.** "Gives up in −3m" is not a sentence, and the next tick either clears the park or closes the run.
+
+**`decision` is a question, `human` is a takeover.** A `decision` park (the Pilot's `ask_owner`, or `request_user_info` for a value) carries `waitingAsk` — `{question, options, why, field, taskId}` — and is answered from a conversation: the console card's answer box, or `answer_instance_input` with that `taskId`. A `human` park needs someone at the session. The fleet reports the first as `decision_blocked` and the second as `hard_blocked`.
 
 A park also outranks the heartbeat test. A run parked on an interruption is mid-resume and has nothing ticking *by design*, so reading its silence as death would report a recovery in progress as a failure.
 

@@ -18,7 +18,7 @@
 // Pure and exported: the same rendering serves the `check_work` tool result and the automatic
 // "recent work" context block, so the two can never tell different stories about one run.
 import { formatInZone } from "./agent-clock.js";
-import type { LoopRunView, RunWaitReason } from "./agent-loop-store.js";
+import type { LoopRunView, RunWaitReason, WaitingAsk } from "./agent-loop-store.js";
 import { type TerminalView } from "./terminal-label.js";
 
 /**
@@ -101,6 +101,9 @@ export const MAX_PARK_MS = 4 * 60 * 60 * 1000;
 export const PARK_LIMIT_MS: Record<RunWaitReason, number> = {
 	platform_interrupt: STALLED_AFTER_MS,
 	human: 30 * 60 * 1000,
+	// The same 15-minute give-up as a takeover (#960): it is the same pause loop, only answerable
+	// from a conversation. Doubled for the same reason `human` is.
+	decision: 30 * 60 * 1000,
 	engine_limit: 8 * 60 * 60 * 1000,
 	// The same 15-minute give-up as a handoff (`coding-pause.ts`'s `waitForSignIn`), doubled for the
 	// same reason `human` is (#881).
@@ -339,6 +342,8 @@ interface Park {
 const PARKS: Record<RunWaitReason, Park> = {
 	engine_limit: { why: "the coding CLI's own usage limit has to reset", deadline: "resume" },
 	human: { why: "it is waiting for YOU to answer a handoff", deadline: "give_up" },
+	// #960: answerable from a conversation — the clause below adds the question and how to answer it.
+	decision: { why: "it is waiting for YOUR ANSWER to a question", deadline: "give_up" },
 	engine_auth: { why: "the coding engine is not signed in — sign it in with coding_engine_reauth, from any device", deadline: "give_up" },
 	// "Being resumed" only while a retry is actually SCHEDULED — see `waitClause` for the park without one (#855).
 	platform_interrupt: { why: "it was interrupted by something other than the work and a retry is scheduled", deadline: "resume" },
@@ -370,7 +375,7 @@ const DEADLINE_CLAUSE: Record<ParkDeadline, (left: string) => string> = {
  * A deadline already in the past renders as no clause at all: "gives up in -3m" is not a sentence,
  * and the next tick either clears the park or closes the run.
  */
-export function waitClause(run: RunHealthInput & { waitingUntil?: number | null }, now: number): string | null {
+export function waitClause(run: RunHealthInput & { waitingUntil?: number | null; waitingAsk?: WaitingAsk | null }, now: number): string | null {
 	// A FINISHED run makes no liveness claim in either direction (#459) — and `finishLoopRun` does
 	// not clear the park columns, so a run that ended while parked still carries them. Reading them
 	// on a closed row would announce a wait that is over.
@@ -379,7 +384,7 @@ export function waitClause(run: RunHealthInput & { waitingUntil?: number | null 
 	// A park whose reason this build does not know is still a park (`coding-run-state.ts` takes the
 	// same line). What it does NOT get is a deadline clause: with no kind, the instant could only be
 	// rendered under a guessed verb, and a guessed verb is the entire defect.
-	const why = park?.why ?? `it is parked (${run.waitingReason})`;
+	const why = (park?.why ?? `it is parked (${run.waitingReason})`) + (run.waitingReason === "decision" ? askClause(run.waitingAsk) : "");
 	const left = run.waitingUntil && run.waitingUntil > now ? ago(run.waitingUntil - now).replace(" ago", "") : "";
 	// An interruption with NO retry scheduled is not "being resumed" (#855): that note sat over a run
 	// nothing was going to resume for 13 minutes while the owner was told to expect it. Said as what it
@@ -391,6 +396,17 @@ export function waitClause(run: RunHealthInput & { waitingUntil?: number | null 
 	// Said out loud, because the whole defect is that this state was indistinguishable from working:
 	// nothing has advanced and that is CORRECT, so neither "stalled" nor a bare "running" is honest.
 	return `WAITING, not stalled and not working — ${why}${until}. No instruction has advanced since it parked, which is expected`;
+}
+
+/**
+ * The question a `decision` park is waiting on, and how to answer it (#960) — said in the wait note
+ * because that note is what every reader (coding_loop_status, recent_instances, the fleet, a
+ * supervisor) already quotes. Without the ask stored, it says only how to find it.
+ */
+export function askClause(ask: WaitingAsk | null | undefined): string {
+	if (!ask) return " (open the run's card to see it)";
+	const options = ask.options.length ? ` Options: ${ask.options.join(" | ")}.` : "";
+	return `: "${ask.question}".${options} Answer with answer_instance_input (task_id ${ask.taskId}) or in the console on that card`;
 }
 
 /**

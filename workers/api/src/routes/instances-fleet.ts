@@ -123,6 +123,7 @@ export function registerFleetRoutes(router: Hono<{ Bindings: Env }>): void {
 				waitingReason: open?.waitingReason ?? null,
 				queueDepth: queueDepths.get(m.id) ?? 0,
 				decisions: decision?.pending ?? 0,
+				runQuestion: open?.waitingAsk ? { question: open.waitingAsk.question, taskId: open.waitingAsk.taskId } : null,
 				ownerSecrets: secrets.get(m.id) ?? 0,
 				issues,
 			});

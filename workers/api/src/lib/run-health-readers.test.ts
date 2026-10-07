@@ -246,7 +246,7 @@ describe("no legend names fewer states than the code can produce (#594 AC5, scop
 		expect(RUN_WAIT_REASONS.length, `${RUN_WAIT_REASONS.length} park reasons swept`).toBeGreaterThanOrEqual(3);
 
 		/** The verb each reason's deadline must be said with — restated here, ON PURPOSE. */
-		const KIND: Record<string, "resume" | "give_up"> = { engine_limit: "resume", human: "give_up", platform_interrupt: "resume", engine_auth: "give_up" };
+		const KIND: Record<string, "resume" | "give_up"> = { engine_limit: "resume", human: "give_up", platform_interrupt: "resume", engine_auth: "give_up", decision: "give_up" };
 		const seen = new Set<string>();
 		for (const reason of RUN_WAIT_REASONS) {
 			const kind = KIND[reason];

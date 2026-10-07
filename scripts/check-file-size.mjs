@@ -995,7 +995,7 @@ const PINS = {
 	"workers/api/src/lib/user-ai.ts": 817,
 	// New entry at #914, crossing LIMIT by 6: the Pilot's prompt split into a 1-hour-cached run prefix
 	// and an uncached round tail, with the measurement that justified it in its doc comment.
-	"workers/api/src/lib/coding-loop.ts": 813, // +7 at #898: the Pilot step log marks the instruction it shortens; `paneChars` rides on the snapshot.
+	"workers/api/src/lib/coding-loop.ts": 869, // +56 at #960: the `ask_owner` decision verb — its tool, prompt rule, decision case and option bounds. +7 at #898: the Pilot step log marks the instruction it shortens; `paneChars` rides on the snapshot.
 	// +3 at #878: the terminal record hook — an import and a one-line call with its comment after the handler. It belongs HERE for the reason the gates do: every surface dispatches through this function, and recording anywhere else would record one surface. The storage is lib/terminal-record.ts.
 	"workers/api/src/lib/tool-registry.ts": 902, // +3 at #898: truncation made visible (paging, marked cuts, refused over-length writes).
 	// +8 for the #312 stats prompt block. Deliberately not split: the block is two statements
@@ -1786,7 +1786,7 @@ const PINS = {
 	// coding-session.ts by deleting ~700 lines of behaviour to get under LIMIT (end-of-run policies,
 	// sync, closing drain, notify, endSession, the "running" card claim, the sync-gate stop). A real
 	// split must MOVE code without changing it; until then this is the honest size.
-	"workers/api/src/workflows/coding-session/workflow-run.ts": 1071, // +1 at #894: the pause carries its session id, so "Coder needs you" opens the run, not the repo list.
+	"workers/api/src/workflows/coding-session/workflow-run.ts": 1101, // +30 at #960: a question is published (agent.needs_input on its card, the ask on the run) and parks as `decision`. +1 at #894: the pause carries its session id, so "Coder needs you" opens the run, not the repo list.
 	// +5 at #754: one new entry for triggers.ts (3 comment lines + 1 pin line) + agent-do raise comment + this.
 	// +7 at #744: 6-line rationale comment for use-voice.ts raise + this note.
 	// +4 at #739: two raised pins (tool-registry, agent-think) + this note + blank line.

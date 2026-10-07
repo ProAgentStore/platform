@@ -47,7 +47,8 @@ import {
 import { describeRepoScopeViolation, recordRepoScopeViolations, registeredRepoSlugs, unscopedWrites } from "../../lib/repo-write-scope.js";
 import { actsInWindow } from "../../lib/instance-work.js";
 import { annotateOwnerAttribution } from "../../lib/run-attribution.js";
-import { finishLoopRun, isCancelRequested, recordIteration, recordLiveness, type RunWaitReason } from "../../lib/agent-loop-store.js";
+import { finishLoopRun, isCancelRequested, recordIteration, recordLiveness, type RunWaitReason, type WaitingAsk } from "../../lib/agent-loop-store.js";
+import { mirrorRuntimeEvent } from "../../routes/instances-runtime.js";
 import { reauthCompletedSince } from "../../lib/engine-reauth-store.js";
 import { tryDequeueAndStart } from "../../lib/objective-queue-start.js";
 import { traceCodingRun } from "../../lib/coding-run-trace.js";
@@ -593,6 +594,8 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 	/** This RUN's wait budget, held across rounds — a park is a property of the run, not a round. */
 	const waitState: EngineWaitState = { waits: 0, spentMs: 0 };
 	/** The pause machine's effects (#541). `conn` is read at call time: the guard re-points it. */
+	/** The question a `decision` park is waiting on (#960), set by `ask` and carried by every tick of that park. */
+	let parkedAsk: WaitingAsk | null = null;
 	const pauseDeps = (round: number, wait: RunWaitReason): PauseDeps => ({
 		repo: goal.repo,
 		timeZone: goal.timeZone,
@@ -601,6 +604,28 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		sessionId,
 		now: () => Date.now(),
 		takeover: (label, reason) => runRetry(`handoff-${round}`, () => callRunner(conn, "/coding/takeover", { sessionId, label, reason })).then(() => undefined),
+		// A QUESTION, published (#960): the `agent.needs_input` event on the card — the console's answer
+		// box reads it, options as a `from:` list — and the `decision` park with the ask on the run, at
+		// once rather than at the first tick, so coding_loop_status says what is being asked now.
+		ask: (ask) => {
+			// Set OUTSIDE the step: a replay returns a journalled step without re-running its body,
+			// and the ticks of this park read `parkedAsk` to keep the question on the run.
+			parkedAsk = ask;
+			return runRetry(`ask-${round}`, async () => {
+				const from = ask.options.length ? `from: ${ask.options.join(", ")}` : "";
+				const why = [ask.why, from].filter(Boolean).join(" — ");
+				await mirrorRuntimeEvent(env, instanceId, userId, {
+					id: `${ask.taskId}:needs_input:${round}`,
+					taskId: ask.taskId,
+					type: "agent.needs_input",
+					message: `Needs your input — ${ask.field}${why ? ` (${why})` : ""}`,
+					data: { field: ask.field, why, options: ask.options, sessionId },
+					createdAt: new Date().toISOString(),
+				});
+				if (event.payload.loopRunId) await recordLiveness(env, event.payload.loopRunId, Date.now(), { reason: "decision", ask });
+				return null;
+			}).then(() => undefined);
+		},
 		takeoverStatus: () =>
 			runRetry(`hstatus-${round}-${n++}`, () => callRunner(conn, "/coding/takeover-status", { sessionId })) as Promise<{ resolved: boolean; value?: string }>,
 		endTakeover: () => runRetry(`resume-${round}`, () => callRunner(conn, `/coding/takeover/${encodeURIComponent(sessionId)}/end`, {})).then(() => undefined),
@@ -630,7 +655,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			if (driverId) await touchSessionDriver(env, instanceId, userId, sessionId, driverId).catch(() => undefined);
 			await touchSessionActivity(env, instanceId, userId, sessionId).catch(() => undefined);
 			if (!loopRunId) return true;
-			await recordLiveness(env, loopRunId, Date.now(), { reason: wait, until: park?.until ?? null }).catch(() => undefined);
+			await recordLiveness(env, loopRunId, Date.now(), { reason: wait, until: park?.until ?? null, ask: wait === "decision" ? parkedAsk : null }).catch(() => undefined);
 			return !(await isCancelRequested(env, loopRunId).catch(() => false));
 		},
 	});
@@ -840,8 +865,13 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			// on — the only place both the reason and the run id are in hand before the wait
 			// starts. `waiting` is the engine's own usage window; `stuck`/`needs_input` are a
 			// person. A tick that could not tell them apart is why the record could not either.
+			// A `needs_input` is a QUESTION — a value or a choice, answerable from a conversation — and
+			// parks as `decision`, not `human` (#960): the record used to make it indistinguishable from
+			// a hands-on takeover, which is why the fleet, the board and the status report all called it
+			// hard-blocked.
 			const parkReason: RunWaitReason =
-				result.outcome === "waiting" ? "engine_limit" : result.outcome === "needs_reauth" ? "engine_auth" : "human";
+				result.outcome === "waiting" ? "engine_limit" : result.outcome === "needs_reauth" ? "engine_auth" : result.outcome === "needs_input" ? "decision" : "human";
+			parkedAsk = null;
 			const pause = await resolvePause(pauseDeps(round, parkReason), { round, result, state: waitState });
 			if (!pause.resume) {
 				result = pause.result;

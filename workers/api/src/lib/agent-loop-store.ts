@@ -41,6 +41,8 @@ export interface LoopRunRow {
 	 * migration for why none of the existing timestamps can answer "how long has it been parked".
 	 */
 	parked_since: number | null;
+	/** What a `decision` park is asking (0182, #960) — JSON {@link WaitingAsk}; null otherwise. */
+	waiting_ask?: string | null;
 	/** Platform interruptions this run was resumed through (0127, #583). */
 	interruptions: number | null;
 	/** Supervisor instance that delegated this run (0090). Null when the owner started it. */
@@ -84,9 +86,43 @@ export interface LoopRunRow {
  * Every table keyed by a park reason — `work-report.ts`'s `PARKS`, `coding-run-state.ts`'s
  * `PARK_GLOSS` — is a place a new member can go unhandled. This array is what lets a test walk them.
  */
-export const RUN_WAIT_REASONS = ["engine_limit", "human", "platform_interrupt", "engine_auth"] as const;
+export const RUN_WAIT_REASONS = ["engine_limit", "human", "platform_interrupt", "engine_auth", "decision"] as const;
 
 export type RunWaitReason = (typeof RUN_WAIT_REASONS)[number];
+
+/**
+ * What a run parked on `decision` (#960) is asking the owner — answerable in a conversation, from a
+ * phone, with no hands on the session. `human` stays the park for a takeover.
+ *
+ * `field` is the Pilot's name for the value (a `request_user_info`) or the question itself (an
+ * `ask_owner`); the owner's answer comes back to the Pilot as `<field>: <answer>`. `options` is
+ * empty for a free-form value. `taskId` is the board card the console's answer box is on, and what
+ * `POST /v1/instances/:id/input` matches an answer against.
+ */
+export interface WaitingAsk {
+	question: string;
+	options: string[];
+	why: string;
+	field: string;
+	taskId: string;
+}
+
+export function parseWaitingAsk(raw: string | null | undefined): WaitingAsk | null {
+	if (!raw) return null;
+	try {
+		const o = JSON.parse(raw) as Partial<WaitingAsk>;
+		if (typeof o.question !== "string" || typeof o.taskId !== "string") return null;
+		return {
+			question: o.question,
+			options: Array.isArray(o.options) ? o.options.filter((x): x is string => typeof x === "string") : [],
+			why: typeof o.why === "string" ? o.why : "",
+			field: typeof o.field === "string" ? o.field : o.question,
+			taskId: o.taskId,
+		};
+	} catch {
+		return null;
+	}
+}
 
 export interface LoopRunView {
 	runId: string;
@@ -131,6 +167,8 @@ export interface LoopRunView {
 	waitingUntil: number | null;
 	/** Why the run is parked, or null when it is not (#580). */
 	waitingReason: RunWaitReason | null;
+	/** What a `decision` park is asking — the question, its options, and the card to answer on (#960). */
+	waitingAsk: WaitingAsk | null;
 	/**
 	 * ms epoch this park BEGAN, or null when the run is not parked (0150, #790).
 	 *
@@ -179,6 +217,7 @@ export function toLoopRunView(row: LoopRunRow): LoopRunView {
 		lastAliveAt: row.last_alive_at ?? null,
 		waitingUntil: row.waiting_until ?? null,
 		waitingReason: (row.waiting_reason as RunWaitReason | null) ?? null,
+		waitingAsk: row.waiting_reason === "decision" ? parseWaitingAsk(row.waiting_ask) : null,
 		parkedSince: row.parked_since ?? null,
 		interruptions: row.interruptions ?? 0,
 		delegatedBy: row.delegated_by ?? null,
@@ -446,6 +485,7 @@ export async function recordIteration(env: Env, runId: string, iteration: number
 		        last_progress_at = CASE WHEN ?2 > iteration THEN ?3 ELSE last_progress_at END,
 		        waiting_until = CASE WHEN ?2 > iteration THEN NULL ELSE waiting_until END,
 		        waiting_reason = CASE WHEN ?2 > iteration THEN NULL ELSE waiting_reason END,
+		        waiting_ask = CASE WHEN ?2 > iteration THEN NULL ELSE waiting_ask END,
 		        parked_since = CASE WHEN ?2 > iteration THEN NULL ELSE parked_since END,
 		        last_alive_at = ?3
 		  WHERE run_id = ?1`,
@@ -483,7 +523,7 @@ export async function recordLiveness(
 	env: Env,
 	runId: string,
 	at: number = Date.now(),
-	wait?: { reason: RunWaitReason; until?: number | null } | null,
+	wait?: { reason: RunWaitReason; until?: number | null; ask?: WaitingAsk | null } | null,
 ): Promise<void> {
 	if (wait === undefined) {
 		await env.DB.prepare("UPDATE agent_loop_runs SET last_alive_at = ?2 WHERE run_id = ?1").bind(runId, at).run();
@@ -500,6 +540,7 @@ export async function recordLiveness(
 		    SET last_alive_at = ?2,
 		        waiting_reason = ?3,
 		        waiting_until = ?4,
+		        waiting_ask = ?5,
 		        parked_since = CASE
 		          WHEN ?3 IS NULL THEN NULL
 		          WHEN waiting_reason IS NULL OR parked_since IS NULL THEN ?2
@@ -507,7 +548,7 @@ export async function recordLiveness(
 		        END
 		  WHERE run_id = ?1`,
 	)
-		.bind(runId, at, wait?.reason ?? null, wait?.until ?? null)
+		.bind(runId, at, wait?.reason ?? null, wait?.until ?? null, wait?.reason === "decision" && wait.ask ? JSON.stringify(wait.ask) : null)
 		.run();
 }
 

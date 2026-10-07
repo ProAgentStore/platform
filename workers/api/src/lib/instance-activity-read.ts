@@ -2,6 +2,7 @@
  * The two reads behind "what is each of my instances doing" (#815) — shared by `GET /my/activity`
  * and the fleet snapshot (#961), so the two cannot disagree about which run is an instance's.
  */
+import { parseWaitingAsk, type WaitingAsk } from "./agent-loop-store.js";
 import type { ActivityRunRow } from "./instance-activity.js";
 import type { Env } from "../types.js";
 
@@ -9,6 +10,8 @@ import type { Env } from "../types.js";
 export interface LatestRun extends ActivityRunRow {
 	objective: string;
 	waitingUntil: number | null;
+	/** What a `decision` park is asking (#960), or null. */
+	waitingAsk: WaitingAsk | null;
 }
 
 /**
@@ -19,7 +22,7 @@ export interface LatestRun extends ActivityRunRow {
 export async function readLatestRuns(env: Env, userId: string, since: number): Promise<LatestRun[]> {
 	const rows = await env.DB.prepare(
 		`SELECT run_id, instance_id, objective, status, stop_reason, started_at, finished_at,
-		        last_alive_at, last_progress_at, waiting_reason, waiting_until, parked_since
+		        last_alive_at, last_progress_at, waiting_reason, waiting_until, parked_since, waiting_ask
 		   FROM (
 		     SELECT r.*, ROW_NUMBER() OVER (
 		              PARTITION BY r.instance_id ORDER BY r.started_at DESC
@@ -45,6 +48,7 @@ export async function readLatestRuns(env: Env, userId: string, since: number): P
 		waitingReason: (r.waiting_reason as string | null) ?? null,
 		waitingUntil: (r.waiting_until as number | null) ?? null,
 		parkedSince: (r.parked_since as number | null) ?? null,
+		waitingAsk: r.waiting_reason === "decision" ? parseWaitingAsk(r.waiting_ask as string | null) : null,
 	}));
 }
 

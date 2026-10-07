@@ -30,6 +30,7 @@ import {
 import type { LoopStopReason } from "./agent-loop.js";
 import type { CodingOutcome, CodingResult } from "./coding-loop.js";
 import { type DeepLink, deepLinkFor } from "./console-links.js";
+import { codingCardId } from "./coding-board.js";
 
 /** Max polls for a human to resolve a stuck/needs-input handoff. 180 × 5s = 15 min. */
 export const HANDOFF_WAIT_POLLS = 180;
@@ -76,6 +77,13 @@ export interface PauseDeps {
 	sessionId?: string;
 	/** Open the console takeover on the runner. */
 	takeover: (label: string, reason: "stuck" | "needs_input") => Promise<void>;
+	/**
+	 * Publish a QUESTION (#960) — a `needs_input` pause: the `agent.needs_input` event on the run's
+	 * card (what lights up the console's answer box) and the `decision` park with the ask stored on
+	 * the run (what coding_loop_status, the fleet and the board read). Optional so a test or a caller
+	 * with nothing to publish to still pauses; the workflow always provides it.
+	 */
+	ask?: (ask: { question: string; options: string[]; why: string; field: string; taskId: string }) => Promise<void>;
 	/** Has the human resolved it, and with what value? */
 	takeoverStatus: () => Promise<{ resolved: boolean; value?: string }>;
 	/** Close the takeover once it is resolved. */
@@ -164,21 +172,37 @@ export async function resolvePause(
 	return waitForHuman(deps, input);
 }
 
+/**
+ * The card a question is answered on (#960): the run's delegation task when it has one, else its
+ * session card — every coding session has one (`csess-<id>`), so an owner-started run is covered.
+ */
+export function askCardId(deps: Pick<PauseDeps, "taskId" | "sessionId">): string | null {
+	return deps.taskId ?? (deps.sessionId ? codingCardId(deps.sessionId) : null);
+}
+
 async function waitForHuman(deps: PauseDeps, input: { round: number; result: CodingResult }): Promise<PauseVerdict> {
 	const { result, round } = input;
 	const reason = result.outcome === "needs_input" ? "needs_input" : "stuck";
 	const label = reason === "needs_input" ? (result.fieldNeeded ?? "a value") : (result.detail ?? "this step");
+	const options = reason === "needs_input" ? (result.options ?? []) : [];
+	const cardId = reason === "needs_input" ? askCardId(deps) : null;
 
 	await deps.takeover(label, reason);
+	// A QUESTION is published as one (#960): its event on the card and its park on the run, before the
+	// pushes below point anyone at it. Best-effort for the same reason the card is — a lost event is a
+	// visibility bug; failing the pause is a work bug.
+	if (cardId && deps.ask) await deps.ask({ question: label, options, why: result.detail ?? "", field: result.fieldNeeded ?? label, taskId: cardId }).catch(() => undefined);
 	// The board FIRST, before the two pushes. It is the surface that persists, so if anything after
 	// this throws, the durable record still says the run is waiting on somebody — rather than the
 	// state that produced #553, where the notification fired and the board said everything was fine.
 	await deps.card("needs_human");
 	// The Engine is stopped until someone answers — `alert`, so muting "Coder" silences the
 	// finished/stopped updates and never this.
-	const notificationUrl = handoffLink(deps);
-	const body = `${deps.repo}: ${label}. You have ${HANDOFF_GIVE_UP_MS / 60_000} minutes to respond before the run gives up.`;
-	await deps.notify("🙋 Coder needs you", body, `coding-handoff:${reason}:${round}`, true, notificationUrl);
+	// A question opens the card its answer box is on; a takeover opens the run (#894).
+	const notificationUrl = cardId ? deepLinkFor({ kind: "task", instanceId: deps.instanceId, taskId: cardId }) : handoffLink(deps);
+	const offered = options.length ? ` Options: ${options.join(" | ")}.` : "";
+	const body = `${deps.repo}: ${label}.${offered} You have ${HANDOFF_GIVE_UP_MS / 60_000} minutes to respond before the run gives up.`;
+	await deps.notify(reason === "needs_input" ? "❓ Coder has a question" : "🙋 Coder needs you", body, `coding-handoff:${reason}:${round}`, true, notificationUrl);
 	// …AND in the thread the run was started from (#541 item d). A runner disconnect has always been
 	// announced in chat; a handoff never was, so the conversation the owner started the run from said
 	// nothing at all while the run waited on him, and then reported that it had failed.
@@ -188,7 +212,9 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 	// announced its resume time in this same thread. "Take over" without "by when" is why three runs
 	// sat here for the full fifteen minutes and then reported that they had been waiting on someone.
 	await deps.announce(
-		`🙋 **Coder needs you** — paused on ${deps.repo}: ${label}. Open the session and take over; the run resumes where it stopped. If nobody does within ${HANDOFF_GIVE_UP_MS / 60_000} minutes it stops and reports that it is waiting on you.`,
+		reason === "needs_input"
+			? `❓ **Coder has a question** — paused on ${deps.repo}: ${label}${offered ? `\n\n${offered.trim()}` : ""}\n\nAnswer it on the run's card${cardId ? ` (\`${cardId}\`)` : ""} or with answer_instance_input — no need to take the session over. The run continues from where it stopped. If nobody answers within ${HANDOFF_GIVE_UP_MS / 60_000} minutes it stops and reports that it is waiting on you.`
+			: `🙋 **Coder needs you** — paused on ${deps.repo}: ${label}. Open the session and take over; the run resumes where it stopped. If nobody does within ${HANDOFF_GIVE_UP_MS / 60_000} minutes it stops and reports that it is waiting on you.`,
 	);
 
 	let resolved = false;
@@ -223,7 +249,7 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 			resume: false,
 			result: {
 				...result,
-				detail: `Waiting on you: ${label}. Nobody took the session over within ${HANDOFF_GIVE_UP_MS / 60_000} minutes, so the run stopped here.`,
+				detail: `Waiting on you: ${label}. ${reason === "needs_input" ? "Nobody answered" : "Nobody took the session over"} within ${HANDOFF_GIVE_UP_MS / 60_000} minutes, so the run stopped here.`,
 			},
 		};
 	}
@@ -237,7 +263,12 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 	return {
 		resume: true,
 		ownerTurn: true,
-		userHint: reason === "needs_input" && value && result.fieldNeeded ? `${result.fieldNeeded}: ${value}` : undefined,
+		userHint:
+			reason === "needs_input" && value && result.fieldNeeded
+				? options.length
+					? `The owner answered your question "${result.fieldNeeded}": ${value}`
+					: `${result.fieldNeeded}: ${value}`
+				: undefined,
 	};
 }
 

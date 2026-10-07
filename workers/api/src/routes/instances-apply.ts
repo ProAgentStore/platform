@@ -1,5 +1,7 @@
 import { overLimit } from "../lib/write-limits.js";
 import type { Hono } from "hono";
+import { decisionRunForCard, resolveCodingPause } from "../lib/coding-answer.js";
+import { codingCardId } from "../lib/coding-board.js";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { requirePro } from "../lib/billing.js";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
@@ -19,6 +21,9 @@ import { logError } from "../lib/error-log.js";
 import { callRuntime, requireOwnedInstance, requireLiveRuntime, runtimeJson, runtimeStatus } from "./instances-runtime.js";
 import { patchInstanceConfig, touchInstanceActivity } from "../lib/instance-config.js";
 import { sqlTime } from "../lib/sql-time.js";
+
+/** Every coding session's board card id starts with this (`codingCardId`). */
+const CODING_CARD_PREFIX = codingCardId("");
 
 /** An apply failure with an HTTP-ish status so callers can map it. */
 export class ApplyError extends Error {
@@ -527,14 +532,27 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		return c.json({ ok: true });
 	});
 
-	/** Supply the value the apply agent asked for (ask-and-hold / needs_input handoff). */
+	/**
+	 * Supply the value an agent asked for (ask-and-hold / needs_input handoff), routed by RUN KIND
+	 * (#960): a coding run parked on a question asked on this card is answered through its coding
+	 * pause; anything else is the apply agent's browser handoff, as before.
+	 */
 	router.post("/:instanceId/input", async (c) => {
 		const session = await requireUser(c);
 		const instanceId = c.req.param("instanceId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
-		const runtime = await requireLiveRuntime(c.env, instanceId, session.uid);
 		const body = (await c.req.json().catch(() => ({}))) as { taskId?: string; value?: string };
 		if (!body.taskId) return c.json({ error: "taskId required" }, 400);
+		const coding = await decisionRunForCard(c.env, instanceId, session.uid, body.taskId);
+		if (coding) {
+			await resolveCodingPause(c.env, instanceId, session.uid, coding.sessionId, String(body.value ?? ""));
+			return c.json({ ok: true, kind: "coding", runId: coding.runId, sessionId: coding.sessionId });
+		}
+		// A coding session's card with no question waiting is not a lost BROWSER session — say what it is.
+		if (body.taskId.startsWith(CODING_CARD_PREFIX)) {
+			return c.json({ ok: false, error: "No question is waiting on that coding session — it was already answered, or the run stopped waiting." }, 409);
+		}
+		const runtime = await requireLiveRuntime(c.env, instanceId, session.uid);
 		const res = await callRuntime(c.env, runtime, "/browser/input", {
 			method: "POST",
 			body: JSON.stringify({ taskId: body.taskId, value: String(body.value ?? "") }),

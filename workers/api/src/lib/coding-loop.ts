@@ -1,3 +1,4 @@
+import { clipMarked } from "./clip-marked.js";
 import { runUserWorkersAi, systemPromptSections, systemPromptText, type SystemPromptBlock } from "./user-ai.js";
 import { hitOutputCap } from "./reply-truncation.js";
 import { authorityInstruction, screenInstruction, type MergePolicy } from "./coding-authority.js";
@@ -164,8 +165,12 @@ export interface CodingDecision {
 	finish?: { status: "done" | "failed"; detail: string };
 	/** The orchestrator can't proceed without a human (stuck handoff). */
 	stuck?: { why: string };
-	/** A value only the user can provide (ask-and-hold). */
-	needsInput?: { field: string; why?: string };
+	/**
+	 * Something only the owner can supply (ask-and-hold): a VALUE (`request_user_info`), or a CHOICE
+	 * between options (`ask_owner`, #960) — in which case `field` is the question itself and
+	 * `options` the answers offered. Both are answered from a conversation, not by taking over.
+	 */
+	needsInput?: { field: string; why?: string; options?: string[] };
 	/**
 	 * The Engine reported ITS OWN usage/rate limit (#541). `at` is the reset instant it named, as an
 	 * ISO-8601 string that must carry an explicit offset to be believed — see `coding-wait.ts`.
@@ -187,6 +192,8 @@ export interface CodingResult {
 	outcome: CodingOutcome;
 	detail?: string;
 	fieldNeeded?: string;
+	/** On `needs_input` from `ask_owner` (#960): the answers offered. Empty/absent for a free-form value. */
+	options?: string[];
 	/** On `waiting`: the reset instant the Engine named, unvalidated — the planner decides what it is worth. */
 	waitUntil?: string;
 	steps: number;
@@ -333,7 +340,9 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 			return { outcome: "stuck", detail: decision.stuck.why, steps: step, transcript };
 		}
 		if (decision.needsInput) {
-			return { outcome: "needs_input", detail: decision.needsInput.why, fieldNeeded: decision.needsInput.field, steps: step, transcript };
+			const options = decision.needsInput.options ?? [];
+			transcript.push(`needs_input: ${decision.needsInput.field}${options.length ? ` [${options.join(" | ")}]` : ""}`);
+			return { outcome: "needs_input", detail: decision.needsInput.why, fieldNeeded: decision.needsInput.field, ...(options.length ? { options } : {}), steps: step, transcript };
 		}
 		if (!decision.action) {
 			// No action and no terminal verdict → treat prose as a stuck signal.
@@ -578,6 +587,24 @@ export const CODING_TOOLS = [
 		description: "Ask the user for a specific value you do not have and must not invent (ask-and-hold).",
 		parameters: { type: "object", properties: { field: { type: "string" }, why: { type: "string" } }, required: ["field"] },
 	},
+	// THE DECISION VERB (#960). Before it, a choice that was the owner's to make had only two exits:
+	// decide it anyway (the CLI's "the user chose…" problem, #505), or `request_human`, which parks
+	// as a hands-on takeover nobody can answer from a phone. This one parks as `decision` and the
+	// owner answers it from a conversation — the console card, or answer_instance_input.
+	{
+		name: "ask_owner",
+		description:
+			"Ask the OWNER to choose, when the next step depends on a decision that is theirs to make and nothing in the objective, the rules or the repo settles it. Give one short question and 2–6 short options; the run pauses until they answer from chat or the console, and their answer comes back to you.",
+		parameters: {
+			type: "object",
+			properties: {
+				question: { type: "string", description: "One short question, answerable by picking an option." },
+				options: { type: "array", items: { type: "string" }, description: "2–6 short, distinct answers." },
+				why: { type: "string", description: "What depends on it — one line." },
+			},
+			required: ["question", "options"],
+		},
+	},
 	// THE VERB THAT DID NOT EXIST (#541). Without it, "the CLI is rate-limited until 22:30" had only
 	// `request_human` to come out as — which binds the run to a 15-minute human deadline and killed
 	// three real runs 41 minutes before the resource they were waiting for came back.
@@ -628,10 +655,12 @@ export function systemPromptBlocks(goal: CodingGoal): SystemPromptBlock[] {
 		"",
 		"You see the terminal pane. Decide the SINGLE next step and call exactly one tool.",
 		"- Drive the CLI with natural-language instructions via send_message; it does the editing/running.",
-		"- You CANNOT send keystrokes: the CLI runs headless with no terminal attached. If it is waiting on a menu or a y/n prompt, either phrase the answer as an instruction via send_message, or call request_human.",
+		"- You CANNOT send keystrokes: the CLI runs headless with no terminal attached. If it is waiting on a menu or a y/n prompt, phrase the answer as an instruction via send_message when the objective or rules settle it; when the choice is the OWNER's to make, call ask_owner with the options.",
 		"- When the objective is satisfied, call finish(status:'done'). If it's impossible, finish(status:'failed').",
 		"- If a value is required that only the user has, call request_user_info — NEVER invent secrets, tokens, or personal data.",
 		"- If you hit something a human must handle live (interactive login, captcha), call request_human.",
+		// #960. The three asks, told apart by WHAT the owner has to do — a value, a choice, or hands.
+		"- If the next step needs a CHOICE that is the owner's (which of two approaches, whether to proceed with something irreversible or out of scope, which of several candidates) and the objective, rules and repo do not settle it, call ask_owner with one short question and 2–6 options — do NOT decide it yourself and do NOT use request_human, which needs someone at the machine. Never use ask_owner for something you can decide from the objective, for a value (request_user_info), or for hands-on work (request_human).",
 		// #541. Stated as the DIFFERENCE between the two, because the three runs this comes from
 		// escalated correctly under the old vocabulary — `request_human` was the only honest move
 		// they had. The rule that matters is which of the two a usage window is, and why.
@@ -790,6 +819,11 @@ export function toDecision(call: { name: string; arguments: Record<string, unkno
 			return { stuck: { why: str(a.why) || "needs a human" } };
 		case "request_user_info":
 			return { needsInput: { field: str(a.field) || "a value", why: str(a.why) } };
+		case "ask_owner": {
+			const question = clipMarked(str(a.question).trim(), ASK_QUESTION_MAX, { within: true });
+			if (!question) return { stuck: { why: "Asked the owner a question but did not say what it was." } };
+			return { needsInput: { field: question, why: str(a.why).trim(), options: askOptions(a.options) } };
+		}
 		case "wait_for_reset":
 			// `at` is passed through UNVALIDATED. Judging it here would put the timezone rule in two
 			// places, and the planner is the one that knows the run's remaining budget.
@@ -797,6 +831,28 @@ export function toDecision(call: { name: string; arguments: Record<string, unkno
 		default:
 			return { stuck: { why: `unknown tool ${call.name}` } };
 	}
+}
+
+/** Bounds on an `ask_owner` (#960) — a phone-sized question; a longer one is cut WITH a marker, options past them are dropped. */
+export const ASK_QUESTION_MAX = 300;
+export const ASK_OPTIONS_MAX = 6;
+export const ASK_OPTION_CHARS = 80;
+
+/**
+ * The options of an `ask_owner`, cleaned: strings, trimmed, de-duplicated, at most six, each short.
+ * A comma becomes a semicolon because the console reads the options back out of a `from: a, b, c`
+ * list (`RunDetail.tsx`) — one option must not become two. Fewer than two is a free-form question.
+ */
+export function askOptions(raw: unknown): string[] {
+	const out: string[] = [];
+	for (const o of Array.isArray(raw) ? raw : []) {
+		if (typeof o !== "string") continue;
+		const v = o.replace(/,/g, ";").replace(/\s+/g, " ").trim();
+		if (!v || v.length > ASK_OPTION_CHARS || out.includes(v)) continue;
+		out.push(v);
+		if (out.length === ASK_OPTIONS_MAX) break;
+	}
+	return out.length >= 2 ? out : [];
 }
 
 /** The loop's `needs_reauth` ending (#881): what the engine said, and what fixes it. */

@@ -28,7 +28,7 @@
 // PURE — no D1, no Env, no fetch. The route brings the rows; this decides the shape.
 
 import { runHealth, type RunHealth } from "./work-report.js";
-import type { LoopRunView } from "./agent-loop-store.js";
+import type { LoopRunView, WaitingAsk } from "./agent-loop-store.js";
 
 /** One live run, as the state payload reports it. */
 export interface RunLivenessRow {
@@ -42,6 +42,8 @@ export interface RunLivenessRow {
 	startedAt: number;
 	parkedSince: number | null;
 	waitingUntil: number | null;
+	/** What a `decision` park is asking — the question, its options, the card to answer on (#960). */
+	waitingAsk: WaitingAsk | null;
 }
 
 export interface RunLiveness {
@@ -82,6 +84,7 @@ export function runLiveness(runs: readonly LoopRunView[], now: number): RunLiven
 			startedAt: r.startedAt,
 			parkedSince: r.parkedSince ?? null,
 			waitingUntil: r.waitingUntil ?? null,
+			waitingAsk: r.waitingAsk ?? null,
 		})),
 	};
 }

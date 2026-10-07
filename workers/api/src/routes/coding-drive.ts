@@ -1,6 +1,7 @@
 import type { Hono } from "hono";
 import { HttpError } from "../lib/auth.js";
 import type { CodingActionKind, CodingGoal } from "../lib/coding-loop.js";
+import { resolveCodingPause } from "../lib/coding-answer.js";
 import { endCodingSession } from "../lib/coding-session-end.js";
 import { startSessionOnRunner } from "../lib/coding-session-open.js";
 import { claimSessionDriver, getRepo, getSession, touchSessionActivity } from "../lib/coding-store.js";
@@ -198,25 +199,13 @@ export function registerDriveRoutes(codingRoutes: Hono<{ Bindings: Env }>): void
 		return c.json({ workflowId: wf.id, sessionId, budgetId: budget.id });
 	});
 
-	/** Resolve a brain handoff: the human finished, so the workflow may resume. */
+	/** Resolve a brain handoff: the human finished (or answered), so the workflow may resume. */
 	codingRoutes.post("/:instanceId/coding/sessions/:sessionId/resume", async (c) => {
 		const { uid, instanceId } = await requireOwned(c);
-		const sessionId = c.req.param("sessionId");
 		const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
-		const session = await getSession(c.env, instanceId, uid, sessionId);
-		if (!session) throw new HttpError(404, "Session not found");
-		const conn = await getSessionRunnerConn(c.env, instanceId, uid, session);
-		if (!conn) throw new HttpError(409, "No coding runner connected");
-		await touchSessionActivity(c.env, instanceId, uid, sessionId);
 		// `body.value` is the human's answer to a blocked engine — a 2FA code, a field the agent could
-		// not fill. Swallowing the delivery reported it landed and threw it away: the Pilot goes on
-		// polling /coding/takeover-status, never sees `resolved`, and closes the run
-		// "<reason> not resolved in time" — a run recorded as the HUMAN's timeout when the human did
-		// answer. Same rule the ticket-cancel route states: don't report success for a call that failed.
-		const delivered = await callRunner(conn, `/coding/takeover/${encodeURIComponent(sessionId)}/resolve`, {
-			value: typeof body.value === "string" ? body.value : undefined,
-		}).then(() => true, () => false);
-		if (!delivered) throw new HttpError(502, "Couldn't hand your answer to the coding runner — it's still waiting. Try again.");
+		// not fill, a choice it asked for (#960). One delivery path with `/input`: `lib/coding-answer.ts`.
+		await resolveCodingPause(c.env, instanceId, uid, c.req.param("sessionId"), typeof body.value === "string" ? body.value : undefined);
 		return c.json({ ok: true });
 	});
 

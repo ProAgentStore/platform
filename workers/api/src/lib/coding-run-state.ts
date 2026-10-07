@@ -85,7 +85,7 @@ export function resolveRunState(probe: RunStateProbe): CodingRunState {
 /** The run behind a session, reduced to what "is it actually working?" needs. */
 export interface SessionRunPark {
 	status: string;
-	/** `engine_limit` | `human` | `platform_interrupt` | `engine_auth` | "" — see `RunWaitReason`. */
+	/** `engine_limit` | `human` | `decision` | `platform_interrupt` | `engine_auth` | "" — see `RunWaitReason`. */
 	waitingReason: string;
 	detail: string;
 	/** ms epoch the park is due to end, if one was published — for an interruption, when it retries (#855). */
@@ -109,6 +109,12 @@ const PARK_GLOSS: Record<string, { what: string; fix: string; severity: "warn" |
 	human: {
 		what: "the run is parked waiting for a person",
 		fix: "Answer the handoff on the board, then the run continues",
+		severity: "warn",
+	},
+	// #960: a question, not a takeover — no hands on the session needed.
+	decision: {
+		what: "the run is parked waiting for your answer to a question",
+		fix: "Answer it on the run's board card, or with answer_instance_input, then the run continues",
 		severity: "warn",
 	},
 	engine_auth: {
