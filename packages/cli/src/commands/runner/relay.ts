@@ -1,5 +1,5 @@
 import { hostname } from "node:os";
-import { sampleResources } from "./resources.js";
+import { type ResourceSample, recordRunnerStart, sampleDisk, sampleResources } from "./resources.js";
 import { loadSession } from "../login.js";
 import { loadMachineIdentity } from "../../machine.js";
 import { writeError, writeLine } from "../../output.js";
@@ -80,6 +80,11 @@ export async function connectViaRelay(
 	// The live membership set. A captured array is what made a newly subscribed agent
 	// unreachable until restart (#229); sockets are now added and removed while running.
 	const attached = new Map<string, RelaySocketHandle>();
+	// What the heartbeat reports about THIS process (#924): when it started, how often the machine has
+	// started a runner lately (a crash loop restarts uptime but not this count), and socket reconnects.
+	const processStartedAt = Date.now();
+	const starts24h = recordRunnerStart(processStartedAt);
+	let relayReconnects = 0;
 	// Instances another live runner owns (4409). Kept out of re-attach until the block clears.
 	const blocked = new Set<string>();
 	/** The membership pass in flight, so the poll and a cloud request queue rather than overlap (#850). */
@@ -225,6 +230,7 @@ export async function connectViaRelay(
 				// and taken when it did not — which is how a register lost to a boot-time
 				// `fetch failed` finally gets a second chance.
 				async (openedId, reconnect) => {
+					if (reconnect) relayReconnects++;
 					if (!shouldRegisterOnOpen(reconnect, registered.has(openedId))) return;
 					// A reconnect REFRESHES the row; it does not re-claim. `--force` suspends coding
 					// sessions owned by other machines, and that is a one-time act the user asked for
@@ -281,8 +287,16 @@ export async function connectViaRelay(
 			// The live set, not the startup array — a heartbeat for a detached instance would
 			// keep it looking online, and a newly attached one would look offline until restart.
 			let failure: string | null = null;
-			// One machine reading per beat, sent with every agent's heartbeat (#924).
-			const resources = sampleResources();
+			// One machine reading per beat, sent with every agent's heartbeat (#924): the machine, its
+			// checkout volume, this process, one relay round trip, and which session is using what.
+			const first = attached.values().next().value as RelaySocketHandle | undefined;
+			const [relayRttMs, sessions] = await Promise.all([first ? first.probeRtt() : Promise.resolve(null), readSessionResources(localUrl, runnerToken)]);
+			const resources = sampleResources(undefined, undefined, {
+				disk: sampleDisk() ?? undefined,
+				runner: { startedAt: processStartedAt, uptimeSec: Math.round(process.uptime()), starts24h, relayReconnects },
+				relayRttMs,
+				sessions: sessions ?? undefined,
+			});
 			for (const id of [...attached.keys()]) {
 				try {
 					await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime/heartbeat`, opts, { runnerNode, resources });
@@ -401,11 +415,34 @@ export async function connectViaRelay(
 	}
 }
 
+/** The local runner's per-session CPU/memory (#924), or null when it could not be read this beat. */
+async function readSessionResources(localUrl: string, runnerToken: string): Promise<ResourceSample["sessions"] | null> {
+	try {
+		const res = await fetch(`${localUrl}/coding/resources`, { headers: { Authorization: `Bearer ${runnerToken}` }, signal: AbortSignal.timeout(3000) });
+		if (!res.ok) return null;
+		const body = (await res.json()) as { sessions?: ResourceSample["sessions"] | null };
+		return Array.isArray(body.sessions) ? body.sessions : null;
+	} catch {
+		// A slow or busy runner skips attribution for this beat; the machine reading still goes.
+		return null;
+	}
+}
+
 export interface RelaySocketHandle {
 	/** Stop reconnecting and close the socket. Detaching an instance must not leave a
 	 *  reconnect timer alive — it would re-open a socket for an agent we no longer serve. */
 	close(): void;
+	/**
+	 * Round trip of one probe through the relay, ms (#924) — "slow" vs "stuck" for this machine.
+	 * Null when the socket is not open or no echo came back in time (a platform before the echo, or
+	 * a relay too slow to answer within the timeout — which is itself the reading).
+	 */
+	probeRtt(timeoutMs?: number): Promise<number | null>;
 }
+
+/** The relay echo protocol (#924): the runner sends `rtt:<id>`, the RelayDO answers `rtt-echo:<id>`. */
+export const RTT_PROBE_PREFIX = "rtt:";
+export const RTT_ECHO_PREFIX = "rtt-echo:";
 
 export function openRelaySocket(
 	instanceId: string,
@@ -436,6 +473,7 @@ export function openRelaySocket(
 	let opened = false;
 	let socket: WebSocket | null = null;
 	let retryTimer: ReturnType<typeof setTimeout> | null = null;
+	const rttWaiters = new Map<string, (echoedAt: number) => void>();
 
 	const connect = async () => {
 		if (closed) return;
@@ -479,6 +517,7 @@ export function openRelaySocket(
 			const text = typeof event.data === "string" ? event.data : String(event.data);
 			// Server pings to verify liveness — respond with pong
 			if (text === "ping") { try { ws.send("pong"); } catch { /* closed */ } return; }
+			if (text.startsWith(RTT_ECHO_PREFIX)) { rttWaiters.get(text.slice(RTT_ECHO_PREFIX.length))?.(Date.now()); return; }
 			let cmd: { id: string; method?: string; path: string; body?: unknown };
 			try {
 				cmd = JSON.parse(text) as { id: string; method?: string; path: string; body?: unknown };
@@ -557,6 +596,18 @@ export function openRelaySocket(
 			if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
 			try { socket?.close(); } catch { /* already closed */ }
 			socket = null;
+		},
+		probeRtt(timeoutMs = 5000) {
+			const ws = socket;
+			if (!ws || ws.readyState !== WebSocket.OPEN) return Promise.resolve(null);
+			const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+			const sentAt = Date.now();
+			return new Promise<number | null>((resolveRtt) => {
+				const timer = setTimeout(() => { rttWaiters.delete(id); resolveRtt(null); }, timeoutMs);
+				timer.unref?.();
+				rttWaiters.set(id, (echoedAt) => { clearTimeout(timer); rttWaiters.delete(id); resolveRtt(echoedAt - sentAt); });
+				try { ws.send(`${RTT_PROBE_PREFIX}${id}`); } catch { clearTimeout(timer); rttWaiters.delete(id); resolveRtt(null); }
+			});
 		},
 	};
 }

@@ -7,7 +7,7 @@
  * of only the new behaviour would let the next change take the old promise back.
  */
 import { describe, expect, it } from "vitest";
-import { evictStaleSockets, PONG_STALE_MS, RunnerLiveness, sendOnFirstOpen, type PingableSocket } from "./relay-liveness.js";
+import { evictStaleSockets, PONG_STALE_MS, RunnerLiveness, rttEcho, sendOnFirstOpen, type PingableSocket } from "./relay-liveness.js";
 
 /** A peer that answers a ping — the shape of a runner whose process is running. */
 function livePeer(liveness: RunnerLiveness, now = () => Date.now()): PingableSocket {
@@ -185,5 +185,18 @@ describe("command dispatch skips a socket the probe just closed (#880)", () => {
 		const b = new Sock();
 		expect(sendOnFirstOpen([a, b], "cmd")).toBe(a);
 		expect(b.sent).toEqual([]);
+	});
+});
+
+describe("rttEcho — the runner's relay round-trip probe (#924)", () => {
+	it("echoes a probe id verbatim", () => {
+		expect(rttEcho("rtt:1700000000000-ab12cd")).toBe("rtt-echo:1700000000000-ab12cd");
+	});
+
+	it("ignores anything that is not a bounded probe — pong, commands, injected text", () => {
+		expect(rttEcho("pong")).toBeNull();
+		expect(rttEcho('{"id":"x"}')).toBeNull();
+		expect(rttEcho("rtt:has spaces")).toBeNull();
+		expect(rttEcho(`rtt:${"x".repeat(65)}`)).toBeNull();
 	});
 });

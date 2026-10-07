@@ -8,7 +8,7 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import { relayDispatchObservation } from "./lib/relay-dispatch-observability.js";
-import { evictStaleSockets, PONG_DEADLINE_MS, RunnerLiveness, sendOnFirstOpen } from "./lib/relay-liveness.js";
+import { evictStaleSockets, PONG_DEADLINE_MS, RunnerLiveness, rttEcho, sendOnFirstOpen } from "./lib/relay-liveness.js";
 import type { Env } from "./types.js";
 
 interface PendingRequest {
@@ -112,8 +112,15 @@ export class RelayDO extends DurableObject<Env> {
 		return new Response(null, { status: 101, webSocket: client });
 	}
 
-	async webSocketMessage(_ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+	async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
 		const text = typeof message === "string" ? message : new TextDecoder().decode(message);
+
+		// The runner's round-trip probe (#924), answered at once — see `rttEcho`.
+		const echo = rttEcho(text);
+		if (echo) {
+			try { ws.send(echo); } catch { /* closed */ }
+			return;
+		}
 
 		// A pong is not noise — it is the ONLY evidence that the peer holding this slot still
 		// exists (#497). Dropping it here is what let a frozen runner look alive.

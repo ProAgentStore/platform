@@ -410,6 +410,7 @@ const TABLE: Record<string, Row> = {
 	list_pipeline_runs: ["observability", "none", null, null, "instance_id,limit,pipeline,token"],
 	// #671: the PLATFORM view — every machine across every agent. No instance_id, by design.
 	list_runner_nodes: ["runtime", "none", null, null, "offset,token"],
+	runner_resource_history: ["runtime", "none", null, null, "from,node,offset,tier,to,token"],
 	runner_node_forget_preflight: ["runtime", "read", null, null, "node,token"],
 	list_supervision: ["composition", "read", null, null, "supervisor_instance_id,token"],
 	list_stats_sources: ["stats", "none", null, null, "token"],

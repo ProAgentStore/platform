@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
-import { parseResourceSample, type RunnerResourceSample, type RunnerResourcesView, resourcesView } from "../lib/runner-resources.js";
+import { COARSE_RETENTION_MS, DENSE_RETENTION_MS, type HistoryTier, parseResourceSample, resourceHistory, type RunnerResourceSample, type RunnerResourcesView, resourcesView } from "../lib/runner-resources.js";
 import { relayConnected } from "../lib/runner-client.js";
 import { mapWithConcurrency } from "../lib/map-concurrency.js";
 import { lastTerminal } from "../lib/coding-timeline.js";
@@ -548,6 +548,48 @@ terminalRoutes.get("/nodes/:node/forget-preflight", async (c) => {
 	const preflight = await preflightForgetNode(c.env, session.uid, c.req.param("node"));
 	if (!preflight.ok) return c.json({ error: preflight.error, ...(preflight.reason ? { reason: preflight.reason } : {}) }, preflight.status);
 	return c.json(preflight);
+});
+
+/**
+ * A machine's resource HISTORY (#924): `?tier=dense` (every heartbeat, ~2h, the default) or
+ * `?tier=coarse` (5-minute worst-of buckets, ~24h), within `?from` / `?to` (epoch ms or ISO; default
+ * the whole retention). Addressed by any of the machine's names and read across all of them, the
+ * same resolution forget uses — a renamed laptop's history is one history.
+ */
+terminalRoutes.get("/nodes/:node/resources", async (c) => {
+	const session = await requireUser(c);
+	const target = normalizeRunnerNode(c.req.param("node"));
+	const rows = (await c.env.DB.prepare("SELECT instance_id, runner_node, machine_id, last_seen_at FROM instance_runtime_nodes WHERE user_id = ?1")
+		.bind(session.uid)
+		.all<{ instance_id: string; runner_node: string; machine_id: string | null; last_seen_at: string | null }>()).results ?? [];
+	const resolved = machineNamesFor(target, rows.map((r) => ({ node: r.runner_node, machineId: r.machine_id, instanceId: r.instance_id, lastSeenAt: r.last_seen_at })));
+	if (!resolved.ok) {
+		return resolved.reason === "unknown"
+			? c.json({ error: "No machine is registered under that name." }, 404)
+			: c.json({ error: `More than one machine has registered as "${target}", so this name does not identify one.`, reason: "ambiguous" }, 409);
+	}
+	const tier: HistoryTier = c.req.query("tier") === "coarse" ? "coarse" : "dense";
+	const now = Date.now();
+	const retention = tier === "coarse" ? COARSE_RETENTION_MS : DENSE_RETENTION_MS;
+	const when = (q: string | undefined, fallback: number) => {
+		if (!q) return fallback;
+		const n = /^\d+$/.test(q) ? Number(q) : Date.parse(q);
+		return Number.isFinite(n) ? n : Number.NaN;
+	};
+	const from = when(c.req.query("from"), now - retention);
+	const to = when(c.req.query("to"), now);
+	if (Number.isNaN(from) || Number.isNaN(to)) return c.json({ error: "`from` and `to` must be epoch milliseconds or ISO timestamps." }, 400);
+	const samples = await resourceHistory(c.env, session.uid, resolved.names, tier, from, to);
+	return c.json({
+		node: target,
+		names: resolved.names,
+		tier,
+		from: new Date(from).toISOString(),
+		to: new Date(to).toISOString(),
+		retention: tier === "coarse" ? "24h of 5-minute buckets, each the bucket's worst readings" : "2h of every heartbeat sample (~30s apart)",
+		count: samples.length,
+		samples,
+	});
 });
 
 /**

@@ -80,7 +80,7 @@ src/
     │   ── ungated: every subscriber gets these ──
     ├── base.ts           9 tools — the connector-tool gate, subscribe/pause/resume/cancel, chat
     ├── machine-control.ts 2 tools — acting ON a machine: force_runner_attach (#856), runner_update (#859)
-    ├── runtime.ts        22 tools — the `pags up` runtime, its task queue, terminal state, safe
+    ├── runtime.ts        23 tools — the `pags up` runtime, its task queue, terminal state, safe
 │                     node forget, and a run's detail
 │                     view: one ticket, its deletion, the needs_input answer and the live
 │                     takeover controls (#613)
@@ -116,10 +116,10 @@ src/
                           surfaces:["coding"]) + 5 loop tools (3 run + 2 objective queue)
 ```
 
-**256 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
+**257 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
 `tools/server-info.ts`, 12 in
 `coding-tools.ts`, 2 in `coding-engine-tools.ts` and 1 in `coding-reauth-tools.ts` — all fifteen behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 205 across `instance-tools/`. 230 are always registered; 26 are
+`storage-tools.ts`, and 206 across `instance-tools/`. 231 are always registered; 26 are
 surface-gated (apply=4, repo=3, coding=19).
 
 These counts add up to the headline: 21 + 1 + 12 + 2 + 1 + 14 + 205 = 256. They said 88 until #602, which made the paragraph sum to 132 — a total the

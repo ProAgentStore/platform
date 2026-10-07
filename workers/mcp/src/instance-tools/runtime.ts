@@ -152,6 +152,33 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 		},
 	);
 
+	// A machine's resource HISTORY (#924), not just its latest heartbeat: the two tiers the API keeps
+	// — every sample for ~2h, worst-of 5-minute buckets for ~24h — for the question "what was this
+	// machine doing before the relay dropped at 06:04". Paged, because a dense window is ~240 points.
+	server.tool(
+		"runner_resource_history",
+		"A machine's resource history, oldest first — for the question list_runner_nodes cannot answer: what the machine was doing BEFORE something failed. Each point has `load1`, `loadPerCpu`, `memUsedPct`, `diskUsedPct`/`inodesUsedPct` (checkout volume), `relayRttMs` (one relay round trip; null = no echo in time), `uptimeSec`/`starts24h` of the runner process (a crash loop shows as starts24h climbing), `topSessions` (the three heaviest coding sessions by CPU, engine plus its child processes) and the `warnings` that point crossed. `tier: \"dense\"` (default) is every heartbeat (~30s) for ~2 hours; `tier: \"coarse\"` is 5-minute buckets for ~24 hours, each the bucket's WORST readings (max load, least free memory and disk) with `samples` counting what it covers. Narrow the window with the from and to parameters (ISO or epoch ms) — e.g. the 10 minutes before a failure's timestamp. `node` is any of the machine's names from list_runner_nodes. Machines on a CLI before 0.4.76 report load and memory only.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			node: z.string().describe("A machine name from list_runner_nodes (`node` or any of its `aka`)."),
+			tier: z.enum(["dense", "coarse"]).optional().describe("dense = every sample, ~2h (default); coarse = 5-minute worst-of buckets, ~24h."),
+			from: z.string().optional().describe("Start of the window, ISO timestamp or epoch ms. Default: the tier's whole retention."),
+			to: z.string().optional().describe("End of the window, ISO timestamp or epoch ms. Default: now."),
+			offset: z.coerce.number().int().min(0).optional().describe("Points come back in pages that fit one response; pass `page.nextOffset` to continue."),
+		},
+		async ({ token, node, tier, from, to, offset }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const qs = new URLSearchParams({ tier: tier ?? "dense" });
+			if (from) qs.set("from", from);
+			if (to) qs.set("to", to);
+			const data = await authedCall(`/v1/terminals/nodes/${encodeURIComponent(node)}/resources?${qs.toString()}`, sessionToken, {}, env);
+			if (!isRec(data) || !Array.isArray(data.samples)) return jsonText(data);
+			const { samples, ...head } = data;
+			return text(fitPage({ rows: samples as unknown[], offset, build: (page, meta) => ({ ...head, samples: page, page: meta }) }).text);
+		},
+	);
+
 	server.tool(
 		"instance_runner_node",
 		"Read which machine ONE instance is pinned to, and which machines it could be pinned to. `runnerNode` is the pin (null means unpinned — calls go to whichever machine holds a live socket). `nodesDetail` reports two different facts per machine: `connected` is whether THIS agent has a socket open there, `nodeOnline` is whether the machine is up for any agent — a machine can be online while this agent has never attached to it. Both are read under EVERY name the machine is provably known by; `aka` lists the machine's other names when it has been renamed, and `runnerVersion` is its most recently seen one. `resolvedNode` is where the pin actually lands when the pinned hostname has changed under the machine; when it is set, the agent is working and the pin's name is merely stale.",

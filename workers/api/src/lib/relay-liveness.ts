@@ -188,3 +188,13 @@ export function sendOnFirstOpen<T extends PingableSocket>(sockets: readonly T[],
 	}
 	return null;
 }
+
+/**
+ * The runner's relay round-trip probe (#924): `rtt:<id>` is answered `rtt-echo:<id>` straight away,
+ * so the runner can time the relay — "slow" vs "stuck" — and report it on its heartbeat. Returns the
+ * reply, or null when the message is not a probe. The id is the runner's, bounded and echoed verbatim.
+ */
+export function rttEcho(text: string): string | null {
+	const m = /^rtt:([\w-]{1,64})$/.exec(text);
+	return m ? `rtt-echo:${m[1]}` : null;
+}

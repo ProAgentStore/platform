@@ -837,7 +837,7 @@ const PINS = {
 	// +16 at #192 (proappstore-online/platform): the 0.1.50 record — recent_instances gains `limit`
 	// and a working-first order; the entry says why the cap had hidden a live run. Ledger, not drift.
 	// +59 at #847: 0.1.51–0.1.57 are published append-only surface records; moving them would defeat the history check that protects this ledger. +5 at #849: the 0.1.58 record. +5 at #854: the 0.1.59 record. +5 at #856: the 0.1.60 record. +4 at #857: the 0.1.61 record. +4 at #858: the 0.1.62 record. +4 at #859: the 0.1.63 record.
-	"workers/mcp/src/surface-lock.ts": 1016, // +4 at #951: the 0.1.79 record (update_agent local_browser); +5 at #927: the 0.1.78 record (pending-call instruction); +5 at #946: the 0.1.77 record (consent + finding review tools); +5 at #944: the 0.1.76 record (start/cancel/resume local browser runs); +6 at #945: the 0.1.75 record (four local browser tools); +4 at #942: the 0.1.74 record (coding_overseer removed); +5 at #938: the 0.1.73 record (get_console_link); +8 at #906: the 0.1.72 record (three secure_input tools); +3 at #904: the 0.1.71 server-info schema record; +2 at #886: the 0.1.70 request_id schema record; +10 at #879: 0.1.66 + 0.1.67 records; +5 at #881: the 0.1.68 record; +4 at #877: the 0.1.69 record — append-only surface ledger, not drift. +7 at #898: truncation made visible (paging, marked cuts, refused over-length writes).
+	"workers/mcp/src/surface-lock.ts": 1020, // +4 at #951: the 0.1.79 record (update_agent local_browser); +5 at #927: the 0.1.78 record (pending-call instruction); +5 at #946: the 0.1.77 record (consent + finding review tools); +5 at #944: the 0.1.76 record (start/cancel/resume local browser runs); +6 at #945: the 0.1.75 record (four local browser tools); +4 at #942: the 0.1.74 record (coding_overseer removed); +5 at #938: the 0.1.73 record (get_console_link); +8 at #906: the 0.1.72 record (three secure_input tools); +3 at #904: the 0.1.71 server-info schema record; +2 at #886: the 0.1.70 request_id schema record; +10 at #879: 0.1.66 + 0.1.67 records; +5 at #881: the 0.1.68 record; +4 at #877: the 0.1.69 record — append-only surface ledger, not drift. +7 at #898: truncation made visible (paging, marked cuts, refused over-length writes). +4 at #924: the 0.1.81 entry.
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
@@ -927,6 +927,7 @@ const PINS = {
 	// description (1) at ingest, the updated comment (1), and the AgentTask type annotation (1).
 	"workers/api/src/agent-do.ts": 1277, // +1 at #852: `modelChosen`, recorded only with a validated brain pick. +13 at #898: the `truncated` flag on the chat reply, the omitted-history window, and refusing an over-length owner task.
 	"workers/api/src/lib/board.ts": 801, // #898 crossed 800: a job key is REFUSED past its limit (an id cut would merge two cards), and card text is cut visibly.
+	"workers/mcp/src/instance-tools/runtime.ts": 811, // #924 crossed 800: runner_resource_history, the machine's two-tier history.
 	// +3 for #308: an import plus the two lines saying why three steps unwrap the fence that the
 	// connectors now apply at the source. Raised rather than split — the growth is a comment and
 	// one import, and splitting the step catalog to absorb three lines would be the tail wagging.
@@ -1276,7 +1277,7 @@ const PINS = {
 	// what a brief says, what it must never claim, and its budget — is not here at all: it is pure,
 	// tested, and in workers/api/src/lib/coding-seed-brief.ts.
 	// +40 at #889: a failed turn's own output — the per-turn tail, `pushUnframed` (a structured engine's non-JSON lines, where Codex wrote its 401) and the `engine_error` case. They are the stream handlers' own branches, so they live where the stream is read; the bounds and the report are in engine-turn.ts.
-	"packages/browser-runner/src/coding/headless.ts": 1058, // +13 at #898: the transcript counts what it trims, and says when it drops an oversized line.
+	"packages/browser-runner/src/coding/headless.ts": 1063, // +13 at #898: the transcript counts what it trims, and says when it drops an oversized line. +5 at #924: the engine pid getter that per-session attribution reads.
 	// New entry at #687 — 629 → 964, crossing LIMIT by 164. The repo-detail slice
 	// (#687) adds three new types (GithubIssueEntry, GithubPullEntry, GithubBranchEntry),
 	// their input/output interfaces, an in-process LRU cache, three projection helpers
@@ -1858,7 +1859,7 @@ const PINS = {
 	// +3 at #889/#893: the headless.ts and user-ai.ts raises above (one line of why each) and this one — both landed without their raise and left CI red until this.
 	// +5 at #921: the restored workflow-run.ts entry above (four lines of why + pin) and this line, less one line of slack.
 	// +6 at #914: the user-ai.ts raise and the new coding-loop.ts entry above (two lines of why each) and this line.
-	"scripts/check-file-size.mjs": 1942, // +2 at #946: the agents.ts pin and its reason; +1 at #944: the reason line for the runner.ts pin; +1 at #898: the board.ts pin.
+	"scripts/check-file-size.mjs": 1943, // +2 at #946: the agents.ts pin and its reason; +1 at #944: the reason line for the runner.ts pin; +1 at #898: the board.ts pin; +1 at #924: the mcp runtime.ts pin.
 };
 
 /**

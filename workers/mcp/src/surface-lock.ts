@@ -1012,4 +1012,8 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// coding_timeline (one event whole). No tool added or removed. Appended, never edited in place:
 	// 0.1.79 is published.
 	"0.1.80": "sha256:2aab2234c1b065b3bcc8659def32e41b11aae848a6a4b42909924d3e451f5478",
+	// 0.1.81 (#924): `runner_resource_history` (read) — a machine's two-tier resource history. 256
+	// registrations become 257, `MCP_TOOL_ALWAYS_ON` 230 → 231, gated stays 26. Appended, never
+	// edited in place: 0.1.80 is published.
+	"0.1.81": "sha256:50848db5b1442999f69ff269bab939f989f90b08a9d5e2251686a4777e2d8884",
 };

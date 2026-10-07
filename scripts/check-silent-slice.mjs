@@ -30,7 +30,7 @@ const ROOT = resolve(import.meta.dirname, "..");
 const PINNED = {
 	// Pinned at #898's landing. Most of what remains is ids, labels and display previews; the
 	// agent-read cuts the audit found were removed or marked before these numbers were taken.
-	"workers/api/src": 430,
+	"workers/api/src": 431, // +1 at #924: a history point's `topSessions` — the three heaviest, named as such.
 	"workers/mcp/src": 11,
 	"packages/browser-runner/src": 57,
 };

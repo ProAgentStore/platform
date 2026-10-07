@@ -470,6 +470,11 @@ export class CodingRuntime {
 		}));
 	}
 
+	/** Every session with a live engine process, and its pid — the roots resource attribution walks (#924). */
+	enginePids(): Array<{ sessionId: string; engineLabel: string; pid: number }> {
+		return [...this.sessions.entries()].flatMap(([sessionId, s]) => (s.pid ? [{ sessionId, engineLabel: s.engineLabel, pid: s.pid }] : []));
+	}
+
 	/** Rich diagnostics for every tracked session — the console's transparency view. */
 	diagnostics(): Array<{
 		sessionId: string;

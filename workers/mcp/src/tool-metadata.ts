@@ -211,6 +211,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	list_knowledge: "read",
 	list_pipeline_runs: "read",
 	list_runner_nodes: "read",
+	runner_resource_history: "read",
 	runner_node_forget_preflight: "read",
 	list_supervision: "read",
 	list_stats_sources: "read",
@@ -583,7 +584,8 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// +3 read at #945: `local_browser_preflight`, `get_instance_local_browser_settings`,
 	// `list_local_browser_runs` — owner-scoped reads of settings, readiness and a run's redacted trace.
 	// +1 read at #946: `get_local_browser_consent` — the owner's live site and profile decisions.
-	read: 121,
+	// +1 read at #924: `runner_resource_history` — a machine's stored resource samples.
+	read: 122,
 	// +2 write at #825: `pause_instance` / `resume_instance`. `write` rather than `destructive` —
 	// nothing is deleted and nothing is unsubscribed, and classing the OFF switch as destructive
 	// would put RESUME behind a scope the caller may not hold, which is the wrong failure mode for

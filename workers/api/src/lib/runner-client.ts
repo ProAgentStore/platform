@@ -1,6 +1,6 @@
 import { decryptKey } from "./crypto.js";
 import { logError } from "./error-log.js";
-import { latestResourceSample, resourcesView } from "./runner-resources.js";
+import { latestResourceSample, resourceHistory, resourcesView } from "./runner-resources.js";
 import { aliasNodesFor, type NodeRegistration } from "./machine-identity.js";
 import { NO_SOCKET_MARKER, relayFailureIsDisconnect, RunnerUnreachableError } from "./runner-unreachable.js";
 import { normalizeRunnerNode, readInstanceRunnerNode, relayNameForInstance } from "./runtime-nodes.js";
@@ -333,12 +333,16 @@ async function recordUnresponsive(conn: RunnerConn, path: string): Promise<void>
 		const node = conn.runnerNode ?? "";
 		const sample = node ? await latestResourceSample(conn.env, conn.userId, [node]) : null;
 		const view = resourcesView(sample, null);
+		// The ten minutes before the failure, from the dense history (#924): one sample says what the
+		// machine looked like 0–30s before; the series says whether it had been climbing.
+		const now = Date.now();
+		const recent = node ? await resourceHistory(conn.env, conn.userId, [node], "dense", now - 10 * 60 * 1000, now).catch(() => []) : [];
 		await logError(conn.env, {
 			source: "runner",
 			level: "warn",
 			userId: conn.userId,
 			message: `Runner relay connected but not responding on ${node || "the default machine"} (${path}).${view ? ` Machine at last heartbeat: load ${view.load1} on ${view.cpus} cores, ${view.memUsedPct}% memory in use.` : " The machine reports no resource sample (CLI before 0.4.71)."}`,
-			context: { instanceId: conn.instanceId, runnerNode: node || null, path, resources: view },
+			context: { instanceId: conn.instanceId, runnerNode: node || null, path, resources: view, recent: recent.map(({ at, load1, loadPerCpu, memUsedPct, diskUsedPct, relayRttMs }) => ({ at, load1, loadPerCpu, memUsedPct, diskUsedPct, relayRttMs })) },
 		});
 	} catch {
 		/* best-effort */

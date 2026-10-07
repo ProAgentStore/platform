@@ -50,3 +50,17 @@ describe("an unresponsive dispatch carries the machine's last resource sample (#
 		expect(await logged()).toBeNull();
 	});
 });
+
+describe("the stamp carries the ten minutes before the failure (#924)", () => {
+	it("includes the dense history series, so a climb shows and not just the last reading", async () => {
+		const now = Date.now();
+		for (const [minsAgo, load] of [[15, 1], [8, 4], [4, 9], [1, 14]] as const) {
+			const at = now - minsAgo * 60_000;
+			d1.exec(`INSERT INTO runner_resource_samples (user_id, node, tier, at, sample) VALUES ('u1', 'pink-laptop', 'dense', ${at}, '${JSON.stringify({ loadAvg: [load, 1, 1], cpus: 8, memTotalBytes: 16e9, memFreeBytes: 8e9, platform: "darwin", sampledAt: at, relayRttMs: load * 100 })}')`);
+		}
+		await expect(callRunner(conn(unresponsive()), "/coding/start", {})).rejects.toBeInstanceOf(RunnerUnreachableError);
+		const recent = (JSON.parse((await logged())?.context ?? "{}") as { recent?: Array<{ load1: number; relayRttMs: number }> }).recent;
+		expect(recent?.map((p) => p.load1)).toEqual([4, 9, 14]); // the 15-minute-old point is outside the window
+		expect(recent?.at(-1)?.relayRttMs).toBe(1400);
+	});
+});

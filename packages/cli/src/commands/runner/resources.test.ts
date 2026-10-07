@@ -3,7 +3,10 @@
  * platform validates them (`workers/api/src/lib/runner-resources.ts`).
  */
 import { describe, expect, it } from "vitest";
-import { sampleResources } from "./resources.js";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { recordRunnerStart, sampleDisk, sampleResources } from "./resources.js";
 
 const fakeOs = (over: Partial<Record<"loadavg" | "cpus" | "totalmem" | "freemem" | "platform", () => unknown>> = {}) =>
 	({
@@ -39,5 +42,35 @@ describe("sampleResources (#924)", () => {
 		const s = sampleResources();
 		expect(s.cpus).toBeGreaterThan(0);
 		expect(s.memTotalBytes).toBeGreaterThan(s.memFreeBytes);
+	});
+});
+
+describe("the rest of the machine (#924 follow-up)", () => {
+	it("carries disk, runner process, relay round trip and sessions when given, and drops undefined", () => {
+		const s = sampleResources(fakeOs(), 1, { disk: { path: "/r", totalBytes: 100, freeBytes: 10, inodesTotal: 50, inodesFree: 5 }, relayRttMs: 42, runner: undefined });
+		expect(s.disk?.freeBytes).toBe(10);
+		expect(s.relayRttMs).toBe(42);
+		expect("runner" in s).toBe(false);
+	});
+
+	it("reads disk and inodes from statfs, falling back to the home volume when the checkout root is missing", () => {
+		const calls: string[] = [];
+		const statfs = ((p: string) => {
+			calls.push(p);
+			if (calls.length === 1) throw new Error("ENOENT");
+			return { bsize: 4096, blocks: 1000, bavail: 250, files: 500, ffree: 100 };
+		}) as unknown as Parameters<typeof sampleDisk>[1];
+		const d = sampleDisk("/no/such/dir", statfs);
+		expect(calls).toHaveLength(2);
+		expect(d).toMatchObject({ totalBytes: 4096 * 1000, freeBytes: 4096 * 250, inodesTotal: 500, inodesFree: 100 });
+	});
+
+	it("counts starts in the last 24h across restarts — a crash loop shows, an old start does not", () => {
+		const file = join(mkdtempSync(join(tmpdir(), "pags-starts-")), "starts.json");
+		const day = 24 * 60 * 60 * 1000;
+		expect(recordRunnerStart(1_000, file)).toBe(1);
+		expect(recordRunnerStart(2_000, file)).toBe(2);
+		expect(recordRunnerStart(3_000, file)).toBe(3);
+		expect(recordRunnerStart(2_000 + day + 1, file)).toBe(2);
 	});
 });

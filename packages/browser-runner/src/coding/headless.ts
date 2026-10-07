@@ -393,6 +393,11 @@ export class HeadlessSession {
 		return this.turnReport;
 	}
 
+	/** The engine process's pid while one is running — what per-session resource attribution reads (#924). */
+	get pid(): number | null {
+		return this.procAlive ? (this.proc?.pid ?? null) : null;
+	}
+
 	/** Is a process running THIS instant? The persistent engine's liveness, and the spawn guard. */
 	private get procAlive(): boolean {
 		return this.proc !== null && this.proc.exitCode === null && this.proc.signalCode === null;

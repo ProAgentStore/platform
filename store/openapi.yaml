@@ -10442,6 +10442,43 @@ paths:
                         label: { type: string }
                         node: { type: string, description: Which of the machine's names it points at. }
 
+  /v1/terminals/nodes/{node}/resources:
+    get:
+      summary: Read a machine's resource history
+      description: |
+        Two tiers written from the runner heartbeat (#924): `dense` keeps every sample (~30s apart)
+        for about 2 hours; `coarse` keeps one 5-minute bucket for about 24 hours, each the bucket's
+        WORST readings (max load, least free memory and disk, max relay round trip) with `samples`
+        counting what it covers. Addressed by any of the machine's names and read across all of them.
+        Points carry load, memory, checkout-volume disk and inode use, one relay round trip, the
+        runner process's uptime and starts in 24h, the three heaviest coding sessions, and the
+        warnings that point crossed. Machines on a CLI before 0.4.76 report load and memory only.
+      operationId: getTerminalNodeResources
+      tags: [Terminals]
+      parameters:
+        - { name: node, in: path, required: true, description: Any one of the machine's names., schema: { type: string } }
+        - { name: tier, in: query, required: false, schema: { type: string, enum: [dense, coarse], default: dense } }
+        - { name: from, in: query, required: false, description: Window start — epoch ms or ISO timestamp. Defaults to the tier's whole retention., schema: { type: string } }
+        - { name: to, in: query, required: false, description: Window end — epoch ms or ISO timestamp. Defaults to now., schema: { type: string } }
+      responses:
+        "200":
+          description: The history window, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  node: { type: string }
+                  names: { type: array, items: { type: string } }
+                  tier: { type: string, enum: [dense, coarse] }
+                  from: { type: string, format: date-time }
+                  to: { type: string, format: date-time }
+                  retention: { type: string }
+                  count: { type: integer }
+                  samples: { type: array, items: { type: object, additionalProperties: true } }
+        "400": { description: "`from` or `to` is not a timestamp" }
+        "404": { description: No machine is registered under that name }
+        "409": { description: More than one machine has registered under that name }
   /v1/terminals/nodes/{node}/forget-preflight:
     get:
       summary: Inspect whether a machine can be forgotten

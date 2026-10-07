@@ -226,6 +226,11 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	if (req.method === "GET" && path === "/coding/sessions") {
 		return json(res, 200, { sessions: runner.coding.list() });
 	}
+	// Per-session CPU and memory, for the heartbeat (#924): which agent is loading this machine.
+	if (req.method === "GET" && path === "/coding/resources") {
+		const { readSessionResources } = await import("./coding/session-resources.js");
+		return json(res, 200, { sessions: readSessionResources(runner.coding.enginePids()) });
+	}
 	if ((req.method === "GET" || req.method === "POST") && path === "/coding/diagnostics") {
 		// No tmux figures here any more (#247). The coding engine spawns a child process
 		// directly, so `pagsTmuxTotal` was structurally always 0 and `tmuxTotal` counted the

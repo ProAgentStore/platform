@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**256 tool registrations.** 230 are always registered; 26 are gated to the console
+**257 tool registrations.** 231 are always registered; 26 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -384,6 +384,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `instance_runtime_status` | Is a runtime registered? | — | | |
 | `unregister_instance_runtime` | Remove the registered runtime endpoint | destructive | yes | `unregister_instance_runtime` |
 | `list_runner_nodes` | Every machine running a CLI, across all agents | — | | |
+| `runner_resource_history` | A machine's resource history — every heartbeat for ~2h (`dense`) or 5-minute worst-of buckets for ~24h (`coarse`): load, memory, disk/inodes, relay round trip, runner restarts, heaviest sessions | — | | |
 | `instance_runner_node` | Which machine one instance is pinned to, and the alternatives | — | | |
 | `runner_setup` | A coding agent's local runner setup checklist — CLI and `pags up`, attachment, GitHub App, bound repository, engine sign-in — each with a live verdict | — | | |
 | `set_instance_runner_node` | Pin an instance to a machine and move it there — the connected `pags up` attaches it now and the old machine lets go (empty clears the pin); lost/slow confirmation returns `outcome: unknown` with `instance_runner_node` polling guidance | write | yes | |
