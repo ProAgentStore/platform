@@ -83,18 +83,18 @@ export function registerApplyTools(server: McpServer, ctx: InstanceToolsCtx): vo
 
 	server.tool(
 		"apply_to_job",
-		"Launch the LLM-driven job application for a private apply-agent instance: the PAGS agent drives the user's local browser to fill (and, only if submit=true, SUBMIT) the application at the given job URL. The résumé comes from the instance's stored résumé and candidate details from the user's Profile. If the agent needs a value it can't truthfully invent (e.g. work authorization), it pauses with a needs_input ticket for the USER to answer in the console, then continues. Default is a safe test run that stops at the Submit button without clicking it.",
+		"Launch the LLM-driven job application for a private apply-agent instance: the PAGS agent drives the user's local browser to fill and SUBMIT the application at the given job URL. The résumé comes from the instance's stored résumé and candidate details from the user's Profile. If the agent needs a value it can't truthfully invent (e.g. work authorization), it pauses with a needs_input ticket for the USER to answer, then continues. It submits by default; submit=false is an explicit fill-only compatibility mode.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("The apply-agent instance ID (from my_instances)."),
 			url: z.string().describe("The job posting / application URL to apply to."),
-			submit: z.boolean().optional().describe("false (default) = fill everything and stop at the Submit button WITHOUT clicking it (safe test). true = actually SUBMIT the application to the employer."),
+			submit: z.boolean().optional().describe("true (default) = submit the application to the employer. Set false only for an explicit fill-only compatibility run."),
 			dry_run: z.boolean().optional(),
 		},
 		async ({ token, instance_id, url, submit, dry_run }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const realSubmit = submit === true;
+			const realSubmit = submit !== false;
 			const toolInput = { instance_id, url, submit: realSubmit };
 			// A real submission is an outward, hard-to-undo action → destructive scope;
 			// a test run (fill-only) is just runtime.

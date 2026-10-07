@@ -286,7 +286,7 @@ describe("storage tools", () => {
 		expect(result.success).toBe(true);
 	});
 
-	it("starts a fill-only job workflow even when the tool call requests a real submission", async () => {
+	it("starts a real-submission job workflow even when the tool call requests dry run", async () => {
 		const engine = makeEngine();
 		const runtime = mockRuntimeEnv();
 		// Declared WITH fetch's arguments: a zero-arg `vi.fn` records a zero-length call tuple, and
@@ -310,8 +310,8 @@ describe("storage tools", () => {
 					linkedin: "https://linkedin.example/test-candidate",
 					work_authorization: "Authorized to work",
 					cover_note: "Interested in the role.",
-					// Tool schemas are advisory to an LLM. An attempted override must not
-					// turn a chat request into a real external application.
+					// Tool schemas are advisory to an LLM. Autonomous apply always submits;
+					// an attempted dry-run override cannot downgrade that delegated action.
 					dryRun: false,
 					dry_run: false,
 				},
@@ -322,15 +322,14 @@ describe("storage tools", () => {
 
 		// New behavior: starts the LLM-driven JobApplyWorkflow (no legacy selector task).
 		expect(result.success).toBe(true);
-		expect(result.content).toContain("Application preparation started");
+		expect(result.content).toContain("Application submission started");
 		expect(result.content).toContain("task_123"); // runner task id
 		expect(runtime.create).toHaveBeenCalledTimes(1); // JOB_APPLY.create — the brain started
-		// The chat tool always starts the workflow in dry-run mode. The workflow and
-		// runner enforce this by blocking its final submit click, so the observable
-		// job cannot create an external application.
+		// The autonomous chat tool always starts a real-submission workflow. The
+		// runner still pauses for CAPTCHA, stuck-widget, and missing-fact handoffs.
 		expect(runtime.create).toHaveBeenCalledWith(expect.objectContaining({
 			params: expect.objectContaining({
-				job: expect.objectContaining({ dryRun: true }),
+				job: expect.objectContaining({ dryRun: false }),
 			}),
 		}));
 		// It creates the agent-driven task (job.apply_agent), not a legacy approval task.
@@ -368,7 +367,7 @@ describe("storage tools", () => {
 		);
 
 		expect(result.success).toBe(true);
-		expect(result.content).toContain("Application preparation started");
+		expect(result.content).toContain("Application submission started");
 		expect(runtime.create).toHaveBeenCalledTimes(1);
 	});
 

@@ -540,7 +540,7 @@ immediately instead of a whole transcript.
 | Tool | Purpose | Scope | Dry | Confirm |
 |---|---|---|---|---|
 | `upload_resume` | Upload/replace the résumé, or re-parse the one on file | write | yes | |
-| `apply_to_job` | Drive the browser to fill (and, with `submit: true`, submit) an application | runtime, or destructive when `submit: true` | yes | |
+| `apply_to_job` | Drive the browser to fill and submit an application by default (`submit: false` is explicit fill-only compatibility mode) | destructive by default, or runtime when `submit: false` | yes | |
 | `get_profile` | Read the structured candidate Profile + Job Preferences | — | | |
 | `get_apply_tips` | Learned per-ATS tips | — | | |
 | `update_profile` | Update Profile fields (string fields only) — always registered | write | yes | |

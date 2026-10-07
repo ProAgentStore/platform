@@ -490,17 +490,43 @@ describe("dry-run mode", () => {
 		expect(h.auditEvents().some((e) => e.action === "dry_run")).toBe(true);
 	});
 
-	it("apply_to_job dry-run describes a fill-only vs submit run and does not hit /apply", async () => {
+	it("apply_to_job dry-run previews its default real submission and does not hit /apply", async () => {
 		const h = setup({ groups: ["apply"] });
 		const res = await h.tools.get("apply_to_job")!.handler({
 			instance_id: "i1",
 			url: "https://jobs.example/apply/1",
-			submit: false,
 			dry_run: true,
 		});
 		const body = JSON.parse(res.content[0].text);
 		expect(body.dryRun).toBe(true);
-		expect(body.action).toContain("stops before submit");
+		expect(body.action).toContain("SUBMIT");
+		expect(h.fetchStub.calls).toHaveLength(0);
+	});
+
+	it("apply_to_job submits by default and sends dryRun false to the apply route", async () => {
+		const h = setup({ groups: ["apply"] });
+		await h.tools.get("apply_to_job")!.handler({
+			instance_id: "i1",
+			url: "https://jobs.example/apply/1",
+		});
+		expect(h.fetchStub.calls).toHaveLength(1);
+		expect(h.fetchStub.calls[0]).toMatchObject({
+			url: "https://api.test/v1/instances/i1/apply",
+			method: "POST",
+		});
+		expect(JSON.parse(h.fetchStub.calls[0].body ?? "{}")).toEqual({
+			url: "https://jobs.example/apply/1",
+			dryRun: false,
+		});
+	});
+
+	it("apply_to_job requires destructive scope for its default real submission", async () => {
+		const h = setup({ groups: ["apply"], scopes: ["read", "write", "runtime"] });
+		const res = await h.tools.get("apply_to_job")!.handler({
+			instance_id: "i1",
+			url: "https://jobs.example/apply/1",
+		});
+		expect(res.content[0].text).toContain('requires MCP scope "destructive"');
 		expect(h.fetchStub.calls).toHaveLength(0);
 	});
 });
