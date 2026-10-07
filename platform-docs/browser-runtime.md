@@ -103,10 +103,11 @@ A separate runtime from the Workflow-driven browser task above. A locally signed
 | --- | --- | --- |
 | `consent_required` | A site that is not on the allow list, or the signed-in browser profile | Allow it and resume, or stop the run |
 | `captcha` / `login_required` | A captcha, or a page with a password field | Clear it in the browser on that machine, then resume. The run never signs in |
+| `paywall` | A page asking to subscribe, or saying a free-article limit has been reached | If you subscribe, sign in yourself in that browser and resume. Otherwise stop, or let the pause end: the source is reported and the run never gets around it |
 | `access_blocked` | A bot check or access-control page ("unusual traffic", "Access Denied", 403) | Pass a human check in that browser and resume, or leave it. The run reports a block that is still there; it never retries past it |
 | `write_affordance` | A form that submits, pays or uploads: an application, card fields, a file input, or an account sign-up | Let it read the page and resume, or stop and it goes back. Nothing on the page can be filled or submitted in either case |
 
-A paywall is reported as a source failure and is not a pause. A run whose CLI exits without ever calling the bridge ends `failed`, saying no page was opened.
+A run whose CLI exits without ever calling the bridge ends `failed`, saying no page was opened.
 
 ## Coder Agents
 

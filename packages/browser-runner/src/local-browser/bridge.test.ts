@@ -216,11 +216,22 @@ describe("stopping for a person", () => {
 		expect(f.calls.some((c) => c.name === "browser_type")).toBe(false);
 	});
 
-	it("reports a paywall without pausing or working around it", async () => {
+	it("pauses on a paywall for the owner, and reports it when nobody opens it — never works around it (#947)", async () => {
 		const { host, events } = fakeHost({ allow: ["news.com"] });
 		const r = await new BrowserBridge(fakeBrowser({ "https://news.com/a": { paywall: true } }).tools, host).callTool("browser_navigate", { url: "https://news.com/a" });
-		expect(textOf(r)).toMatch(/paywall.*Do not try to get around it/);
-		expect(events.some((e) => e.type === "run.paused")).toBe(false);
+		expect(events).toContainEqual(expect.objectContaining({ type: "browser.blocked", domain: "news.com", detail: { reason: "paywall" } }));
+		expect(events).toContainEqual(expect.objectContaining({ type: "run.paused", pauseReason: "paywall" }));
+		expect(textOf(r)).toMatch(/needs a person \(a paywall\).*report_source_failure \(paywall\)/);
+		expect(r.isError).toBe(true);
+	});
+
+	it("reads the page once the owner has got past the paywall themselves, and reports it if it is still there", async () => {
+		let paywalled = true;
+		const pages = { "https://news.com/a": { get paywall() { return paywalled; } } };
+		const { host } = fakeHost({ allow: ["news.com"], pause: () => "resumed", onPause: () => { paywalled = false; } });
+		expect(textOf(await new BrowserBridge(fakeBrowser(pages).tools, host).callTool("browser_navigate", { url: "https://news.com/a" }))).toMatch(/Resumed after the owner handled news\.com/);
+		const still = fakeHost({ allow: ["news.com"], pause: () => "resumed" });
+		expect(textOf(await new BrowserBridge(fakeBrowser({ "https://news.com/a": { paywall: true } }).tools, still.host).callTool("browser_navigate", { url: "https://news.com/a" }))).toMatch(/still shows a paywall/);
 	});
 });
 

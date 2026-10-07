@@ -131,6 +131,8 @@ export function pauseBanner(run: Pick<LocalBrowserRunView, "status" | "pauseReas
 	}
 	if (reason === "captcha") return { title: `Captcha${domain ? ` on ${domain}` : ""}`, body: `Solve it in the browser ${machine}, then resume. The research never tries to get past it.`, actions: [{ kind: "done_in_browser" }] };
 	if (reason === "login_required") return { title: `Sign-in${domain ? ` on ${domain}` : ""}`, body: `Sign in yourself in the browser ${machine} if you want this site read, then resume.`, actions: [{ kind: "done_in_browser" }] };
+	// #947: a paywall is a pause too — an owner who subscribes signs in to it themselves; the run never gets around it.
+	if (reason === "paywall") return { title: `Paywall${domain ? ` on ${domain}` : ""}`, body: `If you subscribe, sign in yourself in the browser ${machine}, then resume. Otherwise stop the run — the research never gets around a paywall.`, actions: [{ kind: "done_in_browser" }] };
 	// #947: a bot check or access block is a person's to clear in that browser, or to leave — never the run's to get past.
 	if (reason === "access_blocked") return { title: `${domain ?? "A site"} is blocking automated browsing`, body: `If it is a "verify you are human" check, pass it yourself in the browser ${machine}, then resume. If it is a hard block, stop — the research does not work around it.`, actions: [{ kind: "done_in_browser" }] };
 	// #947: a page that submits, pays or uploads. Nothing on it can be filled either way; the question is only whether to read it.

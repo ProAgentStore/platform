@@ -88,6 +88,12 @@ describe("why a run is blocked, and the one step that unblocks it", () => {
 		expect(b?.body).toMatch(/cannot fill or submit anything/);
 	});
 
+	it("a paywall is the owner's to open in that browser, or to leave (#947)", () => {
+		const b = pauseBanner(run({ status: "paused", pauseReason: "paywall" }), [ev(1, "browser.blocked", { domain: "news.com", detail: { reason: "paywall" } })]);
+		expect(b).toMatchObject({ title: "Paywall on news.com", actions: [{ kind: "done_in_browser" }] });
+		expect(b?.body).toMatch(/on Macmini.*never gets around a paywall/);
+	});
+
 	it("shows nothing for a run that is not paused", () => {
 		expect(pauseBanner(run(), [])).toBeNull();
 	});

@@ -11,8 +11,8 @@
  *    refused by name — a model cannot submit what it cannot fill;
  *  - every page it reaches is checked against the deny list, the allow list and the owner's
  *    consent; a new site pauses the run until the owner decides;
- *  - a captcha, a login wall, a bot check or an access-control page pauses the run for a person, and
- *    so does a payment, upload or application form; a paywall is reported, never bypassed;
+ *  - a captcha, a login wall, a paywall, a bot check or an access-control page pauses the run for a
+ *    person, and so does a payment, upload or application form — never an obstacle to get around;
  *  - pages, actions and time are counted here and refused past their limits;
  *  - findings are recorded through `record_finding`, which only accepts a URL on a site the run
  *    actually opened — a finding must cite a page, not the model's memory.
@@ -178,11 +178,14 @@ export function evaluateResult(raw: string): unknown {
 }
 
 /** The pauses a person resolves in the browser itself, and how each is named and reported (#947). */
-type PersonBlocker = Extract<LocalBrowserPauseReason, "captcha" | "login_required" | "access_blocked">;
+type PersonBlocker = Extract<LocalBrowserPauseReason, "captcha" | "login_required" | "access_blocked" | "paywall">;
 const BLOCKER_WORDS: Record<PersonBlocker, { noun: string; failure: LocalBrowserSourceFailureReason }> = {
 	captcha: { noun: "a captcha", failure: "captcha" },
 	login_required: { noun: "a sign-in", failure: "login_required" },
 	access_blocked: { noun: "a bot check or access block", failure: "access_denied" },
+	// A pause like the rest (#947): an owner who subscribes can sign in to it in that browser. The run
+	// itself never gets around one — not resumed, or still paywalled after, it is reported.
+	paywall: { noun: "a paywall", failure: "paywall" },
 };
 
 /** The role and accessible name of a snapshot line holding this ref, e.g. `- link "Next" [ref=e12]`. */
@@ -332,16 +335,16 @@ export class BrowserBridge {
 		this.pages++;
 		this.noteNavigation(state);
 		const host = hostOf(state.url) ?? "";
-		// Pauses, never obstacles (#947): a captcha, a sign-in, a bot check or an access-control page is
+		// Pauses, never obstacles (#947): a captcha, a sign-in, a bot check, an access-control page or a paywall is
 		// for a PERSON in the browser on this machine — the run waits, and re-checks once resumed.
-		const blocker: PersonBlocker | null = state.captcha ? "captcha" : state.login ? "login_required" : state.accessBlocked ? "access_blocked" : null;
+		const blocker: PersonBlocker | null = state.captcha ? "captcha" : state.login ? "login_required" : state.accessBlocked ? "access_blocked" : state.paywall ? "paywall" : null;
 		if (blocker) {
 			const what = BLOCKER_WORDS[blocker];
 			this.host.emit({ type: "browser.blocked", url: state.url, domain: host, detail: { reason: blocker } });
 			const outcome = await this.host.pause(blocker, { domain: host });
 			if (outcome !== "resumed") return text(`${host} needs a person (${what.noun}) and nobody resolved it. Record it with report_source_failure (${what.failure}) and move on.`, true);
 			const after = await this.inspect();
-			if (after && (after.captcha || after.login || after.accessBlocked)) return text(`${host} still shows ${what.noun}. Record it with report_source_failure (${what.failure}) and move on.`, true);
+			if (after && (after.captcha || after.login || after.accessBlocked || after.paywall)) return text(`${host} still shows ${what.noun}. Record it with report_source_failure (${what.failure}) and move on.`, true);
 			return text(`Resumed after the owner handled ${host}. Take a browser_snapshot to read the page.`);
 		}
 		// A page that pays, uploads, or submits an application or account is outside research. The
@@ -355,10 +358,6 @@ export class BrowserBridge {
 				return text(`${state.url} is a page for submitting, paying or uploading, and the owner did not ask the run to read it. Went back; do not return to it.`, true);
 			}
 			return text("The owner let the run read this page. It is still research only: nothing here can be filled, submitted or uploaded. Take a browser_snapshot to read it.");
-		}
-		if (state.paywall) {
-			this.host.emit({ type: "browser.blocked", url: state.url, domain: host, detail: { reason: "paywall" } });
-			return text(`${host} is behind a paywall. Do not try to get around it: record it with report_source_failure (paywall) and move on.`, true);
 		}
 		return text(toolText);
 	}
