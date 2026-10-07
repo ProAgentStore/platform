@@ -38,3 +38,18 @@ export async function attachGithubIdentity(
 		.bind(repoId, instanceId, identity.githubRepo, identity.webUrl ?? null, identity.cloneUrl ?? null)
 		.run();
 }
+
+/**
+ * Give a folderless GitHub binding its folder, in place — its id, instructions, sessions and timeline
+ * stay (#884). Only while it still has no folder: a concurrent add that set one first wins, and this
+ * answers null rather than moving that binding to a second folder.
+ */
+export async function attachWorkdir(env: Env, instanceId: string, repoId: string, workdir: string): Promise<CodingRepo | null> {
+	const row = await env.DB.prepare(
+		`UPDATE coding_repos SET workdir = ?3, updated_at = datetime('now')
+		 WHERE id = ?1 AND instance_id = ?2 AND (workdir IS NULL OR trim(workdir) = '') RETURNING *`,
+	)
+		.bind(repoId, instanceId, workdir)
+		.first<RepoRow>();
+	return row ? toRepo(row) : null;
+}

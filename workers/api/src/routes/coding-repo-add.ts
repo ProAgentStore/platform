@@ -6,7 +6,7 @@ import type { Context } from "hono";
 import { CONFIRMATION_WINDOW_MS } from "../lib/confirmation-window.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../lib/runner-client.js";
 import { NO_SOCKET_MARKER, RunnerUnreachableError } from "../lib/runner-unreachable.js";
-import { attachGithubIdentity, findRepoByWorkdir } from "../lib/coding-repo-folder.js";
+import { attachGithubIdentity, attachWorkdir, findRepoByWorkdir } from "../lib/coding-repo-folder.js";
 import { createRepo, findExistingRepoBinding, updateRepoClone } from "../lib/coding-store.js";
 import { checkWorkdirVia } from "../lib/coding-workdir.js";
 import { parseRepoRef } from "../lib/git-providers.js";
@@ -83,8 +83,9 @@ export async function addPairedRepo(
 	if (clone && (verdict.state === "missing" || verdict.state === "empty")) {
 		if (!githubRepoIn) return refuse(`Cloning needs github_repo — which repository to clone into \`${localPath}\`.`);
 		// Refused BEFORE the clone, so a repo already bound here is not cloned a second time for nothing.
+		// A binding with no folder is not a clone: it is what this one completes, below (#884).
 		const bound = await findExistingRepoBinding(c.env, instanceId, githubRepoIn);
-		if (bound) return duplicateBinding(c, githubRepoIn, bound);
+		if (bound?.workdir) return duplicateBinding(c, githubRepoIn, bound);
 		const outcome = await cloneOnMachine(conn, localPath, githubRepoIn, protocol, deadline);
 		if (outcome.kind === "pending") return stillCloning(c, outcome.job);
 		if (outcome.kind === "unconfirmed") return unconfirmedClone(c, localPath, githubRepoIn);
@@ -112,7 +113,7 @@ export async function addPairedRepo(
 		return refuse(`\`${localPath}\` is a checkout of ${ref.slug}, not ${githubRepoIn} — pass the folder that holds ${githubRepoIn}, or omit github_repo.`);
 	}
 	const existing = await findExistingRepoBinding(c.env, instanceId, ref.slug);
-	if (existing) return duplicateBinding(c, ref.slug, existing);
+	if (existing?.workdir) return duplicateBinding(c, ref.slug, existing);
 	// The folder may already be bound (#853 finding 10) — #849's repair flow is exactly a local-only
 	// binding getting its GitHub half. That row is completed IN PLACE, keeping its id, sessions and
 	// timeline; a second binding on one checkout left two repos for session and engine resolution to
@@ -126,6 +127,34 @@ export async function addPairedRepo(
 				existingName: sameFolder.name,
 			},
 			409,
+		);
+	}
+	// The mirror case (#884): the repo is bound with NO folder — the needs_path binding the repo read
+	// tools refuse. It gets this folder in place, keeping its id, instructions, sessions and timeline;
+	// before this, MCP's only route was to remove it and add again, losing all three.
+	if (existing) {
+		// Two half-bindings — one with the folder, one with the repo — cannot both be kept as one row.
+		if (sameFolder) {
+			return c.json(
+				{
+					error: `\`${localPath}\` is already bound as "${sameFolder.name}" with no GitHub repo, and ${ref.slug} is bound separately as "${existing.name}" with no folder — remove the one you do not need (coding_repo_remove), then add again.`,
+					existingId: existing.id,
+					existingName: existing.name,
+					folderBindingId: sameFolder.id,
+				},
+				409,
+			);
+		}
+		const attached = await attachWorkdir(c.env, instanceId, existing.id, localPath);
+		// A concurrent add gave it a folder between the lookup and here — the same 409 as a binding that had one.
+		if (!attached) return duplicateBinding(c, ref.slug, existing);
+		await updateRepoClone(c.env, attached.id, { cloneStatus: "ready", cloneError: null, checkedNow: true });
+		return c.json(
+			{
+				repo: { ...attached, cloneStatus: "ready", cloneError: undefined, cloneCheckedAt: sqlTime() },
+				detail: `${ref.slug} was already bound as "${existing.name}" with no folder; \`${localPath}\` is attached to that binding in place — its id, instructions and session history are kept, and no second binding was made.`,
+			},
+			200,
 		);
 	}
 	if (sameFolder) {

@@ -4,7 +4,7 @@ import Button from "../components/Button";
 import PipelineRunDetails from "../components/PipelineRunDetails";
 import { statusBadgeClass } from "../lib/statusBadge";
 import { runHasErrors, type Run } from "../lib/pipelineRuns";
-import type { DataRecord, RecordQueryResponse } from "../lib/types";
+import type { DataRecord, JobLeadTriageResponse, RecordQueryResponse } from "../lib/types";
 
 // Spreadsheet + board view over an agent's structured collections:
 // filter/sort, show/hide columns, edit the status pipeline inline, toggle a
@@ -250,7 +250,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 		setTriaging(rec.id);
 		setError("");
 		try {
-			const result = await api<{ record?: Rec; error?: string }>(
+			const result = await api<JobLeadTriageResponse>(
 				`/v1/instances/${instanceId}/job-leads/${encodeURIComponent(rec.id)}/triage`,
 				{ method: "POST", body: JSON.stringify({ action, ...(deferUntil ? { defer_until: deferUntil } : {}) }) },
 			);

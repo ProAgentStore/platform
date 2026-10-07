@@ -351,12 +351,11 @@ const CODING_REPO_ADD_REMEDY =
 	"Over MCP, bind it with `coding_repo_add`: pass `path` = the checkout's folder on the connected machine, and if that folder has no checkout yet add `clone: true` with `github_repo` = owner/repo to clone it there first.";
 
 /**
- * The same remedy for a binding that already EXISTS without a folder. `coding_repo_add` refuses a
- * second binding of one GitHub repo (#829), so over MCP the folderless one has to go first — the
- * console's folder field is the in-place fix and keeps the binding's history.
+ * The same remedy for a binding that already EXISTS without a folder. `coding_repo_add` completes
+ * that binding in place (#884) — same id, instructions and history — so it is one call over MCP too.
  */
 const CODING_REPO_READD_REMEDY =
-	"Over MCP, remove the folderless binding with `coding_repo_remove`, then call `coding_repo_add` with `path` = the checkout's folder on the connected machine — adding `clone: true` with `github_repo` = owner/repo if that folder has no checkout yet.";
+	"Over MCP, call `coding_repo_add` with `path` = the checkout's folder on the connected machine — it attaches the folder to the binding that is already there, keeping its id and history — adding `clone: true` with `github_repo` = owner/repo if that folder has no checkout yet.";
 
 /** The generic name for the setting, used when a field is declared without a usable label. */
 const GENERIC_SETTING_LABEL = "the repository setting";

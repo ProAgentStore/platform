@@ -476,6 +476,12 @@ export interface DataRecord {
 	updatedAt?: string;
 }
 
+/** POST /v1/instances/:id/job-leads/:recordId/triage, as the Data tab reads it (worker: `TriageResponse`, routes/instances-job-leads.ts). */
+export interface JobLeadTriageResponse {
+	record?: DataRecord;
+	error?: string;
+}
+
 /** One page of GET /v1/instances/:id/collections/:name/records (worker: `RecordQueryResult`). */
 export interface RecordQueryResponse {
 	records?: DataRecord[];

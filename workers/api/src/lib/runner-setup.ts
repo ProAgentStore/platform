@@ -127,7 +127,7 @@ export async function runnerSetupChecklist(env: Env, instanceId: string, userId:
 				: admission && !admission.ok
 					? admission.message
 					: needsPath
-						? `${repo.name} is bound but no folder on your machine is recorded for it, so the repo tools cannot read it. Set its folder in the Coding tab (repo settings), or remove it with \`coding_repo_remove\` and call \`coding_repo_add\` with \`path\` (plus \`clone: true\` and \`github_repo\` if that folder has no checkout yet).`
+						? `${repo.name} is bound but no folder on your machine is recorded for it, so the repo tools cannot read it. Set its folder in the Coding tab (repo settings), or call \`coding_repo_add\` with \`path\` (plus \`clone: true\` and \`github_repo\` if that folder has no checkout yet) — it attaches the folder to this binding in place.`
 						: `${repo.name} is bound.`,
 			link: coding,
 		},

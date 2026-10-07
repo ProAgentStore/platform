@@ -193,13 +193,13 @@ export async function findExistingRepoBinding(
 	instanceId: string,
 	githubRepo: string,
 	exceptRepoId?: string,
-): Promise<{ id: string; name: string } | null> {
+): Promise<{ id: string; name: string; workdir: string | null } | null> {
 	const row = await env.DB.prepare(
-		"SELECT id, name FROM coding_repos WHERE instance_id = ?1 AND lower(github_repo) = lower(?2) AND id <> ?3 LIMIT 1",
+		"SELECT id, name, workdir FROM coding_repos WHERE instance_id = ?1 AND lower(github_repo) = lower(?2) AND id <> ?3 LIMIT 1",
 	)
 		.bind(instanceId, githubRepo, exceptRepoId ?? "")
-		.first<{ id: string; name: string | null }>();
-	return row ? { id: row.id, name: row.name ?? "" } : null;
+		.first<{ id: string; name: string | null; workdir: string | null }>();
+	return row ? { id: row.id, name: row.name ?? "", workdir: row.workdir?.trim() || null } : null;
 }
 
 export async function createRepo(env: Env, instanceId: string, userId: string, input: NewRepoInput): Promise<CodingRepo> {

@@ -868,7 +868,9 @@ describe("after 0102 the refusal points at the Coding tab, not a deleted setting
 			expect(msg).toContain("`coding_repo_add`");
 			expect(msg).toContain("`path`");
 			expect(msg).toContain("`clone: true`");
-			expect(msg).toContain("`coding_repo_remove`");
+			// #884: the folder is attached in place — removing the binding (and its history) is no longer the remedy.
+			expect(msg).toContain("attaches the folder to the binding that is already there");
+			expect(msg).not.toContain("coding_repo_remove");
 		}
 		expect(callRunner).not.toHaveBeenCalled();
 	});

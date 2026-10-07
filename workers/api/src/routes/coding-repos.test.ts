@@ -80,7 +80,7 @@ function ownerEnv(repo?: Record<string, unknown>, bindings: Binding[] = []) {
 						const hit = bindings.find(
 							(b) => b.instance_id === instanceId && b.id !== exceptId && b.github_repo?.toLowerCase() === githubRepo.toLowerCase(),
 						);
-						return hit ? { id: hit.id, name: hit.name } : null;
+						return hit ? { id: hit.id, name: hit.name, workdir: hit.workdir ?? null } : null;
 					}
 					// The same-folder lookup (#853 finding 10): a binding whose folder is one of the paths
 					// asked about, trailing slashes ignored — the SQL's `rtrim(workdir, '/')`.
@@ -88,6 +88,12 @@ function ownerEnv(repo?: Record<string, unknown>, bindings: Binding[] = []) {
 						const [instanceId, ...paths] = bound as string[];
 						const hit = bindings.find((b) => b.instance_id === instanceId && b.workdir && paths.includes(b.workdir.replace(/\/+$/, "")));
 						return hit ? { id: hit.id, instance_id: hit.instance_id, user_id: UID, name: hit.name, github_repo: hit.github_repo, provider: hit.github_repo ? "github" : "local", workdir: hit.workdir, clone_status: "ready", branch: "", created_at: "2026-08-01 00:00:00", updated_at: "2026-08-01 00:00:00" } : null;
+					}
+					// The in-place folder attach (#884): only a binding that still has no folder takes one.
+					if (/^UPDATE coding_repos SET workdir = \?3.*RETURNING \*$/.test(flat)) {
+						const [repoId, instanceId, workdir] = bound as string[];
+						const hit = bindings.find((b) => b.id === repoId && b.instance_id === instanceId && !(b.workdir ?? "").trim());
+						return hit ? { id: hit.id, instance_id: hit.instance_id, user_id: UID, name: hit.name, github_repo: hit.github_repo, provider: "github", repo_slug: hit.github_repo, workdir, clone_status: "needs_path", instructions: hit.instructions ?? null, branch: "", created_at: "2026-08-01 00:00:00", updated_at: "2026-08-01 00:00:00" } : null;
 					}
 					if (/FROM coding_repos/.test(flat)) return inserted ?? repo ?? null;
 					// The version the connected machine registered — read only by the too-old-to-clone refusal (#861).
@@ -112,6 +118,8 @@ interface Binding {
 	github_repo: string | null;
 	/** The binding's folder, for the same-folder lookup (#853 finding 10). */
 	workdir?: string | null;
+	/** Per-repo instructions — kept across an in-place folder attach (#884). */
+	instructions?: string | null;
 }
 
 function buildApp(repo?: Record<string, unknown>, bindings: Binding[] = []) {
@@ -600,9 +608,86 @@ describe("POST /coding/repos requireGithub — a coding repo is stored with BOTH
 
 	it("keeps one binding per GitHub repo (#829)", async () => {
 		machine("https://github.com/o/r.git");
-		const { status, issued } = await addRepo({ localPath: "~/dev/r", requireGithub: true }, [{ id: "repo_old", instance_id: INSTANCE, name: "r", github_repo: "o/r" }]);
+		const { status, issued } = await addRepo({ localPath: "~/dev/r", requireGithub: true }, [{ id: "repo_old", instance_id: INSTANCE, name: "r", github_repo: "o/r", workdir: "~/dev/r-old" }]);
 		expect(status).toBe(409);
 		expect(inserted(issued)).toBe(false);
+		expect(issued.some((s) => s.sql.startsWith("UPDATE coding_repos SET workdir"))).toBe(false);
+	});
+
+	// #884: the mirror of #853 finding 10. A binding of the repo with NO folder (needs_path, which every
+	// repo read tool refuses) used to 409 here, so MCP's only fix was coding_repo_remove + add — losing the
+	// binding's id, instructions and session history.
+	describe("a repo already bound with NO folder (#884)", () => {
+		const FOLDERLESS = { id: "repo_bare", instance_id: INSTANCE, name: "stash", github_repo: "proappstore-online/stash", workdir: null, instructions: "Run pnpm test before pushing." };
+		const attaches = (issued: Statement[]) => issued.filter((s) => s.sql.startsWith("UPDATE coding_repos SET workdir"));
+		const stampedReady = (issued: Statement[], id: string) =>
+			issued.some((s) => s.sql.startsWith("UPDATE coding_repos SET clone_status") && s.binds[0] === id && s.binds[1] === "ready");
+
+		it("gets the folder attached in place — 200, same id, no second binding, stamped ready", async () => {
+			machine("git@github.com:proappstore-online/stash.git");
+			const { status, body, issued } = await addRepo({ localPath: "~/dev/stash", requireGithub: true }, [FOLDERLESS]);
+			expect(status).toBe(200);
+			expect(inserted(issued)).toBe(false);
+			expect(attaches(issued)).toHaveLength(1);
+			expect(attaches(issued)[0].binds).toEqual(["repo_bare", INSTANCE, "~/dev/stash"]);
+			// Only a row that still has no folder may take one — a concurrent attach is never overwritten.
+			expect(attaches(issued)[0].sql).toMatch(/WHERE id = \?1 AND instance_id = \?2 AND \(workdir IS NULL OR trim\(workdir\) = ''\)/);
+			expect(stampedReady(issued, "repo_bare")).toBe(true);
+			expect(body.detail).toMatch(/already bound as "stash" with no folder; `~\/dev\/stash` is attached to that binding in place/);
+		});
+
+		it("keeps the binding's identity and instructions, and touches nothing that holds its session history", async () => {
+			machine("https://github.com/proappstore-online/stash.git");
+			const { body, issued } = await addRepo({ localPath: "~/dev/stash", githubRepo: "proappstore-online/stash", requireGithub: true }, [FOLDERLESS]);
+			expect(body.repo).toMatchObject({ id: "repo_bare", name: "stash", githubRepo: "proappstore-online/stash", workdir: "~/dev/stash", instructions: "Run pnpm test before pushing.", cloneStatus: "ready" });
+			// Sessions and the timeline hang off the repo id; the attach neither deletes nor re-keys anything.
+			expect(issued.some((s) => /^DELETE /.test(s.sql) || /coding_sessions|coding_timeline/.test(s.sql))).toBe(false);
+			// The UPDATE writes the folder and nothing else — not the name, not the instructions, not the id.
+			expect(attaches(issued)[0].sql).toMatch(/^UPDATE coding_repos SET workdir = \?3, updated_at = datetime\('now'\) WHERE/);
+		});
+
+		it("a concurrent add that gave it a folder first wins — the same 409 as a binding that had one", async () => {
+			machine("https://github.com/proappstore-online/stash.git");
+			const { app, env, issued } = buildApp(undefined, [FOLDERLESS]);
+			const prepare = env.DB.prepare.bind(env.DB);
+			(env.DB as unknown as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
+				const stmt = prepare(sql) as unknown as { bind: (...b: unknown[]) => { first: () => Promise<unknown> } };
+				if (!sql.includes("UPDATE coding_repos SET workdir")) return stmt;
+				const bind = stmt.bind;
+				stmt.bind = (...b: unknown[]) => Object.assign(bind(...b), { first: async () => null });
+				return stmt;
+			};
+			const token = await signSession(UID, SECRET, { roles: [] });
+			const res = await app.request(
+				`/v1/instances/${INSTANCE}/coding/repos`,
+				{ method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ localPath: "~/dev/stash", requireGithub: true }) },
+				env,
+			);
+			expect(res.status).toBe(409);
+			expect(((await res.json()) as { existingId?: string }).existingId).toBe("repo_bare");
+			expect(issued.some((s) => s.sql.startsWith("UPDATE coding_repos SET clone_status"))).toBe(false);
+		});
+
+		it("refuses when the folder is ALSO bound, as a separate local-only binding — both named, nothing changed", async () => {
+			machine("https://github.com/proappstore-online/stash.git");
+			const { status, body, issued } = await addRepo({ localPath: "~/dev/stash", requireGithub: true }, [
+				FOLDERLESS,
+				{ id: "repo_local", instance_id: INSTANCE, name: "stash (local)", github_repo: null, workdir: "~/dev/stash" },
+			]);
+			expect(status).toBe(409);
+			expect(body.existingId).toBe("repo_bare");
+			expect((body as { folderBindingId?: string }).folderBindingId).toBe("repo_local");
+			expect(inserted(issued)).toBe(false);
+			expect(attaches(issued)).toEqual([]);
+			expect(issued.some((s) => s.sql.startsWith("UPDATE coding_repos SET github_repo"))).toBe(false);
+		});
+
+		it("a folder whose origin is a DIFFERENT repo is still refused — the folderless binding is left alone", async () => {
+			machine("https://github.com/o/other.git");
+			const { status, issued } = await addRepo({ localPath: "~/dev/stash", githubRepo: "proappstore-online/stash", requireGithub: true }, [FOLDERLESS]);
+			expect(status).toBe(400);
+			expect(attaches(issued)).toEqual([]);
+		});
 	});
 });
 
@@ -736,9 +821,18 @@ describe("POST /coding/repos requireGithub + clone — the cold start (#857)", (
 
 	it("a repository already bound to this instance is refused BEFORE it is cloned a second time", async () => {
 		const asked = machine({ initial: MISSING });
-		const { status } = await add({ githubRepo: "acme/grass-karma", clone: true }, [{ id: "repo_old", instance_id: INSTANCE, name: "gk", github_repo: "acme/grass-karma" }]);
+		const { status } = await add({ githubRepo: "acme/grass-karma", clone: true }, [{ id: "repo_old", instance_id: INSTANCE, name: "gk", github_repo: "acme/grass-karma", workdir: "~/dev/gk" }]);
 		expect(status).toBe(409);
 		expect(asked.some((a) => a.path.startsWith("/coding/clone-start") || a.path === "/coding/clone")).toBe(false);
+	});
+
+	it("a repository bound with NO folder is cloned, then gets that folder in place — same id, no second binding (#884)", async () => {
+		const asked = machine({ initial: MISSING });
+		const { status, body, issued } = await add({ githubRepo: "acme/grass-karma", clone: true }, [{ id: "repo_bare", instance_id: INSTANCE, name: "gk", github_repo: "acme/grass-karma", workdir: null }]);
+		expect(status).toBe(200);
+		expect(asked.filter((a) => a.path === "/coding/clone-start")).toHaveLength(1);
+		expect(inserted(issued)).toBe(false);
+		expect(body.repo).toMatchObject({ id: "repo_bare", name: "gk", workdir: "~/dev/grass-karma", cloneStatus: "ready" });
 	});
 
 	describe("long clones run in the background, and SSH-only machines clone (#858)", () => {
