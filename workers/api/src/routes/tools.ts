@@ -1149,6 +1149,8 @@ toolRoutes.post("/:id/loop", async (c) => {
 		requireRepoChoice?: boolean;
 		queueIfBusy?: boolean;
 		repairCheckout?: boolean;
+		/** The GitHub issue this run works on (#895); its card is linked to the run. */
+		issue?: number;
 		budget?: { costMicros?: number; delegations?: number; maxDepth?: number };
 	};
 	if (body.requestId !== undefined && (typeof body.requestId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(body.requestId))) throw new HttpError(400, "requestId must contain 1–128 letters, numbers, underscores or hyphens");
@@ -1169,6 +1171,10 @@ toolRoutes.post("/:id/loop", async (c) => {
 	// #877: `coding_loop_start` asks to be refused rather than guessed for on a multi-repo agent.
 	// Absent everywhere else, so the console's Loop and supervisors keep "absent means you pick".
 	const requireRepoChoice = body.requireRepoChoice === true;
+	if (body.issue !== undefined && body.issue !== null && !(Number.isInteger(body.issue) && (body.issue as number) > 0)) {
+		return c.json({ error: "issue must be a positive GitHub issue number", startState: "not_started" }, 400);
+	}
+	const issue = typeof body.issue === "number" ? body.issue : undefined;
 
 	// Match the driver clamp so the returned iteration limit equals the limit actually run (#477, #820).
 	const ceilings = await resolveAccountCeilings(c.env, session.uid);
@@ -1212,6 +1218,7 @@ toolRoutes.post("/:id/loop", async (c) => {
 			budgetId: budget.id,
 			depth: 0,
 			repairCheckout,
+			issue,
 		});
 		if (!started.ok) {
 			// Queue only busy refusals: no runner or unusable checkout cannot be fixed by waiting.
@@ -1235,7 +1242,7 @@ toolRoutes.post("/:id/loop", async (c) => {
 		return c.json({ runId: started.runId, driver: started.driver, budgetId: budget.id, maxIterations, status: "running", startState: "started" }, 201);
 	};
 	return body.requestId
-		? dispatchLoopStartReceipt(c.env, session.uid, instanceId, body.requestId, { objective, maxIterations: body.maxIterations ?? 10, repoId: repoId ?? null, requireRepoChoice, queueIfBusy: body.queueIfBusy === true, repairCheckout, budget: body.budget ?? null }, start, (operation) => c.executionCtx.waitUntil(operation))
+		? dispatchLoopStartReceipt(c.env, session.uid, instanceId, body.requestId, { objective, maxIterations: body.maxIterations ?? 10, repoId: repoId ?? null, requireRepoChoice, queueIfBusy: body.queueIfBusy === true, repairCheckout, issue: issue ?? null, budget: body.budget ?? null }, start, (operation) => c.executionCtx.waitUntil(operation))
 		: start();
 });
 

@@ -58,6 +58,7 @@ import { mcpRoutes } from "./routes/mcp.js";
 import { cloudflareAccessGate, cloudflareAccessMode } from "./lib/cf-access.js";
 import { runDueTriggers } from "./lib/triggers.js";
 import { runDueDeliveries } from "./lib/connections.js";
+import { runIssueSync } from "./lib/issue-sync.js";
 import { syncActiveLocalBrowserRuns } from "./lib/local-browser/sync.js";
 import { syncActiveTailorRuns } from "./lib/local-artifact/tailor.js";
 import { syncActiveApplyRuns } from "./lib/local-apply/apply.js";
@@ -326,6 +327,8 @@ export default {
 		ctx.waitUntil(
 			runCommitCloseWatch(env).catch((err) => logUnhandled(env, err, { path: "scheduled:commit-close-watch", method: "CRON" })),
 		);
+		// Keep coder boards' issue cards in step with GitHub (#895): backlog, labels, closes. Reads only.
+		ctx.waitUntil(runIssueSync(env).catch((err) => logUnhandled(env, err, { path: "scheduled:issue-sync", method: "CRON" })));
 		// Default-branch CI/deploy health for coding repos (#903): reads GitHub, notifies once per red
 		// streak. Its own failure domain for the deploy watcher's reasons.
 		ctx.waitUntil(runCiHealthWatch(env).catch((err) => logUnhandled(env, err, { path: "scheduled:ci-health", method: "CRON" })));

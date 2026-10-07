@@ -358,6 +358,11 @@ const READBACK: Record<string, string | null> = {
 	// ── board ──
 	"set_board_item_status.status": "instance_board",
 	"promote_board_item.job_key": "instance_board", // read back as the card's `ticketId` (#757)
+	// #895: the link reads back as the card's `issue`; sync's effect is the cards themselves.
+	"link_board_item_issue.job_key": "instance_board",
+	"link_board_item_issue.repo": "instance_board",
+	"link_board_item_issue.issue_number": "instance_board",
+	"unlink_board_item_issue.job_key": "instance_board",
 	"set_instance_board_config.columns": "get_instance_board_config",
 	"set_instance_board_config.view": "get_instance_board_config",
 	"update_agent_board_config.config": "get_agent_board_config",
@@ -416,6 +421,7 @@ const READBACK: Record<string, string | null> = {
 	// A repair run's record carries the platform's fixed objective label, which is what the status
 	// tool reads back (#804).
 	"coding_loop_start.repair_checkout": "coding_loop_status",
+	"coding_loop_start.issue": "instance_board", // #895: the run on its issue card (`issue`, `run`)
 
 	// ── feedback ──
 	"resolve_feedback.issue_url": "list_feedback",

@@ -306,7 +306,7 @@ const TABLE: Record<string, Row> = {
 	clear_instance_messages: ["observability", "destructive", "clear_instance_messages", "envelope", "confirm,dry_run,instance_id,token"],
 	clear_instance_voice_settings: ["settings", "write", null, "envelope", "dry_run,instance_id,token"],
 	delete_instance_task: ["runtime", "destructive", "delete_instance_task", "envelope", "confirm,dry_run,instance_id,task_id,token"],
-	coding_loop_start: ["coding", "runtime", null, "envelope", "dry_run,instance_id,max_iterations,objective,queue_if_busy,repair_checkout,repo_id,request_id,token"],
+	coding_loop_start: ["coding", "runtime", null, "envelope", "dry_run,instance_id,issue,max_iterations,objective,queue_if_busy,repair_checkout,repo_id,request_id,token"],
 	// Both were ungated ("none") while they read and mutated MCP-DO memory, which nothing else
 	// could see. Now they read and cancel the SERVER's run record, so they are scoped like every
 	// other read and every other write (#502).
@@ -364,7 +364,7 @@ const TABLE: Record<string, Row> = {
 	// `reasoning` (a BOOLEAN here, not the writer's string) added by #574: the field
 	// `create_instance_ticket` accepts had no reader, so this tool gained the argument that asks
 	// for it. Still ungated — it widens a read, and reads nothing the caller could not already see.
-	instance_board: ["board", "none", null, null, "instance_id,limit,offset,reasoning,token"],
+	instance_board: ["board", "none", null, null, "instance_id,limit,offset,reasoning,repo,token"],
 	// `before` added at #566: the response has always carried `nextCursor`/`hasMore` and no input
 	// could use either, so every message older than the newest page was unreachable over MCP.
 	instance_messages: ["observability", "none", null, null, "before,instance_id,limit,token"],
@@ -462,6 +462,9 @@ const TABLE: Record<string, Row> = {
 	set_agent_stats_schema: ["stats", "write", null, "envelope", "agent_id,cards,dry_run,token"],
 	set_board_item_status: ["board", "write", null, "envelope", "dry_run,instance_id,job_key,status,token"],
 	promote_board_item: ["board", "write", null, "envelope", "dry_run,instance_id,job_key,token"],
+	link_board_item_issue: ["board", "write", null, "envelope", "dry_run,instance_id,issue_number,job_key,repo,token"],
+	unlink_board_item_issue: ["board", "write", null, "envelope", "dry_run,instance_id,job_key,token"],
+	sync_board_issues: ["board", "write", null, "envelope", "dry_run,instance_id,token"],
 	// No `dry_run` on either pause (#667), and that is a decision recorded in composition.ts:
 	// the call is fully determined by one id and one boolean, so a preview could only echo the id
 	// back with less information than `list_connections`/`list_supervision` already give. `write`

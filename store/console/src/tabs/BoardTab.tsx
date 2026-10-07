@@ -9,8 +9,13 @@ import { statusBadgeClass } from "../lib/statusBadge";
 import { LayoutGrid, List, SlidersHorizontal, Plus, Trash2, ArrowUp, ArrowDown, MessageCircleQuestion } from "lucide-react";
 import Button from "../components/Button";
 import Card from "../components/Card";
+import BoardIssueFace, { type BoardIssueFields } from "../components/BoardIssueFace";
+import { BoardLanesView, IssueControls, IssuesViewButton } from "../components/BoardLanes";
+import { type BoardIssueSyncResult, issueRepos } from "../lib/boardLanes";
 
-type BoardView = "kanban" | "list";
+/** `issues` (#895) is this tab's own: the lanes a coder's GitHub issues stand in. Not persisted —
+ *  the server's `boardView` is kanban | list, and an apply agent's board has no issues to lane. */
+type BoardView = "kanban" | "list" | "issues";
 
 // The single, agent-configurable work board. The server (lib/board.ts) is the ONE
 // place the board shape is defined: it groups runtime-task retries into one card
@@ -29,7 +34,7 @@ const GENERIC_COLUMNS: BoardColumn[] = [
 ];
 
 interface BoardAttempt { id: string; status: string; updatedAt: string }
-interface BoardItem {
+interface BoardItem extends BoardIssueFields {
 	jobKey: string;
 	latestTaskId: string;
 	title: string;
@@ -46,6 +51,10 @@ interface BoardItem {
 	threadTurns?: number;
 	/** Set when this card is a first-class ticket (#757): its runs are stored, not just grouped. */
 	ticketId?: string;
+	/** #895: where the card stands among the issue lanes, how urgent its issue is, and the session a coding card is. */
+	lane?: string | null;
+	priority?: number;
+	codingSessionId?: string;
 }
 
 export default function BoardTab({ instanceId, apply }: { instanceId: string; apply?: boolean }) {
@@ -68,11 +77,16 @@ export default function BoardTab({ instanceId, apply }: { instanceId: string; ap
 	const [runMsg, setRunMsg] = useState("");
 
 	const cols = serverCols?.length ? serverCols : GENERIC_COLUMNS;
+	// #895: the repo filter — choices remembered from unfiltered reads, so filtering cannot hide them.
+	const [repo, setRepo] = useState("");
+	const [repos, setRepos] = useState<string[]>([]);
+	const [syncMsg, setSyncMsg] = useState("");
 
 	const loadBoard = useCallback(async () => {
 		try {
-			const data = await api<{ columns?: BoardColumn[]; items?: BoardItem[]; view?: BoardView; truncated?: boolean }>(`/v1/instances/${instanceId}/board`);
+			const data = await api<{ columns?: BoardColumn[]; items?: BoardItem[]; view?: BoardView; truncated?: boolean }>(`/v1/instances/${instanceId}/board${repo ? `?repo=${encodeURIComponent(repo)}` : ""}`);
 			setItems(data.items || []);
+			if (!repo) setRepos(issueRepos(data.items || []));
 			if (data.columns?.length) setServerCols(data.columns);
 			if (!viewInit.current && (data.view === "kanban" || data.view === "list")) { setView(data.view); viewInit.current = true; }
 			setTruncated(data.truncated === true);
@@ -80,13 +94,14 @@ export default function BoardTab({ instanceId, apply }: { instanceId: string; ap
 		} catch (e) {
 			setError(e instanceof Error ? e.message : "Couldn't load the board");
 		}
-	}, [instanceId]);
+	}, [instanceId, repo]);
 
 	// Persist the view choice (config.boardView) so it follows the user + is readable
 	// by MCP / the agent. Optimistic: flip locally first, then save.
 	const changeView = useCallback(async (v: BoardView) => {
 		setView(v);
 		viewInit.current = true;
+		if (v === "issues") return;
 		try { await api(`/v1/instances/${instanceId}/board-config`, { method: "PUT", body: JSON.stringify({ view: v }) }); } catch { /* non-fatal */ }
 	}, [instanceId]);
 
@@ -222,6 +237,20 @@ export default function BoardTab({ instanceId, apply }: { instanceId: string; ap
 	};
 
 	const renderCols = [...cols, ...(other.length ? [{ id: "__other", title: "Other", color: "#a3a3a3" } as BoardColumn] : [])];
+	const hasIssues = repos.length > 0 || items.some((i) => i.githubIssue);
+
+	// Pull the repos' GitHub issues onto the board now (#895) — the cron does it on rotation.
+	const syncIssues = async () => {
+		setSyncMsg("Syncing issues from GitHub…");
+		try {
+			const r = await api<BoardIssueSyncResult>(`/v1/instances/${instanceId}/board/issues/sync`, { method: "POST" });
+			const unread = r.repos.filter((x) => x.unreadable).map((x) => x.githubRepo);
+			setSyncMsg(`${r.repos.reduce((n, x) => n + x.created, 0)} new, ${r.repos.reduce((n, x) => n + x.updated, 0)} updated${unread.length ? ` — couldn't read ${unread.join(", ")}` : ""}.`);
+			loadBoard();
+		} catch (e) {
+			setSyncMsg(e instanceof Error ? e.message : "Sync failed");
+		}
+	};
 
 	// Shared per-card wiring so the Kanban card and the List row behave identically.
 	const itemProps = (item: BoardItem) => ({
@@ -229,7 +258,12 @@ export default function BoardTab({ instanceId, apply }: { instanceId: string; ap
 		cols,
 		expanded: expanded === item.jobKey,
 		onToggleAttempts: () => setExpanded(expanded === item.jobKey ? null : item.jobKey),
-		onOpen: (taskId: string) => { if (taskId) navigate(`/instances/${instanceId}/tasks/${taskId}`); },
+		// A coding card opens its SESSION (#895) — the run page is built for browser tasks.
+		onOpen: (taskId: string) => {
+			if (item.codingSessionId) navigate(`/instances/${instanceId}/coding/${item.codingSessionId}`);
+			else if (taskId) navigate(`/instances/${instanceId}/tasks/${taskId}`);
+		},
+		onOpenSession: (sessionId: string) => navigate(`/instances/${instanceId}/coding/${sessionId}`),
 		// Same destination as opening the card, with `?ask=1` so the ticket lands scrolled to
 		// its conversation with the box focused. The thread was previously reachable only by
 		// opening a ticket and scrolling, so nothing on the board said it existed (#150).
@@ -274,7 +308,9 @@ export default function BoardTab({ instanceId, apply }: { instanceId: string; ap
 					<div className="flex border border-line rounded-lg overflow-hidden">
 						<button type="button" onClick={() => changeView("kanban")} title="Board view" aria-pressed={view === "kanban"} className={`flex items-center gap-1 px-2 py-1.5 text-xs font-bold ${view === "kanban" ? "bg-accent-soft text-accent" : "text-muted hover:bg-panel-hover"}`}><LayoutGrid size={13} /><span className="hidden sm:inline">Board</span></button>
 						<button type="button" onClick={() => changeView("list")} title="List view" aria-pressed={view === "list"} className={`flex items-center gap-1 px-2 py-1.5 text-xs font-bold ${view === "list" ? "bg-accent-soft text-accent" : "text-muted hover:bg-panel-hover"}`}><List size={13} /><span className="hidden sm:inline">List</span></button>
+						{hasIssues && <IssuesViewButton active={view === "issues"} onClick={() => changeView("issues")} />}
 					</div>
+					{hasIssues && <IssueControls repos={repos} repo={repo} onRepo={setRepo} onSync={syncIssues} />}
 					<Button size="md" onClick={() => setEditingCols(true)} title="Customize columns">
 						<SlidersHorizontal size={13} /><span className="hidden sm:inline">Columns</span>
 					</Button>
@@ -303,7 +339,10 @@ export default function BoardTab({ instanceId, apply }: { instanceId: string; ap
 				</div>
 			)}
 
-			{view === "kanban" ? (
+			{syncMsg && <p className="mb-3 text-xs text-muted">{syncMsg}</p>}
+			{view === "issues" ? (
+				<BoardLanesView items={items} renderCard={(item) => <ItemCard key={item.jobKey} {...itemProps(item)} />} />
+			) : view === "kanban" ? (
 				<div className="grid grid-cols-[repeat(auto-fit,minmax(210px,1fr))] gap-3 items-start mb-4">
 					{renderCols.map((col) => {
 						const colItems = col.id === "__other" ? other : (byColumn.get(col.id) ?? []);
@@ -386,12 +425,13 @@ function AskButton({ turns, onAsk, className = "" }: { turns: number; onAsk: () 
 	);
 }
 
-function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove, onRetry, onApprove, retrying, onDelete, onPromote }: {
+function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onOpenSession, onAsk, onMove, onRetry, onApprove, retrying, onDelete, onPromote }: {
 	item: BoardItem;
 	cols: BoardColumn[];
 	expanded: boolean;
 	onToggleAttempts: () => void;
 	onOpen: (taskId: string) => void;
+	onOpenSession: (sessionId: string) => void;
 	onAsk: (taskId: string) => void;
 	onMove: (status: string) => void;
 	onRetry?: () => void;
@@ -403,7 +443,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMov
 }) {
 	const isFinished = ["completed", "cancelled", "failed", "blocked", "expired", "rejected"].includes(item.status);
 	// A moved card whose runs are gone stands alone — no run to open.
-	const openable = !!item.latestTaskId;
+	const openable = !!item.latestTaskId || !!item.codingSessionId;
 	// Current selection: the column holding this card, or "__auto" when no override.
 	const currentCol = columnFor(cols, item.status) ?? "";
 	const selectValue = item.userStatus ? currentCol : "__auto";
@@ -436,6 +476,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMov
 					{item.updatedAt && <span className="text-muted-soft">{formatTime(item.updatedAt)}</span>}
 				</div>
 			</button>
+			<BoardIssueFace item={item} onOpenSession={onOpenSession} />
 
 			{/* Wraps: Ask is a fourth control on this row, and a kanban column is narrow enough
 			    that Approve + Retry + the column select already filled it. */}
@@ -532,7 +573,7 @@ function ListRow({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove
 	onPromote?: () => void;
 }) {
 	const isFinished = ["completed", "cancelled", "failed", "blocked", "expired", "rejected"].includes(item.status);
-	const openable = !!item.latestTaskId;
+	const openable = !!item.latestTaskId || !!item.codingSessionId;
 	const currentCol = columnFor(cols, item.status) ?? "";
 	const selectValue = item.userStatus ? currentCol : "__auto";
 	return (

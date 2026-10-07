@@ -243,10 +243,11 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 			repo_id: z.string().optional().describe("Which of the instance's repos the run works on — an id from coding_repos_list. Optional when the instance has exactly one repo; REQUIRED when it has more than one (omitted, the call is refused with the list of registered repo_ids). A repo_id that is not on this instance is refused, never replaced by another repo. The per-repo run lock and queue_if_busy apply to THIS repo."),
 			request_id: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/).optional().describe("Stable idempotency key for this start. Reuse it with the same arguments after a lost response; coding_loop_status lists the durable start receipt. A new objective needs a new key."),
 			queue_if_busy: z.boolean().optional().describe("When the repo is already being worked on, QUEUE this objective instead of failing. Answers `{queued:true, entry}` instead of a run id, and the platform starts it automatically the moment the active run reaches a terminal state — done, failed or max iterations. Queue is FIFO per repo; read it with coding_loop_queue and withdraw an entry with coding_loop_queue_cancel. Only the BUSY refusal queues: an agent with no repository, no runner, or an unusable checkout still fails immediately, because waiting fixes none of those. Off by default — without it, a busy instance is still an error."),
+			issue: z.coerce.number().int().min(1).optional().describe("The GitHub issue (number, in this repo) this run works on (#895): the run is linked to that issue's board card, and the coding session names it. Omitted, the objective's own subject is used when it leads with one (\"Fix issue #12: …\"), recorded as inferred."),
 			repair_checkout: z.boolean().optional().describe("Start a REPAIR run instead of a work run: when a run was blocked because the checkout is behind or has diverged (the block message ends by naming this flag), this lets the agent fix THAT itself — the platform writes the objective (get onto the branch, in sync with upstream, clean tree), the run is let through the pre-flight sync gate, and it may do nothing else: no ticket work, no pushes, and nothing is ever deleted — work in the way is parked on a `wip/` branch the report names. Coding agents only. Off by default."),
 			dry_run: z.boolean().optional().describe("Report the run that would be started, and the spend it would commit, without starting it."),
 		},
-		async ({ token, instance_id, objective, max_iterations, repo_id, request_id, queue_if_busy, repair_checkout, dry_run }) => {
+		async ({ token, instance_id, objective, max_iterations, repo_id, request_id, queue_if_busy, issue, repair_checkout, dry_run }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const maxIter = max_iterations ?? 10;
@@ -289,10 +290,10 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 					method: "POST",
 					// `requireRepoChoice` (#877): this caller can name the repo, so on a multi-repo instance an
 					// omitted repo_id is refused with the list rather than resolved to whichever was touched last.
-					body: JSON.stringify({ requestId, objective: (objective ?? "").trim() || undefined, maxIterations: maxIter, repoId, requireRepoChoice: true, queueIfBusy: queue_if_busy === true, repairCheckout: repair }),
+					body: JSON.stringify({ requestId, objective: (objective ?? "").trim() || undefined, maxIterations: maxIter, repoId, requireRepoChoice: true, queueIfBusy: queue_if_busy === true, repairCheckout: repair, ...(issue ? { issue } : {}) }),
 				},
 				env,
-				{ tool: "coding_loop_start", possibleOutcomes: ["provisioning", "started", "queued", "not_started"], poll: { tool: "coding_loop_status", input: { instance_id: id } }, retry: { tool: "coding_loop_start", input: { instance_id: id, request_id: requestId, objective, max_iterations, repo_id, queue_if_busy, repair_checkout } } },
+				{ tool: "coding_loop_start", possibleOutcomes: ["provisioning", "started", "queued", "not_started"], poll: { tool: "coding_loop_status", input: { instance_id: id } }, retry: { tool: "coding_loop_start", input: { instance_id: id, request_id: requestId, objective, max_iterations, repo_id, queue_if_busy, issue, repair_checkout } } },
 			);
 			if ((data as { outcome?: string }).outcome === "unknown") return jsonText({ ...(data as object), requestId, startState: "unknown" });
 			if ((data as { startState?: string }).startState === "provisioning") return jsonText(data);

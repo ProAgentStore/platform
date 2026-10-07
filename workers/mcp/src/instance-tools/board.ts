@@ -82,8 +82,9 @@ export function registerBoardTools(server: McpServer, ctx: InstanceToolsCtx): vo
 			// looks perfectly healthy. Measured in production, not anticipated.
 			offset: z.coerce.number().int().min(0).optional().describe("Skip this many cards. Pass `page.nextOffset` from the previous reply; omit for the first page."),
 			limit: z.coerce.number().int().min(1).optional().describe("Cap the cards returned. The reply is budgeted to fit a host's wire limit regardless, so a large limit is silently reduced rather than refused — `page.count` says what you got."),
+			repo: z.string().optional().describe("Only the cards that are, or work on, a GitHub issue of this repo — `owner/repo`, any case (#895). For an instance with several repos."),
 		},
-		async ({ token, instance_id, reasoning, offset, limit }) => {
+		async ({ token, instance_id, reasoning, offset, limit, repo }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			// The API (lib/board.ts) is the single source of the board shape — one card
@@ -92,7 +93,7 @@ export function registerBoardTools(server: McpServer, ctx: InstanceToolsCtx): vo
 			// instead of returning an empty board (which reads as "no jobs").
 			let data: unknown;
 			try {
-				data = await authedCall(`/v1/instances/${instance_id}/board`, sessionToken, {}, env);
+				data = await authedCall(`/v1/instances/${instance_id}/board${repo?.trim() ? `?repo=${encodeURIComponent(repo.trim())}` : ""}`, sessionToken, {}, env);
 			} catch (e) {
 				return jsonText({ error: `board unavailable: ${e instanceof Error ? e.message : String(e)}` });
 			}
@@ -153,6 +154,76 @@ export function registerBoardTools(server: McpServer, ctx: InstanceToolsCtx): vo
 			if (dry_run) return dryRun(safetyFor(token), "promote_board_item", "make board card a ticket", input, { endpoint, method: "POST" });
 			const data = await authedCall(endpoint, sessionToken, { method: "POST" }, env);
 			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "promote_board_item", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"link_board_item_issue",
+		"Link a board card to a GitHub issue (#682, #895): the card then shows the issue's title, state and labels. Address the card by `job_key` from instance_board; name the issue by `repo` (`owner/repo`) and `issue_number`. Reads the issue once to cache it; GitHub is never changed. A coding run's own issue card is linked automatically when the run starts (from coding_loop_start's objective) — this is for any other card. Undo with unlink_board_item_issue.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			job_key: z.string().describe("The card's jobKey from instance_board"),
+			repo: z.string().describe("The issue's repository, `owner/repo`."),
+			issue_number: z.coerce.number().int().min(1).describe("The GitHub issue number."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, job_key, repo, issue_number, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, job_key, repo, issue_number };
+			const denied = await requirePermission(safetyFor(token), "write", "link_board_item_issue", input);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${instance_id}/board/items/${encodeURIComponent(job_key)}/github-issue`;
+			if (dry_run) return dryRun(safetyFor(token), "link_board_item_issue", "link a board card to a GitHub issue", input, { endpoint, method: "PUT" });
+			const data = await authedCall(endpoint, sessionToken, { method: "PUT", body: JSON.stringify({ repo, issueNumber: issue_number }) }, env);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "link_board_item_issue", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"unlink_board_item_issue",
+		"Remove a board card's GitHub issue link (the one link_board_item_issue made). Address the card by `job_key` from instance_board. Changes nothing on GitHub and nothing else about the card.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			job_key: z.string().describe("The card's jobKey from instance_board"),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, job_key, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, job_key };
+			const denied = await requirePermission(safetyFor(token), "write", "unlink_board_item_issue", input);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${instance_id}/board/items/${encodeURIComponent(job_key)}/github-issue`;
+			if (dry_run) return dryRun(safetyFor(token), "unlink_board_item_issue", "unlink a board card from its GitHub issue", input, { endpoint, method: "PUT" });
+			const data = await authedCall(endpoint, sessionToken, { method: "PUT", body: JSON.stringify({ issueNumber: null }) }, env);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "unlink_board_item_issue", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"sync_board_issues",
+		"Bring a coder's board up to date with its repos' GitHub issues now (#895) — what the platform does on its own every few minutes. Open issues no run has touched appear as Backlog cards (needs-human labels as Parked); a closed or relabelled issue moves its card. Reads GitHub only; never starts work — a backlog card is picked up only after you release it to the ticket queue. Answers per repo: issues seen, cards created and updated, or `unreadable` when GitHub could not be read.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id };
+			const denied = await requirePermission(safetyFor(token), "write", "sync_board_issues", input);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${instance_id}/board/issues/sync`;
+			if (dry_run) return dryRun(safetyFor(token), "sync_board_issues", "sync the board's GitHub issues", input, { endpoint, method: "POST" });
+			const data = await authedCall(endpoint, sessionToken, { method: "POST" }, env);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "sync_board_issues", action: "completed", input, result: data });
 			return jsonText(data);
 		},
 	);

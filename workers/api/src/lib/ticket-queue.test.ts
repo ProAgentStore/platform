@@ -21,6 +21,7 @@ import {
 	ticketQueueState,
 } from "./ticket-queue.js";
 import { createTicketCard } from "./tickets.js";
+import { upsertIssueTicket } from "./issue-tickets.js";
 import { isRunnableStatus } from "./actionable-ticket.js";
 import type { Env } from "../types.js";
 
@@ -112,6 +113,21 @@ describe("pickup — a released ticket becomes a run that names it (#864)", () =
 		expect(JSON.parse(task.payload)).toMatchObject({ ticketId: t.id, loopRunId: "run-1" });
 		const card = (await buildInstanceBoard(env, "i1", "u1")).items.find((i) => i.ticketId === t.id);
 		expect(card?.attempts.map((a) => a.id)).toContain("run-1");
+	});
+
+	it("a released ISSUE ticket starts on its own repo and issue (#895) — so a multi-repo coder no longer refuses it (#877)", async () => {
+		const { env } = setup();
+		d1.exec(`INSERT INTO coding_repos (id, instance_id, user_id, name, github_repo) VALUES ('r2', 'i1', 'u1', 'web', 'o/web')`);
+		await setTicketQueueEnabled(env, "i1", "u1", true);
+		const cache = { number: 41, repo: "o/web", title: "Slow login", state: "open", stateReason: null, labels: [], assignees: [], url: "u", updatedAt: "", closedAt: null, summary: "Login takes 9s" };
+		const { ticketId } = await upsertIssueTicket(env, "i1", "u1", { repoId: "r2", issueNumber: 41, cache, linkedBy: "sync" });
+		// A backlog issue is NOT picked until a person releases it.
+		expect(await pickupNextTicket(env, "i1", "u1", { ...green, start: fakeStart().start })).toEqual({ started: false, reason: "none" });
+		await setTicketAuthority(env, "i1", "u1", ticketId, "agent");
+		expect((await buildInstanceBoard(env, "i1", "u1")).items.find((i) => i.ticketId === ticketId)).toMatchObject({ lane: "queued", status: "queued" });
+		const d = fakeStart();
+		expect(await pickupNextTicket(env, "i1", "u1", { ...green, start: d.start })).toMatchObject({ started: true, ticketId });
+		expect(d.calls[0]).toMatchObject({ repoId: "r2", issue: 41, objective: "Ticket: #41 Slow login\n\nLogin takes 9s" });
 	});
 
 	it("takes a ticket once: a picked ticket is not re-offered by the next sweep", async () => {

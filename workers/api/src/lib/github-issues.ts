@@ -108,6 +108,10 @@ interface RawIssue {
 	body: string | null;
 	pull_request?: unknown;
 	labels?: Array<{ name?: string } | string>;
+	/** Read only by the board's issue sync (#895). */
+	closed_at?: string | null;
+	state_reason?: string | null;
+	assignees?: Array<{ login?: string } | null> | null;
 }
 
 interface RawIssueComment {
@@ -193,16 +197,21 @@ export async function listIssues(env: Env, userId: string, githubRepo: string, o
 /** {@link listIssues}, with the page it read and whether there is another. */
 export async function listIssuesPage(env: Env, userId: string, githubRepo: string, opts: ListIssuesOpts = {}): Promise<IssuesPage> {
 	const page = pageOf(opts.page);
-	const none: IssuesPage = { issues: [], page, hasMore: false, unreadable: true };
+	const perPage = Math.min(Math.max(opts.limit ?? 30, 1), 100);
+	const params = new URLSearchParams({ state: opts.state ?? "open", per_page: String(perPage), ...(opts.order === "oldest" ? { sort: "created", direction: "asc" } : { sort: "updated", direction: "desc" }) });
+	if (page > 1) params.set("page", String(page));
+	if (opts.labels) params.set("labels", opts.labels);
+	const data = await fetchRawIssues(env, userId, githubRepo, params);
+	if (!data) return { issues: [], page, hasMore: false, unreadable: true };
+	return { issues: data.filter((i) => !i.pull_request).map(toSummary), page, hasMore: data.length === perPage };
+}
+
+/** One raw page of `GET /repos/:o/:r/issues?<params>` through the conditional cache, or null when unreadable. */
+async function fetchRawIssues(env: Env, userId: string, githubRepo: string, params: URLSearchParams): Promise<RawIssue[] | null> {
 	const parsed = parseRepo(githubRepo);
-	if (!parsed) return none;
+	if (!parsed) return null;
 	try {
 		const token = await installationTokenForOwner(env, userId, parsed.owner);
-		const state = opts.state ?? "open";
-		const perPage = Math.min(Math.max(opts.limit ?? 30, 1), 100);
-		const params = new URLSearchParams({ state, per_page: String(perPage), ...(opts.order === "oldest" ? { sort: "created", direction: "asc" } : { sort: "updated", direction: "desc" }) });
-		if (page > 1) params.set("page", String(page));
-		if (opts.labels) params.set("labels", opts.labels);
 		const qs = params.toString();
 		const res = await githubConditionalJson<RawIssue[]>(env, {
 			identity: { userId, authContext: await githubAuthContext(env, userId, parsed.owner, token) },
@@ -215,13 +224,68 @@ export async function listIssuesPage(env: Env, userId: string, githubRepo: strin
 			url: `https://api.github.com/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.name)}/issues?${qs}`,
 			headers: GH_HEADERS(token),
 		});
-		if (!res.ok) return none;
-		const data = res.data;
-		if (!Array.isArray(data)) return none;
-		return { issues: data.filter((i) => !i.pull_request).map(toSummary), page, hasMore: data.length === perPage };
+		return res.ok && Array.isArray(res.data) ? res.data : null;
 	} catch {
-		return none;
+		return null;
 	}
+}
+
+/** An issue as the board's sync stores it (#895) — what a card face and its lane need, nothing more. */
+export interface IssueSyncRecord {
+	number: number;
+	title: string;
+	state: string;
+	/** GitHub's `completed` / `not_planned` / `reopened`, or null. */
+	stateReason: string | null;
+	labels: string[];
+	assignees: string[];
+	url: string;
+	updatedAt: string;
+	closedAt: string | null;
+	/** What the issue asks, in one line: the first paragraph of its body, cut with a marker. */
+	summary: string;
+}
+
+/** Longest one-line summary a card face carries. */
+export const ISSUE_SUMMARY_MAX = 240;
+
+/** The first non-empty paragraph of a body, markdown headings and blank lines skipped, cut WITH a marker. */
+export function issueSummary(body: string | null | undefined): string {
+	const para = String(body ?? "")
+		.split(/\r?\n\s*\r?\n/)
+		.map((p) => p.replace(/^#+\s.*$/gm, "").replace(/\s+/g, " ").trim())
+		.find((p) => p.length > 0) ?? "";
+	return para.length > ISSUE_SUMMARY_MAX ? `${para.slice(0, ISSUE_SUMMARY_MAX - 1).trimEnd()}…` : para;
+}
+
+/**
+ * A page of a repo's issues for the board's sync (#895): `since` asks GitHub for issues UPDATED at or
+ * after it (closed ones included with `state: "all"`), newest update first. Pull requests removed.
+ * `unreadable` means GitHub could not be read — an empty page is then not "nothing changed".
+ */
+export async function listIssuesForSync(
+	env: Env,
+	userId: string,
+	githubRepo: string,
+	opts: { state: "open" | "all"; since?: string | null; page?: number },
+): Promise<{ issues: IssueSyncRecord[]; hasMore: boolean; unreadable: boolean }> {
+	const params = new URLSearchParams({ state: opts.state, per_page: "100", sort: "updated", direction: "desc" });
+	if (opts.since) params.set("since", opts.since);
+	const page = pageOf(opts.page);
+	if (page > 1) params.set("page", String(page));
+	const data = await fetchRawIssues(env, userId, githubRepo, params);
+	if (!data) return { issues: [], hasMore: false, unreadable: true };
+	const issues = data
+		.filter((i) => !i.pull_request)
+		.map((raw) => ({
+			...toSummary(raw),
+			stateReason: raw.state_reason ?? null,
+			assignees: (raw.assignees ?? []).map((a) => a?.login).filter((l): l is string => typeof l === "string" && l.length > 0),
+			closedAt: raw.closed_at ?? null,
+			summary: issueSummary(raw.body),
+		}))
+		.map(({ comments: _comments, ...rest }) => rest);
+	return { issues, hasMore: data.length === 100, unreadable: false };
 }
 
 /** What `searchIssues` returns: the matches GitHub sent, and how many there are in all. */

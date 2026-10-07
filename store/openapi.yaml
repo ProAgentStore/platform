@@ -4885,9 +4885,20 @@ paths:
         Runtime tasks and work records folded into the agent's configured columns, with any
         durable human status override applied. Read from the D1 mirror, so it works even
         when no runner is connected.
+
+        A card that IS a GitHub issue of a coder's repo (#895) carries `githubIssue`
+        (`repo`, `number`, `title`, `state`, `labels`, `assignees`, `summary`, `url`), `issueRun`
+        (the run on it), `closingCommit` and `priority`. Every card carries `lane` — `backlog`,
+        `parked`, `queued`, `running`, `waiting_on_human`, `failed`, `done`, or null.
       operationId: getInstanceBoard
       tags: [Board]
-      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - name: repo
+          in: query
+          required: false
+          description: Only cards that are, or work on, an issue of this repo (`owner/repo`, any case).
+          schema: { type: string }
       responses:
         "200":
           description: The board
@@ -5207,13 +5218,31 @@ paths:
             application/json:
               schema: { type: object, properties: { ok: { type: boolean }, error: { type: string } } }
 
+  /v1/instances/{instanceId}/board/issues/sync:
+    post:
+      summary: Sync the board's GitHub issues now
+      description: |
+        Brings this instance's coder repos' GitHub issues onto its board now — what the per-minute
+        cron does on rotation (#895). A repo's first sync turns its open issues into Backlog cards
+        (needs-human labels: Parked); later syncs refresh the issues updated since the last one, so a
+        closed or relabelled issue moves its card. Reads GitHub only and never starts work: a backlog
+        card is picked up only once a person releases it to the ticket queue. Answers per repo:
+        `{repoId, githubRepo, seen, created, updated, unreadable}`.
+      operationId: syncBoardIssues
+      tags: [Board]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/board/github-issues/refresh:
     post:
       summary: Refresh cached GitHub issue projections
       description: |
         Re-fetches the title/state/labels/url for every card on this board that is linked
-        to a GitHub issue and updates the stored cache. Uses the instance's configured
-        `boardGithubRepo` setting, or the `repo` field in the request body as an override.
+        to a GitHub issue and updates the stored cache. Each card is read from the repo stored
+        with its link (#895); `repo` in the body, else the instance's `boardGithubRepo`, serves
+        only a card linked before the repo was stored.
         Silently skips cards whose issue cannot be fetched so one unreachable issue cannot
         block the others. Returns refreshed + skipped counts (#682).
       operationId: refreshBoardGithubIssues

@@ -219,14 +219,14 @@ export async function pickupNextTicket(env: Env, instanceId: string, userId: str
 		const { results } = await env.DB.prepare(
 			// A ticket whose own budget is exhausted is parked (#865) — skipped here, so it neither
 			// blocks the tickets behind it nor retries every minute until a person raises it.
-			`SELECT t.id, t.title, t.description FROM tickets t
+			`SELECT t.id, t.title, t.description, t.repo_id, t.issue_number FROM tickets t
 			   LEFT JOIN delegation_budgets b ON b.id = t.budget_id AND b.user_id = t.user_id
 			  WHERE t.instance_id = ?1 AND t.user_id = ?2 AND t.pickup_authority = 'agent' AND t.queue_picked_at IS NULL
 			    AND (b.id IS NULL OR b.status = 'open')
 			  ORDER BY t.created_at, t.id LIMIT 50`,
 		)
 			.bind(instanceId, userId)
-			.all<{ id: string; title: string; description: string }>();
+			.all<{ id: string; title: string; description: string; repo_id: string | null; issue_number: number | null }>();
 		if (!results?.length) return { started: false, reason: "none" };
 
 		// A ticket's status IS its card's — the human overlay included — so it is read from the board,
@@ -294,7 +294,9 @@ export async function pickupNextTicket(env: Env, instanceId: string, userId: str
 
 		const objective = clipMarked(`Ticket: ${next.title}${next.description ? `\n\n${next.description}` : ""}`, MAX_OBJECTIVE);
 		const start = deps.start ?? ((input: LoopStartInput) => loopDriverFor(caps).start(input));
-		const started = await start({ env, instanceId, userId, objective, maxIterations, budgetId, depth: 0 });
+		// A ticket that IS an issue (#895) names its repo — so a multi-repo coder starts it instead of
+		// refusing to guess (#877) — and its issue, so the run lands on this ticket's card.
+		const started = await start({ env, instanceId, userId, objective, maxIterations, budgetId, depth: 0, ...(next.repo_id ? { repoId: next.repo_id } : {}), ...(next.issue_number ? { issue: next.issue_number } : {}) });
 
 		if (!started.ok) {
 			if (started.reason === "busy") {

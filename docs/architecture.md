@@ -405,6 +405,21 @@ Recommended source-of-truth rule:
 Documenting and enforcing this rule will prevent future "which table should I
 update?" ambiguity.
 
+## Issue-backed board (#895)
+
+A coder's board cards can be the GitHub issues it works on.
+
+- **Identity.** The issue lives on the **ticket** (migration `0183`): `repo_id`, `issue_number` and `issue_cache`, unique per (instance, repo, issue), with job key `issue:<repo_id>#<n>`. `linked_by` records how the link was made: `explicit`, `objective`, `manual` or `sync`. A weaker link never overwrites a stronger one. Runs join their ticket through `agent_loop_runs.ticket_id`.
+- **Linking a run** (`lib/issue-tickets.ts` `linkRunToIssue`). It runs at every coding run's start, inside the coding driver. The issue comes from `coding_loop_start`'s `issue` if given; otherwise from the objective's own subject (`referencedIssue`), recorded as `objective`. It also writes `coding_sessions.issue_number`. The ticket queue passes a ticket's `repo_id` and issue, so a multi-repo coder can start it (#877).
+- **Sync** (`lib/issue-sync.ts`). It runs on the per-minute cron, or on demand via `POST …/board/issues/sync`. It takes a rotating batch of 10 repos per tick behind a forward-only `since` watermark, reading through the conditional GitHub cache.
+  - A repo's first sync turns its open issues into backlog tickets. These keep `pickup_authority = 'human'`, so the queue never starts one by itself.
+  - Later syncs refresh the issues updated since the watermark.
+- **Closing commits.** `commit-close-watch` records every closing reference it scans in `issue_closures`.
+- **Lanes** (`lib/board-lanes.ts`). `laneFor` derives a card's lane from the issue's cached state and labels, the newest linked run (including its park reason), and the card's status. The lanes are backlog, parked (`isNeedsHumanLabel`), queued, running, waiting_on_human (`decision` / `human` / `engine_auth` parks), failed and done (issue closed). The backlog is ordered by `severityFromLabels`, then by age.
+  - An issue card's status follows its lane, so the agent's ordinary columns still place it.
+  - A person's move still wins.
+- **Reading the board.** `GET /board` and MCP `instance_board` carry `githubIssue`, `lane`, `issueRun` and `closingCommit`, and both take a `repo` filter. The console adds an Issues view, a repo filter and Sync issues.
+
 ## Connectors
 
 There are two connector layers, added at different times for different jobs.

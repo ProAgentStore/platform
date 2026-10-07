@@ -321,6 +321,7 @@ const ROUTES = [
 	"DELETE /:instanceId/runtime",
 	"GET /:instanceId/tasks",
 	"GET /:instanceId/board",
+	"POST /:instanceId/board/issues/sync",
 	"POST /:instanceId/board/status",
 	"GET /:instanceId/board-config",
 	"PUT /:instanceId/board-config",
@@ -512,6 +513,7 @@ const OWNERSHIP: Record<string, string[]> = {
 	"instances-tasks.ts": [
 		"GET /:instanceId/tasks",
 		"GET /:instanceId/board",
+		"POST /:instanceId/board/issues/sync",
 		"POST /:instanceId/board/status",
 		"GET /:instanceId/board-config",
 		"PUT /:instanceId/board-config",
@@ -764,6 +766,8 @@ const GATES: Record<string, [number, number]> = {
 	"DELETE /:instanceId/runtime": [401, 404],
 	"GET /:instanceId/tasks": [401, 404],
 	"GET /:instanceId/board": [401, 404],
+	// Issue sync (#895). Owner-only: it reads GitHub with the owner's installation.
+	"POST /:instanceId/board/issues/sync": [401, 404],
 	"POST /:instanceId/board/status": [401, 404],
 	"GET /:instanceId/board-config": [401, 404],
 	"PUT /:instanceId/board-config": [401, 404],

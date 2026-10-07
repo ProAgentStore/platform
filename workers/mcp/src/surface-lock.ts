@@ -1043,4 +1043,8 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// 0.1.89 (#953): `list_applications` filters (company, role, source, url, since, until), the
 	// `mark_not_interested` action on `triage_application`, and get/set_application_runner_settings. Appended.
 	"0.1.89": "sha256:5278c796081b56c1ca928ba68cd1a1cbab179a554bb212407fa8acaac6371afd",
+	// 0.1.90 (#895): issue-backed board — `link_board_item_issue`, `unlink_board_item_issue`,
+	// `sync_board_issues` (write), `instance_board` gains `repo`, `coding_loop_start` gains `issue`.
+	// 272 registrations become 275, `MCP_TOOL_ALWAYS_ON` 246 → 249, gated stays 26. Appended.
+	"0.1.90": "sha256:6775cf6b124c6e91326a4599c9a764d1db4411f2d94830d5cd54973c04efdc19",
 };

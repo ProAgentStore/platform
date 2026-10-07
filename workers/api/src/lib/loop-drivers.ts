@@ -19,6 +19,7 @@
 // console. And when `capabilities.workflow` is finally retired in favour of composed steps
 // (docs/agent-platform-strategy.md), this is the single place that has to learn the new form.
 import { createLoopRun } from "./agent-loop-store.js";
+import { linkRunToIssue } from "./issue-tickets.js";
 import { MAX_ITERATIONS_CAP, sanitizeMaxIterations } from "./agent-loop.js";
 import { resolveAccountCeilings } from "./delegation-budget-store.js";
 import { clampIterations, hasLoopLimits, PILOT_DEFAULT_MAX_STEPS, type LoopLimitsConfig } from "./loop-limits.js";
@@ -95,6 +96,11 @@ export interface LoopStartInput {
 	 * multi-repo instance that silently lands on whichever repo was touched last is the bug #877 reports.
 	 */
 	requireRepoChoice?: boolean;
+	/**
+	 * The GitHub issue this run works on (#895), when the caller knows it — `coding_loop_start`'s `issue`,
+	 * or a ticket that IS an issue. Absent, the objective's own subject is used. Coding driver only.
+	 */
+	issue?: number;
 	/**
 	 * Open an observable "Delegated: …" board card. Only a SUPERVISOR's run gets one — an owner
 	 * pressing Loop on their own agent was not delegated to by anybody, and a card that says so
@@ -388,6 +394,9 @@ const codingDriver: LoopDriver = {
 				error: `Could not start the run: ${e instanceof Error ? e.message : String(e)}`,
 			};
 		}
+
+		// The run's issue card (#895): explicit, else the objective's subject. Never fails the start.
+		await linkRunToIssue(env, { instanceId, userId, runId, sessionId: session.id, repoId: repo.id, githubRepo: repo.githubRepo ?? null, objective, issue: input.issue }).catch(() => undefined);
 
 		let boardTaskId: string | undefined;
 		if (input.delegated) {

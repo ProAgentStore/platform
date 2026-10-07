@@ -516,6 +516,11 @@ async function sweepRepo(env: Env, repo: RepoRow): Promise<void> {
 		// page is scanned, and the watermark catches up.
 	}
 
+	// Every closing reference to THIS repo is recorded (#895), before and regardless of the close below:
+	// it is what lets a Done card name the commit that closed its issue, including an issue GitHub had
+	// already closed natively or one past this sweep's closure ceiling.
+	await recordIssueClosures(env, repo, decision.commits).catch(() => undefined);
+
 	let closures = 0;
 	for (const commit of decision.commits) {
 		for (const ref of parseClosingRefs(commit.message)) {
@@ -542,6 +547,30 @@ async function sweepRepo(env: Env, repo: RepoRow): Promise<void> {
 	// Left in place it would be re-served on the next 304 and the watermark comparison would run
 	// against a page that no longer contains the newest commit.
 	await invalidateGithubCache(env, repo.user_id, repo.github_repo, COMMITS_RESOURCE).catch(() => undefined);
+}
+
+/** `issue_closures` rows for the closing references these commits make to their own repo (#895). */
+export async function recordIssueClosures(env: Env, repo: Pick<RepoRow, "id" | "github_repo">, commits: readonly ScannedCommit[]): Promise<number> {
+	const rows: Array<{ n: number; sha: string; at: string }> = [];
+	for (const c of commits) {
+		if (!c.sha) continue;
+		for (const ref of parseClosingRefs(c.message)) {
+			if (ref.repo && ref.repo.toLowerCase() !== repo.github_repo.toLowerCase()) continue;
+			rows.push({ n: ref.number, sha: c.sha, at: c.committedAt });
+		}
+	}
+	if (!rows.length) return 0;
+	await env.DB.batch(
+		rows.map((r) =>
+			env.DB.prepare("INSERT INTO issue_closures (repo_id, issue_number, sha, committed_at, source) VALUES (?1, ?2, ?3, ?4, 'commit') ON CONFLICT(repo_id, issue_number, sha) DO NOTHING").bind(
+				repo.id,
+				r.n,
+				r.sha,
+				r.at || null,
+			),
+		),
+	);
+	return rows.length;
 }
 
 /**

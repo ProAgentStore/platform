@@ -35,6 +35,7 @@ import { runUserWorkersAi } from "../lib/user-ai.js";
 import { readInstanceConfig } from "./instances-apply.js";
 import { touchInstanceActivity } from "../lib/instance-config.js";
 import { createTicketCard } from "../lib/tickets.js";
+import { syncInstanceIssues } from "../lib/issue-sync.js";
 import { sqlTime } from "../lib/sql-time.js";
 import {
 	callRuntime,
@@ -155,7 +156,19 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 		const session = await requireUser(c);
 		const instanceId = c.req.param("instanceId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
-		return c.json(await buildInstanceBoard(c.env, instanceId, session.uid));
+		// `?repo=owner/repo` (#895): only the cards that are, or work on, an issue of that repo.
+		return c.json(await buildInstanceBoard(c.env, instanceId, session.uid, { repo: c.req.query("repo") || undefined }));
+	});
+
+	/**
+	 * Sync this instance's coder repos' GitHub issues into its board now (#895) — what the per-minute
+	 * cron does on rotation (`lib/issue-sync.ts`), for one instance, on demand. Reads GitHub only.
+	 */
+	router.post("/:instanceId/board/issues/sync", async (c) => {
+		const session = await requireUser(c);
+		const instanceId = c.req.param("instanceId");
+		await requireOwnedInstance(c.env, instanceId, session.uid);
+		return c.json({ repos: await syncInstanceIssues(c.env, instanceId, session.uid) });
 	});
 
 	/** Move a job to a column (human status override); empty status resets to automation. */
@@ -263,7 +276,7 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 
 	/**
 	 * Refresh the cached GitHub issue projections for every linked card on this instance's
-	 * board (#682). Uses the per-instance `boardGithubRepo` config setting as the repo.
+	 * board (#682). Each card uses the repo stored with its link; `repo` / `boardGithubRepo` is the fallback.
 	 * Returns counts of refreshed + skipped cards. Silently skips unreachable issues.
 	 */
 	router.post("/:instanceId/board/github-issues/refresh", async (c) => {
@@ -279,8 +292,9 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 		).bind(instanceId, session.uid).first<{ config: string }>();
 		let cfg: Record<string, unknown> = {};
 		try { cfg = configRow?.config ? (JSON.parse(configRow.config) as Record<string, unknown>) : {}; } catch { cfg = {}; }
+		// Each card refreshes from the repo stored with its link (#895); this is only the fallback for
+		// a card linked before the repo was stored.
 		const repo = bodyRepo || (typeof cfg.boardGithubRepo === "string" ? cfg.boardGithubRepo.trim() : "");
-		if (!repo) return c.json({ error: "no GitHub repo configured for this board — set boardGithubRepo in config or pass repo in the body" }, 400);
 		const result = await refreshBoardGithubIssues(c.env, instanceId, session.uid, repo);
 		return c.json(result);
 	});

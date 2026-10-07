@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**272 tool registrations.** 246 are always registered; 26 are gated to the console
+**275 tool registrations.** 249 are always registered; 26 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -369,6 +369,9 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `set_instance_board_config` | Override columns / view per instance | write | yes | |
 | `set_board_item_status` | Move a card, or reset it to automation | write | yes | |
 | `promote_board_item` | Make a card a first-class ticket — its runs are stored as its history (idempotent, #757) | write | yes | |
+| `link_board_item_issue` | Link a board card to a GitHub issue (`repo` + `issue_number`); reads GitHub once, changes nothing there (#895) | write | yes | |
+| `unlink_board_item_issue` | Remove a card's GitHub issue link (#895) | write | yes | |
+| `sync_board_issues` | Sync a coder's repos' GitHub issues into its board now: backlog, parked, closed (#895). Never starts work | write | yes | |
 | `update_board_ticket` | Amend an existing ticket's title / description / reasoning (never its column) | write | yes | |
 | `run_instance_task` | Create a task on the registered runtime | runtime | yes | |
 | `approve_instance_task` | Approve a task waiting for human approval | runtime | yes | |

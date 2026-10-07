@@ -36,6 +36,12 @@ export interface Ticket {
 	description: string;
 	createdBy: "human" | "agent";
 	createdAt: string;
+	/** Set when this ticket IS a GitHub issue (#895): its repo, number and cached projection (JSON). */
+	repoId?: string | null;
+	issueNumber?: number | null;
+	issueCache?: string | null;
+	/** `human` until a person releases the ticket to the queue (#864). */
+	pickupAuthority?: "human" | "agent";
 }
 
 /** A stored attempt: one run attached to a ticket, with its last observed state. */
@@ -54,6 +60,10 @@ interface TicketRow {
 	description: string;
 	created_by: "human" | "agent";
 	created_at: string;
+	repo_id?: string | null;
+	issue_number?: number | null;
+	issue_cache?: string | null;
+	pickup_authority?: "human" | "agent";
 }
 
 const toTicket = (r: TicketRow): Ticket => ({
@@ -64,6 +74,7 @@ const toTicket = (r: TicketRow): Ticket => ({
 	description: r.description,
 	createdBy: r.created_by,
 	createdAt: r.created_at,
+	...(r.issue_number != null ? { repoId: r.repo_id ?? null, issueNumber: r.issue_number, issueCache: r.issue_cache ?? null, pickupAuthority: r.pickup_authority ?? "human" } : {}),
 });
 
 /**
@@ -109,7 +120,7 @@ export async function getTicket(env: Env, instanceId: string, userId: string, ti
 /** Every ticket on an instance with its stored runs — what the board overlays onto its cards. */
 export async function ticketsForInstance(env: Env, instanceId: string, userId: string): Promise<{ tickets: Ticket[]; runs: TicketRun[] }> {
 	const [t, r] = await Promise.all([
-		env.DB.prepare("SELECT id, instance_id, job_key, title, description, created_by, created_at FROM tickets WHERE instance_id = ?1 AND user_id = ?2")
+		env.DB.prepare("SELECT id, instance_id, job_key, title, description, created_by, created_at, repo_id, issue_number, issue_cache, pickup_authority FROM tickets WHERE instance_id = ?1 AND user_id = ?2")
 			.bind(instanceId, userId)
 			.all<TicketRow>()
 			.catch(() => ({ results: [] as TicketRow[] })),

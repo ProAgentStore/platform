@@ -301,6 +301,9 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	set_agent_stats_schema: "write",
 	set_board_item_status: "write",
 	promote_board_item: "write", // #757 — makes a card a first-class ticket; idempotent
+	link_board_item_issue: "write", // #895 — links a card to a GitHub issue; reads GitHub, changes nothing there
+	unlink_board_item_issue: "write", // #895 — removes that link; reversible, nothing deleted
+	sync_board_issues: "write", // #895 — writes issue cards from GitHub's issues; never starts work
 	set_budget_limits: "write",
 	set_connection_enabled: "write",
 	set_instance_board_config: "write",
@@ -619,7 +622,7 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// a safety toggle (the reasoning `set_instance_connector_consent` already records). Not `read`
 	// either: switching an agent off is a real change.
 	// +1 write at #906: `secure_input_request`, agent creates a secure input request for a secret.
-	write: 79, // +1 at #953: set_application_runner_settings (edits the submission policy; auto-submit refused until its prerequisites exist); +2 at #958: triage_application (a decision on PAGS records; Apply emits the lead's handoff once) and cancel_application (stops a run, deletes nothing); +1 at #961: set_instance_tags (a label the owner writes; [] clears it); +1 at #955: triage_job_lead; +2 at #946: set_local_browser_consent (a decision, withdrawable) and review_local_browser_finding (saves one reviewed finding to the owner's own collection); +1 at #944: cancel_local_browser_run (stops a run; deletes nothing); +1 at #945: set_instance_local_browser_settings (edits config, starts nothing); +1 at #757: promote_board_item
+	write: 82, // +3 at #895: link_board_item_issue, unlink_board_item_issue, sync_board_issues (cards from GitHub issues; nothing changes on GitHub, nothing starts); +1 at #953: set_application_runner_settings (edits the submission policy; auto-submit refused until its prerequisites exist); +2 at #958: triage_application (a decision on PAGS records; Apply emits the lead's handoff once) and cancel_application (stops a run, deletes nothing); +1 at #961: set_instance_tags (a label the owner writes; [] clears it); +1 at #955: triage_job_lead; +2 at #946: set_local_browser_consent (a decision, withdrawable) and review_local_browser_finding (saves one reviewed finding to the owner's own collection); +1 at #944: cancel_local_browser_run (stops a run; deletes nothing); +1 at #945: set_instance_local_browser_settings (edits config, starts nothing); +1 at #757: promote_board_item
 	// +1 runtime at #806: `continue_instance_run`. `runtime` rather than `write` for the reason
 	// `start_instance_loop` is — it starts an autonomous run that spends on its own — and the
 	// two must agree, because a caller holding the scope to start one holding a narrower one to
