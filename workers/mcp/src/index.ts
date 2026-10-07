@@ -258,7 +258,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"list_agents",
-			"List all published agents on ProAgentStore",
+			"Browse the public ProAgentStore catalogue: list all published agents anyone can subscribe to — to find or discover an agent. Not yours: the instances you subscribe to are my_instances, the agents you created are my_agents.",
 			{},
 			async () => {
 				const data = (await apiCall("/v1/agents", {}, this.env)) as { agents?: unknown[]; error?: string };
@@ -316,7 +316,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"my_agents",
-			"List agents owned by the authenticated ProAgentStore creator. `total` and `roster` name EVERY owned agent and are never shortened, so answer \"how many agents do I have\" and \"which ones\" from those. `agents` is a PAGE carrying each agent's full record — including `config`, which is 61% of this response's bytes and is not readable through any other tool (agent_info reads the PUBLIC record, which omits config and does not exist for a draft). Read `page.hasMore` and call again with `offset: page.nextOffset` for the rest.",
+			"List my agents as their CREATOR — the agent templates you authored and own, not the instances you subscribe to (those are my_instances). `total` and `roster` name EVERY owned agent and are never shortened, so answer \"how many agents do I have\" and \"which ones\" from those. `agents` is a PAGE carrying each agent's full record — including `config`, which is 61% of this response's bytes and is not readable through any other tool (agent_info reads the PUBLIC record, which omits config and does not exist for a draft). Read `page.hasMore` and call again with `offset: page.nextOffset` for the rest.",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				offset: z.coerce.number().int().min(0).optional().describe("Skip this many agents' full records. Pass `page.nextOffset` from the previous reply; omit for the first page. The roster is complete on every page regardless."),

@@ -11,7 +11,7 @@ export function registerRepoTools(server: McpServer, ctx: InstanceToolsCtx): voi
 	if (groups.has("repo")) {
 	server.tool(
 		"ingest_repo",
-		"Index a GitHub repository into a read-only repo-chat instance (the 'repo-chat' agent). Pulls the whole repo into the instance's vector store so you can ask how the code works. An instance can hold MANY repos — call again with a different URL to add another; call with the same URL to re-index that one. Public repos work as-is; private repos need GitHub connected.",
+		"Chat with a GitHub repo: index (add) a repository into a read-only repo-chat instance (the 'repo-chat' agent) so you can ask questions about its code. Pulls the whole repo into the instance's vector store so you can ask how the code works. An instance can hold MANY repos — call again with a different URL to add another; call with the same URL to re-index that one. Public repos work as-is; private repos need GitHub connected.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),

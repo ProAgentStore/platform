@@ -39,7 +39,7 @@ export function registerAgentTaskTools(server: McpServer, ctx: InstanceToolsCtx)
 
 	server.tool(
 		"list_agent_tasks",
-		"The standing tasks an instance carries in its own task store — the ones injected into its system prompt every turn, NOT the runtime board (for that use instance_board or get_instance_task). Returns each task with `status`, `assignedBy` (`user`, `self`, `trigger`) and timestamps, plus `limits`: `max` tasks an agent may hold, how many are `injected` into one prompt, and the `staleDays` after which an untouched task stops being injected while staying in the store. Read this before concluding an agent is ignoring an instruction — a stale or unlisted task is the usual answer.",
+		"An instance's standing instructions — the tasks it carries in its own task store, injected into its system prompt every turn. NOT its work board of jobs and tickets (for that use instance_board or get_instance_task). Returns each task with `status`, `assignedBy` (`user`, `self`, `trigger`) and timestamps, plus `limits`: `max` tasks an agent may hold, how many are `injected` into one prompt, and the `staleDays` after which an untouched task stops being injected while staying in the store. Read this before concluding an agent is ignoring an instruction — a stale or unlisted task is the usual answer.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),

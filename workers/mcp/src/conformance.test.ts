@@ -1069,3 +1069,48 @@ describe("numeric parameter coercion (#670)", () => {
 		expect(offenders, "bare z.number() found — use z.coerce.number() for all MCP numeric params").toEqual([]);
 	});
 });
+
+/**
+ * Tool discovery (#950). A host finds a tool by searching names and descriptions, and that ranking
+ * is the HOST's, not this server's. It put coding_repos_list and coding_sessions_list above
+ * my_instances for "my_instances list coding instances" because many coding_* tools say "coding"
+ * and "list" and "instance". What the server does control is the text the host searches, so this
+ * holds the property that text can guarantee: for each common phrasing, the intended tool's name and
+ * description contain EVERY content word of the phrasing. my_instances did not say "coding", so a
+ * query naming it lost to tools that did. Not asserted: that no OTHER tool carries the same words —
+ * "list", "my" and "instance" legitimately appear across dozens of tools, and how a host breaks
+ * that tie (name weight, description length) is the host's. A lexical check only: it measures the
+ * input to the host's ranking, not the ranking itself.
+ */
+describe("tool discovery — the right tool carries the words people search with (#950)", () => {
+	const STOP = new Set(["a", "an", "the", "i", "am", "do", "have", "so", "can", "it", "with", "on", "of", "to", "is", "what", "which", "for", "me"]);
+	const terms = (text: string) =>
+		new Set(
+			text
+				.toLowerCase()
+				.split(/[^a-z0-9]+/)
+				.filter((t) => t && !STOP.has(t))
+				.map((t) => (t.length > 3 && t.endsWith("s") ? t.slice(0, -1) : t)),
+		);
+	const textOf = (t: WireTool) => terms(`${t.name} ${t.description ?? ""}`);
+
+	const CASES: Array<[string, string]> = [
+		["my_instances list coding instances", "my_instances"],
+		["list my instances", "my_instances"],
+		["show my subscriptions", "my_instances"],
+		["which instances am I subscribed to", "my_instances"],
+		["list my agents as creator", "my_agents"],
+		["browse the public catalogue of agents", "list_agents"],
+		["what was I working on recently", "recent_instances"],
+		["chat with a github repo", "ingest_repo"],
+		["list the tasks on my agent's work board", "instance_board"],
+	];
+
+	it.each(CASES)("%s → %s", (query, intended) => {
+		const q = terms(query);
+		const tool = published.find((t) => t.name === intended);
+		expect(tool, intended).toBeDefined();
+		const missing = [...q].filter((w) => !textOf(tool as WireTool).has(w));
+		expect(missing, `${intended} does not mention: ${missing.join(", ")}`).toEqual([]);
+	});
+});

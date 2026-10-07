@@ -338,7 +338,7 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 
 	server.tool(
 		"my_instances",
-		"List your subscribed runnable agent instances. These are the correct targets for real agent chats. Paused instances are omitted unless include_paused is true.",
+		"START HERE: list or show my instances — the agent instances you are subscribed to and run (my subscriptions), of every kind: coding, apply, research, chat. Every instance tool (coding_*, chat_with_instance, instance_board and the rest) takes an instance_id from this list. These are the correct targets for real agent chats. Paused instances are omitted unless include_paused is true. For the agents you CREATED use my_agents; for the public catalogue, list_agents.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			include_paused: z.boolean().optional().describe("Also list paused instances, which are hidden by default and can be resumed."),
