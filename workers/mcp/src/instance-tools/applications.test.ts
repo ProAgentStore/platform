@@ -23,7 +23,6 @@ function tools(scopes: SafetyContext["scopes"] = ["read", "write", "runtime"]) {
 		env,
 		tokenFor: (p?: string) => p || "session-token",
 		safetyFor: (): SafetyContext => ({ env, subject: "user-1", scopes }),
-		groups: new Set(),
 	});
 	return { seen, names: [...handlers.keys()], call: (name: string, args: Record<string, unknown>) => (handlers.get(name) as Handler)(args).then((r) => r.content[0].text) };
 }

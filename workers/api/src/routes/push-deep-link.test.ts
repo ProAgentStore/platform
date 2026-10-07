@@ -13,6 +13,13 @@ import { signInSessionId } from "../lib/engine-reauth-store.js";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "../lib/d1-sqlite.js";
 import type { Env } from "../types.js";
 import { notificationTag, notificationTarget, notifyUser } from "./push.js";
+import type { DeepLink } from "../lib/console-links.js";
+
+/**
+ * A page path as the link `notifyUser` is handed. Producers can only build one with `deepLinkFor`
+ * (#894); these tests are about what notifyUser does WITH a given link, so they name it directly.
+ */
+const link = (path: string) => path as DeepLink;
 
 let d1: RealSchemaD1;
 beforeEach(() => {
@@ -42,7 +49,7 @@ describe("notificationTarget — a missing link is a logged bug, never the home 
 
 	it("notifyUser stores the fallback on the row and logs the producer that forgot", async () => {
 		// `url` is required by type; a caller that defeats it at runtime is the case this guards.
-		await notifyUser(env(), "u1", "coding", "🔑 Coding engine signed in", "body", undefined as unknown as string, { instanceId: "i1" });
+		await notifyUser(env(), "u1", "coding", "🔑 Coding engine signed in", "body", undefined as unknown as DeepLink, { instanceId: "i1" });
 		const row = await d1.DB.prepare("SELECT url FROM notifications WHERE user_id = 'u1'").first<{ url: string }>();
 		expect(row?.url).toBe("/console/instances/i1");
 		const logged = await d1.DB.prepare("SELECT source, level, message FROM error_log WHERE user_id = 'u1'").first<{ source: string; level: string; message: string }>();
@@ -52,7 +59,7 @@ describe("notificationTarget — a missing link is a logged bug, never the home 
 	});
 
 	it("logs nothing for a producer that named its page", async () => {
-		await notifyUser(env(), "u1", "deploy", "✅ Deployed", "body", "/console/instances/i1/coding?builds=r1", { instanceId: "i1" });
+		await notifyUser(env(), "u1", "deploy", "✅ Deployed", "body", link("/console/instances/i1/coding?builds=r1"), { instanceId: "i1" });
 		expect(await d1.DB.prepare("SELECT 1 FROM error_log WHERE user_id = 'u1'").first()).toBeNull();
 		expect((await d1.DB.prepare("SELECT url FROM notifications WHERE user_id = 'u1'").first<{ url: string }>())?.url).toBe("/console/instances/i1/coding?builds=r1");
 	});

@@ -27,6 +27,7 @@ function run(over: Partial<LoopRunView> = {}): LoopRunView {
 		lastAliveAt: NOW - 40_000,
 		waitingUntil: null,
 		waitingReason: null,
+		waitingAsk: null,
 		parkedSince: null,
 		interruptions: 0,
 		delegatedBy: null,

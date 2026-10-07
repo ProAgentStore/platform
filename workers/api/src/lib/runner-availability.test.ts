@@ -333,7 +333,8 @@ describe("a runner that is connected but not answering pauses the run, not ends 
 	it("a reconnect that meets the same silence waits again inside the budget instead of escaping", async () => {
 		const wait = waitDeps([], { probe: async () => ONLINE });
 		let reconnects = 0;
-		const reconnect = vi.fn(async () => {
+		// Typed with the name it is called with: the assertion below reads `calls[n][0]`.
+		const reconnect = vi.fn(async (_name: string) => {
 			if (reconnects++ === 0) throw silent();
 		});
 		const guard = makeRunnerGuard({ wait, reconnect });

@@ -2,6 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { notificationDedupeKey } from "../lib/notifications.js";
 import type { Env } from "../types.js";
 import { isSafePushEndpoint, notifyUser, sendPushToUser } from "./push.js";
+import type { DeepLink } from "../lib/console-links.js";
+
+/**
+ * A page path as the link `notifyUser` is handed. Producers can only build one with `deepLinkFor`
+ * (#894); these tests are about what notifyUser does WITH a given link, so they name it directly.
+ */
+const link = (path: string) => path as DeepLink;
 
 const b64url = (b: Uint8Array) =>
 	btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -151,7 +158,7 @@ function notifyEnv(opts: { preferences?: unknown; duplicate?: boolean; subs?: un
 describe("notifyUser", () => {
 	it("records the event key and the kind on the row", async () => {
 		const { env, inserted } = notifyEnv({});
-		await notifyUser(env, "u1", "deploy", "✅ Deployed", "live", "/console/", { key: "deploy:r1:abc" });
+		await notifyUser(env, "u1", "deploy", "✅ Deployed", "live", link("/console/"), { key: "deploy:r1:abc" });
 		expect(inserted).toHaveLength(1);
 		expect(inserted[0].kind).toBe("update");
 		expect(inserted[0].dedupeKey).toBe(notificationDedupeKey("deploy", "deploy:r1:abc", "✅ Deployed", "live"));
@@ -162,7 +169,7 @@ describe("notifyUser", () => {
 		const { env, inserted } = notifyEnv({ duplicate: true });
 		const fetchSpy = vi.fn();
 		vi.stubGlobal("fetch", fetchSpy);
-		await notifyUser(env, "u1", "deploy", "✅ Deployed", "live", "/console/", { key: "deploy:r1:abc" });
+		await notifyUser(env, "u1", "deploy", "✅ Deployed", "live", link("/console/"), { key: "deploy:r1:abc" });
 		expect(inserted).toHaveLength(1); // the bell list is a LOG and stays complete
 		expect(inserted[0].pushedAt).toBeNull(); // ...and this copy did not restart the window
 		expect(fetchSpy).not.toHaveBeenCalled();
@@ -172,7 +179,7 @@ describe("notifyUser", () => {
 		const { env, inserted } = notifyEnv({ preferences: { notifications: { muted: ["deploy"] } } });
 		const fetchSpy = vi.fn();
 		vi.stubGlobal("fetch", fetchSpy);
-		await notifyUser(env, "u1", "deploy", "✅ Deployed", "live", "/console/instances/i1/coding?builds=r1");
+		await notifyUser(env, "u1", "deploy", "✅ Deployed", "live", link("/console/instances/i1/coding?builds=r1"));
 		expect(inserted[0].pushedAt).toBeNull();
 		expect(fetchSpy).not.toHaveBeenCalled();
 	});
@@ -182,7 +189,7 @@ describe("notifyUser", () => {
 		const { env, inserted } = notifyEnv({ preferences: { notifications: { muted: [], instances: ["inst-a"] } } });
 		const fetchSpy = vi.fn();
 		vi.stubGlobal("fetch", fetchSpy);
-		await notifyUser(env, "u1", "coding", "✅ Coder finished", "done", "/console/instances/inst-b/coding/s1", { instanceId: "inst-b" });
+		await notifyUser(env, "u1", "coding", "✅ Coder finished", "done", link("/console/instances/inst-b/coding/s1"), { instanceId: "inst-b" });
 		expect(inserted).toHaveLength(1);
 		expect(inserted[0].pushedAt).toBeNull();
 		expect(fetchSpy).not.toHaveBeenCalled();
@@ -194,7 +201,7 @@ describe("notifyUser", () => {
 		const envWithVapid = { ...(env as object), ...(await vapidEnvKeys()) } as unknown as Env;
 		const fetchSpy = vi.fn(async () => new Response(null, { status: 201 }));
 		vi.stubGlobal("fetch", fetchSpy);
-		await notifyUser(envWithVapid, "u1", "apply", "✅ Résumé parsed", "saved", "/console/profile");
+		await notifyUser(envWithVapid, "u1", "apply", "✅ Résumé parsed", "saved", link("/console/profile"));
 		expect(inserted[0].pushedAt).not.toBeNull();
 		expect(fetchSpy).toHaveBeenCalledTimes(1);
 	});
@@ -207,7 +214,7 @@ describe("notifyUser", () => {
 		const envWithVapid = { ...(env as object), ...(await vapidEnvKeys()) } as unknown as Env;
 		const fetchSpy = vi.fn(async () => new Response(null, { status: 201 }));
 		vi.stubGlobal("fetch", fetchSpy);
-		await notifyUser(envWithVapid, "u1", "coding", "🙋 Coder needs you", "stuck", "/console/", { kind: "alert" });
+		await notifyUser(envWithVapid, "u1", "coding", "🙋 Coder needs you", "stuck", link("/console/"), { kind: "alert" });
 		expect(inserted[0].kind).toBe("alert");
 		expect(fetchSpy).toHaveBeenCalled();
 	});
@@ -219,7 +226,7 @@ describe("notifyUser", () => {
 		const { env, inserted } = notifyEnv({ preferences: { notifications: { muted: ["subscribe"] } } });
 		const fetchSpy = vi.fn();
 		vi.stubGlobal("fetch", fetchSpy);
-		await notifyUser(env, "creator1", "subscribe", "New subscriber: alice", "alice subscribed to My Agent.", "/console/agents/a1");
+		await notifyUser(env, "creator1", "subscribe", "New subscriber: alice", "alice subscribed to My Agent.", link("/console/agents/a1"));
 		// Row stays (the bell list is a log) — but it must not buzz.
 		expect(inserted).toHaveLength(1);
 		expect(inserted[0].pushedAt).toBeNull();
@@ -232,7 +239,7 @@ describe("notifyUser", () => {
 		const envWithVapid = { ...(env as object), ...(await vapidEnvKeys()) } as unknown as Env;
 		const fetchSpy = vi.fn(async () => new Response(null, { status: 201 }));
 		vi.stubGlobal("fetch", fetchSpy);
-		await notifyUser(envWithVapid, "creator1", "subscribe", "New subscriber: alice", "alice subscribed to My Agent.", "/console/agents/a1");
+		await notifyUser(envWithVapid, "creator1", "subscribe", "New subscriber: alice", "alice subscribed to My Agent.", link("/console/agents/a1"));
 		expect(inserted).toHaveLength(1);
 		expect(inserted[0].pushedAt).toBeTypeOf("string"); // the window starts (phone buzzed)
 		expect(fetchSpy).toHaveBeenCalled();
@@ -258,7 +265,7 @@ describe("notifyUser", () => {
 		} as unknown as Env;
 		const fetchSpy = vi.fn(async () => new Response(null, { status: 201 }));
 		vi.stubGlobal("fetch", fetchSpy);
-		await notifyUser(broken, "u1", "deploy", "t", "b", "/console/notifications");
+		await notifyUser(broken, "u1", "deploy", "t", "b", link("/console/notifications"));
 		expect(fetchSpy).toHaveBeenCalled();
 	});
 });
@@ -313,10 +320,10 @@ describe("notifyUser collapses one deploy reported by several workspaces (#709)"
 		// the derived `title|body` fallback could never have collapsed these, and why the explicit
 		// event key is the thing that has to be right.
 		const key = "deploy:proagentstore/platform:sha:b91d340";
-		await notifyUser(env, "u1", "deploy", "✅ Deployed b91d340", "pags/platform is live — Deploy MCP Worker.", "/a", { key });
-		await notifyUser(env, "u1", "deploy", "✅ Deployed b91d340", "pags/platform is live — Deploy Host Worker.", "/b", { key });
-		await notifyUser(env, "u1", "deploy", "✅ Deployed b91d340", "ProAgentStore/platform is live — Deploy Host Worker, Deploy MCP Worker.", "/c", { key });
-		await notifyUser(env, "u1", "deploy", "✅ Deployed b91d340", "pags/platform is live — Deploy MCP Worker.", "/d", { key });
+		await notifyUser(env, "u1", "deploy", "✅ Deployed b91d340", "pags/platform is live — Deploy MCP Worker.", link("/a"), { key });
+		await notifyUser(env, "u1", "deploy", "✅ Deployed b91d340", "pags/platform is live — Deploy Host Worker.", link("/b"), { key });
+		await notifyUser(env, "u1", "deploy", "✅ Deployed b91d340", "ProAgentStore/platform is live — Deploy Host Worker, Deploy MCP Worker.", link("/c"), { key });
+		await notifyUser(env, "u1", "deploy", "✅ Deployed b91d340", "pags/platform is live — Deploy MCP Worker.", link("/d"), { key });
 
 		// The bell list stays complete — it is a LOG, and each row keeps its own workspace link.
 		expect(rows).toHaveLength(4);
@@ -329,8 +336,8 @@ describe("notifyUser collapses one deploy reported by several workspaces (#709)"
 	// repository, so its key differs and it still gets through.
 	it("does not collapse two different repositories on the same commit", async () => {
 		const { env, rows } = floorEnv();
-		await notifyUser(env, "u1", "deploy", "✅ Deployed b91d340", "live", "/a", { key: "deploy:acme/app:sha:b91d340" });
-		await notifyUser(env, "u1", "deploy", "✅ Deployed b91d340", "live", "/b", { key: "deploy:acme/app-fork:sha:b91d340" });
+		await notifyUser(env, "u1", "deploy", "✅ Deployed b91d340", "live", link("/a"), { key: "deploy:acme/app:sha:b91d340" });
+		await notifyUser(env, "u1", "deploy", "✅ Deployed b91d340", "live", link("/b"), { key: "deploy:acme/app-fork:sha:b91d340" });
 		expect(rows.filter((r) => typeof r.pushedAt === "string")).toHaveLength(2);
 	});
 });

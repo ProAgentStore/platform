@@ -32,6 +32,7 @@ const run = (over: Partial<LoopRunView> = {}): LoopRunView => ({
 	lastAliveAt: null,
 	waitingUntil: null,
 	waitingReason: null,
+	waitingAsk: null,
 	parkedSince: null,
 	interruptions: 0,
 	delegatedBy: null,
