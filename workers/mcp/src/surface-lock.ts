@@ -1050,4 +1050,7 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// 0.1.91 (#966): `secure_input_inject` gains `target` + `submit` and answers a verified delivery
 	// verdict; `secure_input_request` gains `target`. No tool added. Appended.
 	"0.1.91": "sha256:157cf2d765d2f212fb55bf5b36c7d01b279859d2146348886cfeeb4f618b0753",
+	// 0.1.92: `apply_to_job` is a submit-only, destructive operation. Its preview controls
+	// were removed so the published input schema changed. Appended.
+	"0.1.92": "sha256:5f5dd90009e5c6d2f64a29512b38a1590312d794ca8449295261853e8d65c9c4",
 };
