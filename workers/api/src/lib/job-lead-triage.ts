@@ -175,3 +175,77 @@ export function planJobLeadTriage(
 	patch.apply_handoff = event;
 	return { ok: true, transitioned: true, patch, event };
 }
+
+// ── #953: one application per job, and the application's status back on the lead ─────────────
+
+/**
+ * What makes two leads the SAME job: an explicit job id the Scout recorded (with its source), else
+ * the posting URL normalised — scheme and host lowercased, no fragment, no `utm_*` tracking, no
+ * trailing slash. Null when the lead carries neither.
+ */
+export function jobIdentity(data: Record<string, unknown>): string | null {
+	const jobId = data.job_id ?? data.jobId;
+	if ((typeof jobId === "string" && jobId.trim()) || typeof jobId === "number") {
+		const source = typeof data.source === "string" ? data.source.trim().toLowerCase() : "";
+		return `id:${source}:${String(jobId).trim()}`;
+	}
+	if (typeof data.url !== "string" || !data.url.trim()) return null;
+	try {
+		const u = new URL(data.url.trim());
+		u.hash = "";
+		for (const k of [...u.searchParams.keys()]) if (/^utm_/i.test(k)) u.searchParams.delete(k);
+		const path = u.pathname.replace(/\/+$/, "");
+		return `url:${u.protocol}//${u.host.toLowerCase()}${path}${u.search}`;
+	} catch {
+		return `url:${data.url.trim()}`;
+	}
+}
+
+/**
+ * Another lead for the same job that has ALREADY been applied for (it carries an apply handoff) —
+ * so applying for this one would be a second application to one posting. Null when there is none.
+ */
+export function duplicateApplyOf(record: CollectionRecord, others: readonly CollectionRecord[]): string | null {
+	const identity = jobIdentity(record.data);
+	if (!identity) return null;
+	const dup = others.find((o) => o.id !== record.id && typeof o.data.apply_request_id === "string" && jobIdentity(o.data) === identity);
+	return dup?.id ?? null;
+}
+
+/** The application's state, as the Application Tailor / Runner report it back onto its lead. */
+export type JobLeadApplicationWriteback = {
+	applicationId: string;
+	/** The lead lifecycle_version the application was created from. */
+	leadVersion: number;
+	status: string;
+	/** The application's state_version — writebacks apply in order, a late one is ignored. */
+	version: number;
+	blockReason?: string | null;
+	submittedAt?: string | null;
+	submittedUrl?: string | null;
+	at: string;
+};
+
+/**
+ * The patch that records an application's status on its lead, or null when the lead already holds
+ * this or a newer one. Newer means: a later application for a later Apply of the lead, or a later
+ * state_version of the same application. Writes `application_*` fields only — never `status`, which
+ * is the owner's triage lifecycle, and never anything that reaches the outbox.
+ */
+export function planApplicationWriteback(record: CollectionRecord, w: JobLeadApplicationWriteback): Record<string, unknown> | null {
+	const d = record.data;
+	const heldLead = typeof d.application_lead_version === "number" ? d.application_lead_version : -1;
+	const heldVersion = typeof d.application_version === "number" ? d.application_version : -1;
+	const newer = w.leadVersion > heldLead || (w.leadVersion === heldLead && d.application_id === w.applicationId && w.version > heldVersion);
+	if (!newer) return null;
+	return {
+		application_id: w.applicationId,
+		application_lead_version: w.leadVersion,
+		application_status: w.status,
+		application_version: w.version,
+		application_block_reason: w.blockReason ?? null,
+		application_submitted_at: w.submittedAt ?? null,
+		application_submitted_url: w.submittedUrl ?? null,
+		application_updated_at: w.at,
+	};
+}

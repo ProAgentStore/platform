@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CollectionRecord } from "../agent-storage-types.js";
-import { JOB_LEAD_APPLY_EVENT, JOB_LEAD_TRANSITIONS, jobLeadStatus, planJobLeadTriage } from "./job-lead-triage.js";
+import { JOB_LEAD_APPLY_EVENT, JOB_LEAD_TRANSITIONS, duplicateApplyOf, jobIdentity, jobLeadStatus, planApplicationWriteback, planJobLeadTriage } from "./job-lead-triage.js";
 
 const lead = (data: Record<string, unknown> = {}): CollectionRecord => ({
 	id: "lead-1",
@@ -111,5 +111,33 @@ describe("Job lead triage lifecycle (#955)", () => {
 		expect(jobLeadStatus({})).toBe("new");
 		const p = plan(lead({ status: "found" }), { action: "apply", expectedStatus: "found", expectedVersion: 0 });
 		expect(p).toMatchObject({ ok: true, transitioned: true, event: { lifecycleVersion: 1 } });
+	});
+});
+
+describe("#953: one application per job, and its status on the lead", () => {
+	const rec = (id: string, data: Record<string, unknown>) => ({ id, collection: "job_leads", data, createdAt: "x", updatedAt: "x" });
+
+	it("knows two postings are the same job by job id, else by the URL without tracking, fragment or trailing slash", () => {
+		expect(jobIdentity({ url: "https://Jobs.Example.com/a/?utm_source=x#apply" })).toBe(jobIdentity({ url: "https://jobs.example.com/a" }));
+		expect(jobIdentity({ url: "https://jobs.example.com/a?id=1" })).not.toBe(jobIdentity({ url: "https://jobs.example.com/a?id=2" }));
+		expect(jobIdentity({ job_id: 42, source: "Seek", url: "https://a" })).toBe(jobIdentity({ jobId: "42", source: "seek", url: "https://b" }));
+		expect(jobIdentity({})).toBeNull();
+	});
+
+	it("finds only another lead of the same job that was already applied for", () => {
+		const me = rec("l2", { url: "https://jobs.example.com/a?utm_medium=m" });
+		expect(duplicateApplyOf(me, [rec("l1", { url: "https://jobs.example.com/a" })])).toBeNull();
+		expect(duplicateApplyOf(me, [rec("l1", { url: "https://jobs.example.com/a", apply_request_id: "s:l1:1" })])).toBe("l1");
+		expect(duplicateApplyOf(me, [rec("l2", { url: "https://jobs.example.com/a", apply_request_id: "s:l2:1" })])).toBeNull();
+	});
+
+	it("applies a writeback only when it is newer, and never touches the triage status", () => {
+		const base = { applicationId: "a1", leadVersion: 1, status: "filling", version: 3, at: "t" };
+		const lead = rec("l1", { status: "apply_requested", application_id: "a1", application_lead_version: 1, application_version: 3 });
+		expect(planApplicationWriteback(lead, base)).toBeNull();
+		expect(planApplicationWriteback(lead, { ...base, version: 2 })).toBeNull();
+		expect(planApplicationWriteback(lead, { ...base, version: 4 })).toMatchObject({ application_status: "filling", application_version: 4 });
+		expect(planApplicationWriteback(lead, { ...base, applicationId: "a2", leadVersion: 2, version: 0 })).toMatchObject({ application_id: "a2" });
+		expect(planApplicationWriteback(lead, { ...base, version: 9 })).not.toHaveProperty("status");
 	});
 });

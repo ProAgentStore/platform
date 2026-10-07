@@ -711,7 +711,7 @@ export interface AgentLocalBrowserCapabilities {
 // ── Applications control surface (#958) — copies of workers/api/src/lib/applications/control.ts ──
 
 export type ApplicationQueueStatus = "new" | "apply_requested" | "tailoring" | "materials_ready" | "filling" | "awaiting_review" | "submitted" | "blocked" | "deferred" | "skipped" | "archived" | "failed";
-export type ApplicationQueueAction = "apply" | "skip" | "defer" | "archive" | "generate_materials" | "retry_tailoring" | "start_fill" | "request_review" | "retry_fill" | "cancel" | "resume";
+export type ApplicationQueueAction = "apply" | "skip" | "defer" | "archive" | "generate_materials" | "retry_tailoring" | "start_fill" | "request_review" | "retry_fill" | "cancel" | "resume" | "mark_not_interested";
 
 export interface ApplicationArtifactHandle {
 	kind: "resume" | "cover_letter";
@@ -783,4 +783,21 @@ export interface ApplicationTraceView {
 
 export interface ConnectionDeliveryList {
 	deliveries: Array<{ id: string; connectionId: string; status: string; eventType: string; lastError: string | null; createdAt: string }>;
+}
+
+/** Copy of `ApplicationRunnerSettings` (workers/api/src/lib/local-apply/policy.ts) — the handoff + submission policy (#953). */
+export interface ApplicationRunnerSettingsView {
+	settings: {
+		engine: "claude" | "codex";
+		authMode: "machine" | "subscription";
+		browserProfile: "isolated" | "default";
+		workspace: string;
+		sources: { profile?: string; answers?: string };
+		allowDomains: string[];
+		maxMinutes: number;
+		maxPages: number;
+		maxActions: number;
+		autoSubmit: { enabled: boolean; roles: string[]; locations: string[]; exclude: string[]; minSalary: number | null; dailyCap: number };
+	};
+	error?: string;
 }

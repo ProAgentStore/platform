@@ -1040,4 +1040,7 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// application_trace, triage_application, generate_application_materials, start_application_fill,
 	// request_application_review, retry_application, resume_application, cancel_application. Appended.
 	"0.1.88": "sha256:2fe796a89445fe5d98b0ad479cff7052dd6de694844a7af684518fab16765933",
+	// 0.1.89 (#953): `list_applications` filters (company, role, source, url, since, until), the
+	// `mark_not_interested` action on `triage_application`, and get/set_application_runner_settings. Appended.
+	"0.1.89": "sha256:5278c796081b56c1ca928ba68cd1a1cbab179a554bb212407fa8acaac6371afd",
 };

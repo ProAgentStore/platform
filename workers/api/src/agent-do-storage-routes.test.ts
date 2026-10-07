@@ -152,7 +152,8 @@ describe("job lead triage route", () => {
 		let patch: Record<string, unknown> | undefined;
 		const record = { id: "lead-1", collection: "job_leads", data: { title: "Head of Engineering" }, createdAt: "x", updatedAt: "x" };
 		const res = await routes.triageJobLead(
-			fakeEngine<"recordGet" | "recordUpdate">({
+			fakeEngine<"recordGet" | "recordUpdate" | "recordQuery">({
+				recordQuery: async () => ({ records: [record], total: 1 }),
 				recordGet: async () => record,
 				recordUpdate: async (_collection: string, _id: string, data: Record<string, unknown>) => {
 					patch = data;
@@ -172,7 +173,8 @@ describe("job lead triage route", () => {
 			let patch: Record<string, unknown> | undefined;
 			const record = { id: "lead-1", collection: "job_leads", data: {}, createdAt: "x", updatedAt: "x" };
 			const res = await routes.triageJobLead(
-				fakeEngine<"recordGet" | "recordUpdate">({
+				fakeEngine<"recordGet" | "recordUpdate" | "recordQuery">({
+					recordQuery: async () => ({ records: [record], total: 1 }),
 					recordGet: async () => record,
 					recordUpdate: async (_collection: string, _id: string, data: Record<string, unknown>) => {
 						patch = data;
@@ -193,7 +195,8 @@ describe("job lead triage — compare-and-set and the instance it speaks for (#9
 	const engineFor = (data: Record<string, unknown>) => {
 		const record = { id: "lead-1", collection: "job_leads", data, createdAt: "x", updatedAt: "x" };
 		const writes: Record<string, unknown>[] = [];
-		const engine = fakeEngine<"recordGet" | "recordUpdate">({
+		const engine = fakeEngine<"recordGet" | "recordUpdate" | "recordQuery">({
+			recordQuery: async () => ({ records: [{ ...record, data: Object.assign({}, record.data, ...writes) }], total: 1 }),
 			recordGet: async () => ({ ...record, data: Object.assign({}, record.data, ...writes) }),
 			recordUpdate: async (_c: string, _id: string, patch: Record<string, unknown>) => {
 				writes.push(patch);

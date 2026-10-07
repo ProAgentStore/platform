@@ -3,11 +3,11 @@
  * and the durable fill run. Every statement is scoped by `user_id`; runs also by `instance_id`.
  */
 import type { Env } from "../../types.js";
-import type { ApplicationStatus, JobApplication } from "../local-artifact/store.js";
+import { type ApplicationStatus, type JobApplication, writeBackToLead } from "../local-artifact/store.js";
 import type { LocalApplyEvent, LocalApplyMode, LocalApplyPause, LocalApplyPlatformEventType } from "./contract.js";
 import type { GateCheck } from "./policy.js";
 
-type DB = Pick<Env, "DB">;
+type DB = Pick<Env, "DB"> & Partial<Pick<Env, "AGENT">>;
 
 // ── The application lifecycle ────────────────────────────────────────────────────────────────
 
@@ -97,7 +97,10 @@ export async function moveApplication(env: DB, app: Pick<JobApplication, "id" | 
 			   FROM job_applications WHERE id = ?2 AND user_id = ?3 AND state_version = ?4 AND status = ?6`,
 		).bind(auditId, app.id, userId, version, app.status, m.to, m.actor, m.actorInstanceId ?? null, m.runId ?? null, m.reason ?? null, now),
 	]);
-	return !!(await env.DB.prepare("SELECT 1 AS ok FROM job_application_events WHERE id = ?1").bind(auditId).first<{ ok: number }>());
+	const moved = !!(await env.DB.prepare("SELECT 1 AS ok FROM job_application_events WHERE id = ?1").bind(auditId).first<{ ok: number }>());
+	// The lead the application came from shows its status (#953).
+	if (moved) await writeBackToLead(env, userId, app.id);
+	return moved;
 }
 
 /** Mark that a submit may have happened, whatever the status — the guard against a second one. */

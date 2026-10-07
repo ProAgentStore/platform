@@ -138,7 +138,26 @@ export function mergeRunnerSettings(current: ApplicationRunnerSettings, patch: u
 			next.autoSubmit.dailyCap = a.dailyCap as number;
 		}
 	}
+	// #953: auto-submit cannot be ENABLED until the policy it would run under exists. The gate would
+	// refuse every application anyway; refusing the switch says so where the owner is looking.
+	const missing = autoSubmitPrerequisites(next);
+	if (next.autoSubmit.enabled && missing.length) return { error: `Auto-submit cannot be enabled yet — it needs ${missing.join(", ")}.` };
 	return { settings: next };
+}
+
+/**
+ * What an enabled auto-submit needs to exist first (#953): the owner's profile to answer from, and an
+ * explicit submission policy — the roles they approve, the sites they allow, and a daily cap. The
+ * profile FILE is checked on the owner's machine by the runner at every run (it ends `blocked` when
+ * missing); here, it must at least be configured. Empty means ready.
+ */
+export function autoSubmitPrerequisites(s: ApplicationRunnerSettings): string[] {
+	const missing: string[] = [];
+	if (!s.sources.profile) missing.push("a profile source (sources.profile)");
+	if (!s.autoSubmit.roles.length) missing.push("at least one approved role (autoSubmit.roles)");
+	if (!s.allowDomains.length) missing.push("at least one allowed site (allowDomains)");
+	if (s.autoSubmit.dailyCap < 1) missing.push("a daily cap of at least 1 (autoSubmit.dailyCap)");
+	return missing;
 }
 
 export function effectiveRunnerSettings(stored: unknown): { settings: ApplicationRunnerSettings } | { error: string } {

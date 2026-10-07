@@ -19,9 +19,13 @@ import { json } from "./lib/do-json.js";
 import {
 	JOB_LEAD_COLLECTION,
 	JOB_LEAD_TRIAGE_ACTIONS,
+	duplicateApplyOf,
+	jobLeadStatus,
+	planApplicationWriteback,
 	planJobLeadTriage,
 	type JobLeadTriageAction,
 } from "./lib/job-lead-triage.js";
+import type { CollectionRecord } from "./agent-storage-types.js";
 
 // ── Collections ─────────────────────────────────────────────────────────────
 
@@ -132,7 +136,7 @@ export async function deleteRecord(
  * read → lifecycle validation → write is serialized with every other write to that instance.
  */
 export async function triageJobLead(
-	engine: Pick<AgentStorageEngine, "recordGet" | "recordUpdate">,
+	engine: Pick<AgentStorageEngine, "recordGet" | "recordUpdate" | "recordQuery">,
 	id: string,
 	request: Request,
 ): Promise<Response> {
@@ -147,6 +151,13 @@ export async function triageJobLead(
 	if (typeof body.source_instance_id !== "string" || !body.source_instance_id) return json({ error: "source_instance_id required" }, 400);
 	const record = await engine.recordGet(JOB_LEAD_COLLECTION, decodeURIComponent(id));
 	if (!record) return json({ error: "Not found" }, 404);
+	// One application per job (#953): a FIRST Apply on a lead whose job another lead already applied
+	// for is refused — the same posting found twice must not become two applications. A repeat Apply
+	// of this lead is not a first one, so it still returns its stored handoff below.
+	if (body.action === "apply" && jobLeadStatus(record.data) !== "apply_requested") {
+		const duplicateOf = duplicateApplyOf(record, await allLeads(engine));
+		if (duplicateOf) return json({ error: `Already applied for this job through lead ${duplicateOf}. Skip or archive this one.`, duplicate: true, duplicateOf }, 409);
+	}
 	const plan = planJobLeadTriage(record, {
 		action: body.action as JobLeadTriageAction,
 		deferUntil: typeof body.defer_until === "string" ? body.defer_until : undefined,
@@ -161,6 +172,48 @@ export async function triageJobLead(
 		: record;
 	if (!updated) return json({ error: "Not found" }, 404);
 	return json({ record: updated, action: body.action, transitioned: plan.transitioned, event: plan.event });
+}
+
+/** Every lead in the collection, page by page (the engine caps a page at 200). */
+async function allLeads(engine: Pick<AgentStorageEngine, "recordQuery">): Promise<CollectionRecord[]> {
+	const out: CollectionRecord[] = [];
+	for (let offset = 0; ; offset += 200) {
+		const page = await engine.recordQuery(JOB_LEAD_COLLECTION, { limit: 200, offset }).catch(() => null);
+		if (!page) return out;
+		out.push(...page.records);
+		if (!page.records.length || out.length >= page.total) return out;
+	}
+}
+
+/**
+ * Record an application's status on the lead it came from (#953) — called by the API whenever an
+ * application moves. Version-guarded (`planApplicationWriteback`), so retries and out-of-order
+ * calls are harmless; `application_*` fields only, never the triage `status`, never the outbox.
+ */
+export async function writeJobLeadApplication(engine: Pick<AgentStorageEngine, "recordGet" | "recordUpdate">, id: string, request: Request): Promise<Response> {
+	const b = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+	const num = (v: unknown) => (typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : null);
+	const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+	const applicationId = str(b?.application_id);
+	const status = str(b?.status);
+	const version = num(b?.version);
+	const leadVersion = num(b?.lead_version);
+	if (!applicationId || !status || version === null || leadVersion === null) return json({ error: "application_id, status, version and lead_version are required" }, 400);
+	const record = await engine.recordGet(JOB_LEAD_COLLECTION, decodeURIComponent(id));
+	if (!record) return json({ error: "Not found" }, 404);
+	const patch = planApplicationWriteback(record, {
+		applicationId,
+		leadVersion,
+		status,
+		version,
+		blockReason: str(b?.block_reason),
+		submittedAt: str(b?.submitted_at),
+		submittedUrl: str(b?.submitted_url),
+		at: str(b?.at) ?? new Date().toISOString(),
+	});
+	if (!patch) return json({ applied: false });
+	await engine.recordUpdate(JOB_LEAD_COLLECTION, record.id, patch);
+	return json({ applied: true });
 }
 
 // ── Files ───────────────────────────────────────────────────────────────────

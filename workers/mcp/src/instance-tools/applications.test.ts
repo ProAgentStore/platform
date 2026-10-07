@@ -32,17 +32,19 @@ afterEach(() => vi.unstubAllGlobals());
 
 const ACTIONS = "https://api.test/v1/instances/t1/application-queue/actions";
 
-describe("the Applications tools (#958)", () => {
+describe("the Applications tools (#958, #953)", () => {
 	it("publishes the issue's typed tools", () => {
 		expect(tools().names.sort()).toEqual([
 			"application_trace",
 			"cancel_application",
 			"generate_application_materials",
 			"get_application",
+			"get_application_runner_settings",
 			"list_applications",
 			"request_application_review",
 			"resume_application",
 			"retry_application",
+			"set_application_runner_settings",
 			"start_application_fill",
 			"triage_application",
 		]);
@@ -84,5 +86,17 @@ describe("the Applications tools (#958)", () => {
 		const { seen, call } = tools(["read", "write"]);
 		expect(await call("request_application_review", { instance_id: "t1", application_id: "a1", expected_status: "materials_ready" })).toMatch(/runtime/);
 		expect(seen).toEqual([]);
+	});
+});
+
+describe("the Runner's submission policy over MCP (#953)", () => {
+	it("reads and patches the settings route the console's policy card uses", async () => {
+		const { seen, call } = tools();
+		await call("get_application_runner_settings", { instance_id: "ap" });
+		await call("set_application_runner_settings", { instance_id: "ap", settings: { autoSubmit: { enabled: false } } });
+		expect(seen).toEqual([
+			{ url: "https://api.test/v1/instances/ap/application-runner/settings", method: "GET", body: undefined },
+			{ url: "https://api.test/v1/instances/ap/application-runner/settings", method: "PUT", body: { autoSubmit: { enabled: false } } },
+		]);
 	});
 });

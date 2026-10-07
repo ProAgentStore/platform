@@ -144,7 +144,7 @@ describe("the queue: every state, from any member of the pipeline", () => {
 		expect(fromTailor.body.pipeline).toEqual({ scouts: ["scout"], tailors: ["t1"], runners: ["ap"] });
 		expect(fromTailor.body.counts).toMatchObject({ new: 1, skipped: 1, materials_ready: 1, submitted: 1, filling: 0 });
 		expect(Object.keys(fromTailor.body.counts)).toEqual(["new", "apply_requested", "tailoring", "materials_ready", "filling", "awaiting_review", "submitted", "blocked", "deferred", "skipped", "archived", "failed"]);
-		expect(item(fromTailor.body.items, "lead:scout:lead-new")).toMatchObject({ kind: "lead", status: "new", leadVersion: 0, actions: ["apply", "skip", "defer", "archive"] });
+		expect(item(fromTailor.body.items, "lead:scout:lead-new")).toMatchObject({ kind: "lead", status: "new", leadVersion: 0, actions: ["apply", "skip", "defer", "archive", "mark_not_interested"] });
 		expect(item(fromTailor.body.items, "app:app-sub")?.actions).toEqual([]);
 		// The same queue read from the Runner — the instance an MCP caller may well hold.
 		const fromRunner = await call("GET", "/ap/application-queue");
@@ -168,8 +168,8 @@ describe("one transition whichever member of the pipeline it is made from", () =
 		readyApp("a2");
 		const viaConsole = await call("POST", "/t1/application-queue/actions", { action: "defer", application_id: "a1", expected_status: "materials_ready", expected_version: 0 });
 		const viaTool = await act("ap", { action: "defer", application_id: "a2", expected_status: "materials_ready", expected_version: 0 });
-		expect(viaConsole.body.item).toMatchObject({ status: "deferred", stateVersion: 1, actions: ["apply", "archive"] });
-		expect(viaTool.body.item).toMatchObject({ status: "deferred", stateVersion: 1, actions: ["apply", "archive"] });
+		expect(viaConsole.body.item).toMatchObject({ status: "deferred", stateVersion: 1, actions: ["apply", "archive", "mark_not_interested"] });
+		expect(viaTool.body.item).toMatchObject({ status: "deferred", stateVersion: 1, actions: ["apply", "archive", "mark_not_interested"] });
 		const strip = (rows: Record<string, unknown>[]) => rows.map(({ version, from_status, to_status, actor, reason }) => ({ version, from_status, to_status, actor, reason }));
 		expect(strip(await audit("a1"))).toEqual([{ version: 1, from_status: "materials_ready", to_status: "deferred", actor: "owner", reason: "defer" }]);
 		expect(strip(await audit("a2"))).toEqual(strip(await audit("a1")));
@@ -218,7 +218,7 @@ describe("no submit path under the default fill-and-review policy", () => {
 		const it1 = item(q.body.items, "app:f1");
 		expect(it1?.submitPolicy).toMatchObject({ allowed: false });
 		expect(it1?.submitPolicy.failing).toContain("auto_submit_enabled");
-		expect(it1?.actions).toEqual(["request_review", "defer", "archive"]);
+		expect(it1?.actions).toEqual(["request_review", "defer", "archive", "mark_not_interested"]);
 		const refused = await act("ap", { action: "start_fill", application_id: "f1", expected_status: "materials_ready" });
 		expect(refused.status).toBe(409);
 		expect(refused.body.error).toMatch(/does not allow an automatic submit/);
@@ -233,13 +233,13 @@ describe("no submit path under the default fill-and-review policy", () => {
 		readyApp("f2");
 		readyApp("f3");
 		const q = await call("GET", "/t1/application-queue");
-		expect(item(q.body.items, "app:f2")?.actions).toEqual(["start_fill", "request_review", "defer", "archive"]);
+		expect(item(q.body.items, "app:f2")?.actions).toEqual(["start_fill", "request_review", "defer", "archive", "mark_not_interested"]);
 		expect(q.body.limits).toEqual([{ runnerInstanceId: "ap", autoSubmitEnabled: true, dailyCap: 2, usedToday: 0, remaining: 2 }]);
 		const submitted = await call("POST", "/t1/application-queue/actions", { action: "start_fill", application_id: "f3", expected_status: "materials_ready" });
 		expect(submitted.body.result.mode).toBe("auto_submit");
 		// One open run: the gate's concurrency check now withholds the submit control from the other.
 		const after = (await call("GET", "/t1/application-queue/item?application_id=f2")).body.item;
-		expect(after.actions).toEqual(["request_review", "defer", "archive"]);
+		expect(after.actions).toEqual(["request_review", "defer", "archive", "mark_not_interested"]);
 		expect(after.submitPolicy.failing).toEqual(["concurrency"]);
 		const reviewed = await call("POST", "/t1/application-queue/actions", { action: "request_review", application_id: "f2", expected_status: "materials_ready" });
 		expect(reviewed.body.result.mode).toBe("fill_and_review");
@@ -267,7 +267,7 @@ describe("retry, cancel and resume", () => {
 		answers["/local-apply/status"] = { status: 200, body: { state: "ended", lastSeq: 0, events: [], result: { runId, outcome: "blocked", mode: "fill_and_review", traceId: runId, engineAuth: "machine-login", filled: 2, uploaded: [], submitAttempted: false, summary: "", blockReason: "incomplete", questions: ["Stopped."] } } };
 		await call("GET", `/ap/application-runs/${runId}`);
 		const blocked = await call("GET", "/t1/application-queue/item?application_id=rf");
-		expect(blocked.body.item.actions).toEqual(["retry_fill", "defer", "archive"]);
+		expect(blocked.body.item.actions).toEqual(["retry_fill", "defer", "archive", "mark_not_interested"]);
 		const retried = await call("POST", "/t1/application-queue/actions", { action: "retry_fill", application_id: "rf", expected_status: "blocked" });
 		expect(retried.body.result.runId).not.toBe(runId);
 		expect(dispatches("/local-apply/run")).toHaveLength(2);

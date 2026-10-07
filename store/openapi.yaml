@@ -7698,6 +7698,12 @@ paths:
         - { $ref: "#/components/parameters/InstanceId" }
         - { name: status, in: query, schema: { type: string, enum: [new, apply_requested, tailoring, materials_ready, filling, awaiting_review, submitted, blocked, deferred, skipped, archived, failed] } }
         - { name: sort, in: query, schema: { type: string, enum: [updated, title] } }
+        - { name: company, in: query, description: Case-insensitive "contains"., schema: { type: string } }
+        - { name: role, in: query, description: Matched against the job title., schema: { type: string } }
+        - { name: source, in: query, schema: { type: string } }
+        - { name: url, in: query, schema: { type: string } }
+        - { name: since, in: query, description: ISO date/time — items updated at or after it., schema: { type: string } }
+        - { name: until, in: query, description: ISO date/time — items updated before it., schema: { type: string } }
       responses:
         "200": { description: The queue., content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
@@ -7725,8 +7731,9 @@ paths:
     post:
       summary: Perform one typed action on a lead or application
       description: |
-        apply · skip · defer · archive · generate_materials · retry_tailoring · start_fill ·
-        request_review · retry_fill · cancel · resume. Requires `expected_status` (and accepts
+        apply · skip · defer · archive · mark_not_interested · generate_materials · retry_tailoring ·
+        start_fill · request_review · retry_fill · cancel · resume. An Apply on a lead whose job (job id,
+        else normalised URL) another lead already applied for is refused (409, duplicate). Requires `expected_status` (and accepts
         `expected_version`) as read: a stale or not-allowed move is refused (409) with nothing
         written. Lead decisions are the Scout's own triage (#955); application moves are
         compare-and-set with an audit row (#957). `start_fill` is accepted only when the Runner's
@@ -7744,7 +7751,7 @@ paths:
               type: object
               required: [action, expected_status]
               properties:
-                action: { type: string, enum: [apply, skip, defer, archive, generate_materials, retry_tailoring, start_fill, request_review, retry_fill, cancel, resume] }
+                action: { type: string, enum: [apply, skip, defer, archive, generate_materials, retry_tailoring, start_fill, request_review, retry_fill, cancel, resume, mark_not_interested] }
                 application_id: { type: string }
                 scout_instance_id: { type: string }
                 record_id: { type: string }

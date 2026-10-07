@@ -36,7 +36,7 @@ import { runJobLeadTriage } from "../../routes/instances-job-leads.js";
 export const QUEUE_STATUSES = ["new", "apply_requested", "tailoring", "materials_ready", "filling", "awaiting_review", "submitted", "blocked", "deferred", "skipped", "archived", "failed"] as const;
 export type QueueStatus = (typeof QUEUE_STATUSES)[number];
 
-export const APPLICATION_ACTIONS = ["apply", "skip", "defer", "archive", "generate_materials", "retry_tailoring", "start_fill", "request_review", "retry_fill", "cancel", "resume"] as const;
+export const APPLICATION_ACTIONS = ["apply", "skip", "defer", "archive", "generate_materials", "retry_tailoring", "start_fill", "request_review", "retry_fill", "cancel", "resume", "mark_not_interested"] as const;
 export type ApplicationAction = (typeof APPLICATION_ACTIONS)[number];
 
 export interface Pipeline {
@@ -150,6 +150,8 @@ function leadItem(scout: string, r: LeadRecord, pipeline: Pipeline): QueueItem {
 	const status = jobLeadStatus(d);
 	const actions: ApplicationAction[] = JOB_LEAD_TRANSITIONS[status].map((t) => LEAD_ACTION[t]).filter((a): a is ApplicationAction => !!a);
 	if (status === "apply_requested" && pipeline.tailors.length) actions.push("generate_materials");
+	// #953: "not interested" is a skip where the lead can still be skipped, else an archive.
+	if (actions.includes("skip") || actions.includes("archive")) actions.push("mark_not_interested");
 	return {
 		key: `lead:${scout}:${r.id}`,
 		kind: "lead",
@@ -217,6 +219,9 @@ function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRu
 	}
 }
 
+/** #953: an application that can be archived can be marked not interested (an archive, with that reason). */
+const withNotInterested = (actions: ApplicationAction[]): ApplicationAction[] => (actions.includes("archive") ? [...actions, "mark_not_interested"] : actions);
+
 function applicationItem(app: JobApplication, pipeline: Pipeline, run: OpenRun | null, policy: QueueItem["submitPolicy"]): QueueItem {
 	const env = (app.lead ?? {}) as { leadUrl?: string; lead?: Record<string, unknown> };
 	const l = env.lead ?? {};
@@ -249,7 +254,7 @@ function applicationItem(app: JobApplication, pipeline: Pipeline, run: OpenRun |
 		submitAttempted: !!app.submitAttemptedAt,
 		submitPolicy: policy,
 		updatedAt: iso(app.updatedAt),
-		actions: applicationActions(app, pipeline, run, !!policy?.allowed),
+		actions: withNotInterested(applicationActions(app, pipeline, run, !!policy?.allowed)),
 	};
 }
 
@@ -305,7 +310,32 @@ export interface QueueView {
 	notes: string[];
 }
 
-export async function applicationQueue(env: Env, uid: string, instanceId: string, opts: { status?: QueueStatus; sort?: "updated" | "title" } = {}): Promise<QueueView> {
+/** Narrowing the queue (#953): every text filter is a case-insensitive "contains"; dates bound `updatedAt`. */
+export interface QueueFilter {
+	status?: QueueStatus;
+	company?: string;
+	/** Matched against the job title. */
+	role?: string;
+	source?: string;
+	url?: string;
+	/** ISO date or time: items updated at or after it. */
+	since?: string;
+	/** ISO date or time: items updated before it. */
+	until?: string;
+	sort?: "updated" | "title";
+}
+
+export function matchesFilter(i: QueueItem, f: QueueFilter): boolean {
+	const has = (v: string | null, q?: string) => !q || (!!v && v.toLowerCase().includes(q.trim().toLowerCase()));
+	if (f.status && i.status !== f.status) return false;
+	if (!has(i.company, f.company) || !has(i.title, f.role) || !has(i.source, f.source) || !has(i.url, f.url)) return false;
+	if ((f.since || f.until) && !i.updatedAt) return false;
+	if (f.since && i.updatedAt < new Date(f.since).toISOString()) return false;
+	if (f.until && i.updatedAt >= new Date(f.until).toISOString()) return false;
+	return true;
+}
+
+export async function applicationQueue(env: Env, uid: string, instanceId: string, opts: QueueFilter = {}): Promise<QueueView> {
 	const pipeline = await pipelineOf(env, uid, instanceId);
 	const apps = await applicationsOf(env, uid, pipeline.tailors);
 	const runs = await openRuns(env, uid, pipeline.runners);
@@ -320,7 +350,8 @@ export async function applicationQueue(env: Env, uid: string, instanceId: string
 	}
 	const counts = Object.fromEntries(QUEUE_STATUSES.map((s) => [s, 0])) as Record<QueueStatus, number>;
 	for (const i of items) counts[i.status]++;
-	const filtered = opts.status ? items.filter((i) => i.status === opts.status) : items;
+	for (const d of [opts.since, opts.until]) if (d && Number.isNaN(Date.parse(d))) throw new HttpError(400, `"${d}" is not a date — pass an ISO date such as 2026-10-01.`);
+	const filtered = items.filter((i) => matchesFilter(i, opts));
 	filtered.sort(opts.sort === "title" ? (a, b) => a.title.localeCompare(b.title) : (a, b) => b.updatedAt.localeCompare(a.updatedAt));
 
 	const limits: QueueView["limits"] = [];
@@ -431,12 +462,13 @@ export async function performApplicationAction(env: Env, uid: string, instanceId
 		const scout = item.scoutInstanceId as string;
 		if (item.status !== input.expectedStatus || (input.expectedVersion !== undefined && input.expectedVersion !== item.leadVersion)) throw stale(item.status, item.leadVersion ?? undefined);
 		if (!item.actions.includes(input.action)) throw new HttpError(409, `A lead in ${item.status} cannot ${input.action.replace(/_/g, " ")}${item.actions.length ? ` (it can: ${item.actions.join(", ")})` : ""}.`);
-		if (LEAD_ACTIONS.includes(input.action)) {
+		if (LEAD_ACTIONS.includes(input.action) || input.action === "mark_not_interested") {
+			const notInterested = input.action === "mark_not_interested";
 			const out = await runJobLeadTriage(env, scout, uid, item.leadId, {
-				action: input.action,
+				action: notInterested ? (item.actions.includes("skip") ? "skip" : "archive") : input.action,
 				expected_status: item.status,
 				expected_version: item.leadVersion,
-				...(input.note ? { note: input.note } : {}),
+				...(input.note || notInterested ? { note: input.note ?? "not interested" } : {}),
 				...(input.deferUntil ? { defer_until: input.deferUntil } : {}),
 			});
 			if (out.status !== 200) throw new HttpError(out.status as 400, out.result.error ?? `triage failed (${out.status})`);
@@ -466,10 +498,13 @@ export async function performApplicationAction(env: Env, uid: string, instanceId
 	switch (input.action) {
 		case "defer":
 		case "archive":
+		case "mark_not_interested":
 		case "apply": {
-			// PAGS records only — nothing external. `apply` on a deferred application puts it back in the queue.
-			const to = input.action === "defer" ? "deferred" : input.action === "archive" ? "archived" : "materials_ready";
-			const moved = await moveApplication(env, app, uid, { to, actor: "owner", actorInstanceId: instanceId, reason: input.note ?? input.action }, now);
+			// PAGS records only — nothing external. `apply` on a deferred application puts it back in the
+			// queue; "not interested" is an archive that says why (#953).
+			const to = input.action === "defer" ? "deferred" : input.action === "apply" ? "materials_ready" : "archived";
+			const reason = input.note ?? (input.action === "mark_not_interested" ? "not_interested" : input.action);
+			const moved = await moveApplication(env, app, uid, { to, actor: "owner", actorInstanceId: instanceId, reason }, now);
 			if (!moved) throw stale("changed", undefined);
 			return after({ transitioned: true });
 		}

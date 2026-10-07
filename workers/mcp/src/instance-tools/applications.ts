@@ -36,6 +36,8 @@ export const APPLICATION_TOOL_SCOPES = {
 	request_application_review: "runtime",
 	retry_application: "runtime",
 	resume_application: "runtime",
+	get_application_runner_settings: "read",
+	set_application_runner_settings: "write",
 } as const satisfies Record<string, McpScope>;
 
 export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceToolsCtx, "env" | "tokenFor" | "safetyFor">, opts: { pinnedInstanceId?: string } = {}): void {
@@ -65,11 +67,18 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 			...who,
 			status: z.enum(["new", "apply_requested", "tailoring", "materials_ready", "filling", "awaiting_review", "submitted", "blocked", "deferred", "skipped", "archived", "failed"]).optional().describe("Only this status."),
 			sort: z.enum(["updated", "title"]).optional(),
+			company: z.string().optional().describe("Only items whose company contains this (case-insensitive)."),
+			role: z.string().optional().describe("Only items whose job title contains this."),
+			source: z.string().optional().describe("Only items from a source containing this."),
+			url: z.string().optional().describe("Only items whose job URL contains this."),
+			since: z.string().optional().describe("ISO date/time: only items updated at or after it."),
+			until: z.string().optional().describe("ISO date/time: only items updated before it."),
 		},
 		async (input: Record<string, unknown>) => {
 			const token = tokenOf(input);
 			const instance_id = instanceOf(input);
 			const { status, sort } = input as { status?: string; sort?: string };
+			const filters = ["company", "role", "source", "url", "since", "until"] as const;
 			const t = tokenFor(token);
 			if (!t) return authRequired();
 			const denied = await requirePermission(safetyFor(token), "read", "list_applications", { instance_id });
@@ -77,6 +86,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 			const q = new URLSearchParams();
 			if (status) q.set("status", status);
 			if (sort) q.set("sort", sort);
+			for (const k of filters) if (typeof input[k] === "string" && input[k]) q.set(k, input[k] as string);
 			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/application-queue?${q}`, t, {}, env)) as { error?: string };
 			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
 		},
@@ -117,6 +127,74 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 			if (denied) return denied;
 			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/application-queue/${encodeURIComponent(application_id)}/trace`, t, {}, env)) as { error?: string };
 			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
+	server.tool(
+		"get_application_runner_settings",
+		"An Application Runner's handoff and submission policy (#953): which signed-in CLI fills applications, from which of the owner's files, on which sites, and the auto-submit policy (off by default — every application stops for review). Pass the Runner's instance_id. Read-only.",
+		{ ...who },
+		async (input: Record<string, unknown>) => {
+			const token = tokenOf(input);
+			const instance_id = instanceOf(input);
+			const t = tokenFor(token);
+			if (!t) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "get_application_runner_settings", { instance_id });
+			if (denied) return denied;
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/application-runner/settings`, t, {}, env)) as { error?: string };
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
+	server.tool(
+		"set_application_runner_settings",
+		"Change an Application Runner's handoff and submission policy. Only the fields you pass change. Auto-submit is REFUSED until a profile source, at least one approved role, at least one allowed site and a daily cap of at least 1 exist — and even then each application is submitted only when it matches every rule. Never takes a provider API key. Call with dry_run first.",
+		{
+			...who,
+			settings: z
+				.object({
+					engine: z.enum(["claude", "codex"]).optional(),
+					authMode: z.enum(["machine", "subscription"]).optional(),
+					browserProfile: z.enum(["isolated", "default"]).optional(),
+					workspace: z.string().optional(),
+					sources: z.object({ profile: z.string().nullable().optional(), answers: z.string().nullable().optional() }).optional(),
+					allowDomains: z.array(z.string()).optional(),
+					maxMinutes: z.coerce.number().int().optional(),
+					maxPages: z.coerce.number().int().optional(),
+					maxActions: z.coerce.number().int().optional(),
+					autoSubmit: z
+						.object({
+							enabled: z.boolean().optional(),
+							roles: z.array(z.string()).optional(),
+							locations: z.array(z.string()).optional(),
+							exclude: z.array(z.string()).optional(),
+							minSalary: z.coerce.number().int().nullable().optional(),
+							dailyCap: z.coerce.number().int().optional(),
+						})
+						.optional(),
+				})
+				.describe("The fields to change, as GET returns them."),
+			dry_run: z.boolean().optional().describe("Describe the change without saving it."),
+		},
+		async (input: Record<string, unknown>) => {
+			const token = tokenOf(input);
+			const instance_id = instanceOf(input);
+			const t = tokenFor(token);
+			if (!t) return authRequired();
+			const auditInput = { instance_id };
+			const denied = await requirePermission(safetyFor(token), "write", "set_application_runner_settings", auditInput);
+			if (denied) return denied;
+			if (input.dry_run) {
+				return dryRun(safetyFor(token), "set_application_runner_settings", "change an Application Runner's submission policy", auditInput, {
+					endpoint: `/v1/instances/${instance_id}/application-runner/settings`,
+					method: "PUT",
+					effect: "The Runner's settings would be patched with the fields given; auto-submit stays refused until its prerequisites exist.",
+				});
+			}
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/application-runner/settings`, t, { method: "PUT", body: JSON.stringify(input.settings ?? {}) }, env)) as { error?: string };
+			if (data.error) return text(`Error: ${data.error}`);
+			await audit(safetyFor(token), { tool: "set_application_runner_settings", action: "completed", input: auditInput });
+			return jsonText(data);
 		},
 	);
 
@@ -163,13 +241,13 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 	};
 	const runnerArg = { runner_instance_id: z.string().optional().describe("A specific Application Runner, when the pipeline has more than one.") };
 
-	const triage = decision("triage_application", ["apply", "skip", "defer", "archive"], "The item would move to the decided status, with an audit row; apply on a lead would also deliver its job.lead.apply_requested handoff.", {
+	const triage = decision("triage_application", ["apply", "skip", "defer", "archive", "mark_not_interested"], "The item would move to the decided status, with an audit row; apply on a lead would also deliver its job.lead.apply_requested handoff.", {
 		note: z.string().optional(),
 		defer_until: z.string().optional(),
 	});
 	server.tool(
 		"triage_application",
-		"Decide a lead or an application. apply: a lead goes to the Tailor (the Scout's own triage, emitting its handoff once), a deferred application goes back in the queue. skip: a lead. defer / archive: either — PAGS records only, nothing on an employer's site is touched. Only actions listed in the item's `actions` are accepted. Pass expected_status (and expected_version) as you read them.",
+		"Decide a lead or an application. apply: a lead goes to the Tailor (the Scout's own triage, emitting its handoff once — refused when another lead for the same job was already applied for), a deferred application goes back in the queue. skip: a lead. mark_not_interested: a skip (lead) or an archive (application) recorded as not interested. defer / archive: either — PAGS records only, nothing on an employer's site is touched. Only actions listed in the item's `actions` are accepted. Pass expected_status (and expected_version) as you read them.",
 		triage.shape,
 		triage.handler,
 	);

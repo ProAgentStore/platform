@@ -363,6 +363,9 @@ export class AgentDO extends DurableObject<Env> {
 			// collection update route. Its internal read/validate/write is serialized by this DO.
 			if (path.match(/^\/job-leads\/[^/]+\/triage$/) && request.method === "POST")
 				return this.withEngine((e) => storageRoutes.triageJobLead(e, path.split("/")[2], request));
+			// An application's status, written back onto its lead (#953). application_* fields only.
+			if (path.match(/^\/job-leads\/[^/]+\/application$/) && request.method === "POST")
+				return this.withEngine((e) => storageRoutes.writeJobLeadApplication(e, path.split("/")[2], request));
 
 			// Files
 			if (path === "/files" && request.method === "GET")

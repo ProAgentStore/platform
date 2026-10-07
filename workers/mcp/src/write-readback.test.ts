@@ -225,6 +225,8 @@ const READBACK: Record<string, string | null> = {
 	"retry_application.action": "application_trace",
 	// The owner's answers go to the runner for that run only; PAGS stores none of them (by design).
 	"resume_application.answers": null,
+	// #953: the policy written is the policy read.
+	"set_application_runner_settings.settings": "get_application_runner_settings",
 	"triage_job_lead.action": "query_instance_records",
 	"triage_job_lead.defer_until": "query_instance_records",
 	"triage_job_lead.note": "query_instance_records",

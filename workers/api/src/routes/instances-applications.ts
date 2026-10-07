@@ -25,7 +25,8 @@ export function registerApplicationsRoutes(router: Hono<{ Bindings: Env }>): voi
 		const status = c.req.query("status");
 		if (status && !(QUEUE_STATUSES as readonly string[]).includes(status)) return c.json({ error: `status must be one of ${QUEUE_STATUSES.join(", ")}` }, 400);
 		const sort = c.req.query("sort") === "title" ? "title" : "updated";
-		return c.json(await applicationQueue(c.env, uid, instanceId, { status: status as QueueStatus | undefined, sort }));
+		const q = (k: string) => c.req.query(k) || undefined;
+		return c.json(await applicationQueue(c.env, uid, instanceId, { status: status as QueueStatus | undefined, sort, company: q("company"), role: q("role"), source: q("source"), url: q("url"), since: q("since"), until: q("until") }));
 	});
 
 	router.get("/:instanceId/application-queue/item", async (c) => {

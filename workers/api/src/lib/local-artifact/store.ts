@@ -16,7 +16,8 @@ import {
 	isWorkspaceRelative,
 } from "./contract.js";
 
-type DB = Pick<Env, "DB">;
+/** D1, and — where the caller has one — the Agent DO namespace the lead writeback (#953) goes through. */
+type DB = Pick<Env, "DB"> & Partial<Pick<Env, "AGENT">>;
 
 // ── Settings (agent_instances.config.applicationTailor) ──────────────────────────────────────
 
@@ -201,6 +202,49 @@ export async function getOwnedApplication(env: DB, userId: string, id: string): 
 	return row ? presentApp(row) : null;
 }
 
+/**
+ * Write an application's current state back onto the lead it came from (#953), in the Scout's own
+ * `job_leads` record: `application_status`, its version, block reason and confirmed submission.
+ * Best-effort and idempotent — the Scout's DO applies it only if it is newer than what the lead
+ * holds — so it is safe to call after every move and from the cron backstop. Never the lead's
+ * triage `status`, never an event.
+ */
+export async function writeBackToLead(env: DB, userId: string, applicationId: string): Promise<boolean> {
+	if (!env.AGENT) return false;
+	const app = await getOwnedApplication(env, userId, applicationId);
+	if (!app) return false;
+	try {
+		const res = await env.AGENT.get(env.AGENT.idFromName(app.sourceInstanceId)).fetch(
+			new Request(`https://agent/job-leads/${encodeURIComponent(app.leadId)}/application`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					application_id: app.id,
+					lead_version: app.lifecycleVersion,
+					status: app.status,
+					version: app.stateVersion,
+					block_reason: app.blockReason,
+					submitted_at: app.submittedAt,
+					submitted_url: app.submittedUrl,
+					at: new Date(app.updatedAt).toISOString(),
+				}),
+			}),
+		);
+		return res.ok;
+	} catch {
+		// The cron backstop (`syncLeadWritebacks`) writes it on the next tick; the move itself stands.
+		return false;
+	}
+}
+
+/** The cron backstop: re-send the state of applications that moved recently. Idempotent on the lead's side. */
+export async function syncLeadWritebacks(env: DB, sinceMs: number, limit = 50): Promise<number> {
+	const { results } = await env.DB.prepare("SELECT id, user_id FROM job_applications WHERE updated_at >= ?1 ORDER BY updated_at DESC LIMIT ?2").bind(sinceMs, limit).all<{ id: string; user_id: string }>();
+	let n = 0;
+	for (const r of results ?? []) if (await writeBackToLead(env, r.user_id, r.id)) n++;
+	return n;
+}
+
 export async function getApplication(env: DB, instanceId: string, userId: string, id: string): Promise<JobApplication | null> {
 	const row = await env.DB.prepare("SELECT * FROM job_applications WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3").bind(id, instanceId, userId).first<AppRow>();
 	return row ? presentApp(row) : null;
@@ -273,6 +317,7 @@ export async function claimApplication(
 			.bind(crypto.randomUUID(), app.id, a.instanceId, a.userId, a.status, a.blockReason ?? null, a.now)
 			.run();
 	}
+	if (created) await writeBackToLead(env, a.userId, app.id);
 	return { created, app };
 }
 
@@ -322,7 +367,9 @@ export async function settleApplication(env: DB, instanceId: string, userId: str
 			   FROM job_applications WHERE id = ?4 AND instance_id = ?5 AND user_id = ?6 AND status = ?7 AND tailoring_run_id = ?2`,
 		).bind(auditId, runId, now, id, instanceId, userId, s.to),
 	]);
-	return !!(await env.DB.prepare("SELECT 1 AS ok FROM job_application_events WHERE id = ?1").bind(auditId).first<{ ok: number }>());
+	const settled = !!(await env.DB.prepare("SELECT 1 AS ok FROM job_application_events WHERE id = ?1").bind(auditId).first<{ ok: number }>());
+	if (settled) await writeBackToLead(env, userId, id);
+	return settled;
 }
 
 export async function markReadyEmitted(env: DB, id: string, now: number): Promise<void> {

@@ -6,7 +6,7 @@ import Card from "../components/Card";
 import LoadFailed from "../components/LoadFailed";
 import { ACTION_LABEL, CONFIRM, QUEUE_STATUS_LABEL, actionBody } from "../lib/applications";
 import { TONE_CLASS } from "../lib/localBrowser";
-import type { ApplicationActionResponse, ApplicationQueueAction, ApplicationQueueItem, ApplicationQueueStatus, ApplicationQueueView, ApplicationTraceView, ConnectionDeliveryList } from "../lib/types";
+import type { ApplicationActionResponse, ApplicationRunnerSettingsView, ApplicationQueueAction, ApplicationQueueItem, ApplicationQueueStatus, ApplicationQueueView, ApplicationTraceView, ConnectionDeliveryList } from "../lib/types";
 
 /**
  * The Applications tab (#958): the whole job-application queue across the owner's Scout → Tailor →
@@ -84,6 +84,8 @@ export default function ApplicationsTab({ instanceId }: { instanceId: string }) 
 			</Card>
 
 			{selected && <Detail key={selected.key} instanceId={instanceId} item={selected} onChanged={load} />}
+
+			{view.pipeline.runners[0] && <SubmissionPolicy runnerId={view.pipeline.runners[0]} onChanged={load} />}
 		</div>
 	);
 }
@@ -240,6 +242,83 @@ function Detail({ instanceId, item, onChanged }: { instanceId: string; item: App
 					))}
 				</ol>
 			)}
+		</Card>
+	);
+}
+
+const list = (v: string) => v.split(",").map((x) => x.trim()).filter(Boolean);
+
+/**
+ * The handoff + submission policy (#953) — the Runner's settings. Fill-and-review is the default and
+ * the server refuses to enable auto-submit until a profile source, approved roles, an allowed site
+ * and a daily cap exist; its sentence is shown as it comes back.
+ */
+function SubmissionPolicy({ runnerId, onChanged }: { runnerId: string; onChanged: () => void }) {
+	const [s, setS] = useState<ApplicationRunnerSettingsView["settings"] | null>(null);
+	const [draft, setDraft] = useState({ profile: "", answers: "", allowDomains: "", roles: "", locations: "", exclude: "", dailyCap: "0", enabled: false });
+	const [msg, setMsg] = useState("");
+	const load = useCallback(async () => {
+		try {
+			const v = await api<ApplicationRunnerSettingsView>(`/v1/instances/${runnerId}/application-runner/settings`);
+			setS(v.settings);
+			const a = v.settings.autoSubmit;
+			setDraft({ profile: v.settings.sources.profile ?? "", answers: v.settings.sources.answers ?? "", allowDomains: v.settings.allowDomains.join(", "), roles: a.roles.join(", "), locations: a.locations.join(", "), exclude: a.exclude.join(", "), dailyCap: String(a.dailyCap), enabled: a.enabled });
+			if (v.error) setMsg(v.error);
+		} catch (e) {
+			setMsg(e instanceof Error ? e.message : String(e));
+		}
+	}, [runnerId]);
+	useEffect(() => {
+		load();
+	}, [load]);
+	if (!s) return null;
+	const save = async () => {
+		setMsg("");
+		try {
+			await api(`/v1/instances/${runnerId}/application-runner/settings`, {
+				method: "PUT",
+				body: JSON.stringify({
+					sources: { profile: draft.profile.trim() || null, answers: draft.answers.trim() || null },
+					allowDomains: list(draft.allowDomains),
+					autoSubmit: { enabled: draft.enabled, roles: list(draft.roles), locations: list(draft.locations), exclude: list(draft.exclude), dailyCap: Number(draft.dailyCap) || 0 },
+				}),
+			});
+			setMsg("Saved.");
+			await load();
+			onChanged();
+		} catch (e) {
+			setMsg(e instanceof Error ? e.message : String(e));
+		}
+	};
+	const field = (key: keyof typeof draft, label: string, hint: string) => (
+		<label className="flex flex-col gap-0.5 text-xs">
+			<span className="font-semibold">{label}</span>
+			<input value={String(draft[key])} onChange={(e) => setDraft({ ...draft, [key]: e.target.value })} className="bg-paper border border-line rounded px-2 py-1 text-sm" placeholder={hint} />
+		</label>
+	);
+	return (
+		<Card className="mt-3 sm:mt-4">
+			<h3 className="text-base font-bold mb-1">Submission policy</h3>
+			<p className="text-sm text-muted mb-2">
+				By default every application is filled on your machine and stops for your review — nothing is submitted. Auto-submit applies only to applications that match every rule below, up to the daily cap.
+			</p>
+			<div className="grid sm:grid-cols-2 gap-2 mb-2">
+				{field("profile", "Profile file (in your workspace)", "profile.md")}
+				{field("answers", "Answers file (optional)", "answers.md")}
+				{field("allowDomains", "Allowed sites", "boards.greenhouse.io, jobs.lever.co")}
+				{field("roles", "Approved roles", "engineer, developer")}
+				{field("locations", "Approved locations (optional)", "Sydney, Remote")}
+				{field("exclude", "Exclude when the job mentions", "contract, unpaid")}
+				{field("dailyCap", "Auto-submits per day", "0")}
+			</div>
+			<label className="flex gap-2 items-center text-sm mb-2">
+				<input type="checkbox" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} />
+				Enable auto-submit for applications that match this policy
+			</label>
+			<Button size="sm" variant="primary" onClick={save}>
+				Save policy
+			</Button>
+			{msg && <p className="text-xs mt-2">{msg}</p>}
 		</Card>
 	);
 }

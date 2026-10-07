@@ -37,6 +37,7 @@ export const ACTION_LABEL: Record<ApplicationQueueAction, string> = {
 	retry_fill: "Retry fill",
 	cancel: "Cancel",
 	resume: "Resume",
+	mark_not_interested: "Not interested",
 };
 
 /** Actions that change something outside PAGS records, and so ask before they run. */
