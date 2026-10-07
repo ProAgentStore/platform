@@ -44,7 +44,7 @@ import {
 	redactText,
 	secretEnvValues,
 } from "./contract.js";
-import { buildEngineSpec, finalText, missingLogin, observedEngineAuth, researchPrompt, signInHelp } from "./engine.js";
+import { bridgeUnused, buildEngineSpec, finalText, missingLogin, observedEngineAuth, researchPrompt, signInHelp } from "./engine.js";
 
 /** A browser for one run: the runner's shared signed-in browser, or a throwaway one. */
 export interface RunBrowser {
@@ -432,6 +432,10 @@ export class LocalBrowserRuntime {
 			const tail = run.output.slice(-5).join("\n").slice(-800);
 			return { outcome: "failed", summary, error: `The ${e.engine} CLI exited with code ${code}${tail ? `: ${tail}` : ""}` };
 		}
+		// A CLI that exits cleanly having never called the bridge did no research, whatever its prose
+		// says. Live run aac758dc (#952) ended `completed` with "the browser bridge required approval":
+		// no page opened, and the run looked like a success with nothing found.
+		if (!bridge?.calls) return { outcome: "failed", summary, error: bridgeUnused(e.engine, summary) };
 		return { outcome: "completed", summary };
 	}
 

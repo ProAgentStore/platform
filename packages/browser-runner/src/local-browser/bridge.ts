@@ -176,6 +176,8 @@ export class BrowserBridge {
 	readonly findings: LocalBrowserFinding[] = [];
 	readonly sourceFailures: LocalBrowserSourceFailure[] = [];
 	summary: string | null = null;
+	/** Tool calls that reached the bridge. Zero at exit means the CLI never used the browser (#944). */
+	calls = 0;
 
 	constructor(
 		private readonly browser: BrowserTools,
@@ -192,6 +194,7 @@ export class BrowserBridge {
 	}
 
 	async callTool(name: string, args: Record<string, unknown> = {}): Promise<ToolResult> {
+		this.calls++;
 		if (name === "record_finding") return this.recordFinding(args);
 		if (name === "report_source_failure") return this.reportFailure(args);
 		if (name === "finish_research") {

@@ -173,6 +173,35 @@ describe("ending a run", () => {
 		expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "failed", engineAuth: "missing_login", error: expect.stringMatching(/codex login/) });
 	});
 
+	it("fails a run whose CLI never called the browser bridge — the live Codex shape of #952, which ended `completed` (#944)", async () => {
+		const rt = runtime();
+		rt.start(envelope({ engine: "codex" }));
+		await settle();
+		const said = "The smoke test was blocked: the browser bridge required approval, but this session’s approval policy is `never`.";
+		spawned[0].child.stdout.write(`${JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: said } })}\n`);
+		await settle();
+		spawned[0].child.exit(0);
+		const r = rt.status({ runId: "run-1" }).result;
+		expect(r).toMatchObject({ outcome: "failed", findings: [], summary: said, error: expect.stringMatching(/Codex CLI was refused the PAGS browser tools\. No page was opened.*npm i -g @proagentstore\/cli/) });
+	});
+
+	it("says the same, without blaming approval, when the CLI just never used the tools", async () => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		spawned[0].child.exit(0);
+		expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "failed", error: expect.stringMatching(/^The Claude Code CLI finished without using the PAGS browser tools/) });
+	});
+
+	it("still completes a run that used the bridge but never called finish_research", async () => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		await rt.bridge({ runId: "run-1", op: "call", name: "browser_navigate", args: { url: "https://seek.com.au/jobs" } });
+		spawned[0].child.exit(0);
+		expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "completed" });
+	});
+
 	it("says the CLI is not installed", async () => {
 		const rt = runtime({ spawnError: Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT" }) });
 		rt.start(envelope());

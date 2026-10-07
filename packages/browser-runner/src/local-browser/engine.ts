@@ -176,6 +176,18 @@ export function signInHelp(engine: LocalBrowserEngine): string {
 		: "The Codex CLI on this machine is not signed in. Run `codex login` on that machine and start the run again.";
 }
 
+/**
+ * Why a run that never touched the browser bridge failed, and the step that fixes it (#944). The usual
+ * cause is the CLI refusing the bridge's tools (an approval policy, #952) or not loading the server.
+ */
+export function bridgeUnused(engine: LocalBrowserEngine, said: string): string {
+	const blocked = /approval|not (allowed|permitted)|permission|denied/i.test(said);
+	const cause = blocked
+		? `The ${engine === "claude" ? "Claude Code" : "Codex"} CLI was refused the PAGS browser tools.`
+		: `The ${engine === "claude" ? "Claude Code" : "Codex"} CLI finished without using the PAGS browser tools.`;
+	return `${cause} No page was opened, so this run found nothing. Update the CLI on that machine (npm i -g @proagentstore/cli), restart \`pags up\`, and start the run again.`;
+}
+
 /** The CLI's own closing text, from its structured output — the summary when it never called finish_research. */
 export function finalText(engine: LocalBrowserEngine, lines: readonly string[]): string {
 	for (let i = lines.length - 1; i >= 0; i--) {
