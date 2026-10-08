@@ -120,6 +120,10 @@ function displayNameFrom(raw: unknown): string {
 }
 
 /** Subscribe to an agent — creates a personal instance with its own DO.
+ *
+ * Public templates are subscribable by everyone. A creator may also subscribe to their own
+ * draft/unlisted template: creation otherwise leaves a local-runtime agent in a dead end where
+ * it must be published to the whole catalogue before its creator can run it privately.
  *  Optional body `{ displayName }`: the name the subscriber CHOSE for this one (#450).
  *  Optional body `{ idempotencyKey }`: a caller-supplied key (max 128 chars). A retry
  *  with the same key returns the existing instance instead of creating a duplicate (#716). */
@@ -133,13 +137,16 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 			? body.idempotencyKey.trim().slice(0, 128)
 			: null;
 
-	// Verify agent exists and is published
+	// A catalogue subscriber gets published templates only. The template owner is the one
+	// exception: private drafts are how an owner composes and runs a personal pipeline before
+	// deciding whether it belongs in the public catalogue.
 	const agent = await c.env.DB.prepare(
-		`SELECT id, name, model, visibility, config FROM agents WHERE (id = ?1 OR slug = ?1) AND visibility = 'published'`,
+		`SELECT id, name, model, visibility, config FROM agents
+		 WHERE (id = ?1 OR slug = ?1) AND (visibility = 'published' OR owner_id = ?2)`,
 	)
-		.bind(agentId)
+		.bind(agentId, session.uid)
 		.first<{ id: string; name: string; model: string; config: string | null }>();
-	if (!agent) throw new HttpError(404, "Agent not found or not published");
+	if (!agent) throw new HttpError(404, "Agent not found, not published, or not yours");
 
 	// Idempotency guard (#716): if the caller supplied a key, check whether they already have an
 	// instance with that key. A retry after a lost-response error returns the same instance instead

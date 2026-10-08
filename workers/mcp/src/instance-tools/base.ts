@@ -292,10 +292,10 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 
 	server.tool(
 		"subscribe_agent",
-		"Subscribe to a published agent and create your own private runnable instance. Use this before chat_with_instance for real user runs. Pass idempotency_key to make retries safe: a retry with the same key returns the existing instance instead of creating a duplicate (#716).",
+		"Subscribe to a published agent — or one of your own private drafts — and create your own private runnable instance. Use this before chat_with_instance for real user runs. Pass idempotency_key to make retries safe: a retry with the same key returns the existing instance instead of creating a duplicate (#716).",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
-			agent_id: z.string().describe("Published agent ID or slug"),
+			agent_id: z.string().describe("Published agent ID or slug, or the ID/slug of an agent template you own"),
 			idempotency_key: z
 				.string()
 				.optional()
@@ -311,7 +311,7 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 			const denied = await requirePermission(safetyFor(token), "write", "subscribe_agent", input);
 			if (denied) return denied;
 			if (dry_run) {
-				return dryRun(safetyFor(token), "subscribe_agent", "subscribe to published agent", input, {
+				return dryRun(safetyFor(token), "subscribe_agent", "subscribe to an agent", input, {
 					endpoint: `/v1/instances/${agent_id}/subscribe`,
 					method: "POST",
 				});

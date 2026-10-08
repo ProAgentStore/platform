@@ -64,10 +64,11 @@ function buildApp(opts: Opts = {}) {
 				bind(...args: unknown[]) {
 					return {
 						async first() {
-							// subscribe: SELECT … FROM agents WHERE (id=?1 OR slug=?1) AND visibility='published'
+							// subscribe: public template, or a private template owned by this caller
 							if (sql.includes("FROM agents") && sql.includes("visibility = 'published'")) {
 								const key = args[0] as string;
-								return (opts.agents ?? []).find((a) => a.id === key || a.slug === key) ?? null;
+								const userId = args[1] as string | undefined;
+								return (opts.agents ?? []).find((a) => (a.id === key || a.slug === key) && (a.visibility === "published" || a.owner_id === userId)) ?? null;
 							}
 							// subscribe: idempotency key lookup (#716)
 							if (sql.includes("FROM agent_instances") && sql.includes("idempotency_key = ?2")) {
@@ -204,6 +205,25 @@ describe("POST /v1/instances/:agentId/subscribe (integration)", () => {
 		const res = await post(app, env, "/v1/instances/ghost/subscribe", {}, await tokenFor("u1"));
 		expect(res.status).toBe(404);
 		expect((await res.json() as { error: string }).error).toContain("not published");
+		expect(writes.some((w) => w.sql.includes("INSERT INTO agent_instances"))).toBe(false);
+	});
+
+	it("lets a creator instantiate their own private draft without exposing it in the catalogue", async () => {
+		const { app, env, writes } = buildApp({
+			agents: [{ id: "a-private", slug: "private-runner", name: "Private Runner", model: "claude-sonnet-4-6", visibility: "draft", owner_id: "u1", config: "{}" }],
+		});
+		const res = await post(app, env, "/v1/instances/a-private/subscribe", {}, await tokenFor("u1"));
+		expect(res.status).toBe(201);
+		expect((await res.json() as { agentId: string }).agentId).toBe("a-private");
+		expect(writes.some((w) => w.sql.includes("INSERT INTO agent_instances"))).toBe(true);
+	});
+
+	it("does not let another user instantiate somebody else's private draft", async () => {
+		const { app, env, writes } = buildApp({
+			agents: [{ id: "a-private", slug: "private-runner", name: "Private Runner", visibility: "draft", owner_id: "u1", config: "{}" }],
+		});
+		const res = await post(app, env, "/v1/instances/a-private/subscribe", {}, await tokenFor("u2"));
+		expect(res.status).toBe(404);
 		expect(writes.some((w) => w.sql.includes("INSERT INTO agent_instances"))).toBe(false);
 	});
 
