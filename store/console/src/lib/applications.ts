@@ -47,8 +47,10 @@ export const ACTION_LABEL: Record<ApplicationQueueAction, string> = {
  * The same decision has two names, because by then it is two different acts (#981).
  *
  * Before the fill it PROCEEDS: nothing exists yet and approving dispatches the run. After the fill
- * it CONTINUES: the owner is looking at a form that is already populated and waiting. The server
- * offers `approve_and_proceed` pre-fill only on `materials_ready`, so the status is all it takes to
+ * it CONTINUES: the run has stopped and the owner decides whether it may be sent — either because
+ * the form is filled and waiting (`awaiting_review`, a supervisor checkpoint) or because the run hit
+ * a control it may not press under fill-and-review and ended `blocked` (#991). The server offers
+ * `approve_and_proceed` pre-fill only on `materials_ready`, so the status is all it takes to
  * tell them apart — and the action name stays one name, which is what keeps this surface, the board
  * and MCP exposing exactly the same permitted action.
  */
@@ -63,9 +65,16 @@ export const CONFIRM: Partial<Record<ApplicationQueueAction, string>> = {
 	cancel: "Stop the running tailoring or fill?",
 };
 
-/** The post-fill wording: what is being authorised is the form that is already on the screen (#981). */
+/**
+ * The post-fill wording (#981), true in both of the states that reach it (#991).
+ *
+ * It used to say "this FILLED application", which the one-click case makes false: the run reached a
+ * control it may not press under fill-and-review, refused it, and ended with `filled: 0` — so there
+ * is no filled form, and the thing being authorised is the submission itself. The sentence now
+ * describes what the approval DOES rather than a form that may not exist.
+ */
 const APPROVE_CONTINUE_CONFIRM =
-	"Approve THIS filled application and let it be submitted? The approval covers this one job only and is used once. If its browser session has already closed, the approval is held and a fresh run sends it — nothing is submitted twice.";
+	"Approve THIS application and let it be submitted? The approval covers this one job only and is used once. If its run has already finished — because the form is waiting for you, or because it stopped at a control it may not press on its own — the approval is held and one fresh run sends it. Nothing is submitted twice.";
 
 export const confirmText = (action: ApplicationQueueAction, status?: string): string | undefined =>
 	action === "approve_and_proceed" && status && status !== "materials_ready" ? APPROVE_CONTINUE_CONFIRM : CONFIRM[action];

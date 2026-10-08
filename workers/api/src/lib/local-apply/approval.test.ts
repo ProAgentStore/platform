@@ -9,10 +9,14 @@
 import { describe, expect, it } from "vitest";
 import { APPROVAL_SATISFIES, type ApprovableApplication, type SubmitAuthorization, approvalEligibility, approvalStageOf, approvalState, fingerprintOf, sameFingerprint } from "./approval.js";
 import { RUNNER_DEFAULTS, evaluateSubmitGate, mergeRunnerSettings } from "./policy.js";
+import { type ApplyRunStatus, isTerminalApplyRun } from "./store.js";
 
 const APP: ApprovableApplication = {
 	id: "app-1",
 	status: "materials_ready",
+	// The fill that produced the form, or null before one ran. Load-bearing for the stage: a block
+	// with a fill behind it is a decision about a form, a block without one is about tailoring.
+	fillRunId: null,
 	stateVersion: 4,
 	lifecycleVersion: 2,
 	profileVersion: "profile-v7",
@@ -200,6 +204,23 @@ describe("the two stages at which the owner can approve (#981)", () => {
 		expect(approvalStageOf(at("blocked"), { status: "paused", pauseReason: "challenge" })).toBeNull();
 		expect(approvalStageOf(at("blocked"), { status: "running", pauseReason: null })).toBeNull();
 		expect(approvalStageOf(at("blocked"), null)).toBeNull();
+	});
+
+	it("a blocked application whose FILL ENDED is the post-fill decision, for every ended status (#991)", () => {
+		// The live one-click case, and the pairing the comment on `approvalStageOf` claims: "live" in
+		// this module is exactly the complement of `isTerminalApplyRun` in the store. A new run status
+		// added to one list and not the other would silently make an open run approvable (or hide a
+		// stopped one), so the two are asserted against each other rather than described.
+		const statuses: readonly ApplyRunStatus[] = ["queued", "running", "paused", "awaiting_review", "submitted", "blocked", "failed", "cancelled"];
+		const filled = { status: "blocked", fillRunId: "run-1" } as Parameters<typeof approvalStageOf>[0];
+		for (const status of statuses) {
+			const stage = approvalStageOf(filled, { status, pauseReason: null });
+			expect(stage, `${status} (terminal: ${isTerminalApplyRun(status)})`).toBe(isTerminalApplyRun(status) ? "post_fill" : null);
+		}
+		// No run row at all reads as ended too — the run is gone, the application is not.
+		expect(approvalStageOf(filled, null)).toBe("post_fill");
+		// And blocked at TAILORING stays out of it: no fill, no form, no final control.
+		expect(approvalStageOf({ status: "blocked", fillRunId: null }, null)).toBeNull();
 	});
 
 	it("nothing else is a stage — mid-fill is a run already holding the decision", () => {

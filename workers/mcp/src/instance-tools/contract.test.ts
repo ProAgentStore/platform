@@ -463,7 +463,7 @@ const TABLE: Record<string, Row> = {
 	// the cadence, rewrite the config. `write`, no confirmation: disabling keeps the trigger.
 	set_instance_trigger: ["triggers", "write", null, "envelope", "config,dry_run,enabled,name,schedule,token,trigger_id"],
 	search_instance_knowledge: ["knowledge", "none", null, null, "instance_id,query,token,top_k"],
-	set_account_preferences: ["account", "write", null, "envelope", "coding,dry_run,notifications,timezone,token,translation,voice"],
+	set_account_preferences: ["account", "write", null, "envelope", "attention,coding,dry_run,notifications,timezone,token,translation,voice"],
 	set_agent_capabilities: ["agentAuthoring", "destructive", "set_agent_capabilities", "envelope", "agent_id,confirm,custom_surfaces,dry_run,local_browser,runtime,surfaces,token,tools,workflow"],
 	set_agent_settings_schema: ["settings", "write", null, "envelope", "agent_id,dry_run,settings_schema,token"],
 	set_agent_state: ["agentAuthoring", "destructive", "set_agent_state", "envelope", "agent_id,confirm,dry_run,state,token"],

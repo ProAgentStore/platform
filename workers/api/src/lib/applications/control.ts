@@ -258,7 +258,21 @@ function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRu
 			// owner's per-application approval belongs here too — beside `resume`, which answers a
 			// question rather than authorising a submission.
 			if (run) return run.status === "paused" ? [...(postFillApprovable ? (["approve_and_proceed"] as const) : []), "resume", "cancel"] : ["cancel"];
-			if (app.fillRunId) return [...(canFill && !app.submitAttemptedAt ? (["retry_fill"] as const) : []), "defer", "archive"];
+			// The fill RAN and stopped without sending anything (#991). Live: a real SEEK listing whose
+			// final control is a genuine `one_click_apply`; the runner refused it under
+			// `fill_and_review`, fabricated nothing, attempted nothing, and the application closed
+			// `blocked / incomplete` telling the owner to "approve this application to let it be sent"
+			// — while the only offers here were retry, defer, archive and not-interested. The safe
+			// state had no path to the authorized application, which is the one thing it needed.
+			if (app.fillRunId) {
+				return [
+					...(postFillApprovable ? (["approve_and_proceed"] as const) : []),
+					...(canFill && !app.submitAttemptedAt ? (["retry_fill"] as const) : []),
+					"defer",
+					"archive",
+				];
+			}
+			// Blocked at TAILORING: no form, no final control, nothing a submission decision means.
 			return ["retry_tailoring", "defer", "archive"];
 		case "failed":
 		case "cancelled":

@@ -735,7 +735,11 @@ const PINS = {
 	// `isIdempotentApprovalRepeat` — the one rule that cannot live in the apply domain because it is
 	// about this file's own permitted-action check. That vocabulary belongs with the rest of the
 	// lifecycle table rather than in a second file nobody reads beside it.
-	"workers/api/src/lib/applications/control.ts": 823,
+	// +4 at #991: the `blocked` branch split in two. A tailoring block has no form and no final
+	// control, so it keeps `retry_tailoring`; a block whose FILL ran offers the same one-job
+	// approval the other post-fill states do. That is the live gap the issue was filed from — the
+	// record said "approve this application to let it be sent" while no action could.
+	"workers/api/src/lib/applications/control.ts": 827,
 	// -1 at #325: the JSON-string coercion create_agent and update_agent each had inline moved
 	// to `http.ts` as `parseJsonArg`, which is where the two copies could stop disagreeing about
 	// what a MALFORMED string means (create silently dropped it, update refused). Pin lowered so
@@ -832,7 +836,10 @@ const PINS = {
 	// and a working-first order; the entry says why the cap had hidden a live run. Ledger, not drift.
 	// +59 at #847: 0.1.51–0.1.57 are published append-only surface records; moving them would defeat the history check that protects this ledger. +5 at #849: the 0.1.58 record. +5 at #854: the 0.1.59 record. +5 at #856: the 0.1.60 record. +4 at #857: the 0.1.61 record. +4 at #858: the 0.1.62 record. +4 at #859: the 0.1.63 record.
 	// +3 at #990: a new lock entry for 0.1.97 (runner_update_status) and the two lines saying why.
-	"workers/mcp/src/surface-lock.ts": 1086, // +10 at #980: the 0.1.96 record (set_instance_trigger — the in-place trigger change the console's scan-schedule controls make, which MCP had no tool for). +6 at #973: the 0.1.95 record (approve_application — the owner's per-application submission authorization, destructive + confirmed). +7 at #971: the 0.1.94 record (four live-run reads for the apply pipeline — the counterpart of coding_session_capture/coding_timeline, over routes no MCP tool reached). +5 at #970: the 0.1.93 record (subscribe_agent's owned-draft argument description — an inputSchema change, so the served surface moved). +3 at #967: the 0.1.92 submit-only apply_to_job record. +3 at #966: the 0.1.91 entry. +4 at #895: the 0.1.90 entry. +3 at #953: the 0.1.89 record (application filters, mark_not_interested, runner settings). +4 at #958: the 0.1.88 record (the ten Applications tools). +3 at #957: the 0.1.87 record (local_apply runtime, start_application_fill action). +3 at #956: the 0.1.86 record (local_artifact runtime, generate_application_materials action). +4 at #951: the 0.1.79 record (update_agent local_browser); +5 at #927: the 0.1.78 record (pending-call instruction); +5 at #946: the 0.1.77 record (consent + finding review tools); +5 at #944: the 0.1.76 record (start/cancel/resume local browser runs); +6 at #945: the 0.1.75 record (four local browser tools); +4 at #942: the 0.1.74 record (coding_overseer removed); +5 at #938: the 0.1.73 record (get_console_link); +8 at #906: the 0.1.72 record (three secure_input tools); +3 at #904: the 0.1.71 server-info schema record; +2 at #886: the 0.1.70 request_id schema record; +10 at #879: 0.1.66 + 0.1.67 records; +5 at #881: the 0.1.68 record; +4 at #877: the 0.1.69 record — append-only surface ledger, not drift. +7 at #898: truncation made visible (paging, marked cuts, refused over-length writes). +4 at #924: the 0.1.81 entry. +5 at #955 (b547ec47; pin raised at #954): the 0.1.82 record (triage_job_lead). +4 at #961: the 0.1.83 record (fleet_snapshot, set_instance_tags). +3 at #962: the 0.1.84 record (run_local_browser trigger action). +2 at #955: the 0.1.85 record (triage_job_lead compare-and-set).
+	// +5 at #991: the 0.1.98 record (set_account_preferences gains `attention.pushOff`, the
+	// per-event push control for the generic owner-attention policy) and the four lines saying why
+	// an argument — not a tool name — moved the published surface. Append-only ledger, not drift.
+	"workers/mcp/src/surface-lock.ts": 1091, // +10 at #980: the 0.1.96 record (set_instance_trigger — the in-place trigger change the console's scan-schedule controls make, which MCP had no tool for). +6 at #973: the 0.1.95 record (approve_application — the owner's per-application submission authorization, destructive + confirmed). +7 at #971: the 0.1.94 record (four live-run reads for the apply pipeline — the counterpart of coding_session_capture/coding_timeline, over routes no MCP tool reached). +5 at #970: the 0.1.93 record (subscribe_agent's owned-draft argument description — an inputSchema change, so the served surface moved). +3 at #967: the 0.1.92 submit-only apply_to_job record. +3 at #966: the 0.1.91 entry. +4 at #895: the 0.1.90 entry. +3 at #953: the 0.1.89 record (application filters, mark_not_interested, runner settings). +4 at #958: the 0.1.88 record (the ten Applications tools). +3 at #957: the 0.1.87 record (local_apply runtime, start_application_fill action). +3 at #956: the 0.1.86 record (local_artifact runtime, generate_application_materials action). +4 at #951: the 0.1.79 record (update_agent local_browser); +5 at #927: the 0.1.78 record (pending-call instruction); +5 at #946: the 0.1.77 record (consent + finding review tools); +5 at #944: the 0.1.76 record (start/cancel/resume local browser runs); +6 at #945: the 0.1.75 record (four local browser tools); +4 at #942: the 0.1.74 record (coding_overseer removed); +5 at #938: the 0.1.73 record (get_console_link); +8 at #906: the 0.1.72 record (three secure_input tools); +3 at #904: the 0.1.71 server-info schema record; +2 at #886: the 0.1.70 request_id schema record; +10 at #879: 0.1.66 + 0.1.67 records; +5 at #881: the 0.1.68 record; +4 at #877: the 0.1.69 record — append-only surface ledger, not drift. +7 at #898: truncation made visible (paging, marked cuts, refused over-length writes). +4 at #924: the 0.1.81 entry. +5 at #955 (b547ec47; pin raised at #954): the 0.1.82 record (triage_job_lead). +4 at #961: the 0.1.83 record (fleet_snapshot, set_instance_tags). +3 at #962: the 0.1.84 record (run_local_browser trigger action). +2 at #955: the 0.1.85 record (triage_job_lead compare-and-set).
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
@@ -1499,7 +1506,10 @@ const PINS = {
 	// shape by design (check-console-types); without the counts the console could only repeat a
 	// status word, which is how "Filled — waiting for your review" came to be shown for a run that
 	// had filled nothing.
-	"store/console/src/lib/types.ts": 826, // +2 at #975: the card's run diagnostic (cause, counts, signal ids) — why nothing reached the page. +2 at #974: the card's queue view (position, attempts, next attempt, reason) — why a run is waiting rather than failed. +2 at #973: the card's submitAuthorization (the owner's per-application approval, its state and the run that spent it). // #953: crossed 800 with the Applications surface's copies of its Worker shapes (#958) and the Runner settings view; these are copies by design (check-console-types), so the file grows with the surface.
+	// +16 at #991: `AttentionEventSpec` (the owner-attention vocabulary the Preferences controls
+	// render from, named rather than another anonymous inline shape — #616's rule), plus the
+	// `attention` section on the stored preferences and `attentionEvents` on the GET response.
+	"store/console/src/lib/types.ts": 842, // +2 at #975: the card's run diagnostic (cause, counts, signal ids) — why nothing reached the page. +2 at #974: the card's queue view (position, attempts, next attempt, reason) — why a run is waiting rather than failed. +2 at #973: the card's submitAuthorization (the owner's per-application approval, its state and the run that spent it). // #953: crossed 800 with the Applications surface's copies of its Worker shapes (#958) and the Runner settings view; these are copies by design (check-console-types), so the file grows with the surface.
 	// New entry at #978 — 801, one line over LIMIT. The application-execution face and its controls
 	// were SPLIT OUT first (components/ApplicationRunFace.tsx, following BoardIssueFace), which took
 	// the file from 900 to 801; what is left is the board itself. Lowering it further means splitting
@@ -1895,7 +1905,10 @@ const PINS = {
 	// +8 at #987: the board.ts and instances-tasks.ts reasons above (five lines) and this one.
 	// +13 at #896: two newly pinned files (terminals.ts, coding-diagnostics.ts) with their reasons,
 	// the runner.ts reason, and this line.
-	"scripts/check-file-size.mjs": 1982, // +1 at #953: the console types.ts entry. +2 at #946: the agents.ts pin and its reason; +1 at #944: the reason line for the runner.ts pin; +1 at #898: the board.ts pin; +1 at #924: the mcp runtime.ts pin.
+	// +5 at #991: the applications/control.ts reason above (four lines) and this line.
+	// +4 at #991: the surface-lock.ts reason above (three lines) and this line.
+	// +4 at #991: the console types.ts reason above (three lines) and this line.
+	"scripts/check-file-size.mjs": 1995, // +1 at #953: the console types.ts entry. +2 at #946: the agents.ts pin and its reason; +1 at #944: the reason line for the runner.ts pin; +1 at #898: the board.ts pin; +1 at #924: the mcp runtime.ts pin.
 };
 
 /**

@@ -58,6 +58,8 @@ export interface SubmitAuthorization {
 export interface ApprovableApplication {
 	id: string;
 	status: string;
+	/** The fill run bound to this application, when one has ever run — see {@link approvalStageOf}. */
+	fillRunId: string | null;
 	stateVersion: number;
 	lifecycleVersion: number;
 	profileVersion: string | null;
@@ -135,6 +137,17 @@ export const APPROVAL_STAGES = ["pre_fill", "post_fill"] as const;
 export type ApprovalStage = (typeof APPROVAL_STAGES)[number];
 
 /** The run facts the stage depends on. Null when the application has no open run. */
+/**
+ * Statuses a fill run is passing THROUGH rather than resting at.
+ *
+ * Spelled out here rather than imported from the apply store: this module is the pure approval
+ * rule and the store imports it, so the dependency would close a cycle. `store.ts`'s
+ * `isTerminalApplyRun` is the same statement from the other side, and `approval.test.ts` pins them
+ * to the same answer.
+ */
+const LIVE_RUN_STATUSES: readonly string[] = ["queued", "running", "paused"];
+const isLiveRunContext = (run: ApprovalRunContext | null): boolean => !!run && LIVE_RUN_STATUSES.includes(run.status);
+
 export interface ApprovalRunContext {
 	status: string;
 	/** `supervisor_checkpoint` | `missing_answer` | … — a paused run's reason, when it is paused. */
@@ -144,15 +157,45 @@ export interface ApprovalRunContext {
 /**
  * Which stage this application is at, or null when an approval is not a meaningful decision here.
  *
- * `blocked` counts ONLY while a run is parked at a supervisor checkpoint: that is the filled form
- * waiting on a decision, which is the same situation as `awaiting_review` one step earlier. A
- * `blocked` application with no such run is stopped for some other reason (a missing answer, a
- * captcha, an unusable checkout), and approving a submission is not the answer to any of those.
+ * ── Why `blocked` after a fill is a submission decision (#991)
+ *
+ * This counted `blocked` ONLY while a run was parked at a supervisor checkpoint, on the reasoning
+ * that a `blocked` application is "stopped for some other reason (a missing answer, a captcha, an
+ * unusable checkout), and approving a submission is not the answer to any of those". The live
+ * one-click case is the counter-example that reasoning missed.
+ *
+ * Application `435d31c8…` / run `c27d1178…`: a real SEEK listing whose final control is a genuine
+ * `one_click_apply`. Everything safe worked — the supervisor continued the initial checkpoint, the
+ * runner refused that control under `fill_and_review`, no field was fabricated and no submit was
+ * attempted — and the run ENDED, closing the application `blocked / incomplete`. The record then
+ * told the owner "Approve this application to let it be sent, or apply on the site yourself", while
+ * the only reachable actions were `retry_fill`, `defer`, `archive` and `mark_not_interested`. The
+ * safe state had no supported path to the authorized application.
+ *
+ * It IS the same situation as `awaiting_review`, and #981's comment there says so in its own words:
+ * the run stopped, nothing was sent, and the owner who must decide could not act. The run having
+ * ended rather than paused changes only HOW the decision is carried out — `approveAndContinue`
+ * already answers `run_ended` with "your approval is recorded and held; `retry_fill` starts a fresh
+ * run that spends it and may submit once".
+ *
+ * `fillRunId` is what keeps this honest: a `blocked` application that never filled is stopped at
+ * TAILORING, where there is no form, no final control and nothing a submission decision could mean.
+ * That one still answers null, which is the old reasoning kept exactly where it was right.
  */
-export function approvalStageOf(app: Pick<ApprovableApplication, "status">, run: ApprovalRunContext | null): ApprovalStage | null {
+export function approvalStageOf(app: Pick<ApprovableApplication, "status" | "fillRunId">, run: ApprovalRunContext | null): ApprovalStage | null {
 	if (app.status === "materials_ready") return "pre_fill";
 	if (app.status === "awaiting_review") return "post_fill";
 	if (app.status === "blocked" && run?.status === "paused" && run.pauseReason === "supervisor_checkpoint") return "post_fill";
+	// The fill ran and ENDED without sending anything (#991) — the one-click refusal, a run that
+	// reached the final control, a `bridge_unused` stop. The decision is the owner's; the run that
+	// carries it is a fresh one.
+	//
+	// "Ended" is load-bearing. A run still PAUSED on a question (`missing_answer`), a captcha or a
+	// sign-in is live, and its own blocker is the thing to resolve — `resume` answers it. Offering
+	// an approval there would pre-authorise sending a form whose required question is still
+	// unanswered, which is the opposite of what the owner is being asked. Only the checkpoint pause
+	// above is a submission decision, because that is the one where the form is complete and waiting.
+	if (app.status === "blocked" && app.fillRunId && !isLiveRunContext(run)) return "post_fill";
 	return null;
 }
 

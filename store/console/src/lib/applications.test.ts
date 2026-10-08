@@ -19,10 +19,16 @@ describe("the Applications tab's request shape (#958)", () => {
 		expect(actionLabel("approve_and_proceed", "awaiting_review")).toBe("Approve & continue");
 		expect(actionLabel("approve_and_proceed", "blocked")).toBe("Approve & continue");
 		expect(actionLabel("retry_fill", "awaiting_review")).toBe(ACTION_LABEL.retry_fill);
-		// Both stages confirm first, and the post-fill wording says what happens if the session closed.
+		// Both stages confirm first, and the post-fill wording says what happens if the run has finished.
 		expect(confirmText("approve_and_proceed", "materials_ready")).toMatch(/does not enable auto-submit/);
-		expect(confirmText("approve_and_proceed", "awaiting_review")).toMatch(/nothing is submitted twice/);
+		expect(confirmText("approve_and_proceed", "awaiting_review")).toMatch(/Nothing is submitted twice/);
 		expect(confirmText("defer", "awaiting_review")).toBeUndefined();
+		// #991: `blocked` reaches the same wording, and it must not claim a form that does not exist —
+		// the one-click refusal ends with `filled: 0`, so "this filled application" was untrue there.
+		const blocked = confirmText("approve_and_proceed", "blocked") ?? "";
+		expect(blocked).toMatch(/Approve THIS application/);
+		expect(blocked).not.toMatch(/filled application/);
+		expect(blocked).toMatch(/stopped at a control it may not press on its own/);
 	});
 
 	it("the approval's idempotency key follows the stage, so a retry reuses one authorization", () => {

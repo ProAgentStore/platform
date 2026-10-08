@@ -100,6 +100,34 @@ describe("the account timezone", () => {
 		expect(badEntry.status).toBe(400);
 	});
 
+	it("round-trips the owner-attention channel control, and serves the vocabulary (#991)", async () => {
+		// The config surface for the generic attention policy. Two things have to hold: the event
+		// table is SERVED (so a new event gets a control by being added to `lib/owner-attention.ts`,
+		// not by editing the page), and a save of this section leaves the other mutes alone — they
+		// are different axes, product area vs kind of attention.
+		const { app, env, saved } = testApp({ notifications: { muted: ["deploy"] } });
+		const vocab = await (await call(app, env)).json<{ attentionEvents: { id: string; pushOptional: boolean }[] }>();
+		expect(vocab.attentionEvents.map((e) => e.id)).toContain("approval_required");
+
+		const res = await call(app, env, put({ attention: { pushOff: ["approval_required"] } }));
+		expect(res.status).toBe(200);
+		const prefs = await read(res);
+		expect(prefs.attention).toEqual({ pushOff: ["approval_required"] });
+		expect(saved().attention).toEqual({ pushOff: ["approval_required"] });
+		expect(prefs.notifications).toEqual({ muted: ["deploy"] });
+
+		// Strict on write for the same reason `notifications` is: a silently dropped id leaves the
+		// owner believing they turned a push off.
+		expect((await call(app, env, put({ attention: { pushOff: ["not_an_event"] } }))).status).toBe(400);
+		expect((await call(app, env, put({ attention: { pushOff: "approval_required" } }))).status).toBe(400);
+		expect((await call(app, env, put({ attention: [] }))).status).toBe(400);
+		// And the refused saves changed nothing.
+		expect(saved().attention).toEqual({ pushOff: ["approval_required"] });
+
+		// Turning it back on is a whole-section write with an empty list, and the key goes away.
+		expect((await read(await call(app, env, put({ attention: { pushOff: [] } })))).attention).toBeUndefined();
+	});
+
 	it("round-trips an IANA zone", async () => {
 		const { app, env, saved } = testApp();
 		const res = await call(app, env, put({ timezone: "Australia/Sydney" }));

@@ -28,6 +28,7 @@
 
 import { isValidTimeZone } from "./cron-time.js";
 import { type NotificationPreferences, type NotificationTypeSpec, sanitizeNotificationPreferences } from "./notifications.js";
+import { type OwnerAttentionEventSpec, type OwnerAttentionPreferences, sanitizeOwnerAttentionPreferences } from "./owner-attention.js";
 
 // Lenient on READ, strict on WRITE. The sanitizers below coerce anything unknown to a safe value,
 // because they also parse rows that were stored years ago by older code — but an explicit save must
@@ -168,6 +169,18 @@ export interface AccountPreferences {
 	 * Enforced in `notifyUser`, and NEVER over an `alert` — see `pushAllowedByPreference`.
 	 */
 	notifications?: NotificationPreferences;
+	/**
+	 * Per-EVENT channel control for owner-attention events (#991).
+	 *
+	 * Beside `notifications` rather than inside it, because the two answer different questions: that
+	 * one is "which PART of the product may interrupt me" (deploys, coding, applications), this one
+	 * is "which kind of ATTENTION may interrupt me" (an approval, a value, a blocker) — and any
+	 * agent can raise any of these, so muting them by product area would be the wrong axis.
+	 *
+	 * Enforced in `requestOwnerAttention`, and it only ever turns off the PUSH: the in-app row is
+	 * the log and is never optional, which is the same split `pushAllowedByPreference` makes.
+	 */
+	attention?: OwnerAttentionPreferences;
 }
 
 export interface CodingPreferences {
@@ -188,6 +201,8 @@ export interface AccountPreferencesResponse {
 	preferences: AccountPreferences;
 	languages: ReadonlyArray<PreferenceLanguageOption>;
 	notificationTypes: NotificationTypeSpec[];
+	/** The kinds of attention an agent can ask for (#991) — the vocabulary the controls render from. */
+	attentionEvents: OwnerAttentionEventSpec[];
 	codingEngineOptions: CodingEngineOption[];
 }
 
@@ -384,6 +399,7 @@ export function parseAccountPreferences(raw: string | null | undefined): Account
 			// to `undefined` lands on the honest unset branch instead of failing a chat turn.
 			timezone: isValidTimeZone(o.timezone) ? o.timezone : undefined,
 			notifications: sanitizeNotificationPreferences(o.notifications),
+			attention: sanitizeOwnerAttentionPreferences(o.attention),
 		};
 	} catch {
 		return {};

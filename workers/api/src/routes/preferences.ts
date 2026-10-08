@@ -18,6 +18,7 @@ import { applyDefaultCodingEngineToIdle } from "../lib/coding-default-engine-app
 import { DEFAULT_ENGINES } from "../lib/coding-engines.js";
 import { isValidTimeZone } from "../lib/cron-time.js";
 import { isKnownNotificationType, NOTIFICATION_TYPES, sanitizeNotificationPreferences } from "../lib/notifications.js";
+import { attentionEventSpec, OWNER_ATTENTION_EVENTS, sanitizeOwnerAttentionPreferences } from "../lib/owner-attention.js";
 import {
 	parseAccountPreferences,
 	sanitizeCodingPreferences,
@@ -52,6 +53,9 @@ preferenceRoutes.get("/", async (c) => {
 		preferences: await readPreferences(c.env, session.uid),
 		languages: TRANSLATION_LANGUAGES,
 		notificationTypes: NOTIFICATION_TYPES,
+		// #991: the owner-attention vocabulary, served for the same reason — a new event gets its
+		// control by being added to `lib/owner-attention.ts`, not by editing the page.
+		attentionEvents: OWNER_ATTENTION_EVENTS,
 		codingEngineOptions: DEFAULT_ENGINES.map((e) => ({ id: e.id, label: e.label })),
 	});
 });
@@ -71,7 +75,19 @@ preferenceRoutes.put("/", async (c) => {
 		coding?: unknown;
 		timezone?: unknown;
 		notifications?: unknown;
+		attention?: unknown;
 	};
+	// Strict on write, like `notifications` below: an event we do not know, or one whose push is not
+	// optional, must be refused rather than dropped — a silently ignored save leaves the owner
+	// believing they turned something off (#991).
+	if (body.attention !== undefined) {
+		const pushOff = (body.attention as { pushOff?: unknown } | null)?.pushOff;
+		if (!body.attention || typeof body.attention !== "object" || Array.isArray(body.attention) || (pushOff !== undefined && !Array.isArray(pushOff))) {
+			throw new HttpError(400, "attention must be an object with a `pushOff` array");
+		}
+		const bad = (pushOff ?? []).find((id: unknown) => !attentionEventSpec(typeof id === "string" ? id : "")?.pushOptional);
+		if (bad !== undefined) throw new HttpError(400, `unknown or non-optional attention event: ${String(bad).slice(0, 40)}`);
+	}
 	// Strict on write, like the timezone below: silently dropping a mute for a type we do not
 	// know leaves the user believing they turned something off. The sanitizer that runs on READ
 	// is lenient on purpose (it parses rows written by older code); a save is not.
@@ -135,6 +151,11 @@ preferenceRoutes.put("/", async (c) => {
 			body.notifications === undefined
 				? current.notifications
 				: sanitizeNotificationPreferences(body.notifications),
+		// The OTHER axis (#991): `notifications` mutes a product area, `attention` mutes a KIND of
+		// attention ("don't push me when something needs approving") across every agent. Same
+		// section-level patch rule — omitting it leaves the stored channel controls alone.
+		attention:
+			body.attention === undefined ? current.attention : sanitizeOwnerAttentionPreferences(body.attention),
 	};
 
 	await c.env.DB.prepare("UPDATE users SET preferences = ?1 WHERE id = ?2")

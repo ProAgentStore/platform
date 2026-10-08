@@ -459,6 +459,9 @@ const READBACK: Record<string, string | null> = {
 	"set_account_preferences.voice": "get_account_preferences",
 	"set_account_preferences.translation": "get_account_preferences",
 	"set_account_preferences.coding": "get_account_preferences",
+	// #991: the per-event push control. Read back from the same GET, which also serves the event
+	// vocabulary (`attentionEvents`) a write has to pick its ids from.
+	"set_account_preferences.attention": "get_account_preferences",
 
 	// ── connector grants ──
 	"grant_instance_connector_folder.provider": "list_instance_connector_grants",

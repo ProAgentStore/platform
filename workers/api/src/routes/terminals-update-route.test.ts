@@ -81,19 +81,29 @@ beforeEach(() => {
 	replyDelayMs = 0;
 	reply = () => ({ action: "restarting", current: "0.4.84", latest: "0.4.85", restartedBy: "pags-up" });
 });
-afterEach(() => d1.close());
+// Drain before closing: a FAILED assertion skips the test's own `settle()`, and the backgrounded
+// write then lands on a closed database as a second, confusing "database is not open" error on top
+// of the real failure.
+afterEach(async () => {
+	await Promise.allSettled(pending);
+	pending = [];
+	d1.close();
+});
 
 const UPDATE = "/nodes/Macmini.modem/update";
 
 describe("POST …/nodes/:node/update — a claim, not a wait (#990)", () => {
 	it("answers before the machine does, with the operation to poll", async () => {
-		// The machine takes longer to answer than the whole response cycle.
-		replyDelayMs = 50;
+		// The machine takes longer to answer than the whole response cycle. The margin is wide on
+		// purpose: the property is "the handler did not await the machine", and a 50ms budget
+		// measured against a 50ms delay failed on a loaded suite at 61ms — timing jitter, not a
+		// regression. Half the machine's delay proves the same thing and cannot flake.
+		replyDelayMs = 500;
 		const started = Date.now();
 		const res = await call("POST", UPDATE, {});
 		expect(res.status).toBe(200);
 		// The reply did not wait for the machine — this is what the 20s deadline needed.
-		expect(Date.now() - started).toBeLessThan(50);
+		expect(Date.now() - started).toBeLessThan(250);
 		expect(res.body).toMatchObject({ node: "Macmini.modem", state: "running", started: true });
 		expect(res.body.operationId).toBeTruthy();
 		expect(res.body.poll).toBe("/v1/terminals/nodes/Macmini.modem/update");

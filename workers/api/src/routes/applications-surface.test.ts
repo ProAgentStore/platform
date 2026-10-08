@@ -465,7 +465,9 @@ describe("retry, cancel and resume", () => {
 		answers["/local-apply/status"] = { status: 200, body: { state: "ended", lastSeq: 0, events: [], result: { runId, outcome: "blocked", mode: "fill_and_review", traceId: runId, engineAuth: "machine-login", filled: 2, uploaded: [], submitAttempted: false, summary: "", blockReason: "incomplete", questions: ["Stopped."] } } };
 		await call("GET", `/ap/application-runs/${runId}`);
 		const blocked = await call("GET", "/t1/application-queue/item?application_id=rf");
-		expect(blocked.body.item.actions).toEqual(["retry_fill", "defer", "archive", "mark_not_interested"]);
+		// #991: the fill RAN and stopped with nothing sent, so the owner's one-job approval belongs
+		// here too — it is the same state the live one-click refusal closed in.
+		expect(blocked.body.item.actions).toEqual(["approve_and_proceed", "retry_fill", "defer", "archive", "mark_not_interested"]);
 		const retried = await call("POST", "/t1/application-queue/actions", { action: "retry_fill", application_id: "rf", expected_status: "blocked" });
 		expect(retried.body.result.runId).not.toBe(runId);
 		expect(dispatches("/local-apply/run")).toHaveLength(2);

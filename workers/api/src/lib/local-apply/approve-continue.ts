@@ -129,7 +129,7 @@ export async function continueCorrelatedRun(env: Env, uid: string, run: ApplyRun
  * table that offers the button and by the action that performs it — a card that offered a button
  * the service then refused (or hid one it would accept) is the drift this prevents.
  */
-export function isPostFillApproval(app: Pick<JobApplication, "status">, run: { status: string; pause?: unknown } | null): boolean {
+export function isPostFillApproval(app: Pick<JobApplication, "status" | "fillRunId">, run: { status: string; pause?: unknown } | null): boolean {
 	const context: ApprovalRunContext | null = run ? { status: run.status, pauseReason: (run.pause as { reason?: string } | null)?.reason ?? null } : null;
 	return approvalStageOf(app, context) === "post_fill";
 }

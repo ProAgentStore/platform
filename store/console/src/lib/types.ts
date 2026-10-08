@@ -178,6 +178,19 @@ export interface NotificationTypeSpec {
 	alerts: boolean;
 }
 
+/**
+ * One kind of attention an agent can ask the owner for (#991) — served by `GET /v1/preferences`,
+ * so a new event gets its control by being added to `workers/api/src/lib/owner-attention.ts`.
+ */
+export interface AttentionEventSpec {
+	id: string;
+	label: string;
+	description: string;
+	kind: "alert" | "update";
+	/** Whether this event's PUSH may be turned off. The in-app notification never can be. */
+	pushOptional: boolean;
+}
+
 export interface AccountCodingPreferences {
 	defaultEngineId?: string;
 }
@@ -187,6 +200,8 @@ export interface ConsoleAccountPreferences {
 	translation?: unknown;
 	coding?: AccountCodingPreferences;
 	notifications?: { muted?: string[]; instances?: string[] };
+	/** Event ids whose push the owner turned off (#991). The in-app row is still written. */
+	attention?: { pushOff?: string[] };
 	timezone?: string;
 }
 
@@ -204,6 +219,7 @@ export interface AccountPreferencesResponse {
 	preferences?: ConsoleAccountPreferences;
 	languages?: ReadonlyArray<PreferenceLanguageOption>;
 	notificationTypes?: ReadonlyArray<NotificationTypeSpec>;
+	attentionEvents?: ReadonlyArray<AttentionEventSpec>;
 	codingEngineOptions?: ReadonlyArray<CodingEngineOption>;
 }
 

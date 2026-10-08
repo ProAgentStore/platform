@@ -61,9 +61,11 @@ export const applicationControlLabel = (action: string, status?: string): string
 export const APPLICATION_CONFIRM: Record<string, string> = {
 	start_fill: "Fill this application and SUBMIT it to the employer if the site accepts it?",
 	approve_and_proceed: "Approve THIS application and submit it to the employer? The approval covers this one job only and is used once.",
-	// After the fill the owner is authorising the form that is already populated and waiting (#981).
+	// After the fill the owner is authorising the SUBMISSION (#981) — of a form that is filled and
+	// waiting, or of an application whose run stopped at a control it may not press (#991, where
+	// nothing was filled at all, so "this filled application" was not a true thing to say).
 	"approve_and_proceed:post_fill":
-		"Approve THIS filled application and let it be submitted? The approval covers this one job only and is used once. If its browser session has already closed, the approval is held and a fresh run sends it — nothing is submitted twice.",
+		"Approve THIS application and let it be submitted? The approval covers this one job only and is used once. If its run has already finished — because the form is waiting for you, or because it stopped at a control it may not press on its own — the approval is held and one fresh run sends it. Nothing is submitted twice.",
 	cancel: "Stop the running tailoring or fill?",
 };
 

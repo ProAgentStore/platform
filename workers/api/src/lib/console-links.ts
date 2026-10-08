@@ -193,6 +193,17 @@ export type NotificationSubject =
 	| { kind: "knowledge"; instanceId: string }
 	/** One local browser research run (#946). */
 	| { kind: "local-browser-run"; instanceId: string; runId: string }
+	/**
+	 * One job application needing the owner (#991) — the Board, where its card is.
+	 *
+	 * The Board and not a per-application page, because the Board is where the control that ANSWERS
+	 * the wait actually renders: the application card carries "Approve & continue" through
+	 * `ApplicationRunControls`. There is no `/applications/:id` route in the console, and pointing a
+	 * notification at a URL that does not resolve is #344's class of broken link; pointing it one
+	 * step short of the control is #897's. The id is carried so the link can narrow if that route
+	 * ever exists.
+	 */
+	| { kind: "application"; instanceId: string; applicationId: string }
 	/** A secure-input request waiting for the owner (#934). */
 	| { kind: "secure-input"; instanceId: string; requestId: string }
 	/** An agent template — notifications to its creator (#622). */
@@ -226,6 +237,8 @@ export function deepLinkFor(subject: NotificationSubject): DeepLink {
 				return instanceKnowledgeLink(subject.instanceId);
 			case "local-browser-run":
 				return localBrowserRunLink(subject.instanceId, subject.runId);
+			case "application":
+				return instanceBoardLink(subject.instanceId);
 			case "secure-input":
 				return secureInputNotificationLink(subject.instanceId, subject.requestId);
 			case "agent":

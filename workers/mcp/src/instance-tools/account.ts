@@ -331,7 +331,7 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"get_account_preferences",
-		"Read your account-wide preferences — the defaults that follow you across every agent: `preferences.timezone` (IANA name; ABSENT means never set, which is not the same as UTC), `preferences.notifications` (`muted`: notification type ids that should not interrupt you; `instances`: when present, only these instances may interrupt), `preferences.coding.defaultEngineId` (the inherited coding CLI engine for coders without their own explicit engine), `preferences.voice` and `preferences.translation` (per-instance overrides can still differ). Also returns the vocabularies a write needs: `notificationTypes` (each type's `id`, and `alerts` — an alert is never muted), `codingEngineOptions`, and `languages`. Read this before set_account_preferences.",
+		"Read your account-wide preferences — the defaults that follow you across every agent: `preferences.timezone` (IANA name; ABSENT means never set, which is not the same as UTC), `preferences.notifications` (`muted`: notification type ids that should not interrupt you; `instances`: when present, only these instances may interrupt), `preferences.coding.defaultEngineId` (the inherited coding CLI engine for coders without their own explicit engine), `preferences.voice` and `preferences.translation` (per-instance overrides can still differ). Also returns the vocabularies a write needs: `notificationTypes` (each type's `id`, and `alerts` — an alert is never muted), `attentionEvents` (the kinds of attention an agent can ask you for, and which pushes you may turn off), `codingEngineOptions`, and `languages`. Read this before set_account_preferences.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 		},
@@ -345,7 +345,7 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"set_account_preferences",
-		"Change your account-wide preferences. Patches by SECTION: pass only the sections you mean to change and the rest are left exactly as stored. `timezone` is an IANA zone (e.g. Australia/Sydney) — an invalid name is REJECTED, never coerced; null clears it back to unset. `notifications` REPLACES that whole section: to mute one more type, read get_account_preferences, add it to the existing `muted`, and send both `muted` and any `instances` scope back — an unknown type id is rejected. `coding.defaultEngineId` sets the inherited coding CLI engine for coders without their own explicit engine. `voice` and `translation` are merged into what is stored, and an unknown voice field is rejected. Returns the saved preferences.",
+		"Change your account-wide preferences. Patches by SECTION: pass only the sections you mean to change and the rest are left exactly as stored. `timezone` is an IANA zone (e.g. Australia/Sydney) — an invalid name is REJECTED, never coerced; null clears it back to unset. `notifications` REPLACES that whole section: to mute one more type, read get_account_preferences, add it to the existing `muted`, and send both `muted` and any `instances` scope back — an unknown type id is rejected. `coding.defaultEngineId` sets the inherited coding CLI engine for coders without their own explicit engine. `voice` and `translation` are merged into what is stored, and an unknown voice field is rejected. `attention.pushOff` turns OFF the push for a kind of attention an agent asks for (`approval_required`, `input_required`, …) across every agent — the in-app notification is still written, and an event id that is not one of `attentionEvents` is rejected. Returns the saved preferences.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			timezone: z.string().nullable().optional().describe("IANA timezone name. null clears it to unset; omit to leave unchanged."),
@@ -364,6 +364,12 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 				})
 				.optional()
 				.describe("Account coding defaults. Omit to leave unchanged."),
+			attention: z
+				.object({
+					pushOff: z.array(z.string()).optional().describe("Owner-attention event ids (from get_account_preferences.attentionEvents) whose PUSH should not reach you. The in-app notification is always written. Send the whole list — it replaces the stored one."),
+				})
+				.optional()
+				.describe("Replaces the whole owner-attention section. Omit to leave it unchanged."),
 			dry_run: z.boolean().optional(),
 		},
 		async (args) => {
@@ -429,7 +435,7 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
  * caller cannot set. `account-notifications.test.ts` reads the route's own body type and fails when a
  * section is added there and not here.
  */
-export const ACCOUNT_PREFERENCE_SECTIONS = ["timezone", "notifications", "voice", "translation", "coding"] as const;
+export const ACCOUNT_PREFERENCE_SECTIONS = ["timezone", "notifications", "voice", "translation", "coding", "attention"] as const;
 
 /**
  * Every column of `account_budget_limits`, as [tool argument, API field].

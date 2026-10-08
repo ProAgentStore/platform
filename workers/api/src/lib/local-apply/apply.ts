@@ -55,9 +55,13 @@ import {
 } from "./store.js";
 import { claimQueuedDispatch, instancesWithQueuedRuns, nextDueQueuedRun, noteQueued } from "../applications/work-queue-store.js";
 import { QUEUE_MAX_ATTEMPTS, refusalVerdict } from "../applications/work-queue.js";
+import { clipMarked } from "../clip-marked.js";
 import { cliAtLeast } from "../runner-upgrade.js";
 import { syncApplicationCard } from "../applications/application-board.js";
-import { approvalState } from "./approval.js";
+import { approvalStageOf, approvalState } from "./approval.js";
+import { type AttentionDeps, requestOwnerAttention } from "../owner-attention.js";
+import { notifyUser } from "../../routes/push.js";
+import { parseAccountPreferences } from "../preferences.js";
 import { consumeSubmitAuthorization, getSubmitAuthorization } from "./approval-store.js";
 import { listSupervisorCheckpoints, noteSupervisorDirectiveDelivery, receiveSupervisorCheckpoint, sanitizeSupervisorFacts, type SupervisorDirective } from "./supervision.js";
 import { directApplicationCheckpoint } from "./brain.js";
@@ -402,7 +406,101 @@ async function settleFromResult(env: Env, uid: string, run: ApplyRun, rawResult:
 	else if (to === "awaiting_review") await move(env, uid, run.applicationId, from, { ...base, to: "awaiting_review" }, now);
 	else if (to === "blocked") await move(env, uid, run.applicationId, from, { ...base, to: "blocked", reason: r.blockReason ?? "incomplete", questions: r.questions ?? [] }, now);
 	else await move(env, uid, run.applicationId, from, { ...base, to: "failed", reason: r.engineAuth === "missing_login" ? "engine_not_signed_in" : "engine_failed" }, now);
+	// #991: a run that stopped at something it may not do without the owner is WAITING on them, and
+	// nothing told them. The first consumer of the generic owner-attention policy
+	// (`lib/owner-attention.ts`) rather than an apply-specific push: the event is
+	// `approval_required`, and any other agent raises the same one.
+	if (to === "blocked" || to === "awaiting_review") await askForApprovalIfWaiting(env, uid, moved).catch(() => undefined);
 	return moved;
+}
+
+/**
+ * How this consumer reaches the delivery stack (#991).
+ *
+ * Injected rather than imported inside `requestOwnerAttention` so the policy module stays testable
+ * without the push stack, and so the push OUTCOME is read from the row that was written rather than
+ * assumed: `notifyUser` is best-effort about the push by design, so "did it actually go" is a
+ * question only the notifications table can answer.
+ */
+const attentionDeps: AttentionDeps = {
+	notify: (env, userId, type, title, body, url, opts) => notifyUser(env, userId, type, title, body, url, opts),
+	pushed: async (env, userId, ids) => {
+		// Read the row that was just written, by the key the notifications table actually stores.
+		// `pushed_at` is set when an interruption was RAISED, and an attention event is an `alert`,
+		// which no per-type mute can suppress — so a null there means the 10-minute duplicate
+		// window swallowed it, and that is the one case worth telling the owner apart.
+		const row = await env.DB.prepare("SELECT pushed_at FROM notifications WHERE user_id = ?1 AND dedupe_key = ?2 ORDER BY created_at DESC LIMIT 1")
+			.bind(userId, ids.dedupeKey)
+			.first<{ pushed_at: string | null }>()
+			.catch(() => null);
+		if (!row) return "unavailable";
+		if (!row.pushed_at) return "deduped";
+		// An interruption was raised; whether a device received it depends on there being one. No
+		// subscription means the owner has nothing to buzz, and saying "notified" would be the lie.
+		const device = await env.DB.prepare("SELECT 1 FROM push_subscriptions WHERE user_id = ?1 LIMIT 1")
+			.bind(userId)
+			.first()
+			.catch(() => null);
+		return device ? "sent" : "unavailable";
+	},
+	preferences: async (env, userId) => {
+		const row = await env.DB.prepare("SELECT preferences FROM users WHERE id = ?1").bind(userId).first<{ preferences: string | null }>();
+		const prefs = parseAccountPreferences(row?.preferences);
+		// `parseAccountPreferences` has already sanitized both sections — this is the stored account,
+		// read through the one parser, not a second interpretation of the same JSON.
+		return { notifications: prefs.notifications, attention: prefs.attention };
+	},
+};
+
+/**
+ * Tell the owner when an application is waiting for THEIR decision, and only then (#991).
+ *
+ * Raised from the one place that knows an application has just stopped, and gated on exactly the
+ * rule that decides whether the approval action is reachable — `approvalStageOf` plus "no
+ * authorization yet, nothing attempted". So the notification cannot say "approve this" in a state
+ * where the Board, the queue and MCP do not offer an approval; that pairing is what #991 was filed
+ * about, from the other direction.
+ *
+ * Best-effort and deliberately swallowed by the caller: a notification that fails must never fail
+ * the settle that noticed. The in-app row is the log; the push outcome is reported truthfully by
+ * `requestOwnerAttention` and is not asserted here.
+ */
+async function askForApprovalIfWaiting(env: Env, uid: string, run: ApplyRun): Promise<void> {
+	const app = await getOwnedApplication(env, uid, run.applicationId);
+	if (!app || app.submitAttemptedAt) return;
+	// The run that just settled, passed in rather than re-read: a run belongs to a RUNNER instance
+	// and the application row names the TAILOR's, so looking it up by `app.instanceId` finds
+	// nothing — and a null context reads as "the fill ended", which would raise "approve to send"
+	// over a run still paused on an unanswered question. The authority on this run is this run.
+	const context = app.fillRunId === run.id ? { status: run.status, pauseReason: run.pause?.reason ?? null } : null;
+	if (approvalStageOf(app, context) !== "post_fill") return;
+	const existing = await getSubmitAuthorization(env, app.id, uid).catch(() => null);
+	// Already approved: the owner has decided, and the thing to do next is a retry they can see.
+	if (existing && approvalState(existing, app).usable) return;
+	const lead = (app.lead ?? {}) as { lead?: { title?: unknown; company?: unknown } };
+	const role = typeof lead.lead?.title === "string" ? lead.lead.title : "A job application";
+	const company = typeof lead.lead?.company === "string" ? ` at ${lead.lead.company}` : "";
+	// The Runner's own Board: the queue it shows is the same from every member of the pipeline, and
+	// this is the instance the owner was just watching work.
+	const runner = run.instanceId;
+	await requestOwnerAttention(
+		env,
+		{
+			event: "approval_required",
+			userId: uid,
+			instanceId: runner,
+			subject: { kind: "application", instanceId: runner, applicationId: app.id },
+			// The state is in the identity, so one stop is one notification however many times a sweep
+			// re-reads it — and a stop AFTER the owner retries is a new one (#991's dedupe rule).
+			about: { kind: "application", id: app.id, state: app.stateVersion },
+			notificationType: "apply",
+			title: `Approve to send: ${role}${company}`.slice(0, 120),
+			// The owner's own sentence from the run. Marked rather than head-cut (#898): a shortened
+			// question read as complete is how a person decides on half a condition.
+			body: clipMarked(app.blockQuestions?.[0] ?? "This application is filled and waiting for your decision; nothing has been sent.", 300, { within: true }),
+		},
+		attentionDeps,
+	);
 }
 
 /**

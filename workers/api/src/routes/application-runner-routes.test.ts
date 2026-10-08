@@ -448,6 +448,184 @@ describe("per-application Approve & proceed authorizes exactly one submission (#
 	});
 });
 
+// ── #991: the one-click refusal leaves a blocked application the owner CAN approve ───────────
+//
+// The live sequence, end to end. Application `435d31c8…` / run `c27d1178…`: a real SEEK listing
+// whose final control is a genuine `one_click_apply`. Everything safe worked — the supervisor
+// continued the initial checkpoint, the runner refused that control under `fill_and_review`, no
+// field was fabricated, no submit was attempted — and the run ENDED, closing the application
+// `blocked / incomplete` with "Approve this application to let it be sent, or apply on the site
+// yourself". The exposed actions were `retry_fill`, `defer`, `archive`, `mark_not_interested`: the
+// safe state had no supported path to the authorized application.
+describe("a one-click block is approvable, and the approval is spent once (#991)", () => {
+	const readyWithEvent = (id: string) => {
+		const ev = readyApp(id);
+		d1.DB.prepare("UPDATE job_applications SET ready_event = ?2 WHERE id = ?1").bind(id, JSON.stringify(ev)).run();
+		return ev;
+	};
+	const card = async (id: string) => (await call("GET", `/t1/application-queue/item?application_id=${id}`)).body.item;
+	const auth = (id: string) => d1.DB.prepare("SELECT id, consumed_at, consumed_run_id FROM job_application_submit_authorizations WHERE application_id = ?1").bind(id).first<Record<string, unknown>>();
+	const settings = async () => (await call("GET", "/ap/application-runner/settings")).body.settings;
+
+	/** Fill once and have the runner refuse a genuine one-click control, as the live run did. */
+	async function oneClickBlocked(id: string) {
+		// One insert, one event: `readyApp` WRITES the row, so calling it a second time for the
+		// dispatch body violates the per-instance idempotency key.
+		const ev = readyWithEvent(id);
+		await call("PUT", "/ap/application-runner/settings", { allowDomains: ["example.com"] });
+		const started = await call("POST", "/ap/application-runs", ev);
+		const runId = started.body.run.id as string;
+		runner("ended", {
+			lastSeq: 3,
+			events: [
+				{ seq: 2, type: "supervisor.directive", at: "2026-10-08T12:00:00Z", detail: { checkpointId: "initial:1", directive: "continue" } },
+				{ seq: 3, type: "policy.decision", at: "2026-10-08T12:00:05Z", detail: { tool: "browser_click", class: "submit", decision: "refused", reason: "fill_and_review", rule: "one_click_apply" } },
+			],
+			result: RESULT(runId, {
+				outcome: "blocked",
+				blockReason: "incomplete",
+				filled: 0,
+				uploaded: [],
+				submitAttempted: false,
+				summary: "Stopped at a one-click apply control: it can send the application outright, and this run fills and waits for review.",
+				questions: ["This listing's apply control can send the application in one click, so a fill-and-review run may not press it, and nothing was entered. Approve this application to let it be sent, or apply on the site yourself."],
+			}),
+		});
+		await syncApplyRun(env(), "u1", (await call("GET", `/ap/application-runs/${runId}`)).body.run);
+		return runId;
+	}
+
+	it("THE LIVE GAP: the blocked application now offers the one-job approval", async () => {
+		await oneClickBlocked("lead-oc1");
+		const item = await card("lead-oc1");
+		expect(item.status).toBe("blocked");
+		expect(item.blockReason).toBe("incomplete");
+		// The sentence the record shows, and now an action that matches it.
+		expect(item.questions[0]).toMatch(/Approve this application to let it be sent/);
+		expect(item.actions, "the four the issue reported, PLUS the approval").toEqual(["approve_and_proceed", "retry_fill", "defer", "archive", "mark_not_interested"]);
+		// Nothing was sent, and no authorization exists until the owner makes one.
+		expect(item.submitAuthorization).toBeNull();
+		expect(item.submitAttempted).toBe(false);
+		expect(await auth("lead-oc1")).toBeNull();
+	});
+
+	it("approving records ONE held authorization and says the retry is what spends it", async () => {
+		await oneClickBlocked("lead-oc2");
+		const before = await card("lead-oc2");
+		const r = await call("POST", "/t1/application-queue/actions", { action: "approve_and_proceed", application_id: "lead-oc2", expected_status: "blocked", expected_version: before.stateVersion });
+		expect(r.status).toBe(200);
+		// The exact run cannot be continued — its browser session ended — so the approval is HELD.
+		expect(r.body.result).toMatchObject({ approval: "granted", stage: "post_fill", outcome: "not_resumable", reason: "run_ended", resumable: false });
+		expect(String(r.body.result.nextAction)).toMatch(/approval is recorded and held for this application/);
+		expect(String(r.body.result.nextAction)).toMatch(/retry_fill/);
+		const row = await auth("lead-oc2");
+		expect(row, "exactly one authorization, scoped to this application").toBeTruthy();
+		expect(row?.consumed_at, "not spent yet — nothing has run").toBeNull();
+		// Still nothing sent, and the GLOBAL toggle is untouched: this is one job, not a policy.
+		expect((await card("lead-oc2")).submitAttempted).toBe(false);
+		expect((await settings()).autoSubmit).toMatchObject({ enabled: false, dailyCap: 0 });
+	});
+
+	it("the authorized retry may press THAT application's final control, once, and records it truthfully", async () => {
+		await oneClickBlocked("lead-oc3");
+		const before = await card("lead-oc3");
+		await call("POST", "/t1/application-queue/actions", { action: "approve_and_proceed", application_id: "lead-oc3", expected_status: "blocked", expected_version: before.stateVersion });
+		const approved = await card("lead-oc3");
+		expect(approved.submitAuthorization).toMatchObject({ usable: true });
+
+		const retry = await call("POST", "/t1/application-queue/actions", { action: "retry_fill", application_id: "lead-oc3", expected_status: "blocked" });
+		expect(retry.status).toBe(200);
+		// The fake machine still held the FIRST run's result; a status read would settle this new run
+		// against it ("the runner's result names another run"). The fresh run is simply running.
+		runner("running", { lastSeq: 0 });
+		// The run the machine was actually told to do: auto_submit, on the approval's authority.
+		const dispatched = dispatches().at(-1)?.body as { policy: { mode: string; submitGate?: { gateId: string } } };
+		expect(dispatched.policy.mode).toBe("auto_submit");
+		expect(dispatched.policy.submitGate?.gateId).toEqual(expect.any(String));
+		const runId = retry.body.result.runId as string;
+		const run = (await call("GET", `/ap/application-runs/${runId}`)).body.run;
+		expect(run.policy.gate.checks.find((c: { check: string }) => c.check === "submission_approved")).toMatchObject({ ok: true });
+		expect(run.policy.gate.checks.find((c: { check: string }) => c.check === "daily_cap")).toMatchObject({ ok: true, why: "approved for this application by the owner" });
+		// SPENT, and bound to the run that spent it — that row is the record of what was authorised.
+		expect(await auth("lead-oc3")).toMatchObject({ consumed_run_id: runId, consumed_at: expect.any(Number) });
+
+		// The employer's answer, recorded as what it was.
+		runner("ended", { lastSeq: 1, result: RESULT(runId, { outcome: "submitted", mode: "auto_submit", submitAttempted: true, submitted: { url: "https://jobs.example.com/thanks", at: "2026-10-08T12:10:00Z", gateId: run.policy.gate.gateId }, filled: 7 }) });
+		await syncApplyRun(env(), "u1", (await call("GET", `/ap/application-runs/${runId}`)).body.run);
+		const after = await card("lead-oc3");
+		expect(after.status).toBe("submitted");
+		expect(after.submittedUrl).toBe("https://jobs.example.com/thanks");
+		expect(after.submitAttempted).toBe(true);
+		// And the approval is finished: no second one, and nothing left to approve.
+		expect(after.actions).not.toContain("approve_and_proceed");
+		expect((await settings()).autoSubmit).toMatchObject({ enabled: false, dailyCap: 0 });
+	});
+
+	it("NO APPROVAL means no submit: the same retry fills and stops again", async () => {
+		await oneClickBlocked("lead-oc4");
+		const retry = await call("POST", "/t1/application-queue/actions", { action: "retry_fill", application_id: "lead-oc4", expected_status: "blocked" });
+		expect(retry.status).toBe(200);
+		const dispatched = dispatches().at(-1)?.body as { policy: { mode: string; submitGate?: unknown } };
+		expect(dispatched.policy.mode, "unapproved, so fill-and-review — whatever the owner was told").toBe("fill_and_review");
+		expect(dispatched.policy.submitGate).toBeUndefined();
+	});
+
+	it("a second approval is refused — the spent one is the record of what was authorised", async () => {
+		await oneClickBlocked("lead-oc5");
+		const before = await card("lead-oc5");
+		await call("POST", "/t1/application-queue/actions", { action: "approve_and_proceed", application_id: "lead-oc5", expected_status: "blocked", expected_version: before.stateVersion });
+		await call("POST", "/t1/application-queue/actions", { action: "retry_fill", application_id: "lead-oc5", expected_status: "blocked" });
+		// The approval is spent by that run. Nothing here may grant another.
+		const spent = await card("lead-oc5");
+		expect(spent.submitAuthorization).toMatchObject({ usable: false, consumedRunId: expect.any(String) });
+		expect(spent.actions).not.toContain("approve_and_proceed");
+		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM job_application_submit_authorizations WHERE application_id = 'lead-oc5'").first<{ n: number }>())?.n).toBe(1);
+	});
+
+	it("TELLS THE OWNER, through the generic attention policy, exactly when the approval is offered (#991)", async () => {
+		// The other half of the live gap: the record said "approve this application to let it be
+		// sent" and nothing reached the owner. This asserts the pairing rather than the prose — a
+		// notification is raised for the same state in which `approve_and_proceed` is offered, and
+		// it deep links to the Board, which is where that control renders.
+		const notes = async () =>
+			((await d1.DB.prepare("SELECT type, title, body, url, kind, instance_id, dedupe_key, pushed_at FROM notifications WHERE user_id = 'u1' ORDER BY created_at").all()).results ?? []) as unknown as Array<Record<string, unknown>>;
+		expect(await notes()).toHaveLength(0);
+
+		await oneClickBlocked("lead-oc8");
+		expect((await card("lead-oc8")).actions).toContain("approve_and_proceed");
+		const raised = await notes();
+		expect(raised).toHaveLength(1);
+		expect(raised[0]).toMatchObject({ type: "apply", kind: "alert", instance_id: "ap", url: "/console/instances/ap/board" });
+		expect(String(raised[0].title)).toMatch(/Approve to send/);
+		// The owner's own sentence from the run, not a paraphrase invented here.
+		expect(String(raised[0].body)).toMatch(/Approve this application to let it be sent/);
+		// An alert interrupts: `pushed_at` is set, which is what the truthful outcome reads back.
+		expect(raised[0].pushed_at).toBeTruthy();
+
+		// Approved: the owner has decided, so the next settle must not ask again. Run it for real —
+		// the retry ends blocked a second time, and the gate is "is there still a usable approval".
+		const before = await card("lead-oc8");
+		await call("POST", "/t1/application-queue/actions", { action: "approve_and_proceed", application_id: "lead-oc8", expected_status: "blocked", expected_version: before.stateVersion });
+		expect(await notes(), "approving is not itself news to the person who just did it").toHaveLength(1);
+	});
+
+	it("blocked at TAILORING offers no approval — there is no form and no final control", async () => {
+		readyWithEvent("lead-oc6");
+		d1.DB.prepare("UPDATE job_applications SET status = 'blocked', block_reason = 'engine_not_signed_in', fill_run_id = NULL WHERE id = 'lead-oc6'").run();
+		const item = await card("lead-oc6");
+		expect(item.actions).not.toContain("approve_and_proceed");
+		expect(item.actions).toContain("retry_tailoring");
+	});
+
+	it("after a submit was ATTEMPTED, nothing is offered to approve — whatever the status says", async () => {
+		await oneClickBlocked("lead-oc7");
+		d1.DB.prepare("UPDATE job_applications SET submit_attempted_at = 1 WHERE id = 'lead-oc7'").run();
+		const item = await card("lead-oc7");
+		expect(item.actions).not.toContain("approve_and_proceed");
+		expect(item.actions).not.toContain("retry_fill");
+	});
+});
+
 // ── #982: a safe initial checkpoint fills the form instead of asking for a review of nothing ──
 //
 // The live failure, end to end: two runs reached `awaiting_review` at the runner's INITIAL

@@ -109,9 +109,38 @@ describe("which applications are at the post-fill decision (#981)", () => {
 		expect(isPostFillApproval(appFixture({ status: "blocked" }), { status: "paused", pause: { reason: "supervisor_checkpoint" } })).toBe(true);
 	});
 
-	it("a run parked on a QUESTION is not — approving a submission answers none of it", () => {
-		expect(isPostFillApproval(appFixture({ status: "blocked" }), { status: "paused", pause: { reason: "missing_answer" } })).toBe(false);
-		expect(isPostFillApproval(appFixture({ status: "blocked" }), null)).toBe(false);
+	it("a LIVE run parked on a QUESTION is not — approving a submission answers none of it", () => {
+		// Still true after #991, and the reason it is narrowed to an ENDED fill: this form has a
+		// required question unanswered, so pre-authorising its submission is the opposite of what the
+		// owner is being asked. `resume` answers it.
+		for (const reason of ["missing_answer", "captcha", "login_required", "consent_required"]) {
+			expect(isPostFillApproval(appFixture({ status: "blocked" }), { status: "paused", pause: { reason } }), reason).toBe(false);
+		}
+		// A queued or running fill is not a decision either — there is nothing stopped to decide on.
+		for (const status of ["queued", "running"]) expect(isPostFillApproval(appFixture({ status: "blocked" }), { status }), status).toBe(false);
+	});
+
+	/**
+	 * #991: a blocked application whose fill ENDED without sending anything.
+	 *
+	 * Live: application `435d31c8…` / run `c27d1178…` on a real SEEK listing whose final control is a
+	 * genuine `one_click_apply`. The runner refused it under `fill_and_review` — nothing fabricated,
+	 * nothing attempted — and the run ended, closing the application `blocked / incomplete` while
+	 * telling the owner to "approve this application to let it be sent". The only reachable actions
+	 * were retry, defer, archive and not-interested: the safe state had no path to the authorized
+	 * application.
+	 */
+	it("a blocked application whose fill ENDED is the decision — the #991 one-click case", () => {
+		expect(isPostFillApproval(appFixture({ status: "blocked" }), null)).toBe(true);
+		// The run row itself, read terminal, says the same thing.
+		for (const status of ["blocked", "failed", "cancelled", "awaiting_review"]) {
+			expect(isPostFillApproval(appFixture({ status: "blocked" }), { status }), status).toBe(true);
+		}
+	});
+
+	it("blocked at TAILORING is not: no form, no final control, nothing to authorise", () => {
+		expect(isPostFillApproval(appFixture({ status: "blocked", fillRunId: null }), null)).toBe(false);
+		expect(isPostFillApproval(appFixture({ status: "blocked", fillRunId: null }), { status: "blocked" })).toBe(false);
 	});
 
 	it("materials_ready is NOT: that is #973's pre-fill stage, which dispatches the fill instead", () => {

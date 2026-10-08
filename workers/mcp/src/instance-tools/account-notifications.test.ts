@@ -146,7 +146,7 @@ describe("set_account_preferences — a section patch must not touch the section
 		expect(h.calls).toHaveLength(0);
 		const preview = JSON.parse(res.content[0].text) as { wouldDo: { body: unknown; unchanged: string[] } };
 		expect(preview.wouldDo.body).toEqual({ voice: { speed: 1.2 } });
-		expect(preview.wouldDo.unchanged.sort()).toEqual(["coding", "notifications", "timezone", "translation"]);
+		expect(preview.wouldDo.unchanged.sort()).toEqual(["attention", "coding", "notifications", "timezone", "translation"]);
 	});
 
 	it("does not audit a rejected write as completed", async () => {

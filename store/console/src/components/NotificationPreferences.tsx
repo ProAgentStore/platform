@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
-import type { Instance, NotificationTypeSpec } from "../lib/types";
+import type { AttentionEventSpec, Instance, NotificationTypeSpec } from "../lib/types";
 import Card from "./Card";
 
 /**
@@ -33,6 +33,9 @@ export default function NotificationPreferences({
 	onSaved,
 	instances,
 	onInstancesSaved,
+	attentionEvents,
+	pushOff,
+	onPushOffSaved,
 }: {
 	types: ReadonlyArray<NotificationTypeSpec>;
 	muted: string[];
@@ -43,15 +46,47 @@ export default function NotificationPreferences({
 	 */
 	instances: string[];
 	onInstancesSaved: (instances: string[]) => void;
+	/**
+	 * The owner-attention vocabulary (#991) — the KINDS of attention an agent can ask for, which is
+	 * a different axis from the product-area mutes above. Served by the route, mapped here, so a new
+	 * event gets its control from `lib/owner-attention.ts`.
+	 */
+	attentionEvents: ReadonlyArray<AttentionEventSpec>;
+	pushOff: string[];
+	onPushOffSaved: (pushOff: string[]) => void;
 }) {
 	const [local, setLocal] = useState<string[]>(muted);
 	const [scope, setScope] = useState<string[]>(instances);
+	const [quiet, setQuiet] = useState<string[]>(pushOff);
 	const [roster, setRoster] = useState<Pick<Instance, "id" | "name" | "slug">[] | null>(null);
 	const [msg, setMsg] = useState("");
 
 	// The parent owns the stored value; re-sync when it finishes loading or another save lands.
 	useEffect(() => setLocal(muted), [muted]);
 	useEffect(() => setScope(instances), [instances]);
+	useEffect(() => setQuiet(pushOff), [pushOff]);
+
+	/**
+	 * Turn one KIND of attention's push off — "don't buzz me when something needs approving",
+	 * whichever agent asks. Its own section on the route, so the mutes and the scope above are not
+	 * resent and cannot be clobbered by a save made in another tab.
+	 */
+	const toggleAttention = useCallback(
+		async (id: string, notify: boolean) => {
+			const next = notify ? quiet.filter((q) => q !== id) : [...new Set([...quiet, id])];
+			const previous = quiet;
+			setQuiet(next);
+			setMsg("");
+			try {
+				await api("/v1/preferences", { method: "PUT", body: JSON.stringify({ attention: { pushOff: next } }) });
+				onPushOffSaved(next);
+			} catch {
+				setQuiet(previous);
+				setMsg("Couldn't save that. Try again.");
+			}
+		},
+		[quiet, onPushOffSaved],
+	);
 
 	// The instances the scope can name. Read once; a scope entry for an instance that is gone is
 	// simply not shown, and the server drops nothing on read, so it is harmless either way.
@@ -131,7 +166,8 @@ export default function NotificationPreferences({
 				on, because a push goes to your account rather than to one browser.{" "}
 				<b>An agent waiting on you always gets through</b> — turning something off here stops the
 				news, never a run that has stopped and needs an answer. Everything stays in this list
-				either way.
+				either way. The one exception is deliberate and is below: you can silence the PUSH for a
+				kind of request, and it still appears here.
 			</p>
 
 			{types.map((t) => {
@@ -184,6 +220,41 @@ export default function NotificationPreferences({
 							</label>
 						);
 					})}
+				</div>
+			)}
+
+			{/* The OTHER axis (#991): the kinds of attention an agent can ask for. The section above is
+			    "which part of the product", this is "what is being asked of me" — an approval, a value,
+			    a blocker to clear. A toggle here silences only the push; the request is always written
+			    to this list, which is why it can be switched off at all. */}
+			{attentionEvents.filter((e) => e.pushOptional).length > 0 && (
+				<div className="mt-4 pt-3 border-t border-line" data-testid="attention-push-controls">
+					<h4 className="text-sm font-semibold mb-1">When an agent needs you</h4>
+					<p className="text-2xs text-muted-soft mb-2">
+						These are requests, not news — a run has stopped and is waiting. Switching one off stops the
+						push to your devices only; it still arrives in your notifications, and the run stays stopped
+						until you answer it.
+					</p>
+					{attentionEvents
+						.filter((e) => e.pushOptional)
+						.map((e) => {
+							const on = !quiet.includes(e.id);
+							return (
+								<label key={e.id} className="flex items-start justify-between gap-3 py-2 cursor-pointer">
+									<span className="text-sm min-w-0">
+										<span className="font-semibold">{e.label}</span>
+										<span className="block text-2xs text-muted-soft mt-0.5">{e.description}</span>
+									</span>
+									<input
+										type="checkbox"
+										checked={on}
+										onChange={(ev) => void toggleAttention(e.id, ev.target.checked)}
+										aria-label={`Push me when: ${e.label}`}
+										className="mt-0.5 shrink-0"
+									/>
+								</label>
+							);
+						})}
 				</div>
 			)}
 

@@ -8,7 +8,7 @@ import NotificationPreferences from "../components/NotificationPreferences";
 import { machineTimeZone, setAccountTimeZone, timeZoneOptions, useAccountTimeZone } from "../lib/accountTimezone";
 import Card from "../components/Card";
 import Button from "../components/Button";
-import type { AccountCodingDefaultApplyResponse, AccountPreferencesResponse, AccountPreferencesWriteResponse, CodingEngineOption, NotificationTypeSpec } from "../lib/types";
+import type { AccountCodingDefaultApplyResponse, AccountPreferencesResponse, AccountPreferencesWriteResponse, AttentionEventSpec, CodingEngineOption, NotificationTypeSpec } from "../lib/types";
 
 /** The current wall clock in a zone, or "" when this runtime cannot resolve it — never a throw. */
 function nowIn(zone: string): string {
@@ -70,6 +70,10 @@ export default function Preferences() {
 	const [mutedNotifications, setMutedNotifications] = useState<string[]>([]);
 	// The instance scope (#784): empty means every instance.
 	const [notificationInstances, setNotificationInstances] = useState<string[]>([]);
+	// The owner-attention axis (#991): the kinds of request an agent can make, and the pushes
+	// turned off for them. Empty means every kind pushes.
+	const [attentionEvents, setAttentionEvents] = useState<ReadonlyArray<AttentionEventSpec>>([]);
+	const [attentionPushOff, setAttentionPushOff] = useState<string[]>([]);
 	const [hasOpenAiKey, setHasOpenAiKey] = useState<boolean | null>(null);
 	const [loaded, setLoaded] = useState(false);
 
@@ -101,6 +105,8 @@ export default function Preferences() {
 				setNotificationTypes(d.notificationTypes || []);
 				setMutedNotifications(d.preferences?.notifications?.muted || []);
 				setNotificationInstances(d.preferences?.notifications?.instances || []);
+				setAttentionEvents(d.attentionEvents || []);
+				setAttentionPushOff(d.preferences?.attention?.pushOff || []);
 			} catch {
 				// A failed read must still render the controls at platform defaults — an empty page
 				// with no explanation is worse than editable defaults.
@@ -203,6 +209,9 @@ export default function Preferences() {
 				onSaved={setMutedNotifications}
 				instances={notificationInstances}
 				onInstancesSaved={setNotificationInstances}
+				attentionEvents={attentionEvents}
+				pushOff={attentionPushOff}
+				onPushOffSaved={setAttentionPushOff}
 			/>
 
 			<Card className="mb-3 sm:mb-4">

@@ -1082,4 +1082,9 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// #990: + runner_update_status — the durable outcome of a machine's CLI update, which a
 	// timed-out `runner_update` reply could not report (its poll hint now names this tool).
 	"0.1.97": "sha256:183715ae5851ad306c3b1bf84d94694172fb55fe05de5cbff04b10da4e457b46",
+	// #991: one new ARGUMENT on `set_account_preferences` — `attention.pushOff`, the per-event
+	// channel control for the generic owner-attention policy (`lib/owner-attention.ts`). No new
+	// tool name; a parameter is part of `inputSchema`, so the surface moved. The matching read is
+	// `get_account_preferences`, which now also serves the `attentionEvents` vocabulary.
+	"0.1.98": "sha256:b9594c21db0a90358af41c043e42404574c87dc49ff489ef399a1a833388c674",
 };
