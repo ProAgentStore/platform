@@ -168,6 +168,22 @@ export const LOCAL_APPLY_BLOCK_REASONS: readonly LocalApplyBlockReason[] = [
  * its own output. The engine's closing sentence continues to cross as `summary`, where it already
  * did — redacted and capped — so this adds diagnosis without adding a new channel for content.
  */
+/**
+ * The first published CLI whose runner executes THIS contract (#977) — the #975 release that ends a
+ * zero-bridge run as `bridge_unused` and attaches {@link LocalApplyDiagnostic}.
+ *
+ * An older runner is not broken; it simply predates the vocabulary. Left to run, it reports the same
+ * failure as `incomplete` with no diagnostic, which is indistinguishable from a run under the new
+ * contract that had nothing to diagnose — exactly the live confusion #977 was filed from. So a
+ * machine below this is refused BEFORE dispatch, naming the update, rather than silently producing
+ * the older shape (`apply.ts` `runnerContractProblem`).
+ *
+ * Bump this when the runner's half of the result contract changes again, together with the CLI
+ * version that ships it. `cliAtLeast` treats an unreported version as capable, which is the
+ * convention every MIN_CLI gate here follows.
+ */
+export const LOCAL_APPLY_CONTRACT_MIN_CLI = "0.4.84";
+
 export type LocalApplyDiagnosticCause = "bridge_unused" | "engine_exited_nonzero" | "timed_out" | "no_engine_output";
 export const LOCAL_APPLY_DIAGNOSTIC_CAUSES: readonly LocalApplyDiagnosticCause[] = ["bridge_unused", "engine_exited_nonzero", "timed_out", "no_engine_output"];
 

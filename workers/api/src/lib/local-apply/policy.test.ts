@@ -4,6 +4,8 @@
  */
 import { describe, expect, it } from "vitest";
 import { type GateInput, RUNNER_DEFAULTS, evaluateSubmitGate, mergeRunnerSettings } from "./policy";
+import { LOCAL_APPLY_CONTRACT_MIN_CLI } from "./contract.js";
+import { runnerContractProblem } from "./apply.js";
 
 describe("mergeRunnerSettings", () => {
 	it.each([
@@ -55,5 +57,38 @@ describe("evaluateSubmitGate", () => {
 		const g = evaluateSubmitGate(input);
 		expect(g.allowed).toBe(false);
 		expect(g.checks.filter((c) => !c.ok).map((c) => c.check)).toEqual([check]);
+	});
+});
+
+// ── #977: the contract gate — which machines may fill an application at all ───────────────────
+describe("runnerContractProblem (#977)", () => {
+	const node = "pink-laptop";
+
+	it.each([["0.4.84"], ["0.4.85"], ["0.5.0"], ["1.0.0"]])("allows %s — at or above the contract", (version) => {
+		expect(runnerContractProblem(version, node)).toBeNull();
+	});
+
+	it.each([["0.4.83"], ["0.4.70"], ["0.3.99"]])("refuses %s, naming the version, the minimum and the fix", (version) => {
+		const problem = runnerContractProblem(version, node);
+		expect(problem).toContain(version);
+		expect(problem).toContain(LOCAL_APPLY_CONTRACT_MIN_CLI);
+		expect(problem).toContain("pink-laptop");
+		// Actionable, not just a diagnosis — and it says what the owner would otherwise have seen.
+		expect(problem).toMatch(/npm i -g @proagentstore\/cli/);
+		expect(problem).toMatch(/restart/);
+		expect(problem).toMatch(/bare "incomplete" with no diagnosis/);
+	});
+
+	it.each([[""], ["   "], [null], [undefined]])("does not judge an unreported version: %s", (version) => {
+		expect(runnerContractProblem(version, node)).toBeNull();
+	});
+
+	it("names the machine generically when the node is unknown", () => {
+		expect(runnerContractProblem("0.4.83", null)).toContain("that machine");
+	});
+
+	it("the minimum is the release that ships the #975 contract, not a future guess", () => {
+		// Pinned so bumping the contract minimum is a deliberate edit with a reason, not a drift.
+		expect(LOCAL_APPLY_CONTRACT_MIN_CLI).toBe("0.4.84");
 	});
 });

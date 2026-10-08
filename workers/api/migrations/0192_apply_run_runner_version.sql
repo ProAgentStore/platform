@@ -1,0 +1,18 @@
+-- Which runner actually executed this application run (#977).
+--
+-- The live regression: #975 shipped `bridge_unused` plus a closed diagnostic in the runner, both
+-- API and Host deployed, and a real retry still came back `blocked: incomplete` with
+-- `diagnostic: null`. Nothing was wrong with the cloud — the machine was running an OLDER published
+-- CLI, which does not know the new reason and cannot produce the diagnostic. The cloud accepted the
+-- old result shape silently, so "the new contract ran and found nothing to diagnose" and "an old
+-- contract ran and could not tell us anything" were the same record.
+--
+-- `runner_version` is the fact that separates them, stamped at dispatch from the registration the
+-- machine itself sent (`instance_runtime_nodes.runner_version`) — not from the result, which an old
+-- runner cannot annotate. With it, a run's record answers "what executed this?" without anyone
+-- reading a terminal, which is the issue's second requirement.
+--
+-- Nullable: runs that predate this column, and a machine that reports no version, are not judged
+-- (`cliAtLeast` treats an unreported version as capable — the convention every other MIN_CLI gate
+-- in this codebase follows, because refusing on a fact we do not have is the worse error).
+ALTER TABLE local_apply_runs ADD COLUMN runner_version TEXT;

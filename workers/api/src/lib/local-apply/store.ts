@@ -168,6 +168,8 @@ export interface ApplyRun {
 	errorCode: string | null;
 	error: string | null;
 	runnerNode: string | null;
+	/** The CLI that executed this run, from the machine's own registration (#977). */
+	runnerVersion: string | null;
 	trace: ApplyTraceEvent[];
 	runnerSeq: number;
 	lastSyncedAt: number | null;
@@ -189,6 +191,7 @@ interface RunRow {
 	error_code: string | null;
 	error: string | null;
 	runner_node: string | null;
+	runner_version: string | null;
 	trace: string;
 	runner_seq: number;
 	last_synced_at: number | null;
@@ -219,6 +222,7 @@ const present = (r: RunRow): ApplyRun => ({
 	errorCode: r.error_code,
 	error: r.error,
 	runnerNode: r.runner_node,
+	runnerVersion: r.runner_version ?? null,
 	trace: json<ApplyTraceEvent[]>(r.trace) ?? [],
 	runnerSeq: Number(r.runner_seq ?? 0),
 	lastSyncedAt: r.last_synced_at,
@@ -243,13 +247,13 @@ export async function listApplyRuns(env: DB, instanceId: string, userId: string,
 }
 
 /** Insert a queued run; a request id already held returns false (the caller reads the existing one). */
-export async function insertApplyRun(env: DB, r: { id: string; instanceId: string; userId: string; applicationId: string; requestId: string; policy: ApplyRunPolicy; trace: ApplyTraceEvent[]; now: number }): Promise<boolean> {
+export async function insertApplyRun(env: DB, r: { id: string; instanceId: string; userId: string; applicationId: string; requestId: string; policy: ApplyRunPolicy; trace: ApplyTraceEvent[]; now: number; runnerVersion?: string | null }): Promise<boolean> {
 	const res = await env.DB.prepare(
-		`INSERT INTO local_apply_runs (id, instance_id, user_id, application_id, request_id, status, policy, trace, created_at, updated_at)
-		 VALUES (?1, ?2, ?3, ?4, ?5, 'queued', ?6, ?7, ?8, ?8)
+		`INSERT INTO local_apply_runs (id, instance_id, user_id, application_id, request_id, status, policy, trace, created_at, updated_at, runner_version)
+		 VALUES (?1, ?2, ?3, ?4, ?5, 'queued', ?6, ?7, ?8, ?8, ?9)
 		 ON CONFLICT(instance_id, request_id) DO NOTHING`,
 	)
-		.bind(r.id, r.instanceId, r.userId, r.applicationId, r.requestId, JSON.stringify(r.policy), JSON.stringify(r.trace), r.now)
+		.bind(r.id, r.instanceId, r.userId, r.applicationId, r.requestId, JSON.stringify(r.policy), JSON.stringify(r.trace), r.now, r.runnerVersion ?? null)
 		.run();
 	return (res.meta?.changes ?? 0) > 0;
 }

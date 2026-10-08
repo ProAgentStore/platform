@@ -448,6 +448,89 @@ describe("per-application Approve & proceed authorizes exactly one submission (#
 	});
 });
 
+// ── #977: a machine below the contract is refused up front, and the version is on the record ──
+//
+// The live regression: #975 shipped and deployed, and a real retry STILL came back
+// `blocked: incomplete` with `diagnostic: null` — because the connected machine ran an older
+// published CLI, which reports the zero-bridge outcome in the previous vocabulary. The cloud took
+// the old shape silently, so "nothing to diagnose" and "cannot diagnose" were one record.
+describe("an outdated runner never silently produces the old result shape (#977)", () => {
+	const setRunnerVersion = (version: string) => d1.exec(`UPDATE instance_runtime_nodes SET runner_version = '${version}' WHERE instance_id = 'ap'`);
+	const runRow = (id: string) => d1.DB.prepare("SELECT status, runner_version FROM local_apply_runs WHERE id = ?1").bind(id).first<Record<string, unknown>>();
+
+	it("refuses the fill before anything is claimed, naming the update", async () => {
+		setRunnerVersion("0.4.83"); // one release below the #975 contract
+		const ev = readyApp("lead-v1");
+		const r = await call("POST", "/ap/application-runs", ev);
+		expect(r.status).toBe(409);
+		expect(r.body.error).toMatch(/predates this application contract/);
+		expect(r.body.error).toMatch(/0\.4\.84 or newer/);
+		expect(r.body.error).toMatch(/npm i -g @proagentstore\/cli|runner_update/);
+		// Nothing was spent and nothing moved: no run row, no dispatch, and the application is still
+		// materials_ready, so it retries cleanly once the machine is updated.
+		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM local_apply_runs").first<{ n: number }>())?.n).toBe(0);
+		expect(dispatches()).toHaveLength(0);
+		expect(await appRow("lead-v1")).toMatchObject({ status: "materials_ready", block_reason: null });
+	});
+
+	it("the same application runs once the machine is updated", async () => {
+		setRunnerVersion("0.4.83");
+		const ev = readyApp("lead-v2");
+		expect((await call("POST", "/ap/application-runs", ev)).status).toBe(409);
+		setRunnerVersion("0.4.84");
+		const ok = await call("POST", "/ap/application-runs", ev);
+		expect(ok.body.run.status).toBe("running");
+		// And the record says WHICH runner executed it — the fact that was missing.
+		expect(await runRow(ok.body.run.id as string)).toMatchObject({ runner_version: "0.4.84" });
+	});
+
+	it("stamps the executing runner's version on every run, and returns it over the API", async () => {
+		setRunnerVersion("0.5.0");
+		const started = await call("POST", "/ap/application-runs", readyApp("lead-v3"));
+		const runId = started.body.run.id as string;
+		expect(await runRow(runId)).toMatchObject({ runner_version: "0.5.0" });
+		// The same row #971's `application_run` returns over MCP.
+		expect((await call("GET", `/ap/application-runs/${runId}`)).body.run.runnerVersion).toBe("0.5.0");
+	});
+
+	it("a machine that reports no version is not judged — a missing fact is not evidence", async () => {
+		// `instance_runtime_nodes.runner_version` is NOT NULL, so the reachable shape of "unreported"
+		// is the empty string. Refusing on a fact we do not have is the worse failure, and is what
+		// `cliAtLeast` and every other MIN_CLI gate in this codebase avoid.
+		setRunnerVersion("");
+		const r = await call("POST", "/ap/application-runs", readyApp("lead-v4"));
+		expect(r.body.run.status).toBe("running");
+		expect(await runRow(r.body.run.id as string)).toMatchObject({ runner_version: "" });
+	});
+
+	it("an up-to-date runner still reports the #975 zero-bridge diagnosis end to end", async () => {
+		setRunnerVersion("0.4.84");
+		const ev = readyApp("lead-v5");
+		const started = await call("POST", "/ap/application-runs", ev);
+		const runId = started.body.run.id as string;
+		runner("ended", {
+			lastSeq: 1,
+			result: RESULT(runId, {
+				outcome: "blocked",
+				blockReason: "bridge_unused",
+				filled: 0,
+				uploaded: [],
+				questions: ["The claude CLI ran for 51s and exited (code 0) without opening the application page."],
+				diagnostic: { cause: "bridge_unused", bridgeCalls: 0, engineExit: 0, activeMs: 51_000, pages: 0, filled: 0, signals: ["approval_policy_blocked"] },
+			}),
+		});
+		await syncApplyRun(env(), "u1", (await call("GET", `/ap/application-runs/${runId}`)).body.run);
+		const run = (await call("GET", `/ap/application-runs/${runId}`)).body.run;
+		// The pairing #977 asks for: the diagnosis AND the contract that produced it, on one record.
+		expect(run.result).toMatchObject({ blockReason: "bridge_unused", diagnostic: { cause: "bridge_unused", bridgeCalls: 0 } });
+		expect(run.runnerVersion).toBe("0.4.84");
+		expect(await appRow("lead-v5")).toMatchObject({ status: "blocked", block_reason: "bridge_unused" });
+		// Still no free text from the CLI, whichever release ran it.
+		expect(JSON.stringify(run.result.diagnostic)).not.toMatch(/[A-Za-z]{200}/);
+		expect(Object.keys(run.result.diagnostic).sort()).toEqual(["activeMs", "bridgeCalls", "cause", "engineExit", "filled", "pages", "signals"]);
+	});
+});
+
 // ── #975: a CLI that did nothing on the page is diagnosed through the API, board and MCP ─────
 describe("the did-nothing diagnosis reaches the owner's surfaces (#975)", () => {
 	const card = async (id: string) => (await call("GET", `/t1/application-queue/item?application_id=${id}`)).body.item;

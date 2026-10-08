@@ -28,6 +28,8 @@ const run = (mode: "fill_and_review" | "auto_submit" = "auto_submit") => ({
 	errorCode: null,
 	error: null,
 	runnerNode: "mac",
+	// #977: the CLI that executed the run is part of its record now.
+	runnerVersion: null,
 	trace: [],
 	runnerSeq: 4,
 	lastSyncedAt: null,

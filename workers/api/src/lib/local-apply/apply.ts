@@ -24,6 +24,7 @@ import type { Env } from "../../types.js";
 import { callRuntime, getLiveRuntime, runtimeJson } from "../../routes/instances-runtime.js";
 import {
 	LOCAL_APPLY_CANCEL_PATH,
+	LOCAL_APPLY_CONTRACT_MIN_CLI,
 	LOCAL_APPLY_DIRECTIVE_PATH,
 	LOCAL_APPLY_PAUSE_REASONS,
 	LOCAL_APPLY_RESUME_PATH,
@@ -54,6 +55,7 @@ import {
 } from "./store.js";
 import { claimQueuedDispatch, instancesWithQueuedRuns, nextDueQueuedRun, noteQueued } from "../applications/work-queue-store.js";
 import { QUEUE_MAX_ATTEMPTS, refusalVerdict } from "../applications/work-queue.js";
+import { cliAtLeast } from "../runner-upgrade.js";
 import { approvalState } from "./approval.js";
 import { consumeSubmitAuthorization, getSubmitAuthorization } from "./approval-store.js";
 import { listSupervisorCheckpoints, noteSupervisorDirectiveDelivery, receiveSupervisorCheckpoint, sanitizeSupervisorFacts, type SupervisorDirective } from "./supervision.js";
@@ -85,6 +87,25 @@ export async function deliverSupervisorDirective(env: Env, uid: string, run: App
 	} catch {
 		return (await noteSupervisorDirectiveDelivery(env, directive, now, false)) ?? directive;
 	}
+}
+
+/**
+ * Why this machine must not fill an application yet, or null (#977).
+ *
+ * The live regression this closes: #975's `bridge_unused` + diagnostic shipped and deployed, and a
+ * real retry still recorded `blocked: incomplete` with `diagnostic: null` — because the connected
+ * machine was running an older published CLI. An old runner does not fail loudly; it reports the
+ * zero-bridge outcome in the PREVIOUS vocabulary, which is indistinguishable from a new-contract run
+ * that had nothing to diagnose. Silent fallback to the older shape is the thing the issue forbids.
+ *
+ * So the cloud refuses before dispatch and says exactly what to do. An unreported version is not
+ * judged — the convention `cliAtLeast` and every other MIN_CLI gate in this codebase follow, because
+ * refusing on a fact we do not have is the worse failure.
+ */
+export function runnerContractProblem(runnerVersion: string | null | undefined, node: string | null | undefined): string | null {
+	const version = runnerVersion?.trim();
+	if (!version || cliAtLeast(version, LOCAL_APPLY_CONTRACT_MIN_CLI)) return null;
+	return `The runner on ${node || "that machine"} is CLI ${version}, which predates this application contract (needs ${LOCAL_APPLY_CONTRACT_MIN_CLI} or newer): it cannot report why a run put nothing on the page, so a failed application would come back as a bare "incomplete" with no diagnosis. Update it (npm i -g @proagentstore/cli, or runner_update) and restart \`pags up\`, then retry this application.`;
 }
 
 export type StartFillOutcome = { kind: "started" | "existing"; application: JobApplication; run: ApplyRun | null };
@@ -197,6 +218,12 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	if (!jobHost) throw new HttpError(409, "The application's lead has no http(s) URL to apply at.");
 	const runtime = await getLiveRuntime(env, instanceId, uid);
 	if (!runtime) throw new HttpError(503, "No runner is connected. Run `pags up` on the machine that holds your job materials; the application will be filled when it connects.");
+	// #977 — refused HERE, before the application leaves materials_ready and before a run row
+	// exists, so an outdated machine costs the owner nothing and the application stays retryable.
+	// 409 rather than 503: the outbox must not retry this on a loop, because only a person updating
+	// the CLI can change the answer.
+	const contractProblem = runnerContractProblem(runtime.runner_version, runtime.runner_node);
+	if (contractProblem) throw new HttpError(409, contractProblem);
 
 	const now = Date.now();
 	const verdict = await submitGateFor(env, instanceId, uid, app, s, now);
@@ -243,7 +270,9 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	];
 	if (spentApproval) trace.push({ type: "policy.decision", at: iso(now), detail: { class: "submit", decision: "allowed", basis: "application_approval", authorizationId: spentApproval.id } });
 	if (lostApprovalRace) trace.push({ type: "policy.decision", at: iso(now), detail: { class: "submit", decision: "refused", reason: "approval_already_spent" } });
-	await insertApplyRun(env, { id: runId, instanceId, userId: uid, applicationId, requestId: key, policy, trace, now });
+	// The version that actually executes this run, from the machine's own registration (#977) — an
+	// old runner cannot annotate its result, so the fact has to be taken here.
+	await insertApplyRun(env, { id: runId, instanceId, userId: uid, applicationId, requestId: key, policy, trace, now, runnerVersion: runtime.runner_version ?? null });
 	let run = (await getApplyRun(env, instanceId, uid, runId)) as ApplyRun;
 
 	const envelope = applyTaskEnvelope(run, app, s);
