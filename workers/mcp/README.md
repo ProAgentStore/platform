@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**280 tool registrations.** 254 are always registered; 26 are gated to the console
+**281 tool registrations.** 255 are always registered; 26 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -478,6 +478,7 @@ immediately instead of a whole transcript.
 | `list_trigger_actions` | The action vocabulary judged against ONE agent (`available` + why not) | — | | |
 | `preview_instance_trigger` | Check a draft trigger before creating it: next run times, and what would be ignored | — | | |
 | `create_instance_trigger` | Create one | write | yes | |
+| `set_instance_trigger` | Change one that exists: on/off, cadence, name, config (#980) | write | yes | |
 | `run_instance_trigger` | Fire one now | runtime | yes | |
 | `list_instance_trigger_events` | Event history for a trigger | read | | |
 | `delete_instance_trigger` | Delete it, plus its history and sync ledger | destructive | yes | `delete_instance_trigger` |

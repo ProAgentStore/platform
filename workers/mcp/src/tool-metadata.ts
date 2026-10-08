@@ -330,6 +330,10 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	create_agent_task: "write",
 	update_agent_task: "write",
 	set_instance_tool: "write",
+	// #980: change a trigger that exists — switch a Scout's scan schedule on or off, move its
+	// cadence. `write`, not `destructive`: disabling keeps the trigger and its history, and
+	// deleting one is `delete_instance_trigger`.
+	set_instance_trigger: "write",
 	set_supervision_enabled: "write",
 	set_translation_config: "write",
 	set_instance_voice_settings: "write",
@@ -635,7 +639,7 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// a safety toggle (the reasoning `set_instance_connector_consent` already records). Not `read`
 	// either: switching an agent off is a real change.
 	// +1 write at #906: `secure_input_request`, agent creates a secure input request for a secret.
-	write: 82, // +3 at #895: link_board_item_issue, unlink_board_item_issue, sync_board_issues (cards from GitHub issues; nothing changes on GitHub, nothing starts); +1 at #953: set_application_runner_settings (edits the submission policy; auto-submit refused until its prerequisites exist); +2 at #958: triage_application (a decision on PAGS records; Apply emits the lead's handoff once) and cancel_application (stops a run, deletes nothing); +1 at #961: set_instance_tags (a label the owner writes; [] clears it); +1 at #955: triage_job_lead; +2 at #946: set_local_browser_consent (a decision, withdrawable) and review_local_browser_finding (saves one reviewed finding to the owner's own collection); +1 at #944: cancel_local_browser_run (stops a run; deletes nothing); +1 at #945: set_instance_local_browser_settings (edits config, starts nothing); +1 at #757: promote_board_item
+	write: 83, // +1 at #980: set_instance_trigger — switch a trigger on or off, move its cadence, rewrite its config. `write` because disabling KEEPS the trigger and its history; deleting one is delete_instance_trigger, which is destructive. It is what gives MCP the schedule controls the console has (#980 parity). +3 at #895: link_board_item_issue, unlink_board_item_issue, sync_board_issues (cards from GitHub issues; nothing changes on GitHub, nothing starts); +1 at #953: set_application_runner_settings (edits the submission policy; auto-submit refused until its prerequisites exist); +2 at #958: triage_application (a decision on PAGS records; Apply emits the lead's handoff once) and cancel_application (stops a run, deletes nothing); +1 at #961: set_instance_tags (a label the owner writes; [] clears it); +1 at #955: triage_job_lead; +2 at #946: set_local_browser_consent (a decision, withdrawable) and review_local_browser_finding (saves one reviewed finding to the owner's own collection); +1 at #944: cancel_local_browser_run (stops a run; deletes nothing); +1 at #945: set_instance_local_browser_settings (edits config, starts nothing); +1 at #757: promote_board_item
 	// +1 runtime at #806: `continue_instance_run`. `runtime` rather than `write` for the reason
 	// `start_instance_loop` is — it starts an autonomous run that spends on its own — and the
 	// two must agree, because a caller holding the scope to start one holding a narrower one to

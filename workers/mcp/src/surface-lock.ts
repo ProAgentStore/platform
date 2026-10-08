@@ -1071,4 +1071,12 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// submission to an employer that cannot be recalled — the rule `apply_to_job` is classed by.
 	// 279 registrations become 280, `MCP_TOOL_ALWAYS_ON` 253 → 254, gated stays 26. Appended.
 	"0.1.95": "sha256:ec0d49982a6a3716735cc356a87132d180961d1a42bc9e2468605512cdd9b371",
+	// 0.1.96 (#980): one new tool NAME — `set_instance_trigger`, which changes a trigger that
+	// already exists (switch it on or off, move its cadence, rewrite its config). The console's own
+	// scan-schedule controls send exactly that PUT, so without it MCP could create and delete a
+	// Job Search Scout's schedule but not pause it — the parity gap `check-mcp-parity` caught.
+	// Also two reworded READ descriptions (`get_instance_local_browser_settings` now documents the
+	// `schedule` block, `list_local_browser_runs` the per-scan `telemetry`), which do not themselves
+	// move the surface; the new name does.
+	"0.1.96": "sha256:ace716733cc8e6eb65366b1f7b361ff709feb1fad827538212a969374d03ab2a",
 };

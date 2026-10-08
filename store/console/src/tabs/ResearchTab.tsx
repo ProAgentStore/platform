@@ -6,7 +6,9 @@ import Button from "../components/Button";
 import Card from "../components/Card";
 import LoadFailed from "../components/LoadFailed";
 import { STATUS_LABEL, TONE_CLASS, isActiveRun, setupChecklist } from "../lib/localBrowser";
-import type { LocalBrowserPreflight, LocalBrowserRunList, LocalBrowserRunView } from "../lib/types";
+import type { LocalBrowserPreflight, LocalBrowserRunList, LocalBrowserRunView, LocalBrowserSettingsResponse } from "../lib/types";
+import type { ScanSchedule } from "../lib/scanSchedule";
+import ScanScheduleCard from "./research/ScanScheduleCard";
 import ResearchRunView from "./research/ResearchRunView";
 
 /**
@@ -30,12 +32,21 @@ function ResearchHome({ instanceId }: { instanceId: string }) {
 	const [objective, setObjective] = useState("");
 	const [starting, setStarting] = useState(false);
 	const [startMsg, setStartMsg] = useState("");
+	const [schedule, setSchedule] = useState<ScanSchedule | null>(null);
 
 	const loadRuns = useCallback(async () => {
 		try {
 			setRuns((await api<LocalBrowserRunList>(`/v1/instances/${instanceId}/local-browser/runs?limit=20`)).runs);
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
+		}
+	}, [instanceId]);
+	// The schedule rides on the settings response (#980) — one read, the same one MCP makes.
+	const loadSchedule = useCallback(async () => {
+		try {
+			setSchedule((await api<LocalBrowserSettingsResponse>(`/v1/instances/${instanceId}/local-browser/settings`)).schedule ?? null);
+		} catch {
+			/* the schedule is a read beside the runs; a failure must not blank the tab */
 		}
 	}, [instanceId]);
 	const loadPreflight = useCallback(async () => {
@@ -48,15 +59,17 @@ function ResearchHome({ instanceId }: { instanceId: string }) {
 	useEffect(() => {
 		loadPreflight();
 		loadRuns();
-	}, [loadPreflight, loadRuns]);
+		loadSchedule();
+	}, [loadPreflight, loadRuns, loadSchedule]);
 	usePolling(loadRuns, 5000, !!runs?.some((r) => isActiveRun(r.status)));
 
-	const start = async () => {
+	const start = async (what?: string) => {
+		const asked = (what ?? objective).trim();
 		setStarting(true);
 		setStartMsg("");
 		try {
 			// A fresh key per click: a retried request (a flaky network) returns the same run instead of a second one.
-			const run = await api<LocalBrowserRunView>(`/v1/instances/${instanceId}/local-browser/runs`, { method: "POST", body: JSON.stringify({ objective: objective.trim(), requestId: crypto.randomUUID() }) });
+			const run = await api<LocalBrowserRunView>(`/v1/instances/${instanceId}/local-browser/runs`, { method: "POST", body: JSON.stringify({ objective: asked, requestId: crypto.randomUUID() }) });
 			setObjective("");
 			navigate(`/instances/${instanceId}/research/${encodeURIComponent(run.id)}`);
 		} catch (e) {
@@ -92,6 +105,9 @@ function ResearchHome({ instanceId }: { instanceId: string }) {
 				</ul>
 			</Card>
 
+			{/* #980: is this Scout scheduled, when did it last look, when does it look next. */}
+			<ScanScheduleCard instanceId={instanceId} schedule={schedule} onChanged={loadSchedule} onScanNow={(what) => start(what)} />
+
 			<Card className="mb-3 sm:mb-4">
 				<label htmlFor="research-objective" className="text-sm font-semibold block mb-1">
 					What should it research?
@@ -106,7 +122,7 @@ function ResearchHome({ instanceId }: { instanceId: string }) {
 					className="w-full bg-paper border border-line rounded px-2 py-1.5 text-sm mb-2"
 				/>
 				<div className="flex gap-2 items-center flex-wrap">
-					<Button variant="primary" disabled={starting || !objective.trim() || preflight?.ready === false} onClick={start}>
+					<Button variant="primary" disabled={starting || !objective.trim() || preflight?.ready === false} onClick={() => start()}>
 						{starting ? "Starting…" : "Start research"}
 					</Button>
 					{preflight?.ready === false && <span className="text-xs text-warning">Finish the checklist above first.</span>}

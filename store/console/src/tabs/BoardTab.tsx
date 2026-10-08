@@ -11,6 +11,7 @@ import Button from "../components/Button";
 import Card from "../components/Card";
 import BoardIssueFace, { type BoardIssueFields } from "../components/BoardIssueFace";
 import ApplicationRunFace, { APPLICATION_CONFIRM, ApplicationRunControls, type ApplicationRunFields } from "../components/ApplicationRunFace";
+import ScanRunFace, { type ScanRunFields } from "../components/ScanRunFace";
 import { BoardLanesView, IssueControls, IssuesViewButton } from "../components/BoardLanes";
 import { type BoardIssueSyncResult, issueRepos } from "../lib/boardLanes";
 
@@ -35,7 +36,7 @@ const GENERIC_COLUMNS: BoardColumn[] = [
 ];
 
 interface BoardAttempt { id: string; status: string; updatedAt: string }
-interface BoardItem extends BoardIssueFields, ApplicationRunFields {
+interface BoardItem extends BoardIssueFields, ApplicationRunFields, ScanRunFields {
 	jobKey: string;
 	latestTaskId: string;
 	title: string;
@@ -493,6 +494,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onOpenSessio
 			</button>
 			<BoardIssueFace item={item} onOpenSession={onOpenSession} />
 			<ApplicationRunFace item={item} />
+			<ScanRunFace item={item} />
 
 			{/* Wraps: Ask is a fourth control on this row, and a kanban column is narrow enough
 			    that Approve + the column select already crowd it. */}

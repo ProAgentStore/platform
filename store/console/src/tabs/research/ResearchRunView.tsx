@@ -1,3 +1,4 @@
+import { telemetryRows } from "../../lib/scanSchedule";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
@@ -126,6 +127,23 @@ export default function ResearchRunView({ instanceId, runId }: { instanceId: str
 					))}
 				</ol>
 			</Card>
+
+			{/* #980: what the scan DID — counts, source reachability, what became of each result, and
+			    the sentence that explains an empty scan. The server's projection, not a second
+			    reading of the trace, so this and MCP say the same thing. */}
+			{run.telemetry && (
+				<Card data-testid="scan-telemetry">
+					<h3 className="text-base font-bold mb-2">Scan activity</h3>
+					<dl className="flex flex-col gap-1">
+						{telemetryRows(run.telemetry).map((row) => (
+							<div key={row.label} className="text-xs flex gap-2 items-baseline">
+								<dt className="text-muted shrink-0 w-40">{row.label}</dt>
+								<dd className={`flex-1 break-words ${row.tone === "danger" ? "text-danger" : row.tone === "warning" ? "text-warning" : "text-ink"}`}>{row.value}</dd>
+							</div>
+						))}
+					</dl>
+				</Card>
+			)}
 
 			{pages.length > 0 && (
 				<Card>

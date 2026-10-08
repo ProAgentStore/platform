@@ -7,6 +7,7 @@
  * through the two functions here, so the pull and the report routes cannot disagree about what an
  * event or a result does to a run.
  */
+import { syncScanCard } from "./scan-board.js";
 import { HttpError } from "../auth.js";
 import { deepLinkFor } from "../console-links.js";
 import { instanceListName } from "../instance-config.js";
@@ -85,9 +86,15 @@ export async function ingestRunnerEvents(
 			if (paused) {
 				current = paused;
 				await notifyPaused(env, uid, instanceId, paused, e.pauseReason ?? null, now).catch(() => undefined);
+				// A scan waiting on a login, a captcha or a consent decision belongs in "Needs you"
+				// on the board, not only in a notification that scrolls away (#980).
+				await syncScanCard(env, instanceId, uid, paused);
 			}
 		}
-		else if (e.type === "run.resumed" && current.status === "paused") current = (await transitionLocalBrowserRun(env, instanceId, uid, run.id, { to: "running" }, now)) ?? current;
+		else if (e.type === "run.resumed" && current.status === "paused") {
+			current = (await transitionLocalBrowserRun(env, instanceId, uid, run.id, { to: "running" }, now)) ?? current;
+			await syncScanCard(env, instanceId, uid, current);
+		}
 	}
 	return { run: current, accepted: stored, rejected: raw.length - events.length, dropped: events.length - stored };
 }
@@ -110,12 +117,16 @@ export async function applyRunnerResult(env: Env, instanceId: string, uid: strin
 	);
 	if (!moved) throw new HttpError(409, `The run cannot end from "${run.status}"`);
 	await appendLocalBrowserEvents(env, instanceId, uid, run.id, [{ type: "run.ended", at: new Date(now).toISOString(), detail: { status: to, findings: parsed.findings.length, sourceFailures: parsed.sourceFailures.length, engineAuth: parsed.engineAuth } }], now);
+	await syncScanCard(env, instanceId, uid, moved);
 	return moved;
 }
 
 async function endLost(env: Env, instanceId: string, uid: string, run: LocalBrowserRun, error: string, now: number): Promise<LocalBrowserRun> {
 	const failed = await transitionLocalBrowserRun(env, instanceId, uid, run.id, { to: "failed", errorCode: "runner_lost", error }, now);
-	if (failed) await appendLocalBrowserEvents(env, instanceId, uid, run.id, [{ type: "run.ended", at: new Date(now).toISOString(), detail: { status: "failed", errorCode: "runner_lost" } }], now);
+	if (failed) {
+		await appendLocalBrowserEvents(env, instanceId, uid, run.id, [{ type: "run.ended", at: new Date(now).toISOString(), detail: { status: "failed", errorCode: "runner_lost" } }], now);
+		await syncScanCard(env, instanceId, uid, failed);
+	}
 	return failed ?? run;
 }
 

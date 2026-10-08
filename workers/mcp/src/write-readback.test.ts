@@ -399,6 +399,12 @@ const READBACK: Record<string, string | null> = {
 	"create_instance_trigger.action": "list_instance_triggers",
 	"create_instance_trigger.schedule": "list_instance_triggers",
 	"create_instance_trigger.config": "list_instance_triggers",
+	// #980: the same three fields, written in place by the schedule controls. `enabled` is a
+	// CONTROL arg by the table's own rule (a switch, not stored content) — and it is read back the
+	// same way, plus as `schedule.enabled` on get_instance_local_browser_settings for a Scout.
+	"set_instance_trigger.name": "list_instance_triggers",
+	"set_instance_trigger.schedule": "list_instance_triggers",
+	"set_instance_trigger.config": "list_instance_triggers",
 	"run_instance_trigger.payload": "list_instance_trigger_events",
 	"create_supervision.subordinate_instance_id": "list_supervision",
 	"create_connection.event_type": "list_connections",

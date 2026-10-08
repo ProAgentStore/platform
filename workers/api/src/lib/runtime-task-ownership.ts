@@ -90,6 +90,10 @@ export const RUNTIME_TASK_OWNERS: Readonly<Record<string, RuntimeTaskOwner>> = {
 	// sweep must never expire it. (The runner-held tasks it describes are the two `runner-durable`
 	// entries above, which keep their own state across a restart.)
 	"application.run": "cloud", // lib/applications/application-board.ts
+	// #980: one Job Search Scout SCAN. Cloud-owned: it is a projection of PAGS's own
+	// `local_browser_runs` row (the runner holds the task, not this card), so a reconnect sweep must
+	// never expire it — and the leads it produced are Data, joined to it by `scan.leadRecordIds`.
+	"local_browser.scan": "cloud", // lib/local-browser/scan-board.ts
 	ticket: "cloud", // lib/tool-registry.ts create_ticket
 	// #864: a run the ticket queue started, on the board naming its ticket. The run is a durable loop
 	// in the cloud, and `run-events.ts` settles the row when it ends — never a runner's to expire.

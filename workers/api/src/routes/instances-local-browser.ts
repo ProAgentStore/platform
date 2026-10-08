@@ -1,3 +1,6 @@
+import { readScanSchedule, scanScheduleSummary } from "../lib/local-browser/schedule.js";
+import { scanTelemetry } from "../lib/local-browser/telemetry.js";
+import { syncScanCard } from "../lib/local-browser/scan-board.js";
 import type { Context, Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { logError } from "../lib/error-log.js";
@@ -81,6 +84,9 @@ export function engineLoginCheck(seen: ObservedEngineAuth | null, engine: string
 
 const REQUEST_ID_RE = /^[A-Za-z0-9_.:-]{1,100}$/;
 
+/** How much of a run's trace the telemetry is computed from. A run's trace is bounded by policy. */
+const SCAN_TELEMETRY_EVENTS = 500;
+
 export function registerLocalBrowserRoutes(router: Hono<{ Bindings: Env }>): void {
 	/** The stored settings, the policy a run would start with, the agent's ceilings, and the runner pin. */
 	router.get("/:instanceId/local-browser/settings", async (c) => {
@@ -88,7 +94,12 @@ export function registerLocalBrowserRoutes(router: Hono<{ Bindings: Env }>): voi
 		const cap = await capabilityOf(c, instanceId, uid);
 		const { settings, runnerNode } = await readLocalBrowserSettings(c.env, instanceId, uid);
 		const effective = effectiveLocalBrowserPolicy(cap, settings);
-		return c.json({ settings, effective: "error" in effective ? null : effective, problem: "error" in effective ? effective.error : null, capability: cap, runnerNode });
+		// The SCAN SCHEDULE (#980), on the response the console's settings card and MCP's
+		// `get_instance_local_browser_settings` both already read — so "is this Scout scheduled" is
+		// answered in the same breath as "how would it run", and the two surfaces cannot disagree.
+		// A view over the existing cron trigger, never a second scheduler: see lib/local-browser/schedule.ts.
+		const schedule = await readScanSchedule(c.env, instanceId, uid);
+		return c.json({ settings, effective: "error" in effective ? null : effective, problem: "error" in effective ? effective.error : null, capability: cap, runnerNode, schedule, scheduleSummary: scanScheduleSummary(schedule) });
 	});
 
 	/** PATCH semantics: a field present replaces, `null` clears it to the agent default. The pin is `PUT /runner-node`. */
@@ -200,7 +211,13 @@ export function registerLocalBrowserRoutes(router: Hono<{ Bindings: Env }>): voi
 	router.get("/:instanceId/local-browser/runs/:runId", async (c) => {
 		const { uid, instanceId } = await owned(c);
 		const run = await runOr404(c, instanceId, uid);
-		return c.json(await syncLocalBrowserRun(c.env, instanceId, uid, run).catch(() => run));
+		const current = await syncLocalBrowserRun(c.env, instanceId, uid, run).catch(() => run);
+		// What the scan DID, structured (#980): counts, source reachability, dispositions by reason
+		// and the terminal reason — from the trace PAGS already holds, so reading it reaches no
+		// machine. Privacy boundary argued in lib/local-browser/telemetry.ts: counts, hostnames and
+		// closed-vocabulary codes only, never page text or engine output.
+		const events = await listLocalBrowserEvents(c.env, instanceId, uid, current.id, 0, SCAN_TELEMETRY_EVENTS).catch(() => []);
+		return c.json({ ...current, telemetry: scanTelemetry({ run: current, events }) });
 	});
 
 	/**
@@ -240,6 +257,9 @@ export function registerLocalBrowserRoutes(router: Hono<{ Bindings: Env }>): voi
 			const runtime = await getLiveRuntime(c.env, instanceId, uid).catch(() => null);
 			if (runtime) await callRuntime(c.env, runtime, LOCAL_BROWSER_CANCEL_PATH, { method: "POST", body: JSON.stringify({ runId: run.id }) }).catch(() => undefined);
 		}
+		// The fourth place a scan's state changes (#980) — a cancelled scan must not sit on the board
+		// as if it were still running.
+		await syncScanCard(c.env, instanceId, uid, moved);
 		return c.json(moved);
 	});
 

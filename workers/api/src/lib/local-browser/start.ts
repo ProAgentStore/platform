@@ -13,6 +13,7 @@ import type { Env } from "../../types.js";
 import { LOCAL_BROWSER_RUN_PATH, LOCAL_BROWSER_TASK_TYPE, type LocalBrowserTaskEnvelope } from "./contract.js";
 import { LOCAL_BROWSER_CODEX_MIN_CLI, effectiveLocalBrowserPolicy, type LocalBrowserCapability } from "./policy.js";
 import { cliAtLeast } from "../runner-upgrade.js";
+import { syncScanCard } from "./scan-board.js";
 import {
 	appendLocalBrowserEvents,
 	getLocalBrowserRun,
@@ -76,7 +77,11 @@ export async function startLocalBrowserRun(
 			detail: { engine: policy.engine, authMode: policy.authMode, browserProfile: policy.browserProfile, maxMinutes: policy.limits.maxMinutes, maxPages: policy.limits.maxPages, source: input.source },
 		},
 	], now);
-	return { kind: "started", run: await dispatch(env, instanceId, uid, run) };
+	const dispatched = await dispatch(env, instanceId, uid, run);
+	// On the BOARD the moment it starts (#980), not when it ends: a Scout mid-scan showed an empty
+	// board and an `Idle` card, which is what made "is it doing anything" unanswerable.
+	await syncScanCard(env, instanceId, uid, dispatched);
+	return { kind: "started", run: dispatched };
 }
 
 /**

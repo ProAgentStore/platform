@@ -459,6 +459,9 @@ const TABLE: Record<string, Row> = {
 	set_local_browser_consent: ["localBrowser", "write", null, "envelope", "decision,domain,dry_run,instance_id,scope,token,ttl_days"],
 	review_local_browser_finding: ["localBrowser", "write", null, "envelope", "decision,dry_run,force,index,instance_id,run_id,token"],
 	run_instance_trigger: ["triggers", "runtime", null, "envelope", "dry_run,payload,token,trigger_id"],
+	// #980: the in-place change the console's scan-schedule controls make — enable/disable, move
+	// the cadence, rewrite the config. `write`, no confirmation: disabling keeps the trigger.
+	set_instance_trigger: ["triggers", "write", null, "envelope", "config,dry_run,enabled,name,schedule,token,trigger_id"],
 	search_instance_knowledge: ["knowledge", "none", null, null, "instance_id,query,token,top_k"],
 	set_account_preferences: ["account", "write", null, "envelope", "coding,dry_run,notifications,timezone,token,translation,voice"],
 	set_agent_capabilities: ["agentAuthoring", "destructive", "set_agent_capabilities", "envelope", "agent_id,confirm,custom_surfaces,dry_run,local_browser,runtime,surfaces,token,tools,workflow"],

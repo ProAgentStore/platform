@@ -11,6 +11,7 @@
 import { HttpError } from "../auth.js";
 import type { Env } from "../../types.js";
 import type { LocalBrowserFinding } from "./contract.js";
+import { syncScanCard } from "./scan-board.js";
 import { type FindingReview, type LocalBrowserRun, appendLocalBrowserEvents, consentIdForHost, getLocalBrowserRun, listDomainConsent, setFindingReview } from "./store.js";
 
 export type FindingAction = "save" | "skip";
@@ -99,5 +100,8 @@ export async function reviewFinding(env: Env, instanceId: string, uid: string, r
 		],
 		now,
 	);
-	return (await getLocalBrowserRun(env, instanceId, uid, run.id)) ?? run;
+	const reviewed = (await getLocalBrowserRun(env, instanceId, uid, run.id)) ?? run;
+	// The card's lead counts are the owner's decisions, so they move when a decision is made (#980).
+	await syncScanCard(env, instanceId, uid, reviewed);
+	return reviewed;
 }

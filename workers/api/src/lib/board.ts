@@ -1,6 +1,7 @@
 import { clipMarked } from "./clip-marked.js";
 import { assertJobKey } from "./write-limits.js";
 import { type ApplicationCardPayload, parseApplicationCard } from "./applications/application-card-payload.js";
+import { type ScanCardPayload, parseScanCard } from "./local-browser/scan-card-payload.js";
 import type { Env } from "../types.js";
 import { mirroredRuntimeTasks, isRecord } from "../routes/instances-runtime.js";
 import { agentCapabilities, sanitizeBoardColumns, type BoardColumn } from "./agent-capabilities.js";
@@ -151,6 +152,12 @@ export interface BoardItemView {
 	 * the Data surface); this is only the execution against it.
 	 */
 	application?: ApplicationCardPayload;
+	/**
+	 * The SCAN this card is an execution of (#980), when it is one: how it was started, what it
+	 * read, what became of each result, and the Data records it produced. One card per scan run;
+	 * the leads themselves stay Data (`job_leads`), joined to it by `scan.leadRecordIds`.
+	 */
+	scan?: ScanCardPayload;
 	/**
 	 * The first-class ticket this card is (#757), when it has been promoted or was created as one.
 	 * Present means `attempts` includes the ticket's STORED runs, so it no longer shrinks when runs
@@ -451,6 +458,10 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 			...(() => {
 				const application = parseApplicationCard((rep as Record<string, unknown>).application);
 				return application ? { application } : {};
+			})(),
+			...(() => {
+				const scan = parseScanCard((rep as Record<string, unknown>).scan);
+				return scan ? { scan } : {};
 			})(),
 		};
 		items.push(item);

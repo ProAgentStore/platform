@@ -1,4 +1,5 @@
 import type { InstanceRetirement } from "./retirement";
+import type { ScanSchedule, ScanTelemetry } from "./scanSchedule";
 
 export interface Agent {
 	id: string;
@@ -594,6 +595,9 @@ export interface LocalBrowserSettingsResponse {
 	problem: string | null;
 	capability: LocalBrowserCapabilityView;
 	runnerNode: string | null;
+	/** The Scout's scan schedule (#980) — a view over the cron trigger that fires it. */
+	schedule?: ScanSchedule;
+	scheduleSummary?: string;
 }
 
 /** `PUT …/local-browser/settings`. */
@@ -662,6 +666,8 @@ export interface LocalBrowserRunView {
 	engineAuth: string | null;
 	runnerNode: string | null;
 	findingReviews: Record<string, LocalBrowserFindingReview>;
+	/** What the scan did, structured (#980). Sent by the single-run read, not by the listing. */
+	telemetry?: ScanTelemetry;
 	createdAt: number;
 	startedAt: number | null;
 	endedAt: number | null;

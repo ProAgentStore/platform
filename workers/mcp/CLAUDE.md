@@ -95,8 +95,9 @@ src/
 │                     the builder plan/execute pair (#613)
     ├── settings.ts       18 tools — settings, name, instructions, operator manual, model, translation, state,
 │                     voice settings (read / customise / use-my-defaults, #613), behaviour schema
-    ├── triggers.ts       7 tools — webhook / cron / connector-sync triggers, plus the action
-│                     vocabulary and the draft preview the console's form is built from (#613)
+    ├── triggers.ts       8 tools — webhook / cron / connector-sync triggers, plus the action
+│                     vocabulary and the draft preview the console's form is built from (#613),
+│                     and the in-place change of one (#980: enable/disable, move a cadence)
     ├── composition.ts   19 tools — supervision (#183), connections (#182) with the delivery outbox,
 │                     replay and delete that complete them (#613), loops, loop presets
     ├── account.ts        17 tools — whoami, platform_health (#198), billing, usage, keys, email, profile, budget limits,
@@ -123,13 +124,13 @@ src/
                           surfaces:["coding"]) + 5 loop tools (3 run + 2 objective queue)
 ```
 
-**280 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
+**281 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
 `tools/server-info.ts`, 12 in
 `coding-tools.ts`, 2 in `coding-engine-tools.ts` and 1 in `coding-reauth-tools.ts` — all fifteen behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 228 across `instance-tools/`. 254 are always registered; 26 are
+`storage-tools.ts`, and 229 across `instance-tools/`. 255 are always registered; 26 are
 surface-gated (apply=4, repo=3, coding=19).
 
-These counts add up to the headline: 21 + 1 + 12 + 2 + 1 + 15 + 228 = 280. They said 88 until #602, which made the paragraph sum to 132 — a total the
+These counts add up to the headline: 21 + 1 + 12 + 2 + 1 + 15 + 229 = 281. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added

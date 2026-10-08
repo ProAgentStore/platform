@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { authRequired, authedCall, jsonText } from "../http.js";
+import { authRequired, authedCall, jsonText, text } from "../http.js";
 import { audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
 import { type InstanceToolsCtx, normalizeTriggerConfig, triggerConfigSchema } from "./shared.js";
 
@@ -79,6 +79,40 @@ export function registerTriggerTools(server: McpServer, ctx: InstanceToolsCtx): 
 				env,
 			);
 			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "create_instance_trigger", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"set_instance_trigger",
+		"Change a trigger that exists: switch it on or off, move its cadence, rename it, or rewrite its config. PATCH semantics — pass only what changes. This is the MCP counterpart of the console's own schedule controls (#980): a Job Search Scout's scan schedule IS a cron trigger with action `run_local_browser` and `config.objective`, read back (with its next and last run) from get_instance_local_browser_settings as `schedule`. Disabling a trigger is not the same as deleting it: the cadence stays visible and switched off, which is what a paused schedule should look like. An action the instance's agent cannot perform is refused rather than saved.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			trigger_id: z.string().describe("The trigger's id, from list_instance_triggers or create_instance_trigger."),
+			enabled: z.boolean().optional().describe("Switch it on or off. Off keeps the trigger and its cadence; nothing fires."),
+			name: z.string().optional().describe("Rename it."),
+			schedule: z.string().optional().describe("Cron triggers only. Examples: @daily, @hourly, every 15 minutes, 0 8 * * *"),
+			config: triggerConfigSchema,
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, trigger_id, enabled, name, schedule, config, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const body: Record<string, unknown> = {
+				...(enabled === undefined ? {} : { enabled }),
+				...(name === undefined ? {} : { name }),
+				...(schedule === undefined ? {} : { schedule }),
+				...(config === undefined ? {} : { config: normalizeTriggerConfig(config) }),
+			};
+			const input = { trigger_id, ...body };
+			const denied = await requirePermission(safetyFor(token), "write", "set_instance_trigger", input);
+			if (denied) return denied;
+			if (!Object.keys(body).length) return text("Error: pass at least one field to change (enabled, name, schedule or config).");
+			if (dry_run) {
+				return dryRun(safetyFor(token), "set_instance_trigger", "update instance trigger", input, { endpoint: `/v1/triggers/${trigger_id}`, method: "PUT", body });
+			}
+			const data = await authedCall(`/v1/triggers/${encodeURIComponent(trigger_id)}`, sessionToken, { method: "PUT", body: JSON.stringify(body) }, env);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_instance_trigger", action: "completed", input, result: data });
 			return jsonText(data);
 		},
 	);
