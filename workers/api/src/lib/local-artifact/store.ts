@@ -130,6 +130,12 @@ export interface JobApplication {
 	/** Only from a confirmed submit. */
 	submittedAt: string | null;
 	submittedUrl: string | null;
+	/** Why the application was terminally archived, if it was. */
+	archiveReason: string | null;
+	/** Bounded runner evidence for a terminal archive. */
+	archiveEvidence: unknown;
+	/** When the Scout acknowledged a terminal unavailable disposition. */
+	leadDispositionSyncedAt: number | null;
 }
 
 interface AppRow {
@@ -158,6 +164,9 @@ interface AppRow {
 	submit_attempted_at: number | null;
 	submitted_at: string | null;
 	submitted_url: string | null;
+	archive_reason: string | null;
+	archive_evidence: string | null;
+	lead_disposition_synced_at: number | null;
 }
 
 const json = <T>(s: string | null): T | null => {
@@ -194,6 +203,9 @@ const presentApp = (r: AppRow): JobApplication => ({
 	submitAttemptedAt: r.submit_attempted_at ?? null,
 	submittedAt: r.submitted_at ?? null,
 	submittedUrl: r.submitted_url ?? null,
+	archiveReason: r.archive_reason ?? null,
+	archiveEvidence: json(r.archive_evidence),
+	leadDispositionSyncedAt: r.lead_disposition_synced_at ?? null,
 });
 
 /** By id and owner only — the Application Runner (#957) acts on an application another of the owner's instances holds. */
@@ -206,8 +218,8 @@ export async function getOwnedApplication(env: DB, userId: string, id: string): 
  * Write an application's current state back onto the lead it came from (#953), in the Scout's own
  * `job_leads` record: `application_status`, its version, block reason and confirmed submission.
  * Best-effort and idempotent — the Scout's DO applies it only if it is newer than what the lead
- * holds — so it is safe to call after every move and from the cron backstop. Never the lead's
- * triage `status`, never an event.
+ * holds — so it is safe to call after every move and from the cron backstop. The sole exception
+ * is a verified `job_unavailable` archive, which terminally archives the same lead as expired.
  */
 export async function writeBackToLead(env: DB, userId: string, applicationId: string): Promise<boolean> {
 	if (!env.AGENT) return false;
@@ -226,11 +238,20 @@ export async function writeBackToLead(env: DB, userId: string, applicationId: st
 					block_reason: app.blockReason,
 					submitted_at: app.submittedAt,
 					submitted_url: app.submittedUrl,
+					disposition: app.status === "archived" && app.archiveReason === "job_unavailable" ? "expired" : undefined,
+					disposition_reason: app.status === "archived" ? app.archiveReason : undefined,
+					disposition_evidence: app.status === "archived" ? app.archiveEvidence : undefined,
 					at: new Date(app.updatedAt).toISOString(),
 				}),
 			}),
 		);
-		return res.ok;
+		if (!res.ok) return false;
+		if (app.status === "archived" && app.archiveReason === "job_unavailable" && !app.leadDispositionSyncedAt) {
+			await env.DB.prepare("UPDATE job_applications SET lead_disposition_synced_at = ?1 WHERE id = ?2 AND user_id = ?3 AND lead_disposition_synced_at IS NULL")
+				.bind(Date.now(), app.id, userId)
+				.run();
+		}
+		return true;
 	} catch {
 		// The cron backstop (`syncLeadWritebacks`) writes it on the next tick; the move itself stands.
 		return false;
@@ -239,7 +260,11 @@ export async function writeBackToLead(env: DB, userId: string, applicationId: st
 
 /** The cron backstop: re-send the state of applications that moved recently. Idempotent on the lead's side. */
 export async function syncLeadWritebacks(env: DB, sinceMs: number, limit = 50): Promise<number> {
-	const { results } = await env.DB.prepare("SELECT id, user_id FROM job_applications WHERE updated_at >= ?1 ORDER BY updated_at DESC LIMIT ?2").bind(sinceMs, limit).all<{ id: string; user_id: string }>();
+	const { results } = await env.DB.prepare(
+		"SELECT id, user_id FROM job_applications WHERE updated_at >= ?1 OR (archive_reason = 'job_unavailable' AND lead_disposition_synced_at IS NULL) ORDER BY updated_at DESC LIMIT ?2",
+	)
+		.bind(sinceMs, limit)
+		.all<{ id: string; user_id: string }>();
 	let n = 0;
 	for (const r of results ?? []) if (await writeBackToLead(env, r.user_id, r.id)) n++;
 	return n;

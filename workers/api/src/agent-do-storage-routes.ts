@@ -21,6 +21,7 @@ import {
 	JOB_LEAD_TRIAGE_ACTIONS,
 	duplicateApplyOf,
 	jobLeadStatus,
+	jobLeadVersion,
 	planApplicationWriteback,
 	planJobLeadTriage,
 	type JobLeadTriageAction,
@@ -211,9 +212,46 @@ export async function writeJobLeadApplication(engine: Pick<AgentStorageEngine, "
 		submittedUrl: str(b?.submitted_url),
 		at: str(b?.at) ?? new Date().toISOString(),
 	});
-	if (!patch) return json({ applied: false });
-	await engine.recordUpdate(JOB_LEAD_COLLECTION, record.id, patch);
-	return json({ applied: true });
+	// `job_unavailable` is a verified terminal observation: archive THIS lead in the same
+	// serialized Scout record write that records the application's terminal state. The D1 move and
+	// its application audit are already a transaction; this message is deliberately idempotent so
+	// `syncLeadWritebacks` can finish the cross-store handoff after a transient DO failure.
+	const expired = b?.disposition === "expired" && b?.disposition_reason === "job_unavailable";
+	if (!expired) {
+		if (!patch) return json({ applied: false });
+		await engine.recordUpdate(JOB_LEAD_COLLECTION, record.id, patch);
+		return json({ applied: true });
+	}
+	const at = str(b?.at) ?? new Date().toISOString();
+	const heldLead = typeof record.data.application_lead_version === "number" ? record.data.application_lead_version : -1;
+	const heldVersion = typeof record.data.application_version === "number" ? record.data.application_version : -1;
+	// A later application/lead generation owns the record now. A stale terminal report may still
+	// write nothing, but must never archive that newer opportunity.
+	if (leadVersion < heldLead || (leadVersion === heldLead && record.data.application_id !== applicationId) || (leadVersion === heldLead && version < heldVersion)) return json({ applied: false, stale: true });
+	const current = jobLeadStatus(record.data);
+	const isSameDisposition = current === "archived" && record.data.expired_application_id === applicationId && record.data.expired_application_version === version;
+	if (isSameDisposition && !patch) return json({ applied: false, disposition: "expired" });
+	const history = Array.isArray(record.data.lifecycle) ? record.data.lifecycle : [];
+	const nextVersion = current === "archived" ? jobLeadVersion(record.data) : jobLeadVersion(record.data) + 1;
+	const transition = current === "archived"
+		? {}
+		: {
+				status: "archived",
+				lifecycle_version: nextVersion,
+				lifecycle: [...history, { from: current, to: "archived", action: "archive", version: nextVersion, at, note: "Job unavailable" }],
+				triage_action: "archive",
+				triaged_at: at,
+			};
+	const evidence = b?.disposition_evidence;
+	const disposition = {
+		expired_at: at,
+		expired_reason: "job_unavailable",
+		expired_application_id: applicationId,
+		expired_application_version: version,
+		...(evidence === undefined ? {} : { expired_evidence: evidence }),
+	};
+	await engine.recordUpdate(JOB_LEAD_COLLECTION, record.id, { ...(patch ?? {}), ...transition, ...disposition });
+	return json({ applied: true, disposition: "expired" });
 }
 
 // ── Files ───────────────────────────────────────────────────────────────────

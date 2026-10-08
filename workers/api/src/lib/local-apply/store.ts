@@ -25,7 +25,7 @@ type DB = Pick<Env, "DB"> & Partial<Pick<Env, "AGENT">>;
 export const APPLICATION_TRANSITIONS: Readonly<Partial<Record<ApplicationStatus, readonly ApplicationStatus[]>>> = {
 	tailoring: ["materials_ready", "blocked", "failed", "cancelled"],
 	materials_ready: ["filling", "deferred", "archived"],
-	filling: ["awaiting_review", "submitted", "blocked", "failed"],
+	filling: ["awaiting_review", "submitted", "blocked", "failed", "archived"],
 	blocked: ["tailoring", "materials_ready", "filling", "awaiting_review", "submitted", "failed", "deferred", "archived"],
 	awaiting_review: ["deferred", "archived"],
 	deferred: ["materials_ready", "archived"],
@@ -53,6 +53,10 @@ export interface ApplicationMove {
 	submitAttempted?: boolean;
 	/** Only with a CONFIRMED submit. */
 	submitted?: { at: string; url: string };
+	/** Why a terminal archive occurred, retained for durable Scout disposition retries. */
+	archiveReason?: string | null;
+	/** Bounded evidence reported by the runner for the terminal archive. */
+	archiveEvidence?: unknown;
 }
 
 /**
@@ -73,8 +77,10 @@ export async function moveApplication(env: DB, app: Pick<JobApplication, "id" | 
 			        block_reason = ?4, block_questions = ?5,
 			        fill_run_id = COALESCE(?6, fill_run_id),
 			        submit_attempted_at = COALESCE(submit_attempted_at, ?7),
-			        submitted_at = COALESCE(?8, submitted_at), submitted_url = COALESCE(?9, submitted_url)
-			  WHERE id = ?10 AND user_id = ?11 AND status = ?12 AND state_version = ?13 AND (?14 IS NULL OR fill_run_id = ?14)`,
+			        submitted_at = COALESCE(?8, submitted_at), submitted_url = COALESCE(?9, submitted_url),
+			        archive_reason = CASE WHEN ?10 = 'archived' THEN COALESCE(?11, archive_reason) ELSE archive_reason END,
+			        archive_evidence = CASE WHEN ?10 = 'archived' THEN COALESCE(?12, archive_evidence) ELSE archive_evidence END
+			  WHERE id = ?13 AND user_id = ?14 AND status = ?15 AND state_version = ?16 AND (?17 IS NULL OR fill_run_id = ?17)`,
 		).bind(
 			m.to,
 			version,
@@ -85,6 +91,9 @@ export async function moveApplication(env: DB, app: Pick<JobApplication, "id" | 
 			m.submitAttempted || m.submitted ? now : null,
 			m.submitted?.at ?? null,
 			m.submitted?.url ?? null,
+			m.to,
+			m.archiveReason ?? m.reason ?? null,
+			m.archiveEvidence === undefined ? null : JSON.stringify(m.archiveEvidence),
 			app.id,
 			userId,
 			app.status,

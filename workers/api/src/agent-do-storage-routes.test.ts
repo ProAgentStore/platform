@@ -231,6 +231,60 @@ describe("job lead triage — compare-and-set and the instance it speaks for (#9
 	});
 });
 
+describe("unavailable application settlement", () => {
+	it("archives the matching Scout lead as expired with one lifecycle audit, and a replay is a no-op", async () => {
+		let record = {
+			id: "lead-1",
+			collection: "job_leads",
+			data: {
+				status: "apply_requested",
+				lifecycle_version: 1,
+				lifecycle: [{ from: "new", to: "apply_requested", action: "apply", version: 1, at: "2026-10-07T00:00:00.000Z" }],
+				application_id: "app-1",
+				application_lead_version: 1,
+				application_status: "filling",
+				application_version: 2,
+			},
+			createdAt: "x",
+			updatedAt: "x",
+		};
+		let writes = 0;
+		const engine = fakeEngine<"recordGet" | "recordUpdate">({
+			recordGet: async () => record,
+			recordUpdate: async (_collection: string, _id: string, patch: Record<string, unknown>) => {
+				writes++;
+				record = { ...record, data: { ...record.data, ...patch } };
+				return record;
+			},
+		});
+		const body = {
+			application_id: "app-1",
+			lead_version: 1,
+			status: "archived",
+			version: 3,
+			disposition: "expired",
+			disposition_reason: "job_unavailable",
+			disposition_evidence: { reason: "expired", url: "https://jobs.example.test/1", observedAt: "2026-10-07T00:05:00.000Z", source: "page_notice" },
+			at: "2026-10-07T00:06:00.000Z",
+		};
+		expect(await (await routes.writeJobLeadApplication(engine, "lead-1", post(body))).json()).toMatchObject({ applied: true, disposition: "expired" });
+		expect(record.data).toMatchObject({
+			status: "archived",
+			lifecycle_version: 2,
+			application_status: "archived",
+			application_version: 3,
+			expired_reason: "job_unavailable",
+			expired_application_id: "app-1",
+			expired_application_version: 3,
+			expired_evidence: body.disposition_evidence,
+		});
+		expect(record.data.lifecycle).toEqual(expect.arrayContaining([expect.objectContaining({ from: "apply_requested", to: "archived", action: "archive", note: "Job unavailable" })]));
+
+		expect(await (await routes.writeJobLeadApplication(engine, "lead-1", post(body))).json()).toMatchObject({ applied: false, disposition: "expired" });
+		expect(writes).toBe(1);
+	});
+});
+
 describe("file routes", () => {
 	it("drops an empty tags param rather than filtering on ['']", async () => {
 		let opts: Record<string, unknown> = {};

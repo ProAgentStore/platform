@@ -225,6 +225,10 @@ async function settleFromResult(env: Env, uid: string, run: ApplyRun, rawResult:
 		r = { ...r, outcome: "blocked", blockReason: "submit_unconfirmed", questions: ["The runner reported a submission this run's policy did not permit. Check the employer's site before anything else is done."], submitted: undefined };
 	}
 	const to = r.outcome;
+	const unavailable = r.outcome === "blocked" && (r.blockReason as string | undefined) === "job_unavailable";
+	// The contract carries structured evidence for this condition. Keep it opaque here: the
+	// contract parser is the trust boundary, while this layer only persists and relays it.
+	const unavailableEvidence = r.unavailable;
 	const moved = await updateApplyRun(
 		env,
 		run,
@@ -233,7 +237,15 @@ async function settleFromResult(env: Env, uid: string, run: ApplyRun, rawResult:
 	);
 	if (!moved) return run;
 	const from = ["filling", "blocked"] as const;
-	if (to === "submitted" && r.submitted) await move(env, uid, run.applicationId, from, { ...base, to: "submitted", submitted: { at: r.submitted.at, url: r.submitted.url } }, now);
+	if (unavailable) {
+		await move(env, uid, run.applicationId, from, {
+			...base,
+			to: "archived",
+			reason: "job_unavailable",
+			archiveReason: "job_unavailable",
+			archiveEvidence: unavailableEvidence,
+		}, now);
+	} else if (to === "submitted" && r.submitted) await move(env, uid, run.applicationId, from, { ...base, to: "submitted", submitted: { at: r.submitted.at, url: r.submitted.url } }, now);
 	else if (to === "awaiting_review") await move(env, uid, run.applicationId, from, { ...base, to: "awaiting_review" }, now);
 	else if (to === "blocked") await move(env, uid, run.applicationId, from, { ...base, to: "blocked", reason: r.blockReason ?? "incomplete", questions: r.questions ?? [] }, now);
 	else await move(env, uid, run.applicationId, from, { ...base, to: "failed", reason: r.engineAuth === "missing_login" ? "engine_not_signed_in" : "engine_failed" }, now);
