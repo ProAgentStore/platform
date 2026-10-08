@@ -34,6 +34,9 @@ import { finalText, missingLogin, signInHelp } from "../local-browser/engine.js"
 import { resolveWorkspacePath } from "../local-browser/runtime.js";
 import { ApplyBridge } from "./bridge.js";
 import {
+	type LocalApplySignal,
+	type LocalApplyDiagnosticCause,
+	type LocalApplyDiagnostic,
 	LOCAL_APPLY_AUTH_MODES,
 	LOCAL_APPLY_CAPS,
 	LOCAL_APPLY_ENGINES,
@@ -198,6 +201,19 @@ export function verifyArtifact(workspace: string, home: string, a: LocalApplyArt
 	}
 }
 
+/**
+ * What to tell the owner when the CLI put nothing on the page (#975) — built from the diagnostic's
+ * own ids, so the advice follows the observation rather than guessing at it.
+ */
+function bridgeUnusedHelp(engine: string, d: LocalApplyDiagnostic): string {
+	if (d.signals.includes("approval_policy_blocked")) return `The ${engine} CLI would not use the browser tools because its own approval policy refused them. Allow the PAGS bridge toolset for this session, then retry.`;
+	if (d.signals.includes("bridge_tools_missing")) return `The ${engine} CLI never saw the browser tools. Update the CLI (npm i -g @proagentstore/cli), run \`pags up\` again, then retry.`;
+	if (d.signals.includes("auth_prompt")) return `The ${engine} CLI stopped on a sign-in prompt before opening the page. Sign it in on this machine, then retry.`;
+	if (d.signals.includes("no_output")) return `The ${engine} CLI produced no output at all before exiting. Check that it runs on this machine, then retry.`;
+	if (d.signals.includes("engine_refused_task")) return `The ${engine} CLI declined the task and never opened the page. Its own closing message is on this run's summary.`;
+	return `The ${engine} CLI ran for ${Math.round(d.activeMs / 1000)}s and exited (code ${d.engineExit}) without opening the application page — no navigation, no checkpoint, no fill. Nothing was submitted. Retry, or run the CLI by hand on this machine to see why it stops.`;
+}
+
 export class LocalApplyRuntime {
 	private readonly runs = new Map<string, Run>();
 	private readonly root: string;
@@ -342,6 +358,39 @@ export class LocalApplyRuntime {
 		run.timer.unref?.();
 	}
 
+	/**
+	 * What the runner OBSERVED about its own CLI (#975), as ids this platform defines.
+	 *
+	 * Matched against the engine's structured output on the machine; only the matching signal's ID
+	 * crosses the contract, never the line that matched it. That is what makes a diagnostic safe to
+	 * persist: a CLI prints the owner's résumé prose and their typed answers while it works, and no
+	 * redaction can reliably tell those from the rest of its chatter.
+	 */
+	private signalsOf(run: Run): LocalApplySignal[] {
+		const text = run.output.join("\n");
+		const out: LocalApplySignal[] = [];
+		if (!text.trim()) out.push("no_output");
+		// #952's live failure, invisible from the cloud and fixable by configuration.
+		if (/approval policy is\s*[`'"]?never|requires? approval|permission denied for tool|not allowed to use/i.test(text)) out.push("approval_policy_blocked");
+		if (/browser_navigate.{0,40}(not found|unknown tool|unavailable)|no such tool|tool .{0,40}is not available/i.test(text)) out.push("bridge_tools_missing");
+		if (missingLogin(run.envelope.engine, text)) out.push("auth_prompt");
+		if (/\b(i (cannot|can't|won't)|unable to) (help|assist|complete|do that|proceed)/i.test(text)) out.push("engine_refused_task");
+		return [...new Set(out)];
+	}
+
+	/** The bounded, closed-vocabulary diagnostic for a run that put nothing on the page (#975). */
+	private diagnosticOf(run: Run, code: number, cause: LocalApplyDiagnosticCause): LocalApplyDiagnostic {
+		return {
+			cause,
+			bridgeCalls: run.bridge?.actions ?? 0,
+			engineExit: Number.isInteger(code) && code >= -1 && code <= 255 ? code : 0,
+			activeMs: this.activeMs(run),
+			pages: run.bridge?.pages ?? 0,
+			filled: run.bridge?.filled ?? 0,
+			signals: this.signalsOf(run),
+		};
+	}
+
 	/** What the run amounts to when the CLI exits — decided by what the bridge did, not what the CLI says. */
 	private outcomeOf(run: Run, code: number): Omit<LocalApplyResultEnvelope, "runId" | "mode" | "traceId" | "engineAuth" | "filled" | "uploaded" | "submitAttempted"> & { engineAuth?: LocalApplyEngineAuth } {
 		const e = run.envelope;
@@ -354,9 +403,26 @@ export class LocalApplyRuntime {
 		if (b?.reviewReady) return { outcome: "awaiting_review", summary };
 		if (!b?.filled && missingLogin(e.engine, run.output.join("\n"))) return { outcome: "blocked", summary, blockReason: "engine_not_signed_in", questions: [signInHelp(e.engine)], engineAuth: "missing_login" };
 		if (b?.blocked) return { outcome: "blocked", summary, blockReason: b.blocked.reason, questions: b.blocked.questions };
-		if (run.timedOut) return { outcome: "blocked", summary, blockReason: "incomplete", questions: [`Stopped at the ${e.limits.maxMinutes}-minute limit before the form was ready for review.`] };
+		if (run.timedOut) {
+			return { outcome: "blocked", summary, blockReason: "incomplete", questions: [`Stopped at the ${e.limits.maxMinutes}-minute limit before the form was ready for review.`], diagnostic: this.diagnosticOf(run, code, "timed_out") };
+		}
+		// #975: a CLI that never called the bridge did NOTHING on the page, which is a different
+		// failure from stopping partway — different cause, different fix — and saying `incomplete`
+		// for both left the owner with a 51-second run they could not explain. The diagnostic says
+		// how long it ran, how many bridge calls it made (0) and what the runner saw it print.
+		const calls = b?.actions ?? 0;
+		if (calls === 0) {
+			const diagnostic = this.diagnosticOf(run, code, !run.output.join("").trim() ? "no_engine_output" : code !== 0 ? "engine_exited_nonzero" : "bridge_unused");
+			return { outcome: "blocked", summary, blockReason: "bridge_unused", questions: [bridgeUnusedHelp(e.engine, diagnostic)], diagnostic };
+		}
 		const tail = code !== 0 ? ` (the ${e.engine} CLI exited with code ${code})` : "";
-		return { outcome: "blocked", summary, blockReason: "incomplete", questions: [`The CLI stopped before marking the form ready for review${tail}. Review the form yourself, or retry.`] };
+		return {
+			outcome: "blocked",
+			summary,
+			blockReason: "incomplete",
+			questions: [`The CLI stopped before marking the form ready for review${tail}. Review the form yourself, or retry.`],
+			diagnostic: this.diagnosticOf(run, code, code !== 0 ? "engine_exited_nonzero" : "bridge_unused"),
+		};
 	}
 
 	private activeMs(run: Run): number {
@@ -544,6 +610,9 @@ export class LocalApplyRuntime {
 			...(r.outcome === "submitted" && r.submitted ? { submitted: r.submitted } : {}),
 			...(r.outcome === "blocked" ? { blockReason: r.blockReason ?? "incomplete", questions: (r.questions ?? []).map((q) => redactText(q, run.secrets)), ...(r.blockReason === "job_unavailable" && r.unavailable ? { unavailable: r.unavailable } : {}) } : {}),
 			...(r.outcome === "failed" ? { error: redactText((r.error ?? "The run failed without a reason.").slice(0, 1000), run.secrets) } : {}),
+			// #975 — carried through as the closed vocabulary it is. Nothing here is redacted because
+			// nothing here is text: counts, an exit code, and signal ids this platform defines.
+			...(r.diagnostic ? { diagnostic: r.diagnostic } : {}),
 		};
 		if (run.child && run.child.exitCode === null) this.kill(run);
 		void run.browser?.stop().catch(() => undefined);

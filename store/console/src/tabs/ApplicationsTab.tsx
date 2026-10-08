@@ -194,6 +194,15 @@ function Detail({ instanceId, item, onChanged }: { instanceId: string; item: App
 					Submit policy: {item.submitPolicy.allowed ? <span className="text-success">this application may be submitted automatically</span> : <span>fill and wait for your review ({item.submitPolicy.failing.join(", ").replace(/_/g, " ")})</span>}
 				</p>
 			)}
+			{/* #975: "it did nothing on the page" is a distinct, actionable cause — the counts that
+			    prove it, and the ids the runner observed. No CLI prose reaches here. */}
+			{item.diagnostic && (
+				<p className="text-xs mb-2" data-testid="run-diagnostic">
+					<span className="text-warning font-bold">Diagnosis:</span> {item.diagnostic.cause.replace(/_/g, " ")} — {item.diagnostic.bridgeCalls} browser call
+					{item.diagnostic.bridgeCalls === 1 ? "" : "s"}, {item.diagnostic.filled} field{item.diagnostic.filled === 1 ? "" : "s"} filled after {Math.round(item.diagnostic.activeMs / 1000)}s (exit {item.diagnostic.engineExit})
+					{item.diagnostic.signals.length ? ` · ${item.diagnostic.signals.join(", ").replace(/_/g, " ")}` : ""}
+				</p>
+			)}
 			{/* #974: waiting for the machine is not a failure, and the card says which it is — the
 			    position in line and when the next attempt is due, not a terminal "runner rejected". */}
 			{item.queue && (

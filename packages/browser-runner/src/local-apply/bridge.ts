@@ -143,8 +143,9 @@ function withQuote(schema: unknown, required: boolean): unknown {
 }
 
 export class ApplyBridge {
-	private actions = 0;
-	private pages = 0;
+	/** Read by the runtime for the #975 diagnostic: 0 calls is the finding, not an internal detail. */
+	actions = 0;
+	pages = 0;
 	private lastSnapshot = "";
 	private readonly admitted = new Set<string>();
 	/** Fill and submit are disabled until the cloud supervisor releases the current page checkpoint. */

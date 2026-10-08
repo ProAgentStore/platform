@@ -94,6 +94,12 @@ export interface QueueItem {
 	 * reason an unapproved application cannot submit.
 	 */
 	/**
+	 * Why nothing reached the page (#975), when the run says so: the structured cause, the counts
+	 * that prove it (0 bridge calls after N seconds) and the signals the runner observed. Closed
+	 * vocabularies only — no CLI prose, no form values, no document text.
+	 */
+	diagnostic: { cause: string; bridgeCalls: number; engineExit: number; activeMs: number; pages: number; filled: number; signals: string[] } | null;
+	/**
 	 * Why a run is WAITING rather than working (#974): its place in its machine's line, how many
 	 * times the machine has been asked, when the next attempt is due, and the sentence to show.
 	 * Null unless this card's run is queued — so its presence IS "this is waiting its turn", which
@@ -198,6 +204,7 @@ function leadItem(scout: string, r: LeadRecord, pipeline: Pipeline): QueueItem {
 		submittedUrl: null,
 		submitAttempted: false,
 		submitPolicy: null,
+		diagnostic: null,
 		queue: null,
 		submitAuthorization: null,
 		updatedAt: str(r.updatedAt) ?? "",
@@ -252,7 +259,7 @@ function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRu
 /** #953: an application that can be archived can be marked not interested (an archive, with that reason). */
 const withNotInterested = (actions: ApplicationAction[]): ApplicationAction[] => (actions.includes("archive") ? [...actions, "mark_not_interested"] : actions);
 
-function applicationItem(app: JobApplication, pipeline: Pipeline, run: OpenRun | null, policy: QueueItem["submitPolicy"], auth: QueueItem["submitAuthorization"] = null, q: QueueItem["queue"] = null): QueueItem {
+function applicationItem(app: JobApplication, pipeline: Pipeline, run: OpenRun | null, policy: QueueItem["submitPolicy"], auth: QueueItem["submitAuthorization"] = null, q: QueueItem["queue"] = null, diag: QueueItem["diagnostic"] = null): QueueItem {
 	const env = (app.lead ?? {}) as { leadUrl?: string; lead?: Record<string, unknown> };
 	const l = env.lead ?? {};
 	return {
@@ -283,6 +290,7 @@ function applicationItem(app: JobApplication, pipeline: Pipeline, run: OpenRun |
 		submittedUrl: app.submittedUrl,
 		submitAttempted: !!app.submitAttemptedAt,
 		submitPolicy: policy,
+		diagnostic: diag,
 		queue: q,
 		submitAuthorization: auth,
 		updatedAt: iso(app.updatedAt),
@@ -314,6 +322,36 @@ async function openRuns(env: Env, uid: string, runners: string[]): Promise<Map<s
 }
 
 /** The gate preview per Runner, for each materials_ready application. Fails closed. */
+/**
+ * The #975 diagnostic as the card shows it, read from the application's own stored fill result.
+ *
+ * No extra query: the result is already on the application row, and `application_run` already
+ * returns the same object over MCP — so the board and MCP describe one record rather than two.
+ */
+async function diagnosticOf(env: Env, uid: string, app: JobApplication): Promise<QueueItem["diagnostic"]> {
+	if (!app.fillRunId) return null;
+	const row = await env.DB.prepare("SELECT result FROM local_apply_runs WHERE id = ?1 AND user_id = ?2").bind(app.fillRunId, uid).first<{ result: string | null }>().catch(() => null);
+	if (!row?.result) return null;
+	let r: { diagnostic?: Record<string, unknown> } | null = null;
+	try {
+		r = JSON.parse(row.result) as { diagnostic?: Record<string, unknown> };
+	} catch {
+		return null;
+	}
+	const d = r?.diagnostic;
+	if (!d || typeof d !== "object") return null;
+	const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+	return {
+		cause: String(d.cause ?? ""),
+		bridgeCalls: n(d.bridgeCalls),
+		engineExit: n(d.engineExit),
+		activeMs: n(d.activeMs),
+		pages: n(d.pages),
+		filled: n(d.filled),
+		signals: (Array.isArray(d.signals) ? d.signals : []).filter((x): x is string => typeof x === "string"),
+	};
+}
+
 /**
  * The waiting view (#974) for every application whose run is queued.
  *
@@ -425,7 +463,11 @@ export async function applicationQueue(env: Env, uid: string, instanceId: string
 	const previews = await policyPreviews(env, uid, pipeline, apps);
 	const approvals = await approvalViews(env, uid, apps);
 	const queues = await queueViews(env, uid, apps, Date.now());
-	const items: QueueItem[] = apps.map((a) => applicationItem(a, pipeline, a.fillRunId ? (runs.get(a.fillRunId) ?? null) : null, previews.get(a.id) ?? null, approvals.get(a.id) ?? null, queues.get(a.id) ?? null));
+	const diagnostics = new Map<string, QueueItem["diagnostic"]>();
+	for (const a of apps) diagnostics.set(a.id, await diagnosticOf(env, uid, a));
+	const items: QueueItem[] = apps.map((a) =>
+		applicationItem(a, pipeline, a.fillRunId ? (runs.get(a.fillRunId) ?? null) : null, previews.get(a.id) ?? null, approvals.get(a.id) ?? null, queues.get(a.id) ?? null, diagnostics.get(a.id) ?? null),
+	);
 	const appLeads = new Set(apps.map((a) => `${a.sourceInstanceId}:${a.leadId}`));
 	const notes: string[] = [];
 	for (const scout of pipeline.scouts) {
@@ -476,7 +518,10 @@ export async function getQueueItem(env: Env, uid: string, instanceId: string, re
 		const previews = await policyPreviews(env, uid, pipeline, [app]);
 		const approvals = await approvalViews(env, uid, [app]);
 		const queues = await queueViews(env, uid, [app], Date.now());
-		return { item: applicationItem(app, pipeline, app.fillRunId ? (runs.get(app.fillRunId) ?? null) : null, previews.get(app.id) ?? null, approvals.get(app.id) ?? null, queues.get(app.id) ?? null), pipeline };
+		return {
+			item: applicationItem(app, pipeline, app.fillRunId ? (runs.get(app.fillRunId) ?? null) : null, previews.get(app.id) ?? null, approvals.get(app.id) ?? null, queues.get(app.id) ?? null, await diagnosticOf(env, uid, app)),
+			pipeline,
+		};
 	}
 	if (ref.scoutInstanceId && ref.recordId) {
 		if (!pipeline.scouts.includes(ref.scoutInstanceId)) throw new HttpError(404, "No such Scout in this pipeline.");

@@ -448,6 +448,76 @@ describe("per-application Approve & proceed authorizes exactly one submission (#
 	});
 });
 
+// ── #975: a CLI that did nothing on the page is diagnosed through the API, board and MCP ─────
+describe("the did-nothing diagnosis reaches the owner's surfaces (#975)", () => {
+	const card = async (id: string) => (await call("GET", `/t1/application-queue/item?application_id=${id}`)).body.item;
+
+	it("persists the structured cause and shows it on the card and the run", async () => {
+		const ev = readyApp("lead-d1");
+		const started = await call("POST", "/ap/application-runs", ev);
+		const runId = started.body.run.id as string;
+		runner("ended", {
+			lastSeq: 1,
+			result: RESULT(runId, {
+				outcome: "blocked",
+				blockReason: "bridge_unused",
+				questions: ["The claude CLI ran for 51s and exited (code 0) without opening the application page."],
+				summary: "I reviewed the materials.",
+				filled: 0,
+				uploaded: [],
+				diagnostic: { cause: "bridge_unused", bridgeCalls: 0, engineExit: 0, activeMs: 51_000, pages: 0, filled: 0, signals: ["approval_policy_blocked"] },
+			}),
+		});
+		await syncApplyRun(env(), "u1", (await call("GET", `/ap/application-runs/${runId}`)).body.run);
+
+		// The API (the same row #971's application_run returns over MCP).
+		const run = (await call("GET", `/ap/application-runs/${runId}`)).body.run;
+		expect(run.result).toMatchObject({ blockReason: "bridge_unused", diagnostic: { cause: "bridge_unused", bridgeCalls: 0, activeMs: 51_000, signals: ["approval_policy_blocked"] } });
+		// The board card, which had only a generic blocked state before.
+		expect(await card("lead-d1")).toMatchObject({ status: "blocked", diagnostic: { cause: "bridge_unused", bridgeCalls: 0, engineExit: 0, signals: ["approval_policy_blocked"] } });
+	});
+
+	it("refuses prose and unknown vocabulary in the diagnostic — nothing free-form is stored", async () => {
+		const ev = readyApp("lead-d2");
+		const started = await call("POST", "/ap/application-runs", ev);
+		const runId = started.body.run.id as string;
+		runner("ended", {
+			lastSeq: 1,
+			result: RESULT(runId, {
+				outcome: "blocked",
+				blockReason: "bridge_unused",
+				filled: 0,
+				diagnostic: {
+					cause: "bridge_unused",
+					bridgeCalls: 0,
+					engineExit: 0,
+					activeMs: 1,
+					pages: 0,
+					filled: 0,
+					// A runner that tries to smuggle text or its own vocabulary gets neither.
+					signals: ["approval_policy_blocked", "made_up_signal"],
+					outputTail: "Jane Citizen, 10 Secret St — session=abc123",
+					note: "sk-ant-0000000000000000000000000000000000000000",
+				},
+			}),
+		});
+		await syncApplyRun(env(), "u1", (await call("GET", `/ap/application-runs/${runId}`)).body.run);
+		const stored = JSON.stringify((await call("GET", `/ap/application-runs/${runId}`)).body.run.result.diagnostic);
+		expect(JSON.parse(stored).signals).toEqual(["approval_policy_blocked"]);
+		for (const leak of ["Jane Citizen", "Secret St", "session=abc123", "sk-ant-", "outputTail", "note"]) expect(stored, leak).not.toContain(leak);
+		expect(Object.keys(JSON.parse(stored)).sort()).toEqual(["activeMs", "bridgeCalls", "cause", "engineExit", "filled", "pages", "signals"]);
+	});
+
+	it("a run with no diagnostic shows none — the card does not invent one", async () => {
+		const ev = readyApp("lead-d3");
+		const started = await call("POST", "/ap/application-runs", ev);
+		const runId = started.body.run.id as string;
+		runner("ended", { lastSeq: 1, result: RESULT(runId) });
+		await syncApplyRun(env(), "u1", (await call("GET", `/ap/application-runs/${runId}`)).body.run);
+		expect((await card("lead-d3")).diagnostic).toBeNull();
+	});
+});
+
 // ── #974: the Runner's busy machine behaves exactly like the Tailor's ───────────────────────
 describe("a busy Runner queues the fill instead of blocking the application (#974)", () => {
 	const BUSY = { status: 409, body: { error: "This machine is already filling an application for this agent; one at a time." } };

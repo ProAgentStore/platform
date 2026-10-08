@@ -134,7 +134,14 @@ export type LocalApplyBlockReason =
 	| "source_unavailable"
 	| "artifact_changed"
 	/** The runner verified the listing's own unavailable/expired notice. */
-	| "job_unavailable";
+	| "job_unavailable"
+	/**
+	 * The CLI ran and exited without ever calling the browser bridge (#975) — no navigation, no
+	 * checkpoint, no fill. Distinct from `incomplete`, which means it started and stopped partway:
+	 * this one did nothing on the page at all, and the two have different causes and different
+	 * remedies, which a single reason could not tell an operator apart.
+	 */
+	| "bridge_unused";
 export const LOCAL_APPLY_BLOCK_REASONS: readonly LocalApplyBlockReason[] = [
 	...LOCAL_APPLY_PAUSE_REASONS,
 	"submit_unconfirmed",
@@ -144,7 +151,55 @@ export const LOCAL_APPLY_BLOCK_REASONS: readonly LocalApplyBlockReason[] = [
 	"source_unavailable",
 	"artifact_changed",
 	"job_unavailable",
+	"bridge_unused",
 ];
+/**
+ * Why a run produced nothing on the page (#975) — a CLOSED vocabulary, never free text.
+ *
+ * The production case: the CLI authenticated, exited 0 after 51 seconds, and emitted no browser,
+ * checkpoint, fill or review event. The outcome said `incomplete`, which is also what a half-filled
+ * form says, so the operator had no way to tell "it did nothing" from "it stopped partway" — and no
+ * way at all to learn WHY without reading a terminal on the machine.
+ *
+ * Deliberately NOT an output tail, redacted or otherwise. `redactText` removes credential SHAPES; it
+ * cannot remove the owner's own résumé prose, their typed answers or a quoted source document, all
+ * of which a CLI legitimately prints while it works. So nothing free-form is added here: every field
+ * is a count, a code, or an id from {@link LOCAL_APPLY_SIGNALS} that the RUNNER chose by matching
+ * its own output. The engine's closing sentence continues to cross as `summary`, where it already
+ * did — redacted and capped — so this adds diagnosis without adding a new channel for content.
+ */
+export type LocalApplyDiagnosticCause = "bridge_unused" | "engine_exited_nonzero" | "timed_out" | "no_engine_output";
+export const LOCAL_APPLY_DIAGNOSTIC_CAUSES: readonly LocalApplyDiagnosticCause[] = ["bridge_unused", "engine_exited_nonzero", "timed_out", "no_engine_output"];
+
+/**
+ * Observations the runner may report, each an id this platform defines — not the text that matched.
+ *
+ *   approval_policy_blocked  the CLI refused the bridge for its own approval policy (#952's live
+ *                            failure: "the browser bridge required approval, but this session's
+ *                            approval policy is `never`"). The single most useful signal, because
+ *                            it is invisible from the cloud and fixable by configuration.
+ *   bridge_tools_missing     the CLI never saw the bridge toolset at all.
+ *   auth_prompt              the CLI stopped on a sign-in prompt.
+ *   no_output                the CLI printed nothing a parser could read.
+ *   engine_refused_task      the CLI declined the task in its closing message.
+ */
+export type LocalApplySignal = "approval_policy_blocked" | "bridge_tools_missing" | "auth_prompt" | "no_output" | "engine_refused_task";
+export const LOCAL_APPLY_SIGNALS: readonly LocalApplySignal[] = ["approval_policy_blocked", "bridge_tools_missing", "auth_prompt", "no_output", "engine_refused_task"];
+
+export interface LocalApplyDiagnostic {
+	cause: LocalApplyDiagnosticCause;
+	/** Bridge tool calls the run made. 0 is the finding. */
+	bridgeCalls: number;
+	/** The CLI's exit code. */
+	engineExit: number;
+	/** How long the engine actually ran, ms — "exited after 51s having done nothing". */
+	activeMs: number;
+	/** Pages the bridge admitted, and fields it filled: 0/0 beside a non-zero activeMs is the shape of this bug. */
+	pages: number;
+	filled: number;
+	signals: LocalApplySignal[];
+}
+
 
 /** Why the site's own notice says this listing cannot be applied to. */
 export type LocalApplyUnavailableReason = "expired" | "unavailable";
@@ -251,6 +306,8 @@ export interface LocalApplyResultEnvelope {
 	unavailable?: LocalApplyUnavailableEvidence;
 	/** Present when `outcome` is `failed`. */
 	error?: string;
+	/** Why nothing reached the page (#975). Present only when there is something to diagnose. */
+	diagnostic?: LocalApplyDiagnostic;
 }
 
 /** What the run is waiting on, as `status` reports it while paused. */
@@ -380,6 +437,24 @@ export function parseLocalApplyResult(raw: unknown): { result: LocalApplyResultE
 		if (!url || !isHttpUrl(url) || !at || Number.isNaN(Date.parse(at)) || !gateId) return { error: "a submitted outcome needs the confirmed url, its time and the gateId" };
 		out.submitted = { url, at, gateId };
 		out.submitAttempted = true;
+	}
+	// #975 — accepted ONLY as the closed vocabulary it declares. A runner that sends prose here gets
+	// it dropped rather than stored: the whole point of a structured diagnostic is that no new
+	// free-text channel opens between the machine and the owner's records.
+	const d = o.diagnostic && typeof o.diagnostic === "object" && !Array.isArray(o.diagnostic) ? (o.diagnostic as Record<string, unknown>) : null;
+	const cause = d ? oneOf(LOCAL_APPLY_DIAGNOSTIC_CAUSES, d.cause) : null;
+	if (d && cause) {
+		const count = (v: unknown) => (typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 1_000_000 ? v : 0);
+		out.diagnostic = {
+			cause,
+			bridgeCalls: count(d.bridgeCalls),
+			engineExit: typeof d.engineExit === "number" && Number.isInteger(d.engineExit) && d.engineExit >= -1 && d.engineExit <= 255 ? d.engineExit : 0,
+			activeMs: count(d.activeMs),
+			pages: count(d.pages),
+			filled: count(d.filled),
+			// Deduped from a closed 5-value vocabulary, so it is bounded by the enum itself — no cap needed.
+			signals: [...new Set((Array.isArray(d.signals) ? d.signals : []).filter((x): x is LocalApplySignal => LOCAL_APPLY_SIGNALS.includes(x as LocalApplySignal)))],
+		};
 	}
 	if (outcome === "blocked") {
 		out.blockReason = oneOf(LOCAL_APPLY_BLOCK_REASONS, o.blockReason) ?? "incomplete";

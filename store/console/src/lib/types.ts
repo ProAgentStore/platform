@@ -748,6 +748,8 @@ export interface ApplicationQueueItem {
 	submittedUrl: string | null;
 	submitAttempted: boolean;
 	submitPolicy: { allowed: boolean; failing: string[] } | null;
+	/** Why nothing reached the page (#975): the structured cause, the counts and the runner's signals. */
+	diagnostic: { cause: string; bridgeCalls: number; engineExit: number; activeMs: number; pages: number; filled: number; signals: string[] } | null;
 	/** Why this card's run is waiting for the machine rather than working (#974). */
 	queue: { position: number; attempts: number; nextAttemptAt: string | null; reason: string | null; exhausted: boolean; label: string } | null;
 	/** The owner's per-application submission approval (#973), once one has been granted. */

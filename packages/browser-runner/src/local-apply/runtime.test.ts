@@ -305,3 +305,159 @@ describe("pauses before the CLI starts — nothing is guessed past", () => {
 		expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "blocked", blockReason: "engine_not_signed_in", engineAuth: "missing_login" });
 	});
 });
+
+// ── #975: a CLI that puts nothing on the page says so, and a healthy run of EITHER engine
+// walks the whole path ────────────────────────────────────────────────────────────────────────
+//
+// The production case: the CLI authenticated, exited 0 after ~51s, and emitted no browser,
+// checkpoint, fill or review event. `incomplete` is also what a half-filled form reports, so the
+// operator could not tell "it did nothing" from "it stopped partway" — and nothing said why.
+describe("a CLI that never touches the browser bridge is diagnosed, not called `incomplete` (#975)", () => {
+	const resultOf = (rt: LocalApplyRuntime) => rt.status({ runId: "run-1" }).result;
+
+	it("exit 0 with zero bridge calls: a distinct reason, the counts that prove it, and nothing submitted", async () => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		// The CLI talks, and never calls a single bridge tool — the exact production shape.
+		child.stdout.write(`${JSON.stringify({ type: "result", result: "I reviewed the materials." })}\n`);
+		await settle();
+		child.exit(0);
+
+		const r = resultOf(rt);
+		expect(r).toMatchObject({ outcome: "blocked", blockReason: "bridge_unused", submitAttempted: false, filled: 0 });
+		expect(r?.diagnostic).toMatchObject({ cause: "bridge_unused", bridgeCalls: 0, engineExit: 0, pages: 0, filled: 0 });
+		// Actionable: the question names what to do, not just that it failed.
+		expect(r?.questions?.[0]).toMatch(/without opening the application page|declined the task/);
+	});
+
+	it("names the approval policy that refused the tools — #952's failure, invisible from the cloud", async () => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		child.stdout.write("the browser bridge required approval, but this session's approval policy is `never`\n");
+		await settle();
+		child.exit(0);
+		const r = resultOf(rt);
+		expect(r?.diagnostic?.signals).toContain("approval_policy_blocked");
+		expect(r?.questions?.[0]).toMatch(/approval policy refused/);
+	});
+
+	it("a CLI that printed nothing at all is a different cause from one that talked", async () => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		child.exit(0);
+		expect(resultOf(rt)?.diagnostic).toMatchObject({ cause: "no_engine_output", signals: expect.arrayContaining(["no_output"]) });
+	});
+
+	it("a non-zero exit is reported as such, with the code", async () => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		child.stdout.write(`${JSON.stringify({ type: "result", result: "giving up" })}\n`);
+		await settle();
+		child.exit(3);
+		expect(resultOf(rt)?.diagnostic).toMatchObject({ cause: "engine_exited_nonzero", engineExit: 3 });
+	});
+
+	it("the diagnostic carries NO prose from the CLI — only ids, codes and counts", async () => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		// Everything a CLI legitimately prints while it works: the owner's résumé, their answers,
+		// a cookie and a key. None of it may appear in the diagnostic.
+		child.stdout.write(`${JSON.stringify({ type: "result", result: "Filled Jane Citizen, sk-ant-0000000000000000000000000000000000000000, session=abc123" })}\n`);
+		child.stdout.write("Dear Globex, I would like to apply. Expected salary: 180000\n");
+		await settle();
+		child.exit(0);
+		const d = JSON.stringify(resultOf(rt)?.diagnostic ?? {});
+		for (const secret of ["Jane Citizen", "sk-ant-", "session=abc123", "Dear Globex", "180000"]) expect(d, secret).not.toContain(secret);
+		// Only the closed vocabulary.
+		expect(Object.keys(JSON.parse(d)).sort()).toEqual(["activeMs", "bridgeCalls", "cause", "engineExit", "filled", "pages", "signals"]);
+	});
+});
+
+describe.each([["claude"], ["codex"]] as const)("%s: a connected-runner application walks the whole path (#975)", (engine) => {
+	it("launches the bridge, checkpoints, fills, pauses, and submits only when authorized", async () => {
+		const rt = runtime();
+		// auto_submit with the PAGS gate is what an owner-approved application (#973) dispatches as.
+		rt.start(envelope({ engine, policy: { mode: "auto_submit", allowDomains: ["jobs.example.com"], submitGate: { gateId: "gate-1" } } }));
+		await settle();
+
+		// 1. BRIDGE LAUNCH — the CLI is spawned for this engine with the bridge wired in.
+		expect(spawned).toHaveLength(1);
+		expect(spawned[0].command).toContain(engine);
+		// The two engines take the bridge differently and both must actually get it: Claude through a
+		// strict MCP config file, Codex through `-c mcp_servers.…` flags (there is no file).
+		if (engine === "claude") expect(readFileSync(join(dir, "data/local-apply/runner-1/run-1/mcp.json"), "utf8")).toContain("PAGS_BRIDGE_TOKEN");
+		else expect(spawned[0].args.join(" ")).toMatch(/mcp_servers\..*\.command=/);
+
+		// 2. CHECKPOINT — the page is admitted only after the cloud supervisor releases it.
+		await call(rt, "browser_navigate", { url: "https://jobs.example.com/apply" });
+		await call(rt, "browser_snapshot");
+		const blockedFill = await call(rt, "browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" });
+		expect(blockedFill.isError, "a fill before the checkpoint is refused").toBeTruthy();
+		await approve(rt);
+
+		// 3. FIELD FILL — grounded in the owner's own approved source.
+		expect((await call(rt, "browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" })).isError).toBeFalsy();
+
+		// 4. PAUSE — a value the CLI does not have stops the run and asks, rather than inventing one.
+		const asked = call(rt, "request_answer", { question: "Expected salary?" });
+		await settle();
+		expect(rt.status({ runId: "run-1" }).pause).toMatchObject({ reason: "missing_answer" });
+		rt.resume({ runId: "run-1", answers: [{ question: "Expected salary?", answer: "Market rate" }] });
+		// The answer becomes a SOURCE the CLI must quote; it is deliberately not echoed back to it.
+		expect((await asked).content[0].text).toMatch(/owner answered/);
+
+		// 5. AUTHORIZED SUBMIT — the gate the cloud issued is what lets the click through.
+		await approve(rt, "before-submit:1", "before_submit");
+		const submit = await call(rt, "browser_click", { target: "e2" });
+		// The gate let it through and it REACHED THE PAGE — which under fill_and_review is refused
+		// outright (the other test in this file asserts that). The fake site shows no confirmation
+		// page, so the runner correctly reports it as pressed-but-unconfirmed and stops: a submit is
+		// recorded as attempted, never as succeeded on the runner's word alone.
+		expect(submit.content[0]?.text).toMatch(/pressed/);
+		expect(clicks, "the authorized submit actually reached the page").toContain("e2");
+		child.exit(0);
+
+		const st = rt.status({ runId: "run-1" });
+		expect(st.state).toBe("ended");
+		expect(st.result, "the submit is recorded as attempted, not as confirmed").toMatchObject({ submitAttempted: true, blockReason: "submit_unconfirmed" });
+		expect(st.result?.blockReason, "a run that used the bridge is never bridge_unused").not.toBe("bridge_unused");
+		// A run that did real work carries NO #975 diagnostic: none of its causes describes this, and
+		// inventing one would make "there is something to diagnose" meaningless. What it did is on
+		// the result and the trace, where it already was.
+		expect(st.result?.diagnostic).toBeUndefined();
+		expect(st.result?.filled).toBeGreaterThan(0);
+		expect(st.events.map((e) => e.type)).toEqual(
+			expect.arrayContaining(["engine.started", "browser.navigated", "supervisor.checkpoint", "field.filled", "run.paused", "submit.attempted"]),
+		);
+		// The owner's own values never enter the trace, whichever engine ran.
+		expect(JSON.stringify(st.events)).not.toContain("Jane Citizen");
+		expect(JSON.stringify(st.events)).not.toContain("Market rate");
+	});
+
+	// The sixth phase is its own run: reporting an unavailable listing ENDS the application, so it
+	// cannot be reached in the same run as a submit — and the runner believes it only after seeing
+	// the page's own notice itself.
+	it("ends as job_unavailable when the page's own notice says the listing is gone — and never submits", async () => {
+		const rt = runtime();
+		rt.start(envelope({ engine, policy: { mode: "auto_submit", allowDomains: ["jobs.example.com"], submitGate: { gateId: "gate-1" } } }));
+		await settle();
+		pageUnavailable = "expired";
+		await call(rt, "browser_navigate", { url: "https://jobs.example.com/apply" });
+		await call(rt, "browser_snapshot");
+		const notice = await call(rt, "report_job_unavailable", { reason: "expired", quote: "This job is no longer advertised" });
+		expect(notice.isError, `report_job_unavailable: ${notice.content[0]?.text}`).toBeFalsy();
+		child.exit(0);
+
+		const st = rt.status({ runId: "run-1" });
+		expect(st.result).toMatchObject({ outcome: "blocked", blockReason: "job_unavailable", submitAttempted: false });
+		// It used the bridge, so it is NOT the #975 "did nothing" case.
+		expect(st.result?.blockReason).not.toBe("bridge_unused");
+		expect(st.events.map((e) => e.type)).toEqual(expect.arrayContaining(["browser.navigated", "job.unavailable"]));
+		expect(clicks).toEqual([]);
+	});
+});
