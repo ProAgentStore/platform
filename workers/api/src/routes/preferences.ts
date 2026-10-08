@@ -18,7 +18,9 @@ import { applyDefaultCodingEngineToIdle } from "../lib/coding-default-engine-app
 import { DEFAULT_ENGINES } from "../lib/coding-engines.js";
 import { isValidTimeZone } from "../lib/cron-time.js";
 import { isKnownNotificationType, NOTIFICATION_TYPES, sanitizeNotificationPreferences } from "../lib/notifications.js";
+import { NOTIFICATION_CHANNEL_SPECS, NOTIFICATION_SEVERITIES, effectiveNotificationMatrix } from "../lib/notification-policy.js";
 import { attentionEventSpec, OWNER_ATTENTION_EVENTS, sanitizeOwnerAttentionPreferences } from "../lib/owner-attention.js";
+import { validateRules } from "./instances-notifications.js";
 import {
 	parseAccountPreferences,
 	sanitizeCodingPreferences,
@@ -56,6 +58,18 @@ preferenceRoutes.get("/", async (c) => {
 		// #991: the owner-attention vocabulary, served for the same reason — a new event gets its
 		// control by being added to `lib/owner-attention.ts`, not by editing the page.
 		attentionEvents: OWNER_ATTENTION_EVENTS,
+		// #992: the channels a rule can decide, and the severities it can select. Served for the
+		// same reason as the two lists above — a new channel gets a column in the editor by being
+		// added to `lib/notification-policy.ts`, not by editing the page.
+		notificationChannels: NOTIFICATION_CHANNEL_SPECS,
+		notificationSeverities: NOTIFICATION_SEVERITIES,
+		// The account's own rules RESOLVED (#992), with no instance in scope — so the Preferences
+		// page shows the same effective state, computed by the same algorithm, as an instance's
+		// editor does. The console never resolves precedence itself.
+		notificationEffective: effectiveNotificationMatrix(
+			{ types: NOTIFICATION_TYPES.map((t) => t.id), events: OWNER_ATTENTION_EVENTS.map((e) => e.id) },
+			{ account: (await readPreferences(c.env, session.uid)).notifications },
+		),
 		codingEngineOptions: DEFAULT_ENGINES.map((e) => ({ id: e.id, label: e.label })),
 	});
 });
@@ -92,6 +106,12 @@ preferenceRoutes.put("/", async (c) => {
 	// know leaves the user believing they turned something off. The sanitizer that runs on READ
 	// is lenient on purpose (it parses rows written by older code); a save is not.
 	if (body.notifications !== undefined) {
+		// The policy rules ride inside the same section (#992), and are validated by the same
+		// strict-on-write rule the mute list has had since #360: an unknown selector is refused,
+		// because a rule that silently never matches is an interruption the owner believes they
+		// turned off. One validator, shared with the per-instance route.
+		const rules = (body.notifications as { rules?: unknown } | null)?.rules;
+		if (rules !== undefined) validateRules(rules, OWNER_ATTENTION_EVENTS.map((e) => e.id));
 		const muted = (body.notifications as { muted?: unknown } | null)?.muted;
 		if (!body.notifications || typeof body.notifications !== "object" || (muted !== undefined && !Array.isArray(muted))) {
 			throw new HttpError(400, "notifications must be an object with a `muted` array");

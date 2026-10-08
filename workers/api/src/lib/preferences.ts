@@ -28,6 +28,7 @@
 
 import { isValidTimeZone } from "./cron-time.js";
 import { type NotificationPreferences, type NotificationTypeSpec, sanitizeNotificationPreferences } from "./notifications.js";
+import { type EffectiveRow, type NotificationChannelSpec, sanitizeNotificationPolicy } from "./notification-policy.js";
 import { type OwnerAttentionEventSpec, type OwnerAttentionPreferences, sanitizeOwnerAttentionPreferences } from "./owner-attention.js";
 
 // Lenient on READ, strict on WRITE. The sanitizers below coerce anything unknown to a safe value,
@@ -203,6 +204,11 @@ export interface AccountPreferencesResponse {
 	notificationTypes: NotificationTypeSpec[];
 	/** The kinds of attention an agent can ask for (#991) — the vocabulary the controls render from. */
 	attentionEvents: OwnerAttentionEventSpec[];
+	/** The channels a notification policy rule can decide, and the severities it can select (#992). */
+	notificationChannels: NotificationChannelSpec[];
+	notificationSeverities: ReadonlyArray<"update" | "alert">;
+	/** The account's rules resolved with no instance in scope — the Preferences page's own matrix. */
+	notificationEffective: EffectiveRow[];
 	codingEngineOptions: CodingEngineOption[];
 }
 
@@ -384,6 +390,17 @@ export function sanitizeCodingPreferences(raw: unknown, base: CodingPreferences 
 }
 
 /** Parse a stored `users.preferences` blob. Junk yields no preferences, never a broken shape. */
+/** The stored notification section with its policy rules field-sanitized (#992). */
+function withSanitizedRules(prefs: NotificationPreferences | undefined): NotificationPreferences | undefined {
+	if (!prefs?.rules) return prefs;
+	const policy = sanitizeNotificationPolicy(prefs.rules);
+	if (!policy) {
+		const { rules, ...rest } = prefs;
+		return rest;
+	}
+	return { ...prefs, rules: policy.rules };
+}
+
 export function parseAccountPreferences(raw: string | null | undefined): AccountPreferences {
 	if (!raw) return {};
 	try {
@@ -398,7 +415,10 @@ export function parseAccountPreferences(raw: string | null | undefined): Account
 			// this check (or name a zone this runtime's tz database does not carry). Dropping it back
 			// to `undefined` lands on the honest unset branch instead of failing a chat turn.
 			timezone: isValidTimeZone(o.timezone) ? o.timezone : undefined,
-			notifications: sanitizeNotificationPreferences(o.notifications),
+			// The rules' SHAPE is checked by `sanitizeNotificationPreferences`; their FIELDS are
+			// checked here, by the module that resolves them (#992) — so what reaches the resolver
+			// is exactly what it understands, on every read, whatever older code wrote.
+			notifications: withSanitizedRules(sanitizeNotificationPreferences(o.notifications)),
 			attention: sanitizeOwnerAttentionPreferences(o.attention),
 		};
 	} catch {

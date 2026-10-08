@@ -2,12 +2,8 @@ import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
 import { consoleHomeLink, type DeepLink, instanceLink, notificationsLink } from "../lib/console-links.js";
 import { logError } from "../lib/error-log.js";
-import {
-	DUPLICATE_WINDOW_MINUTES,
-	type NotificationKind,
-	notificationDedupeKey,
-	pushAllowedByPreference,
-} from "../lib/notifications.js";
+import { type NotificationPolicy, resolveNotificationDelivery, sanitizeNotificationPolicy } from "../lib/notification-policy.js";
+import { DUPLICATE_WINDOW_MINUTES, type NotificationKind, notificationDedupeKey } from "../lib/notifications.js";
 import { parseAccountPreferences } from "../lib/preferences.js";
 import { type PushSubscription, sendWebPush, type VapidConfig } from "../lib/web-push.js";
 import type { Env } from "../types.js";
@@ -200,6 +196,26 @@ export async function sendPushToUser(env: Env, userId: string, msg: PushMessage)
 	return sent;
 }
 
+/**
+ * The instance's own policy (#992), read straight from `agent_instances.config.notifications`.
+ *
+ * Owner-scoped like every other instance read: the notification's `userId` must own the instance,
+ * so a policy cannot be read — or applied — across tenants. Best-effort by construction, because
+ * the caller treats a failure here as "no instance policy" and falls back to the account baseline
+ * rather than losing the notification.
+ */
+export async function readInstanceNotificationPolicy(env: Env, instanceId: string, userId: string): Promise<NotificationPolicy | undefined> {
+	const row = await env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2")
+		.bind(instanceId, userId)
+		.first<{ config: string | null }>();
+	if (!row?.config) return undefined;
+	try {
+		return sanitizeNotificationPolicy((JSON.parse(row.config) as { notifications?: unknown }).notifications);
+	} catch {
+		return undefined;
+	}
+}
+
 export interface NotifyOptions {
 	/**
 	 * What this notification is ABOUT, stably — a commit sha, a session handoff, a trigger id.
@@ -221,6 +237,16 @@ export interface NotifyOptions {
 	 * can exclude.
 	 */
 	instanceId?: string;
+	/**
+	 * The generic EVENT class this notification belongs to (#992) — `approval_required` and the
+	 * rest of the owner-attention vocabulary (#991), or any future event a workflow declares.
+	 *
+	 * Distinct from `key`, which identifies this one occurrence (a commit sha, a run id) and is
+	 * what dedupe compares; `event` says what KIND of thing happened, and is what a policy rule
+	 * can select on. It is the dimension that makes "approvals yes, progress no" expressible when
+	 * both are type `apply`.
+	 */
+	event?: string;
 }
 
 /**
@@ -282,12 +308,22 @@ export async function notifyUser(
 	}
 	const dedupeKey = notificationDedupeKey(type, opts.key, title, body);
 
+	// The policy (#992) decides both channels, and the legacy mute/scope is its baseline — so an
+	// account that has written no rule behaves exactly as it did before. `record` is normally true:
+	// the bell list is a log, and only an explicit rule from the owner can stop a row being written.
 	let interrupt = true;
+	let record = true;
 	try {
-		const row = await env.DB.prepare("SELECT preferences FROM users WHERE id = ?1")
-			.bind(userId)
-			.first<{ preferences: string | null }>();
-		interrupt = pushAllowedByPreference(parseAccountPreferences(row?.preferences).notifications, type, kind, opts.instanceId);
+		const account = parseAccountPreferences(
+			(await env.DB.prepare("SELECT preferences FROM users WHERE id = ?1").bind(userId).first<{ preferences: string | null }>())?.preferences,
+		).notifications;
+		// A second read ONLY when the notification names an instance: that is the only case an
+		// instance-level rule can apply to, and account-level notifications (a résumé parsed, a new
+		// subscriber) must not pay for a lookup that cannot change their outcome.
+		const instance = opts.instanceId ? await readInstanceNotificationPolicy(env, opts.instanceId, userId) : undefined;
+		const decision = resolveNotificationDelivery({ type, severity: kind, event: opts.event, instanceId: opts.instanceId }, { account, instance });
+		interrupt = decision.push.allowed;
+		record = decision.inapp.allowed;
 	} catch {
 		// Fall open — an unreadable preference must not swallow a notification.
 	}
@@ -309,9 +345,11 @@ export async function notifyUser(
 		}
 	}
 
-	await createNotification(env.DB, userId, type, title, body, undefined, target.url, { dedupeKey, kind, interrupt, instanceId: opts.instanceId }).catch(
-		() => undefined,
-	);
+	if (record) {
+		await createNotification(env.DB, userId, type, title, body, undefined, target.url, { dedupeKey, kind, interrupt, instanceId: opts.instanceId }).catch(
+			() => undefined,
+		);
+	}
 	if (!interrupt) return;
 	await sendPushToUser(env, userId, { title, body, url: target.url, tag: notificationTag(type, target.url) }).catch(() => undefined);
 }

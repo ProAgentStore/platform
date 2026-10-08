@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**282 tool registrations.** 256 are always registered; 26 are gated to the console
+**285 tool registrations.** 259 are always registered; 26 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -317,6 +317,9 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `set_instance_stats` | Patch your own stats cards (`card: null` removes/hides; never edits the template) | write | yes | |
 | `get_instance_instructions` | Read Special Instructions | — | | |
 | `set_instance_instructions` | Replace them (max 4000 chars) | write | yes | |
+| `get_instance_notification_policy` | One instance's notification rules, what they inherit, and the RESOLVED state per type/event × channel with the level that decided it (#992) | — | | |
+| `set_instance_notification_policy` | Replace that instance's rules (select by `type`/`event`/`severity`, decide `inapp`/`push`), `allOff` to silence it entirely, or send none to restore inheritance | write | yes | |
+| `get_notification_vocabulary` | What a rule may name: notification types, generic events, delivery channels, severities | — | | |
 | `get_instance_connection_guide` | The pasteable per-instance connection guide: id, agent type, repos, exposed tools with exact field names, worked `call_instance_tool` example | read | | |
 | `get_console_link` | A console URL for an instance, one of its loop runs, a task, a secret request or a tab — `url` for chat, `path` for a push; refuses a tab the instance does not show | read | | |
 | `get_application_runner_settings` | An Application Runner's handoff + submission policy: engine, files, allowed sites, auto-submit rules (off by default) (#953) | read | | |

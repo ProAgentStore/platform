@@ -202,6 +202,84 @@ export function registerSettingsTools(server: McpServer, ctx: InstanceToolsCtx):
 	);
 
 	server.tool(
+		"get_instance_notification_policy",
+		"Read which notifications ONE subscribed instance may send the owner (#992), and why. Returns `rules` (only what the owner set on this instance — an empty array means it inherits the account), `inherited` (the account's own rules, plus its legacy per-type mutes and instance scope restated as the update-only rules they are equivalent to), and `effective`: every notification type × severity, plus every owner-attention event, resolved per CHANNEL (`inapp` = the console's notification list, `push` = an interruption on the owner's devices) with the `source` that decided it — `instance`, `account`, `baseline` (the legacy mutes) or `default`. Read this before set_instance_notification_policy: the rules are a replacement list, not a patch, and `effective` is the only honest answer to \"will this actually reach me\". The vocabulary a rule may name comes from get_notification_vocabulary.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			return jsonText(await authedCall(`/v1/instances/${instance_id}/notifications`, sessionToken, {}, env));
+		},
+	);
+
+	server.tool(
+		"get_notification_vocabulary",
+		"Read what a notification policy rule may name (#992): the notification `types` (each with whether it can also raise an alert), the generic `events` a workflow can declare (`approval_required` and the rest of the owner-attention vocabulary), the delivery `channels` (`inapp`, `push`), and the `severities` (`update`, `alert`). Static product vocabulary shared by every instance — read it with get_instance_notification_policy before writing a rule, because an unknown type or event is refused rather than stored.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+		},
+		async ({ token }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			return jsonText(await authedCall("/v1/instances/notification-vocabulary", sessionToken, {}, env));
+		},
+	);
+
+	server.tool(
+		"set_instance_notification_policy",
+		"Replace which notifications ONE subscribed instance may send the owner (#992). A rule SELECTS notifications — `type` (e.g. `apply`, `coding`, `deploy`, `ci`), `event` (e.g. `approval_required`), `severity` (`update` | `alert`); an omitted selector means any — and DECIDES channels: `push` (interrupt my devices) and `inapp` (write it to the console's notification list); an omitted channel inherits. More specific wins, and an instance rule beats an account rule. Examples: `[{\"event\":\"approval_required\",\"push\":true},{\"type\":\"apply\",\"severity\":\"update\",\"push\":false}]` is \"approvals interrupt me, routine progress does not\"; `allOff:true` silences this agent entirely, alerts included. TWO THINGS TO KNOW: an `alert` (a run that has STOPPED and is waiting for the owner) is delivered unless a rule explicitly says otherwise, so silencing one is the owner's deliberate choice, not a side effect of tidying up noise; and `inapp:false` removes the RECORD, so the owner loses the audit trail — prefer `push:false`, which keeps it. The rules REPLACE the stored list (send `rules: []` or call this with nothing to restore inheritance); an unknown type or event is refused, not dropped.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			rules: z
+				.array(
+					z.object({
+						type: z.string().optional().describe("Notification type id from get_notification_vocabulary. Omit for any type."),
+						event: z.string().optional().describe("Generic event class, e.g. approval_required. Omit for any event."),
+						severity: z.enum(["update", "alert"]).optional().describe("Omit to match both."),
+						inapp: z.boolean().optional().describe("May it be written to the console's notification list? Omit to inherit."),
+						push: z.boolean().optional().describe("May it interrupt the owner's devices? Omit to inherit."),
+					}),
+				)
+				.optional()
+				.describe("The full new rule list (replaces the stored one). Omit or send [] to restore inheritance from the account."),
+			allOff: z.boolean().optional().describe("Silence this instance entirely — no push and no record, alerts included. Cannot be combined with `rules`."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, rules, allOff, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, ...(allOff ? { allOff } : { rules: rules ?? [] }) };
+			const denied = await requirePermission(safetyFor(token), "write", "set_instance_notification_policy", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "set_instance_notification_policy", allOff ? "silence every notification from this instance" : "replace this instance's notification policy", input, {
+					endpoint: `/v1/instances/${instance_id}/notifications`,
+					method: allOff || (rules?.length ?? 0) > 0 ? "PUT" : "DELETE",
+					body: allOff ? { allOff: true } : { rules: rules ?? [] },
+				});
+			}
+			// No rules and no allOff is "restore inherited", which is a DELETE: a stored empty list
+			// and an absent policy resolve the same way, but only the absence says "inherit" to a
+			// reader — and the console's own Restore button sends the same DELETE.
+			const restore = !allOff && (rules?.length ?? 0) === 0;
+			const data = restore
+				? await authedCall(`/v1/instances/${instance_id}/notifications`, sessionToken, { method: "DELETE" }, env)
+				: await authedCall(
+						`/v1/instances/${instance_id}/notifications`,
+						sessionToken,
+						{ method: "PUT", body: JSON.stringify(allOff ? { allOff: true } : { rules }) },
+						env,
+					);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_instance_notification_policy", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
 		"set_instance_model",
 		"Pick the model that runs a subscribed instance's BRAIN — its chat and orchestration: reading the terminal, calling tools, driving the coding engine. Brain models (all tool-capable): claude-sonnet-4-6 (most capable · premium cost, needs the owner's Anthropic key); @cf/meta/llama-4-scout-17b-16e-instruct (cheap · fast · good default for light orchestration); @cf/meta/llama-3.3-70b-instruct-fp8-fast (cheap · stronger reasoning · slower); @cf/qwen/qwen2.5-coder-32b-instruct (cheap · code-optimized). A Cloudflare pick runs on the owner's Cloudflare Workers AI credentials even when an Anthropic key is also stored, and is refused when no Cloudflare credentials are stored. A model that cannot call tools is refused, since a brain without tools confabulates instead of acting. Also the way to move an instance off a model it inherited at subscribe (#151).",
 		{

@@ -191,6 +191,45 @@ export interface AttentionEventSpec {
 	pushOptional: boolean;
 }
 
+/** One rule of the notification policy (#992) — selectors narrow, channels decide. */
+export interface NotificationPolicyRule {
+	type?: string;
+	event?: string;
+	severity?: "update" | "alert";
+	inapp?: boolean;
+	push?: boolean;
+}
+
+/** `GET /v1/instances/notification-vocabulary` — what a rule may name. */
+export interface NotificationVocabulary {
+	types: ReadonlyArray<NotificationTypeSpec>;
+	events: ReadonlyArray<AttentionEventSpec>;
+	channels: ReadonlyArray<{ id: "inapp" | "push"; label: string; description: string; optional: boolean }>;
+	severities: ReadonlyArray<"update" | "alert">;
+}
+
+/** A resolved cell: what will happen, and which level decided it. */
+export interface NotificationChannelDecision {
+	allowed: boolean;
+	source: "instance" | "account" | "baseline" | "default";
+	rule?: NotificationPolicyRule;
+}
+
+/** `GET/PUT/DELETE /v1/instances/:id/notifications` — the instance's own rules, resolved. */
+export interface InstanceNotificationPolicy {
+	instanceId: string;
+	rules: NotificationPolicyRule[];
+	inherited?: { rules: NotificationPolicyRule[]; legacy: NotificationPolicyRule[]; muted: string[]; instances: string[] };
+	effective: Array<{
+		type: string;
+		severity: "update" | "alert";
+		event?: string;
+		inapp: NotificationChannelDecision;
+		push: NotificationChannelDecision;
+	}>;
+	restored?: boolean;
+}
+
 export interface AccountCodingPreferences {
 	defaultEngineId?: string;
 }
@@ -199,7 +238,7 @@ export interface ConsoleAccountPreferences {
 	voice?: unknown;
 	translation?: unknown;
 	coding?: AccountCodingPreferences;
-	notifications?: { muted?: string[]; instances?: string[] };
+	notifications?: { muted?: string[]; instances?: string[]; rules?: NotificationPolicyRule[] };
 	/** Event ids whose push the owner turned off (#991). The in-app row is still written. */
 	attention?: { pushOff?: string[] };
 	timezone?: string;
@@ -220,6 +259,10 @@ export interface AccountPreferencesResponse {
 	languages?: ReadonlyArray<PreferenceLanguageOption>;
 	notificationTypes?: ReadonlyArray<NotificationTypeSpec>;
 	attentionEvents?: ReadonlyArray<AttentionEventSpec>;
+	/** #992: the channels and severities a rule may name, and the account's own resolved matrix. */
+	notificationChannels?: NotificationVocabulary["channels"];
+	notificationSeverities?: NotificationVocabulary["severities"];
+	notificationEffective?: InstanceNotificationPolicy["effective"];
 	codingEngineOptions?: ReadonlyArray<CodingEngineOption>;
 }
 

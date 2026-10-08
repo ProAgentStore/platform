@@ -265,6 +265,10 @@ const ROUTES = [
 	"GET /:instanceId/behaviour",
 	"PUT /:instanceId/behaviour",
 	"DELETE /:instanceId/behaviour",
+	"GET /notification-vocabulary",
+	"GET /:instanceId/notifications",
+	"PUT /:instanceId/notifications",
+	"DELETE /:instanceId/notifications",
 	"GET /:instanceId/connection-guide",
 	"GET /:instanceId/console-link",
 	"GET /:instanceId/local-browser/settings",
@@ -445,6 +449,12 @@ const OWNERSHIP: Record<string, string[]> = {
 		"GET /:instanceId/behaviour",
 		"PUT /:instanceId/behaviour",
 		"DELETE /:instanceId/behaviour",
+	],
+	"instances-notifications.ts": [
+		"GET /notification-vocabulary",
+		"GET /:instanceId/notifications",
+		"PUT /:instanceId/notifications",
+		"DELETE /:instanceId/notifications",
 	],
 	"instances-guide.ts": ["GET /:instanceId/connection-guide"],
 	"instances-console-link.ts": ["GET /:instanceId/console-link"],
@@ -694,6 +704,16 @@ const GATES: Record<string, [number, number]> = {
 	"GET /:instanceId/behaviour": [401, 404],
 	"PUT /:instanceId/behaviour": [401, 404],
 	"DELETE /:instanceId/behaviour": [401, 404],
+	// The notification VOCABULARY (#992) — the types, events, channels and severities a policy
+	// rule may name. Public for the same reason the behaviour table above is: the same list for
+	// every agent, carrying no instance and nothing user-specific.
+	"GET /notification-vocabulary": [200, 200],
+	// The policy itself is per-instance and owner-scoped, so a stranger gets the same 404 as
+	// every other per-instance read — never an empty policy, which would be a statement about
+	// whether that instance exists.
+	"GET /:instanceId/notifications": [401, 404],
+	"PUT /:instanceId/notifications": [401, 404],
+	"DELETE /:instanceId/notifications": [401, 404],
 	// The generated connection guide (#772). Derived state, but every input is tenant-scoped and
 	// the route opens with `requireOwnedInstance`, so a stranger gets the same 404 as every other
 	// per-instance read — not an empty guide, which would be a statement about an instance.
@@ -849,6 +869,7 @@ describe("what a stranger gets from every route", () => {
 		"GET /my/activity": "both its queries ARE the tenant query (WHERE user_id = ?1) — answers with an empty list",
 		"GET /my/snapshot": "every query is the tenant query (WHERE user_id = ?1) — answers with an empty list",
 		"GET /behaviour-schema": "the behaviour field table: the same static vocabulary for every agent, public by design",
+		"GET /notification-vocabulary": "the notification types, events, channels and severities a policy rule may name (#992): the same static vocabulary for every agent, carrying no instance and nothing user-specific — public for the same reason the behaviour table above is",
 	};
 
 	it("only the documented routes answer a caller who owns nothing", () => {

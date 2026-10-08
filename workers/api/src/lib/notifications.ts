@@ -26,6 +26,26 @@
  */
 export type NotificationKind = "alert" | "update";
 
+/**
+ * One rule of the notification policy (#992): selectors narrow WHAT it is about, the channel
+ * fields decide what happens, and an absent field means "any" / "inherit" respectively.
+ *
+ * Declared HERE, with the rest of the stored notification document, so the dependency runs one
+ * way: this module owns the shape, `notification-policy.ts` owns the resolution and the
+ * field-level sanitization, and nothing imports backwards. The same split keeps this file pure.
+ */
+export interface NotificationRule {
+	/** A notification type id (`apply`, `coding`, `ci`, …). Absent = any type. */
+	type?: string;
+	/** A generic event class — `approval_required` and the rest of #991's vocabulary. Absent = any. */
+	event?: string;
+	severity?: NotificationKind;
+	/** May it be written to the bell list? Absent = inherit. */
+	inapp?: boolean;
+	/** May it interrupt the owner's devices? Absent = inherit. */
+	push?: boolean;
+}
+
 export interface NotificationTypeSpec {
 	/** The `type` string callers already pass, and the push `tag`. */
 	id: string;
@@ -60,6 +80,17 @@ export const NOTIFICATION_TYPES: NotificationTypeSpec[] = [
 		id: "deploy",
 		label: "Deploys",
 		description: "A deploy of one of your repos going out, or failing.",
+		alerts: false,
+	},
+	{
+		// Live since the CI-health sweep shipped (`lib/repo-ci-health.ts:353` calls notifyUser with
+		// it) and missing from this list, which meant `isKnownNotificationType("ci")` was false — so
+		// a mute for it could not even be SAVED (the preferences route refuses an unknown id) and
+		// the console had no control to offer. #992 is "the owner can control every notification
+		// received"; a type nobody can name is the one hole that makes that untrue by construction.
+		id: "ci",
+		label: "Build checks",
+		description: "A repo's checks going red or recovering, separately from a deploy.",
 		alerts: false,
 	},
 	{
@@ -161,6 +192,17 @@ export interface NotificationPreferences {
 	 * a scope can only exclude what it can name.
 	 */
 	instances?: string[];
+	/**
+	 * The per-event, per-channel policy (#992) — the general mechanism, layered OVER the two
+	 * legacy axes above rather than replacing them.
+	 *
+	 * The pair stays exactly as it was and keeps being evaluated as the baseline, which is what
+	 * makes the migration a no-op: an account that never writes a rule behaves identically. A rule
+	 * is the only thing that can decide a channel explicitly, and the only thing that can touch an
+	 * `alert`. Resolution lives in `notification-policy.ts`, which is also where the precedence
+	 * order is written down.
+	 */
+	rules?: NotificationRule[];
 }
 
 /** Bounds on the instance scope: an id is opaque but not unbounded, and a list is a choice, not a dump. */
@@ -180,9 +222,21 @@ export function sanitizeNotificationPreferences(raw: unknown): NotificationPrefe
 			if (scope.size >= INSTANCE_SCOPE_MAX) break;
 		}
 	}
+	// The policy rides in the same section (#992). Only its SHAPE is checked here — an array of
+	// objects — because the field-level sanitizer belongs with the resolver that has to understand
+	// them, and `parseAccountPreferences` runs it on every read. A non-array is dropped rather
+	// than stored: `resolveNotificationDelivery` maps over this list.
+	const rawRules = (raw as { rules?: unknown }).rules;
+	const policyRules = Array.isArray(rawRules)
+		? (rawRules.filter((r) => !!r && typeof r === "object" && !Array.isArray(r)) as NotificationRule[])
+		: undefined;
 	// The key is absent, not `[]`, when there is no scope: "every instance" is the ABSENCE of a
 	// choice, and a stored `instances: []` would read as a choice that happens to be empty.
-	return scope.size ? { muted: [...seen], instances: [...scope] } : { muted: [...seen] };
+	return {
+		muted: [...seen],
+		...(scope.size ? { instances: [...scope] } : {}),
+		...(policyRules?.length ? { rules: policyRules } : {}),
+	};
 }
 
 /**

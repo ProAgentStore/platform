@@ -15,6 +15,15 @@
  * work from, and {@link requestOwnerAttention} is the one call: event + the typed subject it deep
  * links to + what it is ABOUT + the prose.
  *
+ * ── Its relationship with the notification policy (#992)
+ *
+ * The event id travels with the notification (`NotifyOptions.event`), which is what makes an
+ * attention event CONFIGURABLE: a policy rule can select `event: "approval_required"` and decide
+ * it per instance and per channel. The `pushOff` preference below predates that policy and is
+ * kept because it is simpler to reason about for the account-wide case; it is evaluated here, and
+ * the policy is evaluated at the delivery boundary, so "off" from either is off — which is the
+ * only composition that cannot surprise an owner who turned something off.
+ *
  * ── What it deliberately does NOT reinvent
  *
  * Delivery, dedupe, preferences and the in-app list already exist and are good: `notifyUser`
@@ -202,7 +211,7 @@ export function attentionDetail(event: string, push: PushOutcome, recorded: bool
  */
 export interface AttentionDeps<E = unknown> {
 	/** Injected so the policy is testable without the delivery stack. */
-	notify: (env: E, userId: string, type: string, title: string, body: string, url: DeepLink, opts: { key: string; kind: "alert" | "update"; instanceId?: string }) => Promise<void>;
+	notify: (env: E, userId: string, type: string, title: string, body: string, url: DeepLink, opts: { key: string; kind: "alert" | "update"; instanceId?: string; event?: string }) => Promise<void>;
 	/**
 	 * Did a push actually go out? Reported, never assumed.
 	 *
@@ -233,14 +242,14 @@ export async function requestOwnerAttention<E>(env: E, req: OwnerAttentionReques
 	if (!attentionPushAllowed(prefs?.attention, req.event)) {
 		// The owner's own choice: the row is still written, because the bell list is a log.
 		const recorded = await deps
-			.notify(env, req.userId, req.notificationType, req.title, req.body, url, { key, kind: "update", instanceId: req.instanceId })
+			.notify(env, req.userId, req.notificationType, req.title, req.body, url, { key, kind: "update", instanceId: req.instanceId, event: req.event })
 			.then(() => true)
 			.catch(() => false);
 		return { event: req.event, recorded, push: "muted", key, url, detail: attentionDetail(req.event, "muted", recorded) };
 	}
 
 	const recorded = await deps
-		.notify(env, req.userId, req.notificationType, req.title, req.body, url, { key, kind, instanceId: req.instanceId })
+		.notify(env, req.userId, req.notificationType, req.title, req.body, url, { key, kind, instanceId: req.instanceId, event: req.event })
 		.then(() => true)
 		.catch(() => false);
 	const push = recorded

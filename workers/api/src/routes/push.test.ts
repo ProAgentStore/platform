@@ -119,7 +119,7 @@ describe("sendPushToUser", () => {
  * subscription list) and records every notification row written, so a test can assert the two
  * things that matter separately: did the ROW get written, and did the phone BUZZ.
  */
-function notifyEnv(opts: { preferences?: unknown; duplicate?: boolean; subs?: unknown[] }) {
+function notifyEnv(opts: { preferences?: unknown; duplicate?: boolean; subs?: unknown[]; instanceConfig?: unknown }) {
 	const inserted: Array<Record<string, unknown>> = [];
 	const DB = {
 		prepare(sql: string) {
@@ -138,6 +138,11 @@ function notifyEnv(opts: { preferences?: unknown; duplicate?: boolean; subs?: un
 						async first() {
 							if (/SELECT preferences FROM users/i.test(sql)) {
 								return { preferences: opts.preferences === undefined ? null : JSON.stringify(opts.preferences) };
+							}
+							// The per-instance policy read (#992). Absent by default, so every assertion
+							// above this one measures the account baseline exactly as it did before.
+							if (/SELECT config FROM agent_instances/i.test(sql)) {
+								return opts.instanceConfig === undefined ? null : { config: JSON.stringify(opts.instanceConfig) };
 							}
 							if (/FROM notifications/i.test(sql)) return opts.duplicate ? { 1: 1 } : null;
 							return null;
@@ -243,6 +248,141 @@ describe("notifyUser", () => {
 		expect(inserted).toHaveLength(1);
 		expect(inserted[0].pushedAt).toBeTypeOf("string"); // the window starts (phone buzzed)
 		expect(fetchSpy).toHaveBeenCalled();
+	});
+
+	// ── #992: the per-instance, per-event, per-channel policy ───────────────────────────────────
+	//
+	// Same measurement as everything above: did the ROW get written, and did the phone BUZZ. The
+	// policy adds a third question — WHOSE rule decided — and these assert the two that matter
+	// most at the delivery boundary: an alert still gets through unless the owner said otherwise,
+	// and the log survives a silenced push.
+	it("honours a per-instance push-off while keeping the row", async () => {
+		const { env, inserted } = notifyEnv({ instanceConfig: { notifications: { rules: [{ push: false }] } } });
+		const fetchSpy = vi.fn();
+		vi.stubGlobal("fetch", fetchSpy);
+		await notifyUser(env, "u1", "coding", "✅ Coder finished", "done", link("/console/instances/i1/coding/s1"), { instanceId: "i1" });
+		expect(inserted).toHaveLength(1);
+		expect(inserted[0].pushedAt).toBeNull();
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it("silences an instance's ALERT only when a rule names it", async () => {
+		const subs = [await realSub("phone")];
+		const vapid = await vapidEnvKeys();
+		// No rule about alerts: the floor holds and it buzzes, even with the type muted.
+		{
+			const { env, inserted } = notifyEnv({ preferences: { notifications: { muted: ["coding"] } }, subs, instanceConfig: { notifications: { rules: [{ severity: "update", push: false }] } } });
+			const fetchSpy = vi.fn(async () => new Response(null, { status: 201 }));
+			vi.stubGlobal("fetch", fetchSpy);
+			await notifyUser({ ...(env as object), ...vapid } as unknown as Env, "u1", "coding", "🙋 Coder needs you", "stuck", link("/console/"), { kind: "alert", instanceId: "i1" });
+			expect(inserted[0].pushedAt).not.toBeNull();
+			expect(fetchSpy).toHaveBeenCalled();
+		}
+		// The owner turned this agent off entirely, alerts included — their call, explicitly made.
+		{
+			const { env, inserted } = notifyEnv({ subs, instanceConfig: { notifications: { rules: [{ push: false }] } } });
+			const fetchSpy = vi.fn(async () => new Response(null, { status: 201 }));
+			vi.stubGlobal("fetch", fetchSpy);
+			await notifyUser({ ...(env as object), ...vapid } as unknown as Env, "u1", "coding", "🙋 Coder needs you", "stuck", link("/console/"), { kind: "alert", instanceId: "i1" });
+			expect(inserted).toHaveLength(1); // still logged
+			expect(inserted[0].pushedAt).toBeNull();
+			expect(fetchSpy).not.toHaveBeenCalled();
+		}
+	});
+
+	it("suppresses the ROW only when a rule explicitly turns the log off", async () => {
+		const { env, inserted } = notifyEnv({ instanceConfig: { notifications: { rules: [{ inapp: false, push: false }] } } });
+		const fetchSpy = vi.fn();
+		vi.stubGlobal("fetch", fetchSpy);
+		await notifyUser(env, "u1", "coding", "✅ Coder finished", "done", link("/console/instances/i1/coding/s1"), { instanceId: "i1" });
+		expect(inserted, "the owner asked for no record of this agent at all").toHaveLength(0);
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it("selects on the EVENT class, so approvals and progress of one type part company", async () => {
+		const subs = [await realSub("phone")];
+		const vapid = await vapidEnvKeys();
+		const cfg = { notifications: { rules: [{ type: "apply", push: false }, { event: "approval_required", push: true }] } };
+		{
+			const { env, inserted } = notifyEnv({ subs, instanceConfig: cfg });
+			const fetchSpy = vi.fn(async () => new Response(null, { status: 201 }));
+			vi.stubGlobal("fetch", fetchSpy);
+			await notifyUser({ ...(env as object), ...vapid } as unknown as Env, "u1", "apply", "Approve to send", "waiting", link("/console/instances/i1/board"), { kind: "alert", instanceId: "i1", event: "approval_required" });
+			expect(inserted[0].pushedAt).not.toBeNull();
+			expect(fetchSpy).toHaveBeenCalled();
+		}
+		{
+			const { env, inserted } = notifyEnv({ subs, instanceConfig: cfg });
+			const fetchSpy = vi.fn(async () => new Response(null, { status: 201 }));
+			vi.stubGlobal("fetch", fetchSpy);
+			await notifyUser({ ...(env as object), ...vapid } as unknown as Env, "u1", "apply", "Filling…", "progress", link("/console/instances/i1/board"), { instanceId: "i1" });
+			expect(inserted[0].pushedAt).toBeNull();
+			expect(fetchSpy).not.toHaveBeenCalled();
+		}
+	});
+
+	it("a policy-suppressed push does not consume the duplicate window (#992 × #361)", async () => {
+		// The interaction the two floors have to get right: the 10-minute window is measured
+		// against rows that actually INTERRUPTED (`pushed_at IS NOT NULL`). A policy-silenced
+		// notification must therefore not start it — otherwise turning a channel back on, or an
+		// alert arriving straight after a silenced update, would be swallowed as a "duplicate" of
+		// something that never reached the owner.
+		const rows: Array<{ pushedAt: unknown }> = [];
+		let policy: unknown = { notifications: { rules: [{ push: false }] } };
+		const subs = [await realSub("phone")];
+		const DB = {
+			prepare(sql: string) {
+				return {
+					bind(...args: unknown[]) {
+						return {
+							all: async () => ({ results: subs }),
+							run: async () => {
+								if (/INSERT INTO notifications/i.test(sql)) rows.push({ pushedAt: args[9] });
+								return {};
+							},
+							first: async () => {
+								if (/SELECT preferences FROM users/i.test(sql)) return { preferences: null };
+								if (/SELECT config FROM agent_instances/i.test(sql)) return policy === undefined ? null : { config: JSON.stringify(policy) };
+								// The real window query: only a row that interrupted counts.
+								if (/FROM notifications/i.test(sql)) return rows.some((r) => r.pushedAt) ? { 1: 1 } : null;
+								return null;
+							},
+						};
+					},
+				};
+			},
+		};
+		const env = { DB, ...(await vapidEnvKeys()) } as unknown as Env;
+		const fetchSpy = vi.fn(async () => new Response(null, { status: 201 }));
+		vi.stubGlobal("fetch", fetchSpy);
+
+		const send = () => notifyUser(env, "u1", "coding", "🙋 Coder needs you", "stuck", link("/console/"), { kind: "alert", instanceId: "i1", key: "session:s1:handoff" });
+		await send();
+		expect(rows[0].pushedAt, "silenced by the policy").toBeNull();
+		expect(fetchSpy).not.toHaveBeenCalled();
+
+		// The owner turns it back on; the same event must still be able to reach them.
+		policy = undefined;
+		await send();
+		expect(rows[1].pushedAt).not.toBeNull();
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+		// And the floor still holds for a real repeat that DID interrupt.
+		await send();
+		expect(rows[2].pushedAt).toBeNull();
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not read an instance policy for a notification that names no instance", async () => {
+		const reads: string[] = [];
+		const DB = {
+			prepare(sql: string) {
+				reads.push(sql);
+				return { bind: () => ({ all: async () => ({ results: [] }), run: async () => ({}), first: async () => null }) };
+			},
+		};
+		await notifyUser({ DB } as unknown as Env, "u1", "apply", "✅ Résumé parsed", "saved", link("/console/profile"));
+		expect(reads.some((q) => /FROM agent_instances/i.test(q)), "an account-level row belongs to no agent").toBe(false);
 	});
 
 	// A notification must not be LOST because the floor could not be evaluated.

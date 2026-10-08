@@ -255,6 +255,12 @@ const READBACK: Record<string, string | null> = {
 	"set_instance_local_browser_settings.trace_retention_days": "get_instance_local_browser_settings",
 	"set_instance_local_browser_settings.collection": "get_instance_local_browser_settings",
 	"set_instance_instructions.instructions": "get_instance_instructions",
+	// #992: the policy is read back WITH its resolution — `get_instance_notification_policy`
+	// returns the stored rules and the effective state per channel, which is the half a writer
+	// cannot infer. `allOff` is stored as the rule it means, so it reads back through the same
+	// tool rather than as a flag nothing reflects.
+	"set_instance_notification_policy.rules": "get_instance_notification_policy",
+	"set_instance_notification_policy.allOff": "get_instance_notification_policy",
 	"set_instance_operator_manual.manual": "get_instance_operator_manual",
 	"set_instance_model.model": "get_instance_state",
 	// #613/#722: consent is a MODE, not a boolean. The reader landed with the explicit setter so

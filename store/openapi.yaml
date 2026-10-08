@@ -841,6 +841,79 @@ components:
             on write (an id that is not yours matches nothing), but the shape is: a non-array or a
             non-string entry is a 400.
           items: { type: string }
+        rules:
+          type: array
+          description: |
+            The per-event, per-channel policy (#992) — the general mechanism, layered OVER the two
+            axes above rather than replacing them. The pair keeps its meaning and keeps being
+            evaluated as the BASELINE under every rule, which is what makes an account that has
+            written no rule behave exactly as it did before. A rule is the only thing that can
+            decide a channel explicitly, and the only thing that can touch an `alert`. An unknown
+            type or event is a 400 on write.
+          items: { $ref: "#/components/schemas/NotificationPolicyRule" }
+
+    NotificationPolicyRule:
+      type: object
+      description: |
+        One rule of the notification policy (#992). The selectors narrow WHAT it is about; the
+        channel fields decide what happens. A rule that decides neither channel is refused on
+        write: a stored rule that cannot change an outcome is a control the owner believes they set.
+      properties:
+        type:
+          type: string
+          description: A notification type id from `notification-vocabulary`. Omit for any type.
+        event:
+          type: string
+          description: A generic event class, e.g. `approval_required`. Omit for any event.
+        severity:
+          type: string
+          enum: [update, alert]
+          description: Omit to match both.
+        inapp:
+          type: boolean
+          description: May it be written to the console's notification list? Omit to inherit. `false` removes the record, so the owner loses the history.
+        push:
+          type: boolean
+          description: May it interrupt the owner's devices? Omit to inherit.
+
+    InstanceNotificationPolicy:
+      type: object
+      description: One instance's rules, what they inherit, and every row resolved per channel with the level that decided it (#992).
+      properties:
+        instanceId: { type: string }
+        rules:
+          type: array
+          description: Only what the owner set here. Empty means it inherits the account.
+          items: { $ref: "#/components/schemas/NotificationPolicyRule" }
+        inherited:
+          type: object
+          properties:
+            rules: { type: array, items: { $ref: "#/components/schemas/NotificationPolicyRule" } }
+            legacy:
+              type: array
+              description: The account's per-type mutes restated as rules. Always `severity: update`, which is why no existing alert can be lost.
+              items: { $ref: "#/components/schemas/NotificationPolicyRule" }
+            muted: { type: array, items: { type: string } }
+            instances: { type: array, items: { type: string } }
+        effective:
+          type: array
+          items:
+            type: object
+            properties:
+              type: { type: string }
+              severity: { type: string, enum: [update, alert] }
+              event: { type: string }
+              inapp: { $ref: "#/components/schemas/NotificationChannelDecision" }
+              push: { $ref: "#/components/schemas/NotificationChannelDecision" }
+        restored: { type: boolean }
+
+    NotificationChannelDecision:
+      type: object
+      description: What will happen on one channel, and which level decided it.
+      properties:
+        allowed: { type: boolean }
+        source: { type: string, enum: [instance, account, baseline, default] }
+        rule: { $ref: "#/components/schemas/NotificationPolicyRule" }
 
     CodingPreferences:
       type: object
@@ -6458,6 +6531,106 @@ paths:
           content:
             application/json:
               schema: { type: object, properties: { ok: { type: boolean } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/notification-vocabulary:
+    get:
+      summary: What a notification policy rule may name
+      description: |
+        Static product vocabulary shared by every instance (#992): the notification `types` (each
+        with whether it can also raise an `alert`), the generic `events` a workflow can declare
+        (`approval_required` and the rest of the owner-attention vocabulary), the delivery
+        `channels` (`inapp` — the console's notification list; `push` — the owner's devices), and
+        the `severities` a rule can select. Served rather than duplicated in a client, so a new
+        type, event or channel gets its control by existing.
+      operationId: getNotificationVocabulary
+      tags: [Notifications]
+      responses:
+        "200":
+          description: The vocabulary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  types: { type: array, items: { type: object } }
+                  events: { type: array, items: { type: object } }
+                  channels: { type: array, items: { type: object } }
+                  severities: { type: array, items: { type: string, enum: [update, alert] } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/instances/{instanceId}/notifications:
+    get:
+      summary: One instance's notification policy, and what it resolves to
+      description: |
+        Which notifications THIS agent may send the owner, per event and per channel (#992).
+
+        `rules` is only what the owner set on this instance — an empty array means it inherits the
+        account. `inherited` carries the account's own rules plus its legacy per-type mutes and
+        instance scope, restated as the update-only rules they are equivalent to. `effective` is
+        every type × severity, plus every event, RESOLVED per channel with the `source` that
+        decided it (`instance`, `account`, `baseline` for the legacy mutes, or `default`).
+
+        The resolution order is: account rules, then this instance's rules, with a narrower
+        selector winning inside each level — and an instance rule beating an account rule even
+        when the account's is more specific. An `alert` is delivered unless a rule explicitly says
+        otherwise, and the in-app row is written unless a rule explicitly turns `inapp` off.
+      operationId: getInstanceNotificationPolicy
+      tags: [Notifications]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: The policy, its inheritance and the resolved state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InstanceNotificationPolicy" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Replace one instance's notification rules
+      description: |
+        The whole rule list, because the list is the unit the editor edits. A rule selects
+        (`type`, `event`, `severity`; an omitted selector means any) and decides channels (`inapp`,
+        `push`; an omitted channel inherits). `allOff: true` silences this agent entirely —
+        alerts and the in-app record included — and is stored as the one rule that means it.
+
+        Strict on write: an unknown type or event, a rule that decides no channel, or an unknown
+        field is a 400. A silently dropped rule would leave the owner believing they turned an
+        interruption off.
+      operationId: setInstanceNotificationPolicy
+      tags: [Notifications]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rules: { type: array, items: { $ref: "#/components/schemas/NotificationPolicyRule" } }
+                allOff: { type: boolean, description: "Silence this instance entirely. Cannot be combined with `rules`." }
+      responses:
+        "200":
+          description: Saved, with the resolved state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InstanceNotificationPolicy" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      summary: Restore inherited
+      description: Remove this instance's override entirely, so it follows the account again. Absent is the state that means "inherit"; a stored empty list is not.
+      operationId: clearInstanceNotificationPolicy
+      tags: [Notifications]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: Restored
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InstanceNotificationPolicy" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 

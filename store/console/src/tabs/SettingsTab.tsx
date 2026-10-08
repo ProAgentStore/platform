@@ -21,6 +21,7 @@ import AgentSettingsSection from "./settings/AgentSettingsSection";
 import ConnectorsSection from "./settings/ConnectorsSection";
 import VoiceTranslationSection from "./settings/VoiceTranslationSection";
 import MiscellaneousSection from "./settings/MiscellaneousSection";
+import NotificationPolicySection from "./settings/NotificationPolicySection";
 import LocalBrowserSection from "./settings/LocalBrowserSection";
 
 interface Props {
@@ -437,6 +438,9 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 			<LoopRunsSection instanceId={instanceId} />
 			<TriggersSection instanceId={instanceId} driveGrants={driveGrants} workdriveGrants={workdriveGrants} />
 
+			{/* What this agent may tell the owner, and where (#992) — every agent has notifications,
+			    so this is ungated, like Behaviour. */}
+			<NotificationPolicySection instanceId={instanceId} />
 			<VoiceTranslationSection
 				voiceSettings={voiceSettings}
 				voiceOverride={voiceOverride}

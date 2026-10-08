@@ -1087,4 +1087,10 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// tool name; a parameter is part of `inputSchema`, so the surface moved. The matching read is
 	// `get_account_preferences`, which now also serves the `attentionEvents` vocabulary.
 	"0.1.98": "sha256:b9594c21db0a90358af41c043e42404574c87dc49ff489ef399a1a833388c674",
+	// #992: three new tool NAMES for the notification policy — `get_instance_notification_policy`
+	// (one instance's rules plus the RESOLVED effective state per channel and the level that
+	// decided it), `get_notification_vocabulary` (the types, events, channels and severities a
+	// rule may name) and `set_instance_notification_policy` (replace that instance's rules, or
+	// `allOff`). 282 registrations become 285, `MCP_TOOL_ALWAYS_ON` 256 → 259, gated stays 26.
+	"0.1.99": "sha256:4faab5ec61a297690faee496f79bb2abca1efb0b7e5bfc4de37a0e3ead410e9d",
 };

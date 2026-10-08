@@ -5,6 +5,7 @@ import VoiceFields from "../components/VoiceFields";
 import TranslationFields from "../components/TranslationFields";
 import AccountConnections from "../components/AccountConnections";
 import NotificationPreferences from "../components/NotificationPreferences";
+import NotificationPolicySection from "../tabs/settings/NotificationPolicySection";
 import { machineTimeZone, setAccountTimeZone, timeZoneOptions, useAccountTimeZone } from "../lib/accountTimezone";
 import Card from "../components/Card";
 import Button from "../components/Button";
@@ -213,6 +214,10 @@ export default function Preferences() {
 				pushOff={attentionPushOff}
 				onPushOffSaved={setAttentionPushOff}
 			/>
+
+			{/* #992: the per-event, per-channel rules under the switches above. Same component as an
+			    agent's own editor, so the two levels cannot describe the same choice differently. */}
+			<NotificationPolicySection />
 
 			<Card className="mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-1">Default coding engine</h3>
