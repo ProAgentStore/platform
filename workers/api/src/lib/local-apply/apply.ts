@@ -272,23 +272,73 @@ async function endLost(env: Env, uid: string, run: ApplyRun, error: string, now:
 	return failed;
 }
 
+/**
+ * The Runner is deliberately the browser/CLI executor, not the authority that can extend a run.
+ * A responsive but wedged CLI used to keep advancing `last_synced_at` forever, so the Worker
+ * never enforced the maxMinutes policy it dispatched.  The cloud owns this terminal decision:
+ * give a just-finished structured result a chance to arrive, then stop the local task and leave
+ * auto-submit runs conservative about whether a click may have happened.
+ */
+async function endTimedOut(env: Env, uid: string, run: ApplyRun, error: string, now: number): Promise<ApplyRun> {
+
+	const unknown = run.policy.mode === "auto_submit";
+	const failed = await updateApplyRun(
+		env,
+		run,
+		{ to: "failed", errorCode: "run_timed_out", error, pause: null, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: "run_timed_out" } }] },
+		now,
+	);
+	if (!failed) return run;
+	if (unknown) await markSubmitAttempted(env, run.applicationId, uid, now);
+	await move(
+		env,
+		uid,
+		run.applicationId,
+		["filling", "blocked"],
+		{
+			actor: "system",
+			actorInstanceId: run.instanceId,
+			runId: run.id,
+			expectRun: run.id,
+			to: "blocked",
+			reason: unknown ? "submit_state_unknown" : "run_timed_out",
+			questions: [unknown ? `${error} This run was allowed to submit, so check the employer's site before anything is retried.` : error],
+		},
+		now,
+	);
+	return failed;
+}
+
+async function stopTimedOutRun(env: Env, runtime: Awaited<ReturnType<typeof getLiveRuntime>>, uid: string, run: ApplyRun, now: number): Promise<ApplyRun> {
+	if (runtime) await callRuntime(env, runtime, LOCAL_APPLY_CANCEL_PATH, { method: "POST", body: JSON.stringify({ runId: run.id }) }).catch(() => undefined);
+	return endTimedOut(env, uid, run, `The application exceeded its ${run.policy.limits.maxMinutes}-minute limit and PAGS stopped the local runner.`, now);
+}
+
 /** Bring one run up to date from its runner, mirroring a pause onto the application. */
 export async function syncApplyRun(env: Env, uid: string, run: ApplyRun, now = Date.now()): Promise<ApplyRun> {
 	// A run recorded but never handed over (the Worker died between the two) is not left queued forever.
 	if (run.status === "queued") return now - run.createdAt > LOST_RUNNER_GRACE_MS ? endLost(env, uid, run, "The run was never handed to the runner.", now) : run;
 	if (run.status !== "running" && run.status !== "paused") return run;
-	const silentSince = run.lastSyncedAt ?? run.startedAt ?? run.createdAt;
+	const startedAt = run.startedAt ?? run.createdAt;
+	const timeLimitReached = run.status === "running" && now - startedAt >= run.policy.limits.maxMinutes * 60_000;
+	const silentSince = run.lastSyncedAt ?? startedAt;
 	const lostByTime = run.status === "running" ? now - silentSince > run.policy.limits.maxMinutes * 60_000 + LOST_RUNNER_GRACE_MS : now - silentSince > PAUSED_RUNNER_GRACE_MS;
 	const runtime = await getLiveRuntime(env, run.instanceId, uid).catch(() => null);
-	if (!runtime) return lostByTime ? endLost(env, uid, run, "The runner went offline during the application and did not come back in time.", now) : run;
+	if (!runtime) {
+		if (timeLimitReached) return stopTimedOutRun(env, null, uid, run, now);
+		return lostByTime ? endLost(env, uid, run, "The runner went offline during the application and did not come back in time.", now) : run;
+	}
 	let res: Response;
 	try {
 		res = await callRuntime(env, runtime, LOCAL_APPLY_STATUS_PATH, { method: "POST", body: JSON.stringify({ runId: run.id, afterSeq: run.runnerSeq }) });
 	} catch {
-		return run;
+		return timeLimitReached ? stopTimedOutRun(env, runtime, uid, run, now) : run;
 	}
 	if (res.status === 404) return endLost(env, uid, run, "The runner no longer holds this run — it was restarted or updated.", now);
-	if (!res.ok) return lostByTime ? endLost(env, uid, run, "The runner stopped answering for this run.", now) : run;
+	if (!res.ok) {
+		if (timeLimitReached) return stopTimedOutRun(env, runtime, uid, run, now);
+		return lostByTime ? endLost(env, uid, run, "The runner stopped answering for this run.", now) : run;
+	}
 	const body = (await runtimeJson(res)) as { state?: unknown; pause?: unknown; events?: unknown; lastSeq?: unknown; result?: unknown };
 	const events = (Array.isArray(body.events) ? body.events : []).map(parseLocalApplyEvent).filter((e): e is NonNullable<typeof e> => e !== null) as ApplyTraceEvent[];
 	const lastSeq = typeof body.lastSeq === "number" && body.lastSeq >= run.runnerSeq ? body.lastSeq : run.runnerSeq;
@@ -309,6 +359,9 @@ export async function syncApplyRun(env: Env, uid: string, run: ApplyRun, now = D
 		await move(env, uid, run.applicationId, ["blocked"], { ...base, to: "filling", reason: "resumed" }, now);
 	}
 	if (body.state === "ended" && body.result !== undefined && !isTerminalApplyRun(current.status)) current = await settleFromResult(env, uid, current, body.result, now);
+	// A result is authoritative if it arrived at the deadline.  Otherwise a still-running CLI
+	// cannot turn status polling into an unbounded lease; PAGS stops and settles it itself.
+	if (timeLimitReached && current.status === "running") current = await stopTimedOutRun(env, runtime, uid, current, now);
 	return current;
 }
 

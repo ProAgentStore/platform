@@ -20,7 +20,7 @@ vi.mock("../lib/runner-client.js", async (importOriginal) => ({ ...(await import
 
 const { instanceRoutes } = await import("./instances.js");
 const { deliverEvent } = await import("../lib/connections.js");
-const { syncActiveApplyRuns } = await import("../lib/local-apply/apply.js");
+const { syncActiveApplyRuns, syncApplyRun } = await import("../lib/local-apply/apply.js");
 const { agentDeleteStatements } = await import("../lib/agent-cascade.js");
 
 let d1: RealSchemaD1;
@@ -294,6 +294,70 @@ describe("submission is gated", () => {
 		answers["/local-apply/status"] = { status: 404, body: { error: "No application run" } };
 		const read = await call("GET", `/ap/application-runs/${r.body.run.id}`);
 		expect(read.body.application).toMatchObject({ status: "blocked", blockReason: "runner_lost", submitAttemptedAt: null });
+	});
+
+	it("settles a runner-verified unavailable posting to a terminal archive, never a retry", async () => {
+		const event = readyApp("lead-unavailable");
+		const started = await call("POST", "/ap/application-runs", event);
+		const runId = started.body.run.id as string;
+		const unavailable = { reason: "expired", url: "https://jobs.example.com/1", observedAt: "2026-10-07T00:09:00.000Z", source: "page_notice" };
+		runner("ended", {
+			lastSeq: 2,
+			events: [{ seq: 2, type: "job.unavailable", at: unavailable.observedAt, url: unavailable.url, detail: { reason: unavailable.reason, source: unavailable.source } }],
+			result: RESULT(runId, { outcome: "blocked", blockReason: "job_unavailable", unavailable, summary: "This posting has expired." }),
+		});
+		await call("GET", `/ap/application-runs/${runId}`);
+		const archived = await call("GET", `/t1/applications/lead-unavailable`);
+		expect(archived.body.application).toMatchObject({ status: "archived", archiveReason: "job_unavailable", archiveEvidence: unavailable });
+		expect((await appRow("lead-unavailable"))?.lead_disposition_synced_at).not.toBeNull();
+		expect((await audit("lead-unavailable")).at(-1)).toMatchObject({ from_status: "filling", to_status: "archived", reason: "job_unavailable" });
+
+		// The terminal run is not pulled again and a new readiness delivery returns the same run;
+		// neither path can produce another browser dispatch or lifecycle audit.
+		await call("GET", `/ap/application-runs/${runId}`);
+		const replay = await call("POST", "/ap/application-runs", { ...event, eventId: "unavailable-replay" });
+		expect(replay.body).toMatchObject({ outcome: "existing", run: { id: runId } });
+		expect(dispatches()).toHaveLength(1);
+		expect(await audit("lead-unavailable")).toEqual(expect.arrayContaining([expect.objectContaining({ from_status: "filling", to_status: "archived", reason: "job_unavailable" })]));
+		expect(await audit("lead-unavailable")).toHaveLength(2);
+	});
+});
+
+describe("cloud supervision", () => {
+	it("stops a CLI that remains responsive past the policy deadline, rather than renewing it from polls", async () => {
+		const started = await call("POST", "/ap/application-runs", readyApp("lead-time-limit"));
+		const runId = started.body.run.id as string;
+		const startedAt = started.body.run.startedAt as number;
+		// The local process is still answering status, but has not sent a terminal result.
+		runner("running", { lastSeq: 0 });
+		const ended = await syncApplyRun(env(), "u1", started.body.run, startedAt + 20 * 60_000);
+
+		expect(sent.find((s) => s.path === "/local-apply/cancel")?.body).toEqual({ runId });
+		expect(ended).toMatchObject({ status: "failed", errorCode: "run_timed_out" });
+		expect(await appRow("lead-time-limit")).toMatchObject({ status: "blocked", block_reason: "run_timed_out", submit_attempted_at: null });
+	});
+
+	it("accepts a structured terminal result that arrives at the deadline before stopping the CLI", async () => {
+		const started = await call("POST", "/ap/application-runs", readyApp("lead-time-limit-result"));
+		const runId = started.body.run.id as string;
+		const startedAt = started.body.run.startedAt as number;
+		runner("ended", { lastSeq: 0, result: RESULT(runId) });
+
+		const ended = await syncApplyRun(env(), "u1", started.body.run, startedAt + 20 * 60_000);
+		expect(ended.status).toBe("awaiting_review");
+		expect(sent.filter((s) => s.path === "/local-apply/cancel")).toHaveLength(0);
+		expect(await appRow("lead-time-limit-result")).toMatchObject({ status: "awaiting_review" });
+	});
+
+	it("treats a timed-out auto-submit run as an unknown submit, so the cloud never retries it", async () => {
+		await enableAutoSubmit();
+		const started = await call("POST", "/ap/application-runs", readyApp("lead-time-limit-auto"));
+		expect(started.body.run.policy.mode).toBe("auto_submit");
+		runner("running", { lastSeq: 0 });
+		await syncApplyRun(env(), "u1", started.body.run, (started.body.run.startedAt as number) + 20 * 60_000);
+
+		expect(await appRow("lead-time-limit-auto")).toMatchObject({ status: "blocked", block_reason: "submit_state_unknown" });
+		expect((await appRow("lead-time-limit-auto"))?.submit_attempted_at).not.toBeNull();
 	});
 });
 
