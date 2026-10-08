@@ -226,6 +226,11 @@ describe("#985: the sweep wakes the supervisor, decides and dispatches — with 
 		// Nobody was asked to resume it.
 		expect(sent.filter((s) => s.path === "/local-apply/resume")).toEqual([]);
 
+		// #986: and while it is parked there, no surface claims a filled form. This is the same run
+		// the live defect was reported on — `phase: initial, filled: 0, uploaded: 0`.
+		const parked = (await call("GET", `/t1/application-queue/item?application_id=${applicationId}`)).body.item;
+		expect(parked.fillProgress).toMatchObject({ stage: "supervisor_pending", filled: 0, uploaded: 0, checkpointPhase: "initial", label: "Paused before form filling — supervisor decision pending. Nothing has been entered yet." });
+
 		// The CLI then does the field work the live runs never reached.
 		answers["/local-apply/status"] = {
 			status: 200,
@@ -247,6 +252,9 @@ describe("#985: the sweep wakes the supervisor, decides and dispatches — with 
 		const { run } = (await call("GET", `/ap/application-runs/${fillRunId}`)).body;
 		expect(run.result).toMatchObject({ filled: 6, uploaded: ["resume"], submitAttempted: false });
 		expect(await applicationStatus(applicationId)).toBe("awaiting_review");
+		// #986: the progress MOVED with the work — and only now does any surface say "filled".
+		const reviewed = (await call("GET", `/t1/application-queue/item?application_id=${applicationId}`)).body.item;
+		expect(reviewed.fillProgress).toMatchObject({ stage: "ready_for_review", filled: 6, uploaded: 1, evidence: "runner_result", label: "Filled 6 fields and 1 attachment — waiting for your review before anything is sent." });
 	});
 
 	it("a LOST directive is retried by the next tick, decided once, delivered once", async () => {

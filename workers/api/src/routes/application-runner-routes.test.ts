@@ -520,7 +520,7 @@ describe("a routine checkpoint continues deterministically (#982)", () => {
 describe("an application execution appears on the normal Kanban (#978)", () => {
 	const board = async (instance = "ap") => (await call("GET", `/${instance}/board`)).body;
 	const appCard = async (instance = "ap") => {
-		type Card = { application?: { applicationId: string; kind: string; stage: string; actions: string[]; traceUrl: string; checkpoint?: { checkpointId: string; directive: string | null }; blockReason?: string }; title: string; status: string; attempts: unknown[] };
+		type Card = { application?: { applicationId: string; kind: string; stage: string; actions: string[]; traceUrl: string; checkpoint?: { checkpointId: string; directive: string | null }; progress?: { stage: string; label: string; filled: number; uploaded: number; checkpointPhase: string | null; checkpointId: string | null; submitAttempted: boolean; evidence: string }; blockReason?: string }; title: string; status: string; attempts: unknown[] };
 		const b = (await board(instance)) as { board?: Record<string, Card[]>; items?: Card[] };
 		const cards = b.items ?? Object.values(b.board ?? {}).flat();
 		return cards.find((c) => c.application);
@@ -534,7 +534,9 @@ describe("an application execution appears on the normal Kanban (#978)", () => {
 		expect(card?.status).toBe("running");
 		// Linked to the application, in the words of the lead.
 		expect(card?.title).toBe("Staff Engineer — Globex");
-		expect(card?.application).toMatchObject({ applicationId: "lead-b1", kind: "fill", stage: "Filling the application in the browser" });
+		// #986: the stage is the runner's own facts — a run that has opened the page and filled
+		// nothing says so, rather than being described as "filling" because its status says running.
+		expect(card?.application).toMatchObject({ applicationId: "lead-b1", kind: "fill", stage: "Opening the application in the browser — no field filled yet." });
 		// And it points at the correlated trace.
 		expect(card?.application?.traceUrl).toContain("/applications/lead-b1/trace");
 	});
@@ -550,7 +552,11 @@ describe("an application execution appears on the normal Kanban (#978)", () => {
 		const card = await appCard();
 		expect(card?.status, "a run waiting on a person belongs in the needs-you column").toBe("needs_human");
 		expect(card?.application?.checkpoint).toMatchObject({ checkpointId: "before-submit-1" });
-		expect(card?.application?.stage).toMatch(/cloud supervisor's decision at a checkpoint/);
+		// #986: and it says WHICH checkpoint in the owner's terms — the form is complete, the counts
+		// prove it, and nothing has been sent. ("Waiting for the cloud supervisor's decision at a
+		// checkpoint" was the same sentence for a run that had filled nothing.)
+		expect(card?.application?.stage).toBe("Form complete (6 fields and 1 attachment) — waiting for the supervisor's decision before anything is sent.");
+		expect(card?.application?.progress).toMatchObject({ stage: "before_submit_review", filled: 6, uploaded: 1, checkpointPhase: "before_submit", checkpointId: "before-submit-1", submitAttempted: false });
 	});
 
 	it("offers only the controls the application action service permits, with its compare-and-set", async () => {
@@ -589,6 +595,62 @@ describe("an application execution appears on the normal Kanban (#978)", () => {
 		const card = await appCard();
 		expect(card?.status).toBe("blocked");
 		expect(card?.application?.blockReason).toBe("bridge_unused");
+	});
+
+	// ── #986: what the card SAYS about the fill is the runner's own measurement ─────────────────
+	//
+	// The live contradiction, over the real routes: application `435d31c8…` was parked at
+	// `phase: initial, filled: 0, uploaded: 0`, no blocker, no submit attempt — and its card read
+	// "Filled — waiting for your review before anything is sent", which invites the one action
+	// (#981's approve-and-continue) that would send an empty application to an employer.
+	const parkZeroField = async (id: string) => {
+		const started = await call("POST", "/ap/application-runs", readyApp(id));
+		const runId = started.body.run.id as string;
+		const checkpoint = { schemaVersion: 1, checkpointId: `${id}:initial`, facts: { phase: "initial", actions: 1, filled: 0, uploaded: 0, blockers: [], domain: "jobs.example.com" } };
+		runner("paused", { lastSeq: 2, pause: { reason: "supervisor_checkpoint", checkpoint }, events: [{ seq: 2, type: "supervisor.checkpoint", at: "2026-10-08T00:06:00Z", detail: { checkpointId: checkpoint.checkpointId } }] });
+		await syncApplyRun(env(), "u1", (await call("GET", `/ap/application-runs/${runId}`)).body.run);
+		return runId;
+	};
+
+	it("THE LIVE CASE: a zero-field initial checkpoint is never described as a filled form", async () => {
+		await parkZeroField("lead-p1");
+		const card = await appCard();
+		expect(card?.application?.stage).toBe("Paused before form filling — supervisor decision pending. Nothing has been entered yet.");
+		expect(card?.application?.progress).toMatchObject({ stage: "supervisor_pending", filled: 0, uploaded: 0, checkpointPhase: "initial", submitAttempted: false, evidence: "runner_checkpoint" });
+		expect(JSON.stringify(card)).not.toMatch(/Filled/);
+	});
+
+	it("the Board card and the Applications/Data item carry the SAME progress, not two derivations", async () => {
+		await parkZeroField("lead-p2");
+		const card = await appCard();
+		const item = (await call("GET", "/ap/application-queue/item?application_id=lead-p2")).body.item;
+		expect(item.fillProgress).toEqual(card?.application?.progress);
+		// …and the queue item's own sentence is the one the card shows, so an owner reading either
+		// surface — or an MCP client reading the queue — is told the same thing about one run.
+		expect(item.fillProgress.label).toBe(card?.application?.stage);
+	});
+
+	it("a run that ENDED at awaiting_review with nothing filled says there is nothing to review", async () => {
+		const started = await call("POST", "/ap/application-runs", readyApp("lead-p3"));
+		const runId = started.body.run.id as string;
+		runner("ended", { lastSeq: 1, result: RESULT(runId, { outcome: "awaiting_review", filled: 0, uploaded: [], summary: "Opened the ad." }) });
+		await syncApplyRun(env(), "u1", (await call("GET", `/ap/application-runs/${runId}`)).body.run);
+		const card = await appCard();
+		const item = (await call("GET", "/ap/application-queue/item?application_id=lead-p3")).body.item;
+		expect(item.status, "the lifecycle status is unchanged — only the CLAIM about it is").toBe("awaiting_review");
+		expect(card?.application?.stage).toBe("Stopped before any field was filled — there is nothing to review, and nothing was sent.");
+		expect(item.fillProgress).toMatchObject({ stage: "stopped_before_filling", filled: 0, uploaded: 0, evidence: "runner_result" });
+	});
+
+	it("a genuinely filled form still reads as review-ready, with the counts it rests on", async () => {
+		const started = await call("POST", "/ap/application-runs", readyApp("lead-p4"));
+		const runId = started.body.run.id as string;
+		runner("ended", { lastSeq: 1, result: RESULT(runId, { outcome: "awaiting_review", filled: 12, uploaded: ["resume", "cover_letter"] }) });
+		await syncApplyRun(env(), "u1", (await call("GET", `/ap/application-runs/${runId}`)).body.run);
+		const item = (await call("GET", "/ap/application-queue/item?application_id=lead-p4")).body.item;
+		expect(item.fillProgress).toMatchObject({ stage: "ready_for_review", filled: 12, uploaded: 2, evidence: "runner_result" });
+		expect(item.fillProgress.label).toBe("Filled 12 fields and 2 attachments — waiting for your review before anything is sent.");
+		expect((await appCard())?.application?.stage).toBe(item.fillProgress.label);
 	});
 
 	it("an instance with no application runtime keeps a plain board — generic behaviour is preserved", async () => {

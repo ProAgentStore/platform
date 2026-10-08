@@ -21,6 +21,8 @@ export interface ApplicationRunFields {
 		stage: string;
 		traceUrl: string;
 		checkpoint?: { checkpointId: string; phase: string; directive: string | null };
+		/** How far the fill actually got, from the runner's own facts (#986) — the counts `stage` was written from. */
+		progress?: { stage: string; label: string; filled: number; uploaded: number; checkpointPhase: string | null; submitAttempted: boolean };
 		blockReason?: string;
 		runnerVersion?: string;
 	};
@@ -71,9 +73,18 @@ export default function ApplicationRunFace({ item }: { item: ApplicationRunField
 	if (!app) return null;
 	return (
 		<div className="text-xs mt-2 flex flex-col gap-0.5" data-testid="application-run">
+			{/* #986: the prefix names the KIND of run, not what it is doing — "Filling:" was printed
+			    over every fill stage, so a card whose own sentence said nothing had been entered still
+			    read as filling. What it is doing is `stage`, which is the runner's own facts. */}
 			<span>
-				<span className="text-accent font-bold">{app.kind === "tailor" ? "Tailoring" : "Filling"}:</span> {app.stage}
+				<span className="text-accent font-bold">{app.kind === "tailor" ? "Tailoring" : "Fill"}:</span> {app.stage}
 			</span>
+			{app.progress && (
+				<span className="text-muted-soft">
+					{app.progress.filled} field{app.progress.filled === 1 ? "" : "s"}, {app.progress.uploaded} attachment{app.progress.uploaded === 1 ? "" : "s"}
+					{app.progress.checkpointPhase ? ` · checkpoint ${app.progress.checkpointPhase.replace(/_/g, " ")}` : ""}
+				</span>
+			)}
 			{app.checkpoint && (
 				<span className="text-warning">
 					Checkpoint {app.checkpoint.checkpointId} ({app.checkpoint.phase}) — {app.checkpoint.directive ? `directive: ${app.checkpoint.directive}` : "awaiting a directive"}

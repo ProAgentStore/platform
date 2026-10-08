@@ -31,6 +31,8 @@ import { cancelTailoring, retryTailoring, startTailoring } from "../local-artifa
 import { cancelApplyRun, resumeApplyRun, retryFill, runnerSettingsFor, startApplicationFill, submitGateFor } from "../local-apply/apply.js";
 import { approvalEligibility, approvalState } from "../local-apply/approval.js";
 import { approveAndContinue, approveContinueResult, isPostFillApproval } from "../local-apply/approve-continue.js";
+import type { FillProgress } from "./fill-progress.js";
+import { type FillViews, NO_FILL_VIEWS, type RunDiagnostic, readFillViews } from "./fill-views.js";
 import { queueFieldsFor, queuePosition } from "./work-queue-store.js";
 import { type QueueView as RunQueueView, queueView, queuedLabel } from "./work-queue.js";
 import { getSubmitAuthorization, grantSubmitAuthorization } from "../local-apply/approval-store.js";
@@ -99,7 +101,15 @@ export interface QueueItem {
 	 * that prove it (0 bridge calls after N seconds) and the signals the runner observed. Closed
 	 * vocabularies only — no CLI prose, no form values, no document text.
 	 */
-	diagnostic: { cause: string; bridgeCalls: number; engineExit: number; activeMs: number; pages: number; filled: number; signals: string[] } | null;
+	diagnostic: RunDiagnostic | null;
+	/**
+	 * How far the fill actually GOT, from the runner's own facts (#986): the stage, the sentence to
+	 * show, the field/attachment counts, the checkpoint phase it is parked at, and what the claim
+	 * rests on. The Board card carries the SAME object from the same function, so a card and this
+	 * item cannot describe one run differently — which is exactly what went wrong when both read
+	 * the `awaiting_review` status word and called an untouched form "Filled".
+	 */
+	fillProgress: FillProgress | null;
 	/**
 	 * Why a run is WAITING rather than working (#974): its place in its machine's line, how many
 	 * times the machine has been asked, when the next attempt is due, and the sentence to show.
@@ -206,6 +216,7 @@ function leadItem(scout: string, r: LeadRecord, pipeline: Pipeline): QueueItem {
 		submitAttempted: false,
 		submitPolicy: null,
 		diagnostic: null,
+		fillProgress: null,
 		queue: null,
 		submitAuthorization: null,
 		updatedAt: str(r.updatedAt) ?? "",
@@ -271,7 +282,15 @@ function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRu
 /** #953: an application that can be archived can be marked not interested (an archive, with that reason). */
 const withNotInterested = (actions: ApplicationAction[]): ApplicationAction[] => (actions.includes("archive") ? [...actions, "mark_not_interested"] : actions);
 
-function applicationItem(app: JobApplication, pipeline: Pipeline, run: OpenRun | null, policy: QueueItem["submitPolicy"], auth: QueueItem["submitAuthorization"] = null, q: QueueItem["queue"] = null, diag: QueueItem["diagnostic"] = null): QueueItem {
+function applicationItem(
+	app: JobApplication,
+	pipeline: Pipeline,
+	run: OpenRun | null,
+	policy: QueueItem["submitPolicy"],
+	auth: QueueItem["submitAuthorization"] = null,
+	q: QueueItem["queue"] = null,
+	fill: FillViews = NO_FILL_VIEWS,
+): QueueItem {
 	const env = (app.lead ?? {}) as { leadUrl?: string; lead?: Record<string, unknown> };
 	const l = env.lead ?? {};
 	return {
@@ -302,7 +321,8 @@ function applicationItem(app: JobApplication, pipeline: Pipeline, run: OpenRun |
 		submittedUrl: app.submittedUrl,
 		submitAttempted: !!app.submitAttemptedAt,
 		submitPolicy: policy,
-		diagnostic: diag,
+		diagnostic: fill.diagnostic,
+		fillProgress: fill.progress,
 		queue: q,
 		submitAuthorization: auth,
 		updatedAt: iso(app.updatedAt),
@@ -331,37 +351,6 @@ async function openRuns(env: Env, uid: string, runners: string[]): Promise<Map<s
 		for (const row of results ?? []) map.set(row.id, { id: row.id, status: row.status, mode: row.mode, pause: row.pause ? JSON.parse(row.pause) : null });
 	}
 	return map;
-}
-
-/** The gate preview per Runner, for each materials_ready application. Fails closed. */
-/**
- * The #975 diagnostic as the card shows it, read from the application's own stored fill result.
- *
- * No extra query: the result is already on the application row, and `application_run` already
- * returns the same object over MCP — so the board and MCP describe one record rather than two.
- */
-async function diagnosticOf(env: Env, uid: string, app: JobApplication): Promise<QueueItem["diagnostic"]> {
-	if (!app.fillRunId) return null;
-	const row = await env.DB.prepare("SELECT result FROM local_apply_runs WHERE id = ?1 AND user_id = ?2").bind(app.fillRunId, uid).first<{ result: string | null }>().catch(() => null);
-	if (!row?.result) return null;
-	let r: { diagnostic?: Record<string, unknown> } | null = null;
-	try {
-		r = JSON.parse(row.result) as { diagnostic?: Record<string, unknown> };
-	} catch {
-		return null;
-	}
-	const d = r?.diagnostic;
-	if (!d || typeof d !== "object") return null;
-	const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
-	return {
-		cause: String(d.cause ?? ""),
-		bridgeCalls: n(d.bridgeCalls),
-		engineExit: n(d.engineExit),
-		activeMs: n(d.activeMs),
-		pages: n(d.pages),
-		filled: n(d.filled),
-		signals: (Array.isArray(d.signals) ? d.signals : []).filter((x): x is string => typeof x === "string"),
-	};
 }
 
 /**
@@ -415,6 +404,7 @@ async function approvalViews(env: Env, uid: string, apps: JobApplication[]): Pro
 	return out;
 }
 
+/** The gate preview per Runner, for each materials_ready application. Fails closed. */
 async function policyPreviews(env: Env, uid: string, pipeline: Pipeline, apps: JobApplication[]): Promise<Map<string, QueueItem["submitPolicy"]>> {
 	const out = new Map<string, QueueItem["submitPolicy"]>();
 	const runner = pipeline.runners[0];
@@ -475,10 +465,10 @@ export async function applicationQueue(env: Env, uid: string, instanceId: string
 	const previews = await policyPreviews(env, uid, pipeline, apps);
 	const approvals = await approvalViews(env, uid, apps);
 	const queues = await queueViews(env, uid, apps, Date.now());
-	const diagnostics = new Map<string, QueueItem["diagnostic"]>();
-	for (const a of apps) diagnostics.set(a.id, await diagnosticOf(env, uid, a));
+	const fills = new Map<string, FillViews>();
+	for (const a of apps) fills.set(a.id, await readFillViews(env, uid, a));
 	const items: QueueItem[] = apps.map((a) =>
-		applicationItem(a, pipeline, a.fillRunId ? (runs.get(a.fillRunId) ?? null) : null, previews.get(a.id) ?? null, approvals.get(a.id) ?? null, queues.get(a.id) ?? null, diagnostics.get(a.id) ?? null),
+		applicationItem(a, pipeline, a.fillRunId ? (runs.get(a.fillRunId) ?? null) : null, previews.get(a.id) ?? null, approvals.get(a.id) ?? null, queues.get(a.id) ?? null, fills.get(a.id)),
 	);
 	const appLeads = new Set(apps.map((a) => `${a.sourceInstanceId}:${a.leadId}`));
 	const notes: string[] = [];
@@ -531,7 +521,7 @@ export async function getQueueItem(env: Env, uid: string, instanceId: string, re
 		const approvals = await approvalViews(env, uid, [app]);
 		const queues = await queueViews(env, uid, [app], Date.now());
 		return {
-			item: applicationItem(app, pipeline, app.fillRunId ? (runs.get(app.fillRunId) ?? null) : null, previews.get(app.id) ?? null, approvals.get(app.id) ?? null, queues.get(app.id) ?? null, await diagnosticOf(env, uid, app)),
+			item: applicationItem(app, pipeline, app.fillRunId ? (runs.get(app.fillRunId) ?? null) : null, previews.get(app.id) ?? null, approvals.get(app.id) ?? null, queues.get(app.id) ?? null, await readFillViews(env, uid, app)),
 			pipeline,
 		};
 	}

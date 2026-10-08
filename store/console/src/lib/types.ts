@@ -758,6 +758,12 @@ export interface ApplicationQueueItem {
 	submittedUrl: string | null;
 	submitAttempted: boolean;
 	submitPolicy: { allowed: boolean; failing: string[] } | null;
+	/**
+	 * How far the fill actually got, from the runner's own facts (#986). `label` is the server's
+	 * sentence — the same one the Board card and MCP carry — and it never says a form was filled
+	 * without `filled`/`uploaded` to show for it.
+	 */
+	fillProgress: { stage: string; label: string; filled: number; uploaded: number; checkpointPhase: string | null; checkpointId: string | null; submitAttempted: boolean; evidence: "runner_result" | "runner_checkpoint" | "run_status" } | null;
 	/** Why nothing reached the page (#975): the structured cause, the counts and the runner's signals. */
 	diagnostic: { cause: string; bridgeCalls: number; engineExit: number; activeMs: number; pages: number; filled: number; signals: string[] } | null;
 	/** Why this card's run is waiting for the machine rather than working (#974). */

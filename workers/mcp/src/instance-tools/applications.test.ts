@@ -170,3 +170,49 @@ describe("the Runner's submission policy over MCP (#953)", () => {
 		]);
 	});
 });
+
+// ── #986: an MCP reader is told how far the fill got, in the same words as the console ────────
+//
+// The parity requirement is met by pass-through, and that is the thing worth pinning: these tools
+// must not project, summarise or re-derive the queue's own answer. A model that received only
+// `status: "awaiting_review"` would reach the same wrong conclusion the Board card did — that a
+// form is populated and waiting to be approved — and `approve_application` is one call away.
+describe("the fill's progress reaches MCP verbatim (#986)", () => {
+	const PROGRESS = {
+		stage: "supervisor_pending",
+		label: "Paused before form filling — supervisor decision pending. Nothing has been entered yet.",
+		filled: 0,
+		uploaded: 0,
+		checkpointPhase: "initial",
+		checkpointId: "cp-1",
+		submitAttempted: false,
+		evidence: "runner_checkpoint",
+	};
+
+	function queueTools(payload: unknown) {
+		const t = tools();
+		vi.stubGlobal("fetch", async () => new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } }));
+		return t;
+	}
+
+	it("carries fillProgress through the queue and the item read, unchanged", async () => {
+		const { call } = queueTools({ items: [{ key: "app:a1", status: "awaiting_review", fillProgress: PROGRESS }], item: { key: "app:a1", status: "awaiting_review", fillProgress: PROGRESS } });
+		for (const name of ["list_applications", "get_application"]) {
+			const body = JSON.parse(await call(name, { instance_id: "t1", application_id: "a1" }));
+			const read = name === "list_applications" ? body.items[0] : body.item;
+			expect(read.fillProgress, name).toEqual(PROGRESS);
+		}
+	});
+
+	it("tells the reader to use it rather than infer progress from the status word", () => {
+		const described = new Map<string, string>();
+		registerApplicationTools({ tool: (name: string, description: string) => described.set(name, description) } as never, {
+			env: { API_BASE: "https://api.test" },
+			tokenFor: () => "session-token",
+			safetyFor: (): SafetyContext => ({ env: { API_BASE: "https://api.test" }, subject: "user-1", scopes: ["read"] }),
+		});
+		expect(described.get("list_applications")).toMatch(/fillProgress/);
+		expect(described.get("list_applications")).toMatch(/awaiting_review. is reported both for a complete form and for a run that stopped before filling/);
+		expect(described.get("get_application")).toMatch(/never say a form is filled when .fillProgress\.filled. and ..uploaded. are 0/);
+	});
+});

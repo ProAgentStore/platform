@@ -7,6 +7,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { APPLICATION_RUN_TASK_TYPE, applicationCardId, applicationCardLabel, applicationCardStatus, applicationRunTaskRecord, applicationStageLabel } from "./application-board.js";
+import { fillProgressOf } from "./fill-progress.js";
 
 const APP = {
 	id: "app-1",
@@ -61,19 +62,38 @@ describe("the stage a reader sees", () => {
 	it.each([
 		["tailor", "running", null, /Tailoring the résumé/],
 		["tailor", "queued", null, /Waiting for the machine to tailor/],
-		["fill", "running", null, /Filling the application in the browser/],
-		["fill", "queued", null, /Waiting for the machine to fill/],
-		["fill", "submitted", null, /Submitted to the employer/],
-		["fill", "awaiting_review", null, /waiting for your review before anything is sent/],
 	] as const)("%s %s → %s", (kind, status, pause, expected) => {
 		expect(applicationStageLabel(kind, status, pause)).toMatch(expected);
 	});
 
-	it("names the supervisor checkpoint, which is the pause a reader most needs explained", () => {
-		expect(applicationStageLabel("fill", "paused", "supervisor_checkpoint")).toMatch(/cloud supervisor's decision at a checkpoint/);
+	it("a tailoring pause says what it is waiting for, in words", () => {
+		expect(applicationStageLabel("tailor", "paused", "missing_answer")).toBe("Paused — missing answer");
 	});
 
-	it("any other pause says what it is waiting for, in words", () => {
+	/**
+	 * A FILL's stage is the runner's facts, not its status word (#986).
+	 *
+	 * This block used to assert `fill awaiting_review → "Filled — waiting for your review before
+	 * anything is sent"`, which is the sentence the issue was filed about: the runner reports that
+	 * outcome for a complete form AND for a run that stopped before touching one, and the card said
+	 * "Filled" for both. The label now comes from `fillProgressOf`, so the test that pinned the
+	 * inference is replaced by tests of the facts.
+	 */
+	it("takes the progress's own sentence when the facts are in hand", () => {
+		const progress = fillProgressOf({ applicationStatus: "awaiting_review", runStatus: "awaiting_review", result: { outcome: "awaiting_review", filled: 7, uploaded: ["resume"] } });
+		expect(applicationStageLabel("fill", "awaiting_review", null, progress)).toMatch(/Filled 7 fields and 1 attachment — waiting for your review/);
+	});
+
+	it("never claims a filled form from the status word alone", () => {
+		// No facts: the honest answer is the status, and `Filled` is not in it.
+		for (const status of ["awaiting_review", "running", "queued", "blocked"]) {
+			expect(applicationStageLabel("fill", status, null), status).not.toMatch(/Filled|filled/);
+		}
+		expect(applicationStageLabel("fill", "awaiting_review", null)).toBe("Fill awaiting_review");
+		expect(applicationStageLabel("fill", "submitted", null)).toMatch(/Submitted to the employer/);
+	});
+
+	it("a pause with no facts still says what it is waiting for", () => {
 		expect(applicationStageLabel("fill", "paused", "missing_answer")).toBe("Paused — missing answer");
 	});
 });

@@ -178,6 +178,20 @@ function Detail({ instanceId, item, onChanged }: { instanceId: string; item: App
 			</p>
 			{item.matchRationale && <p className="text-sm mb-2">Why it matched: {item.matchRationale}</p>}
 
+			{/* #986: what the RUNNER did, not what the status word implies. The sentence is the
+			    server's, so this card, the Board card and an MCP reader say the same thing; the counts
+			    and the checkpoint phase are shown beside it so "filled" is always falsifiable. */}
+			{item.fillProgress && (
+				<p className="text-sm mb-2" data-testid="fill-progress">
+					<span className="font-semibold">Progress:</span> {item.fillProgress.label}
+					<span className="text-xs text-muted-soft">
+						{" "}
+						({item.fillProgress.filled} field{item.fillProgress.filled === 1 ? "" : "s"}, {item.fillProgress.uploaded} attachment{item.fillProgress.uploaded === 1 ? "" : "s"}
+						{item.fillProgress.checkpointPhase ? ` · checkpoint ${item.fillProgress.checkpointPhase.replace(/_/g, " ")}` : ""})
+					</span>
+				</p>
+			)}
+
 			{item.artifacts && (
 				<ul className="text-xs mb-2" aria-label="Tailored materials">
 					{[item.artifacts.resume, item.artifacts.coverLetter].filter(Boolean).map((a) => (

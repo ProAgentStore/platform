@@ -211,6 +211,65 @@ describe("stale and invalid transitions are refused, with nothing written", () =
 	});
 });
 
+// ── #986: the queue response says how far the fill GOT, from the runner's facts ──────────────
+//
+// `awaiting_review` is the outcome the Runner reports BOTH for a finished form and for a run that
+// stopped before touching one, so a surface that reads the status word alone calls both "Filled".
+// Live, that put "Filled — waiting for your review before anything is sent" on an application
+// whose checkpoint said `filled: 0, uploaded: 0`.
+describe("how far the fill actually got, on the queue response (#986)", () => {
+	/** An application with a fill run in a given state — the shapes the issue enumerates. */
+	function withRun(id: string, appStatus: string, run: { status: string; pause?: unknown; result?: unknown; checkpoint?: { phase: string; filled: number; uploaded: number } }) {
+		readyApp(id);
+		const runId = `run-${id}`;
+		d1.DB.prepare("INSERT INTO local_apply_runs (id, instance_id, user_id, application_id, request_id, status, policy, pause, result, created_at, updated_at) VALUES (?1, 'ap', 'u1', ?2, ?1, ?3, '{\"mode\":\"fill_and_review\"}', ?4, ?5, 1, 1)")
+			.bind(runId, id, run.status, run.pause ? JSON.stringify(run.pause) : null, run.result ? JSON.stringify(run.result) : null)
+			.run();
+		if (run.checkpoint) {
+			d1.DB.prepare("INSERT INTO local_apply_supervisor_checkpoints (run_id, instance_id, user_id, checkpoint_id, schema_version, facts, runner_seq, received_at) VALUES (?1, 'ap', 'u1', ?2, 1, ?3, 1, 1)")
+				.bind(runId, `${id}:cp`, JSON.stringify({ ...run.checkpoint, actions: 1, blockers: [] }))
+				.run();
+		}
+		d1.DB.prepare("UPDATE job_applications SET status = ?2, fill_run_id = ?3 WHERE id = ?1").bind(id, appStatus, runId).run();
+		return runId;
+	}
+	const progress = async (id: string) => item((await call("GET", "/t1/application-queue")).body.items, `app:${id}`)?.fillProgress;
+
+	it("the five states read differently, and only one of them says a form was filled", async () => {
+		withRun("zero", "awaiting_review", { status: "paused", pause: { reason: "supervisor_checkpoint" }, checkpoint: { phase: "initial", filled: 0, uploaded: 0 } });
+		withRun("partial", "filling", { status: "running", result: { outcome: "awaiting_review", filled: 3, uploaded: [] } });
+		withRun("ready", "awaiting_review", { status: "awaiting_review", result: { outcome: "awaiting_review", filled: 9, uploaded: ["resume"] } });
+		withRun("stuck", "blocked", { status: "blocked", result: { outcome: "blocked", blockReason: "login_required", filled: 1 } });
+		withRun("final", "awaiting_review", { status: "paused", pause: { reason: "supervisor_checkpoint" }, checkpoint: { phase: "before_submit", filled: 8, uploaded: 1 } });
+
+		expect(await progress("zero")).toMatchObject({ stage: "supervisor_pending", label: "Paused before form filling — supervisor decision pending. Nothing has been entered yet.", filled: 0, uploaded: 0, checkpointPhase: "initial", checkpointId: "zero:cp" });
+		expect(await progress("partial")).toMatchObject({ stage: "filling", label: "Filling the application in the browser — 3 fields so far." });
+		expect(await progress("ready")).toMatchObject({ stage: "ready_for_review", label: "Filled 9 fields and 1 attachment — waiting for your review before anything is sent.", filled: 9, uploaded: 1 });
+		expect(await progress("stuck")).toMatchObject({ stage: "blocked", label: "Stopped — login required, after 1 field." });
+		expect(await progress("final")).toMatchObject({ stage: "before_submit_review", label: "Form complete (8 fields and 1 attachment) — waiting for the supervisor's decision before anything is sent.", checkpointPhase: "before_submit" });
+
+		// Two applications sit at the SAME lifecycle status with opposite claims — which is the
+		// distinction the status word cannot carry and the reason this projection exists.
+		const q = await call("GET", "/t1/application-queue");
+		expect([item(q.body.items, "app:zero")?.status, item(q.body.items, "app:ready")?.status]).toEqual(["awaiting_review", "awaiting_review"]);
+		expect(q.body.items.filter((i: { fillProgress?: { label: string } }) => /Filled \d/.test(i.fillProgress?.label ?? "")).map((i: { key: string }) => i.key)).toEqual(["app:ready"]);
+	});
+
+	it("the item read and the list read agree, and a lead with no run carries no progress at all", async () => {
+		withRun("one", "awaiting_review", { status: "paused", pause: { reason: "supervisor_checkpoint" }, checkpoint: { phase: "initial", filled: 0, uploaded: 0 } });
+		const one = (await call("GET", "/t1/application-queue/item?application_id=one")).body.item;
+		expect(one.fillProgress).toEqual(await progress("one"));
+		expect(item((await call("GET", "/t1/application-queue")).body.items, "lead:scout:lead-new")?.fillProgress).toBeNull();
+	});
+
+	it("an attempted submit outranks the checkpoint — nobody is told to review a form that may be gone", async () => {
+		const runId = withRun("sent", "awaiting_review", { status: "paused", pause: { reason: "supervisor_checkpoint" }, checkpoint: { phase: "initial", filled: 0, uploaded: 0 } });
+		d1.DB.prepare("UPDATE job_applications SET submit_attempted_at = 1 WHERE id = 'sent'").run();
+		expect(runId).toBe("run-sent");
+		expect(await progress("sent")).toMatchObject({ stage: "submitted", submitAttempted: true, label: "A final submit was attempted — check the employer's site before anything else is done." });
+	});
+});
+
 describe("no submit path under the default fill-and-review policy", () => {
 	it("offers request_review only, refuses start_fill, and request_review dispatches without a gate", async () => {
 		readyApp("f1");

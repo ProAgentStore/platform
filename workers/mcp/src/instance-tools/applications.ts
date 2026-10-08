@@ -67,7 +67,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 
 	server.tool(
 		"list_applications",
-		"The job-application queue across the owner's Scout → Tailor → Runner pipeline: leads with no application yet (new, apply_requested, skipped, deferred, archived) and applications (tailoring, materials_ready, filling, awaiting_review, submitted, blocked, failed). Each item has its status, its compare-and-set version, artifact handles (path + sha256, never content), the submit-policy verdict, any pause reason and questions, and the ACTIONS it allows. Also counts per status, today's auto-submit allowance and connection outbox health. Read-only.",
+		"The job-application queue across the owner's Scout → Tailor → Runner pipeline: leads with no application yet (new, apply_requested, skipped, deferred, archived) and applications (tailoring, materials_ready, filling, awaiting_review, submitted, blocked, failed). Each item has its status, its compare-and-set version, artifact handles (path + sha256, never content), the submit-policy verdict, any pause reason and questions, `fillProgress` (how far the fill actually got, from the runner's own facts: stage, the sentence to show, fields filled, attachments uploaded and the checkpoint phase it is parked at — read this rather than inferring progress from `status`, because `awaiting_review` is reported both for a complete form and for a run that stopped before filling anything), and the ACTIONS it allows. Also counts per status, today's auto-submit allowance and connection outbox health. Read-only.",
 		{
 			...who,
 			status: z.enum(["new", "apply_requested", "tailoring", "materials_ready", "filling", "awaiting_review", "submitted", "blocked", "deferred", "skipped", "archived", "failed"]).optional().describe("Only this status."),
@@ -99,7 +99,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 
 	server.tool(
 		"get_application",
-		"One application (by application_id) or one lead with no application yet (by scout_instance_id + record_id), as it stands now: status, versions, artifacts, submit-policy verdict, pause reason and the actions it allows. Read-only.",
+		"One application (by application_id) or one lead with no application yet (by scout_instance_id + record_id), as it stands now: status, versions, artifacts, submit-policy verdict, pause reason, `fillProgress` (the runner's own evidence of how far the fill got — never say a form is filled when `fillProgress.filled` and `.uploaded` are 0) and the actions it allows. Read-only.",
 		{ ...who, application_id: target.application_id, scout_instance_id: target.scout_instance_id, record_id: target.record_id },
 		async (input: Record<string, unknown>) => {
 			const token = tokenOf(input);

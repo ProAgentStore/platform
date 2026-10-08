@@ -1479,7 +1479,12 @@ const PINS = {
 // +6 at #980: `schedule`/`scheduleSummary` on the local-browser settings response and
 	// `telemetry` on one run — the SHAPES live in lib/scanSchedule.ts beside the helpers that read
 	// them, so what is here is four fields and their reasons.
-	"store/console/src/lib/types.ts": 820, // +2 at #975: the card's run diagnostic (cause, counts, signal ids) — why nothing reached the page. +2 at #974: the card's queue view (position, attempts, next attempt, reason) — why a run is waiting rather than failed. +2 at #973: the card's submitAuthorization (the owner's per-application approval, its state and the run that spent it). // #953: crossed 800 with the Applications surface's copies of its Worker shapes (#958) and the Runner settings view; these are copies by design (check-console-types), so the file grows with the surface.
+	// +6 at #986: the card's fillProgress — stage, the sentence the server wrote, the field and
+	// attachment counts, the checkpoint phase and what the claim rests on. A copy of the Worker
+	// shape by design (check-console-types); without the counts the console could only repeat a
+	// status word, which is how "Filled — waiting for your review" came to be shown for a run that
+	// had filled nothing.
+	"store/console/src/lib/types.ts": 826, // +2 at #975: the card's run diagnostic (cause, counts, signal ids) — why nothing reached the page. +2 at #974: the card's queue view (position, attempts, next attempt, reason) — why a run is waiting rather than failed. +2 at #973: the card's submitAuthorization (the owner's per-application approval, its state and the run that spent it). // #953: crossed 800 with the Applications surface's copies of its Worker shapes (#958) and the Runner settings view; these are copies by design (check-console-types), so the file grows with the surface.
 	// New entry at #978 — 801, one line over LIMIT. The application-execution face and its controls
 	// were SPLIT OUT first (components/ApplicationRunFace.tsx, following BoardIssueFace), which took
 	// the file from 900 to 801; what is left is the board itself. Lowering it further means splitting
@@ -1871,7 +1876,8 @@ const PINS = {
 	// +6 at #914: the user-ai.ts raise and the new coding-loop.ts entry above (two lines of why each) and this line.
 	// +7 at #979: the InstanceDetail.tsx and console types.ts raises above (two reasons + two
 	// pins), the applications/control.ts reason extended at #981, and this line.
-	"scripts/check-file-size.mjs": 1955, // +1 at #953: the console types.ts entry. +2 at #946: the agents.ts pin and its reason; +1 at #944: the reason line for the runner.ts pin; +1 at #898: the board.ts pin; +1 at #924: the mcp runtime.ts pin.
+	// +6 at #986: the console types.ts reason above (five lines), this line and its pin bump.
+	"scripts/check-file-size.mjs": 1961, // +1 at #953: the console types.ts entry. +2 at #946: the agents.ts pin and its reason; +1 at #944: the reason line for the runner.ts pin; +1 at #898: the board.ts pin; +1 at #924: the mcp runtime.ts pin.
 };
 
 /**

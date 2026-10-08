@@ -26,6 +26,7 @@
  * showing the same controls — both read this one record.
  */
 import { type ApplicationCardPayload, parseApplicationCard } from "./application-card-payload.js";
+import type { FillProgress } from "./fill-progress.js";
 import type { JobApplication } from "../local-artifact/store.js";
 import { upsertWorkCard } from "../work-card.js";
 import type { Env } from "../../types.js";
@@ -63,17 +64,27 @@ export function applicationCardStatus(runStatus: string): string {
 	return runStatus;
 }
 
-/** What the owner is told the run is doing — the stage, in their words. */
-export function applicationStageLabel(kind: ApplicationRunKind, runStatus: string, pauseReason?: string | null): string {
-	if (pauseReason === "supervisor_checkpoint") return "Waiting for the cloud supervisor's decision at a checkpoint";
-	if (pauseReason) return `Paused — ${pauseReason.replace(/_/g, " ")}`;
+/**
+ * What the owner is told the run is doing — the stage, in their words.
+ *
+ * A FILL's stage is the runner's own facts (`fill-progress.ts`), never the status word. The
+ * sentence this used to return for `awaiting_review` was "Filled — waiting for your review before
+ * anything is sent", and the runner reports that outcome both for a complete form and for a run
+ * that stopped before touching one: live, an application whose checkpoint said `filled: 0,
+ * uploaded: 0` was presented as a populated form waiting to be approved and sent (#986) — and the
+ * one action that reading invites would have sent an empty application to an employer.
+ *
+ * Tailoring keeps its own two words: it has no fields to count.
+ */
+export function applicationStageLabel(kind: ApplicationRunKind, runStatus: string, pauseReason?: string | null, progress?: FillProgress | null): string {
 	if (kind === "tailor") {
+		if (pauseReason) return `Paused — ${pauseReason.replace(/_/g, " ")}`;
 		return runStatus === "running" ? "Tailoring the résumé and cover letter" : runStatus === "queued" ? "Waiting for the machine to tailor it" : `Tailoring ${runStatus}`;
 	}
-	if (runStatus === "running") return "Filling the application in the browser";
-	if (runStatus === "queued") return "Waiting for the machine to fill it";
+	if (progress) return progress.label;
+	// No facts in hand: say what the run's status is, and never infer filled work from it.
+	if (pauseReason) return `Paused — ${pauseReason.replace(/_/g, " ")}`;
 	if (runStatus === "submitted") return "Submitted to the employer";
-	if (runStatus === "awaiting_review") return "Filled — waiting for your review before anything is sent";
 	return `Fill ${runStatus}`;
 }
 
@@ -91,6 +102,11 @@ export interface ApplicationCardFacts {
 	stage: string;
     /** The checkpoint a paused run is waiting on, when it is waiting on one (#971's vocabulary). */
 	checkpoint?: { checkpointId: string; phase: string; directive: string | null } | null;
+	/**
+	 * How far the fill actually got, from the runner's own facts (#986) — the same object the
+	 * Applications/Data queue item carries, so two surfaces cannot describe one run differently.
+	 */
+	progress?: FillProgress | null;
 	/** Where the correlated history is: the application's own trace (#958). */
 	traceUrl: string;
 	/** The terminal reason, when the run ended on one. */
@@ -145,6 +161,7 @@ export function applicationRunTaskRecord(opts: { app: Pick<JobApplication, "id" 
 			stage: opts.facts.stage,
 			traceUrl: opts.facts.traceUrl,
 			...(opts.facts.checkpoint ? { checkpoint: opts.facts.checkpoint } : {}),
+			...(opts.facts.progress ? { progress: opts.facts.progress } : {}),
 			...(opts.facts.blockReason ? { blockReason: opts.facts.blockReason } : {}),
 			...(opts.facts.runnerVersion ? { runnerVersion: opts.facts.runnerVersion } : {}),
 		},
@@ -188,6 +205,11 @@ export async function syncApplicationCard(
 		const { getOwnedApplication } = await import("../local-artifact/store.js");
 		const app = await getOwnedApplication(env, userId, run.applicationId);
 		if (!app) return;
+		// The SAME object the Applications/Data queue item carries, not a second projection of the
+		// same facts (#986): the card and the queue item are then one claim, and the drift that put
+		// "Filled — waiting for your review" on a card whose run had filled nothing cannot recur.
+		// A tailoring card has no fields to count, so it keeps its own two words.
+		const progress = kind === "fill" ? item.fillProgress : null;
 		await upsertApplicationRunCard(env, {
 			// The card belongs to the instance that RAN it, which is where its owner looks: a fill
 			// card on the Runner's board, a tailoring card on the Tailor's.
@@ -202,7 +224,8 @@ export async function syncApplicationCard(
 				actions: item.actions,
 				kind,
 				runId: run.id,
-				stage: applicationStageLabel(kind, run.status, run.pause?.reason ?? null),
+				stage: applicationStageLabel(kind, run.status, run.pause?.reason ?? null, progress),
+				...(progress ? { progress } : {}),
 				traceUrl: `/instances/${run.instanceId}/applications/${run.applicationId}/trace`,
 				...(opts.checkpoint ? { checkpoint: opts.checkpoint } : {}),
 				blockReason: item.blockReason,
