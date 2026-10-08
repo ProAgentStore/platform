@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**281 tool registrations.** 255 are always registered; 26 are gated to the console
+**282 tool registrations.** 256 are always registered; 26 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -412,7 +412,8 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `set_instance_runner_node` | Pin an instance to a machine and move it there — the connected `pags up` attaches it now and the old machine lets go (empty clears the pin); lost/slow confirmation returns `outcome: unknown` with `instance_runner_node` polling guidance | write | yes | |
 | `set_instance_tags` | Replace an instance's tags (`[]` clears them) so fleet_snapshot can ask about it as a group (#961) | write | yes | |
 | `force_runner_attach` | Force a machine's connected `pags up` to (re)attach one agent now — the remote `pags up --force` for that agent: clears a stale socket from its relay slot and takes the slot over. Does not change the pin; lost/slow confirmation returns `outcome: unknown` with `instance_runner_node` polling guidance | runtime | yes | |
-| `runner_update` | Update a machine's `pags` CLI to the latest release and restart it in place — waits for busy engines so no run is cut off, then checks every agent it held is attached again (re-attaching stragglers). `pags up` restarts itself on the new release; a runner under launchd/systemd (`PAGS_SERVICE=1`) or with `PAGS_RESTART_COMMAND` is restarted by that. The first update of a CLI older than 0.4.62 still needs the machine; lost/slow confirmation returns `outcome: unknown` with `list_runner_nodes` polling guidance | runtime | yes | |
+| `runner_update` | Update a machine's `pags` CLI to the latest release and restart it in place — waits for busy engines so no run is cut off, then checks every agent it held is attached again (re-attaching stragglers). `pags up` restarts itself on the new release; a runner under launchd/systemd (`PAGS_SERVICE=1`) or with `PAGS_RESTART_COMMAND` is restarted by that. The first update of a CLI older than 0.4.62 still needs the machine; the update is a durable operation: this answers `{operationId, state}` at once and `runner_update_status` reports the outcome, so a lost or slow confirmation can no longer make it unknowable | runtime | yes | |
+| `runner_update_status` | The DURABLE outcome of the latest CLI update on one machine (#990) — what to call after `runner_update`, and what to read when its reply was slow, interrupted or answered `outcome: unknown`. `state` is `running` while in flight, then `scheduled`, `restarting`, `restarted`, `up_to_date`, `would_update`, `refused`, `unsupported`, `unreachable` or `failed`, with the versions, the agents held/re-attached/missing, and the machine's own reason | read | | |
 | `get_instance_terminal_session` | Saved Tmux-tab terminal target for one instance | read | | |
 | `set_instance_terminal_session` | Save or clear that target; does not operate a terminal | write | yes | |
 | `runner_node_forget_preflight` | Every alias and blocker before a machine registration is forgotten | read | | |

@@ -8,7 +8,8 @@ import { normalizeRunnerNode, parseBoundRunnerNode } from "../lib/runtime-nodes.
 import { adoptableIdByName, identityHint, machineNamesFor, normalizeMachineId } from "../lib/machine-identity.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
 import { runnerFeatureGaps } from "../lib/runner-features.js";
-import { updateRunnerNode } from "../lib/runner-update.js";
+import { startRunnerUpdate, updateRunnerNode } from "../lib/runner-update.js";
+import { latestUpdateOp, latestUpdateOps, type RunnerUpdateOp } from "../lib/runner-update-ops.js";
 import type { Env } from "../types.js";
 
 /**
@@ -142,6 +143,14 @@ export interface TerminalNode {
 	instances: TerminalInstance[];
 	/** Coding sessions pinned to this machine. */
 	sessions: TerminalSession[];
+	/**
+	 * The latest `runner_update` operation on this machine (#990), when one has ever been asked for.
+	 *
+	 * `state` is `running` while it is in flight and one of the terminal words afterwards, with the
+	 * machine's own reason on it. This is the field that makes a timed-out update knowable: before
+	 * it, `runner_update`'s `poll: list_runner_nodes` hint had no state to resolve against.
+	 */
+	update?: RunnerUpdateOp;
 }
 
 /** A user-facing name for an instance: its renamed displayName, else the agent name/slug. */
@@ -460,6 +469,15 @@ terminalRoutes.get("/nodes", async (c) => {
 	await mapWithConcurrency(active, PROBE_CONCURRENCY, async (s) => { tails.set(s.sessionId, await lastTerminal(c.env, s.sessionId).catch(() => null)); });
 	for (const n of nodes) for (const s of n.sessions) s.terminalTail = tails.get(s.sessionId) ?? null;
 
+	// #990: each machine's latest update operation, in ONE read. This is what `runner_update`'s own
+	// `poll: list_runner_nodes` hint always promised and could not deliver: before the operation row
+	// existed there was no state to poll, so a timed-out update was simply unknowable.
+	const ops = await latestUpdateOps(c.env, uid, nodes.flatMap((n) => [n.node, ...n.aka]));
+	for (const n of nodes) {
+		const op = [n.node, ...n.aka].map((name) => ops.get(normalizeRunnerNode(name))).find((o) => o);
+		if (op) n.update = op;
+	}
+
 	return c.json({ nodes });
 });
 
@@ -537,10 +555,45 @@ export async function preflightForgetNode(env: Env, uid: string, rawTarget: stri
  */
 terminalRoutes.post("/nodes/:node/update", async (c) => {
 	const session = await requireUser(c);
-	const body = (await c.req.json().catch(() => ({}))) as { dryRun?: unknown };
-	const result = await updateRunnerNode(c.env, session.uid, c.req.param("node"), { dryRun: body.dryRun === true || c.req.query("dryRun") === "1" });
-	// 200 whatever the outcome: `action` is the verdict, and a non-2xx would lose the machine's reason at the MCP seam.
-	return c.json(result);
+	const body = (await c.req.json().catch(() => ({}))) as { dryRun?: unknown; wait?: unknown };
+	const dryRun = body.dryRun === true || c.req.query("dryRun") === "1";
+	// A dry run contacts the machine and answers in one hop — nothing is installed and nothing
+	// outlives the request, so it needs no durable operation.
+	if (dryRun) return c.json(await updateRunnerNode(c.env, session.uid, c.req.param("node"), { dryRun: true }));
+
+	// #990: claim a durable operation, start the work in the BACKGROUND, and answer immediately.
+	//
+	// The live failure was this route awaiting ~205s of work behind a 20s client deadline: the seam
+	// aborted, which cancelled the Worker, and the update died mid-flight having recorded nothing —
+	// an idle node left on 0.4.84 with no outcome and no error anywhere. `waitUntil` is what makes
+	// the work independent of the caller, and the operation row is what makes it knowable.
+	const background = (p: Promise<unknown>) => {
+		try {
+			c.executionCtx.waitUntil(p);
+		} catch {
+			// No execution context (a test, or a runtime that does not provide one): the work is
+			// awaited inline instead, which is slower but never silently skipped.
+			void p;
+		}
+	};
+	const { op, started } = await startRunnerUpdate(c.env, session.uid, c.req.param("node"), { ...(body.wait === true ? {} : { background }) });
+	// 200 whatever the outcome: `state` is the verdict, and a non-2xx would lose the machine's reason
+	// at the MCP seam. `operationId` is what a timed-out caller polls.
+	return c.json({ operationId: op.id, node: op.node, state: op.state, started, detail: op.detail, poll: `/v1/terminals/nodes/${encodeURIComponent(op.node)}/update`, operation: op });
+});
+
+/**
+ * The outcome of the latest update on this machine (#990) — what a timed-out caller polls.
+ *
+ * The point of the whole change: a lost reply no longer makes the operation unknowable. `state` is
+ * `running` while it is in flight and one of the terminal words afterwards, with the machine's own
+ * reason on it.
+ */
+terminalRoutes.get("/nodes/:node/update", async (c) => {
+	const session = await requireUser(c);
+	const node = normalizeRunnerNode(c.req.param("node"));
+	const op = await latestUpdateOp(c.env, session.uid, node);
+	return c.json(op ? { node, operation: op, state: op.state } : { node, operation: null, state: null, detail: `No update has been asked for on ${node}.` });
 });
 
 terminalRoutes.get("/nodes/:node/forget-preflight", async (c) => {

@@ -1,7 +1,7 @@
 import { authedAsyncCall } from "../async-outcome.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { authRequired, jsonText, text } from "../http.js";
+import { authedCall, authRequired, jsonText, text } from "../http.js";
 import { audit, dryRun, requirePermission } from "../safety.js";
 import type { InstanceToolsCtx } from "./shared.js";
 
@@ -65,7 +65,7 @@ export function registerMachineControlTools(server: McpServer, ctx: InstanceTool
 	// every agent the machine held is attached again, re-attaching stragglers through #856's path.
 	server.tool(
 		"runner_update",
-		"Update a machine's `pags` CLI to the latest release and restart it in place — entirely remotely. Use it when list_runner_nodes or instance_runner_node shows a machine `behind` on a feature, or when an error names runner_update (e.g. coding_repo_add \"too old to clone\"). The machine installs `@proagentstore/cli@latest` with npm and restarts — `pags up` restarts itself on the new release (an older `pags up` restarts only the runner, and the answer's `supervisor` says so), and a runner not under `pags up` restarts through its launchd/systemd unit (PAGS_SERVICE=1) or its PAGS_RESTART_COMMAND; if any coding engine is mid-turn it WAITS until those turns finish (answer `scheduled`, with `waitingFor`), so a run is paused across the restart and resumed — never cut off. After a restart the answer says which agents it held, which came back, which had to be re-attached (the force_runner_attach path), and any still `missing` with the reason. Other answers: `up-to-date`, `refused` (with why — e.g. nothing on the machine would restart it), `unsupported` (a CLI too old to update itself: the FIRST update needs the machine, later ones do not), `unreachable`. An interrupted or slow confirmation answers `{outcome: unknown, confirmation: {reason, httpStatus?}, possibleOutcomes, poll}`; an update may already be scheduled or restarting, so poll list_runner_nodes before retrying. Pass dry_run to see what would be asked without contacting the machine; list_runner_nodes shows its current version and what it is behind on.",
+		"Update a machine's `pags` CLI to the latest release and restart it in place — entirely remotely. Use it when list_runner_nodes or instance_runner_node shows a machine `behind` on a feature, or when an error names runner_update (e.g. coding_repo_add \"too old to clone\"). The machine installs `@proagentstore/cli@latest` with npm and restarts — `pags up` restarts itself on the new release (an older `pags up` restarts only the runner, and the answer's `supervisor` says so), and a runner not under `pags up` restarts through its launchd/systemd unit (PAGS_SERVICE=1) or its PAGS_RESTART_COMMAND; if any coding engine is mid-turn it WAITS until those turns finish (answer `scheduled`, with `waitingFor`), so a run is paused across the restart and resumed — never cut off. After a restart the answer says which agents it held, which came back, which had to be re-attached (the force_runner_attach path), and any still `missing` with the reason. Other answers: `up-to-date`, `refused` (with why — e.g. nothing on the machine would restart it), `unsupported` (a CLI too old to update itself: the FIRST update needs the machine, later ones do not), `unreachable`. The update is a DURABLE operation (#990): this call records it, starts it, and answers at once with `{operationId, state, poll}` — `state` is `running` while it is in flight and then one of `scheduled`, `restarting`, `restarted`, `up_to_date`, `refused`, `unsupported`, `unreachable` or `failed`, each with the machine's own reason. Read the outcome with runner_update_status (or `update` on the machine's row in list_runner_nodes); an interrupted or slow confirmation can no longer make it unknowable. Only ONE update runs per machine at a time: calling again while one is in flight answers that operation with `started: false` rather than installing twice. Pass dry_run to see what would be asked without contacting the machine; list_runner_nodes shows its current version and what it is behind on.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			runner_node: z.string().describe("Machine (node) name to update, from list_runner_nodes or instance_runner_node's `nodes`."),
@@ -86,8 +86,33 @@ export function registerMachineControlTools(server: McpServer, ctx: InstanceTool
 					effect: `${runner_node} would install the latest @proagentstore/cli and restart — after any engine mid-turn finishes — and every agent it holds would be checked back in, re-attaching any that did not return.`,
 				});
 			}
-			const data = (await authedAsyncCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify({}) }, env, { tool: "runner_update", possibleOutcomes: ["not-started", "scheduled", "restarting", "restarted", "refused", "unsupported", "unreachable", "up-to-date", "failed"], poll: { tool: "list_runner_nodes", input: {} } })) as { action?: string; error?: string; outcome?: string };
-			if (!data.error) await audit(safetyFor(token), { tool: "runner_update", action: data.outcome === "unknown" ? "unconfirmed" : "completed", input, result: { action: data.action } });
+			// The route now claims the operation and returns immediately, so this reply arrives well
+			// inside the confirmation deadline. The async-outcome wrapper stays as the transport
+			// safety net — and its `poll` hint names the tool that reads the durable outcome.
+			const data = (await authedAsyncCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify({}) }, env, { tool: "runner_update", possibleOutcomes: ["running", "scheduled", "restarting", "restarted", "refused", "unsupported", "unreachable", "up_to_date", "failed"], poll: { tool: "runner_update_status", input: { runner_node } } })) as { action?: string; error?: string; outcome?: string; state?: string };
+			if (!data.error) await audit(safetyFor(token), { tool: "runner_update", action: data.outcome === "unknown" ? "unconfirmed" : "completed", input, result: { action: data.action ?? data.state } });
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
+	// ── The durable outcome (#990) ───────────────────────────────────────────────
+	//
+	// `runner_update` used to be answerable only by the reply to its own request, and that reply
+	// could be lost: two live attempts on an idle machine returned `outcome: "unknown"` and left the
+	// node on its old CLI with no outcome and no error recorded anywhere. This reads the operation.
+	server.tool(
+		"runner_update_status",
+		"The outcome of the latest `pags` CLI update on one machine (#990) — what to call after runner_update, and the thing to read when its reply was slow, interrupted or answered `outcome: unknown`. Answers `{node, state, operation}`: `state` is `running` while the update is in flight, then one of `scheduled` (waiting for a busy engine to finish its turn), `restarting`, `restarted`, `up_to_date`, `would_update` (a dry run), `refused`, `unsupported` (a CLI too old to update itself — the first update needs the machine), `unreachable` or `failed`. The operation carries the versions it moved between, the version the machine registered after it came back, the agents it held, which were re-attached, any still missing with each one's reason, what restarted it, and the owner-facing reason. Read-only; `null` when no update has ever been asked for on that machine.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			runner_node: z.string().describe("Machine (node) name, from list_runner_nodes or the `node` runner_update answered with."),
+		},
+		async ({ token, runner_node }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "runner_update_status", { runner_node });
+			if (denied) return denied;
+			const data = (await authedCall(`/v1/terminals/nodes/${encodeURIComponent(runner_node)}/update`, sessionToken, {}, env)) as { error?: string };
 			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
 		},
 	);

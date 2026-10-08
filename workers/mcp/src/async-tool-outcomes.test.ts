@@ -37,7 +37,9 @@ describe("async tools retain actionable outcomes", () => {
 		["coding_repo_remove", { instance_id: "i1", repo_id: "repo-1", confirm: "coding_repo_remove" }, "coding_repos_list"],
 		["set_instance_runner_node", { instance_id: "i1", runner_node: "mac" }, "instance_runner_node"],
 		["force_runner_attach", { instance_id: "i1", runner_node: "mac" }, "instance_runner_node"],
-		["runner_update", { runner_node: "mac" }, "list_runner_nodes"],
+		// #990: the poll hint is the DURABLE read now — `list_runner_nodes` carries the same
+		// operation on the machine's row, but this tool is the one that answers for one machine.
+		["runner_update", { runner_node: "mac" }, "runner_update_status"],
 		["coding_repo_add", { instance_id: "i1", path: "~/repo", github_repo: "acme/repo", clone: true }, "coding_repos_list"],
 	] as const)("%s supplies polling guidance when its mutation reply is lost", async (tool, input, pollTool) => {
 		const fetch = vi.fn().mockRejectedValue(new Error("connection lost"));
@@ -52,7 +54,9 @@ describe("async tools retain actionable outcomes", () => {
 
 	it.each([
 		["force_runner_attach", { instance_id: "i1" }, "instance_runner_node"],
-		["runner_update", { runner_node: "mac" }, "list_runner_nodes"],
+		// #990: the poll hint is the DURABLE read now — `list_runner_nodes` carries the same
+		// operation on the machine's row, but this tool is the one that answers for one machine.
+		["runner_update", { runner_node: "mac" }, "runner_update_status"],
 	] as const)("%s returns gateway failure detail instead of a bare MCP exception (#901)", async (tool, input, pollTool) => {
 		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("Relay command timed out", { status: 504 })));
 		const result = await handlers().get(tool)?.(input);

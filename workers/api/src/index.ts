@@ -62,6 +62,7 @@ import { runIssueSync } from "./lib/issue-sync.js";
 import { syncActiveLocalBrowserRuns } from "./lib/local-browser/sync.js";
 import { syncActiveTailorRuns } from "./lib/local-artifact/tailor.js";
 import { syncActiveApplyRuns } from "./lib/local-apply/apply.js";
+import { failStaleUpdateOps } from "./lib/runner-update-ops.js";
 import { syncLeadWritebacks } from "./lib/local-artifact/store.js";
 import { routeRunEvents } from "./lib/run-event-routing.js";
 import { runTicketQueue } from "./lib/ticket-queue.js";
@@ -300,6 +301,10 @@ export default {
 		ctx.waitUntil(syncActiveTailorRuns(env).catch((err) => logUnhandled(env, err, { path: "scheduled:application-tailor", method: "CRON" })));
 		// The same pull for Application Runner fills (#957).
 		ctx.waitUntil(syncActiveApplyRuns(env).catch((err) => logUnhandled(env, err, { path: "scheduled:application-runner", method: "CRON" })));
+		// #990: fail any runner update that stopped reporting. `running` is the only non-terminal
+		// state, so a row left there by a Worker that died would be the new way for an update to be
+		// unknowable — which is the whole defect the operation record exists to end.
+		ctx.waitUntil(failStaleUpdateOps(env).catch((err) => logUnhandled(env, err, { path: "scheduled:runner-update-ops", method: "CRON" })));
 		// Backstop for the lead writeback (#953): applications that moved in the last 10 minutes.
 		ctx.waitUntil(syncLeadWritebacks(env, Date.now() - 10 * 60_000).catch((err) => logUnhandled(env, err, { path: "scheduled:application-lead-writeback", method: "CRON" })));
 		// Snapshot yesterday's stats for instances that were active (#313). A sixth independent

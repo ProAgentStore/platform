@@ -8,12 +8,12 @@ import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { terminalsBusy } from "../lib/pollBusy";
 import { behindLine, type MachineResources, resourceFacts, staleSample } from "../lib/machineHealth";
-import { type RunnerUpdateResponse, updateOutcome } from "../lib/runnerPanel";
+import { type RunnerUpdateOpView, type RunnerUpdateResponse, updateOpLine, updateOutcome } from "../lib/runnerPanel";
 import { Terminal, RefreshCw, Bot, GitBranch, Circle, Pin, PinOff } from "lucide-react";
 
 interface TerminalInstance { instanceId: string; name: string; agentSlug: string | null; status: string; connected: boolean; bound: boolean; pinnedNode?: string | null }
 interface TerminalSession { sessionId: string; instanceId: string; repoId: string; repoName: string | null; engine: string; status: string; issueNumber?: number; issueTitle?: string; updatedAt: string; terminalTail?: string | null }
-interface TerminalNode { node: string; aka?: string[]; machineId?: string | null; identityHint?: string | null; placement: string; runnerVersion: string; runnerBehind?: string[] | null; lastSeenAt: string | null; connected: boolean; resources?: MachineResources | null; instances: TerminalInstance[]; sessions: TerminalSession[] }
+interface TerminalNode { node: string; aka?: string[]; machineId?: string | null; identityHint?: string | null; placement: string; runnerVersion: string; runnerBehind?: string[] | null; lastSeenAt: string | null; connected: boolean; resources?: MachineResources | null; instances: TerminalInstance[]; sessions: TerminalSession[]; update?: RunnerUpdateOpView }
 
 function ago(iso: string | null): string {
 	if (!iso) return "never";
@@ -194,20 +194,26 @@ export default function Terminals() {
 								</div>
 							)}
 
-							{/* A CLI too old for a feature (#859) — with the remote update, not just the version. */}
-							{(behindLine(n.runnerBehind) || updateNote[n.node]) && (
+							{/* A CLI too old for a feature (#859) — with the remote update, not just the version.
+							    #990: and the LAST update's own outcome, which rides on the machine's row, so a
+							    reply this page never received (the live failure) can no longer hide it. The note
+							    from a click this session wins while it is there; otherwise the durable one shows. */}
+							{(behindLine(n.runnerBehind) || updateNote[n.node] || updateOpLine(n.update)) && (
 								<div className="px-4 py-2 text-xs border-b border-line/60 flex flex-wrap items-center gap-2">
 									{behindLine(n.runnerBehind) && <span className="text-warning">{behindLine(n.runnerBehind)}</span>}
 									{behindLine(n.runnerBehind) && n.connected && (
-										<Button size="sm" onClick={() => void updateCli(n)} disabled={updateNote[n.node]?.tone === "pending"} data-testid="machine-update">
+										<Button size="sm" onClick={() => void updateCli(n)} disabled={updateNote[n.node]?.tone === "pending" || n.update?.state === "running"} data-testid="machine-update">
 											Update CLI
 										</Button>
 									)}
-									{updateNote[n.node] && (
-										<span role="status" className={`basis-full ${updateNote[n.node].tone === "warn" ? "text-warning" : updateNote[n.node].tone === "ok" ? "text-success" : "text-muted"}`}>
-											{updateNote[n.node].text}
-										</span>
-									)}
+									{(() => {
+										const line = updateNote[n.node] ?? updateOpLine(n.update);
+										return line ? (
+											<span role="status" data-testid="machine-update-state" className={`basis-full ${line.tone === "warn" ? "text-warning" : line.tone === "ok" ? "text-success" : "text-muted"}`}>
+												{line.text}
+											</span>
+										) : null;
+									})()}
 								</div>
 							)}
 

@@ -1079,4 +1079,7 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// `schedule` block, `list_local_browser_runs` the per-scan `telemetry`), which do not themselves
 	// move the surface; the new name does.
 	"0.1.96": "sha256:ace716733cc8e6eb65366b1f7b361ff709feb1fad827538212a969374d03ab2a",
+	// #990: + runner_update_status — the durable outcome of a machine's CLI update, which a
+	// timed-out `runner_update` reply could not report (its poll hint now names this tool).
+	"0.1.97": "sha256:183715ae5851ad306c3b1bf84d94694172fb55fe05de5cbff04b10da4e457b46",
 };

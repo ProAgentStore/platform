@@ -369,20 +369,66 @@ export function canReattach(runnerNode: string, warning: ReturnType<typeof pinne
 }
 
 /** `POST /v1/terminals/nodes/:node/update`'s answer (worker: `RunnerUpdateResult`). */
-export interface RunnerUpdateResponse {
-	action: "up-to-date" | "refused" | "scheduled" | "restarted" | "would-update" | "unsupported" | "unreachable" | "failed";
-	detail?: string;
+/** The durable update operation (#990) as the machine's row and the update route report it. */
+export interface RunnerUpdateOpView {
+	id: string;
+	state: "running" | "scheduled" | "restarting" | "restarted" | "up_to_date" | "would_update" | "refused" | "unsupported" | "unreachable" | "failed";
+	currentVersion?: string | null;
+	latestVersion?: string | null;
+	finalVersion?: string | null;
+	detail?: string | null;
+	endedAt?: string | null;
 }
 
-/** The line under the card after an update — the server's own sentence, in the console's words. */
+/**
+ * What POST …/update answers (#990): the claimed operation, not the finished work.
+ *
+ * `action` survives for a dry run, which still answers inline because nothing is installed and
+ * nothing outlives the request.
+ */
+export interface RunnerUpdateResponse {
+	operationId?: string;
+	state?: RunnerUpdateOpView["state"];
+	started?: boolean;
+	detail?: string;
+	action?: "up-to-date" | "refused" | "scheduled" | "restarted" | "would-update" | "unsupported" | "unreachable" | "failed";
+}
+
+/** Terminal states that went WELL — everything else terminal is something to look at. */
+const UPDATE_OK = new Set(["restarted", "up_to_date"]);
+const UPDATE_PENDING = new Set(["running", "scheduled", "restarting", "would_update"]);
+
+/** The server's own sentence, in the console's words — the detail is written for MCP callers too. */
+const updateText = (detail: string | null | undefined, fallback: string): string =>
+	humanDetail(detail ?? undefined)
+		.replace(/\bCall runner_update again afterwards\b/g, "Refresh afterwards")
+		.replace(/\bpoll list_runner_nodes\b/g, "refresh this page")
+		.replace(/\bruic?nner_update_status\b/g, "this page")
+		.replace(/\bcoding_diagnostics\b/g, "the agent's diagnostics") || fallback;
+
+/** The line under the card after asking for an update, or while one is in flight (#990). */
 export function updateOutcome(res: RunnerUpdateResponse): { tone: "ok" | "pending" | "warn"; text: string } {
-	// The update detail is written for MCP callers too; on this card "poll" and "call again" are a refresh.
-	const text =
-		humanDetail(res.detail)
-			.replace(/\bCall runner_update again afterwards\b/g, "Refresh afterwards")
-			.replace(/\bpoll list_runner_nodes\b/g, "refresh this page")
-			.replace(/\bcoding_diagnostics\b/g, "the agent's diagnostics") || res.action;
-	if (res.action === "restarted" || res.action === "up-to-date") return { tone: "ok", text };
-	if (res.action === "scheduled" || res.action === "would-update") return { tone: "pending", text };
+	// A dry run still answers inline, in the old vocabulary.
+	const state = res.state ?? (res.action ? res.action.replace(/-/g, "_") : "");
+	const text = updateText(res.detail, state || "asked");
+	if (UPDATE_OK.has(state)) return { tone: "ok", text };
+	if (UPDATE_PENDING.has(state)) return { tone: "pending", text };
+	return { tone: "warn", text };
+}
+
+/**
+ * The line a machine's card shows for its LAST update, whenever the page is opened (#990).
+ *
+ * This is the half the live failure had no answer for: two updates returned nothing usable and the
+ * console had no record of either, because the only statement about them was the reply that was
+ * lost. The operation now rides on the machine's own row, so the outcome is there on load.
+ */
+export function updateOpLine(op: RunnerUpdateOpView | null | undefined): { tone: "ok" | "pending" | "warn"; text: string } | null {
+	if (!op) return null;
+	const moved = op.currentVersion && (op.finalVersion || op.latestVersion) ? ` (${op.currentVersion} → ${op.finalVersion || op.latestVersion})` : "";
+	const fallback = op.state === "running" ? "Updating…" : op.state.replace(/_/g, " ");
+	const text = `${updateText(op.detail, fallback)}${moved}`;
+	if (UPDATE_OK.has(op.state)) return { tone: "ok", text };
+	if (UPDATE_PENDING.has(op.state)) return { tone: "pending", text };
 	return { tone: "warn", text };
 }

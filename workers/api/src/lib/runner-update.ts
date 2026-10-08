@@ -15,6 +15,7 @@
  * the runner is away and resumes it — engine conversation included (`--resume`) — once it is back.
  */
 import { aliasNodesFor } from "./machine-identity.js";
+import { advanceUpdateOp, claimUpdateOp, type RunnerUpdateOp, UPDATE_STATE_FOR_ACTION } from "./runner-update-ops.js";
 import { callRunner, relayConnected } from "./runner-client.js";
 import { attachAgentOnNode, liveCarriers, nodeRegistrations, type RepinDeps } from "./runner-repin.js";
 import { RunnerUnreachableError } from "./runner-unreachable.js";
@@ -175,4 +176,80 @@ export async function updateRunnerNode(env: Env, userId: string, rawNode: string
 		...(supervisor ? { supervisor } : {}),
 		detail: supervisor ? `${outcome} ${supervisor}` : outcome,
 	};
+}
+
+/**
+ * The same update, as a DURABLE operation (#990).
+ *
+ * ── What was wrong with calling {@link updateRunnerNode} from the route
+ *
+ * It can block for ~205s (a 115s relay command, then a 90s re-attach wait) and the MCP seam's
+ * confirmation deadline is 20s. On expiry that seam ABORTS the request, which cancels the Worker —
+ * so the work stopped somewhere in the middle having written nothing at all, and the live attempts
+ * on `Macmini.modem` left a node that was idle, connected, on 0.4.84, with no outcome and no error
+ * to read. A timed-out reply made the operation unknowable, and the tool's own `poll` hint had
+ * nothing to resolve against.
+ *
+ * ── The shape now
+ *
+ * 1. CLAIM the operation in D1 (single-flight per machine) and hand the caller its id immediately,
+ *    well inside any client deadline;
+ * 2. run the work in the background through `waitUntil`, so the client going away cannot kill it;
+ * 3. write the terminal outcome to the row whatever happens — including a thrown error, which
+ *    previously vanished with the request.
+ *
+ * The caller therefore always leaves with something to poll, and every attempt ends in a state
+ * somebody can read. `startRunnerUpdate` returns the claimed operation; the result of the work
+ * itself is read back through `latestUpdateOp` (the route's GET, `list_runner_nodes`, the Console).
+ */
+export interface StartRunnerUpdate {
+	op: RunnerUpdateOp;
+	/** False when an update was already in flight on this machine — this call joined it. */
+	started: boolean;
+}
+
+export async function startRunnerUpdate(
+	env: Env,
+	userId: string,
+	rawNode: string,
+	opts: RepinDeps & { dryRun?: boolean; background?: (p: Promise<unknown>) => void } = {},
+): Promise<StartRunnerUpdate> {
+	const node = normalizeRunnerNode(rawNode);
+	const { op, claimed } = await claimUpdateOp(env, userId, node, { dryRun: opts.dryRun === true, now: opts.now?.() });
+	// Already in flight, or the claim could not be recorded: either way nothing new is started, and
+	// the operation the caller gets back is the one that actually exists.
+	if (!claimed) return { op, started: false };
+
+	const run = (async () => {
+		try {
+			const result = await updateRunnerNode(env, userId, node, opts);
+			await advanceUpdateOp(env, userId, op.id, {
+				state: UPDATE_STATE_FOR_ACTION[result.action] ?? "failed",
+				currentVersion: result.current ?? null,
+				latestVersion: result.latest ?? null,
+				finalVersion: result.version ?? null,
+				detail: result.detail ?? null,
+				reason: result.action,
+				held: result.held,
+				reattached: result.reattached ?? [],
+				missing: result.missing ?? [],
+				waitingFor: result.waitingFor ?? [],
+				restartedBy: result.restartedBy ?? null,
+				supervisor: result.supervisor ?? null,
+			}, opts.now?.());
+			return result;
+		} catch (e) {
+			// The one path that used to lose everything: a throw inside a request nobody is waiting
+			// for. It is now the operation's recorded outcome, with the reason on it.
+			await advanceUpdateOp(env, userId, op.id, {
+				state: "failed",
+				reason: "error",
+				detail: `The update on ${node} failed: ${(e instanceof Error ? e.message : String(e)).slice(0, 400)}`,
+			}, opts.now?.());
+			return null;
+		}
+	})();
+	if (opts.background) opts.background(run);
+	else await run;
+	return { op, started: true };
 }

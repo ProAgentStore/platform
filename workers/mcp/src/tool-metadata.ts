@@ -382,6 +382,10 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	force_runner_attach: "runtime",
 	// Installs software on a machine and restarts its runner (#859).
 	runner_update: "runtime",
+	// #990: reads one machine's latest update operation. A read, and deliberately so — it answers
+	// the question a lost `runner_update` reply leaves open, and must not need the scope that
+	// drives a machine to do it.
+	runner_update_status: "read",
 	coding_session_end: "runtime",
 	coding_session_fresh: "runtime",
 	coding_session_message: "runtime",
@@ -632,7 +636,7 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// continued, nothing is dispatched, and nothing external is touched. They carry policy
 	// verdicts, pause reasons, event classes and artifact handles — never résumé text, typed form
 	// values or page content.
-	read: 131,
+	read: 132, // +1 at #990: runner_update_status — the durable outcome of a CLI update on one machine, which a timed-out runner_update reply could not report.
 	// +2 write at #825: `pause_instance` / `resume_instance`. `write` rather than `destructive` —
 	// nothing is deleted and nothing is unsubscribed, and classing the OFF switch as destructive
 	// would put RESUME behind a scope the caller may not hold, which is the wrong failure mode for

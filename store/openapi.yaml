@@ -11194,16 +11194,77 @@ paths:
         "409": { description: More than one machine has registered under that name }
 
   /v1/terminals/nodes/{node}/update:
+    get:
+      summary: The outcome of the latest CLI update on a machine
+      description: |
+        `runner_update_status` (#990) — the DURABLE outcome of the update, and what a caller whose
+        POST reply was slow or lost reads instead of guessing.
+
+        Before this the update ran inline in the POST: it can take ~205s (a 115s relay command, then
+        a 90s wait for every agent to re-attach) while the MCP seam's confirmation deadline is 20s,
+        and on expiry that seam aborts the request — cancelling the Worker and killing the work
+        mid-flight with nothing written. Two live attempts on an idle machine therefore answered
+        `outcome: unknown` and left it on its old CLI with no outcome and no error anywhere.
+
+        `state` is `running` while the update is in flight, then one of `scheduled`, `restarting`,
+        `restarted`, `up_to_date`, `would_update`, `refused`, `unsupported`, `unreachable` or
+        `failed`. `operation` is null when no update has ever been asked for on that machine.
+      operationId: getRunnerUpdateStatus
+      tags: [Runtime]
+      parameters:
+        - { name: node, in: path, required: true, schema: { type: string }, description: "Any name the machine answers to." }
+      responses:
+        "200":
+          description: The latest update operation on that machine, or null
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  node: { type: string }
+                  state: { type: string, nullable: true, enum: [running, scheduled, restarting, restarted, up_to_date, would_update, refused, unsupported, unreachable, failed, null] }
+                  detail: { type: string }
+                  operation:
+                    type: object
+                    nullable: true
+                    properties:
+                      id: { type: string }
+                      node: { type: string }
+                      state: { type: string }
+                      currentVersion: { type: string, nullable: true }
+                      latestVersion: { type: string, nullable: true }
+                      finalVersion: { type: string, nullable: true }
+                      detail: { type: string, nullable: true }
+                      reason: { type: string, nullable: true }
+                      held: { type: array, items: { type: string } }
+                      reattached: { type: array, items: { type: string } }
+                      missing:
+                        type: array
+                        items: { type: object, properties: { instanceId: { type: string }, detail: { type: string } } }
+                      waitingFor: { type: array, items: { type: string } }
+                      restartedBy: { type: string, nullable: true }
+                      supervisor: { type: string, nullable: true }
+                      dryRun: { type: boolean }
+                      createdAt: { type: string }
+                      updatedAt: { type: string }
+                      endedAt: { type: string, nullable: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
     post:
       summary: Update a machine's pags CLI and restart it in place
       description: |
-        `runner_update` (#859). The machine installs the latest `@proagentstore/cli` with npm and
-        restarts under its `pags up` — waiting first while any coding engine is mid-turn, so a run is
-        parked across the restart and resumed rather than cut off. After a restart the answer names the
-        agents the machine held, the ones #856's attach path had to re-attach, and any still missing with
-        the reason. `action` is the verdict: `restarted`, `scheduled`, `up-to-date`, `refused`,
-        `unsupported` (a CLI too old to update itself), `unreachable`, `failed`, or `would-update` for a
-        dry run. Always 200, so the reason reaches the caller.
+        `runner_update` (#859, durable since #990). The machine installs the latest
+        `@proagentstore/cli` with npm and restarts under its `pags up` — waiting first while any
+        coding engine is mid-turn, so a run is parked across the restart and resumed rather than cut
+        off.
+
+        This route CLAIMS a durable operation and answers immediately with `{operationId, state,
+        poll}`; the work then runs in the background, so a client that stops waiting cannot kill it
+        and every attempt ends in a recorded state. Only one update runs per machine at a time —
+        calling again while one is in flight answers that operation with `started: false` rather than
+        installing twice. Read the outcome with `GET` on this path.
+
+        A `dryRun` still answers inline with the machine's own plan (`action`), because nothing is
+        installed and nothing outlives the request. Always 200, so the reason reaches the caller.
       operationId: updateRunnerNode
       tags: [Runtime]
       parameters:
@@ -11225,7 +11286,11 @@ paths:
                 type: object
                 properties:
                   node: { type: string }
-                  action: { type: string, enum: [restarted, scheduled, up-to-date, refused, unsupported, unreachable, failed, would-update] }
+                  operationId: { type: string, description: "The durable operation to poll (#990). Absent on a dry run." }
+                  state: { type: string, description: "The operation's state when it was claimed — `running` for a real update." }
+                  started: { type: boolean, description: "False when an update was already in flight on this machine; this call joined it." }
+                  poll: { type: string, description: "Where the outcome is read." }
+                  action: { type: string, enum: [restarted, scheduled, up-to-date, refused, unsupported, unreachable, failed, would-update], description: "A dry run's verdict, which is answered inline." }
                   current: { type: string }
                   latest: { type: string }
                   version: { type: string, nullable: true }
