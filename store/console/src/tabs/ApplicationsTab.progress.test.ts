@@ -18,7 +18,7 @@ const face = maskComments(readFileSync(new URL("../components/ApplicationRunFace
 
 describe("ApplicationsTab — the fill's progress (#986)", () => {
 	it("renders the server's sentence rather than composing one from the status", () => {
-		expect(src).toContain('data-testid="fill-progress"');
+		expect(src).toContain('data-testid="run-progress"');
 		expect(src).toContain("{item.fillProgress.label}");
 	});
 

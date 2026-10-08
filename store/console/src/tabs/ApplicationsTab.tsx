@@ -182,7 +182,7 @@ function Detail({ instanceId, item, onChanged }: { instanceId: string; item: App
 			    server's, so this card, the Board card and an MCP reader say the same thing; the counts
 			    and the checkpoint phase are shown beside it so "filled" is always falsifiable. */}
 			{item.fillProgress && (
-				<p className="text-sm mb-2" data-testid="fill-progress">
+				<p className="text-sm mb-2" data-testid="run-progress">
 					<span className="font-semibold">Progress:</span> {item.fillProgress.label}
 					<span className="text-xs text-muted-soft">
 						{" "}
