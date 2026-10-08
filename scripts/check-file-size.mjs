@@ -904,7 +904,7 @@ const PINS = {
 	// +5 for #754: accept assignedBy:"trigger" from the request body (1 line), cap title (1) and
 	// description (1) at ingest, the updated comment (1), and the AgentTask type annotation (1).
 	"workers/api/src/agent-do.ts": 1284, // +3 at #953: the lead's application-status writeback route (application_* fields only). +1 at #852: `modelChosen`, recorded only with a validated brain pick. +13 at #898: the `truncated` flag on the chat reply, the omitted-history window, and refusing an over-length owner task. +4 at #955 (b547ec47; pin raised at #954): the job-lead triage dispatch — its own DO operation, never a side effect of the generic record update.
-	"workers/api/src/lib/board.ts": 838, // +37 at #895: the card's issue fields (lane, issueRun, closingCommit, priority, codingSessionId) with their meaning, the repo filter, and the #682 link keeping its repo; the derivation itself lives in board-issues.ts. #898 crossed 800: a job key is REFUSED past its limit (an id cut would merge two cards), and card text is cut visibly.
+	"workers/api/src/lib/board.ts": 854, // +16 at #978: the `application` field a run card carries and the one line that passes it through — its TYPE and parser live with the domain that writes them (applications/application-board.ts), which is why this is +16 and not +60. // +37 at #895: the card's issue fields (lane, issueRun, closingCommit, priority, codingSessionId) with their meaning, the repo filter, and the #682 link keeping its repo; the derivation itself lives in board-issues.ts. #898 crossed 800: a job key is REFUSED past its limit (an id cut would merge two cards), and card text is cut visibly.
 	"workers/mcp/src/instance-tools/runtime.ts": 811, // #924 crossed 800: runner_resource_history, the machine's two-tier history.
 	// +3 for #308: an import plus the two lines saying why three steps unwrap the fence that the
 	// connectors now apply at the source. Raised rather than split — the growth is a comment and
@@ -1459,6 +1459,11 @@ const PINS = {
 	// than a condition in JSX, because this console has no component harness and a verdict embedded
 	// in markup is a verdict nothing checks.
 	"store/console/src/lib/types.ts": 810, // +2 at #975: the card's run diagnostic (cause, counts, signal ids) — why nothing reached the page. +2 at #974: the card's queue view (position, attempts, next attempt, reason) — why a run is waiting rather than failed. +2 at #973: the card's submitAuthorization (the owner's per-application approval, its state and the run that spent it). // #953: crossed 800 with the Applications surface's copies of its Worker shapes (#958) and the Runner settings view; these are copies by design (check-console-types), so the file grows with the surface.
+	// New entry at #978 — 801, one line over LIMIT. The application-execution face and its controls
+	// were SPLIT OUT first (components/ApplicationRunFace.tsx, following BoardIssueFace), which took
+	// the file from 900 to 801; what is left is the board itself. Lowering it further means splitting
+	// the card renderers, which is a change to the generic board, not to this ticket.
+	"store/console/src/tabs/BoardTab.tsx": 801,
 	"store/console/src/pages/AgentDetail.tsx": 970, // +1 at #957: the local_apply runtime option. +1 at #956: the local_artifact runtime option. +6 at #894: a link to a deleted agent says so (MissingSubject) instead of loading forever.
 	// First entry at #477: supervision.ts crossed 800 lines before this PR — the ratchet did not
 	// catch it because it was not tracked. Adding the entry to record the current state; the right

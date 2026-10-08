@@ -13,6 +13,7 @@
  * workflow), not `runtime: coding`: its own runtime, `local_artifact`, its own task and tables.
  */
 import { HttpError } from "../auth.js";
+import { syncApplicationCard } from "../applications/application-board.js";
 import { claimQueuedDispatch, instancesWithQueuedRuns, nextDueQueuedRun, noteQueued } from "../applications/work-queue-store.js";
 import { QUEUE_MAX_ATTEMPTS, refusalVerdict } from "../applications/work-queue.js";
 import { moveApplication } from "../local-apply/store.js";
@@ -192,6 +193,7 @@ async function dispatchTailoring(
 		else run = (await updateTailorRun(env, run, { to: "running", runnerNode: runtime.runner_node || null, events: [{ type: "runner.dispatched", at: iso(now), detail: { status: "running" } }] }, now)) ?? run;
 		if (refusal.defer) run = (await getTailorRun(env, instanceId, uid, runId)) ?? run;
 	}
+	await syncApplicationCard(env, uid, run, "tailor");
 	return run;
 }
 
@@ -320,6 +322,9 @@ export async function syncTailorRun(env: Env, uid: string, run: TailorRun, now =
 	const lastSeq = typeof body.lastSeq === "number" && body.lastSeq >= run.runnerSeq ? body.lastSeq : run.runnerSeq;
 	let current = (await updateTailorRun(env, run, { events, runnerSeq: lastSeq }, now)) ?? (await getTailorRun(env, run.instanceId, uid, run.id)) ?? run;
 	if (body.state === "ended" && body.result !== undefined && !isTerminalRun(current.status)) current = await settleFromResult(env, uid, current, body.result, now);
+	// #978 — the tailoring run on the owner's normal board, through the one function every
+	// runner-reported transition comes through.
+	await syncApplicationCard(env, uid, current, "tailor");
 	return current;
 }
 

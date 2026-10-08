@@ -186,7 +186,11 @@ function sweep(root: string, find = findHandAuthoredControls) {
 // both padding and a radius. That is luck, not coverage, which is the argument for the
 // denominator assertion below rather than for a bigger pin.
 // 44 → 42 at #970: the apply board's two Retry buttons went with the retired JOB_APPLY start.
-const PINNED = { "store/console": 42, "store/admin": 4, "agents/coder/web": 23 };
+// 42 → 43 at #978: ONE hand-authored control shape, in `components/ApplicationRunFace.tsx` — the
+// application's permitted actions. It is one button, not two, because the Kanban card and the List
+// row render the same extracted component; it matches the shapes beside it (Approve, the column
+// select) rather than introducing a different control idiom on one card type.
+const PINNED = { "store/console": 43, "store/admin": 4, "agents/coder/web": 23 };
 
 describe.each(TREES)("%s holds its count of buttons that draw their own box", (name, root) => {
 	/**

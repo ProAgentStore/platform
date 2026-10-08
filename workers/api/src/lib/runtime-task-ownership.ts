@@ -84,6 +84,12 @@ export const RUNTIME_TASK_OWNERS: Readonly<Record<string, RuntimeTaskOwner>> = {
 	"local_artifact.generate": "runner-durable",
 	// #957: Application Runner. Its state is PAGS's own `local_apply_runs` row, ended by the pull.
 	"local_browser.apply": "runner-durable",
+	// #978: the application EXECUTION card — one per application, refreshed by the pull on every
+	// transition of its tailoring or fill run. Cloud-owned: it is a projection of PAGS's own
+	// `local_artifact_runs` / `local_apply_runs` rows, not a task a runner holds, so a reconnect
+	// sweep must never expire it. (The runner-held tasks it describes are the two `runner-durable`
+	// entries above, which keep their own state across a restart.)
+	"application.run": "cloud", // lib/applications/application-board.ts
 	ticket: "cloud", // lib/tool-registry.ts create_ticket
 	// #864: a run the ticket queue started, on the board naming its ticket. The run is a durable loop
 	// in the cloud, and `run-events.ts` settles the row when it ends — never a runner's to expire.

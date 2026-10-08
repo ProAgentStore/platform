@@ -56,6 +56,7 @@ import {
 import { claimQueuedDispatch, instancesWithQueuedRuns, nextDueQueuedRun, noteQueued } from "../applications/work-queue-store.js";
 import { QUEUE_MAX_ATTEMPTS, refusalVerdict } from "../applications/work-queue.js";
 import { cliAtLeast } from "../runner-upgrade.js";
+import { syncApplicationCard } from "../applications/application-board.js";
 import { approvalState } from "./approval.js";
 import { consumeSubmitAuthorization, getSubmitAuthorization } from "./approval-store.js";
 import { listSupervisorCheckpoints, noteSupervisorDirectiveDelivery, receiveSupervisorCheckpoint, sanitizeSupervisorFacts, type SupervisorDirective } from "./supervision.js";
@@ -299,6 +300,8 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 		else run = (await updateApplyRun(env, run, { to: "running", runnerNode: runtime.runner_node || null, events: [{ type: "runner.dispatched", at: iso(now), detail: { status: "running", mode } }] }, now)) ?? run;
 		if (refusal.defer) run = (await getApplyRun(env, instanceId, uid, runId)) ?? run;
 	}
+	// #978: on the board the moment it starts, not when it ends.
+	await syncApplicationCard(env, uid, run, "fill");
 	return { kind: "started", application: (await getOwnedApplication(env, uid, applicationId)) as JobApplication, run };
 }
 
@@ -490,6 +493,16 @@ export async function syncApplyRun(env: Env, uid: string, run: ApplyRun, now = D
 		// once more so this API read does not return a stale `paused` application for another minute.
 		if (runnerStateMayHaveChanged) return syncApplyRun(env, uid, current, now);
 	}
+	// #978 — the card follows the run through every transition this function makes: running, the
+	// checkpoint pause (with the checkpoint and its directive, which is what the board shows as
+	// "awaiting review"), and each terminal outcome. One choke point, because every runner-reported
+	// change comes through here; wiring the individual settle paths is how a stale card happens.
+	const cardCheckpoint = current.status === "paused" && current.pause?.reason === "supervisor_checkpoint"
+		? (await listSupervisorCheckpoints(env, current).catch(() => []))
+				.map((c) => ({ checkpointId: c.checkpointId, phase: c.facts.phase, directive: c.directive?.directive ?? null }))
+				.at(-1) ?? null
+		: null;
+	await syncApplicationCard(env, uid, current, "fill", { checkpoint: cardCheckpoint });
 	return current;
 }
 

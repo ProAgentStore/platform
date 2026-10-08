@@ -91,6 +91,26 @@ const EXPECTED_DEFERRED = new Set([
 	"lib/local-artifact/tailor.ts",
 	// #957: the Application Runner is started by a connection action, the same way.
 	"lib/local-apply/apply.ts",
+	// #978: the board card is written BY the two apply domains and reads the permitted actions FROM
+	// the applications control service — which imports those same domains to perform them. A genuine
+	// two-way need: the card must show exactly what the action service allows (that is the Console/MCP
+	// parity requirement), and the service must be able to start the runs. Deferred so the cycle is
+	// never closed at module load.
+	"lib/applications/application-board.ts",
+	// The other end of that same cycle: the control service performs the actions the card offers, so
+	// it imports the domains; the card asks it which actions are permitted. Declared as its own
+	// member because every module on a cycle has to be, or the next back-edge could hide behind
+	// a neighbour's entry.
+	"lib/applications/control.ts",
+	// …and the route the control service calls to triage a lead, which closes the loop back into the
+	// pump. On the cycle only as a consequence of the two entries above; it has no deferred import of
+	// its own and nothing new depends on it.
+	//
+	// The payload SHAPE was deliberately NOT left on this cycle: `lib/board.ts` is the generic board
+	// and would have been dragged in by importing the domain module, so the shape lives in the leaf
+	// `applications/application-card-payload.ts`, which imports nothing. Only the ACTIONS lookup —
+	// the parity requirement, "the card offers exactly what the service permits" — is two-way.
+	"routes/instances-job-leads.ts",
 ]);
 
 describe("workers/api import graph", () => {

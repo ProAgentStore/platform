@@ -10,6 +10,7 @@ import { LayoutGrid, List, SlidersHorizontal, Plus, Trash2, ArrowUp, ArrowDown, 
 import Button from "../components/Button";
 import Card from "../components/Card";
 import BoardIssueFace, { type BoardIssueFields } from "../components/BoardIssueFace";
+import ApplicationRunFace, { APPLICATION_CONFIRM, ApplicationRunControls, type ApplicationRunFields } from "../components/ApplicationRunFace";
 import { BoardLanesView, IssueControls, IssuesViewButton } from "../components/BoardLanes";
 import { type BoardIssueSyncResult, issueRepos } from "../lib/boardLanes";
 
@@ -34,7 +35,7 @@ const GENERIC_COLUMNS: BoardColumn[] = [
 ];
 
 interface BoardAttempt { id: string; status: string; updatedAt: string }
-interface BoardItem extends BoardIssueFields {
+interface BoardItem extends BoardIssueFields, ApplicationRunFields {
 	jobKey: string;
 	latestTaskId: string;
 	title: string;
@@ -65,6 +66,8 @@ export default function BoardTab({ instanceId }: { instanceId: string }) {
 	const [truncated, setTruncated] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [view, setView] = useState<BoardView>("kanban");
+	/** The application action in flight, so its button can say so and cannot be double-sent. */
+	const [busy, setBusy] = useState<string | null>(null);
 	const [editingCols, setEditingCols] = useState(false);
 	// Only adopt the server's saved view on first load — otherwise every 2.5s poll
 	// would yank the user back out of a view they just toggled.
@@ -197,6 +200,33 @@ export default function BoardTab({ instanceId }: { instanceId: string }) {
 		}
 	};
 
+	/**
+	 * #978 — an application control from the board card.
+	 *
+	 * It posts to the SAME owner-scoped action route the Applications surface and the typed MCP
+	 * tools use (`/application-queue/actions`), with the compare-and-set the card was rendered
+	 * with. So the board gains no power the other surfaces lack, a stale card is refused rather
+	 * than applied, and there is one audit row per decision however it was made.
+	 */
+	const handleApplicationAction = async (item: BoardItem, action: string) => {
+		const app = item.application;
+		if (!app) return;
+		const confirmText = APPLICATION_CONFIRM[action];
+		if (confirmText && !confirm(confirmText)) return;
+		setBusy(action);
+		try {
+			await api(`/v1/instances/${instanceId}/application-queue/actions`, {
+				method: "POST",
+				body: JSON.stringify({ action, application_id: app.applicationId, expected_status: app.applicationStatus, expected_version: app.stateVersion }),
+			});
+			loadBoard();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : String(e));
+		} finally {
+			setBusy(null);
+		}
+	};
+
 	const handleDeleteItem = async (item: BoardItem) => {
 		try {
 			// Hide the runtime tasks AND clear any durable overlay row (status "").
@@ -252,6 +282,8 @@ export default function BoardTab({ instanceId }: { instanceId: string }) {
 		onAsk: (taskId: string) => { if (taskId) navigate(`/instances/${instanceId}/tasks/${taskId}?ask=1`); },
 		onMove: (status: string) => setStatus(item, status),
 		onApprove: item.status === "needs_approval" ? () => handleApprove(item) : undefined,
+		onApplicationAction: item.application ? (action: string) => handleApplicationAction(item, action) : undefined,
+		applicationBusy: busy,
 		onDelete: () => handleDeleteItem(item),
 		onPromote: item.ticketId ? undefined : () => handlePromote(item),
 	});
@@ -405,7 +437,7 @@ function AskButton({ turns, onAsk, className = "" }: { turns: number; onAsk: () 
 	);
 }
 
-function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onOpenSession, onAsk, onMove, onApprove, onDelete, onPromote }: {
+function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onOpenSession, onAsk, onMove, onApprove, onApplicationAction, applicationBusy, onDelete, onPromote }: {
 	item: BoardItem;
 	cols: BoardColumn[];
 	expanded: boolean;
@@ -415,6 +447,10 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onOpenSessio
 	onAsk: (taskId: string) => void;
 	onMove: (status: string) => void;
 	onApprove?: () => void;
+	/** #978: run one of the application's permitted controls, through the shared action route. */
+	onApplicationAction?: (action: string) => void;
+	/** The application action in flight, if any — the button that sent it says so. */
+	applicationBusy?: string | null;
 	onDelete: () => void;
 	/** Absent when the card already is a ticket (#757). */
 	onPromote?: () => void;
@@ -455,6 +491,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onOpenSessio
 				</div>
 			</button>
 			<BoardIssueFace item={item} onOpenSession={onOpenSession} />
+			<ApplicationRunFace item={item} />
 
 			{/* Wraps: Ask is a fourth control on this row, and a kanban column is narrow enough
 			    that Approve + the column select already crowd it. */}
@@ -480,6 +517,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onOpenSessio
 						Approve
 					</button>
 				)}
+				{onApplicationAction && <ApplicationRunControls item={item} busy={applicationBusy} onAction={onApplicationAction} />}
 				{/* Move to any column (pipeline stages the automation never sets). */}
 				<select
 					value={selectValue}
@@ -524,7 +562,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onOpenSessio
 }
 
 /** A compact one-line row for the List view — same actions as the Kanban card. */
-function ListRow({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove, onApprove, onDelete, onPromote }: {
+function ListRow({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove, onApprove, onApplicationAction, applicationBusy, onDelete, onPromote }: {
 	item: BoardItem;
 	cols: BoardColumn[];
 	expanded: boolean;
@@ -533,6 +571,10 @@ function ListRow({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove
 	onAsk: (taskId: string) => void;
 	onMove: (status: string) => void;
 	onApprove?: () => void;
+	/** #978: run one of the application's permitted controls, through the shared action route. */
+	onApplicationAction?: (action: string) => void;
+	/** The application action in flight, if any — the button that sent it says so. */
+	applicationBusy?: string | null;
 	onDelete: () => void;
 	/** Absent when the card already is a ticket (#757). */
 	onPromote?: () => void;
@@ -562,6 +604,7 @@ function ListRow({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove
 				{onApprove && (
 					<button type="button" onClick={onApprove} className="shrink-0 text-2xs px-2 py-1 rounded border border-success-line text-success hover:bg-success-soft font-bold" title="Approve this task to run">Approve</button>
 				)}
+				{onApplicationAction && <ApplicationRunControls item={item} busy={applicationBusy} onAction={onApplicationAction} compact />}
 				<select
 					value={selectValue}
 					onChange={(e) => { const v = e.target.value; onMove(v === "__auto" ? "" : (cols.find((c) => c.id === v)?.statuses?.[0] ?? v)); }}

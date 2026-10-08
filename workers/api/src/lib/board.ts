@@ -1,5 +1,6 @@
 import { clipMarked } from "./clip-marked.js";
 import { assertJobKey } from "./write-limits.js";
+import { type ApplicationCardPayload, parseApplicationCard } from "./applications/application-card-payload.js";
 import type { Env } from "../types.js";
 import { mirroredRuntimeTasks, isRecord } from "../routes/instances-runtime.js";
 import { agentCapabilities, sanitizeBoardColumns, type BoardColumn } from "./agent-capabilities.js";
@@ -139,6 +140,17 @@ export interface BoardItemView {
 	priority?: number;
 	/** The coding session a `coding.session` card is keyed on — where the console opens it (#895). */
 	codingSessionId?: string;
+	/**
+	 * The application this card is an execution of (#978), when it is one: its id and lifecycle
+	 * status, the compare-and-set token, the stage, the checkpoint it waits on, the trace to read,
+	 * and the actions the application action service permits right now.
+	 *
+	 * Carried in the card's payload rather than read back here, which is what keeps Console and MCP
+	 * showing the same controls — the domain computes them once, on every transition, and both
+	 * surfaces read this one record. The application RECORD itself stays data (`job_applications`,
+	 * the Data surface); this is only the execution against it.
+	 */
+	application?: ApplicationCardPayload;
 	/**
 	 * The first-class ticket this card is (#757), when it has been promoted or was created as one.
 	 * Present means `attempts` includes the ticket's STORED runs, so it no longer shrinks when runs
@@ -436,6 +448,10 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 			attempts: arr.map((t) => ({ id: String(t.id ?? ""), status: String(t.status ?? ""), updatedAt: t.updatedAt || t.createdAt || "" })),
 			updatedAt: rep.updatedAt || rep.createdAt || "",
 			...(githubIssue ? { githubIssue } : {}),
+			...(() => {
+				const application = parseApplicationCard((rep as Record<string, unknown>).application);
+				return application ? { application } : {};
+			})(),
 		};
 		items.push(item);
 		if (rep.type === CODING_SESSION_TASK_TYPE) {

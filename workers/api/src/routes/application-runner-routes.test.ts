@@ -448,6 +448,92 @@ describe("per-application Approve & proceed authorizes exactly one submission (#
 	});
 });
 
+// ── #978: the run is on the owner's NORMAL board, linked to the application ──────────────────
+//
+// Before this the Board rendered only generic runtime tasks, so a Runner actively filling an
+// employer's form had an EMPTY board and the work existed only on a separate Applications surface.
+describe("an application execution appears on the normal Kanban (#978)", () => {
+	const board = async (instance = "ap") => (await call("GET", `/${instance}/board`)).body;
+	const appCard = async (instance = "ap") => {
+		type Card = { application?: { applicationId: string; kind: string; stage: string; actions: string[]; traceUrl: string; checkpoint?: { checkpointId: string; directive: string | null }; blockReason?: string }; title: string; status: string; attempts: unknown[] };
+		const b = (await board(instance)) as { board?: Record<string, Card[]>; items?: Card[] };
+		const cards = b.items ?? Object.values(b.board ?? {}).flat();
+		return cards.find((c) => c.application);
+	};
+
+	it("shows a running card the moment the fill starts, titled with the job it is for", async () => {
+		const ev = readyApp("lead-b1");
+		await call("POST", "/ap/application-runs", ev);
+		const card = await appCard();
+		expect(card, "the board must not be empty while the Runner works").toBeTruthy();
+		expect(card?.status).toBe("running");
+		// Linked to the application, in the words of the lead.
+		expect(card?.title).toBe("Staff Engineer — Globex");
+		expect(card?.application).toMatchObject({ applicationId: "lead-b1", kind: "fill", stage: "Filling the application in the browser" });
+		// And it points at the correlated trace.
+		expect(card?.application?.traceUrl).toContain("/applications/lead-b1/trace");
+	});
+
+	it("moves to awaiting-review with the checkpoint when the supervisor pauses it — the acceptance line", async () => {
+		const ev = readyApp("lead-b2");
+		const started = await call("POST", "/ap/application-runs", ev);
+		const runId = started.body.run.id as string;
+		const checkpoint = { schemaVersion: 1, checkpointId: "before-submit-1", facts: { phase: "before_submit", actions: 9, filled: 6, uploaded: 1, blockers: [], domain: "jobs.example.com" } };
+		runner("paused", { lastSeq: 4, pause: { reason: "supervisor_checkpoint", checkpoint }, events: [{ seq: 4, type: "supervisor.checkpoint", at: "2026-10-08T00:06:00Z", detail: { checkpointId: "before-submit-1" } }] });
+		await syncApplyRun(env(), "u1", (await call("GET", `/ap/application-runs/${runId}`)).body.run);
+
+		const card = await appCard();
+		expect(card?.status, "a run waiting on a person belongs in the needs-you column").toBe("needs_human");
+		expect(card?.application?.checkpoint).toMatchObject({ checkpointId: "before-submit-1" });
+		expect(card?.application?.stage).toMatch(/cloud supervisor's decision at a checkpoint/);
+	});
+
+	it("offers only the controls the application action service permits, with its compare-and-set", async () => {
+		const ev = readyApp("lead-b3");
+		await call("POST", "/ap/application-runs", ev);
+		const card = await appCard();
+		// The SAME list the Applications surface computes for this state — parity by construction.
+		const item = (await call("GET", "/ap/application-queue/item?application_id=lead-b3")).body.item;
+		expect(card?.application?.actions).toEqual(item.actions);
+		// …and a control taken from the card goes through that service's own route.
+		const acted = await call("POST", "/ap/application-queue/actions", { action: "cancel", application_id: "lead-b3", expected_status: item.status, expected_version: item.stateVersion });
+		expect(acted.status).toBe(200);
+	});
+
+	it("one application is ONE card however many runs it has — a retry is an attempt, not a second card", async () => {
+		const ev = readyApp("lead-b4");
+		const started = await call("POST", "/ap/application-runs", ev);
+		const runId = started.body.run.id as string;
+		runner("ended", { lastSeq: 1, result: RESULT(runId, { outcome: "blocked", blockReason: "incomplete", filled: 1 }) });
+		await syncApplyRun(env(), "u1", (await call("GET", `/ap/application-runs/${runId}`)).body.run);
+		await call("POST", "/ap/application-queue/actions", { action: "retry_fill", application_id: "lead-b4", expected_status: "blocked" });
+
+		const cards = (await d1.DB.prepare("SELECT COUNT(*) AS n FROM instance_runtime_tasks WHERE type = 'application.run'").first<{ n: number }>())?.n;
+		expect(cards, "the retry must land on the application's existing card").toBe(1);
+	});
+
+	it("a terminal run explains itself on the card", async () => {
+		const ev = readyApp("lead-b5");
+		const started = await call("POST", "/ap/application-runs", ev);
+		const runId = started.body.run.id as string;
+		runner("ended", {
+			lastSeq: 1,
+			result: RESULT(runId, { outcome: "blocked", blockReason: "bridge_unused", filled: 0, diagnostic: { cause: "bridge_unused", bridgeCalls: 0, engineExit: 0, activeMs: 51_000, pages: 0, filled: 0, signals: [] } }),
+		});
+		await syncApplyRun(env(), "u1", (await call("GET", `/ap/application-runs/${runId}`)).body.run);
+		const card = await appCard();
+		expect(card?.status).toBe("blocked");
+		expect(card?.application?.blockReason).toBe("bridge_unused");
+	});
+
+	it("an instance with no application runtime keeps a plain board — generic behaviour is preserved", async () => {
+		// `t1` is the Tailor; a card only ever appears for an application it actually ran.
+		const b = (await board("t1")) as { board?: Record<string, unknown[]>; items?: unknown[] };
+		const cards = b.items ?? Object.values(b.board ?? {}).flat();
+		expect(cards.filter((c) => (c as { application?: unknown }).application)).toEqual([]);
+	});
+});
+
 // ── #977: a machine below the contract is refused up front, and the version is on the record ──
 //
 // The live regression: #975 shipped and deployed, and a real retry STILL came back
