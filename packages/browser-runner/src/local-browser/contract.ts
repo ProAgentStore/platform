@@ -338,6 +338,37 @@ export function parseLocalBrowserEvent(raw: unknown): LocalBrowserEvent | null {
 }
 
 /**
+ * A finding, with every free-text part redacted (#947).
+ *
+ * The gap this closes: the result envelope's `summary` and `error` went through {@link redactText}
+ * and its FINDINGS did not. `title`, `evidence` and `detail` were length-capped only, and `fields`
+ * was filtered by KEY ({@link SENSITIVE_KEY}) — so a credential-shaped value under an innocuous key
+ * (`{"note": "sk-ant-api03-…"}`) survived, and a secret environment value quoted into `evidence`
+ * survived verbatim. Both are written by the same CLI, on the same machine, in the same envelope as
+ * the summary that WAS cleaned, and findings are the part that persists furthest: the run's result
+ * row, the console, MCP, and then the owner's own collection record. #947's observability rule —
+ * "do not retain … secret environment values" — was therefore breached on the longest-lived path.
+ *
+ * One definition, used by the runner (which knows the machine's secret env values and passes them)
+ * and again by the API when it parses what arrived (which does not, and catches shapes). Defence in
+ * depth on purpose: the runner is where secrets are knowable, and the cloud is where a runner that
+ * skipped the step is still caught.
+ */
+export function redactFinding(f: LocalBrowserFinding, secrets: readonly string[] = []): LocalBrowserFinding {
+	const fields: LocalBrowserFinding["fields"] = {};
+	for (const [k, v] of Object.entries(f.fields ?? {})) {
+		if (SENSITIVE_KEY.test(k)) continue;
+		fields[k] = typeof v === "string" ? redactText(v, secrets) : v;
+	}
+	return { title: redactText(f.title, secrets), url: f.url, evidence: redactText(f.evidence, secrets), fields };
+}
+
+/** The same for a source failure's free text; its `reason` is a closed vocabulary and its url is a url. */
+export function redactSourceFailure(f: LocalBrowserSourceFailure, secrets: readonly string[] = []): LocalBrowserSourceFailure {
+	return f.detail === undefined ? f : { ...f, detail: redactText(f.detail, secrets) };
+}
+
+/**
  * A validated result envelope, or the reason it is not one.
  *
  * Wrapped as `{ result }` on purpose: a FAILED envelope carries its own `error` field, so returning
@@ -371,7 +402,9 @@ export function parseLocalBrowserResult(raw: unknown): { result: LocalBrowserRes
 			if (typeof v === "string") fields[k.slice(0, 100)] = v.slice(0, LOCAL_BROWSER_CAPS.text);
 			else if (typeof v === "number" || typeof v === "boolean" || v === null) fields[k.slice(0, 100)] = v;
 		}
-		findings.push({ title, url, evidence, fields });
+		// #947: capped and key-filtered is not redacted. A finding is the longest-lived thing a run
+		// produces, and its free text was the one part of this envelope nothing cleaned.
+		findings.push(redactFinding({ title, url, evidence, fields }));
 	}
 	const sourceFailures: LocalBrowserSourceFailure[] = [];
 	for (const [i, f] of o.sourceFailures.entries()) {
@@ -380,7 +413,7 @@ export function parseLocalBrowserResult(raw: unknown): { result: LocalBrowserRes
 		const reason = oneOf(LOCAL_BROWSER_SOURCE_FAILURE_REASONS, r.reason);
 		if (!url || !reason) return { error: `sourceFailures[${i}] needs url and a known reason` };
 		const detail = str(r.detail, 1000);
-		sourceFailures.push(detail ? { url, reason, detail } : { url, reason });
+		sourceFailures.push(redactSourceFailure(detail ? { url, reason, detail } : { url, reason }));
 	}
 	const out: LocalBrowserResultEnvelope = { runId, outcome, findings, sourceFailures, summary: redactText(str(o.summary, LOCAL_BROWSER_CAPS.text) ?? ""), traceId, engineAuth };
 	// Redacted again here, whatever the runner did: an error is CLI output, and CLIs print keys.

@@ -167,6 +167,54 @@ describe("ending a run", () => {
 		expect(browsersStopped).toBe(1);
 	});
 
+	/**
+	 * #947: the machine's secret env values are knowable in the runner and nowhere after it, so the
+	 * findings are cleaned here. Before this they were capped and key-filtered only, and the run's
+	 * result — the thing that reaches the console, MCP and the owner's collection — kept whatever
+	 * the CLI had written into a finding's title, evidence or an innocuously-named field.
+	 */
+	it("strips the machine's own secret env value out of a finding, not just credential shapes", async () => {
+		const prev = process.env.JOB_SITE_PASSWORD;
+		process.env.JOB_SITE_PASSWORD = "hunter2-horse-battery";
+		try {
+			const rt = runtime();
+			rt.start(envelope());
+			await settle();
+			await rt.bridge({ runId: "run-1", op: "call", name: "browser_navigate", args: { url: "https://seek.com.au/jobs" } });
+			await rt.bridge({
+				runId: "run-1",
+				op: "call",
+				name: "record_finding",
+				args: {
+					title: "Dev at hunter2-horse-battery Ltd",
+					url: "https://seek.com.au/job/1",
+					// Both shapes in one finding: the machine's own value, and a credential shape.
+					evidence: "Dev — Sydney. Signed in with hunter2-horse-battery and sk-ant-api03-aaaabbbbccccddddeeeeffffgggghhhh",
+					fields: { note: "hunter2-horse-battery", location: "Sydney" },
+				},
+			});
+			await rt.bridge({ runId: "run-1", op: "call", name: "report_source_failure", args: { url: "https://x.example.com", reason: "login_required", detail: "rejected hunter2-horse-battery" } });
+			await rt.bridge({ runId: "run-1", op: "call", name: "finish_research", args: { summary: "1 role" } });
+			spawned[0].child.exit(0);
+
+			const s = rt.status({ runId: "run-1" });
+			const f = s.result?.findings[0] as { title: string; evidence: string; fields: Record<string, unknown> };
+			expect(f.title).toBe("Dev at [REDACTED] Ltd");
+			expect(f.evidence).toContain("Dev — Sydney");
+			expect(f.fields.note).toBe("[REDACTED]");
+			expect(f.fields.location, "ordinary text survives — this is redaction, not deletion").toBe("Sydney");
+			expect(s.result?.sourceFailures[0]).toMatchObject({ detail: "rejected [REDACTED]" });
+			// Nowhere in the result, under any field, by any route out of the runner.
+			expect(JSON.stringify(s.result)).not.toContain("hunter2-horse-battery");
+			expect(JSON.stringify(s.result)).not.toContain("sk-ant-api03");
+			// …and not on the trace either, which was already true and must stay true.
+			expect(JSON.stringify(s.events)).not.toContain("hunter2-horse-battery");
+		} finally {
+			if (prev === undefined) delete process.env.JOB_SITE_PASSWORD;
+			else process.env.JOB_SITE_PASSWORD = prev;
+		}
+	});
+
 	it("says the CLI is not signed in, and how to fix it", async () => {
 		const rt = runtime();
 		rt.start(envelope({ engine: "codex" }));

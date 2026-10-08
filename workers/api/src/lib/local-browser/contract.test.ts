@@ -62,6 +62,64 @@ describe("parseLocalBrowserResult", () => {
 	});
 });
 
+/**
+ * #947: "do not retain … secret environment values" — on the path that retains longest.
+ *
+ * The envelope's `summary` and `error` were redacted and its FINDINGS were not: `title`, `evidence`
+ * and a source failure's `detail` were length-capped only, and `fields` was filtered by KEY. So a
+ * credential under an innocuous key, or a secret quoted into evidence, was stored in the run's
+ * result, shown in the console, returned over MCP, and copied into the owner's collection record.
+ */
+describe("findings are redacted, not just capped (#947)", () => {
+	const KEY = "sk-ant-api03-aaaabbbbccccddddeeeeffffgggghhhh";
+
+	it("redacts a credential-shaped string in a finding's evidence, title and an innocuously-keyed field", async () => {
+		const { parseLocalBrowserResult } = await import("./contract");
+		const r = parseLocalBrowserResult({
+			...RESULT,
+			findings: [{ title: `Engineer ${KEY}`, url: "https://jobs.example.com/1", evidence: `Posted by ${KEY} — Sydney`, fields: { note: `contact ${KEY}`, location: "Sydney" } }],
+		});
+		expect("result" in r).toBe(true);
+		const f = ("result" in r ? r.result.findings[0] : null) as { title: string; evidence: string; fields: Record<string, unknown> };
+		expect(f.title).toBe("Engineer [REDACTED]");
+		expect(f.evidence).toBe("Posted by [REDACTED] — Sydney");
+		// The KEY name was innocuous — the old filter only looked at keys, so this is the case it missed.
+		expect(f.fields.note).toBe("contact [REDACTED]");
+		expect(f.fields.location, "ordinary text is untouched").toBe("Sydney");
+		// Nowhere in the stored envelope, under any field.
+		expect(JSON.stringify("result" in r ? r.result : {})).not.toContain(KEY);
+	});
+
+	it("redacts a credential-shaped string in a source failure's detail", async () => {
+		const { parseLocalBrowserResult } = await import("./contract");
+		const r = parseLocalBrowserResult({
+			...RESULT,
+			sourceFailures: [{ url: "https://www.linkedin.com/jobs", reason: "login_required", detail: `rejected: Bearer abc.def-ghi_jkl012 for ${KEY}` }],
+		});
+		const sf = ("result" in r ? r.result.sourceFailures[0] : null) as { detail: string };
+		expect(sf.detail).toBe("rejected: Bearer [REDACTED] for [REDACTED]");
+		expect(JSON.stringify("result" in r ? r.result : {})).not.toContain(KEY);
+	});
+
+	it("removes a machine's own secret env value, which has no recognisable shape", async () => {
+		const { redactFinding, redactSourceFailure, secretEnvValues } = await import("./contract");
+		const secrets = secretEnvValues({ JOB_SITE_PASSWORD: "hunter2-horse", HOME: "/Users/me" });
+		const f = redactFinding({ title: "Role at hunter2-horse Ltd", url: "https://jobs.example.com/1", evidence: "signed in with hunter2-horse", fields: { note: "hunter2-horse" } }, secrets);
+		expect(f.title).toBe("Role at [REDACTED] Ltd");
+		expect(f.evidence).toBe("signed in with [REDACTED]");
+		expect(f.fields.note).toBe("[REDACTED]");
+		expect(redactSourceFailure({ url: "https://x.example.com", reason: "login_required", detail: "hunter2-horse rejected" }, secrets).detail).toBe("[REDACTED] rejected");
+		// A failure with no detail is returned as it was, not given an empty one.
+		expect(redactSourceFailure({ url: "https://x.example.com", reason: "login_required" }, secrets)).toEqual({ url: "https://x.example.com", reason: "login_required" });
+	});
+
+	it("still drops a sensitive KEY outright rather than redacting its value", async () => {
+		const { redactFinding } = await import("./contract");
+		const f = redactFinding({ title: "t", url: "https://x.example.com", evidence: "e", fields: { password: "hunter2", cookie: "a=b", location: "Sydney" } });
+		expect(f.fields).toEqual({ location: "Sydney" });
+	});
+});
+
 describe("parseLocalBrowserEvent", () => {
 	it("accepts a navigation and redacts its detail", () => {
 		const e = parseLocalBrowserEvent({ type: "browser.navigated", at: "2026-10-07T01:00:00Z", url: "https://seek.com.au/jobs", domain: "SEEK.com.au", detail: { title: "Jobs", cookie: "sid=1", nested: { authorization: "Bearer x", ok: 1 } } });

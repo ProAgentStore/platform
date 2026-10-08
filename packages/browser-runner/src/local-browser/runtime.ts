@@ -42,6 +42,8 @@ import {
 	type LocalBrowserStatusResponse,
 	type LocalBrowserTaskEnvelope,
 	redactDetail,
+	redactFinding,
+	redactSourceFailure,
 	redactText,
 	secretEnvValues,
 } from "./contract.js";
@@ -478,8 +480,11 @@ export class LocalBrowserRuntime {
 		run.result = {
 			runId: run.envelope.runId,
 			outcome: r.outcome,
-			findings: run.bridge?.findings ?? [],
-			sourceFailures: run.bridge?.sourceFailures ?? [],
+			// #947: the machine's own secret env values are knowable HERE and nowhere later, so the
+			// findings are cleaned with them — the same treatment `summary` and `error` below already
+			// had, and the part of this envelope that previously kept whatever the CLI wrote.
+			findings: (run.bridge?.findings ?? []).map((f) => redactFinding(f, run.secrets)),
+			sourceFailures: (run.bridge?.sourceFailures ?? []).map((f) => redactSourceFailure(f, run.secrets)),
 			summary: redactText((r.summary ?? "").slice(0, 4000), run.secrets),
 			traceId: run.envelope.runId,
 			engineAuth: r.engineAuth ?? run.engineAuth,
