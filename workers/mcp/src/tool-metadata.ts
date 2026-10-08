@@ -259,6 +259,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	secure_input_status: "read",
 	get_console_link: "read",
 	local_browser_preflight: "read",
+	gmail_scout_config_get: "read",
+	gmail_scout_status: "read",
 	get_instance_local_browser_settings: "read",
 	list_local_browser_runs: "read",
 	set_instance_local_browser_settings: "write",
@@ -317,6 +319,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	set_instance_instructions: "write",
 	set_instance_notification_policy: "write",
 	set_instance_connector_account: "write",
+	gmail_scout_config_set: "write",
+	gmail_scout_scan: "write",
 	import_instance_drive_file: "write",
 	import_instance_workdrive_file: "write",
 	set_instance_loop_limits: "write",
@@ -644,14 +648,14 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// types/events/channels a rule may name, and `set_instance_notification_policy` replaces that
 	// instance's rules. The write is `write` and not `destructive`: it is reversible by sending
 	// the old list back, and "restore inherited" is a first-class call that removes the override.
-	read: 134, // +1 at #990: runner_update_status — the durable outcome of a CLI update on one machine, which a timed-out runner_update reply could not report.
+	read: 136, // +2 at #995: gmail_scout_config_get and gmail_scout_status.
 	// +2 write at #825: `pause_instance` / `resume_instance`. `write` rather than `destructive` —
 	// nothing is deleted and nothing is unsubscribed, and classing the OFF switch as destructive
 	// would put RESUME behind a scope the caller may not hold, which is the wrong failure mode for
 	// a safety toggle (the reasoning `set_instance_connector_consent` already records). Not `read`
 	// either: switching an agent off is a real change.
 	// +1 write at #906: `secure_input_request`, agent creates a secure input request for a secret.
-	write: 84, // +1 at #992: set_instance_notification_policy (see the note above the read count). +1 at #980: set_instance_trigger — switch a trigger on or off, move its cadence, rewrite its config. `write` because disabling KEEPS the trigger and its history; deleting one is delete_instance_trigger, which is destructive. It is what gives MCP the schedule controls the console has (#980 parity). +3 at #895: link_board_item_issue, unlink_board_item_issue, sync_board_issues (cards from GitHub issues; nothing changes on GitHub, nothing starts); +1 at #953: set_application_runner_settings (edits the submission policy; auto-submit refused until its prerequisites exist); +2 at #958: triage_application (a decision on PAGS records; Apply emits the lead's handoff once) and cancel_application (stops a run, deletes nothing); +1 at #961: set_instance_tags (a label the owner writes; [] clears it); +1 at #955: triage_job_lead; +2 at #946: set_local_browser_consent (a decision, withdrawable) and review_local_browser_finding (saves one reviewed finding to the owner's own collection); +1 at #944: cancel_local_browser_run (stops a run; deletes nothing); +1 at #945: set_instance_local_browser_settings (edits config, starts nothing); +1 at #757: promote_board_item
+	write: 86, // +2 at #995: gmail_scout_config_set and gmail_scout_scan.
 	// +1 runtime at #806: `continue_instance_run`. `runtime` rather than `write` for the reason
 	// `start_instance_loop` is — it starts an autonomous run that spends on its own — and the
 	// two must agree, because a caller holding the scope to start one holding a narrower one to

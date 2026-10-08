@@ -72,6 +72,7 @@ import { registerJobLeadRoutes } from "./instances-job-leads.js";
 import { registerApplicationTailorRoutes } from "./instances-application-tailor.js";
 import { registerApplicationRunnerRoutes } from "./instances-application-runner.js";
 import { registerApplicationsRoutes } from "./instances-applications.js";
+import { registerGmailScoutRoutes } from "./instances-gmail-scout.js";
 import { instanceRoutes } from "./instances.js";
 
 const SECRET = "instances-contract-secret";
@@ -286,6 +287,10 @@ const ROUTES = [
 	"GET /:instanceId/local-browser/runs/:runId/events",
 	"POST /:instanceId/local-browser/runs/:runId/events",
 	"POST /:instanceId/local-browser/runs/:runId/result",
+	"GET /:instanceId/gmail-scout/config",
+	"PUT /:instanceId/gmail-scout/config",
+	"POST /:instanceId/gmail-scout/scan",
+	"GET /:instanceId/gmail-scout/status",
 	"POST /:instanceId/runner-attach",
 	"GET /:instanceId/runner-setup",
 	"POST /:instanceId/browse",
@@ -417,6 +422,7 @@ const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
 	"instances-application-tailor.ts": registerApplicationTailorRoutes,
 	"instances-application-runner.ts": registerApplicationRunnerRoutes,
 	"instances-applications.ts": registerApplicationsRoutes,
+	"instances-gmail-scout.ts": registerGmailScoutRoutes,
 	"instances-terminal.ts": registerConnectorBindingRoutes,
 	"instances-terminal-history.ts": registerTerminalHistoryRoutes,
 	"instances-translation.ts": registerTranslationRoutes,
@@ -479,6 +485,12 @@ const OWNERSHIP: Record<string, string[]> = {
 	"instances-runner-setup.ts": ["GET /:instanceId/runner-setup"],
 	"instances-lifecycle.ts": ["POST /:instanceId/pause", "POST /:instanceId/resume"],
 	"instances-job-leads.ts": ["POST /:instanceId/job-leads/:recordId/triage"],
+	"instances-gmail-scout.ts": [
+		"GET /:instanceId/gmail-scout/config",
+		"PUT /:instanceId/gmail-scout/config",
+		"POST /:instanceId/gmail-scout/scan",
+		"GET /:instanceId/gmail-scout/status",
+	],
 	"instances-application-tailor.ts": [
 		"GET /:instanceId/application-tailor/settings",
 		"PUT /:instanceId/application-tailor/settings",
@@ -768,6 +780,10 @@ const GATES: Record<string, [number, number]> = {
 	// The explicit human triage boundary (#955) opens with the instance owner check before it
 	// reads the lead or can enqueue a downstream application handoff.
 	"POST /:instanceId/job-leads/:recordId/triage": [401, 404],
+	"GET /:instanceId/gmail-scout/config": [401, 404],
+	"PUT /:instanceId/gmail-scout/config": [401, 404],
+	"POST /:instanceId/gmail-scout/scan": [401, 404],
+	"GET /:instanceId/gmail-scout/status": [401, 404],
 	// Application Tailor (#956): every route opens with the instance-owner check.
 	"GET /:instanceId/application-tailor/settings": [401, 404],
 	"PUT /:instanceId/application-tailor/settings": [401, 404],

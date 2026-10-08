@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**285 tool registrations.** 259 are always registered; 26 are gated to the console
+**289 tool registrations.** 263 are always registered; 26 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -340,6 +340,10 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `resume_application` | Release a paused fill, optionally with answers used for that run only | runtime | yes | |
 | `cancel_application` | Stop a running tailoring or fill; nothing external is touched | write | yes | |
 | `local_browser_preflight` | Is a local CLI browser research agent ready to run: settings vs the agent's limits, runner connected, runner supports it, signed-in-profile consent, and the engine sign-in the runner last observed (`engineAuth`) — with the step that fixes each | read | | |
+| `gmail_scout_config_get` | Read the Gmail Job Search Scout source configuration | read | | |
+| `gmail_scout_status` | Read mailbox binding, scan counts and failures | read | | |
+| `gmail_scout_config_set` | Configure the pinned, read-only Gmail source | write | yes | |
+| `gmail_scout_scan` | Scan configured Gmail job alerts into new private Scout leads | write | yes | |
 | `get_instance_local_browser_settings` | A local browser research agent's chosen settings, the effective run policy, the agent's ceilings and the runner pin; no credentials | read | | |
 | `set_instance_local_browser_settings` | Patch engine, sign-in mode, workspace, browser profile, sites, limits, retention and result collection; refuses anything outside the agent's ceiling | write | yes | |
 | `list_local_browser_runs` | A local browser research agent's runs, or one run with its redacted trace (pages, consent, pauses, findings) | read | | |

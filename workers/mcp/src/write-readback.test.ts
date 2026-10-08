@@ -254,6 +254,10 @@ const READBACK: Record<string, string | null> = {
 	"set_instance_local_browser_settings.limits": "get_instance_local_browser_settings",
 	"set_instance_local_browser_settings.trace_retention_days": "get_instance_local_browser_settings",
 	"set_instance_local_browser_settings.collection": "get_instance_local_browser_settings",
+	// #995: the source configuration (including its mailbox pin) reads back through its own
+	// read-only MCP tool; scan itself has no caller-provided content to classify.
+	"gmail_scout_config_set.pinned_email": "gmail_scout_config_get",
+	"gmail_scout_config_set.enabled": "gmail_scout_config_get",
 	"set_instance_instructions.instructions": "get_instance_instructions",
 	// #992: the policy is read back WITH its resolution — `get_instance_notification_policy`
 	// returns the stored rules and the effective state per channel, which is the half a writer

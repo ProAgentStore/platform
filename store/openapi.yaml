@@ -6696,6 +6696,59 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/gmail-scout/config:
+    get:
+      summary: Gmail Job Search Scout configuration
+      description: Read the configured read-only Gmail job-alert source. No mail content or credential is returned.
+      operationId: getGmailScoutConfig
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Configure Gmail Job Search Scout
+      description: Select a connected Gmail mailbox and enable or disable this read-only source. The mailbox must already be connected.
+      operationId: setGmailScoutConfig
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/gmail-scout/scan:
+    post:
+      summary: Scan Gmail job alerts
+      description: Read the configured Gmail mailbox and store deduplicated candidates as new leads in this Scout's private collection. Mail is never modified and no application is started.
+      operationId: scanGmailScout
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/gmail-scout/status:
+    get:
+      summary: Gmail Job Search Scout scan status
+      description: Read mailbox binding, last scan, candidate/dedupe counts, failures and private lead counts.
+      operationId: getGmailScoutStatus
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/local-browser/settings:
     get:
       summary: Local CLI browser research settings

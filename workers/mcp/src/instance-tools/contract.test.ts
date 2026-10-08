@@ -14,6 +14,7 @@ import { registerConnectorAccountTools, registerConnectorGrantTools } from "./co
 import { registerGuideTools } from "./guide.js";
 import { registerConsoleLinkTools } from "./console-link.js";
 import { registerLocalBrowserTools } from "./local-browser.js";
+import { registerGmailScoutTools } from "./gmail-scout.js";
 import { registerApplicationTools } from "./applications.js";
 import { registerInstanceTools } from "./index.js";
 import { registerKnowledgeTools } from "./knowledge.js";
@@ -460,6 +461,10 @@ const TABLE: Record<string, Row> = {
 	get_local_browser_consent: ["localBrowser", "read", null, null, "instance_id,token"],
 	set_local_browser_consent: ["localBrowser", "write", null, "envelope", "decision,domain,dry_run,instance_id,scope,token,ttl_days"],
 	review_local_browser_finding: ["localBrowser", "write", null, "envelope", "decision,dry_run,force,index,instance_id,run_id,token"],
+	gmail_scout_config_get: ["gmailScout", "read", null, null, "instance_id,token"],
+	gmail_scout_status: ["gmailScout", "read", null, null, "instance_id,token"],
+	gmail_scout_config_set: ["gmailScout", "write", null, "envelope", "dry_run,enabled,instance_id,pinned_email,token"],
+	gmail_scout_scan: ["gmailScout", "write", null, "envelope", "dry_run,instance_id,token"],
 	run_instance_trigger: ["triggers", "runtime", null, "envelope", "dry_run,payload,token,trigger_id"],
 	// #980: the in-place change the console's scan-schedule controls make — enable/disable, move
 	// the cadence, rewrite the config. `write`, no confirmation: disabling keeps the trigger.
@@ -576,6 +581,7 @@ const REGISTRARS: Record<string, (s: unknown, c: InstanceToolsCtx) => void> = {
 	guide: registerGuideTools as any,
 	consoleLink: registerConsoleLinkTools as any,
 	localBrowser: registerLocalBrowserTools as any,
+	gmailScout: registerGmailScoutTools as any,
 	applications: registerApplicationTools as any,
 	knowledge: registerKnowledgeTools as any,
 	machineControl: registerMachineControlTools as any,

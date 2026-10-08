@@ -20,6 +20,7 @@ import { registerChatRoutes } from "./instances-chat.js";
 import { registerGuideRoutes } from "./instances-guide.js";
 import { registerConsoleLinkRoutes } from "./instances-console-link.js";
 import { registerLocalBrowserRoutes } from "./instances-local-browser.js";
+import { registerGmailScoutRoutes } from "./instances-gmail-scout.js";
 import { registerRunnerAttachRoutes, registerRunnerPinRoutes } from "./instances-runner-attach.js";
 import { registerRunnerSetupRoutes } from "./instances-runner-setup.js";
 import { registerInstanceLifecycleRoutes } from "./instances-lifecycle.js";
@@ -1063,6 +1064,7 @@ registerInstanceNotificationRoutes(instanceRoutes);
 registerGuideRoutes(instanceRoutes);
 registerConsoleLinkRoutes(instanceRoutes); // a precise console URL for an agent to hand over (#938)
 registerLocalBrowserRoutes(instanceRoutes); // local CLI browser research: settings, consent, runs (#945)
+registerGmailScoutRoutes(instanceRoutes); // read-only Gmail alert ingestion into this Scout's private leads (#995)
 registerRunnerAttachRoutes(instanceRoutes); // the remote `pags up --force`, for one agent (#856)
 registerRunnerSetupRoutes(instanceRoutes); // the local coding runner setup checklist (#868)
 registerBrowseRoutes(instanceRoutes);

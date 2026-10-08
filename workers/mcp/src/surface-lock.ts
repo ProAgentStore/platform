@@ -1093,4 +1093,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// rule may name) and `set_instance_notification_policy` (replace that instance's rules, or
 	// `allOff`). 282 registrations become 285, `MCP_TOOL_ALWAYS_ON` 256 → 259, gated stays 26.
 	"0.1.99": "sha256:4faab5ec61a297690faee496f79bb2abca1efb0b7e5bfc4de37a0e3ead410e9d",
+	// #995: four Gmail Job Search Scout source tools, all bound to its private lead collection.
+	"0.1.100": "sha256:e2adb1bffb398b3baba8a0838b5d0ad2c5fb9c5c4cbf952617ba19c02fa2e4d7",
 };
