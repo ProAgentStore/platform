@@ -12,7 +12,17 @@
 // the operation that triggered the write is a work bug, and strictly worse.
 import type { Env } from "../types.js";
 
-/** Upsert one card by id. The `task` object is stored verbatim as the payload. */
+/**
+ * Upsert one card by id. The `task` object is stored verbatim as the payload.
+ *
+ * `instance_id` is part of the conflict update from #987. A card id is a durable identity (a coding
+ * session, an application), and the writer decides which board it belongs on — but the first write
+ * used to win that forever, because the conflict clause left `instance_id` alone. For coding and
+ * pipeline cards the instance never changes and this is a no-op; for an APPLICATION, whose stages
+ * run on two different instances, it was how a card ended up stranded on the board of whichever
+ * stage happened to write it first, with every later write silently patching a payload the owner
+ * was not looking at.
+ */
 export async function upsertWorkCard(
 	env: Env,
 	opts: { instanceId: string; userId: string; id: string; task: Record<string, unknown> },
@@ -21,8 +31,8 @@ export async function upsertWorkCard(
 	await env.DB.prepare(
 		`INSERT INTO instance_runtime_tasks (id, instance_id, user_id, type, status, payload, created_at, updated_at)
 		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now'))
-		 ON CONFLICT(id) DO UPDATE SET type = excluded.type, status = excluded.status,
-		   payload = excluded.payload, updated_at = excluded.updated_at`,
+		 ON CONFLICT(id) DO UPDATE SET instance_id = excluded.instance_id, type = excluded.type,
+		   status = excluded.status, payload = excluded.payload, updated_at = excluded.updated_at`,
 	)
 		.bind(opts.id, opts.instanceId, opts.userId, task.type, task.status, JSON.stringify(task))
 		.run()

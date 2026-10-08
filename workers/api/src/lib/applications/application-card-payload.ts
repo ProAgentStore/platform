@@ -11,6 +11,35 @@
  * at build — so the leaf property holds: nothing is added to anybody's runtime graph.
  */
 import type { FillProgress } from "./fill-progress.js";
+/** One execution correlated to an application: which stage ran it, how it went, and where. */
+export interface ApplicationCardExecution {
+	runId: string;
+	kind: "tailor" | "fill";
+	status: string;
+	/** The instance that executed it, so a deep link goes to the right agent's trace. */
+	instanceId: string;
+}
+
+/**
+ * An application's execution history, joined at READ time (#987).
+ *
+ * The card is one row per application forever (that dedup is #978's product model), so the generic
+ * `attempts` — which counts card rows — reported `1` for an application with four correlated fill
+ * runs. These are the runs themselves: how many, of which kind, the latest one's state, and the run
+ * the card's own payload was written by. `runs` is bounded; `total` is not, so truncation cannot
+ * understate the history.
+ */
+export interface ApplicationCardExecutions {
+	total: number;
+	fills: number;
+	tailorings: number;
+	runs: ApplicationCardExecution[];
+	/** The newest execution, whatever stage ran it. */
+	latest?: ApplicationCardExecution;
+	/** The run this card's payload names (`runId`), when it still exists. */
+	card?: ApplicationCardExecution;
+}
+
 /** What an `application.run` card carries (#978), as the domain wrote it. */
 export interface ApplicationCardPayload {
 	applicationId: string;
@@ -29,6 +58,12 @@ export interface ApplicationCardPayload {
 	 * sentence was written from, not a regex over it.
 	 */
 	progress?: FillProgress;
+	/**
+	 * The application's correlated executions (#987), attached when the board reads the card — not
+	 * stored, because a run changes state in four different writers and a stored copy would be the
+	 * stale one. Absent on a card read from anywhere but the board.
+	 */
+	executions?: ApplicationCardExecutions;
 	blockReason?: string;
 	runnerVersion?: string;
 }

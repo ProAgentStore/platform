@@ -11,6 +11,7 @@ import { getRecord, queryRecords, triageJobLead } from "../agent-do-storage-rout
 import { HttpError } from "../lib/auth.js";
 import { realSchemaD1, type RealSchemaD1 } from "../lib/d1-sqlite.js";
 import { JOB_LEAD_APPLY_EVENT } from "../lib/job-lead-triage.js";
+import { RECONCILE_LIMIT } from "../lib/applications/application-board.js";
 import type { Env } from "../types.js";
 
 vi.mock("../lib/auth.js", async () => {
@@ -267,6 +268,138 @@ describe("how far the fill actually got, on the queue response (#986)", () => {
 		d1.DB.prepare("UPDATE job_applications SET submit_attempted_at = 1 WHERE id = 'sent'").run();
 		expect(runId).toBe("run-sent");
 		expect(await progress("sent")).toMatchObject({ stage: "submitted", submitAttempted: true, label: "A final submit was attempted — check the employer's site before anything else is done." });
+	});
+});
+
+// ── #987: the Board projects every durable application, not only the ones that moved ─────────
+//
+// Live: the Runner's board reported `jobCount: 1` against an authoritative queue of three —
+// BusinessAI (awaiting_review), DAI (awaiting_review) and Gentrack (blocked). The two older
+// applications predated #978's projection, their lifecycle was finished, and no future transition
+// would ever write them a card.
+describe("existing applications are reconciled onto the Board (#987)", () => {
+	/** An application at a lifecycle state, with its runs, and NO card — the pre-#978 shape. */
+	function legacy(id: string, status: string, over: { fill?: string; fills?: number; tailoring?: boolean; stateVersion?: number } = {}) {
+		readyApp(id);
+		if (over.tailoring !== false) {
+			d1.DB.prepare("INSERT INTO local_artifact_runs (id, instance_id, user_id, application_id, request_id, status, policy, created_at, updated_at) VALUES (?1, 't1', 'u1', ?2, ?1, 'completed', '{}', 1, 1)").bind(`tail-${id}`, id).run();
+			d1.DB.prepare("UPDATE job_applications SET tailoring_run_id = ?2 WHERE id = ?1").bind(id, `tail-${id}`).run();
+		}
+		for (let i = 0; i < (over.fills ?? 0); i++) {
+			const runId = `fill-${id}-${i}`;
+			d1.DB.prepare("INSERT INTO local_apply_runs (id, instance_id, user_id, application_id, request_id, status, policy, result, created_at, updated_at, ended_at) VALUES (?1, 'ap', 'u1', ?2, ?1, ?3, '{\"mode\":\"fill_and_review\"}', ?4, ?5, ?5, ?5)")
+				.bind(runId, id, i === (over.fills ?? 0) - 1 ? (over.fill ?? "awaiting_review") : "blocked", JSON.stringify({ outcome: i === (over.fills ?? 0) - 1 ? (over.fill ?? "awaiting_review") : "blocked", filled: 4, uploaded: ["resume"] }), 100 + i)
+				.run();
+			d1.DB.prepare("UPDATE job_applications SET fill_run_id = ?2 WHERE id = ?1").bind(id, runId).run();
+		}
+		d1.DB.prepare("UPDATE job_applications SET status = ?2, state_version = ?3 WHERE id = ?1").bind(id, status, over.stateVersion ?? 1).run();
+	}
+	const board = async (instance: string) => (await call("GET", `/${instance}/board`)).body;
+	const appCards = async (instance: string) => ((await board(instance)).items as Array<{ latestTaskId: string; application?: { applicationId: string } }>).filter((i) => i.application);
+	const cardRows = async () => (await d1.DB.prepare("SELECT COUNT(*) AS n FROM instance_runtime_tasks WHERE type = 'application.run'").first<{ n: number }>())?.n;
+
+	it("backfills every pre-existing application in one pass, in its own truthful state", async () => {
+		legacy("biz", "awaiting_review", { fills: 1 });
+		legacy("dai", "awaiting_review", { fills: 1 });
+		legacy("gentrack", "blocked", { fills: 1, fill: "blocked" });
+		legacy("ready", "materials_ready");
+		legacy("filling", "filling", { fills: 1, fill: "running" });
+		legacy("sent", "submitted", { fills: 1, fill: "submitted" });
+		legacy("gone", "archived", { fills: 1, fill: "blocked" });
+		expect(await cardRows(), "the pre-#978 state: durable applications, no cards").toBe(0);
+
+		// ONE board read reconciles them.
+		const cards = await appCards("ap");
+		expect(cards.map((c) => c.application?.applicationId).sort()).toEqual(["biz", "dai", "filling", "gentrack", "gone", "ready", "sent"].sort());
+		// …each carrying ITS lifecycle state, not the state of whatever ran last.
+		const byId = new Map(cards.map((c) => [c.application?.applicationId, c as { application?: Record<string, unknown> }]));
+		expect(byId.get("gentrack")?.application).toMatchObject({ applicationStatus: "blocked" });
+		expect(byId.get("sent")?.application).toMatchObject({ applicationStatus: "submitted" });
+		expect(byId.get("ready")?.application).toMatchObject({ applicationStatus: "materials_ready", kind: "tailor" });
+		// And the correlated trace link for each, which is how an owner gets from a card to a run.
+		for (const c of cards) expect(String((c as unknown as { application: { traceUrl: string } }).application.traceUrl)).toContain("/applications/");
+	});
+
+	it("is idempotent: reading the board again writes no second card and changes nothing", async () => {
+		legacy("biz", "awaiting_review", { fills: 1 });
+		legacy("dai", "awaiting_review", { fills: 1 });
+		const first = await appCards("ap");
+		const rows = await cardRows();
+		const second = await appCards("ap");
+		const third = await appCards("ap");
+		expect(await cardRows(), "the card id is the application's, so a repeat cannot fork it").toBe(rows);
+		expect(second.map((c) => c.application?.applicationId).sort()).toEqual(first.map((c) => c.application?.applicationId).sort());
+		expect(third.length).toBe(first.length);
+		expect(second.map((c) => c.latestTaskId).sort()).toEqual(["app-biz", "app-dai"]);
+	});
+
+	it("does not touch the lifecycle it projects — no transition, no audit row, no run change", async () => {
+		legacy("biz", "awaiting_review", { fills: 1 });
+		const before = (await call("GET", "/t1/application-queue/item?application_id=biz")).body.item;
+		const auditBefore = await audit("biz");
+		await appCards("ap");
+		const after = (await call("GET", "/t1/application-queue/item?application_id=biz")).body.item;
+		expect(after.status).toBe(before.status);
+		expect(after.stateVersion).toBe(before.stateVersion);
+		expect(after.fillRunId).toBe(before.fillRunId);
+		expect(await audit("biz")).toEqual(auditBefore);
+	});
+
+	it("a lifecycle move AFTER the backfill lands on the same card", async () => {
+		legacy("biz", "materials_ready");
+		expect((await appCards("ap")).length).toBe(1);
+		// The owner defers it: a real transition through the action service.
+		const acted = await act("t1", { action: "defer", application_id: "biz", expected_status: "materials_ready" });
+		expect(acted.status).toBe(200);
+		const cards = await appCards("ap");
+		expect(await cardRows(), "still one card for this application").toBe(1);
+		expect(cards[0]?.application).toMatchObject({ applicationId: "biz", applicationStatus: "deferred" });
+	});
+
+	it("the Board, the Board's MCP response and the queue agree on the same applications", async () => {
+		legacy("biz", "awaiting_review", { fills: 1 });
+		legacy("dai", "awaiting_review", { fills: 1 });
+		legacy("gentrack", "blocked", { fills: 1, fill: "blocked" });
+		const b = await board("ap");
+		// MCP `instance_board` IS this route (`workers/mcp/src/instance-tools/board.ts`), so the set
+		// it reports is this set; the queue is the authoritative list the issue compares against.
+		const cards = (b.items as Array<{ application?: { applicationId: string } }>).filter((i) => i.application).map((i) => i.application?.applicationId);
+		const queue = ((await call("GET", "/t1/application-queue")).body.items as Array<{ applicationId: string | null }>).filter((i) => i.applicationId).map((i) => i.applicationId);
+		expect(cards.sort()).toEqual(queue.sort());
+		// `jobCount` is MCP's own field over this response (`instance-tools/shared.ts` = items.length),
+		// so the count the two surfaces report is this one.
+		expect((b.items as unknown[]).filter((i) => (i as { application?: unknown }).application)).toHaveLength(3);
+		expect(queue).toHaveLength(3);
+	});
+
+	it("an application with FOUR historical fills is one card reporting four executions", async () => {
+		legacy("biz", "awaiting_review", { fills: 4 });
+		const cards = await appCards("ap");
+		expect(cards).toHaveLength(1);
+		const card = cards[0] as unknown as { attempts: Array<{ id: string }>; application?: { executions?: { total: number; fills: number; latest?: { runId: string; status: string } }; runId?: string } };
+		expect(card.application?.executions).toMatchObject({ total: 5, fills: 4, tailorings: 1 });
+		// The generic attempt counter said 1 for this shape. The attempts are the runs now.
+		expect(card.attempts.map((a) => a.id)).toContain("fill-biz-3");
+		expect(card.application?.executions?.latest).toMatchObject({ runId: "fill-biz-3", status: "awaiting_review" });
+		// One card, keyed on the application — the product model #978 states.
+		expect(await cardRows()).toBe(1);
+	});
+
+	it("reconciliation is bounded: a big backlog heals over passes instead of one huge read", async () => {
+		for (let i = 0; i < RECONCILE_LIMIT + 4; i++) legacy(`app-${i}`, "awaiting_review", { fills: 1 });
+		const first = await appCards("ap");
+		expect(first.length, "one pass takes at most the bound").toBe(RECONCILE_LIMIT);
+		const second = await appCards("ap");
+		expect(second.length).toBe(RECONCILE_LIMIT + 4);
+		// And a third pass has nothing left to do.
+		expect((await appCards("ap")).length).toBe(RECONCILE_LIMIT + 4);
+	});
+
+	it("an instance in no apply pipeline is untouched — the generic board stays generic", async () => {
+		legacy("biz", "awaiting_review", { fills: 1 });
+		const chat = await call("GET", "/chat/board");
+		expect(chat.status).toBe(200);
+		expect((chat.body.items as Array<{ application?: unknown }>).filter((i) => i.application)).toEqual([]);
 	});
 });
 

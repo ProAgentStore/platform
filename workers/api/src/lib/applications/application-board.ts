@@ -201,7 +201,7 @@ export async function syncApplicationCard(
 ): Promise<void> {
 	try {
 		const { getQueueItem } = await import("./control.js");
-		const { item } = await getQueueItem(env, userId, run.instanceId, { applicationId: run.applicationId });
+		const { item, pipeline } = await getQueueItem(env, userId, run.instanceId, { applicationId: run.applicationId });
 		const { getOwnedApplication } = await import("../local-artifact/store.js");
 		const app = await getOwnedApplication(env, userId, run.applicationId);
 		if (!app) return;
@@ -211,9 +211,13 @@ export async function syncApplicationCard(
 		// A tailoring card has no fields to count, so it keeps its own two words.
 		const progress = kind === "fill" ? item.fillProgress : null;
 		await upsertApplicationRunCard(env, {
-			// The card belongs to the instance that RAN it, which is where its owner looks: a fill
-			// card on the Runner's board, a tailoring card on the Tailor's.
-			instanceId: run.instanceId,
+			// ONE home per application: the Runner of its pipeline when it has one, else the Tailor
+			// (#987). An application is one card by id, and its stages run on two instances, so a home
+			// chosen per-WRITE meant the card sat wherever the first stage put it — which is how the
+			// Runner's board reported one card against a queue of three. The Runner's board is where
+			// the pipeline's work is read, and the queue that board is compared against is pipeline-
+			// wide from any member, so this is the home that makes the two agree.
+			instanceId: pipeline.runners[0] ?? run.instanceId,
 			userId,
 			app,
 			runStatus: run.status,
@@ -235,4 +239,135 @@ export async function syncApplicationCard(
 	} catch {
 		/* visibility only — never fail the run that triggered it */
 	}
+}
+
+/**
+ * Project every durable application onto the board it belongs to — bounded, idempotent (#987).
+ *
+ * ── The gap
+ *
+ * The card was written only when a transition happened. The Runner's board therefore showed the
+ * applications that had moved since #978 deployed and nothing else: live, `jobCount: 1` against an
+ * authoritative queue of three (BusinessAI awaiting_review, DAI awaiting_review, Gentrack blocked).
+ * The two older applications had no card and no way to acquire one — their lifecycle was finished,
+ * so no future transition would ever write them.
+ *
+ * ── The shape of the fix
+ *
+ * A reconciliation that finds applications whose card is MISSING or STALE and writes it through the
+ * very same path a transition uses (`syncApplicationCard`), so a backfilled card and a live one
+ * cannot differ in content — the parity the issue asks for, met by construction rather than by a
+ * second projection written for the backfill.
+ *
+ * - **Idempotent**: the card id is `app-<applicationId>` and the write is `ON CONFLICT(id) DO
+ *   UPDATE`, so a repeated pass rewrites the same row. There is no path to a duplicate card.
+ * - **Bounded**: at most {@link RECONCILE_LIMIT} applications per pass, newest first. A backlog
+ *   heals over consecutive passes instead of turning one board read into a migration.
+ * - **Cheap when there is nothing to do**: ONE indexed anti-join decides whether any work exists,
+ *   and the steady state is zero rows, which is what keeps a 2.5s board poll a board poll.
+ * - **Lifecycle-safe**: it writes CARDS only. It never moves an application, never touches a run,
+ *   and takes no decision — `syncApplicationCard` reads the queue item and projects it.
+ */
+export const RECONCILE_LIMIT = 25;
+
+export interface ApplicationCardReconciliation {
+	/** Cards written by this pass. */
+	reconciled: number;
+	/** Applications still missing or stale after it — a later pass will take them. */
+	remaining: number;
+}
+
+/**
+ * The applications of this pipeline whose card is missing or behind, newest first.
+ *
+ * Staleness is `state_version`: every lifecycle move bumps it and re-syncs the card, so a card
+ * carrying an older version is one whose write was lost (or never happened). The third clause heals
+ * cards written before #986: a FILL card always carries `progress` now, and one that does not is
+ * still showing the sentence that claimed a filled form for a run that had filled nothing. It is
+ * self-limiting — after the pass the block exists.
+ */
+async function applicationsNeedingCards(env: Env, userId: string, tailors: readonly string[], limit: number): Promise<{ ids: string[]; total: number }> {
+	if (!tailors.length) return { ids: [], total: 0 };
+	const inList = tailors.map((_, i) => `?${i + 2}`).join(",");
+	const { results } = await env.DB.prepare(
+		`SELECT a.id
+		   FROM job_applications a
+		   LEFT JOIN instance_runtime_tasks t ON t.id = 'app-' || a.id AND t.user_id = a.user_id
+		  WHERE a.user_id = ?1 AND a.instance_id IN (${inList})
+		    AND (t.id IS NULL
+		         OR COALESCE(json_extract(t.payload, '$.application.stateVersion'), -1) < a.state_version
+		         OR (a.fill_run_id IS NOT NULL AND json_extract(t.payload, '$.application.progress') IS NULL))
+		  ORDER BY a.updated_at DESC, a.id`,
+	)
+		.bind(userId, ...tailors)
+		.all<{ id: string }>()
+		.catch(() => ({ results: [] as Array<{ id: string }> }));
+	const ids = (results ?? []).map((r) => r.id);
+	return { ids: ids.slice(0, limit), total: ids.length };
+}
+
+/**
+ * Reconcile the application cards visible from ONE instance of the pipeline.
+ *
+ * Takes any member — Scout, Tailor or Runner — because `pipelineOf` resolves the graph from any of
+ * them, which is what makes the Runner's own board heal when the owner opens it. An instance in no
+ * apply pipeline is a no-op after one cheap read, so this is safe to call from the generic board
+ * route for every instance.
+ */
+export async function reconcileApplicationCards(env: Env, userId: string, instanceId: string, opts: { limit?: number } = {}): Promise<ApplicationCardReconciliation> {
+	const limit = Math.max(1, Math.min(opts.limit ?? RECONCILE_LIMIT, 100));
+	try {
+		const { pipelineOf } = await import("./control.js");
+		const pipeline = await pipelineOf(env, userId, instanceId);
+		const { ids, total } = await applicationsNeedingCards(env, userId, pipeline.tailors, limit);
+		if (!ids.length) return { reconciled: 0, remaining: 0 };
+		const { getOwnedApplication } = await import("../local-artifact/store.js");
+		const { getApplyRun } = await import("../local-apply/store.js");
+		let reconciled = 0;
+		for (const id of ids) {
+			const app = await getOwnedApplication(env, userId, id);
+			if (!app) continue;
+			// WHICH board, and which execution the card speaks for: the fill run when the application
+			// has one (the Runner's board, where its owner looks for it), else the tailoring run on the
+			// Tailor's. An application with neither has no execution to show and no board to be on —
+			// it is a lead the Tailor has not started, and the queue is where it belongs.
+			const fill = app.fillRunId ? await Promise.all(pipeline.runners.map((r) => getApplyRun(env, r, userId, app.fillRunId as string))).then((rs) => rs.find((r) => r)) : null;
+			if (fill) {
+				// The checkpoint a paused run is parked at, exactly as the live sync path passes it —
+				// otherwise a backfilled card would omit the one thing a paused application is about.
+				const { listSupervisorCheckpoints } = await import("../local-apply/supervision.js");
+				const latest = fill.status === "paused" && fill.pause?.reason === "supervisor_checkpoint" ? (await listSupervisorCheckpoints(env, fill).catch(() => [])).at(-1) ?? null : null;
+				await syncApplicationCard(env, userId, fill, "fill", {
+					...(latest ? { checkpoint: { checkpointId: latest.checkpointId, phase: latest.facts.phase, directive: latest.directive?.directive ?? null } } : {}),
+				});
+				reconciled++;
+				continue;
+			}
+			if (!app.tailoringRunId) continue;
+			// `syncApplicationCard` resolves the home itself (the pipeline's Runner, else the Tailor),
+			// so this passes the run's OWN instance and the home rule stays in one place.
+			await syncApplicationCard(env, userId, { id: app.tailoringRunId, instanceId: app.instanceId, applicationId: app.id, status: tailoringCardStatus(app.status) }, "tailor");
+			reconciled++;
+		}
+		return { reconciled, remaining: Math.max(0, total - reconciled) };
+	} catch {
+		// Visibility only, like every other card write in this file: a board that is one pass behind
+		// is a far better outcome than a board route that 500s.
+		return { reconciled: 0, remaining: 0 };
+	}
+}
+
+/**
+ * The run status a tailoring card is written with when the RUN is not what is being read.
+ *
+ * A backfill knows the application's lifecycle, not the Tailor run's own row, and the two agree on
+ * everything a card shows: an application past `tailoring` has a finished run behind it, and one
+ * still in it has a live one. `blocked` is the one that matters — it is what puts the card in the
+ * board's "needs you" column.
+ */
+function tailoringCardStatus(applicationStatus: string): string {
+	if (applicationStatus === "tailoring") return "running";
+	if (applicationStatus === "blocked") return "paused";
+	if (applicationStatus === "failed" || applicationStatus === "cancelled") return "failed";
+	return "completed";
 }

@@ -4,6 +4,7 @@ import { hitOutputCap } from "../lib/reply-truncation.js";
 import type { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
+import { reconcileApplicationCards } from "../lib/applications/application-board.js";
 import {
 	type BoardItemMeta,
 	boardConfigForInstance,
@@ -156,6 +157,13 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 		const session = await requireUser(c);
 		const instanceId = c.req.param("instanceId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
+		// #987: project any durable application whose card is missing or behind BEFORE the read, so
+		// an owner opening the board sees every application their pipeline actually holds — not only
+		// the ones that happened to transition since #978 deployed. Bounded and idempotent (see
+		// `reconcileApplicationCards`); a no-op after one cheap read for any instance that is not in
+		// an apply pipeline, which is why it can sit in the generic board route. Both this response
+		// and MCP's `instance_board` are this one route, so they cannot disagree about the set.
+		await reconcileApplicationCards(c.env, session.uid, instanceId);
 		// `?repo=owner/repo` (#895): only the cards that are, or work on, an issue of that repo.
 		return c.json(await buildInstanceBoard(c.env, instanceId, session.uid, { repo: c.req.query("repo") || undefined }));
 	});

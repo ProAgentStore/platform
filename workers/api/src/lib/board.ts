@@ -1,6 +1,7 @@
 import { clipMarked } from "./clip-marked.js";
 import { assertJobKey } from "./write-limits.js";
 import { type ApplicationCardPayload, parseApplicationCard } from "./applications/application-card-payload.js";
+import { applicationRunsForCards, reconcileApplicationCard } from "./applications/application-runs.js";
 import { type ScanCardPayload, parseScanCard } from "./local-browser/scan-card-payload.js";
 import type { Env } from "../types.js";
 import { mirroredRuntimeTasks, isRecord } from "../routes/instances-runtime.js";
@@ -431,6 +432,10 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 	// with the runs behind it (#592). Collected here and joined in ONE pair of reads below rather
 	// than a read per card — the board polls every 2.5s.
 	const codingCards = new Map<string, BoardItemView>();
+	// Application cards are keyed on an APPLICATION and are one row forever, so their executions
+	// live in the run tables (#987) — collected here and joined in one pair of reads below, for the
+	// reason the coding join gives: the board polls every 2.5s.
+	const applicationCards = new Map<string, BoardItemView>();
 	for (const [jobKey, arr] of byKey) {
 		arr.sort((a, b) => stamp(b) - stamp(a));
 		const rep = arr[0];
@@ -465,6 +470,7 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 			})(),
 		};
 		items.push(item);
+		if (item.application) applicationCards.set(item.application.applicationId, item);
 		if (rep.type === CODING_SESSION_TASK_TYPE) {
 			const sessionId = codingSessionIdFromCardId(jobKey);
 			if (sessionId) {
@@ -497,6 +503,19 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 			// A human's own move still outranks the reconciliation, exactly as it outranks the writer.
 			item.status = item.userStatus || patch.runStatus;
 			if (patch.sessionEnded) item.sessionEnded = true;
+		}
+	}
+
+	// The same read-time join for the apply domain (#987): an application card reported `attempts: 1`
+	// for an application with four correlated fill runs, because `attempts` counts card rows. See
+	// `applications/application-runs.ts` for why this cannot be a write-through either.
+	if (applicationCards.size) {
+		const runsByApplication = await applicationRunsForCards(env, userId, [...applicationCards.keys()]);
+		for (const [applicationId, item] of applicationCards) {
+			if (!item.application) continue;
+			const patch = reconcileApplicationCard({ attempts: item.attempts, runs: runsByApplication.get(applicationId) ?? [], application: item.application });
+			item.attempts = patch.attempts;
+			item.application = { ...item.application, executions: patch.executions };
 		}
 	}
 

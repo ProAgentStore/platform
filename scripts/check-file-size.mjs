@@ -920,7 +920,10 @@ const PINS = {
 	// +11 at #980: the `scan` card field a Job Search Scout's run writes, passed through the way
 	// #978's `application` is — a leaf payload module (local-browser/scan-card-payload.ts) so the
 	// GENERIC board still imports nothing from the local-browser domain, plus its parse at read time.
-	"workers/api/src/lib/board.ts": 865, // +16 at #978: the `application` field a run card carries and the one line that passes it through — its TYPE and parser live with the domain that writes them (applications/application-board.ts), which is why this is +16 and not +60. // +37 at #895: the card's issue fields (lane, issueRun, closingCommit, priority, codingSessionId) with their meaning, the repo filter, and the #682 link keeping its repo; the derivation itself lives in board-issues.ts. #898 crossed 800: a job key is REFUSED past its limit (an id cut would merge two cards), and card text is cut visibly.
+// +19 at #987: the read-time join for application cards — an application card reported
+	// `attempts: 1` for an application with four correlated fill runs, because `attempts` counts
+	// card rows. Mirrors the coding join above it (#592) and, like it, cannot be a write-through.
+		"workers/api/src/lib/board.ts": 884, // +16 at #978: the `application` field a run card carries and the one line that passes it through — its TYPE and parser live with the domain that writes them (applications/application-board.ts), which is why this is +16 and not +60. // +37 at #895: the card's issue fields (lane, issueRun, closingCommit, priority, codingSessionId) with their meaning, the repo filter, and the #682 link keeping its repo; the derivation itself lives in board-issues.ts. #898 crossed 800: a job key is REFUSED past its limit (an id cut would merge two cards), and card text is cut visibly.
 	"workers/mcp/src/instance-tools/runtime.ts": 811, // #924 crossed 800: runner_resource_history, the machine's two-tier history.
 	// +3 for #308: an import plus the two lines saying why three steps unwrap the fence that the
 	// connectors now apply at the source. Raised rather than split — the growth is a comment and
@@ -1405,7 +1408,9 @@ const PINS = {
 	// `lib/tool-approval-run.ts`; the dispatch it guards is there too. Splitting this file is worth
 	// doing on its own terms (it is the board/ticket surface AND the runtime-task surface), but
 	// doing it inside a security fix would bury the fix in a move diff.
-	"workers/api/src/routes/instances-tasks.ts": 853, // +14 at #895: the on-demand issue sync route and the board's repo filter. +4 at #868: the no-runtime branch resolves the agent's capabilities so a coding agent's setup card names its GitHub and repository steps. +25 at #898: truncation made visible (paging, marked cuts, refused over-length writes).
+	// +8 at #987: the reconciliation call in front of the board read, and the paragraph saying
+	// why a bounded idempotent backfill belongs in the generic route (both surfaces are this route).
+	"workers/api/src/routes/instances-tasks.ts": 861, // +14 at #895: the on-demand issue sync route and the board's repo filter. +4 at #868: the no-runtime branch resolves the agent's capabilities so a coding agent's setup card names its GitHub and repository steps. +25 at #898: truncation made visible (paging, marked cuts, refused over-length writes).
 	// First entry at #477: Usage.tsx crossed 800 lines as BudgetPanel expanded to cover per-tree
 	// run knobs (perTreeCostMicros, perTreeDelegations, perTreeMaxDepth, loopMaxIterations) and
 	// their edit fields. The page is one coherent screen — usage data + the limits that bound it —
@@ -1877,7 +1882,8 @@ const PINS = {
 	// +7 at #979: the InstanceDetail.tsx and console types.ts raises above (two reasons + two
 	// pins), the applications/control.ts reason extended at #981, and this line.
 	// +6 at #986: the console types.ts reason above (five lines), this line and its pin bump.
-	"scripts/check-file-size.mjs": 1961, // +1 at #953: the console types.ts entry. +2 at #946: the agents.ts pin and its reason; +1 at #944: the reason line for the runner.ts pin; +1 at #898: the board.ts pin; +1 at #924: the mcp runtime.ts pin.
+	// +8 at #987: the board.ts and instances-tasks.ts reasons above (five lines) and this one.
+	"scripts/check-file-size.mjs": 1969, // +1 at #953: the console types.ts entry. +2 at #946: the agents.ts pin and its reason; +1 at #944: the reason line for the runner.ts pin; +1 at #898: the board.ts pin; +1 at #924: the mcp runtime.ts pin.
 };
 
 /**
