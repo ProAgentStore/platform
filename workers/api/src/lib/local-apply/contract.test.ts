@@ -48,4 +48,17 @@ describe("parseLocalApplyResult", () => {
 		const r = parseLocalApplyResult({ ...BASE, outcome: "blocked", mode: "fill_and_review", blockReason: "made_up", questions: ["Q?", 3, ""] });
 		expect("result" in r && r.result).toMatchObject({ blockReason: "incomplete", questions: ["Q?"] });
 	});
+	it("accepts only runner-verified structured evidence for an unavailable job", () => {
+		const r = parseLocalApplyResult({ ...BASE, outcome: "blocked", mode: "fill_and_review", blockReason: "job_unavailable", unavailable: { reason: "expired", url: "https://jobs.example.com/closed", observedAt: "2026-10-07T00:00:00Z", source: "page_notice", notice: "This job has expired" } });
+		expect("result" in r && r.result).toMatchObject({ blockReason: "job_unavailable", unavailable: { reason: "expired", url: "https://jobs.example.com/closed", observedAt: "2026-10-07T00:00:00Z", source: "page_notice" } });
+		expect("result" in r && r.result && r.result.unavailable).not.toHaveProperty("notice");
+	});
+	it.each([
+		["without evidence", { blockReason: "job_unavailable" }],
+		["with caller-supplied prose instead of a page signal", { blockReason: "job_unavailable", unavailable: { reason: "expired", url: "https://jobs.example.com/closed", observedAt: "2026-10-07T00:00:00Z", source: "model_claim" } }],
+		["for a different block reason", { blockReason: "incomplete", unavailable: { reason: "expired", url: "https://jobs.example.com/closed", observedAt: "2026-10-07T00:00:00Z", source: "page_notice" } }],
+	])("refuses unavailable evidence %s", (_label, over) => {
+		const r = parseLocalApplyResult({ ...BASE, outcome: "blocked", mode: "fill_and_review", ...over });
+		expect("error" in r && r.error).toMatch(/unavailable evidence/);
+	});
 });

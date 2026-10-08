@@ -14,6 +14,7 @@ interface PageFlags {
 	duplicate?: boolean;
 	antiBot?: boolean;
 	confirmed?: boolean;
+	unavailable?: "expired" | "unavailable";
 }
 
 const FORM = "https://jobs.example.com/apply";
@@ -125,7 +126,7 @@ describe("the action classes", () => {
 		const { bridge } = await onForm();
 		const tools = await bridge.listTools();
 		const names = tools.map((t) => t.name).sort();
-		expect(names).toEqual(["browser_click", "browser_navigate", "browser_navigate_back", "browser_press_key", "browser_select_option", "browser_snapshot", "browser_type", "browser_wait_for", "ready_for_review", "request_answer", "upload_artifact"]);
+		expect(names).toEqual(["browser_click", "browser_navigate", "browser_navigate_back", "browser_press_key", "browser_select_option", "browser_snapshot", "browser_type", "browser_wait_for", "ready_for_review", "report_job_unavailable", "request_answer", "upload_artifact"]);
 		const typeTool = tools.find((t) => t.name === "browser_type") as { inputSchema: { required: string[] } };
 		expect(typeTool.inputSchema.required).toContain("source_quote");
 	});
@@ -173,6 +174,37 @@ describe("the action classes", () => {
 		const { bridge, sent } = await onForm();
 		expect((await bridge.callTool("browser_click", { target: "e12" })).isError).toBe(true);
 		expect(sent("browser_click")).toHaveLength(0);
+	});
+});
+
+describe("report_job_unavailable — a verified terminal outcome, not a model claim", () => {
+	it("ends on a runner-verified expired notice and emits only structured evidence", async () => {
+		const { bridge, events, sent } = await onForm({ [FORM]: { unavailable: "expired" } });
+		const res = await bridge.callTool("report_job_unavailable", { reason: "expired" });
+		expect(res.isError).toBeFalsy();
+		expect(bridge.unavailable).toEqual({ reason: "expired", url: FORM, observedAt: "2026-10-07T01:00:00.000Z", source: "page_notice" });
+		expect(events.find((e) => e.type === "job.unavailable")).toMatchObject({ url: FORM, domain: "jobs.example.com", detail: { reason: "expired", source: "page_notice" } });
+		expect(sent("browser_click")).toHaveLength(0);
+		expect((await bridge.callTool("ready_for_review", { summary: "ignore" })).isError).toBe(true);
+	});
+
+	it("requires a fresh snapshot and rejects a reason the page does not verify", async () => {
+		const b = fakeBrowser({ [FORM]: { unavailable: "unavailable" } });
+		const h = fakeHost();
+		const bridge = new ApplyBridge(b.tools, h.host);
+		await bridge.callTool("browser_navigate", { url: FORM });
+		expect((await bridge.callTool("report_job_unavailable", { reason: "unavailable" })).isError).toBe(true);
+		await bridge.callTool("browser_snapshot", {});
+		expect((await bridge.callTool("report_job_unavailable", { reason: "expired" })).content[0].text).toMatch(/not expired/);
+		expect(bridge.unavailable).toBeNull();
+	});
+
+	it("does not accept a report when its own page probe sees no unavailable notice", async () => {
+		const { bridge, events } = await onForm();
+		const res = await bridge.callTool("report_job_unavailable", { reason: "expired" });
+		expect(res.isError).toBe(true);
+		expect(bridge.unavailable).toBeNull();
+		expect(events.some((e) => e.type === "job.unavailable")).toBe(false);
 	});
 });
 

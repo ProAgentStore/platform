@@ -27,7 +27,7 @@
 import { ELEMENT_PROBE_FN, type ElementFacts, FALLBACK_COMMIT_RE } from "../commit-guard.js";
 import { normalize } from "../local-artifact/engine.js";
 import { type BrowserTools, evaluateResult, hostOf, refRole } from "../local-browser/bridge.js";
-import type { LocalApplyArtifactKind, LocalApplyBlockReason, LocalApplyEvent, LocalApplyLimits, LocalApplyMode, LocalApplyPause, LocalApplyPauseReason } from "./contract.js";
+import type { LocalApplyArtifactKind, LocalApplyBlockReason, LocalApplyEvent, LocalApplyLimits, LocalApplyMode, LocalApplyPause, LocalApplyPauseReason, LocalApplyUnavailableEvidence, LocalApplyUnavailableReason } from "./contract.js";
 
 export interface ApplyBridgeHost {
 	emit(event: Omit<LocalApplyEvent, "at">): void;
@@ -96,6 +96,9 @@ const INSPECT_PAGE = `() => {
 		duplicate: /you('ve| have) already applied|already applied (for|to) this|application (already exists|has already been (submitted|received))|duplicate application/.test(text),
 		antiBot: /unusual traffic|access (is )?denied|request (has been )?blocked|bot detected|checking (if the site connection is secure|your browser)/.test(text),
 		confirmed: /thank you for (your )?appl|application (has been |was )?(received|submitted)|we('ve| have) received your application|successfully (applied|submitted)/.test(text),
+		unavailable: /(?:this |the )?(?:job|position|posting|role|opportunity).{0,120}(?:has )?(?:expired|closed|been filled|is no longer available|is no longer accepting applications)|(?:expired|closed|no longer available|no longer accepting applications).{0,120}(?:job|position|posting|role|opportunity)/.test(text)
+			? (/expired/.test(text) ? "expired" : "unavailable")
+			: null,
 	};
 }`;
 
@@ -107,6 +110,7 @@ interface PageState {
 	duplicate: boolean;
 	antiBot: boolean;
 	confirmed: boolean;
+	unavailable: LocalApplyUnavailableReason | null;
 }
 
 const text = (t: string, isError = false): ToolResult => ({ content: [{ type: "text", text: t }], ...(isError ? { isError: true } : {}) });
@@ -145,6 +149,8 @@ export class ApplyBridge {
 	readonly uploaded = new Set<LocalApplyArtifactKind>();
 	reviewReady = false;
 	summary: string | null = null;
+	/** Present only after the CLI explicitly reports a notice that the runner independently saw. */
+	unavailable: LocalApplyUnavailableEvidence | null = null;
 	submitAttempted = false;
 	submitted: { url: string; at: string; gateId: string } | null = null;
 	/** The last thing that stopped the work and was not resolved — the block reason if the run ends here. */
@@ -156,7 +162,7 @@ export class ApplyBridge {
 	) {}
 
 	private get done(): boolean {
-		return this.reviewReady || this.submitAttempted;
+		return this.reviewReady || this.submitAttempted || this.unavailable !== null;
 	}
 
 	async listTools(): Promise<Array<{ name: string; description?: string; inputSchema: unknown }>> {
@@ -185,6 +191,11 @@ export class ApplyBridge {
 				description: "The form is filled as far as the sources allow. Stop here; the owner reviews it. Call once, last.",
 				inputSchema: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"] },
 			},
+			{
+				name: "report_job_unavailable",
+				description: "End the run when a fresh browser snapshot shows that this job is expired, closed or unavailable. The runner independently verifies the page notice; it refuses unsupported reports.",
+				inputSchema: { type: "object", properties: { reason: { type: "string", enum: ["expired", "unavailable"] } }, required: ["reason"] },
+			},
 		];
 	}
 
@@ -192,6 +203,7 @@ export class ApplyBridge {
 		if (this.done) return text("The application is finished for this run. Stop now.", true);
 		if (name === "ready_for_review") return this.review(typeof args.summary === "string" ? args.summary : "");
 		if (name === "request_answer") return this.requestAnswer(args);
+		if (name === "report_job_unavailable") return this.reportUnavailable(args);
 		if (REFUSED.has(name)) return this.refuse(name, "read", `${name} is not available to an application run.`);
 		if (!READ_TOOLS.has(name) && !FILL_TOOLS.has(name) && name !== "browser_click" && name !== "browser_press_key" && name !== "upload_artifact") return this.refuse(name, "read", `${name} is not available.`);
 		if (this.host.overTime()) return this.refuse(name, "read", "The run's time limit is reached. Call ready_for_review now.");
@@ -225,7 +237,8 @@ export class ApplyBridge {
 		const res = await this.browser.callTool("browser_evaluate", { function: INSPECT_PAGE }).catch(() => null);
 		const v = res && !res.isError ? (evaluateResult(textOf(res)) as Partial<PageState> | null) : null;
 		if (!v || typeof v.url !== "string") return null;
-		return { url: v.url, title: String(v.title ?? ""), captcha: !!v.captcha, login: !!v.login, duplicate: !!v.duplicate, antiBot: !!v.antiBot, confirmed: !!v.confirmed };
+		const unavailable = v.unavailable === "expired" || v.unavailable === "unavailable" ? v.unavailable : null;
+		return { url: v.url, title: String(v.title ?? ""), captcha: !!v.captcha, login: !!v.login, duplicate: !!v.duplicate, antiBot: !!v.antiBot, confirmed: !!v.confirmed, unavailable };
 	}
 
 	private blockerOf(s: PageState): LocalApplyPauseReason | null {
@@ -414,6 +427,25 @@ export class ApplyBridge {
 		// Resumed without an answer: the owner chose to leave it — never a cue to guess.
 		if (this.host.grounding().length === before) return text("The owner resumed without answering: leave that field empty and continue with the others.");
 		return text("The owner answered. Their answer is now part of your sources — quote it as source_quote. Take a browser_snapshot and continue.");
+	}
+
+	/**
+	 * A terminal result needs the runner's own fresh observation, not the CLI's reading of a page.
+	 * The snapshot requirement makes the notice visible to the CLI; the static page probe verifies
+	 * its category and current URL before any evidence is retained.
+	 */
+	private async reportUnavailable(args: Record<string, unknown>): Promise<ToolResult> {
+		const reason = args.reason === "expired" || args.reason === "unavailable" ? args.reason : null;
+		if (!reason) return text("reason must be expired or unavailable.", true);
+		if (!this.lastSnapshot) return text("Take a fresh browser_snapshot that shows the listing notice before reporting it unavailable.", true);
+		const state = await this.inspect();
+		if (!state?.unavailable) return text("The runner could not verify an expired or unavailable listing notice on the current page. Continue only if the page is still actionable, or take a fresh snapshot.", true);
+		if (state.unavailable !== reason) return text(`The runner verified this listing as ${state.unavailable}, not ${reason}. Report that reason or take a fresh snapshot.`, true);
+		const url = state.url;
+		const domain = hostOf(url) ?? "";
+		this.unavailable = { reason, url, observedAt: new Date(this.host.now()).toISOString(), source: "page_notice" };
+		this.host.emit({ type: "job.unavailable", url, domain, detail: { reason, source: "page_notice" } });
+		return text(`Recorded the runner-verified ${reason} listing notice. Stop now.`);
 	}
 
 	private review(summary: string): ToolResult {

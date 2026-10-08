@@ -38,13 +38,14 @@ let home: string;
 let spawned: Array<{ command: string; args: string[]; env: NodeJS.ProcessEnv }>;
 let child: FakeChild;
 let clicks: string[];
+let pageUnavailable: "expired" | "unavailable" | null;
 
 const browser: BrowserTools = {
 	listTools: async () => ["browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_evaluate"].map((name) => ({ name, inputSchema: {} })),
 	callTool: async (name, args = {}) => {
 		if (name === "browser_evaluate") {
 			if (args.target) return { content: [{ text: `### Result\n${JSON.stringify({ submits: true, method: "post", name: "Submit application", tag: "button", type: "submit" })}` }] };
-			return { content: [{ text: `### Result\n${JSON.stringify({ url: "https://jobs.example.com/apply", title: "Apply" })}` }] };
+			return { content: [{ text: `### Result\n${JSON.stringify({ url: "https://jobs.example.com/apply", title: "Apply", ...(pageUnavailable ? { unavailable: pageUnavailable } : {}) })}` }] };
 		}
 		if (name === "browser_snapshot") return { content: [{ text: '- textbox "Full name" [ref=e1]\n- button "Submit application" [ref=e2]' }] };
 		if (name === "browser_click") clicks.push(String(args.target));
@@ -103,6 +104,7 @@ beforeEach(() => {
 	writeFileSync(join(home, "jobs/applications/lead-1/t-run/cover-letter.md"), COVER);
 	spawned = [];
 	clicks = [];
+	pageUnavailable = null;
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -206,6 +208,20 @@ describe("a fill-and-review run, end to end on the runner", () => {
 		rt.cancel({ runId: "run-1" });
 		await asked;
 		expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "failed", error: "Cancelled by the owner" });
+	});
+
+	it("ends blocked with runner-verified evidence when the CLI reports an expired listing", async () => {
+		pageUnavailable = "expired";
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		await call(rt, "browser_navigate", { url: "https://jobs.example.com/apply" });
+		await call(rt, "browser_snapshot");
+		expect((await call(rt, "report_job_unavailable", { reason: "expired" })).isError).toBeFalsy();
+		child.exit(0);
+		const status = rt.status({ runId: "run-1" });
+		expect(status.result).toMatchObject({ outcome: "blocked", blockReason: "job_unavailable", unavailable: { reason: "expired", url: "https://jobs.example.com/apply", source: "page_notice" } });
+		expect(status.events.map((e) => e.type)).toContain("job.unavailable");
 	});
 });
 

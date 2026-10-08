@@ -127,7 +127,9 @@ export type LocalApplyBlockReason =
 	| "engine_not_signed_in"
 	| "api_key_refused"
 	| "source_unavailable"
-	| "artifact_changed";
+	| "artifact_changed"
+	/** The runner verified the listing's own unavailable/expired notice. */
+	| "job_unavailable";
 export const LOCAL_APPLY_BLOCK_REASONS: readonly LocalApplyBlockReason[] = [
 	...LOCAL_APPLY_PAUSE_REASONS,
 	"submit_unconfirmed",
@@ -136,7 +138,24 @@ export const LOCAL_APPLY_BLOCK_REASONS: readonly LocalApplyBlockReason[] = [
 	"api_key_refused",
 	"source_unavailable",
 	"artifact_changed",
+	"job_unavailable",
 ];
+
+/** Why the site's own notice says this listing cannot be applied to. */
+export type LocalApplyUnavailableReason = "expired" | "unavailable";
+export const LOCAL_APPLY_UNAVAILABLE_REASONS: readonly LocalApplyUnavailableReason[] = ["expired", "unavailable"];
+
+/**
+ * Evidence from the application page, collected and verified by the runner — never supplied by
+ * the CLI as prose. It deliberately records no page text: the URL, observed time and fixed
+ * `source` identify the notice without copying potentially private page contents into the trace.
+ */
+export interface LocalApplyUnavailableEvidence {
+	reason: LocalApplyUnavailableReason;
+	url: string;
+	observedAt: string;
+	source: "page_notice";
+}
 
 export type LocalApplyEventType =
 	| "engine.auth_checked"
@@ -152,6 +171,7 @@ export type LocalApplyEventType =
 	| "submit.attempted"
 	| "submit.confirmed"
 	| "submit.unconfirmed"
+	| "job.unavailable"
 	| "run.paused"
 	| "run.resumed"
 	| "note";
@@ -169,6 +189,7 @@ export const LOCAL_APPLY_EVENT_TYPES: readonly LocalApplyEventType[] = [
 	"submit.attempted",
 	"submit.confirmed",
 	"submit.unconfirmed",
+	"job.unavailable",
 	"run.paused",
 	"run.resumed",
 	"note",
@@ -217,6 +238,8 @@ export interface LocalApplyResultEnvelope {
 	/** Present when `outcome` is `blocked`. */
 	blockReason?: LocalApplyBlockReason;
 	questions?: string[];
+	/** Present exactly when `blockReason` is `job_unavailable`. */
+	unavailable?: LocalApplyUnavailableEvidence;
 	/** Present when `outcome` is `failed`. */
 	error?: string;
 }
@@ -253,7 +276,7 @@ const str = (v: unknown, max: number): string | null => (typeof v === "string" &
 const oneOf = <T extends string>(list: readonly T[], v: unknown): T | null => (list.includes(v as T) ? (v as T) : null);
 const isHttpUrl = (v: string) => /^https?:\/\/[^\s/]+/i.test(v);
 
-const DETAIL_KEYS = new Set(["engine", "authMode", "engineAuth", "mode", "class", "tool", "decision", "reason", "role", "kind", "path", "sha256", "bytes", "gateId", "exitCode", "count", "status", "basis"]);
+const DETAIL_KEYS = new Set(["engine", "authMode", "engineAuth", "mode", "class", "tool", "decision", "reason", "role", "kind", "path", "sha256", "bytes", "gateId", "exitCode", "count", "status", "basis", "source"]);
 
 /** A validated event, or null. Detail keeps only whitelisted, primitive, bounded values. */
 export function parseLocalApplyEvent(raw: unknown): LocalApplyEvent | null {
@@ -319,7 +342,18 @@ export function parseLocalApplyResult(raw: unknown): { result: LocalApplyResultE
 			.filter((q): q is string => typeof q === "string" && q.trim() !== "")
 			.slice(0, LOCAL_APPLY_CAPS.questions)
 			.map((q) => q.trim().slice(0, LOCAL_APPLY_CAPS.questionChars));
+		if (out.blockReason === "job_unavailable") {
+			const evidence = (o.unavailable && typeof o.unavailable === "object" && !Array.isArray(o.unavailable) ? o.unavailable : {}) as Record<string, unknown>;
+			const reason = oneOf(LOCAL_APPLY_UNAVAILABLE_REASONS, evidence.reason);
+			const url = str(evidence.url, 2000);
+			const observedAt = str(evidence.observedAt, 40);
+			if (!reason || !url || !isHttpUrl(url) || !observedAt || Number.isNaN(Date.parse(observedAt)) || evidence.source !== "page_notice") {
+				return { error: "a job_unavailable result needs runner-verified unavailable evidence (reason, url, observedAt, source)" };
+			}
+			out.unavailable = { reason, url, observedAt, source: "page_notice" };
+		} else if (o.unavailable !== undefined) return { error: "unavailable evidence is only valid for a job_unavailable result" };
 	}
+	else if (o.unavailable !== undefined) return { error: "unavailable evidence is only valid for a job_unavailable result" };
 	if (outcome === "failed") out.error = str(o.error, 1000) ?? "The run failed without a reason.";
 	return { result: out };
 }

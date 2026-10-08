@@ -54,6 +54,7 @@ export function applyPrompt(e: LocalApplyTaskEnvelope, sources: readonly SourceB
 		`- If a question has no answer in the sources, or is ambiguous, call ${t("request_answer")}. Never guess, never invent, never pick a "safe" default.`,
 		`- To attach a document, click the field's upload control, then call ${t("upload_artifact")} with kind resume or cover_letter.`,
 		"- Never sign in, solve a captcha, accept terms or work around any block; the run pauses for the owner by itself.",
+		`- If a fresh snapshot shows the job itself is expired, closed or unavailable, call ${t("report_job_unavailable")} with reason expired or unavailable. The runner will independently verify the page notice; do not report it from inference alone.`,
 		`- Stay on the application's site. Limits: ${e.limits.maxPages} pages, ${e.limits.maxActions} browser actions, ${e.limits.maxMinutes} minutes.`,
 		finish,
 	].join("\n");

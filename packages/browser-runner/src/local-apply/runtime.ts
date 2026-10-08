@@ -342,6 +342,7 @@ export class LocalApplyRuntime {
 		const summary = b?.summary ?? finalText(e.engine, run.output);
 		if (run.cancelled) return { outcome: "failed", summary, error: "Cancelled by the owner" };
 		if (b?.submitted) return { outcome: "submitted", summary, submitted: b.submitted };
+		if (b?.unavailable) return { outcome: "blocked", summary, blockReason: "job_unavailable", unavailable: b.unavailable };
 		if (b?.submitAttempted) return { outcome: "blocked", summary, blockReason: "submit_unconfirmed", questions: b.blocked?.questions ?? [] };
 		if (b?.reviewReady) return { outcome: "awaiting_review", summary };
 		if (!b?.filled && missingLogin(e.engine, run.output.join("\n"))) return { outcome: "blocked", summary, blockReason: "engine_not_signed_in", questions: [signInHelp(e.engine)], engineAuth: "missing_login" };
@@ -475,7 +476,7 @@ export class LocalApplyRuntime {
 			submitAttempted: b?.submitAttempted ?? false,
 			summary: redactText((r.summary ?? "").slice(0, LOCAL_APPLY_CAPS.summary), run.secrets),
 			...(r.outcome === "submitted" && r.submitted ? { submitted: r.submitted } : {}),
-			...(r.outcome === "blocked" ? { blockReason: r.blockReason ?? "incomplete", questions: (r.questions ?? []).map((q) => redactText(q, run.secrets)) } : {}),
+			...(r.outcome === "blocked" ? { blockReason: r.blockReason ?? "incomplete", questions: (r.questions ?? []).map((q) => redactText(q, run.secrets)), ...(r.blockReason === "job_unavailable" && r.unavailable ? { unavailable: r.unavailable } : {}) } : {}),
 			...(r.outcome === "failed" ? { error: redactText((r.error ?? "The run failed without a reason.").slice(0, 1000), run.secrets) } : {}),
 		};
 		if (run.child && run.child.exitCode === null) this.kill(run);
