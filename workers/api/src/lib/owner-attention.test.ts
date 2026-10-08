@@ -35,7 +35,7 @@ const REQ = (over: Partial<OwnerAttentionRequest> = {}): OwnerAttentionRequest =
 	body: "This listing's apply control can send the application in one click…",
 	...over,
 });
-const deps = (over: Partial<AttentionDeps> = {}): AttentionDeps => ({ notify: vi.fn(async () => undefined), pushed: async () => "sent", ...over });
+const deps = (over: Partial<AttentionDeps<Env>> = {}): AttentionDeps<Env> => ({ notify: vi.fn(async () => undefined), pushed: async () => "sent", ...over });
 
 describe("the event vocabulary is data, usable by any agent (#991)", () => {
 	it("declares each kind of attention with what it means, and what may be turned off", () => {
@@ -94,7 +94,7 @@ describe("the owner's channel control", () => {
 
 describe("raising it, and saying truthfully what happened", () => {
 	it("records the row, deep links where the control IS, and reports the push", async () => {
-		const notify = vi.fn<AttentionDeps["notify"]>(async () => undefined);
+		const notify = vi.fn<AttentionDeps<Env>["notify"]>(async () => undefined);
 		const out = await requestOwnerAttention(env, REQ(), deps({ notify }));
 		expect(out).toMatchObject({ event: "approval_required", recorded: true, push: "sent" });
 		// The Board, where the Approve control renders — not a URL that does not resolve.
@@ -111,7 +111,7 @@ describe("raising it, and saying truthfully what happened", () => {
 		// The column holds a hash of (type, event key, title, body). A consumer that looked the row
 		// up by the raw attention key would find nothing and report every delivered push as
 		// `unavailable` — the precise lie this module exists to prevent, wearing a truthful face.
-		const pushed = vi.fn<NonNullable<AttentionDeps["pushed"]>>(async () => "sent");
+		const pushed = vi.fn<NonNullable<AttentionDeps<Env>["pushed"]>>(async () => "sent");
 		const req = REQ();
 		const out = await requestOwnerAttention(env, req, deps({ pushed }));
 		expect(pushed.mock.calls[0][2]).toEqual({ key: out.key, dedupeKey: attentionNotificationKey(req) });
@@ -134,7 +134,7 @@ describe("raising it, and saying truthfully what happened", () => {
 	});
 
 	it("the owner's own push-off still records the row, and reports `muted`", async () => {
-		const notify = vi.fn<AttentionDeps["notify"]>(async () => undefined);
+		const notify = vi.fn<AttentionDeps<Env>["notify"]>(async () => undefined);
 		const out = await requestOwnerAttention(env, REQ(), deps({ notify, preferences: async () => ({ attention: { pushOff: ["approval_required"] } }) }));
 		expect(out.push).toBe("muted");
 		expect(out.recorded, "the log is never optional").toBe(true);

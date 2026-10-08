@@ -33,7 +33,6 @@
  */
 import { type DeepLink, deepLinkFor, type NotificationSubject } from "./console-links.js";
 import { type NotificationPreferences, notificationDedupeKey } from "./notifications.js";
-import type { Env } from "../types.js";
 
 /** The kinds of attention an agent can ask for. DATA — the console renders its controls from this. */
 export interface OwnerAttentionEventSpec {
@@ -191,9 +190,19 @@ export function attentionDetail(event: string, push: PushOutcome, recorded: bool
 	}
 }
 
-export interface AttentionDeps {
+/**
+ * The delivery seam, generic over the Worker environment (`AttentionDeps<Env>` at the call site).
+ *
+ * This module must NOT import `Env`: `lib/preferences.ts` carries the stored `attention` section
+ * and is imported by the console's type guard (`store/console/src/lib/types.test.ts`), whose program
+ * has no Cloudflare Worker globals — so an `Env` import here reaches `workers/api/src/types.ts` and
+ * fails that typecheck with `Cannot find name 'D1Database'`. The policy never touches the
+ * environment anyway; it only hands it to the injected dependency, which is exactly what a type
+ * parameter says.
+ */
+export interface AttentionDeps<E = unknown> {
 	/** Injected so the policy is testable without the delivery stack. */
-	notify: (env: Env, userId: string, type: string, title: string, body: string, url: DeepLink, opts: { key: string; kind: "alert" | "update"; instanceId?: string }) => Promise<void>;
+	notify: (env: E, userId: string, type: string, title: string, body: string, url: DeepLink, opts: { key: string; kind: "alert" | "update"; instanceId?: string }) => Promise<void>;
 	/**
 	 * Did a push actually go out? Reported, never assumed.
 	 *
@@ -203,8 +212,8 @@ export interface AttentionDeps {
 	 * nothing, which would report every delivered push as `unavailable`: the exact lie this module
 	 * exists to prevent.
 	 */
-	pushed?: (env: Env, userId: string, ids: { key: string; dedupeKey: string }) => Promise<PushOutcome>;
-	preferences?: (env: Env, userId: string) => Promise<{ notifications?: NotificationPreferences; attention?: OwnerAttentionPreferences }>;
+	pushed?: (env: E, userId: string, ids: { key: string; dedupeKey: string }) => Promise<PushOutcome>;
+	preferences?: (env: E, userId: string) => Promise<{ notifications?: NotificationPreferences; attention?: OwnerAttentionPreferences }>;
 }
 
 /**
@@ -214,7 +223,7 @@ export interface AttentionDeps {
  * must never fail the work that noticed. What it does NOT do is lie about it — the outcome names
  * the channel that carried it, and `attentionDetail` is the sentence a caller may surface.
  */
-export async function requestOwnerAttention(env: Env, req: OwnerAttentionRequest, deps: AttentionDeps): Promise<OwnerAttentionOutcome> {
+export async function requestOwnerAttention<E>(env: E, req: OwnerAttentionRequest, deps: AttentionDeps<E>): Promise<OwnerAttentionOutcome> {
 	const spec = attentionEventSpec(req.event);
 	const key = attentionKey(req.event, req.about);
 	const url = deepLinkFor(req.subject);

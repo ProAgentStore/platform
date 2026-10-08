@@ -422,7 +422,7 @@ async function settleFromResult(env: Env, uid: string, run: ApplyRun, rawResult:
  * assumed: `notifyUser` is best-effort about the push by design, so "did it actually go" is a
  * question only the notifications table can answer.
  */
-const attentionDeps: AttentionDeps = {
+const attentionDeps: AttentionDeps<Env> = {
 	notify: (env, userId, type, title, body, url, opts) => notifyUser(env, userId, type, title, body, url, opts),
 	pushed: async (env, userId, ids) => {
 		// Read the row that was just written, by the key the notifications table actually stores.
