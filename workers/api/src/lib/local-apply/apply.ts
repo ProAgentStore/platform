@@ -52,6 +52,8 @@ import {
 	moveApplication,
 	updateApplyRun,
 } from "./store.js";
+import { approvalState } from "./approval.js";
+import { consumeSubmitAuthorization, getSubmitAuthorization } from "./approval-store.js";
 import { listSupervisorCheckpoints, noteSupervisorDirectiveDelivery, receiveSupervisorCheckpoint, sanitizeSupervisorFacts, type SupervisorDirective } from "./supervision.js";
 import { directApplicationCheckpoint } from "./brain.js";
 
@@ -102,8 +104,15 @@ async function move(env: Env, uid: string, applicationId: string, from: readonly
 export async function submitGateFor(env: Env, runnerInstanceId: string, uid: string, app: JobApplication, s: ApplicationRunnerSettings, now: number) {
 	const lead = (app.lead ?? {}) as { leadUrl?: string; lead?: { title?: string; company?: string; location?: string; match_rationale?: string } };
 	const counts = await applyRunCounts(env, runnerInstanceId, uid, now);
+	// The owner's per-application approval (#973). Read here rather than passed in, so EVERY caller
+	// of the gate — the queue rendering a card, a dispatch, a retry — sees the same verdict; a
+	// surface that evaluated the gate without it would show the owner a different answer than the
+	// one their approval actually produces.
+	const auth = await getSubmitAuthorization(env, app.id, uid).catch(() => null);
+	const approval = auth ? { id: auth.id, usable: approvalState(auth, app).usable } : null;
 	const gate = evaluateSubmitGate({
 		settings: s,
+		approval,
 		application: {
 			profileVersion: app.profileVersion,
 			resumeSha: app.resumeArtifact?.sha256 ?? null,
@@ -116,7 +125,7 @@ export async function submitGateFor(env: Env, runnerInstanceId: string, uid: str
 		autoSubmitsToday: counts.autoSubmitsToday,
 		activeRuns: counts.active,
 	});
-	return { ...gate, autoSubmitsToday: counts.autoSubmitsToday, dailyCap: s.autoSubmit.dailyCap };
+	return { ...gate, autoSubmitsToday: counts.autoSubmitsToday, dailyCap: s.autoSubmit.dailyCap, authorizationId: approval?.usable ? approval.id : null };
 }
 
 /** The Runner's effective settings, or why they cannot be used. */
@@ -163,9 +172,30 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	const gate = opts.review
 		? { allowed: false, checks: [...verdict.checks, { check: "review_requested", ok: false, why: "the owner asked to review the filled form before anything is sent" }] }
 		: { allowed: verdict.allowed, checks: verdict.checks };
-	const gateId = gate.allowed ? crypto.randomUUID() : null;
-	const mode = gate.allowed ? "auto_submit" : "fill_and_review";
 	const runId = crypto.randomUUID();
+	const intendedMode = gate.allowed ? "auto_submit" : "fill_and_review";
+
+	// The application leaves materials_ready exactly once: the move IS the claim.
+	const claimed = await moveApplication(env, app, uid, { to: "filling", actor: "runner", actorInstanceId: instanceId, runId, bindRun: runId, reason: intendedMode }, now);
+	if (!claimed) {
+		const fresh = (await getOwnedApplication(env, uid, applicationId)) ?? app;
+		return { kind: "existing", application: fresh, run: fresh.fillRunId ? await getApplyRun(env, instanceId, uid, fresh.fillRunId) : null };
+	}
+
+	// Spend the owner's approval on THIS run, after the claim and before anything is built from the
+	// verdict (#973). Conditional on it still being unspent, so two dispatches racing for one
+	// approval cannot both proceed to submit — and the loser is DOWNGRADED here rather than after
+	// the fact: `mode`, `gateId` and the recorded gate all derive from the outcome below, because
+	// the envelope the runner receives is built from them. Mutating the stored policy afterwards
+	// would have left the runner's own copy still saying `auto_submit`.
+	const spentApproval = gate.allowed && verdict.authorizationId ? await consumeSubmitAuthorization(env, verdict.authorizationId, uid, runId, now) : null;
+	const lostApprovalRace = gate.allowed && !!verdict.authorizationId && !spentApproval;
+	const allowed = gate.allowed && !lostApprovalRace;
+	const checks = lostApprovalRace
+		? [...gate.checks, { check: "submission_approved", ok: false, why: "another run spent this application's approval first" }]
+		: gate.checks;
+	const gateId = allowed ? crypto.randomUUID() : null;
+	const mode = allowed ? "auto_submit" : "fill_and_review";
 	const policy: ApplyRunPolicy = {
 		engine: s.engine,
 		authMode: s.authMode,
@@ -173,20 +203,15 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 		mode,
 		allowDomains: [...new Set([jobHost, ...s.allowDomains])],
 		limits: { maxMinutes: s.maxMinutes, maxPages: s.maxPages, maxActions: s.maxActions },
-		gate: { allowed: gate.allowed, gateId, checks: gate.checks },
+		gate: { allowed, gateId, checks },
 	};
-	const failing = gate.checks.filter((c) => !c.ok).map((c) => c.check);
+	const failing = checks.filter((c) => !c.ok).map((c) => c.check);
 	const trace: ApplyTraceEvent[] = [
 		{ type: "run.requested", at: iso(now), detail: { engine: s.engine, authMode: s.authMode, status: source } },
-		{ type: "policy.submit_gate", at: iso(now), detail: { mode, decision: gate.allowed ? "allowed" : "refused", ...(gateId ? { gateId } : { reason: failing.join(",").slice(0, 300) }) } },
+		{ type: "policy.submit_gate", at: iso(now), detail: { mode, decision: allowed ? "allowed" : "refused", ...(gateId ? { gateId } : { reason: failing.join(",").slice(0, 300) }) } },
 	];
-
-	// The application leaves materials_ready exactly once: the move IS the claim.
-	const claimed = await moveApplication(env, app, uid, { to: "filling", actor: "runner", actorInstanceId: instanceId, runId, bindRun: runId, reason: mode }, now);
-	if (!claimed) {
-		const fresh = (await getOwnedApplication(env, uid, applicationId)) ?? app;
-		return { kind: "existing", application: fresh, run: fresh.fillRunId ? await getApplyRun(env, instanceId, uid, fresh.fillRunId) : null };
-	}
+	if (spentApproval) trace.push({ type: "policy.decision", at: iso(now), detail: { class: "submit", decision: "allowed", basis: "application_approval", authorizationId: spentApproval.id } });
+	if (lostApprovalRace) trace.push({ type: "policy.decision", at: iso(now), detail: { class: "submit", decision: "refused", reason: "approval_already_spent" } });
 	await insertApplyRun(env, { id: runId, instanceId, userId: uid, applicationId, requestId: key, policy, trace, now });
 	let run = (await getApplyRun(env, instanceId, uid, runId)) as ApplyRun;
 

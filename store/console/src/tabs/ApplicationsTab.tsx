@@ -194,6 +194,15 @@ function Detail({ instanceId, item, onChanged }: { instanceId: string; item: App
 					Submit policy: {item.submitPolicy.allowed ? <span className="text-success">this application may be submitted automatically</span> : <span>fill and wait for your review ({item.submitPolicy.failing.join(", ").replace(/_/g, " ")})</span>}
 				</p>
 			)}
+			{/* #973: the owner's own decision about this job — approved, spent on a run, or no longer
+			    usable because the materials changed under it. `label` is the server's wording, so the
+			    board and an MCP reader say the same thing about the same authorization. */}
+			{item.submitAuthorization && (
+				<p className="text-xs mb-2" data-testid="submit-authorization">
+					<span className={item.submitAuthorization.usable ? "text-success font-bold" : "text-muted-soft"}>Approval:</span> {item.submitAuthorization.label}
+					{item.submitAuthorization.consumedRunId ? <span className="text-muted-soft"> (run {item.submitAuthorization.consumedRunId.slice(0, 8)})</span> : null}
+				</p>
+			)}
 			{item.submittedAt && (
 				<p className="text-sm text-success mb-2">
 					Submitted {new Date(item.submittedAt).toLocaleString()}

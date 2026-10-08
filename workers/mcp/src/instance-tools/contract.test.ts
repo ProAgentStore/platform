@@ -436,6 +436,7 @@ const TABLE: Record<string, Row> = {
 	list_applications: ["applications", "read", null, null, "company,instance_id,role,since,sort,source,status,token,until,url"],
 	get_application: ["applications", "read", null, null, "application_id,instance_id,record_id,scout_instance_id,token"],
 	application_trace: ["applications", "read", null, null, "application_id,instance_id,token"],
+	approve_application: ["applications", "destructive", "approve_application", "envelope", "application_id,confirm,dry_run,expected_status,expected_version,idempotency_key,instance_id,record_id,scout_instance_id,token"],
 	application_runs: ["applications", "read", null, null, "instance_id,limit,token"],
 	application_run: ["applications", "read", null, null, "instance_id,run_id,token"],
 	application_run_supervision: ["applications", "read", null, null, "instance_id,run_id,token"],

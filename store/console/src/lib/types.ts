@@ -711,7 +711,7 @@ export interface AgentLocalBrowserCapabilities {
 // ── Applications control surface (#958) — copies of workers/api/src/lib/applications/control.ts ──
 
 export type ApplicationQueueStatus = "new" | "apply_requested" | "tailoring" | "materials_ready" | "filling" | "awaiting_review" | "submitted" | "blocked" | "deferred" | "skipped" | "archived" | "failed";
-export type ApplicationQueueAction = "apply" | "skip" | "defer" | "archive" | "generate_materials" | "retry_tailoring" | "start_fill" | "request_review" | "retry_fill" | "cancel" | "resume" | "mark_not_interested";
+export type ApplicationQueueAction = "apply" | "skip" | "defer" | "archive" | "generate_materials" | "retry_tailoring" | "start_fill" | "request_review" | "retry_fill" | "cancel" | "resume" | "mark_not_interested" | "approve_and_proceed";
 
 export interface ApplicationArtifactHandle {
 	kind: "resume" | "cover_letter";
@@ -748,6 +748,8 @@ export interface ApplicationQueueItem {
 	submittedUrl: string | null;
 	submitAttempted: boolean;
 	submitPolicy: { allowed: boolean; failing: string[] } | null;
+	/** The owner's per-application submission approval (#973), once one has been granted. */
+	submitAuthorization: { id: string; usable: boolean; label: string; approvedBy: string; approvedAt: string; approvedStateVersion: number; idempotencyKey: string; consumedAt: string | null; consumedRunId: string | null } | null;
 	updatedAt: string;
 	actions: ApplicationQueueAction[];
 }

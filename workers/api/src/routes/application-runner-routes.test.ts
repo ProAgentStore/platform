@@ -324,6 +324,130 @@ describe("submission is gated", () => {
 	});
 });
 
+// ── #973: the owner approves ONE job on the board, and that is what lets it be submitted ──────
+//
+// The acceptance list from the issue, over the real schema and the real action route — the one the
+// console button and `approve_application` both post to. The daily cap is deliberately NEVER set in
+// this block: the whole point is that a per-application approval needs none.
+describe("per-application Approve & proceed authorizes exactly one submission (#973)", () => {
+	/**
+	 * A materials_ready application that also HOLDS its readiness event, as the Tailor leaves it in
+	 * production — `approve_and_proceed` dispatches from that stored event, the same one the
+	 * connection would have delivered, so the owner's approval needs no payload of its own.
+	 */
+	const readyWithEvent = (id: string) => {
+		const ev = readyApp(id);
+		d1.DB.prepare("UPDATE job_applications SET ready_event = ?2 WHERE id = ?1").bind(id, JSON.stringify(ev)).run();
+		return ev;
+	};
+	const approve = (id: string, over: Record<string, unknown> = {}) =>
+		call("POST", "/t1/application-queue/actions", { action: "approve_and_proceed", application_id: id, expected_status: "materials_ready", ...over });
+	const auth = (id: string) => d1.DB.prepare("SELECT * FROM job_application_submit_authorizations WHERE application_id = ?1").bind(id).first<Record<string, unknown>>();
+	const card = async (id: string) => (await call("GET", `/t1/application-queue/item?application_id=${id}`)).body.item;
+
+	it("approves, submits that one application, and needs no auto-submit toggle and no daily cap", async () => {
+		readyWithEvent("lead-ap1");
+		// The Runner's settings allow the site and nothing else: auto-submit OFF, dailyCap 0.
+		await call("PUT", "/ap/application-runner/settings", { allowDomains: ["example.com"] });
+		const before = await card("lead-ap1");
+		expect(before.submitPolicy.allowed, "unapproved: the standing policy must refuse").toBe(false);
+		expect(before.actions).toContain("approve_and_proceed");
+		expect(before.submitAuthorization).toBeNull();
+
+		const r = await approve("lead-ap1", { expected_version: before.stateVersion });
+		expect(r.status).toBe(200);
+		expect(r.body.result).toMatchObject({ approval: "granted", mode: "auto_submit", nextAction: expect.stringMatching(/submits it/) });
+		// The run the Runner was actually told to do carries the submit mode and the gate that allowed it.
+		// What the RUNNER was told — the envelope carries the mode and the gate id that allowed it.
+		const dispatched = dispatches().at(-1)?.body as { policy: { mode: string; submitGate?: { gateId: string } } };
+		expect(dispatched.policy.mode).toBe("auto_submit");
+		expect(dispatched.policy.submitGate?.gateId).toEqual(expect.any(String));
+		const run = (await call("GET", `/ap/application-runs/${r.body.result.runId}`)).body.run;
+		expect(run.policy.gate.allowed).toBe(true);
+		expect(run.policy.gate.checks.find((c: { check: string }) => c.check === "submission_approved")).toMatchObject({ ok: true });
+		// Not via the cap: it is still zero, and its check passed on the approval's authority.
+		expect(run.policy.gate.checks.find((c: { check: string }) => c.check === "daily_cap")).toMatchObject({ ok: true, why: "approved for this application by the owner" });
+		const settings = (await call("GET", "/ap/application-runner/settings")).body.settings;
+		expect(settings.autoSubmit.enabled, "the global toggle must still be off").toBe(false);
+		expect(settings.autoSubmit.dailyCap).toBe(0);
+	});
+
+	it("an unapproved application cannot submit — it fills for review instead", async () => {
+		const ev = readyApp("lead-ap2");
+		await call("PUT", "/ap/application-runner/settings", { allowDomains: ["example.com"] });
+		const item = await card("lead-ap2");
+		expect(item.actions).not.toContain("start_fill");
+		// Dispatching it anyway (the connection path) must not submit.
+		const r = await call("POST", "/ap/application-runs", ev);
+		expect(r.body.run.policy.mode).toBe("fill_and_review");
+		expect(r.body.run.policy.gate.allowed).toBe(false);
+		expect(await auth("lead-ap2")).toBeNull();
+	});
+
+	it("is single-use: the run spends it, and a second approval is refused", async () => {
+		readyWithEvent("lead-ap3");
+		await call("PUT", "/ap/application-runner/settings", { allowDomains: ["example.com"] });
+		const first = await approve("lead-ap3");
+		const runId = first.body.result.runId as string;
+		expect(first.body.result.authorizationConsumedBy).toBe(runId);
+		expect(await auth("lead-ap3")).toMatchObject({ consumed_run_id: runId });
+
+		const again = await approve("lead-ap3", { expected_status: "filling" });
+		expect(again.status).toBe(409);
+		expect(again.body.error).toMatch(/already used by a run|cannot approve/i);
+		// Still exactly one authorization row, bound to the one run.
+		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM job_application_submit_authorizations").first<{ n: number }>())?.n).toBe(1);
+	});
+
+	it("a retried approval is idempotent — one authorization, one run, no second submission", async () => {
+		readyWithEvent("lead-ap4");
+		await call("PUT", "/ap/application-runner/settings", { allowDomains: ["example.com"] });
+		const key = { idempotency_key: "approve:lead-ap4:0" };
+		const first = await approve("lead-ap4", key);
+		const dispatchedAfterFirst = dispatches().length;
+		// The same decision sent again (a double-click, a replayed MCP call): the application has
+		// left materials_ready, so the CAS refuses it — and nothing new is dispatched either way.
+		const replay = await approve("lead-ap4", { ...key, expected_status: "materials_ready" });
+		expect(replay.status).toBe(409);
+		expect(dispatches()).toHaveLength(dispatchedAfterFirst);
+		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM job_application_submit_authorizations WHERE application_id = 'lead-ap4'").first<{ n: number }>())?.n).toBe(1);
+		expect(await auth("lead-ap4")).toMatchObject({ idempotency_key: "approve:lead-ap4:0", consumed_run_id: first.body.result.runId });
+	});
+
+	it("binds to the state version the owner saw: a stale approval is refused with nothing recorded", async () => {
+		readyWithEvent("lead-ap5");
+		await call("PUT", "/ap/application-runner/settings", { allowDomains: ["example.com"] });
+		const stale = await approve("lead-ap5", { expected_version: 99 });
+		expect(stale.status).toBe(409);
+		expect(stale.body.error).toMatch(/stale/);
+		expect(await auth("lead-ap5")).toBeNull();
+		expect(dispatches()).toHaveLength(0);
+	});
+
+	it("the card shows the approval and the run that spent it, for the board and MCP alike", async () => {
+		readyWithEvent("lead-ap6");
+		await call("PUT", "/ap/application-runner/settings", { allowDomains: ["example.com"] });
+		const r = await approve("lead-ap6");
+		const item = await card("lead-ap6");
+		expect(item.submitAuthorization).toMatchObject({
+			usable: false,
+			approvedBy: "owner",
+			consumedRunId: r.body.result.runId,
+			label: expect.stringMatching(/single-use/),
+		});
+		expect(item.submitAuthorization.approvedStateVersion).toBe(0);
+	});
+
+	it("only a materials_ready application may be approved", async () => {
+		const ev = readyApp("lead-ap7");
+		await call("PUT", "/ap/application-runner/settings", { allowDomains: ["example.com"] });
+		await call("POST", "/ap/application-runs", ev); // → filling, unapproved
+		const r = await approve("lead-ap7", { expected_status: "filling" });
+		expect(r.status).toBe(409);
+		expect(await auth("lead-ap7")).toBeNull();
+	});
+});
+
 describe("cloud supervision", () => {
 	it("persists bounded checkpoint facts and has the Runner's cloud brain direct that exact checkpoint", async () => {
 		const started = await call("POST", "/ap/application-runs", readyApp("lead-supervised"));

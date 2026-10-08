@@ -38,6 +38,7 @@ describe("the Applications tools (#958, #953)", () => {
 			"application_run_supervision",
 			"application_runs",
 			"application_trace",
+			"approve_application",
 			"cancel_application",
 			"generate_application_materials",
 			"get_application",
@@ -119,6 +120,30 @@ describe("the Applications tools (#958, #953)", () => {
 		const { seen, call } = tools();
 		await call(name, { instance_id: "t1", ...args });
 		expect(seen).toEqual([{ url: ACTIONS, method: "POST", body }]);
+	});
+
+	// #973 — the issue's parity requirement: "the UI button and MCP tool call the same owner-scoped
+	// command/endpoint with the same eligibility checks, idempotency key, authorization record and
+	// returned application state. Neither surface may have powers the other lacks."
+	it("approve_application posts the board's own approve_and_proceed body to the board's own route", async () => {
+		const { seen, call } = tools(["read", "write", "runtime", "destructive"]);
+		await call("approve_application", { instance_id: "t1", application_id: "a1", expected_status: "materials_ready", expected_version: 4, idempotency_key: "approve:a1:4", confirm: "approve_application" });
+		expect(seen).toEqual([{ url: ACTIONS, method: "POST", body: { action: "approve_and_proceed", application_id: "a1", expected_status: "materials_ready", expected_version: 4, idempotency_key: "approve:a1:4" } }]);
+	});
+
+	it("approving needs the confirmation every destructive tool in this surface asks for", async () => {
+		const { seen, call } = tools(["read", "write", "runtime", "destructive"]);
+		expect(await call("approve_application", { instance_id: "t1", application_id: "a1", expected_status: "materials_ready" })).toMatch(/confirm="approve_application"/);
+		expect(seen).toEqual([]);
+		// A dry run describes rather than acts, so it answers without one.
+		expect(await call("approve_application", { instance_id: "t1", application_id: "a1", expected_status: "materials_ready", dry_run: true })).toMatch(/dryRun/);
+		expect(seen).toEqual([]);
+	});
+
+	it("approving is destructive — it sends an application to an employer and cannot be recalled", async () => {
+		const { seen, call } = tools(["read", "write", "runtime"]);
+		expect(await call("approve_application", { instance_id: "t1", application_id: "a1", expected_status: "materials_ready" })).toMatch(/destructive/);
+		expect(seen).toEqual([]);
 	});
 
 	it("a dry run touches nothing", async () => {

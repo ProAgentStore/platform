@@ -17,6 +17,7 @@
  * each failing check — is on the run's trace.
  */
 import { domainWithin, normalizeDomain } from "../local-browser/policy.js";
+import { APPROVAL_SATISFIES } from "./approval.js";
 import { LOCAL_APPLY_AUTH_MODES, LOCAL_APPLY_ENGINES, type LocalApplyAuthMode, type LocalApplyEngine, type LocalApplyProfile } from "./contract.js";
 import { isHomeRelative, isWorkspaceRelative } from "../local-artifact/contract.js";
 
@@ -175,6 +176,12 @@ export function hostOfUrl(url: string): string | null {
 
 export interface GateInput {
 	settings: ApplicationRunnerSettings;
+	/**
+	 * The owner's per-application approval (#973), when one is usable. It stands in for the checks
+	 * that INFER intent ({@link APPROVAL_SATISFIES}) and for nothing else: the safety and
+	 * correctness checks below still have to pass, and so do the runner's own bridge checks.
+	 */
+	approval?: { id: string; usable: boolean } | null;
 	application: {
 		profileVersion: string | null;
 		resumeSha: string | null;
@@ -202,6 +209,7 @@ export function evaluateSubmitGate(i: GateInput): { allowed: boolean; checks: Ga
 	const has = (text: string | undefined, list: string[]) => !!text && list.some((t) => text.toLowerCase().includes(t));
 	const host = hostOfUrl(app.leadUrl);
 	const salary = typeof app.lead.salary === "number" ? app.lead.salary : null;
+	const approved = i.approval?.usable === true;
 	const checks: GateCheck[] = [
 		{ check: "auto_submit_enabled", ok: a.enabled, why: "the owner has not enabled auto-submit" },
 		{ check: "materials_complete", ok: !!app.profileVersion && !!app.resumeSha && !!app.coverLetterSha, why: "no versioned profile and complete artifact set" },
@@ -213,6 +221,19 @@ export function evaluateSubmitGate(i: GateInput): { allowed: boolean; checks: Ga
 		{ check: "daily_cap", ok: a.dailyCap > 0 && i.autoSubmitsToday < a.dailyCap, why: `the daily cap (${a.dailyCap}) is used` },
 		{ check: "concurrency", ok: i.activeRuns === 0, why: "another application run is open" },
 		{ check: "no_blocker", ok: !app.blockReason && app.submitAttemptedAt === null, why: "the application carries a blocker or an earlier submit attempt" },
-	].map((c) => (c.ok ? { check: c.check, ok: true } : c));
+	]
+		// An approval answers the intent checks. Rewritten rather than skipped so the recorded gate
+		// still lists every check and says WHY each one passed — a gate whose checks vanish when a
+		// flag is set cannot be audited afterwards, and this gate is the record of why a submit was
+		// allowed to happen.
+		.map((c) => (approved && (APPROVAL_SATISFIES as readonly string[]).includes(c.check) ? { check: c.check, ok: true, why: "approved for this application by the owner" } : c))
+		.map((c) => (c.ok ? { check: c.check, ok: true, ...(c.why ? { why: c.why } : {}) } : c));
+	if (i.approval) {
+		checks.push(
+			approved
+				? { check: "submission_approved", ok: true, why: `authorization ${i.approval.id}` }
+				: { check: "submission_approved", ok: false, why: "the approval for this application is no longer usable" },
+		);
+	}
 	return { allowed: checks.every((c) => c.ok), checks };
 }

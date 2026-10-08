@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authRequired, authedCall, jsonText, text } from "../http.js";
-import { type McpScope, audit, dryRun, requirePermission } from "../safety.js";
+import { type McpScope, audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
 import type { InstanceToolsCtx } from "./shared.js";
 
 /**
@@ -34,6 +34,7 @@ export const APPLICATION_TOOL_SCOPES = {
 	application_run_supervision: "read",
 	tailoring_run: "read",
 	triage_application: "write",
+	approve_application: "destructive",
 	cancel_application: "write",
 	generate_application_materials: "runtime",
 	start_application_fill: "runtime",
@@ -295,7 +296,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 	 * console's action route. Each tool below is still registered with its name LITERALLY at the call
 	 * — `scripts/docs-drift.mjs` and the README table read registered names from the source.
 	 */
-	const decision = (name: keyof typeof APPLICATION_TOOL_SCOPES, actions: readonly [string, ...string[]], effect: string, extra: z.ZodRawShape = {}) => {
+	const decision = (name: keyof typeof APPLICATION_TOOL_SCOPES, actions: readonly [string, ...string[]], effect: string, extra: z.ZodRawShape = {}, confirmWith?: string) => {
 		const many = actions.length > 1;
 		const shape: z.ZodRawShape = {
 			...who,
@@ -313,8 +314,17 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 			const auditInput = { instance_id, action, application_id: input.application_id, record_id: input.record_id };
 			const denied = await requirePermission(safetyFor(token), APPLICATION_TOOL_SCOPES[name], name, auditInput);
 			if (denied) return denied;
+			// A destructive decision is confirmed, the convention every other destructive tool in this
+			// surface keeps — and the MCP counterpart of the board's own confirmation dialog, so the
+			// two surfaces ask for the same deliberateness rather than one being the quiet path.
+			// Checked AFTER the dry run below is NOT an option: a dry run describes, so it is allowed
+			// unconfirmed; the real call is not.
+			if (confirmWith && !input.dry_run) {
+				const unconfirmed = await requireConfirmation(safetyFor(token), name, input.confirm as string | undefined, confirmWith, auditInput);
+				if (unconfirmed) return unconfirmed;
+			}
 			const body: Record<string, unknown> = { action };
-			for (const k of ["application_id", "scout_instance_id", "record_id", "expected_status", "expected_version", "runner_instance_id", "note", "defer_until", "answers"]) {
+			for (const k of ["application_id", "scout_instance_id", "record_id", "expected_status", "expected_version", "runner_instance_id", "note", "defer_until", "answers", "idempotency_key"]) {
 				if (input[k] !== undefined) body[k] = input[k];
 			}
 			if (input.dry_run) {
@@ -342,6 +352,23 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 		"Decide a lead or an application. apply: a lead goes to the Tailor (the Scout's own triage, emitting its handoff once — refused when another lead for the same job was already applied for), a deferred application goes back in the queue. skip: a lead. mark_not_interested: a skip (lead) or an archive (application) recorded as not interested. defer / archive: either — PAGS records only, nothing on an employer's site is touched. Only actions listed in the item's `actions` are accepted. Pass expected_status (and expected_version) as you read them.",
 		triage.shape,
 		triage.handler,
+	);
+
+	const approve = decision(
+		"approve_application",
+		["approve_and_proceed"],
+		"A single-use authorization would be recorded for THIS application, and the Runner would fill it and submit it once — no daily cap is required or consumed.",
+		{
+			idempotency_key: z.string().optional().describe("Your own key for this approval, so a retry you cannot tell succeeded reuses the same authorization instead of granting a second one. Omit it and the server derives one from the application and the state version you approved."),
+			confirm: z.string().optional().describe('Must be "approve_application": this authorizes a real submission to an employer, which cannot be recalled.'),
+		},
+		"approve_application",
+	);
+	server.tool(
+		"approve_application",
+		"Approve ONE job application and let it be submitted — the owner's per-application decision (#973), the same command the Applications board's \"Approve & proceed\" button sends. It records a durable, single-use authorization bound to this application and the exact state version you pass, then dispatches the fill that spends it; the reply carries the authorization, the run and the next action. This is NOT a global auto-submit toggle: it requires no daily cap, consumes none, and authorizes nothing but this one application. It cannot be replayed — for another lead, after the materials are re-tailored, or after the run that holds it. The Runner still has to pass its own submit gate (complete materials, an allow-listed domain, no blocker, nothing else running) and its browser safety checks, so an approval permits a submission rather than forcing one. Accepted only for a `materials_ready` application whose `actions` include approve_and_proceed. Pass `dry_run` first to see what would happen.",
+		approve.shape,
+		approve.handler,
 	);
 
 	const generate = decision("generate_application_materials", ["generate_materials", "retry_tailoring"], "A tailoring run would start on the owner's runner.");

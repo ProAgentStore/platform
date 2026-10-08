@@ -29,6 +29,8 @@ import { MATERIALS_READY_EVENT } from "../local-artifact/contract.js";
 import { type JobApplication, getOwnedApplication, getTailorRun } from "../local-artifact/store.js";
 import { cancelTailoring, retryTailoring, startTailoring } from "../local-artifact/tailor.js";
 import { cancelApplyRun, resumeApplyRun, retryFill, runnerSettingsFor, startApplicationFill, submitGateFor } from "../local-apply/apply.js";
+import { approvalEligibility, approvalState } from "../local-apply/approval.js";
+import { getSubmitAuthorization, grantSubmitAuthorization } from "../local-apply/approval-store.js";
 import { type ApplyRun, applicationAudit, getApplyRun, moveApplication } from "../local-apply/store.js";
 import type { Env } from "../../types.js";
 import { runJobLeadTriage } from "../../routes/instances-job-leads.js";
@@ -36,7 +38,7 @@ import { runJobLeadTriage } from "../../routes/instances-job-leads.js";
 export const QUEUE_STATUSES = ["new", "apply_requested", "tailoring", "materials_ready", "filling", "awaiting_review", "submitted", "blocked", "deferred", "skipped", "archived", "failed"] as const;
 export type QueueStatus = (typeof QUEUE_STATUSES)[number];
 
-export const APPLICATION_ACTIONS = ["apply", "skip", "defer", "archive", "generate_materials", "retry_tailoring", "start_fill", "request_review", "retry_fill", "cancel", "resume", "mark_not_interested"] as const;
+export const APPLICATION_ACTIONS = ["apply", "skip", "defer", "archive", "generate_materials", "retry_tailoring", "start_fill", "request_review", "retry_fill", "cancel", "resume", "mark_not_interested", "approve_and_proceed"] as const;
 export type ApplicationAction = (typeof APPLICATION_ACTIONS)[number];
 
 export interface Pipeline {
@@ -83,6 +85,13 @@ export interface QueueItem {
 	 * control is never offered under the default fill-and-review policy.
 	 */
 	submitPolicy: { allowed: boolean; failing: string[] } | null;
+	/**
+	 * The owner's per-application submission approval (#973), when one has ever been granted:
+	 * whether it is still usable, the words to show, who granted it and when, and the run that
+	 * spent it. Null when this application was never approved — which is the default, and the
+	 * reason an unapproved application cannot submit.
+	 */
+	submitAuthorization: { id: string; usable: boolean; label: string; approvedBy: string; approvedAt: string; approvedStateVersion: number; idempotencyKey: string; consumedAt: string | null; consumedRunId: string | null } | null;
 	updatedAt: string;
 	actions: ApplicationAction[];
 }
@@ -180,6 +189,7 @@ function leadItem(scout: string, r: LeadRecord, pipeline: Pipeline): QueueItem {
 		submittedUrl: null,
 		submitAttempted: false,
 		submitPolicy: null,
+		submitAuthorization: null,
 		updatedAt: str(r.updatedAt) ?? "",
 		actions,
 	};
@@ -193,13 +203,23 @@ interface OpenRun {
 }
 
 /** The actions an application in this state can take — the lifecycle table, read for the owner. */
-function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRun | null, submitAllowed: boolean): ApplicationAction[] {
+function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRun | null, submitAllowed: boolean, auth: QueueItem["submitAuthorization"] = null): ApplicationAction[] {
 	const canFill = pipeline.runners.length > 0;
 	switch (app.status) {
 		case "tailoring":
 			return ["cancel"];
 		case "materials_ready":
-			return [...(canFill && submitAllowed ? (["start_fill"] as const) : []), ...(canFill ? (["request_review"] as const) : []), "defer", "archive"];
+			// `approve_and_proceed` (#973) is the owner's per-application decision, offered while the
+			// card is still waiting for one. `start_fill` remains the standing-policy path: it appears
+			// when the gate already allows a submit — which an approval is one way to achieve, so an
+			// approved card shows `start_fill` rather than a second Approve button.
+			return [
+				...(canFill && !auth && !app.submitAttemptedAt ? (["approve_and_proceed"] as const) : []),
+				...(canFill && submitAllowed ? (["start_fill"] as const) : []),
+				...(canFill ? (["request_review"] as const) : []),
+				"defer",
+				"archive",
+			];
 		case "filling":
 			return ["cancel"];
 		case "blocked":
@@ -222,7 +242,7 @@ function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRu
 /** #953: an application that can be archived can be marked not interested (an archive, with that reason). */
 const withNotInterested = (actions: ApplicationAction[]): ApplicationAction[] => (actions.includes("archive") ? [...actions, "mark_not_interested"] : actions);
 
-function applicationItem(app: JobApplication, pipeline: Pipeline, run: OpenRun | null, policy: QueueItem["submitPolicy"]): QueueItem {
+function applicationItem(app: JobApplication, pipeline: Pipeline, run: OpenRun | null, policy: QueueItem["submitPolicy"], auth: QueueItem["submitAuthorization"] = null): QueueItem {
 	const env = (app.lead ?? {}) as { leadUrl?: string; lead?: Record<string, unknown> };
 	const l = env.lead ?? {};
 	return {
@@ -253,8 +273,9 @@ function applicationItem(app: JobApplication, pipeline: Pipeline, run: OpenRun |
 		submittedUrl: app.submittedUrl,
 		submitAttempted: !!app.submitAttemptedAt,
 		submitPolicy: policy,
+		submitAuthorization: auth,
 		updatedAt: iso(app.updatedAt),
-		actions: withNotInterested(applicationActions(app, pipeline, run, !!policy?.allowed)),
+		actions: withNotInterested(applicationActions(app, pipeline, run, !!policy?.allowed, auth)),
 	};
 }
 
@@ -282,6 +303,30 @@ async function openRuns(env: Env, uid: string, runners: string[]): Promise<Map<s
 }
 
 /** The gate preview per Runner, for each materials_ready application. Fails closed. */
+/** The card's view of the owner's approval (#973), for every application that has ever had one. */
+async function approvalViews(env: Env, uid: string, apps: JobApplication[]): Promise<Map<string, QueueItem["submitAuthorization"]>> {
+	const out = new Map<string, QueueItem["submitAuthorization"]>();
+	for (const app of apps) {
+		const auth = await getSubmitAuthorization(env, app.id, uid).catch(() => null);
+		if (!auth) continue;
+		const state = approvalState(auth, app);
+		out.set(app.id, {
+			id: auth.id,
+			usable: state.usable,
+			label: state.label,
+			approvedBy: auth.approvedBy,
+			approvedAt: iso(auth.approvedAt),
+			approvedStateVersion: auth.approvedStateVersion,
+			// Returned so the key a caller sent is readable back — a retry can confirm which
+			// decision the stored authorization belongs to (#574's write/read reachability).
+			idempotencyKey: auth.idempotencyKey,
+			consumedAt: auth.consumedAt ? iso(auth.consumedAt) : null,
+			consumedRunId: auth.consumedRunId,
+		});
+	}
+	return out;
+}
+
 async function policyPreviews(env: Env, uid: string, pipeline: Pipeline, apps: JobApplication[]): Promise<Map<string, QueueItem["submitPolicy"]>> {
 	const out = new Map<string, QueueItem["submitPolicy"]>();
 	const runner = pipeline.runners[0];
@@ -340,7 +385,8 @@ export async function applicationQueue(env: Env, uid: string, instanceId: string
 	const apps = await applicationsOf(env, uid, pipeline.tailors);
 	const runs = await openRuns(env, uid, pipeline.runners);
 	const previews = await policyPreviews(env, uid, pipeline, apps);
-	const items: QueueItem[] = apps.map((a) => applicationItem(a, pipeline, a.fillRunId ? (runs.get(a.fillRunId) ?? null) : null, previews.get(a.id) ?? null));
+	const approvals = await approvalViews(env, uid, apps);
+	const items: QueueItem[] = apps.map((a) => applicationItem(a, pipeline, a.fillRunId ? (runs.get(a.fillRunId) ?? null) : null, previews.get(a.id) ?? null, approvals.get(a.id) ?? null));
 	const appLeads = new Set(apps.map((a) => `${a.sourceInstanceId}:${a.leadId}`));
 	const notes: string[] = [];
 	for (const scout of pipeline.scouts) {
@@ -389,7 +435,8 @@ export async function getQueueItem(env: Env, uid: string, instanceId: string, re
 		if (!app || !pipeline.tailors.includes(app.instanceId)) throw new HttpError(404, "No such application in this pipeline.");
 		const runs = await openRuns(env, uid, pipeline.runners);
 		const previews = await policyPreviews(env, uid, pipeline, [app]);
-		return { item: applicationItem(app, pipeline, app.fillRunId ? (runs.get(app.fillRunId) ?? null) : null, previews.get(app.id) ?? null), pipeline };
+		const approvals = await approvalViews(env, uid, [app]);
+		return { item: applicationItem(app, pipeline, app.fillRunId ? (runs.get(app.fillRunId) ?? null) : null, previews.get(app.id) ?? null, approvals.get(app.id) ?? null), pipeline };
 	}
 	if (ref.scoutInstanceId && ref.recordId) {
 		if (!pipeline.scouts.includes(ref.scoutInstanceId)) throw new HttpError(404, "No such Scout in this pipeline.");
@@ -417,6 +464,12 @@ export interface ActionInput {
 	note?: string;
 	deferUntil?: string;
 	answers?: Array<{ question: string; answer: string }>;
+	/**
+	 * The caller's own key for an `approve_and_proceed` (#973), so a retry it cannot tell succeeded
+	 * reuses the same authorization. Omitted, the key is derived from the application and the state
+	 * version the owner approved, which makes the same decision idempotent either way.
+	 */
+	idempotencyKey?: string;
 }
 
 export function parseActionInput(raw: unknown): ActionInput {
@@ -437,6 +490,7 @@ export function parseActionInput(raw: unknown): ActionInput {
 		note: s("note"),
 		deferUntil: s("defer_until") ?? s("deferUntil"),
 		answers: Array.isArray(o.answers) ? (o.answers as ActionInput["answers"]) : undefined,
+		idempotencyKey: s("idempotency_key") ?? s("idempotencyKey"),
 	};
 }
 
@@ -511,6 +565,44 @@ export async function performApplicationAction(env: Env, uid: string, instanceId
 		case "retry_tailoring": {
 			const out = await retryTailoring(env, app.instanceId, uid, app, now);
 			return after({ runId: out.run.id });
+		}
+		case "approve_and_proceed": {
+			// ONE owner action: record the authorization, then dispatch the fill that spends it. The
+			// grant is idempotent (unique on the application), and `startApplicationFill` is already
+			// replay-safe on the event id — so a double-click, a retried MCP call and a redelivered
+			// event all converge on one authorization and one run, never a second submission.
+			if (!app.readyEvent) throw new HttpError(409, "The application has no materials_ready event to fill from.");
+			const existingAuth = await getSubmitAuthorization(env, app.id, uid);
+			const eligible = approvalEligibility(app, existingAuth);
+			if (!eligible.eligible) throw new HttpError(409, `This application cannot be approved: ${eligible.why}.`);
+			const granted = await grantSubmitAuthorization(
+				env,
+				{
+					app,
+					instanceId: app.instanceId,
+					userId: uid,
+					approvedBy: "owner",
+					// The caller's key when it sent one, else one derived from exactly what was approved:
+					// the application and the state the owner saw. A retry of the same decision reuses it.
+					idempotencyKey: input.idempotencyKey ?? `approve:${app.id}:${app.stateVersion}`,
+				},
+				now,
+			);
+			const out = await startApplicationFill(env, runner, uid, app.readyEvent, "owner");
+			const after = await getSubmitAuthorization(env, app.id, uid);
+			return {
+				item: (await getQueueItem(env, uid, instanceId, { applicationId: app.id })).item,
+				result: {
+					outcome: out.kind,
+					approval: granted.kind,
+					authorizationId: granted.authorization.id,
+					// What actually happened to the authorization: `consumed` is the run that may submit.
+					authorizationConsumedBy: after?.consumedRunId ?? null,
+					runId: out.run?.id ?? null,
+					mode: out.run?.policy.mode ?? null,
+					nextAction: out.run?.policy.mode === "auto_submit" ? "the Runner fills this application and submits it" : "the Runner fills this application and stops for review",
+				},
+			};
 		}
 		case "start_fill":
 		case "request_review": {

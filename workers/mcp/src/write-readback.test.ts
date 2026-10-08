@@ -220,6 +220,8 @@ const READBACK: Record<string, string | null> = {
 	// audit row's reason (application) or the lead's triage_note; defer_until is stored on the lead.
 	"triage_application.action": "application_trace",
 	"triage_application.note": "application_trace",
+	// #973: the authorization carries the key it was granted under; the card returns it.
+	"approve_application.idempotency_key": "get_application",
 	"triage_application.defer_until": "query_instance_records",
 	"generate_application_materials.action": "application_trace",
 	"retry_application.action": "application_trace",

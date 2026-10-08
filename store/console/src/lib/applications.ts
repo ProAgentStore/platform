@@ -38,11 +38,16 @@ export const ACTION_LABEL: Record<ApplicationQueueAction, string> = {
 	cancel: "Cancel",
 	resume: "Resume",
 	mark_not_interested: "Not interested",
+	// #973: the owner's decision about THIS job. Named for what it does, and distinct from
+	// `start_fill` — that one reads a standing policy, this one IS the authorization.
+	approve_and_proceed: "Approve & proceed",
 };
 
 /** Actions that change something outside PAGS records, and so ask before they run. */
 export const CONFIRM: Partial<Record<ApplicationQueueAction, string>> = {
 	start_fill: "Fill this application and SUBMIT it to the employer if the site accepts it? Your auto-submit policy allows it for this one.",
+	// The authorization is single-use, so the confirmation says what the owner is spending it on.
+	approve_and_proceed: "Approve THIS application and submit it to the employer? The approval covers this one job only, is used once, and does not enable auto-submit for anything else.",
 	cancel: "Stop the running tailoring or fill?",
 };
 
@@ -51,5 +56,8 @@ export function actionBody(item: ApplicationQueueItem, action: ApplicationQueueA
 	const target = item.applicationId
 		? { application_id: item.applicationId, expected_version: item.stateVersion ?? undefined }
 		: { scout_instance_id: item.scoutInstanceId, record_id: item.leadId, expected_version: item.leadVersion ?? undefined };
-	return { action, expected_status: item.status, ...target, ...(extra.answers?.length ? { answers: extra.answers } : {}) };
+	// #973: an approval carries the key the server would derive anyway, so a double-click or a
+	// retried request reuses the same authorization instead of racing for a second one.
+	const idem = action === "approve_and_proceed" && item.applicationId ? { idempotency_key: `approve:${item.applicationId}:${item.stateVersion ?? 0}` } : {};
+	return { action, expected_status: item.status, ...target, ...idem, ...(extra.answers?.length ? { answers: extra.answers } : {}) };
 }

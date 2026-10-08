@@ -218,7 +218,11 @@ describe("no submit path under the default fill-and-review policy", () => {
 		const it1 = item(q.body.items, "app:f1");
 		expect(it1?.submitPolicy).toMatchObject({ allowed: false });
 		expect(it1?.submitPolicy.failing).toContain("auto_submit_enabled");
-		expect(it1?.actions).toEqual(["request_review", "defer", "archive", "mark_not_interested"]);
+		// #973 added the owner's per-application approval, which is offered here BECAUSE the standing
+		// policy refuses: it is the one way this card can reach a submit. `start_fill` — the
+		// standing-policy control — is still absent, which is what this test is about.
+		expect(it1?.actions).toEqual(["approve_and_proceed", "request_review", "defer", "archive", "mark_not_interested"]);
+		expect(it1?.actions).not.toContain("start_fill");
 		const refused = await act("ap", { action: "start_fill", application_id: "f1", expected_status: "materials_ready" });
 		expect(refused.status).toBe(409);
 		expect(refused.body.error).toMatch(/does not allow an automatic submit/);
@@ -233,13 +237,15 @@ describe("no submit path under the default fill-and-review policy", () => {
 		readyApp("f2");
 		readyApp("f3");
 		const q = await call("GET", "/t1/application-queue");
-		expect(item(q.body.items, "app:f2")?.actions).toEqual(["start_fill", "request_review", "defer", "archive", "mark_not_interested"]);
+		expect(item(q.body.items, "app:f2")?.actions).toEqual(["approve_and_proceed", "start_fill", "request_review", "defer", "archive", "mark_not_interested"]);
 		expect(q.body.limits).toEqual([{ runnerInstanceId: "ap", autoSubmitEnabled: true, dailyCap: 2, usedToday: 0, remaining: 2 }]);
 		const submitted = await call("POST", "/t1/application-queue/actions", { action: "start_fill", application_id: "f3", expected_status: "materials_ready" });
 		expect(submitted.body.result.mode).toBe("auto_submit");
 		// One open run: the gate's concurrency check now withholds the submit control from the other.
 		const after = (await call("GET", "/t1/application-queue/item?application_id=f2")).body.item;
-		expect(after.actions).toEqual(["request_review", "defer", "archive", "mark_not_interested"]);
+		// An approval is still offerable while another run holds the slot — granting one is a decision,
+		// and the gate's own concurrency check is what refuses the dispatch until the slot frees.
+		expect(after.actions).toEqual(["approve_and_proceed", "request_review", "defer", "archive", "mark_not_interested"]);
 		expect(after.submitPolicy.failing).toEqual(["concurrency"]);
 		const reviewed = await call("POST", "/t1/application-queue/actions", { action: "request_review", application_id: "f2", expected_status: "materials_ready" });
 		expect(reviewed.body.result.mode).toBe("fill_and_review");

@@ -220,6 +220,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	list_applications: "read",
 	get_application: "read",
 	application_trace: "read",
+	approve_application: "destructive",
 	application_runs: "read",
 	application_run: "read",
 	application_run_supervision: "read",
@@ -658,7 +659,9 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// turn, create an enduring version, or create/scaffold a template. They all require the
 	// destructive scope, an exact confirm and a no-network dry run, because this is the creator's
 	// shared source template rather than a caller-private instance.
-	destructive: 31,
+	// +1 at #973: `approve_application`. Destructive by this file's own rule — it authorizes a
+	// submission to an employer, which cannot be recalled, the same reason `apply_to_job` is.
+	destructive: 32,
 };
 
 /** The subset of MCP's `ToolAnnotations` this server can state honestly.

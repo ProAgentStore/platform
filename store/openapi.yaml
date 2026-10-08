@@ -7806,7 +7806,7 @@ paths:
               type: object
               required: [action, expected_status]
               properties:
-                action: { type: string, enum: [apply, skip, defer, archive, generate_materials, retry_tailoring, start_fill, request_review, retry_fill, cancel, resume, mark_not_interested] }
+                action: { type: string, enum: [apply, skip, defer, archive, generate_materials, retry_tailoring, start_fill, request_review, retry_fill, cancel, resume, mark_not_interested, approve_and_proceed] }
                 application_id: { type: string }
                 scout_instance_id: { type: string }
                 record_id: { type: string }

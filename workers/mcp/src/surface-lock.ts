@@ -1065,4 +1065,10 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// submit-gate verdicts, event trace and supervisor checkpoints were HTTP-only. 275
 	// registrations become 279, `MCP_TOOL_ALWAYS_ON` 249 → 253, gated stays 26. Appended.
 	"0.1.94": "sha256:07574ebdb0a6c6e5d85d3e34927b66f51ab60acef1e12fe971c6884ee2cc3487",
+	// 0.1.95 (#973): one new tool NAME — `approve_application`, the owner's per-application
+	// submission authorization, posting the SAME `approve_and_proceed` action the board's button
+	// sends. `destructive` + confirmed (`confirm: "approve_application"`), because it authorizes a
+	// submission to an employer that cannot be recalled — the rule `apply_to_job` is classed by.
+	// 279 registrations become 280, `MCP_TOOL_ALWAYS_ON` 253 → 254, gated stays 26. Appended.
+	"0.1.95": "sha256:ec0d49982a6a3716735cc356a87132d180961d1a42bc9e2468605512cdd9b371",
 };
