@@ -748,6 +748,8 @@ export interface ApplicationQueueItem {
 	submittedUrl: string | null;
 	submitAttempted: boolean;
 	submitPolicy: { allowed: boolean; failing: string[] } | null;
+	/** Why this card's run is waiting for the machine rather than working (#974). */
+	queue: { position: number; attempts: number; nextAttemptAt: string | null; reason: string | null; exhausted: boolean; label: string } | null;
 	/** The owner's per-application submission approval (#973), once one has been granted. */
 	submitAuthorization: { id: string; usable: boolean; label: string; approvedBy: string; approvedAt: string; approvedStateVersion: number; idempotencyKey: string; consumedAt: string | null; consumedRunId: string | null } | null;
 	updatedAt: string;

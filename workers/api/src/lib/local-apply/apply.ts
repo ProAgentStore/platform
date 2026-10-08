@@ -52,6 +52,8 @@ import {
 	moveApplication,
 	updateApplyRun,
 } from "./store.js";
+import { claimQueuedDispatch, instancesWithQueuedRuns, nextDueQueuedRun, noteQueued } from "../applications/work-queue-store.js";
+import { QUEUE_MAX_ATTEMPTS, refusalVerdict } from "../applications/work-queue.js";
 import { approvalState } from "./approval.js";
 import { consumeSubmitAuthorization, getSubmitAuthorization } from "./approval-store.js";
 import { listSupervisorCheckpoints, noteSupervisorDirectiveDelivery, receiveSupervisorCheckpoint, sanitizeSupervisorFacts, type SupervisorDirective } from "./supervision.js";
@@ -137,6 +139,35 @@ export async function runnerSettingsFor(env: Env, runnerInstanceId: string, uid:
 }
 
 /**
+ * The task the runner is sent, built from the run's OWN recorded policy (#974).
+ *
+ * One builder for the first dispatch and for a re-dispatch out of the queue: a second construction
+ * of this envelope would be a second answer to "what was this run allowed to do", and the submit
+ * mode and gate id live in it. Reading them off `run.policy` means a queued run that waits an hour
+ * is dispatched as the decision that was recorded when the owner approved it.
+ */
+export function applyTaskEnvelope(run: ApplyRun, app: JobApplication, s: ApplicationRunnerSettings): LocalApplyTaskEnvelope {
+	const lead = (app.lead ?? {}) as { leadUrl?: string; lead?: { title?: string; company?: string; location?: string } };
+	return {
+		type: LOCAL_APPLY_TASK_TYPE,
+		runId: run.id,
+		requestId: run.requestId,
+		instanceId: run.instanceId,
+		applicationId: run.applicationId,
+		engine: s.engine,
+		authMode: s.authMode,
+		browserProfile: s.browserProfile,
+		applicationUrl: str(lead.leadUrl),
+		job: { title: str(lead.lead?.title) || "the job", ...(lead.lead?.company ? { company: lead.lead.company } : {}), ...(lead.lead?.location ? { location: lead.lead.location } : {}) },
+		workspace: s.workspace,
+		sources: (["profile", "answers"] as const).filter((r) => s.sources[r]).map((role) => ({ role, path: s.sources[role] as string })),
+		artifacts: [app.resumeArtifact, app.coverLetterArtifact].filter((a): a is NonNullable<typeof a> => !!a).map((a) => ({ kind: a.kind, path: a.path, sha256: a.sha256 })),
+		policy: { mode: run.policy.mode, allowDomains: run.policy.allowDomains, ...(run.policy.gate.gateId ? { submitGate: { gateId: run.policy.gate.gateId } } : {}) },
+		limits: run.policy.limits,
+	};
+}
+
+/**
  * `review: true` (#958 "Request review") pins the run to fill_and_review whatever the policy says:
  * the gate is still evaluated and recorded, with `review_requested` as a failing check.
  */
@@ -215,23 +246,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	await insertApplyRun(env, { id: runId, instanceId, userId: uid, applicationId, requestId: key, policy, trace, now });
 	let run = (await getApplyRun(env, instanceId, uid, runId)) as ApplyRun;
 
-	const envelope: LocalApplyTaskEnvelope = {
-		type: LOCAL_APPLY_TASK_TYPE,
-		runId,
-		requestId: key,
-		instanceId,
-		applicationId,
-		engine: s.engine,
-		authMode: s.authMode,
-		browserProfile: s.browserProfile,
-		applicationUrl: leadUrl,
-		job: { title: str(lead.lead?.title) || "the job", ...(lead.lead?.company ? { company: lead.lead.company } : {}), ...(lead.lead?.location ? { location: lead.lead.location } : {}) },
-		workspace: s.workspace,
-		sources: (["profile", "answers"] as const).filter((r) => s.sources[r]).map((role) => ({ role, path: s.sources[role] as string })),
-		artifacts: [app.resumeArtifact, app.coverLetterArtifact].filter((a): a is NonNullable<typeof a> => !!a).map((a) => ({ kind: a.kind, path: a.path, sha256: a.sha256 })),
-		policy: { mode, allowDomains: policy.allowDomains, ...(gateId ? { submitGate: { gateId } } : {}) },
-		limits: policy.limits,
-	};
+	const envelope = applyTaskEnvelope(run, app, s);
 	const fail = async (errorCode: string, error: string) => {
 		run = (await updateApplyRun(env, run, { to: "failed", errorCode, error, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: errorCode } }] }, now)) ?? run;
 		await move(env, uid, applicationId, ["filling"], { to: "blocked", actor: "system", actorInstanceId: instanceId, runId, expectRun: runId, reason: errorCode, questions: [error] }, now);
@@ -244,9 +259,16 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	}
 	if (res) {
 		const payload = (await runtimeJson(res)) as Record<string, unknown>;
+		const refusal = res.ok ? { defer: false as const } : refusalVerdict({ status: res.status, error: typeof payload.error === "string" ? payload.error : undefined, code: typeof payload.code === "string" ? payload.code : undefined });
 		if (res.status === 404) await fail("runner_unsupported", "The connected runner cannot fill applications yet. Update the CLI (npm i -g @proagentstore/cli) and run `pags up` again.");
+		// The machine is busy with the owner's OTHER application, which is a WAIT, not a failure
+		// (#974). The run stays `queued` — it already is the queue entry — and the per-minute sweep
+		// dispatches it when the slot frees. Before this, five leads approved at once left one run
+		// and four dead applications for the owner to retry by hand.
+		else if (refusal.defer) await noteQueued(env, "local_apply_runs", runId, refusal.message, now);
 		else if (!res.ok) await fail("runner_rejected", `The runner refused the run: ${typeof payload.error === "string" ? payload.error.slice(0, 500) : `HTTP ${res.status}`}`);
 		else run = (await updateApplyRun(env, run, { to: "running", runnerNode: runtime.runner_node || null, events: [{ type: "runner.dispatched", at: iso(now), detail: { status: "running", mode } }] }, now)) ?? run;
+		if (refusal.defer) run = (await getApplyRun(env, instanceId, uid, runId)) ?? run;
 	}
 	return { kind: "started", application: (await getOwnedApplication(env, uid, applicationId)) as JobApplication, run };
 }
@@ -490,6 +512,59 @@ export async function retryFill(env: Env, runnerInstanceId: string, uid: string,
 	return startApplicationFill(env, runnerInstanceId, uid, { eventId: `${ready.eventId}:retry:${app.stateVersion + 1}`, applicationId: app.id, tailorInstanceId: app.instanceId }, "owner", opts);
 }
 
+/**
+ * Dispatch this Runner's next queued fill, if its machine slot is free and the wait is up (#974).
+ *
+ * Returns what happened, so a sweep can report it. The claim comes BEFORE the machine is asked
+ * (`claimQueuedDispatch` is conditional on the attempt count), so two sweeps overlapping on one
+ * instance cannot both dispatch the same run — and a dispatch that dies mid-flight leaves the row
+ * due again later rather than claimed forever.
+ *
+ * Attempts are bounded: a machine that never frees settles the application as blocked, with the
+ * reason the owner can act on, instead of waiting in silence for ever.
+ */
+export async function dispatchNextQueuedFill(env: Env, instanceId: string, uid: string, now = Date.now()): Promise<"dispatched" | "queued" | "idle" | "exhausted"> {
+	const next = await nextDueQueuedRun(env, "local_apply_runs", instanceId, uid, now);
+	if (!next) return "idle";
+	const run = await getApplyRun(env, instanceId, uid, next.id);
+	const app = await getOwnedApplication(env, uid, next.applicationId);
+	if (!run || !app) return "idle";
+	if (next.attempts >= QUEUE_MAX_ATTEMPTS) {
+		const failed = await updateApplyRun(env, run, { to: "failed", errorCode: "runner_busy", error: `The machine never freed up for this application after ${next.attempts} attempts.`, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: "runner_busy" } }] }, now);
+		if (failed) await move(env, uid, run.applicationId, ["filling"], { to: "blocked", actor: "system", actorInstanceId: instanceId, runId: run.id, expectRun: run.id, reason: "runner_busy", questions: ["Your machine stayed busy. Retry this application when a run has finished."] }, now);
+		return "exhausted";
+	}
+	if (!(await claimQueuedDispatch(env, "local_apply_runs", next, now))) return "queued";
+	const runtime = await getLiveRuntime(env, instanceId, uid).catch(() => null);
+	if (!runtime) {
+		await noteQueued(env, "local_apply_runs", run.id, "No runner is connected — run `pags up` on the machine that holds your job materials.", now);
+		return "queued";
+	}
+	const s = await runnerSettingsFor(env, instanceId, uid).catch(() => null);
+	if (!s) return "queued";
+	let res: Response | null = null;
+	try {
+		res = await callRuntime(env, runtime, LOCAL_APPLY_RUN_PATH, { method: "POST", body: JSON.stringify(applyTaskEnvelope(run, app, s)) });
+	} catch {
+		await noteQueued(env, "local_apply_runs", run.id, "The runner did not answer; waiting to try again.", now);
+		return "queued";
+	}
+	const payload = (await runtimeJson(res)) as Record<string, unknown>;
+	if (res.ok) {
+		await updateApplyRun(env, run, { to: "running", runnerNode: runtime.runner_node || null, events: [{ type: "runner.dispatched", at: iso(now), detail: { status: "running", mode: run.policy.mode, from: "queue" } }] }, now);
+		return "dispatched";
+	}
+	const refusal = refusalVerdict({ status: res.status, error: typeof payload.error === "string" ? payload.error : undefined, code: typeof payload.code === "string" ? payload.code : undefined });
+	if (refusal.defer) {
+		await noteQueued(env, "local_apply_runs", run.id, refusal.message, now);
+		return "queued";
+	}
+	// A refusal that is NOT a wait ends the run, exactly as the first dispatch would have.
+	const failed = await updateApplyRun(env, run, { to: "failed", errorCode: "runner_rejected", error: `The runner refused the run: ${typeof payload.error === "string" ? payload.error.slice(0, 500) : `HTTP ${res.status}`}`, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: "runner_rejected" } }] }, now);
+	if (failed) await move(env, uid, run.applicationId, ["filling"], { to: "blocked", actor: "system", actorInstanceId: instanceId, runId: run.id, expectRun: run.id, reason: "runner_rejected", questions: [typeof payload.error === "string" ? payload.error.slice(0, 300) : `HTTP ${res.status}`] }, now);
+	return "exhausted";
+}
+
 export async function syncActiveApplyRuns(env: Env, limit = 25): Promise<number> {
 	const now = Date.now();
 	let synced = 0;
@@ -498,6 +573,12 @@ export async function syncActiveApplyRuns(env: Env, limit = 25): Promise<number>
 		if (!run) continue;
 		await syncApplyRun(env, r.userId, run, now).catch(() => undefined);
 		synced++;
+	}
+	// Then move the line along (#974). AFTER the pulls above, so a run that just ended has already
+	// released the machine slot in this same tick and the next queued application starts now rather
+	// than a minute later. Each instance is independent: one that cannot dispatch must not stop the rest.
+	for (const i of await instancesWithQueuedRuns(env, "local_apply_runs", limit)) {
+		await dispatchNextQueuedFill(env, i.instanceId, i.userId, now).catch(() => undefined);
 	}
 	return synced;
 }

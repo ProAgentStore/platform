@@ -127,6 +127,138 @@ async function call(method: string, path: string, body?: unknown) {
 const appCount = async () => (await d1.DB.prepare("SELECT COUNT(*) AS n FROM job_applications").first<{ n: number }>())?.n;
 const runCount = async () => (await d1.DB.prepare("SELECT COUNT(*) AS n FROM local_artifact_runs").first<{ n: number }>())?.n;
 
+// ── #974: five approved leads must QUEUE behind one machine, not die on it ───────────────────
+//
+// The production failure: five leads approved at once → one tailoring run and four applications
+// terminally `blocked: runner_rejected: This machine is already tailoring 1 application(s)`, each
+// needing a manual retry. Over the real schema and the real connection outbox.
+describe("approved work queues behind a busy machine (#974)", () => {
+	const BUSY = { status: 409, body: { error: "This machine is already tailoring 1 application(s) for this agent (limit 1)." } };
+	/** The #955 handoff for one of N distinct leads. */
+	const leadN = (n: number) => {
+		const plan = planJobLeadTriage(
+			{ id: `lead-${n}`, data: { ...LEAD_RECORD.data, url: `https://jobs.example.com/${n}`, status: "new" } } as never,
+			{ action: "apply", sourceInstanceId: "scout" },
+			{ now: `2026-10-07T00:0${n}:00.000Z` },
+		);
+		if (!plan.ok || !plan.event) throw new Error("fixture lead did not plan");
+		return plan.event;
+	};
+	const runRows = async () =>
+		(await d1.DB.prepare("SELECT id, application_id, status, attempts, queued_reason FROM local_artifact_runs ORDER BY created_at, id").all<Record<string, unknown>>()).results ?? [];
+	const dispatched = () => sent.filter((x) => x.path === "/local-artifact/run").length;
+
+	it("five approvals at once: one run starts, four wait in line, none is terminally blocked", async () => {
+		// The machine takes the first and refuses the rest, exactly as the real runner does.
+		let served = 0;
+		answers["/local-artifact/run"] = { status: 202, body: { status: "running" } };
+		const relayBusyAfterFirst = () => {
+			served++;
+			answers["/local-artifact/run"] = served >= 1 ? BUSY : { status: 202, body: { status: "running" } };
+		};
+		for (let n = 1; n <= 5; n++) {
+			const ev = leadN(n);
+			await deliverEvent(env(), "scout", "u1", JOB_LEAD_APPLY_EVENT, [ev], { traceId: ev.eventId });
+			relayBusyAfterFirst();
+		}
+		const rows = await runRows();
+		expect(rows).toHaveLength(5);
+		expect(rows.filter((r) => r.status === "running")).toHaveLength(1);
+		expect(rows.filter((r) => r.status === "queued")).toHaveLength(4);
+		// NOT the old behaviour: nothing failed, and no application is blocked.
+		expect(rows.filter((r) => r.status === "failed")).toHaveLength(0);
+		const apps = (await d1.DB.prepare("SELECT status, block_reason FROM job_applications").all<Record<string, unknown>>()).results ?? [];
+		expect(apps.filter((a) => a.status === "blocked")).toHaveLength(0);
+		expect(apps.every((a) => a.block_reason === null)).toBe(true);
+		// Each waiting run records WHY, in the machine's own words.
+		for (const r of rows.filter((x) => x.status === "queued")) expect(String(r.queued_reason)).toMatch(/already tailoring/);
+	});
+
+	it("the line moves on its own: when the machine frees, the next queued run dispatches", async () => {
+		answers["/local-artifact/run"] = { status: 202, body: { status: "running" } };
+		const first = leadN(1);
+		await deliverEvent(env(), "scout", "u1", JOB_LEAD_APPLY_EVENT, [first], { traceId: first.eventId });
+		answers["/local-artifact/run"] = BUSY;
+		const second = leadN(2);
+		await deliverEvent(env(), "scout", "u1", JOB_LEAD_APPLY_EVENT, [second], { traceId: second.eventId });
+		expect((await runRows()).filter((r) => r.status === "queued")).toHaveLength(1);
+		const dispatchesBefore = dispatched();
+
+		// The first run ends; the machine is free and accepts the next.
+		const runningId = String((await runRows()).find((r) => r.status === "running")?.id);
+		runnerEnds(RESULT(runningId));
+		answers["/local-artifact/run"] = { status: 202, body: { status: "running" } };
+		await syncActiveTailorRuns(env());
+
+		expect(dispatched(), "the queued run was dispatched without the owner retrying").toBeGreaterThan(dispatchesBefore);
+		const after = await runRows();
+		expect(after.filter((r) => r.status === "queued")).toHaveLength(0);
+		expect(after.filter((r) => r.status === "running")).toHaveLength(1);
+	});
+
+	it("a queued run is not re-asked every tick — the backoff holds it until it is due", async () => {
+		answers["/local-artifact/run"] = BUSY;
+		const ev = leadN(1);
+		await deliverEvent(env(), "scout", "u1", JOB_LEAD_APPLY_EVENT, [ev], { traceId: ev.eventId });
+		const queued = (await runRows())[0];
+		expect(queued.status).toBe("queued");
+		const before = dispatched();
+		// Two sweeps in the same minute: the first claims and asks, the second finds nothing due.
+		await syncActiveTailorRuns(env());
+		const afterFirst = dispatched();
+		await syncActiveTailorRuns(env());
+		expect(dispatched(), "the second sweep must not re-ask the machine").toBe(afterFirst);
+		expect(afterFirst).toBeGreaterThan(before);
+		const row = (await runRows())[0];
+		expect(Number(row.attempts)).toBeGreaterThanOrEqual(1);
+	});
+
+	it("a replayed handoff still makes no second run or application, queued or not", async () => {
+		answers["/local-artifact/run"] = BUSY;
+		const ev = leadN(1);
+		await deliverEvent(env(), "scout", "u1", JOB_LEAD_APPLY_EVENT, [ev], { traceId: ev.eventId });
+		expect(await runCount()).toBe(1);
+		expect(await appCount()).toBe(1);
+		// The outbox redelivers the SAME event (a restart, a retry): the unique (instance, request_id)
+		// index is what makes this one run, and queueing does not weaken it.
+		await deliverEvent(env(), "scout", "u1", JOB_LEAD_APPLY_EVENT, [ev], { traceId: ev.eventId });
+		await call("POST", "/t1/applications", { event: ev });
+		expect(await runCount()).toBe(1);
+		expect(await appCount()).toBe(1);
+		expect((await runRows())[0].status).toBe("queued");
+	});
+
+	it("a refusal that is NOT a wait still fails the application, as it always did", async () => {
+		// The 409 that must never be retried: the run is bound to another request on that machine.
+		answers["/local-artifact/run"] = { status: 409, body: { error: "Run xyz already exists with another requestId" } };
+		const ev = leadN(1);
+		await deliverEvent(env(), "scout", "u1", JOB_LEAD_APPLY_EVENT, [ev], { traceId: ev.eventId });
+		const rows = await runRows();
+		expect(rows[0].status).toBe("failed");
+		const app = await d1.DB.prepare("SELECT status, block_reason FROM job_applications").first<Record<string, unknown>>();
+		expect(app).toMatchObject({ status: "blocked", block_reason: "runner_rejected" });
+	});
+
+	it("the card says it is waiting, with its place in line — not that it failed", async () => {
+		answers["/local-artifact/run"] = { status: 202, body: { status: "running" } };
+		const first = leadN(1);
+		await deliverEvent(env(), "scout", "u1", JOB_LEAD_APPLY_EVENT, [first], { traceId: first.eventId });
+		answers["/local-artifact/run"] = BUSY;
+		for (const n of [2, 3]) {
+			const ev = leadN(n);
+			await deliverEvent(env(), "scout", "u1", JOB_LEAD_APPLY_EVENT, [ev], { traceId: ev.eventId });
+		}
+		const queue = await call("GET", "/t1/application-queue");
+		const waiting = (queue.body.items as Array<Record<string, any>>).filter((i) => i.queue);
+		expect(waiting).toHaveLength(2);
+		expect(waiting.map((i) => i.queue.position).sort()).toEqual([1, 2]);
+		expect(waiting[0].status, "waiting is not a terminal state").toBe("tailoring");
+		expect(waiting.some((i) => /in line/.test(i.queue.label))).toBe(true);
+		// The running one is not described as waiting.
+		expect((queue.body.items as Array<Record<string, any>>).find((i) => i.queue === null)).toBeTruthy();
+	});
+});
+
 describe("end to end: apply_requested → materials_ready, exactly once", () => {
 	it("tailors once however often the lead is delivered, and emits materials_ready once however often it is synced", async () => {
 		const event = leadEvent();

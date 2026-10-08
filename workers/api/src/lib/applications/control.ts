@@ -30,6 +30,8 @@ import { type JobApplication, getOwnedApplication, getTailorRun } from "../local
 import { cancelTailoring, retryTailoring, startTailoring } from "../local-artifact/tailor.js";
 import { cancelApplyRun, resumeApplyRun, retryFill, runnerSettingsFor, startApplicationFill, submitGateFor } from "../local-apply/apply.js";
 import { approvalEligibility, approvalState } from "../local-apply/approval.js";
+import { queueFieldsFor, queuePosition } from "./work-queue-store.js";
+import { type QueueView as RunQueueView, queueView, queuedLabel } from "./work-queue.js";
 import { getSubmitAuthorization, grantSubmitAuthorization } from "../local-apply/approval-store.js";
 import { type ApplyRun, applicationAudit, getApplyRun, moveApplication } from "../local-apply/store.js";
 import type { Env } from "../../types.js";
@@ -91,6 +93,13 @@ export interface QueueItem {
 	 * spent it. Null when this application was never approved — which is the default, and the
 	 * reason an unapproved application cannot submit.
 	 */
+	/**
+	 * Why a run is WAITING rather than working (#974): its place in its machine's line, how many
+	 * times the machine has been asked, when the next attempt is due, and the sentence to show.
+	 * Null unless this card's run is queued — so its presence IS "this is waiting its turn", which
+	 * is what the owner could not tell from a terminal `runner_rejected` before.
+	 */
+	queue: (RunQueueView & { label: string }) | null;
 	submitAuthorization: { id: string; usable: boolean; label: string; approvedBy: string; approvedAt: string; approvedStateVersion: number; idempotencyKey: string; consumedAt: string | null; consumedRunId: string | null } | null;
 	updatedAt: string;
 	actions: ApplicationAction[];
@@ -189,6 +198,7 @@ function leadItem(scout: string, r: LeadRecord, pipeline: Pipeline): QueueItem {
 		submittedUrl: null,
 		submitAttempted: false,
 		submitPolicy: null,
+		queue: null,
 		submitAuthorization: null,
 		updatedAt: str(r.updatedAt) ?? "",
 		actions,
@@ -242,7 +252,7 @@ function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRu
 /** #953: an application that can be archived can be marked not interested (an archive, with that reason). */
 const withNotInterested = (actions: ApplicationAction[]): ApplicationAction[] => (actions.includes("archive") ? [...actions, "mark_not_interested"] : actions);
 
-function applicationItem(app: JobApplication, pipeline: Pipeline, run: OpenRun | null, policy: QueueItem["submitPolicy"], auth: QueueItem["submitAuthorization"] = null): QueueItem {
+function applicationItem(app: JobApplication, pipeline: Pipeline, run: OpenRun | null, policy: QueueItem["submitPolicy"], auth: QueueItem["submitAuthorization"] = null, q: QueueItem["queue"] = null): QueueItem {
 	const env = (app.lead ?? {}) as { leadUrl?: string; lead?: Record<string, unknown> };
 	const l = env.lead ?? {};
 	return {
@@ -273,6 +283,7 @@ function applicationItem(app: JobApplication, pipeline: Pipeline, run: OpenRun |
 		submittedUrl: app.submittedUrl,
 		submitAttempted: !!app.submitAttemptedAt,
 		submitPolicy: policy,
+		queue: q,
 		submitAuthorization: auth,
 		updatedAt: iso(app.updatedAt),
 		actions: withNotInterested(applicationActions(app, pipeline, run, !!policy?.allowed, auth)),
@@ -303,6 +314,33 @@ async function openRuns(env: Env, uid: string, runners: string[]): Promise<Map<s
 }
 
 /** The gate preview per Runner, for each materials_ready application. Fails closed. */
+/**
+ * The waiting view (#974) for every application whose run is queued.
+ *
+ * Which table to read follows the application's own status: `tailoring` waits on the Tailor's run,
+ * `filling` on the Runner's. Nothing else can be waiting for a machine, so nothing else is read —
+ * this runs for every card the queue renders.
+ */
+async function queueViews(env: Env, uid: string, apps: JobApplication[], now: number): Promise<Map<string, QueueItem["queue"]>> {
+	const out = new Map<string, QueueItem["queue"]>();
+	for (const app of apps) {
+		const table = app.status === "tailoring" ? "local_artifact_runs" : app.status === "filling" ? "local_apply_runs" : null;
+		const runId = app.status === "tailoring" ? app.tailoringRunId : app.fillRunId;
+		if (!table || !runId) continue;
+		const row = await env.DB.prepare(`SELECT id, instance_id, user_id, status, created_at FROM ${table} WHERE id = ?1 AND user_id = ?2`)
+			.bind(runId, uid)
+			.first<{ id: string; instance_id: string; user_id: string; status: string; created_at: number }>()
+			.catch(() => null);
+		if (row?.status !== "queued") continue;
+		const fields = await queueFieldsFor(env, table, runId).catch(() => null);
+		if (!fields) continue;
+		const position = await queuePosition(env, table, { id: row.id, instanceId: row.instance_id, userId: row.user_id, createdAt: row.created_at }).catch(() => 1);
+		const view = queueView({ position, attempts: fields.attempts, nextAttemptAt: fields.nextAttemptAt, reason: fields.reason }, now);
+		out.set(app.id, { ...view, label: queuedLabel(view) });
+	}
+	return out;
+}
+
 /** The card's view of the owner's approval (#973), for every application that has ever had one. */
 async function approvalViews(env: Env, uid: string, apps: JobApplication[]): Promise<Map<string, QueueItem["submitAuthorization"]>> {
 	const out = new Map<string, QueueItem["submitAuthorization"]>();
@@ -386,7 +424,8 @@ export async function applicationQueue(env: Env, uid: string, instanceId: string
 	const runs = await openRuns(env, uid, pipeline.runners);
 	const previews = await policyPreviews(env, uid, pipeline, apps);
 	const approvals = await approvalViews(env, uid, apps);
-	const items: QueueItem[] = apps.map((a) => applicationItem(a, pipeline, a.fillRunId ? (runs.get(a.fillRunId) ?? null) : null, previews.get(a.id) ?? null, approvals.get(a.id) ?? null));
+	const queues = await queueViews(env, uid, apps, Date.now());
+	const items: QueueItem[] = apps.map((a) => applicationItem(a, pipeline, a.fillRunId ? (runs.get(a.fillRunId) ?? null) : null, previews.get(a.id) ?? null, approvals.get(a.id) ?? null, queues.get(a.id) ?? null));
 	const appLeads = new Set(apps.map((a) => `${a.sourceInstanceId}:${a.leadId}`));
 	const notes: string[] = [];
 	for (const scout of pipeline.scouts) {
@@ -436,7 +475,8 @@ export async function getQueueItem(env: Env, uid: string, instanceId: string, re
 		const runs = await openRuns(env, uid, pipeline.runners);
 		const previews = await policyPreviews(env, uid, pipeline, [app]);
 		const approvals = await approvalViews(env, uid, [app]);
-		return { item: applicationItem(app, pipeline, app.fillRunId ? (runs.get(app.fillRunId) ?? null) : null, previews.get(app.id) ?? null, approvals.get(app.id) ?? null), pipeline };
+		const queues = await queueViews(env, uid, [app], Date.now());
+		return { item: applicationItem(app, pipeline, app.fillRunId ? (runs.get(app.fillRunId) ?? null) : null, previews.get(app.id) ?? null, approvals.get(app.id) ?? null, queues.get(app.id) ?? null), pipeline };
 	}
 	if (ref.scoutInstanceId && ref.recordId) {
 		if (!pipeline.scouts.includes(ref.scoutInstanceId)) throw new HttpError(404, "No such Scout in this pipeline.");

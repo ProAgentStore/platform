@@ -13,6 +13,8 @@
  * workflow), not `runtime: coding`: its own runtime, `local_artifact`, its own task and tables.
  */
 import { HttpError } from "../auth.js";
+import { claimQueuedDispatch, instancesWithQueuedRuns, nextDueQueuedRun, noteQueued } from "../applications/work-queue-store.js";
+import { QUEUE_MAX_ATTEMPTS, refusalVerdict } from "../applications/work-queue.js";
 import { moveApplication } from "../local-apply/store.js";
 import { capabilitiesForInstance } from "../agent-capabilities.js";
 import { deliverEvent } from "../connections.js";
@@ -167,18 +169,7 @@ async function dispatchTailoring(
 		now,
 	});
 	let run = (await getTailorRun(env, instanceId, uid, runId)) as TailorRun;
-	const envelope: LocalArtifactTaskEnvelope = {
-		type: LOCAL_ARTIFACT_TASK_TYPE,
-		runId,
-		requestId,
-		instanceId,
-		engine: s.engine,
-		authMode: s.authMode,
-		workspace: s.workspace,
-		sources: policy.sources,
-		lead,
-		policy: { retainDays: s.retainDays, maxMinutes: s.maxMinutes, maxConcurrent: 1 },
-	};
+	const envelope = tailorTaskEnvelope(run, lead, s);
 	const fail = async (errorCode: string, error: string) => {
 		run = (await updateTailorRun(env, run, { to: "failed", errorCode, error, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: errorCode } }] }, now)) ?? run;
 		await settleApplication(env, instanceId, uid, applicationId, runId, { to: "blocked", blockReason: errorCode, blockQuestions: [error] }, now);
@@ -191,9 +182,15 @@ async function dispatchTailoring(
 	}
 	if (res) {
 		const payload = (await runtimeJson(res)) as Record<string, unknown>;
+		const refusal = res.ok ? { defer: false as const } : refusalVerdict({ status: res.status, error: typeof payload.error === "string" ? payload.error : undefined, code: typeof payload.code === "string" ? payload.code : undefined });
 		if (res.status === 404) await fail("runner_unsupported", "The connected runner does not support the Application Tailor yet. Update the CLI (npm i -g @proagentstore/cli) and run `pags up` again.");
+		// Busy is a WAIT (#974): the run stays `queued` and the sweep dispatches it when the machine's
+		// one tailoring slot frees. This is the exact production failure — five approved leads, one
+		// run, and four applications terminally `runner_rejected`.
+		else if (refusal.defer) await noteQueued(env, "local_artifact_runs", runId, refusal.message, now);
 		else if (!res.ok) await fail("runner_rejected", `The runner refused the run: ${typeof payload.error === "string" ? payload.error.slice(0, 500) : `HTTP ${res.status}`}`);
 		else run = (await updateTailorRun(env, run, { to: "running", runnerNode: runtime.runner_node || null, events: [{ type: "runner.dispatched", at: iso(now), detail: { status: "running" } }] }, now)) ?? run;
+		if (refusal.defer) run = (await getTailorRun(env, instanceId, uid, runId)) ?? run;
 	}
 	return run;
 }
@@ -338,6 +335,75 @@ export async function cancelTailoring(env: Env, uid: string, run: TailorRun, now
 }
 
 /** The cron tick: pull active runs, then put any ready event still missing from the outbox into it. */
+/**
+ * The task the runner is sent. One builder for the first dispatch and for a re-dispatch out of the
+ * queue (#974), for the reason the Runner's has one: two constructions would be two answers to what
+ * this run was asked to do.
+ */
+export function tailorTaskEnvelope(run: TailorRun, lead: LocalArtifactTaskEnvelope["lead"], s: ApplicationTailorSettings): LocalArtifactTaskEnvelope {
+	return {
+		type: LOCAL_ARTIFACT_TASK_TYPE,
+		runId: run.id,
+		requestId: run.requestId,
+		instanceId: run.instanceId,
+		engine: s.engine,
+		authMode: s.authMode,
+		workspace: s.workspace,
+		sources: run.policy.sources,
+		lead,
+		policy: { retainDays: s.retainDays, maxMinutes: s.maxMinutes, maxConcurrent: 1 },
+	};
+}
+
+/**
+ * Dispatch this Tailor's next queued run when its one tailoring slot is free (#974) — the
+ * counterpart of `dispatchNextQueuedFill`, with the same claim-before-asking rule and the same
+ * bounded wait.
+ */
+export async function dispatchNextQueuedTailoring(env: Env, instanceId: string, uid: string, now = Date.now()): Promise<"dispatched" | "queued" | "idle" | "exhausted"> {
+	const next = await nextDueQueuedRun(env, "local_artifact_runs", instanceId, uid, now);
+	if (!next) return "idle";
+	const run = await getTailorRun(env, instanceId, uid, next.id);
+	const app = await getApplication(env, instanceId, uid, next.applicationId);
+	if (!run || !app) return "idle";
+	if (next.attempts >= QUEUE_MAX_ATTEMPTS) {
+		await updateTailorRun(env, run, { to: "failed", errorCode: "runner_busy", error: `The machine never freed up for this application after ${next.attempts} attempts.`, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: "runner_busy" } }] }, now);
+		await settleApplication(env, instanceId, uid, next.applicationId, run.id, { to: "blocked", blockReason: "runner_busy", blockQuestions: ["Your machine stayed busy. Retry this application when a run has finished."] }, now);
+		return "exhausted";
+	}
+	const parsed = parseLocalArtifactLead(app.lead);
+	if ("error" in parsed) return "queued";
+	if (!(await claimQueuedDispatch(env, "local_artifact_runs", next, now))) return "queued";
+	const runtime = await getLiveRuntime(env, instanceId, uid).catch(() => null);
+	if (!runtime) {
+		await noteQueued(env, "local_artifact_runs", run.id, "No runner is connected — run `pags up` on the machine that holds your job materials.", now);
+		return "queued";
+	}
+	const pair = await readInstanceConfigPair(env, instanceId, uid);
+	const settings = effectiveTailorSettings((pair?.config as Record<string, unknown> | undefined)?.[TAILOR_SETTINGS_KEY]);
+	if ("error" in settings) return "queued";
+	let res: Response | null = null;
+	try {
+		res = await callRuntime(env, runtime, LOCAL_ARTIFACT_RUN_PATH, { method: "POST", body: JSON.stringify(tailorTaskEnvelope(run, parsed.lead, settings.settings)) });
+	} catch {
+		await noteQueued(env, "local_artifact_runs", run.id, "The runner did not answer; waiting to try again.", now);
+		return "queued";
+	}
+	const payload = (await runtimeJson(res)) as Record<string, unknown>;
+	if (res.ok) {
+		await updateTailorRun(env, run, { to: "running", runnerNode: runtime.runner_node || null, events: [{ type: "runner.dispatched", at: iso(now), detail: { status: "running", from: "queue" } }] }, now);
+		return "dispatched";
+	}
+	const refusal = refusalVerdict({ status: res.status, error: typeof payload.error === "string" ? payload.error : undefined, code: typeof payload.code === "string" ? payload.code : undefined });
+	if (refusal.defer) {
+		await noteQueued(env, "local_artifact_runs", run.id, refusal.message, now);
+		return "queued";
+	}
+	await updateTailorRun(env, run, { to: "failed", errorCode: "runner_rejected", error: `The runner refused the run: ${typeof payload.error === "string" ? payload.error.slice(0, 500) : `HTTP ${res.status}`}`, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: "runner_rejected" } }] }, now);
+	await settleApplication(env, instanceId, uid, next.applicationId, run.id, { to: "blocked", blockReason: "runner_rejected", blockQuestions: [typeof payload.error === "string" ? payload.error.slice(0, 300) : `HTTP ${res.status}`] }, now);
+	return "exhausted";
+}
+
 export async function syncActiveTailorRuns(env: Env, limit = 25): Promise<number> {
 	const now = Date.now();
 	let synced = 0;
@@ -348,5 +414,10 @@ export async function syncActiveTailorRuns(env: Env, limit = 25): Promise<number
 		synced++;
 	}
 	for (const a of await unemittedReadyApplications(env, limit)) await emitReady(env, a.instanceId, a.userId, a.id).catch(() => undefined);
+	// Move the line along (#974), after the pulls: a tailoring run that just finished frees the
+	// machine in this tick, so the next approved lead starts immediately.
+	for (const i of await instancesWithQueuedRuns(env, "local_artifact_runs", limit)) {
+		await dispatchNextQueuedTailoring(env, i.instanceId, i.userId, now).catch(() => undefined);
+	}
 	return synced;
 }

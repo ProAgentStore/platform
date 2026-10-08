@@ -194,6 +194,13 @@ function Detail({ instanceId, item, onChanged }: { instanceId: string; item: App
 					Submit policy: {item.submitPolicy.allowed ? <span className="text-success">this application may be submitted automatically</span> : <span>fill and wait for your review ({item.submitPolicy.failing.join(", ").replace(/_/g, " ")})</span>}
 				</p>
 			)}
+			{/* #974: waiting for the machine is not a failure, and the card says which it is — the
+			    position in line and when the next attempt is due, not a terminal "runner rejected". */}
+			{item.queue && (
+				<p className="text-xs mb-2" data-testid="queue-position">
+					<span className={item.queue.exhausted ? "text-warning font-bold" : "text-accent font-bold"}>⏳ Queued:</span> {item.queue.label}
+				</p>
+			)}
 			{/* #973: the owner's own decision about this job — approved, spent on a run, or no longer
 			    usable because the materials changed under it. `label` is the server's wording, so the
 			    board and an MCP reader say the same thing about the same authorization. */}

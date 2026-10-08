@@ -448,6 +448,69 @@ describe("per-application Approve & proceed authorizes exactly one submission (#
 	});
 });
 
+// ── #974: the Runner's busy machine behaves exactly like the Tailor's ───────────────────────
+describe("a busy Runner queues the fill instead of blocking the application (#974)", () => {
+	const BUSY = { status: 409, body: { error: "This machine is already filling an application for this agent; one at a time." } };
+	const runRow = (id: string) => d1.DB.prepare("SELECT status, attempts, queued_reason FROM local_apply_runs WHERE id = ?1").bind(id).first<Record<string, unknown>>();
+
+	it("waits in line, keeps the application out of blocked, and dispatches when the machine frees", async () => {
+		answers["/local-apply/run"] = BUSY;
+		const r = await call("POST", "/ap/application-runs", readyApp("lead-q1"));
+		const runId = r.body.run.id as string;
+		expect(await runRow(runId)).toMatchObject({ status: "queued" });
+		expect(String((await runRow(runId))?.queued_reason)).toMatch(/already filling/);
+		// Not blocked: the application is filling, waiting its turn — the old path made it terminal.
+		expect(await appRow("lead-q1")).toMatchObject({ status: "filling", block_reason: null });
+		expect((await audit("lead-q1")).some((a) => a.to_status === "blocked")).toBe(false);
+
+		// The machine frees; the sweep dispatches it with no owner action.
+		answers["/local-apply/run"] = { status: 202, body: { status: "running" } };
+		runner("running", { lastSeq: 0 });
+		await syncActiveApplyRuns(env());
+		expect(await runRow(runId)).toMatchObject({ status: "running" });
+	});
+
+	it("a genuine 409 conflict still blocks, so a bound run is never retried forever", async () => {
+		answers["/local-apply/run"] = { status: 409, body: { error: "Run abc already exists with another requestId" } };
+		const r = await call("POST", "/ap/application-runs", readyApp("lead-q2"));
+		expect(await runRow(r.body.run.id as string)).toMatchObject({ status: "failed" });
+		expect(await appRow("lead-q2")).toMatchObject({ status: "blocked", block_reason: "runner_rejected" });
+	});
+
+	it("a replayed materials_ready event finds the queued run instead of starting a second", async () => {
+		answers["/local-apply/run"] = BUSY;
+		const ev = readyApp("lead-q3");
+		const first = await call("POST", "/ap/application-runs", ev);
+		const replay = await call("POST", "/ap/application-runs", ev);
+		expect(replay.body.outcome).toBe("existing");
+		expect(replay.body.run.id).toBe(first.body.run.id);
+		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM local_apply_runs WHERE application_id = 'lead-q3'").first<{ n: number }>())?.n).toBe(1);
+	});
+
+	it("an approved submission survives the wait — the authorization stays spent on that run", async () => {
+		// #973 + #974: the approval is consumed at the first dispatch attempt, so the run that
+		// eventually goes to the machine is still the one the owner authorized.
+		readyApp("lead-q4");
+		d1.DB.prepare("UPDATE job_applications SET ready_event = ?2 WHERE id = ?1")
+			.bind("lead-q4", JSON.stringify({ eventType: "job.application.materials_ready", eventId: "t1:lead-q4:1:materials", applicationId: "lead-q4", tailorInstanceId: "t1", leadId: "lead-q4" }))
+			.run();
+		await call("PUT", "/ap/application-runner/settings", { allowDomains: ["example.com"] });
+		answers["/local-apply/run"] = BUSY;
+		const approved = await call("POST", "/t1/application-queue/actions", { action: "approve_and_proceed", application_id: "lead-q4", expected_status: "materials_ready" });
+		const runId = approved.body.result.runId as string;
+		expect(await runRow(runId)).toMatchObject({ status: "queued" });
+		expect(approved.body.result.mode).toBe("auto_submit");
+		expect(approved.body.result.authorizationConsumedBy).toBe(runId);
+		// When it finally dispatches, it still carries the submit gate the approval granted.
+		answers["/local-apply/run"] = { status: 202, body: { status: "running" } };
+		runner("running", { lastSeq: 0 });
+		await syncActiveApplyRuns(env());
+		const sentEnvelope = dispatches().at(-1)?.body as { policy: { mode: string; submitGate?: { gateId: string } } };
+		expect(sentEnvelope.policy.mode).toBe("auto_submit");
+		expect(sentEnvelope.policy.submitGate?.gateId).toEqual(expect.any(String));
+	});
+});
+
 describe("cloud supervision", () => {
 	it("persists bounded checkpoint facts and has the Runner's cloud brain direct that exact checkpoint", async () => {
 		const started = await call("POST", "/ap/application-runs", readyApp("lead-supervised"));
