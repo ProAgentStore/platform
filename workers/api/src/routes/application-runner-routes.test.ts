@@ -448,6 +448,71 @@ describe("per-application Approve & proceed authorizes exactly one submission (#
 	});
 });
 
+// ── #982: a safe initial checkpoint fills the form instead of asking for a review of nothing ──
+//
+// The live failure, end to end: two runs reached `awaiting_review` at the runner's INITIAL
+// checkpoint with `filled: 0, uploaded: 0` and no blocker. The brain proposed `request_review` and
+// the proposal passed through, so a `fill_and_review` run stopped before filling anything.
+describe("a routine checkpoint continues deterministically (#982)", () => {
+	const initialCheckpoint = { schemaVersion: 1, checkpointId: "initial:1", facts: { phase: "initial", actions: 1, filled: 0, uploaded: 0, blockers: [], url: "https://jobs.example.com/apply", domain: "jobs.example.com" } };
+	const traceOf = async (runId: string) =>
+		JSON.parse(String((await d1.DB.prepare("SELECT trace FROM local_apply_runs WHERE id = ?1").bind(runId).first<{ trace: string }>())?.trace ?? "[]")) as Array<{ type: string; detail?: Record<string, unknown> }>;
+	const directiveOf = async (runId: string) =>
+		await d1.DB.prepare("SELECT directive FROM local_apply_supervisor_directives WHERE run_id = ?1").bind(runId).first<{ directive: string }>();
+
+	/** Park the run at a checkpoint and let the platform decide it, as the cron does. */
+	async function parkAt(id: string, checkpoint: Record<string, unknown>) {
+		const started = await call("POST", "/ap/application-runs", readyApp(id));
+		const runId = started.body.run.id as string;
+		runner("paused", { lastSeq: 4, pause: { reason: "supervisor_checkpoint", checkpoint }, events: [{ seq: 4, type: "supervisor.checkpoint", at: "2026-10-08T00:06:00Z", detail: { checkpointId: String(checkpoint.checkpointId) } }] });
+		await syncApplyRun(env(), "u1", (await call("GET", `/ap/application-runs/${runId}`)).body.run);
+		return runId;
+	}
+
+	it("THE regression: initial + filled:0 + no blocker is CONTINUED, and the trace says the platform decided it", async () => {
+		// No brain is reachable in this harness, which is the "brain unavailable" half of the issue —
+		// before #982 that fell to `request_review` and ended the run as a review of an empty form.
+		const runId = await parkAt("lead-c1", initialCheckpoint);
+		expect(await directiveOf(runId)).toMatchObject({ directive: "continue" });
+		// The directive reached the machine, so the run goes on filling rather than ending.
+		expect(sent.filter((x) => x.path === "/local-apply/directive").map((x) => x.body)).toEqual([
+			{ runId, checkpointId: "initial:1", schemaVersion: 1, directive: "continue" },
+		]);
+		// And the rationale is on the trace, with the progress that made it safe.
+		const decision = (await traceOf(runId)).find((e) => e.detail?.class === "checkpoint");
+		expect(decision?.detail).toMatchObject({ phase: "initial", decision: "continue", source: "policy", reason: "routine_checkpoint_cannot_submit", filled: 0, uploaded: 0 });
+	});
+
+	it("a real blocker at the same phase still stops, with the blocker named", async () => {
+		const runId = await parkAt("lead-c2", { ...initialCheckpoint, checkpointId: "initial:2", facts: { ...initialCheckpoint.facts, blockers: ["captcha"] } });
+		expect(await directiveOf(runId)).toMatchObject({ directive: "stop" });
+		const decision = (await traceOf(runId)).find((e) => e.detail?.class === "checkpoint");
+		expect(decision?.detail).toMatchObject({ decision: "stop", reason: "blocker", blockers: "captcha" });
+	});
+
+	it("a fill_and_review run at before_submit still asks the owner — it never submits", async () => {
+		const runId = await parkAt("lead-c3", { schemaVersion: 1, checkpointId: "before-submit:1", facts: { phase: "before_submit", actions: 9, filled: 6, uploaded: 1, blockers: [] } });
+		expect(await directiveOf(runId)).toMatchObject({ directive: "request_review" });
+		const decision = (await traceOf(runId)).find((e) => e.detail?.class === "checkpoint");
+		expect(decision?.detail).toMatchObject({ decision: "request_review", reason: "fill_and_review_never_submits" });
+	});
+
+	it("the recorded rationale carries no page value — only ids, counts and the phase", async () => {
+		const runId = await parkAt("lead-c4", initialCheckpoint);
+		const decision = (await traceOf(runId)).find((e) => e.detail?.class === "checkpoint");
+		const text = JSON.stringify(decision);
+		for (const leak of ["https://", "jobs.example.com"]) expect(text, leak).not.toContain(leak);
+	});
+
+	it("the decision is written once — a replayed pull does not re-decide or re-log it", async () => {
+		const runId = await parkAt("lead-c5", initialCheckpoint);
+		const before = (await traceOf(runId)).filter((e) => e.detail?.class === "checkpoint").length;
+		await syncApplyRun(env(), "u1", (await call("GET", `/ap/application-runs/${runId}`)).body.run);
+		expect((await traceOf(runId)).filter((e) => e.detail?.class === "checkpoint")).toHaveLength(before);
+		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM local_apply_supervisor_directives WHERE run_id = ?1").bind(runId).first<{ n: number }>())?.n).toBe(1);
+	});
+});
+
 // ── #978: the run is on the owner's NORMAL board, linked to the application ──────────────────
 //
 // Before this the Board rendered only generic runtime tasks, so a Runner actively filling an

@@ -491,7 +491,10 @@ export async function syncApplyRun(env: Env, uid: string, run: ApplyRun, now = D
 		}
 		// `continue`, `request_review` and `stop` all change the local runtime synchronously. Pull
 		// once more so this API read does not return a stale `paused` application for another minute.
-		if (runnerStateMayHaveChanged) return syncApplyRun(env, uid, current, now);
+		// RE-READ before re-entering. `updateApplyRun` writes the trace wholesale from the run object
+		// it is handed, so passing this stale `current` would silently drop anything the loop above
+		// just wrote — including the checkpoint decision's own rationale (#982).
+		if (runnerStateMayHaveChanged) return syncApplyRun(env, uid, (await getApplyRun(env, current.instanceId, uid, current.id)) ?? current, now);
 	}
 	// #978 — the card follows the run through every transition this function makes: running, the
 	// checkpoint pause (with the checkpoint and its directive, which is what the board shows as
