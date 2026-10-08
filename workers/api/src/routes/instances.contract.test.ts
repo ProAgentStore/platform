@@ -145,6 +145,7 @@ const PARAMS: Record<string, string> = {
 	jobKey: "job-key-1",
 	recordId: "lead-record-1",
 	applicationId: "application-1",
+	checkpointId: "checkpoint-1",
 };
 
 function concrete(pattern: string): string {
@@ -314,6 +315,8 @@ const ROUTES = [
 	"GET /:instanceId/application-runs/:runId",
 	"POST /:instanceId/application-runs/:runId/resume",
 	"POST /:instanceId/application-runs/:runId/cancel",
+	"GET /:instanceId/application-runs/:runId/supervision",
+	"POST /:instanceId/application-runs/:runId/supervision/checkpoints/:checkpointId/directives",
 	"GET /:instanceId/application-queue",
 	"GET /:instanceId/application-queue/item",
 	"POST /:instanceId/application-queue/actions",
@@ -482,6 +485,8 @@ const OWNERSHIP: Record<string, string[]> = {
 		"GET /:instanceId/application-runs/:runId",
 		"POST /:instanceId/application-runs/:runId/resume",
 		"POST /:instanceId/application-runs/:runId/cancel",
+		"GET /:instanceId/application-runs/:runId/supervision",
+		"POST /:instanceId/application-runs/:runId/supervision/checkpoints/:checkpointId/directives",
 	],
 	"instances-applications.ts": [
 		"GET /:instanceId/application-queue",
@@ -758,6 +763,8 @@ const GATES: Record<string, [number, number]> = {
 	"GET /:instanceId/application-runs/:runId": [401, 404],
 	"POST /:instanceId/application-runs/:runId/resume": [401, 404],
 	"POST /:instanceId/application-runs/:runId/cancel": [401, 404],
+	"GET /:instanceId/application-runs/:runId/supervision": [401, 404],
+	"POST /:instanceId/application-runs/:runId/supervision/checkpoints/:checkpointId/directives": [401, 404],
 	// Applications control surface (#958): every route opens with the instance-owner check.
 	"GET /:instanceId/application-queue": [401, 404],
 	"GET /:instanceId/application-queue/item": [401, 404],

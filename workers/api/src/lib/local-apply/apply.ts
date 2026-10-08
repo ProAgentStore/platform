@@ -24,6 +24,7 @@ import type { Env } from "../../types.js";
 import { callRuntime, getLiveRuntime, runtimeJson } from "../../routes/instances-runtime.js";
 import {
 	LOCAL_APPLY_CANCEL_PATH,
+	LOCAL_APPLY_DIRECTIVE_PATH,
 	LOCAL_APPLY_PAUSE_REASONS,
 	LOCAL_APPLY_RESUME_PATH,
 	LOCAL_APPLY_RUN_PATH,
@@ -51,6 +52,8 @@ import {
 	moveApplication,
 	updateApplyRun,
 } from "./store.js";
+import { listSupervisorCheckpoints, noteSupervisorDirectiveDelivery, receiveSupervisorCheckpoint, sanitizeSupervisorFacts, type SupervisorDirective } from "./supervision.js";
+import { directApplicationCheckpoint } from "./brain.js";
 
 /** The event the Runner consumes — #956's readiness event. */
 export const MATERIALS_READY_EVENT = "job.application.materials_ready";
@@ -63,6 +66,22 @@ export function notRunnerMessage(runtime: string | null | undefined): string {
 
 const iso = (now: number) => new Date(now).toISOString();
 const str = (v: unknown) => (typeof v === "string" ? v : "");
+
+/** Deliver an already-persisted decision. A failed relay attempt stays durable and is retried on the next status pull. */
+export async function deliverSupervisorDirective(env: Env, uid: string, run: ApplyRun, directive: SupervisorDirective, now = Date.now()): Promise<SupervisorDirective> {
+	if (directive.deliveredAt) return directive;
+	const runtime = await getLiveRuntime(env, run.instanceId, uid).catch(() => null);
+	if (!runtime) return (await noteSupervisorDirectiveDelivery(env, directive, now, false)) ?? directive;
+	try {
+		const res = await callRuntime(env, runtime, LOCAL_APPLY_DIRECTIVE_PATH, {
+			method: "POST",
+			body: JSON.stringify({ runId: run.id, checkpointId: directive.checkpointId, schemaVersion: directive.schemaVersion, directive: directive.directive }),
+		});
+		return (await noteSupervisorDirectiveDelivery(env, directive, now, res.ok)) ?? directive;
+	} catch {
+		return (await noteSupervisorDirectiveDelivery(env, directive, now, false)) ?? directive;
+	}
+}
 
 export type StartFillOutcome = { kind: "started" | "existing"; application: JobApplication; run: ApplyRun | null };
 
@@ -346,10 +365,26 @@ export async function syncApplyRun(env: Env, uid: string, run: ApplyRun, now = D
 	if (events.some((e) => e.type === "submit.attempted")) await markSubmitAttempted(env, run.applicationId, uid, now);
 
 	const p = body.pause && typeof body.pause === "object" ? (body.pause as Record<string, unknown>) : null;
+	const rawCheckpoint = p?.checkpoint && typeof p.checkpoint === "object" && !Array.isArray(p.checkpoint) ? (p.checkpoint as Record<string, unknown>) : null;
+	const checkpointFacts = rawCheckpoint ? sanitizeSupervisorFacts(rawCheckpoint.facts) : null;
+	const checkpoint = rawCheckpoint && rawCheckpoint.schemaVersion === 1 && typeof rawCheckpoint.checkpointId === "string" && checkpointFacts
+		? { schemaVersion: 1 as const, checkpointId: rawCheckpoint.checkpointId, facts: checkpointFacts }
+		: null;
 	const pause: LocalApplyPause | null =
 		body.state === "paused" && p && LOCAL_APPLY_PAUSE_REASONS.includes(p.reason as never)
-			? { reason: p.reason as LocalApplyPause["reason"], ...(typeof p.url === "string" ? { url: p.url.slice(0, 2000) } : {}), ...(typeof p.domain === "string" ? { domain: p.domain.slice(0, 253) } : {}), ...(typeof p.question === "string" ? { question: p.question.slice(0, 300) } : {}) }
+			? {
+				reason: p.reason as LocalApplyPause["reason"],
+				...(typeof p.url === "string" ? { url: p.url.slice(0, 2000) } : {}),
+				...(typeof p.domain === "string" ? { domain: p.domain.slice(0, 253) } : {}),
+				...(typeof p.question === "string" ? { question: p.question.slice(0, 300) } : {}),
+				...(p.reason === "supervisor_checkpoint" && checkpoint ? { checkpoint } : {}),
+			}
 			: null;
+	// Receipt is durable before a cloud brain can see the pause. The checkpoint has no prose or
+	// form values — only runner-derived facts validated by `sanitizeSupervisorFacts` above.
+	if (pause?.reason === "supervisor_checkpoint" && pause.checkpoint) {
+		await receiveSupervisorCheckpoint(env, run, uid, { ...pause.checkpoint, runnerSeq: lastSeq }, now);
+	}
 	const to = body.state === "paused" && pause ? "paused" : body.state === "running" ? "running" : run.status;
 	let current = (await updateApplyRun(env, run, { to, events, runnerSeq: lastSeq, ...(to !== run.status || to === "paused" ? { pause: to === "paused" ? pause : null } : {}) }, now)) ?? (await getApplyRun(env, run.instanceId, uid, run.id)) ?? run;
 	const base = { actor: "runner" as const, actorInstanceId: run.instanceId, runId: run.id, expectRun: run.id };
@@ -362,6 +397,23 @@ export async function syncApplyRun(env: Env, uid: string, run: ApplyRun, now = D
 	// A result is authoritative if it arrived at the deadline.  Otherwise a still-running CLI
 	// cannot turn status polling into an unbounded lease; PAGS stops and settles it itself.
 	if (timeLimitReached && current.status === "running") current = await stopTimedOutRun(env, runtime, uid, current, now);
+	// Delivery is deliberately best-effort: the directive was persisted first. A later pull retries
+	// an unacknowledged directive with exactly the same checkpoint and decision.
+	if (current.status === "paused" && current.pause?.reason === "supervisor_checkpoint") {
+		let runnerStateMayHaveChanged = false;
+		for (const checkpoint of await listSupervisorCheckpoints(env, current)) {
+			// This is the existing Runner instance's brain, not a second agent: its only authority is
+			// the durable directive for this exact checkpoint. A retry sees the same row and relays it.
+			const directive = checkpoint.directive ?? await directApplicationCheckpoint(env, uid, current, checkpoint, now);
+			if (directive && !directive.deliveredAt) {
+				const delivered = await deliverSupervisorDirective(env, uid, current, directive, now);
+				runnerStateMayHaveChanged ||= !!delivered.deliveredAt;
+			}
+		}
+		// `continue`, `request_review` and `stop` all change the local runtime synchronously. Pull
+		// once more so this API read does not return a stale `paused` application for another minute.
+		if (runnerStateMayHaveChanged) return syncApplyRun(env, uid, current, now);
+	}
 	return current;
 }
 

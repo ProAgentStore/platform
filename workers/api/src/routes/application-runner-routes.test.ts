@@ -325,7 +325,7 @@ describe("submission is gated", () => {
 });
 
 describe("cloud supervision", () => {
-	it("persists bounded checkpoint facts and sends one idempotent directive to that exact checkpoint", async () => {
+	it("persists bounded checkpoint facts and has the Runner's cloud brain direct that exact checkpoint", async () => {
 		const started = await call("POST", "/ap/application-runs", readyApp("lead-supervised"));
 		const runId = started.body.run.id as string;
 		const checkpoint = {
@@ -345,23 +345,15 @@ describe("cloud supervision", () => {
 		runner("paused", { lastSeq: 4, pause: { reason: "supervisor_checkpoint", checkpoint }, events: [{ seq: 4, type: "supervisor.checkpoint", at: "2026-10-07T00:06:00Z", detail: { checkpointId: "before-submit-1" } }] });
 
 		const received = await call("GET", `/ap/application-runs/${runId}/supervision`);
-		expect(received.body).toMatchObject({ schemaVersion: 1, checkpoints: [{ checkpointId: "before-submit-1", schemaVersion: 1, runnerSeq: 4, facts: checkpoint.facts, directive: null }] });
+		expect(received.body).toMatchObject({ schemaVersion: 1, checkpoints: [{ checkpointId: "before-submit-1", schemaVersion: 1, runnerSeq: 4, facts: checkpoint.facts, directive: { directive: "request_review", idempotencyKey: "brain:before-submit-1", deliveredAt: expect.any(Number) } }] });
 		expect(JSON.stringify(received.body)).not.toContain("150000 AUD");
+		expect(sent.filter((s) => s.path === "/local-apply/directive").map((s) => s.body)).toEqual([{ runId, checkpointId: "before-submit-1", schemaVersion: 1, directive: "request_review" }]);
 
-		const payload = { schemaVersion: 1, idempotencyKey: "directive-before-submit-1", directive: "continue" };
-		const first = await call("POST", `/ap/application-runs/${runId}/supervision/checkpoints/before-submit-1/directives`, payload);
-		expect(first.status).toBe(201);
-		expect(first.body.directive).toMatchObject({ checkpointId: "before-submit-1", directive: "continue", idempotencyKey: "directive-before-submit-1", deliveredAt: expect.any(Number) });
-		expect(sent.filter((s) => s.path === "/local-apply/directive").map((s) => s.body)).toEqual([{ runId, checkpointId: "before-submit-1", schemaVersion: 1, directive: "continue" }]);
-
-		const replay = await call("POST", `/ap/application-runs/${runId}/supervision/checkpoints/before-submit-1/directives`, payload);
-		expect(replay.status).toBe(200);
-		expect(replay.body.outcome).toBe("existing");
+		// A human/API caller cannot revise the brain's durable decision for the same checkpoint.
+		const revision = await call("POST", `/ap/application-runs/${runId}/supervision/checkpoints/before-submit-1/directives`, { schemaVersion: 1, idempotencyKey: "directive-revision", directive: "continue" });
+		expect(revision.status).toBe(409);
 		expect(sent.filter((s) => s.path === "/local-apply/directive")).toHaveLength(1);
 		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM local_apply_supervisor_directives").first<{ n: number }>())?.n).toBe(1);
-
-		const revision = await call("POST", `/ap/application-runs/${runId}/supervision/checkpoints/before-submit-1/directives`, { schemaVersion: 1, idempotencyKey: "directive-revision", directive: "stop" });
-		expect(revision.status).toBe(409);
 	});
 
 	it("does not make an untyped runner pause actionable as a supervisor checkpoint", async () => {

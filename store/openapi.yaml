@@ -7679,6 +7679,62 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /v1/instances/{instanceId}/application-runs/{runId}/supervision:
+    get:
+      summary: Read the Application Runner cloud-brain checkpoints
+      description: |
+        Pulls the local runner first, then returns its durable, typed cloud-supervision state. The
+        existing Application Runner instance's selected brain decides each checkpoint and persists
+        one immutable `continue`, `request_review`, or `stop` directive before delivery to the
+        local Codex/Claude CLI. Checkpoint facts are bounded runner observations (phase, counts,
+        blockers and page identity), never page snapshots, form values, source files or CLI prose.
+      operationId: getApplicationRunSupervision
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The current run and its durable checkpoints/directives.
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/application-runs/{runId}/supervision/checkpoints/{checkpointId}/directives:
+    post:
+      summary: Persist a directive for an undirected Runner checkpoint
+      description: |
+        Low-level recovery surface. A normal checkpoint is directed automatically by the existing
+        Application Runner brain. A directive is immutable and scoped to one durable checkpoint;
+        it is persisted before it is relayed to the local CLI, and a conflicting revision is
+        refused. This endpoint can never change an already-directed checkpoint.
+      operationId: directApplicationRunCheckpoint
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+        - { name: checkpointId, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_.:-]{1,300}$' } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [schemaVersion, idempotencyKey, directive]
+              properties:
+                schemaVersion: { type: integer, enum: [1] }
+                idempotencyKey: { type: string, pattern: '^[A-Za-z0-9_.:-]{1,300}$' }
+                directive: { type: string, enum: [continue, request_review, stop] }
+      responses:
+        "200": { description: The prior identical directive. }
+        "201": { description: The persisted and relay-delivered directive. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /v1/instances/{instanceId}/application-queue:
     get:
       summary: The job-application queue (Applications control surface)
