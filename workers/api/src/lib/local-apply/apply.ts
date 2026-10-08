@@ -140,7 +140,13 @@ export async function deliverSupervisorDirective(env: Env, uid: string, run: App
 }
 
 /**
- * Why this machine must not fill an application yet, or null (#977).
+ * Why this machine must not fill an application yet, or null (#977, #989).
+ *
+ * #989 is the same incident one layer up: #985's click classification shipped to `main` and was
+ * never published, so the live machine kept running the previous runner and reproduced a defect
+ * the repository had already fixed. The floor moved with that behaviour change, so this gate now
+ * catches it — a machine that cannot tell the entry control from the final submit is refused here
+ * instead of ending `awaiting_review` having typed nothing.
  *
  * The live regression this closes: #975's `bridge_unused` + diagnostic shipped and deployed, and a
  * real retry still recorded `blocked: incomplete` with `diagnostic: null` — because the connected
@@ -155,7 +161,7 @@ export async function deliverSupervisorDirective(env: Env, uid: string, run: App
 export function runnerContractProblem(runnerVersion: string | null | undefined, node: string | null | undefined): string | null {
 	const version = runnerVersion?.trim();
 	if (!version || cliAtLeast(version, LOCAL_APPLY_CONTRACT_MIN_CLI)) return null;
-	return `The runner on ${node || "that machine"} is CLI ${version}, which predates this application contract (needs ${LOCAL_APPLY_CONTRACT_MIN_CLI} or newer): it cannot report why a run put nothing on the page, so a failed application would come back as a bare "incomplete" with no diagnosis. Update it (npm i -g @proagentstore/cli, or runner_update) and restart \`pags up\`, then retry this application.`;
+	return `The runner on ${node || "that machine"} is CLI ${version}, which predates this application contract (needs ${LOCAL_APPLY_CONTRACT_MIN_CLI} or newer): it reads the control that OPENS an application as the final submit, so a fill-and-review run stops before it types anything, and it cannot report why a run put nothing on the page. Update it (npm i -g @proagentstore/cli, or runner_update) and restart \`pags up\`, then retry this application.`;
 }
 
 export type StartFillOutcome = { kind: "started" | "existing"; application: JobApplication; run: ApplyRun | null };

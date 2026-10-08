@@ -238,8 +238,11 @@ describe("fill_and_review — a final submit is never performed", () => {
 	it.each([
 		["an English submit button", "e8"],
 		["a French one, caught by the DOM fact that it submits a POST form", "e9"],
-	])("refuses %s, enters review, and refuses everything after", async (_label, ref) => {
+	])("refuses %s, enters review with the filled form, and refuses everything after", async (_label, ref) => {
 		const { bridge, sent, events } = await onForm();
+		// There IS a form to review: the run typed something before it reached the submit (#989 —
+		// with nothing typed this is not a review state, which the next test covers).
+		await bridge.callTool("browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" });
 		const res = await bridge.callTool("browser_click", { target: ref });
 		expect(res.isError).toBeFalsy();
 		expect(res.content[0].text).toMatch(/NOT pressed/);
@@ -316,7 +319,13 @@ describe("the control that OPENS an application is pressed, not refused (#985)",
 		expect(sent("browser_click")).toHaveLength(0);
 		expect(res.content[0].text).toMatch(/can send the application in one click/);
 		expect(res.content[0].text).toMatch(/Approve this application/);
-		expect(bridge.reviewReady).toBe(true);
+		// #989: nothing was entered, so this is NOT a review state — it is a recorded blocker with
+		// the owner's remedy on it. `awaiting_review` with `filled: 0` is the outcome the issue
+		// forbids, and it was produced here.
+		expect(bridge.reviewReady).toBe(false);
+		expect(bridge.blocked).toMatchObject({ reason: "incomplete" });
+		expect(bridge.blocked?.questions?.[0]).toMatch(/can send the application in one click/);
+		expect(bridge.blocked?.questions?.[0]).toMatch(/Approve this application|apply on the site yourself/);
 		// The trace names the RULE and the control, so "stopped at filled: 0" is explicable.
 		const refusal = events.find((e) => e.type === "policy.decision" && e.detail?.class === "submit" && e.detail.decision === "refused");
 		expect(refusal?.detail).toMatchObject({ reason: "fill_and_review", rule: "one_click_apply" });

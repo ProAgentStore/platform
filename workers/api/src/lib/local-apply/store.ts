@@ -31,7 +31,12 @@ export const APPLICATION_TRANSITIONS: Readonly<Partial<Record<ApplicationStatus,
 	tailoring: ["materials_ready", "blocked", "failed", "cancelled"],
 	materials_ready: ["filling", "deferred", "archived"],
 	filling: ["awaiting_review", "submitted", "blocked", "failed", "archived"],
-	blocked: ["tailoring", "materials_ready", "filling", "awaiting_review", "submitted", "failed", "deferred", "archived"],
+	// `blocked → blocked` is permitted from #989: a run that was paused (the application blocked for
+	// `supervisor_checkpoint`) can resume and END on a different reason inside one poll interval, and
+	// the reason the RUN settled with is the true one. Without this the application kept saying it
+	// was waiting for a supervisor decision that had already been made, and the terminal reason —
+	// nothing was entered; approve it or apply yourself — never reached the record.
+	blocked: ["tailoring", "materials_ready", "filling", "awaiting_review", "submitted", "failed", "deferred", "archived", "blocked"],
 	awaiting_review: ["materials_ready", "filling", "deferred", "archived"],
 	deferred: ["materials_ready", "archived"],
 	failed: ["tailoring", "materials_ready", "archived"],

@@ -323,6 +323,102 @@ describe("#985: the sweep wakes the supervisor, decides and dispatches — with 
 	});
 });
 
+/**
+ * #989 — the connected-runner regression for the LIVE sequence.
+ *
+ * The post-#985 live run (`64ed66de…`, machine on CLI 0.4.84) got everything right up to the last
+ * step and then recorded `browser_click → class: submit → refused: fill_and_review` two seconds
+ * after resuming, `review.ready {count: 0}`, and ended `awaiting_review` with nothing filled. What
+ * the published runner must report instead is this: the entry control pressed and ALLOWED, the
+ * form's own checkpoint, field work, and the final submit still refused.
+ */
+describe("#989: the entry Apply opens the form, and the submit stays refused", () => {
+	/** The runner's events after it resumes: the entry press, the new page, and the real submit. */
+	const afterResume = (runId: string, over: { filled?: number; uploaded?: string[]; outcome?: string; blockReason?: string; questions?: string[]; reviewReady?: boolean } = {}) => ({
+		status: 200,
+		body: {
+			runId,
+			state: "ended",
+			lastSeq: 14,
+			events: [
+				{ seq: 8, type: "supervisor.directive", at: "2026-10-08T11:21:25Z", detail: { checkpointId: INITIAL.checkpointId, directive: "continue" } },
+				{ seq: 9, type: "run.resumed", at: "2026-10-08T11:21:25Z" },
+				// THE PRESS THAT ENDED THE LIVE RUNS — now classified as what it is.
+				{ seq: 10, type: "policy.decision", at: "2026-10-08T11:21:28Z", detail: { tool: "browser_click", class: "entry", decision: "allowed", reason: "entry_label_nothing_filled", role: "link" } },
+				{ seq: 11, type: "browser.navigated", at: "2026-10-08T11:21:29Z", url: "https://jobs.example.com/pm/apply", domain: "jobs.example.com" },
+				{ seq: 12, type: "field.filled", at: "2026-10-08T11:21:40Z", detail: { tool: "browser_type", class: "fill", role: "textbox" } },
+				{ seq: 13, type: "artifact.uploaded", at: "2026-10-08T11:21:44Z", detail: { kind: "resume", class: "fill" } },
+				// The real final submit, refused — with the rule that classified it (#985).
+				{ seq: 14, type: "policy.decision", at: "2026-10-08T11:21:50Z", detail: { tool: "browser_click", class: "submit", decision: "refused", reason: "fill_and_review", rule: "terminal_label" } },
+			],
+			result: {
+				runId,
+				outcome: over.outcome ?? "awaiting_review",
+				mode: "fill_and_review",
+				traceId: runId,
+				engineAuth: "machine-login",
+				filled: over.filled ?? 6,
+				uploaded: over.uploaded ?? ["resume"],
+				submitAttempted: false,
+				summary: "Filled; waiting for your review.",
+				...(over.blockReason ? { blockReason: over.blockReason } : {}),
+				...(over.questions ? { questions: over.questions } : {}),
+			},
+		},
+	});
+
+	it("initial checkpoint → automatic continue → entry Apply → fields filled, submit refused, nothing sent", async () => {
+		const { applicationId, fillRunId } = await fillForReview();
+		answers["/local-apply/status"] = pausedAt(fillRunId);
+		expect(await syncActiveApplyRuns(env())).toBeGreaterThan(0);
+		expect((await directives())[0]).toMatchObject({ directive: "continue" });
+
+		answers["/local-apply/status"] = afterResume(fillRunId);
+		await syncActiveApplyRuns(env());
+
+		const { run } = (await call("GET", `/ap/application-runs/${fillRunId}`)).body;
+		// The entry press is on the cloud's own trace as an ENTRY, allowed — not a refused submit.
+		const entry = (run.trace as Array<{ type: string; detail?: Record<string, unknown> }>).find((e) => e.detail?.class === "entry");
+		expect(entry?.detail).toMatchObject({ tool: "browser_click", decision: "allowed", reason: "entry_label_nothing_filled" });
+		// And the submit that follows is the real one, still refused under fill_and_review.
+		expect((run.trace as Array<{ detail?: Record<string, unknown> }>).find((e) => e.detail?.class === "submit")?.detail).toMatchObject({ decision: "refused", reason: "fill_and_review", rule: "terminal_label" });
+		expect(run.result).toMatchObject({ filled: 6, uploaded: ["resume"], submitAttempted: false });
+		// Observable progress, and nothing reached the employer.
+		expect((run.trace as Array<{ type: string }>).some((e) => e.type === "field.filled")).toBe(true);
+		expect((run.trace as Array<{ type: string }>).some((e) => e.type === "submit.attempted")).toBe(false);
+		const app = (await call("GET", `/t1/applications/${applicationId}`)).body.application;
+		expect(app).toMatchObject({ status: "awaiting_review", submitAttemptedAt: null, submittedAt: null });
+		// #986: and the surfaces now say what the run actually did, from these counts.
+		const item = (await call("GET", `/t1/application-queue/item?application_id=${applicationId}`)).body.item;
+		expect(item.fillProgress).toMatchObject({ stage: "ready_for_review", filled: 6, uploaded: 1, evidence: "runner_result" });
+	});
+
+	it("the forbidden shape is gone: an entry-caused stop with nothing filled is blocked, not review-ready", async () => {
+		const { applicationId, fillRunId } = await fillForReview();
+		answers["/local-apply/status"] = pausedAt(fillRunId);
+		await syncActiveApplyRuns(env());
+		// The runner refused a submit-class control having typed nothing. Post-#989 its own bridge
+		// declines to report that as a review, so the outcome that reaches the cloud is blocked.
+		answers["/local-apply/status"] = afterResume(fillRunId, {
+			filled: 0,
+			uploaded: [],
+			outcome: "blocked",
+			blockReason: "incomplete",
+			questions: ["This listing's apply control can send the application in one click, so a fill-and-review run may not press it, and nothing was entered. Approve this application to let it be sent, or apply on the site yourself."],
+		});
+		await syncActiveApplyRuns(env());
+
+		const app = (await call("GET", `/t1/applications/${applicationId}`)).body.application;
+		expect(app.status, "awaiting_review with filled: 0 is the outcome #989 forbids").toBe("blocked");
+		expect(app.blockReason).toBe("incomplete");
+		expect(app.blockQuestions[0]).toMatch(/Approve this application|apply on the site yourself/);
+		expect(app.submitAttemptedAt).toBeNull();
+		const item = (await call("GET", `/t1/application-queue/item?application_id=${applicationId}`)).body.item;
+		expect(item.fillProgress).toMatchObject({ stage: "blocked", filled: 0, uploaded: 0 });
+		expect(item.fillProgress.label).not.toMatch(/[Ff]illed \d|waiting for your review/);
+	});
+});
+
 describe("#985: the hard stops are preserved", () => {
 	it.each([
 		["a blocker on the page", { phase: "initial", blockers: ["captcha"] }, "stop"],

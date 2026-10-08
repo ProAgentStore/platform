@@ -526,8 +526,20 @@ export class ApplyBridge {
 	}
 
 	private review(summary: string): ToolResult {
-		this.reviewReady = true;
 		this.summary = summary; // bounded where the result is built (runtime.ts `end`)
+		// #989: "ready for review" with nothing entered is not a review state.
+		//
+		// The live run ended `awaiting_review` with `filled: 0, uploaded: 0` seconds after the cloud
+		// had let it through its initial checkpoint, because a refused submit-class click called
+		// this. An owner reading that is told a form is populated and waiting for them — and the one
+		// action it invites (#981's approve-and-continue) would send an empty application. There is
+		// no form to review, so the honest terminal outcome is the recorded blocker and its remedy
+		// (`runtime.ts` `outcomeOf` reads `blocked` once `reviewReady` is false).
+		if (!this.filled && !this.uploaded.size && this.blocked) {
+			this.host.emit({ type: "policy.decision", detail: { tool: "ready_for_review", class: "review", decision: "refused", reason: this.blocked.reason, count: 0 } });
+			return text(`Nothing was entered on this application, so there is nothing to review: the run is recorded as ${this.blocked.reason.replace(/_/g, " ")}. Stop now.`, true);
+		}
+		this.reviewReady = true;
 		this.host.emit({ type: "review.ready", detail: { class: "review", count: this.filled } });
 		return text("Recorded. The application waits for the owner's review; nothing was submitted. Stop now.");
 	}
@@ -563,6 +575,21 @@ export class ApplyBridge {
 			// needs — "this was the one-click control", not "this was a submit".
 			this.host.emit({ type: "policy.decision", detail: { tool: "browser_click", class: "submit", decision: "refused", reason: "fill_and_review", rule: why } });
 			const oneClick = why === "one_click_apply";
+			// #989: a refusal with NOTHING entered is not a review state, so it is recorded as the
+			// blocker it is. `review` then declines to mark the run ready (see there), and the owner
+			// gets a terminal outcome they can act on — approve this application, or open it
+			// themselves — instead of an empty form presented as waiting for their approval. With
+			// work on the page the old reading holds: there IS a filled form to look at.
+			if (!this.filled && !this.uploaded.size) {
+				this.blocked = {
+					reason: "incomplete",
+					questions: [
+						oneClick
+							? "This listing's apply control can send the application in one click, so a fill-and-review run may not press it, and nothing was entered. Approve this application to let it be sent, or apply on the site yourself."
+							: "The run reached the control that submits this application without entering anything — the form may already be complete from your profile, or it may not have opened. Approve this application to let it be sent, or open it yourself.",
+					],
+				};
+			}
 			this.review(oneClick ? "Stopped at a one-click apply control: it can send the application outright, and this run fills and waits for review." : "Stopped at the final submit: this run fills and waits for review.");
 			return text(
 				oneClick

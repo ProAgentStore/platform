@@ -39,16 +39,30 @@ let spawned: Array<{ command: string; args: string[]; env: NodeJS.ProcessEnv }>;
 let child: FakeChild;
 let clicks: string[];
 let pageUnavailable: "expired" | "unavailable" | null;
+/**
+ * The live SEEK shape (#989), when a test asks for it: a job AD whose only control is the one that
+ * OPENS the application, and which reveals the form once that control is pressed. `null` keeps the
+ * plain single-page form every other test here uses.
+ */
+let seek: "ad" | "form" | null;
+const SEEK_AD = "https://au.seek.com/job/94991284";
+const SEEK_FORM = "https://au.seek.com/job/94991284/apply";
 
 const browser: BrowserTools = {
 	listTools: async () => ["browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_evaluate"].map((name) => ({ name, inputSchema: {} })),
 	callTool: async (name, args = {}) => {
 		if (name === "browser_evaluate") {
+			if (args.target === "a1") return { content: [{ text: `### Result\n${JSON.stringify({ submits: false, method: "", name: "Apply", tag: "a", type: "" })}` }] };
 			if (args.target) return { content: [{ text: `### Result\n${JSON.stringify({ submits: true, method: "post", name: "Submit application", tag: "button", type: "submit" })}` }] };
-			return { content: [{ text: `### Result\n${JSON.stringify({ url: "https://jobs.example.com/apply", title: "Apply", ...(pageUnavailable ? { unavailable: pageUnavailable } : {}) })}` }] };
+			const url = seek === "ad" ? SEEK_AD : seek === "form" ? SEEK_FORM : "https://jobs.example.com/apply";
+			return { content: [{ text: `### Result\n${JSON.stringify({ url, title: "Apply", ...(pageUnavailable ? { unavailable: pageUnavailable } : {}) })}` }] };
 		}
-		if (name === "browser_snapshot") return { content: [{ text: '- textbox "Full name" [ref=e1]\n- button "Submit application" [ref=e2]' }] };
-		if (name === "browser_click") clicks.push(String(args.target));
+		if (name === "browser_snapshot") return { content: [{ text: seek === "ad" ? '- link "Apply" [ref=a1]' : '- textbox "Full name" [ref=e1]\n- button "Submit application" [ref=e2]' }] };
+		if (name === "browser_click") {
+			clicks.push(String(args.target));
+			// Pressing the ad's Apply control is what puts the form on the screen.
+			if (args.target === "a1" && seek === "ad") seek = "form";
+		}
 		return { content: [{ text: `${name} ok` }] };
 	},
 };
@@ -111,6 +125,7 @@ beforeEach(() => {
 	spawned = [];
 	clicks = [];
 	pageUnavailable = null;
+	seek = null;
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -271,6 +286,91 @@ describe("a fill-and-review run, end to end on the runner", () => {
 		const status = rt.status({ runId: "run-1" });
 		expect(status.result).toMatchObject({ outcome: "blocked", blockReason: "job_unavailable", unavailable: { reason: "expired", url: "https://jobs.example.com/apply", source: "page_notice" } });
 		expect(status.events.map((e) => e.type)).toContain("job.unavailable");
+	});
+});
+
+/**
+ * #989 — the live sequence, through the real runtime.
+ *
+ * Post-#985 production run `64ed66de…` on `au.seek.com/job/94991284`: the runner reported its
+ * `initial` checkpoint, the cloud's policy decided `continue`, the directive was delivered and
+ * acknowledged, the CLI resumed — and two seconds later recorded
+ * `browser_click → class: submit → refused: fill_and_review`, then `review.ready {count: 0}`, and
+ * ended `awaiting_review` having typed nothing. The machine was running CLI 0.4.84, whose bundled
+ * bridge predates #985 (that commit never bumped `packages/cli`, so nothing was published), and
+ * `LOCAL_APPLY_CONTRACT_MIN_CLI` now refuses it — but the behaviour the published runner will
+ * carry is the one asserted here, end to end.
+ */
+describe("the live SEEK sequence: the entry Apply opens the form, the final submit stays refused (#989)", () => {
+	const seekEnvelope = () => envelope({ applicationUrl: SEEK_AD, policy: { mode: "fill_and_review", allowDomains: ["au.seek.com"] } });
+
+	it("initial checkpoint → continue → entry Apply → the form fills → the submit is refused", async () => {
+		seek = "ad";
+		const rt = runtime();
+		rt.start(seekEnvelope());
+		await settle();
+		await call(rt, "browser_navigate", { url: SEEK_AD });
+		await call(rt, "browser_snapshot");
+		// The cloud's own decision at the initial checkpoint, exactly as #982/#985 deliver it.
+		await approve(rt, "seek-94991284-initial", "initial");
+
+		// THE PRESS THAT ENDED THE LIVE RUNS. It reaches the page now.
+		const entry = await call(rt, "browser_click", { target: "a1" });
+		expect(entry.isError).toBeFalsy();
+		expect(clicks).toEqual(["a1"]);
+
+		// The form is on screen, and it gets its OWN checkpoint: the approval was spent by the move.
+		await call(rt, "browser_snapshot");
+		const early = await call(rt, "browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" });
+		expect(early.isError).toBe(true);
+		expect(early.content[0].text).toMatch(/supervisor_checkpoint must return continue/);
+		await approve(rt, "seek-94991284-form", "post_navigation");
+
+		// Field work — the capability the live runs never got to use.
+		expect((await call(rt, "browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" })).isError).toBeFalsy();
+
+		// And the FINAL submit is still never pressed under fill_and_review.
+		const sub = await call(rt, "browser_click", { target: "e2" });
+		expect(sub.content[0].text).toMatch(/NOT pressed/);
+		expect(clicks).toEqual(["a1"]);
+		child.exit(0);
+
+		const st = rt.status({ runId: "run-1" });
+		expect(st.result).toMatchObject({ outcome: "awaiting_review", mode: "fill_and_review", filled: 1, submitAttempted: false });
+		const entryDecision = st.events.find((e) => e.type === "policy.decision" && e.detail?.class === "entry");
+		expect(entryDecision?.detail).toMatchObject({ tool: "browser_click", decision: "allowed", reason: "entry_label_nothing_filled" });
+		// The refusal that follows is the real one, and it names the rule that classified it.
+		expect(st.events.find((e) => e.type === "policy.decision" && e.detail?.class === "submit")?.detail).toMatchObject({ decision: "refused", reason: "fill_and_review", rule: "terminal_label" });
+		expect(st.events.some((e) => e.type === "submit.attempted")).toBe(false);
+		// Observable progress, which is what the issue asks the live repeat to show.
+		expect(st.events.some((e) => e.type === "field.filled")).toBe(true);
+		expect(JSON.stringify(st.events)).not.toContain("Jane Citizen");
+	});
+
+	it("a submit-class control refused with NOTHING entered ends blocked — never review-ready with count 0", async () => {
+		seek = "form";
+		const rt = runtime();
+		rt.start(seekEnvelope());
+		await settle();
+		await call(rt, "browser_navigate", { url: SEEK_FORM });
+		await call(rt, "browser_snapshot");
+		await approve(rt, "seek-94991284-initial", "initial");
+
+		// Nothing typed, and the control that submits is pressed: the live shape of the defect.
+		const sub = await call(rt, "browser_click", { target: "e2" });
+		expect(sub.content[0].text).toMatch(/NOT pressed/);
+		expect(clicks).toEqual([]);
+		// The CLI then tries to report a review anyway. It is declined: there is no form to review.
+		const review = await call(rt, "ready_for_review", { summary: "Stopped at the submit." });
+		expect(review.isError).toBe(true);
+		expect(review.content[0].text).toMatch(/nothing to review/);
+		child.exit(0);
+
+		const st = rt.status({ runId: "run-1" });
+		expect(st.result).toMatchObject({ outcome: "blocked", blockReason: "incomplete", filled: 0, uploaded: [], submitAttempted: false });
+		expect((st.result as { questions?: string[] }).questions?.[0]).toMatch(/Approve this application|open it yourself/);
+		expect(st.events.some((e) => e.type === "review.ready")).toBe(false);
+		expect(st.events.find((e) => e.type === "policy.decision" && e.detail?.tool === "ready_for_review")?.detail).toMatchObject({ decision: "refused", reason: "incomplete" });
 	});
 });
 

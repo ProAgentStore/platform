@@ -169,20 +169,37 @@ export const LOCAL_APPLY_BLOCK_REASONS: readonly LocalApplyBlockReason[] = [
  * did — redacted and capped — so this adds diagnosis without adding a new channel for content.
  */
 /**
- * The first published CLI whose runner executes THIS contract (#977) — the #975 release that ends a
- * zero-bridge run as `bridge_unused` and attaches {@link LocalApplyDiagnostic}.
+ * The first published CLI whose runner executes THIS contract (#977, raised at #989).
  *
- * An older runner is not broken; it simply predates the vocabulary. Left to run, it reports the same
- * failure as `incomplete` with no diagnostic, which is indistinguishable from a run under the new
- * contract that had nothing to diagnose — exactly the live confusion #977 was filed from. So a
- * machine below this is refused BEFORE dispatch, naming the update, rather than silently producing
- * the older shape (`apply.ts` `runnerContractProblem`).
+ * An older runner is not broken; it simply predates the vocabulary. Left to run, it reports the
+ * same failure in the PREVIOUS shape, which is indistinguishable from a run under the new contract
+ * — exactly the live confusion #977 was filed from. So a machine below this is refused BEFORE
+ * dispatch, naming the update, rather than silently producing the older behaviour (`apply.ts`
+ * `runnerContractProblem`).
  *
- * Bump this when the runner's half of the result contract changes again, together with the CLI
- * version that ships it. `cliAtLeast` treats an unreported version as capable, which is the
- * convention every MIN_CLI gate here follows.
+ * ── Why it moved to 0.4.85 (#989)
+ *
+ * #985 fixed the runner's click classification — the press that OPENS a SEEK application stopped
+ * being read as the final submit ({@link classifyApplyClick}) — and that fix lives in
+ * `packages/browser-runner`, which ships INSIDE the published CLI. The commit did not bump
+ * `packages/cli/package.json`, and `publish-npm.yml` publishes only a version that is new, so
+ * nothing was published: the live machine kept running 0.4.84, whose bundled bridge still tests
+ * `FALLBACK_COMMIT_RE`. The next live run therefore reproduced the defect the fix had already
+ * removed from `main` — `browser_click → class: submit → refused: fill_and_review`, no `rule`
+ * field, three seconds after the cloud's own `continue` — and the only durable evidence that the
+ * code was old was the absence of a field nobody looks for.
+ *
+ * A behaviour change in the runner is a CONTRACT change, because the cloud's decisions assume it.
+ * So this floor moves with it: a machine that cannot tell the entry control from the final submit
+ * is refused with a sentence that says so, instead of ending `awaiting_review` having typed
+ * nothing.
+ *
+ * Bump this when the runner's half of the contract changes again, together with the CLI version
+ * that ships it — `policy.test.ts` pins the pair, so the floor cannot name a release that has not
+ * been published. `cliAtLeast` treats an unreported version as capable, which is the convention
+ * every MIN_CLI gate here follows.
  */
-export const LOCAL_APPLY_CONTRACT_MIN_CLI = "0.4.84";
+export const LOCAL_APPLY_CONTRACT_MIN_CLI = "0.4.85";
 
 export type LocalApplyDiagnosticCause = "bridge_unused" | "engine_exited_nonzero" | "timed_out" | "no_engine_output";
 export const LOCAL_APPLY_DIAGNOSTIC_CAUSES: readonly LocalApplyDiagnosticCause[] = ["bridge_unused", "engine_exited_nonzero", "timed_out", "no_engine_output"];
@@ -394,7 +411,11 @@ const str = (v: unknown, max: number): string | null => (typeof v === "string" &
 const oneOf = <T extends string>(list: readonly T[], v: unknown): T | null => (list.includes(v as T) ? (v as T) : null);
 const isHttpUrl = (v: string) => /^https?:\/\/[^\s/]+/i.test(v);
 
-const DETAIL_KEYS = new Set(["engine", "authMode", "engineAuth", "mode", "class", "tool", "decision", "reason", "role", "kind", "path", "sha256", "bytes", "gateId", "exitCode", "count", "status", "basis", "source", "checkpointId", "directive", "phase", "actions", "filled", "uploaded"]);
+// `rule` is on this list from #989: the runner has emitted WHICH rule classified a click as the
+// submit since #985, and this whitelist silently dropped it — so the one fact that tells "it
+// refused the control that opens the form" from "it refused the real submit" never reached the
+// cloud trace, which is where the live investigation needed it.
+const DETAIL_KEYS = new Set(["engine", "authMode", "engineAuth", "mode", "class", "tool", "decision", "reason", "rule", "role", "kind", "path", "sha256", "bytes", "gateId", "exitCode", "count", "status", "basis", "source", "checkpointId", "directive", "phase", "actions", "filled", "uploaded"]);
 
 /** A validated event, or null. Detail keeps only whitelisted, primitive, bounded values. */
 export function parseLocalApplyEvent(raw: unknown): LocalApplyEvent | null {
