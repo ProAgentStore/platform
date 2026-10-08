@@ -19,7 +19,7 @@ import { localStamp } from "./agent-clock.js";
 import { RETRIEVAL_EMPTY_MESSAGE, searchKnowledgeFor } from "./retrieval.js";
 import { withTurnReplay } from "./coding-turn-replay.js";
 import type { Env } from "../types.js";
-import { LEGACY_JOB_APPLY_RETIRED_MESSAGE } from "../routes/instances-apply.js";
+import { LEGACY_JOB_APPLY_RETIRED_MESSAGE } from "./agent-retirement.js";
 
 export interface StorageToolCallRequest {
 	name: string;

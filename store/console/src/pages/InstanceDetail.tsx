@@ -11,6 +11,8 @@ import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
 import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import PlaybackIcon from "../components/PlaybackIcon";
 import InstanceMissing from "../components/InstanceMissing";
+import RetiredNotice, { RetiredBadge } from "../components/RetiredNotice";
+import { retirementOf } from "../lib/retirement";
 import { useInstanceRecord } from "../hooks/useInstanceRecord";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { useVoice, buildTranscribePrompt, resolveVoiceStatus, resolveComposer } from "@proagentstore/sdk/hooks";
@@ -980,6 +982,8 @@ function InstancePage() {
 		}
 	};
 
+	// One read of the server's verdict (#979) — no local notion of "retired" anywhere in the page.
+	const retirement = retirementOf(instance);
 	const isApply = surfaces.includes("apply");
 	const isRepo = surfaces.includes("repo");
 	// Tabs are derived from the surface registry filtered by this instance's capabilities.
@@ -1014,6 +1018,9 @@ function InstancePage() {
 						{identityFor(instance).emoji}
 					</span>
 					<span className="text-sm font-semibold truncate max-w-32 hidden sm:inline">{instance.name}</span>
+					{/* Shown on MOBILE too (#979): the name is hidden below sm, and "this does not run"
+					    is the one thing about this instance that must not be the part that is dropped. */}
+					{retirement && <RetiredBadge retirement={retirement} />}
 				</>
 			)}
 			{/* Runner dot only for agents that USE a runner — chat-only agents showed a
@@ -1041,7 +1048,7 @@ function InstancePage() {
 				))}
 			</div>
 		</div>
-		), [instance, hasRuntime, runnerOnline, runnerNode, tab, tabDefs, navigate, setTab]);
+		), [instance, hasRuntime, runnerOnline, runnerNode, tab, tabDefs, navigate, setTab, retirement]);
 
 	// A surface that DECLARES `ownsHeader` may replace the page header while it is active — a
 	// full-screen terminal needs it for repo + engine status + session actions.
@@ -1059,6 +1066,11 @@ function InstancePage() {
 
 	return (
 		<div className="flex flex-col flex-1 min-h-0">
+			{/* The agent's work is RETIRED (#979): said on every tab, before anything is attempted,
+			    with the route to the replacement pipeline. Beside the secure-input banner because it
+			    is the same kind of fact — something about this instance a person must see whichever
+			    surface they opened, not a per-tab detail. */}
+			{retirement && <RetiredNotice retirement={retirement} onOpen={(path) => navigate(path)} />}
 			{/* #934: a value an agent waits for, on every tab — chat already lists them in full. */}
 			{id && tab !== "chat" && <SecureInputBanner instanceId={id} />}
 			{/* Tab content */}
@@ -1325,7 +1337,10 @@ function InstancePage() {
 							{loopOn ? (
 								<>{loopBadge && <span role="status" data-testid="loop-activity" title={loopBadge.title} className={`px-1.5 py-0.5 text-2xs font-semibold border rounded-lg ${LOOP_WATCH_BADGE_CLASS[loopBadge.tone]}`}>{loopBadge.word}</span>}
 								<button type="button" onClick={stopLoop} disabled={!loopControl.canStop} aria-label={loopControl.actionLabel} title={loopControl.hint ?? loopBadge?.title ?? `Loop ${loopIteration}/${loopMax}`} className={`px-1.5 py-1.5 text-sm border rounded-lg relative disabled:opacity-60 ${LOOP_BUTTON_CLASS[loopControl.phase]}`}>{loopControl.phase === "stopping" ? <Loader2 size={13} className="animate-spin" /> : <Square size={13} />}<span className={`absolute -top-1 -right-1 text-2xs rounded-full px-1 font-bold leading-tight ${LOOP_BADGE_CLASS[loopControl.phase]}`}>{loopIteration}</span></button></>
-							) : (
+							) : retirement ? null : (
+								/* #979: no Loop starter on a retired agent. The driver refuses it with a 410
+								   and the migration message, so offering the control would be an action the
+								   UI knows cannot work — the banner above says what to use instead. */
 								<button type="button" onClick={toggleLoopForm} title="Loop" className={`px-1.5 py-1.5 text-sm border rounded-lg ${showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}><Repeat size={13} /></button>
 							)}
 							<div className="relative">

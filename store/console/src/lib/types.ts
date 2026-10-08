@@ -1,3 +1,5 @@
+import type { InstanceRetirement } from "./retirement";
+
 export interface Agent {
 	id: string;
 	slug: string;
@@ -83,6 +85,8 @@ export interface Instance {
 	 * (#815). `lib/instanceActivity.ts` combines it with the run's own heartbeat for that.
 	 */
 	lastActivityAt?: string | null;
+	/** Present only when this agent's WORKFLOW is retired (#979) — see lib/retirement.ts. */
+	retirement?: InstanceRetirement;
 	capabilities?: {
 		surfaces: string[];
 		runtime?: string;

@@ -14,6 +14,7 @@
  * category, so nothing needs a migration to keep working.
  */
 
+import { type RetirementNotice, retirementFor } from "./agent-retirement.js";
 import {
 	type ConstraintSpec,
 	constraintsFor,
@@ -125,6 +126,15 @@ export interface AgentCapabilities {
 	settingsSchema?: SettingsField[];
 	/** Local CLI browser research (#945) — resolved, with defaults. Present only for `runtime: "local_browser"`. */
 	localBrowser?: LocalBrowserCapability;
+	/**
+	 * This agent's WORKFLOW is retired and will not run (#979), with the replacement pipeline.
+	 *
+	 * Separate from the subscription: the instance stays `active` and accessible — its board,
+	 * history and chat are the point of keeping it — while the work is permanently unavailable.
+	 * Resolved from the one closed table (`agent-retirement.ts`) so the console banner, the start
+	 * refusals and MCP are all reading the same fact rather than three copies of it.
+	 */
+	retired?: RetirementNotice;
 }
 
 /**
@@ -522,6 +532,9 @@ export function agentCapabilities(agent: AgentLike, env?: CustomSurfaceEnv | nul
 			boardColumns: declaredColumns ?? defaultBoardColumns(surfaces),
 			settingsSchema,
 			...localBrowserFor(declared),
+			// Derived from the resolved workflow, on BOTH paths below, so a retired agent cannot
+			// resolve as live by having declared its capabilities rather than inherited them (#979).
+			...retiredFor(isAgentWorkflow(declared.workflow) ? declared.workflow : null),
 		};
 	}
 
@@ -541,7 +554,13 @@ export function agentCapabilities(agent: AgentLike, env?: CustomSurfaceEnv | nul
 	} else {
 		base = { surfaces: [], runtime: null, workflow: null };
 	}
-	return { ...base, tools, customSurfaces, ...withOptions, boardColumns: declaredColumns ?? defaultBoardColumns(base.surfaces), settingsSchema };
+	return { ...base, tools, customSurfaces, ...withOptions, boardColumns: declaredColumns ?? defaultBoardColumns(base.surfaces), settingsSchema, ...retiredFor(base.workflow) };
+}
+
+/** The retirement block, present only when there is one — absent is the healthy case (#979). */
+function retiredFor(workflow: AgentWorkflow | null): { retired?: RetirementNotice } {
+	const retired = retirementFor(workflow);
+	return retired ? { retired } : {};
 }
 
 /**

@@ -230,6 +230,32 @@ describe("read proxies", () => {
 		expect(res.structuredContent).toEqual({ instances });
 	});
 
+	it("my_instances carries a RETIRED agent's state and its replacement ids through, unaltered (#979)", async () => {
+		// The console reads this same body, from this same route. Parity is not two implementations
+		// kept in step: the API resolves the retirement once and both surfaces read the field — so
+		// what this asserts is that the proxy does not project it away, which is the only way the
+		// two could come to disagree about whether an agent can run.
+		const h = setup();
+		const retirement = {
+			workflow: "JOB_APPLY",
+			status: "retired",
+			label: "Retired — disabled",
+			since: "2026-10-08",
+			migration: "Use the Scout → Tailor → Runner pipeline.",
+			replacements: [{ role: "scout", instanceId: "i-scout", consolePath: "/instances/i-scout" }],
+			missingRoles: ["runner"],
+		};
+		const instances = [{ id: "legacy", agent_id: "a1", status: "active", retirement, capabilities: { surfaces: ["apply"], retired: { workflow: "JOB_APPLY" } } }];
+		h.fetchStub.respond((u) => u.endsWith("/v1/instances/my/instances"), { body: { instances } });
+		const res = (await h.tools.get("my_instances")!.handler({})) as { content: { text: string }[]; structuredContent?: unknown };
+		// Both halves of the reply: a model reads the text, a client reads the structure, and a
+		// retired agent must not look operational in either.
+		expect(JSON.parse(res.content[0].text)).toEqual({ instances });
+		expect(res.structuredContent).toEqual({ instances });
+		expect(res.content[0].text).toContain("Retired — disabled");
+		expect(res.content[0].text).toContain("/instances/i-scout");
+	});
+
 	it("my_instances exposes include_paused and requests the paused-inclusive roster only when asked (#826)", async () => {
 		const h = setup();
 		const instances = [{ id: "active-1", agent_id: "a1", status: "active" }, { id: "paused-1", agent_id: "a2", status: "paused" }];

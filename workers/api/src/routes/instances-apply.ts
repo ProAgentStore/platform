@@ -1,3 +1,4 @@
+import { LEGACY_JOB_APPLY_RETIRED_MESSAGE } from "../lib/agent-retirement.js";
 import { overLimit } from "../lib/write-limits.js";
 import type { Hono } from "hono";
 import { decisionRunForCard, resolveCodingPause } from "../lib/coding-answer.js";
@@ -36,11 +37,12 @@ export class ApplyError extends Error {
  * The workflow is deliberately retained so existing runs can finish and their task history
  * remains readable. New work must use the owner-controlled local pipeline instead.
  *
- * Keep this wording stable across HTTP and chat: it is the actionable migration response a
- * caller receives, not an implementation-detail error.
+ * The wording moved to `lib/agent-retirement.ts` at #979 and is re-exported here, where every
+ * existing caller imports it. It is now ONE string shared by the refusals and by the retirement
+ * state the console and MCP read — a banner that explains a different thing from the error the
+ * same action returns is how a reader learns to trust neither.
  */
-export const LEGACY_JOB_APPLY_RETIRED_MESSAGE =
-	"The legacy JOB_APPLY workflow no longer accepts new applications. Existing application tasks and history remain available. Use the Scout → Tailor → Runner pipeline: triage a job lead, generate application materials, then request review or start the Application Runner fill.";
+export { LEGACY_JOB_APPLY_RETIRED_MESSAGE } from "../lib/agent-retirement.js";
 
 /** Kept as a predicate so TypeScript continues to typecheck the retained in-flight workflow path. */
 function legacyJobApplyStartsAreRetired(): boolean {

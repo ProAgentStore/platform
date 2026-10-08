@@ -1,3 +1,4 @@
+import { RetiredBadge } from "../components/RetiredNotice";
 import { useState, useEffect, useCallback, useRef } from "react";
 import Button from "../components/Button";
 import Page from "../components/Page";
@@ -342,6 +343,10 @@ export default function Dashboard() {
 										    server's verdict, not "has an open run": a park has nothing ticking by
 										    design and a wedged run has nothing ticking because it is dead. Only
 										    `working` pulses; only `stalled` is danger. */}
+										{/* #979: a retired agent's card led with "Idle", which is true and useless — it
+										    is idle because its workflow will never run again. The badge says so where
+										    the status line is, so the list cannot present it as an operational agent. */}
+										{inst.retirement && <RetiredBadge retirement={inst.retirement} className="mb-1.5 inline-block" />}
 										<div className="flex items-center gap-1.5 mb-1.5 text-xs" data-testid="instance-status">
 											<span className={`w-2 h-2 rounded-full shrink-0 ${HEALTH_DOT[act.health]}`} aria-hidden="true" />
 											<span className={`font-semibold ${HEALTH_TEXT[act.health]}`}>{HEALTH_LABEL[act.health]}</span>

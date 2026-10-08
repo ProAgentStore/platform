@@ -478,7 +478,11 @@ const PINS = {
 	// resume behind it is gated on byte equality with that exact string. The prose has to say why it
 	// only fills an EMPTY box and why re-speaking is not a substitute, or the next reader deletes it
 	// as a stray restore.
-	"store/console/src/pages/InstanceDetail.tsx": 1507, // +1 (#934): the SecureInputBanner import and its one-line mount; the banner itself is components/SecureInputBanner.tsx. +5 (#931): the busy-refusal hold — its state, the catch branch that routes a busy refusal to it, a clear on the next start, and the render; parsing, the link and the notice live in agents/coder/web/src/coding-loop-run.ts + BusyHoldNotice.tsx. +1 (#930): the coder-web import for the loop watcher's parked/stalled badge; the logic lives in agents/coder/web/src/coding-loop-run.ts. +5 (#929): a start that is queued or not yet confirmed is said as such instead of watched as a run with no id, and the busy notice can queue it — the start itself is coder-web's postLoopStart.
+		// +14 at #979: the retirement badge in the header, the banner on every surface, the Loop
+	// starter gated on it, and one read of the server's verdict. The markup and the wording live in
+	// components/RetiredNotice.tsx + lib/retirement.ts; what is here is the three places a person
+	// looks at this instance.
+"store/console/src/pages/InstanceDetail.tsx": 1522, // +1 (#934): the SecureInputBanner import and its one-line mount; the banner itself is components/SecureInputBanner.tsx. +5 (#931): the busy-refusal hold — its state, the catch branch that routes a busy refusal to it, a clear on the next start, and the render; parsing, the link and the notice live in agents/coder/web/src/coding-loop-run.ts + BusyHoldNotice.tsx. +1 (#930): the coder-web import for the loop watcher's parked/stalled badge; the logic lives in agents/coder/web/src/coding-loop-run.ts. +5 (#929): a start that is queued or not yet confirmed is said as such instead of watched as a run with no id, and the busy notice can queue it — the start itself is coder-web's postLoopStart.
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.
@@ -1467,7 +1471,9 @@ const PINS = {
 	// bug presented as two. The decision is a pure `subscribeActionFor` with its own tests rather
 	// than a condition in JSX, because this console has no component harness and a verdict embedded
 	// in markup is a verdict nothing checks.
-	"store/console/src/lib/types.ts": 810, // +2 at #975: the card's run diagnostic (cause, counts, signal ids) — why nothing reached the page. +2 at #974: the card's queue view (position, attempts, next attempt, reason) — why a run is waiting rather than failed. +2 at #973: the card's submitAuthorization (the owner's per-application approval, its state and the run that spent it). // #953: crossed 800 with the Applications surface's copies of its Worker shapes (#958) and the Runner settings view; these are copies by design (check-console-types), so the file grows with the surface.
+		// +3 at #979: `Instance.retirement`, and the first import this file has ever needed — the
+	// retirement SHAPE belongs beside the helpers that read it (lib/retirement.ts), not inlined here.
+"store/console/src/lib/types.ts": 814, // +2 at #975: the card's run diagnostic (cause, counts, signal ids) — why nothing reached the page. +2 at #974: the card's queue view (position, attempts, next attempt, reason) — why a run is waiting rather than failed. +2 at #973: the card's submitAuthorization (the owner's per-application approval, its state and the run that spent it). // #953: crossed 800 with the Applications surface's copies of its Worker shapes (#958) and the Runner settings view; these are copies by design (check-console-types), so the file grows with the surface.
 	// New entry at #978 — 801, one line over LIMIT. The application-execution face and its controls
 	// were SPLIT OUT first (components/ApplicationRunFace.tsx, following BoardIssueFace), which took
 	// the file from 900 to 801; what is left is the board itself. Lowering it further means splitting
@@ -1855,7 +1861,9 @@ const PINS = {
 	// +3 at #889/#893: the headless.ts and user-ai.ts raises above (one line of why each) and this one — both landed without their raise and left CI red until this.
 	// +5 at #921: the restored workflow-run.ts entry above (four lines of why + pin) and this line, less one line of slack.
 	// +6 at #914: the user-ai.ts raise and the new coding-loop.ts entry above (two lines of why each) and this line.
-	"scripts/check-file-size.mjs": 1944, // +1 at #953: the console types.ts entry. +2 at #946: the agents.ts pin and its reason; +1 at #944: the reason line for the runner.ts pin; +1 at #898: the board.ts pin; +1 at #924: the mcp runtime.ts pin.
+	// +7 at #979: the InstanceDetail.tsx and console types.ts raises above (two reasons + two
+	// pins), the applications/control.ts reason extended at #981, and this line.
+	"scripts/check-file-size.mjs": 1947, // +1 at #953: the console types.ts entry. +2 at #946: the agents.ts pin and its reason; +1 at #944: the reason line for the runner.ts pin; +1 at #898: the board.ts pin; +1 at #924: the mcp runtime.ts pin.
 };
 
 /**

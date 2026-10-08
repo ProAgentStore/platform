@@ -1,3 +1,4 @@
+import { retirementView } from "../lib/agent-retirement.js";
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
@@ -363,13 +364,17 @@ instanceRoutes.get("/my/instances", async (c) => {
 	// it except the two keys `instanceListView` whitelists: the display name (how two instances
 	// of one agent stay distinguishable) and the runner-node PIN, which `pags up` filters its
 	// membership on and could not see while the whole blob was dropped (#500).
-	const instances = (results ?? []).map((r) => {
+	// Resolved ONCE for the whole list, because the retirement block below needs every instance's
+	// runtime to find the owner's replacement pipeline — the Scout, Tailor and Runner are rows in
+	// this very result set, so a retired agent's way out costs no extra query (#979).
+	const resolved = (results ?? []).map((r) => ({ row: r, caps: agentCapabilities({ slug: r.slug as string, category: r.category as string, config: r.config as string }, c.env) }));
+	const roster = resolved.map((e) => ({ id: e.row.id as string, name: (instanceListView(e.row.instance_config as string | null).displayName || e.row.name) as string, runtime: e.caps.runtime }));
+	const instances = resolved.map(({ row: r, caps: fullCaps }) => {
 		const { config, instance_config, last_activity_at, ...rest } = r;
 		const view = instanceListView(instance_config as string | null);
 		// Full capabilities (with boardColumns + settingsSchema) cost ~83 KB for 28
 		// instances. The list only needs the routing fields; heavy config lives on the
 		// per-instance/per-agent detail routes.
-		const fullCaps = agentCapabilities({ slug: r.slug as string, category: r.category as string, config: config as string }, c.env);
 		const { boardColumns: _bc, settingsSchema: _ss, ...lightCaps } = fullCaps;
 		return {
 			...rest,
@@ -379,6 +384,11 @@ instanceRoutes.get("/my/instances", async (c) => {
 			...(view.runnerNode ? { config: { runnerNode: view.runnerNode } } : {}),
 			...(view.tags.length ? { tags: view.tags } : {}),
 			lastActivityAt: last_activity_at ?? null,
+			// A RETIRED workflow, with the owner's own replacement instances attached (#979). Present
+			// only for a retired agent, so every other card is byte-identical to before — and it is on
+			// THIS response because it is the one the console renders instances from and the one MCP's
+			// `my_instances` passes through, which is what makes the two unable to disagree.
+			...(fullCaps.retired ? { retirement: retirementView(fullCaps.retired, roster) } : {}),
 			// env carries the fail-closed custom-surface gate (#186) — this is the one response the
 			// console renders tabs from, so it is the path that must consult it.
 			capabilities: lightCaps,

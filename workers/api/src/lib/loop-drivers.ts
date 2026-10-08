@@ -631,9 +631,34 @@ function withProGate(driver: LoopDriver): LoopDriver {
 	};
 }
 
+/**
+ * Refuse autonomous work on an agent whose WORKFLOW is retired (#979), at the same one door.
+ *
+ * The legacy JOB_APPLY agent's own start path already answers 410, but its chat loop did not: the
+ * Loop button, `start_instance_loop`, a trigger and a supervisor's `delegate_goal` would all have
+ * started a run on an agent whose every apply tool refuses — burning the owner's tokens to arrive
+ * at the migration message the refusal could have given for nothing. #979 asks for exactly that:
+ * no silent no-op, an explanatory migration message instead.
+ *
+ * 410 and not 409: this is permanent. A caller that retries a 409 is right to; retrying this is
+ * the mistake the status code exists to prevent. Synchronous, because the capabilities the caller
+ * already resolved carry the verdict — no read, and nothing to fail.
+ */
+function withRetirementGate(capabilities: AgentCapabilities | null | undefined, driver: LoopDriver): LoopDriver {
+	const retired = capabilities?.retired;
+	if (!retired) return driver;
+	return {
+		id: driver.id,
+		label: driver.label,
+		async start() {
+			return { ok: false, status: 410, error: `${retired.label}. ${retired.migration}` };
+		},
+	};
+}
+
 export function loopDriverFor(capabilities: AgentCapabilities | null | undefined): LoopDriver {
 	const wf = capabilities?.workflow;
-	return withPauseGate(withProGate((wf && DRIVERS[wf]) || DEFAULT_LOOP_DRIVER));
+	return withRetirementGate(capabilities, withPauseGate(withProGate((wf && DRIVERS[wf]) || DEFAULT_LOOP_DRIVER)));
 }
 
 /** Every driver id, for tests and diagnostics. */
