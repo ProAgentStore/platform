@@ -102,7 +102,7 @@ export default function NotificationPolicySection({ instanceId }: { instanceId?:
 	if (!vocab || !policy) return null;
 
 	const rows = policyRows(vocab, policy);
-	const overridden = policy.rules.length > 0;
+	const overridden = (policy.rules ?? []).length > 0;
 
 	const setChoice = (row: PolicyRow, channel: "inapp" | "push", choice: PolicyChoice) => {
 		void save(rows.map((r) => (r.key === row.key ? { ...r, [channel]: { ...r[channel], choice } } : r)));

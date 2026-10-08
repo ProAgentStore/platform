@@ -79,6 +79,20 @@ describe("the rows the editor shows", () => {
 	});
 });
 
+describe("a malformed answer is an empty editor, never a thrown render", () => {
+	it("tolerates a body that is not the declared shape", () => {
+		// CI's own demonstration: the research e2e mock answers every unmatched route `{}`, and a
+		// `for (const x of undefined)` here threw DURING RENDER — which blanks the whole Settings
+		// tab, not just this card. The lists are read defensively for that reason.
+		const empty = {} as NotificationVocabulary;
+		expect(policyRows(empty, {} as InstanceNotificationPolicy)).toEqual([]);
+		expect(policyRows(vocab, {} as InstanceNotificationPolicy)).toEqual([]);
+		expect(policyRows(empty, policy())).toEqual([]);
+		// A type with no matching effective row is skipped rather than rendered without an answer.
+		expect(policyRows(vocab, policy({ effective: [] }))).toEqual([]);
+	});
+});
+
 describe("what a save sends", () => {
 	it("sends nothing for rows left inheriting — which is how `restore inherited` is expressible", () => {
 		expect(rulesFromChoices(policyRows(vocab, policy()))).toEqual([]);

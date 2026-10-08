@@ -60,9 +60,17 @@ export function policyRows(vocab: NotificationVocabulary, policy: InstanceNotifi
 		allowed,
 		source,
 	});
-	const effective = (match: (e: InstanceNotificationPolicy["effective"][number]) => boolean) => policy.effective.find(match);
+	// Each list is read defensively because this is a BOUNDARY: a 200 whose body is not the
+	// declared shape would otherwise throw during render, and an exception here takes the whole
+	// Settings tab down with it — not just this card. That is not hypothetical; it is what the
+	// research e2e mock (which answers every unmatched route `{}`) demonstrated, and the same
+	// trap its own comment records for the trigger form. No rows is an honest empty editor.
+	const types = vocab?.types ?? [];
+	const events = vocab?.events ?? [];
+	const severities = vocab?.severities ?? [];
+	const effective = (match: (e: InstanceNotificationPolicy["effective"][number]) => boolean) => (policy?.effective ?? []).find(match);
 
-	for (const event of vocab.events) {
+	for (const event of events) {
 		const row = effective((e) => e.event === event.id);
 		if (!row) continue;
 		rows.push({
@@ -74,8 +82,8 @@ export function policyRows(vocab: NotificationVocabulary, policy: InstanceNotifi
 			push: cell(row.push.allowed, row.push.source),
 		});
 	}
-	for (const type of vocab.types) {
-		for (const severity of vocab.severities) {
+	for (const type of types) {
+		for (const severity of severities) {
 			const row = effective((e) => e.type === type.id && e.severity === severity && !e.event);
 			if (!row) continue;
 			// A type that never raises an alert has no alert row worth showing: the control would

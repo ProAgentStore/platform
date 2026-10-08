@@ -131,6 +131,39 @@ async function mockResearchAgent(page: Page, opts: { pause?: Pause; failure?: Fa
 		// The Settings tab's trigger form previews its draft on load and reads `issues` off the answer;
 		// `{}` crashes that section's error boundary and takes the whole tab — this section included — with it.
 		if (path === "/v1/triggers/preview") return json({ schedule: null, timezone: null, issues: [] });
+		// The notification policy (#992) renders on this tab too, and its editor reads two lists off
+		// these answers. `{}` below would throw during its render and take the whole tab with it —
+		// the same trap the trigger form's note above records — so both are answered with their
+		// real shapes, which also means the mobile-fit assertions below cover the new card.
+		if (path === "/v1/instances/notification-vocabulary") {
+			return json({
+				types: [
+					{ id: "local-browser", label: "Browser research", description: "A research run pausing for you.", alerts: true },
+					{ id: "deploy", label: "Deploys", description: "A deploy going out, or failing.", alerts: false },
+				],
+				events: [{ id: "approval_required", label: "Approval needed", description: "A run stopped at something it may not do without you.", kind: "alert", pushOptional: true }],
+				channels: [
+					{ id: "inapp", label: "In the console", description: "The bell list.", optional: true },
+					{ id: "push", label: "Push to my devices", description: "Every device you have enabled alerts on.", optional: true },
+				],
+				severities: ["update", "alert"],
+			});
+		}
+		if (path === "/v1/instances/inst-1/notifications") {
+			const d = { allowed: true, source: "baseline" };
+			return json({
+				instanceId: "inst-1",
+				rules: [],
+				inherited: { rules: [], legacy: [], muted: [], instances: [] },
+				effective: [
+					{ type: "local-browser", severity: "update", inapp: d, push: d },
+					{ type: "local-browser", severity: "alert", inapp: d, push: d },
+					{ type: "deploy", severity: "update", inapp: d, push: d },
+					{ type: "deploy", severity: "alert", inapp: d, push: d },
+					{ type: "", severity: "alert", event: "approval_required", inapp: d, push: d },
+				],
+			});
+		}
 		// Everything else the shell reads on its way past is answered empty — nothing under test.
 		return json({});
 	});
