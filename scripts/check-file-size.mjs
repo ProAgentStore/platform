@@ -130,28 +130,6 @@ const PINS = {
 	// construction, so the more thorough call was the only one that could not report a machine
 	// offline. Raised rather than split: the change is three expressions inside an existing
 	// handler, and the decision it feeds is pure and already lives in lib/runtime-response.ts.
-	// New entry at #712 — 799 → 809, crossing LIMIT by ten. The PDF form tools (inspect / fill /
-	// build an answer sheet) needed a home, and this file had been sitting one line under the
-	// threshold, so anything at all would have tripped it.
-	//
-	// Split FIRST, then raised: the ~130 lines of implementation live in lib/pdf-storage-tools.ts
-	// (and the pure part in lib/pdf-form.ts before that). What is left here is the ten lines that
-	// genuinely belong — one import, the spread that keeps STORAGE_TOOLS the single list of what
-	// an agent can do with its own storage, and a two-line delegation ahead of the switch that
-	// returns null for a name it does not own. Listing the three tool names here instead would
-	// have been a second copy of the module's own contents, kept in step by hand.
-	// +17 at #715-follow-up: find_confirmation_link resolves WHICH mailbox before reading a token,
-	// instead of .first()-ing over (user_id, provider). Raised rather than split — it is one
-	// resolution at an existing call site, and the decision it makes is pure and already lives in
-	// lib/connector-accounts.ts with its own tests.
-	// +13 at #752/#751: `read_terminal` fences the pane it returns. This tool is a BUILT-IN, so it
-	// never reaches `runRegistryTool` and the per-tool `untrustedOutput` declaration cannot cover it
-	// — ADR 0006 F4 is exactly the case, and the comment saying so is most of the 13 lines. Not
-	// split: the fence has to sit beside the three return paths whose LABELS must stay outside it
-	// ("[live · idle]", "[last snapshot — runner offline]"), and separating a fence from the framing
-	// it is positioned against is how `mcp_get_prompt` came to put a remote server's description
-	// where the platform's own words go.
-	"workers/api/src/lib/storage-tools.ts": 857, // +18 (#762): upload_file handler gains content_base64 branch — size cap check, bytesFromBase64 call, text-path mime-type guard; tool declaration gains two optional params and an import.
 	// +2 for #496 AC2: the owner-initiated resync-identity route is mounted from a new sub-module
 	// (instances-identity.ts) to keep this file's size honest; the two new lines are the import
 	// and the register call. Raised rather than split: the whole change is a mount and an import.
