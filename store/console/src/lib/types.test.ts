@@ -147,6 +147,7 @@ const WORKER_TRIGGER_ACTIONS: Record<TriggerAction, true> = {
 	generate_application_materials: true,
 	start_application_fill: true,
 	log_event: true,
+	start_loop: true,
 };
 
 describe("console response types match the Worker declarations they copy (#617)", () => {
@@ -174,7 +175,7 @@ describe("console response types match the Worker declarations they copy (#617)"
 		// The runtime half of the assertion above: the exhaustive Record catches a MISSING member at
 		// compile time, and this catches the list drifting from `lib/trigger-types.ts:34` in size.
 		expect(Object.keys(WORKER_TRIGGER_ACTIONS).sort()).toEqual([
-			"add_knowledge", "create_task", "generate_application_materials", "insert_record", "log_event", "run_browse", "run_local_browser", "run_pipeline", "start_application_fill", "sync_connector",
+			"add_knowledge", "create_task", "generate_application_materials", "insert_record", "log_event", "run_browse", "run_local_browser", "run_pipeline", "start_application_fill", "start_loop", "sync_connector",
 		]);
 	});
 

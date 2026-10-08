@@ -1205,7 +1205,7 @@ const PINS = {
 	// Raised rather than split — the growth is a comment and two small string operations, and
 	// splitting the dispatch module to absorb them would hide the rationale from the mechanism.
 	// +16 at #847: runtime selection is the trigger adapter that preserves delivery/retry/idempotency; workflow creation already owns the runtime mechanics.
-	"workers/api/src/lib/triggers.ts": 823, // +3 at #957: the start_application_fill action (dispatch + summary line), mirroring generate_application_materials. +3 at #898: truncation made visible (paging, marked cuts, refused over-length writes).
+	"workers/api/src/lib/triggers.ts": 828, // +5 at #968: the `start_loop` dispatch — the action that was missing, delegating to run-wake-start.ts (the ~55 lines of it that could have landed here were SPLIT out, which is why this is +5 and not +68). // +3 at #957: the start_application_fill action (dispatch + summary line), mirroring generate_application_materials. +3 at #898: truncation made visible (paging, marked cuts, refused over-length writes).
 	// +55 at #391 (a constant, a config field, a timer, and the paragraphs saying why): one-shot
 	// turn boundaries moved from three inferred timers to the process's own exit, and the
 	// 15-minute backstop had to become an ENFORCED ceiling — a timer that ends the turn — rather

@@ -98,6 +98,14 @@ describe("BUDGET_OPENING_TOOLS", () => {
 			// argument the objective queue's drain makes above. A root, so depth 0; the button is
 			// the owner's.
 			"routes/loop-continue-routes.ts",
+			// The #968 wake-up — a terminal `run.finished` / `run.stalled` routed onto a connection
+			// whose action is `start_loop`, starting the receiving agent's next turn. A NEW pool and a
+			// root at depth 0, for the reason the objective queue and `/continue` give above: the
+			// finished run's pool is spent, and inheriting it would let one admission fund an
+			// unbounded chain of wake-ups — each of which is itself a run that ends and can wake
+			// something else. Bounded instead by the account ceilings a root pool is subject to, by
+			// the outbox's attempt cap, and by the refusal to wake an agent for its own run.
+			"lib/run-wake-start.ts",
 		].sort());
 	});
 });

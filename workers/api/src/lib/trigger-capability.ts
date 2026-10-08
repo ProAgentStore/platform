@@ -35,6 +35,7 @@ const ACTION_LABELS: Record<TriggerAction, string> = {
 	run_local_browser: "Run browser research",
 	generate_application_materials: "Tailor application materials",
 	start_application_fill: "Fill the application",
+	start_loop: "Take the next turn",
 };
 
 /**

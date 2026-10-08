@@ -90,6 +90,10 @@ const ACTION_KEYS: Record<TriggerAction, readonly string[]> = {
 	generate_application_materials: [],
 	// #957: the payload IS the materials_ready event; the policy lives in the instance settings.
 	start_application_fill: [],
+	// #968: `objective` is the STANDING instruction the owner wrote once ("review what finished and
+	// decide the next step"); the event's own facts are appended by the executor, so the wiring does
+	// not have to restate them and cannot go stale when the payload shape grows.
+	start_loop: ["objective", "mapping"],
 };
 
 /** Config that belongs to the SCHEDULE rather than the action, so it is cron-only. */
@@ -111,6 +115,8 @@ export const MAPPING_TARGETS: Record<TriggerAction, readonly string[]> = {
 	run_local_browser: ["objective"],
 	generate_application_materials: [],
 	start_application_fill: [],
+	// A webhook may carry the instruction for this one turn (#968), as it may for research.
+	start_loop: ["objective"],
 };
 
 export const MAX_MAPPING_ENTRIES = 12;

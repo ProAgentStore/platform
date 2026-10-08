@@ -18,7 +18,7 @@
 // Adding an agent type is an entry here — not a route change, not a button, not a branch in the
 // console. And when `capabilities.workflow` is finally retired in favour of composed steps
 // (docs/agent-platform-strategy.md), this is the single place that has to learn the new form.
-import { createLoopRun } from "./agent-loop-store.js";
+import { createLoopRun, finishLoopRun } from "./agent-loop-store.js";
 import { linkRunToIssue } from "./issue-tickets.js";
 import { MAX_ITERATIONS_CAP, sanitizeMaxIterations } from "./agent-loop.js";
 import { resolveAccountCeilings } from "./delegation-budget-store.js";
@@ -190,19 +190,30 @@ const chatDriver: LoopDriver = {
 			// driver opens a run row at all — a supervisor must not have to know which one ran.
 			delegatedBy: input.onBehalfOf ?? null,
 		});
-		await input.env.AGENT_LOOP.create({
-			id: runId,
-			params: {
-				runId,
-				instanceId: input.instanceId,
-				userId: input.userId,
-				objective: input.objective,
-				maxIterations,
-				budgetId: input.budgetId,
-				depth: input.depth,
-				onBehalfOf: input.onBehalfOf,
-			},
-		});
+		try {
+			await input.env.AGENT_LOOP.create({
+				id: runId,
+				params: {
+					runId,
+					instanceId: input.instanceId,
+					userId: input.userId,
+					objective: input.objective,
+					maxIterations,
+					budgetId: input.budgetId,
+					depth: input.depth,
+					onBehalfOf: input.onBehalfOf,
+				},
+			});
+		} catch (err) {
+			// The row is opened BEFORE the workflow exists, so a create that throws used to leave a
+			// run stuck at `running` for ever: every reader reported the agent as busy, and the stale
+			// sweep (#207C) was the only thing that ever closed it. A caller retrying — the #968
+			// wake-up does, through the outbox — would then be told "already taking a turn" by the
+			// wreckage of its own last attempt. Close it here, then rethrow: the caller still learns
+			// the start failed, and nothing is left claiming to run.
+			await finishLoopRun(input.env, runId, "failed", `the run could not be started: ${err instanceof Error ? err.message : String(err)}`, Date.now()).catch(() => undefined);
+			throw err;
+		}
 		return { ok: true, runId, driver: chatDriver.id };
 	},
 };

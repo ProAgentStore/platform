@@ -43,6 +43,7 @@ import type { Env } from "../types.js";
  *  NAMES an action doesn't inherit this file's executor graph (#293). Re-exported here
  *  because this is still where triggers are validated, stored and run. */
 import { TRIGGER_ACTIONS } from "./trigger-types.js";
+import { startWakeLoop } from "./run-wake-start.js";
 import type { TriggerAction, TriggerConfig, TriggerEventType, TriggerRow, TriggerType } from "./trigger-types.js";
 export type { TriggerAction, TriggerConfig, TriggerEventType, TriggerRow, TriggerType };
 
@@ -295,6 +296,10 @@ export async function executeTriggerAction(
 		const { startApplicationFill } = await import("./local-apply/apply.js");
 		const out = await startApplicationFill(env, target.instance_id, target.user_id, payload, "connection");
 		resultPayload = { applicationId: out.application.id, status: out.application.status, runId: out.run?.id ?? null, outcome: out.kind, mode: out.run?.policy.mode ?? null };
+	} else if (target.action === "start_loop") {
+		// #968 — have this agent take its NEXT TURN. The whole decision lives in `run-wake-start.ts`
+		// beside its pure half, because this dispatch chain is long enough already.
+		resultPayload = await startWakeLoop(env, target, payload, config, mapped);
 	} else if (target.action === "run_browse") {
 		// #172: schedule a generic browser task — fire the BROWSER_TASK workflow at the
 		// configured start URL. Runner-offline (503) or a run already active (409) aren't

@@ -17,7 +17,7 @@
 import type { ConnectorProvider } from "./connector-grants.js";
 
 export type TriggerType = "webhook" | "cron";
-export type TriggerAction = "create_task" | "add_knowledge" | "log_event" | "sync_connector" | "run_pipeline" | "insert_record" | "run_browse" | "run_local_browser" | "generate_application_materials" | "start_application_fill";
+export type TriggerAction = "create_task" | "add_knowledge" | "log_event" | "sync_connector" | "run_pipeline" | "insert_record" | "run_browse" | "run_local_browser" | "generate_application_materials" | "start_application_fill" | "start_loop";
 export type TriggerEventType = TriggerType | "manual";
 
 /**
@@ -65,6 +65,7 @@ export const TRIGGER_ACTIONS: readonly TriggerAction[] = [
 	"generate_application_materials",
 	"start_application_fill",
 	"log_event",
+	"start_loop",
 ];
 
 export interface TriggerRow {
