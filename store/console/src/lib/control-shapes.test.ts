@@ -185,7 +185,8 @@ function sweep(root: string, find = findHandAuthoredControls) {
 // swallowed 3491 characters over 79 lines. Its 32 hidden tags simply contained no `<button>` with
 // both padding and a radius. That is luck, not coverage, which is the argument for the
 // denominator assertion below rather than for a bigger pin.
-const PINNED = { "store/console": 44, "store/admin": 4, "agents/coder/web": 23 };
+// 44 → 42 at #970: the apply board's two Retry buttons went with the retired JOB_APPLY start.
+const PINNED = { "store/console": 42, "store/admin": 4, "agents/coder/web": 23 };
 
 describe.each(TREES)("%s holds its count of buttons that draw their own box", (name, root) => {
 	/**

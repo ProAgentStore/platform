@@ -181,11 +181,11 @@ export const SURFACES: SurfaceDef[] = [
 		id: "apply",
 		label: "Apply",
 		icon: "📮",
-		// The job-application agent's single work board (one card per job, Retry, move,
+		// The job-application agent's single work board (one card per job, move,
 		// attempts drill-down). The old applications-records detail page was retired.
 		show: ({ surfaces }) => surfaces.includes("apply"),
 		scroll: true,
-		render: ({ instanceId }) => <BoardTab instanceId={instanceId} apply />,
+		render: ({ instanceId }) => <BoardTab instanceId={instanceId} />,
 	},
 	{
 		id: "board",
