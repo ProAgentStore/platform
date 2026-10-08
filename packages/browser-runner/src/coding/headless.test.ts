@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -47,6 +47,30 @@ process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "codex-
 process.stdout.write(JSON.stringify({ type: "turn.started" }) + "\\n");
 process.stdout.write(JSON.stringify({ type: "item.completed", item: { id: "item_0", type: "agent_message", text: "argv: " + JSON.stringify(argv) } }) + "\\n");
 process.stdout.write(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } }) + "\\n");
+`;
+
+/**
+ * Structured Codex stand-in that holds its USAGE event until the test releases it (#983).
+ *
+ * The same four events as `FAKE_CODEX_JSON_ARGV`, with the `turn.completed` that carries the token
+ * counts withheld until `USAGE_GATE` exists on disk. A FILE and not a timer: the ordering under
+ * test must hold under any scheduling, and a `setTimeout` long enough to be safe on a loaded CI box
+ * is the same guess that made the test it replaces flaky.
+ */
+const FAKE_CODEX_GATED_USAGE = `#!/usr/bin/env node
+const fs = require("node:fs");
+const argv = process.argv.slice(2);
+process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "codex-gated" }) + "\\n");
+process.stdout.write(JSON.stringify({ type: "turn.started" }) + "\\n");
+process.stdout.write(JSON.stringify({ type: "item.completed", item: { id: "item_0", type: "agent_message", text: "argv: " + JSON.stringify(argv) } }) + "\\n");
+const tick = () => {
+  if (fs.existsSync(process.env.USAGE_GATE)) {
+    process.stdout.write(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 7, cached_input_tokens: 2, cache_write_input_tokens: 3, output_tokens: 11, reasoning_output_tokens: 0 } }) + "\\n");
+    return;
+  }
+  setTimeout(tick, 20);
+};
+tick();
 `;
 
 /** Structured Codex stand-in: records argv and emits the event fields #848 must preserve. */
@@ -452,6 +476,9 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 	let argvBin: string;
 	let codexJsonArgvBin: string;
 	let codexResumeBin: string;
+	let codexGatedBin: string;
+	/** Touched by the #983 test to let the gated engine publish its usage. */
+	let usageGate: string;
 	let oldCodexJsonBin: string;
 	let wedgedBin: string;
 	let refuserBin: string;
@@ -465,6 +492,8 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		argvBin = join(dir, "fake-argv.js");
 		codexJsonArgvBin = join(dir, "fake-codex-json-argv.js");
 		codexResumeBin = join(dir, "fake-codex-resume.js");
+		codexGatedBin = join(dir, "fake-codex-gated.js");
+		usageGate = join(dir, "release-usage");
 		oldCodexJsonBin = join(dir, "fake-codex-old-json.js");
 		wedgedBin = join(dir, "fake-wedged.js");
 		refuserBin = join(dir, "fake-refuser.js");
@@ -475,6 +504,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		writeFileSync(argvBin, FAKE_ARGV);
 		writeFileSync(codexJsonArgvBin, FAKE_CODEX_JSON_ARGV);
 		writeFileSync(codexResumeBin, FAKE_CODEX_RESUME);
+		writeFileSync(codexGatedBin, FAKE_CODEX_GATED_USAGE);
 		writeFileSync(oldCodexJsonBin, FAKE_CODEX_OLD_JSON);
 		writeFileSync(wedgedBin, FAKE_WEDGED);
 		writeFileSync(refuserBin, FAKE_REFUSER);
@@ -485,6 +515,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		chmodSync(argvBin, 0o755);
 		chmodSync(codexJsonArgvBin, 0o755);
 		chmodSync(codexResumeBin, 0o755);
+		chmodSync(codexGatedBin, 0o755);
 		chmodSync(oldCodexJsonBin, 0o755);
 		chmodSync(wedgedBin, 0o755);
 		chmodSync(refuserBin, 0o755);
@@ -772,7 +803,10 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		});
 		s.start();
 		s.input("fix the failing test");
-		await until(() => s.snapshot().includes("argv:"), 8000, "codex JSON argv echo");
+		// The turn's END, not its argv line (#983): this asserts the usage too, and the token counts
+		// are on the `turn.completed` event that FOLLOWS the argv echo. Gating on the pane made the
+		// assertion depend on both events arriving in one stdout chunk.
+		await until(() => s.lastTurn !== null, 8000, "the codex JSON argv turn to end");
 		const argv = JSON.parse(/argv: (\[.*\])/.exec(s.snapshot())?.[1] ?? "[]") as string[];
 		expect(argv).toEqual(["exec", "--json", "--sandbox", "danger-full-access", "-c", "model=o3", "fix the failing test"]);
 		expect(s.takeUsage()).toMatchObject([{ provider: "openai", model: "codex", inputTokens: 1, outputTokens: 1, costUsd: 0 }]);
@@ -891,10 +925,65 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		expect(() => s.start()).not.toThrow();
 		// One-shot: the process is spawned by the TURN, so nothing runs until input arrives.
 		s.input("hi");
-		await until(() => s.snapshot().includes("argv:"), 8000, "default codex engine process output");
+		// Gate on the TURN ENDING, not on mid-turn pane content (#983). `argv:` is an
+		// `item.completed` event and the token counts are on the LATER `turn.completed`; waiting for
+		// the first and asserting the second passes only while both land in one stdout chunk, which
+		// is what failed the Deploy API Worker run for 54dfc902 with `expected [] to match …`.
+		// `lastTurn` is set either by `turn_end` — the same synchronous handler that publishes the
+		// usage, immediately before it — or by the process `close`, which Node emits after every
+		// stdout chunk has been delivered. Either way it cannot be observed before the usage exists.
+		await until(() => s.lastTurn !== null, 8000, "the default codex engine's turn to end");
 		const snap = s.snapshot().toLowerCase();
+		// Still the same claim: the transcript is codex's, never claude's…
+		expect(snap).toContain("argv:");
 		expect(snap).not.toContain("claude");
+		// …and the spend is attributed to the engine that actually ran.
 		expect(s.takeUsage()).toMatchObject([{ provider: "openai", model: "codex" }]);
+		s.stop();
+	}, 15_000);
+
+	// ── #983: the release gate was blocked by the assertion above, not by the production code ──
+	//
+	// The flake was an ORDERING assumption in a test: the pane is written per event, and usage is
+	// published once per turn, so "the pane shows the turn's output" is not "the turn is over". This
+	// holds the real contract with the ordering made explicit instead of left to stdout chunking —
+	// the engine's `turn.completed` is withheld until this test releases a file, so the window the
+	// CI failure landed in is open for as long as the assertions need rather than for a few
+	// microseconds nobody can schedule into.
+	it("usage is published AT THE TURN BOUNDARY — mid-turn output is not a usage gate (#983)", async () => {
+		const s = new HeadlessSession({
+			id: "usage-ordering",
+			workDir: dir,
+			clientType: "codex",
+			// `exec` is what puts the session in STRUCTURED codex mode (`engineAdapterFor`), which is
+			// the only mode that parses usage at all — a raw engine reports none by design.
+			command: "codex exec",
+			bin: codexGatedBin,
+			env: { USAGE_GATE: usageGate },
+		});
+		s.start();
+		s.input("hi");
+		await until(() => s.snapshot().includes("argv:"), 8000, "the engine's mid-turn output");
+
+		// MID-TURN, deterministically: the engine has produced observable output and has NOT yet
+		// reported what the turn cost. A reader that drains here gets nothing — correctly, because
+		// nothing has been measured yet — and must not read that as "this turn was free".
+		expect(existsSync(usageGate)).toBe(false);
+		expect(s.lastTurn).toBeNull();
+		expect(s.runState()).not.toBe("idle");
+		expect(s.takeUsage()).toEqual([]);
+
+		// Now let the turn end. The usage event is the SAME event that ends the turn, so once the
+		// turn is over the measurement is already in hand.
+		writeFileSync(usageGate, "go");
+		await until(() => s.lastTurn !== null, 8000, "the gated turn to end");
+		expect(s.takeUsage()).toMatchObject([
+			{ provider: "openai", model: "codex", inputTokens: 7, outputTokens: 11, cacheReadTokens: 2, cacheWriteTokens: 3 },
+		]);
+		// Drained, not re-reported — a 3s capture poll must not re-send a turn's spend.
+		expect(s.takeUsage()).toEqual([]);
+		// And the turn's own output is still there: ending the turn does not rewrite the pane.
+		expect(s.snapshot()).toContain("argv:");
 		s.stop();
 	}, 15_000);
 
