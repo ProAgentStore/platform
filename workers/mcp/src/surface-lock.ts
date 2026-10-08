@@ -1053,4 +1053,9 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// 0.1.92: `apply_to_job` is a submit-only, destructive operation. Its preview controls
 	// were removed so the published input schema changed. Appended.
 	"0.1.92": "sha256:5f5dd90009e5c6d2f64a29512b38a1590312d794ca8449295261853e8d65c9c4",
+	// 0.1.93 (#970): `subscribe_agent` takes an agent template the caller OWNS, not only a
+	// published one, and its `agent_id` argument description says so. An argument description
+	// lives in inputSchema, so — unlike a tool's own description — it IS the served surface, the
+	// same reason 0.1.20 moved. No tool added; counts unchanged. Appended.
+	"0.1.93": "sha256:6222ad49194c8b862b81cf90b0270ab3846cbfa8b4f1be0af246539b90fbb335",
 };
