@@ -98,6 +98,11 @@ export const RUNTIME_TASK_OWNERS: Readonly<Record<string, RuntimeTaskOwner>> = {
 	// PERSON, not work a runner is doing, so a reconnect sweep must leave it exactly where it is.
 	tool_approval: "cloud", // lib/tool-approval-queue.ts
 	"coding.uncommitted": "cloud", // lib/repo-policies.ts — a standing-policy observation
+	// #984: work a run owned and never accounted for — raised when a START was refused because that
+	// checkout is not safe to hand over. Cloud-owned: it is a claim about a CLOSED run's leftovers,
+	// not a task a runner holds, so a reconnect sweep must never expire it. It closes when the claim
+	// is answered (the tree confirmed clean, or a run for that issue recovers it).
+	"coding.recovery": "cloud", // lib/coding-handoff-store.ts
 	"coding.off_branch": "cloud", // lib/repo-policies.ts — ditto
 	"coding.unauthorized_act": "cloud", // lib/coding-authority.ts
 	"coding.out_of_scope_write": "cloud", // lib/repo-write-scope.ts — a write outside the registered repos

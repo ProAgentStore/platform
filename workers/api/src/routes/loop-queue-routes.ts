@@ -11,6 +11,7 @@
 import type { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { describeBusyHolder } from "../lib/loop-busy.js";
+import { storedHandoff } from "../lib/coding-handoff-store.js";
 import { cancelQueueEntry, getQueueEntry, listQueue } from "../lib/objective-queue.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import type { Env } from "../types.js";
@@ -42,7 +43,13 @@ export function registerLoopQueueRoutes(router: Hono<{ Bindings: Env }>): void {
 		// `queue_if_busy` starts and then read this saw an empty queue — read as "none of them landed".
 		// `describeBusyHolder` is the reading the busy refusal already gives (#886), for the same repo.
 		const { activeRun, inFlightStarts } = await describeBusyHolder(c.env, { userId: session.uid, instanceId, repoId: repoParam || undefined }).catch(() => ({ activeRun: null, inFlightStarts: [] }));
-		return c.json({ entries, activeRun, inFlightStarts });
+		// WHY a non-empty queue may not be draining (#984). An entry that is first in line and still
+		// pending has exactly two explanations — something is working, or the repo is mid-handover —
+		// and before this only the first was reportable, so a queue held up by an interrupted run's
+		// uncommitted work looked like a queue nobody was draining. Stored, never probed: a listing
+		// must not make a relay round trip, and the state is cached at each admission attempt.
+		const handoff = repoParam ? await storedHandoff(c.env, instanceId, session.uid, repoParam).catch(() => null) : null;
+		return c.json({ entries, activeRun, inFlightStarts, handoff: handoff ?? (repoParam ? { state: activeRun ? "working" : "safe_to_start_next", detail: "" } : null) });
 	});
 
 	/**

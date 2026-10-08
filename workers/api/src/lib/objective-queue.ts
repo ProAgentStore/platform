@@ -9,6 +9,7 @@
 // See `migrations/0149_instance_objective_queue.sql` for why the table is keyed
 // `(instance_id, repo_id)` and what each `status` means.
 
+import { clipMarked } from "./clip-marked.js";
 import type { Env } from "../types.js";
 import { MAX_CONFIGURABLE_OBJECTIVE_CHARS } from "./loop-limits.js";
 
@@ -246,12 +247,19 @@ export async function finishQueueEntry(
  * repo is busy again. `created_at` is untouched, so it keeps its position — re-enqueueing would send
  * a first-in-line objective to the back of the queue for losing a race it never entered.
  */
-export async function requeueEntry(env: Env, id: string): Promise<void> {
+/** How much of the waiting reason a pending row carries. `clipMarked`, because it is a sentence. */
+const QUEUE_NOTE_CHARS = 500;
+
+export async function requeueEntry(env: Env, id: string, note?: string | null): Promise<void> {
+	// `stop_reason` carries WHY it is still waiting (#984). The column is otherwise null on a pending
+	// row and is already surfaced as `stopReason`, so the entry can say "the repo holds #978's
+	// uncommitted work" instead of sitting pending with nothing recorded — which is indistinguishable
+	// from a queue nobody is draining.
 	await env.DB.prepare(
 		`UPDATE instance_objective_queue
-		    SET status = 'pending', started_at = NULL
+		    SET status = 'pending', started_at = NULL, stop_reason = ?2
 		  WHERE id = ?1 AND status = 'running'`,
 	)
-		.bind(id)
+		.bind(id, note ? clipMarked(note, QUEUE_NOTE_CHARS) : null)
 		.run();
 }

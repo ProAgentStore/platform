@@ -25,7 +25,7 @@ import { clampIterations } from "./loop-limits.js";
 import { readLoopLimits } from "./loop-limits-store.js";
 import { openBudget, resolveAccountCeilings } from "./delegation-budget-store.js";
 import { logError } from "./error-log.js";
-import { loopDriverFor } from "./loop-drivers.js";
+import { loopDriverFor, startRefusalIsWaitable } from "./loop-drivers.js";
 import { dequeueNext, finishQueueEntry, requeueEntry } from "./objective-queue.js";
 import type { Env } from "../types.js";
 
@@ -119,8 +119,14 @@ export async function tryDequeueAndStart(env: Env, instanceId: string, repoId: s
 		// Busy AGAIN is a race, not a verdict on this objective: another start won the claim between
 		// this run releasing it and this drain asking for it. Put the entry back where it was and let
 		// the winner's own terminal path drain it.
-		if (started.reason === "busy") {
-			await requeueEntry(env, entry.id);
+		//
+		// `recovery_required` (#984) is waited for the same way, and that is the point of the issue:
+		// the repo holds work owned by a run the platform closed, or an engine still executing a dead
+		// run's instruction, so this entry must KEEP ITS PLACE rather than be failed or — as before —
+		// started on top of it. The refusal is recorded on the row, because an entry that sits pending
+		// with nobody told why is the other half of the same complaint.
+		if (startRefusalIsWaitable(started.reason)) {
+			await requeueEntry(env, entry.id, started.error);
 			return { drained: true, entryId: entry.id, started: false, requeued: true, error: started.error };
 		}
 

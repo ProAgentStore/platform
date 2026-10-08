@@ -33,6 +33,9 @@ vi.mock("./instances-runtime.js", () => ({ requireOwnedInstance: (...a: unknown[
 // What the queue sits behind and what is still on its way in (#935) — real behaviour in queue-fan-out.test.ts.
 const describeBusyHolder = vi.fn();
 vi.mock("../lib/loop-busy.js", () => ({ describeBusyHolder: (...a: unknown[]) => describeBusyHolder(...a) }));
+// Why a queue may not be draining (#984) — real behaviour in coding-handoff.integration.test.ts.
+const storedHandoff = vi.fn();
+vi.mock("../lib/coding-handoff-store.js", () => ({ storedHandoff: (...a: unknown[]) => storedHandoff(...a) }));
 
 const { registerLoopQueueRoutes } = await import("./loop-queue-routes.js");
 
@@ -51,6 +54,7 @@ beforeEach(() => {
 	requireOwnedInstance.mockResolvedValue(undefined);
 	listQueue.mockResolvedValue([]);
 	describeBusyHolder.mockResolvedValue({ activeRun: null, inFlightStarts: [] });
+	storedHandoff.mockResolvedValue(null);
 });
 
 describe("GET /:id/loop/queue", () => {
@@ -58,7 +62,23 @@ describe("GET /:id/loop/queue", () => {
 		listQueue.mockResolvedValue([{ id: "objq-1" }]);
 		const res = await app().request("/i1/loop/queue", {}, {} as Env);
 		expect(res.status).toBe(200);
-		expect(await res.json()).toEqual({ entries: [{ id: "objq-1" }], activeRun: null, inFlightStarts: [] });
+		// `handoff` is null without a repo_id: the state is per-REPO, and an instance-wide read has no
+		// one checkout to report on.
+		expect(await res.json()).toEqual({ entries: [{ id: "objq-1" }], activeRun: null, inFlightStarts: [], handoff: null });
+	});
+
+	it("reports the per-repo handover state, so a stuck queue says WHY (#984)", async () => {
+		storedHandoff.mockResolvedValue({ state: "interrupted_awaiting_recovery", detail: "8 uncommitted files belong to run run-978 (issue #978).", runId: "run-978", issue: 978, sessionId: "csess-A" });
+		const res = await app().request("/i1/loop/queue?repo_id=r1", {}, {} as Env);
+		expect(await res.json()).toMatchObject({ handoff: { state: "interrupted_awaiting_recovery", runId: "run-978", issue: 978 } });
+	});
+
+	it("with nothing claiming the repo, says which of the two ordinary states it is in", async () => {
+		storedHandoff.mockResolvedValue(null);
+		describeBusyHolder.mockResolvedValue({ activeRun: { runId: "run-1" }, inFlightStarts: [] });
+		expect(await (await app().request("/i1/loop/queue?repo_id=r1", {}, {} as Env)).json()).toMatchObject({ handoff: { state: "working" } });
+		describeBusyHolder.mockResolvedValue({ activeRun: null, inFlightStarts: [] });
+		expect(await (await app().request("/i1/loop/queue?repo_id=r1", {}, {} as Env)).json()).toMatchObject({ handoff: { state: "safe_to_start_next" } });
 	});
 
 	it("returns everything pending when no repo is named", async () => {

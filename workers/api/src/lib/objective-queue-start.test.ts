@@ -8,6 +8,8 @@
  *   start succeeds        → `started`, with the run id, so the entry has a forwarding address
  *   budget throws         → `failed`, and NOT started (the #184 admission point for this new entry)
  *   busy again (a race)   → back to `pending`, keeping its place — the winner's drain takes it
+ *   recovery_required     → back to `pending` with the reason on the row (#984): the repo is
+ *                           mid-handover, which a person resolves
  *   any other refusal     → `failed`, with the driver's own sentence, rather than pending forever
  *
  * And the property that makes it safe to call from a workflow's terminal path: it NEVER THROWS. The
@@ -30,7 +32,12 @@ vi.mock("./objective-queue.js", () => ({
 	finishQueueEntry: (...a: unknown[]) => finishQueueEntry(...a),
 	requeueEntry: (...a: unknown[]) => requeueEntry(...a),
 }));
-vi.mock("./loop-drivers.js", () => ({ loopDriverFor: () => ({ id: "coding", label: "the engine", start: (...a: unknown[]) => start(...a) }) }));
+vi.mock("./loop-drivers.js", () => ({
+	loopDriverFor: () => ({ id: "coding", label: "the engine", start: (...a: unknown[]) => start(...a) }),
+	// The REAL predicate, not a stub: which refusals are waited for is the decision this file is
+	// about, and a mock that answered it would assert the mock (#984).
+	startRefusalIsWaitable: (reason: string | undefined) => reason === "busy" || reason === "recovery_required",
+}));
 vi.mock("./agent-capabilities.js", () => ({ capabilitiesForInstance: async () => ({ workflow: "CODING_SESSION" }) }));
 vi.mock("./delegation-budget-store.js", () => ({
 	openBudget: (...a: unknown[]) => openBudget(...a),
@@ -147,7 +154,19 @@ describe("when the start is refused", () => {
 		dequeueNext.mockResolvedValue(entry());
 		start.mockResolvedValue({ ok: false, status: 409, reason: "busy", error: "repo is already being worked on" });
 		const out = await tryDequeueAndStart(env, "i1", "r1", "owner-1");
-		expect(requeueEntry).toHaveBeenCalledWith(env, "objq-1");
+		expect(requeueEntry).toHaveBeenCalledWith(env, "objq-1", "repo is already being worked on");
+		expect(finishQueueEntry).not.toHaveBeenCalled();
+		expect(out).toMatchObject({ drained: true, started: false, requeued: true });
+	});
+
+	it("recovery_required is WAITED FOR too, with the reason recorded on the row (#984)", async () => {
+		// The repo holds work a closed run owns, or an engine still executing a dead run's
+		// instruction. Failing the entry would drop a queued issue on the floor; starting it is the
+		// incident. It keeps its place and says why — the queue's own answer to "nothing is moving".
+		dequeueNext.mockResolvedValue(entry());
+		start.mockResolvedValue({ ok: false, status: 409, reason: "recovery_required", error: "This checkout holds 8 uncommitted files belonging to run run-978 (issue #978)." });
+		const out = await tryDequeueAndStart(env, "i1", "r1", "owner-1");
+		expect(requeueEntry).toHaveBeenCalledWith(env, "objq-1", "This checkout holds 8 uncommitted files belonging to run run-978 (issue #978).");
 		expect(finishQueueEntry).not.toHaveBeenCalled();
 		expect(out).toMatchObject({ drained: true, started: false, requeued: true });
 	});

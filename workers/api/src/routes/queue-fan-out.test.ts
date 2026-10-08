@@ -68,6 +68,8 @@ describe("coding_loop_queue during a fan-out (#935)", () => {
 		d1.exec(`DELETE FROM loop_start_receipts`);
 		d1.exec(`DELETE FROM instance_objective_queue`);
 		d1.exec(`UPDATE agent_loop_runs SET status = 'completed'`);
-		expect(await queue()).toEqual({ entries: [], activeRun: null, inFlightStarts: [] });
+		// `handoff` is null here because this read names no repo (#984): the handover state is a fact
+		// about one checkout, and an instance-wide read has no single one to report.
+		expect(await queue()).toEqual({ entries: [], activeRun: null, inFlightStarts: [], handoff: null });
 	});
 });

@@ -41,7 +41,7 @@ import { delegationDenial } from "../lib/supervision-capability.js";
 import { countLoopRuns, getLoopRun, listLoopRuns, requestCancel } from "../lib/agent-loop-store.js";
 // The run verdict, imported rather than re-derived — see `withHealth` (#580 AC3).
 import { runHealth, waitClause } from "../lib/work-report.js";
-import { loopDriverFor } from "../lib/loop-drivers.js";
+import { loopDriverFor, startRefusalIsWaitable } from "../lib/loop-drivers.js";
 import { dispatchLoopStartReceipt, loopStartsPage } from "../lib/loop-start-receipts.js";
 import { findDuplicateObjective } from "../lib/objective-dedupe.js";
 import { describeBusyHolder } from "../lib/loop-busy.js";
@@ -1221,9 +1221,10 @@ toolRoutes.post("/:id/loop", async (c) => {
 			issue,
 		});
 		if (!started.ok) {
-			// Queue only busy refusals: no runner or unusable checkout cannot be fixed by waiting.
+			// Queue only the refusals WAITING fixes: no runner or unusable checkout cannot be, while a
+			// busy repo and one holding a closed run's unfinished work both can (#984).
 			// The drain opens its own budget; this unspent pool is not reused.
-			if (body.queueIfBusy === true && started.reason === "busy") {
+			if (body.queueIfBusy === true && startRefusalIsWaitable(started.reason)) {
 				// Same issue already waiting or running on this repo (#925): hand THAT back, not a second entry.
 				const dup = await findDuplicateObjective(c.env, { userId: session.uid, instanceId, repoId, objective });
 				if (dup?.kind === "queued") return c.json({ queued: true, entry: dup.entry, duplicate_of: dup.entry.id, blocked: started.error }, 202);

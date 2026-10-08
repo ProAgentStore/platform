@@ -28,6 +28,8 @@ import { delegationTaskRecord } from "./delegation.js";
 import { claimSessionDriver, endSession, listRepos, releaseSessionDriver } from "./coding-store.js";
 import { ensureActiveSession } from "./coding-session-open.js";
 import { admitRepoForRun } from "./coding-repo-admission.js";
+import { releaseRecoveryClaim, resolveRepoHandoff } from "./coding-handoff-store.js";
+import { referencedIssue } from "./objective-dedupe.js";
 import { checkWorkdirVia } from "./coding-workdir.js";
 import { cloneSourceFor } from "./git-providers.js";
 import { getBoundRunnerConn } from "./runner-client.js";
@@ -129,6 +131,14 @@ export interface LoopStartInput {
 	 * The chat driver ignores it: a chat loop has no repository and no resume note to widen.
 	 */
 	resumeLookbackMs?: number;
+	/**
+	 * The run this one explicitly continues (#984) — set by `POST /:id/loop/:runId/continue`.
+	 *
+	 * It is the owner naming the work they are picking back up, which is what lets a continue inherit
+	 * an interrupted run's uncommitted checkout when that run had no issue to match on. Any other
+	 * caller leaves it absent: inheriting a tree must be a statement, never an inference.
+	 */
+	continueFromRunId?: string;
 }
 
 export type LoopStartResult =
@@ -147,16 +157,33 @@ export type LoopStartResult =
 			 * parks the objective until the lock clears, while parking it on "this agent has no
 			 * repository yet" would queue work that can never drain.
 			 *
+			 * `recovery_required` (#984) is the second waitable one: the repo holds work owned by a run
+			 * the platform closed, or an engine still executing a dead run's instruction. Waiting IS
+			 * the remedy — a person recovers it, or a run for that same issue continues it — so a
+			 * queued objective must keep its place rather than fail. See {@link startRefusalIsWaitable}.
+			 *
 			 * Absent rather than `"other"`: a driver that has not thought about this question should
 			 * not be able to answer it by accident.
 			 */
-			reason?: "busy" | "engine_auth";
+			reason?: "busy" | "engine_auth" | "recovery_required";
 			/**
 			 * Set with `reason: "engine_auth"` (#891): the refused run was RECORDED, finished with that
 			 * stop reason, so sign-in tooling can find it and `continue` can pick it back up.
 			 */
 			runId?: string;
 	  };
+
+/**
+ * Is this refusal one that WAITING fixes?
+ *
+ * Three callers have to tell waitable from structural — `queue_if_busy` on the start route, the
+ * ticket queue's release-vs-refuse, and the objective queue's requeue-vs-fail — and each one wrote
+ * `reason === "busy"` by hand. #984 added a second waitable reason, which is exactly the shape of
+ * change that leaves two of three call sites behind, so the question is asked in one place.
+ */
+export function startRefusalIsWaitable(reason: string | undefined): boolean {
+	return reason === "busy" || reason === "recovery_required";
+}
 
 export interface LoopDriver {
 	/** Stable id, for logs and the `driver` field callers get back. */
@@ -320,6 +347,37 @@ const codingDriver: LoopDriver = {
 		}
 		if (!admission.ok) return { ok: false, status: 409, error: admission.message };
 
+		// Whose work is in that checkout, and is the previous engine actually stopped? (#984)
+		//
+		// The fifth admission check, and the one the #978/#982 incident needed: a repo can be
+		// reachable, its session `active`, no row `running` and its checkout present, and STILL be
+		// mid-handover. The sweeper closes a run that stopped heartbeating without ever asking the
+		// machine whether the engine stopped or what the tree holds, and `claimSessionDriver` treats
+		// a heartbeat older than fifteen minutes as takeable — so the next objective was admitted
+		// into a live CLI that was still being told to commit, push and close the PREVIOUS issue.
+		//
+		// BEFORE `ensureActiveSession`, deliberately: opening (or cloning into) a session for a run
+		// that must not start is the litter the claim path below already warns about, and the claim
+		// may belong to a session that is already ended while the checkout it dirtied is the one this
+		// run would use. The check is on the REPO for that reason, not on the session.
+		//
+		// It refuses the HANDOVER and never the work: see `coding-handoff.ts` for why nothing here
+		// resets, stashes or commits anything, and for the two ways out that preserve it.
+		const handoff = await resolveRepoHandoff(env, {
+			instanceId,
+			userId,
+			repo,
+			incoming: {
+				// The caller's explicit issue, else the objective's own subject — the SAME reading
+				// `linkRunToIssue` makes, so what the run will be attributed to is what decides
+				// whether it may inherit this checkout.
+				issue: input.issue ?? referencedIssue(objective),
+				repair: input.repairCheckout === true,
+				continueFromRunId: input.continueFromRunId ?? null,
+			},
+		});
+		if (!handoff.admit) return { ok: false, status: 409, reason: "recovery_required", error: handoff.detail };
+
 		// Open one if there isn't one. Requiring a live session made delegation SINGLE-USE — the
 		// Pilot ended the session its own driver required, so the second goal always 409'd — and
 		// meant a supervisor could not supervise unless a human first sat in the console.
@@ -404,6 +462,21 @@ const codingDriver: LoopDriver = {
 				status: 500,
 				error: `Could not start the run: ${e instanceof Error ? e.message : String(e)}`,
 			};
+		}
+
+		// The checkout's owner, now that the run has an id (#984). Written at the moment the run row
+		// exists so the claim, the active-run record and the issue link cannot disagree about who is
+		// working in that tree: "#982 did not start clean here — it continued #978" is a recorded
+		// fact rather than something a reader reconstructs from timestamps.
+		if (handoff.recovering && handoff.claim) {
+			await releaseRecoveryClaim(env, {
+				instanceId,
+				userId,
+				sessionId: handoff.claim.sessionId,
+				resolvedBy: runId,
+				state: handoff.state,
+				detail: handoff.detail,
+			}).catch(() => undefined);
 		}
 
 		// The run's issue card (#895): explicit, else the objective's subject. Never fails the start.

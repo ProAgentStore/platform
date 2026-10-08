@@ -17,6 +17,8 @@
 // It also weakens the case for ever unifying the run tables: more write paths into one table means
 // more ways to strand a row, and a stranded row is permanent data.
 import { closeCodingSessionCards } from "./coding-board.js";
+import { raiseRecoveryClaim } from "./coding-handoff-store.js";
+import { recoveryReasonForStop } from "./coding-handoff.js";
 import { logUnhandled } from "./on-error.js";
 import { MAX_PARK_MS, PARK_LIMIT_MS } from "./work-report.js";
 import { RUN_WAIT_REASONS } from "./agent-loop-store.js";
@@ -65,6 +67,18 @@ const CANCEL_DETAIL =
 const PARK_DETAIL =
 	"This run parked waiting to be resumed and never came back, so the platform closed it. " +
 	"It did not report either way — check the repository before starting the objective again.";
+
+/**
+ * What a sweep pass selects, and `objective` is here for #984: the claim it raises names the work
+ * that is in the checkout, and a human recovering it needs to read whose work that is.
+ */
+interface SweptRunRow {
+	run_id: string;
+	instance_id: string;
+	user_id: string;
+	session_id: string | null;
+	objective: string;
+}
 
 export interface SweepResult {
 	loopRuns: number;
@@ -115,7 +129,7 @@ export async function sweepStaleRuns(env: Env, now: number = Date.now()): Promis
 async function enforceCancelledRuns(env: Env, now: number): Promise<number> {
 	const cutoff = now - CANCEL_ENFORCE_MS;
 	const { results } = await env.DB.prepare(
-		`SELECT run_id, instance_id, user_id, session_id FROM agent_loop_runs
+		`SELECT run_id, instance_id, user_id, session_id, objective FROM agent_loop_runs
 		  WHERE status = 'running'
 		    AND cancel_requested = 1
 		    AND COALESCE(cancel_requested_at, started_at) < ?1
@@ -123,7 +137,7 @@ async function enforceCancelledRuns(env: Env, now: number): Promise<number> {
 		  LIMIT ?2`,
 	)
 		.bind(cutoff, SWEEP_LIMIT)
-		.all<{ run_id: string; instance_id: string; user_id: string; session_id: string | null }>();
+		.all<SweptRunRow>();
 	return closeRuns(env, results ?? [], now, "cancelled", CANCEL_DETAIL, "cancelled");
 }
 
@@ -148,11 +162,11 @@ async function enforceCancelledRuns(env: Env, now: number): Promise<number> {
 async function sweepWedgedParks(env: Env, now: number): Promise<number> {
 	// One statement per reason rather than a CASE, so the budget bound into the query is the same
 	// value `runHealth` reads for that reason and a new park reason cannot inherit somebody else's.
-	const out: Array<{ run_id: string; instance_id: string; user_id: string; session_id: string | null }> = [];
+	const out: SweptRunRow[] = [];
 	for (const reason of RUN_WAIT_REASONS) {
 		const cutoff = now - (PARK_LIMIT_MS[reason] ?? MAX_PARK_MS);
 		const { results } = await env.DB.prepare(
-			`SELECT run_id, instance_id, user_id, session_id FROM agent_loop_runs
+			`SELECT run_id, instance_id, user_id, session_id, objective FROM agent_loop_runs
 			  WHERE status = 'running'
 			    AND waiting_reason = ?1
 			    AND COALESCE(parked_since, last_alive_at, last_progress_at, started_at) < ?2
@@ -160,7 +174,7 @@ async function sweepWedgedParks(env: Env, now: number): Promise<number> {
 			  LIMIT ?4`,
 		)
 			.bind(reason, cutoff, now, SWEEP_LIMIT)
-			.all<{ run_id: string; instance_id: string; user_id: string; session_id: string | null }>();
+			.all<SweptRunRow>();
 		out.push(...(results ?? []));
 	}
 	return closeRuns(env, out, now, "interrupted", PARK_DETAIL, "failed");
@@ -178,7 +192,7 @@ async function sweepWedgedParks(env: Env, now: number): Promise<number> {
  */
 async function closeRuns(
 	env: Env,
-	rows: Array<{ run_id: string; instance_id: string; user_id: string; session_id: string | null }>,
+	rows: SweptRunRow[],
 	now: number,
 	stopReason: string,
 	detail: string,
@@ -203,7 +217,51 @@ async function closeRuns(
 	// The platform closed these, not the runs: `run.stalled` (#579). A row the workflow closed first
 	// carries its own finished_at, so `recordRunEvent` skips it rather than calling a finish a stall.
 	for (const r of rows) await recordRunEvent(env, r.run_id, "run.stalled", now);
+	await claimUnaccountedWork(env, rows, now, stopReason);
 	return res.meta?.changes ?? 0;
+}
+
+/**
+ * Record who owns whatever these runs left behind (#984).
+ *
+ * The run rows are closed, the cards are closed, and the honest remaining fact is that NOBODY
+ * confirmed what happened on the machine: the sweeper runs in the cloud, so it has not seen whether
+ * the engine stopped or what is in the checkout. Without that written down, the next objective was
+ * admitted into the dead run's session — `claimSessionDriver` finds the heartbeat stale and takes
+ * the claim, `ensureActiveSession` reuses the still-`active` session, and the new run inherits a
+ * live CLI holding the previous issue's instruction plus that issue's uncommitted files.
+ *
+ * Only for runs that THIS pass actually closed, and only coding runs (`session_id`). The UPDATE
+ * above is conditional on `status = 'running'`, so a run whose own workflow got there first is not
+ * ours to describe: re-reading by `finished_at` + `stop_reason` identifies exactly the rows it won.
+ *
+ * Best-effort throughout. A claim that cannot be written leaves the behaviour that existed before
+ * this — which is the bug, but a sweeper that throws leaves a `running` row forever, which is worse.
+ */
+async function claimUnaccountedWork(env: Env, rows: SweptRunRow[], now: number, stopReason: string): Promise<void> {
+	const coding = rows.filter((r) => r.session_id);
+	if (!coding.length) return;
+	const ids = coding.map((r) => r.run_id);
+	const { results } = await env.DB.prepare(
+		`SELECT run_id FROM agent_loop_runs
+		  WHERE finished_at = ?1 AND stop_reason = ?2 AND run_id IN (${ids.map((_, i) => `?${i + 3}`).join(",")})`,
+	)
+		.bind(now, stopReason, ...ids)
+		.all<{ run_id: string }>()
+		.catch(() => ({ results: [] as { run_id: string }[] }));
+	const closedHere = new Set((results ?? []).map((r) => r.run_id));
+	for (const r of coding) {
+		if (!closedHere.has(r.run_id)) continue;
+		await raiseRecoveryClaim(env, {
+			instanceId: r.instance_id,
+			userId: r.user_id,
+			sessionId: r.session_id as string,
+			runId: r.run_id,
+			reason: recoveryReasonForStop(stopReason),
+			objective: r.objective ?? "",
+			now,
+		});
+	}
 }
 
 async function sweepLoopRuns(env: Env, cutoff: number, now: number): Promise<number> {
@@ -228,12 +286,12 @@ async function sweepLoopRuns(env: Env, cutoff: number, now: number): Promise<num
 	// that they agree was not merely wrong, it argued for making one of them worse. The agreement
 	// that does hold, and the one worth stating, is with `runHealth`.
 	const { results } = await env.DB.prepare(
-		`SELECT run_id, instance_id, user_id, session_id FROM agent_loop_runs
+		`SELECT run_id, instance_id, user_id, session_id, objective FROM agent_loop_runs
 		  WHERE status = 'running' AND COALESCE(last_alive_at, last_progress_at, started_at) < ?1
 		  LIMIT ?2`,
 	)
 		.bind(cutoff, SWEEP_LIMIT)
-		.all<{ run_id: string; instance_id: string; user_id: string; session_id: string | null }>();
+		.all<SweptRunRow>();
 	// `failed`, not `escalated`: nothing about a dead workflow says a human can resolve it by
 	// answering a question. `statusFor("failed")` is the `failed` status, which is honest.
 	//

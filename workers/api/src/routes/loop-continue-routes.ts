@@ -217,6 +217,10 @@ export function registerLoopContinueRoutes(router: Hono<{ Bindings: Env }>): voi
 			depth: 0,
 			// The one thing that makes this a continue rather than a restart (#806 item 4).
 			resumeLookbackMs: CONTINUE_RESUME_LOOKBACK_MS,
+			// The owner is naming the work they are picking back up (#984), which is what lets this
+			// run inherit an interrupted run's uncommitted checkout — including when that run had no
+			// issue for the handover check to match on.
+			continueFromRunId: run.runId,
 		});
 		if (!started.ok) throw new HttpError(started.status, started.error);
 		// `continuedFromRunId` is in the RESPONSE and not on the row: nothing reads it back, and a

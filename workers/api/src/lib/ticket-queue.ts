@@ -40,7 +40,7 @@ import { resolveAccountCeilings } from "./delegation-budget-store.js";
 import { logError } from "./error-log.js";
 import { listHostedBuilds, type HostedRepoRef } from "./hosted-repo.js";
 import { readInstanceConfigPair } from "./instance-config.js";
-import { type LoopStartInput, type LoopStartResult, loopDriverFor } from "./loop-drivers.js";
+import { type LoopStartInput, type LoopStartResult, loopDriverFor, startRefusalIsWaitable } from "./loop-drivers.js";
 import { DEFAULT_MAX_OBJECTIVE_CHARS, clampIterations } from "./loop-limits.js";
 import { readLoopLimits } from "./loop-limits-store.js";
 import { ensureTicketBudget } from "./ticket-budget.js";
@@ -299,8 +299,9 @@ export async function pickupNextTicket(env: Env, instanceId: string, userId: str
 		const started = await start({ env, instanceId, userId, objective, maxIterations, budgetId, depth: 0, ...(next.repo_id ? { repoId: next.repo_id } : {}), ...(next.issue_number ? { issue: next.issue_number } : {}) });
 
 		if (!started.ok) {
-			if (started.reason === "busy") {
-				// The session is being driven — waiting is the remedy, so the ticket goes back.
+			if (startRefusalIsWaitable(started.reason)) {
+				// The session is being driven, or it holds work a closed run owns (#984) — waiting is
+				// the remedy either way, so the ticket goes back.
 				await release(started.error);
 				return { started: false, reason: "driver_busy", ticketId: next.id, detail: started.error };
 			}
