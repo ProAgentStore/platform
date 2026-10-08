@@ -184,6 +184,20 @@ const MAX_PANE = 64 * 1024;
 
 export class CodingRuntime {
 	private sessions = new Map<string, HeadlessSession>();
+
+	/**
+	 * Coding sessions that are running here (#896).
+	 *
+	 * A Claude session survives a restart — it is re-spawned with `--resume <session_id>` and only
+	 * the turn in flight is cut — but a Codex, Grok or raw-engine session restarts cold and its turn
+	 * is gone. Both are named, because the owner is the one deciding whether to take the machine.
+	 */
+	liveWork(): string[] {
+		return [...this.sessions.values()].map((s) => {
+			const engine = (s as unknown as { clientType?: string }).clientType ?? "";
+			return engine === "claude" ? "a Claude coding session (resumes after a restart)" : `a ${engine || "coding"} turn (lost on a restart)`;
+		});
+	}
 	/** Background cold-start clones, one per folder (#858). */
 	private cloneJobs = new CloneJobs();
 	/**

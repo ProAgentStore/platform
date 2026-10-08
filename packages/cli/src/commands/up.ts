@@ -10,43 +10,46 @@ import { writeLine } from "../output.js";
 import { clearScreen, printLogo, printStatus, printStep, waitForKey, type TuiState } from "../tui.js";
 import { parseStatusLine } from "./runner/status-line.js";
 import { restartUpArgs, RUNNER_RESTART_EXIT_CODE, SUPERVISED_ENV, SUPERVISOR_RESTARTS } from "./runner/self-update.js";
+import { holderMessage, inspectHolder, isTakeable, lockPath, readLock, releaseLock } from "../runner-lock.js";
+import { replaceHolder } from "../runner-replace.js";
 
 const API_BASE = "https://api.proagentstore.online";
 const CLI_VERSION = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
 
 /**
- * Kill any stale runner processes from previous runs. Critical: without
- * this, every `pags up` stacks another runner, they fight over ports,
- * and the health check hits the wrong one → 401.
+ * `stopRunnerProcesses()` — `pkill -f` over three name patterns — was deleted here (#896).
+ *
+ * It ran on every `pags up` and every `pags down`, and it was the cause of the failure this issue
+ * was filed from rather than a defence against it:
+ *
+ *  - it killed ANY matching process of this OS user: a deliberate scoped `runner connect`, a dev
+ *    runner from the monorepo, a runner signed in as a DIFFERENT account, and a launchd/systemd
+ *    one that the service manager then restarted — so the two fought in a loop;
+ *  - it killed the live runner's CHILD, whose SIGTERM exit reads as `code === null`; the old
+ *    supervisor's `if (code && code !== 0)` then treated that as a clean exit, so a five-day-old
+ *    terminal kept showing "connected" while owning nothing. Pressing `r` there killed the real
+ *    runner in turn;
+ *  - since the local runtimes shipped it destroyed real work on every start: a Codex or Grok turn,
+ *    a local browser research run, a Tailor run, an Application Runner fill — each lost, with the
+ *    owner told nothing until the cloud gave up on it minutes later;
+ *  - on Windows it was skipped entirely, so there was no protection there at all.
+ *
+ * What replaces it: an exclusive per-account lock (`runner-lock.ts`), which refuses rather than
+ * kills, takes over only a lock whose process is GONE, and makes replacement an explicit
+ * `--replace` that stops the holder gracefully through its own control endpoint.
  */
-async function stopRunnerProcesses(): Promise<boolean> {
-	if (process.platform === "win32") return false;
-	const { execFileSync } = await import("node:child_process");
-	const patterns = [
-		"dist/browser-runner/index.js",
-		"browser-runner/src/index",
-		"runner connect",
-	];
-	let stopped = false;
-	for (const p of patterns) {
-		try {
-			// execFileSync (argv, no shell) — the pattern never touches a shell, so there's
-			// no command-injection surface even if a pattern ever becomes dynamic.
-			execFileSync("pkill", ["-f", p], { stdio: "ignore" });
-			stopped = true;
-		} catch {
-			/* nothing matched — fine */
-		}
-	}
-	return stopped;
-}
 
 export const upCommand = new Command("up")
 	.description("Start the browser runner for all your agent instances")
 	.option("--headless", "Run browser in headless mode")
 	.option("--instance <id>", "Connect to a specific instance only")
 	.option("--force", "Take over from another connected machine")
-	.action(async (opts: { headless?: boolean; instance?: string; force?: boolean }) => {
+	// #896. Deliberately NOT `--force`, which already means something else here: `--force` takes an
+	// agent's relay slot from ANOTHER MACHINE, while `--replace` stops another `pags up` on THIS
+	// one. Folding them together would make one flag mean two unrelated takeovers.
+	.option("--replace", "Stop the `pags up` already running here for this account, then take over")
+	.option("--now", "With --replace: stop it even though work is running on it (that work is lost)")
+	.action(async (opts: { headless?: boolean; instance?: string; force?: boolean; replace?: boolean; now?: boolean }) => {
 		const session = requireSession();
 
 		const state: TuiState = {
@@ -162,8 +165,29 @@ export const upCommand = new Command("up")
 				: `${instances.length} agents`;
 		printStep(`Connecting ${state.activeInstance}…`, "wait");
 
-		// Clean slate: kill any stale runner from a previous run.
-		await stopRunnerProcesses();
+		// One `pags up` per account on this machine (#896). The lock is held by the `runner connect`
+		// child, which owns the sockets; this checks it FIRST so a second start can refuse with who
+		// holds it rather than killing them. `--replace` asks that holder to stop, gracefully.
+		const lockFile = lockPath(session.user.login);
+		const held = await inspectHolder(lockFile);
+		if (held.lock && !isTakeable(held.verdict)) {
+			if (!opts.replace) {
+				clearScreen();
+				printLogo(CLI_VERSION);
+				for (const line of holderMessage(held.lock, held.verdict)) writeLine(`  ${line}`);
+				writeLine("");
+				process.exit(1);
+			}
+			const replaced = await replaceHolder(held.lock, { now: opts.now === true });
+			if (!replaced.ok) {
+				clearScreen();
+				printLogo(CLI_VERSION);
+				for (const line of replaced.lines) writeLine(`  ${line}`);
+				writeLine("");
+				process.exit(1);
+			}
+			for (const line of replaced.lines) printStep(line, "ok");
+		}
 
 		// Spawn ONE runner connect that serves ALL active instances.
 		const { spawn } = await import("node:child_process");
@@ -180,10 +204,14 @@ export const upCommand = new Command("up")
 		// CLI. {@link SUPERVISOR_RESTARTS} tells it this `pags up` restarts ITSELF on the new release (#860).
 		const child = spawn(process.execPath, args, {
 			stdio: ["ignore", "pipe", "pipe"],
-			env: { ...process.env, PAGS_TOKEN: session.token, [SUPERVISED_ENV]: SUPERVISOR_RESTARTS },
+			// The child is the lock HOLDER (#896): it owns the relay sockets, so it is what a
+			// contender must find and what `--replace` must be able to stop.
+			env: { ...process.env, PAGS_TOKEN: session.token, [SUPERVISED_ENV]: SUPERVISOR_RESTARTS, PAGS_LOCK_ACCOUNT: session.user.login },
 		});
 
 		const logs: string[] = [];
+		/** Our child's own process id (#896), announced on its first status line. */
+		let childRsid = "";
 
 		const handleOutput = (data: Buffer) => {
 			const text = data.toString("utf-8");
@@ -197,6 +225,8 @@ export const upCommand = new Command("up")
 				// The child STATES its product-level facts; everything below is prose (#497).
 				// Registration and the heartbeat used to be inferred from relay wording, which is
 				// how a machine that registered nothing still showed a green ProAgentStore light.
+				const rsidLine = trimmed.match(/^STATUS runner-session=(\S+)/);
+				if (rsidLine) childRsid = rsidLine[1];
 				const status = parseStatusLine(trimmed);
 				if (status) {
 					if (status.registration) {
@@ -274,7 +304,18 @@ export const upCommand = new Command("up")
 				return;
 			}
 			childDead = true;
-			if (code && code !== 0) {
+			// A child killed by a SIGNAL exits with `code === null`, and the old test
+			// (`if (code && code !== 0)`) read that as a clean exit (#896 F1). That is how a
+			// five-day-old terminal kept showing "connected" after a newer `pags up` had killed its
+			// runner: nothing was marked, nothing was said, and pressing `r` there killed the live
+			// runner in turn. A signal is now reported as what it is.
+			if (code === null) {
+				state.runner = "error";
+				state.lastEvent = "Runner stopped by another process (signal) — it is not connected any more";
+				printStatus(state);
+				return;
+			}
+			if (code !== 0) {
 				state.runner = "error";
 				state.lastEvent = `Runner exited (code ${code})`;
 				const recent = logs.slice(-5);
@@ -339,7 +380,18 @@ export const upCommand = new Command("up")
 				printStatus(state);
 			}
 			if (key === "r") {
-				if (childDead) restartUp("Restarting runner...");
+				// #896 F2: `r` ran `pags up` again, whose `pkill` killed whatever runner was live —
+				// so two stale terminals took turns killing each other's runner. The restart now
+				// goes through the lock like any other start, and refuses while somebody holds it.
+				if (childDead) {
+					const other = await inspectHolder(lockFile);
+					if (other.lock && other.lock.rsid !== childRsid && !isTakeable(other.verdict)) {
+						state.lastEvent = `Another \`pags up\` holds this machine (pid ${other.lock.pid}) — restart refused`;
+						printStatus(state);
+						continue;
+					}
+					restartUp("Restarting runner...");
+				}
 				printStatus(state);
 			}
 		}
@@ -347,21 +399,32 @@ export const upCommand = new Command("up")
 
 export const downCommand = new Command("down")
 	.description("Stop the browser runner and disconnect")
-	.action(async () => {
+	// #896: `pags down` stops THE LOCK HOLDER — this account's own runner on this machine — by
+	// asking it to, through the same drain `--replace` uses. It used to `pkill -f` three name
+	// patterns, which stopped any matching process of this OS user: another account's runner, a
+	// deliberate scoped one, a service-managed one (restarted seconds later), and whatever work was
+	// mid-flight. Windows had no such path at all, so `pags down` did nothing there; now it works
+	// the same way everywhere, because asking a process to stop needs no signals (Q6).
+	.option("--now", "Stop it even though work is running on it (that work is lost)")
+	.action(async (opts: { now?: boolean }) => {
 		clearScreen();
 		printLogo(CLI_VERSION);
-		if (process.platform === "win32") {
-			writeLine("  On Windows: switch to the 'pags up' window and press Ctrl+C to disconnect.");
+		const session = requireSession();
+		const lock = readLock(lockPath(session.user.login));
+		if (!lock) {
+			writeLine("  No runner of yours is running on this machine — nothing to stop.");
 			writeLine("");
 			return;
 		}
-		const stopped = await stopRunnerProcesses();
-		if (stopped) {
-			writeLine("  " + "✓ Runner stopped — you're disconnected.");
+		const stopped = await replaceHolder(lock, { now: opts.now === true });
+		if (stopped.ok) {
+			// The holder releases its own lock on the way out; this clears a lock it left behind.
+			releaseLock(lockPath(session.user.login), lock.rsid);
+			writeLine("  ✓ Runner stopped — you're disconnected.");
 			writeLine("");
 			writeLine("  Your agent won't act on the web until you run 'pags up' again.");
 		} else {
-			writeLine("  No runner was running — nothing to stop.");
+			for (const line of stopped.lines) writeLine(`  ${line}`);
 		}
 		writeLine("");
 	});

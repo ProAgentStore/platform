@@ -132,6 +132,21 @@ export class LocalRunner {
 		if (expired > 0) console.log(`[runner] expired ${expired} orphaned in-flight task(s) from a previous session`);
 	}
 
+	/**
+	 * What this process is doing that a restart would destroy (#896).
+	 *
+	 * `close()` stops every local runtime it owns, so "restart the runner" is not a free action: a
+	 * Claude coding session resumes, but a Codex or Grok turn, a browser research run, a tailoring
+	 * run and an application fill are each lost, and the cloud only reports them `runner_lost`
+	 * minutes later. `pags up --replace` reads this and refuses while anything is live unless the
+	 * owner passes `--now`, which is the whole reason it is reported rather than counted silently.
+	 */
+	liveWork(): { codingTurns: number; localRuns: number; detail: string[] } {
+		const coding = this.coding.liveWork();
+		const local = [...this.localBrowser.liveWork(), ...this.localArtifact.liveWork(), ...this.localApply.liveWork()];
+		return { codingTurns: coding.length, localRuns: local.length, detail: [...coding, ...local].slice(0, 10) };
+	}
+
 	capabilities() {
 		return {
 			runtime: "pags-browser-runtime",
@@ -271,6 +286,18 @@ export class LocalRunner {
 	 * holding a live browser until someone `kill -9`ed it. That kill is exactly
 	 * what orphans the browser, so an unswallowed error here MADE the leak.
 	 */
+	/**
+	 * Stop because somebody with the lock asked (#896) — the same teardown a signal runs.
+	 *
+	 * Deliberately not a second shutdown path: `index.ts`'s handler is idempotent and time-boxed
+	 * (#274), so raising SIGTERM on ourselves reuses it rather than re-implementing it, which is
+	 * what keeps "asked to stop" and "signalled to stop" from drifting apart.
+	 */
+	async requestShutdown(reason: string): Promise<void> {
+		console.log(`[runner] stopping on request (${reason.slice(0, 60)})`);
+		process.kill(process.pid, "SIGTERM");
+	}
+
 	async close(): Promise<void> {
 		this.localBrowser.closeAll();
 		this.localArtifact.closeAll();

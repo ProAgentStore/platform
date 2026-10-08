@@ -16,6 +16,10 @@ import {
 	waitForLocalRunner,
 } from "./process.js";
 import { connectViaRelay } from "./relay.js";
+import { acquireLock, holderMessage, releaseLock } from "../../runner-lock.js";
+import { loadMachineIdentity } from "../../machine.js";
+import { CLI_VERSION } from "./process.js";
+import { hostname } from "node:os";
 import type {
 	PagsRequestOptions,
 	RunnerConnectOptions,
@@ -68,6 +72,30 @@ export function createRunnerCommand(): Command {
 			const runnerToken = clean(opts.token) || clean(process.env.PAGS_RUNNER_TOKEN) || `pags_runner_${randomUUID()}`;
 			const host = clean(opts.host) || "127.0.0.1";
 			const port = clean(opts.port) || String(await findFreePort(49171));
+
+			// ── The single-instance lock (#896) ──────────────────────────────────────────────
+			//
+			// THIS process is the holder, because it owns the relay sockets: a contender that finds
+			// a live holder must find the process whose sockets it would be competing with, and
+			// `--replace` must be able to stop that one. `pags up` checks the lock before spawning
+			// us so it can refuse with who holds it; we take it, so a bare `runner connect` and a
+			// service-launched one are held to the same rule.
+			const lockAccount = clean(process.env.PAGS_LOCK_ACCOUNT) || "";
+			let lockHeld: { path: string; rsid: string; nonce: string; launch: string } | null = null;
+			if (lockAccount) {
+				const taken = await acquireLock({ account: lockAccount, node: hostname(), machineId: loadMachineIdentity().id || null, version: CLI_VERSION, port: Number(port), runnerToken });
+				if (!taken.ok) {
+					for (const line of taken.lock ? holderMessage(taken.lock, taken.verdict) : ["Another `pags up` holds this machine for this account."]) writeError(line);
+					process.exit(1);
+				}
+				lockHeld = { path: taken.path, rsid: taken.lock.rsid, nonce: taken.lock.nonce, launch: taken.lock.launch };
+				// The supervisor reads this to know which process is ITS child (#896 F2), and the
+				// runner carries the same id to the cloud so duplicates can be named there.
+				writeLine(`STATUS runner-session=${taken.lock.rsid}`);
+			}
+			const releaseHeldLock = () => {
+				if (lockHeld) releaseLock(lockHeld.path, lockHeld.rsid);
+			};
 			const localUrl = `http://${host}:${port}`;
 			const primary = instanceIds[0];
 			const runnerOpts: RunnerStartOptions = { ...opts, host, port, token: runnerToken };
@@ -76,6 +104,13 @@ export function createRunnerCommand(): Command {
 				cwd: spec.cwd,
 				stdio: ["ignore", "pipe", "pipe"],
 				shell: process.platform === "win32",
+				// #896: the runtime answers `/health` with the lock's identity and stops for a
+				// request quoting its nonce — so a contender can prove who is on that port, and a
+				// replace is an authorisation rather than a signal aimed at a name pattern.
+				env: {
+					...process.env,
+					...(lockHeld ? { PAGS_RUNNER_RSID: lockHeld.rsid, PAGS_RUNNER_CONTROL_NONCE: lockHeld.nonce, PAGS_RUNNER_LAUNCH: lockHeld.launch } : {}),
+				},
 			});
 			runner.stdout?.on("data", (data) => process.stdout.write(data));
 			runner.stderr?.on("data", (data) => process.stderr.write(data));
@@ -90,7 +125,13 @@ export function createRunnerCommand(): Command {
 				process.exit(code ?? 1);
 			});
 
-			const shutdown = () => { shuttingDown = true; if (!runner.killed) runner.kill("SIGTERM"); };
+			const shutdown = () => {
+				shuttingDown = true;
+				// The lock goes before the child, and only if it is still ours (#896): a process that
+				// was already replaced must not unlock the machine on its way out.
+				releaseHeldLock();
+				if (!runner.killed) runner.kill("SIGTERM");
+			};
 			// Any exit takes the local runtime with it — including the restart `runner_update` asks for (#859).
 			process.once("exit", shutdown);
 			process.once("SIGINT", () => { shutdown(); process.exit(0); });

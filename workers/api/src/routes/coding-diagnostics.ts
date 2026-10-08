@@ -24,7 +24,8 @@ import { refusingEngineIssue } from "../lib/coding-run-state.js";
 import { listRepos, listSessions, reconcileOrphanedSessions } from "../lib/coding-store.js";
 import { readProviderAccountHealth } from "../lib/provider-account-health.js";
 import { readInstanceRunnerNode, relayNameForInstance } from "../lib/runtime-nodes.js";
-import { activeSessionsOn, resourcesView } from "../lib/runner-resources.js";
+import { activeSessionsOn, resourcesView, runnerIdentityOf } from "../lib/runner-resources.js";
+import { duplicateRunnersOn } from "../lib/runner-duplicates.js";
 import { classifyHealthProbeFailure, type HealthCheckState, runnerHealthRemedy, runnerLiveStatus } from "../lib/runner-health.js";
 import { latestRunRow, readReauthState, signInBlockFrom } from "../lib/engine-reauth-store.js";
 import { reauthExpiryView } from "../lib/engine-reauth-expiry.js";
@@ -437,7 +438,13 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		runner.healthCheck = healthCheck;
 		runner.reachable = effectivelyReachable;
 		runner.health = runnerHealth;
-		const healthRemedy = runnerHealthRemedy(liveStatus, healthCheck);
+		// #896: is more than one `pags up` live on this machine? Read from the heartbeats this
+		// account's rows already carry — two distinct runner-process start times for one machine are
+		// two processes. It leads the remedy because it changes the answer: while two compete for the
+		// same agents, re-attaching only moves the agent between them.
+		const duplicate = resourceNode ? await duplicateRunnersOn(env, uid, resourceNode, { identityOf: runnerIdentityOf }) : null;
+		if (duplicate?.duplicate) runner.duplicate = duplicate;
+		const healthRemedy = runnerHealthRemedy(liveStatus, healthCheck, duplicate?.duplicate ? duplicate.detail : null);
 		runner.remedy = healthRemedy;
 
 		// 3. D1 sessions + repos + the engine presets (needed to name each session's sign-in MODE,

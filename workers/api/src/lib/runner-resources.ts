@@ -34,7 +34,7 @@ export interface RunnerResourceSample {
 	/** The checkout volume (CLI ≥ {@link RESOURCE_DETAIL_MIN_CLI}). */
 	disk?: { path: string; totalBytes: number; freeBytes: number; inodesTotal: number; inodesFree: number };
 	/** The `pags runner connect` process: start time, uptime, starts in 24h, relay reconnects. */
-	runner?: { startedAt: number; uptimeSec: number; starts24h: number; relayReconnects: number };
+	runner?: { startedAt: number; uptimeSec: number; starts24h: number; relayReconnects: number; rsid?: string; pid?: number; launch?: string };
 	/** One relay round trip this beat, ms; null when the probe got no echo in time. */
 	relayRttMs?: number | null;
 	/** Per-session CPU/memory, engine plus descendants. */
@@ -110,7 +110,14 @@ export function parseResourceSample(raw: unknown): RunnerResourceSample | null {
 		const uptimeSec = finite(p.uptimeSec, 10 ** 9);
 		const starts24h = finite(p.starts24h, 10_000);
 		const relayReconnects = finite(p.relayReconnects, 10 ** 7);
-		if (startedAt && uptimeSec !== null && starts24h !== null && relayReconnects !== null) sample.runner = { startedAt, uptimeSec, starts24h, relayReconnects };
+		if (startedAt && uptimeSec !== null && starts24h !== null && relayReconnects !== null) {
+			// #896: the process's own identity rides along when the CLI holds a lock. Bounded and
+			// typed like everything else here; absent from an older CLI, which the detector handles.
+			const rsid = typeof p.rsid === "string" && p.rsid.trim() ? p.rsid.trim().slice(0, 64) : undefined;
+			const pid = finite(p.pid, 2 ** 31);
+			const launch = typeof p.launch === "string" && /^(tty|tmux|service|headless)$/.test(p.launch) ? p.launch : undefined;
+			sample.runner = { startedAt, uptimeSec, starts24h, relayReconnects, ...(rsid ? { rsid } : {}), ...(pid ? { pid } : {}), ...(launch ? { launch } : {}) };
+		}
 	}
 	if (r.relayRttMs === null) sample.relayRttMs = null;
 	else {
@@ -154,7 +161,7 @@ export interface RunnerResourcesView {
 	/** The checkout volume; null when the runner does not report it (CLI before {@link RESOURCE_DETAIL_MIN_CLI}). */
 	disk: { path: string; totalBytes: number; freeBytes: number; usedPct: number; inodesUsedPct: number } | null;
 	/** The runner process; null when not reported. */
-	runner: { startedAt: string; uptimeSec: number; starts24h: number; relayReconnects: number } | null;
+	runner: { startedAt: string; uptimeSec: number; starts24h: number; relayReconnects: number; rsid?: string; pid?: number; launch?: string } | null;
 	/** One relay round trip at the sample, ms. null: no echo in time, or not reported. */
 	relayRttMs: number | null;
 	/** Per-session usage, heaviest CPU first; null when not reported. */
@@ -164,6 +171,28 @@ export interface RunnerResourcesView {
 }
 
 const round = (n: number, places = 2) => Math.round(n * 10 ** places) / 10 ** places;
+
+/**
+ * One row's sample as a runner-PROCESS identity (#896), or null when it carries none.
+ *
+ * Lives here because this file owns what a stored sample means; the duplicate detector stays pure
+ * and knows nothing about rows or JSON. A CLI before #924 reported no process block at all, and a
+ * CLI before #896 reports one without an `rsid` — both are handled, since the machines most likely
+ * to be running duplicates are exactly the ones nobody has updated.
+ */
+export function runnerIdentityOf(instanceId: string, node: string, raw: unknown): { instanceId: string; node: string; startedAt: number; rsid?: string; pid?: number; launch?: string; sampledAt: number } | null {
+	const s = parseResourceSample(raw);
+	if (!s?.runner?.startedAt) return null;
+	return {
+		instanceId,
+		node,
+		startedAt: s.runner.startedAt,
+		...(s.runner.rsid ? { rsid: s.runner.rsid } : {}),
+		...(s.runner.pid ? { pid: s.runner.pid } : {}),
+		...(s.runner.launch ? { launch: s.runner.launch } : {}),
+		sampledAt: s.sampledAt,
+	};
+}
 
 /**
  * The reported view of a stored sample, or null when the runner has not reported one.
@@ -214,7 +243,17 @@ export function resourcesView(raw: unknown, activeSessions: number | null): Runn
 		activeSessions,
 		recommendedMaxSessions: capacity,
 		disk,
-		runner: s.runner ? { startedAt: new Date(s.runner.startedAt).toISOString(), uptimeSec: s.runner.uptimeSec, starts24h: s.runner.starts24h, relayReconnects: s.runner.relayReconnects } : null,
+		runner: s.runner
+			? {
+				startedAt: new Date(s.runner.startedAt).toISOString(),
+				uptimeSec: s.runner.uptimeSec,
+				starts24h: s.runner.starts24h,
+				relayReconnects: s.runner.relayReconnects,
+				...(s.runner.rsid ? { rsid: s.runner.rsid } : {}),
+				...(s.runner.pid ? { pid: s.runner.pid } : {}),
+				...(s.runner.launch ? { launch: s.runner.launch } : {}),
+			}
+			: null,
 		relayRttMs: typeof s.relayRttMs === "number" ? Math.round(s.relayRttMs) : null,
 		sessions: s.sessions ? [...s.sessions].sort((a, b) => b.cpuPct - a.cpuPct) : null,
 		warnings,

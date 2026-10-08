@@ -10,6 +10,8 @@ import { agentCapabilities } from "../lib/agent-capabilities.js";
 import { runnerFeatureGaps } from "../lib/runner-features.js";
 import { startRunnerUpdate, updateRunnerNode } from "../lib/runner-update.js";
 import { latestUpdateOp, latestUpdateOps, type RunnerUpdateOp } from "../lib/runner-update-ops.js";
+import { detectDuplicateRunners, type DuplicateVerdict, type RunnerProcessIdentity } from "../lib/runner-duplicates.js";
+import { runnerIdentityOf } from "../lib/runner-resources.js";
 import type { Env } from "../types.js";
 
 /**
@@ -143,6 +145,15 @@ export interface TerminalNode {
 	instances: TerminalInstance[];
 	/** Coding sessions pinned to this machine. */
 	sessions: TerminalSession[];
+	/**
+	 * Two or more `pags up` processes live on this machine (#896), when there are.
+	 *
+	 * The 2026-10-01 state had three, and the platform could not say so: nothing identified a runner
+	 * PROCESS, so three looked like one while only one owned the relay link. `detail` names each and
+	 * gives the fix, because the old advice — "restart `pags up`" — was how the next duplicate got
+	 * made back when the start path still ran `pkill`.
+	 */
+	duplicate?: DuplicateVerdict;
 	/**
 	 * The latest `runner_update` operation on this machine (#990), when one has ever been asked for.
 	 *
@@ -468,6 +479,18 @@ terminalRoutes.get("/nodes", async (c) => {
 	const tails = new Map<string, string | null>();
 	await mapWithConcurrency(active, PROBE_CONCURRENCY, async (s) => { tails.set(s.sessionId, await lastTerminal(c.env, s.sessionId).catch(() => null)); });
 	for (const n of nodes) for (const s of n.sessions) s.terminalTail = tails.get(s.sessionId) ?? null;
+
+	// #896: is more than one `pags up` live here? Read from the heartbeats already on each row —
+	// no extra query and no migration, because the runner process's own `startedAt` has ridden along
+	// since #924 and two distinct ones for a machine ARE two processes.
+	for (const n of nodes) {
+		const samples = nodeRows
+			.filter((r) => [n.node, ...n.aka].some((name) => normalizeRunnerNode(name) === normalizeRunnerNode(r.runner_node ?? "")))
+			.map((r) => runnerIdentityOf(r.instance_id, r.runner_node ?? n.node, r.resources))
+			.filter((x): x is RunnerProcessIdentity => !!x);
+		const verdict = detectDuplicateRunners(samples, Date.now());
+		if (verdict.duplicate) n.duplicate = verdict;
+	}
 
 	// #990: each machine's latest update operation, in ONE read. This is what `runner_update`'s own
 	// `poll: list_runner_nodes` hint always promised and could not deliver: before the operation row

@@ -24,6 +24,22 @@ export interface RunnerConfig {
 	token?: string;
 	instanceId?: string;
 	headless: boolean;
+	/**
+	 * This runner PROCESS's id (#896), from the single-instance lock its parent took.
+	 *
+	 * Reported by `/health` so a contender can prove the process on that port is the one the lock
+	 * names — a recycled port answering "ok" is not evidence about our holder.
+	 */
+	rsid?: string;
+	/** Where it was launched from (`tty` | `tmux` | `service` | `headless`), reported for diagnostics. */
+	launch?: string;
+	/**
+	 * The secret from the mode-600 lock file that authorises `POST /control/shutdown`.
+	 *
+	 * Only a process that can read the owner's own lock knows it, which is what makes a replace an
+	 * authorisation. Never sent to the cloud, never logged.
+	 */
+	controlNonce?: string;
 }
 
 export interface RunnerSession {

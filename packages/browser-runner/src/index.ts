@@ -43,6 +43,12 @@ function configFromArgs(): RunnerConfig {
 		token: arg("--token", process.env.PAGS_RUNNER_TOKEN) || `pags_runner_${randomUUID()}`,
 		instanceId: arg("--instance-id", process.env.PAGS_INSTANCE_ID),
 		headless: flag("--headless") || process.env.PAGS_RUNNER_HEADLESS === "1",
+		// #896: the single-instance lock's identity and shutdown credential, passed by the parent
+		// (`runner connect`) that took the lock. Absent when nothing holds a lock — a bare
+		// `pags runner start`, or a CLI older than the lock — and then `/control/shutdown` refuses.
+		rsid: process.env.PAGS_RUNNER_RSID || undefined,
+		launch: process.env.PAGS_RUNNER_LAUNCH || undefined,
+		controlNonce: process.env.PAGS_RUNNER_CONTROL_NONCE || undefined,
 	};
 }
 

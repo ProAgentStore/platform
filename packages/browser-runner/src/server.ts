@@ -70,6 +70,12 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	const path = url.pathname.replace(/\/$/, "") || "/";
 
 	if ((req.method === "GET" || req.method === "POST") && path === "/health") {
+		// #896: a health check that cannot say WHO answered is not enough to decide anything with.
+		// A contender for the single-instance lock has a pid and a port from the lock file; what it
+		// needs is proof that the process on that port is the one the lock names (`rsid`), and what
+		// `--replace` needs on top of that is what would be destroyed by stopping it (`work`).
+		// Without the id, a recycled port answering "ok" reads as a live holder; without the work
+		// counts, replacing silently ends a Codex turn, a research run or an application fill.
 		return json(res, 200, {
 			ok: true,
 			service: "proagentstore-browser-runtime",
@@ -77,7 +83,35 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 			controlPlane: "pags",
 			runtimePlane: "pags",
 			instanceId: runner.config.instanceId,
+			rsid: runner.config.rsid ?? null,
+			pid: process.pid,
+			launch: runner.config.launch ?? null,
+			work: runner.liveWork(),
 		});
+	}
+
+	/**
+	 * `POST /control/shutdown` — stop gracefully, when asked by somebody holding the lock (#896).
+	 *
+	 * This is what makes `pags up --replace` and `pags down` an ASK rather than a kill. The caller
+	 * proves it is entitled by quoting the nonce from the mode-600 lock file, which only a process
+	 * able to read the owner's own lock can do; `pkill`, which this replaced, proved nothing and
+	 * stopped anything matching a name — including another account's runner and a service's.
+	 *
+	 * The drain itself is `close()`, the same teardown a signal runs, so there is one shutdown path
+	 * and not a second one that forgets something.
+	 */
+	if (req.method === "POST" && path === "/control/shutdown") {
+		const expected = runner.config.controlNonce ?? "";
+		const body = (await readJson(req).catch(() => null)) as { nonce?: unknown; reason?: unknown } | null;
+		const given = typeof body?.nonce === "string" ? body.nonce : "";
+		if (!expected || !given || given !== expected) return json(res, 403, { error: "This runner only stops for a request carrying its own lock's nonce." });
+		const work = runner.liveWork();
+		json(res, 202, { stopping: true, pid: process.pid, work });
+		// Answer first, then stop: the caller is waiting for the pid to go, and a reply written
+		// after teardown never arrives.
+		setTimeout(() => void runner.requestShutdown(typeof body?.reason === "string" ? body.reason : "requested"), 10);
+		return;
 	}
 
 	if ((req.method === "GET" || req.method === "POST") && path === "/capabilities") {

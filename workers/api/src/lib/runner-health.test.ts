@@ -67,6 +67,23 @@ describe("runnerHealthRemedy (#901)", () => {
 		}
 	});
 
+	/**
+	 * #896: the 2026-10-01 machine had THREE `pags up` processes, one owning a relay link that then
+	 * wedged. "Try force_runner_attach, then restart `pags up`" was the advice, and with the old
+	 * start path still running `pkill` that made a fourth process. A duplicate changes the answer.
+	 */
+	it("leads with the duplicate when there is one, because re-attaching cannot fix it", () => {
+		const detail = "2 `pags up` processes are running on pink-laptop: pid 4121, in a terminal, started X; pid 977, in a tmux session, started Y. Fix: run `pags up --replace`…";
+		const remedy = runnerHealthRemedy("unresponsive", "timeout", detail)!;
+		expect(remedy.startsWith(detail), "the duplicate comes first — it is the cause, not a footnote").toBe(true);
+		expect(remedy).toMatch(/re-attaching only moves the agent between them/);
+		// A healthy runner with a duplicate still gets told: two processes is a problem by itself.
+		expect(runnerHealthRemedy("online", "ok", detail)).toBe(detail);
+		// And without one, nothing changes.
+		expect(runnerHealthRemedy("online", "ok", null)).toBeNull();
+		expect(runnerHealthRemedy("unresponsive", "timeout")).toContain("force_runner_attach");
+	});
+
 	it("distinguishes a missing or closed socket and an unregistered runner", () => {
 		for (const [status, state] of [["offline", "not_attempted"], ["unresponsive", "disconnected"]] as const) {
 			const remedy = runnerHealthRemedy(status, state)!;

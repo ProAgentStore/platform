@@ -202,6 +202,16 @@ export function resolveWorkspacePath(path: string, home: string): string {
 
 export class LocalBrowserRuntime {
 	private readonly runs = new Map<string, Run>();
+
+	/**
+	 * Research runs that would be LOST if this process stopped (#896).
+	 *
+	 * Their state is in this process's memory: a restart does not resume them, and the cloud only
+	 * gives up on them minutes later. So `--replace` asks before taking the machine.
+	 */
+	liveWork(): string[] {
+		return [...this.runs.values()].filter((r) => r.state !== "ended").map((r) => `a browser research run (${r.envelope.instanceId.slice(0, 8)})`);
+	}
 	private readonly root: string;
 	private readonly now: () => number;
 	private readonly spawn: typeof nodeSpawn;

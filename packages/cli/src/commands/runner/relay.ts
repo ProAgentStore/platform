@@ -293,7 +293,16 @@ export async function connectViaRelay(
 			const [relayRttMs, sessions] = await Promise.all([first ? first.probeRtt() : Promise.resolve(null), readSessionResources(localUrl, runnerToken)]);
 			const resources = sampleResources(undefined, undefined, {
 				disk: sampleDisk() ?? undefined,
-				runner: { startedAt: processStartedAt, uptimeSec: Math.round(process.uptime()), starts24h, relayReconnects },
+				runner: {
+					startedAt: processStartedAt,
+					uptimeSec: Math.round(process.uptime()),
+					starts24h,
+					relayReconnects,
+					// #896: who is heartbeating. Set by `runner connect` from the lock it took.
+					...(process.env.PAGS_RUNNER_RSID ? { rsid: process.env.PAGS_RUNNER_RSID } : {}),
+					pid: process.pid,
+					...(process.env.PAGS_RUNNER_LAUNCH ? { launch: process.env.PAGS_RUNNER_LAUNCH } : {}),
+				},
 				relayRttMs,
 				sessions: sessions ?? undefined,
 			});

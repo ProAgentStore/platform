@@ -153,6 +153,11 @@ class Pause extends Error {
 
 export class LocalArtifactRuntime {
 	private readonly runs = new Map<string, Run>();
+
+	/** Tailoring runs that a restart would lose (#896) — their state is in this process. */
+	liveWork(): string[] {
+		return [...this.runs.values()].filter((r) => r.state !== "ended").map((r) => `a tailoring run (${r.envelope.runId.slice(0, 8)})`);
+	}
 	private readonly root: string;
 	private readonly now: () => number;
 	private readonly spawn: typeof nodeSpawn;

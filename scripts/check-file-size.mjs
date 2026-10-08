@@ -684,7 +684,10 @@ const PINS = {
 	// back in the reader's head.
 	// +29 at #847: bounded capture receipt updates one LocalRunner task, its durable store and its event log; splitting that command would fragment the state transition.
 	// +19 at #944: constructs the local browser research runtime and picks its browser per profile (the shared signed-in one, or a throwaway one in the run folder); the runtime itself is local-browser/runtime.ts.
-	"packages/browser-runner/src/runner.ts": 1334, // +3 at #957: the localApply runtime (field, construction sharing the research browserFor, shutdown). +6 at #956: the local-artifact runtime is constructed, advertised and shut down beside local-browser's.
+	// +27 at #896: `liveWork()` — what a restart would destroy — and `requestShutdown`, which is
+	// how `--replace` asks instead of killing. The counts exist so a replace can REFUSE while a
+	// Codex turn, a research run or an application fill is live; `pkill` destroyed them silently.
+	"packages/browser-runner/src/runner.ts": 1361, // +3 at #957: the localApply runtime (field, construction sharing the research browserFor, shutdown). +6 at #956: the local-artifact runtime is constructed, advertised and shut down beside local-browser's.
 	// New pin at #946: the local browser capability is validated at the three agent write doors (#945) and served back resolved by both capabilities routes (#946) — four lines over the line; splitting the agents router is its own change.
 	"workers/api/src/routes/agents.ts": 804,
 	// +45 at #263: `probeMcpSurface`, so the connection test can ask about resources and prompts
@@ -1411,6 +1414,12 @@ const PINS = {
 	// doing it inside a security fix would bury the fix in a move diff.
 	// +8 at #987: the reconciliation call in front of the board read, and the paragraph saying
 	// why a bounded idempotent backfill belongs in the generic route (both surfaces are this route).
+	// #896: crossed 800 when the duplicate-`pags up` verdict joined the health remedy — a stale
+	// relay link with two processes competing is not fixed by re-attaching, so the cause leads.
+	"workers/api/src/routes/coding-diagnostics.ts": 805,
+	// #896: crossed 800 when each machine's row gained the duplicate-`pags up` verdict — the
+	// platform could not say "there are two" before, because nothing identified a runner process.
+	"workers/api/src/routes/terminals.ts": 804,
 	"workers/api/src/routes/instances-tasks.ts": 861, // +14 at #895: the on-demand issue sync route and the board's repo filter. +4 at #868: the no-runtime branch resolves the agent's capabilities so a coding agent's setup card names its GitHub and repository steps. +25 at #898: truncation made visible (paging, marked cuts, refused over-length writes).
 	// First entry at #477: Usage.tsx crossed 800 lines as BudgetPanel expanded to cover per-tree
 	// run knobs (perTreeCostMicros, perTreeDelegations, perTreeMaxDepth, loopMaxIterations) and
@@ -1884,7 +1893,9 @@ const PINS = {
 	// pins), the applications/control.ts reason extended at #981, and this line.
 	// +6 at #986: the console types.ts reason above (five lines), this line and its pin bump.
 	// +8 at #987: the board.ts and instances-tasks.ts reasons above (five lines) and this one.
-	"scripts/check-file-size.mjs": 1969, // +1 at #953: the console types.ts entry. +2 at #946: the agents.ts pin and its reason; +1 at #944: the reason line for the runner.ts pin; +1 at #898: the board.ts pin; +1 at #924: the mcp runtime.ts pin.
+	// +13 at #896: two newly pinned files (terminals.ts, coding-diagnostics.ts) with their reasons,
+	// the runner.ts reason, and this line.
+	"scripts/check-file-size.mjs": 1982, // +1 at #953: the console types.ts entry. +2 at #946: the agents.ts pin and its reason; +1 at #944: the reason line for the runner.ts pin; +1 at #898: the board.ts pin; +1 at #924: the mcp runtime.ts pin.
 };
 
 /**

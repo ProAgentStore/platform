@@ -77,9 +77,15 @@ export function runnerLiveStatus(input: { registered: boolean; relayConnected: b
 
 /** Recovery guidance from observed health, without assuming a timeout proves a frozen process (#901).
  * Diagnostics only recommends recovery: force attach is an explicit takeover, never a read-side effect.
+ *
+ * `duplicateDetail` (#896) comes FIRST when it is present, because it changes the answer rather than
+ * decorating it: a relay link that goes stale while two `pags up` processes compete for the same
+ * agents is not fixed by re-attaching, and the old advice — "restart `pags up`" — was how the next
+ * duplicate got made while the start path still ran `pkill`. The 2026-10-01 machine had three.
  */
-export function runnerHealthRemedy(status: RunnerLiveStatus, healthCheck: HealthCheckState): string | null {
-	if (status === "online") return null;
+export function runnerHealthRemedy(status: RunnerLiveStatus, healthCheck: HealthCheckState, duplicateDetail?: string | null): string | null {
+	if (status === "online") return duplicateDetail ? duplicateDetail : null;
+	if (duplicateDetail) return `${duplicateDetail} Until one of them is stopped, re-attaching only moves the agent between them.`;
 	if (status === "unregistered") return "Run `pags up` on the machine to register and connect this instance";
 	if (status === "offline" || healthCheck === "disconnected") {
 		return "The relay socket is absent or closed. If another of your agents has a responding runner on the same machine, try `force_runner_attach` for this instance and recheck `coding_diagnostics`. Otherwise check `pags up` on the machine and start or restart it if it does not reconnect";

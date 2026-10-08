@@ -216,6 +216,11 @@ function bridgeUnusedHelp(engine: string, d: LocalApplyDiagnostic): string {
 
 export class LocalApplyRuntime {
 	private readonly runs = new Map<string, Run>();
+
+	/** Application fills that a restart would lose (#896) — their state is in this process. */
+	liveWork(): string[] {
+		return [...this.runs.values()].filter((r) => r.state !== "ended").map((r) => `an application fill (${r.envelope.applicationId.slice(0, 8)})`);
+	}
 	private readonly root: string;
 	private readonly now: () => number;
 	private readonly spawn: typeof nodeSpawn;

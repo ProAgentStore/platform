@@ -37,6 +37,17 @@ export interface DiskSample {
 
 export interface RunnerProcessSample {
 	startedAt: number;
+	/**
+	 * This runner PROCESS's id from the single-instance lock (#896), when it holds one.
+	 *
+	 * The server cannot otherwise tell two runners on one machine apart: heartbeats, registrations
+	 * and relay sockets all carried only (instance, node), so three `pags up` processes looked
+	 * exactly like one. With this, a duplicate can be NAMED rather than merely suspected.
+	 */
+	rsid?: string;
+	pid?: number;
+	/** `tty` | `tmux` | `service` | `headless` — so the fix can say where the other one is. */
+	launch?: string;
 	uptimeSec: number;
 	/** Process starts on this machine in the last 24h, this one included — a crash loop shows here. */
 	starts24h: number;
