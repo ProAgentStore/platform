@@ -66,6 +66,7 @@ beforeEach(() => {
 		"/local-apply/run": { status: 202, body: { status: "running" } },
 		"/local-apply/resume": { status: 200, body: {} },
 		"/local-apply/cancel": { status: 200, body: {} },
+		"/local-apply/directive": { status: 200, body: { state: "running", events: [], lastSeq: 0 } },
 	};
 	sent = [];
 });
@@ -324,6 +325,55 @@ describe("submission is gated", () => {
 });
 
 describe("cloud supervision", () => {
+	it("persists bounded checkpoint facts and sends one idempotent directive to that exact checkpoint", async () => {
+		const started = await call("POST", "/ap/application-runs", readyApp("lead-supervised"));
+		const runId = started.body.run.id as string;
+		const checkpoint = {
+			schemaVersion: 1,
+			checkpointId: "before-submit-1",
+			facts: {
+				phase: "before_submit",
+				actions: 14,
+				filled: 6,
+				uploaded: 2,
+				blockers: [],
+				url: "https://jobs.example.com/apply/step-3",
+				domain: "jobs.example.com",
+				title: "Staff Engineer application",
+			},
+		};
+		runner("paused", { lastSeq: 4, pause: { reason: "supervisor_checkpoint", checkpoint }, events: [{ seq: 4, type: "supervisor.checkpoint", at: "2026-10-07T00:06:00Z", detail: { checkpointId: "before-submit-1" } }] });
+
+		const received = await call("GET", `/ap/application-runs/${runId}/supervision`);
+		expect(received.body).toMatchObject({ schemaVersion: 1, checkpoints: [{ checkpointId: "before-submit-1", schemaVersion: 1, runnerSeq: 4, facts: checkpoint.facts, directive: null }] });
+		expect(JSON.stringify(received.body)).not.toContain("150000 AUD");
+
+		const payload = { schemaVersion: 1, idempotencyKey: "directive-before-submit-1", directive: "continue" };
+		const first = await call("POST", `/ap/application-runs/${runId}/supervision/checkpoints/before-submit-1/directives`, payload);
+		expect(first.status).toBe(201);
+		expect(first.body.directive).toMatchObject({ checkpointId: "before-submit-1", directive: "continue", idempotencyKey: "directive-before-submit-1", deliveredAt: expect.any(Number) });
+		expect(sent.filter((s) => s.path === "/local-apply/directive").map((s) => s.body)).toEqual([{ runId, checkpointId: "before-submit-1", schemaVersion: 1, directive: "continue" }]);
+
+		const replay = await call("POST", `/ap/application-runs/${runId}/supervision/checkpoints/before-submit-1/directives`, payload);
+		expect(replay.status).toBe(200);
+		expect(replay.body.outcome).toBe("existing");
+		expect(sent.filter((s) => s.path === "/local-apply/directive")).toHaveLength(1);
+		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM local_apply_supervisor_directives").first<{ n: number }>())?.n).toBe(1);
+
+		const revision = await call("POST", `/ap/application-runs/${runId}/supervision/checkpoints/before-submit-1/directives`, { schemaVersion: 1, idempotencyKey: "directive-revision", directive: "stop" });
+		expect(revision.status).toBe(409);
+	});
+
+	it("does not make an untyped runner pause actionable as a supervisor checkpoint", async () => {
+		const started = await call("POST", "/ap/application-runs", readyApp("lead-supervised-invalid"));
+		const runId = started.body.run.id as string;
+		runner("paused", { lastSeq: 1, pause: { reason: "supervisor_checkpoint", checkpoint: { schemaVersion: 1, checkpointId: "unsafe", facts: { phase: "before_submit", actions: 1, filled: 0, uploaded: 0, blockers: ["not-a-real-blocker"] } } } });
+		const received = await call("GET", `/ap/application-runs/${runId}/supervision`);
+		expect(received.body.checkpoints).toEqual([]);
+		const directive = await call("POST", `/ap/application-runs/${runId}/supervision/checkpoints/unsafe/directives`, { schemaVersion: 1, idempotencyKey: "unsafe-directive", directive: "stop" });
+		expect(directive.status).toBe(404);
+	});
+
 	it("stops a CLI that remains responsive past the policy deadline, rather than renewing it from polls", async () => {
 		const started = await call("POST", "/ap/application-runs", readyApp("lead-time-limit"));
 		const runId = started.body.run.id as string;

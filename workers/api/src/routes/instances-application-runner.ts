@@ -15,6 +15,7 @@ import { patchInstanceConfig, readInstanceConfigPair } from "../lib/instance-con
 import { cancelApplyRun, resumeApplyRun, startApplicationFill, syncApplyRun } from "../lib/local-apply/apply.js";
 import { RUNNER_DEFAULTS, RUNNER_SETTINGS_KEY, effectiveRunnerSettings, mergeRunnerSettings } from "../lib/local-apply/policy.js";
 import { applicationAudit, getApplyRun, listApplyRuns } from "../lib/local-apply/store.js";
+import { SUPERVISOR_SCHEMA_VERSION, isSupervisorDirective, issueSupervisorDirective, listSupervisorCheckpoints } from "../lib/local-apply/supervision.js";
 import { getOwnedApplication } from "../lib/local-artifact/store.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
@@ -90,5 +91,39 @@ export function registerApplicationRunnerRoutes(router: Hono<{ Bindings: Env }>)
 	router.post("/:instanceId/application-runs/:runId/cancel", async (c) => {
 		const { uid, run } = await ownedRun(c);
 		return c.json({ run: await cancelApplyRun(c.env, uid, run) });
+	});
+
+	/**
+	 * Durable cloud-supervisor state. Reading first pulls the runner, so a just-emitted checkpoint
+	 * is visible here without trusting a client to repeat it.
+	 */
+	router.get("/:instanceId/application-runs/:runId/supervision", async (c) => {
+		const { uid, run: stored } = await ownedRun(c);
+		const run = await syncApplyRun(c.env, uid, stored);
+		return c.json({ schemaVersion: SUPERVISOR_SCHEMA_VERSION, run, checkpoints: await listSupervisorCheckpoints(c.env, run) });
+	});
+
+	/** Record one immutable directive for a runner-reported checkpoint, then ask the relay to deliver it. */
+	router.post("/:instanceId/application-runs/:runId/supervision/checkpoints/:checkpointId/directives", async (c) => {
+		const { uid, run: stored } = await ownedRun(c);
+		const run = await syncApplyRun(c.env, uid, stored);
+		const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+		const checkpointId = c.req.param("checkpointId") ?? "";
+		if (!body || body.schemaVersion !== SUPERVISOR_SCHEMA_VERSION || typeof body.idempotencyKey !== "string" || !isSupervisorDirective(body.directive)) {
+			throw new HttpError(400, `body must be { schemaVersion: ${SUPERVISOR_SCHEMA_VERSION}, idempotencyKey, directive: "continue" | "request_review" | "stop" }`);
+		}
+		const outcome = await issueSupervisorDirective(c.env, run, uid, {
+			checkpointId,
+			schemaVersion: body.schemaVersion,
+			idempotencyKey: body.idempotencyKey,
+			directive: body.directive,
+		}, Date.now());
+		if (outcome.kind === "missing_checkpoint") throw new HttpError(404, "Supervisor checkpoint not found for this run");
+		if (outcome.kind === "idempotency_conflict") throw new HttpError(409, "That idempotency key was already used for another supervisor directive");
+		if (outcome.kind === "checkpoint_already_directed") throw new HttpError(409, "This supervisor checkpoint already has a directive");
+		// Imported lazily to keep this route's durable-record decision visibly before the machine call.
+		const { deliverSupervisorDirective } = await import("../lib/local-apply/apply.js");
+		const directive = await deliverSupervisorDirective(c.env, uid, run, outcome.directive);
+		return c.json({ schemaVersion: SUPERVISOR_SCHEMA_VERSION, outcome: outcome.kind, directive }, outcome.kind === "issued" ? 201 : 200);
 	});
 }
