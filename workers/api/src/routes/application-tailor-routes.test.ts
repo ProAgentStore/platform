@@ -248,14 +248,16 @@ describe("approved work queues behind a busy machine (#974)", () => {
 			const ev = leadN(n);
 			await deliverEvent(env(), "scout", "u1", JOB_LEAD_APPLY_EVENT, [ev], { traceId: ev.eventId });
 		}
+		type Card = { status: string; queue: { position: number; label: string } | null };
 		const queue = await call("GET", "/t1/application-queue");
-		const waiting = (queue.body.items as Array<Record<string, any>>).filter((i) => i.queue);
+		const cards = queue.body.items as Card[];
+		const waiting = cards.filter((i) => i.queue);
 		expect(waiting).toHaveLength(2);
-		expect(waiting.map((i) => i.queue.position).sort()).toEqual([1, 2]);
+		expect(waiting.map((i) => i.queue?.position).sort()).toEqual([1, 2]);
 		expect(waiting[0].status, "waiting is not a terminal state").toBe("tailoring");
-		expect(waiting.some((i) => /in line/.test(i.queue.label))).toBe(true);
+		expect(waiting.some((i) => /in line/.test(i.queue?.label ?? ""))).toBe(true);
 		// The running one is not described as waiting.
-		expect((queue.body.items as Array<Record<string, any>>).find((i) => i.queue === null)).toBeTruthy();
+		expect(cards.find((i) => i.queue === null)).toBeTruthy();
 	});
 });
 
