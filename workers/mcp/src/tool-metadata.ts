@@ -220,6 +220,10 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	list_applications: "read",
 	get_application: "read",
 	application_trace: "read",
+	application_runs: "read",
+	application_run: "read",
+	application_run_supervision: "read",
+	tailoring_run: "read",
 	triage_application: "write",
 	cancel_application: "write",
 	generate_application_materials: "runtime",
@@ -616,7 +620,14 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// +3 read at #958: `list_applications`, `get_application`, `application_trace` — the owner's
 	// application queue, one item and its correlated trace; handles and verdicts, never content.
 	// +1 read at #953: `get_application_runner_settings` — the Runner's submission policy.
-	read: 127,
+	// +4 read at #971: `application_runs`, `application_run`, `application_run_supervision` and
+	// `tailoring_run` — live run visibility for the apply pipeline, the counterpart of
+	// `coding_session_capture`/`coding_timeline`. Two of them pull the owner's machine before
+	// answering, which is a READ of a run the owner already started: no run is created, resumed or
+	// continued, nothing is dispatched, and nothing external is touched. They carry policy
+	// verdicts, pause reasons, event classes and artifact handles — never résumé text, typed form
+	// values or page content.
+	read: 131,
 	// +2 write at #825: `pause_instance` / `resume_instance`. `write` rather than `destructive` —
 	// nothing is deleted and nothing is unsubscribed, and classing the OFF switch as destructive
 	// would put RESUME behind a scope the caller may not hold, which is the wrong failure mode for

@@ -17,7 +17,7 @@ import type { InstanceToolsCtx } from "./shared.js";
  * Every state change carries the `expected_status` (and `expected_version`) the caller read, and is
  * refused as stale when the item has moved since. Defer and archive change PAGS records only.
  *
- * `pinnedInstanceId`: the same ten tools on a session pinned to one Tailor or Runner (#783's
+ * `pinnedInstanceId`: the same tools on a session pinned to one Tailor or Runner (#783's
  * `/mcp/i/<id>`, registered from `pinned.ts`) — bound to that instance, so they take no
  * `instance_id` and no `token` (a pinned session is its OAuth grant).
  */
@@ -29,6 +29,10 @@ export const APPLICATION_TOOL_SCOPES = {
 	list_applications: "read",
 	get_application: "read",
 	application_trace: "read",
+	application_runs: "read",
+	application_run: "read",
+	application_run_supervision: "read",
+	tailoring_run: "read",
 	triage_application: "write",
 	cancel_application: "write",
 	generate_application_materials: "runtime",
@@ -126,6 +130,94 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 			const denied = await requirePermission(safetyFor(token), "read", "application_trace", { instance_id, application_id });
 			if (denied) return denied;
 			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/application-queue/${encodeURIComponent(application_id)}/trace`, t, {}, env)) as { error?: string };
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
+	// ── Live run visibility (#971) ────────────────────────────────────────────
+	//
+	// `application_trace` answers "what happened to this application" across the whole pipeline.
+	// These four answer "what is THIS run doing" — the question `coding_session_capture` and
+	// `coding_timeline` answer for a coding agent, and the one that had no MCP path at all: not a
+	// single tool reached `/application-runs/*` or the Tailor's `/applications/:id`, so a run's
+	// policy, its pause, its submit-gate verdicts, its per-event trace and its supervisor
+	// checkpoints were readable over HTTP and from nowhere else.
+	//
+	// Two of them are LIVE in the strict sense: the route pulls the runner before it answers, so a
+	// just-emitted event is in the reply without trusting a client to have polled for it.
+	//
+	// What they CANNOT show, said plainly in the descriptions rather than discovered: the engine is
+	// a CLI on the owner's machine, and its stdout never crosses the runner contract — only the
+	// `summary` the runner derives from it. A run whose CLI called no bridge tool therefore has no
+	// page-by-page detail to return, and that absence is itself the finding (it is why such a run
+	// ends `blocked`/`incomplete`). Claiming otherwise would send a reader looking for a record
+	// that was never written.
+
+	server.tool(
+		"application_runs",
+		"The Application Runner's fill runs, newest first: each run's status, which application it is for, the machine it ran on, its policy mode and submit-gate verdict, and its timings. Pass the RUNNER's instance_id. This is how you find the run that holds a concurrency slot — a dispatch refused with \"already filling N application(s) for this agent, limit N\" names no run id, and this lists the one that does. For what that run is DOING, read application_run. Read-only.",
+		{ ...who, limit: z.coerce.number().int().min(1).max(200).optional().describe("How many of the newest runs to return (default 50, max 200).") },
+		async (input: Record<string, unknown>) => {
+			const token = tokenOf(input);
+			const instance_id = instanceOf(input);
+			const limit = input.limit === undefined ? undefined : Number(input.limit);
+			const t = tokenFor(token);
+			if (!t) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "application_runs", { instance_id, limit });
+			if (denied) return denied;
+			const q = limit === undefined ? "" : `?limit=${limit}`;
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/application-runs${q}`, t, {}, env)) as { error?: string };
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
+	server.tool(
+		"application_run",
+		"ONE fill run as it stands RIGHT NOW — the live view of an Application Runner, the counterpart of coding_session_capture for a coding agent. Reading it pulls the owner's machine first, so a just-emitted event is already here. Returns the run (`status`, `pause` — what it is waiting for and the questions it asked, `policy` with the mode, limits, allowed domains and every submit-gate check with its verdict, `result` with the outcome, how many fields were filled, what was uploaded and whether a submit was attempted, `engineAuth`, `runnerNode`, `errorCode`/`error`, timings), its `trace` of runner-reported events (`browser.navigated`, `field.filled`, `artifact.uploaded`, `policy.decision`, `browser.blocked`, `submit.*`, `supervisor.*`) with `runnerSeq`, plus the application and its lifecycle audit. A trace holding only `engine.started`/`engine.ended` is a real finding, not a gap in this tool: the CLI called no browser tool, which is usually why such a run ends blocked and incomplete. The CLI's own output stays on the machine by contract — `result.summary` is the only part of it the platform receives. Read-only.",
+		{ ...who, run_id: z.string().describe("The fill run's id (`id` from application_runs, or fillRunId from list_applications).") },
+		async (input: Record<string, unknown>) => {
+			const token = tokenOf(input);
+			const instance_id = instanceOf(input);
+			const run_id = String(input.run_id ?? "");
+			const t = tokenFor(token);
+			if (!t) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "application_run", { instance_id, run_id });
+			if (denied) return denied;
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/application-runs/${encodeURIComponent(run_id)}`, t, {}, env)) as { error?: string };
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
+	server.tool(
+		"application_run_supervision",
+		"The cloud-supervision state of one fill run: every checkpoint the runner reported — its phase (`initial`, `post_navigation`, `before_submit`, `uncertain`), the bounded facts it was decided on (actions, fields filled, uploads, blockers, domain) and its `runnerSeq` — each with the single immutable `directive` recorded for it (`continue`, `request_review`, `stop`) and when that directive was delivered. This is what a run paused at a checkpoint is waiting on, and why the Runner's own brain decided as it did. Reading it pulls the machine first. Facts only, never page text or typed values. Read-only.",
+		{ ...who, run_id: z.string().describe("The fill run's id (`id` from application_runs).") },
+		async (input: Record<string, unknown>) => {
+			const token = tokenOf(input);
+			const instance_id = instanceOf(input);
+			const run_id = String(input.run_id ?? "");
+			const t = tokenFor(token);
+			if (!t) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "application_run_supervision", { instance_id, run_id });
+			if (denied) return denied;
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/application-runs/${encodeURIComponent(run_id)}/supervision`, t, {}, env)) as { error?: string };
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
+	server.tool(
+		"tailoring_run",
+		"ONE application's tailoring run as it stands RIGHT NOW — the live view of an Application Tailor, and the answer to \"how far along is the run holding my limit-1 slot\". Pass the TAILOR's instance_id and the application_id. A run still `running` is pulled from the owner's machine before answering. Returns the application (status, artifact handles, profile version, block reason and questions) and the run: its `policy` (engine, auth mode, workspace, which of the owner's source files it may read, retention), `result`, `engineAuth`, `runnerNode`, `errorCode`/`error`, timings, and its `trace` of runner-reported events with `runnerSeq`. Artifact HANDLES and claim counts only — never résumé or cover-letter text. Read-only.",
+		{ ...who, application_id: z.string().describe("The application's id (applicationId from list_applications).") },
+		async (input: Record<string, unknown>) => {
+			const token = tokenOf(input);
+			const instance_id = instanceOf(input);
+			const application_id = String(input.application_id ?? "");
+			const t = tokenFor(token);
+			if (!t) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "tailoring_run", { instance_id, application_id });
+			if (denied) return denied;
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/applications/${encodeURIComponent(application_id)}`, t, {}, env)) as { error?: string };
 			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
 		},
 	);

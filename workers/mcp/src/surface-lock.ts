@@ -1058,4 +1058,11 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// lives in inputSchema, so — unlike a tool's own description — it IS the served surface, the
 	// same reason 0.1.20 moved. No tool added; counts unchanged. Appended.
 	"0.1.93": "sha256:6222ad49194c8b862b81cf90b0270ab3846cbfa8b4f1be0af246539b90fbb335",
+	// 0.1.94 (#971): live run visibility for the apply pipeline — four READ tools, the counterpart
+	// of `coding_session_capture`/`coding_timeline` for a Tailor or Runner: `application_runs`,
+	// `application_run`, `application_run_supervision`, `tailoring_run`. Nothing reached
+	// `/application-runs/*` or the Tailor's `/applications/:id` before, so a run's policy, pause,
+	// submit-gate verdicts, event trace and supervisor checkpoints were HTTP-only. 275
+	// registrations become 279, `MCP_TOOL_ALWAYS_ON` 249 → 253, gated stays 26. Appended.
+	"0.1.94": "sha256:07574ebdb0a6c6e5d85d3e34927b66f51ab60acef1e12fe971c6884ee2cc3487",
 };

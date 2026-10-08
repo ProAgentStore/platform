@@ -34,6 +34,9 @@ const ACTIONS = "https://api.test/v1/instances/t1/application-queue/actions";
 describe("the Applications tools (#958, #953)", () => {
 	it("publishes the issue's typed tools", () => {
 		expect(tools().names.sort()).toEqual([
+			"application_run",
+			"application_run_supervision",
+			"application_runs",
 			"application_trace",
 			"cancel_application",
 			"generate_application_materials",
@@ -45,6 +48,7 @@ describe("the Applications tools (#958, #953)", () => {
 			"retry_application",
 			"set_application_runner_settings",
 			"start_application_fill",
+			"tailoring_run",
 			"triage_application",
 		]);
 	});
@@ -59,6 +63,48 @@ describe("the Applications tools (#958, #953)", () => {
 			"GET https://api.test/v1/instances/t1/application-queue/item?application_id=a1",
 			"GET https://api.test/v1/instances/t1/application-queue/a1/trace",
 		]);
+	});
+
+	// #971 — the live-run reads. The gap these close is that NOTHING reached `/application-runs/*`
+	// or the Tailor's `/applications/:id`, so a run's policy, pause, submit-gate verdicts, event
+	// trace and supervisor checkpoints were HTTP-only: the apply pipeline had no answer to the
+	// question `coding_session_capture` answers for a coding agent.
+	it("reads the Runner's and Tailor's own run routes, which nothing reached before", async () => {
+		const { seen, call } = tools();
+		await call("application_runs", { instance_id: "r1" });
+		await call("application_runs", { instance_id: "r1", limit: 5 });
+		await call("application_run", { instance_id: "r1", run_id: "run-1" });
+		await call("application_run_supervision", { instance_id: "r1", run_id: "run-1" });
+		await call("tailoring_run", { instance_id: "t1", application_id: "a1" });
+		expect(seen.map((s) => `${s.method} ${s.url}`)).toEqual([
+			"GET https://api.test/v1/instances/r1/application-runs",
+			"GET https://api.test/v1/instances/r1/application-runs?limit=5",
+			"GET https://api.test/v1/instances/r1/application-runs/run-1",
+			"GET https://api.test/v1/instances/r1/application-runs/run-1/supervision",
+			"GET https://api.test/v1/instances/t1/applications/a1",
+		]);
+		// Reads, every one: a live view pulls the machine, but it starts, resumes and dispatches
+		// nothing — so none of them may be a POST.
+		expect(seen.every((s) => s.method === "GET")).toBe(true);
+	});
+
+	it("ids are sent as given, encoded — a run id is opaque", async () => {
+		const { seen, call } = tools();
+		await call("application_run", { instance_id: "r 1", run_id: "run/1" });
+		expect(seen[0].url).toBe("https://api.test/v1/instances/r%201/application-runs/run%2F1");
+	});
+
+	it("the live reads need only the read scope", async () => {
+		const { seen, call } = tools(["read"]);
+		for (const [name, args] of [
+			["application_runs", {}],
+			["application_run", { run_id: "run-1" }],
+			["application_run_supervision", { run_id: "run-1" }],
+			["tailoring_run", { application_id: "a1" }],
+		] as const) {
+			expect(await call(name, { instance_id: "t1", ...args }), name).toContain("\"ok\"");
+		}
+		expect(seen).toHaveLength(4);
 	});
 
 	it.each([
