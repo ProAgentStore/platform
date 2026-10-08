@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserTools } from "./bridge.js";
+import { LOCAL_BROWSER_ERROR_CODES } from "./contract.js";
 import type { LocalBrowserTaskEnvelope } from "./contract.js";
 import { LocalBrowserRuntime, parseEnvelope, resolveWorkspacePath } from "./runtime.js";
 
@@ -42,7 +43,7 @@ const browser: BrowserTools = {
 		name === "browser_evaluate" ? { content: [{ text: `### Result\n${JSON.stringify({ url: "https://seek.com.au/jobs", title: "Jobs" })}` }] } : { content: [{ text: `${name} ${JSON.stringify(args)}` }] },
 };
 
-function runtime(over: { retentionMs?: number; spawnError?: NodeJS.ErrnoException } = {}) {
+function runtime(over: { retentionMs?: number; spawnError?: NodeJS.ErrnoException; browserError?: Error } = {}) {
 	return new LocalBrowserRuntime({
 		dataDir: dir,
 		homeDir: home,
@@ -50,7 +51,10 @@ function runtime(over: { retentionMs?: number; spawnError?: NodeJS.ErrnoExceptio
 		bridgeScript: "/runner/bridge-stdio.js",
 		now: () => now,
 		retentionMs: over.retentionMs,
-		browserFor: async () => ({ tools: browser, stop: async () => void browsersStopped++ }),
+		browserFor: async () => {
+			if (over.browserError) throw over.browserError;
+			return { tools: browser, stop: async () => void browsersStopped++ };
+		},
 		spawn: ((command: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv }) => {
 			const child = new FakeChild();
 			spawned.push({ command, args, opts, child });
@@ -257,6 +261,78 @@ describe("pauses", () => {
 		await settle();
 		rt.cancel({ runId: "run-1" });
 		expect(((await call) as { isError?: boolean }).isError).toBe(true);
+	});
+});
+
+/**
+ * #944's acceptance criterion: "a disconnected runner, missing browser, missing subscription login,
+ * login/captcha, and expired consent all return explicit actionable states."
+ *
+ * The missing browser was the one with no name. A launch failure ended the run with whatever the
+ * browser threw, and the cloud filed every non-login failure as `engine_failed` — so a machine with
+ * no Chrome was indistinguishable from a crashed CLI, and the owner was told neither what happened
+ * nor what to do. Each cause now names itself, which is also what lets a reader branch on it.
+ */
+describe("the cause a failed run names (#944)", () => {
+	it("MISSING BROWSER: says it could not start one, what to check, and files it as its own state", async () => {
+		const rt = runtime({ browserError: new Error("Failed to launch chromium: executable doesn't exist") });
+		rt.start(envelope());
+		await settle();
+		const st = rt.status({ runId: "run-1" });
+		expect(st.state).toBe("ended");
+		expect(st.result).toMatchObject({ outcome: "failed", errorCode: "browser_unavailable" });
+		// Actionable, and it keeps the raw message — the half that says WHICH browser problem it was.
+		expect(st.result?.error).toMatch(/could not be started on this machine/);
+		expect(st.result?.error).toMatch(/Chrome or Chromium is installed/);
+		expect(st.result?.error).toMatch(/executable doesn't exist/);
+		// Not the CLI's fault, and it is not reported as such.
+		expect(st.result?.errorCode).not.toBe("engine_failed");
+		expect(spawned, "the engine is never started when there is no browser to give it").toHaveLength(0);
+	});
+
+	it("DECLINED CONSENT is a decision, not a fault: its own state, separate from a browser failure", async () => {
+		const rt = runtime();
+		rt.start(envelope({ browserProfile: "default" }));
+		await settle();
+		expect(rt.status({ runId: "run-1" }).state).toBe("paused");
+		// The owner says no: resumed without granting the profile.
+		rt.resume({ runId: "run-1" });
+		await settle();
+		const st = rt.status({ runId: "run-1" });
+		expect(st.state).toBe("ended");
+		expect(st.result).toMatchObject({ outcome: "failed", errorCode: "consent_declined" });
+		expect(st.result?.error).toMatch(/did not allow research in their signed-in browser profile/);
+	});
+
+	it.each([
+		["a CLI that never touched the bridge", "bridge_unused"],
+		["a CLI that is not signed in", "engine_not_signed_in"],
+	] as const)("%s keeps its own code", async (_label, code) => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		if (code === "engine_not_signed_in") spawned[0].child.stdout.write("Not logged in. Please run /login\n");
+		spawned[0].child.exit(code === "engine_not_signed_in" ? 1 : 0);
+		await settle();
+		expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "failed", errorCode: code });
+	});
+
+	it("the owner's cancel is named as a cancel, not a failure of the machine", async () => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		rt.cancel({ runId: "run-1" });
+		await settle();
+		spawned[0].child.exit(143);
+		await settle();
+		expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "failed", errorCode: "cancelled" });
+	});
+
+	it("every code it can report is in the contract's closed vocabulary", async () => {
+		const rt = runtime({ browserError: new Error("no browser") });
+		rt.start(envelope());
+		await settle();
+		expect(LOCAL_BROWSER_ERROR_CODES).toContain(rt.status({ runId: "run-1" }).result?.errorCode);
 	});
 });
 

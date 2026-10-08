@@ -293,6 +293,37 @@ describe("consent", () => {
 		expect(set.body.consent).toEqual([expect.objectContaining({ domain: "seek.com.au", scope: "navigate", decision: "allow", expiresAt: expect.any(Number) })]);
 		expect((await call("PUT", "/i1/local-browser/consent", { scope: "navigate", domain: "seek.com.au", decision: null })).body.consent).toEqual([]);
 	});
+
+	/**
+	 * #944's "expired consent returns an explicit actionable state", asserted where it is decided.
+	 *
+	 * An expired decision is not a quieter allow — it is NO decision, so the domain is not sent to
+	 * the runner as consented and the run pauses for the owner the same way a brand-new site does.
+	 * The behaviour was already right (`listDomainConsent` filters on `expires_at`); what was missing
+	 * was anything holding it there, and a consent layer that silently keeps honouring a lapsed
+	 * decision is the kind of defect that looks identical to working.
+	 */
+	it("stops honouring an allow once it has expired — it is no decision, not a lasting one", async () => {
+		// An allow that lapsed an hour ago, written straight to the table so the clock is the test's.
+		const lapsed = Date.now() - 3_600_000;
+		d1.exec(`INSERT INTO local_browser_domain_consent (instance_id, user_id, domain, scope, decision, decided_at, expires_at, id)
+		         VALUES ('i1', 'u1', 'seek.com.au', 'navigate', 'allow', ${lapsed - 1000}, ${lapsed}, 'c-lapsed')`);
+		// It is not listed…
+		expect((await call("GET", "/i1/local-browser/consent")).body.consent).toEqual([]);
+		// …and it is not handed to the runner, so that site needs the owner again.
+		const run = await call("POST", "/i1/local-browser/runs", { objective: "x" });
+		const dispatched = sent.find((x) => x.path === "/local-browser/run");
+		expect((dispatched?.body as { policy: { consentedDomains: string[] } }).policy.consentedDomains).not.toContain("seek.com.au");
+		expect(run.body.status).toBe("running");
+
+		// A live allow for the same site IS handed over — so what changed is the expiry, nothing else.
+		// (The first run is cancelled first: one research run at a time per instance.)
+		await call("POST", `/i1/local-browser/runs/${run.body.id}/cancel`, {});
+		await call("PUT", "/i1/local-browser/consent", { scope: "navigate", domain: "seek.com.au", decision: "allow", ttlDays: 30 });
+		sent.length = 0;
+		await call("POST", "/i1/local-browser/runs", { objective: "y", requestId: "req-live" });
+		expect((sent.find((x) => x.path === "/local-browser/run")?.body as { policy: { consentedDomains: string[] } }).policy.consentedDomains).toContain("seek.com.au");
+	});
 });
 
 describe("pulling state from the runner (#944)", () => {
@@ -321,6 +352,39 @@ describe("pulling state from the runner (#944)", () => {
 		runner.paths = { "/local-browser/status": { status: 200, body: { runId: run.id, state: "ended", lastSeq: 0, events: [], result: { ...result(run.id), outcome: "failed", findings: [], engineAuth: "missing_login", error: "Run `codex login`" } } } };
 		const got = (await call("GET", `/i1/local-browser/runs/${run.id}`)).body;
 		expect(got).toMatchObject({ status: "failed", errorCode: "engine_not_signed_in", engineAuth: "missing_login" });
+	});
+
+	/**
+	 * #944: the cloud stores the cause the RUNNER named, because the runner is the only party that
+	 * knows it. This used to be derived from one fact — `engineAuth === "missing_login"` — so a
+	 * browser that never started arrived as the generic `engine_failed`, reading exactly like a
+	 * crashed CLI and telling the owner nothing they could act on.
+	 */
+	it.each([
+		["a browser that would not start", "browser_unavailable"],
+		["a CLI that never touched the bridge", "bridge_unused"],
+		["a CLI that is not installed", "engine_not_installed"],
+		["the owner declining the signed-in profile", "consent_declined"],
+		["the run's own time limit", "time_limit"],
+	] as const)("files %s under its own code", async (_label, errorCode) => {
+		const run = (await call("POST", "/i1/local-browser/runs", { objective: "x" })).body;
+		runner.paths = { "/local-browser/status": { status: 200, body: { runId: run.id, state: "ended", lastSeq: 0, events: [], result: { ...result(run.id), outcome: "failed", findings: [], error: "the machine's own sentence", errorCode } } } };
+		const got = (await call("GET", `/i1/local-browser/runs/${run.id}`)).body;
+		expect(got).toMatchObject({ status: "failed", errorCode, error: "the machine's own sentence" });
+	});
+
+	it("keeps the old derivation for a runner that predates the field, so an un-updated machine still works", async () => {
+		const run = (await call("POST", "/i1/local-browser/runs", { objective: "x" })).body;
+		// No `errorCode` at all — the shape every published runner sent before this change.
+		runner.paths = { "/local-browser/status": { status: 200, body: { runId: run.id, state: "ended", lastSeq: 0, events: [], result: { ...result(run.id), outcome: "failed", findings: [], error: "it broke" } } } };
+		expect((await call("GET", `/i1/local-browser/runs/${run.id}`)).body).toMatchObject({ status: "failed", errorCode: "engine_failed" });
+	});
+
+	it("refuses a code outside the vocabulary rather than storing whatever a machine sends", async () => {
+		const run = (await call("POST", "/i1/local-browser/runs", { objective: "x" })).body;
+		runner.paths = { "/local-browser/status": { status: 200, body: { runId: run.id, state: "ended", lastSeq: 0, events: [], result: { ...result(run.id), outcome: "failed", findings: [], error: "x", errorCode: "something_invented" } } } };
+		// Dropped by the contract parser, so the fallback decides — never the machine's own word.
+		expect((await call("GET", `/i1/local-browser/runs/${run.id}`)).body).toMatchObject({ status: "failed", errorCode: "engine_failed" });
 	});
 
 	it("ends a run its runner no longer holds, rather than showing it running forever", async () => {

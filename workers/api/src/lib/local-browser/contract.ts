@@ -176,6 +176,31 @@ export interface LocalBrowserSourceFailure {
 	detail?: string;
 }
 
+/**
+ * WHY a run failed — named by the runner, which is the only party that knows (#944).
+ *
+ * The acceptance criterion this exists for: "a disconnected runner, missing browser, missing
+ * subscription login, login/captcha, and expired consent all return explicit actionable states."
+ * Most of those were already distinct, and one was not: the cloud derived the code from a single
+ * fact — `engineAuth === "missing_login" ? "engine_not_signed_in" : "engine_failed"` — so every
+ * other cause arrived as the generic `engine_failed` carrying whatever text the failure threw. A
+ * browser that could not start was therefore indistinguishable from a CLI that crashed, and the
+ * owner was told neither what happened nor what to do about it.
+ *
+ *   browser_unavailable  the runner could not start or reach a browser for the run. Actionable at
+ *                        the machine (install Chrome, or stop whatever is holding the profile) and
+ *                        nowhere else, which is exactly why it must not read as "the engine failed".
+ *   engine_not_installed the CLI is not on this machine's PATH.
+ *   engine_not_signed_in the CLI is installed but has no subscription login.
+ *   bridge_unused        the CLI exited cleanly without making one browser call (#952's live shape).
+ *   consent_declined     the owner was asked and said no — a decision, not a fault.
+ *   time_limit           the run hit its own time cap with work still to do.
+ *   cancelled            the owner stopped it.
+ *   engine_failed        anything else the CLI did. The honest residue, not the default.
+ */
+export type LocalBrowserErrorCode = "browser_unavailable" | "engine_not_installed" | "engine_not_signed_in" | "bridge_unused" | "consent_declined" | "time_limit" | "cancelled" | "engine_failed";
+export const LOCAL_BROWSER_ERROR_CODES: readonly LocalBrowserErrorCode[] = ["browser_unavailable", "engine_not_installed", "engine_not_signed_in", "bridge_unused", "consent_declined", "time_limit", "cancelled", "engine_failed"];
+
 /** What the runner returns when a run ends. */
 export interface LocalBrowserResultEnvelope {
 	runId: string;
@@ -187,6 +212,12 @@ export interface LocalBrowserResultEnvelope {
 	engineAuth: LocalBrowserEngineAuth;
 	/** Present when `outcome` is `failed`. */
 	error?: string;
+	/**
+	 * Present when `outcome` is `failed`: WHICH cause (#944). Absent from a runner older than this
+	 * contract, and the cloud falls back to its previous derivation for one of those — so an old
+	 * machine keeps working and a current one is specific.
+	 */
+	errorCode?: LocalBrowserErrorCode;
 }
 
 /** A runner event with its position in the run's trace, as `status` returns it. */
@@ -355,6 +386,12 @@ export function parseLocalBrowserResult(raw: unknown): { result: LocalBrowserRes
 	// Redacted again here, whatever the runner did: an error is CLI output, and CLIs print keys.
 	const rawError = str(o.error, 1000);
 	const error = rawError === null ? null : redactText(rawError);
-	if (outcome === "failed") out.error = error ?? "The run failed without a reason.";
+	if (outcome === "failed") {
+		out.error = error ?? "The run failed without a reason.";
+		// #944: the runner's own name for the cause, when it gave one. An unrecognised code is
+		// dropped rather than passed through, so the stored vocabulary stays closed.
+		const code = oneOf(LOCAL_BROWSER_ERROR_CODES, o.errorCode);
+		if (code) out.errorCode = code;
+	}
 	return { result: out };
 }

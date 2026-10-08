@@ -31,6 +31,7 @@ import {
 	LOCAL_BROWSER_ENGINES,
 	LOCAL_BROWSER_TASK_TYPE,
 	type LocalBrowserEngineAuth,
+	type LocalBrowserErrorCode,
 	type LocalBrowserEvent,
 	type LocalBrowserLimits,
 	type LocalBrowserPauseReason,
@@ -66,6 +67,27 @@ export interface LocalBrowserRuntimeDeps {
 	retentionMs?: number;
 	/** Path to the compiled bridge forwarder. Defaults to bridge-stdio.js beside this file. */
 	bridgeScript?: string;
+}
+
+/**
+ * Why the run could not be launched, in words the owner can act on (#944).
+ *
+ * Two shapes reach here: the owner declining the signed-in profile, which is a DECISION and not a
+ * fault, and the browser failing to start — the "missing browser" state the acceptance criteria
+ * ask for. Everything a browser can refuse at startup is fixed at the machine (install Chrome, free
+ * the profile another window is holding, allow the automation port), so the sentence says that; the
+ * raw message rides along, because it is the half that names which of those it was.
+ */
+function launchFailure(err: unknown): { outcome: "failed"; error: string; errorCode: LocalBrowserErrorCode } {
+	const message = err instanceof Error ? err.message : String(err);
+	if (/did not allow research in their signed-in browser profile/i.test(message)) {
+		return { outcome: "failed", error: message, errorCode: "consent_declined" };
+	}
+	return {
+		outcome: "failed",
+		error: `The browser for this run could not be started on this machine: ${message.slice(0, 400)}. Check that Chrome or Chromium is installed, that no other window is holding the profile this run uses, and that \`pags up\` may launch it — then start the run again.`,
+		errorCode: "browser_unavailable",
+	};
 }
 
 const MAX_EVENTS = 2000;
@@ -231,7 +253,10 @@ export class LocalBrowserRuntime {
 		this.runs.set(envelope.runId, run);
 		// Not awaited: a signed-in-profile consent pause can hold the launch for minutes, and the
 		// relay command that started the run must answer now. Everything after this is in `status`.
-		void this.launch(run, selfUrl).catch((err) => this.end(run, { outcome: "failed", error: err instanceof Error ? err.message : String(err) }));
+		// #944: a launch failure is the one the acceptance criteria call "missing browser", and it was
+		// the one cause with no name: it ended the run with whatever the browser threw, which the
+		// cloud then filed as `engine_failed` — the CLI blamed for a browser that never started.
+		void this.launch(run, selfUrl).catch((err) => this.end(run, launchFailure(err)));
 		return { runId: envelope.runId, taskId: envelope.runId, status: run.state, existing: false };
 	}
 
@@ -286,7 +311,12 @@ export class LocalBrowserRuntime {
 		child.stderr?.on("data", keep);
 		child.on("error", (err: NodeJS.ErrnoException) => {
 			const missing = err.code === "ENOENT";
-			this.end(run, { outcome: "failed", error: missing ? `The ${e.engine === "claude" ? "Claude Code" : "Codex"} CLI is not installed on this machine (\`${spec.command}\` was not found).` : err.message });
+			this.end(run, {
+				outcome: "failed",
+				...(missing
+					? { error: `The ${e.engine === "claude" ? "Claude Code" : "Codex"} CLI is not installed on this machine (\`${spec.command}\` was not found).`, errorCode: "engine_not_installed" as const }
+					: { error: err.message }),
+			});
 		});
 		child.on("close", (code) => {
 			if (buf.trim()) run.output.push(buf);
@@ -419,15 +449,15 @@ export class LocalBrowserRuntime {
 		this.end(run, this.outcomeOf(run, code));
 	}
 
-	private outcomeOf(run: Run, code: number): { outcome: "completed" | "failed"; summary?: string; error?: string; engineAuth?: LocalBrowserEngineAuth } {
+	private outcomeOf(run: Run, code: number): { outcome: "completed" | "failed"; summary?: string; error?: string; errorCode?: LocalBrowserErrorCode; engineAuth?: LocalBrowserEngineAuth } {
 		const e = run.envelope;
 		const bridge = run.bridge;
 		const summary = bridge?.summary ?? finalText(e.engine, run.output);
 		const found = (bridge?.findings.length ?? 0) > 0;
-		if (run.cancelled) return { outcome: "failed", error: "Cancelled by the owner" };
-		if (missingLogin(e.engine, run.output.join("\n")) && !found) return { outcome: "failed", error: signInHelp(e.engine), engineAuth: "missing_login" };
+		if (run.cancelled) return { outcome: "failed", error: "Cancelled by the owner", errorCode: "cancelled" };
+		if (missingLogin(e.engine, run.output.join("\n")) && !found) return { outcome: "failed", error: signInHelp(e.engine), errorCode: "engine_not_signed_in", engineAuth: "missing_login" };
 		const limit = `Stopped at the ${e.limits.maxMinutes}-minute limit.`;
-		if (run.timedOut) return { outcome: found ? "completed" : "failed", summary: summary || limit, error: limit };
+		if (run.timedOut) return { outcome: found ? "completed" : "failed", summary: summary || limit, error: limit, errorCode: "time_limit" };
 		if (code !== 0 && !bridge?.summary) {
 			const tail = run.output.slice(-5).join("\n").slice(-800);
 			return { outcome: "failed", summary, error: `The ${e.engine} CLI exited with code ${code}${tail ? `: ${tail}` : ""}` };
@@ -435,11 +465,11 @@ export class LocalBrowserRuntime {
 		// A CLI that exits cleanly having never called the bridge did no research, whatever its prose
 		// says. Live run aac758dc (#952) ended `completed` with "the browser bridge required approval":
 		// no page opened, and the run looked like a success with nothing found.
-		if (!bridge?.calls) return { outcome: "failed", summary, error: bridgeUnused(e.engine, summary) };
+		if (!bridge?.calls) return { outcome: "failed", summary, error: bridgeUnused(e.engine, summary), errorCode: "bridge_unused" };
 		return { outcome: "completed", summary };
 	}
 
-	private end(run: Run, r: { outcome: "completed" | "failed"; summary?: string; error?: string; engineAuth?: LocalBrowserEngineAuth }): void {
+	private end(run: Run, r: { outcome: "completed" | "failed"; summary?: string; error?: string; errorCode?: LocalBrowserErrorCode; engineAuth?: LocalBrowserEngineAuth }): void {
 		if (run.state === "ended") return;
 		if (run.state === "paused") this.release(run, "stopped");
 		if (run.timer) clearInterval(run.timer);
@@ -454,7 +484,13 @@ export class LocalBrowserRuntime {
 			traceId: run.envelope.runId,
 			engineAuth: r.engineAuth ?? run.engineAuth,
 			// CLI output becomes this text, and a CLI prints whatever it was given: redacted before it is kept.
-			...(r.outcome === "failed" ? { error: redactText((r.error ?? "The run failed without a reason.").slice(0, 1000), run.secrets) } : {}),
+			...(r.outcome === "failed"
+				? {
+					error: redactText((r.error ?? "The run failed without a reason.").slice(0, 1000), run.secrets),
+					// #944: WHICH cause, named here rather than guessed by the cloud from `engineAuth`.
+					errorCode: r.errorCode ?? "engine_failed",
+				}
+				: {}),
 		};
 		if (run.child && run.child.exitCode === null) this.kill(run);
 		void run.browser?.stop().catch(() => undefined);

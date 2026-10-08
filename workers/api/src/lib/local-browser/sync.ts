@@ -112,13 +112,28 @@ export async function applyRunnerResult(env: Env, instanceId: string, uid: strin
 		instanceId,
 		uid,
 		run.id,
-		{ to, result: parsed, engineAuth: parsed.engineAuth, ...(to === "failed" ? { errorCode: parsed.engineAuth === "missing_login" ? "engine_not_signed_in" : "engine_failed", error: parsed.error ?? null } : {}) },
+		{ to, result: parsed, engineAuth: parsed.engineAuth, ...(to === "failed" ? { errorCode: failureCode(parsed), error: parsed.error ?? null } : {}) },
 		now,
 	);
 	if (!moved) throw new HttpError(409, `The run cannot end from "${run.status}"`);
 	await appendLocalBrowserEvents(env, instanceId, uid, run.id, [{ type: "run.ended", at: new Date(now).toISOString(), detail: { status: to, findings: parsed.findings.length, sourceFailures: parsed.sourceFailures.length, engineAuth: parsed.engineAuth } }], now);
 	await syncScanCard(env, instanceId, uid, moved);
 	return moved;
+}
+
+/**
+ * The code a failed run is stored under (#944).
+ *
+ * The runner names the cause, because it is the only party that knows it: a browser that would not
+ * start, a CLI that is not installed, one that never touched the bridge, a time limit, the owner
+ * declining. This used to be derived here from ONE fact — `engineAuth === "missing_login"` — so
+ * every other cause was filed as the generic `engine_failed`, and a machine with no browser read
+ * exactly like a crashed CLI. The old derivation survives as the fallback for a runner that
+ * predates the field, which is the version-tolerance every contract in this directory keeps.
+ */
+function failureCode(parsed: { errorCode?: string; engineAuth: string }): string {
+	if (parsed.errorCode) return parsed.errorCode;
+	return parsed.engineAuth === "missing_login" ? "engine_not_signed_in" : "engine_failed";
 }
 
 async function endLost(env: Env, instanceId: string, uid: string, run: LocalBrowserRun, error: string, now: number): Promise<LocalBrowserRun> {
