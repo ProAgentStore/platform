@@ -995,6 +995,242 @@ describe("the did-nothing diagnosis reaches the owner's surfaces (#975)", () => 
 	});
 });
 
+// ── #993: the queue must not cost the owner the mode their approval earned ───────────────────
+//
+// Two live failures in one real test session, and they are opposite halves of the same mistake —
+// deciding the submit mode at a moment that is not the moment the run reaches the machine.
+//
+//  1. Halcyon Knights application `b6244557…`, run `42990ac8…`: approved, then asked to retry while
+//     another application was filling. `concurrency` is the one check an approval deliberately does
+//     NOT satisfy, so the run was created `fill_and_review` and the mode was frozen into the queued
+//     row. On dequeue it dispatched `mode: fill_and_review, from: queue` with `submitAuthorization.
+//     usable: true`, hit a one-click control it was not allowed to press, and stopped `incomplete`.
+//  2. Online Education Services application `cc90cd13…`, run `26d8f1c1…`: launched `auto_submit`,
+//     consumed the approval, then emitted `review.ready` and ended `awaiting_review` with
+//     `submitAttempted=false, filled=0` — spending a one-time approval on nothing and leaving a
+//     retry that could only fill-and-review again.
+describe("an approval survives the queue, and is never spent on a run that sent nothing (#993)", () => {
+	const BUSY_RUNNER = { status: 409, body: { error: "This machine is already filling an application for this agent; one at a time." } };
+	const readyWithEvent = (id: string) => {
+		const ev = readyApp(id);
+		d1.DB.prepare("UPDATE job_applications SET ready_event = ?2 WHERE id = ?1").bind(id, JSON.stringify(ev)).run();
+		return ev;
+	};
+	const card = async (id: string) => (await call("GET", `/t1/application-queue/item?application_id=${id}`)).body.item;
+	const auth = (id: string) => d1.DB.prepare("SELECT id, consumed_at, consumed_run_id FROM job_application_submit_authorizations WHERE application_id = ?1").bind(id).first<Record<string, unknown>>();
+	const runRow = (id: string) => d1.DB.prepare("SELECT status, policy, trace FROM local_apply_runs WHERE id = ?1").bind(id).first<{ status: string; policy: string; trace: string }>();
+	const modeOf = async (runId: string) => (JSON.parse((await runRow(runId))?.policy ?? "{}") as { mode?: string }).mode;
+	const traceOf = async (runId: string) => JSON.parse((await runRow(runId))?.trace ?? "[]") as Array<{ type: string; detail?: Record<string, unknown> }>;
+
+	/** Fill once and stop at a genuine one-click control, exactly as the live SEEK run did. */
+	async function oneClickBlocked(id: string) {
+		const ev = readyWithEvent(id);
+		await call("PUT", "/ap/application-runner/settings", { allowDomains: ["example.com"] });
+		const started = await call("POST", "/ap/application-runs", ev);
+		const runId = started.body.run.id as string;
+		runner("ended", {
+			lastSeq: 2,
+			events: [{ seq: 2, type: "policy.decision", at: "2026-10-09T01:00:00Z", detail: { tool: "browser_click", class: "submit", decision: "refused", reason: "fill_and_review", rule: "one_click_apply" } }],
+			result: RESULT(runId, { outcome: "blocked", blockReason: "incomplete", filled: 0, uploaded: [], submitAttempted: false, summary: "Stopped at a one-click apply control.", questions: ["Approve this application to let it be sent, or apply on the site yourself."] }),
+		});
+		await syncApplyRun(env(), "u1", (await call("GET", `/ap/application-runs/${runId}`)).body.run);
+		return runId;
+	}
+
+	/** Another application, actually filling — the machine is busy and `concurrency` fails for real. */
+	async function occupyTheMachine(id: string) {
+		const started = await call("POST", "/ap/application-runs", readyWithEvent(id));
+		const runId = started.body.run.id as string;
+		expect(await runRow(runId), "the blocker has to be OPEN for concurrency to fail").toMatchObject({ status: "running" });
+		return runId;
+	}
+
+	it("THE LIVE GAP: a queued approved retry reaches the machine in auto_submit, not the mode it earned while busy", async () => {
+		await oneClickBlocked("lead-993a");
+		const busyRunId = await occupyTheMachine("lead-993busy");
+
+		// Approve the blocked one-click application. Its own run has ended, so the approval is HELD.
+		const before = await card("lead-993a");
+		const approved = await call("POST", "/t1/application-queue/actions", { action: "approve_and_proceed", application_id: "lead-993a", expected_status: "blocked", expected_version: before.stateVersion });
+		expect(approved.body.result).toMatchObject({ approval: "granted", resumable: false });
+		expect(await auth("lead-993a"), "held, not spent — nothing has run").toMatchObject({ consumed_at: null });
+
+		// Retry while the other application is still filling: the machine refuses, and the gate
+		// refuses too — `concurrency` is open. This is the state the bug was frozen in.
+		answers["/local-apply/run"] = BUSY_RUNNER;
+		const retry = await call("POST", "/t1/application-queue/actions", { action: "retry_fill", application_id: "lead-993a", expected_status: "blocked" });
+		const queuedRunId = retry.body.result.runId as string;
+		expect(await runRow(queuedRunId)).toMatchObject({ status: "queued" });
+		expect(await modeOf(queuedRunId), "while the machine was busy it could only fill-and-review").toBe("fill_and_review");
+		const queuedGate = (await traceOf(queuedRunId)).find((e) => e.type === "policy.submit_gate");
+		expect(String(queuedGate?.detail?.reason)).toMatch(/concurrency/);
+		expect(await auth("lead-993a"), "a refused gate must not spend the approval").toMatchObject({ consumed_at: null });
+
+		// The other application finishes; the sweep settles it and dequeues this one in the same tick.
+		answers["/local-apply/run"] = { status: 202, body: { status: "running" } };
+		runner("ended", { lastSeq: 1, result: RESULT(busyRunId, { outcome: "awaiting_review", filled: 4 }) });
+		await syncActiveApplyRuns(env());
+		expect(await runRow(busyRunId), "the machine is free again").toMatchObject({ status: "awaiting_review" });
+
+		// THE FIX: the mode is decided when it reaches the machine, so the approval is honoured.
+		expect(await runRow(queuedRunId)).toMatchObject({ status: "running" });
+		expect(await modeOf(queuedRunId)).toBe("auto_submit");
+		const envelope = dispatches().at(-1)?.body as { runId: string; policy: { mode: string; submitGate?: { gateId: string } } };
+		expect(envelope.runId, "the LAST dispatch is the dequeued one").toBe(queuedRunId);
+		expect(envelope.policy.mode).toBe("auto_submit");
+		expect(envelope.policy.submitGate?.gateId, "the machine is given the gate it must quote back").toEqual(expect.any(String));
+		// The envelope and the stored policy are the same gate — what `settleFromResult` checks a
+		// reported submission against.
+		expect((JSON.parse((await runRow(queuedRunId))?.policy ?? "{}") as { gate: { gateId: string } }).gate.gateId).toBe(envelope.policy.submitGate?.gateId);
+		// Spent at the upgrade, bound to this run, and recorded as the owner's own approval.
+		expect(await auth("lead-993a")).toMatchObject({ consumed_run_id: queuedRunId, consumed_at: expect.any(Number) });
+		const upgrade = (await traceOf(queuedRunId)).filter((e) => e.type === "policy.submit_gate").at(-1);
+		expect(upgrade?.detail).toMatchObject({ mode: "auto_submit", decision: "allowed", from: "queue" });
+		expect((await traceOf(queuedRunId)).some((e) => e.type === "policy.decision" && e.detail?.basis === "application_approval")).toBe(true);
+		// And exactly one run for the application — no duplicate was started on the way (#993 Safety).
+		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM local_apply_runs WHERE application_id = 'lead-993a'").first<{ n: number }>())?.n).toBe(2);
+	});
+
+	it("a REVIEW the owner asked for is not an intent the queue may override", async () => {
+		// The mirror of the test above, and the reason the upgrade is not simply "re-run the gate".
+		// Auto-submit is ON and this lead matches it, so the fresh verdict at dequeue DOES allow a
+		// submit — but the owner asked to look at the filled form first, and that is a decision,
+		// not the transient `concurrency` refusal the queue exists to wait out.
+		const ev = readyWithEvent("lead-993r");
+		await enableAutoSubmit();
+		const busyRunId = await occupyTheMachine("lead-993rbusy");
+		answers["/local-apply/run"] = BUSY_RUNNER;
+		const asked = await call("POST", "/t1/application-queue/actions", { action: "request_review", application_id: "lead-993r", expected_status: "materials_ready" });
+		expect(asked.status, JSON.stringify(asked.body)).toBe(200);
+		const queuedRunId = asked.body.result.runId as string;
+		expect(await runRow(queuedRunId)).toMatchObject({ status: "queued" });
+		expect(await modeOf(queuedRunId)).toBe("fill_and_review");
+		expect((await traceOf(queuedRunId)).find((e) => e.type === "policy.submit_gate")?.detail?.reason).toMatch(/review_requested/);
+		expect(ev.applicationId).toBe("lead-993r");
+
+		answers["/local-apply/run"] = { status: 202, body: { status: "running" } };
+		runner("ended", { lastSeq: 1, result: RESULT(busyRunId, { outcome: "awaiting_review", filled: 4 }) });
+		await syncActiveApplyRuns(env());
+		expect(await runRow(queuedRunId)).toMatchObject({ status: "running" });
+		expect(await modeOf(queuedRunId), "the owner asked to look at it first").toBe("fill_and_review");
+		expect((dispatches().at(-1)?.body as { policy: { mode: string; submitGate?: unknown } }).policy.mode).toBe("fill_and_review");
+		expect((dispatches().at(-1)?.body as { policy: { submitGate?: unknown } }).policy.submitGate, "no gate means it cannot submit even if it wanted to").toBeUndefined();
+	});
+
+	it("the owner's STANDING auto-submit policy survives the queue too — not only a per-application approval", async () => {
+		// The same loss without an approval anywhere: auto-submit is on, the lead matches, and the
+		// only reason the run was created `fill_and_review` is that the machine was busy. An
+		// ordinary (non-one-click) application that waits in line must still reach the browser in
+		// the mode the owner's own policy earned it.
+		const ev = readyWithEvent("lead-993s");
+		// A cap with room in it: the application occupying the machine below also auto-submits, and
+		// at `dailyCap: 1` the recomputed gate refuses on `daily_cap` — correctly, which the test
+		// after this one pins. The cap is a live fact the dequeue re-reads, not a formality.
+		await enableAutoSubmit({ dailyCap: 5 });
+		const busyRunId = await occupyTheMachine("lead-993sbusy");
+		answers["/local-apply/run"] = BUSY_RUNNER;
+		const started = await call("POST", "/ap/application-runs", ev);
+		const queuedRunId = started.body.run.id as string;
+		expect(await runRow(queuedRunId)).toMatchObject({ status: "queued" });
+		expect(await modeOf(queuedRunId)).toBe("fill_and_review");
+		expect((await traceOf(queuedRunId)).find((e) => e.type === "policy.submit_gate")?.detail?.reason).toMatch(/concurrency/);
+
+		answers["/local-apply/run"] = { status: 202, body: { status: "running" } };
+		runner("ended", { lastSeq: 1, result: RESULT(busyRunId, { outcome: "awaiting_review", filled: 4 }) });
+		await syncActiveApplyRuns(env());
+		expect(await modeOf(queuedRunId)).toBe("auto_submit");
+		const envelope = dispatches().at(-1)?.body as { runId: string; policy: { mode: string; submitGate?: { gateId: string } } };
+		expect(envelope.runId).toBe(queuedRunId);
+		expect(envelope.policy.submitGate?.gateId).toEqual(expect.any(String));
+		// No authorization was invented to do it: this is the standing policy, not an approval.
+		expect(await auth("lead-993s")).toBeNull();
+		expect((await traceOf(queuedRunId)).some((e) => e.type === "policy.decision" && e.detail?.basis === "application_approval")).toBe(false);
+	});
+
+	it("the dequeue re-reads the LIVE gate: a daily cap used up while it waited still refuses", async () => {
+		// The other direction, and the reason this is a re-evaluation rather than a remembered
+		// intent: whatever changed while the run sat in line is what decides it now. Here the
+		// application that went first spent the owner's one allowed submission for the day.
+		const ev = readyWithEvent("lead-993cap");
+		await enableAutoSubmit({ dailyCap: 1 });
+		const busyRunId = await occupyTheMachine("lead-993capbusy");
+		expect(await modeOf(busyRunId), "the first one took the day's only slot").toBe("auto_submit");
+		answers["/local-apply/run"] = BUSY_RUNNER;
+		const queuedRunId = (await call("POST", "/ap/application-runs", ev)).body.run.id as string;
+		expect(await modeOf(queuedRunId)).toBe("fill_and_review");
+
+		answers["/local-apply/run"] = { status: 202, body: { status: "running" } };
+		runner("ended", { lastSeq: 1, result: RESULT(busyRunId, { outcome: "awaiting_review", filled: 4 }) });
+		await syncActiveApplyRuns(env());
+		expect(await runRow(queuedRunId)).toMatchObject({ status: "running" });
+		expect(await modeOf(queuedRunId), "the cap is used: fill and review, as the gate says").toBe("fill_and_review");
+	});
+
+	it("THE SECOND LIVE GAP: an auto_submit run that reviews instead of sending gives the approval back", async () => {
+		// The review-ready path, with nothing sent: `submitAttempted=false`, and in the live run
+		// `filled=0` too. The approval must be usable again, and the retry it offers must be able
+		// to spend it — otherwise the owner's one-time decision bought nothing.
+		await oneClickBlocked("lead-993b");
+		const before = await card("lead-993b");
+		await call("POST", "/t1/application-queue/actions", { action: "approve_and_proceed", application_id: "lead-993b", expected_status: "blocked", expected_version: before.stateVersion });
+		const retry = await call("POST", "/t1/application-queue/actions", { action: "retry_fill", application_id: "lead-993b", expected_status: "blocked" });
+		const runId = retry.body.result.runId as string;
+		expect(await modeOf(runId)).toBe("auto_submit");
+		expect(await auth("lead-993b")).toMatchObject({ consumed_run_id: runId });
+
+		// It fills the form and asks for a review instead of submitting.
+		runner("ended", { lastSeq: 1, result: RESULT(runId, { outcome: "awaiting_review", mode: "auto_submit", submitAttempted: false, filled: 0, uploaded: [] }) });
+		await syncApplyRun(env(), "u1", (await call("GET", `/ap/application-runs/${runId}`)).body.run);
+
+		const after = await card("lead-993b");
+		expect(after.status).toBe("awaiting_review");
+		expect(after.submitAttempted).toBe(false);
+		// The recoverable state: the approval is the owner's again, and the card says so.
+		expect(await auth("lead-993b")).toMatchObject({ consumed_at: null, consumed_run_id: null });
+		expect(after.submitAuthorization).toMatchObject({ usable: true });
+		expect(after.actions).toContain("retry_fill");
+
+		// ...and the continuation actually continues: the next run submits on that same approval.
+		runner("running", { lastSeq: 0 });
+		const second = await call("POST", "/t1/application-queue/actions", { action: "retry_fill", application_id: "lead-993b", expected_status: "awaiting_review" });
+		const secondRunId = second.body.result.runId as string;
+		expect(await modeOf(secondRunId), "the approval was still there to spend").toBe("auto_submit");
+		expect(await auth("lead-993b")).toMatchObject({ consumed_run_id: secondRunId });
+	});
+
+	it("a run that ATTEMPTED a submit keeps the approval spent, and is never retried (#993 Safety)", async () => {
+		await oneClickBlocked("lead-993c");
+		const before = await card("lead-993c");
+		await call("POST", "/t1/application-queue/actions", { action: "approve_and_proceed", application_id: "lead-993c", expected_status: "blocked", expected_version: before.stateVersion });
+		const retry = await call("POST", "/t1/application-queue/actions", { action: "retry_fill", application_id: "lead-993c", expected_status: "blocked" });
+		const runId = retry.body.result.runId as string;
+		// The machine pressed Submit and then lost the page — the outcome PAGS must stay conservative
+		// about. `submitAttempted` is the fact that makes it terminal.
+		runner("ended", { lastSeq: 1, result: RESULT(runId, { outcome: "blocked", blockReason: "submit_unconfirmed", mode: "auto_submit", submitAttempted: true, filled: 7, questions: ["Check the employer's site."] }) });
+		await syncApplyRun(env(), "u1", (await call("GET", `/ap/application-runs/${runId}`)).body.run);
+
+		expect(await auth("lead-993c"), "something may have reached the employer: the approval stays spent").toMatchObject({ consumed_run_id: runId, consumed_at: expect.any(Number) });
+		const after = await card("lead-993c");
+		expect(after.submitAttempted).toBe(true);
+		expect(after.actions).not.toContain("retry_fill");
+		expect(after.actions).not.toContain("approve_and_proceed");
+	});
+
+	it("a submitted run keeps its approval spent — the one-time decision was used for what it was for", async () => {
+		await oneClickBlocked("lead-993d");
+		const before = await card("lead-993d");
+		await call("POST", "/t1/application-queue/actions", { action: "approve_and_proceed", application_id: "lead-993d", expected_status: "blocked", expected_version: before.stateVersion });
+		const retry = await call("POST", "/t1/application-queue/actions", { action: "retry_fill", application_id: "lead-993d", expected_status: "blocked" });
+		const runId = retry.body.result.runId as string;
+		const gateId = (JSON.parse((await runRow(runId))?.policy ?? "{}") as { gate: { gateId: string } }).gate.gateId;
+		runner("ended", { lastSeq: 1, result: RESULT(runId, { outcome: "submitted", mode: "auto_submit", submitAttempted: true, submitted: { url: "https://jobs.example.com/thanks", at: "2026-10-09T02:00:00Z", gateId }, filled: 9 }) });
+		await syncApplyRun(env(), "u1", (await call("GET", `/ap/application-runs/${runId}`)).body.run);
+		const after = await card("lead-993d");
+		expect(after.status).toBe("submitted");
+		expect(await auth("lead-993d")).toMatchObject({ consumed_run_id: runId, consumed_at: expect.any(Number) });
+	});
+});
+
 // ── #974: the Runner's busy machine behaves exactly like the Tailor's ───────────────────────
 describe("a busy Runner queues the fill instead of blocking the application (#974)", () => {
 	const BUSY = { status: 409, body: { error: "This machine is already filling an application for this agent; one at a time." } };

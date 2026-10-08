@@ -124,6 +124,34 @@ export async function consumeSubmitAuthorization(env: DB, authorizationId: strin
 	return row ? view(row) : null;
 }
 
+/**
+ * Give the approval BACK when the run that spent it ended without attempting a submit (#993).
+ *
+ * The approval is consumed at dispatch, before the machine is asked, because that is the only
+ * moment two racing dispatches can be told apart (`consumeSubmitAuthorization` above). The cost of
+ * claiming it that early is that a run which never reaches the employer — the runner refused it,
+ * the engine died, or it filled the form and asked for a review instead of submitting — took the
+ * owner's one-time approval with it. Live: application `cc90cd13…` ran `auto_submit`, emitted
+ * `review.ready`, ended `awaiting_review` with `submitAttempted=false, filled=0`, and left an
+ * approval nothing could use and no way to grant another.
+ *
+ * So the release is conditional on BOTH facts that make it safe, in the statement itself:
+ *
+ *   · `consumed_run_id = ?3` — a run can only release the approval IT spent, so a concurrent run
+ *     holding the same approval is never robbed of it;
+ *   · the caller has already established that no submit was attempted. That is the invariant the
+ *     whole feature rests on: a run with `submit.attempted` stays terminal (`submit_unconfirmed`)
+ *     and must never be retried automatically, so its approval must stay spent.
+ */
+export async function releaseSubmitAuthorization(env: DB, authorizationId: string, userId: string, runId: string): Promise<boolean> {
+	const res = await env.DB.prepare(
+		"UPDATE job_application_submit_authorizations SET consumed_at = NULL, consumed_run_id = NULL WHERE id = ?1 AND user_id = ?2 AND consumed_run_id = ?3 AND consumed_at IS NOT NULL",
+	)
+		.bind(authorizationId, userId, runId)
+		.run();
+	return (res.meta?.changes ?? 0) > 0;
+}
+
 /** Withdraw an unspent authorization (the owner changed their mind). */
 export async function revokeSubmitAuthorization(env: DB, applicationId: string, userId: string, reason: string, now: number): Promise<boolean> {
 	const res = await env.DB.prepare(

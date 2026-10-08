@@ -739,6 +739,14 @@ const PINS = {
 	// control, so it keeps `retry_tailoring`; a block whose FILL ran offers the same one-job
 	// approval the other post-fill states do. That is the live gap the issue was filed from — the
 	// record said "approve this application to let it be sent" while no action could.
+	// NEW at #993: the Runner's dispatch/settle module crossed 800 teaching the queue to decide the
+	// submit mode when a run reaches the machine rather than when it was parked. The two rules that
+	// carry it — claim the approval at dispatch, hand it back when the run ends having sent nothing
+	// — were extracted to `local-apply/approval-at-dispatch.ts` first (913 → 826), because they are
+	// a different subject from the dispatch plumbing and read better alone. What is left here is
+	// this file's own: the gate's counting options, the release call on each path that ends a run,
+	// and the comments explaining why the mode could not be trusted from the queued row.
+	"workers/api/src/lib/local-apply/apply.ts": 826,
 	"workers/api/src/lib/applications/control.ts": 827,
 	// -1 at #325: the JSON-string coercion create_agent and update_agent each had inline moved
 	// to `http.ts` as `parseJsonArg`, which is where the two copies could stop disagreeing about
@@ -1913,11 +1921,12 @@ const PINS = {
 	// +13 at #896: two newly pinned files (terminals.ts, coding-diagnostics.ts) with their reasons,
 	// the runner.ts reason, and this line.
 	// +5 at #991: the applications/control.ts reason above (four lines) and this line.
+	// +8 at #993: the newly pinned local-apply/apply.ts entry above (seven lines of why) and this line.
 	// +4 at #991: the surface-lock.ts reason above (three lines) and this line.
 	// +4 at #991: the console types.ts reason above (three lines) and this line.
 	// +9 at #992: the console types.ts reason (five lines) and the surface-lock.ts reason (two
 	// lines) above, plus these two.
-	"scripts/check-file-size.mjs": 2004, // +1 at #953: the console types.ts entry. +2 at #946: the agents.ts pin and its reason; +1 at #944: the reason line for the runner.ts pin; +1 at #898: the board.ts pin; +1 at #924: the mcp runtime.ts pin.
+	"scripts/check-file-size.mjs": 2012, // +1 at #953: the console types.ts entry. +2 at #946: the agents.ts pin and its reason; +1 at #944: the reason line for the runner.ts pin; +1 at #898: the board.ts pin; +1 at #924: the mcp runtime.ts pin.
 };
 
 /**

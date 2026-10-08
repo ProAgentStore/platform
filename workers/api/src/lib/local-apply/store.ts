@@ -274,7 +274,7 @@ export const MAX_APPLY_TRACE = 500;
 export async function updateApplyRun(
 	env: DB,
 	run: ApplyRun,
-	u: { to?: ApplyRunStatus; pause?: LocalApplyPause | null; result?: unknown; engineAuth?: string | null; errorCode?: string | null; error?: string | null; runnerNode?: string | null; events?: ApplyTraceEvent[]; runnerSeq?: number },
+	u: { to?: ApplyRunStatus; pause?: LocalApplyPause | null; result?: unknown; engineAuth?: string | null; errorCode?: string | null; error?: string | null; runnerNode?: string | null; events?: ApplyTraceEvent[]; runnerSeq?: number; policy?: ApplyRunPolicy },
 	now: number,
 ): Promise<ApplyRun | null> {
 	const to = u.to ?? run.status;
@@ -285,7 +285,7 @@ export async function updateApplyRun(
 		        error_code = COALESCE(?6, error_code), error = COALESCE(?7, error), runner_node = COALESCE(?8, runner_node), trace = ?9,
 		        runner_seq = MAX(runner_seq, ?10), last_synced_at = CASE WHEN ?11 THEN ?12 ELSE last_synced_at END,
 		        started_at = CASE WHEN ?1 = 'running' AND started_at IS NULL THEN ?12 ELSE started_at END,
-		        ended_at = CASE WHEN ?13 THEN ?12 ELSE ended_at END, updated_at = ?12
+		        ended_at = CASE WHEN ?13 THEN ?12 ELSE ended_at END, policy = COALESCE(?17, policy), updated_at = ?12
 		  WHERE id = ?14 AND instance_id = ?15 AND status = ?16`,
 	)
 		.bind(
@@ -305,6 +305,11 @@ export async function updateApplyRun(
 			run.id,
 			run.instanceId,
 			run.status,
+			// The run's own policy is rewritten in exactly one case (#993): a queued run whose
+			// approval earns `auto_submit` once the machine is free. `COALESCE` keeps every other
+			// update from touching it, so the column still cannot drift behind the envelope the
+			// runner was given — that pairing is why the mode is persisted at all.
+			u.policy === undefined ? null : JSON.stringify(u.policy),
 		)
 		.run();
 	if ((res.meta?.changes ?? 0) === 0) return null;
@@ -320,13 +325,34 @@ export async function activeApplyRuns(env: DB, limit: number): Promise<Array<{ i
 }
 
 /** What the gate counts: open runs, and auto_submit runs dispatched in the last 24h. */
-export async function applyRunCounts(env: DB, instanceId: string, userId: string, now: number): Promise<{ active: number; autoSubmitsToday: number }> {
+/**
+ * `opts` exists for the dequeue path (#993), and only for it.
+ *
+ * `excludeRunId` — the run being evaluated must not count itself. A queued run IS a row with
+ * status `queued`, so re-evaluating its own gate at dispatch found `active >= 1` and refused
+ * `concurrency` for ever: the queued run could never be upgraded to the mode its approval had
+ * already earned, however long it waited.
+ *
+ * `machineOnly` — count only the statuses that actually HOLD the machine. `queued` belongs in the
+ * count for a first dispatch (a new application should not auto-submit past a line of waiting
+ * ones), but at dequeue the queue has just proven the slot free, and counting siblings still in
+ * line would reinstate the same deadlock the moment two applications were approved together —
+ * which is the case #974 was filed about.
+ */
+export async function applyRunCounts(
+	env: DB,
+	instanceId: string,
+	userId: string,
+	now: number,
+	opts: { excludeRunId?: string; machineOnly?: boolean } = {},
+): Promise<{ active: number; autoSubmitsToday: number }> {
+	const statuses = opts.machineOnly ? "('running', 'paused')" : "('queued', 'running', 'paused')";
 	const row = await env.DB.prepare(
-		`SELECT SUM(CASE WHEN status IN ('queued', 'running', 'paused') THEN 1 ELSE 0 END) AS active,
-		        SUM(CASE WHEN json_extract(policy, '$.mode') = 'auto_submit' AND created_at >= ?3 THEN 1 ELSE 0 END) AS auto_today
+		`SELECT SUM(CASE WHEN status IN ${statuses} AND id <> ?4 THEN 1 ELSE 0 END) AS active,
+		        SUM(CASE WHEN json_extract(policy, '$.mode') = 'auto_submit' AND created_at >= ?3 AND id <> ?4 THEN 1 ELSE 0 END) AS auto_today
 		   FROM local_apply_runs WHERE instance_id = ?1 AND user_id = ?2`,
 	)
-		.bind(instanceId, userId, now - 86_400_000)
+		.bind(instanceId, userId, now - 86_400_000, opts.excludeRunId ?? "")
 		.first<{ active: number | null; auto_today: number | null }>();
 	return { active: Number(row?.active ?? 0), autoSubmitsToday: Number(row?.auto_today ?? 0) };
 }

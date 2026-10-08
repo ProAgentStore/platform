@@ -63,6 +63,7 @@ import { type AttentionDeps, requestOwnerAttention } from "../owner-attention.js
 import { notifyUser } from "../../routes/push.js";
 import { parseAccountPreferences } from "../preferences.js";
 import { consumeSubmitAuthorization, getSubmitAuthorization } from "./approval-store.js";
+import { releaseApprovalIfNothingWasSent, upgradeQueuedRunPolicy } from "./approval-at-dispatch.js";
 import { listSupervisorCheckpoints, noteSupervisorDirectiveDelivery, receiveSupervisorCheckpoint, sanitizeSupervisorFacts, type SupervisorDirective } from "./supervision.js";
 import { directApplicationCheckpoint } from "./brain.js";
 
@@ -184,9 +185,18 @@ async function move(env: Env, uid: string, applicationId: string, from: readonly
  * so the outbox retries.
  */
 /** The gate's verdict for one application on one Runner — what dispatch uses and what the console previews (#958). */
-export async function submitGateFor(env: Env, runnerInstanceId: string, uid: string, app: JobApplication, s: ApplicationRunnerSettings, now: number) {
+export async function submitGateFor(
+	env: Env,
+	runnerInstanceId: string,
+	uid: string,
+	app: JobApplication,
+	s: ApplicationRunnerSettings,
+	now: number,
+	/** See {@link applyRunCounts} — set only by the dequeue path (#993). */
+	counting: { excludeRunId?: string; machineOnly?: boolean } = {},
+) {
 	const lead = (app.lead ?? {}) as { leadUrl?: string; lead?: { title?: string; company?: string; location?: string; match_rationale?: string } };
-	const counts = await applyRunCounts(env, runnerInstanceId, uid, now);
+	const counts = await applyRunCounts(env, runnerInstanceId, uid, now, counting);
 	// The owner's per-application approval (#973). Read here rather than passed in, so EVERY caller
 	// of the gate — the queue rendering a card, a dispatch, a retry — sees the same verdict; a
 	// surface that evaluated the gate without it would show the owner a different answer than the
@@ -337,6 +347,8 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 
 	const envelope = applyTaskEnvelope(run, app, s);
 	const fail = async (errorCode: string, error: string) => {
+		// The machine never took it, so nothing was sent and the approval goes back (#993).
+		await releaseApprovalIfNothingWasSent(env, uid, run).catch(() => undefined);
 		run = (await updateApplyRun(env, run, { to: "failed", errorCode, error, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: errorCode } }] }, now)) ?? run;
 		await move(env, uid, applicationId, ["filling"], { to: "blocked", actor: "system", actorInstanceId: instanceId, runId, expectRun: runId, reason: errorCode, questions: [error] }, now);
 	};
@@ -406,6 +418,12 @@ async function settleFromResult(env: Env, uid: string, run: ApplyRun, rawResult:
 	else if (to === "awaiting_review") await move(env, uid, run.applicationId, from, { ...base, to: "awaiting_review" }, now);
 	else if (to === "blocked") await move(env, uid, run.applicationId, from, { ...base, to: "blocked", reason: r.blockReason ?? "incomplete", questions: r.questions ?? [] }, now);
 	else await move(env, uid, run.applicationId, from, { ...base, to: "failed", reason: r.engineAuth === "missing_login" ? "engine_not_signed_in" : "engine_failed" }, now);
+	// #993: an `auto_submit` run that ended without asking the employer must not take the owner's
+	// one-time approval with it. `review.ready` is the live case — the form was filled (or not even
+	// that) and the run stopped for a human — and the retry the card offers is only a continuation
+	// if the approval it needs still exists. Guarded inside on `submit.attempted`, so a run that
+	// DID attempt stays spent and terminal.
+	if (to !== "submitted") await releaseApprovalIfNothingWasSent(env, uid, moved).catch(() => undefined);
 	// #991: a run that stopped at something it may not do without the owner is WAITING on them, and
 	// nothing told them. The first consumer of the generic owner-attention policy
 	// (`lib/owner-attention.ts`) rather than an apply-specific push: the event is
@@ -733,6 +751,7 @@ export async function dispatchNextQueuedFill(env: Env, instanceId: string, uid: 
 	const app = await getOwnedApplication(env, uid, next.applicationId);
 	if (!run || !app) return "idle";
 	if (next.attempts >= QUEUE_MAX_ATTEMPTS) {
+		await releaseApprovalIfNothingWasSent(env, uid, run).catch(() => undefined);
 		const failed = await updateApplyRun(env, run, { to: "failed", errorCode: "runner_busy", error: `The machine never freed up for this application after ${next.attempts} attempts.`, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: "runner_busy" } }] }, now);
 		if (failed) await move(env, uid, run.applicationId, ["filling"], { to: "blocked", actor: "system", actorInstanceId: instanceId, runId: run.id, expectRun: run.id, reason: "runner_busy", questions: ["Your machine stayed busy. Retry this application when a run has finished."] }, now);
 		return "exhausted";
@@ -745,25 +764,44 @@ export async function dispatchNextQueuedFill(env: Env, instanceId: string, uid: 
 	}
 	const s = await runnerSettingsFor(env, instanceId, uid).catch(() => null);
 	if (!s) return "queued";
+	// #993: the mode is decided HERE, not when the run was queued. `dispatched` is the run whose
+	// envelope the machine receives, so the policy it carries and the policy stored on the row are
+	// the same object — the property `settleFromResult` relies on when it checks a reported submit
+	// against `run.policy.gate.gateId`.
+	// #993: the mode is decided HERE, not when the run was queued. The queue has already proven no
+	// run holds the machine (`nextDueQueuedRun`) and a run must not count itself — without both,
+	// `concurrency` refuses for ever. See `approval-at-dispatch.ts` for the rest.
+	const { run: dispatched, upgraded } = await upgradeQueuedRunPolicy(
+		env,
+		uid,
+		run,
+		() => submitGateFor(env, instanceId, uid, app, s, now, { excludeRunId: run.id, machineOnly: true }),
+		now,
+	).catch(() => ({ run, upgraded: false }));
 	let res: Response | null = null;
 	try {
-		res = await callRuntime(env, runtime, LOCAL_APPLY_RUN_PATH, { method: "POST", body: JSON.stringify(applyTaskEnvelope(run, app, s)) });
+		res = await callRuntime(env, runtime, LOCAL_APPLY_RUN_PATH, { method: "POST", body: JSON.stringify(applyTaskEnvelope(dispatched, app, s)) });
 	} catch {
 		await noteQueued(env, "local_apply_runs", run.id, "The runner did not answer; waiting to try again.", now);
 		return "queued";
 	}
 	const payload = (await runtimeJson(res)) as Record<string, unknown>;
 	if (res.ok) {
-		await updateApplyRun(env, run, { to: "running", runnerNode: runtime.runner_node || null, events: [{ type: "runner.dispatched", at: iso(now), detail: { status: "running", mode: run.policy.mode, from: "queue" } }] }, now);
+		await updateApplyRun(env, dispatched, { to: "running", runnerNode: runtime.runner_node || null, events: [{ type: "runner.dispatched", at: iso(now), detail: { status: "running", mode: dispatched.policy.mode, from: "queue" } }] }, now);
 		return "dispatched";
 	}
 	const refusal = refusalVerdict({ status: res.status, error: typeof payload.error === "string" ? payload.error : undefined, code: typeof payload.code === "string" ? payload.code : undefined });
 	if (refusal.defer) {
+		// Still waiting. Hand back only an approval THIS attempt just claimed for an upgrade: the
+		// run goes back in line and the next attempt re-earns it. A run that has been `auto_submit`
+		// since an earlier attempt keeps both its mode and the approval behind it (#993).
+		if (upgraded) await releaseApprovalIfNothingWasSent(env, uid, dispatched).catch(() => undefined);
 		await noteQueued(env, "local_apply_runs", run.id, refusal.message, now);
 		return "queued";
 	}
 	// A refusal that is NOT a wait ends the run, exactly as the first dispatch would have.
-	const failed = await updateApplyRun(env, run, { to: "failed", errorCode: "runner_rejected", error: `The runner refused the run: ${typeof payload.error === "string" ? payload.error.slice(0, 500) : `HTTP ${res.status}`}`, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: "runner_rejected" } }] }, now);
+	await releaseApprovalIfNothingWasSent(env, uid, dispatched).catch(() => undefined);
+	const failed = await updateApplyRun(env, dispatched, { to: "failed", errorCode: "runner_rejected", error: `The runner refused the run: ${typeof payload.error === "string" ? payload.error.slice(0, 500) : `HTTP ${res.status}`}`, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: "runner_rejected" } }] }, now);
 	if (failed) await move(env, uid, run.applicationId, ["filling"], { to: "blocked", actor: "system", actorInstanceId: instanceId, runId: run.id, expectRun: run.id, reason: "runner_rejected", questions: [typeof payload.error === "string" ? payload.error.slice(0, 300) : `HTTP ${res.status}`] }, now);
 	return "exhausted";
 }
