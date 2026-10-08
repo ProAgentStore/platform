@@ -493,3 +493,139 @@ export function parseLocalApplyResult(raw: unknown): { result: LocalApplyResultE
 	if (outcome === "failed") out.error = str(o.error, 1000) ?? "The run failed without a reason.";
 	return { result: out };
 }
+
+// ── Which control is the FINAL submit, and which one opens the form (#985) ───────────────────
+
+/**
+ * ── The live failure
+ *
+ * Four consecutive fill-and-review runs on one SEEK posting ended `awaiting_review` with
+ * `filled: 0`. The last of them (`286bbb8a…`, 2026-10-08) got everything right up to the last
+ * step: the runner reported its `initial` checkpoint, the cloud's deterministic policy decided
+ * `continue` (#982), the directive was delivered and acknowledged and the CLI resumed — and then,
+ * three seconds later, the press that OPENS the application was classified as the final submit,
+ * refused under `fill_and_review`, and the run ended at review having typed nothing.
+ *
+ * The cause was a borrowed vocabulary. The bridge tested the control's label against the runner's
+ * `FALLBACK_COMMIT_RE` — the READ-ONLY floor, which matches bare `apply` deliberately, because for
+ * an agent that may never act, refusing a filter button called "Apply" is the cheap error. For a
+ * run whose entire capability is to fill the form it is the expensive one. The cloud's own
+ * `commit-guard.ts` had already written the distinction down twice ("Apply/Next/Continue … are the
+ * ENTRY button on most multi-page ATS"; the APPLY family is terminal "only after something has
+ * been typed") — the apply bridge just had no list of its own to reach for.
+ *
+ * ── The three families, and why the order of the tests is the safety property
+ *
+ * 1. ONE-CLICK ({@link ONE_CLICK_SUBMIT_RE}) — "Quick apply", "Easy Apply", "Apply with your
+ *    profile". On LinkedIn, and on a profile-apply SEEK listing, that control can send the
+ *    application outright. Tested FIRST and always terminal, because the two families overlap in
+ *    English and the overlap is only dangerous in one direction: reading "Quick apply" as an entry
+ *    control is how an unapproved application reaches an employer.
+ * 2. TERMINAL ({@link TERMINAL_APPLY_SUBMIT_RE}) — "Submit", "Send application", "Finish", in
+ *    twenty languages: the control that sends what has been filled.
+ * 3. ENTRY ({@link APPLY_ENTRY_RE}) — "Apply", "Apply for this job", "Next", "Continue", and their
+ *    equivalents: the control that opens or advances the form. Only ever an entry while nothing has
+ *    been entered yet and the control is not a POST submit; once a field is filled, the APPLY
+ *    family becomes terminal again, which is the rule the cloud guard already states.
+ *
+ * Everything outside the three families is decided by the DOM, as before: a native POST submit is
+ * a submit. The one case that changed is a POST submit labelled as a STEP with nothing filled yet
+ * ("Save and continue" on page 1) — that stays walkable, because a multi-page ATS cannot be filled
+ * otherwise, and the final page's control says SUBMIT.
+ */
+const applyWordish = (token: string) => `(?<![\\p{L}\\p{N}])${token}(?![\\p{L}\\p{N}])`;
+
+/** A control that can SEND the application on its own. Terminal, whatever else it looks like. */
+export const ONE_CLICK_SUBMIT_RE = new RegExp(
+	[
+		"quick apply|easy apply|instant apply|one[- ]?click|1[- ]?click|apply with (your )?(profile|r[ée]sum[ée]|cv|linkedin|indeed|seek)|apply using (your )?profile",
+		...["schnellbewerbung", "postulation rapide", "candidatura rapida", "snelle sollicitatie"].map(applyWordish),
+		...["快速申请", "簡単応募", "간편지원"],
+	].join("|"),
+	"iu",
+);
+
+/** The control that SENDS a filled application. Mirrors the cloud guard's terminal English set. */
+export const TERMINAL_APPLY_SUBMIT_RE = new RegExp(
+	[
+		"\\b(submit|finish|done|complete|confirm)\\b|send application|submit application|send my application",
+		...[
+			"envoyer", "soumettre", "valider", "finaliser", "terminer", "confirmer",
+			"absenden", "abschicken", "senden", "einreichen", "best[äa]tigen", "abschlie[sß]en", "fertigstellen",
+			"enviar", "confirmar", "finalizar", "completar", "submeter", "concluir",
+			"invia", "inviare", "conferma", "confermare", "completa", "termina", "finalizza",
+			"verstuur", "versturen", "verzenden", "indienen", "bevestig", "bevestigen", "voltooien", "afronden",
+			"skicka", "sende", "bekr[äae]fta", "bekreft", "bekr[æa]ft", "slutf[öo]r", "fullf[øo]r", "afslut",
+			"wy[śs]lij", "z[łl]ó[żz]", "potwierd[źz]", "zako[ńn]cz", "odeslat", "potvrdit", "dokon[čc]it",
+			"g[öo]nder", "onayla", "tamamla", "kirim", "kirimkan", "ajukan", "konfirmasi",
+			"g[ửu]i", "n[ộo]p", "отправить", "подтвердить", "завершить", "подать",
+		].map(applyWordish),
+		...["提交", "送出", "确认", "確認", "完成", "送信", "提出", "完了", "제출", "보내기", "확인", "완료", "إرسال", "تقديم", "تأكيد"],
+	].join("|"),
+	"iu",
+);
+
+/** The control that OPENS or ADVANCES the form — never the one that sends it. */
+export const APPLY_ENTRY_RE = new RegExp(
+	[
+		"\\b(apply|apply now|apply for this job|apply for this role|view (and )?apply|start( your)? application|begin( your)? application|next|continue|save and continue|start)\\b",
+		...["postuler", "candidater", "bewerben", "candidati", "solliciteer", "aplikuj", "aplicar", "postular", "candidatar", "ans[øo]g", "başvur", "lamar", "откликнуться"].map(applyWordish),
+		...["申请", "应聘", "応募する", "応募", "지원하기", "التقديم"],
+	].join("|"),
+	"iu",
+);
+
+/** What the application bridge may do with one click. */
+export type ApplyClickClass =
+	/** The final submit: gated by the run's policy, and refused under fill_and_review. */
+	| "submit"
+	/** Opens or advances the form: allowed, counted as a page move, and re-checkpointed after. */
+	| "entry"
+	/** A within-form step (Next, Upload, Add) that does not submit. */
+	| "step"
+	/** Not a control an application run may press. */
+	| "other";
+
+/** What the bridge knows about one click when it classifies it. */
+export interface ApplyClickInput {
+	/** The accessibility role from the snapshot the CLI decided from. */
+	role: string;
+	/** Every name the click came with: the page's, the snapshot's, the CLI's claim. */
+	names: Array<string | undefined>;
+	/** Does the DOM say this control submits a form, and with what method? Null when unprobeable. */
+	submits: boolean;
+	method: string;
+	/** Fields filled and artifacts uploaded SO FAR — the state that makes the APPLY family terminal. */
+	filled: number;
+	uploaded: number;
+}
+
+/**
+ * Classify one click. PURE, so the rule that decides whether a real application is sent is
+ * assertable without a browser — and identical in both copies of this file.
+ *
+ * Order is the specification: one-click first (it can send), then terminal, then the DOM's own
+ * verdict once anything has been entered, then entry/step.
+ */
+export function classifyApplyClick(input: ApplyClickInput): { klass: ApplyClickClass; reason: string } {
+	const names = input.names.map((n) => (n ?? "").trim()).filter((n) => n.length > 0);
+	const hit = (re: RegExp) => names.find((n) => re.test(n));
+	const entered = input.filled > 0 || input.uploaded > 0;
+
+	const oneClick = hit(ONE_CLICK_SUBMIT_RE);
+	if (oneClick) return { klass: "submit", reason: "one_click_apply" };
+	const terminal = hit(TERMINAL_APPLY_SUBMIT_RE);
+	if (terminal) return { klass: "submit", reason: "terminal_label" };
+	// A native POST submit, once something HAS been entered: there is an application to send, so
+	// the benefit of the doubt goes to the employer rather than to the run.
+	if (input.submits && input.method === "post" && entered) return { klass: "submit", reason: "post_submit_after_fill" };
+	const entry = hit(APPLY_ENTRY_RE);
+	// Nothing entered yet: an APPLY/NEXT control opens the form. This is the press that ended four
+	// live runs at `filled: 0` — and it cannot be the final submit, because nothing has been typed.
+	if (entry && !entered) return { klass: "entry", reason: input.submits ? "entry_post_form_nothing_filled" : "entry_label_nothing_filled" };
+	if (entry) return { klass: "step", reason: "step_after_fill" };
+	// A POST submit with no recognised label and nothing entered is a page-advance on a multi-page
+	// form; with something entered it was caught above.
+	if (input.submits && input.method === "post") return { klass: "step", reason: "post_submit_nothing_filled" };
+	return { klass: "other", reason: "unrecognised" };
+}

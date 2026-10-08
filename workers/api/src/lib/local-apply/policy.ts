@@ -222,12 +222,19 @@ export function evaluateSubmitGate(i: GateInput): { allowed: boolean; checks: Ga
 		{ check: "concurrency", ok: i.activeRuns === 0, why: "another application run is open" },
 		{ check: "no_blocker", ok: !app.blockReason && app.submitAttemptedAt === null, why: "the application carries a blocker or an earlier submit attempt" },
 	]
+		// A PASSING check drops its `why` (#985). Every check above is built with the sentence that
+		// explains its FAILURE, so keeping it on a pass rendered the live gate as a contradiction:
+		// `domain_allowlisted · ok: true · why: "au.seek.com is not on the instance's allow list"`,
+		// `not_excluded · ok: true · why: "the lead matches an exclusion"`. An owner reading that
+		// cannot tell which half to believe, and this record is the only account of why a submission
+		// was allowed. Done BEFORE the approval rewrite below, so the one affirmative sentence there
+		// is — the owner's own approval — survives.
+		.map((c) => (c.ok ? { check: c.check, ok: true } : c))
 		// An approval answers the intent checks. Rewritten rather than skipped so the recorded gate
 		// still lists every check and says WHY each one passed — a gate whose checks vanish when a
 		// flag is set cannot be audited afterwards, and this gate is the record of why a submit was
 		// allowed to happen.
-		.map((c) => (approved && (APPROVAL_SATISFIES as readonly string[]).includes(c.check) ? { check: c.check, ok: true, why: "approved for this application by the owner" } : c))
-		.map((c) => (c.ok ? { check: c.check, ok: true, ...(c.why ? { why: c.why } : {}) } : c));
+		.map((c) => (approved && (APPROVAL_SATISFIES as readonly string[]).includes(c.check) ? { check: c.check, ok: true, why: "approved for this application by the owner" } : c));
 	if (i.approval) {
 		checks.push(
 			approved

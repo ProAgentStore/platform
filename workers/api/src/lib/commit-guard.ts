@@ -157,6 +157,14 @@ export const COMMIT_VERB_RE = new RegExp(
  * terminal once the form has been filled. "Apply" is the ENTRY button on most multi-page ATS, and
  * an eSignature/acknowledge step ("I Agree", "Accept") is the common LAST step — so these are safe
  * to treat as a submit only after something has been typed, which is state only the loop holds.
+ *
+ * The LOCAL-APPLY runner (`local_apply`, the Application Runner) makes the same distinction over
+ * its own live DOM and holds the same state, so its vocabulary lives in the byte-identical
+ * local-apply contract pair (`lib/local-apply/contract.ts` `classifyApplyClick`) rather than being
+ * copied here: that pair is already held identical by a test, and this module's `FALLBACK_COMMIT_RE`
+ * is the READ-ONLY floor, which matches bare `apply` deliberately and must keep doing so. Reading
+ * that floor as "the final submit of an application" is what ended four live fills at `filled: 0`
+ * (#985).
  */
 export const POST_FILL_SUBMIT_RE = new RegExp(
 	[

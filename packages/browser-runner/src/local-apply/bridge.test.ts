@@ -32,6 +32,12 @@ const SNAPSHOT = [
 	'- textbox "Password" [ref=e11]',
 	'- button "Share on LinkedIn" [ref=e12]',
 	'- button "Resume" [ref=e13]',
+	// The SEEK shape (#985): a job AD with the control that OPENS the application, and the
+	// profile-apply control that can send it outright.
+	'- link "Apply" [ref=e20]',
+	'- button "Apply for this job" [ref=e21]',
+	'- button "Quick apply" [ref=e22]',
+	'- button "Save and continue" [ref=e23]',
 ].join("\n");
 /** What the commit-guard probe reads from the page for each ref. */
 const FACTS: Record<string, { submits: boolean; method: string; name: string }> = {
@@ -41,6 +47,10 @@ const FACTS: Record<string, { submits: boolean; method: string; name: string }> 
 	e10: { submits: false, method: "", name: "Company careers" },
 	e12: { submits: false, method: "", name: "Share on LinkedIn" },
 	e13: { submits: false, method: "post", name: "Resume", tag: "input", type: "file" } as never,
+	e20: { submits: false, method: "", name: "Apply" },
+	e21: { submits: true, method: "post", name: "Apply for this job" },
+	e22: { submits: false, method: "", name: "Quick apply" },
+	e23: { submits: true, method: "post", name: "Save and continue" },
 };
 
 function fakeBrowser(pages: Record<string, PageFlags> = {}, opts: { clicks?: Record<string, string>; uploadError?: string } = {}) {
@@ -249,6 +259,78 @@ describe("fill_and_review — a final submit is never performed", () => {
 		await bridge.callTool("browser_snapshot", {});
 		await bridge.callTool("browser_click", { target: "e8" });
 		expect(b.sent("browser_click")).toHaveLength(0);
+	});
+});
+
+/**
+ * #985: four live fill-and-review runs on one SEEK posting ended `awaiting_review` with
+ * `filled: 0`, seconds after the cloud had decided `continue` at their initial checkpoint and the
+ * CLI had resumed. The press that OPENS the application was being read as the final submit.
+ */
+describe("the control that OPENS an application is pressed, not refused (#985)", () => {
+	it.each([
+		["a link labelled Apply on a job ad", "e20"],
+		["a button labelled Apply for this job, inside a POST form", "e21"],
+		["a page-advance labelled Save and continue, inside a POST form", "e23"],
+	])("presses %s and stays in the run", async (_label, ref) => {
+		const { bridge, sent, events } = await onForm({}, {}, { clicks: { [ref]: "https://jobs.example.com/apply/step-1" } });
+		const res = await bridge.callTool("browser_click", { target: ref });
+		expect(res.isError).toBeFalsy();
+		// The click REACHED the page, which is the whole capability the live runs never got to use.
+		expect(sent("browser_click")).toHaveLength(1);
+		// Not a review, not a submit attempt, and the owner is not waiting for anything.
+		expect(bridge.reviewReady).toBe(false);
+		expect(bridge.submitAttempted).toBe(false);
+		expect(events.some((e) => e.type === "policy.decision" && e.detail?.class === "submit")).toBe(false);
+		// And it is traced as what it is, with the rule that classified it.
+		expect(events.some((e) => e.type === "policy.decision" && e.detail?.class === "entry" && e.detail.decision === "allowed")).toBe(true);
+	});
+
+	it("needs the supervisor's live continue, exactly as a fill does", async () => {
+		// A page change on an unapproved page is the thing the checkpoint exists to gate.
+		const b = fakeBrowser({}, { clicks: { e20: "https://jobs.example.com/apply/step-1" } });
+		const h = fakeHost();
+		const bridge = new ApplyBridge(b.tools, h.host);
+		await bridge.callTool("browser_navigate", { url: FORM });
+		await bridge.callTool("browser_snapshot", {});
+		const res = await bridge.callTool("browser_click", { target: "e20" });
+		expect(res.isError).toBe(true);
+		expect(res.content[0].text).toMatch(/supervisor_checkpoint must return continue/);
+		expect(b.sent("browser_click")).toHaveLength(0);
+	});
+
+	it("clears the approval after the page moves, so the form that opens gets its OWN checkpoint", async () => {
+		const { bridge, sent } = await onForm({}, {}, { clicks: { e20: "https://jobs.example.com/apply/step-1" } });
+		await bridge.callTool("browser_click", { target: "e20" });
+		// The next fill on the new page is refused until the cloud approves that page.
+		const fill = await bridge.callTool("browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" });
+		expect(fill.isError).toBe(true);
+		expect(fill.content[0].text).toMatch(/supervisor_checkpoint must return continue/);
+		expect(sent("browser_type")).toHaveLength(0);
+	});
+
+	it("a ONE-CLICK apply is still refused, and now says so in the words an owner needs", async () => {
+		const { bridge, sent, events } = await onForm();
+		const res = await bridge.callTool("browser_click", { target: "e22" });
+		expect(res.isError).toBeFalsy();
+		expect(sent("browser_click")).toHaveLength(0);
+		expect(res.content[0].text).toMatch(/can send the application in one click/);
+		expect(res.content[0].text).toMatch(/Approve this application/);
+		expect(bridge.reviewReady).toBe(true);
+		// The trace names the RULE and the control, so "stopped at filled: 0" is explicable.
+		const refusal = events.find((e) => e.type === "policy.decision" && e.detail?.class === "submit" && e.detail.decision === "refused");
+		expect(refusal?.detail).toMatchObject({ reason: "fill_and_review", rule: "one_click_apply" });
+	});
+
+	it("once a field is filled, the APPLY-family control is the submit again", async () => {
+		const { bridge, sent, events } = await onForm();
+		await bridge.callTool("browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" });
+		expect(sent("browser_type")).toHaveLength(1);
+		const res = await bridge.callTool("browser_click", { target: "e21" });
+		expect(res.content[0].text).toMatch(/NOT pressed/);
+		expect(sent("browser_click")).toHaveLength(0);
+		expect(bridge.reviewReady).toBe(true);
+		expect(events.find((e) => e.type === "policy.decision" && e.detail?.class === "submit")?.detail).toMatchObject({ rule: "post_submit_after_fill" });
 	});
 });
 

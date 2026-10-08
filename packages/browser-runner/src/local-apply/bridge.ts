@@ -24,7 +24,8 @@
  *
  * The trace carries classes, domains, decisions and artifact handles — never a typed value.
  */
-import { ELEMENT_PROBE_FN, type ElementFacts, FALLBACK_COMMIT_RE } from "../commit-guard.js";
+import { classifyApplyClick } from "./contract.js";
+import { ELEMENT_PROBE_FN, type ElementFacts } from "../commit-guard.js";
 import { normalize } from "../local-artifact/engine.js";
 import { type BrowserTools, evaluateResult, hostOf, refRole } from "../local-browser/bridge.js";
 import type { LocalApplyArtifactKind, LocalApplyBlockReason, LocalApplyEvent, LocalApplyLimits, LocalApplyMode, LocalApplyPause, LocalApplyPauseReason, LocalApplySupervisorBlocker, LocalApplySupervisorCheckpoint, LocalApplySupervisorDirective, LocalApplySupervisorPhase, LocalApplyUnavailableEvidence, LocalApplyUnavailableReason } from "./contract.js";
@@ -354,8 +355,22 @@ export class ApplyBridge {
 
 		const facts = await this.probe(t.ref, t.name);
 		if (!facts) return this.refuse("browser_click", "read", "That element could not be read from the page, so the click cannot be shown to be safe. Take a fresh browser_snapshot.");
-		const commits = (facts.submits && facts.method === "post") || [facts.name, t.name, String(forward.element)].some((n) => n && FALLBACK_COMMIT_RE.test(n));
-		if (commits) return this.submit(forward);
+		// WHICH control is this? (#985) The rule is in the shared contract, which states the three
+		// families and why the order of the tests is the safety property. It replaced a test against
+		// `FALLBACK_COMMIT_RE` — the READ-ONLY floor, which matches bare `apply` on purpose — under
+		// which the press that OPENS a SEEK application was the final submit, and four live
+		// fill-and-review runs ended `awaiting_review` with `filled: 0` seconds after the cloud had
+		// let them through their initial checkpoint.
+		const klass = classifyApplyClick({
+			role: t.role,
+			names: [facts.name, t.name, String(forward.element)],
+			submits: facts.submits,
+			method: facts.method,
+			filled: this.filled,
+			uploaded: this.uploaded.size,
+		});
+		if (klass.klass === "submit") return this.submit(forward, klass.reason);
+		if (klass.klass === "entry") return this.entry(forward, t, klass.reason);
 		if (NAV_ROLES.has(t.role) || (t.role === "button" && PAGINATION_NAME.test(t.name.trim()))) {
 			if (this.pages >= this.host.limits.maxPages) return this.refuse("browser_click", "read", `The run's limit of ${this.host.limits.maxPages} pages is reached. Call ready_for_review now.`);
 			const res = await this.browser.callTool("browser_click", forward);
@@ -364,7 +379,7 @@ export class ApplyBridge {
 		}
 		// A native file input opens the file chooser for upload_artifact — a DOM fact, whatever its label.
 		const fileInput = facts.tag === "input" && facts.type === "file";
-		if (fileInput || (t.role === "button" && STEP_NAME.test(t.name.trim()) && !facts.submits)) {
+		if (fileInput || klass.klass === "step" || (t.role === "button" && STEP_NAME.test(t.name.trim()) && !facts.submits)) {
 			const checkpoint = this.requireSupervisor("browser_click", "fill");
 			if (checkpoint) return checkpoint;
 			this.allow("browser_click", "fill");
@@ -517,14 +532,43 @@ export class ApplyBridge {
 		return text("Recorded. The application waits for the owner's review; nothing was submitted. Stop now.");
 	}
 
+	/**
+	 * The control that OPENS the application (#985) — pressed, never submitted.
+	 *
+	 * It needs the supervisor's live `continue` exactly as a fill does: it changes the page, and the
+	 * cloud is the party that decides whether this page may be worked on. `afterMove` then counts the
+	 * page, traces it and clears the approval, so the form that opens gets its own checkpoint — which
+	 * is what keeps a multi-page ATS supervised page by page rather than once at the start.
+	 */
+	private async entry(forward: Record<string, unknown>, t: { role: string; name: string }, reason: string): Promise<ToolResult> {
+		const checkpoint = this.requireSupervisor("browser_click", "fill");
+		if (checkpoint) return checkpoint;
+		if (this.pages >= this.host.limits.maxPages) return this.refuse("browser_click", "read", `The run's limit of ${this.host.limits.maxPages} pages is reached. Call ready_for_review now.`);
+		this.host.emit({ type: "policy.decision", detail: { tool: "browser_click", class: "entry", decision: "allowed", reason, role: t.role } });
+		const res = await this.browser.callTool("browser_click", forward);
+		if (res.isError) return { content: [{ type: "text", text: textOf(res) }], isError: true };
+		return this.afterMove("browser_click", textOf(res));
+	}
+
 	/** The final Submit. Never under fill_and_review; once, gated and traced, under auto_submit. */
-	private async submit(forward: Record<string, unknown>): Promise<ToolResult> {
+	private async submit(forward: Record<string, unknown>, why = "terminal_label"): Promise<ToolResult> {
 		const checkpoint = this.requireSupervisor("browser_click", "submit");
 		if (checkpoint) return checkpoint;
 		if (this.host.mode !== "auto_submit" || !this.host.gateId) {
-			this.host.emit({ type: "policy.decision", detail: { tool: "browser_click", class: "submit", decision: "refused", reason: "fill_and_review" } });
-			this.review("Stopped at the final submit: this run fills and waits for review.");
-			return text("That control submits the application, and this run is fill-and-review: it was NOT pressed. The application waits for the owner's review. Stop now.");
+			// `reason` carries WHICH rule classified this as the submit (#985). "fill_and_review"
+			// alone left an owner with a run that stopped at `filled: 0` and no way to tell whether it
+			// had reached the end of the form or refused the button that opens it.
+			// The RULE, not the control's label: the label is the page's own prose and belongs to the
+			// machine (the contract keeps page text off the cloud trace). The rule is what an owner
+			// needs — "this was the one-click control", not "this was a submit".
+			this.host.emit({ type: "policy.decision", detail: { tool: "browser_click", class: "submit", decision: "refused", reason: "fill_and_review", rule: why } });
+			const oneClick = why === "one_click_apply";
+			this.review(oneClick ? "Stopped at a one-click apply control: it can send the application outright, and this run fills and waits for review." : "Stopped at the final submit: this run fills and waits for review.");
+			return text(
+				oneClick
+					? 'That control ("' + String(forward.element ?? "") + '") can send the application in one click, and this run is fill-and-review: it was NOT pressed. Approve this application if you want it sent. Stop now.'
+					: "That control submits the application, and this run is fill-and-review: it was NOT pressed. The application waits for the owner's review. Stop now.",
+			);
 		}
 		const before = await this.inspect();
 		if (!before) return this.refuse("browser_click", "submit", "The page could not be read, so the submit cannot be shown to be safe. Take a fresh browser_snapshot.");

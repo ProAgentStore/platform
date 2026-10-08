@@ -74,19 +74,68 @@ export function notRunnerMessage(runtime: string | null | undefined): string {
 const iso = (now: number) => new Date(now).toISOString();
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 
+/**
+ * Put the DISPATCH of a decision on the application's own trace (#985).
+ *
+ * The directive row has always recorded `deliveryAttemptedAt` / `deliveredAt`, but the trace — the
+ * timeline an owner and MCP actually read — showed only the decision, so "decided and never
+ * dispatched", "dispatched and refused" and "dispatched, delivered, the CLI never acted" were one
+ * indistinguishable silence. The run that #985 was filed from was in fact fully delivered; proving
+ * that took a database read nobody outside the platform can make.
+ *
+ * RE-READS the run first, for the reason #982 records: `updateApplyRun` writes the trace wholesale
+ * from the object it is handed, and the decision event was appended by `directApplicationCheckpoint`
+ * against the same (now stale) object a moment ago. Appending from the stale copy would drop it.
+ *
+ * Bounded to two events per directive — the FIRST attempt, and the transition to delivered — so a
+ * run parked for hours at one tick a minute cannot fill its own trace with retries.
+ */
+async function traceDirectiveDispatch(env: Env, uid: string, run: ApplyRun, directive: SupervisorDirective, outcome: { delivered: boolean; reason: string }, now: number): Promise<void> {
+	const fresh = (await getApplyRun(env, run.instanceId, uid, run.id).catch(() => null)) ?? run;
+	await updateApplyRun(
+		env,
+		fresh,
+		{
+			events: [
+				{
+					type: "policy.decision",
+					at: iso(now),
+					detail: {
+						class: "checkpoint",
+						checkpointId: directive.checkpointId,
+						decision: directive.directive,
+						dispatch: outcome.delivered ? "delivered" : "undelivered",
+						reason: outcome.reason,
+					},
+				},
+			],
+		},
+		now,
+	).catch(() => undefined);
+}
+
 /** Deliver an already-persisted decision. A failed relay attempt stays durable and is retried on the next status pull. */
 export async function deliverSupervisorDirective(env: Env, uid: string, run: ApplyRun, directive: SupervisorDirective, now = Date.now()): Promise<SupervisorDirective> {
 	if (directive.deliveredAt) return directive;
+	// First attempt, or a retry of one that has already been recorded as undelivered (#985): the
+	// trace records the first and the one that finally lands, never every tick in between.
+	const firstAttempt = !directive.deliveryAttemptedAt;
+	const settle = async (ok: boolean, reason: string): Promise<SupervisorDirective> => {
+		const noted = (await noteSupervisorDirectiveDelivery(env, directive, now, ok)) ?? directive;
+		const delivered = !!noted.deliveredAt;
+		if (firstAttempt || delivered) await traceDirectiveDispatch(env, uid, run, directive, { delivered, reason }, now);
+		return noted;
+	};
 	const runtime = await getLiveRuntime(env, run.instanceId, uid).catch(() => null);
-	if (!runtime) return (await noteSupervisorDirectiveDelivery(env, directive, now, false)) ?? directive;
+	if (!runtime) return settle(false, "runner_offline");
 	try {
 		const res = await callRuntime(env, runtime, LOCAL_APPLY_DIRECTIVE_PATH, {
 			method: "POST",
 			body: JSON.stringify({ runId: run.id, checkpointId: directive.checkpointId, schemaVersion: directive.schemaVersion, directive: directive.directive }),
 		});
-		return (await noteSupervisorDirectiveDelivery(env, directive, now, res.ok)) ?? directive;
+		return settle(res.ok, res.ok ? "acknowledged" : `runner_refused_${res.status}`);
 	} catch {
-		return (await noteSupervisorDirectiveDelivery(env, directive, now, false)) ?? directive;
+		return settle(false, "runner_unreachable");
 	}
 }
 
