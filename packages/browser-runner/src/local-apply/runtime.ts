@@ -42,6 +42,7 @@ import {
 	type LocalApplyArtifact,
 	type LocalApplyArtifactKind,
 	type LocalApplyBlockReason,
+	type LocalApplyDirectiveRequest,
 	type LocalApplyEngineAuth,
 	type LocalApplyEvent,
 	type LocalApplyPause,
@@ -50,6 +51,8 @@ import {
 	type LocalApplyRunnerEvent,
 	type LocalApplySource,
 	type LocalApplyStatusResponse,
+	type LocalApplySupervisorCheckpoint,
+	type LocalApplySupervisorDirective,
 	type LocalApplyTaskEnvelope,
 } from "./contract.js";
 import { applyPrompt, buildApplyEngineSpec, observedApplyAuth, type SourceBlock } from "./engine.js";
@@ -101,6 +104,8 @@ interface Run {
 	engineAuth: LocalApplyEngineAuth;
 	cancelled: boolean;
 	timedOut: boolean;
+	/** Directives are recorded before they can release a checkpoint, including a delivery-before-wait race. */
+	checkpoints: Map<string, { checkpoint?: LocalApplySupervisorCheckpoint; directive?: LocalApplySupervisorDirective }>;
 	endedAt?: number;
 	timer?: ReturnType<typeof setInterval>;
 }
@@ -237,6 +242,7 @@ export class LocalApplyRuntime {
 			engineAuth: "unknown",
 			cancelled: false,
 			timedOut: false,
+			checkpoints: new Map(),
 		};
 		this.runs.set(envelope.runId, run);
 		void this.launch(run, selfUrl).catch((err) => {
@@ -289,6 +295,7 @@ export class LocalApplyRuntime {
 		run.bridge = new ApplyBridge(run.browser.tools, {
 			emit: (ev) => this.emit(run, ev),
 			pause: (p) => this.pause(run, p),
+			supervisorCheckpoint: (checkpointId) => this.supervisorCheckpoint(run, checkpointId),
 			isAllowed: (host) => [...run.allow].some((d) => domainWithin(host, d)),
 			grounding: () => run.grounding.join("\n"),
 			artifactPath: (kind: LocalApplyArtifactKind) => {
@@ -372,6 +379,31 @@ export class LocalApplyRuntime {
 		return new Promise((done) => run.waiters.push(done));
 	}
 
+	/**
+	 * Wait for a cloud-brain decision without accepting a model's prose as permission. A directive
+	 * can be stored before this call reaches its pause (the delivery race), but a normal `resume`
+	 * can never release this pause.
+	 */
+	private supervisorCheckpoint(run: Run, supervisor: LocalApplySupervisorCheckpoint): Promise<LocalApplySupervisorDirective> {
+		const { checkpointId } = supervisor;
+		let checkpoint = run.checkpoints.get(checkpointId);
+		if (!checkpoint) {
+			checkpoint = {};
+			run.checkpoints.set(checkpointId, checkpoint);
+		}
+		if (!checkpoint.checkpoint) {
+			checkpoint.checkpoint = supervisor;
+			this.emit(run, {
+				type: "supervisor.checkpoint",
+				...(supervisor.facts.url ? { url: supervisor.facts.url } : {}),
+				...(supervisor.facts.domain ? { domain: supervisor.facts.domain } : {}),
+				detail: { checkpointId, phase: supervisor.facts.phase, actions: supervisor.facts.actions, filled: supervisor.facts.filled, uploaded: supervisor.facts.uploaded },
+			});
+		}
+		if (checkpoint.directive) return Promise.resolve(checkpoint.directive);
+		return this.pause(run, { reason: "supervisor_checkpoint", checkpoint: supervisor }).then(() => run.checkpoints.get(checkpointId)?.directive ?? "stop");
+	}
+
 	private release(run: Run, outcome: "resumed" | "stopped"): void {
 		if (run.state === "paused") {
 			run.state = "running";
@@ -387,12 +419,46 @@ export class LocalApplyRuntime {
 		const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
 		const run = this.get(String(o.runId ?? ""));
 		if (run.state === "ended") throw new RunnerInputError("The run has ended", 409);
+		if (run.pause?.reason === "supervisor_checkpoint") throw new RunnerInputError("This run is waiting for a persisted supervisor directive, not an owner resume", 409);
 		for (const a of (Array.isArray(o.answers) ? o.answers : []).slice(0, LOCAL_APPLY_CAPS.answers)) {
 			const r = (a && typeof a === "object" ? a : {}) as Record<string, unknown>;
 			if (typeof r.question === "string" && typeof r.answer === "string" && r.answer.trim()) run.grounding.push(`Q: ${r.question.slice(0, LOCAL_APPLY_CAPS.questionChars)}\nA: ${r.answer.trim().slice(0, LOCAL_APPLY_CAPS.answerChars)}`);
 		}
 		for (const d of strList(o.allowDomains)) run.allow.add(d);
 		this.release(run, "resumed");
+		return this.status({ runId: run.envelope.runId, afterSeq: run.seq });
+	}
+
+	/**
+	 * Store then apply an immutable cloud directive. The caller persists it before this runner
+	 * endpoint is reached; this in-process record makes delivery idempotent and closes the race
+	 * where a directive arrives just before the bridge begins waiting.
+	 */
+	directive(raw: unknown): LocalApplyStatusResponse {
+		const o = (raw && typeof raw === "object" ? raw : {}) as Partial<LocalApplyDirectiveRequest>;
+		const run = this.get(typeof o.runId === "string" ? o.runId : "");
+		const checkpointId = typeof o.checkpointId === "string" && SAFE_ID.test(o.checkpointId) ? o.checkpointId : null;
+		const directive: LocalApplySupervisorDirective | null = o.directive === "continue" || o.directive === "request_review" || o.directive === "stop" ? o.directive : null;
+		if (o.schemaVersion !== 1 || !checkpointId || !directive) throw new RunnerInputError("directive needs schemaVersion: 1, a safe checkpointId, and directive continue, request_review or stop");
+		if (run.state === "ended") throw new RunnerInputError("The run has ended", 409);
+
+		let checkpoint = run.checkpoints.get(checkpointId);
+		if (checkpoint?.directive) {
+			if (checkpoint.directive !== directive) throw new RunnerInputError("A different directive is already recorded for this checkpoint", 409);
+			return this.status({ runId: run.envelope.runId, afterSeq: run.seq });
+		}
+		checkpoint ??= {};
+		checkpoint.directive = directive;
+		run.checkpoints.set(checkpointId, checkpoint);
+		this.emit(run, { type: "supervisor.directive", detail: { checkpointId, directive } });
+
+		const waitingForThis = run.state === "paused" && run.pause?.reason === "supervisor_checkpoint" && run.pause.checkpoint?.checkpointId === checkpointId;
+		if (waitingForThis && directive === "continue") this.release(run, "resumed");
+		else if (waitingForThis && directive === "request_review") {
+			this.end(run, { outcome: "awaiting_review", summary: "The supervisor requested an owner review." });
+		} else if (waitingForThis && directive === "stop") {
+			this.end(run, { outcome: "blocked", blockReason: "incomplete", questions: ["The supervisor stopped this run before it could continue."] });
+		}
 		return this.status({ runId: run.envelope.runId, afterSeq: run.seq });
 	}
 

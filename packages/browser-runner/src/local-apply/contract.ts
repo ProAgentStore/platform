@@ -32,6 +32,8 @@ export const LOCAL_APPLY_RUN_PATH = "/local-apply/run";
 export const LOCAL_APPLY_STATUS_PATH = "/local-apply/status";
 export const LOCAL_APPLY_RESUME_PATH = "/local-apply/resume";
 export const LOCAL_APPLY_CANCEL_PATH = "/local-apply/cancel";
+/** Delivers a cloud-persisted supervisory decision to one paused checkpoint. */
+export const LOCAL_APPLY_DIRECTIVE_PATH = "/local-apply/directive";
 
 export type LocalApplyEngine = "claude" | "codex";
 export const LOCAL_APPLY_ENGINES: readonly LocalApplyEngine[] = ["claude", "codex"];
@@ -107,7 +109,9 @@ export type LocalApplyPauseReason =
 	| "screening_ambiguity"
 	| "external_redirect"
 	| "duplicate_application"
-	| "anti_bot";
+	| "anti_bot"
+	/** A cloud supervisor is deciding whether the local CLI may continue. */
+	| "supervisor_checkpoint";
 export const LOCAL_APPLY_PAUSE_REASONS: readonly LocalApplyPauseReason[] = [
 	"captcha",
 	"login_required",
@@ -117,6 +121,7 @@ export const LOCAL_APPLY_PAUSE_REASONS: readonly LocalApplyPauseReason[] = [
 	"external_redirect",
 	"duplicate_application",
 	"anti_bot",
+	"supervisor_checkpoint",
 ];
 
 /** Why a run ENDED blocked: an unresolved pause, or one of these. */
@@ -172,6 +177,8 @@ export type LocalApplyEventType =
 	| "submit.confirmed"
 	| "submit.unconfirmed"
 	| "job.unavailable"
+	| "supervisor.checkpoint"
+	| "supervisor.directive"
 	| "run.paused"
 	| "run.resumed"
 	| "note";
@@ -190,6 +197,8 @@ export const LOCAL_APPLY_EVENT_TYPES: readonly LocalApplyEventType[] = [
 	"submit.confirmed",
 	"submit.unconfirmed",
 	"job.unavailable",
+	"supervisor.checkpoint",
+	"supervisor.directive",
 	"run.paused",
 	"run.resumed",
 	"note",
@@ -251,6 +260,42 @@ export interface LocalApplyPause {
 	domain?: string;
 	/** The question to answer, for `missing_answer` / `screening_ambiguity`. */
 	question?: string;
+	/** Present exactly for a `supervisor_checkpoint` pause. */
+	checkpoint?: LocalApplySupervisorCheckpoint;
+}
+
+/** The only decisions a cloud supervisor may persist for a local checkpoint. */
+export type LocalApplySupervisorDirective = "continue" | "request_review" | "stop";
+export const LOCAL_APPLY_SUPERVISOR_DIRECTIVES: readonly LocalApplySupervisorDirective[] = ["continue", "request_review", "stop"];
+
+/** A bounded phase label supplied by the CLI; page facts are independently derived by the runner. */
+export type LocalApplySupervisorPhase = "initial" | "before_submit" | "post_navigation" | "uncertain";
+export const LOCAL_APPLY_SUPERVISOR_PHASES: readonly LocalApplySupervisorPhase[] = ["initial", "before_submit", "post_navigation", "uncertain"];
+
+/** Stable, non-prose signals a cloud supervisor may use to decide. */
+export type LocalApplySupervisorBlocker = "captcha" | "login_required" | "anti_bot" | "missing_answer" | "screening_ambiguity" | "external_redirect" | "duplicate_application";
+export interface LocalApplySupervisorFacts {
+	phase: LocalApplySupervisorPhase;
+	actions: number;
+	filled: number;
+	uploaded: number;
+	blockers: LocalApplySupervisorBlocker[];
+	url?: string;
+	domain?: string;
+	title?: string;
+}
+
+/** The durable identity and runner-derived facts for one bridge checkpoint. No model prose crosses this boundary. */
+export interface LocalApplySupervisorCheckpoint {
+	schemaVersion: 1;
+	checkpointId: string;
+	facts: LocalApplySupervisorFacts;
+}
+
+/** `POST /local-apply/directive` — PAGS persists this decision before delivering it to the runner. */
+export interface LocalApplyDirectiveRequest extends Pick<LocalApplySupervisorCheckpoint, "schemaVersion" | "checkpointId"> {
+	runId: string;
+	directive: LocalApplySupervisorDirective;
 }
 
 /** `POST /local-apply/status {runId, afterSeq}`. */
@@ -276,7 +321,7 @@ const str = (v: unknown, max: number): string | null => (typeof v === "string" &
 const oneOf = <T extends string>(list: readonly T[], v: unknown): T | null => (list.includes(v as T) ? (v as T) : null);
 const isHttpUrl = (v: string) => /^https?:\/\/[^\s/]+/i.test(v);
 
-const DETAIL_KEYS = new Set(["engine", "authMode", "engineAuth", "mode", "class", "tool", "decision", "reason", "role", "kind", "path", "sha256", "bytes", "gateId", "exitCode", "count", "status", "basis", "source"]);
+const DETAIL_KEYS = new Set(["engine", "authMode", "engineAuth", "mode", "class", "tool", "decision", "reason", "role", "kind", "path", "sha256", "bytes", "gateId", "exitCode", "count", "status", "basis", "source", "checkpointId", "directive", "phase", "actions", "filled", "uploaded"]);
 
 /** A validated event, or null. Detail keeps only whitelisted, primitive, bounded values. */
 export function parseLocalApplyEvent(raw: unknown): LocalApplyEvent | null {

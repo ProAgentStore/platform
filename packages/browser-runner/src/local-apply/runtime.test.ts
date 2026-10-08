@@ -94,6 +94,12 @@ function envelope(over: Partial<LocalApplyTaskEnvelope> = {}): LocalApplyTaskEnv
 
 const settle = () => new Promise((r) => setTimeout(r, 20));
 const call = (rt: LocalApplyRuntime, name: string, args: Record<string, unknown> = {}) => rt.bridge({ runId: "run-1", op: "call", name, args }) as Promise<{ isError?: boolean; content: Array<{ text: string }> }>;
+async function approve(rt: LocalApplyRuntime, checkpointId = "initial:1", phase = "initial") {
+	const checkpoint = call(rt, "supervisor_checkpoint", { checkpointId, phase });
+	await settle();
+	rt.directive({ runId: "run-1", schemaVersion: 1, checkpointId, directive: "continue" });
+	return checkpoint;
+}
 
 beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "local-apply-"));
@@ -141,6 +147,7 @@ describe("a fill-and-review run, end to end on the runner", () => {
 
 			await call(rt, "browser_navigate", { url: "https://jobs.example.com/apply" });
 			await call(rt, "browser_snapshot");
+			await approve(rt);
 			expect((await call(rt, "browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" })).isError).toBeFalsy();
 			// Grounded in the approved résumé, too.
 			expect((await call(rt, "browser_type", { target: "e1", text: "Staff engineer", source_quote: "Staff engineer, 2019 - 2024" })).isError).toBeFalsy();
@@ -196,6 +203,7 @@ describe("a fill-and-review run, end to end on the runner", () => {
 		expect((await call(rt, "browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" })).content[0].text).toMatch(/paused for the owner/);
 		rt.resume({ runId: "run-1", answers: [{ question: "Expected salary?", answer: "150000 AUD" }] });
 		expect((await asked).isError).toBeFalsy();
+		await approve(rt, "after-answer:1", "uncertain");
 		expect((await call(rt, "browser_type", { target: "e1", text: "150000 AUD", source_quote: "A: 150000 AUD" })).isError).toBeFalsy();
 	});
 
@@ -208,6 +216,47 @@ describe("a fill-and-review run, end to end on the runner", () => {
 		rt.cancel({ runId: "run-1" });
 		await asked;
 		expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "failed", error: "Cancelled by the owner" });
+	});
+
+	it("waits at a typed supervisor checkpoint until its persisted continue directive, never an owner resume", async () => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		const checkpoint = call(rt, "supervisor_checkpoint", { checkpointId: "before-submit:1", phase: "before_submit" });
+		await settle();
+		expect(rt.status({ runId: "run-1" })).toMatchObject({
+			state: "paused",
+			pause: { reason: "supervisor_checkpoint", checkpoint: { schemaVersion: 1, checkpointId: "before-submit:1", facts: { phase: "before_submit", actions: 0, filled: 0, uploaded: 0, blockers: [] } } },
+		});
+		expect(() => rt.resume({ runId: "run-1" })).toThrow(/persisted supervisor directive/);
+		const released = rt.directive({ runId: "run-1", schemaVersion: 1, checkpointId: "before-submit:1", directive: "continue" });
+		expect(released.state).toBe("running");
+		expect((await checkpoint).content[0].text).toMatch(/persisted supervisor directive is continue/);
+		expect(rt.status({ runId: "run-1" }).events).toEqual(expect.arrayContaining([
+			expect.objectContaining({ type: "supervisor.checkpoint", detail: expect.objectContaining({ checkpointId: "before-submit:1", phase: "before_submit" }) }),
+			expect.objectContaining({ type: "supervisor.directive", detail: { checkpointId: "before-submit:1", directive: "continue" } }),
+		]));
+	});
+
+	it("records a directive idempotently before a checkpoint arrives, and refuses a conflicting replay", async () => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		rt.directive({ runId: "run-1", schemaVersion: 1, checkpointId: "after-profile", directive: "continue" });
+		expect((await call(rt, "supervisor_checkpoint", { checkpointId: "after-profile", phase: "initial" })).content[0].text).toMatch(/directive is continue/);
+		expect(rt.directive({ runId: "run-1", schemaVersion: 1, checkpointId: "after-profile", directive: "continue" }).state).toBe("running");
+		expect(() => rt.directive({ runId: "run-1", schemaVersion: 1, checkpointId: "after-profile", directive: "stop" })).toThrow(/different directive/);
+	});
+
+	it.each(["request_review", "stop"] as const)("terminally resolves a persisted %s directive without trusting the CLI", async (directive) => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		const checkpoint = call(rt, "supervisor_checkpoint", { checkpointId: "final-check", phase: "uncertain" });
+		await settle();
+		const status = rt.directive({ runId: "run-1", schemaVersion: 1, checkpointId: "final-check", directive });
+		expect(status).toMatchObject({ state: "ended", result: directive === "request_review" ? { outcome: "awaiting_review" } : { outcome: "blocked", blockReason: "incomplete" } });
+		expect((await checkpoint).isError).toBe(true);
 	});
 
 	it("ends blocked with runner-verified evidence when the CLI reports an expired listing", async () => {

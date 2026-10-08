@@ -27,12 +27,14 @@
 import { ELEMENT_PROBE_FN, type ElementFacts, FALLBACK_COMMIT_RE } from "../commit-guard.js";
 import { normalize } from "../local-artifact/engine.js";
 import { type BrowserTools, evaluateResult, hostOf, refRole } from "../local-browser/bridge.js";
-import type { LocalApplyArtifactKind, LocalApplyBlockReason, LocalApplyEvent, LocalApplyLimits, LocalApplyMode, LocalApplyPause, LocalApplyPauseReason, LocalApplyUnavailableEvidence, LocalApplyUnavailableReason } from "./contract.js";
+import type { LocalApplyArtifactKind, LocalApplyBlockReason, LocalApplyEvent, LocalApplyLimits, LocalApplyMode, LocalApplyPause, LocalApplyPauseReason, LocalApplySupervisorBlocker, LocalApplySupervisorCheckpoint, LocalApplySupervisorDirective, LocalApplySupervisorPhase, LocalApplyUnavailableEvidence, LocalApplyUnavailableReason } from "./contract.js";
 
 export interface ApplyBridgeHost {
 	emit(event: Omit<LocalApplyEvent, "at">): void;
 	/** Pause until the owner resumes ("resumed") or the run is cancelled ("stopped"). */
 	pause(p: LocalApplyPause): Promise<"resumed" | "stopped">;
+	/** Wait for a durable cloud directive at this exact, runner-observed checkpoint. */
+	supervisorCheckpoint(checkpoint: LocalApplySupervisorCheckpoint): Promise<LocalApplySupervisorDirective>;
 	isAllowed(host: string): boolean;
 	/** Everything a value may be grounded in: profile, answers, approved materials, the owner's answers so far. */
 	grounding(): string;
@@ -52,7 +54,7 @@ export interface ToolResult {
 
 const READ_TOOLS = new Set(["browser_navigate", "browser_navigate_back", "browser_snapshot", "browser_wait_for"]);
 const FILL_TOOLS = new Set(["browser_type", "browser_select_option"]);
-const BRIDGE_TOOLS = ["upload_artifact", "request_answer", "ready_for_review"] as const;
+const BRIDGE_TOOLS = ["upload_artifact", "request_answer", "ready_for_review", "supervisor_checkpoint"] as const;
 const REFUSED = new Set([
 	"browser_fill_form",
 	"browser_file_upload",
@@ -145,6 +147,8 @@ export class ApplyBridge {
 	private pages = 0;
 	private lastSnapshot = "";
 	private readonly admitted = new Set<string>();
+	/** Fill and submit are disabled until the cloud supervisor releases the current page checkpoint. */
+	private supervisorApproved = false;
 	filled = 0;
 	readonly uploaded = new Set<LocalApplyArtifactKind>();
 	reviewReady = false;
@@ -192,6 +196,11 @@ export class ApplyBridge {
 				inputSchema: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"] },
 			},
 			{
+				name: "supervisor_checkpoint",
+				description: "Pause safely for the cloud supervisor. Use the exact checkpointId supplied in your task; do not continue until this returns continue. request_review and stop are terminally handled by the runner.",
+				inputSchema: { type: "object", properties: { checkpointId: { type: "string", minLength: 1, maxLength: 300 }, phase: { type: "string", enum: ["initial", "post_navigation", "before_submit", "uncertain"] } }, required: ["checkpointId", "phase"], additionalProperties: false },
+			},
+			{
 				name: "report_job_unavailable",
 				description: "End the run when a fresh browser snapshot shows that this job is expired, closed or unavailable. The runner independently verifies the page notice; it refuses unsupported reports.",
 				inputSchema: { type: "object", properties: { reason: { type: "string", enum: ["expired", "unavailable"] } }, required: ["reason"] },
@@ -203,6 +212,7 @@ export class ApplyBridge {
 		if (this.done) return text("The application is finished for this run. Stop now.", true);
 		if (name === "ready_for_review") return this.review(typeof args.summary === "string" ? args.summary : "");
 		if (name === "request_answer") return this.requestAnswer(args);
+		if (name === "supervisor_checkpoint") return this.supervisorCheckpoint(args);
 		if (name === "report_job_unavailable") return this.reportUnavailable(args);
 		if (REFUSED.has(name)) return this.refuse(name, "read", `${name} is not available to an application run.`);
 		if (!READ_TOOLS.has(name) && !FILL_TOOLS.has(name) && name !== "browser_click" && name !== "browser_press_key" && name !== "upload_artifact") return this.refuse(name, "read", `${name} is not available.`);
@@ -251,6 +261,8 @@ export class ApplyBridge {
 		const outcome = await this.host.pause(p);
 		if (outcome !== "resumed") return false;
 		if (recheck && !(await recheck())) return false;
+		// A person may have changed the page or its answers while handling the pause.
+		this.supervisorApproved = false;
 		this.blocked = null;
 		return true;
 	}
@@ -258,6 +270,8 @@ export class ApplyBridge {
 	/** After a page change: count it, trace it, and stop for a person when the page needs one. */
 	private async landed(toolText: string, known?: PageState | null): Promise<ToolResult> {
 		const state = known ?? (await this.inspect());
+		// A navigation can put the CLI on a materially different form, even on the same origin.
+		this.supervisorApproved = false;
 		if (!state) return text(toolText);
 		this.pages++;
 		const host = hostOf(state.url) ?? "";
@@ -350,14 +364,19 @@ export class ApplyBridge {
 		// A native file input opens the file chooser for upload_artifact — a DOM fact, whatever its label.
 		const fileInput = facts.tag === "input" && facts.type === "file";
 		if (fileInput || (t.role === "button" && STEP_NAME.test(t.name.trim()) && !facts.submits)) {
+			const checkpoint = this.requireSupervisor("browser_click", "fill");
+			if (checkpoint) return checkpoint;
 			this.allow("browser_click", "fill");
 			const res = await this.browser.callTool("browser_click", forward);
+			if (!res.isError && !fileInput) this.supervisorApproved = false;
 			return { content: [{ type: "text", text: textOf(res) }], ...(res.isError ? { isError: true } : {}) };
 		}
 		return this.refuse("browser_click", "read", `"${t.name || t.role}" is not a control an application run may press. Links, form-step buttons (Next, Upload, Add) and answers are allowed.`);
 	}
 
 	private async fill(tool: string, role: string, forward: Record<string, unknown>): Promise<ToolResult> {
+		const checkpoint = this.requireSupervisor(tool, "fill");
+		if (checkpoint) return checkpoint;
 		const res = await this.browser.callTool(tool, forward);
 		if (res.isError) return { content: [{ type: "text", text: textOf(res) }], isError: true };
 		this.filled++;
@@ -399,6 +418,8 @@ export class ApplyBridge {
 	}
 
 	private async upload(args: Record<string, unknown>): Promise<ToolResult> {
+		const checkpoint = this.requireSupervisor("upload_artifact", "fill");
+		if (checkpoint) return checkpoint;
 		const kind = args.kind === "resume" || args.kind === "cover_letter" ? args.kind : null;
 		if (!kind) return this.refuse("upload_artifact", "fill", "kind must be resume or cover_letter.");
 		if (this.uploaded.has(kind)) return this.refuse("upload_artifact", "fill", `The ${kind.replace("_", " ")} is already attached; it is never attached twice.`);
@@ -430,6 +451,46 @@ export class ApplyBridge {
 	}
 
 	/**
+	 * The CLI may ask to stop at a named checkpoint, but it cannot smuggle a decision through this
+	 * tool. The runner waits for a separately persisted, typed directive and terminal directives are
+	 * resolved by the runtime before this call returns.
+	 */
+	private async supervisorCheckpoint(args: Record<string, unknown>): Promise<ToolResult> {
+		const checkpointId = typeof args.checkpointId === "string" ? args.checkpointId.trim() : "";
+		if (!/^[A-Za-z0-9_.:-]{1,300}$/.test(checkpointId)) return text("supervisor_checkpoint needs a safe checkpointId (letters, numbers, dot, underscore, colon or hyphen).", true);
+		const phase: LocalApplySupervisorPhase | null = args.phase === "initial" || args.phase === "post_navigation" || args.phase === "before_submit" || args.phase === "uncertain" ? args.phase : null;
+		if (!phase) return text("supervisor_checkpoint needs phase initial, post_navigation, before_submit or uncertain.", true);
+		const state = await this.inspect();
+		const blockers = new Set<LocalApplySupervisorBlocker>();
+		if (state?.captcha) blockers.add("captcha");
+		if (state?.login) blockers.add("login_required");
+		if (state?.antiBot) blockers.add("anti_bot");
+		if (state?.duplicate) blockers.add("duplicate_application");
+		if (this.blocked && ["missing_answer", "screening_ambiguity", "external_redirect", "duplicate_application", "anti_bot", "login_required", "captcha"].includes(this.blocked.reason)) blockers.add(this.blocked.reason as LocalApplySupervisorBlocker);
+		const url = state?.url;
+		const domain = url ? hostOf(url) ?? undefined : undefined;
+		const directive = await this.host.supervisorCheckpoint({
+			schemaVersion: 1,
+			checkpointId,
+			facts: {
+				phase,
+				actions: this.actions,
+				filled: this.filled,
+				uploaded: this.uploaded.size,
+				blockers: [...blockers],
+				...(url ? { url } : {}),
+				...(domain ? { domain } : {}),
+				...(state?.title ? { title: state.title.slice(0, 300) } : {}),
+			},
+		});
+		if (directive === "continue") {
+			this.supervisorApproved = true;
+			return text("The persisted supervisor directive is continue. You may continue using only the application bridge tools.");
+		}
+		return text(`The persisted supervisor directive is ${directive}. The runner has ended this application run locally; do not take any further action.`, true);
+	}
+
+	/**
 	 * A terminal result needs the runner's own fresh observation, not the CLI's reading of a page.
 	 * The snapshot requirement makes the notice visible to the CLI; the static page probe verifies
 	 * its category and current URL before any evidence is retained.
@@ -457,6 +518,8 @@ export class ApplyBridge {
 
 	/** The final Submit. Never under fill_and_review; once, gated and traced, under auto_submit. */
 	private async submit(forward: Record<string, unknown>): Promise<ToolResult> {
+		const checkpoint = this.requireSupervisor("browser_click", "submit");
+		if (checkpoint) return checkpoint;
 		if (this.host.mode !== "auto_submit" || !this.host.gateId) {
 			this.host.emit({ type: "policy.decision", detail: { tool: "browser_click", class: "submit", decision: "refused", reason: "fill_and_review" } });
 			this.review("Stopped at the final submit: this run fills and waits for review.");
@@ -484,5 +547,12 @@ export class ApplyBridge {
 		this.blocked = { reason: "submit_unconfirmed", questions: ["The application was submitted but the site did not confirm it. Check the employer's site or your email before anything is retried."] };
 		this.host.emit({ type: "submit.unconfirmed", ...(after ? { url: after.url } : {}), domain, detail: { gateId: this.host.gateId } });
 		return text("The submit was pressed but no confirmation was seen. Do not press it again. Stop now.", true);
+	}
+
+	/** A cloud-persisted checkpoint, not a prompt instruction, authorizes each page's writes. */
+	private requireSupervisor(tool: string, actionClass: "fill" | "submit"): ToolResult | null {
+		if (this.supervisorApproved) return null;
+		this.host.emit({ type: "policy.decision", detail: { tool, class: actionClass, decision: "refused", reason: "supervisor_checkpoint" } });
+		return text(`A persisted supervisor_checkpoint must return continue before ${actionClass === "submit" ? "the final submit" : "any fill or upload"}. Take a browser_snapshot if needed, then call supervisor_checkpoint.`, true);
 	}
 }

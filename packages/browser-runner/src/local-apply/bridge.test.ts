@@ -72,7 +72,7 @@ function fakeBrowser(pages: Record<string, PageFlags> = {}, opts: { clicks?: Rec
 
 const PROFILE = "Name: Jane Citizen\nEmail: jane@example.com\nWork authorization: Authorized to work in Australia\nRequires sponsorship: No\nNotice period: four weeks";
 
-function fakeHost(o: { mode?: "fill_and_review" | "auto_submit"; allow?: string[]; resume?: (p: LocalApplyPause) => "resumed" | "stopped"; artifactError?: string } = {}) {
+function fakeHost(o: { mode?: "fill_and_review" | "auto_submit"; allow?: string[]; resume?: (p: LocalApplyPause) => "resumed" | "stopped"; artifactError?: string; directive?: "continue" | "request_review" | "stop" } = {}) {
 	const events: Array<Omit<LocalApplyEvent, "at">> = [];
 	const pauses: LocalApplyPause[] = [];
 	const allow = new Set(o.allow ?? ["jobs.example.com"]);
@@ -85,6 +85,7 @@ function fakeHost(o: { mode?: "fill_and_review" | "auto_submit"; allow?: string[
 			pauses.push(p);
 			return o.resume ? o.resume(p) : "stopped";
 		},
+		supervisorCheckpoint: async () => o.directive ?? "continue",
 		isAllowed: (h) => [...allow].some((d) => h === d || h.endsWith(`.${d}`)),
 		grounding: () => grounding.join("\n"),
 		artifactPath: (kind) => (o.artifactError ? { error: o.artifactError } : { path: `/home/jane/jobs/applications/lead-1/run-1/${kind}.md`, sha256: "a".repeat(64) }),
@@ -103,6 +104,7 @@ async function onForm(pages: Record<string, PageFlags> = {}, hostOpts: Parameter
 	const bridge = new ApplyBridge(b.tools, h.host);
 	await bridge.callTool("browser_navigate", { url: FORM });
 	await bridge.callTool("browser_snapshot", {});
+	await bridge.callTool("supervisor_checkpoint", { checkpointId: "initial:1", phase: "initial" });
 	return { bridge, ...b, ...h };
 }
 
@@ -126,7 +128,7 @@ describe("the action classes", () => {
 		const { bridge } = await onForm();
 		const tools = await bridge.listTools();
 		const names = tools.map((t) => t.name).sort();
-		expect(names).toEqual(["browser_click", "browser_navigate", "browser_navigate_back", "browser_press_key", "browser_select_option", "browser_snapshot", "browser_type", "browser_wait_for", "ready_for_review", "report_job_unavailable", "request_answer", "upload_artifact"]);
+		expect(names).toEqual(["browser_click", "browser_navigate", "browser_navigate_back", "browser_press_key", "browser_select_option", "browser_snapshot", "browser_type", "browser_wait_for", "ready_for_review", "report_job_unavailable", "request_answer", "supervisor_checkpoint", "upload_artifact"]);
 		const typeTool = tools.find((t) => t.name === "browser_type") as { inputSchema: { required: string[] } };
 		expect(typeTool.inputSchema.required).toContain("source_quote");
 	});
@@ -154,6 +156,20 @@ describe("the action classes", () => {
 		expect(bridge.filled).toBe(1);
 		// The trace names the class and the role, never the value typed.
 		expect(JSON.stringify(events)).not.toContain("Jane Citizen");
+	});
+
+	it("requires a persisted supervisor continuation for writes, and resets it after navigation", async () => {
+		const b = fakeBrowser();
+		const h = fakeHost();
+		const bridge = new ApplyBridge(b.tools, h.host);
+		await bridge.callTool("browser_navigate", { url: FORM });
+		await bridge.callTool("browser_snapshot", {});
+		expect((await bridge.callTool("browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" })).content[0].text).toMatch(/supervisor_checkpoint/);
+		expect(b.sent("browser_type")).toHaveLength(0);
+		await bridge.callTool("supervisor_checkpoint", { checkpointId: "initial:1", phase: "initial" });
+		expect((await bridge.callTool("browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" })).isError).toBeFalsy();
+		await bridge.callTool("browser_navigate", { url: `${FORM}?step=2` });
+		expect((await bridge.callTool("browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" })).content[0].text).toMatch(/supervisor_checkpoint/);
 	});
 
 	it("selects and answers radios only from the sources", async () => {
@@ -358,6 +374,7 @@ describe("pauses — a person handles it, the run never works around it", () => 
 		expect((await bridge.callTool("browser_type", { target: "e1", text: "150000 AUD", source_quote: "A: 150000 AUD" })).isError).toBe(true);
 		await bridge.callTool("request_answer", { question: "Salary expectation?" });
 		expect(bridge.blocked).toBeNull();
+		await bridge.callTool("supervisor_checkpoint", { checkpointId: "after-answer:1", phase: "uncertain" });
 		expect((await bridge.callTool("browser_type", { target: "e1", text: "150000 AUD", source_quote: "A: 150000 AUD" })).isError).toBeFalsy();
 	});
 });
