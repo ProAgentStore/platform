@@ -30,6 +30,7 @@ import { type JobApplication, getOwnedApplication, getTailorRun } from "../local
 import { cancelTailoring, retryTailoring, startTailoring } from "../local-artifact/tailor.js";
 import { cancelApplyRun, resumeApplyRun, retryFill, runnerSettingsFor, startApplicationFill, submitGateFor } from "../local-apply/apply.js";
 import { approvalEligibility, approvalState } from "../local-apply/approval.js";
+import { approveAndContinue, approveContinueResult, isPostFillApproval } from "../local-apply/approve-continue.js";
 import { queueFieldsFor, queuePosition } from "./work-queue-store.js";
 import { type QueueView as RunQueueView, queueView, queuedLabel } from "./work-queue.js";
 import { getSubmitAuthorization, grantSubmitAuthorization } from "../local-apply/approval-store.js";
@@ -222,6 +223,8 @@ interface OpenRun {
 /** The actions an application in this state can take — the lifecycle table, read for the owner. */
 function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRun | null, submitAllowed: boolean, auth: QueueItem["submitAuthorization"] = null): ApplicationAction[] {
 	const canFill = pipeline.runners.length > 0;
+	// The same test the action itself applies: this stage, nothing approved yet, nothing attempted.
+	const postFillApprovable = canFill && !auth && !app.submitAttemptedAt && isPostFillApproval(app, run);
 	switch (app.status) {
 		case "tailoring":
 			return ["cancel"];
@@ -240,7 +243,10 @@ function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRu
 		case "filling":
 			return ["cancel"];
 		case "blocked":
-			if (run) return run.status === "paused" ? ["resume", "cancel"] : ["cancel"];
+			// Parked at a supervisor checkpoint IS the filled form waiting on a decision (#981), so the
+			// owner's per-application approval belongs here too — beside `resume`, which answers a
+			// question rather than authorising a submission.
+			if (run) return run.status === "paused" ? [...(postFillApprovable ? (["approve_and_proceed"] as const) : []), "resume", "cancel"] : ["cancel"];
 			if (app.fillRunId) return [...(canFill && !app.submitAttemptedAt ? (["retry_fill"] as const) : []), "defer", "archive"];
 			return ["retry_tailoring", "defer", "archive"];
 		case "failed":
@@ -248,7 +254,13 @@ function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRu
 			if (app.fillRunId) return [...(canFill && !app.submitAttemptedAt && app.status === "failed" ? (["retry_fill"] as const) : []), "archive"];
 			return ["retry_tailoring", "archive"];
 		case "awaiting_review":
-			return ["defer", "archive"];
+			// #981: the form is filled, nothing was sent, and the only offers here were defer, archive
+			// and not-interested — so the owner who ASKED for the review could not act on it.
+			// `approve_and_proceed` records the decision; `retry_fill` is the run that spends it, and is
+			// listed whatever the approval state, because a review-mode re-fill is always allowed while
+			// nothing has been submitted. Without an approval that retry fills and stops again, which
+			// is exactly "no approval means no submit".
+			return [...(postFillApprovable ? (["approve_and_proceed"] as const) : []), ...(canFill && !app.submitAttemptedAt ? (["retry_fill"] as const) : []), "defer", "archive"];
 		case "deferred":
 			return ["apply", "archive"];
 		default:
@@ -582,6 +594,21 @@ export function parseActionInput(raw: unknown): ActionInput {
 const LEAD_ACTIONS: readonly ApplicationAction[] = ["apply", "skip", "defer", "archive"];
 
 /**
+ * Is this a REPEAT of a decision this application already holds? (#981)
+ *
+ * The card stops offering Approve the moment an application is approved — it is answered, and the
+ * next thing to do is the run that spends it. But a double-clicked button, a retried MCP call and a
+ * request whose response was lost all arrive as a second identical POST, and refusing those as an
+ * illegal move turns an idempotent action into a 409 the caller cannot tell from a real conflict. So
+ * a repeat converges on the authorization that exists (`approveAndContinue` reports it as
+ * `existing`), while anything that is not that exact repeat is still refused: a SPENT authorization
+ * is not `usable`, so it does not qualify here.
+ */
+function isIdempotentApprovalRepeat(item: QueueItem, app: JobApplication, action: ApplicationAction): boolean {
+	return action === "approve_and_proceed" && !!item.submitAuthorization?.usable && isPostFillApproval(app, item.fillRun);
+}
+
+/**
  * Perform one action — the single entry point for the console and every typed MCP tool. Compare-and-set
  * on the status (and version, when given) the caller saw; a stale or invalid move is refused (409)
  * with nothing written. Returns the item as it now stands.
@@ -625,7 +652,7 @@ export async function performApplicationAction(env: Env, uid: string, instanceId
 	const { item } = await getQueueItem(env, uid, instanceId, { applicationId: input.applicationId });
 	const app = (await getOwnedApplication(env, uid, input.applicationId)) as JobApplication;
 	if ((input.expectedStatus !== app.status && input.expectedStatus !== item.status) || (input.expectedVersion !== undefined && input.expectedVersion !== app.stateVersion)) throw stale(app.status, app.stateVersion);
-	if (!item.actions.includes(input.action)) {
+	if (!item.actions.includes(input.action) && !isIdempotentApprovalRepeat(item, app, input.action)) {
 		const why = input.action === "start_fill" && app.status === "materials_ready" ? " — this application's policy does not allow an automatic submit; use request_review" : "";
 		throw new HttpError(409, `An application in ${app.status} cannot ${input.action.replace(/_/g, " ")}${why}${item.actions.length ? ` (it can: ${item.actions.join(", ")})` : ""}.`);
 	}
@@ -652,6 +679,15 @@ export async function performApplicationAction(env: Env, uid: string, instanceId
 			return after({ runId: out.run.id });
 		}
 		case "approve_and_proceed": {
+			// TWO stages, ONE action name — which is what keeps the console and MCP exposing exactly the
+			// same permitted action and result (#981). Post-fill (awaiting_review, or parked at a
+			// checkpoint) the form already exists: record the decision and continue the EXACT run, or
+			// say plainly that its session has gone and name `retry_fill`. Pre-fill is #973's path below.
+			if (isPostFillApproval(app, item.fillRun)) {
+				const run = app.fillRunId ? await fillRun(env, uid, pipeline, app).catch(() => null) : null;
+				const key = input.idempotencyKey ?? `approve-continue:${app.id}:${app.stateVersion}`;
+				return after(approveContinueResult(await approveAndContinue(env, uid, app, run, { idempotencyKey: key }, now)));
+			}
 			// ONE owner action: record the authorization, then dispatch the fill that spends it. The
 			// grant is idempotent (unique on the application), and `startApplicationFill` is already
 			// replay-safe on the event id — so a double-click, a retried MCP call and a redelivered
@@ -674,7 +710,9 @@ export async function performApplicationAction(env: Env, uid: string, instanceId
 				now,
 			);
 			const out = await startApplicationFill(env, runner, uid, app.readyEvent, "owner");
-			const after = await getSubmitAuthorization(env, app.id, uid);
+			// Named for what it is. It used to be `after`, which SHADOWED the `after()` helper every
+			// other branch returns through — invisible until a second statement in this block needed it.
+			const spent = await getSubmitAuthorization(env, app.id, uid);
 			return {
 				item: (await getQueueItem(env, uid, instanceId, { applicationId: app.id })).item,
 				result: {
@@ -682,7 +720,7 @@ export async function performApplicationAction(env: Env, uid: string, instanceId
 					approval: granted.kind,
 					authorizationId: granted.authorization.id,
 					// What actually happened to the authorization: `consumed` is the run that may submit.
-					authorizationConsumedBy: after?.consumedRunId ?? null,
+					authorizationConsumedBy: spent?.consumedRunId ?? null,
 					runId: out.run?.id ?? null,
 					mode: out.run?.policy.mode ?? null,
 					nextAction: out.run?.policy.mode === "auto_submit" ? "the Runner fills this application and submits it" : "the Runner fills this application and stops for review",

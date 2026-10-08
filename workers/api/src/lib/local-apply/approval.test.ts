@@ -7,7 +7,7 @@
  * list in `APPROVAL_SATISFIES`.
  */
 import { describe, expect, it } from "vitest";
-import { APPROVAL_SATISFIES, type ApprovableApplication, type SubmitAuthorization, approvalEligibility, approvalState, fingerprintOf, sameFingerprint } from "./approval.js";
+import { APPROVAL_SATISFIES, type ApprovableApplication, type SubmitAuthorization, approvalEligibility, approvalStageOf, approvalState, fingerprintOf, sameFingerprint } from "./approval.js";
 import { RUNNER_DEFAULTS, evaluateSubmitGate, mergeRunnerSettings } from "./policy.js";
 
 const APP: ApprovableApplication = {
@@ -172,5 +172,49 @@ describe("the gate: an approval answers intent, never safety (#973)", () => {
 		const r = evaluateSubmitGate(gateInput({ approval: { id: "auth-1", usable: false } }));
 		expect(r.allowed).toBe(false);
 		expect(r.checks.find((c) => c.check === "submission_approved")).toMatchObject({ ok: false, why: expect.stringMatching(/no longer usable/) });
+	});
+});
+
+/**
+ * WHEN an approval is a decision (#981). The rule is here, in the pure half, because it is what
+ * decides whether a card offers the button at all — and the live gap was an `awaiting_review`
+ * application that offered defer, archive and nothing else.
+ */
+describe("the two stages at which the owner can approve (#981)", () => {
+	const at = (status: string) => ({ status }) as Parameters<typeof approvalStageOf>[0];
+
+	it("materials_ready is the pre-fill decision — it dispatches the fill that spends it", () => {
+		expect(approvalStageOf(at("materials_ready"), null)).toBe("pre_fill");
+	});
+
+	it("awaiting_review is the post-fill decision: the form is filled and nothing was sent", () => {
+		expect(approvalStageOf(at("awaiting_review"), null)).toBe("post_fill");
+	});
+
+	it("a run parked at a SUPERVISOR CHECKPOINT is the same situation one step earlier", () => {
+		expect(approvalStageOf(at("blocked"), { status: "paused", pauseReason: "supervisor_checkpoint" })).toBe("post_fill");
+	});
+
+	it("a run parked on a QUESTION is not — a submission authorizes none of those", () => {
+		expect(approvalStageOf(at("blocked"), { status: "paused", pauseReason: "missing_answer" })).toBeNull();
+		expect(approvalStageOf(at("blocked"), { status: "paused", pauseReason: "challenge" })).toBeNull();
+		expect(approvalStageOf(at("blocked"), { status: "running", pauseReason: null })).toBeNull();
+		expect(approvalStageOf(at("blocked"), null)).toBeNull();
+	});
+
+	it("nothing else is a stage — mid-fill is a run already holding the decision", () => {
+		for (const status of ["tailoring", "filling", "submitted", "failed", "cancelled", "deferred", "archived"]) {
+			expect(approvalStageOf(at(status), null), status).toBeNull();
+		}
+	});
+
+	it("eligibility follows the stage it is GIVEN, not the status it can guess", () => {
+		// The caller sees the run; this function must not re-derive a stage from half the facts.
+		const filled = { ...APP, status: "awaiting_review" };
+		expect(approvalEligibility(filled, null, "post_fill")).toEqual({ eligible: true });
+		expect(approvalEligibility(filled, null, null).eligible).toBe(false);
+		expect(approvalEligibility({ ...APP, status: "blocked" }, null, "post_fill")).toEqual({ eligible: true });
+		// And the refusals that are about the application, not the stage, still hold at both stages.
+		expect(approvalEligibility({ ...filled, submitAttemptedAt: 1 }, null, "post_fill").why).toMatch(/already attempted/);
 	});
 });

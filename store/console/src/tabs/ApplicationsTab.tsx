@@ -4,7 +4,7 @@ import { usePolling } from "@proagentstore/sdk/hooks";
 import Button from "../components/Button";
 import Card from "../components/Card";
 import LoadFailed from "../components/LoadFailed";
-import { ACTION_LABEL, CONFIRM, QUEUE_STATUS_LABEL, actionBody } from "../lib/applications";
+import { QUEUE_STATUS_LABEL, actionBody, actionLabel, confirmText } from "../lib/applications";
 import { TONE_CLASS } from "../lib/localBrowser";
 import type { ApplicationActionResponse, ApplicationRunnerSettingsView, ApplicationQueueAction, ApplicationQueueItem, ApplicationQueueStatus, ApplicationQueueView, ApplicationTraceView, ConnectionDeliveryList } from "../lib/types";
 
@@ -138,14 +138,14 @@ function Detail({ instanceId, item, onChanged }: { instanceId: string; item: App
 	const questions = pause?.question ? [pause.question] : item.questions;
 
 	const act = async (action: ApplicationQueueAction) => {
-		const confirmText = CONFIRM[action];
-		if (confirmText && !window.confirm(confirmText)) return;
+		const ask = confirmText(action, item.status);
+		if (ask && !window.confirm(ask)) return;
 		setBusy(action);
 		setMsg("");
 		try {
 			const given = questions.map((q) => ({ question: q, answer: (answers[q] ?? "").trim() })).filter((a) => a.answer);
 			const out = await api<ApplicationActionResponse>(`/v1/instances/${instanceId}/application-queue/actions`, { method: "POST", body: JSON.stringify(actionBody(item, action, { answers: action === "resume" ? given : undefined })) });
-			setMsg(`${ACTION_LABEL[action]}: now ${QUEUE_STATUS_LABEL[out.item.status].label}.`);
+			setMsg(`${actionLabel(action, item.status)}: now ${QUEUE_STATUS_LABEL[out.item.status].label}.`);
 			onChanged();
 		} catch (e) {
 			setMsg(e instanceof Error ? e.message : String(e));
@@ -245,7 +245,7 @@ function Detail({ instanceId, item, onChanged }: { instanceId: string; item: App
 			<fieldset className="flex flex-wrap gap-1.5 border-0 p-0 m-0 min-w-0" aria-label={`Actions for ${item.title}`}>
 				{item.actions.map((a) => (
 					<Button key={a} size="sm" variant={a === "start_fill" ? "danger" : a === "request_review" || a === "apply" ? "primary" : "secondary"} disabled={!!busy} onClick={() => act(a)}>
-						{busy === a ? "…" : ACTION_LABEL[a]}
+						{busy === a ? "…" : actionLabel(a, item.status)}
 					</Button>
 				))}
 				{item.applicationId && (

@@ -43,6 +43,18 @@ export const ACTION_LABEL: Record<ApplicationQueueAction, string> = {
 	approve_and_proceed: "Approve & proceed",
 };
 
+/**
+ * The same decision has two names, because by then it is two different acts (#981).
+ *
+ * Before the fill it PROCEEDS: nothing exists yet and approving dispatches the run. After the fill
+ * it CONTINUES: the owner is looking at a form that is already populated and waiting. The server
+ * offers `approve_and_proceed` pre-fill only on `materials_ready`, so the status is all it takes to
+ * tell them apart — and the action name stays one name, which is what keeps this surface, the board
+ * and MCP exposing exactly the same permitted action.
+ */
+export const actionLabel = (action: ApplicationQueueAction, status?: string): string =>
+	action === "approve_and_proceed" && status && status !== "materials_ready" ? "Approve & continue" : ACTION_LABEL[action];
+
 /** Actions that change something outside PAGS records, and so ask before they run. */
 export const CONFIRM: Partial<Record<ApplicationQueueAction, string>> = {
 	start_fill: "Fill this application and SUBMIT it to the employer if the site accepts it? Your auto-submit policy allows it for this one.",
@@ -51,6 +63,13 @@ export const CONFIRM: Partial<Record<ApplicationQueueAction, string>> = {
 	cancel: "Stop the running tailoring or fill?",
 };
 
+/** The post-fill wording: what is being authorised is the form that is already on the screen (#981). */
+const APPROVE_CONTINUE_CONFIRM =
+	"Approve THIS filled application and let it be submitted? The approval covers this one job only and is used once. If its browser session has already closed, the approval is held and a fresh run sends it — nothing is submitted twice.";
+
+export const confirmText = (action: ApplicationQueueAction, status?: string): string | undefined =>
+	action === "approve_and_proceed" && status && status !== "materials_ready" ? APPROVE_CONTINUE_CONFIRM : CONFIRM[action];
+
 /** The request for one action on one item — always with the status and version it was read in. */
 export function actionBody(item: ApplicationQueueItem, action: ApplicationQueueAction, extra: { answers?: Array<{ question: string; answer: string }> } = {}): Record<string, unknown> {
 	const target = item.applicationId
@@ -58,6 +77,11 @@ export function actionBody(item: ApplicationQueueItem, action: ApplicationQueueA
 		: { scout_instance_id: item.scoutInstanceId, record_id: item.leadId, expected_version: item.leadVersion ?? undefined };
 	// #973: an approval carries the key the server would derive anyway, so a double-click or a
 	// retried request reuses the same authorization instead of racing for a second one.
-	const idem = action === "approve_and_proceed" && item.applicationId ? { idempotency_key: `approve:${item.applicationId}:${item.stateVersion ?? 0}` } : {};
+	// The key shape follows the STAGE, matching what the server derives for the same decision, so a
+	// retry from either surface reuses one authorization instead of racing for a second.
+	const idem =
+		action === "approve_and_proceed" && item.applicationId
+			? { idempotency_key: `${item.status === "materials_ready" ? "approve" : "approve-continue"}:${item.applicationId}:${item.stateVersion ?? 0}` }
+			: {};
 	return { action, expected_status: item.status, ...target, ...idem, ...(extra.answers?.length ? { answers: extra.answers } : {}) };
 }

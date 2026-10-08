@@ -117,14 +117,54 @@ export function approvalState(auth: SubmitAuthorization | null, app: ApprovableA
 }
 
 /**
+ * WHEN the owner is giving the decision — the two moments at which it means something (#981).
+ *
+ * `pre_fill`   `materials_ready`: nothing has been filled yet, so the approval dispatches the fill
+ *              that spends it. This is #973's original and only stage.
+ * `post_fill`  the form is filled and nothing was sent: the run stopped `awaiting_review`, or it is
+ *              parked at a supervisor checkpoint. The owner has now SEEN the populated form, which
+ *              is the strongest moment there is to decide — and it was the one moment with no way
+ *              to decide at all (#981): the queue offered defer, archive and not-interested, so an
+ *              owner who asked for a review-mode fill could never then say "send this one".
+ *
+ * Mid-fill (`filling`) is deliberately absent: an approval granted while the engine is working
+ * would be a second authority over a run already in flight, and the run's own recorded policy is
+ * what the runner is executing.
+ */
+export const APPROVAL_STAGES = ["pre_fill", "post_fill"] as const;
+export type ApprovalStage = (typeof APPROVAL_STAGES)[number];
+
+/** The run facts the stage depends on. Null when the application has no open run. */
+export interface ApprovalRunContext {
+	status: string;
+	/** `supervisor_checkpoint` | `missing_answer` | … — a paused run's reason, when it is paused. */
+	pauseReason: string | null;
+}
+
+/**
+ * Which stage this application is at, or null when an approval is not a meaningful decision here.
+ *
+ * `blocked` counts ONLY while a run is parked at a supervisor checkpoint: that is the filled form
+ * waiting on a decision, which is the same situation as `awaiting_review` one step earlier. A
+ * `blocked` application with no such run is stopped for some other reason (a missing answer, a
+ * captcha, an unusable checkout), and approving a submission is not the answer to any of those.
+ */
+export function approvalStageOf(app: Pick<ApprovableApplication, "status">, run: ApprovalRunContext | null): ApprovalStage | null {
+	if (app.status === "materials_ready") return "pre_fill";
+	if (app.status === "awaiting_review") return "post_fill";
+	if (app.status === "blocked" && run?.status === "paused" && run.pauseReason === "supervisor_checkpoint") return "post_fill";
+	return null;
+}
+
+/**
  * May the owner approve this application now? Separate from {@link approvalState}, which judges an
  * authorization that exists: this judges whether granting one is meaningful.
  *
- * `materials_ready` only. Earlier there is nothing to send; later a run already holds the decision,
- * and an approval granted mid-fill would be a second authority over a run already in flight.
+ * The stage is taken rather than re-derived, because only the caller can see the run (#981). Absent,
+ * it falls back to what the status alone can say — which is every pre-#981 call site, unchanged.
  */
-export function approvalEligibility(app: ApprovableApplication, auth: SubmitAuthorization | null): { eligible: boolean; why?: string } {
-	if (app.status !== "materials_ready") return { eligible: false, why: `an application in ${app.status} is not waiting for a submission decision` };
+export function approvalEligibility(app: ApprovableApplication, auth: SubmitAuthorization | null, stage: ApprovalStage | null = approvalStageOf(app, null)): { eligible: boolean; why?: string } {
+	if (!stage) return { eligible: false, why: `an application in ${app.status} is not waiting for a submission decision` };
 	if (app.submitAttemptedAt !== null) return { eligible: false, why: "a submit was already attempted for this application" };
 	const state = approvalState(auth, app);
 	// A live approval is not re-granted; the caller gets the one that exists (idempotency), which is

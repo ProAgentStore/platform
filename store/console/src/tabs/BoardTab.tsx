@@ -211,7 +211,8 @@ export default function BoardTab({ instanceId }: { instanceId: string }) {
 	const handleApplicationAction = async (item: BoardItem, action: string) => {
 		const app = item.application;
 		if (!app) return;
-		const confirmText = APPLICATION_CONFIRM[action];
+		// The post-fill variant when there is one (#981): the same action, a different thing to confirm.
+		const confirmText = (app.applicationStatus !== "materials_ready" ? APPLICATION_CONFIRM[`${action}:post_fill`] : undefined) ?? APPLICATION_CONFIRM[action];
 		if (confirmText && !confirm(confirmText)) return;
 		setBusy(action);
 		try {

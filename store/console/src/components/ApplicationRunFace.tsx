@@ -47,10 +47,21 @@ export const APPLICATION_ACTION_LABEL: Record<string, string> = {
 	generate_materials: "Tailor materials",
 };
 
+/**
+ * The label for one control, STAGE-aware for the approval (#981): before the fill it proceeds, after
+ * the fill it continues. Falls back to the table, which is also what decides whether a control is
+ * rendered at all.
+ */
+export const applicationControlLabel = (action: string, status?: string): string =>
+	action === "approve_and_proceed" && status && status !== "materials_ready" ? "Approve & continue" : (APPLICATION_ACTION_LABEL[action] ?? action);
+
 /** The controls that reach an employer's site, or stop live work — they ask before they run. */
 export const APPLICATION_CONFIRM: Record<string, string> = {
 	start_fill: "Fill this application and SUBMIT it to the employer if the site accepts it?",
 	approve_and_proceed: "Approve THIS application and submit it to the employer? The approval covers this one job only and is used once.",
+	// After the fill the owner is authorising the form that is already populated and waiting (#981).
+	"approve_and_proceed:post_fill":
+		"Approve THIS filled application and let it be submitted? The approval covers this one job only and is used once. If its browser session has already closed, the approval is held and a fresh run sends it — nothing is submitted twice.",
 	cancel: "Stop the running tailoring or fill?",
 };
 
@@ -95,9 +106,9 @@ export function ApplicationRunControls({ item, busy, onAction, compact }: { item
 							onAction(a);
 						}}
 						className={`${compact ? "shrink-0 " : ""}text-2xs px-2 py-1 rounded border border-line text-accent hover:bg-accent-soft font-bold disabled:opacity-40`}
-						title={APPLICATION_ACTION_LABEL[a]}
+						title={applicationControlLabel(a, item.application?.applicationStatus)}
 					>
-						{busy === a ? "…" : APPLICATION_ACTION_LABEL[a]}
+						{busy === a ? "…" : applicationControlLabel(a, item.application?.applicationStatus)}
 					</button>
 				))}
 		</>

@@ -21,13 +21,18 @@ type DB = Pick<Env, "DB"> & Partial<Pick<Env, "AGENT">>;
  *  - Retry (#958): a stopped TAILORING goes back to `tailoring`; a stopped FILL goes back to
  *    `materials_ready` and is started again. Which one applies is decided by the caller from
  *    `fill_run_id`, and neither is allowed after any submit attempt.
+ *  - `awaiting_review` → `materials_ready` (#981): the filled form was never sent and its browser
+ *    session has closed with the run, so carrying the owner's approval to the employer means
+ *    filling again. It is as safe as the other two retries and for the same reason — `retryFill`
+ *    refuses any application that has already ATTEMPTED a submit — and it is what makes the
+ *    approve-and-continue decision reachable from the state the owner is actually looking at.
  */
 export const APPLICATION_TRANSITIONS: Readonly<Partial<Record<ApplicationStatus, readonly ApplicationStatus[]>>> = {
 	tailoring: ["materials_ready", "blocked", "failed", "cancelled"],
 	materials_ready: ["filling", "deferred", "archived"],
 	filling: ["awaiting_review", "submitted", "blocked", "failed", "archived"],
 	blocked: ["tailoring", "materials_ready", "filling", "awaiting_review", "submitted", "failed", "deferred", "archived"],
-	awaiting_review: ["deferred", "archived"],
+	awaiting_review: ["materials_ready", "filling", "deferred", "archived"],
 	deferred: ["materials_ready", "archived"],
 	failed: ["tailoring", "materials_ready", "archived"],
 	cancelled: ["tailoring", "archived"],

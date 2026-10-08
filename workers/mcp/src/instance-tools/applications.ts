@@ -357,7 +357,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 	const approve = decision(
 		"approve_application",
 		["approve_and_proceed"],
-		"A single-use authorization would be recorded for THIS application, and the Runner would fill it and submit it once — no daily cap is required or consumed.",
+		"A single-use authorization would be recorded for THIS application. Before the fill, the Runner would then fill it and submit it once; after the fill (awaiting_review, or parked at a checkpoint) the exact run would be continued where it can be, and otherwise the approval is held for retry_application. No daily cap is required or consumed.",
 		{
 			idempotency_key: z.string().optional().describe("Your own key for this approval, so a retry you cannot tell succeeded reuses the same authorization instead of granting a second one. Omit it and the server derives one from the application and the state version you approved."),
 			confirm: z.string().optional().describe('Must be "approve_application": this authorizes a real submission to an employer, which cannot be recalled.'),
@@ -366,7 +366,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 	);
 	server.tool(
 		"approve_application",
-		"Approve ONE job application and let it be submitted — the owner's per-application decision (#973), the same command the Applications board's \"Approve & proceed\" button sends. It records a durable, single-use authorization bound to this application and the exact state version you pass, then dispatches the fill that spends it; the reply carries the authorization, the run and the next action. This is NOT a global auto-submit toggle: it requires no daily cap, consumes none, and authorizes nothing but this one application. It cannot be replayed — for another lead, after the materials are re-tailored, or after the run that holds it. The Runner still has to pass its own submit gate (complete materials, an allow-listed domain, no blocker, nothing else running) and its browser safety checks, so an approval permits a submission rather than forcing one. Accepted only for a `materials_ready` application whose `actions` include approve_and_proceed. Pass `dry_run` first to see what would happen.",
+		"Approve ONE job application and let it be submitted — the owner's per-application decision (#973, #981), the same command the Applications board's \"Approve & proceed\" / \"Approve & continue\" button sends. It records a durable, single-use authorization bound to this application and the exact state version you pass; the reply carries the authorization, the run and the next action. This is NOT a global auto-submit toggle: it requires no daily cap, consumes none, and authorizes nothing but this one application. It cannot be replayed — for another lead, after the materials are re-tailored, or after the run that holds it. WHAT IT THEN DOES depends on where the application is, and the reply says which happened. `materials_ready`: it dispatches the fill that spends the authorization. `awaiting_review`, or an application parked at a supervisor checkpoint (#981): the form is already filled and nothing was sent, so it continues THAT run — releasing the exact checkpoint it is parked at (`resumable: true`, with `checkpointId`) when the run is still open. When the run has ended its browser session is gone with it, so nothing is resumed and nothing is recreated: the reply is `resumable: false` with a closed-vocabulary `reason` and `recovery: \"retry_fill\"`, and the approval is HELD for that retry (retry_application), which spends it and may submit once. The Runner still has to pass its own submit gate (complete materials, an allow-listed domain, no blocker, nothing else running) and its browser safety checks, so an approval permits a submission rather than forcing one. Accepted only when the item's `actions` include approve_and_proceed. Pass `dry_run` first to see what would happen.",
 		approve.shape,
 		approve.handler,
 	);
@@ -395,10 +395,10 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 		review.handler,
 	);
 
-	const retry = decision("retry_application", ["retry_fill", "retry_tailoring"], "A fresh run of that stage would start, under a new key.", runnerArg);
+	const retry = decision("retry_application", ["retry_fill", "retry_tailoring"], "A fresh run of that stage would start, under a new key. If this application holds an unspent approval (#981), that run is the one that spends it and may submit once.", runnerArg);
 	server.tool(
 		"retry_application",
-		"Retry the stage that stopped. retry_fill: a fill that ended blocked/failed — refused after any submit attempt, which needs checking on the employer's site instead. retry_tailoring: tailoring that stopped.",
+		"Retry the stage that stopped. retry_fill: a fill that ended blocked, failed or awaiting_review — refused after any submit attempt, which needs checking on the employer's site instead. This is the path approve_application names when a filled application's browser session has already closed (#981): the fresh run spends the approval that is being held and may submit once, and without an approval it fills and stops for review again. retry_tailoring: tailoring that stopped.",
 		retry.shape,
 		retry.handler,
 	);

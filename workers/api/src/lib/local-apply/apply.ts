@@ -548,7 +548,12 @@ export async function cancelApplyRun(env: Env, uid: string, run: ApplyRun, now =
  * per-attempt key, so a repeated click finds the run it started.
  */
 export async function retryFill(env: Env, runnerInstanceId: string, uid: string, app: JobApplication, opts: { review?: boolean } = {}): Promise<StartFillOutcome> {
-	if (!app.fillRunId || !["blocked", "failed"].includes(app.status)) throw new HttpError(409, `A fill can be retried only after a fill run stopped; this application is ${app.status}${app.fillRunId ? "" : " and has not been filled"}.`);
+	// `awaiting_review` joined the list at #981, and it is the one the whole ticket turns on: that
+	// application's run STOPPED, nothing was sent, and the browser session that held its filled form
+	// is gone — so a fresh run is the only way to carry the owner's approval to the employer. It is
+	// as safe as the other two for the same reason: the guard below refuses any application that has
+	// already attempted a submit, and the approval it spends is single-use.
+	if (!app.fillRunId || !["blocked", "failed", "awaiting_review"].includes(app.status)) throw new HttpError(409, `A fill can be retried only after a fill run stopped; this application is ${app.status}${app.fillRunId ? "" : " and has not been filled"}.`);
 	if (app.submitAttemptedAt) throw new HttpError(409, "A final submit was already attempted for this application; it will not be filled again. Check the employer's site.");
 	const ready = app.readyEvent as { eventId?: unknown } | null;
 	if (!ready || typeof ready.eventId !== "string") throw new HttpError(409, "The application has no materials_ready event to fill from.");

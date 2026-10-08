@@ -720,6 +720,15 @@ const PINS = {
 	// mapped so every reader agrees) and `claimFreeSessionDriver` (apply-now's never-steal claim, beside
 	// the claim/release pair it must not diverge from). Both are repo/session persistence.
 	"workers/api/src/lib/coding-store.ts": 871,
+	// NEW at #981: the Applications control surface crossed 800 adding the post-fill approval stage —
+	// the action table entries that offer it on `awaiting_review` and at a supervisor checkpoint, and
+	// the four-line branch that performs it. The decision, the continuation and the reply shape all
+	// live in `lib/local-apply/approve-continue.ts`, which is why this is +23 and not +190; what is
+	// here is the queue's own vocabulary (which actions a status permits), the four-line branch, and
+	// `isIdempotentApprovalRepeat` — the one rule that cannot live in the apply domain because it is
+	// about this file's own permitted-action check. That vocabulary belongs with the rest of the
+	// lifecycle table rather than in a second file nobody reads beside it.
+	"workers/api/src/lib/applications/control.ts": 823,
 	// -1 at #325: the JSON-string coercion create_agent and update_agent each had inline moved
 	// to `http.ts` as `parseJsonArg`, which is where the two copies could stop disagreeing about
 	// what a MALFORMED string means (create silently dropped it, update refused). Pin lowered so
@@ -1463,7 +1472,10 @@ const PINS = {
 	// were SPLIT OUT first (components/ApplicationRunFace.tsx, following BoardIssueFace), which took
 	// the file from 900 to 801; what is left is the board itself. Lowering it further means splitting
 	// the card renderers, which is a change to the generic board, not to this ticket.
-	"store/console/src/tabs/BoardTab.tsx": 801,
+	// +1 at #981: the application controls pick the POST-FILL confirmation when the card is past
+	// `materials_ready`, which is one ternary — the wording itself lives in ApplicationRunFace's
+	// table beside the labels, where the rest of the card's vocabulary already is.
+	"store/console/src/tabs/BoardTab.tsx": 802,
 	"store/console/src/pages/AgentDetail.tsx": 970, // +1 at #957: the local_apply runtime option. +1 at #956: the local_artifact runtime option. +6 at #894: a link to a deleted agent says so (MissingSubject) instead of loading forever.
 	// First entry at #477: supervision.ts crossed 800 lines before this PR — the ratchet did not
 	// catch it because it was not tracked. Adding the entry to record the current state; the right
