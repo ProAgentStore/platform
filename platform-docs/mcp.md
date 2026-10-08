@@ -493,7 +493,7 @@ per-connection:
 
 | Surface | Gated tools |
 |---|---|
-| `apply` | `upload_resume`, `apply_to_job`, `get_profile`, `get_apply_tips` |
+| `apply` | `upload_resume`, `apply_to_job` (retired start guidance), `get_profile`, `get_apply_tips` |
 | `repo` | `ingest_repo`, `ingest_repo_status`, `remove_repo` |
 | `coding` | `system_status`, `coding_diagnostics`, `coding_repos_list`, `coding_engine_get`, `coding_engine_set`, `coding_engine_reauth`, `coding_repo_add`, `coding_repo_remove`, `coding_sessions_list`, `coding_session_open`, `coding_session_capture`, `coding_session_message`, `coding_session_restart`, `coding_session_end`, `coding_session_fresh`, `coding_timeline`, `coding_loop_trace`, `coding_terminal`, `coding_instance_deploy_status` |
 
@@ -502,6 +502,12 @@ actually there rather than assuming a tool exists; the surface is versioned and 
 change. The full table — every tool with its scope, `dry_run` support, and `confirm`
 value — is in
 [`workers/mcp/README.md`](https://github.com/ProAgentStore/platform/blob/main/workers/mcp/README.md).
+
+`apply_to_job` remains registered only to give cached clients an actionable migration response:
+legacy `JOB_APPLY` accepts no new starts, while existing tasks and history stay readable. Start
+new work through the Scout → Tailor → Runner tools: `triage_application`,
+`generate_application_materials`, then `request_application_review` or
+`start_application_fill`.
 
 ## Capabilities
 

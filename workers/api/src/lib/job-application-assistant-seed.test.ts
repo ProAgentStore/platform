@@ -1,9 +1,10 @@
 /**
  * Migration 0185 turns the Job Application Assistant from an operator-created production row
  * into a first-party catalog seed. Migration 0186 then converges that already-existing
- * production row on the autonomous-submission identity. These assertions execute the migrations
- * against SQLite: unlike a SQL text check, they prove a fresh database has a row a subscriber
- * can discover and that the capability/identity payload survives the platform's normal parser.
+ * production row on the autonomous-submission identity. Migration 0189 then retires the legacy
+ * catalog entry without deleting it. These assertions execute the migrations against SQLite:
+ * unlike a SQL text check, they prove the historic row and its capability/identity payload remain
+ * readable while fresh subscribers can no longer discover it.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -31,13 +32,13 @@ function jobAgent(d1: ReturnType<typeof realSchemaD1>): AgentRow {
 	return row as unknown as AgentRow;
 }
 
-describe("migration 0185 — Job Application Assistant catalog seed", () => {
-	it("creates one active, published agent on a fresh database", () => {
+describe("legacy Job Application Assistant catalog row", () => {
+	it("preserves one active but retired agent on a fresh database", () => {
 		const d1 = realSchemaD1();
 		try {
 			const row = jobAgent(d1);
 			expect(row.id).toBe("agent_job_application_assistant");
-			expect(row.visibility).toBe("published");
+			expect(row.visibility).toBe("draft");
 			expect(row.status).toBe("active");
 			expect(row.store_type).toBe("agent");
 			expect(row.category).toBe("productivity");
@@ -48,7 +49,7 @@ describe("migration 0185 — Job Application Assistant catalog seed", () => {
 		}
 	});
 
-	it("declares the apply surface and JOB_APPLY browser workflow, rather than relying on the legacy slug fallback", () => {
+	it("keeps its declared apply surface and JOB_APPLY workflow for existing-instance reads", () => {
 		const d1 = realSchemaD1();
 		try {
 			const row = jobAgent(d1);

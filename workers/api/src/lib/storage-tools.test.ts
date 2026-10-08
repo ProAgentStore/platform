@@ -28,58 +28,6 @@ function makeEngine() {
 	return new AgentStorageEngine(mockDoStorage(), null, null, null, "test-agent", null);
 }
 
-function mockRuntimeEnv(opts?: { profile?: Record<string, unknown> }) {
-	const first = vi.fn(async (sql: string) => {
-		if (sql.includes("FROM instance_runtimes")) {
-			return {
-				endpoint_url: "https://runner.example.test",
-				token_plaintext: "runner-token",
-				token_ciphertext: null,
-				token_dek_wrapped: null,
-				token_iv: null,
-			};
-		}
-		if (sql.includes("FROM user_profile")) return opts?.profile ?? null;
-		return null;
-	});
-	// run() returns a D1-shaped result; changes:1 so the apply single-flight claim insert
-	// (INSERT … WHERE NOT EXISTS) reads as "claimed" and the apply proceeds.
-	const bind = vi.fn((sql: string) => ({ first: () => first(sql), run: vi.fn(async () => ({ meta: { changes: 1 } })), all: vi.fn(async () => ({ results: [] })) }));
-	const prepare = vi.fn((sql: string) => ({ bind: () => bind(sql) }));
-	const create = vi.fn(async () => ({ id: "wf_123" }));
-	return {
-		env: {
-			DB: { prepare } as unknown as D1Database,
-			JOB_APPLY: { create },
-			SESSION_SIGNING_KEY: "test-secret",
-			RELAY: {
-				idFromName: () => ({ name: "test" }),
-				get: () => ({
-					fetch: async (req: Request) => {
-						// The live-runner probe (relayConnected → requireLiveRuntime) hits /status —
-						// report connected so apply routing resolves this machine as the live node.
-						if (new URL(req.url).pathname === "/status") return Response.json({ connected: true });
-						// Relay stub: forward the command to the global fetch mock
-						const body = await req.json() as { path: string; body: unknown };
-						return globalThis.fetch(`https://runner.example.test${body.path}`, {
-							method: "POST",
-							headers: { "Content-Type": "application/json" },
-							body: JSON.stringify(body.body ?? {}),
-						});
-					},
-				}),
-			},
-			// Only the bindings the apply path touches are stubbed; `executeStorageTool` takes the
-			// real `Env`, so the stand-in is cast to it rather than to a narrower shape the callee
-			// would then have to be widened past.
-		} as unknown as Env,
-		prepare,
-		bind,
-		first,
-		create,
-	};
-}
-
 describe("storage tools", () => {
 	afterEach(() => {
 		vi.unstubAllGlobals();
@@ -286,114 +234,23 @@ describe("storage tools", () => {
 		expect(result.success).toBe(true);
 	});
 
-	it("starts a real-submission job workflow even when the tool call requests dry run", async () => {
+	it("refuses the retired chat apply tool before it can create a legacy task", async () => {
 		const engine = makeEngine();
-		const runtime = mockRuntimeEnv();
-		// Declared WITH fetch's arguments: a zero-arg `vi.fn` records a zero-length call tuple, and
-		// the assertion below reads the request body back out of `calls[0][1]`.
-		const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(
-			JSON.stringify({ id: "task_123", status: "needs_approval" }),
-			{ status: 200, headers: { "content-type": "application/json" } },
-		));
-		vi.stubGlobal("fetch", fetchMock);
-
-		const result = await executeStorageTool(
-			{
-				name: "submit_job_application",
-				input: {
-					url: "https://example.com/jobs/1",
-					resume_path: "/tmp/test-candidate-resume.pdf",
-					full_name: "Test Candidate",
-					email: "candidate@example.com",
-					phone: "+1 555 0100",
-					location: "Test City",
-					linkedin: "https://linkedin.example/test-candidate",
-					work_authorization: "Authorized to work",
-					cover_note: "Interested in the role.",
-					// Tool schemas are advisory to an LLM. Autonomous apply always submits;
-					// an attempted dry-run override cannot downgrade that delegated action.
-					dryRun: false,
-					dry_run: false,
-				},
-			},
-			engine,
-			{ env: runtime.env, agentId: "instance-1", userId: "user-1" },
-		);
-
-		// New behavior: starts the LLM-driven JobApplyWorkflow (no legacy selector task).
-		expect(result.success).toBe(true);
-		expect(result.content).toContain("Application submission started");
-		expect(result.content).toContain("task_123"); // runner task id
-		expect(runtime.create).toHaveBeenCalledTimes(1); // JOB_APPLY.create — the brain started
-		// The autonomous chat tool always starts a real-submission workflow. The
-		// runner still pauses for CAPTCHA, stuck-widget, and missing-fact handoffs.
-		expect(runtime.create).toHaveBeenCalledWith(expect.objectContaining({
-			params: expect.objectContaining({
-				job: expect.objectContaining({ dryRun: false }),
-			}),
-		}));
-		// It creates the agent-driven task (job.apply_agent), not a legacy approval task.
-		expect(fetchMock).toHaveBeenCalledWith("https://runner.example.test/tasks", expect.any(Object));
-		const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-		const body = JSON.parse(String(init.body));
-		expect(body.type).toBe("job.apply_agent");
-		expect(body.input.url).toBe("https://example.com/jobs/1");
-	});
-
-	it("falls back to the candidate Profile when the model omits name/email", async () => {
-		const engine = makeEngine();
-		// The model called submit_job_application with only a url — no candidate.
-		// storage-tools passes candidate.fullName/email as "" (empty strings), which
-		// must NOT defeat the Profile fallback in startJobApply.
-		const runtime = mockRuntimeEnv({
-			profile: { first_name: "Sergey", last_name: "Ivochkin", email: "serge.pro.job@gmail.com" },
-		});
-		const fetchMock = vi.fn(async () => new Response(
-			JSON.stringify({ id: "task_123", status: "needs_approval" }),
-			{ status: 200, headers: { "content-type": "application/json" } },
-		));
-		vi.stubGlobal("fetch", fetchMock);
-
-		const result = await executeStorageTool(
-			{
-				name: "submit_job_application",
-				input: {
-					url: "https://example.com/jobs/1",
-					resume_path: "/tmp/resume.pdf",
-				},
-			},
-			engine,
-			{ env: runtime.env, agentId: "instance-1", userId: "user-1" },
-		);
-
-		expect(result.success).toBe(true);
-		expect(result.content).toContain("Application submission started");
-		expect(runtime.create).toHaveBeenCalledTimes(1);
-	});
-
-	it("does not create job application task without a résumé on file", async () => {
-		const engine = makeEngine();
-		const runtime = mockRuntimeEnv();
 		const fetchMock = vi.fn();
 		vi.stubGlobal("fetch", fetchMock);
 
-		// No résumé uploaded (mock env has no stored résumé) and no resume_path →
-		// the apply must refuse, not invent a file.
 		const result = await executeStorageTool(
 			{
 				name: "submit_job_application",
-				input: {
-					url: "https://example.com/jobs/1",
-					full_name: "Test Candidate",
-					email: "candidate@example.com",
-				},
+				input: { url: "https://example.com/jobs/1" },
 			},
 			engine,
-			{ env: runtime.env, agentId: "instance-1", userId: "user-1" },
+			{ agentId: "instance-1", userId: "user-1" },
 		);
 
 		expect(result.success).toBe(false);
-		expect(result.content).toContain("résumé");
+		expect(result.content).toContain("legacy JOB_APPLY workflow no longer accepts new applications");
+		expect(result.content).toContain("Scout → Tailor → Runner");
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 });

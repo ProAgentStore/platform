@@ -490,21 +490,16 @@ describe("dry-run mode", () => {
 		expect(h.auditEvents().some((e) => e.action === "dry_run")).toBe(true);
 	});
 
-	it("apply_to_job exposes no fill-only or dry-run controls and always starts a real submission", async () => {
+	it("apply_to_job keeps its cached schema but refuses new legacy JOB_APPLY starts locally", async () => {
 		const h = setup({ groups: ["apply"] });
 		expect(Object.keys(h.tools.get("apply_to_job")!.schema).sort()).toEqual(["instance_id", "token", "url"]);
-		await h.tools.get("apply_to_job")!.handler({
+		const res = await h.tools.get("apply_to_job")!.handler({
 			instance_id: "i1",
 			url: "https://jobs.example/apply/1",
 		});
-		expect(h.fetchStub.calls).toHaveLength(1);
-		expect(h.fetchStub.calls[0]).toMatchObject({
-			url: "https://api.test/v1/instances/i1/apply",
-			method: "POST",
-		});
-		expect(JSON.parse(h.fetchStub.calls[0].body ?? "{}")).toEqual({
-			url: "https://jobs.example/apply/1",
-		});
+		expect(res.content[0].text).toContain("legacy JOB_APPLY workflow no longer accepts new applications");
+		expect(res.content[0].text).toContain("Scout → Tailor → Runner");
+		expect(h.fetchStub.calls).toHaveLength(0);
 	});
 
 	it("apply_to_job requires destructive scope for its default real submission", async () => {

@@ -152,11 +152,11 @@ Transport is a **WebSocket relay**: the runner connects outbound to a per-(insta
 - `pags up --instance <id>` — pin to one agent (debug)
 - `pags up --headless` — headless mode
 
-The job-application agent runs on this runtime via the LLM-driven apply pipeline below, not a legacy fixed runtime task: `POST /v1/instances/:id/apply { url, resumePath }` starts `JobApplyWorkflow`, which drives the runtime's `/browser/snapshot` + `/browser/act` endpoints. The **Coder** agent runs its chosen engine (Claude Code, Codex, Gemini CLI, Grok, or a local command) on the session's assigned runner node; Claude uses a persistent structured session, while other engines run one-shot turns.
+The former `JOB_APPLY` job-application workflow is retired for new starts. Its endpoint, chat tool, and MCP tool return a migration response without creating work; existing tasks and history remain readable. New applications use the Scout → Tailor → Runner pipeline below. The **Coder** agent runs its chosen engine (Claude Code, Codex, Gemini CLI, Grok, or a local command) on the session's assigned runner node; Claude uses a persistent structured session, while other engines run one-shot turns.
 
-### Job application agent (LLM-driven apply)
+### Legacy job application agent (retired for new starts)
 
-The flagship apply flow: a **Brain** (Cloudflare Workflow `JobApplyWorkflow`, using the user's BYOK Claude) drives the **Hands** (the local browser runtime) to fill and submit a real application autonomously — snapshot the ARIA tree → pick one action → act → repeat. Durable + resumable (escapes the 30s Worker limit). Retry + attempt tracking per job. Three human-in-the-loop handoffs share one pause/resume machine: **captcha** (solve in a live takeover, auto-resumes), **stuck** (do one step + Resume), **needs_input** (supply a value → saved to Profile → resumes). Per-ATS tips are cached and fed back next run; "Open in Gmail" surfaces confirmation links. There is no final review or submit-confirmation gate: the workflow submits once it has grounded answers for the required form fields.
+The prior Cloudflare `JobApplyWorkflow` brain and browser-runner task are retained only so existing runs, board cards, traces, résumé metadata, and ATS history can still be read. No endpoint creates another one. For new work, use the owner-controlled Scout → Tailor → Runner pipeline: triage a lead, tailor materials, then ask for review or let the Application Runner fill under its configured submission policy.
 
 ### Skills and plugins
 
@@ -235,7 +235,7 @@ never built or deployed.
 | `coder-lead` | Coder Lead | `0063` | none — declarative capabilities |
 | `local-repo-chat` | Local Repo Chat | `0066` | none — declarative capabilities |
 | `tmux-operator` | tmux Operator | `0072` | none — declarative capabilities |
-| `job-application-assistant` | Job Application Assistant | `0185` | `agents/job-application-assistant` |
+| `job-application-assistant` | Job Application Assistant (retired) | `0185`, `0189` | `agents/job-application-assistant` |
 
 **Created through the API/console by the operator** — they exist only as D1 rows, so a fresh
 database will not have them. Treat this as known drift, not a design:

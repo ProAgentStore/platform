@@ -1,11 +1,17 @@
-# Job Application Assistant
+# Job Application Assistant (legacy, retired for new starts)
 
-A first-party ProAgentStore catalog agent. Give it a job URL and an LLM brain drives a real
-browser to complete and submit the application autonomously, answering only from your structured
-Profile and the résumé you uploaded. There is no review screen or final-submit prompt: when it
-has every required, grounded answer, it submits the application.
+> The `JOB_APPLY` workflow is retired for new starts. `POST /apply`, the chat
+> `submit_job_application` tool, and MCP `apply_to_job` return migration guidance without
+> creating a task. Existing task cards, history, traces, résumé data, and ATS tips remain
+> readable. Start new work through the Scout → Tailor → Runner pipeline: triage a lead, tailor
+> materials, then request review or start the Application Runner fill.
 
-**Architecture: remote brain, local hands.**
+A former first-party ProAgentStore catalog agent. Historically, an LLM brain drove a real
+browser to complete and submit an application autonomously, answering only from your structured
+Profile and the résumé you uploaded. That start path is now retired; the implementation remains
+documented here solely to explain existing history and data.
+
+**Historical architecture: remote brain, local hands.**
 
 | Half | Where it runs | What it is |
 |---|---|---|
@@ -19,59 +25,24 @@ minutes. The loop is: snapshot → Claude picks exactly ONE action → act → r
 The runner reaches the cloud over the outbound WebSocket relay (`RelayDO`). There is no
 cloudflared, no tunnel, and nothing inbound to expose.
 
-## Start an application
+## Retirement and migration
 
-There is exactly one apply path. Every entry point below funnels into `startJobApply()` in
-`workers/api/src/routes/instances-apply.ts`, which creates the `job.apply_agent` runner task
-and starts `JobApplyWorkflow`.
+There is no legacy apply start path. The three former entry points are retained only to answer
+with the same migration message; they do not create a `job.apply_agent` task, a workflow, a
+budget, or browser actions. Existing `job.apply_agent` records, workflow traces, board cards,
+uploaded résumé data, and per-ATS tips are not deleted.
 
-### HTTP
+For new work, use the existing owner-controlled pipeline:
 
-```http
-POST /v1/instances/{instanceId}/apply
-Authorization: Bearer <session token>
 
-{ "url": "https://boards.example.com/jobs/1234" }
-```
+1. Use the Job Search Scout to record and triage the lead (`triage_application` with `apply`).
+2. Run `generate_application_materials` through the Application Tailor.
+3. Use `request_application_review`, or `start_application_fill` when the Application Runner's
+   submission policy allows it.
 
-Returns `202 { workflowId, taskId, status: "running", url }`.
-
-| Field | Meaning |
-|---|---|
-| `url` | Required. The job posting / application URL (`http`/`https`). |
-| `resumePath` | Optional and normally omitted. If a résumé has been uploaded to the platform the route hands the runner a short-lived signed download URL instead; a local path is only a legacy same-machine fallback. |
-| `candidate`, `coverNote` | Optional overrides. Anything absent comes from the saved Profile. |
-
-Requires a **live runner** — `requireLiveRuntime` throws if no machine is connected. It also
-calls `requirePro`, which is currently a no-op in production because PAGS billing is deferred
-(`PAYWALL_ENFORCE` is unset, so `isPaywallEnforced` is false); it becomes a `402` gate if PAGS
-billing is ever enabled.
-
-Concurrency is single-flighted per instance: the runner drives one browser page, so a second
-concurrent apply on the same instance is rejected with `409` via an atomic placeholder-claim
-insert, not a check-then-act race.
-
-### MCP
-
-```text
-subscribe_agent
-upload_resume        # url= or content_base64=, or neither to re-parse the résumé on file
-apply_to_job         # starts an autonomous, real application submission
-instance_board       # watch progress and handoffs
-instance_task_events
-get_apply_tips       # what the agent has learned per ATS host
-get_profile
-```
-
-`apply_to_job` starts a real submission under the caller's `destructive` scope. It is not a
-separate implementation: it starts the same durable workflow and browser task as the HTTP and
-chat paths.
-
-### Chat tool
-
-The chat agent exposes `submit_job_application`. The **name** is legacy — it predates the
-workflow — but it is not a separate implementation: it calls the same `startJobApply()` and
-starts a real submission.
+`POST /v1/instances/{instanceId}/apply` returns `410 Gone`; chat
+`submit_job_application` and MCP `apply_to_job` return the same migration direction. Their
+schemas remain available temporarily for cached clients, but none can begin legacy work.
 
 ## Human handoffs
 

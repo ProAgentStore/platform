@@ -32,6 +32,21 @@ export class ApplyError extends Error {
 	}
 }
 
+/**
+ * The workflow is deliberately retained so existing runs can finish and their task history
+ * remains readable. New work must use the owner-controlled local pipeline instead.
+ *
+ * Keep this wording stable across HTTP and chat: it is the actionable migration response a
+ * caller receives, not an implementation-detail error.
+ */
+export const LEGACY_JOB_APPLY_RETIRED_MESSAGE =
+	"The legacy JOB_APPLY workflow no longer accepts new applications. Existing application tasks and history remain available. Use the Scout → Tailor → Runner pipeline: triage a job lead, generate application materials, then request review or start the Application Runner fill.";
+
+/** Kept as a predicate so TypeScript continues to typecheck the retained in-flight workflow path. */
+function legacyJobApplyStartsAreRetired(): boolean {
+	return true;
+}
+
 // ── Résumé transfer mechanism ────────────────────────────────────────────────
 // The runner can be on a remote machine that doesn't have the user's résumé. So
 // the user uploads it once via the web (stored in R2), and the runner DOWNLOADS
@@ -73,12 +88,13 @@ export interface StartApplyInput {
 }
 
 /**
- * The single entry point for the LLM-driven job application: builds the job from
- * the structured Profile + credentials vault + Special Instructions, creates the
- * agent-driven runner task, and starts the JobApplyWorkflow brain. Used by BOTH
- * the /apply route and the chat agent's apply tool — there is no other apply path.
+ * Former entry point for the LLM-driven JOB_APPLY workflow. The implementation remains
+ * below to preserve compatibility with in-flight workflow executions, but every new start
+ * is refused before it can create a task, loop run, budget, or workflow.
  */
 export async function startJobApply(env: Env, instanceId: string, userId: string, input: StartApplyInput): Promise<{ workflowId: string; taskId: string }> {
+	if (legacyJobApplyStartsAreRetired()) throw new ApplyError(LEGACY_JOB_APPLY_RETIRED_MESSAGE, 410);
+
 	const url = String(input.url ?? "");
 	if (!/^https?:\/\//.test(url)) throw new ApplyError("url (http/https) required");
 	// Prefer a résumé uploaded to the platform (a signed URL the runner downloads);
@@ -584,7 +600,10 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		return c.json((await runtimeJson(res)) as object, runtimeStatus(res, 200));
 	});
 
-	/** Start the LLM-driven job application (the ONLY apply path). dryRun fills everything but never submits. */
+	/**
+	 * Retired JOB_APPLY start path. Kept as a 410 migration response so old console, chat and
+	 * MCP clients receive an actionable direction rather than creating a new legacy task.
+	 */
 	router.post("/:instanceId/apply", async (c) => {
 		const session = await requireUser(c);
 		const instanceId = c.req.param("instanceId");
@@ -605,7 +624,7 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 			void touchInstanceActivity(c.env, instanceId, session.uid);
 			return c.json({ workflowId, taskId, status: "running", url }, 202);
 		} catch (e) {
-			if (e instanceof ApplyError) return c.json({ error: e.message }, e.status === 502 ? 502 : 400);
+			if (e instanceof ApplyError) return c.json({ error: e.message }, e.status === 410 ? 410 : e.status === 502 ? 502 : 400);
 			throw e;
 		}
 	});

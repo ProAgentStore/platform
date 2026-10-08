@@ -35,6 +35,34 @@ describe("readInstanceConfig", () => {
 	});
 });
 
+describe("POST /:instanceId/apply — retired JOB_APPLY start", () => {
+	it("returns an actionable 410 before creating any legacy work", async () => {
+		const secret = "retired-apply-secret";
+		const instanceId = "inst-1";
+		const env = {
+			SESSION_SIGNING_KEY: secret,
+			DB: { prepare: () => ({ bind: () => ({ first: async () => ({ id: instanceId, user_id: "u1", config: "{}" }) }) }) },
+		} as unknown as Env;
+		const router = new Hono<{ Bindings: Env }>();
+		registerApplyRoutes(router);
+		const app = new Hono<{ Bindings: Env }>();
+		app.route("/v1/instances", router);
+		app.onError((err, c) => (err instanceof HttpError ? c.json({ error: err.message }, err.status as 400) : c.json({ error: String(err) }, 500)));
+
+		const token = await signSession("u1", secret, { roles: [] });
+		const res = await app.request(`/v1/instances/${instanceId}/apply`, {
+			method: "POST",
+			headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+			body: JSON.stringify({ url: "https://jobs.example/role/1" }),
+		}, env);
+
+		expect(res.status).toBe(410);
+		const body = await res.json<{ error: string }>();
+		expect(body.error).toContain("legacy JOB_APPLY workflow no longer accepts new applications");
+		expect(body.error).toContain("Scout → Tailor → Runner");
+	});
+});
+
 // ── #325: a deletion endpoint that cannot fail is a retention record that lies ─
 //
 // `DELETE /apply-resume` is the only way to remove an uploaded CV — name, address, employment

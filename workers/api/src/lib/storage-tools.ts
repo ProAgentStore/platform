@@ -19,6 +19,7 @@ import { localStamp } from "./agent-clock.js";
 import { RETRIEVAL_EMPTY_MESSAGE, searchKnowledgeFor } from "./retrieval.js";
 import { withTurnReplay } from "./coding-turn-replay.js";
 import type { Env } from "../types.js";
+import { LEGACY_JOB_APPLY_RETIRED_MESSAGE } from "../routes/instances-apply.js";
 
 export interface StorageToolCallRequest {
 	name: string;
@@ -202,7 +203,7 @@ export const STORAGE_TOOLS: ToolDef[] = [
 	},
 	{
 		name: "submit_job_application",
-		description: "Submit a job application in a real browser from the saved candidate Profile. The agent fills and submits to the employer, then runs in the background and pauses only for a captcha, a stuck widget, or a missing value it cannot truthfully answer. Requires a connected runner (pags up). Call it ONCE per job. HONESTY: report it as started only if THIS tool returns success with a real task id; on an error, tell the user that exact error and that nothing started. Never invent a task or workflow id, and never claim it was submitted from this start result. ORDER: call this first, and only AFTER it succeeds insert_record the application into 'applications' — logging one that did not start shows phantom applications on the Board.",
+		description: "Retired legacy JOB_APPLY entry point. It starts no work and returns migration guidance to the Scout → Tailor → Runner application pipeline. Existing application tasks and history remain available.",
 		parameters: {
 			url: { type: "string", description: "Job posting URL", required: true },
 			resume_path: { type: "string", description: "Optional. Leave empty — the apply uses the résumé the user uploaded in the console; the runner downloads it." },
@@ -529,47 +530,9 @@ export async function executeStorageTool(
 			}
 
 			case "submit_job_application": {
-				if (!ctx?.env || !ctx.agentId || !ctx.userId) {
-					return fail(call.name, "Runtime context not available");
-				}
-				const url = stringInput(call.input.url);
-				if (!url) return fail(call.name, "url required");
-				// resume_path is optional — the apply uses the résumé the user uploaded
-				// in the console (Knowledge → Résumé), which the runner downloads. A local
-				// path is only a legacy fallback for a same-machine runner.
-				const resumePath = stringInput(call.input.resume_path) || stringInput(call.input.resumePath) || "";
-				const candidateInput = isPlainRecord(call.input.candidate) ? call.input.candidate : {};
-				// This is the autonomous entry point: the user has delegated applying to
-				// the agent, so the workflow is allowed to submit. It still pauses instead
-				// of guessing when it hits a CAPTCHA, stuck widget, or missing fact.
-				try {
-					const { startJobApply } = await import("../routes/instances-apply.js");
-					// ctx.env is the full worker Env at runtime (the tool context types it
-					// narrowly); startJobApply needs JOB_APPLY + runtime bindings.
-					const fullEnv = ctx.env as unknown as Parameters<typeof startJobApply>[0];
-					const { workflowId, taskId } = await startJobApply(fullEnv, ctx.agentId, ctx.userId, {
-						url,
-						resumePath,
-						candidate: {
-							fullName: stringInput(candidateInput.fullName) || stringInput(candidateInput.full_name) || stringInput(call.input.full_name) || stringInput(call.input.fullName),
-							email: stringInput(candidateInput.email) || stringInput(call.input.email),
-							phone: optionalInput(candidateInput.phone) || optionalInput(call.input.phone),
-							location: optionalInput(candidateInput.location) || optionalInput(call.input.location),
-							linkedin: optionalInput(candidateInput.linkedin) || optionalInput(call.input.linkedin),
-							workAuthorization: optionalInput(candidateInput.workAuthorization) || optionalInput(candidateInput.work_authorization) || optionalInput(call.input.work_authorization) || optionalInput(call.input.workAuthorization),
-						},
-						coverNote: optionalInput(call.input.cover_note) || optionalInput(call.input.coverNote),
-						dryRun: false,
-					});
-					return ok(
-						call.name,
-						`Application submission started — the agent is now filling and submitting the browser form (workflow ${workflowId}, task ${taskId}). It pauses only for a captcha, a stuck widget, or a missing value. Do NOT call submit_job_application again for this job, and do NOT claim it is submitted until the workflow reports that outcome.`,
-					);
-				} catch (e) {
-					const msg = e instanceof Error ? e.message : String(e);
-					if (/runner|runtime|registered|offline/i.test(msg)) return fail(call.name, "No browser runner connected. Start the runner with: pags up");
-					return fail(call.name, msg);
-				}
+				// This name remains recognisable to existing chat histories, but must never create
+				// another JOB_APPLY task. The replacement is the owner-controlled local pipeline.
+				return fail(call.name, LEGACY_JOB_APPLY_RETIRED_MESSAGE);
 			}
 
 			case "find_confirmation_link": {
@@ -809,19 +772,6 @@ function ok(name: string, content: string): ToolCallResult {
 
 function fail(name: string, content: string): ToolCallResult {
 	return { name, content, success: false };
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function stringInput(value: unknown): string {
-	return typeof value === "string" ? value.trim() : "";
-}
-
-function optionalInput(value: unknown): string | undefined {
-	const text = stringInput(value);
-	return text || undefined;
 }
 
 function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {

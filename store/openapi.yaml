@@ -6328,18 +6328,16 @@ paths:
 
   /v1/instances/{instanceId}/apply:
     post:
-      summary: Start a job application
+      summary: Retired legacy job-application start
+      deprecated: true
       description: |
-        Kicks off the durable `JobApplyWorkflow`, whose LLM brain drives the connected
-        browser runner page by page (snapshot → decide one action → act). Returns
-        immediately with the workflow and task ids; progress lands on the board and in the
-        trace. Requires Pro (the workflow drives a local runner).
+        The legacy `JOB_APPLY` workflow no longer accepts new starts. It returns `410` with
+        migration guidance and does not create a task, workflow, budget, or browser action.
+        Existing application tasks and their history remain readable.
 
-        `dryRun: true` fills everything but a runtime guard in the workflow BLOCKS the final
-        submit click — the brain cannot override it. Omit it (or send `false`) to apply for
-        real.
-
-        Concurrent applies on the same instance are single-flighted: the loser gets 409.
+        Use the Scout → Tailor → Runner application pipeline instead: triage a job lead,
+        generate application materials, then request review or start the Application Runner
+        fill under its configured submission policy.
       operationId: startApply
       tags: [Apply]
       parameters: [{ $ref: "#/components/parameters/InstanceId" }]
@@ -6357,31 +6355,13 @@ paths:
                 coverNote: { type: string, description: "Also accepted as `cover_note`." }
                 dryRun: { type: boolean, default: false, description: "Fill but never submit. Also accepted as `dry_run`." }
       responses:
-        "202":
-          description: Workflow started
+        "410":
+          description: Legacy JOB_APPLY is retired for new starts; use the Scout → Tailor → Runner pipeline
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  workflowId: { type: string }
-                  taskId: { type: string }
-                  status: { type: string, example: running }
-                  url: { type: string, format: uri }
-        "400": { $ref: "#/components/responses/BadRequest" }
+              schema: { $ref: "#/components/schemas/Error" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "402": { $ref: "#/components/responses/PaymentRequired" }
         "404": { $ref: "#/components/responses/NotFound" }
-        "409":
-          description: An apply is already in flight for this instance
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "502":
-          description: The runner could not be reached
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
 
   /v1/instances/{instanceId}/input:
     post:
