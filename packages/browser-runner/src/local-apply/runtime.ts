@@ -33,6 +33,7 @@ import { redactText, secretEnvValues } from "../local-browser/contract.js";
 import { finalText, missingLogin, signInHelp } from "../local-browser/engine.js";
 import { resolveWorkspacePath } from "../local-browser/runtime.js";
 import { ApplyBridge } from "./bridge.js";
+import { confirmationSignals } from "./confirmation.js";
 import {
 	type LocalApplySignal,
 	type LocalApplyDiagnosticCause,
@@ -404,7 +405,20 @@ export class LocalApplyRuntime {
 		if (run.cancelled) return { outcome: "failed", summary, error: "Cancelled by the owner" };
 		if (b?.submitted) return { outcome: "submitted", summary, submitted: b.submitted };
 		if (b?.unavailable) return { outcome: "blocked", summary, blockReason: "job_unavailable", unavailable: b.unavailable };
-		if (b?.submitAttempted) return { outcome: "blocked", summary, blockReason: "submit_unconfirmed", questions: b.blocked?.questions ?? [] };
+		// #994: a pressed submit nobody confirmed now SAYS what was seen. The outcome is unchanged —
+		// terminal, no retry, the owner told to check the employer's site — because that safety is
+		// correct; what was missing was any way to tell "the click never moved the page" from "the
+		// page moved and said something this platform does not recognise yet".
+		if (b?.submitAttempted) {
+			const d = this.diagnosticOf(run, code, "submit_unconfirmed");
+			return {
+				outcome: "blocked",
+				summary,
+				blockReason: "submit_unconfirmed",
+				questions: b.blocked?.questions ?? [],
+				diagnostic: { ...d, signals: [...d.signals, ...(b.confirmation ? (confirmationSignals(b.confirmation) as LocalApplySignal[]) : [])] },
+			};
+		}
 		if (b?.reviewReady) return { outcome: "awaiting_review", summary };
 		if (!b?.filled && missingLogin(e.engine, run.output.join("\n"))) return { outcome: "blocked", summary, blockReason: "engine_not_signed_in", questions: [signInHelp(e.engine)], engineAuth: "missing_login" };
 		if (b?.blocked) return { outcome: "blocked", summary, blockReason: b.blocked.reason, questions: b.blocked.questions };

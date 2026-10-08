@@ -526,10 +526,12 @@ describe.each([["claude"], ["codex"]] as const)("%s: a connected-runner applicat
 		expect(st.state).toBe("ended");
 		expect(st.result, "the submit is recorded as attempted, not as confirmed").toMatchObject({ submitAttempted: true, blockReason: "submit_unconfirmed" });
 		expect(st.result?.blockReason, "a run that used the bridge is never bridge_unused").not.toBe("bridge_unused");
-		// A run that did real work carries NO #975 diagnostic: none of its causes describes this, and
-		// inventing one would make "there is something to diagnose" meaningless. What it did is on
-		// the result and the trace, where it already was.
-		expect(st.result?.diagnostic).toBeUndefined();
+		// #994: a pressed submit that remains unconfirmed is a distinct, actionable diagnostic. Its
+		// evidence is ids only — the fake page's contents do not cross the runner contract.
+		expect(st.result?.diagnostic).toMatchObject({
+			cause: "submit_unconfirmed",
+			signals: expect.arrayContaining(["confirmation_no_marker", "confirmation_url_unchanged"]),
+		});
 		expect(st.result?.filled).toBeGreaterThan(0);
 		expect(st.events.map((e) => e.type)).toEqual(
 			expect.arrayContaining(["engine.started", "browser.navigated", "supervisor.checkpoint", "field.filled", "run.paused", "submit.attempted"]),

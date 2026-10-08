@@ -69,13 +69,13 @@ describe("evaluateSubmitGate", () => {
 describe("runnerContractProblem (#977)", () => {
 	const node = "pink-laptop";
 
-	it.each([["0.4.85"], ["0.4.86"], ["0.5.0"], ["1.0.0"]])("allows %s — at or above the contract", (version) => {
+	it.each([["0.4.89"], ["0.4.90"], ["0.5.0"], ["1.0.0"]])("allows %s — at or above the contract", (version) => {
 		expect(runnerContractProblem(version, node)).toBeNull();
 	});
 
-	// 0.4.84 is REFUSED from #989 on: it is the release the live machine ran, and its bundled bridge
-	// reads the control that opens a SEEK application as the final submit (it predates #985).
-	it.each([["0.4.84"], ["0.4.83"], ["0.4.70"], ["0.3.99"]])("refuses %s, naming the version, the minimum and the fix", (version) => {
+	// 0.4.88 is REFUSED from #994 on: it predates the bounded post-submit observation and SEEK's
+	// "application sent" receipt marker.
+	it.each([["0.4.88"], ["0.4.85"], ["0.4.70"], ["0.3.99"]])("refuses %s, naming the version, the minimum and the fix", (version) => {
 		const problem = runnerContractProblem(version, node);
 		expect(problem).toContain(version);
 		expect(problem).toContain(LOCAL_APPLY_CONTRACT_MIN_CLI);
@@ -83,8 +83,8 @@ describe("runnerContractProblem (#977)", () => {
 		// Actionable, not just a diagnosis — and it says what the owner would otherwise have seen.
 		expect(problem).toMatch(/npm i -g @proagentstore\/cli/);
 		expect(problem).toMatch(/restart/);
-		expect(problem).toMatch(/reads the control that OPENS an application as the final submit/);
-		expect(problem).toMatch(/stops before it types anything/);
+		expect(problem).toMatch(/post-submit confirmation/);
+		expect(problem).toMatch(/submit_unconfirmed/);
 	});
 
 	it.each([[""], ["   "], [null], [undefined]])("does not judge an unreported version: %s", (version) => {
@@ -97,10 +97,9 @@ describe("runnerContractProblem (#977)", () => {
 
 	it("the minimum is the release that ships the current runner contract, not a future guess", () => {
 		// Pinned so bumping the contract minimum is a deliberate edit with a reason, not a drift.
-		// 0.4.85 is #989's release: the first published CLI whose bridge classifies the control that
-		// OPENS an application as an entry rather than the final submit (#985's fix, which 0.4.84
-		// does not contain because that commit never bumped the CLI).
-		expect(LOCAL_APPLY_CONTRACT_MIN_CLI).toBe("0.4.85");
+		// 0.4.89 is #994's release: the first published CLI whose bridge repeatedly observes a
+		// post-submit page and recognises SEEK's "application sent" receipt.
+		expect(LOCAL_APPLY_CONTRACT_MIN_CLI).toBe("0.4.89");
 	});
 
 	/**

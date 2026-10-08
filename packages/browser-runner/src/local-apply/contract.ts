@@ -177,32 +177,39 @@ export const LOCAL_APPLY_BLOCK_REASONS: readonly LocalApplyBlockReason[] = [
  * dispatch, naming the update, rather than silently producing the older behaviour (`apply.ts`
  * `runnerContractProblem`).
  *
- * ── Why it moved to 0.4.85 (#989)
+ * ── Why it moved to 0.4.89 (#994)
  *
- * #985 fixed the runner's click classification — the press that OPENS a SEEK application stopped
- * being read as the final submit ({@link classifyApplyClick}) — and that fix lives in
- * `packages/browser-runner`, which ships INSIDE the published CLI. The commit did not bump
- * `packages/cli/package.json`, and `publish-npm.yml` publishes only a version that is new, so
- * nothing was published: the live machine kept running 0.4.84, whose bundled bridge still tests
- * `FALLBACK_COMMIT_RE`. The next live run therefore reproduced the defect the fix had already
- * removed from `main` — `browser_click → class: submit → refused: fill_and_review`, no `rule`
- * field, three seconds after the cloud's own `continue` — and the only durable evidence that the
- * code was old was the absence of a field nobody looks for.
+ * #994 makes a post-click confirmation observable and recognises SEEK's "application sent"
+ * receipt wording. It also carries only closed-vocabulary evidence when a pressed submit remains
+ * unconfirmed. Those changes live in `packages/browser-runner`, which ships INSIDE the published
+ * CLI. A machine below this floor cannot provide that evidence, so it must not silently look
+ * equivalent to a current runner.
  *
  * A behaviour change in the runner is a CONTRACT change, because the cloud's decisions assume it.
- * So this floor moves with it: a machine that cannot tell the entry control from the final submit
- * is refused with a sentence that says so, instead of ending `awaiting_review` having typed
- * nothing.
+ * So this floor moves with it: a machine that cannot observe a post-submit receipt is refused
+ * with a sentence that says so, rather than reporting an unhelpful `submit_unconfirmed` state.
  *
  * Bump this when the runner's half of the contract changes again, together with the CLI version
  * that ships it — `policy.test.ts` pins the pair, so the floor cannot name a release that has not
  * been published. `cliAtLeast` treats an unreported version as capable, which is the convention
  * every MIN_CLI gate here follows.
  */
-export const LOCAL_APPLY_CONTRACT_MIN_CLI = "0.4.85";
+export const LOCAL_APPLY_CONTRACT_MIN_CLI = "0.4.89";
 
-export type LocalApplyDiagnosticCause = "bridge_unused" | "engine_exited_nonzero" | "timed_out" | "no_engine_output";
-export const LOCAL_APPLY_DIAGNOSTIC_CAUSES: readonly LocalApplyDiagnosticCause[] = ["bridge_unused", "engine_exited_nonzero", "timed_out", "no_engine_output"];
+export type LocalApplyDiagnosticCause = "bridge_unused" | "engine_exited_nonzero" | "timed_out" | "no_engine_output" | "submit_unconfirmed";
+export const LOCAL_APPLY_DIAGNOSTIC_CAUSES: readonly LocalApplyDiagnosticCause[] = ["bridge_unused", "engine_exited_nonzero", "timed_out", "no_engine_output", "submit_unconfirmed"];
+
+/**
+ * WHY a submission was taken as confirmed — an id, never the text or URL that matched (#994).
+ *
+ * `page_text` is the site's own success wording; `url_receipt` is a confirmation URL the click
+ * navigated TO (an unchanged one is the form, not a receipt); `already_applied_notice` is the
+ * site's duplicate notice appearing only after this click, which is that site reporting the
+ * application it has just taken. Every one is comparative or textual evidence the RUNNER verified
+ * on the machine — the CLI cannot assert any of them as prose.
+ */
+export type LocalApplyConfirmationMarker = "page_text" | "url_receipt" | "already_applied_notice";
+export const LOCAL_APPLY_CONFIRMATION_MARKERS: readonly LocalApplyConfirmationMarker[] = ["page_text", "url_receipt", "already_applied_notice"];
 
 /**
  * Observations the runner may report, each an id this platform defines — not the text that matched.
@@ -216,8 +223,33 @@ export const LOCAL_APPLY_DIAGNOSTIC_CAUSES: readonly LocalApplyDiagnosticCause[]
  *   no_output                the CLI printed nothing a parser could read.
  *   engine_refused_task      the CLI declined the task in its closing message.
  */
-export type LocalApplySignal = "approval_policy_blocked" | "bridge_tools_missing" | "auth_prompt" | "no_output" | "engine_refused_task";
-export const LOCAL_APPLY_SIGNALS: readonly LocalApplySignal[] = ["approval_policy_blocked", "bridge_tools_missing", "auth_prompt", "no_output", "engine_refused_task"];
+export type LocalApplySignal =
+	| "approval_policy_blocked"
+	| "bridge_tools_missing"
+	| "auth_prompt"
+	| "no_output"
+	| "engine_refused_task"
+	// #994 — what was seen after a submit that was pressed and not confirmed. They distinguish the
+	// three cases an owner acts on differently: the page never moved (the click may not have
+	// landed), it moved but said nothing this platform's vocabulary knows (a wording to add), or it
+	// could not be read at all.
+	| "confirmation_no_marker"
+	| "confirmation_page_unreadable"
+	| "confirmation_url_changed"
+	| "confirmation_url_unchanged"
+	| "confirmation_title_changed";
+export const LOCAL_APPLY_SIGNALS: readonly LocalApplySignal[] = [
+	"approval_policy_blocked",
+	"bridge_tools_missing",
+	"auth_prompt",
+	"no_output",
+	"engine_refused_task",
+	"confirmation_no_marker",
+	"confirmation_page_unreadable",
+	"confirmation_url_changed",
+	"confirmation_url_unchanged",
+	"confirmation_title_changed",
+];
 
 export interface LocalApplyDiagnostic {
 	cause: LocalApplyDiagnosticCause;
@@ -415,7 +447,11 @@ const isHttpUrl = (v: string) => /^https?:\/\/[^\s/]+/i.test(v);
 // submit since #985, and this whitelist silently dropped it — so the one fact that tells "it
 // refused the control that opens the form" from "it refused the real submit" never reached the
 // cloud trace, which is where the live investigation needed it.
-const DETAIL_KEYS = new Set(["engine", "authMode", "engineAuth", "mode", "class", "tool", "decision", "reason", "rule", "role", "kind", "path", "sha256", "bytes", "gateId", "exitCode", "count", "status", "basis", "source", "checkpointId", "directive", "phase", "actions", "filled", "uploaded"]);
+// `marker`, `looks`, `urlChanged` and `titleChanged` are #994's post-click evidence: a marker ID
+// from `LOCAL_APPLY_CONFIRMATION_MARKERS`, how many times the page was read, and whether it moved.
+// Each is an id, a count or a boolean — the same whitelist rule as everything else here, so no page
+// text and no typed value can ride along on a `submit.confirmed` / `submit.unconfirmed` event.
+const DETAIL_KEYS = new Set(["engine", "authMode", "engineAuth", "mode", "class", "tool", "decision", "reason", "rule", "role", "kind", "path", "sha256", "bytes", "gateId", "exitCode", "count", "status", "basis", "source", "checkpointId", "directive", "phase", "actions", "filled", "uploaded", "marker", "looks", "urlChanged", "titleChanged"]);
 
 /** A validated event, or null. Detail keeps only whitelisted, primitive, bounded values. */
 export function parseLocalApplyEvent(raw: unknown): LocalApplyEvent | null {
@@ -436,6 +472,14 @@ export function parseLocalApplyEvent(raw: unknown): LocalApplyEvent | null {
 		const detail: Record<string, string | number | boolean> = {};
 		for (const [k, v] of Object.entries(o.detail as Record<string, unknown>)) {
 			if (!DETAIL_KEYS.has(k)) continue;
+			// #994: `marker` is a runner-defined confirmation ID, never the success sentence the
+			// page displayed. Keep the closed vocabulary closed even if a compromised/outdated
+			// runner tries to use this otherwise-string field as a prose channel.
+			if (k === "marker") {
+				const marker = oneOf(LOCAL_APPLY_CONFIRMATION_MARKERS, v);
+				if (marker) detail[k] = marker;
+				continue;
+			}
 			if (typeof v === "string") detail[k] = v.slice(0, 300);
 			else if (typeof v === "number" || typeof v === "boolean") detail[k] = v;
 		}

@@ -23,6 +23,16 @@ describe("parseLocalApplyEvent", () => {
 		const e = parseLocalApplyEvent({ type: "field.filled", at: "2026-10-07T00:00:00Z", detail: { class: "fill", role: "textbox", value: "Jane Citizen", text: "page text", cookie: "sid=1" } });
 		expect(e).toEqual({ type: "field.filled", at: "2026-10-07T00:00:00Z", detail: { class: "fill", role: "textbox" } });
 	});
+	it("keeps only closed post-submit confirmation evidence, never the site's receipt prose", () => {
+		const e = parseLocalApplyEvent({
+			type: "submit.confirmed",
+			at: "2026-10-07T00:00:00Z",
+			detail: { marker: "page_text", looks: 2, urlChanged: true, titleChanged: false, text: "Your application has been sent" },
+		});
+		expect(e?.detail).toEqual({ marker: "page_text", looks: 2, urlChanged: true, titleChanged: false });
+		const untrusted = parseLocalApplyEvent({ type: "submit.confirmed", at: "2026-10-07T00:00:00Z", detail: { marker: "Your application has been sent" } });
+		expect(untrusted?.detail).toBeUndefined();
+	});
 	it("refuses a pause without a known reason, and an unknown type", () => {
 		expect(parseLocalApplyEvent({ type: "run.paused", at: "2026-10-07T00:00:00Z" })).toBeNull();
 		expect(parseLocalApplyEvent({ type: "form.submitted", at: "2026-10-07T00:00:00Z" })).toBeNull();

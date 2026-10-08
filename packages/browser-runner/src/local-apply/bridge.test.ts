@@ -9,6 +9,7 @@ import { ApplyBridge, type ApplyBridgeHost, groundingRefusal } from "./bridge.js
 import type { LocalApplyEvent, LocalApplyPause } from "./contract.js";
 
 interface PageFlags {
+	title?: string;
 	captcha?: boolean;
 	login?: boolean;
 	duplicate?: boolean;
@@ -53,9 +54,14 @@ const FACTS: Record<string, { submits: boolean; method: string; name: string }> 
 	e23: { submits: true, method: "post", name: "Save and continue" },
 };
 
-function fakeBrowser(pages: Record<string, PageFlags> = {}, opts: { clicks?: Record<string, string>; uploadError?: string } = {}) {
+function fakeBrowser(
+	pages: Record<string, PageFlags> = {},
+	opts: { clicks?: Record<string, string>; uploadError?: string; postSubmit?: (looks: number) => PageFlags } = {},
+) {
 	const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
 	const history: string[] = [];
+	let submitPressed = false;
+	let postSubmitLooks = 0;
 	const tools: BrowserTools = {
 		listTools: async () =>
 			["browser_navigate", "browser_navigate_back", "browser_snapshot", "browser_click", "browser_type", "browser_select_option", "browser_press_key", "browser_evaluate", "browser_fill_form", "browser_file_upload", "browser_wait_for"].map((name) => ({
@@ -66,11 +72,15 @@ function fakeBrowser(pages: Record<string, PageFlags> = {}, opts: { clicks?: Rec
 			if (name === "browser_evaluate") {
 				if (typeof args.target === "string") return { content: [{ text: `### Result\n${JSON.stringify({ tag: "button", type: "", ...(FACTS[args.target] ?? { submits: false, method: "", name: "" }) })}` }] };
 				const url = history[history.length - 1] ?? "about:blank";
-				return { content: [{ text: `### Result\n${JSON.stringify({ url, title: "Apply", ...pages[url] })}\n### Ran Playwright code` }] };
+				return { content: [{ text: `### Result\n${JSON.stringify({ url, title: "Apply", ...pages[url], ...(submitPressed ? opts.postSubmit?.(postSubmitLooks) : {}) })}\n### Ran Playwright code` }] };
 			}
 			calls.push({ name, args });
 			if (name === "browser_navigate") history.push(String(args.url));
-			if (name === "browser_click" && opts.clicks?.[String(args.target)]) history.push(opts.clicks[String(args.target)]);
+			if (name === "browser_click") {
+				if (args.target === "e8") submitPressed = true;
+				if (opts.clicks?.[String(args.target)]) history.push(opts.clicks[String(args.target)]);
+			}
+			if (name === "browser_wait_for" && submitPressed) postSubmitLooks++;
 			if (name === "browser_navigate_back") history.pop();
 			if (name === "browser_snapshot") return { content: [{ text: SNAPSHOT }] };
 			if (name === "browser_file_upload" && opts.uploadError) return { content: [{ text: opts.uploadError }], isError: true };
@@ -353,8 +363,30 @@ describe("auto_submit — once, gated, traced, and only on a confirmation", () =
 		const types = events.map((e) => e.type);
 		expect(types.indexOf("submit.attempted")).toBeLessThan(types.indexOf("submit.confirmed"));
 		expect(events.find((e) => e.type === "submit.attempted")?.detail?.gateId).toBe("gate-1");
+		expect(events.find((e) => e.type === "submit.confirmed")?.detail).toMatchObject({ gateId: "gate-1", marker: "page_text", looks: 1, urlChanged: true });
 		// A second press is impossible.
 		expect((await bridge.callTool("browser_click", { target: "e8" })).isError).toBe(true);
+		expect(sent("browser_click")).toHaveLength(1);
+	});
+
+	it("keeps looking for a delayed SEEK-style receipt, then confirms it exactly once", async () => {
+		// `confirmed` is the browser's boolean result from CONFIRMATION_TEXT_RE; confirmation.test.ts
+		// pins the realistic SEEK wording ("Your application has been sent") that produces it.
+		const { bridge, sent, events } = await onForm({}, { mode: "auto_submit" }, { postSubmit: (looks) => (looks >= 2 ? { confirmed: true, title: "Application sent" } : {}) });
+		const res = await bridge.callTool("browser_click", { target: "e8" });
+		expect(res.content[0].text).toMatch(/Submitted/);
+		expect(sent("browser_click")).toHaveLength(1);
+		expect(sent("browser_wait_for")).toHaveLength(2);
+		expect(bridge.confirmation).toMatchObject({ marker: "page_text", looks: 2, urlChanged: false, titleChanged: true });
+		expect(events.map((e) => e.type)).toEqual(expect.arrayContaining(["submit.attempted", "submit.confirmed"]));
+	});
+
+	it("accepts a moved receipt URL, but only after the submit", async () => {
+		const receipt = "https://jobs.example.com/application/sent";
+		const { bridge, sent } = await onForm({}, { mode: "auto_submit" }, { clicks: { e8: receipt } });
+		await bridge.callTool("browser_click", { target: "e8" });
+		expect(bridge.submitted?.url).toBe(receipt);
+		expect(bridge.confirmation).toMatchObject({ marker: "url_receipt", looks: 1, urlChanged: true });
 		expect(sent("browser_click")).toHaveLength(1);
 	});
 

@@ -25,6 +25,14 @@
  * The trace carries classes, domains, decisions and artifact handles — never a typed value.
  */
 import { classifyApplyClick } from "./contract.js";
+import {
+	CONFIRMATION_INTERVAL_SECONDS,
+	CONFIRMATION_LOOKS,
+	CONFIRMATION_TEXT_RE,
+	type ConfirmationObservation,
+	confirmationMarker,
+	observe,
+} from "./confirmation.js";
 import { ELEMENT_PROBE_FN, type ElementFacts } from "../commit-guard.js";
 import { normalize } from "../local-artifact/engine.js";
 import { type BrowserTools, evaluateResult, hostOf, refRole } from "../local-browser/bridge.js";
@@ -86,8 +94,15 @@ const CREDENTIAL_NAME = /password|passcode|one[- ]?time|\botp\b|verification cod
 /** Keys that move between fields without entering or activating anything. */
 const SAFE_KEYS = /^(Tab|Shift\+Tab|Arrow(Up|Down|Left|Right)|Escape|Home|End|PageUp|PageDown)$/;
 
-/** Runs inside the page, through the browser's own evaluate tool — never offered to the CLI. */
+/**
+ * Runs inside the page, through the browser's own evaluate tool — never offered to the CLI.
+ *
+ * The success vocabulary is INTERPOLATED from `confirmation.ts` rather than written out here
+ * (#994): a second copy of that regex is how the "sent" family — the exact word SEEK uses — was
+ * missing from the detector while being present in nobody's tests, through three live runs.
+ */
 const INSPECT_PAGE = `() => {
+	const CONFIRMATION_TEXT_SOURCE = ${JSON.stringify(CONFIRMATION_TEXT_RE.source)};
 	const text = (document.body ? document.body.innerText : "").slice(0, 20000).toLowerCase();
 	const has = (s) => !!document.querySelector(s);
 	return {
@@ -98,7 +113,7 @@ const INSPECT_PAGE = `() => {
 		login: has('input[type=password]'),
 		duplicate: /you('ve| have) already applied|already applied (for|to) this|application (already exists|has already been (submitted|received))|duplicate application/.test(text),
 		antiBot: /unusual traffic|access (is )?denied|request (has been )?blocked|bot detected|checking (if the site connection is secure|your browser)/.test(text),
-		confirmed: /thank you for (your )?appl|application (has been |was )?(received|submitted)|we('ve| have) received your application|successfully (applied|submitted)/.test(text),
+		confirmed: new RegExp(CONFIRMATION_TEXT_SOURCE).test(text),
 		unavailable: /(?:this |the )?(?:job|position|posting|role|opportunity).{0,120}(?:has )?(?:expired|closed|been filled|is no longer available|is no longer accepting applications)|(?:expired|closed|no longer available|no longer accepting applications).{0,120}(?:job|position|posting|role|opportunity)/.test(text)
 			? (/expired/.test(text) ? "expired" : "unavailable")
 			: null,
@@ -158,6 +173,8 @@ export class ApplyBridge {
 	/** Present only after the CLI explicitly reports a notice that the runner independently saw. */
 	unavailable: LocalApplyUnavailableEvidence | null = null;
 	submitAttempted = false;
+	/** What was seen after the submit click (#994) — read by the runtime to build the diagnostic. */
+	confirmation: ConfirmationObservation | null = null;
 	submitted: { url: string; at: string; gateId: string } | null = null;
 	/** The last thing that stopped the work and was not resolved — the block reason if the run ends here. */
 	blocked: { reason: LocalApplyBlockReason; questions: string[] } | null = null;
@@ -609,16 +626,42 @@ export class ApplyBridge {
 		this.submitAttempted = true;
 		this.host.emit({ type: "submit.attempted", url: before.url, domain, detail: { class: "submit", gateId: this.host.gateId } });
 		const res = await this.browser.callTool("browser_click", forward);
-		await this.browser.callTool("browser_wait_for", { time: 2 }).catch(() => undefined);
-		const after = res.isError ? null : await this.inspect();
-		if (after?.confirmed) {
-			this.submitted = { url: after.url, at: new Date(this.host.now()).toISOString(), gateId: this.host.gateId };
-			this.host.emit({ type: "submit.confirmed", url: after.url, domain: hostOf(after.url) ?? domain, detail: { gateId: this.host.gateId } });
+		// Look REPEATEDLY, not once (#994). The old path waited two seconds and read the page a
+		// single time, so a receipt that arrives on a navigation or a client-side re-render a moment
+		// later was simply not there yet when the only look happened. `submitAttempted` is already
+		// true above, so waiting longer cannot make a pressed button look unpressed.
+		const { after, looks } = res.isError ? { after: null, looks: 0 } : await this.awaitConfirmation(before);
+		const seen = observe(before, after, looks);
+		this.confirmation = seen;
+		const evidence = { looks: seen.looks, urlChanged: seen.urlChanged, titleChanged: seen.titleChanged };
+		if (seen.marker) {
+			const at = after as PageState;
+			this.submitted = { url: at.url, at: new Date(this.host.now()).toISOString(), gateId: this.host.gateId };
+			this.host.emit({ type: "submit.confirmed", url: at.url, domain: hostOf(at.url) ?? domain, detail: { gateId: this.host.gateId, marker: seen.marker, ...evidence } });
 			return text("Submitted, and the site confirmed it. Stop now.");
 		}
 		this.blocked = { reason: "submit_unconfirmed", questions: ["The application was submitted but the site did not confirm it. Check the employer's site or your email before anything is retried."] };
-		this.host.emit({ type: "submit.unconfirmed", ...(after ? { url: after.url } : {}), domain, detail: { gateId: this.host.gateId } });
+		this.host.emit({ type: "submit.unconfirmed", ...(after ? { url: after.url } : {}), domain, detail: { gateId: this.host.gateId, ...evidence } });
 		return text("The submit was pressed but no confirmation was seen. Do not press it again. Stop now.", true);
+	}
+
+	/**
+	 * Read the page until it confirms, or until the looks run out (#994).
+	 *
+	 * It returns the LAST page it read, not the first: when nothing confirms, the owner's
+	 * diagnostic should describe where the browser actually ended up. Bounded by
+	 * `CONFIRMATION_LOOKS` — an application run holds the owner's only browser, so "look again"
+	 * must never become "sit here".
+	 */
+	private async awaitConfirmation(before: PageState): Promise<{ after: PageState | null; looks: number }> {
+		let after: PageState | null = null;
+		for (let i = 0; i < CONFIRMATION_LOOKS; i++) {
+			await this.browser.callTool("browser_wait_for", { time: CONFIRMATION_INTERVAL_SECONDS }).catch(() => undefined);
+			const page = await this.inspect();
+			if (page) after = page;
+			if (confirmationMarker(before, page)) return { after: page, looks: i + 1 };
+		}
+		return { after, looks: CONFIRMATION_LOOKS };
 	}
 
 	/** A cloud-persisted checkpoint, not a prompt instruction, authorizes each page's writes. */
