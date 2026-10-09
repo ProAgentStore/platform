@@ -147,6 +147,7 @@ describe("registerInstanceTools — registration + surface gating", () => {
 	it("always registers the core (surface-independent) instance tools", () => {
 		const { tools } = setup();
 		for (const name of [
+			"describe_instance",
 			"list_instance_tools",
 			"call_instance_tool",
 			"subscribe_agent",
@@ -214,6 +215,16 @@ describe("authentication", () => {
 // ── Read proxies: correct route + method, bearer header ──────────────────────
 
 describe("read proxies", () => {
+	it("describe_instance is a read-scoped, encoded proxy for the secret-safe API projection", async () => {
+		const h = setup({ scopes: ["read"] });
+		const description = { execution: { kind: "local_cli_apply", engine: "codex", browser: "playwright" }, credentialPosture: { stored: 1, protected: 1 } };
+		h.fetchStub.respond((u) => u.endsWith("/v1/instances/i%2F1/description"), { body: description });
+		const res = await h.tools.get("describe_instance")!.handler({ instance_id: "i/1" });
+		expect(h.fetchStub.calls).toHaveLength(1);
+		expect(h.fetchStub.calls[0]).toMatchObject({ url: "https://api.test/v1/instances/i%2F1/description", method: "GET" });
+		expect(JSON.parse(res.content[0].text)).toEqual(description);
+	});
+
 	it("my_instances GETs the instances route and returns the instances, in text AND structured", async () => {
 		// The payload is `{instances: […]}` rather than the bare array this used to answer
 		// with: the tool declares an outputSchema (#561), and `structuredContent` has to be an

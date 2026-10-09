@@ -6696,6 +6696,28 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/description:
+    get:
+      summary: Describe an instance's execution runtime
+      description: >
+        Owner-only, secret-safe projection joining template capabilities, runtime/node metadata,
+        credential posture counts, named handoffs, and current run metadata. It never returns
+        runtime tokens, credential values, connection config, traces, or artifact content.
+      operationId: describeInstance
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200":
+          description: Secret-safe execution metadata projection
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/instances/{instanceId}/gmail-scout/config:
     get:
       summary: Gmail Job Search Scout configuration

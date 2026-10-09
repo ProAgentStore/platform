@@ -73,6 +73,7 @@ import { registerApplicationTailorRoutes } from "./instances-application-tailor.
 import { registerApplicationRunnerRoutes } from "./instances-application-runner.js";
 import { registerApplicationsRoutes } from "./instances-applications.js";
 import { registerGmailScoutRoutes } from "./instances-gmail-scout.js";
+import { registerInstanceDescriptionRoutes } from "./instances-description.js";
 import { instanceRoutes } from "./instances.js";
 
 const SECRET = "instances-contract-secret";
@@ -291,6 +292,7 @@ const ROUTES = [
 	"PUT /:instanceId/gmail-scout/config",
 	"POST /:instanceId/gmail-scout/scan",
 	"GET /:instanceId/gmail-scout/status",
+	"GET /:instanceId/description",
 	"POST /:instanceId/runner-attach",
 	"GET /:instanceId/runner-setup",
 	"POST /:instanceId/browse",
@@ -423,6 +425,7 @@ const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
 	"instances-application-runner.ts": registerApplicationRunnerRoutes,
 	"instances-applications.ts": registerApplicationsRoutes,
 	"instances-gmail-scout.ts": registerGmailScoutRoutes,
+	"instances-description.ts": registerInstanceDescriptionRoutes,
 	"instances-terminal.ts": registerConnectorBindingRoutes,
 	"instances-terminal-history.ts": registerTerminalHistoryRoutes,
 	"instances-translation.ts": registerTranslationRoutes,
@@ -491,6 +494,7 @@ const OWNERSHIP: Record<string, string[]> = {
 		"POST /:instanceId/gmail-scout/scan",
 		"GET /:instanceId/gmail-scout/status",
 	],
+	"instances-description.ts": ["GET /:instanceId/description"],
 	"instances-application-tailor.ts": [
 		"GET /:instanceId/application-tailor/settings",
 		"PUT /:instanceId/application-tailor/settings",
@@ -784,6 +788,8 @@ const GATES: Record<string, [number, number]> = {
 	"PUT /:instanceId/gmail-scout/config": [401, 404],
 	"POST /:instanceId/gmail-scout/scan": [401, 404],
 	"GET /:instanceId/gmail-scout/status": [401, 404],
+	// #1002's execution projection uses requireOwnedInstance before every dependent read.
+	"GET /:instanceId/description": [401, 404],
 	// Application Tailor (#956): every route opens with the instance-owner check.
 	"GET /:instanceId/application-tailor/settings": [401, 404],
 	"PUT /:instanceId/application-tailor/settings": [401, 404],

@@ -175,6 +175,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	instance_runner_node: "read",
 	runner_setup: "read",
 	instance_runtime_status: "read",
+	describe_instance: "read",
 	instance_task_events: "read",
 	keys_status: "read",
 	list_agent_files: "read",

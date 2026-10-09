@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**289 tool registrations.** 263 are always registered; 26 are gated to the console
+**290 tool registrations.** 264 are always registered; 26 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -271,6 +271,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 |---|---|---|---|---|
 | `subscribe_agent` | Subscribe to a published agent, creating your private instance | write | yes | |
 | `my_instances` | List your subscribed instances | — | | |
+| `describe_instance` | Secret-safe joined execution projection: template, declared tools, runtime/nodes, credential posture counts, named handoffs, current run and storage-migration provenance. Never tokens, credential values, connection config, traces or artifacts. | read | | |
 | `get_creator_dashboard` | Creator totals, subscribers, usage and per-agent ranking | — | | |
 | `get_usage_dashboard` | Subscriber usage totals and the last 30 days by day and agent | — | | |
 | `account_activity` | Every instance's live health (`working`/`waiting`/`stalled`/`idle`), queue depth and last outcome, in one call — two queries, uncapped, unlike `recent_instances` (#815) | read | | |

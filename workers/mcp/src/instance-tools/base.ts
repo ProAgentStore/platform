@@ -146,6 +146,22 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 	// definition in the API registry → surfaced here via a thin proxy.
 
 	server.tool(
+		"describe_instance",
+		"Read a secret-safe execution description for one of your instances: template and declared tools, runtime registration and runner nodes, credential posture counts (never credential values), named handoffs, current/recent run metadata, and the migrations that define those records. Use this to distinguish a legacy managed Claude-API browser agent from a local Codex/Claude CLI Playwright runner without joining opaque ids yourself. This never returns runtime tokens, encrypted key material, credential usernames, connection config, traces, or artifact contents.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Private instance ID from my_instances."),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "describe_instance", { instance_id });
+			if (denied) return denied;
+			return jsonText(await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/description`, sessionToken, {}, env));
+		},
+	);
+
+	server.tool(
 		"list_instance_tools",
 		"Audit exactly what one of your instances may do. Returns EVERY tool it could run — its built-in agent facilities (memory, tasks, board, fetch_url, knowledge, files, collections) as well as its connector tools — each with this instance's verdict: `allowed` (may it run), `mutates` (does a call CHANGE anything — the external system, your machine, or the agent's own stored data), `scope` (read/write — whether the write-CONSENT gate applies to it, NOT whether it changes anything), `disabled` (true when you switched it off — omitted otherwise, so missing means false), `reason` (ok | not_declared | disabled_by_owner), `writeConsent` (n/a | granted | required | per_call) — omitted when n/a, so missing means no consent gate applies. It is the SEPARATE consent gate, so `allowed:true, writeConsent:\"required\"` means the tool is this agent's but every call is refused until write access for its `connector` is granted; `per_call` means some calls run and mutating ones don't (a caller-chosen HTTP method, or an MCP server/tool that has not been granted) — plus `tier` (" +
 			// Rendered from TOOL_TIERS, never typed out: the two-of-four description that shipped is

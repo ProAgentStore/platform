@@ -186,7 +186,7 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// types/events/channels a rule may name, and `set_instance_notification_policy` replaces that
 	// instance's rules. The write is `write` and not `destructive`: it is reversible by sending
 	// the old list back, and "restore inherited" is a first-class call that removes the override.
-	read: 136, // +2 at #995: gmail_scout_config_get and gmail_scout_status.
+	read: 137, // +1 at #1002: describe_instance is the secret-safe runtime projection.
 	// +2 write at #825: `pause_instance` / `resume_instance`. `write` rather than `destructive` —
 	// nothing is deleted and nothing is unsubscribed, and classing the OFF switch as destructive
 	// would put RESUME behind a scope the caller may not hold, which is the wrong failure mode for

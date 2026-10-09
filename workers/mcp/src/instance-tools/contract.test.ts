@@ -334,6 +334,7 @@ const TABLE: Record<string, Row> = {
 	delete_instance_memory: ["knowledge", "destructive", "delete_instance_memory", "envelope", "confirm,dry_run,instance_id,key,token"],
 	delete_instance_trigger: ["triggers", "destructive", "delete_instance_trigger", "envelope", "confirm,dry_run,token,trigger_id"],
 	delete_supervision: ["composition", "destructive", "delete_supervision", "envelope", "confirm,dry_run,supervision_id,supervisor_instance_id,token"],
+	describe_instance: ["base", "read", null, null, "instance_id,token"],
 	email_status: ["account", "none", null, null, "token"],
 	execute_agent_builder_plan: ["agentAuthoring", "destructive", "execute_agent_builder_plan", "envelope", "confirm,dry_run,plan,token"],
 	get_agent_settings_schema: ["settings", "none", null, null, "agent_id,token"],

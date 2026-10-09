@@ -78,7 +78,7 @@ src/
     ├── index.ts          builds the ctx, calls the fifteen group registrars
     ├── shared.ts         TokenResolver/SafetyResolver, trigger config, board grouping
     │   ── ungated: every subscriber gets these ──
-    ├── base.ts           9 tools — the connector-tool gate, subscribe/pause/resume/cancel, chat
+    ├── base.ts           10 tools — the connector-tool gate, describe/subscribe/pause/resume/cancel, chat
     ├── machine-control.ts 3 tools — acting ON a machine: force_runner_attach (#856), runner_update (#859) and the durable outcome of an update, runner_update_status (#990)
     ├── runtime.ts        23 tools — the `pags up` runtime, its task queue, terminal state, safe
 │                     node forget, and a run's detail
@@ -125,13 +125,13 @@ src/
                           surfaces:["coding"]) + 5 loop tools (3 run + 2 objective queue)
 ```
 
-**289 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
+**290 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
 `tools/server-info.ts`, 12 in
 `coding-tools.ts`, 2 in `coding-engine-tools.ts` and 1 in `coding-reauth-tools.ts` — all fifteen behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 237 across `instance-tools/`. 263 are always registered; 26 are
+`storage-tools.ts`, and 238 across `instance-tools/`. 264 are always registered; 26 are
 surface-gated (apply=4, repo=3, coding=19).
 
-These counts add up to the headline: 21 + 1 + 12 + 2 + 1 + 15 + 237 = 289. They said 88 until #602, which made the paragraph sum to 132 — a total the
+These counts add up to the headline: 21 + 1 + 12 + 2 + 1 + 15 + 238 = 290. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added
