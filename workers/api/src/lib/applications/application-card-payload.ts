@@ -11,6 +11,7 @@
  * at build — so the leaf property holds: nothing is added to anybody's runtime graph.
  */
 import type { FillProgress } from "./fill-progress.js";
+import type { ApplicationExecutionProjection, DirectiveDelivery, DirectiveReconciliation, ExecutionCheckpoint } from "./execution-projection.js";
 /** One execution correlated to an application: which stage ran it, how it went, and where. */
 export interface ApplicationCardExecution {
 	runId: string;
@@ -66,6 +67,45 @@ export interface ApplicationCardPayload {
 	executions?: ApplicationCardExecutions;
 	blockReason?: string;
 	runnerVersion?: string;
+	/** #988: exact redacted execution projection served by the application API. */
+	execution?: ApplicationExecutionProjection;
+}
+
+function parseExecution(value: unknown): ApplicationExecutionProjection | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const v = value as Record<string, unknown>;
+	const lifecycle = v.lifecycle && typeof v.lifecycle === "object" && !Array.isArray(v.lifecycle) ? (v.lifecycle as Record<string, unknown>) : null;
+	const number = (input: unknown): number => (typeof input === "number" && Number.isFinite(input) && input > 0 ? Math.floor(input) : 0);
+	const stateVersion = lifecycle?.stateVersion;
+	if (v.schemaVersion !== 1 || !lifecycle || typeof lifecycle.status !== "string" || typeof stateVersion !== "number" || !Number.isInteger(stateVersion) || stateVersion < 0) return undefined;
+	const actions = Array.isArray(v.permittedActions) ? v.permittedActions.filter((x): x is string => typeof x === "string") : [];
+	const run = v.currentRun && typeof v.currentRun === "object" && !Array.isArray(v.currentRun) ? (v.currentRun as Record<string, unknown>) : null;
+	const currentRun = run && typeof run.id === "string" && (run.kind === "tailor" || run.kind === "fill") && typeof run.status === "string" && typeof run.instanceId === "string"
+		? { id: run.id, kind: run.kind, status: run.status, instanceId: run.instanceId, mode: typeof run.mode === "string" ? run.mode : null } as ApplicationExecutionProjection["currentRun"]
+		: null;
+	const cp = v.checkpoint && typeof v.checkpoint === "object" && !Array.isArray(v.checkpoint) ? (v.checkpoint as Record<string, unknown>) : null;
+	const facts = cp?.facts && typeof cp.facts === "object" && !Array.isArray(cp.facts) ? (cp.facts as Record<string, unknown>) : null;
+	const directive = cp?.directive && typeof cp.directive === "object" && !Array.isArray(cp.directive) ? (cp.directive as Record<string, unknown>) : null;
+	const delivery = directive?.delivery;
+	const checkpoint: ExecutionCheckpoint | null =
+		cp && facts && typeof cp.id === "string" && (cp.phase === "initial" || cp.phase === "post_navigation" || cp.phase === "before_submit" || cp.phase === "uncertain")
+			? {
+				id: cp.id,
+				phase: cp.phase,
+				facts: { actions: number(facts.actions), filled: number(facts.filled), uploaded: number(facts.uploaded), blockers: Array.isArray(facts.blockers) ? facts.blockers.filter((x): x is string => typeof x === "string") : [], domain: typeof facts.domain === "string" ? facts.domain : null },
+				directive:
+					directive && (directive.kind === "continue" || directive.kind === "request_review" || directive.kind === "stop") && (delivery === "queued" || delivery === "delivery_attempted" || delivery === "delivered" || delivery === "acknowledged_by_runner")
+						? { kind: directive.kind, delivery: delivery as DirectiveDelivery }
+						: null,
+			}
+			: null;
+	const p = v.progress && typeof v.progress === "object" && !Array.isArray(v.progress) ? (v.progress as Record<string, unknown>) : null;
+	const progress: FillProgress | null = p && typeof p.stage === "string" && typeof p.label === "string"
+		? { stage: p.stage as FillProgress["stage"], label: p.label, filled: number(p.filled), uploaded: number(p.uploaded), checkpointPhase: typeof p.checkpointPhase === "string" ? p.checkpointPhase : null, checkpointId: typeof p.checkpointId === "string" ? p.checkpointId : null, submitAttempted: p.submitAttempted === true, evidence: (p.evidence === "runner_result" || p.evidence === "runner_checkpoint" ? p.evidence : "run_status") as FillProgress["evidence"] }
+		: null;
+	const reconciliation = v.directiveReconciliation;
+	if (!["not_applicable", "terminal", "decision_pending", "delivery_pending", "retry_pending", "acknowledged"].includes(String(reconciliation))) return undefined;
+	return { schemaVersion: 1, lifecycle: { status: lifecycle.status, stateVersion, blockReason: typeof lifecycle.blockReason === "string" ? lifecycle.blockReason : null, submitAttempted: lifecycle.submitAttempted === true }, currentRun, checkpoint, progress, permittedActions: actions, directiveReconciliation: reconciliation as DirectiveReconciliation };
 }
 
 /**
@@ -85,6 +125,7 @@ export function parseApplicationCard(value: unknown): ApplicationCardPayload | u
 	const cp = a.checkpoint && typeof a.checkpoint === "object" && !Array.isArray(a.checkpoint) ? (a.checkpoint as Record<string, unknown>) : null;
 	const p = a.progress && typeof a.progress === "object" && !Array.isArray(a.progress) ? (a.progress as Record<string, unknown>) : null;
 	const n = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
+	const execution = parseExecution(a.execution);
 	return {
 		applicationId,
 		applicationStatus: str(a.applicationStatus),
@@ -111,6 +152,6 @@ export function parseApplicationCard(value: unknown): ApplicationCardPayload | u
 			: {}),
 		...(str(a.blockReason) ? { blockReason: str(a.blockReason) } : {}),
 		...(str(a.runnerVersion) ? { runnerVersion: str(a.runnerVersion) } : {}),
+		...(execution ? { execution } : {}),
 	};
 }
-

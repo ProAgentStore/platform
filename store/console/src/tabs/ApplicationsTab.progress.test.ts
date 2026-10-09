@@ -2,7 +2,7 @@
  * #986 — the Applications card shows how far the fill GOT, in the server's own words.
  *
  * The sentence is not written here, and that is the property this pins: the Board card, this card
- * and an MCP reader all carry `fillProgress.label` from one projection
+ * and an MCP reader all carry the shared execution projection's `progress.label`
  * (`workers/api/src/lib/applications/fill-progress.ts`), which is what stopped a card from saying
  * "Filled — waiting for your review before anything is sent" about a run whose own checkpoint
  * reported `filled: 0, uploaded: 0`. Checked on the source, as the console's other wiring tests
@@ -19,13 +19,13 @@ const face = maskComments(readFileSync(new URL("../components/ApplicationRunFace
 describe("ApplicationsTab — the fill's progress (#986)", () => {
 	it("renders the server's sentence rather than composing one from the status", () => {
 		expect(src).toContain('data-testid="run-progress"');
-		expect(src).toContain("{item.fillProgress.label}");
+		expect(src).toContain("{progress.label}");
 	});
 
 	it("shows the counts the sentence rests on, so a claim of filled work is falsifiable", () => {
-		expect(src).toMatch(/item\.fillProgress\.filled/);
-		expect(src).toMatch(/item\.fillProgress\.uploaded/);
-		expect(src).toMatch(/item\.fillProgress\.checkpointPhase/);
+		expect(src).toMatch(/progress\.filled/);
+		expect(src).toMatch(/progress\.uploaded/);
+		expect(src).toMatch(/progress\.checkpointPhase/);
 	});
 
 	it("never states filled work in its own words", () => {

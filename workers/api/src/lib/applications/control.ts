@@ -32,6 +32,7 @@ import { cancelApplyRun, resumeApplyRun, retryFill, runnerSettingsFor, startAppl
 import { approvalEligibility, approvalState } from "../local-apply/approval.js";
 import { approveAndContinue, approveContinueResult, isPostFillApproval } from "../local-apply/approve-continue.js";
 import type { FillProgress } from "./fill-progress.js";
+import { projectApplicationExecution, type ApplicationExecutionProjection } from "./execution-projection.js";
 import { type FillViews, NO_FILL_VIEWS, type RunDiagnostic, readFillViews } from "./fill-views.js";
 import { queueFieldsFor, queuePosition } from "./work-queue-store.js";
 import { type QueueView as RunQueueView, queueView, queuedLabel } from "./work-queue.js";
@@ -110,6 +111,7 @@ export interface QueueItem {
 	 * the `awaiting_review` status word and called an untouched form "Filled".
 	 */
 	fillProgress: FillProgress | null;
+	execution: ApplicationExecutionProjection | null;
 	/**
 	 * Why a run is WAITING rather than working (#974): its place in its machine's line, how many
 	 * times the machine has been asked, when the next attempt is due, and the sentence to show.
@@ -217,6 +219,7 @@ function leadItem(scout: string, r: LeadRecord, pipeline: Pipeline): QueueItem {
 		submitPolicy: null,
 		diagnostic: null,
 		fillProgress: null,
+		execution: null,
 		queue: null,
 		submitAuthorization: null,
 		updatedAt: str(r.updatedAt) ?? "",
@@ -307,6 +310,14 @@ function applicationItem(
 ): QueueItem {
 	const env = (app.lead ?? {}) as { leadUrl?: string; lead?: Record<string, unknown> };
 	const l = env.lead ?? {};
+	const actions = withNotInterested(applicationActions(app, pipeline, run, !!policy?.allowed, auth));
+	const runStatus = run?.status ?? fill.runStatus;
+	const currentRun = app.fillRunId
+		? { id: app.fillRunId, kind: "fill" as const, status: runStatus ?? app.status, instanceId: pipeline.runners[0] ?? "", mode: run?.mode ?? null }
+		: app.tailoringRunId
+			? { id: app.tailoringRunId, kind: "tailor" as const, status: app.status === "tailoring" ? "running" : app.status, instanceId: app.instanceId, mode: null }
+			: null;
+	const execution = projectApplicationExecution({ lifecycle: { status: app.status, stateVersion: app.stateVersion, blockReason: app.blockReason, submitAttempted: !!app.submitAttemptedAt }, currentRun, checkpoint: fill.checkpoint, progress: fill.progress, permittedActions: actions });
 	return {
 		key: `app:${app.id}`,
 		kind: "application",
@@ -337,10 +348,11 @@ function applicationItem(
 		submitPolicy: policy,
 		diagnostic: fill.diagnostic,
 		fillProgress: fill.progress,
+		execution,
 		queue: q,
 		submitAuthorization: auth,
 		updatedAt: iso(app.updatedAt),
-		actions: withNotInterested(applicationActions(app, pipeline, run, !!policy?.allowed, auth)),
+		actions,
 	};
 }
 

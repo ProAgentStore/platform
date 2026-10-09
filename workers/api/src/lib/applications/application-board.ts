@@ -27,6 +27,7 @@
  */
 import { type ApplicationCardPayload, parseApplicationCard } from "./application-card-payload.js";
 import type { FillProgress } from "./fill-progress.js";
+import type { ApplicationExecutionProjection } from "./execution-projection.js";
 import type { JobApplication } from "../local-artifact/store.js";
 import { upsertWorkCard } from "../work-card.js";
 import type { Env } from "../../types.js";
@@ -113,6 +114,8 @@ export interface ApplicationCardFacts {
 	blockReason?: string | null;
 	/** The runner CLI that executed it (#977), when known. */
 	runnerVersion?: string | null;
+	/** The same durable projection served by application APIs; Board stores no second interpretation. */
+	execution: ApplicationExecutionProjection;
 }
 
 const clip = (s: string, n: number): string => (s.length <= n ? s : `${s.slice(0, n - 1)}…`);
@@ -164,6 +167,7 @@ export function applicationRunTaskRecord(opts: { app: Pick<JobApplication, "id" 
 			...(opts.facts.progress ? { progress: opts.facts.progress } : {}),
 			...(opts.facts.blockReason ? { blockReason: opts.facts.blockReason } : {}),
 			...(opts.facts.runnerVersion ? { runnerVersion: opts.facts.runnerVersion } : {}),
+			execution: opts.facts.execution,
 		},
 		createdAt: opts.now,
 		updatedAt: opts.now,
@@ -210,6 +214,8 @@ export async function syncApplicationCard(
 		// "Filled — waiting for your review" on a card whose run had filled nothing cannot recur.
 		// A tailoring card has no fields to count, so it keeps its own two words.
 		const progress = kind === "fill" ? item.fillProgress : null;
+		const execution = item.execution;
+		if (!execution) return;
 		await upsertApplicationRunCard(env, {
 			// ONE home per application: the Runner of its pipeline when it has one, else the Tailor
 			// (#987). An application is one card by id, and its stages run on two instances, so a home
@@ -234,6 +240,7 @@ export async function syncApplicationCard(
 				...(opts.checkpoint ? { checkpoint: opts.checkpoint } : {}),
 				blockReason: item.blockReason,
 				runnerVersion: run.runnerVersion ?? null,
+				execution,
 			},
 		});
 	} catch {
@@ -296,6 +303,7 @@ async function applicationsNeedingCards(env: Env, userId: string, tailors: reado
 		  WHERE a.user_id = ?1 AND a.instance_id IN (${inList})
 		    AND (t.id IS NULL
 		         OR COALESCE(json_extract(t.payload, '$.application.stateVersion'), -1) < a.state_version
+		         OR json_extract(t.payload, '$.application.execution.schemaVersion') IS NULL
 		         OR (a.fill_run_id IS NOT NULL AND json_extract(t.payload, '$.application.progress') IS NULL))
 		  ORDER BY a.updated_at DESC, a.id`,
 	)

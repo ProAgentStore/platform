@@ -803,6 +803,20 @@ describe("an application execution appears on the normal Kanban (#978)", () => {
 		const card = await appCard();
 		const item = (await call("GET", "/ap/application-queue/item?application_id=lead-p2")).body.item;
 		expect(item.fillProgress).toEqual(card?.application?.progress);
+		// #988: this is the complete durable execution claim, not merely one duplicated label. Board,
+		// application API and MCP (which calls this route) therefore cannot independently reinterpret
+		// a checkpoint, its directive delivery or the set of permitted actions.
+		expect(item.execution).toEqual(card?.application?.execution);
+		expect(item.execution).toMatchObject({
+			schemaVersion: 1,
+			lifecycle: { submitAttempted: false },
+			checkpoint: { phase: "initial", facts: { filled: 0, uploaded: 0, blockers: [] } },
+			progress: { stage: "supervisor_pending", filled: 0, uploaded: 0 },
+		});
+		// Privacy boundary: the allow-list domain is a closed, safe fact; browser URL/title, DOM and
+		// form values are not projected.
+		expect(Object.keys(item.execution.checkpoint.facts)).toEqual(["actions", "filled", "uploaded", "blockers", "domain"]);
+		expect(JSON.stringify(item.execution)).not.toMatch(/https?:\/\/|<input|password|resume\.pdf/i);
 		// …and the queue item's own sentence is the one the card shows, so an owner reading either
 		// surface — or an MCP client reading the queue — is told the same thing about one run.
 		expect(item.fillProgress.label).toBe(card?.application?.stage);

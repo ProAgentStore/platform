@@ -1,5 +1,6 @@
 import type { InstanceRetirement } from "./retirement";
 import type { ScanSchedule, ScanTelemetry } from "./scanSchedule";
+import type { ApplicationExecutionProjection } from "../../../../workers/api/src/agent-types";
 
 export interface Agent {
 	id: string;
@@ -823,6 +824,8 @@ export interface ApplicationQueueItem {
 	 * without `filled`/`uploaded` to show for it.
 	 */
 	fillProgress: { stage: string; label: string; filled: number; uploaded: number; checkpointPhase: string | null; checkpointId: string | null; submitAttempted: boolean; evidence: "runner_result" | "runner_checkpoint" | "run_status" } | null;
+	/** #988 redacted execution projection. No raw browser payload, form values, credentials or artefact content. */
+	execution: ApplicationExecutionProjection | null;
 	/** Why nothing reached the page (#975): the structured cause, the counts and the runner's signals. */
 	diagnostic: { cause: string; bridgeCalls: number; engineExit: number; activeMs: number; pages: number; filled: number; signals: string[] } | null;
 	/** Why this card's run is waiting for the machine rather than working (#974). */

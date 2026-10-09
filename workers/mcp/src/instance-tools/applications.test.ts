@@ -211,8 +211,28 @@ describe("the fill's progress reaches MCP verbatim (#986)", () => {
 			tokenFor: () => "session-token",
 			safetyFor: (): SafetyContext => ({ env: { API_BASE: "https://api.test" }, subject: "user-1", scopes: ["read"] }),
 		});
-		expect(described.get("list_applications")).toMatch(/fillProgress/);
-		expect(described.get("list_applications")).toMatch(/awaiting_review. is reported both for a complete form and for a run that stopped before filling/);
-		expect(described.get("get_application")).toMatch(/never say a form is filled when .fillProgress\.filled. and ..uploaded. are 0/);
+		expect(described.get("list_applications")).toMatch(/execution/);
+		expect(described.get("list_applications")).toMatch(/does not grant submission authority/);
+		expect(described.get("get_application")).toMatch(/never says a form is filled without durable counts/);
+	});
+});
+
+describe("durable execution projection reaches MCP verbatim (#988)", () => {
+	const EXECUTION = {
+		schemaVersion: 1,
+		lifecycle: { status: "filling", stateVersion: 3, blockReason: null, submitAttempted: false },
+		currentRun: { id: "run-1", kind: "fill", status: "paused", instanceId: "runner-1", mode: "fill_and_review" },
+		checkpoint: { id: "cp-1", phase: "initial", facts: { actions: 1, filled: 0, uploaded: 0, blockers: [], domain: "jobs.example.com" }, directive: { kind: "continue", delivery: "acknowledged_by_runner" } },
+		progress: null,
+		permittedActions: ["resume", "cancel"],
+		directiveReconciliation: "acknowledged",
+	};
+
+	it("does not re-project, redact differently, or grant an action over MCP", async () => {
+		const t = tools();
+		vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ item: { key: "app:a1", execution: EXECUTION } }), { status: 200, headers: { "Content-Type": "application/json" } }));
+		const body = JSON.parse(await t.call("get_application", { instance_id: "t1", application_id: "a1" }));
+		expect(body.item.execution).toEqual(EXECUTION);
+		expect(body.item.execution.permittedActions).toEqual(["resume", "cancel"]);
 	});
 });

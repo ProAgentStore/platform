@@ -147,6 +147,23 @@ export interface GmailScoutScanResponse {
 }
 
 /**
+ * Redacted, durable state of one job application's execution (#988).
+ *
+ * This import-free declaration is the Worker/Console contract. It contains only ids, closed
+ * vocabulary, counts and owner-safe status; raw browser payloads, form values, credentials and
+ * artifact contents are intentionally not representable here.
+ */
+export interface ApplicationExecutionProjection {
+	schemaVersion: 1;
+	lifecycle: { status: string; stateVersion: number; blockReason: string | null; submitAttempted: boolean };
+	currentRun: { id: string; kind: "tailor" | "fill"; status: string; instanceId: string; mode: string | null } | null;
+	checkpoint: { id: string; phase: "initial" | "post_navigation" | "before_submit" | "uncertain"; facts: { actions: number; filled: number; uploaded: number; blockers: string[]; domain: string | null }; directive: { kind: "continue" | "request_review" | "stop"; delivery: "queued" | "delivery_attempted" | "delivered" | "acknowledged_by_runner" } | null } | null;
+	progress: { stage: string; label: string; filled: number; uploaded: number; checkpointPhase: string | null; checkpointId: string | null; submitAttempted: boolean; evidence: "runner_result" | "runner_checkpoint" | "run_status" } | null;
+	permittedActions: string[];
+	directiveReconciliation: "not_applicable" | "terminal" | "decision_pending" | "delivery_pending" | "retry_pending" | "acknowledged";
+}
+
+/**
  * What a granted connector write-consent MEANS for each call (#722, migration 0155).
  *
  *   always — dispatch. What every row written before 0155 does, and the column's default.

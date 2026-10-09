@@ -747,7 +747,10 @@ const PINS = {
 	// this file's own: the gate's counting options, the release call on each path that ends a run,
 	// and the comments explaining why the mode could not be trusted from the queued row.
 	"workers/api/src/lib/local-apply/apply.ts": 826,
-	"workers/api/src/lib/applications/control.ts": 827,
+	// +12 at #988: the control surface now attaches the single redacted execution projection to
+	// application queue items. Projection construction itself lives in execution-projection.ts;
+	// the remaining lines are the queue's typed field and its one construction boundary.
+	"workers/api/src/lib/applications/control.ts": 839,
 	// -1 at #325: the JSON-string coercion create_agent and update_agent each had inline moved
 	// to `http.ts` as `parseJsonArg`, which is where the two copies could stop disagreeing about
 	// what a MALFORMED string means (create silently dropped it, update refused). Pin lowered so
@@ -1524,7 +1527,9 @@ const PINS = {
 	// the three new fields on the preferences response. Named rather than inline `api<{…}>`
 	// shapes (#616's rule, and `check-console-types.mjs` would otherwise require ledger entries
 	// for each), and this is the file that holds every console-visible Worker shape.
-	"store/console/src/lib/types.ts": 885, // +2 at #975: the card's run diagnostic (cause, counts, signal ids) — why nothing reached the page. +2 at #974: the card's queue view (position, attempts, next attempt, reason) — why a run is waiting rather than failed. +2 at #973: the card's submitAuthorization (the owner's per-application approval, its state and the run that spent it). // #953: crossed 800 with the Applications surface's copies of its Worker shapes (#958) and the Runner settings view; these are copies by design (check-console-types), so the file grows with the surface.
+	// +3 at #988: the Console imports the named Worker execution projection rather than copying its
+	// privacy-sensitive shape. The compile-time parity guard is the intentional boundary.
+	"store/console/src/lib/types.ts": 888, // +2 at #975: the card's run diagnostic (cause, counts, signal ids) — why nothing reached the page. +2 at #974: the card's queue view (position, attempts, next attempt, reason) — why a run is waiting rather than failed. +2 at #973: the card's submitAuthorization (the owner's per-application approval, its state and the run that spent it). // #953: crossed 800 with the Applications surface's copies of its Worker shapes (#958) and the Runner settings view; these are copies by design (check-console-types), so the file grows with the surface.
 	// New entry at #978 — 801, one line over LIMIT. The application-execution face and its controls
 	// were SPLIT OUT first (components/ApplicationRunFace.tsx, following BoardIssueFace), which took
 	// the file from 900 to 801; what is left is the board itself. Lowering it further means splitting
@@ -1926,7 +1931,7 @@ const PINS = {
 	// +4 at #991: the console types.ts reason above (three lines) and this line.
 	// +9 at #992: the console types.ts reason (five lines) and the surface-lock.ts reason (two
 	// lines) above, plus these two.
-	"scripts/check-file-size.mjs": 2012, // +1 at #953: the console types.ts entry. +2 at #946: the agents.ts pin and its reason; +1 at #944: the reason line for the runner.ts pin; +1 at #898: the board.ts pin; +1 at #924: the mcp runtime.ts pin.
+	"scripts/check-file-size.mjs": 2015, // +3 at #988: two projection pins and their reason; this ledger records intentional growth. +1 at #953: the console types.ts entry. +2 at #946: the agents.ts pin and its reason; +1 at #944: the reason line for the runner.ts pin; +1 at #898: the board.ts pin; +1 at #924: the mcp runtime.ts pin.
 };
 
 /**

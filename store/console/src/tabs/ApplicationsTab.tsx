@@ -135,6 +135,9 @@ function Detail({ instanceId, item, onChanged }: { instanceId: string; item: App
 	const [answers, setAnswers] = useState<Record<string, string>>({});
 	const [trace, setTrace] = useState<ApplicationTraceView | null>(null);
 	const pause = item.fillRun?.pause ?? null;
+	// #988: the API's one durable, privacy-safe execution projection is authoritative. Keep the
+	// legacy field as a read compatibility fallback for cards written before the projection existed.
+	const progress = item.execution?.progress ?? item.fillProgress;
 	const questions = pause?.question ? [pause.question] : item.questions;
 
 	const act = async (action: ApplicationQueueAction) => {
@@ -181,14 +184,20 @@ function Detail({ instanceId, item, onChanged }: { instanceId: string; item: App
 			{/* #986: what the RUNNER did, not what the status word implies. The sentence is the
 			    server's, so this card, the Board card and an MCP reader say the same thing; the counts
 			    and the checkpoint phase are shown beside it so "filled" is always falsifiable. */}
-			{item.fillProgress && (
+			{progress && (
 				<p className="text-sm mb-2" data-testid="run-progress">
-					<span className="font-semibold">Progress:</span> {item.fillProgress.label}
+					<span className="font-semibold">Progress:</span> {progress.label}
 					<span className="text-xs text-muted-soft">
 						{" "}
-						({item.fillProgress.filled} field{item.fillProgress.filled === 1 ? "" : "s"}, {item.fillProgress.uploaded} attachment{item.fillProgress.uploaded === 1 ? "" : "s"}
-						{item.fillProgress.checkpointPhase ? ` · checkpoint ${item.fillProgress.checkpointPhase.replace(/_/g, " ")}` : ""})
+						({progress.filled} field{progress.filled === 1 ? "" : "s"}, {progress.uploaded} attachment{progress.uploaded === 1 ? "" : "s"}
+						{progress.checkpointPhase ? ` · checkpoint ${progress.checkpointPhase.replace(/_/g, " ")}` : ""})
 					</span>
+				</p>
+			)}
+			{item.execution?.checkpoint && (
+				<p className="text-xs text-muted mb-2" data-testid="directive-reconciliation">
+					Supervisor: {item.execution.directiveReconciliation.replace(/_/g, " ")}
+					{item.execution.checkpoint.directive ? ` · ${item.execution.checkpoint.directive.kind.replace(/_/g, " ")} (${item.execution.checkpoint.directive.delivery.replace(/_/g, " ")})` : ""}
 				</p>
 			)}
 
