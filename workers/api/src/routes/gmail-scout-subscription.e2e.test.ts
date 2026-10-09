@@ -1,5 +1,8 @@
 /** #997: the fresh Gmail Scout path, from catalog subscription through its first handoff. */
 import { Hono } from "hono";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { toolNamesFor } from "../agent-do-tools.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
@@ -16,6 +19,16 @@ import { instanceRoutes } from "./instances.js";
 
 const SECRET = "gmail-scout-e2e-secret";
 const USER = "gmail-scout-owner";
+const LEGACY_UPGRADE = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../../migrations/0197_upgrade_legacy_job_search_scout_gmail_source.sql"), "utf8");
+
+function legacyScoutConfig(): string {
+	return JSON.stringify({
+		capabilities: {
+			surfaces: [], runtime: "local_browser", workflow: null,
+			tools: ["create_collection", "list_collections", "insert_record", "query_records", "update_record"],
+		},
+	});
+}
 
 describe("#997 Gmail Scout fresh subscription acceptance", () => {
 	it("subscribes the read-only source, pins its one mailbox, scans an isolated new lead, and emits Tailor handoff only on Apply", async () => {
@@ -81,6 +94,33 @@ describe("#997 Gmail Scout fresh subscription acceptance", () => {
 
 			const handoff = planJobLeadTriage({ id: "lead-1", collection: "job_leads", data: leads[0].data, createdAt: "now", updatedAt: "now" }, { action: "apply", sourceInstanceId: instanceId });
 			expect(handoff).toMatchObject({ ok: true, event: { eventType: JOB_LEAD_APPLY_EVENT, sourceInstanceId: instanceId, leadId: "lead-1" } });
+		} finally {
+			d1.close();
+		}
+	});
+
+	it("upgrades an existing legacy Job Search Scout so deployed subscriptions no longer report Gmail no_tools", async () => {
+		const d1 = realSchemaD1();
+		try {
+			d1.exec(`INSERT INTO users (id, github_login, roles) VALUES ('${USER}', 'serge', '["user"]')`);
+			d1.exec(`INSERT INTO user_api_keys (user_id, provider, account_id, key_ciphertext, dek_wrapped, iv, account_label)
+				VALUES ('${USER}', 'gmail', '${GMAIL_SCOUT_PINNED_EMAIL}', X'00', X'00', X'00', '${GMAIL_SCOUT_PINNED_EMAIL}')`);
+			d1.exec(`INSERT INTO agents (id, owner_id, slug, name, config) VALUES ('legacy-scout', '${USER}', 'job-search-scout', 'Job Search Scout', '${legacyScoutConfig().replaceAll("'", "''")}')`);
+			d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config, created_at, updated_at)
+				VALUES ('legacy-instance', 'legacy-scout', '${USER}', 'active', '{}', datetime('now'), datetime('now'))`);
+
+			// This executes the same forward migration deployed to D1. It proves the live failure mode:
+			// a subscription made before the Gmail catalog row existed must resolve connector tools
+			// through its upgraded template, not through an unrepairable per-instance snapshot.
+			d1.exec(LEGACY_UPGRADE);
+			const upgraded = d1.sqlite.prepare("SELECT config FROM agents WHERE id = 'legacy-scout'").get() as { config: string };
+			const tools = toolNamesFor(agentCapabilities({ slug: "job-search-scout", config: upgraded.config }));
+			expect([...tools].filter((name) => name.startsWith("gmail_"))).toEqual(["gmail_search", "gmail_read_message"]);
+			expect([...tools]).not.toEqual(expect.arrayContaining(["gmail_send", "gmail_archive", "gmail_mark_read"]));
+
+			const env = { DB: d1.DB } as unknown as Env;
+			const gmail = (await instanceConnectorPolicy(env, "legacy-instance", USER, "{}")).find((entry) => entry.id === "gmail");
+			expect(gmail).toMatchObject({ allowed: true, reason: "tools" });
 		} finally {
 			d1.close();
 		}
