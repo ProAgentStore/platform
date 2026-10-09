@@ -23,6 +23,7 @@ import VoiceTranslationSection from "./settings/VoiceTranslationSection";
 import MiscellaneousSection from "./settings/MiscellaneousSection";
 import NotificationPolicySection from "./settings/NotificationPolicySection";
 import LocalBrowserSection from "./settings/LocalBrowserSection";
+import GmailScoutSection from "./settings/GmailScoutSection";
 
 interface Props {
 	instanceId: string;
@@ -32,6 +33,8 @@ interface Props {
 	isRepo?: boolean;
 	/** A local CLI browser research agent (#946) — shows its own settings section. */
 	isLocalBrowser?: boolean;
+	/** Dedicated inbox Scout: its Gmail source is configured here, not through generic mail tools. */
+	isGmailScout?: boolean;
 	onUnsubscribe: () => void;
 }
 
@@ -58,7 +61,7 @@ interface WorkdriveStatus {
 	reach?: ConnectorReach;
 }
 
-export default function SettingsTab({ instanceId, instanceName, isApply, isCoding, isRepo, isLocalBrowser, onUnsubscribe }: Props) {
+export default function SettingsTab({ instanceId, instanceName, isApply, isCoding, isRepo, isLocalBrowser, isGmailScout, onUnsubscribe }: Props) {
 	const [maintMsg, setMaintMsg] = useState("");
 	const [resyncMsg, setResyncMsg] = useState("");
 	const [agentFields, setAgentFields] = useState<SettingsField[]>([]);
@@ -406,6 +409,7 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 			<BrainModelCard instanceId={instanceId} />
 			{isCoding && <CodingEngineCard instanceId={instanceId} />}
 			{isLocalBrowser && <LocalBrowserSection instanceId={instanceId} />}
+			{isGmailScout && <GmailScoutSection instanceId={instanceId} />}
 
 			<RunnerPanel instanceId={instanceId} />
 			<SecureInputHistory instanceId={instanceId} />

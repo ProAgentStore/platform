@@ -24,6 +24,28 @@ import type { CollectionRecord } from "../agent-storage-types.js";
 export const JOB_LEAD_COLLECTION = "job_leads";
 export const JOB_LEAD_APPLY_EVENT = "job.lead.apply_requested";
 
+/** Query keys mailers add for attribution rather than job identity. */
+const JOB_URL_TRACKING_KEY = /^(utm_|mc_|ref$|source$|trk$|campaign$|token$)/i;
+
+/**
+ * The URL form used for every job-lead identity, whether it arrived from a browser Scout or a
+ * Gmail alert. Keeping this here prevents a mailer tracking suffix from creating a second lead
+ * that the ordinary duplicate-prevention logic cannot see.
+ */
+export function canonicalJobUrl(value: string): string | null {
+	try {
+		const url = new URL(value.trim());
+		if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+		url.hash = "";
+		for (const key of [...url.searchParams.keys()]) if (JOB_URL_TRACKING_KEY.test(key)) url.searchParams.delete(key);
+		url.searchParams.sort();
+		url.pathname = url.pathname.replace(/\/+$/, "") || "/";
+		return `${url.protocol}//${url.host.toLowerCase()}${url.pathname}${url.search}`;
+	} catch {
+		return null;
+	}
+}
+
 export const JOB_LEAD_TRIAGE_ACTIONS = ["apply", "skip", "defer", "archive"] as const;
 export type JobLeadTriageAction = (typeof JOB_LEAD_TRIAGE_ACTIONS)[number];
 
@@ -190,15 +212,7 @@ export function jobIdentity(data: Record<string, unknown>): string | null {
 		return `id:${source}:${String(jobId).trim()}`;
 	}
 	if (typeof data.url !== "string" || !data.url.trim()) return null;
-	try {
-		const u = new URL(data.url.trim());
-		u.hash = "";
-		for (const k of [...u.searchParams.keys()]) if (/^utm_/i.test(k)) u.searchParams.delete(k);
-		const path = u.pathname.replace(/\/+$/, "");
-		return `url:${u.protocol}//${u.host.toLowerCase()}${path}${u.search}`;
-	} catch {
-		return `url:${data.url.trim()}`;
-	}
+	return `url:${canonicalJobUrl(data.url) ?? data.url.trim()}`;
 }
 
 /**

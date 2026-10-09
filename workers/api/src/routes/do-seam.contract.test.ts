@@ -157,7 +157,10 @@ function ownerEnv() {
 	const row = (sql: string): Record<string, unknown> | null => {
 		if (/FROM users/i.test(sql)) return { suspended: 0, roles: '["user"]', github_login: null };
 		if (/FROM agents/i.test(sql)) {
-			return { id: "agent-1", slug: "agent-1", name: "Probe", model: "m", owner_id: UID, config: "{}", is_published: 1 };
+			// The Gmail Scout status route has a source-mode gate before it asks its private lead
+			// collection. This owner fixture is intentionally one source that is eligible to reach
+			// every mounted route, so the seam assertion can continue to observe that forward.
+			return { id: "agent-1", slug: "agent-1", name: "Probe", model: "m", owner_id: UID, config: '{"source_mode":"gmail"}', is_published: 1 };
 		}
 		if (/FROM agent_instances/i.test(sql)) {
 			return { id: "instance-1", user_id: UID, agent_id: "agent-1", config: "{}", status: "active" };

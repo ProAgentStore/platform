@@ -5,6 +5,8 @@ import { patchInstanceConfig } from "../instance-config.js";
 
 export const GMAIL_SCOUT_TOOLS = ["gmail_search", "gmail_read_message"] as const;
 export const GMAIL_SCOUT_CAPABILITY = { connector: "gmail", readOnly: true, tools: GMAIL_SCOUT_TOOLS } as const;
+/** The declared source mode a dedicated, read-only inbox Scout carries. */
+export const GMAIL_SCOUT_SOURCE_MODE = "gmail" as const;
 
 export type GmailScoutConfig = { id: string; instanceId: string; pinnedEmail: string | null; enabled: boolean; createdAt: string; updatedAt: string };
 export type GmailScoutScanState = { instanceId: string; lastScanAt: string | null; lastMessageIdCursor: string | null; candidateCount: number; dedupeCount: number; failureCount: number; lastFailureAt: string | null; lastFailureMessage: string | null };
@@ -13,6 +15,16 @@ const configRow = (r: Record<string, unknown>): GmailScoutConfig => ({
 	id: String(r.id), instanceId: String(r.instance_id), pinnedEmail: typeof r.pinned_email === "string" ? r.pinned_email : null,
 	enabled: Number(r.enabled) === 1, createdAt: String(r.created_at), updatedAt: String(r.updated_at),
 });
+
+/** Parse source mode without trusting malformed historical config blobs. */
+export function gmailScoutSourceMode(config: string | null | undefined): boolean {
+	if (!config) return false;
+	try {
+		return (JSON.parse(config) as { source_mode?: unknown }).source_mode === GMAIL_SCOUT_SOURCE_MODE;
+	} catch {
+		return false;
+	}
+}
 
 export async function getGmailScoutConfig(env: Env, instanceId: string): Promise<GmailScoutConfig | null> {
 	const r = await env.DB.prepare("SELECT id, instance_id, pinned_email, enabled, created_at, updated_at FROM gmail_scout_configs WHERE instance_id = ?1").bind(instanceId).first<Record<string, unknown>>();

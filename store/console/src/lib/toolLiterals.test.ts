@@ -85,6 +85,12 @@ const ALLOWED: { file: string; names: string[]; because: string }[] = [
 		because:
 			"COPY, not a call: the placeholder in the creator's tool-allowlist input, showing the shape of a name to type. Nothing is invoked, and the field's own label says unknown names are ignored.",
 	},
+	{
+		file: "store/console/src/lib/surfaces.tsx",
+		names: ["gmail_read_message", "gmail_search"],
+		because:
+			"The Gmail Scout settings panel is shown only when the instance's declared allowlist is exactly these two read tools. These names are a capability predicate, not a call; a send/archive/modify tool cannot make this panel appear.",
+	},
 ];
 
 const findings = TREES.flatMap(([tree, root]) =>

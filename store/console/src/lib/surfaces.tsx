@@ -142,6 +142,12 @@ const KB_TOOLS = ["search_knowledge", "list_knowledge", "read_knowledge", "add_k
 const COLLECTION_TOOLS = ["create_collection", "list_collections", "insert_record", "query_records", "update_record", "delete_record"] as const;
 /** Instance file storage — what the Knowledge → Files sub-tab uploads into. */
 const FILE_TOOLS = ["upload_file", "list_files", "read_file", "delete_file"] as const;
+const GMAIL_SCOUT_TOOLS = ["gmail_search", "gmail_read_message"] as const;
+
+/** The source template declares exactly these two Gmail reads; other inbox agents keep their own UI. */
+function isGmailScout(caps: SurfaceCaps): boolean {
+	return caps.tools?.length === GMAIL_SCOUT_TOOLS.length && GMAIL_SCOUT_TOOLS.every((tool) => caps.tools?.includes(tool)) === true;
+}
 
 /**
  * The vector store behind RAG — named once so the `indexing` SURFACE and the `index` SUB-TAB
@@ -360,7 +366,7 @@ export const SURFACES: SurfaceDef[] = [
 		show: () => true,
 		scroll: true,
 		render: ({ instanceId, instanceName, isApply, isCoding, isRepo, caps, onUnsubscribe }) => (
-			<SettingsTab instanceId={instanceId} instanceName={instanceName} isApply={isApply} isCoding={isCoding} isRepo={isRepo} isLocalBrowser={caps.runtime === "local_browser"} onUnsubscribe={onUnsubscribe} />
+			<SettingsTab instanceId={instanceId} instanceName={instanceName} isApply={isApply} isCoding={isCoding} isRepo={isRepo} isLocalBrowser={caps.runtime === "local_browser"} isGmailScout={isGmailScout(caps)} onUnsubscribe={onUnsubscribe} />
 		),
 	},
 ];

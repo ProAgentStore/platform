@@ -2,6 +2,7 @@ import { retirementView } from "../lib/agent-retirement.js";
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
+import { GMAIL_SCOUT_SOURCE_MODE } from "../lib/gmail-scout/config.js";
 import { composeInstanceActivity } from "../lib/instance-activity.js";
 import { readLatestRuns, readQueueDepths } from "../lib/instance-activity-read.js";
 import { applySettingsPatch, settingsPatchRefusal, resolveSettingsValues } from "../lib/instance-settings.js";
@@ -217,6 +218,13 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 	// rather than poisoning the instance config.
 	const displayName = chosenName || (nth > 1 ? `${agent.name} ${nth}` : "");
 	const initial: Record<string, unknown> = displayName ? { displayName } : {};
+	// Source mode is part of an instance's authority as well as its catalog template. Copy the
+	// Gmail Scout declaration on subscribe so its mailbox routes can reject every other instance.
+	try {
+		if ((JSON.parse(agent.config || "{}") as { source_mode?: unknown }).source_mode === GMAIL_SCOUT_SOURCE_MODE) initial.source_mode = GMAIL_SCOUT_SOURCE_MODE;
+	} catch {
+		// A malformed template config has no source mode; the normal capability parser handles it.
+	}
 	const declaredPipelines = defaultPipelinesFor(agent.config);
 	if (Object.keys(declaredPipelines).length) initial.pipelines = declaredPipelines;
 	const initialConfig = JSON.stringify(initial);
