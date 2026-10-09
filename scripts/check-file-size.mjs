@@ -688,6 +688,10 @@ const PINS = {
 	// how `--replace` asks instead of killing. The counts exist so a replace can REFUSE while a
 	// Codex turn, a research run or an application fill is live; `pkill` destroyed them silently.
 	"packages/browser-runner/src/runner.ts": 1361, // +3 at #957: the localApply runtime (field, construction sharing the research browserFor, shutdown). +6 at #956: the local-artifact runtime is constructed, advertised and shut down beside local-browser's.
+	// New at #953: the four-line read-only email-lead preflight route belongs beside the existing
+	// local-apply routes. Splitting a single ordered route registration would add indirection without
+	// reducing its ownership; the page validation itself stays in local-apply/runtime.ts.
+	"packages/browser-runner/src/server.ts": 804,
 	// New pin at #946: the local browser capability is validated at the three agent write doors (#945) and served back resolved by both capabilities routes (#946) — four lines over the line; splitting the agents router is its own change.
 	"workers/api/src/routes/agents.ts": 804,
 	// +45 at #263: `probeMcpSurface`, so the connection test can ask about resources and prompts
@@ -1930,7 +1934,7 @@ const PINS = {
 	// +4 at #991: the console types.ts reason above (three lines) and this line.
 	// +9 at #992: the console types.ts reason (five lines) and the surface-lock.ts reason (two
 	// lines) above, plus these two.
-	"scripts/check-file-size.mjs": 2015, // +3 at #988: two projection pins and their reason; this ledger records intentional growth. +1 at #953: the console types.ts entry. +2 at #946: the agents.ts pin and its reason; +1 at #944: the reason line for the runner.ts pin; +1 at #898: the board.ts pin; +1 at #924: the mcp runtime.ts pin.
+	"scripts/check-file-size.mjs": 2018, // +3 at #953: the server.ts preflight-route pin and its explanation; this ledger records intentional growth. +3 at #988: two projection pins and their reason; +1 at #953: the console types.ts entry. +2 at #946: the agents.ts pin and its reason; +1 at #944: the reason line for the runner.ts pin; +1 at #898: the board.ts pin; +1 at #924: the mcp runtime.ts pin.
 };
 
 /**
