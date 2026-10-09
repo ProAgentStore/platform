@@ -64,7 +64,7 @@ export default function GmailScoutSection({ instanceId }: { instanceId: string }
 			<Button size="sm" onClick={() => void scan()} disabled={busy || !enabled}>{busy ? "Working…" : "Scan now"}</Button>
 		</div>
 		<label className="block text-sm mt-4">Connected Gmail mailbox
-			<input className="mt-1 w-full rounded border border-line bg-base px-2 py-1.5" value={mailbox} readOnly aria-readonly="true" type="email" />
+			<input className="mt-1 w-full rounded border border-line bg-paper px-2 py-1.5" value={mailbox} readOnly aria-readonly="true" type="email" />
 		</label>
 		<label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /> Enable Gmail job-alert scans</label>
 		<div className="mt-3 flex flex-wrap items-center gap-2"><Button size="sm" onClick={() => void save()} disabled={busy}>Save Gmail source</Button>{message && <span className="text-xs text-muted-soft" role="status">{message}</span>}</div>
