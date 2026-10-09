@@ -222,6 +222,19 @@ const CLONE_POLL_MS = 2_000;
 /** A pre-#858 runner's synchronous clone is one relay command, capped by the relay at two minutes. */
 const LEGACY_CLONE_TIMEOUT_MS = 120_000;
 
+type ClonePollDelay = (ms: number) => Promise<void>;
+const realClonePollDelay: ClonePollDelay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+let clonePollDelay: ClonePollDelay = realClonePollDelay;
+
+/** Test seam for advancing the confirmation clock only after the clone poll is actually awaited. */
+export function setClonePollDelayForTest(delay?: ClonePollDelay): () => void {
+	const previous = clonePollDelay;
+	clonePollDelay = delay ?? realClonePollDelay;
+	return () => {
+		clonePollDelay = previous;
+	};
+}
+
 /** The runner's answer for why it could not be asked — or null when the error is git's own. */
 function runnerTrouble(e: unknown): string | null {
 	const message = e instanceof Error ? e.message : String(e);
@@ -250,7 +263,7 @@ async function awaitClone(conn: RunnerConn, localPath: string, job: CloneJobView
 	const until = Math.min(deadline, Date.now() + CLONE_WAIT_MS);
 	let current = job;
 	while (current.state === "cloning" && Date.now() < until) {
-		await new Promise<void>((r) => setTimeout(r, Math.min(CLONE_POLL_MS, Math.max(0, until - Date.now()))));
+		await clonePollDelay(Math.min(CLONE_POLL_MS, Math.max(0, until - Date.now())));
 		const left = until - Date.now();
 		if (left <= 0) break;
 		current = (await callRunner<CloneJobView>(conn, "/coding/clone-status", { workDir: localPath }, { timeoutMs: Math.min(READ_TIMEOUT_MS, left) }).catch(() => null)) ?? current;

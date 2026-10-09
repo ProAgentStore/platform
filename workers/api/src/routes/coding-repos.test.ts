@@ -29,6 +29,7 @@ vi.mock("../lib/runner-client.js", async (importOriginal) => ({
 }));
 
 import { registerRepoRoutes } from "./coding-repos.js";
+import { setClonePollDelayForTest } from "./coding-repo-add.js";
 // Registered alongside the repo routes so the provider-dispatch block can assert that the
 // three hosted surfaces disagree about GitLab on purpose: issues and builds answer, pull
 // requests refuse (#221).
@@ -836,26 +837,26 @@ describe("POST /coding/repos requireGithub + clone — the cold start (#857)", (
 	});
 
 	describe("long clones run in the background, and SSH-only machines clone (#858)", () => {
-		afterEach(() => vi.useRealTimers());
+		let restoreClonePollDelay: () => void = () => undefined;
+		afterEach(() => {
+			restoreClonePollDelay();
+			restoreClonePollDelay = () => undefined;
+			vi.useRealTimers();
+		});
 		/** Fake only the wait's clock — the request's own async work (session signing, crypto) stays real. */
-		const fakeClock = () => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-		/** Advance the fake clock a second at a time, yielding to real I/O between, until the call answers. */
-		async function settle<T>(call: Promise<T>): Promise<T> {
-			let done = false;
-			void call.finally(() => {
-				done = true;
+		const fakeClock = () => {
+			vi.useFakeTimers({ toFake: ["Date"] });
+			// The route has reached a clone poll before this advances virtual time. This is a
+			// synchronization point, not a scheduler race: each production poll advances once.
+			restoreClonePollDelay = setClonePollDelayForTest(async (ms) => {
+				vi.setSystemTime(Date.now() + ms);
 			});
-			for (let i = 0; i < 600 && !done; i++) {
-				await new Promise((r) => setImmediate(r));
-				await vi.advanceTimersByTimeAsync(1_000);
-			}
-			return call;
-		}
+		};
 
 		it("a clone still running when the wait ends answers 202 — NOTHING stored — with the job and what to do", async () => {
 			fakeClock();
 			machine({ initial: MISSING, finishAfter: Number.POSITIVE_INFINITY });
-			const { status, body, issued } = await settle(add({ githubRepo: "acme/grass-karma", clone: true }));
+			const { status, body, issued } = await add({ githubRepo: "acme/grass-karma", clone: true });
 			expect(status).toBe(202);
 			expect(body).toMatchObject({ cloning: true, job: { path: "~/dev/grass-karma", slug: "acme/grass-karma", state: "cloning" } });
 			expect((body as { detail: string }).detail).toMatch(/Nothing is stored yet\. Call coding_repo_add again with the same arguments: it joins this clone — never starts a second/);
@@ -884,9 +885,9 @@ describe("POST /coding/repos requireGithub + clone — the cold start (#857)", (
 			fakeClock();
 			// First call: the clone outlives the wait (it finishes on the 10th status read, ~20s in).
 			const asked = machine({ initial: MISSING, finishAfter: 10 });
-			expect((await settle(add({ githubRepo: "acme/grass-karma", clone: true }))).status).toBe(202);
+			expect((await add({ githubRepo: "acme/grass-karma", clone: true })).status).toBe(202);
 			// Second call, same arguments: it must not read the half-written folder as a checkout, nor clone again.
-			const { status, row } = await settle(add({ githubRepo: "acme/grass-karma", clone: true }));
+			const { status, row } = await add({ githubRepo: "acme/grass-karma", clone: true });
 			expect(status).toBe(201);
 			expect(row).toMatchObject({ workdir: "~/dev/grass-karma", github_repo: "acme/grass-karma" });
 			expect(asked.filter((a) => a.path === "/coding/clone-start")).toHaveLength(1);
