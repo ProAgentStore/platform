@@ -392,7 +392,7 @@ async function reconcileResultOutcome(env: Env, uid: string, run: ApplyRun, r: L
 		const app = await getOwnedApplication(env, uid, run.applicationId);
 		// The result was already projected (or the application moved on) if it no longer has the
 		// in-flight state. Do not replay notifications/history on every scheduled sweep.
-		if (!app || app.status !== "filling") return;
+		if (app?.status !== "filling") return;
 	}
 	const attempted = run.trace.some((e) => e.type === "submit.attempted") || r.submitAttempted === true;
 	if (attempted) await markSubmitAttempted(env, run.applicationId, uid, now);

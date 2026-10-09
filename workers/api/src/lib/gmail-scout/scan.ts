@@ -161,7 +161,7 @@ export async function ingestGmailCandidates(input: {
 	readMessage: (id: string) => Promise<GmailMessage>;
 	existing: { data?: Record<string, unknown> }[];
 	/** `false` means the owning Scout returned an existing unchanged lead (a concurrent duplicate). */
-	insertLead: (data: Record<string, unknown>) => Promise<boolean | void>;
+	insertLead: (data: Record<string, unknown>) => Promise<boolean | undefined>;
 }): Promise<{ candidates: number; added: number; deduped: number }> {
 	let added = 0, deduped = 0, candidates = 0;
 	for (const hit of input.hits) {
