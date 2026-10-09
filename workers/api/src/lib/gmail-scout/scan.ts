@@ -26,10 +26,10 @@ function metadataLine(value: string | undefined): string | undefined {
 function extractVisibleMetadata(message: GmailMessage): Pick<ScoutCandidate, "company" | "location"> {
 	const text = `${message.subject}\n${message.snippet}\n${message.text}`;
 	const company =
-		text.match(/(?:company|employer|organisation|organization)\s*[:\-]\s*([^\n|•]{2,100})/i)?.[1] ??
+		text.match(/(?:company|employer|organisation|organization)\s*[:-]\s*([^\n|•]{2,100})/i)?.[1] ??
 		text.match(/\b(?:at|with|join)\s+([A-Z][\w&.,'’ -]{1,80}?)(?=\s+(?:in|—|\||,)|$)/m)?.[1];
 	const location =
-		text.match(/(?:location|based\s+in|work\s+location)\s*[:\-]\s*([^\n|•]{2,100})/i)?.[1] ??
+		text.match(/(?:location|based\s+in|work\s+location)\s*[:-]\s*([^\n|•]{2,100})/i)?.[1] ??
 		text.match(/\b(?:in|located\s+in)\s+([A-Z][\w .,'’-]{1,80}?)(?=\s+(?:—|\|)|$)/m)?.[1];
 	return { company: metadataLine(company), location: metadataLine(location) };
 }

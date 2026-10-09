@@ -63,7 +63,7 @@ export async function putGmailScoutConfig(env: Env, instanceId: string, userId: 
 }
 
 /** Resolves exactly one account; ambiguity is intentionally a hard refusal before a mailbox is read. */
-export async function resolveGmailScoutAccount(env: Env, instanceId: string, userId: string, pinnedEmail?: string | null) {
+export async function resolveGmailScoutAccount(env: Env, _instanceId: string, userId: string, pinnedEmail?: string | null) {
 	if (!pinnedEmail || pinnedEmail.toLowerCase() !== GMAIL_SCOUT_PINNED_EMAIL) {
 		throw new Error(`Gmail Job Search Scout must use the fixed mailbox "${GMAIL_SCOUT_PINNED_EMAIL}".`);
 	}

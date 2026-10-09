@@ -77,7 +77,7 @@ export function confirmationMarker(before: ConfirmationPage | null, after: Confi
 	if (!after) return null;
 	if (after.confirmed) return "page_text";
 	const url = urlPathAndQuery(after.url).toLowerCase();
-	if (CONFIRMATION_URL_RE.test(url) && !!before && urlPathAndQuery(before.url).toLowerCase() !== url) return "url_receipt";
+	if (CONFIRMATION_URL_RE.test(url) && before && urlPathAndQuery(before.url).toLowerCase() !== url) return "url_receipt";
 	// The site's own duplicate notice, but ONLY if it appeared after this click: "you have already
 	// applied" that was on the page beforehand is an earlier application of the owner's, and
 	// reading it as this run's success would record a submission that never happened.
