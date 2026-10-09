@@ -6,7 +6,7 @@
  * end to end in `application-runner-routes.test.ts`.
  */
 import { describe, expect, it } from "vitest";
-import { APPLICATION_RUN_TASK_TYPE, applicationCardId, applicationCardLabel, applicationCardStatus, applicationRunTaskRecord, applicationStageLabel } from "./application-board.js";
+import { APPLICATION_RUN_TASK_TYPE, applicationCardId, applicationCardLabel, applicationCardStatus, applicationRunTaskRecord, applicationStageLabel, type ApplicationCardFacts } from "./application-board.js";
 import { fillProgressOf } from "./fill-progress.js";
 
 const APP = {
@@ -17,6 +17,16 @@ const APP = {
 	},
 } as never;
 
+const execution = {
+	schemaVersion: 1,
+	lifecycle: { status: "filling", stateVersion: 4, blockReason: null, submitAttempted: false },
+	currentRun: { id: "run-1", kind: "fill", status: "running", instanceId: "ap", mode: null },
+	checkpoint: null,
+	progress: null,
+	permittedActions: ["cancel"],
+	directiveReconciliation: "not_applicable",
+} satisfies ApplicationCardFacts["execution"];
+
 const facts = (over: Record<string, unknown> = {}) => ({
 	applicationId: "app-1",
 	applicationStatus: "filling",
@@ -26,8 +36,9 @@ const facts = (over: Record<string, unknown> = {}) => ({
 	runId: "run-1",
 	stage: "Filling the application in the browser",
 	traceUrl: "/instances/ap/applications/app-1/trace",
+	execution,
 	...over,
-});
+} as ApplicationCardFacts);
 
 describe("one card per application, many runs (#978)", () => {
 	it("is keyed on the APPLICATION, so a retry lands on the same card", () => {

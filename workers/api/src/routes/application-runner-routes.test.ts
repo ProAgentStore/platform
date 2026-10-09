@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "../lib/auth.js";
 import { realSchemaD1, type RealSchemaD1 } from "../lib/d1-sqlite.js";
 import { JOB_LEAD_APPLY_EVENT, planJobLeadTriage } from "../lib/job-lead-triage.js";
+import type { ApplicationExecutionProjection } from "../lib/applications/execution-projection.js";
 import type { Env } from "../types.js";
 
 vi.mock("../lib/auth.js", async () => {
@@ -698,7 +699,7 @@ describe("a routine checkpoint continues deterministically (#982)", () => {
 describe("an application execution appears on the normal Kanban (#978)", () => {
 	const board = async (instance = "ap") => (await call("GET", `/${instance}/board`)).body;
 	const appCard = async (instance = "ap") => {
-		type Card = { application?: { applicationId: string; kind: string; stage: string; actions: string[]; traceUrl: string; checkpoint?: { checkpointId: string; directive: string | null }; progress?: { stage: string; label: string; filled: number; uploaded: number; checkpointPhase: string | null; checkpointId: string | null; submitAttempted: boolean; evidence: string }; blockReason?: string }; title: string; status: string; attempts: unknown[] };
+		type Card = { application?: { applicationId: string; kind: string; stage: string; actions: string[]; traceUrl: string; checkpoint?: { checkpointId: string; directive: string | null }; progress?: { stage: string; label: string; filled: number; uploaded: number; checkpointPhase: string | null; checkpointId: string | null; submitAttempted: boolean; evidence: string }; blockReason?: string; execution?: ApplicationExecutionProjection }; title: string; status: string; attempts: unknown[] };
 		const b = (await board(instance)) as { board?: Record<string, Card[]>; items?: Card[] };
 		const cards = b.items ?? Object.values(b.board ?? {}).flat();
 		return cards.find((c) => c.application);

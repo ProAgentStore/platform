@@ -8,9 +8,9 @@ describe("Gmail Scout permissions", () => {
 		const d1 = realSchemaD1();
 		try {
 			const row = d1.sqlite.prepare("SELECT config FROM agents WHERE slug = 'gmail-job-search-scout'").get() as { config?: string } | undefined;
-			expect(row?.config).toBeTruthy();
-			const config = JSON.parse(row!.config) as { source_mode?: string };
-			const capabilities = agentCapabilities({ slug: "gmail-job-search-scout", config: row!.config });
+			if (!row?.config) throw new Error("Gmail Scout seed config is missing");
+			const config = JSON.parse(row.config) as { source_mode?: string };
+			const capabilities = agentCapabilities({ slug: "gmail-job-search-scout", config: row.config });
 			expect(config.source_mode).toBe(GMAIL_SCOUT_SOURCE_MODE);
 			expect(capabilities.tools).toEqual([...GMAIL_SCOUT_TOOLS]);
 			expect(GMAIL_SCOUT_CAPABILITY).toEqual({ connector: "gmail", readOnly: true, tools: GMAIL_SCOUT_TOOLS });
