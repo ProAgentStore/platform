@@ -29,7 +29,7 @@ describe("describeInstance (#1002)", () => {
 	it("joins named execution metadata without exposing runtime or credential secrets", async () => {
 		const d1 = fixture();
 		try {
-			const view = await describeInstance({ DB: d1.DB } as Env, INSTANCE, OWNER);
+			const view = await describeInstance({ DB: d1.DB } as unknown as Env, INSTANCE, OWNER);
 			expect(view).toMatchObject({
 				instance: { id: INSTANCE },
 				template: { name: "Application Runner", slug: "application-runner" },
@@ -53,7 +53,7 @@ describe("describeInstance (#1002)", () => {
 	it("fails closed for another owner before reading any related execution data", async () => {
 		const d1 = fixture();
 		try {
-			await expect(describeInstance({ DB: d1.DB } as Env, INSTANCE, "other-owner")).rejects.toMatchObject({ status: 404 });
+			await expect(describeInstance({ DB: d1.DB } as unknown as Env, INSTANCE, "other-owner")).rejects.toMatchObject({ status: 404 });
 		} finally {
 			d1.close();
 		}
