@@ -746,7 +746,7 @@ const PINS = {
 	// a different subject from the dispatch plumbing and read better alone. What is left here is
 	// this file's own: the gate's counting options, the release call on each path that ends a run,
 	// and the comments explaining why the mode could not be trusted from the queued row.
-	"workers/api/src/lib/local-apply/apply.ts": 826,
+	"workers/api/src/lib/local-apply/apply.ts": 857, // +31 at #953: durable CLI result receipt/reconciliation belongs beside the dispatch and settlement CAS operations, so its evidence cannot diverge from the application outcome.
 	// +12 at #988: the control surface now attaches the single redacted execution projection to
 	// application queue items. Projection construction itself lives in execution-projection.ts; the remaining lines are the queue's typed field and its one construction boundary. +4 at #997: a runnerless Gmail Scout is classified from its durable Apply handoff, so its intentionally null runtime cannot hide private leads from this queue.
 	"workers/api/src/lib/applications/control.ts": 843,
@@ -946,7 +946,7 @@ const PINS = {
 // +19 at #987: the read-time join for application cards — an application card reported
 	// `attempts: 1` for an application with four correlated fill runs, because `attempts` counts
 	// card rows. Mirrors the coding join above it (#592) and, like it, cannot be a write-through.
-		"workers/api/src/lib/board.ts": 884, // +16 at #978: the `application` field a run card carries and the one line that passes it through — its TYPE and parser live with the domain that writes them (applications/application-board.ts), which is why this is +16 and not +60. // +37 at #895: the card's issue fields (lane, issueRun, closingCommit, priority, codingSessionId) with their meaning, the repo filter, and the #682 link keeping its repo; the derivation itself lives in board-issues.ts. #898 crossed 800: a job key is REFUSED past its limit (an id cut would merge two cards), and card text is cut visibly.
+		"workers/api/src/lib/board.ts": 885, // +1 at #953: application cards bypass generic manual lanes so a completed runtime cannot mask the durable application outcome. +16 at #978: the `application` field a run card carries and the one line that passes it through — its TYPE and parser live with the domain that writes them (applications/application-board.ts), which is why this is +16 and not +60. // +37 at #895: the card's issue fields (lane, issueRun, closingCommit, priority, codingSessionId) with their meaning, the repo filter, and the #682 link keeping its repo; the derivation itself lives in board-issues.ts. #898 crossed 800: a job key is REFUSED past its limit (an id cut would merge two cards), and card text is cut visibly.
 	"workers/mcp/src/instance-tools/runtime.ts": 811, // #924 crossed 800: runner_resource_history, the machine's two-tier history.
 	// +3 for #308: an import plus the two lines saying why three steps unwrap the fence that the
 	// connectors now apply at the source. Raised rather than split — the growth is a comment and
