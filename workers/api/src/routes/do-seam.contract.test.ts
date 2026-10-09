@@ -371,6 +371,9 @@ const FORWARDS: Record<string, string[]> = {
 	// new one, and it is why `find_confirmation_link` can appear in the guide's tool list at all.
 	"instances.ts GET /:instanceId/connection-guide": ["/state"],
 	"instances.ts GET /:instanceId/gmail-scout/status": [
+		// A first-run Scout has no job_leads schema yet. The route probes its existence so only
+		// that explicit 404 becomes an empty isolated collection; all other DO errors still fail.
+		"/collections/job_leads",
 		"/collections/job_leads/records?before,limit,mime_type,offset,order_by,order_dir,tags,type,user_id,where",
 	],
 	"instances.ts GET /:instanceId/knowledge/:docId": ["/knowledge/doc-1"],

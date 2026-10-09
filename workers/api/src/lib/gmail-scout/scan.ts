@@ -53,11 +53,22 @@ export function candidateFromMessage(message: GmailMessage): ScoutCandidate | nu
 	};
 }
 function stub(env: Env, id: string) { return env.AGENT.get(env.AGENT.idFromName(id)); }
-async function records(env: Env, instanceId: string, query?: URLSearchParams) {
+
+/**
+ * A brand-new Scout has no collection schema until its first lead is inserted (the Agent DO
+ * creates it on that insert).  Probe the collection route first, where absence is an explicit
+ * 404, rather than mistaking record-query's generic error for a Gmail failure.  Do not turn
+ * any other storage failure into an empty inbox: that would hide an unavailable Scout store.
+ */
+export async function readGmailScoutLeadRecords(env: Env, instanceId: string, query?: URLSearchParams) {
+	const agent = stub(env, instanceId);
+	const collection = await agent.fetch(new Request("https://agent/collections/job_leads"));
+	if (collection.status === 404) return [];
+	if (!collection.ok) throw new Error("Could not inspect this Scout's job leads.");
 	// Preserve caller query keys when this is reached from the status route: AgentDO's paging
 	// contract is shared by every collection reader, and dropping one here is the #428 seam bug.
 	const suffix = query?.toString() || "limit=500";
-	const res = await stub(env, instanceId).fetch(new Request(`https://agent/collections/job_leads/records?${suffix}`));
+	const res = await agent.fetch(new Request(`https://agent/collections/job_leads/records?${suffix}`));
 	if (!res.ok) throw new Error("Could not read this Scout's job leads.");
 	const body = await res.json() as { records?: Array<{ data?: Record<string, unknown> }> };
 	return body.records ?? [];
@@ -130,7 +141,7 @@ export async function scanGmailScout(env: Env, instanceId: string, userId: strin
 		const token = await connectorClient(env, "gmail", { userId, instanceId }).token({ scope: "read" });
 		const state = await getGmailScoutScanState(env, instanceId);
 		const hits = await listMessages(token, gmailScoutQuery(state.lastMessageIdCursor), 25);
-		const existing = await records(env, instanceId);
+		const existing = await readGmailScoutLeadRecords(env, instanceId);
 		const { candidates, added, deduped } = await ingestGmailCandidates({
 			hits,
 			readMessage: (id) => getMessage(token, id, 20_000),
@@ -151,6 +162,6 @@ export async function scanGmailScout(env: Env, instanceId: string, userId: strin
 }
 
 export async function gmailScoutStatus(env: Env, instanceId: string, query?: URLSearchParams) {
-	const [config, state, leads] = await Promise.all([getGmailScoutConfig(env, instanceId), getGmailScoutScanState(env, instanceId), records(env, instanceId, query)]);
+	const [config, state, leads] = await Promise.all([getGmailScoutConfig(env, instanceId), getGmailScoutScanState(env, instanceId), readGmailScoutLeadRecords(env, instanceId, query)]);
 	return { config, state, leadCount: leads.length, newLeadCount: leads.filter((r) => (r.data?.status ?? "new") === "new").length };
 }

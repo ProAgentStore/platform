@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { Env } from "../../../types.js";
 import { resolveConnectorAccount } from "../../connector-accounts.js";
-import { candidateFromMessage, gmailScoutQuery, ingestGmailCandidates } from "../scan.js";
+import { candidateFromMessage, gmailScoutQuery, ingestGmailCandidates, readGmailScoutLeadRecords } from "../scan.js";
 
 describe("Gmail Scout scan", () => {
 	it("fails closed when several Gmail accounts are not pinned", () => {
@@ -44,5 +45,21 @@ describe("Gmail Scout scan", () => {
 	it("uses its persisted cursor as a Gmail after-date floor after the first scan", () => {
 		expect(gmailScoutQuery(null)).toContain("newer_than:30d");
 		expect(gmailScoutQuery(JSON.stringify({ after: "2026-10-09T12:00:00.000Z", messageId: "m1" }))).toContain("after:2026/10/9");
+	});
+
+	it("treats only an absent private lead collection as empty for a first scan", async () => {
+		const requests: string[] = [];
+		const env = {
+			AGENT: {
+				idFromName: (id: string) => id,
+				get: () => ({ fetch: async (request: Request) => {
+					requests.push(new URL(request.url).pathname);
+					return Response.json({ error: "Not found" }, { status: 404 });
+				} }),
+			},
+		} as unknown as Env;
+
+		await expect(readGmailScoutLeadRecords(env, "new-scout")).resolves.toEqual([]);
+		expect(requests).toEqual(["/collections/job_leads"]);
 	});
 });
