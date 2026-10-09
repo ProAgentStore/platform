@@ -748,9 +748,8 @@ const PINS = {
 	// and the comments explaining why the mode could not be trusted from the queued row.
 	"workers/api/src/lib/local-apply/apply.ts": 826,
 	// +12 at #988: the control surface now attaches the single redacted execution projection to
-	// application queue items. Projection construction itself lives in execution-projection.ts;
-	// the remaining lines are the queue's typed field and its one construction boundary.
-	"workers/api/src/lib/applications/control.ts": 839,
+	// application queue items. Projection construction itself lives in execution-projection.ts; the remaining lines are the queue's typed field and its one construction boundary. +4 at #997: a runnerless Gmail Scout is classified from its durable Apply handoff, so its intentionally null runtime cannot hide private leads from this queue.
+	"workers/api/src/lib/applications/control.ts": 843,
 	// -1 at #325: the JSON-string coercion create_agent and update_agent each had inline moved
 	// to `http.ts` as `parseJsonArg`, which is where the two copies could stop disagreeing about
 	// what a MALFORMED string means (create silently dropped it, update refused). Pin lowered so
