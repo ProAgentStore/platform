@@ -166,9 +166,12 @@ export interface LocalArtifactSourceHash {
 
 /** Safe parser/validation metadata. CLI or source text never crosses the runner boundary. */
 export type LocalArtifactValidationError = "no_json_object" | "invalid_json" | "not_draft_object" | "incomplete_draft" | "unverified_claim";
+/** Closed parser strategy names; never CLI or source text. */
+export type LocalArtifactParseAttempt = "fenced_json" | "balanced_object";
+export const LOCAL_ARTIFACT_PARSE_ATTEMPTS: readonly LocalArtifactParseAttempt[] = ["fenced_json", "balanced_object"];
 export interface LocalArtifactValidationDiagnostic {
 	validationError: LocalArtifactValidationError;
-	parseAttempts: string[];
+	parseAttempts: LocalArtifactParseAttempt[];
 	rawOutputChars: number;
 	runId: string;
 	attemptNumber: number;
@@ -323,9 +326,16 @@ export function parseLocalArtifactResult(raw: unknown): { result: LocalArtifactR
 		const diagnostic = o.diagnostic && typeof o.diagnostic === "object" ? o.diagnostic as Record<string, unknown> : null;
 		const validationError = diagnostic?.validationError;
 		if (diagnostic && (validationError === "no_json_object" || validationError === "invalid_json" || validationError === "not_draft_object" || validationError === "incomplete_draft" || validationError === "unverified_claim")) {
+			const parseAttempts: LocalArtifactParseAttempt[] = [];
+			if (Array.isArray(diagnostic.parseAttempts)) {
+				for (let index = 0; index < diagnostic.parseAttempts.length && index < 8; index += 1) {
+					const parseAttempt = oneOf(LOCAL_ARTIFACT_PARSE_ATTEMPTS, diagnostic.parseAttempts[index]);
+					if (parseAttempt && !parseAttempts.includes(parseAttempt)) parseAttempts.push(parseAttempt);
+				}
+			}
 			out.diagnostic = {
 				validationError,
-				parseAttempts: Array.isArray(diagnostic.parseAttempts) ? diagnostic.parseAttempts.filter((v): v is string => typeof v === "string").slice(0, 8).map((v) => v.slice(0, 80)) : [],
+				parseAttempts,
 				rawOutputChars: typeof diagnostic.rawOutputChars === "number" ? Math.max(0, Math.min(diagnostic.rawOutputChars, 200_000)) : 0,
 				runId: str(diagnostic.runId, 100) ?? runId,
 				attemptNumber: typeof diagnostic.attemptNumber === "number" && Number.isInteger(diagnostic.attemptNumber) && diagnostic.attemptNumber > 0 ? diagnostic.attemptNumber : 1,

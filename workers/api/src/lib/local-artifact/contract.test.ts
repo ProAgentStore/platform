@@ -68,4 +68,14 @@ describe("what a runner may report", () => {
 	it("has no api-key engine mode to report as a choice, but reports one if observed", () => {
 		expect(parseLocalArtifactResult({ ...base, engineAuth: "api-key", outcome: "needs_human", artifacts: [], blockReason: "api_key_refused" })).toMatchObject({ result: { engineAuth: "api-key", blockReason: "api_key_refused" } });
 	});
+	it("keeps only closed parser-attempt labels from a runner diagnostic", () => {
+		const r = parseLocalArtifactResult({
+			...base,
+			outcome: "needs_human",
+			artifacts: [],
+			blockReason: "invalid_cli_output",
+			diagnostic: { validationError: "invalid_json", parseAttempts: ["fenced_json", "untrusted CLI output", "balanced_object", "fenced_json"], rawOutputChars: 12, runId: "r", attemptNumber: 1 },
+		});
+		expect("result" in r && r.result.diagnostic?.parseAttempts).toEqual(["fenced_json", "balanced_object"]);
+	});
 });
