@@ -13,6 +13,18 @@ describe("Gmail Scout scan", () => {
 		expect(lead).not.toHaveProperty("text");
 	});
 
+	it("marks, rather than silently cuts, bounded Gmail display metadata", () => {
+		const lead = candidateFromMessage({
+			id: "m-long", threadId: "t-long", from: `alerts-${"x".repeat(400)}@example.com`, to: "me@example.com", cc: "",
+			subject: `Role at ${"Acme ".repeat(80)}`, date: "2026-10-09".repeat(20), messageId: "", references: "",
+			snippet: "", text: `Company: ${"Acme ".repeat(40)}\nApply https://jobs.example.com/job/long`, attachments: [],
+		});
+		expect(lead?.title).toContain("[cut: showing the first");
+		expect(lead?.gmail_subject).toContain("[cut: showing the first");
+		expect(lead?.gmail_from).toContain("[cut: showing the first");
+		expect(lead?.gmail_date).toContain("[cut: showing the first");
+	});
+
 	it("writes a mocked Gmail alert only to the source Scout's private lead collection", async () => {
 		const scoutLeads: Array<{ data: Record<string, unknown> }> = [];
 		const existing: Array<{ data: Record<string, unknown> }> = [];
