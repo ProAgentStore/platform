@@ -7,6 +7,12 @@ export const GMAIL_SCOUT_TOOLS = ["gmail_search", "gmail_read_message"] as const
 export const GMAIL_SCOUT_CAPABILITY = { connector: "gmail", readOnly: true, tools: GMAIL_SCOUT_TOOLS } as const;
 /** The declared source mode a dedicated, read-only inbox Scout carries. */
 export const GMAIL_SCOUT_SOURCE_MODE = "gmail" as const;
+/**
+ * This source is intentionally not a general inbox picker.  It is the dedicated job-alert
+ * mailbox the owner requested, so accepting another connected Gmail account would turn a
+ * harmless-looking Scout configuration into access to a different inbox.
+ */
+export const GMAIL_SCOUT_PINNED_EMAIL = "serge.pro.job@gmail.com";
 
 export type GmailScoutConfig = { id: string; instanceId: string; pinnedEmail: string | null; enabled: boolean; createdAt: string; updatedAt: string };
 export type GmailScoutScanState = { instanceId: string; lastScanAt: string | null; lastMessageIdCursor: string | null; candidateCount: number; dedupeCount: number; failureCount: number; lastFailureAt: string | null; lastFailureMessage: string | null };
@@ -34,11 +40,17 @@ export async function getGmailScoutConfig(env: Env, instanceId: string): Promise
 /** Save config and mirror an explicit mailbox pin into the connector resolver's canonical location. */
 export async function putGmailScoutConfig(env: Env, instanceId: string, userId: string, input: { pinnedEmail?: string | null; enabled?: boolean }): Promise<GmailScoutConfig> {
 	const current = await getGmailScoutConfig(env, instanceId);
-	const pinnedEmail = input.pinnedEmail === undefined ? current?.pinnedEmail ?? null : input.pinnedEmail?.trim() || null;
+	const requestedEmail = input.pinnedEmail === undefined ? current?.pinnedEmail ?? GMAIL_SCOUT_PINNED_EMAIL : input.pinnedEmail?.trim() || null;
+	if (!requestedEmail || requestedEmail.toLowerCase() !== GMAIL_SCOUT_PINNED_EMAIL) {
+		throw new Error(`Gmail Job Search Scout must use the fixed mailbox "${GMAIL_SCOUT_PINNED_EMAIL}".`);
+	}
+	const pinnedEmail = GMAIL_SCOUT_PINNED_EMAIL;
 	const enabled = input.enabled === undefined ? current?.enabled ?? true : input.enabled;
-	if (pinnedEmail) {
+	// Disabling is always available, even after a mailbox has been disconnected; it performs no
+	// read. Enabling is the boundary that verifies and pins the one connected account.
+	if (enabled) {
 		const accounts = await listConnectorAccounts(env, userId, "gmail");
-		const found = accounts.find((a) => a.accountId === pinnedEmail || a.label === pinnedEmail);
+		const found = accounts.find((a) => a.accountId.toLowerCase() === pinnedEmail || a.label?.toLowerCase() === pinnedEmail);
 		if (!found) throw new Error(`Gmail account "${pinnedEmail}" is not connected.`);
 		await patchInstanceConfig(env, instanceId, userId, "connectorAccounts", { gmail: found.accountId });
 	}
@@ -52,8 +64,13 @@ export async function putGmailScoutConfig(env: Env, instanceId: string, userId: 
 
 /** Resolves exactly one account; ambiguity is intentionally a hard refusal before a mailbox is read. */
 export async function resolveGmailScoutAccount(env: Env, instanceId: string, userId: string, pinnedEmail?: string | null) {
+	if (!pinnedEmail || pinnedEmail.toLowerCase() !== GMAIL_SCOUT_PINNED_EMAIL) {
+		throw new Error(`Gmail Job Search Scout must use the fixed mailbox "${GMAIL_SCOUT_PINNED_EMAIL}".`);
+	}
 	const accounts = await listConnectorAccounts(env, userId, "gmail");
-	const resolved = resolveConnectorAccount(accounts, pinnedEmail ?? undefined, "Gmail");
+	const account = accounts.find((candidate) => candidate.accountId.toLowerCase() === GMAIL_SCOUT_PINNED_EMAIL || candidate.label?.toLowerCase() === GMAIL_SCOUT_PINNED_EMAIL);
+	if (!account) throw new Error(`Gmail account "${GMAIL_SCOUT_PINNED_EMAIL}" is not connected.`);
+	const resolved = resolveConnectorAccount(accounts, account.accountId, "Gmail");
 	if (!resolved.ok) throw new Error(resolved.message);
 	return resolved.account;
 }

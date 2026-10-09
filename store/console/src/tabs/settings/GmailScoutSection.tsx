@@ -3,6 +3,8 @@ import { api } from "@proagentstore/sdk/client";
 import Button from "../../components/Button";
 import Card from "../../components/Card";
 
+const GMAIL_SCOUT_MAILBOX = "serge.pro.job@gmail.com";
+
 type Config = { pinnedEmail: string | null; enabled: boolean };
 type Status = {
 	config: Config | null;
@@ -14,7 +16,7 @@ type Status = {
 /** The owner-facing control plane for the dedicated, read-only Gmail Scout source (#995). */
 export default function GmailScoutSection({ instanceId }: { instanceId: string }) {
 	const [status, setStatus] = useState<Status | null>(null);
-	const [mailbox, setMailbox] = useState("");
+	const [mailbox, setMailbox] = useState(GMAIL_SCOUT_MAILBOX);
 	const [enabled, setEnabled] = useState(true);
 	const [message, setMessage] = useState("");
 	const [busy, setBusy] = useState(false);
@@ -23,7 +25,7 @@ export default function GmailScoutSection({ instanceId }: { instanceId: string }
 		try {
 			const value = await api<Status>(`/v1/instances/${instanceId}/gmail-scout/status`);
 			setStatus(value);
-			setMailbox(value.config?.pinnedEmail ?? "");
+			setMailbox(value.config?.pinnedEmail ?? GMAIL_SCOUT_MAILBOX);
 			setEnabled(value.config?.enabled ?? true);
 		} catch (error) {
 			setMessage(error instanceof Error ? error.message : "Could not load Gmail Scout settings.");
@@ -35,7 +37,7 @@ export default function GmailScoutSection({ instanceId }: { instanceId: string }
 	const save = async () => {
 		setBusy(true); setMessage("");
 		try {
-			await api(`/v1/instances/${instanceId}/gmail-scout/config`, { method: "PUT", body: JSON.stringify({ pinnedEmail: mailbox.trim() || null, enabled }) });
+			await api(`/v1/instances/${instanceId}/gmail-scout/config`, { method: "PUT", body: JSON.stringify({ pinnedEmail: GMAIL_SCOUT_MAILBOX, enabled }) });
 			setMessage("Gmail Scout source saved.");
 			await load();
 		} catch (error) {
@@ -58,10 +60,10 @@ export default function GmailScoutSection({ instanceId }: { instanceId: string }
 	return <Card className="mt-4" aria-labelledby="gmail-scout-heading">
 		<div className="flex flex-wrap items-center justify-between gap-2">
 			<div><h2 id="gmail-scout-heading" className="font-semibold">Gmail Job Search Scout</h2><p className="text-xs text-muted-soft mt-1">Read-only job-alert ingestion. It never sends, archives, marks, or modifies mail.</p></div>
-			<Button size="sm" onClick={() => void scan()} disabled={busy || !enabled || !mailbox.trim()}>{busy ? "Working…" : "Scan now"}</Button>
+			<Button size="sm" onClick={() => void scan()} disabled={busy || !enabled}>{busy ? "Working…" : "Scan now"}</Button>
 		</div>
 		<label className="block text-sm mt-4">Connected Gmail mailbox
-			<input className="mt-1 w-full rounded border border-line bg-base px-2 py-1.5" value={mailbox} onChange={(event) => setMailbox(event.target.value)} placeholder="serge.pro.job@gmail.com" type="email" />
+			<input className="mt-1 w-full rounded border border-line bg-base px-2 py-1.5" value={mailbox} readOnly aria-readonly="true" type="email" />
 		</label>
 		<label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /> Enable Gmail job-alert scans</label>
 		<div className="mt-3 flex flex-wrap items-center gap-2"><Button size="sm" onClick={() => void save()} disabled={busy}>Save Gmail source</Button>{message && <span className="text-xs text-muted-soft" role="status">{message}</span>}</div>
