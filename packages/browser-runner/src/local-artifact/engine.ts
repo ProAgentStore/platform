@@ -20,7 +20,7 @@
 import { mergeEnv } from "../coding/engine-env.js";
 import { resolveEngineAuth } from "../coding/engine-auth.js";
 import { finalText as finalTextFromEngine, missingLogin } from "../local-browser/engine.js";
-import type { LocalArtifactAuthMode, LocalArtifactEngine, LocalArtifactEngineAuth, LocalArtifactLead, LocalArtifactSourceRole } from "./contract.js";
+import type { LocalArtifactAuthMode, LocalArtifactEngine, LocalArtifactEngineAuth, LocalArtifactLead, LocalArtifactParseAttempt, LocalArtifactSourceRole } from "./contract.js";
 
 export { missingLogin };
 
@@ -100,11 +100,11 @@ export function tailorPrompt(lead: LocalArtifactLead, sources: readonly SourceTe
 }
 
 export type DraftValidationError = "no_json_object" | "invalid_json" | "not_draft_object" | "incomplete_draft" | "unverified_claim";
-export type ParsedDraft = { draft: Record<string, unknown> | null; validationError?: DraftValidationError; parseAttempts: string[] };
+export type ParsedDraft = { draft: Record<string, unknown> | null; validationError?: DraftValidationError; parseAttempts: LocalArtifactParseAttempt[] };
 
 /** JSON objects from fenced blocks or prose, while respecting braces inside JSON strings. */
-function jsonCandidates(text: string): Array<{ source: string; text: string }> {
-	const candidates: Array<{ source: string; text: string }> = [];
+function jsonCandidates(text: string): Array<{ source: LocalArtifactParseAttempt; text: string }> {
+	const candidates: Array<{ source: LocalArtifactParseAttempt; text: string }> = [];
 	for (const match of text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) candidates.push({ source: "fenced_json", text: match[1].trim() });
 	for (let start = 0; start < text.length; start++) {
 		if (text[start] !== "{") continue;
@@ -167,7 +167,7 @@ const digits = (s: string) => s.replace(/\D/g, "");
 
 export type DraftCheck =
 	| { ok: true; resume: string; coverLetter: string; claims: number }
-	| { ok: false; reason: "missing_information" | "uncertain_claim" | "invalid_cli_output"; questions: string[]; claims: number; unmatched: number; validationError: DraftValidationError; parseAttempts: string[] };
+	| { ok: false; reason: "missing_information" | "uncertain_claim" | "invalid_cli_output"; questions: string[]; claims: number; unmatched: number; validationError: DraftValidationError; parseAttempts: LocalArtifactParseAttempt[] };
 
 /**
  * Check the CLI's draft against the sources. Questions name WHAT to confirm, bounded, and are
