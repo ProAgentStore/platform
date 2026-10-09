@@ -1,5 +1,6 @@
 /** Read-only Gmail alert ingestion.  Mail text is parsed in-process and never persisted or logged. */
 import type { Env } from "../../types.js";
+import type { GmailScoutScanResult } from "../../agent-types.js";
 import { connectorClient } from "../connectors/client.js";
 import { emailPermitted } from "../connectors/gmail.js";
 import { getMessage, listMessages, type GmailMessage } from "../gmail.js";
@@ -62,7 +63,7 @@ export function duplicateGmailLead(candidate: Pick<ScoutCandidate, "url" | "gmai
 		(Boolean(identity) && jobIdentity(record.data ?? {}) === identity),
 	);
 }
-export type GmailScoutScanResult = { mailbox: string; candidates: number; added: number; deduped: number; lastMessageId: string | null };
+export type { GmailScoutScanResult } from "../../agent-types.js";
 
 type ScanCursor = { after: string; messageId: string | null };
 

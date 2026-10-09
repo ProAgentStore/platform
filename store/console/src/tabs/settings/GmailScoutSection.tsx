@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import Button from "../../components/Button";
 import Card from "../../components/Card";
+import type { GmailScoutScanResponse } from "../../lib/gmailScout";
 
 const GMAIL_SCOUT_MAILBOX = "serge.pro.job@gmail.com";
 
@@ -48,7 +49,7 @@ export default function GmailScoutSection({ instanceId }: { instanceId: string }
 	const scan = async () => {
 		setBusy(true); setMessage("");
 		try {
-			const result = await api<{ scan: { added: number; deduped: number } }>(`/v1/instances/${instanceId}/gmail-scout/scan`, { method: "POST" });
+			const result = await api<GmailScoutScanResponse>(`/v1/instances/${instanceId}/gmail-scout/scan`, { method: "POST" });
 			setMessage(`Scan complete: ${result.scan.added} lead(s) added, ${result.scan.deduped} duplicate(s) skipped.`);
 			await load();
 		} catch (error) {

@@ -3,10 +3,11 @@ import type { KnowledgeDoc as WorkerKnowledgeDoc } from "../../../../workers/api
 import type { ConnectionGuideResponse as WorkerConnectionGuideResponse } from "../../../../workers/api/src/lib/connection-guide";
 import type { ApplyDefaultEngineResult as WorkerApplyDefaultEngineResult } from "../../../../workers/api/src/lib/coding-default-engine-types";
 import type { AccountPreferencesResponse as WorkerAccountPreferencesResponse, AccountPreferencesWriteResponse as WorkerAccountPreferencesWriteResponse } from "../../../../workers/api/src/lib/preferences";
-import type { AgentState as WorkerAgentState, ConsentRow as WorkerConsentRow } from "../../../../workers/api/src/agent-types";
+import type { AgentState as WorkerAgentState, ConsentRow as WorkerConsentRow, GmailScoutScanResponse as WorkerGmailScoutScanResponse } from "../../../../workers/api/src/agent-types";
 import type { CollectionRecord as WorkerCollectionRecord, RecordQueryResult as WorkerRecordQueryResult } from "../../../../workers/api/src/agent-storage-types";
 import type { RunnerEvent, RunnerTask } from "../../../../packages/browser-runner/src/types";
 import type { AccountCodingDefaultApplyResponse, AccountPreferencesResponse, AccountPreferencesWriteResponse, ConnectionGuideResponse, ConnectorConsent, InstanceModelState, Credential, DataRecord, KnowledgeDoc, Notification, RecordQueryResponse, RuntimeEvent, RuntimeTask, TriggerAction } from "./types";
+import type { GmailScoutScanResponse } from "./gmailScout";
 
 /**
  * The console's API-response types, checked against the Worker declarations they copy (#617).
@@ -111,6 +112,16 @@ const _connectorConsentHasNoInventedFields: Extra<ConnectorConsent, WorkerConsen
 	? true
 	: never = true;
 
+// ── GmailScoutScanResponse ─────────────────────────────────────────────────────────────────
+//
+// The read-only Scout panel starts a server-side ingestion. Naming the whole envelope matters:
+// `added` and `deduped` are rendered today, but a later Worker field must not become an inline
+// Console assertion that has no producer contract.
+const _gmailScoutScanHasNoInventedFields: Extra<GmailScoutScanResponse, WorkerGmailScoutScanResponse> extends never
+	? true
+	: never = true;
+const _gmailScoutScanAcceptsTheProducer: GmailScoutScanResponse = {} as WorkerGmailScoutScanResponse;
+
 // ── RuntimeTask / RuntimeEvent ───────────────────────────────────────────────────────────────
 //
 // `mirrorRuntimeTask` stringifies the task whole, so the payload is a `RunnerTask` — EXCEPT for
@@ -164,11 +175,13 @@ describe("console response types match the Worker declarations they copy (#617)"
 			_accountPreferencesHasNoInventedFields,
 			_accountPreferencesWriteHasNoInventedFields,
 			_accountCodingApplyHasNoInventedFields,
-		]).toEqual([true, true, true, true, true, true, true, true, true]);
+			_gmailScoutScanHasNoInventedFields,
+		]).toEqual([true, true, true, true, true, true, true, true, true, true]);
 		expect(_instanceModelStateAcceptsTheProducer).toEqual({});
 		expect(_accountPreferencesAcceptsTheProducer).toEqual({});
 		expect(_accountPreferencesWriteAcceptsTheProducer).toEqual({});
 		expect(_accountCodingApplyAcceptsTheProducer).toEqual({});
+		expect(_gmailScoutScanAcceptsTheProducer).toEqual({});
 	});
 
 	it("declares every trigger action the Worker's TRIGGER_ACTIONS has, and no more", () => {
