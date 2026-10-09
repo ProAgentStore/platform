@@ -137,6 +137,24 @@ function readyApp(id: string, over: { title?: string } = {}) {
 const item = (items: Array<{ key: string }>, key: string) => items.find((i) => i.key === key) as Record<string, any> | undefined;
 
 describe("the queue: every state, from any member of the pipeline", () => {
+	it("includes a runnerless Gmail Scout by its approved-lead handoff, then uses the normal Apply path", async () => {
+		// Gmail is a server-side source: it must never be relabelled as local_browser merely to
+		// appear in the application queue. Its event connection is the durable Scout role.
+		d1.exec(`UPDATE agents SET config = '{"source_mode":"gmail","capabilities":{"surfaces":[],"runtime":null,"workflow":null,"tools":["gmail_search","gmail_read_message"]}}' WHERE id = 'scout-a'`);
+		d1.exec(`UPDATE agent_instances SET config = '{"source_mode":"gmail"}' WHERE id = 'scout'`);
+
+		const listed = await call("GET", "/t1/application-queue");
+		expect(listed.status).toBe(200);
+		expect(listed.body.pipeline).toEqual({ scouts: ["scout"], tailors: ["t1"], runners: ["ap"] });
+		expect(item(listed.body.items, "lead:scout:lead-new")).toMatchObject({ kind: "lead", status: "new", leadVersion: 0, actions: expect.arrayContaining(["apply"]) });
+
+		const applied = await act("t1", { action: "apply", scout_instance_id: "scout", record_id: "lead-new", expected_status: "new", expected_version: 0 });
+		expect(applied.status).toBe(200);
+		expect(leads.get("lead-new")?.data).toMatchObject({ status: "apply_requested", lifecycle_version: 1 });
+		expect(dispatches("/local-artifact/run")).toHaveLength(1);
+		expect(applied.body.item).toMatchObject({ kind: "application", status: "tailoring", leadId: "lead-new" });
+	});
+
 	it("joins the Scout's leads with the applications, the same from the Tailor's tab and a session on the Runner", async () => {
 		readyApp("app-ready");
 		d1.exec("INSERT INTO job_applications (id, instance_id, user_id, source_instance_id, lead_id, lifecycle_version, idempotency_key, status, lead, created_at, updated_at) VALUES ('app-sub', 't1', 'u1', 'scout', 'app-sub', 1, 'k-sub', 'submitted', '{\"leadUrl\":\"https://jobs.example.com/s\",\"lead\":{\"title\":\"Done\"}}', 2, 2)");

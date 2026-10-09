@@ -130,11 +130,15 @@ const iso = (ms: number) => new Date(ms).toISOString();
 /** The Scout → Tailor → Runner graph around one instance, from the owner's own connections. */
 export async function pipelineOf(env: Env, uid: string, instanceId: string): Promise<Pipeline> {
 	const { results } = await env.DB.prepare(
-		"SELECT source_instance_id AS s, target_instance_id AS t FROM agent_connections WHERE user_id = ?1 AND enabled = 1 AND event_type IN (?2, ?3)",
+		"SELECT source_instance_id AS s, target_instance_id AS t, event_type AS eventType FROM agent_connections WHERE user_id = ?1 AND enabled = 1 AND event_type IN (?2, ?3)",
 	)
 		.bind(uid, JOB_LEAD_APPLY_EVENT, MATERIALS_READY_EVENT)
-		.all<{ s: string; t: string }>();
+		.all<{ s: string; t: string; eventType: string }>();
 	const edges = results ?? [];
+	// A Scout's job is defined by emitting the lead-approval fact, not by requiring a
+	// local-browser runner. Gmail Scouts are server-side, read-only sources and deliberately
+	// declare runtime:null; their enabled handoff still makes them a first-class pipeline Scout.
+	const scoutSources = new Set(edges.filter((e) => e.eventType === JOB_LEAD_APPLY_EVENT).map((e) => e.s));
 	const seen = new Set([instanceId]);
 	const queue = [instanceId];
 	while (queue.length) {
@@ -151,7 +155,7 @@ export async function pipelineOf(env: Env, uid: string, instanceId: string): Pro
 	const out: Pipeline = { scouts: [], tailors: [], runners: [] };
 	for (const id of seen) {
 		const runtime = (await capabilitiesForInstance(env, id, uid))?.runtime;
-		if (runtime === "local_browser") out.scouts.push(id);
+		if (runtime === "local_browser" || scoutSources.has(id)) out.scouts.push(id);
 		else if (runtime === "local_artifact") out.tailors.push(id);
 		else if (runtime === "local_apply") out.runners.push(id);
 	}
