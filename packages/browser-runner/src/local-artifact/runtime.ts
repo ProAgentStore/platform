@@ -45,6 +45,7 @@ import {
 	type LocalArtifactSourceHash,
 	type LocalArtifactStatusResponse,
 	type LocalArtifactTaskEnvelope,
+	type LocalArtifactValidationDiagnostic,
 	PATH_SEGMENT,
 	REQUIRED_SOURCE_ROLES,
 	isHomeRelative,
@@ -305,10 +306,19 @@ export class LocalArtifactRuntime {
 			return;
 		}
 		const check = checkDraft(parseDraft(text), ctx.texts);
-		this.emit(run, { type: "claims.checked", detail: { total: check.claims, unmatched: check.ok ? 0 : check.unmatched } });
+		const retry = /:retry:(\d+)$/.exec(e.requestId);
+		const attemptNumber = retry ? Number(retry[1]) : 1;
+		const diagnostic: LocalArtifactValidationDiagnostic | undefined = check.ok ? undefined : {
+			validationError: check.validationError,
+			parseAttempts: check.parseAttempts,
+			rawOutputChars: text.length,
+			runId: e.runId,
+			attemptNumber,
+		};
+		this.emit(run, { type: "claims.checked", detail: { total: check.claims, unmatched: check.ok ? 0 : check.unmatched, ...(diagnostic ? { validationError: diagnostic.validationError, parseAttempts: diagnostic.parseAttempts.join(","), rawOutputChars: diagnostic.rawOutputChars, runId: diagnostic.runId, attemptNumber } : {}) } });
 		if (!check.ok) {
 			this.removeIfEmpty(ctx.outDir);
-			this.pauseEnd(run, check.reason, check.questions);
+			this.pauseEnd(run, check.reason, check.questions, diagnostic);
 			return;
 		}
 
@@ -373,9 +383,9 @@ export class LocalArtifactRuntime {
 		run.events.push({ ...ev, at: new Date(this.now()).toISOString(), seq: ++run.seq });
 	}
 
-	private pauseEnd(run: Run, reason: LocalArtifactBlockReason, questions: string[]): void {
-		this.emit(run, { type: "run.needs_human", detail: { reason, count: questions.length } });
-		this.end(run, { outcome: "needs_human", blockReason: reason, questions });
+	private pauseEnd(run: Run, reason: LocalArtifactBlockReason, questions: string[], diagnostic?: LocalArtifactValidationDiagnostic): void {
+		this.emit(run, { type: "run.needs_human", detail: { reason, count: questions.length, ...(diagnostic ? { validationError: diagnostic.validationError, parseAttempts: diagnostic.parseAttempts.join(","), rawOutputChars: diagnostic.rawOutputChars, runId: diagnostic.runId, attemptNumber: diagnostic.attemptNumber } : {}) } });
+		this.end(run, { outcome: "needs_human", blockReason: reason, questions, diagnostic });
 	}
 
 	private end(run: Run, r: Partial<LocalArtifactResultEnvelope> & { outcome: LocalArtifactResultEnvelope["outcome"] }): void {
@@ -392,7 +402,7 @@ export class LocalArtifactRuntime {
 			engineAuth: run.engineAuth,
 			traceId: run.envelope.runId,
 			...(r.generatedAt ? { generatedAt: r.generatedAt } : {}),
-			...(r.outcome === "needs_human" ? { blockReason: r.blockReason, questions: (r.questions ?? []).map((q) => redactText(q, run.secrets)) } : {}),
+			...(r.outcome === "needs_human" ? { blockReason: r.blockReason, questions: (r.questions ?? []).map((q) => redactText(q, run.secrets)), ...(r.diagnostic ? { diagnostic: r.diagnostic } : {}) } : {}),
 			// CLI output becomes this text, and a CLI prints whatever it was given: redacted before it is kept.
 			...(r.outcome === "failed" ? { error: redactText((r.error ?? "The run failed without a reason.").slice(0, 1000), run.secrets) } : {}),
 		};

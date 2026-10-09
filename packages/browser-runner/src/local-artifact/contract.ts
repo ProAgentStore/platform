@@ -88,6 +88,7 @@ export type LocalArtifactBlockReason =
 	| "workspace_unavailable"
 	| "missing_information"
 	| "uncertain_claim"
+	| "invalid_cli_output"
 	| "engine_not_signed_in"
 	| "api_key_refused";
 export const LOCAL_ARTIFACT_BLOCK_REASONS: readonly LocalArtifactBlockReason[] = [
@@ -96,6 +97,7 @@ export const LOCAL_ARTIFACT_BLOCK_REASONS: readonly LocalArtifactBlockReason[] =
 	"workspace_unavailable",
 	"missing_information",
 	"uncertain_claim",
+	"invalid_cli_output",
 	"engine_not_signed_in",
 	"api_key_refused",
 ];
@@ -162,6 +164,16 @@ export interface LocalArtifactSourceHash {
 	bytes: number;
 }
 
+/** Safe parser/validation metadata. CLI or source text never crosses the runner boundary. */
+export type LocalArtifactValidationError = "no_json_object" | "invalid_json" | "not_draft_object" | "incomplete_draft" | "unverified_claim";
+export interface LocalArtifactValidationDiagnostic {
+	validationError: LocalArtifactValidationError;
+	parseAttempts: string[];
+	rawOutputChars: number;
+	runId: string;
+	attemptNumber: number;
+}
+
 /** What the runner returns when a run ends. */
 export interface LocalArtifactResultEnvelope {
 	runId: string;
@@ -177,6 +189,8 @@ export interface LocalArtifactResultEnvelope {
 	blockReason?: LocalArtifactBlockReason;
 	/** What the owner must supply or confirm. Questions only — never a source excerpt. */
 	questions?: string[];
+	/** Safe diagnostic metadata for a rejected CLI draft; never CLI/source text. */
+	diagnostic?: LocalArtifactValidationDiagnostic;
 	/** Present when `outcome` is `failed`. */
 	error?: string;
 }
@@ -241,7 +255,7 @@ export function parseLocalArtifactLead(raw: unknown): { lead: LocalArtifactLead 
 	return { lead: { eventId, sourceInstanceId, leadId, leadUrl, lifecycleVersion, requestedAt, lead } };
 }
 
-const DETAIL_KEYS = new Set(["engine", "authMode", "engineAuth", "role", "path", "sha256", "bytes", "kind", "total", "unmatched", "reason", "exitCode", "count", "removed", "status"]);
+const DETAIL_KEYS = new Set(["engine", "authMode", "engineAuth", "role", "path", "sha256", "bytes", "kind", "total", "unmatched", "reason", "exitCode", "count", "removed", "status", "validationError", "parseAttempts", "rawOutputChars", "runId", "attemptNumber"]);
 
 /** A validated event, or null. Detail keeps only whitelisted, primitive, bounded values. */
 export function parseLocalArtifactEvent(raw: unknown): LocalArtifactEvent | null {
@@ -306,6 +320,17 @@ export function parseLocalArtifactResult(raw: unknown): { result: LocalArtifactR
 			.filter((q): q is string => typeof q === "string" && q.trim() !== "")
 			.slice(0, LOCAL_ARTIFACT_CAPS.questions)
 			.map((q) => q.trim().slice(0, LOCAL_ARTIFACT_CAPS.questionChars));
+		const diagnostic = o.diagnostic && typeof o.diagnostic === "object" ? o.diagnostic as Record<string, unknown> : null;
+		const validationError = diagnostic?.validationError;
+		if (diagnostic && (validationError === "no_json_object" || validationError === "invalid_json" || validationError === "not_draft_object" || validationError === "incomplete_draft" || validationError === "unverified_claim")) {
+			out.diagnostic = {
+				validationError,
+				parseAttempts: Array.isArray(diagnostic.parseAttempts) ? diagnostic.parseAttempts.filter((v): v is string => typeof v === "string").slice(0, 8).map((v) => v.slice(0, 80)) : [],
+				rawOutputChars: typeof diagnostic.rawOutputChars === "number" ? Math.max(0, Math.min(diagnostic.rawOutputChars, 200_000)) : 0,
+				runId: str(diagnostic.runId, 100) ?? runId,
+				attemptNumber: typeof diagnostic.attemptNumber === "number" && Number.isInteger(diagnostic.attemptNumber) && diagnostic.attemptNumber > 0 ? diagnostic.attemptNumber : 1,
+			};
+		}
 	}
 	if (outcome === "failed") out.error = str(o.error, 1000) ?? "The run failed without a reason.";
 	return { result: out };

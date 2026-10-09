@@ -124,6 +124,10 @@ describe("a tailoring run", () => {
 		expect(s.state).toBe("ended");
 		expect(s.result).toMatchObject({ outcome: "completed", engineAuth: "machine-login", traceId: "run-1" });
 		expect(s.result?.artifacts.map((a) => a.path)).toEqual(["~/jobs/applications/lead-1/run-1/resume.md", "~/jobs/applications/lead-1/run-1/cover-letter.md"]);
+		expect(s.result?.artifacts).toEqual(expect.arrayContaining([
+			expect.objectContaining({ kind: "resume", path: "~/jobs/applications/lead-1/run-1/resume.md", sha256: expect.stringMatching(/^[a-f0-9]{64}$/), bytes: expect.any(Number) }),
+			expect.objectContaining({ kind: "cover_letter", path: "~/jobs/applications/lead-1/run-1/cover-letter.md", sha256: expect.stringMatching(/^[a-f0-9]{64}$/), bytes: expect.any(Number) }),
+		]));
 		const dir = join(jobs(), "applications", "lead-1", "run-1");
 		expect(readFileSync(join(dir, "resume.md"), "utf8")).toContain("Senior TypeScript Engineer");
 		expect(JSON.parse(readFileSync(join(dir, ARTIFACT_MANIFEST), "utf8"))).toMatchObject({ runId: "run-1", leadId: "lead-1", eventId: "scout-1:lead-1:1", retainUntil: null });
@@ -243,6 +247,34 @@ describe("it pauses instead of guessing", () => {
 		expect(r).toMatchObject({ outcome: "needs_human", blockReason: "uncertain_claim", artifacts: [] });
 		expect(r?.questions?.join(" ")).toContain("PhD in Computer Science");
 		expect(existsSync(join(jobs(), "applications", "lead-1", "run-1"))).toBe(false);
+	});
+
+	it("accepts fenced application JSON surrounded by prose and malformed braces", async () => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		answer(0, `I prepared this {not JSON}.\n\n\`\`\`json\n${JSON.stringify(GOOD)}\n\`\`\`\nDone.`);
+		await settle();
+		expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "completed" });
+	});
+
+	it("records safe structured diagnostics for two failed retry attempts", async () => {
+		const rt = runtime();
+		rt.start(envelope({ runId: "run-2", requestId: "scout-1:lead-1:1:retry:2" }));
+		await settle();
+		answer(0, "The model returned prose instead of application JSON.");
+		await settle();
+		const first = rt.status({ runId: "run-2" });
+		expect(first.result).toMatchObject({ outcome: "needs_human", blockReason: "invalid_cli_output", diagnostic: { validationError: "no_json_object", parseAttempts: ["fenced_json", "balanced_object"], runId: "run-2", attemptNumber: 2 } });
+		expect(first.events.find((event) => event.type === "claims.checked")?.detail).toMatchObject({ validationError: "no_json_object", runId: "run-2", attemptNumber: 2 });
+
+		rt.start(envelope({ runId: "run-3", requestId: "scout-1:lead-1:1:retry:3" }));
+		await settle();
+		answer(1, "```json\n{broken}\n```");
+		await settle();
+		const second = rt.status({ runId: "run-3" });
+		expect(second.result).toMatchObject({ outcome: "needs_human", blockReason: "invalid_cli_output", diagnostic: { validationError: "invalid_json", runId: "run-3", attemptNumber: 3 } });
+		expect(JSON.stringify(second.events)).not.toContain("The model returned prose");
 	});
 
 	it("on an invented year, email or phone number, even when every claim cites a real quote", async () => {
