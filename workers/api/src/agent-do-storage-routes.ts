@@ -222,12 +222,15 @@ export async function writeJobLeadApplication(engine: Pick<AgentStorageEngine, "
 		submittedUrl: str(b?.submitted_url),
 		at: str(b?.at) ?? new Date().toISOString(),
 	});
-	// `job_unavailable` is a verified terminal observation: archive THIS lead in the same
-	// serialized Scout record write that records the application's terminal state. The D1 move and
-	// its application audit are already a transaction; this message is deliberately idempotent so
-	// `syncLeadWritebacks` can finish the cross-store handoff after a transient DO failure.
-	const expired = b?.disposition === "expired" && b?.disposition_reason === "job_unavailable";
-	if (!expired) {
+	// A Runner preflight is an observation of the source lead, not merely an application detail.
+	// Keep it version-bound to the Apply action that requested it: a later human triage must never
+	// be overwritten by a late Runner answer or a retry from the cross-store backstop.
+	const disposition = str(b?.disposition);
+	const dispositionReason = str(b?.disposition_reason);
+	const isVerified = disposition === "verified" && dispositionReason === "live";
+	const isExpired = disposition === "expired" && dispositionReason === "job_unavailable";
+	const isUnverifiable = disposition === "unverifiable" && !!dispositionReason;
+	if (!isVerified && !isExpired && !isUnverifiable) {
 		if (!patch) return json({ applied: false });
 		await engine.recordUpdate(JOB_LEAD_COLLECTION, record.id, patch);
 		return json({ applied: true });
@@ -237,31 +240,69 @@ export async function writeJobLeadApplication(engine: Pick<AgentStorageEngine, "
 	const heldVersion = typeof record.data.application_version === "number" ? record.data.application_version : -1;
 	// A later application/lead generation owns the record now. A stale terminal report may still
 	// write nothing, but must never archive that newer opportunity.
-	if (leadVersion < heldLead || (leadVersion === heldLead && record.data.application_id !== applicationId) || (leadVersion === heldLead && version < heldVersion)) return json({ applied: false, stale: true });
 	const current = jobLeadStatus(record.data);
-	const isSameDisposition = current === "archived" && record.data.expired_application_id === applicationId && record.data.expired_application_version === version;
-	if (isSameDisposition && !patch) return json({ applied: false, disposition: "expired" });
+	const sameReportedDisposition = (isExpired && current === "archived" && record.data.expired_application_id === applicationId && record.data.expired_application_version === version)
+		|| (isUnverifiable && current === "unverifiable" && record.data.unverifiable_application_id === applicationId && record.data.unverifiable_application_version === version);
+	if (leadVersion < heldLead || (leadVersion === heldLead && record.data.application_id !== applicationId) || (leadVersion === heldLead && version < heldVersion) || (jobLeadVersion(record.data) > leadVersion && !sameReportedDisposition)) return json({ applied: false, stale: true });
 	const history = Array.isArray(record.data.lifecycle) ? record.data.lifecycle : [];
-	const nextVersion = current === "archived" ? jobLeadVersion(record.data) : jobLeadVersion(record.data) + 1;
-	const transition = current === "archived"
-		? {}
-		: {
-				status: "archived",
-				lifecycle_version: nextVersion,
-				lifecycle: [...history, { from: current, to: "archived", action: "archive", version: nextVersion, at, note: "Job unavailable" }],
-				triage_action: "archive",
-				triaged_at: at,
-			};
 	const evidence = b?.disposition_evidence;
-	const disposition = {
-		expired_at: at,
-		expired_reason: "job_unavailable",
-		expired_application_id: applicationId,
-		expired_application_version: version,
-		...(evidence === undefined ? {} : { expired_evidence: evidence }),
+	const attempts = Array.isArray(record.data.preflight_history) ? record.data.preflight_history : [];
+	const sameAttempt = attempts.some((item) => item && typeof item === "object" && (item as Record<string, unknown>).application_id === applicationId && (item as Record<string, unknown>).application_version === version && (item as Record<string, unknown>).state === disposition);
+	const observation = {
+		state: disposition,
+		reason: dispositionReason,
+		at,
+		application_id: applicationId,
+		application_version: version,
+		lead_version: leadVersion,
+		...(evidence === undefined ? {} : { evidence }),
 	};
-	await engine.recordUpdate(JOB_LEAD_COLLECTION, record.id, { ...(patch ?? {}), ...transition, ...disposition });
-	return json({ applied: true, disposition: "expired" });
+	const provenance = {
+		preflight: observation,
+		preflight_history: sameAttempt ? attempts : [...attempts.slice(-19), observation],
+	};
+	if (isVerified) {
+		if (!patch && sameAttempt) return json({ applied: false, disposition: "verified" });
+		await engine.recordUpdate(JOB_LEAD_COLLECTION, record.id, { ...(patch ?? {}), ...provenance });
+		return json({ applied: true, disposition: "verified" });
+	}
+	if (isExpired) {
+		const sameDisposition = current === "archived" && record.data.expired_application_id === applicationId && record.data.expired_application_version === version;
+		if (sameDisposition && !patch && sameAttempt) return json({ applied: false, disposition: "expired" });
+		const nextVersion = current === "archived" ? jobLeadVersion(record.data) : jobLeadVersion(record.data) + 1;
+		const transition = current === "archived" ? {} : {
+			status: "archived",
+			lifecycle_version: nextVersion,
+			lifecycle: [...history, { from: current, to: "archived", action: "archive", version: nextVersion, at, note: "Job unavailable" }],
+			triage_action: "archive",
+			triaged_at: at,
+		};
+		await engine.recordUpdate(JOB_LEAD_COLLECTION, record.id, {
+			...(patch ?? {}), ...transition, ...provenance,
+			expired_at: at, expired_reason: "job_unavailable", expired_application_id: applicationId, expired_application_version: version,
+			...(evidence === undefined ? {} : { expired_evidence: evidence }),
+		});
+		return json({ applied: true, disposition: "expired" });
+	}
+	// Unverifiable is deliberately not an archive: it records that the current posting could not
+	// be established as live and leaves the owner free to defer, skip, or archive it.
+	if (current !== "apply_requested" && current !== "unverified" && current !== "unverifiable") return json({ applied: false, stale: true });
+	const sameDisposition = current === "unverifiable" && record.data.unverifiable_application_id === applicationId && record.data.unverifiable_application_version === version;
+	if (sameDisposition && !patch && sameAttempt) return json({ applied: false, disposition: "unverifiable" });
+	const nextVersion = current === "unverifiable" ? jobLeadVersion(record.data) : jobLeadVersion(record.data) + 1;
+	const transition = current === "unverifiable" ? {} : {
+		status: "unverifiable",
+		lifecycle_version: nextVersion,
+		lifecycle: [...history, { from: current, to: "unverifiable", action: "verify", version: nextVersion, at, note: "Live job page could not be verified" }],
+		triage_action: "verify",
+		triaged_at: at,
+	};
+	await engine.recordUpdate(JOB_LEAD_COLLECTION, record.id, {
+		...(patch ?? {}), ...transition, ...provenance,
+		unverifiable_at: at, unverifiable_reason: dispositionReason, unverifiable_application_id: applicationId, unverifiable_application_version: version,
+		...(evidence === undefined ? {} : { unverifiable_evidence: evidence }),
+	});
+	return json({ applied: true, disposition: "unverifiable" });
 }
 
 // ── Files ───────────────────────────────────────────────────────────────────

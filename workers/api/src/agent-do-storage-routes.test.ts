@@ -297,6 +297,48 @@ describe("unavailable application settlement", () => {
 		expect(await (await routes.writeJobLeadApplication(engine, "lead-1", post(body))).json()).toMatchObject({ applied: false, disposition: "expired" });
 		expect(writes).toBe(1);
 	});
+
+	it("records a live preflight without changing triage, and makes an unverifiable retry explicit exactly once", async () => {
+		let record = {
+			id: "lead-1",
+			collection: "job_leads",
+			data: {
+				status: "apply_requested",
+				lifecycle_version: 1,
+				lifecycle: [{ from: "unverified", to: "apply_requested", action: "apply", version: 1, at: "2026-10-07T00:00:00.000Z" }],
+				application_id: "app-1",
+				application_lead_version: 1,
+				application_status: "tailoring",
+				application_version: 0,
+			},
+			createdAt: "x",
+			updatedAt: "x",
+		};
+		let writes = 0;
+		const engine = fakeEngine<"recordGet" | "recordUpdate">({
+			recordGet: async () => record,
+			recordUpdate: async (_collection: string, _id: string, patch: Record<string, unknown>) => {
+				writes++;
+				record = { ...record, data: { ...record.data, ...patch } };
+				return record;
+			},
+		});
+		const live = { application_id: "app-1", lead_version: 1, status: "tailoring", version: 0, disposition: "verified", disposition_reason: "live", disposition_evidence: { state: "live", evidence: "apply_control_present" }, at: "2026-10-07T00:01:00.000Z" };
+		expect(await (await routes.writeJobLeadApplication(engine, "lead-1", post(live))).json()).toMatchObject({ applied: true, disposition: "verified" });
+		expect(record.data).toMatchObject({ status: "apply_requested", lifecycle_version: 1, preflight: expect.objectContaining({ state: "verified", reason: "live" }) });
+
+		const unverifiable = { application_id: "app-1", lead_version: 1, status: "blocked", version: 1, disposition: "unverifiable", disposition_reason: "access_blocked", disposition_evidence: { state: "unverifiable", reason: "access_blocked" }, at: "2026-10-07T00:02:00.000Z" };
+		expect(await (await routes.writeJobLeadApplication(engine, "lead-1", post(unverifiable))).json()).toMatchObject({ applied: true, disposition: "unverifiable" });
+		expect(record.data).toMatchObject({ status: "unverifiable", lifecycle_version: 2, unverifiable_reason: "access_blocked" });
+		expect((record.data as Record<string, unknown>).preflight_history).toHaveLength(2);
+		expect(await (await routes.writeJobLeadApplication(engine, "lead-1", post(unverifiable))).json()).toMatchObject({ applied: false, disposition: "unverifiable" });
+		expect(writes).toBe(2);
+
+		const newer = { ...unverifiable, version: 2, lead_version: 1 };
+		record = { ...record, data: { ...record.data, status: "deferred", lifecycle_version: 3 } };
+		expect(await (await routes.writeJobLeadApplication(engine, "lead-1", post(newer))).json()).toMatchObject({ applied: false, stale: true });
+		expect(record.data.status).toBe("deferred");
+	});
 });
 
 describe("file routes", () => {

@@ -69,7 +69,7 @@ describe("evaluateSubmitGate", () => {
 describe("runnerContractProblem (#977)", () => {
 	const node = "pink-laptop";
 
-	it.each([["0.4.89"], ["0.4.90"], ["0.5.0"], ["1.0.0"]])("allows %s — at or above the contract", (version) => {
+	it.each([["0.4.90"], ["0.5.0"], ["1.0.0"]])("allows %s — at or above the contract", (version) => {
 		expect(runnerContractProblem(version, node)).toBeNull();
 	});
 
@@ -99,7 +99,7 @@ describe("runnerContractProblem (#977)", () => {
 		// Pinned so bumping the contract minimum is a deliberate edit with a reason, not a drift.
 		// 0.4.89 is #994's release: the first published CLI whose bridge repeatedly observes a
 		// post-submit page and recognises SEEK's "application sent" receipt.
-		expect(LOCAL_APPLY_CONTRACT_MIN_CLI).toBe("0.4.89");
+		expect(LOCAL_APPLY_CONTRACT_MIN_CLI).toBe("0.4.90");
 	});
 
 	/**

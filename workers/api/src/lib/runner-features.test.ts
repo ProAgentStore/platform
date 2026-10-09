@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { SECURE_HANDOFF_MIN_CLI } from "./connectors/tmux.js";
 import { ENGINE_CHECK_MIN_CLI } from "./engine-preflight.js";
+import { LOCAL_APPLY_CONTRACT_MIN_CLI } from "./local-apply/contract.js";
 import { RELAY_NAME_STABLE_MIN_CLI } from "./machine-identity.js";
-import { RESOURCE_DETAIL_MIN_CLI, RESOURCES_MIN_CLI } from "./runner-resources.js";
+import { RESOURCES_MIN_CLI } from "./runner-resources.js";
 import { BOOTSTRAP_MIN_CLI, RUNNER_CONTROL_MIN_CLI, RUNNER_FEATURES, runnerFeatureGaps, runnerVersionView } from "./runner-features.js";
 
 describe("what a runner version is too old for (#859)", () => {
@@ -13,9 +14,9 @@ describe("what a runner version is too old for (#859)", () => {
 	});
 
 	it("a current runner is behind on nothing; an unknown version is not judged", () => {
-		expect(runnerFeatureGaps(RESOURCE_DETAIL_MIN_CLI)).toEqual([]);
+		expect(runnerFeatureGaps(LOCAL_APPLY_CONTRACT_MIN_CLI)).toEqual([]);
 		// 0.4.71 reports load and memory, and is behind only on the rest of the machine (#924).
-		expect(runnerFeatureGaps(RESOURCES_MIN_CLI)?.map((g) => g.feature)).toEqual(["disk, runner restarts, relay round trip and per-session usage in the resource history", "Codex local browser research (the browser tools approved for codex exec, #952)"]);
+		expect(runnerFeatureGaps(RESOURCES_MIN_CLI)?.map((g) => g.feature)).toEqual(["disk, runner restarts, relay round trip and per-session usage in the resource history", "Codex local browser research (the browser tools approved for codex exec, #952)", "email-lead live-page preflight before application tailoring"]);
 		expect(runnerFeatureGaps("")).toBeNull();
 		expect(runnerVersionView(null)).toEqual({ runnerVersion: null, behind: null });
 	});
@@ -39,6 +40,7 @@ describe("what a runner version is too old for (#859)", () => {
 			"the engine's own output in a failed run's detail",
 			"engine check before launch (installed + signed in), required by apply-now",
 			"runner_update restarts pags up itself, and service-managed runners",
+			"email-lead live-page preflight before application tailoring",
 		]);
 	});
 
@@ -51,6 +53,7 @@ describe("what a runner version is too old for (#859)", () => {
 			"tmux_secure_put / tmux_secure_get (machine-to-machine secret files) (needs 0.4.69)",
 			"the engine's own output in a failed run's detail (needs 0.4.68)",
 			"engine check before launch (installed + signed in), required by apply-now (needs 0.4.67)",
+			"email-lead live-page preflight before application tailoring (needs 0.4.90)",
 		]);
 		expect(runnerFeatureGaps(ENGINE_CHECK_MIN_CLI)?.map((g) => g.feature)).toEqual([
 			"disk, runner restarts, relay round trip and per-session usage in the resource history",
@@ -59,6 +62,7 @@ describe("what a runner version is too old for (#859)", () => {
 			"relay sockets that keep their machine name when the hostname changes",
 			"tmux_secure_put / tmux_secure_get (machine-to-machine secret files)",
 			"the engine's own output in a failed run's detail",
+			"email-lead live-page preflight before application tailoring",
 		]);
 	});
 
@@ -69,14 +73,15 @@ describe("what a runner version is too old for (#859)", () => {
 			"machine CPU load and memory in list_runner_nodes / coding_diagnostics (needs 0.4.71)",
 			"relay sockets that keep their machine name when the hostname changes (needs 0.4.70)",
 			"tmux_secure_put / tmux_secure_get (machine-to-machine secret files) (needs 0.4.69)",
+			"email-lead live-page preflight before application tailoring (needs 0.4.90)",
 		]);
 	});
 
 	it("a machine on 0.4.70 is behind only on resource telemetry (#924)", () => {
-		expect(runnerFeatureGaps(RELAY_NAME_STABLE_MIN_CLI)?.map((g) => g.feature)).toEqual(["disk, runner restarts, relay round trip and per-session usage in the resource history", "Codex local browser research (the browser tools approved for codex exec, #952)", "machine CPU load and memory in list_runner_nodes / coding_diagnostics"]);
+		expect(runnerFeatureGaps(RELAY_NAME_STABLE_MIN_CLI)?.map((g) => g.feature)).toEqual(["disk, runner restarts, relay round trip and per-session usage in the resource history", "Codex local browser research (the browser tools approved for codex exec, #952)", "machine CPU load and memory in list_runner_nodes / coding_diagnostics", "email-lead live-page preflight before application tailoring"]);
 	});
 
 	it("a machine on 0.4.69 is behind only on resource telemetry (#924) and stable relay names (#922)", () => {
-		expect(runnerFeatureGaps(SECURE_HANDOFF_MIN_CLI)?.map((g) => g.feature)).toEqual(["disk, runner restarts, relay round trip and per-session usage in the resource history", "Codex local browser research (the browser tools approved for codex exec, #952)", "machine CPU load and memory in list_runner_nodes / coding_diagnostics", "relay sockets that keep their machine name when the hostname changes"]);
+		expect(runnerFeatureGaps(SECURE_HANDOFF_MIN_CLI)?.map((g) => g.feature)).toEqual(["disk, runner restarts, relay round trip and per-session usage in the resource history", "Codex local browser research (the browser tools approved for codex exec, #952)", "machine CPU load and memory in list_runner_nodes / coding_diagnostics", "relay sockets that keep their machine name when the hostname changes", "email-lead live-page preflight before application tailoring"]);
 	});
 });

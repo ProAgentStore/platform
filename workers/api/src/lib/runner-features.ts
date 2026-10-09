@@ -18,6 +18,7 @@ import { FAST_FORWARD_MIN_CLI } from "./repo-sync-gate.js";
 import { RESOURCE_DETAIL_MIN_CLI, RESOURCES_MIN_CLI } from "./runner-resources.js";
 import { cliAtLeast } from "./runner-upgrade.js";
 import { LOCAL_BROWSER_CODEX_MIN_CLI } from "./local-browser/policy.js";
+import { LOCAL_APPLY_CONTRACT_MIN_CLI } from "./local-apply/contract.js";
 
 /**
  * The runner's own control commands, answered by the CLI over the relay: the membership sync behind
@@ -56,6 +57,7 @@ export const RUNNER_FEATURES: readonly RunnerFeature[] = [
 	{ feature: "repo_search", minCli: REPO_SEARCH_MIN_CLI },
 	{ feature: "switch a checkout back to its branch", minCli: SWITCH_BRANCH_MIN_CLI },
 	{ feature: "machine identity across renames", minCli: MACHINE_ID_MIN_CLI },
+	{ feature: "email-lead live-page preflight before application tailoring", minCli: LOCAL_APPLY_CONTRACT_MIN_CLI },
 ];
 
 /**

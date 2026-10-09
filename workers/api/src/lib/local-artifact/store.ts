@@ -222,13 +222,27 @@ export async function getOwnedApplication(env: DB, userId: string, id: string): 
  * Write an application's current state back onto the lead it came from (#953), in the Scout's own
  * `job_leads` record: `application_status`, its version, block reason and confirmed submission.
  * Best-effort and idempotent — the Scout's DO applies it only if it is newer than what the lead
- * holds — so it is safe to call after every move and from the cron backstop. The sole exception
- * is a verified `job_unavailable` archive, which terminally archives the same lead as expired.
+ * holds — so it is safe to call after every move and from the cron backstop. A Gmail preflight is
+ * also relayed as a versioned observation: live evidence is retained, an unavailable posting is
+ * archived as expired, and an unverifiable one is made explicit on the originating Scout lead.
  */
+type LeadDisposition = "verified" | "expired" | "unverifiable";
+
+function preflightDisposition(app: JobApplication): { disposition: LeadDisposition; reason: string; evidence: unknown } | null {
+	const lead = app.lead && typeof app.lead === "object" && !Array.isArray(app.lead) ? app.lead as Record<string, unknown> : null;
+	const verification = lead?.verification && typeof lead.verification === "object" && !Array.isArray(lead.verification) ? lead.verification as Record<string, unknown> : null;
+	if (!verification || typeof verification.state !== "string") return null;
+	if (verification.state === "live") return { disposition: "verified", reason: "live", evidence: verification };
+	if (verification.state === "unavailable") return { disposition: "expired", reason: "job_unavailable", evidence: verification };
+	if (verification.state === "unverifiable") return { disposition: "unverifiable", reason: typeof verification.reason === "string" ? verification.reason : "unverifiable", evidence: verification };
+	return null;
+}
+
 export async function writeBackToLead(env: DB, userId: string, applicationId: string): Promise<boolean> {
 	if (!env.AGENT) return false;
 	const app = await getOwnedApplication(env, userId, applicationId);
 	if (!app) return false;
+	const disposition = preflightDisposition(app);
 	try {
 		const res = await env.AGENT.get(env.AGENT.idFromName(app.sourceInstanceId)).fetch(
 			new Request(`https://agent/job-leads/${encodeURIComponent(app.leadId)}/application`, {
@@ -242,15 +256,15 @@ export async function writeBackToLead(env: DB, userId: string, applicationId: st
 					block_reason: app.blockReason,
 					submitted_at: app.submittedAt,
 					submitted_url: app.submittedUrl,
-					disposition: app.status === "archived" && app.archiveReason === "job_unavailable" ? "expired" : undefined,
-					disposition_reason: app.status === "archived" ? app.archiveReason : undefined,
-					disposition_evidence: app.status === "archived" ? app.archiveEvidence : undefined,
+					disposition: disposition?.disposition ?? (app.status === "archived" && app.archiveReason === "job_unavailable" ? "expired" : undefined),
+					disposition_reason: disposition?.reason ?? (app.status === "archived" ? app.archiveReason : undefined),
+					disposition_evidence: disposition?.evidence ?? (app.status === "archived" ? app.archiveEvidence : undefined),
 					at: new Date(app.updatedAt).toISOString(),
 				}),
 			}),
 		);
 		if (!res.ok) return false;
-		if (app.status === "archived" && app.archiveReason === "job_unavailable" && !app.leadDispositionSyncedAt) {
+		if ((disposition || (app.status === "archived" && app.archiveReason === "job_unavailable")) && !app.leadDispositionSyncedAt) {
 			await env.DB.prepare("UPDATE job_applications SET lead_disposition_synced_at = ?1 WHERE id = ?2 AND user_id = ?3 AND lead_disposition_synced_at IS NULL")
 				.bind(Date.now(), app.id, userId)
 				.run();
@@ -265,7 +279,7 @@ export async function writeBackToLead(env: DB, userId: string, applicationId: st
 /** The cron backstop: re-send the state of applications that moved recently. Idempotent on the lead's side. */
 export async function syncLeadWritebacks(env: DB, sinceMs: number, limit = 50): Promise<number> {
 	const { results } = await env.DB.prepare(
-		"SELECT id, user_id FROM job_applications WHERE updated_at >= ?1 OR (archive_reason = 'job_unavailable' AND lead_disposition_synced_at IS NULL) ORDER BY updated_at DESC LIMIT ?2",
+		"SELECT id, user_id FROM job_applications WHERE updated_at >= ?1 OR (lead_disposition_synced_at IS NULL AND (archive_reason = 'job_unavailable' OR json_extract(lead, '$.verification.state') IN ('live', 'unavailable', 'unverifiable'))) ORDER BY updated_at DESC LIMIT ?2",
 	)
 		.bind(sinceMs, limit)
 		.all<{ id: string; user_id: string }>();

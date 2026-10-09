@@ -58,6 +58,7 @@ import { QUEUE_MAX_ATTEMPTS, refusalVerdict } from "../applications/work-queue.j
 import { clipMarked } from "../clip-marked.js";
 import { cliAtLeast } from "../runner-upgrade.js";
 import { syncApplicationCard } from "../applications/application-board.js";
+import { deepLinkFor } from "../console-links.js";
 import { approvalStageOf, approvalState } from "./approval.js";
 import { type AttentionDeps, requestOwnerAttention } from "../owner-attention.js";
 import { notifyUser } from "../../routes/push.js";
@@ -147,9 +148,9 @@ export async function deliverSupervisorDirective(env: Env, uid: string, run: App
 /**
  * Why this machine must not fill an application yet, or null (#977, #989, #994).
  *
- * A runner capability changes only when a new CLI bundles it. #994 adds bounded post-submit
- * observation and SEEK's receipt vocabulary; the floor moves with that behaviour so an older
- * runner cannot silently report the old, opaque `submit_unconfirmed` state.
+ * A runner capability changes only when a new CLI bundles it. #953 adds read-only email-lead
+ * preflight; the floor moves with that behaviour so an older runner cannot silently omit the
+ * validation that must precede tailoring.
  *
  * The live regression this closes: #975's `bridge_unused` + diagnostic shipped and deployed, and a
  * real retry still recorded `blocked: incomplete` with `diagnostic: null` — because the connected
@@ -164,7 +165,7 @@ export async function deliverSupervisorDirective(env: Env, uid: string, run: App
 export function runnerContractProblem(runnerVersion: string | null | undefined, node: string | null | undefined): string | null {
 	const version = runnerVersion?.trim();
 	if (!version || cliAtLeast(version, LOCAL_APPLY_CONTRACT_MIN_CLI)) return null;
-	return `The runner on ${node || "that machine"} is CLI ${version}, which predates this application contract (needs ${LOCAL_APPLY_CONTRACT_MIN_CLI} or newer): it cannot observe post-submit confirmation evidence or recognise SEEK's application-sent receipt, so a real submit can end as an opaque submit_unconfirmed state. Update it (npm i -g @proagentstore/cli, or runner_update) and restart \`pags up\`, then retry this application.`;
+	return `The runner on ${node || "that machine"} is CLI ${version}, which predates this application contract (needs ${LOCAL_APPLY_CONTRACT_MIN_CLI} or newer): it cannot perform the required read-only live-page preflight for email leads, and it predates the current post-submit confirmation evidence, which can leave an opaque submit_unconfirmed outcome. Update it (npm i -g @proagentstore/cli, or runner_update) and restart \`pags up\`, then retry this application.`;
 }
 
 export type StartFillOutcome = { kind: "started" | "existing"; application: JobApplication; run: ApplyRun | null };
@@ -403,29 +404,53 @@ async function reconcileResultOutcome(env: Env, uid: string, run: ApplyRun, r: L
 	// contract parser is the trust boundary, while this layer only persists and relays it.
 	const unavailableEvidence = r.unavailable;
 	const from = ["filling", "blocked"] as const;
+	let projected = false;
 	if (unavailable) {
-		await move(env, uid, run.applicationId, from, {
+		projected = await move(env, uid, run.applicationId, from, {
 			...base,
 			to: "archived",
 			reason: "job_unavailable",
 			archiveReason: "job_unavailable",
 			archiveEvidence: unavailableEvidence,
 		}, now);
-	} else if (to === "submitted" && r.submitted) await move(env, uid, run.applicationId, from, { ...base, to: "submitted", submitted: { at: r.submitted.at, url: r.submitted.url } }, now);
-	else if (to === "awaiting_review") await move(env, uid, run.applicationId, from, { ...base, to: "awaiting_review" }, now);
-	else if (to === "blocked") await move(env, uid, run.applicationId, from, { ...base, to: "blocked", reason: r.blockReason ?? "incomplete", questions: r.questions ?? [] }, now);
-	else await move(env, uid, run.applicationId, from, { ...base, to: "failed", reason: r.engineAuth === "missing_login" ? "engine_not_signed_in" : "engine_failed" }, now);
+	} else if (to === "submitted" && r.submitted) projected = await move(env, uid, run.applicationId, from, { ...base, to: "submitted", submitted: { at: r.submitted.at, url: r.submitted.url } }, now);
+	else if (to === "awaiting_review") projected = await move(env, uid, run.applicationId, from, { ...base, to: "awaiting_review" }, now);
+	else if (to === "blocked") projected = await move(env, uid, run.applicationId, from, { ...base, to: "blocked", reason: r.blockReason ?? "incomplete", questions: r.questions ?? [] }, now);
+	else projected = await move(env, uid, run.applicationId, from, { ...base, to: "failed", reason: r.engineAuth === "missing_login" ? "engine_not_signed_in" : "engine_failed" }, now);
 	// #993: an `auto_submit` run that ended without asking the employer must not take the owner's
 	// one-time approval with it. `review.ready` is the live case — the form was filled (or not even
 	// that) and the run stopped for a human — and the retry the card offers is only a continuation
 	// if the approval it needs still exists. Guarded inside on `submit.attempted`, so a run that
 	// DID attempt stays spent and terminal.
 	if (to !== "submitted") await releaseApprovalIfNothingWasSent(env, uid, run).catch(() => undefined);
+	// Terminal news is not owner-attention: nobody is blocked. It is still durable, policy-aware
+	// information, emitted only after the compare-and-set projection won. That makes a persisted
+	// result safe to replay after a restart without a second notification.
+	if (projected && (to === "submitted" || to === "failed")) await notifyTerminalOutcome(env, uid, run, to, r).catch(() => undefined);
 	// #991: a run that stopped at something it may not do without the owner is WAITING on them, and
 	// nothing told them. The first consumer of the generic owner-attention policy
 	// (`lib/owner-attention.ts`) rather than an apply-specific push: the event is
 	// `approval_required`, and any other agent raises the same one.
 	if (to === "blocked" || to === "awaiting_review") await askForApprovalIfWaiting(env, uid, run).catch(() => undefined);
+}
+
+/** Tell the owner only facts the runner result and durable application state establish. */
+async function notifyTerminalOutcome(env: Env, uid: string, run: ApplyRun, outcome: "submitted" | "failed", result: LocalApplyResultEnvelope): Promise<void> {
+	const app = await getOwnedApplication(env, uid, run.applicationId);
+	if (!app || app.status !== outcome) return;
+	const lead = app.lead && typeof app.lead === "object" && !Array.isArray(app.lead) ? app.lead as { lead?: { title?: unknown; company?: unknown } } : null;
+	const role = typeof lead?.lead?.title === "string" && lead.lead.title.trim() ? lead.lead.title.trim() : "Application";
+	const company = typeof lead?.lead?.company === "string" && lead.lead.company.trim() ? ` at ${lead.lead.company.trim()}` : "";
+	const succeeded = outcome === "submitted";
+	const title = `${succeeded ? "Application submitted" : "Application failed"}: ${role}${company}`.slice(0, 120);
+	const body = succeeded
+		? "The employer site confirmed this application was submitted."
+		: clipMarked(result.error?.trim() || "The application runner ended before a confirmed submission. Review the run details before retrying.", 300, { within: true });
+	await notifyUser(env, uid, "apply", title, body, deepLinkFor({ kind: "application", instanceId: run.instanceId, applicationId: app.id }), {
+		key: `application-terminal:${app.id}:${app.stateVersion}`,
+		kind: "update",
+		instanceId: run.instanceId,
+	});
 }
 
 /** End a run's application from its result — result receipt precedes outcome projection. */

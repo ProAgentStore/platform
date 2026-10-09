@@ -185,13 +185,12 @@ export const LOCAL_APPLY_BLOCK_REASONS: readonly LocalApplyBlockReason[] = [
  * dispatch, naming the update, rather than silently producing the older behaviour (`apply.ts`
  * `runnerContractProblem`).
  *
- * ── Why it moved to 0.4.89 (#994)
+ * ── Why it moved to 0.4.90 (#953)
  *
- * #994 makes a post-click confirmation observable and recognises SEEK's "application sent"
- * receipt wording. It also carries only closed-vocabulary evidence when a pressed submit remains
- * unconfirmed. Those changes live in `packages/browser-runner`, which ships INSIDE the published
- * CLI. A machine below this floor cannot provide that evidence, so it must not silently look
- * equivalent to a current runner.
+ * #953 adds the read-only `/local-apply/preflight` route used before an email lead can enter
+ * tailoring. That route lives in `packages/browser-runner`, which ships INSIDE the published CLI.
+ * A machine below this floor cannot make the live/expired/unverifiable observation, so it must
+ * not silently look equivalent to a current runner.
  *
  * A behaviour change in the runner is a CONTRACT change, because the cloud's decisions assume it.
  * So this floor moves with it: a machine that cannot observe a post-submit receipt is refused
@@ -202,7 +201,7 @@ export const LOCAL_APPLY_BLOCK_REASONS: readonly LocalApplyBlockReason[] = [
  * been published. `cliAtLeast` treats an unreported version as capable, which is the convention
  * every MIN_CLI gate here follows.
  */
-export const LOCAL_APPLY_CONTRACT_MIN_CLI = "0.4.89";
+export const LOCAL_APPLY_CONTRACT_MIN_CLI = "0.4.90";
 
 export type LocalApplyDiagnosticCause = "bridge_unused" | "engine_exited_nonzero" | "timed_out" | "no_engine_output" | "submit_unconfirmed";
 export const LOCAL_APPLY_DIAGNOSTIC_CAUSES: readonly LocalApplyDiagnosticCause[] = ["bridge_unused", "engine_exited_nonzero", "timed_out", "no_engine_output", "submit_unconfirmed"];

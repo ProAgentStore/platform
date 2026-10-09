@@ -245,11 +245,31 @@ describe("submission is gated", () => {
 		expect(read.body.application).toMatchObject({ status: "submitted", submittedAt: "2026-10-07T00:09:02Z", submittedUrl: "https://jobs.example.com/thanks" });
 		expect(read.body.run.trace.map((e: { type: string }) => e.type)).toEqual(expect.arrayContaining(["policy.submit_gate", "submit.attempted", "submit.confirmed"]));
 		expect(read.body.audit.at(-1)).toMatchObject({ from: "filling", to: "submitted" });
+		const terminalNotes = async () => (await d1.DB.prepare("SELECT type, title, body, url, kind, instance_id, dedupe_key FROM notifications WHERE user_id = 'u1' ORDER BY created_at").all<Record<string, unknown>>()).results ?? [];
+		expect(await terminalNotes()).toEqual([expect.objectContaining({ type: "apply", kind: "update", instance_id: "ap", url: "/console/instances/ap/board", title: expect.stringMatching(/^Application submitted: Staff Engineer at Globex$/), body: "The employer site confirmed this application was submitted.", dedupe_key: expect.any(String) })]);
+		// The persisted terminal result is polled again after a restart/scheduled sweep; it must not
+		// produce another terminal notification.
+		await call("GET", `/ap/application-runs/${runId}`);
+		await syncActiveApplyRuns(env());
+		expect(await terminalNotes()).toHaveLength(1);
 
 		// The daily cap (1) is now used: the next application fills and waits for review.
 		const next = await call("POST", "/ap/application-runs", readyApp("lead-7"));
 		expect(next.body.run.policy.mode).toBe("fill_and_review");
 		expect(next.body.run.policy.gate.checks.find((c: { check: string }) => c.check === "daily_cap").ok).toBe(false);
+	});
+
+	it("records one truthful terminal failure notification and never replays it", async () => {
+		const r = await call("POST", "/ap/application-runs", readyApp("lead-terminal-failed"));
+		const runId = r.body.run.id as string;
+		runner("ended", { result: RESULT(runId, { outcome: "failed", error: "The signed-in runner engine exited before it could fill the form." }) });
+		const read = await call("GET", `/ap/application-runs/${runId}`);
+		expect(read.body.application).toMatchObject({ status: "failed" });
+		const notes = async () => (await d1.DB.prepare("SELECT type, title, body, url, kind, instance_id FROM notifications WHERE user_id = 'u1' ORDER BY created_at").all<Record<string, unknown>>()).results ?? [];
+		expect(await notes()).toEqual([expect.objectContaining({ type: "apply", kind: "update", instance_id: "ap", url: "/console/instances/ap/board", title: "Application failed: Staff Engineer at Globex", body: "The signed-in runner engine exited before it could fill the form." })]);
+		await call("GET", `/ap/application-runs/${runId}`);
+		await syncActiveApplyRuns(env());
+		expect(await notes()).toHaveLength(1);
 	});
 
 	it.each([
@@ -871,7 +891,7 @@ describe("an outdated runner never silently produces the old result shape (#977)
 		const r = await call("POST", "/ap/application-runs", ev);
 		expect(r.status).toBe(409);
 		expect(r.body.error).toMatch(/predates this application contract/);
-		expect(r.body.error).toMatch(/0\.4\.89 or newer/);
+		expect(r.body.error).toMatch(/0\.4\.90 or newer/);
 		expect(r.body.error).toMatch(/post-submit confirmation/);
 		expect(r.body.error).toMatch(/npm i -g @proagentstore\/cli|runner_update/);
 		// Nothing was spent and nothing moved: no run row, no dispatch, and the application is still
@@ -885,11 +905,11 @@ describe("an outdated runner never silently produces the old result shape (#977)
 		setRunnerVersion("0.4.84");
 		const ev = readyApp("lead-v2");
 		expect((await call("POST", "/ap/application-runs", ev)).status).toBe(409);
-		setRunnerVersion("0.4.89");
+		setRunnerVersion("0.4.90");
 		const ok = await call("POST", "/ap/application-runs", ev);
 		expect(ok.body.run.status).toBe("running");
 		// And the record says WHICH runner executed it — the fact that was missing.
-		expect(await runRow(ok.body.run.id as string)).toMatchObject({ runner_version: "0.4.89" });
+		expect(await runRow(ok.body.run.id as string)).toMatchObject({ runner_version: "0.4.90" });
 	});
 
 	it("stamps the executing runner's version on every run, and returns it over the API", async () => {
@@ -912,7 +932,7 @@ describe("an outdated runner never silently produces the old result shape (#977)
 	});
 
 	it("an up-to-date runner still reports the #975 zero-bridge diagnosis end to end", async () => {
-		setRunnerVersion("0.4.89");
+		setRunnerVersion("0.4.90");
 		const ev = readyApp("lead-v5");
 		const started = await call("POST", "/ap/application-runs", ev);
 		const runId = started.body.run.id as string;
@@ -931,7 +951,7 @@ describe("an outdated runner never silently produces the old result shape (#977)
 		const run = (await call("GET", `/ap/application-runs/${runId}`)).body.run;
 		// The pairing #977 asks for: the diagnosis AND the contract that produced it, on one record.
 		expect(run.result).toMatchObject({ blockReason: "bridge_unused", diagnostic: { cause: "bridge_unused", bridgeCalls: 0 } });
-		expect(run.runnerVersion).toBe("0.4.89");
+		expect(run.runnerVersion).toBe("0.4.90");
 		expect(await appRow("lead-v5")).toMatchObject({ status: "blocked", block_reason: "bridge_unused" });
 		// Still no free text from the CLI, whichever release ran it.
 		expect(JSON.stringify(run.result.diagnostic)).not.toMatch(/[A-Za-z]{200}/);

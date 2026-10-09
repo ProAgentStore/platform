@@ -87,7 +87,8 @@ export interface MaterialsReadyEvent {
 const iso = (now: number) => new Date(now).toISOString();
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 
-type EmailPreflight = { ok: true; result: Extract<LocalApplyPreflightResult, { state: "live" }> } | { ok: false; reason: string; question: string };
+type PreflightEvidence = LocalApplyPreflightResult | { state: "unverifiable"; jobUrl: string; reason: "runner_unavailable" | "runner_incompatible" };
+type EmailPreflight = { ok: true; result: Extract<LocalApplyPreflightResult, { state: "live" }> } | { ok: false; reason: string; question: string; result: Exclude<PreflightEvidence, { state: "live" }> };
 
 /**
  * The target Application Runner, not the Tailor's machine, reads an email-sourced posting before
@@ -98,21 +99,22 @@ async function preflightEmailLead(env: Env, tailorInstanceId: string, uid: strin
 	const target = await env.DB.prepare(
 		"SELECT target_instance_id FROM agent_connections WHERE user_id = ?1 AND source_instance_id = ?2 AND event_type = ?3 AND enabled = 1 ORDER BY created_at ASC LIMIT 1",
 	).bind(uid, tailorInstanceId, MATERIALS_READY_EVENT).first<{ target_instance_id: string }>();
-	if (!target?.target_instance_id) return { ok: false, reason: "unverifiable_lead", question: "No connected Application Runner can validate this email lead's live job page and apply path. Connect one before requesting materials." };
+	if (!target?.target_instance_id) return { ok: false, reason: "unverifiable_lead", question: "No connected Application Runner can validate this email lead's live job page and apply path. Connect one before requesting materials.", result: { state: "unverifiable", jobUrl, reason: "runner_unavailable" } };
 	const caps = await capabilitiesForInstance(env, target.target_instance_id, uid);
-	if (caps?.runtime !== "local_apply") return { ok: false, reason: "unverifiable_lead", question: "The downstream agent is not an Application Runner, so this email lead's live page cannot be verified before tailoring." };
+	if (caps?.runtime !== "local_apply") return { ok: false, reason: "unverifiable_lead", question: "The downstream agent is not an Application Runner, so this email lead's live page cannot be verified before tailoring.", result: { state: "unverifiable", jobUrl, reason: "runner_incompatible" } };
 	const runtime = await getLiveRuntime(env, target.target_instance_id, uid);
-	if (!runtime) return { ok: false, reason: "unverifiable_lead", question: "The Application Runner is offline. Its browser must verify the live job page and active apply path before materials are prepared." };
+	if (!runtime) return { ok: false, reason: "unverifiable_lead", question: "The Application Runner is offline. Its browser must verify the live job page and active apply path before materials are prepared.", result: { state: "unverifiable", jobUrl, reason: "runner_unavailable" } };
 	try {
 		const response = await callRuntime(env, runtime, LOCAL_APPLY_PREFLIGHT_PATH, { method: "POST", body: JSON.stringify({ jobUrl }) });
 		const value = (await runtimeJson(response)) as Partial<LocalApplyPreflightResult>;
 		if (response.ok && value.state === "live" && typeof value.applyUrl === "string" && typeof value.jobUrl === "string") {
 			return { ok: true, result: value as Extract<LocalApplyPreflightResult, { state: "live" }> };
 		}
-		if (value.state === "unavailable") return { ok: false, reason: "job_unavailable", question: "The Application Runner found this posting expired or unavailable. It was not sent for tailoring or submission." };
-		return { ok: false, reason: "unverifiable_lead", question: "The Application Runner could not verify a live job page with an active apply path. Email freshness is not evidence that the vacancy is open." };
+		if (value.state === "unavailable" && typeof value.jobUrl === "string" && (value.reason === "expired" || value.reason === "unavailable")) return { ok: false, reason: "job_unavailable", question: "The Application Runner found this posting expired or unavailable. It was not sent for tailoring or submission.", result: value as Extract<LocalApplyPreflightResult, { state: "unavailable" }> };
+		if (value.state === "unverifiable" && typeof value.jobUrl === "string" && (value.reason === "navigation_failed" || value.reason === "no_active_apply_path" || value.reason === "access_blocked")) return { ok: false, reason: "unverifiable_lead", question: "The Application Runner could not verify a live job page with an active apply path. Email freshness is not evidence that the vacancy is open.", result: value as Extract<LocalApplyPreflightResult, { state: "unverifiable" }> };
+		return { ok: false, reason: "unverifiable_lead", question: "The Application Runner could not verify a live job page with an active apply path. Email freshness is not evidence that the vacancy is open.", result: { state: "unverifiable", jobUrl, reason: "navigation_failed" } };
 	} catch {
-		return { ok: false, reason: "unverifiable_lead", question: "The Application Runner could not complete the read-only live-page verification. No materials were prepared." };
+		return { ok: false, reason: "unverifiable_lead", question: "The Application Runner could not complete the read-only live-page verification. No materials were prepared.", result: { state: "unverifiable", jobUrl, reason: "navigation_failed" } };
 	}
 }
 
@@ -155,6 +157,7 @@ export async function startTailoring(env: Env, instanceId: string, uid: string, 
 		return { kind: claim.created ? "blocked" : "existing", application: claim.app, run: null };
 	}
 	let lead = parsed.lead;
+	let leadForStorage: unknown = lead;
 	// The event id protects a delivery replay.  The stable key protects a different
 	// source event for the same posting, without crossing into another owner's instance.
 	// Legacy handoffs are derivable from their canonical URL; a lead with neither is
@@ -183,21 +186,22 @@ export async function startTailoring(env: Env, instanceId: string, uid: string, 
 	if (lead.lead.source?.toLowerCase() === "gmail") {
 		const validation = await preflightEmailLead(env, instanceId, uid, lead.leadUrl || lead.lead.url || "");
 		if (!validation.ok) {
-			const claim = await claimApplication(env, { ...base, workKey, lead: { ...lead, verification: { state: validation.reason, checked_by: "application_runner", checked_at: iso(now) } }, status: "blocked", blockReason: validation.reason, blockQuestions: [validation.question] });
+			const claim = await claimApplication(env, { ...base, workKey, lead: { ...lead, verification: { ...validation.result, checked_by: "application_runner", checked_at: iso(now) } }, status: "blocked", blockReason: validation.reason, blockQuestions: [validation.question] });
 			return { kind: claim.created ? "blocked" : "existing", application: claim.app, run: null };
 		}
 		lead = { ...lead, leadUrl: validation.result.applyUrl, lead: { ...lead.lead, url: validation.result.applyUrl } };
+		leadForStorage = { ...lead, verification: { ...validation.result, checked_by: "application_runner", checked_at: iso(now) } };
 	}
 	const pair = await readInstanceConfigPair(env, instanceId, uid);
 	const settings = effectiveTailorSettings((pair?.config as Record<string, unknown> | undefined)?.[TAILOR_SETTINGS_KEY]);
 	if ("error" in settings) {
-		const claim = await claimApplication(env, { ...base, workKey, lead, status: "blocked", blockReason: "settings_invalid", blockQuestions: [`The Application Tailor settings are invalid: ${settings.error}. Fix them, then retry.`] });
+		const claim = await claimApplication(env, { ...base, workKey, lead: leadForStorage, status: "blocked", blockReason: "settings_invalid", blockQuestions: [`The Application Tailor settings are invalid: ${settings.error}. Fix them, then retry.`] });
 		return { kind: claim.created ? "blocked" : "existing", application: claim.app, run: null };
 	}
 	const runtime = await getLiveRuntime(env, instanceId, uid);
 	if (!runtime) throw new HttpError(503, "No runner is connected. Run `pags up` on the machine that holds your job materials; the lead will be tailored when it connects.");
 
-	const claim = await claimApplication(env, { ...base, workKey, lead, status: "tailoring" });
+	const claim = await claimApplication(env, { ...base, workKey, lead: leadForStorage, status: "tailoring" });
 	if (!claim.created) return { kind: "existing", application: claim.app, run: claim.app.tailoringRunId ? await getTailorRun(env, instanceId, uid, claim.app.tailoringRunId) : null };
 	const run = await dispatchTailoring(env, instanceId, uid, claim.app.id, lead, settings.settings, key, source, runtime, now);
 	return { kind: "started", application: (await getApplication(env, instanceId, uid, claim.app.id)) as JobApplication, run };
