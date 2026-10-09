@@ -4,16 +4,53 @@ import type { GmailScoutScanResult } from "../../agent-types.js";
 import { connectorClient } from "../connectors/client.js";
 import { emailPermitted } from "../connectors/gmail.js";
 import { getMessage, listMessages, type GmailMessage } from "../gmail.js";
-import { canonicalJobUrl, jobIdentity } from "../job-lead-triage.js";
+import { canonicalJobUrl, jobIdentity, workKeyForLead } from "../job-lead-triage.js";
 import { clipMarked } from "../clip-marked.js";
 import { getGmailScoutConfig, getGmailScoutScanState, resolveGmailScoutAccount } from "./config.js";
 
-const JOB_ALERT_QUERY = "(subject:(job OR jobs OR role OR opportunity OR alert OR recommendation) OR from:(seek.com linkedin.com indeed.com)) newer_than:30d";
+// A recent alert is an intake clue, not vacancy verification.  We deliberately keep the window
+// short and require the Runner's browser preflight before a lead can be treated as live.
+const JOB_ALERT_QUERY = "(subject:(job OR jobs OR role OR opportunity OR alert OR recommendation) OR from:(seek.com linkedin.com indeed.com)) newer_than:2d";
 const URL_RE = /https?:\/\/[^\s"'<>]+/g;
-export type ScoutCandidate = { url: string; title: string; company?: string; location?: string; source: string; source_domain?: string; posted_date?: string; gmail_message_id: string; gmail_subject: string; gmail_from: string; gmail_date: string };
+export type GmailLeadProvenance = {
+	provider: "gmail";
+	message_id: string;
+	subject: string;
+	sender: string;
+	received_at: string;
+	source_domain: string;
+};
+export type ScoutCandidate = { url: string; title: string; company?: string; location?: string; source: string; source_domain?: string; posted_date?: string; gmail_message_id: string; gmail_subject: string; gmail_from: string; gmail_date: string; gmail_provenance: GmailLeadProvenance };
 
-function firstJobUrl(text: string): string | null {
-	for (const raw of text.match(URL_RE) ?? []) { const url = canonicalJobUrl(raw.replace(/[).,;]+$/, "")); if (url && /(job|jobs|career|position|apply|posting|role)/i.test(url)) return url; }
+const SECURITY_ALERT_RE = /(?:security|verify|verification|password|sign[ -]?in|login|unusual activity|account alert)/i;
+const ASSET_RE = /\.(?:avif|bmp|css|gif|ico|jpe?g|js|png|svg|webp|woff2?|pdf)(?:$|\?)/i;
+const NAV_SEGMENT_RE = /^(?:account|accounts|auth|help|home|login|logout|preferences|privacy|profile|reset|security|settings|signin|subscribe|unsubscribe)$/i;
+const GENERIC_SEGMENT_RE = /^(?:alert|alerts|career|careers|job|jobs|opportunities|opportunity|position|positions|recommendation|recommendations|role|roles|search)$/i;
+const GENERIC_ROUTE_SEGMENT_RE = /^(?:alerts?|browse|categories?|home|recommendations?|search)$/i;
+
+function isSpecificJobUrl(url: string): boolean {
+	const parsed = new URL(url);
+	const segments = parsed.pathname.split("/").filter(Boolean);
+	if (ASSET_RE.test(parsed.pathname) || segments.some((segment) => NAV_SEGMENT_RE.test(segment) || GENERIC_ROUTE_SEGMENT_RE.test(segment))) return false;
+	if (["q", "query", "search", "keywords"].some((key) => parsed.searchParams.has(key))) return false;
+	// Root pages and one-segment listing/search/home pages cannot identify a posting.
+	if (segments.length < 2 || segments.every((segment) => GENERIC_SEGMENT_RE.test(segment))) return false;
+	const hasJobContext = segments.some((segment) => GENERIC_SEGMENT_RE.test(segment)) || /(?:job|jobs|career|role|position|apply|posting)/i.test(parsed.hostname);
+	const leaf = segments.at(-1) ?? "";
+	return hasJobContext && !GENERIC_SEGMENT_RE.test(leaf) && /[a-z0-9]/i.test(leaf);
+}
+
+function recentMessageDate(value: string, now = Date.now()): boolean {
+	const parsed = Date.parse(value);
+	return Number.isFinite(parsed) && parsed <= now + 5 * 60_000 && parsed >= now - 2 * 24 * 60 * 60_000;
+}
+
+/** Extract only a specific posting URL; generic mail/navigation/asset links never become leads. */
+export function specificJobUrl(text: string): string | null {
+	for (const raw of text.match(URL_RE) ?? []) {
+		const url = canonicalJobUrl(raw.replace(/[).,;]+$/, ""));
+		if (url && isSpecificJobUrl(url)) return url;
+	}
 	return null;
 }
 
@@ -35,10 +72,15 @@ function extractVisibleMetadata(message: GmailMessage): Pick<ScoutCandidate, "co
 }
 
 /** Deliberately modest extraction: metadata is visible, body prose is neither stored nor logged. */
-export function candidateFromMessage(message: GmailMessage): ScoutCandidate | null {
-	const url = firstJobUrl(message.text) ?? firstJobUrl(message.snippet);
-	if (!url) return null;
+export function candidateFromMessage(message: GmailMessage, now = Date.now()): ScoutCandidate | null {
+	if (!message.id || !message.subject?.trim() || !message.from?.trim() || !recentMessageDate(message.date, now)) return null;
+	if (SECURITY_ALERT_RE.test(`${message.subject}\n${message.from}`)) return null;
+	const url = specificJobUrl(message.text) ?? specificJobUrl(message.snippet);
+	if (!url || !workKeyForLead({ url })) return null;
 	const host = new URL(url).hostname.toLowerCase();
+	const subject = clipMarked(message.subject, 300, { within: true });
+	const sender = clipMarked(message.from, 300, { within: true });
+	const receivedAt = clipMarked(message.date, 100, { within: true });
 	return {
 		url,
 		title: clipMarked(message.subject.trim(), 300, { within: true }) || "Job suggestion",
@@ -46,9 +88,10 @@ export function candidateFromMessage(message: GmailMessage): ScoutCandidate | nu
 		source_domain: host,
 		posted_date: message.date || undefined,
 		gmail_message_id: message.id,
-		gmail_subject: clipMarked(message.subject, 300, { within: true }),
-		gmail_from: clipMarked(message.from, 300, { within: true }),
-		gmail_date: clipMarked(message.date, 100, { within: true }),
+		gmail_subject: subject,
+		gmail_from: sender,
+		gmail_date: receivedAt,
+		gmail_provenance: { provider: "gmail", message_id: message.id, subject, sender, received_at: receivedAt, source_domain: host },
 		...extractVisibleMetadata(message),
 	};
 }
@@ -73,9 +116,10 @@ export async function readGmailScoutLeadRecords(env: Env, instanceId: string, qu
 	const body = await res.json() as { records?: Array<{ data?: Record<string, unknown> }> };
 	return body.records ?? [];
 }
-async function insert(env: Env, instanceId: string, data: Record<string, unknown>) {
+async function insert(env: Env, instanceId: string, data: Record<string, unknown>): Promise<boolean> {
 	const res = await stub(env, instanceId).fetch(new Request("https://agent/collections/job_leads/records", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ data }) }));
 	if (!res.ok) throw new Error("Could not save a Gmail job lead.");
+	return (await res.json() as { created?: unknown }).created !== false;
 }
 
 /** The two durable duplicate keys: Gmail message identity and platform-wide job identity. */
@@ -116,7 +160,8 @@ export async function ingestGmailCandidates(input: {
 	hits: readonly { id: string }[];
 	readMessage: (id: string) => Promise<GmailMessage>;
 	existing: { data?: Record<string, unknown> }[];
-	insertLead: (data: Record<string, unknown>) => Promise<void>;
+	/** `false` means the owning Scout returned an existing unchanged lead (a concurrent duplicate). */
+	insertLead: (data: Record<string, unknown>) => Promise<boolean | void>;
 }): Promise<{ candidates: number; added: number; deduped: number }> {
 	let added = 0, deduped = 0, candidates = 0;
 	for (const hit of input.hits) {
@@ -124,8 +169,17 @@ export async function ingestGmailCandidates(input: {
 		if (!candidate) continue;
 		candidates++;
 		if (duplicateGmailLead(candidate, input.existing)) { deduped++; continue; }
-		const data = { ...candidate, status: "new", lifecycle_version: 0 };
-		await input.insertLead(data);
+		const workKey = workKeyForLead(candidate);
+		if (!workKey) continue;
+		const data = {
+			...candidate,
+			work_key: workKey,
+			status: "unverified",
+			lifecycle_version: 0,
+			verification: { state: "unverified", source: "gmail_alert", checked_at: null, canonical_job_url: candidate.url, active_apply_url: null, reason: "email_alert_requires_live_validation", evidence: null },
+		};
+		const created = await input.insertLead(data);
+		if (created === false) { deduped++; continue; }
 		input.existing.push({ data });
 		added++;
 	}

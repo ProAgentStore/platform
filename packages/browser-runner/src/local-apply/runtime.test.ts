@@ -233,6 +233,23 @@ describe("a fill-and-review run, end to end on the runner", () => {
 		expect(rt.status({ runId: "run-1" }).result).toMatchObject({ outcome: "failed", error: "Cancelled by the owner" });
 	});
 
+	it("serves a terminal typed result after the runner process restarts", async () => {
+		const first = runtime();
+		first.start(envelope());
+		await settle();
+		// A terminal result is written before the old process can disappear.
+		first.cancel({ runId: "run-1" });
+		const before = first.status({ runId: "run-1" });
+		const restarted = runtime();
+		expect(restarted.status({ runId: "run-1" })).toMatchObject({
+			state: "ended",
+			lastSeq: before.lastSeq,
+			result: { runId: "run-1", outcome: "failed", error: "Cancelled by the owner" },
+		});
+		// The recovered terminal run still protects the request id from a duplicate start.
+		expect(restarted.start(envelope())).toMatchObject({ existing: true, status: "ended" });
+	});
+
 	it("waits at a typed supervisor checkpoint until its persisted continue directive, never an owner resume", async () => {
 		const rt = runtime();
 		rt.start(envelope());

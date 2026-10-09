@@ -318,7 +318,16 @@ export async function updateApplyRun(
 }
 
 export async function activeApplyRuns(env: DB, limit: number): Promise<Array<{ id: string; instanceId: string; userId: string }>> {
-	const { results } = await env.DB.prepare("SELECT id, instance_id, user_id FROM local_apply_runs WHERE status IN ('queued', 'running', 'paused') ORDER BY COALESCE(last_synced_at, 0) LIMIT ?1")
+	// A runner result is committed before its application projection.  The second arm repairs the
+	// narrow crash window between those two durable writes; it cannot revive ordinary terminal
+	// history because only an application still at `filling` is eligible.
+	const { results } = await env.DB.prepare(`SELECT r.id, r.instance_id, r.user_id
+		FROM local_apply_runs r
+		WHERE r.status IN ('queued', 'running', 'paused')
+		   OR (r.result IS NOT NULL AND EXISTS (
+			SELECT 1 FROM job_applications a WHERE a.id = r.application_id AND a.user_id = r.user_id AND a.status = 'filling'
+		   ))
+		ORDER BY CASE WHEN r.status IN ('queued', 'running', 'paused') THEN 0 ELSE 1 END, COALESCE(r.last_synced_at, 0) LIMIT ?1`)
 		.bind(limit)
 		.all<{ id: string; instance_id: string; user_id: string }>();
 	return (results ?? []).map((r) => ({ id: r.id, instanceId: r.instance_id, userId: r.user_id }));

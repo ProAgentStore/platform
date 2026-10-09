@@ -374,35 +374,34 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	return { kind: "started", application: (await getOwnedApplication(env, uid, applicationId)) as JobApplication, run };
 }
 
-/** End a run's application from its result — exactly once, by compare-and-set. */
-async function settleFromResult(env: Env, uid: string, run: ApplyRun, rawResult: unknown, now: number): Promise<ApplyRun> {
+/** Keep the deterministic submission gate when replaying a persisted runner result. */
+function acceptedResult(run: ApplyRun, rawResult: unknown): LocalApplyResultEnvelope | null {
 	const checked = parseLocalApplyResult(rawResult);
-	const attempted = run.trace.some((e) => e.type === "submit.attempted") || (rawResult as { submitAttempted?: unknown } | null)?.submitAttempted === true;
-	if (attempted) await markSubmitAttempted(env, run.applicationId, uid, now);
-	const base = { actor: "runner" as const, actorInstanceId: run.instanceId, runId: run.id, expectRun: run.id };
-	if ("error" in checked || checked.result.runId !== run.id) {
-		const error = "error" in checked ? `The runner sent a result PAGS cannot accept: ${checked.error}` : "The runner's result names another run.";
-		const failed = await updateApplyRun(env, run, { to: "failed", errorCode: "runner_result_invalid", error, pause: null, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: "runner_result_invalid" } }] }, now);
-		if (failed) await move(env, uid, run.applicationId, ["filling", "blocked"], { ...base, to: "blocked", reason: attempted ? "submit_state_unknown" : "runner_result_invalid", questions: [error] }, now);
-		return failed ?? run;
-	}
-	let r: LocalApplyResultEnvelope = checked.result;
+	if ("error" in checked || checked.result.runId !== run.id) return null;
+	let r = checked.result;
 	// A submit PAGS did not gate is not a submission PAGS records — whatever the runner says.
 	if (r.outcome === "submitted" && (run.policy.mode !== "auto_submit" || r.submitted?.gateId !== run.policy.gate.gateId)) {
 		r = { ...r, outcome: "blocked", blockReason: "submit_unconfirmed", questions: ["The runner reported a submission this run's policy did not permit. Check the employer's site before anything else is done."], submitted: undefined };
 	}
+	return r;
+}
+
+/** Project a typed, already-durable result onto the application. Safe to replay after a crash. */
+async function reconcileResultOutcome(env: Env, uid: string, run: ApplyRun, r: LocalApplyResultEnvelope, now: number, replayOnly = false): Promise<void> {
+	if (replayOnly) {
+		const app = await getOwnedApplication(env, uid, run.applicationId);
+		// The result was already projected (or the application moved on) if it no longer has the
+		// in-flight state. Do not replay notifications/history on every scheduled sweep.
+		if (!app || app.status !== "filling") return;
+	}
+	const attempted = run.trace.some((e) => e.type === "submit.attempted") || r.submitAttempted === true;
+	if (attempted) await markSubmitAttempted(env, run.applicationId, uid, now);
+	const base = { actor: "runner" as const, actorInstanceId: run.instanceId, runId: run.id, expectRun: run.id };
 	const to = r.outcome;
 	const unavailable = r.outcome === "blocked" && (r.blockReason as string | undefined) === "job_unavailable";
 	// The contract carries structured evidence for this condition. Keep it opaque here: the
 	// contract parser is the trust boundary, while this layer only persists and relays it.
 	const unavailableEvidence = r.unavailable;
-	const moved = await updateApplyRun(
-		env,
-		run,
-		{ to, pause: null, result: r, engineAuth: r.engineAuth, ...(to === "failed" ? { errorCode: "engine_failed", error: r.error ?? null } : {}), events: [{ type: "run.ended", at: iso(now), detail: { status: to, engineAuth: r.engineAuth, count: r.filled, ...(r.blockReason ? { reason: r.blockReason } : {}) } }] },
-		now,
-	);
-	if (!moved) return run;
 	const from = ["filling", "blocked"] as const;
 	if (unavailable) {
 		await move(env, uid, run.applicationId, from, {
@@ -421,12 +420,36 @@ async function settleFromResult(env: Env, uid: string, run: ApplyRun, rawResult:
 	// that) and the run stopped for a human — and the retry the card offers is only a continuation
 	// if the approval it needs still exists. Guarded inside on `submit.attempted`, so a run that
 	// DID attempt stays spent and terminal.
-	if (to !== "submitted") await releaseApprovalIfNothingWasSent(env, uid, moved).catch(() => undefined);
+	if (to !== "submitted") await releaseApprovalIfNothingWasSent(env, uid, run).catch(() => undefined);
 	// #991: a run that stopped at something it may not do without the owner is WAITING on them, and
 	// nothing told them. The first consumer of the generic owner-attention policy
 	// (`lib/owner-attention.ts`) rather than an apply-specific push: the event is
 	// `approval_required`, and any other agent raises the same one.
-	if (to === "blocked" || to === "awaiting_review") await askForApprovalIfWaiting(env, uid, moved).catch(() => undefined);
+	if (to === "blocked" || to === "awaiting_review") await askForApprovalIfWaiting(env, uid, run).catch(() => undefined);
+}
+
+/** End a run's application from its result — result receipt precedes outcome projection. */
+async function settleFromResult(env: Env, uid: string, run: ApplyRun, rawResult: unknown, now: number): Promise<ApplyRun> {
+	const attempted = run.trace.some((e) => e.type === "submit.attempted") || (rawResult as { submitAttempted?: unknown } | null)?.submitAttempted === true;
+	if (attempted) await markSubmitAttempted(env, run.applicationId, uid, now);
+	const base = { actor: "runner" as const, actorInstanceId: run.instanceId, runId: run.id, expectRun: run.id };
+	const r = acceptedResult(run, rawResult);
+	if (!r) {
+		const checked = parseLocalApplyResult(rawResult);
+		const error = "error" in checked ? `The runner sent a result PAGS cannot accept: ${checked.error}` : "The runner's result names another run.";
+		const failed = await updateApplyRun(env, run, { to: "failed", errorCode: "runner_result_invalid", error, pause: null, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: "runner_result_invalid" } }] }, now);
+		if (failed) await move(env, uid, run.applicationId, ["filling", "blocked"], { ...base, to: "blocked", reason: attempted ? "submit_state_unknown" : "runner_result_invalid", questions: [error] }, now);
+		return failed ?? run;
+	}
+	const to = r.outcome;
+	const moved = await updateApplyRun(
+		env,
+		run,
+		{ to, pause: null, result: r, engineAuth: r.engineAuth, ...(to === "failed" ? { errorCode: "engine_failed", error: r.error ?? null } : {}), events: [{ type: "run.ended", at: iso(now), detail: { status: to, engineAuth: r.engineAuth, count: r.filled, ...(r.blockReason ? { reason: r.blockReason } : {}) } }] },
+		now,
+	);
+	if (!moved) return run;
+	await reconcileResultOutcome(env, uid, moved, r, now);
 	return moved;
 }
 
@@ -585,7 +608,17 @@ async function stopTimedOutRun(env: Env, runtime: Awaited<ReturnType<typeof getL
 export async function syncApplyRun(env: Env, uid: string, run: ApplyRun, now = Date.now()): Promise<ApplyRun> {
 	// A run recorded but never handed over (the Worker died between the two) is not left queued forever.
 	if (run.status === "queued") return now - run.createdAt > LOST_RUNNER_GRACE_MS ? endLost(env, uid, run, "The run was never handed to the runner.", now) : run;
-	if (run.status !== "running" && run.status !== "paused") return run;
+	if (run.status !== "running" && run.status !== "paused") {
+		// Receipt is intentionally separate from projection. If a Worker stopped after saving the
+		// runner's typed result but before its application CAS, the scheduled sweep replays only this
+		// deterministic projection — it never contacts the runner or repeats browser work.
+		const result = run.result === null ? null : acceptedResult(run, run.result);
+		if (result) {
+			await reconcileResultOutcome(env, uid, run, result, now, true);
+			await syncApplicationCard(env, uid, run, "fill");
+		}
+		return run;
+	}
 	const startedAt = run.startedAt ?? run.createdAt;
 	const timeLimitReached = run.status === "running" && now - startedAt >= run.policy.limits.maxMinutes * 60_000;
 	const silentSince = run.lastSyncedAt ?? startedAt;

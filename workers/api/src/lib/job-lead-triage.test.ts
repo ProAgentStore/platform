@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CollectionRecord } from "../agent-storage-types.js";
-import { JOB_LEAD_APPLY_EVENT, JOB_LEAD_TRANSITIONS, duplicateApplyOf, jobIdentity, jobLeadStatus, planApplicationWriteback, planJobLeadTriage } from "./job-lead-triage.js";
+import { JOB_LEAD_APPLY_EVENT, JOB_LEAD_TRANSITIONS, duplicateApplyOf, jobIdentity, jobLeadStatus, planApplicationWriteback, planJobLeadTriage, workKeyForLead } from "./job-lead-triage.js";
 
 const lead = (data: Record<string, unknown> = {}): CollectionRecord => ({
 	id: "lead-1",
@@ -115,6 +115,17 @@ describe("Job lead triage lifecycle (#955)", () => {
 });
 
 describe("#953: one application per job, and its status on the lead", () => {
+	it("does not let email freshness bypass live job-page validation", () => {
+		const record = lead({
+			status: "unverified",
+			url: "https://jobs.example.com/job/platform-engineer-42",
+			verification: { state: "unverified", source: "gmail_alert" },
+		});
+		const planned = planJobLeadTriage(record, { sourceInstanceId: "scout-1", action: "apply" });
+		expect(planned).toMatchObject({ ok: false });
+		if (!planned.ok) expect(planned.error).toContain("email freshness is not proof");
+	});
+
 	const rec = (id: string, data: Record<string, unknown>) => ({ id, collection: "job_leads", data, createdAt: "x", updatedAt: "x" });
 
 	it("knows two postings are the same job by job id, else by the URL without tracking, fragment or trailing slash", () => {
@@ -122,6 +133,12 @@ describe("#953: one application per job, and its status on the lead", () => {
 		expect(jobIdentity({ url: "https://jobs.example.com/a?id=1" })).not.toBe(jobIdentity({ url: "https://jobs.example.com/a?id=2" }));
 		expect(jobIdentity({ job_id: 42, source: "Seek", url: "https://a" })).toBe(jobIdentity({ jobId: "42", source: "seek", url: "https://b" }));
 		expect(jobIdentity({})).toBeNull();
+	});
+
+	it("derives a stable work key without inventing one for malformed leads", () => {
+		expect(workKeyForLead({ url: "https://www.seek.com.au/job/94872937?tracking=mail" })).toBe("seek:94872937");
+		expect(workKeyForLead({ url: "https://jobs.example.com/job/platform-engineer-42?utm_source=mail" })).toBe("url:https://jobs.example.com/job/platform-engineer-42");
+		expect(workKeyForLead({ url: "not a url" })).toBeNull();
 	});
 
 	it("finds only another lead of the same job that was already applied for", () => {

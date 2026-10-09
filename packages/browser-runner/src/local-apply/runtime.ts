@@ -15,12 +15,13 @@
  *  - the result: `awaiting_review`, `submitted` (only with the site's confirmation), `blocked`
  *    with the reason, or `failed`.
  *
- * Runs live in memory: a runner restart loses them, and `status` answers 404, which PAGS reads as
- * "the runner lost this run".
+ * Active runs live in memory: a runner restart loses them, and `status` answers 404, which PAGS
+ * reads as "the runner lost this run". Terminal typed/redacted results are journaled locally so a
+ * restart after completion does not erase observed evidence before PAGS pulls it.
  */
 import { type ChildProcess, spawn as nodeSpawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,6 +59,7 @@ import {
 	type LocalApplySupervisorCheckpoint,
 	type LocalApplySupervisorDirective,
 	type LocalApplyTaskEnvelope,
+	parseLocalApplyResult,
 } from "./contract.js";
 import { applyPrompt, buildApplyEngineSpec, observedApplyAuth, type SourceBlock } from "./engine.js";
 
@@ -112,6 +114,21 @@ interface Run {
 	checkpoints: Map<string, { checkpoint?: LocalApplySupervisorCheckpoint; directive?: LocalApplySupervisorDirective }>;
 	endedAt?: number;
 	timer?: ReturnType<typeof setInterval>;
+}
+
+/**
+ * The only runner state that survives a process restart.  In particular this deliberately does
+ * not include CLI output, source text, answers, browser snapshots, or the bridge token.  The
+ * cloud already has a typed/redacted result contract; retaining that contract locally lets it
+ * fetch an outcome which completed just before the runner was updated or restarted.
+ */
+interface TerminalJournal {
+	version: 1;
+	envelope: LocalApplyTaskEnvelope;
+	events: LocalApplyRunnerEvent[];
+	seq: number;
+	result: LocalApplyResultEnvelope;
+	endedAt: number;
 }
 
 class Blocked extends Error {
@@ -232,6 +249,50 @@ export class LocalApplyRuntime {
 		this.now = deps.now ?? Date.now;
 		this.spawn = deps.spawn ?? nodeSpawn;
 		this.retentionMs = deps.retentionMs ?? 24 * 60 * 60 * 1000;
+		this.hydrateTerminalJournals();
+	}
+
+	private journalPath(dir: string): string {
+		return join(dir, "terminal-result.json");
+	}
+
+	/** Write-before-return: a terminal result is durable before `status` can expose it. */
+	private persistTerminal(run: Run): void {
+		if (!run.result || !run.endedAt) return;
+		const journal: TerminalJournal = { version: 1, envelope: run.envelope, events: run.events, seq: run.seq, result: run.result, endedAt: run.endedAt };
+		const path = this.journalPath(run.dir);
+		const tmp = `${path}.${randomBytes(8).toString("hex")}.tmp`;
+		writeFileSync(tmp, JSON.stringify(journal), { mode: 0o600 });
+		renameSync(tmp, path);
+	}
+
+	/** Hydrate terminal-only records. Interrupted runs remain deliberately unrecoverable. */
+	private hydrateTerminalJournals(): void {
+		if (!existsSync(this.root)) return;
+		for (const instance of readdirSync(this.root)) {
+			const instanceDir = join(this.root, instance);
+			let runIds: string[];
+			try { runIds = readdirSync(instanceDir); } catch { continue; }
+			for (const runId of runIds) {
+				const dir = join(instanceDir, runId);
+				const path = this.journalPath(dir);
+				if (!existsSync(path)) continue;
+				try {
+					const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<TerminalJournal>;
+					if (raw.version !== 1 || !raw.envelope || !raw.result || !Array.isArray(raw.events) || typeof raw.seq !== "number" || typeof raw.endedAt !== "number") continue;
+					const envelope = parseApplyEnvelope(raw.envelope);
+					const parsed = parseLocalApplyResult(raw.result);
+					if ("error" in parsed || parsed.result.runId !== envelope.runId) continue;
+					const checked = parsed.result;
+					this.runs.set(envelope.runId, {
+						envelope, dir, token: "", state: "ended", events: raw.events as LocalApplyRunnerEvent[], seq: raw.seq,
+						result: checked, allow: new Set(envelope.policy.allowDomains), grounding: [], secrets: [], activeSince: raw.endedAt,
+						activeMs: 0, waiters: [], output: [], engineAuth: checked.engineAuth, cancelled: false, timedOut: false,
+						checkpoints: new Map(), endedAt: raw.endedAt,
+					});
+				} catch { /* a corrupt local cache is never an authority */ }
+			}
+		}
 	}
 
 	start(raw: unknown): { runId: string; taskId: string; status: Run["state"]; existing: boolean } {
@@ -633,6 +694,9 @@ export class LocalApplyRuntime {
 			// nothing here is text: counts, an exit code, and signal ids this platform defines.
 			...(r.diagnostic ? { diagnostic: r.diagnostic } : {}),
 		};
+		// This must happen before stopping the browser or exposing `ended`: a process restart in the
+		// narrow handoff window must not turn an observed result into `runner_lost` in the cloud.
+		this.persistTerminal(run);
 		if (run.child && run.child.exitCode === null) this.kill(run);
 		void run.browser?.stop().catch(() => undefined);
 	}

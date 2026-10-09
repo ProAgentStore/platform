@@ -53,6 +53,8 @@ export interface LocalArtifactLead {
 	sourceInstanceId: string;
 	leadId: string;
 	leadUrl: string;
+	/** Stable posting identity, scoped to the owning Tailor instance. Older handoffs omit it. */
+	workKey?: string;
 	lifecycleVersion: number;
 	requestedAt: string;
 	lead: { title: string; company?: string; location?: string; url?: string; source?: string; posted_date?: string; match_rationale?: string };
@@ -245,6 +247,7 @@ export function parseLocalArtifactLead(raw: unknown): { lead: LocalArtifactLead 
 	if (typeof lifecycleVersion !== "number" || !Number.isInteger(lifecycleVersion) || lifecycleVersion < 1) return { error: "the lead has no lifecycleVersion" };
 	const leadUrl = str(o.leadUrl, 2000) ?? "";
 	if (leadUrl && !/^https?:\/\/[^\s/]+/i.test(leadUrl)) return { error: "the lead's URL is not an http(s) URL" };
+	const workKey = str(o.workKey, 600);
 	const requestedAt = str(o.requestedAt, 40);
 	if (!requestedAt || Number.isNaN(Date.parse(requestedAt))) return { error: "the lead has no requestedAt time" };
 	const body = o.lead && typeof o.lead === "object" && !Array.isArray(o.lead) ? (o.lead as Record<string, unknown>) : null;
@@ -255,7 +258,7 @@ export function parseLocalArtifactLead(raw: unknown): { lead: LocalArtifactLead 
 		const v = str(body[f], f === "match_rationale" ? 2000 : 500);
 		if (v) lead[f] = v;
 	}
-	return { lead: { eventId, sourceInstanceId, leadId, leadUrl, lifecycleVersion, requestedAt, lead } };
+	return { lead: { eventId, sourceInstanceId, leadId, leadUrl, ...(workKey ? { workKey } : {}), lifecycleVersion, requestedAt, lead } };
 }
 
 const DETAIL_KEYS = new Set(["engine", "authMode", "engineAuth", "role", "path", "sha256", "bytes", "kind", "total", "unmatched", "reason", "exitCode", "count", "removed", "status", "validationError", "parseAttempts", "rawOutputChars", "runId", "attemptNumber"]);

@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { toolNamesFor } from "../agent-do-tools.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
 import { instanceConnectorPolicy } from "../lib/instance-connector-access.js";
-import { JOB_LEAD_APPLY_EVENT, planJobLeadTriage } from "../lib/job-lead-triage.js";
+import { planJobLeadTriage } from "../lib/job-lead-triage.js";
 import { GMAIL_SCOUT_PINNED_EMAIL } from "../lib/gmail-scout/config.js";
 import { ingestGmailCandidates } from "../lib/gmail-scout/scan.js";
 import { realSchemaD1 } from "../lib/d1-sqlite.js";
@@ -83,17 +83,17 @@ describe("#997 Gmail Scout fresh subscription acceptance", () => {
 			expect(permissions.get(instanceId), "the owner configures this read-only source without a second browser-only permission step").toBe(true);
 
 			// A mocked Gmail response is ingested into this Scout's collection only; it is stored as
-			// a normal `new` lead and never retains the message body.
+			// an explicitly unverified lead and never retains the message body.
 			await ingestGmailCandidates({
 				hits: [{ id: "gmail-message-1" }], existing: [],
 				readMessage: async () => ({ id: "gmail-message-1", threadId: "t", from: "alerts@example.com", to: GMAIL_SCOUT_PINNED_EMAIL, cc: "", subject: "Engineer at Acme", date: "2026-10-09", messageId: "", references: "", snippet: "Location: Melbourne", text: "Apply https://jobs.example.com/role/1?utm_source=gmail", attachments: [] }),
 				insertLead: async (data) => { leads.push({ id: "lead-1", data }); },
 			});
 			expect(leads).toHaveLength(1);
-			expect(leads[0].data).toMatchObject({ status: "new", source: "Gmail", gmail_message_id: "gmail-message-1", url: "https://jobs.example.com/role/1" });
+			expect(leads[0].data).toMatchObject({ status: "unverified", source: "Gmail", gmail_message_id: "gmail-message-1", url: "https://jobs.example.com/role/1", verification: { state: "unverified" } });
 
 			const handoff = planJobLeadTriage({ id: "lead-1", collection: "job_leads", data: leads[0].data, createdAt: "now", updatedAt: "now" }, { action: "apply", sourceInstanceId: instanceId });
-			expect(handoff).toMatchObject({ ok: true, event: { eventType: JOB_LEAD_APPLY_EVENT, sourceInstanceId: instanceId, leadId: "lead-1" } });
+			expect(handoff).toMatchObject({ ok: false, error: expect.stringContaining("unverified") });
 		} finally {
 			d1.close();
 		}

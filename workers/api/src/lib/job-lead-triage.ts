@@ -49,11 +49,20 @@ export function canonicalJobUrl(value: string): string | null {
 export const JOB_LEAD_TRIAGE_ACTIONS = ["apply", "skip", "defer", "archive"] as const;
 export type JobLeadTriageAction = (typeof JOB_LEAD_TRIAGE_ACTIONS)[number];
 
-export const JOB_LEAD_STATUSES = ["new", "apply_requested", "skipped", "deferred", "archived", "tailoring", "blocked"] as const;
+/**
+ * `unverified` means the lead was observed in a source (for example Gmail), but no browser has
+ * established that the posting and its apply path are currently live.  It is deliberately not
+ * synonymous with `new`: a recent alert is evidence of where we found a lead, never evidence
+ * that a vacancy is open.
+ */
+export const JOB_LEAD_STATUSES = ["unverified", "new", "apply_requested", "skipped", "deferred", "archived", "tailoring", "blocked", "unverifiable"] as const;
 export type JobLeadStatus = (typeof JOB_LEAD_STATUSES)[number];
 
 /** The lifecycle, as data — the one place a transition is allowed. */
 export const JOB_LEAD_TRANSITIONS: Record<JobLeadStatus, readonly JobLeadStatus[]> = {
+	// An email alert is deliberately not eligible for material generation.  A Runner/browser
+	// validation writes the durable verification fact first; only then may a human request apply.
+	unverified: ["skipped", "deferred", "archived", "unverifiable"],
 	new: ["apply_requested", "skipped", "deferred", "archived"],
 	deferred: ["apply_requested", "skipped", "archived"],
 	skipped: ["apply_requested", "archived"],
@@ -61,6 +70,7 @@ export const JOB_LEAD_TRANSITIONS: Record<JobLeadStatus, readonly JobLeadStatus[
 	tailoring: [],
 	blocked: [],
 	archived: [],
+	unverifiable: ["skipped", "deferred", "archived"],
 };
 
 const TARGET: Record<JobLeadTriageAction, JobLeadStatus> = {
@@ -81,6 +91,8 @@ export type JobLeadApplyEvent = {
 	sourceInstanceId: string;
 	leadId: string;
 	leadUrl: string;
+	/** Stable, instance-scoped job identity. Older handoffs omit it and remain readable. */
+	workKey?: string;
 	lifecycleVersion: number;
 	requestedAt: string;
 	lead: Partial<Record<(typeof ENVELOPE_FIELDS)[number], string>>;
@@ -143,6 +155,12 @@ export function planJobLeadTriage(
 	const current = jobLeadStatus(record.data);
 	const version = jobLeadVersion(record.data);
 	const target = TARGET[input.action];
+	if (input.action === "apply" && current === "unverified") {
+		return { ok: false, error: "This email lead is unverified. Validate its live job page and active apply path before requesting materials; email freshness is not proof that the vacancy is open." };
+	}
+	if (input.action === "apply" && current === "unverifiable") {
+		return { ok: false, error: "This lead could not be verified as live. It cannot request materials or submission; defer, skip, or archive it instead." };
+	}
 
 	// Already there: a retry of the decision that was made, not a new one. Apply returns its stored
 	// handoff so a retry after an outbox failure re-delivers the SAME event, which the outbox dedupes.
@@ -187,6 +205,7 @@ export function planJobLeadTriage(
 		sourceInstanceId: input.sourceInstanceId,
 		leadId: record.id,
 		leadUrl: typeof record.data.url === "string" ? record.data.url : "",
+		...(typeof record.data.work_key === "string" && record.data.work_key ? { workKey: record.data.work_key } : {}),
 		lifecycleVersion: nextVersion,
 		requestedAt: now,
 		lead: envelopeLead(record.data),
@@ -213,6 +232,29 @@ export function jobIdentity(data: Record<string, unknown>): string | null {
 	}
 	if (typeof data.url !== "string" || !data.url.trim()) return null;
 	return `url:${canonicalJobUrl(data.url) ?? data.url.trim()}`;
+}
+
+/**
+ * The durable per-owner work key.  SEEK's numeric posting id is stable across its job and apply
+ * URLs; other sources retain the canonical specific posting URL.  It intentionally returns null
+ * for malformed/non-specific records rather than inventing an identity from an email title/date.
+ */
+export function workKeyForLead(data: Record<string, unknown>): string | null {
+	const rawUrl = typeof data.url === "string" ? canonicalJobUrl(data.url) : null;
+	if (rawUrl) {
+		const url = new URL(rawUrl);
+		if (/(^|\.)seek\.com\.au$/i.test(url.hostname)) {
+			const id = url.pathname.match(/\/(?:job|jobs)\/(\d+)(?:\/|$)/i)?.[1] ?? url.searchParams.get("jobId")?.match(/^\d+$/)?.[0];
+			if (id) return `seek:${id}`;
+		}
+		return `url:${rawUrl}`;
+	}
+	const jobId = data.job_id ?? data.jobId;
+	const source = typeof data.source === "string" ? data.source.trim().toLowerCase().replace(/\s+/g, "_") : "";
+	if (((typeof jobId === "string" && jobId.trim()) || typeof jobId === "number") && source) {
+		return `${source === "seek" ? "seek" : source}:${String(jobId).trim()}`;
+	}
+	return null;
 }
 
 /**

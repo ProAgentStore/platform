@@ -5,6 +5,7 @@
 import type { ActivityEvent, CollectionField, CollectionRecord, CollectionSchema, RecordQueryResult, VectorMeta } from "../agent-storage-types.js";
 import { encodeIndexValue, inferCollectionFields, validateRecord } from "../agent-storage-utils.js";
 import { type AgentStorageBaseCtor, MAX_COLLECTION_RECORDS, MAX_COLLECTIONS } from "./base.js";
+import { workKeyForLead } from "../lib/job-lead-triage.js";
 
 /** Sibling methods this group relies on (provided by earlier layers). */
 interface CollectionDeps {
@@ -194,6 +195,41 @@ export function withCollections<TBase extends AgentStorageBaseCtor & GConstructo
 		}
 
 		/**
+		 * Insert a Job Search Scout lead once per stable work key.  This belongs in the owning
+		 * Agent DO rather than callers: all writes for an instance are serial here, so two source
+		 * events cannot both win between a read and an insert.  A duplicate returns the original
+		 * record without touching its lifecycle, evidence, audit history, or timestamps.
+		 */
+		async recordCreateOrGetJobLead(
+			data: Record<string, unknown>,
+			userId?: string,
+		): Promise<{ record: CollectionRecord; created: boolean }> {
+			const workKey = workKeyForLead(data);
+			if (!workKey) throw new Error("A job lead needs a specific canonical job URL or job id.");
+			const indexKey = `joblead-work-key:${workKey}`;
+			const existingId = await this.doStorage.get<string>(indexKey);
+			if (existingId) {
+				const existing = await this.recordGet("job_leads", existingId);
+				if (existing) return { record: existing, created: false };
+				// A deleted record may leave an old index in a pre-upgrade DO. Remove only that stale
+				// pointer before continuing; no live record is ever rewritten here.
+				await this.doStorage.delete(indexKey);
+			}
+			// Leads created before the work-key index existed remain immutable.  A one-time lookup
+			// lets them participate in the new invariant without rewriting their status/history.
+			const legacy = await this.doStorage.list<CollectionRecord>({ prefix: "col:job_leads:" });
+			for (const candidate of legacy.values()) {
+				if (workKeyForLead(candidate.data) === workKey) {
+					await this.doStorage.put(indexKey, candidate.id);
+					return { record: candidate, created: false };
+				}
+			}
+			const record = await this.recordInsert("job_leads", { ...data, work_key: workKey }, userId);
+			await this.doStorage.put(indexKey, record.id);
+			return { record, created: true };
+		}
+
+		/**
 		 * Get a record by ID.
 		 */
 		async recordGet(collection: string, id: string): Promise<CollectionRecord | null> {
@@ -216,6 +252,13 @@ export function withCollections<TBase extends AgentStorageBaseCtor & GConstructo
 			if (!schema) return null;
 
 			const merged = { ...existing.data, ...data };
+			if (collection === "job_leads") {
+				const heldKey = typeof existing.data.work_key === "string" ? existing.data.work_key : workKeyForLead(existing.data);
+				const nextKey = workKeyForLead(merged);
+				if (heldKey && nextKey && heldKey !== nextKey) throw new Error("A job lead's work_key is immutable; create a distinct lead instead.");
+				if (heldKey && data.work_key !== undefined && data.work_key !== heldKey) throw new Error("A job lead's work_key is immutable.");
+				if (heldKey) merged.work_key = heldKey;
+			}
 			const validated = validateRecord(schema, merged);
 
 			// Enforce unique constraints on the NEW values — recordInsert does this, but the
@@ -287,6 +330,11 @@ export function withCollections<TBase extends AgentStorageBaseCtor & GConstructo
 			}
 
 			await this.doStorage.delete(`col:${collection}:${id}`);
+			if (collection === "job_leads" && typeof existing.data.work_key === "string") {
+				const indexKey = `joblead-work-key:${existing.data.work_key}`;
+				// Do not erase a newer pointer if a legacy/manual repair changed the key.
+				if ((await this.doStorage.get<string>(indexKey)) === id) await this.doStorage.delete(indexKey);
+			}
 			await this.logEvent("collection.record.deleted", userId, { collection, recordId: id });
 			return true;
 		}

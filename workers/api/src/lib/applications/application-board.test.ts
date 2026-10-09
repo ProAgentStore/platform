@@ -121,6 +121,13 @@ describe("the board column a run lands in", () => {
 		expect(applicationCardStatus("submitted")).toBe("completed");
 	});
 
+	it("does not turn a finished runtime into an employer submission", () => {
+		// `completed` is a generic task word. Only the typed `submitted` outcome/evidence earns the
+		// completed lane for an application; a blocked lifecycle remains visible as blocked.
+		expect(applicationCardStatus("completed", "blocked")).toBe("blocked");
+		expect(applicationCardStatus("completed", "awaiting_review")).toBe("needs_human");
+	});
+
 	it.each([["running"], ["queued"], ["failed"], ["blocked"], ["cancelled"]])("%s passes through — the board has a column for it", (runStatus) => {
 		expect(applicationCardStatus(runStatus)).toBe(runStatus);
 	});

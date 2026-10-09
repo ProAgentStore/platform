@@ -57,8 +57,17 @@ export const applicationCardId = (applicationId: string): string => `app-${appli
  * waiting for a person is `needs_human`, which is the status every board column set has a home for
  * and the one the console's "needs you" column reads.
  */
-export function applicationCardStatus(runStatus: string): string {
+export function applicationCardStatus(runStatus: string, applicationStatus = runStatus): string {
+	// A completed runtime is evidence that a process ended, not that an employer received an
+	// application. The application lifecycle is the durable outcome authority and outlives retries.
 	if (runStatus === "paused") return "needs_human";
+	// `submitted` is a typed runner result with confirmation evidence, not a generic run.done.
+	if (runStatus === "submitted") return "completed";
+	if (applicationStatus === "submitted") return "completed";
+	if (applicationStatus === "awaiting_review") return "needs_human";
+	if (applicationStatus === "blocked") return "blocked";
+	if (applicationStatus === "filling" || applicationStatus === "materials_ready" || applicationStatus === "tailoring") return applicationStatus === "materials_ready" ? "queued" : "running";
+	if (applicationStatus === "failed" || applicationStatus === "cancelled" || applicationStatus === "deferred" || applicationStatus === "archived") return applicationStatus;
 	if (runStatus === "awaiting_review") return "needs_human";
 	if (runStatus === "queued") return "queued";
 	if (runStatus === "submitted") return "completed";
@@ -140,7 +149,7 @@ export function applicationCardLabel(app: Pick<JobApplication, "lead">): { title
  */
 export function applicationRunTaskRecord(opts: { app: Pick<JobApplication, "id" | "lead">; facts: ApplicationCardFacts; runStatus: string; now: string }): Record<string, unknown> {
 	const label = applicationCardLabel(opts.app);
-	const status = applicationCardStatus(opts.runStatus);
+	const status = applicationCardStatus(opts.runStatus, opts.facts.applicationStatus);
 	const detail = [opts.facts.stage, opts.facts.blockReason ? `reason: ${opts.facts.blockReason}` : "", opts.facts.checkpoint ? `checkpoint ${opts.facts.checkpoint.checkpointId} (${opts.facts.checkpoint.phase})${opts.facts.checkpoint.directive ? ` → ${opts.facts.checkpoint.directive}` : " — awaiting a directive"}` : ""]
 		.filter(Boolean)
 		.join(" · ");

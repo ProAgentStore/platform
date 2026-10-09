@@ -131,6 +131,20 @@ describe("record routes", () => {
 		).toBe(404);
 	});
 
+	it("returns an existing job lead unchanged instead of creating a second work item", async () => {
+		const existing = { id: "lead-1", data: { status: "blocked", lifecycle: [{ at: "earlier" }], work_key: "seek:94872937" } };
+		const res = await routes.insertRecord(
+			fakeEngine<"recordInsert" | "recordCreateOrGetJobLead">({
+				recordInsert: async () => { throw new Error("must not insert a duplicate"); },
+				recordCreateOrGetJobLead: async () => ({ record: existing, created: false }),
+			}),
+			"job_leads",
+			post({ data: { url: "https://www.seek.com.au/job/94872937", status: "new" } }),
+		);
+		expect(res.status).toBe(200);
+		expect(await res.json()).toMatchObject({ id: "lead-1", created: false, data: { status: "blocked", lifecycle: [{ at: "earlier" }] } });
+	});
+
 	it("decodes both the collection and the record id", async () => {
 		let seen: string[] = [];
 		await routes.getRecord(

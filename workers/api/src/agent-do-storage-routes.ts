@@ -82,12 +82,22 @@ export async function queryRecords(
 }
 
 export async function insertRecord(
-	engine: Pick<AgentStorageEngine, "recordInsert">,
+	engine: Pick<AgentStorageEngine, "recordInsert"> & Partial<Pick<AgentStorageEngine, "recordCreateOrGetJobLead">>,
 	collection: string,
 	request: Request,
 ): Promise<Response> {
 	const { data } = await request.json<{ data: Record<string, unknown> }>();
 	if (!data) return json({ error: "data required" }, 400);
+	if (decodeURIComponent(collection) === JOB_LEAD_COLLECTION) {
+		// Route/unit seams predating the specialized engine pass only recordInsert. Production
+		// AgentStorageEngine always exposes the idempotent method; retaining this narrow fallback
+		// keeps those storage-only fakes from claiming a concurrency guarantee they cannot model.
+		if (!engine.recordCreateOrGetJobLead) return json(await engine.recordInsert(JOB_LEAD_COLLECTION, data), 201);
+		const result = await engine.recordCreateOrGetJobLead(data);
+		// A duplicate is successful but deliberately not a second mutation.  200 makes that
+		// distinction observable to source ingest without requiring a follow-up read.
+		return json({ ...result.record, created: result.created }, result.created ? 201 : 200);
+	}
 	const record = await engine.recordInsert(decodeURIComponent(collection), data);
 	return json(record, 201);
 }

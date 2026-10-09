@@ -7,6 +7,9 @@ export const JOB_LEAD_ACTIONS = ["apply", "skip", "defer", "archive"] as const;
 export type JobLeadAction = (typeof JOB_LEAD_ACTIONS)[number];
 
 export const JOB_LEAD_TRANSITIONS: Record<string, readonly string[]> = {
+	// Gmail alerts are intake evidence only. They remain here as a distinct lane until the
+	// Runner/browser has verified a live posting and apply path.
+	unverified: ["skipped", "deferred", "archived", "unverifiable"],
 	new: ["apply_requested", "skipped", "deferred", "archived"],
 	deferred: ["apply_requested", "skipped", "archived"],
 	skipped: ["apply_requested", "archived"],
@@ -14,10 +17,11 @@ export const JOB_LEAD_TRANSITIONS: Record<string, readonly string[]> = {
 	tailoring: [],
 	blocked: [],
 	archived: [],
+	unverifiable: ["skipped", "deferred", "archived"],
 };
 
 /** Board columns, in lifecycle order. */
-export const JOB_LEAD_PIPELINE = ["new", "deferred", "apply_requested", "tailoring", "blocked", "skipped", "archived"];
+export const JOB_LEAD_PIPELINE = ["unverified", "new", "deferred", "apply_requested", "tailoring", "blocked", "unverifiable", "skipped", "archived"];
 
 const TARGET: Record<JobLeadAction, string> = { apply: "apply_requested", skip: "skipped", defer: "deferred", archive: "archived" };
 

@@ -109,6 +109,8 @@ export interface JobApplication {
 	leadId: string;
 	lifecycleVersion: number;
 	idempotencyKey: string;
+	/** Stable posting identity, scoped to this owning Tailor instance. */
+	workKey: string | null;
 	status: ApplicationStatus;
 	lead: unknown;
 	tailoringRunId: string | null;
@@ -146,6 +148,7 @@ interface AppRow {
 	lead_id: string;
 	lifecycle_version: number;
 	idempotency_key: string;
+	work_key: string | null;
 	status: ApplicationStatus;
 	lead: string;
 	tailoring_run_id: string | null;
@@ -185,6 +188,7 @@ const presentApp = (r: AppRow): JobApplication => ({
 	leadId: r.lead_id,
 	lifecycleVersion: r.lifecycle_version,
 	idempotencyKey: r.idempotency_key,
+	workKey: r.work_key ?? null,
 	status: r.status,
 	lead: json(r.lead),
 	tailoringRunId: r.tailoring_run_id,
@@ -280,6 +284,13 @@ export async function getApplicationByKey(env: DB, instanceId: string, userId: s
 	return row ? presentApp(row) : null;
 }
 
+/** The other replay boundary: one posting may have many source events, but only one
+ * application in the Tailor instance that owns it. */
+export async function getApplicationByWorkKey(env: DB, instanceId: string, userId: string, workKey: string): Promise<JobApplication | null> {
+	const row = await env.DB.prepare("SELECT * FROM job_applications WHERE instance_id = ?1 AND user_id = ?2 AND work_key = ?3").bind(instanceId, userId, workKey).first<AppRow>();
+	return row ? presentApp(row) : null;
+}
+
 export async function listApplications(env: DB, instanceId: string, userId: string, opts: { status?: ApplicationStatus; limit: number }): Promise<JobApplication[]> {
 	const { results } = await env.DB.prepare(
 		`SELECT * FROM job_applications WHERE instance_id = ?1 AND user_id = ?2 AND (?3 IS NULL OR status = ?3) ORDER BY created_at DESC, id DESC LIMIT ?4`,
@@ -304,6 +315,7 @@ export async function claimApplication(
 		leadId: string;
 		lifecycleVersion: number;
 		key: string;
+		workKey?: string | null;
 		lead: unknown;
 		status: "tailoring" | "blocked";
 		blockReason?: string;
@@ -312,9 +324,9 @@ export async function claimApplication(
 	},
 ): Promise<{ created: boolean; app: JobApplication }> {
 	const res = await env.DB.prepare(
-		`INSERT INTO job_applications (id, instance_id, user_id, source_instance_id, lead_id, lifecycle_version, idempotency_key, status, lead, block_reason, block_questions, created_at, updated_at)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)
-		 ON CONFLICT(instance_id, idempotency_key) DO NOTHING`,
+		`INSERT INTO job_applications (id, instance_id, user_id, source_instance_id, lead_id, lifecycle_version, idempotency_key, work_key, status, lead, block_reason, block_questions, created_at, updated_at)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)
+		 ON CONFLICT DO NOTHING`,
 	)
 		.bind(
 			a.id,
@@ -324,6 +336,7 @@ export async function claimApplication(
 			a.leadId,
 			a.lifecycleVersion,
 			a.key,
+			a.workKey ?? null,
 			a.status,
 			JSON.stringify(a.lead ?? null),
 			a.blockReason ?? null,
@@ -331,7 +344,10 @@ export async function claimApplication(
 			a.now,
 		)
 		.run();
-	const app = (await getApplicationByKey(env, a.instanceId, a.userId, a.key)) as JobApplication;
+	const byEvent = await getApplicationByKey(env, a.instanceId, a.userId, a.key);
+	if (byEvent && a.workKey && byEvent.workKey && byEvent.workKey !== a.workKey) throw new Error("Application event id is already bound to another work key");
+	const app = byEvent ?? (a.workKey ? await getApplicationByWorkKey(env, a.instanceId, a.userId, a.workKey) : null);
+	if (!app) throw new Error("Application claim did not return an application");
 	const created = (res.meta?.changes ?? 0) > 0;
 	// The lifecycle audit (#958) starts here: version 0, the application's creation from the approved lead.
 	if (created) {

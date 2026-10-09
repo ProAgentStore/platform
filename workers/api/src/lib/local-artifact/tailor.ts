@@ -14,6 +14,7 @@
  */
 import { HttpError } from "../auth.js";
 import { syncApplicationCard } from "../applications/application-board.js";
+import { workKeyForLead } from "../job-lead-triage.js";
 import { claimQueuedDispatch, instancesWithQueuedRuns, nextDueQueuedRun, noteQueued } from "../applications/work-queue-store.js";
 import { QUEUE_MAX_ATTEMPTS, refusalVerdict } from "../applications/work-queue.js";
 import { moveApplication } from "../local-apply/store.js";
@@ -47,6 +48,7 @@ import {
 	effectiveTailorSettings,
 	getApplication,
 	getApplicationByKey,
+	getApplicationByWorkKey,
 	getTailorRun,
 	isTerminalRun,
 	markReadyEmitted,
@@ -123,16 +125,39 @@ export async function startTailoring(env: Env, instanceId: string, uid: string, 
 		return { kind: claim.created ? "blocked" : "existing", application: claim.app, run: null };
 	}
 	const lead = parsed.lead;
+	// The event id protects a delivery replay.  The stable key protects a different
+	// source event for the same posting, without crossing into another owner's instance.
+	// Legacy handoffs are derivable from their canonical URL; a lead with neither is
+	// blocked rather than starting a second, unidentifiable piece of work.
+	const workKey = lead.workKey ?? workKeyForLead({
+		url: lead.leadUrl || lead.lead.url,
+		source: lead.lead.source,
+	});
+	if (!workKey) {
+		const claim = await claimApplication(env, {
+			...base,
+			lead,
+			status: "blocked",
+			blockReason: "unverifiable_lead",
+			blockQuestions: ["This lead has no stable, canonical posting identity. Validate the live job page before requesting materials."],
+		});
+		return { kind: claim.created ? "blocked" : "existing", application: claim.app, run: null };
+	}
+	// Return the existing durable work item before inspecting settings or a local runtime. This is
+	// both the normal duplicate fast path and the observable guarantee that a duplicate event
+	// cannot reset its status/evidence or create another runtime task.
+	const existingWork = await getApplicationByWorkKey(env, instanceId, uid, workKey);
+	if (existingWork) return { kind: "existing", application: existingWork, run: existingWork.tailoringRunId ? await getTailorRun(env, instanceId, uid, existingWork.tailoringRunId) : null };
 	const pair = await readInstanceConfigPair(env, instanceId, uid);
 	const settings = effectiveTailorSettings((pair?.config as Record<string, unknown> | undefined)?.[TAILOR_SETTINGS_KEY]);
 	if ("error" in settings) {
-		const claim = await claimApplication(env, { ...base, lead, status: "blocked", blockReason: "settings_invalid", blockQuestions: [`The Application Tailor settings are invalid: ${settings.error}. Fix them, then retry.`] });
+		const claim = await claimApplication(env, { ...base, workKey, lead, status: "blocked", blockReason: "settings_invalid", blockQuestions: [`The Application Tailor settings are invalid: ${settings.error}. Fix them, then retry.`] });
 		return { kind: claim.created ? "blocked" : "existing", application: claim.app, run: null };
 	}
 	const runtime = await getLiveRuntime(env, instanceId, uid);
 	if (!runtime) throw new HttpError(503, "No runner is connected. Run `pags up` on the machine that holds your job materials; the lead will be tailored when it connects.");
 
-	const claim = await claimApplication(env, { ...base, lead, status: "tailoring" });
+	const claim = await claimApplication(env, { ...base, workKey, lead, status: "tailoring" });
 	if (!claim.created) return { kind: "existing", application: claim.app, run: claim.app.tailoringRunId ? await getTailorRun(env, instanceId, uid, claim.app.tailoringRunId) : null };
 	const run = await dispatchTailoring(env, instanceId, uid, claim.app.id, lead, settings.settings, key, source, runtime, now);
 	return { kind: "started", application: (await getApplication(env, instanceId, uid, claim.app.id)) as JobApplication, run };

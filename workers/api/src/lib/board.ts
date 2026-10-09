@@ -442,6 +442,7 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 		const label = taskLabel(rep);
 		const runStatus = String(rep.status ?? "");
 		const userStatus = overlay.get(jobKey)?.user_status ?? null;
+		const application = parseApplicationCard((rep as Record<string, unknown>).application);
 		const latestTaskId = String(rep.id ?? "");
 		const overlayRow = overlay.get(jobKey);
 		const githubIssue = overlayRow ? parseCachedIssue(overlayRow.github_issue_cache) : undefined;
@@ -456,14 +457,14 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 			url: typeof rep.input?.url === "string" ? rep.input.url : "",
 			runStatus,
 			userStatus,
-			status: userStatus || runStatus,
+			// Application cards have a durable lifecycle/outcome projection. A generic manual lane is
+			// useful for coding work, but must not hide "uncertain", "blocked" or a non-submitted
+			// application behind a completed card merely because its runtime process ended.
+			status: application ? runStatus : userStatus || runStatus,
 			attempts: arr.map((t) => ({ id: String(t.id ?? ""), status: String(t.status ?? ""), updatedAt: t.updatedAt || t.createdAt || "" })),
 			updatedAt: rep.updatedAt || rep.createdAt || "",
 			...(githubIssue ? { githubIssue } : {}),
-			...(() => {
-				const application = parseApplicationCard((rep as Record<string, unknown>).application);
-				return application ? { application } : {};
-			})(),
+			...(application ? { application } : {}),
 			...(() => {
 				const scan = parseScanCard((rep as Record<string, unknown>).scan);
 				return scan ? { scan } : {};
