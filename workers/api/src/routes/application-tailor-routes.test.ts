@@ -100,11 +100,11 @@ beforeEach(() => {
 	d1.exec(`INSERT INTO agents (id, owner_id, slug, name, config) VALUES
 	  ('scout-a', 'u1', 't956-scout', 'Job Search Scout', '{"capabilities":{"surfaces":[],"runtime":"local_browser"}}'),
 	  ('tailor-a', 'u1', 't956-tailor', 'Application Tailor', '{"capabilities":{"surfaces":[],"runtime":"local_artifact"}}'),
-	  ('runner-a', 'u1', 't956-runner', 'Application Runner', '{"capabilities":{"surfaces":[]}}')`);
+	  ('runner-a', 'u1', 't956-runner', 'Application Runner', '{"capabilities":{"surfaces":[],"runtime":"local_apply"}}')`);
 	d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES
 	  ('scout', 'scout-a', 'u1', 'active', '{}'), ('t1', 'tailor-a', 'u1', 'active', '{"runnerNode":"mac"}'),
 	  ('next', 'runner-a', 'u1', 'active', '{}'), ('other', 'tailor-a', 'u2', 'active', '{}')`);
-	d1.exec(`INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, runner_version, status, last_seen_at) VALUES ('t1', 'u1', 'mac', 'relay://', '0.6.0', 'online', '2026-10-07 00:00:00')`);
+	d1.exec(`INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, runner_version, status, last_seen_at) VALUES ('t1', 'u1', 'mac', 'relay://', '0.6.0', 'online', '2026-10-07 00:00:00'), ('next', 'u1', 'mac', 'relay://', '0.6.0', 'online', '2026-10-07 00:00:00')`);
 	d1.exec(`INSERT INTO agent_connections (id, user_id, source_instance_id, event_type, target_instance_id, action, config, enabled) VALUES
 	  ('c-lead', 'u1', 'scout', '${JOB_LEAD_APPLY_EVENT}', 't1', 'generate_application_materials', '{}', 1),
 	  ('c-ready', 'u1', 't1', 'job.application.materials_ready', 'next', 'create_task', '{}', 1)`);
@@ -262,6 +262,54 @@ describe("approved work queues behind a busy machine (#974)", () => {
 });
 
 describe("end to end: apply_requested → materials_ready, exactly once", () => {
+	it("Runner validates an email lead's active Apply control before any Tailor task is created", async () => {
+		const plan = planJobLeadTriage(
+			{ id: "email-1", data: { ...LEAD_RECORD.data, source: "Gmail", status: "unverified", url: "https://jobs.example.com/role/42" } } as never,
+			{ action: "apply", sourceInstanceId: "scout" },
+			{ now: "2026-10-07T00:00:00.000Z" },
+		);
+		if (!plan.ok || !plan.event) throw new Error("email fixture did not plan");
+		answers["/local-apply/preflight"] = { status: 200, body: { state: "live", jobUrl: "https://jobs.example.com/role/42", applyUrl: "https://jobs.example.com/role/42/apply", evidence: "apply_control_present" } };
+		await deliverEvent(env(), "scout", "u1", JOB_LEAD_APPLY_EVENT, [plan.event], { traceId: plan.event.eventId });
+		expect(sent.map((x) => x.path)).toEqual(["/local-apply/preflight", "/local-artifact/run"]);
+		const task = sent.find((x) => x.path === "/local-artifact/run")?.body;
+		expect(task?.lead).toMatchObject({ leadUrl: "https://jobs.example.com/role/42/apply" });
+	});
+
+	it("an expired email listing is blocked before materials or a runtime task", async () => {
+		const plan = planJobLeadTriage(
+			{ id: "email-expired", data: { ...LEAD_RECORD.data, source: "Gmail", status: "unverified", url: "https://jobs.example.com/role/expired" } } as never,
+			{ action: "apply", sourceInstanceId: "scout" },
+			{ now: "2026-10-07T00:00:00.000Z" },
+		);
+		if (!plan.ok || !plan.event) throw new Error("email fixture did not plan");
+		answers["/local-apply/preflight"] = { status: 200, body: { state: "unavailable", jobUrl: "https://jobs.example.com/role/expired", reason: "expired" } };
+		await deliverEvent(env(), "scout", "u1", JOB_LEAD_APPLY_EVENT, [plan.event], { traceId: plan.event.eventId });
+		expect(sent.map((x) => x.path)).toEqual(["/local-apply/preflight"]);
+		expect(await d1.DB.prepare("SELECT status, block_reason FROM job_applications WHERE lead_id = 'email-expired'").first()).toMatchObject({ status: "blocked", block_reason: "job_unavailable" });
+	});
+
+	it("concurrent distinct events for one work key return the one unchanged application before a second runtime task", async () => {
+		const eventFor = (leadId: string) => {
+			const plan = planJobLeadTriage(
+				{ id: leadId, data: { ...LEAD_RECORD.data, url: "https://jobs.example.com/role/42?utm_source=mail", status: "new" } } as never,
+				{ action: "apply", sourceInstanceId: "scout" },
+				{ now: "2026-10-07T00:00:00.000Z" },
+			);
+			if (!plan.ok || !plan.event) throw new Error("fixture lead did not plan");
+			return plan.event;
+		};
+		const [a, b] = await Promise.all([call("POST", "/t1/applications", { event: eventFor("lead-concurrent-a") }), call("POST", "/t1/applications", { event: eventFor("lead-concurrent-b") })]);
+		expect([a.status, b.status].sort()).toEqual([200, 201]);
+		expect(await appCount()).toBe(1);
+		expect(await runCount()).toBe(1);
+		expect(sent.filter((x) => x.path === "/local-artifact/run")).toHaveLength(1);
+		const apps = (await d1.DB.prepare("SELECT id, status, state_version, work_key FROM job_applications").all<Record<string, unknown>>()).results ?? [];
+		expect(apps).toEqual([expect.objectContaining({ status: "tailoring", state_version: 0, work_key: "url:https://jobs.example.com/role/42" })]);
+		const applicationId = String(apps[0].id);
+		expect([a.body.application.id, b.body.application.id]).toEqual([applicationId, applicationId]);
+	});
+
 	it("tailors once however often the lead is delivered, and emits materials_ready once however often it is synced", async () => {
 		const event = leadEvent();
 		const first = await deliverEvent(env(), "scout", "u1", JOB_LEAD_APPLY_EVENT, [event], { traceId: event.eventId });

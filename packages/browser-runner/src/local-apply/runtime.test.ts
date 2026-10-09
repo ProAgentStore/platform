@@ -57,7 +57,7 @@ const browser: BrowserTools = {
 			const url = seek === "ad" ? SEEK_AD : seek === "form" ? SEEK_FORM : "https://jobs.example.com/apply";
 			return { content: [{ text: `### Result\n${JSON.stringify({ url, title: "Apply", ...(pageUnavailable ? { unavailable: pageUnavailable } : {}) })}` }] };
 		}
-		if (name === "browser_snapshot") return { content: [{ text: seek === "ad" ? '- link "Apply" [ref=a1]' : '- textbox "Full name" [ref=e1]\n- button "Submit application" [ref=e2]' }] };
+		if (name === "browser_snapshot") return { content: [{ text: pageUnavailable ? "This job has expired and is no longer accepting applications." : seek === "ad" ? '- link "Apply" [ref=a1]' : '- textbox "Full name" [ref=e1]\n- button "Submit application" [ref=e2]' }] };
 		if (name === "browser_click") {
 			clicks.push(String(args.target));
 			// Pressing the ad's Apply control is what puts the form on the screen.
@@ -142,6 +142,28 @@ describe("parseApplyEnvelope", () => {
 	it("drops a gate sent with fill_and_review — the mode decides, not a stray field", () => {
 		const e = parseApplyEnvelope({ ...envelope(), policy: { mode: "fill_and_review", allowDomains: ["jobs.example.com"], submitGate: { gateId: "g" } } });
 		expect(e.policy.submitGate).toBeUndefined();
+	});
+});
+
+describe("email job-page preflight", () => {
+	it("observes an active Apply control without creating a CLI/application run", async () => {
+		seek = "ad";
+		const rt = runtime();
+		await expect(rt.preflight({ jobUrl: "https://jobs.example.com/role/42" })).resolves.toMatchObject({
+			state: "live",
+			jobUrl: "https://jobs.example.com/role/42",
+			applyUrl: "https://jobs.example.com/role/42",
+			evidence: "apply_control_present",
+		});
+		expect(spawned).toEqual([]);
+		expect(() => rt.status({ runId: "run-1" })).toThrow(/No application run/);
+	});
+
+	it("marks an expired page unavailable rather than treating a recent email as live", async () => {
+		pageUnavailable = "expired";
+		const rt = runtime();
+		await expect(rt.preflight({ jobUrl: "https://jobs.example.com/role/42" })).resolves.toMatchObject({ state: "unavailable", reason: "expired" });
+		expect(spawned).toEqual([]);
 	});
 });
 

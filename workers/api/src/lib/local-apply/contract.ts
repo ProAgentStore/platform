@@ -32,6 +32,8 @@ export const LOCAL_APPLY_RUN_PATH = "/local-apply/run";
 export const LOCAL_APPLY_STATUS_PATH = "/local-apply/status";
 export const LOCAL_APPLY_RESUME_PATH = "/local-apply/resume";
 export const LOCAL_APPLY_CANCEL_PATH = "/local-apply/cancel";
+/** Read-only job-page check used before an email lead may enter material preparation. */
+export const LOCAL_APPLY_PREFLIGHT_PATH = "/local-apply/preflight";
 /** Delivers a cloud-persisted supervisory decision to one paused checkpoint. */
 export const LOCAL_APPLY_DIRECTIVE_PATH = "/local-apply/directive";
 
@@ -49,6 +51,12 @@ export type LocalApplyActionClass = "read" | "fill" | "review" | "submit";
 
 /** `isolated` = a throwaway profile; `default` = the runner's own signed-in browser. */
 export type LocalApplyProfile = "isolated" | "default";
+
+/** Typed, redacted evidence from a read-only job-page/apply-control check. */
+export type LocalApplyPreflightResult =
+	| { state: "live"; jobUrl: string; applyUrl: string; evidence: "apply_control_present" }
+	| { state: "unavailable"; jobUrl: string; reason: "expired" | "unavailable" }
+	| { state: "unverifiable"; jobUrl: string; reason: "navigation_failed" | "no_active_apply_path" | "access_blocked" };
 
 export type LocalApplyArtifactKind = "resume" | "cover_letter";
 

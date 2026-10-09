@@ -51,6 +51,7 @@ import {
 	type LocalApplyEngineAuth,
 	type LocalApplyEvent,
 	type LocalApplyPause,
+	type LocalApplyPreflightResult,
 	type LocalApplyProfile,
 	type LocalApplyResultEnvelope,
 	type LocalApplyRunnerEvent,
@@ -250,6 +251,48 @@ export class LocalApplyRuntime {
 		this.spawn = deps.spawn ?? nodeSpawn;
 		this.retentionMs = deps.retentionMs ?? 24 * 60 * 60 * 1000;
 		this.hydrateTerminalJournals();
+	}
+
+	/**
+	 * Read a specific job page before an email alert can cause any materials to be generated.
+	 * This deliberately creates no application run, launches no CLI, and never clicks/fills: the
+	 * only evidence it returns is a closed, redacted vocabulary the API can durably record.
+	 */
+	async preflight(raw: unknown): Promise<LocalApplyPreflightResult> {
+		const input = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+		const jobUrl = typeof input.jobUrl === "string" ? input.jobUrl.trim() : "";
+		let parsed: URL;
+		try {
+			parsed = new URL(jobUrl);
+			if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("scheme");
+		} catch {
+			return { state: "unverifiable", jobUrl, reason: "navigation_failed" };
+		}
+		const profile = input.browserProfile === "default" ? "default" : "isolated";
+		const dir = join(this.root, "preflight", randomBytes(12).toString("hex"));
+		let browser: RunBrowser | null = null;
+		try {
+			browser = await this.deps.browserFor(profile, dir);
+			const navigated = await browser.tools.callTool("browser_navigate", { url: parsed.toString() });
+			if (navigated.isError) return { state: "unverifiable", jobUrl: parsed.toString(), reason: "navigation_failed" };
+			const snapshot = await browser.tools.callTool("browser_snapshot");
+			const page = (snapshot.content ?? []).map((part) => part.text ?? "").join("\n");
+			if (snapshot.isError || /captcha|verify (?:you(?:'| a)re|that you are) human|access denied|unusual traffic|checking (?:if )?your browser/i.test(page)) {
+				return { state: "unverifiable", jobUrl: parsed.toString(), reason: "access_blocked" };
+			}
+			if (/(?:job|position|posting|role|opportunity).{0,120}(?:has )?(?:expired|closed|been filled|is no longer available|is no longer accepting applications)|(?:expired|closed|no longer available|no longer accepting applications).{0,120}(?:job|position|posting|role|opportunity)/i.test(page)) {
+				return { state: "unavailable", jobUrl: parsed.toString(), reason: /expired/i.test(page) ? "expired" : "unavailable" };
+			}
+			// An accessible Apply control is an active path, unlike a generic careers/search URL.
+			if (/(?:button|link)\s+"[^"]{0,80}\bapply(?: now| for| here)?\b|\bapply (?:now|for (?:this )?(?:job|role|position))\b|\bstart application\b/i.test(page)) {
+				return { state: "live", jobUrl: parsed.toString(), applyUrl: parsed.toString(), evidence: "apply_control_present" };
+			}
+			return { state: "unverifiable", jobUrl: parsed.toString(), reason: "no_active_apply_path" };
+		} catch {
+			return { state: "unverifiable", jobUrl: parsed.toString(), reason: "navigation_failed" };
+		} finally {
+			await browser?.stop().catch(() => undefined);
+		}
 	}
 
 	private journalPath(dir: string): string {

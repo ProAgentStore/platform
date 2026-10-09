@@ -7,9 +7,9 @@ export const JOB_LEAD_ACTIONS = ["apply", "skip", "defer", "archive"] as const;
 export type JobLeadAction = (typeof JOB_LEAD_ACTIONS)[number];
 
 export const JOB_LEAD_TRANSITIONS: Record<string, readonly string[]> = {
-	// Gmail alerts are intake evidence only. They remain here as a distinct lane until the
-	// Runner/browser has verified a live posting and apply path.
-	unverified: ["skipped", "deferred", "archived", "unverifiable"],
+	// Apply requests the Runner's read-only preflight. Tailoring stays blocked until that Runner
+	// proves a live posting and active Apply control; email freshness never does.
+	unverified: ["apply_requested", "skipped", "deferred", "archived", "unverifiable"],
 	new: ["apply_requested", "skipped", "deferred", "archived"],
 	deferred: ["apply_requested", "skipped", "archived"],
 	skipped: ["apply_requested", "archived"],

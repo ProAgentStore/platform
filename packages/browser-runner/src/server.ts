@@ -253,6 +253,10 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	}
 
 	// Local application execution (#957) — run, status, resume, cancel; PULL like research.
+	// The email-lead preflight is read-only and precedes Tailor material generation (#953).
+	if (req.method === "POST" && path === "/local-apply/preflight") {
+		return json(res, 200, await runner.localApply.preflight(await readJson(req)));
+	}
 	if (req.method === "POST" && path === "/local-apply/run") {
 		return json(res, 202, runner.localApply.start(await readJson(req)));
 	}

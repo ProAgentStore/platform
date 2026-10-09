@@ -1375,6 +1375,20 @@ describe("cloud supervision", () => {
 		expect(await appRow("lead-time-limit-result")).toMatchObject({ status: "awaiting_review" });
 	});
 
+	it("replays a durably received terminal result after a Worker restart without contacting the runner again", async () => {
+		const started = await call("POST", "/ap/application-runs", readyApp("lead-receipt-replay"));
+		const runId = started.body.run.id as string;
+		const result = RESULT(runId);
+		// This is the exact crash window: result receipt committed, but projection to the
+		// application has not happened. Reconstructing the scheduled sweep must need no runner.
+		await d1.DB.prepare("UPDATE local_apply_runs SET status = 'awaiting_review', result = ?2 WHERE id = ?1").bind(runId, JSON.stringify(result)).run();
+		sent = [];
+		await syncApplyRun(env(), "u1", { ...started.body.run, status: "awaiting_review", result } as never);
+		expect(sent).toEqual([]);
+		expect(await appRow("lead-receipt-replay")).toMatchObject({ status: "awaiting_review" });
+		expect(await audit("lead-receipt-replay")).toEqual(expect.arrayContaining([expect.objectContaining({ to_status: "awaiting_review", actor: "runner" })]));
+	});
+
 	it("treats a timed-out auto-submit run as an unknown submit, so the cloud never retries it", async () => {
 		await enableAutoSubmit();
 		const started = await call("POST", "/ap/application-runs", readyApp("lead-time-limit-auto"));

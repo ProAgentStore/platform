@@ -87,13 +87,15 @@ describe("#997 Gmail Scout fresh subscription acceptance", () => {
 			await ingestGmailCandidates({
 				hits: [{ id: "gmail-message-1" }], existing: [],
 				readMessage: async () => ({ id: "gmail-message-1", threadId: "t", from: "alerts@example.com", to: GMAIL_SCOUT_PINNED_EMAIL, cc: "", subject: "Engineer at Acme", date: "2026-10-09", messageId: "", references: "", snippet: "Location: Melbourne", text: "Apply https://jobs.example.com/role/1?utm_source=gmail", attachments: [] }),
-				insertLead: async (data) => { leads.push({ id: "lead-1", data }); },
+				insertLead: async (data) => { leads.push({ id: "lead-1", data }); return undefined; },
 			});
 			expect(leads).toHaveLength(1);
 			expect(leads[0].data).toMatchObject({ status: "unverified", source: "Gmail", gmail_message_id: "gmail-message-1", url: "https://jobs.example.com/role/1", verification: { state: "unverified" } });
 
 			const handoff = planJobLeadTriage({ id: "lead-1", collection: "job_leads", data: leads[0].data, createdAt: "now", updatedAt: "now" }, { action: "apply", sourceInstanceId: instanceId });
-			expect(handoff).toMatchObject({ ok: false, error: expect.stringContaining("unverified") });
+			// Apply only requests the downstream Runner's read-only preflight; it does not claim the
+			// email proves the vacancy is open or allow Tailor to start on its own.
+			expect(handoff).toMatchObject({ ok: true, transitioned: true, event: { eventType: "job.lead.apply_requested" } });
 		} finally {
 			d1.close();
 		}

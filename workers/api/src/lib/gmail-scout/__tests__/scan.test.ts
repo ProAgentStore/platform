@@ -34,7 +34,7 @@ describe("Gmail Scout scan", () => {
 			hits: [{ id: "message-1" }],
 			readMessage: async () => ({ id: "message-1", threadId: "thread-1", from: "alerts@example.com", to: "me@example.com", cc: "", subject: "Platform Engineer at Acme", date: "2026-10-09", messageId: "", references: "", snippet: "Location: Melbourne", text: "Role: Platform Engineer\nApply https://jobs.example.com/job/42?ref=weekly", attachments: [] }),
 			existing,
-			insertLead: async (data) => { scoutLeads.push({ data }); },
+			insertLead: async (data) => { scoutLeads.push({ data }); return undefined; },
 		});
 		expect(result).toEqual({ candidates: 1, added: 1, deduped: 0 });
 		expect(scoutLeads).toHaveLength(1);

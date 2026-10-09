@@ -115,15 +115,15 @@ describe("Job lead triage lifecycle (#955)", () => {
 });
 
 describe("#953: one application per job, and its status on the lead", () => {
-	it("does not let email freshness bypass live job-page validation", () => {
+	it("sends an email lead only to the Runner preflight; triage itself never calls it live", () => {
 		const record = lead({
 			status: "unverified",
 			url: "https://jobs.example.com/job/platform-engineer-42",
 			verification: { state: "unverified", source: "gmail_alert" },
 		});
 		const planned = planJobLeadTriage(record, { sourceInstanceId: "scout-1", action: "apply" });
-		expect(planned).toMatchObject({ ok: false });
-		if (!planned.ok) expect(planned.error).toContain("email freshness is not proof");
+		expect(planned).toMatchObject({ ok: true, transitioned: true, event: { eventType: "job.lead.apply_requested", leadUrl: "https://jobs.example.com/job/platform-engineer-42" } });
+		if (planned.ok) expect(JSON.stringify(planned.event)).not.toContain("live");
 	});
 
 	const rec = (id: string, data: Record<string, unknown>) => ({ id, collection: "job_leads", data, createdAt: "x", updatedAt: "x" });

@@ -23,6 +23,7 @@ import { deliverEvent } from "../connections.js";
 import { readInstanceConfigPair } from "../instance-config.js";
 import type { Env } from "../../types.js";
 import { callRuntime, getLiveRuntime, runtimeJson } from "../../routes/instances-runtime.js";
+import { LOCAL_APPLY_PREFLIGHT_PATH, type LocalApplyPreflightResult } from "../local-apply/contract.js";
 import {
 	LOCAL_ARTIFACT_CANCEL_PATH,
 	LOCAL_ARTIFACT_RUN_PATH,
@@ -86,6 +87,35 @@ export interface MaterialsReadyEvent {
 const iso = (now: number) => new Date(now).toISOString();
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 
+type EmailPreflight = { ok: true; result: Extract<LocalApplyPreflightResult, { state: "live" }> } | { ok: false; reason: string; question: string };
+
+/**
+ * The target Application Runner, not the Tailor's machine, reads an email-sourced posting before
+ * any artifact run exists.  This follows the already-configured materials_ready edge and does
+ * not create a runtime task; an absent/old/offline Runner is therefore unverifiable, never live.
+ */
+async function preflightEmailLead(env: Env, tailorInstanceId: string, uid: string, jobUrl: string): Promise<EmailPreflight> {
+	const target = await env.DB.prepare(
+		"SELECT target_instance_id FROM agent_connections WHERE user_id = ?1 AND source_instance_id = ?2 AND event_type = ?3 AND enabled = 1 ORDER BY created_at ASC LIMIT 1",
+	).bind(uid, tailorInstanceId, MATERIALS_READY_EVENT).first<{ target_instance_id: string }>();
+	if (!target?.target_instance_id) return { ok: false, reason: "unverifiable_lead", question: "No connected Application Runner can validate this email lead's live job page and apply path. Connect one before requesting materials." };
+	const caps = await capabilitiesForInstance(env, target.target_instance_id, uid);
+	if (caps?.runtime !== "local_apply") return { ok: false, reason: "unverifiable_lead", question: "The downstream agent is not an Application Runner, so this email lead's live page cannot be verified before tailoring." };
+	const runtime = await getLiveRuntime(env, target.target_instance_id, uid);
+	if (!runtime) return { ok: false, reason: "unverifiable_lead", question: "The Application Runner is offline. Its browser must verify the live job page and active apply path before materials are prepared." };
+	try {
+		const response = await callRuntime(env, runtime, LOCAL_APPLY_PREFLIGHT_PATH, { method: "POST", body: JSON.stringify({ jobUrl }) });
+		const value = (await runtimeJson(response)) as Partial<LocalApplyPreflightResult>;
+		if (response.ok && value.state === "live" && typeof value.applyUrl === "string" && typeof value.jobUrl === "string") {
+			return { ok: true, result: value as Extract<LocalApplyPreflightResult, { state: "live" }> };
+		}
+		if (value.state === "unavailable") return { ok: false, reason: "job_unavailable", question: "The Application Runner found this posting expired or unavailable. It was not sent for tailoring or submission." };
+		return { ok: false, reason: "unverifiable_lead", question: "The Application Runner could not verify a live job page with an active apply path. Email freshness is not evidence that the vacancy is open." };
+	} catch {
+		return { ok: false, reason: "unverifiable_lead", question: "The Application Runner could not complete the read-only live-page verification. No materials were prepared." };
+	}
+}
+
 export type StartTailoringOutcome = { kind: "started" | "existing" | "blocked"; application: JobApplication; run: TailorRun | null };
 
 /**
@@ -124,7 +154,7 @@ export async function startTailoring(env: Env, instanceId: string, uid: string, 
 		const claim = await claimApplication(env, { ...base, lead: raw, status: "blocked", blockReason: "malformed_lead", blockQuestions: [`The approved lead could not be read: ${parsed.error}. Re-approve it from the Scout.`] });
 		return { kind: claim.created ? "blocked" : "existing", application: claim.app, run: null };
 	}
-	const lead = parsed.lead;
+	let lead = parsed.lead;
 	// The event id protects a delivery replay.  The stable key protects a different
 	// source event for the same posting, without crossing into another owner's instance.
 	// Legacy handoffs are derivable from their canonical URL; a lead with neither is
@@ -148,6 +178,16 @@ export async function startTailoring(env: Env, instanceId: string, uid: string, 
 	// cannot reset its status/evidence or create another runtime task.
 	const existingWork = await getApplicationByWorkKey(env, instanceId, uid, workKey);
 	if (existingWork) return { kind: "existing", application: existingWork, run: existingWork.tailoringRunId ? await getTailorRun(env, instanceId, uid, existingWork.tailoringRunId) : null };
+	// Gmail's recent timestamp only establishes provenance. The downstream Runner must observe a
+	// specific live page and Apply control before even the Tailor starts preparation.
+	if (lead.lead.source?.toLowerCase() === "gmail") {
+		const validation = await preflightEmailLead(env, instanceId, uid, lead.leadUrl || lead.lead.url || "");
+		if (!validation.ok) {
+			const claim = await claimApplication(env, { ...base, workKey, lead: { ...lead, verification: { state: validation.reason, checked_by: "application_runner", checked_at: iso(now) } }, status: "blocked", blockReason: validation.reason, blockQuestions: [validation.question] });
+			return { kind: claim.created ? "blocked" : "existing", application: claim.app, run: null };
+		}
+		lead = { ...lead, leadUrl: validation.result.applyUrl, lead: { ...lead.lead, url: validation.result.applyUrl } };
+	}
 	const pair = await readInstanceConfigPair(env, instanceId, uid);
 	const settings = effectiveTailorSettings((pair?.config as Record<string, unknown> | undefined)?.[TAILOR_SETTINGS_KEY]);
 	if ("error" in settings) {

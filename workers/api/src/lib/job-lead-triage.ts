@@ -60,9 +60,9 @@ export type JobLeadStatus = (typeof JOB_LEAD_STATUSES)[number];
 
 /** The lifecycle, as data — the one place a transition is allowed. */
 export const JOB_LEAD_TRANSITIONS: Record<JobLeadStatus, readonly JobLeadStatus[]> = {
-	// An email alert is deliberately not eligible for material generation.  A Runner/browser
-	// validation writes the durable verification fact first; only then may a human request apply.
-	unverified: ["skipped", "deferred", "archived", "unverifiable"],
+	// Applying an email lead asks the downstream Runner for its read-only live-page preflight.
+	// That check, not email freshness, decides whether Tailor may generate materials.
+	unverified: ["apply_requested", "skipped", "deferred", "archived", "unverifiable"],
 	new: ["apply_requested", "skipped", "deferred", "archived"],
 	deferred: ["apply_requested", "skipped", "archived"],
 	skipped: ["apply_requested", "archived"],
@@ -155,9 +155,6 @@ export function planJobLeadTriage(
 	const current = jobLeadStatus(record.data);
 	const version = jobLeadVersion(record.data);
 	const target = TARGET[input.action];
-	if (input.action === "apply" && current === "unverified") {
-		return { ok: false, error: "This email lead is unverified. Validate its live job page and active apply path before requesting materials; email freshness is not proof that the vacancy is open." };
-	}
 	if (input.action === "apply" && current === "unverifiable") {
 		return { ok: false, error: "This lead could not be verified as live. It cannot request materials or submission; defer, skip, or archive it instead." };
 	}
