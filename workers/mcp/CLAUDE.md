@@ -84,7 +84,7 @@ src/
 │                     node forget, and a run's detail
 │                     view: one ticket, its deletion, the needs_input answer and the live
 │                     takeover controls (#613)
-    ├── knowledge.ts      12 tools — documents (incl. in-place edit + URL ingest, #613), files, vectors, memory
+    ├── knowledge.ts      13 tools — documents (incl. in-place edit + URL ingest, #613), owner-scoped files, vectors, memory
     ├── observability.ts  13 tools — messages, activity, errors (flat + grouped), trace, pipeline runs, feedback (incl. file + delete, #613), single-turn deletion
     ├── board.ts          13 tools — the board, its columns, the per-ticket thread (#150), card→ticket promotion (#757), GitHub issue link/unlink/sync (#895)
 ├── agent-tasks.ts    4 tools — the agent's OWN standing tasks: DO state rendered into its
