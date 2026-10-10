@@ -25,8 +25,15 @@ import {
 	listApplications,
 	mergeTailorSettings,
 } from "../lib/local-artifact/store.js";
+import {
+	clearUploadedTailorSource,
+	isUploadedTailorSourceRole,
+	listUploadedTailorSourceSelections,
+	selectUploadedTailorSource,
+	type UploadedTailorFileSnapshot,
+} from "../lib/local-artifact/uploaded-sources.js";
 import type { Env } from "../types.js";
-import { requireOwnedInstance } from "./instances-runtime.js";
+import { getLiveRuntime, requireOwnedInstance } from "./instances-runtime.js";
 
 type C = Context<{ Bindings: Env }>;
 
@@ -41,6 +48,61 @@ async function owned(c: C): Promise<{ uid: string; instanceId: string }> {
 async function storedSettings(c: C, instanceId: string, uid: string): Promise<unknown> {
 	const pair = await readInstanceConfigPair(c.env, instanceId, uid);
 	return (pair?.config as Record<string, unknown> | undefined)?.[TAILOR_SETTINGS_KEY];
+}
+
+const FILE_EXTRACTION_STATUSES = ["none", "extracted", "unsupported", "failed"] as const;
+
+/**
+ * The Agent DO remains the source of truth for Files. Selection is allowed only from the owned
+ * instance's user-filtered list, never from a file name or an R2 key supplied by the client.
+ */
+async function ownedUploadedFiles(c: C, instanceId: string, uid: string): Promise<UploadedTailorFileSnapshot[]> {
+	if (!c.env.AGENT) throw new HttpError(503, "Instance Files are unavailable");
+	const response = await c.env.AGENT.get(c.env.AGENT.idFromName(instanceId)).fetch(
+		new Request(`https://agent/files?user_id=${encodeURIComponent(uid)}`),
+	);
+	if (!response.ok) throw new HttpError(503, "Could not verify the selected uploaded file");
+	const body = await response.json().catch(() => null) as { files?: unknown } | null;
+	if (!Array.isArray(body?.files)) throw new HttpError(503, "Could not verify the selected uploaded file");
+	const optionalLength = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+	return body.files.flatMap((raw) => {
+		if (!raw || typeof raw !== "object") return [];
+		const file = raw as Record<string, unknown>;
+		if (typeof file.id !== "string" || typeof file.name !== "string" || typeof file.mimeType !== "string" || typeof file.size !== "number" || !Number.isSafeInteger(file.size) || file.size < 0 || typeof file.createdAt !== "string" || typeof file.updatedAt !== "string") return [];
+		const extractionStatus = typeof file.extractionStatus === "string" && (FILE_EXTRACTION_STATUSES as readonly string[]).includes(file.extractionStatus)
+			? file.extractionStatus as UploadedTailorFileSnapshot["extractionStatus"]
+			: undefined;
+		return [{
+			id: file.id,
+			name: file.name,
+			mimeType: file.mimeType,
+			size: file.size,
+			...(extractionStatus ? { extractionStatus } : {}),
+			...(optionalLength(file.extractedTextLength) === undefined ? {} : { extractedTextLength: optionalLength(file.extractedTextLength) }),
+			...(optionalLength(file.indexedTextLength) === undefined ? {} : { indexedTextLength: optionalLength(file.indexedTextLength) }),
+			...(file.textTruncated === true ? { textTruncated: true } : {}),
+			...(typeof file.extractionError === "string" ? { extractionError: file.extractionError } : {}),
+			createdAt: file.createdAt,
+			updatedAt: file.updatedAt,
+		}];
+	});
+}
+
+async function ownedUploadedFile(c: C, instanceId: string, uid: string, fileId: unknown): Promise<UploadedTailorFileSnapshot> {
+	if (typeof fileId !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(fileId)) throw new HttpError(400, "fileId must be an uploaded file id");
+	const file = (await ownedUploadedFiles(c, instanceId, uid)).find((candidate) => candidate.id === fileId);
+	if (!file) throw new HttpError(404, "Uploaded file not found on this instance");
+	return file;
+}
+
+function sourceBlockers(selected: UploadedTailorFileSnapshot | undefined, live: UploadedTailorFileSnapshot | undefined): string[] {
+	if (!selected) return ["not_selected"];
+	if (!live) return ["file_deleted"];
+	if (live.name !== selected.name || live.mimeType !== selected.mimeType || live.size !== selected.size || live.createdAt !== selected.createdAt || live.updatedAt !== selected.updatedAt) return ["file_changed_reselect_required"];
+	if (live.extractionStatus !== "extracted") return [live.extractionStatus === "failed" ? "extraction_failed" : "extraction_unavailable"];
+	if (live.textTruncated) return ["extracted_text_truncated"];
+	if (!live.extractedTextLength) return ["extracted_text_empty"];
+	return [];
 }
 
 export function registerApplicationTailorRoutes(router: Hono<{ Bindings: Env }>): void {
@@ -58,6 +120,54 @@ export function registerApplicationTailorRoutes(router: Hono<{ Bindings: Env }>)
 		if ("error" in merged) return c.json({ error: merged.error }, 400);
 		await patchInstanceConfig(c.env, instanceId, uid, TAILOR_SETTINGS_KEY, merged.settings);
 		return c.json({ settings: merged.settings });
+	});
+
+	/** Read the owner-approved uploaded Files choices. This never starts a tailoring run. */
+	router.get("/:instanceId/application-tailor/uploaded-sources", async (c) => {
+		const { uid, instanceId } = await owned(c);
+		return c.json({ sources: await listUploadedTailorSourceSelections(c.env, instanceId, uid) });
+	});
+
+	/**
+	 * Read-only readiness for uploaded mode. It re-reads the owning DO every time, so deletion or
+	 * changed File metadata is visible before any future materialization/run path exists.
+	 */
+	router.get("/:instanceId/application-tailor/uploaded-sources/readiness", async (c) => {
+		const { uid, instanceId } = await owned(c);
+		const selections = await listUploadedTailorSourceSelections(c.env, instanceId, uid);
+		const live = await ownedUploadedFiles(c, instanceId, uid);
+		const runner = await getLiveRuntime(c.env, instanceId, uid);
+		const byRole = new Map(selections.map((source) => [source.role, source]));
+		const sources = (["resume", "profile"] as const).map((role) => {
+			const selected = byRole.get(role);
+			const current = selected ? live.find((file) => file.id === selected.id) : undefined;
+			const blockers = sourceBlockers(selected, current);
+			// No source bytes have a runner transfer route yet. Saying that explicitly prevents the
+			// selection API from looking like consent to run with an unmaterialized document.
+			return { role, selected: selected ?? null, uploaded: !!current, extracted: current?.extractionStatus === "extracted", availableToRunner: false, ready: false, blockers: [...blockers, "materialization_unsupported"] };
+		});
+		const blockers = [...sources.flatMap((source) => source.blockers.map((blocker) => `${source.role}:${blocker}`)), ...(runner ? [] : ["runner_unavailable"])] as string[];
+		return c.json({ mode: "uploaded", sources, runner: { available: !!runner }, ready: false, blockers });
+	});
+
+	/** Select one exact uploaded Instance File for a required source role. */
+	router.put("/:instanceId/application-tailor/uploaded-sources/:role", async (c) => {
+		const { uid, instanceId } = await owned(c);
+		const role = c.req.param("role");
+		if (!isUploadedTailorSourceRole(role)) throw new HttpError(400, "role must be resume or profile");
+		const body = await c.req.json().catch(() => null) as { fileId?: unknown } | null;
+		const file = await ownedUploadedFile(c, instanceId, uid, body?.fileId);
+		const source = await selectUploadedTailorSource(c.env, { instanceId, userId: uid, role, file, now: Date.now() });
+		return c.json({ source });
+	});
+
+	/** Clearing a role is an explicit owner action; it cannot silently choose another uploaded file. */
+	router.delete("/:instanceId/application-tailor/uploaded-sources/:role", async (c) => {
+		const { uid, instanceId } = await owned(c);
+		const role = c.req.param("role");
+		if (!isUploadedTailorSourceRole(role)) throw new HttpError(400, "role must be resume or profile");
+		const cleared = await clearUploadedTailorSource(c.env, instanceId, uid, role);
+		return c.json({ cleared });
 	});
 
 	router.get("/:instanceId/applications", async (c) => {

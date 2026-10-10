@@ -364,6 +364,9 @@ const FORWARDS: Record<string, string[]> = {
 		"/messages?before,limit,mime_type,offset,order_by,order_dir,tags,type,user_id,where",
 	],
 	"instances.ts GET /:instanceId/messages": ["/messages?before,limit"],
+	// #1004: selection is verified against the Files DO, scoped to the authenticated owner rather
+	// than by forwarding an untrusted Files filter from the browser.
+	"instances.ts GET /:instanceId/application-tailor/uploaded-sources/readiness": ["/files?user_id"],
 	// The connection guide (#772) reads the DO once, and not for anything it renders directly:
 	// `instanceToolPolicy` resolves the email-permission gate through `emailPermitted`
 	// (`lib/instance-tool-policy.ts:402`), which is a `/state` read. So the guide inherits the
@@ -401,7 +404,11 @@ describe("what each route hands the Durable Object", () => {
  * purpose. An entry is a claim that the caller's value must not reach the object (a route that
  * pins the value itself, or scopes it to the session); it is not somewhere to park a defect.
  */
-const DROPS_A_PARAMETER: Record<string, string> = {};
+const DROPS_A_PARAMETER: Record<string, string> = {
+	// The readiness check deliberately ignores a caller `mime_type`: it must enumerate the
+	// owner-scoped Files set or a filter could hide a selected file and create a false verdict.
+	"instances.ts GET /:instanceId/application-tailor/uploaded-sources/readiness → /files": "?mime_type sent as text/plain, arrived as (absent)",
+};
 
 describe("a parameter the object reads survives the hop", () => {
 	it("every route forwarding to a DO path passes every parameter that path takes", async () => {

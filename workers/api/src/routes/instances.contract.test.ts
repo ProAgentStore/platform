@@ -147,6 +147,7 @@ const PARAMS: Record<string, string> = {
 	jobKey: "job-key-1",
 	recordId: "lead-record-1",
 	applicationId: "application-1",
+	role: "resume",
 	checkpointId: "checkpoint-1",
 };
 
@@ -315,6 +316,10 @@ const ROUTES = [
 	"POST /:instanceId/job-leads/:recordId/triage",
 	"GET /:instanceId/application-tailor/settings",
 	"PUT /:instanceId/application-tailor/settings",
+	"GET /:instanceId/application-tailor/uploaded-sources",
+	"GET /:instanceId/application-tailor/uploaded-sources/readiness",
+	"PUT /:instanceId/application-tailor/uploaded-sources/:role",
+	"DELETE /:instanceId/application-tailor/uploaded-sources/:role",
 	"GET /:instanceId/applications",
 	"POST /:instanceId/applications",
 	"GET /:instanceId/applications/:applicationId",
@@ -498,6 +503,10 @@ const OWNERSHIP: Record<string, string[]> = {
 	"instances-application-tailor.ts": [
 		"GET /:instanceId/application-tailor/settings",
 		"PUT /:instanceId/application-tailor/settings",
+		"GET /:instanceId/application-tailor/uploaded-sources",
+		"GET /:instanceId/application-tailor/uploaded-sources/readiness",
+		"PUT /:instanceId/application-tailor/uploaded-sources/:role",
+		"DELETE /:instanceId/application-tailor/uploaded-sources/:role",
 		"GET /:instanceId/applications",
 		"POST /:instanceId/applications",
 		"GET /:instanceId/applications/:applicationId",
@@ -793,6 +802,10 @@ const GATES: Record<string, [number, number]> = {
 	// Application Tailor (#956): every route opens with the instance-owner check.
 	"GET /:instanceId/application-tailor/settings": [401, 404],
 	"PUT /:instanceId/application-tailor/settings": [401, 404],
+	"GET /:instanceId/application-tailor/uploaded-sources": [401, 404],
+	"GET /:instanceId/application-tailor/uploaded-sources/readiness": [401, 404],
+	"PUT /:instanceId/application-tailor/uploaded-sources/:role": [401, 404],
+	"DELETE /:instanceId/application-tailor/uploaded-sources/:role": [401, 404],
 	"GET /:instanceId/applications": [401, 404],
 	"POST /:instanceId/applications": [401, 404],
 	"GET /:instanceId/applications/:applicationId": [401, 404],

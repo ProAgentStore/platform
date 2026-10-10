@@ -99,6 +99,8 @@ export const INSTANCE_CHILD_TABLES = [
 	"local_browser_run_events",
 	"local_browser_runs",
 	"local_browser_domain_consent",
+	// #1004 — explicit uploaded-source choices are instance-owned provenance, not agent-global data.
+	"application_tailor_uploaded_sources",
 	// #956 — the run before the application it references (FK).
 	"local_artifact_runs",
 	// #957 — the Runner's fill runs (no FK: their application is on the Tailor's instance) and the
