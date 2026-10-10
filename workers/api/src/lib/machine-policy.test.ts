@@ -23,4 +23,9 @@ describe("machine policy — stable owner-scoped defaults", () => {
 		await setMachinePolicy(env(), "u1", "machine-aaaa1111", false);
 		expect(await getMachinePolicy(env(), "u1", "machine-aaaa1111")).toMatchObject({ autoUpdate: false, status: "disabled" });
 	});
+	it("drops oversized runner telemetry instead of silently storing a truncated fact", async () => {
+		await setMachinePolicy(env(), "u1", "machine-aaaa1111", true);
+		await reportMachinePolicyStatus(env(), "u1", "machine-aaaa1111", { status: "failure", latestVersion: "x".repeat(81), error: "e".repeat(501) });
+		expect(await getMachinePolicy(env(), "u1", "machine-aaaa1111")).toMatchObject({ latestVersion: null, lastError: null });
+	});
 });

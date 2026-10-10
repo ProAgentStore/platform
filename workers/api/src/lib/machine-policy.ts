@@ -52,8 +52,12 @@ export async function reportMachinePolicyStatus(env: Pick<Env, "DB">, userId: st
 	const aliases: Record<string, AutoUpdateStatus> = { "waiting-for-idle": "waiting_for_idle", running: "installing", "verified-success": "verified_success", failure: "failed" };
 	const status = rawStatus && STATUSES.has((aliases[rawStatus] ?? rawStatus) as AutoUpdateStatus) ? (aliases[rawStatus] ?? rawStatus) as AutoUpdateStatus : null;
 	if (!status) return;
-	const latest = typeof value.latestVersion === "string" ? value.latestVersion.slice(0, 80) : typeof value.latest_version === "string" ? value.latest_version.slice(0, 80) : null;
-	const error = typeof value.error === "string" ? value.error.slice(0, 500) : null;
+	const latestCandidate = typeof value.latestVersion === "string" ? value.latestVersion : typeof value.latest_version === "string" ? value.latest_version : null;
+	const errorCandidate = typeof value.error === "string" ? value.error : null;
+	// A lifecycle record is evidence, not display text: never silently turn an arbitrary client
+	// value into a plausible-but-incomplete version or error. Invalid telemetry is omitted.
+	const latest = latestCandidate && latestCandidate.length <= 80 ? latestCandidate : null;
+	const error = errorCandidate && errorCandidate.length <= 500 ? errorCandidate : null;
 	await env.DB.prepare(`UPDATE machine_policies SET status = ?1, latest_version = COALESCE(?2, latest_version), last_error = ?3,
 		last_attempt_at = ?4, updated_at = ?4 WHERE user_id = ?5 AND machine_id = ?6`)
 		.bind(status, latest, error, Date.now(), userId, machineId).run().catch(() => undefined);
