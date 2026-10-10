@@ -166,6 +166,12 @@ const EXCLUSIONS = [
 			"The console UI lets the owner submit secret values for agent requests. The agent requests secure input via `secure_input_request` MCP tool and reads status via `secure_input_status`. Only the console UI calls these endpoints to fetch and submit values.",
 		match: /^(GET|POST) \/v1\/instances\/\{\}\/secure-inputs/,
 	},
+	{
+		label: "Permission-recovery decisions and continuation (#1009)",
+		why:
+			"The exact Permissions & Connections control is an explicit owner-facing consent decision. MCP may create a verified `get_console_link(permission_request_id)` handoff, but must not approve, deny, inspect a pending call's arguments, or resume it: an agent-controlled MCP client is not the owner standing at that control, and Ask retains its independent per-call board approval.",
+		match: /^(GET|POST) \/v1\/instances\/\{\}\/permission-requests\//,
+	},
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────

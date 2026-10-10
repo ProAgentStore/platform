@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realSchemaD1, type RealSchemaD1 } from "./d1-sqlite.js";
-import { cancelRequest, claimApprovedRequest, consumeClaimedRequest, createOrReuseRequest, denyRequest, expireRequest, getRequest, markUncertainRequest, permissionOperationFingerprint, revokeRequest, staleRequest, transitionRequest } from "./instance-permission-requests.js";
+import { cancelRequest, claimApprovedRequest, consumeClaimedRequest, createOrReuseRequest, denyRequest, expireRequest, getRequest, markUncertainRequest, permissionBlocker, permissionOperationFingerprint, permissionResourceId, revokeRequest, staleRequest, transitionRequest } from "./instance-permission-requests.js";
 import { requestOwnerAttention } from "./owner-attention.js";
 import type { Env } from "../types.js";
 
@@ -30,6 +30,16 @@ describe("instance permission requests (#1009)", () => {
 		const approved=(await getRequest(env(),request.id,"i1","u1"))!; await claimApprovedRequest(env(),approved);
 		const claimed=(await getRequest(env(),request.id,"i1","u1"))!; expect(await consumeClaimedRequest(env(),claimed)).toBe(true); expect(await consumeClaimedRequest(env(),claimed)).toBe(false);
 		expect(await markUncertainRequest(env(),(await getRequest(env(),request.id,"i1","u1"))!)).toBe(true);
+	});
+	it("shows only a validated non-secret GitHub repository as the affected resource", () => {
+		expect(permissionResourceId("github",{repo:"owner/repo"})).toBe("owner/repo");
+		expect(permissionResourceId("github",{repo:"https://token@example.test/x"})).toBeNull();
+		expect(permissionResourceId("github",{repo:"owner/repo",body:"a secret-looking message"})).toBe("owner/repo");
+		expect(permissionResourceId("gmail",{to:"person@example.test"})).toBeNull();
+	});
+	it("preserves the affected resource in the owner-facing blocker without persisting arguments", async () => {
+		const request=(await createOrReuseRequest(env(),{...input(),operationFingerprint:"resource-op",resourceId:"owner/repo"})).request;
+		expect(permissionBlocker(request)).toMatchObject({resource:"owner/repo",operation:"github_create_issue"});
 	});
 	it("cancels, expires, revokes, and stales active requests without ever reopening them", async () => {
 		const cancelled=await createOrReuseRequest(env(),input()); expect(await cancelRequest(env(),cancelled.request)).toBe(true); expect(await cancelRequest(env(),cancelled.request)).toBe(false);

@@ -6824,11 +6824,13 @@ paths:
     post:
       summary: Safely retry one verified blocked operation
       description: |
-        The owner must provide the original operation and exact arguments. The service checks the
+        The owner-facing client must provide the original operation and exact arguments. The service checks the
         canonical secret-safe fingerprint, active instance, current policy and live consent, then
         atomically consumes the claim before entering the normal registry dispatcher. Ask mode
         produces a fresh per-call approval card; it never approves a historical pending call.
-        A failed post-claim outcome is terminal and is never automatically replayed.
+        A failed post-claim outcome is terminal and is never automatically replayed. This is an
+        explicit retry, not a durable workflow-resume API: callers without a validated live source
+        run must not treat it as permission to restart stopped work.
       operationId: resumeInstancePermissionRequest
       tags: [Instances]
       parameters:

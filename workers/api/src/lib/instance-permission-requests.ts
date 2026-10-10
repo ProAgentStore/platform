@@ -22,6 +22,13 @@ export async function permissionOperationFingerprint(operation: string, args: Re
 	const bytes = new TextEncoder().encode(`${operation}:${stableStringify(args)}`);
 	return [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
+
+/** A displayable resource only where the connector gives us a non-secret, validated identity. */
+export function permissionResourceId(connector: string, args: Record<string, unknown>): string | null {
+	if (connector !== "github" || typeof args.repo !== "string") return null;
+	const repo=args.repo.trim();
+	return /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repo) ? repo : null;
+}
 const asRequest = (r: Record<string, unknown>): PermissionRequest => ({
 	id: String(r.id), instanceId: String(r.instance_id), userId: String(r.user_id), control: String(r.control), connector: r.connector ? String(r.connector) : null, resourceId: r.resource_id ? String(r.resource_id) : null,
 	requestedScope: String(r.requested_scope), currentScope: r.current_scope ? String(r.current_scope) : null, operationKind: String(r.operation_kind), operationFingerprint: String(r.operation_fingerprint), continuationRef: String(r.continuation_ref), reason: String(r.reason ?? ""), status: String(r.status) as PermissionRequestStatus, expiresAt: String(r.expires_at),
@@ -82,7 +89,7 @@ export async function recoverMissingWritePermission(name: string, ctx: RegistryT
 	const fingerprint = await permissionOperationFingerprint(name, input);
 	let created: Awaited<ReturnType<typeof createOrReuseRequest>>;
 	try {
-		created = await createOrReuseRequest(ctx.env, { instanceId, userId: ctx.userId, control: "connector_consent", connector: tool.connector, requestedScope: "write", currentScope: null, operationKind: name, operationFingerprint: fingerprint, continuationRef: fingerprint, reason: `${name} needs write access for ${label}.` });
+		created = await createOrReuseRequest(ctx.env, { instanceId, userId: ctx.userId, control: "connector_consent", connector: tool.connector, resourceId: permissionResourceId(tool.connector,input), requestedScope: "write", currentScope: null, operationKind: name, operationFingerprint: fingerprint, continuationRef: fingerprint, reason: `${name} needs write access for ${label}.` });
 	} catch {
 		// A recovery-record failure is a refusal, never a fall-through to an external write.
 		return { name, content: `Writing via the ${label} connector isn't permitted for this agent. Enable write access for ${label} in the instance's Connections settings, then try again.`, success: false };
