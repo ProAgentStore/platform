@@ -74,7 +74,25 @@ describe("CodingRuntime liveWork (#1007)", () => {
 			["stopped", { clientType: "grok", alive: false, runState: () => "thinking" }],
 		]);
 
-		expect(runtime.liveWork()).toEqual(["a Claude coding session (resumes after a restart)", "a codex turn (lost on a restart)"]);
+		expect(runtime.liveWork()).toEqual([
+			"coding session thinking (thinking): Claude conversation resumes after a restart",
+			"coding session responding (responding): codex turn is lost on a restart",
+		]);
+	});
+
+	it("tracks a retained engine across an idle → tool-executing → idle transition", () => {
+		let state = "idle";
+		const runtime = runtimeWithSessions([
+			["csess-transition", { clientType: "codex", alive: true, runState: () => state }],
+		]);
+
+		// The invariant: a restart may pass the two authoritative idle observations, but neither
+		// observation can launder the intervening turn into a safe restart.
+		expect(runtime.liveWork()).toEqual([]);
+		state = "tool-executing";
+		expect(runtime.liveWork()).toEqual(["coding session csess-transition (tool-executing): codex turn is lost on a restart"]);
+		state = "idle";
+		expect(runtime.liveWork()).toEqual([]);
 	});
 
 	it("fails closed when a retained session's state cannot be observed", () => {
@@ -85,9 +103,9 @@ describe("CodingRuntime liveWork (#1007)", () => {
 		]);
 
 		expect(runtime.liveWork()).toEqual([
-			"a Claude coding session (resumes after a restart)",
-			"a codex turn (lost on a restart)",
-			"a grok turn (lost on a restart)",
+			"coding session run-state-throws (unknown): Claude conversation resumes after a restart",
+			"coding session malformed-state (unknown): codex turn is lost on a restart",
+			"coding session unknown-alive (idle): grok turn is lost on a restart",
 		]);
 	});
 });

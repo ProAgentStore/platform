@@ -21,6 +21,51 @@ import { AutomaticUpdateController, RelayMutationAdmission } from "./auto-update
  */
 export const MEMBERSHIP_SYNC_PATH = "/pags/membership/sync";
 
+export interface RunnerCodingLifecycle {
+	sessionId?: unknown;
+	alive?: unknown;
+	runState?: unknown;
+}
+
+export interface RunnerWorkObservation {
+	sessions?: unknown;
+	work?: { codingTurns?: unknown; localRuns?: unknown; detail?: unknown };
+}
+
+/**
+ * Turn the two runner observations into the named work that blocks a restart (#1007).
+ *
+ * A retained engine is safe only when its own lifecycle says `alive:true, runState:"idle"`.
+ * Every missing or unrecognised value is deliberately a named blocker: an observation problem is
+ * never evidence that it is safe to cut off an owner's machine. The session id and state are
+ * diagnostic metadata only; no terminal text, paths, credentials, or prompts pass this boundary.
+ */
+export function observedRunnerWork(observation: RunnerWorkObservation): string[] {
+	const sessions = observation.sessions;
+	const work = observation.work;
+	if (!Array.isArray(sessions) || !work || typeof work !== "object") return ["runner-work-observation-unavailable"];
+	const codingTurns = typeof work.codingTurns === "number" && Number.isInteger(work.codingTurns) && work.codingTurns >= 0 ? work.codingTurns : null;
+	const localRuns = typeof work.localRuns === "number" && Number.isInteger(work.localRuns) && work.localRuns >= 0 ? work.localRuns : null;
+	const detail = Array.isArray(work.detail) && work.detail.every((item) => typeof item === "string") ? work.detail : null;
+	if (codingTurns === null || localRuns === null || detail === null) return ["runner-work-observation-unavailable"];
+
+	const activeCoding = (sessions as RunnerCodingLifecycle[]).flatMap((session) => {
+		// A definitely stopped process cannot be interrupted. Everything else must prove it is idle.
+		if (session?.alive === false) return [];
+		const id = typeof session?.sessionId === "string" && session.sessionId ? session.sessionId : "unidentified-session";
+		const state = typeof session?.runState === "string" && session.runState ? session.runState : "unknown";
+		if (session?.alive === true && state === "idle") return [];
+		return [`coding session ${id} (${state})`];
+	});
+	const unmatchedCodingTurns = Math.max(0, codingTurns - activeCoding.length);
+	const localDetail = detail.slice(codingTurns);
+	return [
+		...activeCoding,
+		...Array.from({ length: unmatchedCodingTurns }, (_v, i) => `coding-turn-unmatched-${i + 1}`),
+		...Array.from({ length: localRuns }, (_v, i) => localDetail[i] || `local-run-${i + 1}`),
+	];
+}
+
 /** Every relay command the CLI answers itself rather than forwarding to the local runner. */
 const CLI_CONTROL_PATHS = new Set([MEMBERSHIP_SYNC_PATH, RUNNER_UPDATE_PATH]);
 
@@ -178,20 +223,9 @@ export async function connectViaRelay(
 		]);
 		// An unavailable observation is NEVER evidence that a restart is safe. A local browser/apply
 		// run can be destroyed by a restart just as surely as a coding turn, so fail closed.
-		const observationsUnavailable = sessionsResult.status !== "fulfilled" || healthResult.status !== "fulfilled" || !healthResult.value.work;
-		const sessions = sessionsResult.status === "fulfilled" ? sessionsResult.value : { sessions: [] };
-		const health = healthResult.status === "fulfilled" ? healthResult.value : {};
-		// `/coding/sessions` names the authoritative engine lifecycle. An unrecognised or missing
-		// answer is not permission to restart; it is a named fail-closed blocker. Health's aggregate
-		// below remains a conservative backstop for an older/inconsistent runner, but must not count
-		// these same named turns a second time (#1007).
-		const activeCoding = (sessions.sessions ?? [])
-			.filter((s) => s.alive !== false && (s.alive !== true || !["idle", "thinking", "responding"].includes(s.runState ?? "") || s.runState !== "idle"))
-			.map((s) => s.sessionId || "coding-session-state-unavailable");
-		const localRuns = health.work?.localRuns ?? 0;
-		const codingTurns = health.work?.codingTurns ?? 0;
-		const unmatchedCodingTurns = Math.max(0, codingTurns - activeCoding.length);
-		const localDetail = health.work?.detail?.slice(codingTurns) ?? [];
+		const busy = sessionsResult.status === "fulfilled" && healthResult.status === "fulfilled"
+			? observedRunnerWork({ sessions: sessionsResult.value.sessions, work: healthResult.value.work })
+			: ["runner-work-observation-unavailable"];
 		return {
 			current: CLI_VERSION,
 			latest: await latestPublishedVersion(),
@@ -199,9 +233,7 @@ export async function connectViaRelay(
 			restarter: restarterFrom(process.env),
 			// A restart ends browser/application work too. Give these durable names to the same
 			// planner so neither manual nor automatic update can mistake them for an idle machine.
-			busy: observationsUnavailable
-				? ["runner-work-observation-unavailable"]
-				: [...activeCoding, ...Array.from({ length: unmatchedCodingTurns }, (_v, i) => `coding-turn-unmatched-${i + 1}`), ...Array.from({ length: localRuns }, (_v, i) => localDetail[i] || `local-run-${i + 1}`)],
+			busy,
 		};
 	};
 	/**

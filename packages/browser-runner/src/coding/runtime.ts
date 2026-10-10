@@ -194,9 +194,9 @@ export class CodingRuntime {
 	 * answer rather than restarting across work whose state it cannot prove is idle.
 	 */
 	liveWork(): string[] {
-		return [...this.sessions.values()].flatMap((s) => {
+		return [...this.sessions.entries()].flatMap(([sessionId, s]) => {
 			const engine = (s as unknown as { clientType?: string }).clientType ?? "";
-			const label = engine === "claude" ? "a Claude coding session (resumes after a restart)" : `a ${engine || "coding"} turn (lost on a restart)`;
+			const consequence = engine === "claude" ? "Claude conversation resumes after a restart" : `${engine || "coding"} turn is lost on a restart`;
 			try {
 				// `alive: false` is an observed inactive session. Any other answer (including a
 				// malformed older implementation) is unknown and must fail closed below.
@@ -204,12 +204,12 @@ export class CodingRuntime {
 				if (alive === false) return [];
 				const state = s.runState();
 				if (alive === true && state === "idle") return [];
-				if (alive === true && (state === "thinking" || state === "responding")) return [label];
+				if (alive === true && (state === "thinking" || state === "responding")) return [`coding session ${sessionId} (${state}): ${consequence}`];
 				// An unrecognised `alive`/`runState` pair is not proof that an engine is idle.
-				return [label];
+				return [`coding session ${sessionId} (${typeof state === "string" ? state : "unknown"}): ${consequence}`];
 			} catch {
 				// Do not turn a failed state probe into permission to restart the machine.
-				return [label];
+				return [`coding session ${sessionId} (unknown): ${consequence}`];
 			}
 		});
 	}
