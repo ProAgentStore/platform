@@ -166,6 +166,44 @@ export async function pipelineOf(env: Env, uid: string, instanceId: string): Pro
 	return out;
 }
 
+/**
+ * #1010 deliberately sends one reviewed application across a paused edge.  That does not make
+ * the edge part of the general pipeline again, but its durable receipt may name the Runner that
+ * owns this application's fill run.  Keep that exception bound to this owner, application,
+ * reviewed bytes and observed run; a stale or malformed receipt simply unlocks nothing.
+ */
+async function targetedTransferRunner(env: Env, uid: string, app: JobApplication): Promise<string | null> {
+	if (!app.fillRunId) return null;
+	const resume = app.resumeArtifact?.sha256?.toLowerCase();
+	const cover = app.coverLetterArtifact?.sha256?.toLowerCase();
+	if (!resume || !cover) return null;
+	const { results } = await env.DB.prepare(
+		`SELECT destination_runner_instance_id, resume_sha256, cover_letter_sha256
+		   FROM application_material_transfers
+		  WHERE user_id = ?1 AND source_application_id = ?2 AND source_tailor_instance_id = ?3
+		  ORDER BY created_at DESC`,
+	)
+		.bind(uid, app.id, app.instanceId)
+		.all<{ destination_runner_instance_id: string; resume_sha256: string; cover_letter_sha256: string }>();
+	for (const receipt of results ?? []) {
+		if (receipt.resume_sha256.toLowerCase() !== resume || receipt.cover_letter_sha256.toLowerCase() !== cover) continue;
+		if ((await capabilitiesForInstance(env, receipt.destination_runner_instance_id, uid))?.runtime !== "local_apply") continue;
+		const correlated = await env.DB.prepare(
+			"SELECT id FROM local_apply_runs WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND application_id = ?4",
+		)
+			.bind(app.fillRunId, receipt.destination_runner_instance_id, uid, app.id)
+			.first<{ id: string }>();
+		if (correlated) return receipt.destination_runner_instance_id;
+	}
+	return null;
+}
+
+/** Add only this receipt-backed Runner to one application's otherwise enabled-edge pipeline. */
+async function pipelineForApplication(env: Env, uid: string, pipeline: Pipeline, app: JobApplication): Promise<Pipeline> {
+	const runner = await targetedTransferRunner(env, uid, app);
+	return runner && !pipeline.runners.includes(runner) ? { ...pipeline, runners: [...pipeline.runners, runner] } : pipeline;
+}
+
 interface LeadRecord {
 	id: string;
 	data: Record<string, unknown>;
@@ -543,14 +581,15 @@ export async function getQueueItem(env: Env, uid: string, instanceId: string, re
 	if (ref.applicationId) {
 		const app = await getOwnedApplication(env, uid, ref.applicationId);
 		if (!app || !pipeline.tailors.includes(app.instanceId)) throw new HttpError(404, "No such application in this pipeline.");
-		const runs = await openRuns(env, uid, pipeline.runners);
-		const approval = await approvalRuns(env, uid, pipeline.runners, [app]);
-		const previews = await policyPreviews(env, uid, pipeline, [app]);
+		const applicationPipeline = await pipelineForApplication(env, uid, pipeline, app);
+		const runs = await openRuns(env, uid, applicationPipeline.runners);
+		const approval = await approvalRuns(env, uid, applicationPipeline.runners, [app]);
+		const previews = await policyPreviews(env, uid, applicationPipeline, [app]);
 		const approvals = await approvalViews(env, uid, [app]);
 		const queues = await queueViews(env, uid, [app], Date.now());
 		return {
-			item: applicationItem(app, pipeline, app.fillRunId ? (runs.get(app.fillRunId) ?? null) : null, approval.get(app.id) ?? null, previews.get(app.id) ?? null, approvals.get(app.id) ?? null, queues.get(app.id) ?? null, await readFillViews(env, uid, app)),
-			pipeline,
+			item: applicationItem(app, applicationPipeline, app.fillRunId ? (runs.get(app.fillRunId) ?? null) : null, approval.get(app.id) ?? null, previews.get(app.id) ?? null, approvals.get(app.id) ?? null, queues.get(app.id) ?? null, await readFillViews(env, uid, app)),
+			pipeline: applicationPipeline,
 		};
 	}
 	if (ref.scoutInstanceId && ref.recordId) {
@@ -669,14 +708,15 @@ export async function performApplicationAction(env: Env, uid: string, instanceId
 	// ── An application ───────────────────────────────────────────────────────────────────────
 	const { item } = await getQueueItem(env, uid, instanceId, { applicationId: input.applicationId });
 	const app = (await getOwnedApplication(env, uid, input.applicationId)) as JobApplication;
-	const correlatedRun = app.fillRunId ? await fillRun(env, uid, pipeline, app).catch(() => null) : null;
+	const applicationPipeline = await pipelineForApplication(env, uid, pipeline, app);
+	const correlatedRun = app.fillRunId ? await fillRun(env, uid, applicationPipeline, app).catch(() => null) : null;
 	if ((input.expectedStatus !== app.status && input.expectedStatus !== item.status) || (input.expectedVersion !== undefined && input.expectedVersion !== app.stateVersion)) throw stale(app.status, app.stateVersion);
 	if (!item.actions.includes(input.action) && !isIdempotentApprovalRepeat(item, app, correlatedRun, input.action)) {
 		const why = input.action === "start_fill" && app.status === "materials_ready" ? " — this application's policy does not allow an automatic submit; use request_review" : "";
 		throw new HttpError(409, `An application in ${app.status} cannot ${input.action.replace(/_/g, " ")}${why}${item.actions.length ? ` (it can: ${item.actions.join(", ")})` : ""}.`);
 	}
-	const runner = input.runnerInstanceId ?? pipeline.runners[0];
-	if (input.runnerInstanceId && !pipeline.runners.includes(input.runnerInstanceId)) throw new HttpError(404, "No such Application Runner in this pipeline.");
+	const runner = input.runnerInstanceId ?? applicationPipeline.runners[0];
+	if (input.runnerInstanceId && !applicationPipeline.runners.includes(input.runnerInstanceId)) throw new HttpError(404, "No such Application Runner in this pipeline.");
 	const now = Date.now();
 	const after = async (result: Record<string, unknown>) => ({ item: (await getQueueItem(env, uid, instanceId, { applicationId: app.id })).item, result });
 

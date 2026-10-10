@@ -143,6 +143,7 @@ describe("#953: Scout → Connection → Application Runner → status writeback
 		d1.exec("UPDATE agent_connections SET enabled = 0 WHERE id = 'c-ready'");
 		const resume = { kind: "resume", path: "~/jobs/applications/manual/resume.md", sha256: "c".repeat(64), bytes: 11 };
 		const cover = { kind: "cover_letter", path: "~/jobs/applications/manual/cover.md", sha256: "d".repeat(64), bytes: 12 };
+		await call("PUT", "/ap/application-runner/settings", { allowDomains: ["jobs.example.com"] });
 		const event = { eventType: "job.application.materials_ready", eventId: "tailor-ready", applicationId: "reviewed", tailorInstanceId: "t1", sourceInstanceId: "scout", leadId: "lead-reviewed", leadUrl: "https://jobs.example.com/reviewed", lifecycleVersion: 1, leadEventId: "lead-event", tailoringRunId: "tailor-run", profileVersion: "p1", generatedAt: "2026-10-07T00:00:00Z", artifacts: { resume, coverLetter: cover }, lead: { title: "Staff Engineer", company: "Globex" } };
 		await d1.DB.prepare(`INSERT INTO job_applications (id, instance_id, user_id, source_instance_id, lead_id, lifecycle_version, idempotency_key, status, lead, resume_artifact, cover_letter_artifact, profile_version, generated_at, ready_event, state_version, created_at, updated_at)
 			VALUES ('reviewed', 't1', 'u1', 'scout', 'lead-reviewed', 1, 'lead-event', 'materials_ready', ?1, ?2, ?3, 'p1', '2026-10-07T00:00:00Z', ?4, 7, 1, 1)`)
@@ -156,10 +157,77 @@ describe("#953: Scout → Connection → Application Runner → status writeback
 		expect(dispatches("/local-apply/run")).toHaveLength(1);
 		expect(dispatches("/local-apply/run")[0].body.policy).toEqual({ mode: "fill_and_review", allowDomains: ["jobs.example.com"] });
 		expect((await d1.DB.prepare("SELECT count(*) AS n FROM local_apply_runs WHERE application_id = 'reviewed'").first<{ n: number }>())?.n).toBe(1);
+		// The receipt, not the paused edge, is the narrow proof that this Runner owns this fill.
+		// Its terminal evidence is the exact pre-submit one-click refusal #1011 permits the owner to approve.
+		const fillRunId = dispatches("/local-apply/run")[0].body.runId as string;
+		answers["/local-apply/status"] = {
+			status: 200,
+			body: {
+				state: "ended",
+				lastSeq: 3,
+				events: [{ seq: 3, type: "policy.decision", at: "2026-10-10T00:00:05Z", detail: { tool: "browser_click", class: "submit", decision: "refused", reason: "fill_and_review", rule: "one_click_apply" } }],
+				result: { runId: fillRunId, outcome: "blocked", mode: "fill_and_review", traceId: fillRunId, engineAuth: "machine-login", filled: 0, uploaded: [], submitAttempted: false, blockReason: "incomplete", summary: "Stopped at a one-click apply control." },
+			},
+		};
+		await call("GET", `/ap/application-runs/${fillRunId}`);
+		const blocked = (await call("GET", "/t1/application-queue/item?application_id=reviewed")).body.item;
+		expect(blocked.actions).toContain("approve_and_proceed");
+		expect(blocked.actions).toContain("retry_fill");
+		// The application's current state version remains the compare-and-set guard, even though the
+		// receipt records the earlier reviewed-material version.
+		const stale = await call("POST", "/t1/application-queue/actions", { action: "approve_and_proceed", application_id: "reviewed", expected_status: "blocked", expected_version: blocked.stateVersion - 1 });
+		expect(stale.status).toBe(409);
+		const approved = await call("POST", "/t1/application-queue/actions", { action: "approve_and_proceed", application_id: "reviewed", expected_status: "blocked", expected_version: blocked.stateVersion });
+		expect(approved.status).toBe(200);
+		expect(approved.body.item.submitAuthorization).toMatchObject({ usable: true });
+		expect(await d1.DB.prepare("SELECT approval_kind FROM job_application_submit_authorizations WHERE application_id = 'reviewed'").first<{ approval_kind: string }>()).toEqual({ approval_kind: "verified_one_click" });
+		const retry = await call("POST", "/t1/application-queue/actions", { action: "retry_fill", application_id: "reviewed", expected_status: "blocked" });
+		expect(retry.status).toBe(200);
+		expect(dispatches("/local-apply/run")).toHaveLength(2);
+		expect(dispatches("/local-apply/run")[1].body.policy).toMatchObject({ mode: "auto_submit", submitGate: { gateId: expect.any(String) } });
 		// A lost response retry re-reads the same receipt; it cannot enqueue, fill, or submit again.
 		expect((await call("POST", "/t1/applications/reviewed/transfer", body)).body.id).toBe(first.body.id);
-		expect(dispatches("/local-apply/run")).toHaveLength(1);
+		expect(dispatches("/local-apply/run")).toHaveLength(2);
 		expect((await d1.DB.prepare("SELECT submit_attempted_at FROM job_applications WHERE id = 'reviewed'").first<{ submit_attempted_at: number | null }>())?.submit_attempted_at).toBeNull();
+	});
+
+	it("#1011 does not broaden a paused edge for absent, foreign, malformed or unsafe transfer evidence", async () => {
+		d1.exec("UPDATE agent_connections SET enabled = 0 WHERE id = 'c-ready'");
+		const resume = { kind: "resume", path: "~/jobs/applications/unsafe/resume.md", sha256: "c".repeat(64), bytes: 11 };
+		const cover = { kind: "cover_letter", path: "~/jobs/applications/unsafe/cover.md", sha256: "d".repeat(64), bytes: 12 };
+		const event = { eventType: "job.application.materials_ready", eventId: "unsafe-ready", applicationId: "unsafe", tailorInstanceId: "t1", sourceInstanceId: "scout", leadId: "lead-unsafe", leadUrl: "https://jobs.example.com/unsafe", lifecycleVersion: 1, leadEventId: "lead-unsafe-event", tailoringRunId: "tailor-unsafe", profileVersion: "p1", generatedAt: "2026-10-07T00:00:00Z", artifacts: { resume, coverLetter: cover }, lead: { title: "Staff Engineer", company: "Globex" } };
+		const refusal = { outcome: "blocked", blockReason: "incomplete", submitAttempted: false };
+		const trace = [{ seq: 3, type: "policy.decision", at: "2026-10-10T00:00:05Z", detail: { tool: "browser_click", class: "submit", decision: "refused", reason: "fill_and_review", rule: "one_click_apply" } }];
+		await d1.DB.prepare(`INSERT INTO job_applications (id, instance_id, user_id, source_instance_id, lead_id, lifecycle_version, idempotency_key, status, lead, resume_artifact, cover_letter_artifact, profile_version, generated_at, ready_event, state_version, fill_run_id, block_reason, created_at, updated_at)
+			VALUES ('unsafe', 't1', 'u1', 'scout', 'lead-unsafe', 1, 'lead-unsafe-event', 'blocked', ?1, ?2, ?3, 'p1', '2026-10-07T00:00:00Z', ?4, 9, 'unsafe-run', 'incomplete', 1, 1)`)
+			.bind(JSON.stringify({ leadUrl: event.leadUrl, lead: event.lead }), JSON.stringify(resume), JSON.stringify(cover), JSON.stringify(event)).run();
+		await d1.DB.prepare("INSERT INTO local_apply_runs (id, instance_id, user_id, application_id, request_id, status, policy, result, trace, created_at, updated_at, ended_at) VALUES ('unsafe-run', 'ap', 'u1', 'unsafe', 'transfer:unsafe', 'blocked', ?1, ?2, ?3, 1, 1, 1)")
+			.bind(JSON.stringify({ mode: "fill_and_review" }), JSON.stringify(refusal), JSON.stringify(trace)).run();
+		const item = async () => (await call("GET", "/t1/application-queue/item?application_id=unsafe")).body.item;
+		const approve = async () => call("POST", "/t1/application-queue/actions", { action: "approve_and_proceed", application_id: "unsafe", expected_status: "blocked", expected_version: 9 });
+		// A disabled connection alone never becomes a Runner relationship.
+		expect((await item()).actions).not.toContain("approve_and_proceed");
+		expect((await approve()).status).toBe(409);
+		await d1.DB.prepare(`INSERT INTO application_material_transfers
+			(id, user_id, source_application_id, source_tailor_instance_id, destination_runner_instance_id, connection_id, source_state_version, resume_sha256, cover_letter_sha256, idempotency_key, transfer_event_id, event_payload, created_at, updated_at)
+			VALUES ('unsafe-transfer', 'u1', 'unsafe', 't1', 'ap', 'c-ready', 7, ?1, ?2, 'unsafe-key', 'transfer:unsafe', '{}', 1, 1)`)
+			.bind("e".repeat(64), cover.sha256).run();
+		// The receipt has to name the exact reviewed bytes, a local-apply Runner and this owner.
+		expect((await item()).actions).not.toContain("approve_and_proceed");
+		d1.exec(`INSERT INTO agents (id, owner_id, slug, name, config) VALUES
+			('runner-b', 'u1', 't1011-runner-b', 'Other Application Runner', '{"capabilities":{"surfaces":[],"runtime":"local_apply"}}');
+			INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES ('ap2', 'runner-b', 'u1', 'active', '{}')`);
+		await d1.DB.prepare("UPDATE application_material_transfers SET resume_sha256 = ?1, destination_runner_instance_id = 'ap2' WHERE id = 'unsafe-transfer'").bind(resume.sha256).run();
+		expect((await item()).actions).not.toContain("approve_and_proceed");
+		d1.exec("INSERT INTO users (id, github_login) VALUES ('u2', 'u2')");
+		await d1.DB.prepare("UPDATE application_material_transfers SET destination_runner_instance_id = 'ap', user_id = 'u2' WHERE id = 'unsafe-transfer'").run();
+		expect((await item()).actions).not.toContain("approve_and_proceed");
+		await d1.DB.prepare("UPDATE application_material_transfers SET user_id = 'u1' WHERE id = 'unsafe-transfer'").run();
+		expect((await item()).actions).toContain("approve_and_proceed");
+		// An unknown/prior submit remains a hard stop even with a valid receipt and verified refusal.
+		await d1.DB.prepare("UPDATE job_applications SET submit_attempted_at = 2 WHERE id = 'unsafe'").run();
+		expect((await item()).actions).not.toContain("approve_and_proceed");
+		expect((await approve()).status).toBe(409);
 	});
 
 	it("one saved lead, one handoff, delivered after a dead letter and a replay, filled for review, its status back on the lead", async () => {
