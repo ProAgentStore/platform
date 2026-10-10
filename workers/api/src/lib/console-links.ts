@@ -83,6 +83,11 @@ export function instanceKnowledgeLink(instanceId: string): string {
 	return `${instanceLink(instanceId)}/knowledge`;
 }
 
+/** The Knowledge → Files uploader, encoded as query state so it survives reload and OAuth return. */
+export function instanceFilesUploadLink(instanceId: string): string {
+	return `${instanceKnowledgeLink(instanceId)}?subtab=files`;
+}
+
 /** A local browser research run (#946) — the Research tab, or one run on it. */
 export function localBrowserRunLink(instanceId: string, runId?: string): string {
 	const research = `${instanceLink(instanceId)}/research`;

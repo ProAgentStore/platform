@@ -42,6 +42,18 @@ describe("get_console_link (#938)", () => {
 		expect(seen[0]).toBe("https://api.test/v1/instances/i1/console-link?run_id=run+1");
 	});
 
+	it("returns the API-verified Files uploader link through the read-only console-link tool", async () => {
+		const link = {
+			url: "https://proagentstore.online/console/instances/i1/knowledge?subtab=files",
+			path: "/console/instances/i1/knowledge?subtab=files",
+			lands: "the Knowledge Files tab, ready to upload a file",
+		};
+		const { seen, call } = getConsoleLink({ status: 200, body: link });
+		expect(JSON.parse(await call({ instance_id: "i1", target: "files-upload" }))).toEqual(link);
+		expect(seen).toEqual(["https://api.test/v1/instances/i1/console-link?target=files-upload"]);
+		expect(link.url).not.toMatch(/token|session|credential/i);
+	});
+
 	it("reports the API's refusal as an error rather than a link", async () => {
 		const { call } = getConsoleLink({ status: 400, body: { error: "This instance does not show the Coding tab" } });
 		expect(await call({ instance_id: "i1", section: "coding" })).toMatch(/^Error: This instance does not show the Coding tab/);

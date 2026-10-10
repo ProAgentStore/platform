@@ -31,6 +31,7 @@ describe("checkConsoleLink", () => {
 			"/console/instances/i1",
 			"/console/instances/i1/board",
 			"/console/instances/i1/knowledge",
+			"/console/instances/i1/knowledge?subtab=files",
 			"/console/instances/i1/coding",
 			"/console/instances/i1/coding/csess_1",
 			"/console/instances/i1/coding?builds=repo_1",

@@ -41,6 +41,19 @@ describe("buildConsoleLink", () => {
 		}
 	});
 
+	it("builds the canonical Files uploader link only when the instance can read uploaded files", () => {
+		const link = ok({ kind: "filesUpload" }, REPO_CHAT);
+		expect(link.path).toBe("/console/instances/inst_1/knowledge?subtab=files");
+		expect(link.url).toBe("https://proagentstore.online/console/instances/inst_1/knowledge?subtab=files");
+		expect(link.url).not.toMatch(/token|session|credential/i);
+
+		const denied = buildConsoleLink("inst_1", { kind: "filesUpload" }, { surfaces: [], tools: ["write_code"] });
+		expect(denied).toEqual({
+			error: "This instance cannot accept Files uploads because it does not declare file or knowledge-reading capability.",
+			reason: "files_upload_unsupported",
+		});
+	});
+
 	it("refuses an unknown section, naming the real ones", () => {
 		const r = buildConsoleLink("inst_1", { kind: "section", section: "logs" }, CODER);
 		expect("error" in r && r.error).toMatch(/"logs" is not a console section\. Sections: chat, apply, board/);

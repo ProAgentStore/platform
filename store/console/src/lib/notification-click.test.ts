@@ -33,6 +33,8 @@ describe("withoutSessionParam — sign-in continues to the full target", () => {
 	it("keeps the deploy link's ?builds= and any hash, dropping only the session token", () => {
 		expect(withoutSessionParam("https://proagentstore.online/console/instances/i1/coding?builds=r1&session=JWT")).toBe("/console/instances/i1/coding?builds=r1");
 		expect(withoutSessionParam("https://console.proagentstore.online/instances/i1/tasks/t1?session=JWT&ask=1#input")).toBe("/instances/i1/tasks/t1?ask=1#input");
+		expect(withoutSessionParam("https://proagentstore.online/console/instances/i1/knowledge?subtab=files&session=JWT")).toBe("/console/instances/i1/knowledge?subtab=files");
+		expect(withoutSessionParam("https://console.proagentstore.online/instances/i1/knowledge?subtab=files&session=JWT")).toBe("/instances/i1/knowledge?subtab=files");
 	});
 
 	it("leaves a path with no other query bare", () => {

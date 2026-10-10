@@ -21,7 +21,7 @@
  * The console is a BrowserRouter: a `#fragment` is ignored (`checkConsoleLink`), so there is no anchor
  * finer than a tab or a record page. A "field" is answered with the tab that holds it.
  */
-import { codingSessionLink, instanceLink, instanceRunLink, localBrowserRunLink, secureInputNotificationLink } from "./console-links.js";
+import { codingSessionLink, instanceFilesUploadLink, instanceLink, instanceRunLink, localBrowserRunLink, secureInputNotificationLink } from "./console-links.js";
 
 /** The console's public origin. `/console/…` paths resolve here (and on console.proagentstore.online without the prefix). */
 export const CONSOLE_ORIGIN = "https://proagentstore.online";
@@ -36,8 +36,11 @@ export interface LinkCaps {
 }
 
 const KB_TOOLS = ["search_knowledge", "list_knowledge", "read_knowledge", "add_knowledge", "update_knowledge", "delete_knowledge"];
+const FILE_TOOLS = ["upload_file", "list_files", "read_file", "delete_file"];
 const COLLECTION_TOOLS = ["create_collection", "list_collections", "insert_record", "query_records", "update_record", "delete_record"];
 const canUse = (caps: LinkCaps, names: readonly string[]) => !caps.tools || names.some((n) => caps.tools?.includes(n));
+/** Mirrors `showsKnowledgeSubTab(caps, "files")` in the console. */
+export const canUploadInstanceFiles = (caps: LinkCaps) => canUse(caps, FILE_TOOLS) || canUse(caps, KB_TOOLS);
 
 /** Every instance tab, with the console's rule for showing it (mirrors `surfaces.tsx` `SURFACES`). */
 export const CONSOLE_SECTIONS: ReadonlyArray<{ id: string; label: string; shown: (caps: LinkCaps) => boolean; needs?: string }> = [
@@ -63,6 +66,8 @@ export const CONSOLE_SECTIONS: ReadonlyArray<{ id: string; label: string; shown:
 export type ConsoleTarget =
 	| { kind: "instance" }
 	| { kind: "section"; section: string }
+	/** Knowledge's Files uploader, only where uploaded data is readable by this instance. */
+	| { kind: "filesUpload" }
 	/** A loop run: its coding session when it drives one, else the Assistant where a chat-driven run reports. */
 	| { kind: "run"; runId: string; sessionId: string | null }
 	/** A local browser research run (#946) — its page on the Research tab. */
@@ -80,8 +85,14 @@ export interface ConsoleLink {
 	lands: string;
 }
 
+export interface ConsoleLinkError {
+	error: string;
+	/** Stable machine-readable explanation when the Files uploader is capability-gated. */
+	reason?: "files_upload_unsupported";
+}
+
 /** The link, or why there is no honest one. Pure: ownership and lookups are the route's job. */
-export function buildConsoleLink(instanceId: string, target: ConsoleTarget, caps: LinkCaps): ConsoleLink | { error: string } {
+export function buildConsoleLink(instanceId: string, target: ConsoleTarget, caps: LinkCaps): ConsoleLink | ConsoleLinkError {
 	const make = (path: string, lands: string): ConsoleLink => ({ url: `${CONSOLE_ORIGIN}${path}`, path, lands });
 	switch (target.kind) {
 		case "instance":
@@ -95,6 +106,13 @@ export function buildConsoleLink(instanceId: string, target: ConsoleTarget, caps
 			}
 			return make(spec.id === "chat" ? instanceLink(instanceId) : `${instanceLink(instanceId)}/${spec.id}`, `the ${spec.label} tab`);
 		}
+		case "filesUpload":
+			return canUploadInstanceFiles(caps)
+				? make(instanceFilesUploadLink(instanceId), "the Knowledge Files tab, ready to upload a file")
+				: {
+					error: "This instance cannot accept Files uploads because it does not declare file or knowledge-reading capability.",
+					reason: "files_upload_unsupported",
+				};
 		case "run":
 			return target.sessionId
 				? make(codingSessionLink(instanceId, target.sessionId), "the coding session this run drives — its Co-pilot and terminal")

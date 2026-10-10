@@ -1098,4 +1098,8 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// #859 follow-up: stable-physical-machine Auto-update policy read/write for MCP. The reader
 	// returns detail/policy/status; the writer is an owner-scoped, dry-runnable `write` toggle.
 	"0.1.102": "sha256:991179219f9ad3885ce5d656ba33e55697ae3337964482834e351ba8930d1eff",
+	// #1003: `get_console_link` gains the literal `target: "files-upload"` input for an
+	// owner-scoped, capability-checked Knowledge → Files link. No tool was added; an inputSchema
+	// changed, so clients need a new surface revision. Appended: 0.1.102 is published.
+	"0.1.103": "sha256:acb1face50551a48e764cd6ac219da7bab5e0eca9fb9f992275418a9318be55a",
 };

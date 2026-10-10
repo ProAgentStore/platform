@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { KnowledgeDoc, Credential } from "../lib/types";
 import { useUploader } from "../lib/use-uploader";
@@ -14,8 +15,9 @@ import TasksSection from "../components/TasksSection";
 import VectorsSection from "../components/VectorsSection";
 import { formatTime, renderMd } from "@proagentstore/sdk/ui";
 import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
+import { knowledgeSubtabFromSearch, searchWithKnowledgeSubtab, type KnowledgeSubtab } from "../lib/knowledgeSubtab";
 
-type KbSubTab = "docs" | "memory" | "tasks" | "files" | "index" | "credentials" | "rules";
+type KbSubTab = KnowledgeSubtab;
 
 interface DriveFile {
 	id: string;
@@ -51,8 +53,19 @@ interface ConnectorGrant {
 }
 
 export default function KnowledgeTab({ instanceId, caps }: Props) {
+	const [searchParams, setSearchParams] = useSearchParams();
 	// Documents only when the agent can read one back, else Memory (#509). The buttons ARE the filtered list.
-	const [subTab, setSubTab] = useState<KbSubTab>(() => (showsKnowledgeSubTab(caps, "docs") ? "docs" : "memory"));
+	const defaultSubTab: KbSubTab = showsKnowledgeSubTab(caps, "docs") ? "docs" : "memory";
+	const requestedSubTab = knowledgeSubtabFromSearch(searchParams);
+	const requestedIsAllowed = requestedSubTab ? showsKnowledgeSubTab(caps, requestedSubTab) : false;
+	// Derived from the URL rather than copied into state: reload, a bookmark and browser back/forward
+	// all select the same panel. An unsupported Files target stays visible as an explanation instead
+	// of silently mounting a different upload surface.
+	const subTab: KbSubTab = requestedSubTab && requestedIsAllowed ? requestedSubTab : defaultSubTab;
+	const filesUploadUnsupported = requestedSubTab === "files" && !requestedIsAllowed;
+	const selectSubTab = useCallback((next: KbSubTab) => {
+		setSearchParams(searchWithKnowledgeSubtab(searchParams, next));
+	}, [searchParams, setSearchParams]);
 	const [docs, setDocs] = useState<KnowledgeDoc[]>([]);
 	const [credentials, setCredentials] = useState<Credential[]>([]);
 	const [instructions, setInstructions] = useState("");
@@ -372,7 +385,7 @@ export default function KnowledgeTab({ instanceId, caps }: Props) {
 			const isTextDoc = /\.(txt|md|csv|json|html?)$/i.test(file.name) && !file.type.includes("pdf");
 			if (!isTextDoc || file.size > 100_000) {
 				await uploadFile(file);
-				setSubTab("files");
+				selectSubTab("files");
 				return;
 			}
 			const text = await file.text();
@@ -438,7 +451,7 @@ export default function KnowledgeTab({ instanceId, caps }: Props) {
 					<button
 						key={t.id}
 						type="button"
-						onClick={() => setSubTab(t.id)}
+						onClick={() => selectSubTab(t.id)}
 						className={`px-3 py-2 text-sm font-bold border-b-2 whitespace-nowrap transition-all ${
 							subTab === t.id
 								? "text-accent border-accent"
@@ -449,6 +462,11 @@ export default function KnowledgeTab({ instanceId, caps }: Props) {
 					</button>
 				))}
 			</div>
+			{filesUploadUnsupported && (
+				<div className="mb-4 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-ink" role="alert">
+					This instance cannot accept Files uploads because it does not declare file or knowledge-reading capability. Choose an eligible instance to upload a document it can read.
+				</div>
+			)}
 
 			{/* Documents — first-class Markdown docs: create, read (rendered), edit. The
 			    agent reads/writes these too, so you can ask the Assistant to update one. */}

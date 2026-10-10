@@ -14,18 +14,22 @@ import type { Env } from "../types.js";
  * link that lands on a page reading "not found".
  */
 export function registerConsoleLinkRoutes(router: Hono<{ Bindings: Env }>): void {
-	/** GET /v1/instances/:instanceId/console-link?section=|run_id=|task_id=|secure_input_id= — at most one. */
+	/** GET /v1/instances/:instanceId/console-link?section=|target=files-upload|run_id=|task_id=|secure_input_id= — at most one. */
 	router.get("/:instanceId/console-link", async (c) => {
 		const session = await requireUser(c);
 		const instanceId = c.req.param("instanceId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
 
 		const q = (k: string) => c.req.query(k)?.trim() || "";
-		const given = (["section", "run_id", "task_id", "secure_input_id"] as const).filter((k) => q(k));
-		if (given.length > 1) throw new HttpError(400, `Give one of section, run_id, task_id or secure_input_id, not ${given.join(" and ")} — a record's page already sits on its own tab.`);
+		const given = (["section", "target", "run_id", "task_id", "secure_input_id"] as const).filter((k) => q(k));
+		if (given.length > 1) throw new HttpError(400, `Give one of section, target, run_id, task_id or secure_input_id, not ${given.join(" and ")} — a record's page already sits on its own tab.`);
 
 		let target: ConsoleTarget = { kind: "instance" };
 		if (q("section")) target = { kind: "section", section: q("section").toLowerCase() };
+		else if (q("target")) {
+			if (q("target") !== "files-upload") throw new HttpError(400, `Unknown console-link target "${q("target")}"`);
+			target = { kind: "filesUpload" };
+		}
 		else if (q("run_id")) {
 			const run = await c.env.DB.prepare("SELECT session_id FROM agent_loop_runs WHERE run_id = ?1 AND instance_id = ?2 AND user_id = ?3")
 				.bind(q("run_id"), instanceId, session.uid)
@@ -48,7 +52,7 @@ export function registerConsoleLinkRoutes(router: Hono<{ Bindings: Env }>): void
 
 		const caps = await capabilitiesForInstance(c.env, instanceId, session.uid);
 		const link = buildConsoleLink(instanceId, target, { surfaces: caps?.surfaces ?? [], runtime: caps?.runtime ?? null, tools: caps?.tools });
-		if ("error" in link) throw new HttpError(400, link.error);
+		if ("error" in link) return c.json(link, 400);
 		return c.json(link);
 	});
 }

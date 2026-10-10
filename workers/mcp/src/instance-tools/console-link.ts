@@ -16,7 +16,7 @@ export function registerConsoleLinkTools(server: McpServer, ctx: InstanceToolsCt
 
 	server.tool(
 		"get_console_link",
-		"A console URL that opens exactly what you are discussing with the owner: an instance, one of its runs, a task, a pending secret request, or one tab of it. Use it instead of writing a console URL by hand: a guessed link still opens a page, just not the one you named. Returns url (absolute, for a chat message), path (the same page as a console path, for a push notification) and lands (what the person will see). Give at most ONE of section, run_id, task_id or secure_input_id; with none it opens the instance. A section the instance does not show is refused with the ones it does. There is no anchor finer than a tab or a record page — for a field, name the tab that holds it, e.g. settings for a setting, knowledge for a memory entry, behaviour for a behaviour field.",
+		"A console URL that opens exactly what you are discussing with the owner: an instance, one of its runs, a task, a pending secret request, one tab, or target files-upload for the eligible Knowledge → Files uploader. Use it instead of writing a console URL by hand: a guessed link still opens a page, just not the one you named. Returns url (absolute, for a chat message), path (the same page as a console path, for a push notification) and lands (what the person will see). Give at most ONE of section, target, run_id, task_id or secure_input_id; with none it opens the instance. A section or Files upload unavailable to this instance is refused with a reason. Uploaded Files are stored in R2/AgentDO and indexed for instance knowledge; they are NOT automatically consumed by Application Tailor's local_artifact runner, which reads its configured local workspace sources. Selecting an uploaded file as a Tailor source needs a separate materialization step. There is no anchor finer than a tab or a record page beyond target files-upload — for a field, name the tab that holds it, e.g. settings for a setting, knowledge for a memory entry, behaviour for a behaviour field.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID from my_instances. Copy it exactly."),
@@ -24,17 +24,18 @@ export function registerConsoleLinkTools(server: McpServer, ctx: InstanceToolsCt
 				.string()
 				.optional()
 				.describe("A console tab: chat, apply, board, repo, coding, tmux, activity, stats, knowledge, behaviour, feedback, indexing, data or settings."),
+			target: z.literal("files-upload").optional().describe("The eligible Knowledge → Files uploader. Its link never contains an upload token or credential."),
 			run_id: z.string().optional().describe("A loop run id, as coding_loop_start or coding_loop_status returned it. A coding run opens its session; a chat run opens the Assistant."),
 			task_id: z.string().optional().describe("A runtime task id from instance_board or get_instance_task — opens the task's own page."),
 			secure_input_id: z.string().optional().describe("A request id from secure_input_request — opens the page where the owner enters the value."),
 		},
-		async ({ token, instance_id, section, run_id, task_id, secure_input_id }) => {
+		async ({ token, instance_id, section, target, run_id, task_id, secure_input_id }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const denied = await requirePermission(safetyFor(token), "read", "get_console_link", { instance_id, section, run_id, task_id, secure_input_id });
+			const denied = await requirePermission(safetyFor(token), "read", "get_console_link", { instance_id, section, target, run_id, task_id, secure_input_id });
 			if (denied) return denied;
 			const q = new URLSearchParams();
-			for (const [k, v] of Object.entries({ section, run_id, task_id, secure_input_id })) if (v) q.set(k, v);
+			for (const [k, v] of Object.entries({ section, target, run_id, task_id, secure_input_id })) if (v) q.set(k, v);
 			const qs = q.toString() ? `?${q}` : "";
 			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/console-link${qs}`, sessionToken, {}, env)) as { error?: string };
 			if (data.error) return text(`Error: ${data.error}`);

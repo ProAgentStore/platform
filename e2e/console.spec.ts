@@ -1598,6 +1598,48 @@ test.describe("ProAgentStore Console smoke", () => {
 		}
 	});
 
+	test("Files upload links survive cold load, reload, and browser history (#1003)", async ({ page }) => {
+		await mockSignedInConsole(page);
+		await page.goto("/console/instances/inst-1/knowledge?subtab=files");
+		await expect(page.getByRole("heading", { name: "Files" })).toBeVisible();
+		await expect(page.getByText("Upload File", { exact: true })).toBeVisible();
+
+		await page.reload();
+		await expect(page.getByRole("heading", { name: "Files" })).toBeVisible();
+
+		await page.getByRole("button", { name: "Memory", exact: true }).click();
+		await expect(page).toHaveURL(/subtab=memory/);
+		await page.goBack();
+		await expect(page.getByRole("heading", { name: "Files" })).toBeVisible();
+		await page.goForward();
+		await expect(page.getByRole("button", { name: "Memory", exact: true })).toHaveClass(/text-accent/);
+	});
+
+	test("a Files upload link explains when the instance cannot read uploads (#1003)", async ({ page }) => {
+		await mockSignedInConsole(page, {
+			instances: [{
+				id: "inst-1",
+				name: "Heartfull",
+				slug: "coder-repo",
+				category: "code",
+				capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION", tools: ["repo_tree", "repo_read_file"] },
+			}],
+		});
+		await page.goto("/console/instances/inst-1/knowledge?subtab=files");
+		await expect(page.getByRole("alert")).toContainText("cannot accept Files uploads");
+		await expect(page.getByRole("heading", { name: "Files" })).toHaveCount(0);
+		await expect(page.getByRole("button", { name: "Memory", exact: true })).toHaveClass(/text-accent/);
+	});
+
+	test("mobile — a direct Files upload link keeps its picker reachable (#1003)", async ({ page }) => {
+		await page.setViewportSize({ width: 320, height: 800 });
+		await mockSignedInConsole(page);
+		await page.goto("/console/instances/inst-1/knowledge?subtab=files");
+		await expect(page.getByText("Upload File", { exact: true })).toBeVisible();
+		const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+		expect(overflow).toBeLessThanOrEqual(0);
+	});
+
 	test("console deep links restore instance tabs after refresh", async ({ page }) => {
 		await mockSignedInConsole(page);
 
@@ -4568,10 +4610,10 @@ test.describe("mobile — mute is reachable in every phase (ADR 0001 M1, #388)",
 		});
 		await page.addInitScript(() => {
 			(window as unknown as { __realMicCalls: number }).__realMicCalls = 0;
-			MediaDevices.prototype.getUserMedia = function () {
+			MediaDevices.prototype.getUserMedia = (() => {
 				(window as unknown as { __realMicCalls: number }).__realMicCalls++;
 				return Promise.reject(new DOMException("e2e must not open the real microphone (#462)", "NotAllowedError"));
-			} as typeof MediaDevices.prototype.getUserMedia;
+			}) as typeof MediaDevices.prototype.getUserMedia;
 		});
 	}
 
