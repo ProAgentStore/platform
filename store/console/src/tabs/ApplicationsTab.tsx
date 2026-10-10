@@ -85,7 +85,7 @@ export default function ApplicationsTab({ instanceId, isTailor = false }: { inst
 				</ul>
 			</Card>
 
-			{selected && <Detail key={selected.key} instanceId={instanceId} item={selected} onChanged={load} />}
+			{selected && <Detail key={selected.key} instanceId={instanceId} item={selected} connections={view.connections} onChanged={load} />}
 
 			{view.pipeline.runners[0] && <SubmissionPolicy runnerId={view.pipeline.runners[0]} onChanged={load} />}
 		</div>
@@ -131,11 +131,12 @@ function Limits({ view, instanceId, onChanged }: { view: ApplicationQueueView; i
 	);
 }
 
-function Detail({ instanceId, item, onChanged }: { instanceId: string; item: ApplicationQueueItem; onChanged: () => void }) {
+function Detail({ instanceId, item, connections, onChanged }: { instanceId: string; item: ApplicationQueueItem; connections: ApplicationQueueView["connections"]; onChanged: () => void }) {
 	const [busy, setBusy] = useState<ApplicationQueueAction | null>(null);
 	const [msg, setMsg] = useState("");
 	const [answers, setAnswers] = useState<Record<string, string>>({});
 	const [trace, setTrace] = useState<ApplicationTraceView | null>(null);
+	const [transferConnection, setTransferConnection] = useState("");
 	const pause = item.fillRun?.pause ?? null;
 	// #988: the API's one durable, privacy-safe execution projection is authoritative. Keep the
 	// legacy field as a read compatibility fallback for cards written before the projection existed.
@@ -165,6 +166,20 @@ function Detail({ instanceId, item, onChanged }: { instanceId: string; item: App
 		} catch (e) {
 			setMsg(e instanceof Error ? e.message : String(e));
 		}
+	};
+	const pausedTransfers = item.status === "materials_ready" && item.tailorInstanceId ? connections.filter((c) => !c.enabled && c.sourceInstanceId === item.tailorInstanceId && c.eventType === "job.application.materials_ready" && c.action === "start_application_fill") : [];
+	const transfer = async () => {
+		const connection = pausedTransfers.find((c) => c.id === (transferConnection || pausedTransfers[0]?.id));
+		const resume = item.artifacts?.resume;
+		const cover = item.artifacts?.coverLetter;
+		if (!connection || !resume || !cover || !item.applicationId || item.stateVersion === null) return;
+		if (!window.confirm("Send this exact reviewed material set to the selected Runner for review only? The connection stays paused and nothing will be submitted.")) return;
+		setBusy("request_review"); setMsg("");
+		try {
+			const out = await api<{ id: string; status: string; runId: string | null }>(`/v1/instances/${instanceId}/applications/${encodeURIComponent(item.applicationId)}/transfer`, { method: "POST", body: JSON.stringify({ expected_status: "materials_ready", expected_version: item.stateVersion, resume_sha256: resume.sha256, cover_letter_sha256: cover.sha256, destination_runner_instance_id: connection.targetInstanceId, connection_id: connection.id, idempotency_key: `transfer:${item.applicationId}:${item.stateVersion}:${connection.id}` }) });
+			setMsg(`Reviewed transfer ${out.status}${out.runId ? ` (run ${out.runId.slice(0, 8)})` : ""}.`); onChanged();
+		} catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
+		setBusy(null);
 	};
 
 	return (
@@ -212,6 +227,16 @@ function Detail({ instanceId, item, onChanged }: { instanceId: string; item: App
 					))}
 					{item.profileVersion && <li className="text-muted-soft">From profile version {item.profileVersion}</li>}
 				</ul>
+			)}
+			{pausedTransfers.length > 0 && item.artifacts?.resume && item.artifacts?.coverLetter && (
+				<div className="mb-3 rounded border border-line p-2 text-sm" data-testid="reviewed-material-transfer">
+					<p className="font-semibold">Transfer this reviewed set</p>
+					<p className="text-xs text-muted mb-2">Send these exact hashes to one paused Runner for fill-and-review only. This does not resume the connection or submit an application.</p>
+					<select aria-label="Runner for reviewed transfer" value={transferConnection || pausedTransfers[0].id} onChange={(e) => setTransferConnection(e.target.value)} className="border border-line rounded px-2 py-1 mr-2">
+						{pausedTransfers.map((c) => <option key={c.id} value={c.id}>{c.targetInstanceId}</option>)}
+					</select>
+					<Button size="sm" onClick={transfer} disabled={busy !== null}>{busy === "request_review" ? "Transferring…" : "Transfer for review"}</Button>
+				</div>
 			)}
 
 			{item.submitPolicy && (

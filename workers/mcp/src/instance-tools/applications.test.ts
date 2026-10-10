@@ -54,6 +54,7 @@ describe("the Applications tools (#958, #953)", () => {
 			"set_application_tailor_uploaded_source",
 			"start_application_fill",
 			"tailoring_run",
+			"transfer_prepared_application",
 			"triage_application",
 		]);
 	});

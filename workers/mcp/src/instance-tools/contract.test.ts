@@ -453,6 +453,7 @@ const TABLE: Record<string, Row> = {
 	triage_application: ["applications", "write", null, "envelope", "action,application_id,defer_until,dry_run,expected_status,expected_version,instance_id,note,record_id,scout_instance_id,token"],
 	generate_application_materials: ["applications", "runtime", null, "envelope", "action,application_id,dry_run,expected_status,expected_version,instance_id,record_id,scout_instance_id,token"],
 	start_application_fill: ["applications", "runtime", null, "envelope", "application_id,dry_run,expected_status,expected_version,instance_id,record_id,runner_instance_id,scout_instance_id,token"],
+	transfer_prepared_application: ["applications", "runtime", null, "envelope", "application_id,connection_id,cover_letter_sha256,destination_runner_instance_id,dry_run,expected_status,expected_version,idempotency_key,instance_id,resume_sha256,token"],
 	request_application_review: ["applications", "runtime", null, "envelope", "application_id,dry_run,expected_status,expected_version,instance_id,record_id,runner_instance_id,scout_instance_id,token"],
 	retry_application: ["applications", "runtime", null, "envelope", "action,application_id,dry_run,expected_status,expected_version,instance_id,record_id,runner_instance_id,scout_instance_id,token"],
 	resume_application: ["applications", "runtime", null, "envelope", "answers,application_id,dry_run,expected_status,expected_version,instance_id,record_id,scout_instance_id,token"],

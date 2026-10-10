@@ -103,6 +103,8 @@ export const INSTANCE_CHILD_TABLES = [
 	"local_browser_domain_consent",
 	// #1004 — explicit uploaded-source choices are instance-owned provenance, not agent-global data.
 	"application_tailor_uploaded_sources",
+	// #1010 — receipt rows reference the source application and both instances/connections.
+	"application_material_transfers",
 	// #956 — the run before the application it references (FK).
 	"local_artifact_runs",
 	// #957 — the Runner's fill runs (no FK: their application is on the Tailor's instance) and the
@@ -214,6 +216,20 @@ export function agentDeleteStatements(
 	const stmts: D1PreparedStatement[] = [];
 	if (opts.cascadeSubscribers) {
 		for (const table of INSTANCE_CHILD_TABLES) {
+			// #1010's receipt deliberately names both ends instead of pretending that it belongs
+			// to a single instance.  Remove it when either endpoint is being cascaded; deleting
+			// only its Tailor would leave a Runner FK, and the generic instance_id predicate
+			// would be a non-existent-column bug.
+			if (table === "application_material_transfers") {
+				stmts.push(
+					db.prepare(
+						`DELETE FROM application_material_transfers
+						 WHERE source_tailor_instance_id IN (SELECT id FROM agent_instances WHERE agent_id = ?1)
+						    OR destination_runner_instance_id IN (SELECT id FROM agent_instances WHERE agent_id = ?1)`,
+					).bind(agentId),
+				);
+				continue;
+			}
 			stmts.push(
 				db
 					.prepare(

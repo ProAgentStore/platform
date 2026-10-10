@@ -43,6 +43,7 @@ export const APPLICATION_TOOL_SCOPES = {
 	generate_application_materials: "runtime",
 	start_application_fill: "runtime",
 	request_application_review: "runtime",
+	transfer_prepared_application: "runtime",
 	retry_application: "runtime",
 	resume_application: "runtime",
 	get_application_runner_settings: "read",
@@ -496,6 +497,42 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 		"Fill a materials_ready application with the Runner and STOP before the final submit, whatever the policy allows. The run ends awaiting_review for the owner.",
 		review.shape,
 		review.handler,
+	);
+
+	server.tool(
+		"transfer_prepared_application",
+		"Deliver ONE already-reviewed Tailor résumé and cover-letter set to ONE selected Application Runner through ONE existing PAUSED materials_ready connection. The edge remains paused and unrelated events remain untouched. Exact hashes and the application state version are required; the receipt survives retries and drives the existing Runner in fill-and-review mode only. It does not enable auto-submit, change a cap, or submit anything.",
+		{
+			...who,
+			application_id: z.string().describe("The reviewed Application Tailor application id."),
+			expected_status: z.enum(["materials_ready"]).describe("The reviewed application must still be materials_ready."),
+			expected_version: z.coerce.number().int().min(0).describe("The application stateVersion you reviewed."),
+			resume_sha256: z.string().describe("Exact reviewed résumé SHA-256 (64 hex characters; the API validates it)."),
+			cover_letter_sha256: z.string().describe("Exact reviewed cover-letter SHA-256 (64 hex characters; the API validates it)."),
+			destination_runner_instance_id: z.string().describe("The selected Application Runner instance."),
+			connection_id: z.string().describe("The existing paused Tailor → Runner materials_ready connection id."),
+			idempotency_key: z.string().min(1).max(300).describe("Stable caller key: retry an uncertain response with this exact key."),
+			dry_run: z.boolean().optional(),
+		},
+		async (input: Record<string, unknown>) => {
+			const token = tokenOf(input);
+			const instance_id = instanceOf(input);
+			const t = tokenFor(token);
+			if (!t) return authRequired();
+			const auditInput = { instance_id, application_id: input.application_id, destination_runner_instance_id: input.destination_runner_instance_id, connection_id: input.connection_id, expected_version: input.expected_version, idempotency_key: input.idempotency_key };
+			const denied = await requirePermission(safetyFor(token), "runtime", "transfer_prepared_application", auditInput);
+			if (denied) return denied;
+			if (input.dry_run) return dryRun(safetyFor(token), "transfer_prepared_application", "transfer one reviewed material set for Runner review", auditInput, { endpoint: `/v1/instances/${instance_id}/applications/${input.application_id}/transfer`, method: "POST", effect: "A receipt-backed review-only delivery would be created; the paused connection and all auto-submit policy remain unchanged." });
+			const body = {
+				expected_status: input.expected_status, expected_version: input.expected_version, resume_sha256: input.resume_sha256,
+				cover_letter_sha256: input.cover_letter_sha256, destination_runner_instance_id: input.destination_runner_instance_id,
+				connection_id: input.connection_id, idempotency_key: input.idempotency_key,
+			};
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/applications/${encodeURIComponent(String(input.application_id))}/transfer`, t, { method: "POST", body: JSON.stringify(body) }, env)) as { error?: string };
+			if (data.error) return text(`Error: ${data.error}`);
+			await audit(safetyFor(token), { tool: "transfer_prepared_application", action: "completed", input: auditInput, result: data });
+			return jsonText(data);
+		},
 	);
 
 	const retry = decision("retry_application", ["retry_fill", "retry_tailoring"], "A fresh run of that stage would start, under a new key. If this application holds an unspent approval (#981), that run is the one that spends it and may submit once.", runnerArg);

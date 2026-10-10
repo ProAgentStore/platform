@@ -92,6 +92,7 @@ const CONTROL_ARGS: ReadonlySet<string> = new Set([
 	"application_id",
 	"scout_instance_id",
 	"runner_instance_id",
+	"destination_runner_instance_id",
 	"session_id",
 	"connection_id",
 	"grant_id",
@@ -230,6 +231,11 @@ const READBACK: Record<string, string | null> = {
 	"triage_application.note": "application_trace",
 	// #973: the authorization carries the key it was granted under; the card returns it.
 	"approve_application.idempotency_key": "get_application",
+	// #1010: the exact material handles/hashes remain on the source application; the stable
+	// caller receipt key is intentionally not a general query key.
+	"transfer_prepared_application.resume_sha256": "get_application",
+	"transfer_prepared_application.cover_letter_sha256": "get_application",
+	"transfer_prepared_application.idempotency_key": null,
 	"triage_application.defer_until": "query_instance_records",
 	"generate_application_materials.action": "application_trace",
 	"retry_application.action": "application_trace",

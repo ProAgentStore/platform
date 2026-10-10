@@ -8025,6 +8025,43 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /v1/instances/{instanceId}/applications/{applicationId}/transfer:
+    post:
+      summary: Transfer one reviewed Tailor material set to a Runner
+      description: |
+        A receipt-backed, owner-scoped exception for ONE exact `materials_ready` set through ONE
+        existing paused Tailor → Runner connection. The edge remains paused; unrelated events are
+        not delivered. Both reviewed SHA-256 values and the application state version must match.
+        The Runner is forced into fill-and-review mode: this endpoint never enables auto-submit,
+        changes a cap, or submits an application.
+      operationId: transferPreparedApplication
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: applicationId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_status, expected_version, resume_sha256, cover_letter_sha256, destination_runner_instance_id, connection_id, idempotency_key]
+              properties:
+                expected_status: { type: string, enum: [materials_ready] }
+                expected_version: { type: integer, minimum: 0 }
+                resume_sha256: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
+                cover_letter_sha256: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
+                destination_runner_instance_id: { type: string }
+                connection_id: { type: string }
+                idempotency_key: { type: string, maxLength: 300 }
+      responses:
+        "200": { description: Durable transfer receipt and current delivery/run status. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { description: Receipt or delivery could not be recovered safely. }
+
   /v1/instances/{instanceId}/application-runner/settings:
     get:
       summary: Read the Application Runner settings

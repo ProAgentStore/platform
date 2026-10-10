@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**297 tool registrations.** 271 are always registered; 26 are gated to the console
+**298 tool registrations.** 272 are always registered; 26 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 

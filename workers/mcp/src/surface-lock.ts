@@ -1116,4 +1116,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// the exact Permissions & Connections control. It changes the tool input schema, so it is a
 	// new published surface revision rather than an edit of the already-published 0.1.105 lock.
 	"0.1.106": "sha256:f0bfa90be9565db899e641d0c0d15395373a14c07aed61a20aece3ae3772ab4d",
+	// #1010: the owner-scoped, review-only reviewed-material transfer is a new always-on schema.
+	"0.1.107": "sha256:343f1ed70ff1da1bd4ae007c038085fdb2de6a83d99b70b810a335dc96476e46",
 };

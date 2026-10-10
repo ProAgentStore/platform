@@ -238,6 +238,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	generate_application_materials: "runtime",
 	start_application_fill: "runtime",
 	request_application_review: "runtime",
+	transfer_prepared_application: "runtime",
 	retry_application: "runtime",
 	resume_application: "runtime",
 	// #953: the Runner's handoff + submission policy — a config read and a config write (starts nothing).

@@ -9,6 +9,7 @@ import { requireUser } from "../lib/auth.js";
 import { QUEUE_STATUSES, type QueueStatus, applicationQueue, applicationTrace, getQueueItem, parseActionInput, performApplicationAction } from "../lib/applications/control.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
+import { transferPreparedApplication } from "../lib/applications/material-transfer.js";
 
 type C = Context<{ Bindings: Env }>;
 
@@ -39,6 +40,21 @@ export function registerApplicationsRoutes(router: Hono<{ Bindings: Env }>): voi
 	router.post("/:instanceId/application-queue/actions", async (c) => {
 		const { uid, instanceId } = await owned(c);
 		return c.json(await performApplicationAction(c.env, uid, instanceId, parseActionInput(await c.req.json().catch(() => null))));
+	});
+
+	/** A receipt-backed exception through one existing PAUSED Tailor → Runner edge (#1010). */
+	router.post("/:instanceId/applications/:applicationId/transfer", async (c) => {
+		const { uid, instanceId } = await owned(c);
+		const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+		if (!body) return c.json({ error: "A transfer body is required." }, 400);
+		const str = (key: string) => (typeof body[key] === "string" ? body[key].trim() : "");
+		const version = body.expected_version;
+		if (!Number.isInteger(version) || (version as number) < 0) return c.json({ error: "expected_version must be a non-negative integer." }, 400);
+		return c.json(await transferPreparedApplication(c.env, uid, instanceId, {
+			applicationId: c.req.param("applicationId"), expectedStatus: str("expected_status"), expectedVersion: version as number,
+			resumeSha256: str("resume_sha256"), coverLetterSha256: str("cover_letter_sha256"),
+			destinationRunnerInstanceId: str("destination_runner_instance_id"), connectionId: str("connection_id"), idempotencyKey: str("idempotency_key"),
+		}));
 	});
 
 	router.get("/:instanceId/application-queue/:applicationId/trace", async (c) => {

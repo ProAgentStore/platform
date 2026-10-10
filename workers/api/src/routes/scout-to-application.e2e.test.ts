@@ -137,6 +137,31 @@ beforeEach(() => {
 afterEach(() => d1.close());
 
 describe("#953: Scout → Connection → Application Runner → status writeback", () => {
+	it("#1010: transfers one exact reviewed set through a paused edge once, to review only", async () => {
+		// Isolated fixture: a completed Tailor record and an intentionally paused, authorized edge.
+		// This exercises the actual outbox consumer and Runner, never a real owner edge or browser.
+		d1.exec("UPDATE agent_connections SET enabled = 0 WHERE id = 'c-ready'");
+		const resume = { kind: "resume", path: "~/jobs/applications/manual/resume.md", sha256: "c".repeat(64), bytes: 11 };
+		const cover = { kind: "cover_letter", path: "~/jobs/applications/manual/cover.md", sha256: "d".repeat(64), bytes: 12 };
+		const event = { eventType: "job.application.materials_ready", eventId: "tailor-ready", applicationId: "reviewed", tailorInstanceId: "t1", sourceInstanceId: "scout", leadId: "lead-reviewed", leadUrl: "https://jobs.example.com/reviewed", lifecycleVersion: 1, leadEventId: "lead-event", tailoringRunId: "tailor-run", profileVersion: "p1", generatedAt: "2026-10-07T00:00:00Z", artifacts: { resume, coverLetter: cover }, lead: { title: "Staff Engineer", company: "Globex" } };
+		await d1.DB.prepare(`INSERT INTO job_applications (id, instance_id, user_id, source_instance_id, lead_id, lifecycle_version, idempotency_key, status, lead, resume_artifact, cover_letter_artifact, profile_version, generated_at, ready_event, state_version, created_at, updated_at)
+			VALUES ('reviewed', 't1', 'u1', 'scout', 'lead-reviewed', 1, 'lead-event', 'materials_ready', ?1, ?2, ?3, 'p1', '2026-10-07T00:00:00Z', ?4, 7, 1, 1)`)
+			.bind(JSON.stringify({ leadUrl: event.leadUrl, lead: event.lead }), JSON.stringify(resume), JSON.stringify(cover), JSON.stringify(event)).run();
+		const body = { expected_status: "materials_ready", expected_version: 7, resume_sha256: resume.sha256, cover_letter_sha256: cover.sha256, destination_runner_instance_id: "ap", connection_id: "c-ready", idempotency_key: "reviewed-transfer-1" };
+		const first = await call("POST", "/t1/applications/reviewed/transfer", body);
+		expect(first.status).toBe(200);
+		expect(first.body).toMatchObject({ sourceApplicationId: "reviewed", destinationApplicationId: "reviewed", destinationRunnerInstanceId: "ap", connectionId: "c-ready", resumeSha256: resume.sha256, coverLetterSha256: cover.sha256, status: "consumed" });
+		expect(await d1.DB.prepare("SELECT enabled FROM agent_connections WHERE id = 'c-ready'").first<{ enabled: number }>()).toEqual({ enabled: 0 });
+		expect(await d1.DB.prepare("SELECT count(*) AS n FROM agent_connection_deliveries WHERE connection_id = 'c-ready'").first<{ n: number }>()).toEqual({ n: 1 });
+		expect(dispatches("/local-apply/run")).toHaveLength(1);
+		expect(dispatches("/local-apply/run")[0].body.policy).toEqual({ mode: "fill_and_review", allowDomains: ["jobs.example.com"] });
+		expect((await d1.DB.prepare("SELECT count(*) AS n FROM local_apply_runs WHERE application_id = 'reviewed'").first<{ n: number }>())?.n).toBe(1);
+		// A lost response retry re-reads the same receipt; it cannot enqueue, fill, or submit again.
+		expect((await call("POST", "/t1/applications/reviewed/transfer", body)).body.id).toBe(first.body.id);
+		expect(dispatches("/local-apply/run")).toHaveLength(1);
+		expect((await d1.DB.prepare("SELECT submit_attempted_at FROM job_applications WHERE id = 'reviewed'").first<{ submit_attempted_at: number | null }>())?.submit_attempted_at).toBeNull();
+	});
+
 	it("one saved lead, one handoff, delivered after a dead letter and a replay, filled for review, its status back on the lead", async () => {
 		// 1. The owner saves both findings: two records in the Scout's Data table.
 		expect((await call("POST", "/scout/local-browser/runs/run-1/findings/0/save")).status).toBe(200);

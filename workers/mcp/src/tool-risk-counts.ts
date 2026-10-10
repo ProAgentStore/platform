@@ -4,6 +4,8 @@ import type { McpScope } from "./safety.js";
 /** How the surface splits. A ratchet in BOTH directions: silently losing a read-only
  *  annotation is as much a regression as silently gaining one. */
 export const MCP_RISK_COUNTS: Record<McpScope, number> = {
+	// +1 runtime at #1010: an owner-scoped receipt dispatches one exact reviewed material set to
+	// their Runner in review-only mode. It drives a machine but cannot submit or enable an edge.
 	// +2 read, +1 write at #671: `list_runner_nodes` and `instance_runner_node` read machine
 	// placement, `set_instance_runner_node` writes the pin. The write is `write` and not `runtime`
 	// deliberately — it changes where calls are ROUTED without itself driving anything on the
@@ -215,7 +217,7 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// browser on the owner's machine; runtime for the reason `coding_loop_start` is.
 	// +5 runtime at #958: generate_application_materials, start_application_fill, request_application_review,
 	// retry_application, resume_application — each starts or continues a run on the owner's machine.
-	runtime: 35,
+	runtime: 36,
 	// +1 read, +8 destructive at #613 (agent-template authoring, write half): builder planning
 	// only computes a proposal; the other eight can delete, overwrite, run a billable template
 	// turn, create an enduring version, or create/scaffold a template. They all require the
