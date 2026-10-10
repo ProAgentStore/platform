@@ -5,7 +5,7 @@ import { loadMachineIdentity } from "../../machine.js";
 import { writeError, writeLine } from "../../output.js";
 import { apiPathSegment, clean, pagsApiBase, requestPags, requestRunner } from "./http.js";
 import { CLI_VERSION, runsFromSource } from "./process.js";
-import { installVersion, latestPublishedVersion, leaveForRestart, planRunnerUpdate, restarterFrom, RUNNER_UPDATE_PATH, supervisorNote, type UpdatePlan } from "./self-update.js";
+import { deferredUpdateLease, deferredUpdateLeaseActive, installVersion, latestPublishedVersion, leaveForRestart, planRunnerUpdate, restarterFrom, RUNNER_UPDATE_PATH, supervisorNote, type DeferredUpdateLease, type UpdatePlan } from "./self-update.js";
 import { diffMembership, instanceLabel, pendingRegistrations, pinnedAway, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance, type ReattachRequest } from "./membership.js";
 import { formatStatusLine } from "./status-line.js";
 import type { PagsRequestOptions } from "./types.js";
@@ -246,10 +246,10 @@ export async function connectViaRelay(
 	// observe the runner one final time. This turns "idle at the last poll" into a real admission
 	// boundary: a coding turn cannot slip in during npm or the old 500ms restart delay.
 	const relayMutationAdmission = new RelayMutationAdmission();
-	const installAndRestart = async (plan: Extract<UpdatePlan, { action: "update" }>, automatic = false): Promise<boolean> => {
+	const installAndRestart = async (plan: Extract<UpdatePlan, { action: "update" }>, automatic = false, lease?: DeferredUpdateLease): Promise<boolean> => {
 		// An automatic check and a remote manual request may both have observed the same old version.
 		// Only one may ever reach npm/restart; a second observer leaves the first to finish.
-		if (updateInstallInFlight) return false;
+		if (updateInstallInFlight || (lease && !deferredUpdateLeaseActive(lease))) return false;
 		updateInstallInFlight = true;
 		// Cached policy is deliberately insufficient for unattended mutation. Read the owner's
 		// current switch immediately before npm so an offline runner cannot install after a disable.
@@ -271,9 +271,14 @@ export async function connectViaRelay(
 		// than trusting the idle snapshot that admitted installation; a run that began during npm
 		// must survive. The short drain also lets a request admitted just before the boundary show up
 		// in /health before we make the final decision.
+		await relayMutationAdmission.drain();
+		await new Promise<void>((resolve) => setTimeout(resolve, 500));
+		if (lease && !deferredUpdateLeaseActive(lease)) {
+			relayMutationAdmission.resume();
+			updateInstallInFlight = false;
+			return false;
+		}
 		if (automatic) {
-			await relayMutationAdmission.drain();
-			await new Promise<void>((resolve) => setTimeout(resolve, 500));
 			if (!(await refreshAutomaticPolicy()) || !autoUpdatePolicy.autoUpdate) {
 				relayMutationAdmission.resume();
 				updateInstallInFlight = false;
@@ -288,17 +293,27 @@ export async function connectViaRelay(
 		}
 		writeLine(`Installed ${plan.latest} — restarting; every agent re-attaches on the way back up.`);
 		for (const id of [...attached.keys()]) detach(id);
-		leaveForRestart(plan.restarter);
+		// The control reply must leave the relay before `process.exit` closes its socket.  The caller
+		// owns the actual exit: an explicit update schedules it after its acknowledgement, while a
+		// deferred or unattended update has no reply to wait for (#1008).
 		return true;
 	};
 	/** A deferred update waits for busy engines to finish, re-checking — never cuts a turn off (#859). */
 	let updateWaiting = false;
-	const updateWhenIdle = (automatic = false) => {
-		if (updateWaiting) return;
+	let deferredManualLease: DeferredUpdateLease | null = null;
+	const updateWhenIdle = (automatic = false, lease?: DeferredUpdateLease): boolean => {
+		if (updateWaiting || (!automatic && !lease)) return false;
 		updateWaiting = true;
-		const until = Date.now() + 60 * 60_000;
+		if (!automatic) deferredManualLease = lease!;
+		const until = automatic ? Date.now() + 60 * 60_000 : lease!.expiresAt;
 		const tick = () =>
 			setTimeout(async () => {
+				if (!automatic && (!deferredManualLease || !deferredUpdateLeaseActive(deferredManualLease))) {
+					writeLine("runner_update: the deferred operation lease expired; no delayed restart was performed.");
+					deferredManualLease = null;
+					updateWaiting = false;
+					return;
+				}
 				// The policy can change while a coding turn runs. Read our most recently synced value
 				// and then fetch the owner switch again immediately before planning/installation. It
 				// never affects an operator's explicit runner_update command.
@@ -314,24 +329,30 @@ export async function connectViaRelay(
 						return;
 					}
 					if (automatic) saveAutoUpdateStatus("running", { latestVersion: plan.latest, reason: undefined });
-					const installed = await installAndRestart(plan, automatic).catch((e) => {
+					const installed = await installAndRestart(plan, automatic, automatic ? undefined : deferredManualLease ?? undefined).catch((e) => {
 						if (automatic) saveAutoUpdateStatus("failure", { reason: e instanceof Error ? e.message : String(e) });
 						writeError(`runner_update: install failed — ${e instanceof Error ? e.message : String(e)}`);
 						return false;
 					});
-					if (automatic && !installed && Date.now() < until) {
+					if (!installed && Date.now() < until) {
 						saveAutoUpdateStatus("waiting-for-idle", { latestVersion: plan.latest });
 						tick();
-					} else updateWaiting = false;
+					} else {
+						deferredManualLease = null;
+						updateWaiting = false;
+						if (installed) leaveForRestart(plan.restarter);
+					}
 				} else if (plan.action === "wait" && Date.now() < until) {
 					if (automatic) saveAutoUpdateStatus("waiting-for-idle", { latestVersion: plan.latest, reason: undefined });
 					tick();
 				} else {
 					if (automatic && plan.action === "refused") saveAutoUpdateStatus("unsupported", { reason: plan.reason });
+					deferredManualLease = null;
 					updateWaiting = false;
 				}
 			}, 15_000).unref();
 		tick();
+		return true;
 	};
 
 	/**
@@ -424,7 +445,13 @@ export async function connectViaRelay(
 		plan: planRunnerUpdate,
 		// This bridge is deliberately the same function used by explicit runner_update. It owns npm,
 		// a fresh authoritative policy, the mutation drain, final local-work observation and restart.
-		installAndRestart,
+		installAndRestart: async (plan, automatic) => {
+			const installed = await installAndRestart(plan, automatic);
+			// The controller records its `restarting` status in the microtask after this resolves;
+			// leaving on a timer preserves that evidence before the process goes away.
+			if (installed) setTimeout(() => leaveForRestart(plan.restarter), 0).unref();
+			return installed;
+		},
 		status: saveAutoUpdateStatus,
 	});
 	// `acceptAutoUpdatePolicy` is declared before this controller so startup registration can parse
@@ -436,15 +463,20 @@ export async function connectViaRelay(
 		const plan = planRunnerUpdate(await updateFacts());
 		if (dryRun || plan.action === "up-to-date" || plan.action === "refused") return { status: 200, result: { ...plan, dryRun } };
 		if (plan.action === "wait") {
-			updateWhenIdle();
-			return { status: 200, result: { ...plan, detail: "Restarts itself as soon as these engines finish their turns — no run is cut off." } };
+			const lease = deferredUpdateLease(body);
+			if (!lease) return { status: 400, result: { error: "A busy runner_update needs a current operation lease; no delayed restart was scheduled." } };
+			if (!updateWhenIdle(false, lease)) return { status: 409, result: { error: "A runner update is already waiting for active work to finish." } };
+			return { status: 200, result: { ...plan, operationId: lease.operationId, deferredUntil: lease.expiresAt, detail: "This operation may restart only before its recorded lease expires; no delayed restart survives an expired or terminal operation." } };
 		}
 		try {
-			if (!(await automaticUpdateController.installManually(plan))) return { status: 409, result: { error: "A runner update is already installing or restarting." } };
+			if (!(await installAndRestart(plan))) return { status: 409, result: { error: "A runner update is already installing or restarting." } };
 		} catch (e) {
 			return { status: 500, result: { error: `npm could not install ${plan.latest}: ${e instanceof Error ? e.message : String(e)}` } };
 		}
 		const supervisor = supervisorNote(plan.restarter);
+		// `openRelaySocket` sends this value before timers run.  Calling `leaveForRestart` above
+		// would synchronously exit and make this decisive machine acknowledgement impossible.
+		setTimeout(() => leaveForRestart(plan.restarter), 25).unref();
 		return { status: 200, result: { action: "restarting", current: plan.current, latest: plan.latest, restartedBy: plan.restarter, ...(supervisor ? { supervisor } : {}) } };
 	};
 

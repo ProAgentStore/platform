@@ -3,7 +3,7 @@
  * it must refuse because nothing would bring it back.
  */
 import { describe, expect, it, vi } from "vitest";
-import { leaveForRestart, olderThan, restartUpArgs, planRunnerUpdate, RESTART_COMMAND_ENV, restarterFrom, RUNNER_RESTART_EXIT_CODE, SERVICE_ENV, SUPERVISED_ENV, SUPERVISOR_RESTARTS, supervisorNote, type UpdateFacts } from "./self-update.js";
+import { deferredUpdateLease, deferredUpdateLeaseActive, leaveForRestart, MAX_DEFERRED_UPDATE_LEASE_MS, olderThan, restartUpArgs, planRunnerUpdate, RESTART_COMMAND_ENV, restarterFrom, RUNNER_RESTART_EXIT_CODE, SERVICE_ENV, SUPERVISED_ENV, SUPERVISOR_RESTARTS, supervisorNote, type UpdateFacts } from "./self-update.js";
 
 const facts = (over: Partial<UpdateFacts> = {}): UpdateFacts => ({ current: "0.4.62", latest: "0.4.63", fromSource: false, restarter: "pags-up", busy: [], ...over });
 
@@ -37,6 +37,26 @@ describe("planRunnerUpdate (#859)", () => {
 	it("refuses a source checkout, and a machine that cannot reach npm", () => {
 		expect(planRunnerUpdate(facts({ fromSource: true }))).toMatchObject({ action: "refused", reason: expect.stringMatching(/git pull/) });
 		expect(planRunnerUpdate(facts({ latest: null }))).toMatchObject({ action: "refused", reason: expect.stringMatching(/npm could not be asked/) });
+	});
+});
+
+describe("deferred manual update leases (#1008)", () => {
+	it("accepts only a current, bounded operation lease — an expired operation cannot restart later", () => {
+		const now = Date.parse("2026-10-11T00:00:00Z");
+		const lease = deferredUpdateLease({ operationId: "op-safe", deferUntil: now + MAX_DEFERRED_UPDATE_LEASE_MS }, now);
+		expect(lease).toEqual({ operationId: "op-safe", expiresAt: now + MAX_DEFERRED_UPDATE_LEASE_MS });
+		expect(deferredUpdateLeaseActive(lease!, now + MAX_DEFERRED_UPDATE_LEASE_MS - 1)).toBe(true);
+		expect(deferredUpdateLeaseActive(lease!, now + MAX_DEFERRED_UPDATE_LEASE_MS)).toBe(false);
+	});
+
+	it("refuses malformed, expired, and unbounded deferrals", () => {
+		const now = Date.parse("2026-10-11T00:00:00Z");
+		for (const value of [
+			{},
+			{ operationId: "", deferUntil: now + 1 },
+			{ operationId: "op", deferUntil: now },
+			{ operationId: "op", deferUntil: now + MAX_DEFERRED_UPDATE_LEASE_MS + 1 },
+		]) expect(deferredUpdateLease(value, now)).toBeNull();
 	});
 });
 

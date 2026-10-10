@@ -81,6 +81,34 @@ export type UpdatePlan =
 	| { action: "update"; current: string; latest: string; restarter: Restarter };
 
 /**
+ * A manual update which is waiting for active work is allowed to restart only for this bounded
+ * control-plane lease.  Without a lease, a terminal/expired operation could leave a local timer
+ * that restarts the machine much later with no operation left to explain it (#1008).
+ */
+export interface DeferredUpdateLease {
+	operationId: string;
+	expiresAt: number;
+}
+
+/** Five minutes is deliberately shorter than the API's six-minute stale-operation sweep. */
+export const MAX_DEFERRED_UPDATE_LEASE_MS = 5 * 60_000;
+
+/** Parse a non-secret, bounded lease supplied by the durable control-plane operation. */
+export function deferredUpdateLease(value: unknown, now = Date.now()): DeferredUpdateLease | null {
+	if (!value || typeof value !== "object") return null;
+	const raw = value as Record<string, unknown>;
+	const operationId = typeof raw.operationId === "string" ? raw.operationId.trim() : "";
+	const expiresAt = typeof raw.deferUntil === "number" ? raw.deferUntil : NaN;
+	if (!operationId || operationId.length > 128 || !Number.isFinite(expiresAt)) return null;
+	if (expiresAt <= now || expiresAt > now + MAX_DEFERRED_UPDATE_LEASE_MS) return null;
+	return { operationId, expiresAt };
+}
+
+export function deferredUpdateLeaseActive(lease: DeferredUpdateLease, now = Date.now()): boolean {
+	return now < lease.expiresAt;
+}
+
+/**
  * Leave so {@link Restarter} starts this process again on the new release (#860): the restart code for
  * `pags up` or a service manager; for a {@link RESTART_COMMAND_ENV} the command, started detached first.
  */

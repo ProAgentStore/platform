@@ -24,7 +24,7 @@ const live = new Set<string>();
 let dropped = false;
 let comesBack = true;
 let pollsAfterRestart = 0;
-let reply: () => unknown = () => ({ action: "restarting", current: "0.4.84", latest: "0.4.85", restartedBy: "pags-up" });
+let reply: (body?: Record<string, unknown>) => unknown = () => ({ action: "restarting", current: "0.4.84", latest: "0.4.85", restartedBy: "pags-up" });
 
 vi.mock("./runner-client.js", () => ({
 	relayConnected: async (_e: unknown, id: string, node: string) => {
@@ -34,9 +34,9 @@ vi.mock("./runner-client.js", () => ({
 	},
 	evictStaleRunnerSocket: async () => ({ sockets: 0, alive: false, evicted: 0 }),
 	getRunnerConnIgnoringLiveness: async (_e: unknown, id: string, _uid: string, node: string) => ({ instanceId: id, runnerNode: node }),
-	callRunner: async (conn: { instanceId: string }, path: string) => {
+	callRunner: async (conn: { instanceId: string }, path: string, body?: Record<string, unknown>) => {
 		if (path !== "/pags/runner/update") return { attached: [], target: conn.instanceId };
-		const r = reply();
+		const r = reply(body);
 		if (r instanceof Error) throw r;
 		// The restart: every socket on the machine drops.
 		if ((r as { action?: string }).action === "restarting") dropped = true;
@@ -218,12 +218,29 @@ describe("the idle-node update path, end to end (#990)", () => {
 	it.each([
 		["up-to-date", { action: "up-to-date", current: "0.4.85" }, "up_to_date"],
 		["refused", { action: "refused", current: "0.4.84", reason: "nothing here would restart it" }, "refused"],
-		["waiting for a busy engine", { action: "wait", current: "0.4.84", latest: "0.4.85", waitingFor: ["session-1"] }, "scheduled"],
+		["waiting for a busy engine", undefined, "scheduled"],
 	] as const)("propagates the machine's own %s verdict as a terminal state", async (_label, machineReply, state) => {
-		reply = () => machineReply;
+		reply = (body) => machineReply ?? { action: "wait", current: "0.4.84", latest: "0.4.85", waitingFor: ["session-1"], operationId: body?.operationId, deferredUntil: body?.deferUntil };
 		const { op } = await start(fast);
 		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ id: op.id, state });
 		expect((await row(op.id))?.ended_at, "a terminal state is finished").toBeTruthy();
+	});
+
+	it("records a bounded busy deferral, so a completed operation cannot hide an uncontrolled delayed restart", async () => {
+		reply = (body) => ({ action: "wait", current: "0.4.84", latest: "0.4.85", waitingFor: ["coding session c1 (thinking)"], operationId: body?.operationId, deferredUntil: body?.deferUntil });
+		const { op } = await start(fast);
+		const final = await latestUpdateOp(env(), "u1", NODE);
+		expect(final).toMatchObject({ id: op.id, state: "scheduled", phase: "deferred", waitingFor: ["coding session c1 (thinking)"] });
+		expect(final?.deferredUntil).toBeTruthy();
+		expect(final?.detail).toMatch(/will not restart after that lease expires/);
+	});
+
+	it("fails closed when an older runner tries to defer without accepting the operation lease", async () => {
+		reply = () => ({ action: "wait", current: "0.4.84", latest: "0.4.85", waitingFor: ["session-1"] });
+		const { op } = await start(fast);
+		const final = await latestUpdateOp(env(), "u1", NODE);
+		expect(final).toMatchObject({ id: op.id, state: "failed" });
+		expect(final?.detail).toMatch(/without accepting its bounded operation lease/);
 	});
 
 	it("records a CLI too old to update itself as `unsupported`, with the one manual step", async () => {

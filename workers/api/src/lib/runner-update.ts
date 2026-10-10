@@ -39,6 +39,8 @@ export const RUNNER_UPDATE_PATH = "/pags/runner/update";
 const UPDATE_TIMEOUT_MS = 115_000;
 /** How long the restarted runner gets to re-attach every agent on its own before we step in. */
 const REATTACH_WAIT_MS = 90_000;
+/** Must expire before the stale-operation sweep, so a terminal row cannot hide a local retry. */
+export const DEFERRED_UPDATE_LEASE_MS = 5 * 60_000;
 
 /** What the machine answered — `self-update.ts`'s plan, or `restarting`. */
 interface MachineReply {
@@ -49,6 +51,9 @@ interface MachineReply {
 	waitingFor?: string[];
 	detail?: string;
 	dryRun?: boolean;
+	/** Echoed by a bounded busy deferral; never a credential. */
+	operationId?: string;
+	deferredUntil?: number;
 	/** What starts it again (#860) — `self-update.ts`'s `Restarter`. Absent from a CLI older than #860. */
 	restartedBy?: string;
 	/** What the update did not reach, when something (#860). */
@@ -80,12 +85,14 @@ export interface RunnerUpdateResult {
 	restartedBy?: string;
 	/** Set when the machine's `pags up` supervisor did NOT move onto the new release (#860). */
 	supervisor?: string;
+	/** A busy runner may defer only through this lease; after it, it must not restart itself. */
+	deferredUntil?: string;
 	detail?: string;
 }
 
 type UpdateProgress = (phase: Exclude<RunnerUpdatePhase, "claimed" | "queued">, detail: string, versions?: { current?: string; latest?: string }) => Promise<boolean>;
 
-export async function updateRunnerNode(env: Env, userId: string, rawNode: string, opts: RepinDeps & { dryRun?: boolean; onProgress?: UpdateProgress } = {}): Promise<RunnerUpdateResult> {
+export async function updateRunnerNode(env: Env, userId: string, rawNode: string, opts: RepinDeps & { dryRun?: boolean; onProgress?: UpdateProgress; operationId?: string; deferUntil?: number } = {}): Promise<RunnerUpdateResult> {
 	const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 	const now = opts.now ?? Date.now;
 	const node = normalizeRunnerNode(rawNode);
@@ -115,7 +122,11 @@ export async function updateRunnerNode(env: Env, userId: string, rawNode: string
 			if ((await opts.onProgress?.("installing", `The install request for ${node} is being dispatched to the runner; machine acknowledgement is pending.`)) === false) {
 				return { node, action: "failed", held, detail: `The update on ${node} was not dispatched because its operation record closed first.` };
 			}
-			reply = (await callRunner<MachineReply>(carrier, RUNNER_UPDATE_PATH, { dryRun: opts.dryRun === true }, { timeoutMs: UPDATE_TIMEOUT_MS })) ?? {};
+			reply = (await callRunner<MachineReply>(carrier, RUNNER_UPDATE_PATH, {
+				dryRun: opts.dryRun === true,
+				...(opts.operationId ? { operationId: opts.operationId } : {}),
+				...(opts.deferUntil ? { deferUntil: opts.deferUntil } : {}),
+			}, { timeoutMs: UPDATE_TIMEOUT_MS })) ?? {};
 			break;
 		} catch (e) {
 			if (e instanceof RunnerUnreachableError) continue;
@@ -142,13 +153,23 @@ export async function updateRunnerNode(env: Env, userId: string, rawNode: string
 	if (reply.action === "up-to-date") return { ...base, action: "up-to-date", detail: `${node} already runs ${reply.current}, the latest release.` };
 	if (reply.action === "refused") return { ...base, action: "refused", detail: reply.reason };
 	if (reply.action === "wait") {
+		const validLease = typeof reply.deferredUntil === "number"
+			&& reply.operationId === opts.operationId
+			&& reply.deferredUntil > now()
+			&& reply.deferredUntil <= (opts.deferUntil ?? 0);
+		if (!opts.dryRun && opts.operationId && !validLease) {
+			return { ...base, action: "failed", detail: `${node} deferred the update without accepting its bounded operation lease, so the platform did not treat a delayed restart as safe. Wait for the work to finish and retry.` };
+		}
 		return opts.dryRun
 			? { ...base, action: "would-update", waitingFor: reply.waitingFor, detail: `Would update ${reply.current} → ${reply.latest} once ${reply.waitingFor?.length ?? 0} engine(s) finish their turns.` }
 			: {
 					...base,
 					action: "scheduled",
 					waitingFor: reply.waitingFor,
-					detail: `${node} will update ${reply.current} → ${reply.latest} and restart as soon as these engines finish their turns — no run is cut off. Call runner_update again afterwards to confirm every agent re-attached.`,
+					...(validLease ? { deferredUntil: new Date(reply.deferredUntil!).toISOString() } : {}),
+					detail: validLease
+						? `${node} deferred ${reply.current} → ${reply.latest} until ${new Date(reply.deferredUntil!).toISOString()}; it will not restart after that lease expires. No run is cut off.`
+						: `${node} will update ${reply.current} → ${reply.latest} and restart as soon as these engines finish their turns — no run is cut off.`,
 				};
 	}
 	if (reply.action !== "restarting") {
@@ -333,10 +354,15 @@ export async function executeRunnerUpdateOperation(
 		return true;
 	};
 	try {
-		const result = await updateRunnerNode(env, userId, node, { ...opts, onProgress: checkpoint });
+		const result = await updateRunnerNode(env, userId, node, {
+			...opts,
+			onProgress: checkpoint,
+			operationId: opId,
+			deferUntil: (opts.now?.() ?? Date.now()) + DEFERRED_UPDATE_LEASE_MS,
+		});
 		const patch = {
 				state: UPDATE_STATE_FOR_ACTION[result.action] ?? "failed",
-				phase: result.action === "restarted" ? "reattaching" : "installing",
+				phase: result.action === "restarted" ? "reattaching" : result.action === "scheduled" ? "deferred" : "installing",
 				currentVersion: result.current ?? null,
 				latestVersion: result.latest ?? null,
 				finalVersion: result.version ?? null,
@@ -348,6 +374,7 @@ export async function executeRunnerUpdateOperation(
 				waitingFor: result.waitingFor ?? [],
 				restartedBy: result.restartedBy ?? null,
 				supervisor: result.supervisor ?? null,
+				deferredUntil: result.deferredUntil ?? null,
 			} as const;
 		const completed = await advanceUpdateOp(env, userId, opId, patch, opts.now?.());
 		if (!completed) {

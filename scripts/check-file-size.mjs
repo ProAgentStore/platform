@@ -1934,13 +1934,13 @@ const PINS = {
 	// +4 at #991: the console types.ts reason above (three lines) and this line.
 	// +9 at #992: the console types.ts reason (five lines) and the surface-lock.ts reason (two
 	// lines) above, plus these two.
-	"packages/cli/src/commands/runner/relay.ts": 895, // #1007 also keeps the named engine-state/update-health dedup beside the safety planner; #859 follow-up: relay wires the injected automatic-update controller and in-flight mutation drain; policy/cache and controller sequencing live in sibling modules.
+	"packages/cli/src/commands/runner/relay.ts": 959, // #1008 keeps the correlated manual-update acknowledgement, bounded deferred lease, final mutation drain, and actual relay control path beside the runner's singleton update state; extracting them would split safety state across modules. #1007 also keeps the named engine-state/update-health dedup beside the safety planner; #859 follow-up: relay wires the injected automatic-update controller and in-flight mutation drain; policy/cache and controller sequencing live in sibling modules.
 	"workers/api/src/routes/instances.ts": 1178, // #1009 mounts the extracted owner permission-recovery routes (one import, one registrar); lifecycle work remains in instances-permission-requests.ts. #859 follow-up: runtime registration/heartbeat wires the owner policy and lifecycle telemetry; policy queries live in lib/machine-policy.ts.
 	"workers/api/src/routes/instances-runtime.ts": 938, // #859 follow-up: runtime status exposes the resolved physical-machine policy; resolution lives in lib/machine-policy.ts.
 	"workers/api/src/routes/terminals.ts": 878, // #859 follow-up: ordered terminal routes own the stable machine detail and policy endpoints; D1 policy access lives in lib/machine-policy.ts.
 	"workers/mcp/src/surface-lock.ts": 1120, // #1009 appends the 0.1.106 permission-request deep-link schema record; this history-checked ledger is deliberately unsplit. #1004 appends the 0.1.105 owner-scoped instance-file upload surface record (and 0.1.104 uploaded-Tailor-source controls); this history-checked ledger is deliberately unsplit. #1003 appends the get_console_link files-upload inputSchema revision; this history-checked ledger is deliberately unsplit. #859 follow-up: append-only MCP ledger entries for get_machine_policy and set_machine_policy.
 	"store/console/src/tabs/KnowledgeTab.tsx": 818, // #1003 keeps URL-addressable knowledge subtabs beside the existing capability-gated upload surfaces; splitting the tab would separate state from the controls it governs.
-	"scripts/check-file-size.mjs": 2024, // #1003 adds the reviewed KnowledgeTab URL-subtab pin above. #859 follow-up adds five explicitly reviewed policy/relay surface pins above; this ledger must describe its own deliberate growth.
+	"scripts/check-file-size.mjs": 2025, // #1008 raises the correlated runner-update safety pin above. #1003 adds the reviewed KnowledgeTab URL-subtab pin above. #859 follow-up adds five explicitly reviewed policy/relay surface pins above; this ledger must describe its own deliberate growth.
 };
 
 /**

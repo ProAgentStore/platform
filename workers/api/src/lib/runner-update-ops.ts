@@ -34,7 +34,7 @@ export const RUNNER_UPDATE_STATES = ["running", "scheduled", "restarting", "rest
 export type RunnerUpdateState = (typeof RUNNER_UPDATE_STATES)[number];
 
 /** The last durable control-plane checkpoint; it never pretends to observe an unreported machine step. */
-export const RUNNER_UPDATE_PHASES = ["claimed", "queued", "dispatching", "installing", "restarting", "reattaching"] as const;
+export const RUNNER_UPDATE_PHASES = ["claimed", "queued", "dispatching", "installing", "deferred", "restarting", "reattaching"] as const;
 export type RunnerUpdatePhase = (typeof RUNNER_UPDATE_PHASES)[number];
 
 export const isTerminalUpdateState = (state: string): boolean => state !== "running";
@@ -77,6 +77,8 @@ export interface RunnerUpdateOp {
 	executionOwner: string | null;
 	workflowId: string | null;
 	workflowQueuedAt: string | null;
+	/** Bounded machine-side deferral deadline, if the runner was busy. */
+	deferredUntil: string | null;
 	dryRun: boolean;
 	createdAt: string;
 	updatedAt: string;
@@ -105,6 +107,7 @@ interface Row {
 	execution_owner: string | null;
 	workflow_id: string | null;
 	workflow_queued_at: number | null;
+	deferred_until: number | null;
 	dry_run: number;
 	created_at: number;
 	updated_at: number;
@@ -151,6 +154,7 @@ const present = (r: Row): RunnerUpdateOp => ({
 	executionOwner: r.execution_owner,
 	workflowId: r.workflow_id,
 	workflowQueuedAt: iso(r.workflow_queued_at),
+	deferredUntil: iso(r.deferred_until),
 	dryRun: r.dry_run === 1,
 	createdAt: iso(r.created_at) ?? "",
 	updatedAt: iso(r.updated_at) ?? "",
@@ -158,7 +162,7 @@ const present = (r: Row): RunnerUpdateOp => ({
 });
 
 const SELECT = `SELECT id, node, machine_id, state, phase, current_version, latest_version, final_version, detail, reason,
- held, reattached, missing, waiting_for, restarted_by, supervisor, reconciliation, reconciled_at, execution_owner, workflow_id, workflow_queued_at, dry_run, created_at, updated_at, ended_at
+ held, reattached, missing, waiting_for, restarted_by, supervisor, reconciliation, reconciled_at, execution_owner, workflow_id, workflow_queued_at, deferred_until, dry_run, created_at, updated_at, ended_at
  FROM runner_update_ops`;
 
 /** The live operation on this machine, when one is in flight. */
@@ -253,6 +257,7 @@ export async function claimUpdateOp(
 			executionOwner: "workflow",
 			workflowId: null,
 			workflowQueuedAt: null,
+			deferredUntil: null,
 			dryRun: opts.dryRun === true,
 			createdAt: new Date(now).toISOString(),
 			updatedAt: new Date(now).toISOString(),
@@ -327,6 +332,7 @@ export interface UpdateOpPatch {
 	waitingFor?: readonly string[];
 	restartedBy?: string | null;
 	supervisor?: string | null;
+	deferredUntil?: string | null;
 }
 
 /**
@@ -353,9 +359,10 @@ export async function advanceUpdateOp(env: Pick<Env, "DB">, userId: string, id: 
 		        waiting_for = COALESCE(?11, waiting_for),
 		        restarted_by = COALESCE(?12, restarted_by),
 		        supervisor = COALESCE(?13, supervisor),
-		        updated_at = ?14,
-		        ended_at = CASE WHEN ?15 = 1 THEN ?14 ELSE ended_at END
-		  WHERE id = ?16 AND user_id = ?17 AND state = 'running'`,
+			        deferred_until = COALESCE(?14, deferred_until),
+			        updated_at = ?15,
+			        ended_at = CASE WHEN ?16 = 1 THEN ?15 ELSE ended_at END
+		  WHERE id = ?17 AND user_id = ?18 AND state = 'running'`,
 	)
 		.bind(
 			patch.state,
@@ -371,6 +378,7 @@ export async function advanceUpdateOp(env: Pick<Env, "DB">, userId: string, id: 
 			patch.waitingFor ? JSON.stringify([...patch.waitingFor]) : null,
 			patch.restartedBy ?? null,
 			patch.supervisor ?? null,
+			patch.deferredUntil ? Date.parse(patch.deferredUntil) : null,
 			now,
 			terminal ? 1 : 0,
 			id,
