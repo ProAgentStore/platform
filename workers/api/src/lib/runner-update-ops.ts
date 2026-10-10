@@ -32,6 +32,10 @@ import type { Env } from "../types.js";
 export const RUNNER_UPDATE_STATES = ["running", "scheduled", "restarting", "restarted", "up_to_date", "would_update", "refused", "unsupported", "unreachable", "failed"] as const;
 export type RunnerUpdateState = (typeof RUNNER_UPDATE_STATES)[number];
 
+/** The last durable control-plane checkpoint; it never pretends to observe an unreported machine step. */
+export const RUNNER_UPDATE_PHASES = ["claimed", "dispatching", "installing", "restarting", "reattaching"] as const;
+export type RunnerUpdatePhase = (typeof RUNNER_UPDATE_PHASES)[number];
+
 export const isTerminalUpdateState = (state: string): boolean => state !== "running";
 
 /** The `action` vocabulary {@link RunnerUpdateResult} speaks, mapped onto the stored state. */
@@ -53,6 +57,7 @@ export interface RunnerUpdateOp {
 	/** Stable physical identity when the caller had one; null for pre-identity runners. */
 	machineId: string | null;
 	state: RunnerUpdateState;
+	phase: RunnerUpdatePhase;
 	currentVersion: string | null;
 	latestVersion: string | null;
 	/** The version the platform recorded for the machine after it came back. */
@@ -65,6 +70,8 @@ export interface RunnerUpdateOp {
 	waitingFor: string[];
 	restartedBy: string | null;
 	supervisor: string | null;
+	reconciliation: string | null;
+	reconciledAt: string | null;
 	dryRun: boolean;
 	createdAt: string;
 	updatedAt: string;
@@ -76,6 +83,7 @@ interface Row {
 	node: string;
 	machine_id: string | null;
 	state: string;
+	phase: string;
 	current_version: string | null;
 	latest_version: string | null;
 	final_version: string | null;
@@ -87,6 +95,8 @@ interface Row {
 	waiting_for: string;
 	restarted_by: string | null;
 	supervisor: string | null;
+	reconciliation: string | null;
+	reconciled_at: number | null;
 	dry_run: number;
 	created_at: number;
 	updated_at: number;
@@ -115,6 +125,7 @@ const present = (r: Row): RunnerUpdateOp => ({
 	id: r.id,
 	node: r.node,
 	state: (RUNNER_UPDATE_STATES as readonly string[]).includes(r.state) ? (r.state as RunnerUpdateState) : "failed",
+	phase: (RUNNER_UPDATE_PHASES as readonly string[]).includes(r.phase) ? (r.phase as RunnerUpdatePhase) : "claimed",
 	machineId: r.machine_id,
 	currentVersion: r.current_version,
 	latestVersion: r.latest_version,
@@ -127,14 +138,16 @@ const present = (r: Row): RunnerUpdateOp => ({
 	waitingFor: list(r.waiting_for),
 	restartedBy: r.restarted_by,
 	supervisor: r.supervisor,
+	reconciliation: r.reconciliation,
+	reconciledAt: iso(r.reconciled_at),
 	dryRun: r.dry_run === 1,
 	createdAt: iso(r.created_at) ?? "",
 	updatedAt: iso(r.updated_at) ?? "",
 	endedAt: iso(r.ended_at),
 });
 
-const SELECT = `SELECT id, node, machine_id, state, current_version, latest_version, final_version, detail, reason,
- held, reattached, missing, waiting_for, restarted_by, supervisor, dry_run, created_at, updated_at, ended_at
+const SELECT = `SELECT id, node, machine_id, state, phase, current_version, latest_version, final_version, detail, reason,
+ held, reattached, missing, waiting_for, restarted_by, supervisor, reconciliation, reconciled_at, dry_run, created_at, updated_at, ended_at
  FROM runner_update_ops`;
 
 /** The live operation on this machine, when one is in flight. */
@@ -189,8 +202,8 @@ export async function claimUpdateOp(
 	const now = opts.now ?? Date.now();
 	const id = opts.id ?? crypto.randomUUID();
 	const inserted = await env.DB.prepare(
-		`INSERT INTO runner_update_ops (id, user_id, node, machine_id, state, dry_run, requested_by, detail, created_at, updated_at)
-		 VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7, ?8, ?8)
+		`INSERT INTO runner_update_ops (id, user_id, node, machine_id, state, phase, dry_run, requested_by, detail, created_at, updated_at)
+		 VALUES (?1, ?2, ?3, ?4, 'running', 'claimed', ?5, ?6, ?7, ?8, ?8)
 		 ON CONFLICT DO NOTHING`,
 	)
 		.bind(id, userId, name, opts.machineId ?? null, opts.dryRun ? 1 : 0, opts.requestedBy ?? "owner", `Asking ${name} to update its \`pags\` CLI and restart.`, now)
@@ -212,6 +225,7 @@ export async function claimUpdateOp(
 			node: name,
 			machineId: opts.machineId ?? null,
 			state: "failed",
+			phase: "claimed",
 			currentVersion: null,
 			latestVersion: null,
 			finalVersion: null,
@@ -223,6 +237,8 @@ export async function claimUpdateOp(
 			waitingFor: [],
 			restartedBy: null,
 			supervisor: null,
+			reconciliation: null,
+			reconciledAt: null,
 			dryRun: opts.dryRun === true,
 			createdAt: new Date(now).toISOString(),
 			updatedAt: new Date(now).toISOString(),
@@ -234,6 +250,7 @@ export async function claimUpdateOp(
 
 export interface UpdateOpPatch {
 	state: RunnerUpdateState;
+	phase?: RunnerUpdatePhase;
 	currentVersion?: string | null;
 	latestVersion?: string | null;
 	finalVersion?: string | null;
@@ -254,28 +271,30 @@ export interface UpdateOpPatch {
  * late phase of the same attempt, which is the same rule `closeWorkCards`'s `openOnly` applies for
  * the same reason — whoever recorded the verdict first had the authority to.
  */
-export async function advanceUpdateOp(env: Pick<Env, "DB">, userId: string, id: string, patch: UpdateOpPatch, now = Date.now()): Promise<void> {
+export async function advanceUpdateOp(env: Pick<Env, "DB">, userId: string, id: string, patch: UpdateOpPatch, now = Date.now()): Promise<boolean> {
 	const terminal = isTerminalUpdateState(patch.state);
-	await env.DB.prepare(
+	return env.DB.prepare(
 		`UPDATE runner_update_ops
 		    SET state = ?1,
-		        current_version = COALESCE(?2, current_version),
-		        latest_version = COALESCE(?3, latest_version),
-		        final_version = COALESCE(?4, final_version),
-		        detail = COALESCE(?5, detail),
-		        reason = COALESCE(?6, reason),
-		        held = COALESCE(?7, held),
-		        reattached = COALESCE(?8, reattached),
-		        missing = COALESCE(?9, missing),
-		        waiting_for = COALESCE(?10, waiting_for),
-		        restarted_by = COALESCE(?11, restarted_by),
-		        supervisor = COALESCE(?12, supervisor),
-		        updated_at = ?13,
-		        ended_at = CASE WHEN ?14 = 1 THEN ?13 ELSE ended_at END
-		  WHERE id = ?15 AND user_id = ?16 AND state = 'running'`,
+		        phase = COALESCE(?2, phase),
+		        current_version = COALESCE(?3, current_version),
+		        latest_version = COALESCE(?4, latest_version),
+		        final_version = COALESCE(?5, final_version),
+		        detail = COALESCE(?6, detail),
+		        reason = COALESCE(?7, reason),
+		        held = COALESCE(?8, held),
+		        reattached = COALESCE(?9, reattached),
+		        missing = COALESCE(?10, missing),
+		        waiting_for = COALESCE(?11, waiting_for),
+		        restarted_by = COALESCE(?12, restarted_by),
+		        supervisor = COALESCE(?13, supervisor),
+		        updated_at = ?14,
+		        ended_at = CASE WHEN ?15 = 1 THEN ?14 ELSE ended_at END
+		  WHERE id = ?16 AND user_id = ?17 AND state = 'running'`,
 	)
 		.bind(
 			patch.state,
+			patch.phase ?? null,
 			patch.currentVersion ?? null,
 			patch.latestVersion ?? null,
 			patch.finalVersion ?? null,
@@ -293,7 +312,25 @@ export async function advanceUpdateOp(env: Pick<Env, "DB">, userId: string, id: 
 			userId,
 		)
 		.run()
-		.catch(() => undefined);
+		.then((r) => (r.meta?.changes ?? 0) > 0)
+		.catch(() => false);
+}
+
+/**
+ * The machine can finish after its control-plane owner was interrupted and the stale sweep closed
+ * the attempt. Preserve that late observation without reopening the operation or allowing a second
+ * install to overwrite its original terminal verdict.
+ */
+export async function reconcileLateUpdateOp(env: Pick<Env, "DB">, userId: string, id: string, reconciliation: string, now = Date.now()): Promise<boolean> {
+	const res = await env.DB.prepare(
+		`UPDATE runner_update_ops
+		    SET reconciliation = ?1, reconciled_at = ?2, updated_at = ?2
+		  WHERE id = ?3 AND user_id = ?4 AND state != 'running'`,
+	)
+		.bind(reconciliation.slice(0, 800), now, id, userId)
+		.run()
+		.catch(() => null);
+	return (res?.meta?.changes ?? 0) > 0;
 }
 
 /**
@@ -308,8 +345,8 @@ export async function failStaleUpdateOps(env: Pick<Env, "DB">, now = Date.now())
 	const res = await env.DB.prepare(
 		`UPDATE runner_update_ops
 		    SET state = 'failed',
-		        reason = COALESCE(reason, 'abandoned'),
-		        detail = 'The update stopped reporting before it finished, so its outcome was never recorded. The machine may or may not have installed it — check its version before retrying.',
+		        reason = 'abandoned_' || phase,
+		        detail = 'The update stopped reporting during phase ' || phase || ', so its outcome was never recorded. The machine may or may not have installed it — check its version before retrying.',
 		        updated_at = ?1, ended_at = ?1
 		  WHERE state = 'running' AND updated_at < ?2`,
 	)

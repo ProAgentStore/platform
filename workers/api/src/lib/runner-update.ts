@@ -15,7 +15,7 @@
  * the runner is away and resumes it — engine conversation included (`--resume`) — once it is back.
  */
 import { aliasNodesFor } from "./machine-identity.js";
-import { advanceUpdateOp, claimUpdateOp, type RunnerUpdateOp, UPDATE_STATE_FOR_ACTION } from "./runner-update-ops.js";
+import { advanceUpdateOp, claimUpdateOp, reconcileLateUpdateOp, type RunnerUpdateOp, type RunnerUpdatePhase, UPDATE_STATE_FOR_ACTION } from "./runner-update-ops.js";
 import { callRunner, relayConnected } from "./runner-client.js";
 import { attachAgentOnNode, liveCarriers, nodeRegistrations, type RepinDeps } from "./runner-repin.js";
 import { RunnerUnreachableError } from "./runner-unreachable.js";
@@ -53,7 +53,7 @@ const LEGACY_SUPERVISOR_NOTE =
 
 export interface RunnerUpdateResult {
 	node: string;
-	action: "up-to-date" | "refused" | "scheduled" | "restarted" | "would-update" | "unsupported" | "unreachable" | "failed";
+	action: "up-to-date" | "refused" | "scheduled" | "restarting" | "restarted" | "would-update" | "unsupported" | "unreachable" | "failed";
 	current?: string;
 	latest?: string;
 	/** The version the machine registers after the restart, as the platform now records it. */
@@ -72,7 +72,9 @@ export interface RunnerUpdateResult {
 	detail?: string;
 }
 
-export async function updateRunnerNode(env: Env, userId: string, rawNode: string, opts: RepinDeps & { dryRun?: boolean } = {}): Promise<RunnerUpdateResult> {
+type UpdateProgress = (phase: Exclude<RunnerUpdatePhase, "claimed">, detail: string, versions?: { current?: string; latest?: string }) => Promise<boolean>;
+
+export async function updateRunnerNode(env: Env, userId: string, rawNode: string, opts: RepinDeps & { dryRun?: boolean; onProgress?: UpdateProgress } = {}): Promise<RunnerUpdateResult> {
 	const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 	const now = opts.now ?? Date.now;
 	const node = normalizeRunnerNode(rawNode);
@@ -97,6 +99,11 @@ export async function updateRunnerNode(env: Env, userId: string, rawNode: string
 	let reply: MachineReply | null = null;
 	for (const carrier of carriers) {
 		try {
+			// This is the last durable point before the remote control command.  The machine has
+			// not acknowledged it yet: the label means "install requested", not "npm completed".
+			if ((await opts.onProgress?.("installing", `The install request for ${node} is being dispatched to the runner; machine acknowledgement is pending.`)) === false) {
+				return { node, action: "failed", held, detail: `The update on ${node} was not dispatched because its operation record closed first.` };
+			}
 			reply = (await callRunner<MachineReply>(carrier, RUNNER_UPDATE_PATH, { dryRun: opts.dryRun === true }, { timeoutMs: UPDATE_TIMEOUT_MS })) ?? {};
 			break;
 		} catch (e) {
@@ -138,6 +145,14 @@ export async function updateRunnerNode(env: Env, userId: string, rawNode: string
 	}
 
 	// 3. The machine is restarting on the new version. Wait for every held agent to come back.
+	// `restarting` is the CLI's post-install reply: npm and its final busy guard completed before
+	// it answered, so this is the first machine-confirmed point after the requested install.
+	if ((await opts.onProgress?.("restarting", `${node} confirmed ${reply.current ?? "its current CLI"} → ${reply.latest ?? "the requested release"}; restart is in progress.`, { current: reply.current, latest: reply.latest })) === false) {
+		return { ...base, action: "restarting", detail: `${node} acknowledged the install and restart after its original operation had already closed; re-attachment was not continued by that expired control-plane attempt.` };
+	}
+	if ((await opts.onProgress?.("reattaching", `${node} is restarting; waiting for ${held.length} held agent(s) to re-attach.`, { current: reply.current, latest: reply.latest })) === false) {
+		return { ...base, action: "restarting", detail: `${node} is restarting after its original operation had already closed; re-attachment was not continued by that expired control-plane attempt.` };
+	}
 	const until = now() + REATTACH_WAIT_MS;
 	let away = held;
 	while (away.length > 0 && now() < until) {
@@ -221,10 +236,27 @@ export async function startRunnerUpdate(
 	if (!claimed) return { op, started: false };
 
 	const run = (async () => {
+		let lastPhase: Exclude<RunnerUpdatePhase, "claimed"> = "dispatching";
+		const checkpoint = async (phase: Exclude<RunnerUpdatePhase, "claimed">, detail: string, versions?: { current?: string; latest?: string }): Promise<boolean> => {
+			const recorded = await advanceUpdateOp(env, userId, op.id, {
+				state: "running",
+				phase,
+				detail,
+				currentVersion: versions?.current,
+				latestVersion: versions?.latest,
+			}, opts.now?.());
+			// Do not contact or keep waiting on a machine if the operation can no longer report
+			// where it is. A late machine reply is reconciled below without reopening the row.
+			if (!recorded) return false;
+			lastPhase = phase;
+			return true;
+		};
 		try {
-			const result = await updateRunnerNode(env, userId, node, opts);
-			await advanceUpdateOp(env, userId, op.id, {
+			if (!(await checkpoint("dispatching", `Dispatching the update request to ${node}; no machine result has been observed yet.`))) return null;
+			const result = await updateRunnerNode(env, userId, node, { ...opts, onProgress: checkpoint });
+			const patch = {
 				state: UPDATE_STATE_FOR_ACTION[result.action] ?? "failed",
+				phase: result.action === "restarted" ? "reattaching" : "installing",
 				currentVersion: result.current ?? null,
 				latestVersion: result.latest ?? null,
 				finalVersion: result.version ?? null,
@@ -236,16 +268,23 @@ export async function startRunnerUpdate(
 				waitingFor: result.waitingFor ?? [],
 				restartedBy: result.restartedBy ?? null,
 				supervisor: result.supervisor ?? null,
-			}, opts.now?.());
+			} as const;
+			const completed = await advanceUpdateOp(env, userId, op.id, patch, opts.now?.());
+			if (!completed) {
+				await reconcileLateUpdateOp(env, userId, op.id, `Late machine result after the original operation closed: ${result.action}; ${result.detail ?? "no machine detail was returned"}.`, opts.now?.());
+			}
 			return result;
 		} catch (e) {
 			// The one path that used to lose everything: a throw inside a request nobody is waiting
 			// for. It is now the operation's recorded outcome, with the reason on it.
-			await advanceUpdateOp(env, userId, op.id, {
+			const detail = `The update on ${node} failed: ${(e instanceof Error ? e.message : String(e)).slice(0, 400)}`;
+			const completed = await advanceUpdateOp(env, userId, op.id, {
 				state: "failed",
+				phase: lastPhase,
 				reason: "error",
-				detail: `The update on ${node} failed: ${(e instanceof Error ? e.message : String(e)).slice(0, 400)}`,
+				detail,
 			}, opts.now?.());
+			if (!completed) await reconcileLateUpdateOp(env, userId, op.id, `Late control-plane failure after the original operation closed: ${detail}`, opts.now?.());
 			return null;
 		}
 	})();

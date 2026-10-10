@@ -50,6 +50,48 @@ describe("CodingRuntime capabilities", () => {
 	});
 });
 
+describe("CodingRuntime liveWork (#1007)", () => {
+	function runtimeWithSessions(sessions: Array<[string, unknown]>): CodingRuntime {
+		const runtime = new CodingRuntime("/tmp/does-not-matter");
+		const tracked = (runtime as unknown as { sessions: Map<string, unknown> }).sessions;
+		for (const [id, session] of sessions) tracked.set(id, session);
+		return runtime;
+	}
+
+	it("does not block an update for retained idle sessions", () => {
+		const runtime = runtimeWithSessions([
+			["idle-claude", { clientType: "claude", alive: true, runState: () => "idle" }],
+			["idle-codex", { clientType: "codex", alive: true, runState: () => "idle" }],
+		]);
+
+		expect(runtime.liveWork()).toEqual([]);
+	});
+
+	it("reports genuinely in-flight thinking and responding turns", () => {
+		const runtime = runtimeWithSessions([
+			["thinking", { clientType: "claude", alive: true, runState: () => "thinking" }],
+			["responding", { clientType: "codex", alive: true, runState: () => "responding" }],
+			["stopped", { clientType: "grok", alive: false, runState: () => "thinking" }],
+		]);
+
+		expect(runtime.liveWork()).toEqual(["a Claude coding session (resumes after a restart)", "a codex turn (lost on a restart)"]);
+	});
+
+	it("fails closed when a retained session's state cannot be observed", () => {
+		const runtime = runtimeWithSessions([
+			["run-state-throws", { clientType: "claude", alive: true, runState: () => { throw new Error("probe failed"); } }],
+			["malformed-state", { clientType: "codex", alive: true, runState: () => "unknown" }],
+			["unknown-alive", { clientType: "grok", alive: undefined, runState: () => "idle" }],
+		]);
+
+		expect(runtime.liveWork()).toEqual([
+			"a Claude coding session (resumes after a restart)",
+			"a codex turn (lost on a restart)",
+			"a grok turn (lost on a restart)",
+		]);
+	});
+});
+
 describe("authenticatedCloneUrl — the credential the runner puts in a clone URL (#221)", () => {
 	it("defaults to x-access-token, so a cloud that sends only a token behaves as before", () => {
 		expect(authenticatedCloneUrl("https://github.com/o/r.git", "ghs_live")).toBe("https://x-access-token:ghs_live@github.com/o/r.git");

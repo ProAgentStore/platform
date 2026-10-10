@@ -44,7 +44,7 @@ vi.mock("./runner-client.js", () => ({
 }));
 
 const { realSchemaD1 } = await import("./d1-sqlite.js");
-const { claimUpdateOp, advanceUpdateOp, failStaleUpdateOps, latestUpdateOp, latestUpdateOps, liveUpdateOp, UPDATE_OP_STALE_MS } = await import("./runner-update-ops.js");
+const { claimUpdateOp, advanceUpdateOp, failStaleUpdateOps, latestUpdateOp, latestUpdateOps, liveUpdateOp, reconcileLateUpdateOp, UPDATE_OP_STALE_MS } = await import("./runner-update-ops.js");
 const { startRunnerUpdate } = await import("./runner-update.js");
 type D1 = ReturnType<typeof realSchemaD1>;
 
@@ -73,13 +73,13 @@ beforeEach(() => {
 });
 afterEach(() => d1.close());
 
-const row = async (id: string) => await d1.DB.prepare("SELECT state, reason, ended_at, final_version FROM runner_update_ops WHERE id = ?1").bind(id).first<Record<string, unknown>>();
+const row = async (id: string) => await d1.DB.prepare("SELECT state, phase, reason, ended_at, final_version, reconciliation FROM runner_update_ops WHERE id = ?1").bind(id).first<Record<string, unknown>>();
 
 describe("the operation record (#990)", () => {
 	it("claims a state BEFORE the machine is contacted, so there is always something to poll", async () => {
 		const { op, claimed } = await claimUpdateOp(env(), "u1", NODE);
 		expect(claimed).toBe(true);
-		expect(op).toMatchObject({ node: NODE, state: "running", dryRun: false });
+		expect(op).toMatchObject({ node: NODE, state: "running", phase: "claimed", dryRun: false });
 		expect(op.detail).toMatch(/update its `pags` CLI/);
 		// And it is readable by the two paths a caller has: the machine's latest, and the live one.
 		expect((await latestUpdateOp(env(), "u1", NODE))?.id).toBe(op.id);
@@ -109,11 +109,11 @@ describe("the operation record (#990)", () => {
 		expect(await row(op.id)).toMatchObject({ state: "restarted" });
 	});
 
-	it("a non-terminal phase keeps the operation open and readable", async () => {
+	it("persists a dispatch checkpoint before the machine can be contacted", async () => {
 		const { op } = await claimUpdateOp(env(), "u1", NODE);
-		await advanceUpdateOp(env(), "u1", op.id, { state: "running", detail: "installing" });
-		expect(await row(op.id)).toMatchObject({ state: "running", ended_at: null });
-		expect((await liveUpdateOp(env(), "u1", NODE))?.detail).toBe("installing");
+		expect(await advanceUpdateOp(env(), "u1", op.id, { state: "running", phase: "dispatching", detail: "request prepared" })).toBe(true);
+		expect(await row(op.id)).toMatchObject({ state: "running", phase: "dispatching", ended_at: null });
+		expect((await liveUpdateOp(env(), "u1", NODE))?.detail).toBe("request prepared");
 	});
 
 	it("fails an operation that stopped reporting, so `running` cannot become the new unknown", async () => {
@@ -121,9 +121,26 @@ describe("the operation record (#990)", () => {
 		expect(await failStaleUpdateOps(env(), NOW + 1000)).toBe(0);
 		expect(await failStaleUpdateOps(env(), NOW + UPDATE_OP_STALE_MS + 1000)).toBe(1);
 		const after = await latestUpdateOp(env(), "u1", NODE);
-		expect(after).toMatchObject({ id: op.id, state: "failed", reason: "abandoned" });
-		expect(after?.detail).toMatch(/never recorded|check its version/);
+		expect(after).toMatchObject({ id: op.id, state: "failed", phase: "claimed", reason: "abandoned_claimed" });
+		expect(after?.detail).toMatch(/phase claimed|check its version/);
 		expect(after?.endedAt).toBeTruthy();
+	});
+
+	it("names the last phase when an interrupted update is abandoned", async () => {
+		const { op } = await claimUpdateOp(env(), "u1", NODE, { now: NOW });
+		await advanceUpdateOp(env(), "u1", op.id, { state: "running", phase: "reattaching", detail: "waiting for the runner" }, NOW + 1);
+		await failStaleUpdateOps(env(), NOW + UPDATE_OP_STALE_MS + 2);
+		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ id: op.id, state: "failed", phase: "reattaching", reason: "abandoned_reattaching" });
+	});
+
+	it("records a late machine reply as reconciliation without reopening an abandoned operation", async () => {
+		const { op } = await claimUpdateOp(env(), "u1", NODE, { now: NOW });
+		await advanceUpdateOp(env(), "u1", op.id, { state: "running", phase: "installing", detail: "machine acknowledgement pending" }, NOW + 1);
+		await failStaleUpdateOps(env(), NOW + UPDATE_OP_STALE_MS + 2);
+		expect(await reconcileLateUpdateOp(env(), "u1", op.id, "Late machine result: restarting on 0.4.85.", NOW + UPDATE_OP_STALE_MS + 3)).toBe(true);
+		const after = await latestUpdateOp(env(), "u1", NODE);
+		expect(after).toMatchObject({ id: op.id, state: "failed", phase: "installing", reason: "abandoned_installing", reconciliation: "Late machine result: restarting on 0.4.85." });
+		expect(await liveUpdateOp(env(), "u1", NODE)).toBeNull();
 	});
 
 	it("reads the latest per machine for a list of machines, newest wins", async () => {
@@ -155,7 +172,7 @@ describe("the idle-node update path, end to end (#990)", () => {
 		// The caller leaves with a state immediately, which is the property the 20s deadline needs.
 		expect(op.state).toBe("running");
 		const final = await latestUpdateOp(env(), "u1", NODE);
-		expect(final).toMatchObject({ id: op.id, state: "restarted", currentVersion: "0.4.84", latestVersion: "0.4.85", restartedBy: "pags-up" });
+		expect(final).toMatchObject({ id: op.id, state: "restarted", phase: "reattaching", currentVersion: "0.4.84", latestVersion: "0.4.85", restartedBy: "pags-up" });
 		// It held one agent — an idle machine still has a socket — and that agent is back.
 		expect(final?.held).toEqual(["i1"]);
 		expect(final?.missing).toEqual([]);
@@ -219,6 +236,21 @@ describe("the idle-node update path, end to end (#990)", () => {
 		expect(background).not.toBeNull();
 		await background;
 		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ state: "restarted" });
+	});
+
+	it("reconciles a machine reply that arrives after the stale sweep without reopening the operation", async () => {
+		let releaseReply: ((value: unknown) => void) | undefined;
+		reply = () => new Promise((resolve) => { releaseReply = resolve; });
+		let background: Promise<unknown> | null = null;
+		const { op } = await startRunnerUpdate(env(), "u1", NODE, { ...fast, background: (p) => { background = p; } });
+		await vi.waitFor(async () => expect((await latestUpdateOp(env(), "u1", NODE))?.phase).toBe("installing"));
+		await failStaleUpdateOps(env(), NOW + UPDATE_OP_STALE_MS + 1);
+		releaseReply?.({ action: "restarting", current: "0.4.84", latest: "0.4.85", restartedBy: "pags-up" });
+		await background;
+		const after = await latestUpdateOp(env(), "u1", NODE);
+		expect(after).toMatchObject({ id: op.id, state: "failed", phase: "installing", reason: "abandoned_installing" });
+		expect(after?.reconciliation).toMatch(/Late machine result.*restarting/);
+		expect(await liveUpdateOp(env(), "u1", NODE)).toBeNull();
 	});
 
 	it("a second call while one is in flight does not contact the machine again", async () => {

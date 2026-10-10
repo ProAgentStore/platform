@@ -181,9 +181,17 @@ export async function connectViaRelay(
 		const observationsUnavailable = sessionsResult.status !== "fulfilled" || healthResult.status !== "fulfilled" || !healthResult.value.work;
 		const sessions = sessionsResult.status === "fulfilled" ? sessionsResult.value : { sessions: [] };
 		const health = healthResult.status === "fulfilled" ? healthResult.value : {};
-		const activeCoding = (sessions.sessions ?? []).filter((s) => s.alive && s.runState && s.runState !== "idle").map((s) => s.sessionId);
+		// `/coding/sessions` names the authoritative engine lifecycle. An unrecognised or missing
+		// answer is not permission to restart; it is a named fail-closed blocker. Health's aggregate
+		// below remains a conservative backstop for an older/inconsistent runner, but must not count
+		// these same named turns a second time (#1007).
+		const activeCoding = (sessions.sessions ?? [])
+			.filter((s) => s.alive !== false && (s.alive !== true || !["idle", "thinking", "responding"].includes(s.runState ?? "") || s.runState !== "idle"))
+			.map((s) => s.sessionId || "coding-session-state-unavailable");
 		const localRuns = health.work?.localRuns ?? 0;
 		const codingTurns = health.work?.codingTurns ?? 0;
+		const unmatchedCodingTurns = Math.max(0, codingTurns - activeCoding.length);
+		const localDetail = health.work?.detail?.slice(codingTurns) ?? [];
 		return {
 			current: CLI_VERSION,
 			latest: await latestPublishedVersion(),
@@ -193,7 +201,7 @@ export async function connectViaRelay(
 			// planner so neither manual nor automatic update can mistake them for an idle machine.
 			busy: observationsUnavailable
 				? ["runner-work-observation-unavailable"]
-				: [...activeCoding, ...Array.from({ length: codingTurns }, (_v, i) => `coding-turn-${i + 1}`), ...Array.from({ length: localRuns }, (_v, i) => health.work?.detail?.[i] || `local-run-${i + 1}`)],
+				: [...activeCoding, ...Array.from({ length: unmatchedCodingTurns }, (_v, i) => `coding-turn-unmatched-${i + 1}`), ...Array.from({ length: localRuns }, (_v, i) => localDetail[i] || `local-run-${i + 1}`)],
 		};
 	};
 	/**

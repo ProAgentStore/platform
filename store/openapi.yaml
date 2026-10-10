@@ -11568,7 +11568,10 @@ paths:
 
         `state` is `running` while the update is in flight, then one of `scheduled`, `restarting`,
         `restarted`, `up_to_date`, `would_update`, `refused`, `unsupported`, `unreachable` or
-        `failed`. `operation` is null when no update has ever been asked for on that machine.
+        `failed`. `phase` is the last durable control-plane checkpoint (`claimed`, `dispatching`,
+        `installing`, `restarting`, or `reattaching`); it never assumes an unreported machine step
+        completed. A late machine result is preserved in `reconciliation` without reopening an
+        abandoned operation. `operation` is null when no update has ever been asked for on that machine.
       operationId: getRunnerUpdateStatus
       tags: [Runtime]
       parameters:
@@ -11591,11 +11594,14 @@ paths:
                       id: { type: string }
                       node: { type: string }
                       state: { type: string }
+                      phase: { type: string, enum: [claimed, dispatching, installing, restarting, reattaching] }
                       currentVersion: { type: string, nullable: true }
                       latestVersion: { type: string, nullable: true }
                       finalVersion: { type: string, nullable: true }
                       detail: { type: string, nullable: true }
                       reason: { type: string, nullable: true }
+                      reconciliation: { type: string, nullable: true }
+                      reconciledAt: { type: string, nullable: true }
                       held: { type: array, items: { type: string } }
                       reattached: { type: array, items: { type: string } }
                       missing:

@@ -186,16 +186,31 @@ export class CodingRuntime {
 	private sessions = new Map<string, HeadlessSession>();
 
 	/**
-	 * Coding sessions that are running here (#896).
+	 * Coding turns that are running here (#896, #1007).
 	 *
-	 * A Claude session survives a restart — it is re-spawned with `--resume <session_id>` and only
-	 * the turn in flight is cut — but a Codex, Grok or raw-engine session restarts cold and its turn
-	 * is gone. Both are named, because the owner is the one deciding whether to take the machine.
+	 * A retained session is a conversation, not necessarily work in flight: a healthy engine remains
+	 * available at `runState: "idle"` between turns. Runner updates must protect only turns that can
+	 * be interrupted. If this runtime cannot observe a session's state, retain the conservative busy
+	 * answer rather than restarting across work whose state it cannot prove is idle.
 	 */
 	liveWork(): string[] {
-		return [...this.sessions.values()].map((s) => {
+		return [...this.sessions.values()].flatMap((s) => {
 			const engine = (s as unknown as { clientType?: string }).clientType ?? "";
-			return engine === "claude" ? "a Claude coding session (resumes after a restart)" : `a ${engine || "coding"} turn (lost on a restart)`;
+			const label = engine === "claude" ? "a Claude coding session (resumes after a restart)" : `a ${engine || "coding"} turn (lost on a restart)`;
+			try {
+				// `alive: false` is an observed inactive session. Any other answer (including a
+				// malformed older implementation) is unknown and must fail closed below.
+				const alive = s.alive;
+				if (alive === false) return [];
+				const state = s.runState();
+				if (alive === true && state === "idle") return [];
+				if (alive === true && (state === "thinking" || state === "responding")) return [label];
+				// An unrecognised `alive`/`runState` pair is not proof that an engine is idle.
+				return [label];
+			} catch {
+				// Do not turn a failed state probe into permission to restart the machine.
+				return [label];
+			}
 		});
 	}
 	/** Background cold-start clones, one per folder (#858). */

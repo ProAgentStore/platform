@@ -373,10 +373,14 @@ export function canReattach(runnerNode: string, warning: ReturnType<typeof pinne
 export interface RunnerUpdateOpView {
 	id: string;
 	state: "running" | "scheduled" | "restarting" | "restarted" | "up_to_date" | "would_update" | "refused" | "unsupported" | "unreachable" | "failed";
+	/** Last durable control-plane checkpoint; machine-side work is not inferred beyond it. */
+	phase?: "claimed" | "dispatching" | "installing" | "restarting" | "reattaching";
 	currentVersion?: string | null;
 	latestVersion?: string | null;
 	finalVersion?: string | null;
 	detail?: string | null;
+	/** A machine result received only after the original operation had already closed. */
+	reconciliation?: string | null;
 	endedAt?: string | null;
 }
 
@@ -426,7 +430,7 @@ export function updateOutcome(res: RunnerUpdateResponse): { tone: "ok" | "pendin
 export function updateOpLine(op: RunnerUpdateOpView | null | undefined): { tone: "ok" | "pending" | "warn"; text: string } | null {
 	if (!op) return null;
 	const moved = op.currentVersion && (op.finalVersion || op.latestVersion) ? ` (${op.currentVersion} → ${op.finalVersion || op.latestVersion})` : "";
-	const fallback = op.state === "running" ? "Updating…" : op.state.replace(/_/g, " ");
+	const fallback = op.state === "running" ? `Updating${op.phase ? ` (${op.phase.replace(/_/g, " ")})` : ""}…` : op.state.replace(/_/g, " ");
 	const text = `${updateText(op.detail, fallback)}${moved}`;
 	if (UPDATE_OK.has(op.state)) return { tone: "ok", text };
 	if (UPDATE_PENDING.has(op.state)) return { tone: "pending", text };
