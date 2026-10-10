@@ -3,6 +3,7 @@ import {
 	machineAutoUpdateEnabled,
 	machineAutoUpdateIsBusy,
 	machineAutoUpdateStatus,
+	machineCanRunAutomaticUpdates,
 	machineFromResponse,
 	machineLastAttempt,
 	machineLatestVersion,
@@ -44,5 +45,12 @@ describe("machine details from the terminals API", () => {
 	it("shows the server's latest version regardless of its response casing", () => {
 		expect(machineLatestVersion({ machineId: "snake", latest_version: "0.5.0" })).toBe("0.5.0");
 		expect(machineLatestVersion({ machineId: "camel", latestVersion: "0.5.1" })).toBe("0.5.1");
+	});
+
+	it("does not mistake an identifiable pre-controller runner for an automatic-update capable one", () => {
+		expect(machineCanRunAutomaticUpdates({ machineId: "macmini", runnerVersion: "0.4.90" })).toBe(false);
+		expect(machineCanRunAutomaticUpdates({ machineId: "unknown" })).toBe(false);
+		expect(machineCanRunAutomaticUpdates({ machineId: "supported", runnerVersion: "0.4.92" })).toBe(true);
+		expect(machineCanRunAutomaticUpdates({ machineId: "newer", runnerVersion: "v0.5.0" })).toBe(true);
 	});
 });

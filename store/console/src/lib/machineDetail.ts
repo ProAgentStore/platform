@@ -33,6 +33,9 @@ export interface MachineDetail {
 	autoUpdateStatus?: AutoUpdateStatus | string | null;
 }
 
+/** The first CLI release containing the runner-side automatic-update controller. */
+export const AUTO_UPDATE_CONTROLLER_MIN_CLI = "0.4.92";
+
 export type MachineDetailResponse = MachineDetail | { machine: MachineDetail };
 
 export function machineFromResponse(response: MachineDetailResponse): MachineDetail {
@@ -45,6 +48,23 @@ export function machineAutoUpdateEnabled(machine: MachineDetail): boolean {
 
 export function machineLatestVersion(machine: MachineDetail): string | null {
 	return machine.latest_version ?? machine.latestVersion ?? null;
+}
+
+/**
+ * A policy can be stored for any identified machine. It becomes executable only after this CLI
+ * release; do not let a visible toggle imply that an already-running older CLI will bootstrap
+ * itself. This intentionally accepts normal semver prerelease/build suffixes but treats an absent
+ * or malformed version as unsupported until the runner reports a known release.
+ */
+export function machineCanRunAutomaticUpdates(machine: MachineDetail): boolean {
+	const match = machine.runnerVersion?.trim().replace(/^v/, "").match(/^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/);
+	if (!match) return false;
+	const current = match.slice(1, 4).map(Number);
+	const required = AUTO_UPDATE_CONTROLLER_MIN_CLI.split(".").map(Number);
+	for (let index = 0; index < required.length; index += 1) {
+		if (current[index] !== required[index]) return current[index] > required[index];
+	}
+	return true;
 }
 
 export function machineAutoUpdateStatus(machine: MachineDetail): AutoUpdateStatus {

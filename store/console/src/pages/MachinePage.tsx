@@ -8,6 +8,7 @@ import Card from "../components/Card";
 import Page from "../components/Page";
 import {
 	machineAutoUpdateEnabled,
+	machineCanRunAutomaticUpdates,
 	machineAutoUpdateIsBusy,
 	machineAutoUpdateStatus,
 	machineFromResponse,
@@ -79,6 +80,7 @@ export default function MachinePage() {
 
 	const status = machine ? machineAutoUpdateStatus(machine) : {};
 	const enabled = machine ? machineAutoUpdateEnabled(machine) : false;
+	const canRunAutomaticUpdates = machine ? machineCanRunAutomaticUpdates(machine) : false;
 	const lastAttempt = machine ? machineLastAttempt(machine) : null;
 
 	return (
@@ -131,6 +133,9 @@ export default function MachinePage() {
 							</label>
 						</div>
 						{saving && <p role="status" className="text-xs text-muted mt-3">Saving automatic update policy…</p>}
+						{!canRunAutomaticUpdates && <p className="text-xs text-warning mt-3" data-testid="machine-auto-update-compatibility">
+							This runner must first be safely updated to CLI 0.4.92 or later. This toggle stores the policy, but an older running CLI will not install updates from it.
+						</p>}
 					</Card>
 
 					<Card className="p-4" data-testid="machine-auto-update-status">
