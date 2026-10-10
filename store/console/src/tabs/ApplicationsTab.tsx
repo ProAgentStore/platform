@@ -8,6 +8,7 @@ import UploadedTailorSourcesSection from "../components/UploadedTailorSourcesSec
 import { QUEUE_STATUS_LABEL, actionBody, actionLabel, confirmText } from "../lib/applications";
 import { TONE_CLASS } from "../lib/localBrowser";
 import type { ApplicationActionResponse, ApplicationRunnerSettingsView, ApplicationQueueAction, ApplicationQueueItem, ApplicationQueueStatus, ApplicationQueueView, ApplicationTraceView, ConnectionDeliveryList } from "../lib/types";
+import type { PreparedApplicationTransferReceipt } from "../lib/applicationTransfer";
 
 /**
  * The Applications tab (#958): the whole job-application queue across the owner's Scout → Tailor →
@@ -176,7 +177,7 @@ function Detail({ instanceId, item, connections, onChanged }: { instanceId: stri
 		if (!window.confirm("Send this exact reviewed material set to the selected Runner for review only? The connection stays paused and nothing will be submitted.")) return;
 		setBusy("request_review"); setMsg("");
 		try {
-			const out = await api<{ id: string; status: string; runId: string | null }>(`/v1/instances/${instanceId}/applications/${encodeURIComponent(item.applicationId)}/transfer`, { method: "POST", body: JSON.stringify({ expected_status: "materials_ready", expected_version: item.stateVersion, resume_sha256: resume.sha256, cover_letter_sha256: cover.sha256, destination_runner_instance_id: connection.targetInstanceId, connection_id: connection.id, idempotency_key: `transfer:${item.applicationId}:${item.stateVersion}:${connection.id}` }) });
+			const out = await api<PreparedApplicationTransferReceipt>(`/v1/instances/${instanceId}/applications/${encodeURIComponent(item.applicationId)}/transfer`, { method: "POST", body: JSON.stringify({ expected_status: "materials_ready", expected_version: item.stateVersion, resume_sha256: resume.sha256, cover_letter_sha256: cover.sha256, destination_runner_instance_id: connection.targetInstanceId, connection_id: connection.id, idempotency_key: `transfer:${item.applicationId}:${item.stateVersion}:${connection.id}` }) });
 			setMsg(`Reviewed transfer ${out.status}${out.runId ? ` (run ${out.runId.slice(0, 8)})` : ""}.`); onChanged();
 		} catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
 		setBusy(null);
@@ -231,7 +232,7 @@ function Detail({ instanceId, item, connections, onChanged }: { instanceId: stri
 			{pausedTransfers.length > 0 && item.artifacts?.resume && item.artifacts?.coverLetter && (
 				<div className="mb-3 rounded border border-line p-2 text-sm" data-testid="reviewed-material-transfer">
 					<p className="font-semibold">Transfer this reviewed set</p>
-					<p className="text-xs text-muted mb-2">Send these exact hashes to one paused Runner for fill-and-review only. This does not resume the connection or submit an application.</p>
+					<p className="text-xs text-muted mb-2">Send these exact hashes to one paused Runner for fill and review only. This does not resume the connection or submit an application.</p>
 					<select aria-label="Runner for reviewed transfer" value={transferConnection || pausedTransfers[0].id} onChange={(e) => setTransferConnection(e.target.value)} className="border border-line rounded px-2 py-1 mr-2">
 						{pausedTransfers.map((c) => <option key={c.id} value={c.id}>{c.targetInstanceId}</option>)}
 					</select>

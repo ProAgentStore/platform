@@ -164,6 +164,27 @@ export interface ApplicationExecutionProjection {
 }
 
 /**
+ * Owner-safe receipt for one explicit reviewed-material transfer (#1010).
+ *
+ * It names only durable ids, status and reviewed-artifact provenance.  The receipt deliberately
+ * does not expose the retained event payload or any document bytes to the Console.
+ */
+export interface PreparedApplicationTransferReceipt {
+	id: string;
+	sourceApplicationId: string;
+	destinationApplicationId: string;
+	destinationRunnerInstanceId: string;
+	connectionId: string;
+	stateVersion: number;
+	resumeSha256: string;
+	coverLetterSha256: string;
+	deliveryId: string | null;
+	deliveryStatus: string | null;
+	runId: string | null;
+	status: "queued" | "delivered" | "retrying" | "dead" | "consumed";
+}
+
+/**
  * What a granted connector write-consent MEANS for each call (#722, migration 0155).
  *
  *   always — dispatch. What every row written before 0155 does, and the column's default.

@@ -102,6 +102,13 @@ const EXPECTED_DEFERRED = new Set([
 	// member because every module on a cycle has to be, or the next back-edge could hide behind
 	// a neighbour's entry.
 	"lib/applications/control.ts",
+	// #981: post-fill approval reuses the existing Runner directive delivery without re-creating a
+	// browser run, so its decision helper calls the apply executor that supplies the board/control
+	// action cycle above.
+	"lib/local-apply/approve-continue.ts",
+	// #1010: the extracted application-fill adapter keeps `triggers.ts` below its size ceiling.
+	// It still defers the Runner executor, whose graph reaches the connection pump that calls it.
+	"lib/trigger-application-fill.ts",
 	// …and the route the control service calls to triage a lead, which closes the loop back into the
 	// pump. On the cycle only as a consequence of the two entries above; it has no deferred import of
 	// its own and nothing new depends on it.

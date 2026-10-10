@@ -10,6 +10,7 @@ import { attemptDelivery } from "../connections.js";
 import { MATERIALS_READY_EVENT } from "../local-artifact/contract.js";
 import { getOwnedApplication, type JobApplication } from "../local-artifact/store.js";
 import { getApplyRunByRequest } from "../local-apply/store.js";
+import type { PreparedApplicationTransferReceipt } from "../../agent-types.js";
 import type { Env } from "../../types.js";
 
 const HASH = /^[a-f0-9]{64}$/i;
@@ -44,20 +45,7 @@ export interface PreparedTransferInput {
 	idempotencyKey: string;
 }
 
-export interface TransferReceipt {
-	id: string;
-	sourceApplicationId: string;
-	destinationApplicationId: string;
-	destinationRunnerInstanceId: string;
-	connectionId: string;
-	stateVersion: number;
-	resumeSha256: string;
-	coverLetterSha256: string;
-	deliveryId: string | null;
-	deliveryStatus: string | null;
-	runId: string | null;
-	status: "queued" | "delivered" | "retrying" | "dead" | "consumed";
-}
+export type TransferReceipt = PreparedApplicationTransferReceipt;
 
 function artifactHash(a: unknown, kind: "resume" | "cover_letter"): string | null {
 	if (!a || typeof a !== "object" || Array.isArray(a)) return null;

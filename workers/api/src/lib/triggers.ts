@@ -44,6 +44,7 @@ import type { Env } from "../types.js";
  *  because this is still where triggers are validated, stored and run. */
 import { TRIGGER_ACTIONS } from "./trigger-types.js";
 import { startWakeLoop } from "./run-wake-start.js";
+import { startApplicationFillForTrigger } from "./trigger-application-fill.js";
 import type { TriggerAction, TriggerConfig, TriggerEventType, TriggerRow, TriggerType } from "./trigger-types.js";
 export type { TriggerAction, TriggerConfig, TriggerEventType, TriggerRow, TriggerType };
 
@@ -293,12 +294,7 @@ export async function executeTriggerAction(
 		// #957: the payload is #956's job.application.materials_ready. Replay-safe — the run is keyed
 		// on the event id and the application leaves materials_ready once. No runner → 503, so the
 		// outbox retries. Deferred like the Tailor.
-		const { startApplicationFill } = await import("./local-apply/apply.js");
-		// #1010's receipt-backed manual delivery persists this flag on ITS outbox row.  The
-		// ordinary connection action remains policy-driven; a transfer can only narrow it to
-		// review, never turn an auto-submit policy on.
-		const out = await startApplicationFill(env, target.instance_id, target.user_id, payload, "connection", { review: (config as Record<string, unknown>).reviewOnly === true });
-		resultPayload = { applicationId: out.application.id, status: out.application.status, runId: out.run?.id ?? null, outcome: out.kind, mode: out.run?.policy.mode ?? null };
+		resultPayload = await startApplicationFillForTrigger(env, target.instance_id, target.user_id, payload, config);
 	} else if (target.action === "start_loop") {
 		// #968 — have this agent take its NEXT TURN. The whole decision lives in `run-wake-start.ts`
 		// beside its pure half, because this dispatch chain is long enough already.

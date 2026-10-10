@@ -3,11 +3,12 @@ import type { KnowledgeDoc as WorkerKnowledgeDoc } from "../../../../workers/api
 import type { ConnectionGuideResponse as WorkerConnectionGuideResponse } from "../../../../workers/api/src/lib/connection-guide";
 import type { ApplyDefaultEngineResult as WorkerApplyDefaultEngineResult } from "../../../../workers/api/src/lib/coding-default-engine-types";
 import type { AccountPreferencesResponse as WorkerAccountPreferencesResponse, AccountPreferencesWriteResponse as WorkerAccountPreferencesWriteResponse } from "../../../../workers/api/src/lib/preferences";
-import type { AgentState as WorkerAgentState, ConsentRow as WorkerConsentRow, GmailScoutScanResponse as WorkerGmailScoutScanResponse, ApplicationExecutionProjection as WorkerApplicationExecutionProjection, InstancePermissionRequestView as WorkerInstancePermissionRequestView, InstancePermissionRequestResponse as WorkerInstancePermissionRequestResponse, InstancePermissionRequestDecisionResponse as WorkerInstancePermissionRequestDecisionResponse } from "../../../../workers/api/src/agent-types";
+import type { AgentState as WorkerAgentState, ConsentRow as WorkerConsentRow, GmailScoutScanResponse as WorkerGmailScoutScanResponse, ApplicationExecutionProjection as WorkerApplicationExecutionProjection, InstancePermissionRequestView as WorkerInstancePermissionRequestView, InstancePermissionRequestResponse as WorkerInstancePermissionRequestResponse, InstancePermissionRequestDecisionResponse as WorkerInstancePermissionRequestDecisionResponse, PreparedApplicationTransferReceipt as WorkerPreparedApplicationTransferReceipt } from "../../../../workers/api/src/agent-types";
 import type { CollectionRecord as WorkerCollectionRecord, RecordQueryResult as WorkerRecordQueryResult } from "../../../../workers/api/src/agent-storage-types";
 import type { RunnerEvent, RunnerTask } from "../../../../packages/browser-runner/src/types";
 import type { AccountCodingDefaultApplyResponse, AccountPreferencesResponse, AccountPreferencesWriteResponse, ConnectionGuideResponse, ConnectorConsent, InstanceModelState, Credential, DataRecord, KnowledgeDoc, Notification, RecordQueryResponse, RuntimeEvent, RuntimeTask, TriggerAction, ApplicationQueueItem, InstancePermissionRequest, InstancePermissionRequestResponse, InstancePermissionRequestDecisionResponse } from "./types";
 import type { GmailScoutScanResponse } from "./gmailScout";
+import type { PreparedApplicationTransferReceipt } from "./applicationTransfer";
 
 /**
  * The console's API-response types, checked against the Worker declarations they copy (#617).
@@ -139,6 +140,11 @@ const _gmailScoutScanAcceptsTheProducer: GmailScoutScanResponse = {} as WorkerGm
 // #988: queue detail uses the named Worker projection instead of rebuilding lifecycle/checkpoint
 // semantics in the browser. This compile-time assignment catches incompatible widening.
 const _applicationExecutionAcceptsTheProducer: NonNullable<ApplicationQueueItem["execution"]> = {} as WorkerApplicationExecutionProjection;
+
+const _preparedApplicationTransferReceiptHasNoInventedFields: Extra<PreparedApplicationTransferReceipt, WorkerPreparedApplicationTransferReceipt> extends never
+	? true
+	: never = true;
+const _preparedApplicationTransferReceiptAcceptsTheProducer: PreparedApplicationTransferReceipt = {} as WorkerPreparedApplicationTransferReceipt;
 
 // ── RuntimeTask / RuntimeEvent ───────────────────────────────────────────────────────────────
 //

@@ -342,6 +342,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `generate_application_materials` | Tailor materials for an apply_requested lead, or retry tailoring that stopped | runtime | yes | |
 | `start_application_fill` | Fill under the Runner's policy, which may submit once — accepted only when the item's submit policy allows it | runtime | yes | |
 | `request_application_review` | Fill and stop before the final submit, whatever the policy allows | runtime | yes | |
+| `transfer_prepared_application` | Transfer one exact reviewed Tailor material set through one selected paused edge; it stays paused and the Runner is forced to review-only fill | runtime | yes | |
 | `retry_application` | Retry a stopped fill (never after a submit attempt) or tailoring | runtime | yes | |
 | `resume_application` | Release a paused fill, optionally with answers used for that run only | runtime | yes | |
 | `cancel_application` | Stop a running tailoring or fill; nothing external is touched | write | yes | |
