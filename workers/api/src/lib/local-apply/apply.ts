@@ -442,7 +442,7 @@ async function notifyTerminalOutcome(env: Env, uid: string, run: ApplyRun, outco
 	const role = typeof lead?.lead?.title === "string" && lead.lead.title.trim() ? lead.lead.title.trim() : "Application";
 	const company = typeof lead?.lead?.company === "string" && lead.lead.company.trim() ? ` at ${lead.lead.company.trim()}` : "";
 	const succeeded = outcome === "submitted";
-	const title = `${succeeded ? "Application submitted" : "Application failed"}: ${role}${company}`.slice(0, 120);
+	const title = clipMarked(`${succeeded ? "Application submitted" : "Application failed"}: ${role}${company}`, 120, { within: true });
 	const body = succeeded
 		? "The employer site confirmed this application was submitted."
 		: clipMarked(result.error?.trim() || "The application runner ended before a confirmed submission. Review the run details before retrying.", 300, { within: true });
