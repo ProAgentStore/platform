@@ -463,7 +463,7 @@ export default function KnowledgeTab({ instanceId, caps }: Props) {
 				))}
 			</div>
 			{filesUploadUnsupported && (
-				<div className="mb-4 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-ink" role="alert">
+				<div className="mb-4 rounded-xl border border-warning-line bg-warning-soft px-3 py-2 text-sm text-ink" role="alert">
 					This instance cannot accept Files uploads because it does not declare file or knowledge-reading capability. Choose an eligible instance to upload a document it can read.
 				</div>
 			)}
