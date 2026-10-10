@@ -1112,4 +1112,8 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// and returns FileMeta provenance rather than bytes. 296 registrations become 297, always-on
 	// 270 → 271, gated remains 26. Appended because 0.1.104 is published.
 	"0.1.105": "sha256:a766d44b3ec5aee25df46e0df7d20e0e3cd7879dfb44090e7e449b5417d063d3",
+	// #1009: `get_console_link` gains `permission_request_id`, an owner-scoped verified link to
+	// the exact Permissions & Connections control. It changes the tool input schema, so it is a
+	// new published surface revision rather than an edit of the already-published 0.1.105 lock.
+	"0.1.106": "sha256:f0bfa90be9565db899e641d0c0d15395373a14c07aed61a20aece3ae3772ab4d",
 };

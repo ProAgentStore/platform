@@ -21,7 +21,7 @@
  * The console is a BrowserRouter: a `#fragment` is ignored (`checkConsoleLink`), so there is no anchor
  * finer than a tab or a record page. A "field" is answered with the tab that holds it.
  */
-import { codingSessionLink, instanceFilesUploadLink, instanceLink, instanceRunLink, localBrowserRunLink, secureInputNotificationLink } from "./console-links.js";
+import { codingSessionLink, instanceFilesUploadLink, instanceLink, instancePermissionsLink, instanceRunLink, localBrowserRunLink, secureInputNotificationLink } from "./console-links.js";
 
 /** The console's public origin. `/console/…` paths resolve here (and on console.proagentstore.online without the prefix). */
 export const CONSOLE_ORIGIN = "https://proagentstore.online";
@@ -74,7 +74,8 @@ export type ConsoleTarget =
 	| { kind: "local_browser_run"; runId: string }
 	/** A runtime task (browser task, approval, takeover) — `RunDetail`. */
 	| { kind: "task"; taskId: string }
-	| { kind: "secure_input"; requestId: string };
+	| { kind: "secure_input"; requestId: string }
+	| { kind: "permission_request"; requestId: string };
 
 export interface ConsoleLink {
 	/** Absolute, for a chat message or a notification. */
@@ -123,5 +124,7 @@ export function buildConsoleLink(instanceId: string, target: ConsoleTarget, caps
 			return make(instanceRunLink(instanceId, target.taskId), "this task's page — its status, screenshots and any takeover or input it waits on");
 		case "secure_input":
 			return make(secureInputNotificationLink(instanceId, target.requestId), "the page where the owner enters this secret value");
+		case "permission_request":
+			return make(instancePermissionsLink(instanceId, target.requestId), "Permissions & Connections, focused on this request");
 	}
 }

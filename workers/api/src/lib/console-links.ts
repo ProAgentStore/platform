@@ -166,6 +166,16 @@ export function instanceSettingsLink(instanceId: string): string {
 	return `${instanceLink(instanceId)}/settings`;
 }
 
+/** The actual Permissions & Connections control, with optional durable request focus (#1009). */
+export function instancePermissionsLink(instanceId: string, requestId?: string): string {
+	const query = new URLSearchParams({ focus: "permissions" });
+	if (requestId) query.set("permission_request", requestId);
+	return `${instanceSettingsLink(instanceId)}?${query}`;
+}
+
+/** Alias for callers whose subject is a connector rather than a tool permission. */
+export const instanceConnectionsLink = instancePermissionsLink;
+
 // ── Notification links (#894) ────────────────────────────────────────────────
 
 /**
@@ -211,6 +221,8 @@ export type NotificationSubject =
 	| { kind: "application"; instanceId: string; applicationId: string }
 	/** A secure-input request waiting for the owner (#934). */
 	| { kind: "secure-input"; instanceId: string; requestId: string }
+	/** An exact owner-scoped permission request, focused inside Permissions & Connections (#1009). */
+	| { kind: "permission-request"; instanceId: string; requestId: string }
 	/** An agent template — notifications to its creator (#622). */
 	| { kind: "agent"; agentId: string }
 	/** Several instances at once (#897): the instance list. */
@@ -246,6 +258,8 @@ export function deepLinkFor(subject: NotificationSubject): DeepLink {
 				return instanceBoardLink(subject.instanceId);
 			case "secure-input":
 				return secureInputNotificationLink(subject.instanceId, subject.requestId);
+			case "permission-request":
+				return instancePermissionsLink(subject.instanceId, subject.requestId);
 			case "agent":
 				return agentLink(subject.agentId);
 			case "instances":

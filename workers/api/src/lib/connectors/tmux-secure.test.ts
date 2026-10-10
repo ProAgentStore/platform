@@ -220,7 +220,7 @@ describe("tmux_secure_put → tmux_secure_get across two of the owner's machines
 		d1.exec("DELETE FROM instance_connector_consent WHERE instance_id = 'A'");
 		const p = await put();
 		expect(p.success).toBe(false);
-		expect(p.content).toMatch(/isn't permitted/);
+		expect(p.content).toMatch(/permission|isn't permitted/);
 		expect(relayed).toEqual([]);
 	});
 });

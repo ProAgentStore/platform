@@ -487,7 +487,7 @@ async function settleFromResult(env: Env, uid: string, run: ApplyRun, rawResult:
  * question only the notifications table can answer.
  */
 const attentionDeps: AttentionDeps<Env> = {
-	notify: (env, userId, type, title, body, url, opts) => notifyUser(env, userId, type, title, body, url, opts),
+	notify: async (env, userId, type, title, body, url, opts) => { await notifyUser(env, userId, type, title, body, url, opts); },
 	pushed: async (env, userId, ids) => {
 		// Read the row that was just written, by the key the notifications table actually stores.
 		// `pushed_at` is set when an interruption was RAISED, and an attention event is an `alert`,

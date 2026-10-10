@@ -20,6 +20,7 @@ import { registerBrowseRoutes } from "./instances-browse.js";
 import { registerChatRoutes } from "./instances-chat.js";
 import { registerGuideRoutes } from "./instances-guide.js";
 import { registerConsoleLinkRoutes } from "./instances-console-link.js";
+import { registerPermissionRequestRoutes } from "./instances-permission-requests.js";
 import { registerLocalBrowserRoutes } from "./instances-local-browser.js";
 import { registerGmailScoutRoutes } from "./instances-gmail-scout.js";
 import { registerInstanceDescriptionRoutes } from "./instances-description.js";
@@ -1083,6 +1084,7 @@ registerInstanceNotificationRoutes(instanceRoutes);
 // renderer of its own, and this file is already at its size pin.
 registerGuideRoutes(instanceRoutes);
 registerConsoleLinkRoutes(instanceRoutes); // a precise console URL for an agent to hand over (#938)
+registerPermissionRequestRoutes(instanceRoutes); // durable owner permission recovery (#1009)
 registerLocalBrowserRoutes(instanceRoutes); // local CLI browser research: settings, consent, runs (#945)
 registerGmailScoutRoutes(instanceRoutes); // read-only Gmail alert ingestion into this Scout's private leads (#995)
 registerInstanceDescriptionRoutes(instanceRoutes); // one secret-safe runtime projection for MCP / Console (#1002)

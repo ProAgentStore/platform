@@ -29,6 +29,9 @@ beforeEach(() => {
 	  ('run_code', 'u1', 'i1', 'fix', 5, 1, 'sess_9'), ('run_chat', 'u1', 'i1', 'chat', 5, 1, NULL), ('run_foreign', 'u2', 'other', 'x', 5, 1, 's')`);
 	d1.exec(`INSERT INTO instance_runtime_tasks (id, instance_id, user_id, type, status, payload, created_at, updated_at) VALUES ('t_7', 'i1', 'u1', 'browser', 'running', '{}', 1, 1)`);
 	d1.exec(`INSERT INTO secure_input_requests (id, instance_id, user_id, label, destination_scope, expires_at) VALUES ('sir_3', 'i1', 'u1', 'OTP', 'env', '2099-01-01')`);
+	d1.exec(`INSERT INTO instance_permission_requests (id, instance_id, user_id, control, connector, requested_scope, operation_kind, operation_fingerprint, continuation_ref, reason, expires_at) VALUES
+	  ('pr_1', 'i1', 'u1', 'connector_consent', 'github', 'write', 'github_create_issue', 'fingerprint', 'opaque', 'GitHub write', '2099-01-01'),
+	  ('pr_foreign', 'other', 'u2', 'connector_consent', 'github', 'write', 'github_create_issue', 'foreign', 'opaque', 'GitHub write', '2099-01-01')`);
 });
 afterEach(() => d1.close());
 
@@ -76,6 +79,14 @@ describe("GET /v1/instances/:id/console-link (#938)", () => {
 	it("links a task and a secret request to their own pages", async () => {
 		expect((await link("i1", "?task_id=t_7")).body.path).toBe("/console/instances/i1/tasks/t_7");
 		expect((await link("i1", "?secure_input_id=sir_3")).body.path).toBe("/console/instances/i1/secure-inputs/sir_3");
+	});
+
+	it("links a verified owner permission request to the exact Permissions & Connections control", async () => {
+		expect((await link("i1", "?permission_request_id=pr_1")).body).toMatchObject({
+			path: "/console/instances/i1/settings?focus=permissions&permission_request=pr_1",
+			lands: "Permissions & Connections, focused on this request",
+		});
+		expect((await link("i1", "?permission_request_id=pr_foreign")).status).toBe(404);
 	});
 
 	it("404s a record that is not this owner's on this instance, rather than linking a 'not found' page", async () => {

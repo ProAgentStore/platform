@@ -149,6 +149,7 @@ const PARAMS: Record<string, string> = {
 	applicationId: "application-1",
 	role: "resume",
 	checkpointId: "checkpoint-1",
+	requestId: "permission-request-1",
 };
 
 function concrete(pattern: string): string {
@@ -274,6 +275,11 @@ const ROUTES = [
 	"DELETE /:instanceId/notifications",
 	"GET /:instanceId/connection-guide",
 	"GET /:instanceId/console-link",
+	"GET /:instanceId/permission-requests",
+	"GET /:instanceId/permission-requests/:requestId",
+	"POST /:instanceId/permission-requests/:requestId/deny",
+	"POST /:instanceId/permission-requests/:requestId/cancel",
+	"POST /:instanceId/permission-requests/:requestId/approve",
 	"GET /:instanceId/local-browser/settings",
 	"PUT /:instanceId/local-browser/settings",
 	"GET /:instanceId/local-browser/preflight",
@@ -472,6 +478,13 @@ const OWNERSHIP: Record<string, string[]> = {
 	],
 	"instances-guide.ts": ["GET /:instanceId/connection-guide"],
 	"instances-console-link.ts": ["GET /:instanceId/console-link"],
+	"instances-permission-requests.ts": [
+		"GET /:instanceId/permission-requests",
+		"GET /:instanceId/permission-requests/:requestId",
+		"POST /:instanceId/permission-requests/:requestId/deny",
+		"POST /:instanceId/permission-requests/:requestId/cancel",
+		"POST /:instanceId/permission-requests/:requestId/approve",
+	],
 	"instances-local-browser.ts": [
 		"GET /:instanceId/local-browser/settings",
 		"PUT /:instanceId/local-browser/settings",
@@ -744,6 +757,11 @@ const GATES: Record<string, [number, number]> = {
 	// per-instance read — not an empty guide, which would be a statement about an instance.
 	"GET /:instanceId/connection-guide": [401, 404],
 	"GET /:instanceId/console-link": [401, 404],
+	"GET /:instanceId/permission-requests": [401, 404],
+	"GET /:instanceId/permission-requests/:requestId": [401, 404],
+	"POST /:instanceId/permission-requests/:requestId/deny": [401, 404],
+	"POST /:instanceId/permission-requests/:requestId/cancel": [401, 404],
+	"POST /:instanceId/permission-requests/:requestId/approve": [401, 404],
 	"GET /:instanceId/local-browser/settings": [401, 404],
 	"PUT /:instanceId/local-browser/settings": [401, 404],
 	"GET /:instanceId/local-browser/preflight": [401, 404],

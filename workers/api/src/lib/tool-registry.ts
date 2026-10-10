@@ -724,7 +724,7 @@ export async function runRegistryTool(
 	name: string,
 	ctx: RegistryToolCtx,
 	input: Record<string, unknown>,
-): Promise<{ name: string; content: string; success: boolean; transfer?: ConversationTransfer; artifacts?: unknown[] }> {
+): Promise<{ name: string; content: string; success: boolean; transfer?: ConversationTransfer; artifacts?: unknown[]; blocker?: RegistryToolResult["blocker"] }> {
 	const tool = REGISTRY.get(name);
 	if (!tool) return { name, content: `Unknown tool: ${name}`, success: false };
 	// Declared-capability gate (#381), FIRST because it is the cheapest and the most fundamental:
@@ -767,6 +767,41 @@ export async function runRegistryTool(
 		const mode = tool.connector ? await consentModeFor(ctx.env, authority || undefined, tool.connector, "write") : null;
 		if (!tool.connector || !mode) {
 			const label = tool.connector ?? "this";
+			// A missing write consent is a durable owner action, never a prose-only hint. The
+			// request fingerprint names this exact blocked operation; no URL contains arguments.
+			if (authority && ctx.userId && tool.connector) {
+				const { createOrReuseRequest, permissionBlocker, auditPermissionRequest } = await import("./instance-permission-requests.js");
+				const { instancePermissionsLink } = await import("./console-links.js");
+				// Do not persist arguments as a "fingerprint": they may contain a bearer token,
+				// recipient address, or other connector secret.  A digest binds this request to
+				// the exact call without turning the permission/audit tables into an argument log.
+				const bytes = new TextEncoder().encode(`${name}:${JSON.stringify(input ?? {})}`);
+				const fingerprint = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+				let created: Awaited<ReturnType<typeof createOrReuseRequest>>;
+				try {
+					created = await createOrReuseRequest(ctx.env, { instanceId: authority, userId: ctx.userId, control: "connector_consent", connector: tool.connector, requestedScope: "write", currentScope: null, operationKind: name, operationFingerprint: fingerprint, continuationRef: fingerprint, reason: `${name} needs write access for ${label}.` });
+				} catch {
+					// Older/synthetic environments may not have the new durable schema.  They
+					// still fail closed; never turn a failed recovery-record write into a write.
+					return { name, content: `Writing via the ${label} connector isn't permitted for this agent. Enable write access for ${label} in the instance's Connections settings, then try again.`, success: false };
+				}
+				const blocker = permissionBlocker(created.request);
+				if (!created.reused) {
+					const { requestOwnerAttention } = await import("./owner-attention.js"); const { notifyUser } = await import("../routes/push.js");
+					try {
+						let observedPush: "sent" | "muted" | "deduped" | "unavailable" = "unavailable";
+						const outcome = await requestOwnerAttention(ctx.env, { event:"approval_required", userId:ctx.userId, instanceId:authority, subject:{kind:"permission-request",instanceId:authority,requestId:created.request.id}, about:{kind:"permission-request",id:created.request.id,state:"pending"}, title:`Permission needed: ${label} write access`, body:`${name} is blocked until you explicitly grant the minimum write scope.`, notificationType:"permission" }, {
+							notify: async (env, userId, type, title, body, url, opts) => { observedPush = await notifyUser(env, userId, type, title, body, url, opts); },
+							pushed: async () => observedPush,
+						});
+						await auditPermissionRequest(ctx.env,created.request,"notification.outcome",{outcome:outcome.push});
+					} catch {
+						// The durable request remains actionable if notification delivery is offline.
+						await auditPermissionRequest(ctx.env,created.request,"notification.outcome",{outcome:"unavailable"}).catch(() => undefined);
+					}
+				}
+				return { name, content: `Writing via the ${label} connector needs your explicit permission. Open the verified Permissions & Connections control: ${instancePermissionsLink(authority, created.request.id)}`, success:false, blocker };
+			}
 			return {
 				name,
 				content: `Writing via the ${label} connector isn't permitted for this agent. Enable write access for ${label} in the instance's Connections settings, then try again.`,
@@ -894,6 +929,7 @@ export async function runRegistryTool(
 			success: r.success,
 			...(r.transfer ? { transfer: r.transfer } : {}),
 			...(r.artifacts?.length ? { artifacts: r.artifacts } : {}),
+			...(r.blocker ? { blocker: r.blocker } : {}),
 		};
 	} catch (err) {
 		return { name, content: `Error: ${err instanceof Error ? err.message : String(err)}`, success: false };

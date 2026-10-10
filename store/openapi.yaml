@@ -279,8 +279,36 @@ components:
           schema:
             type: object
             additionalProperties: true
+    PermissionRequestDecision:
+      description: Terminal owner decision; no operation was dispatched.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [requestId, status]
+            properties:
+              requestId: { type: string }
+              status: { type: string, enum: [denied, cancelled] }
 
   schemas:
+    PermissionRequest:
+      type: object
+      required: [id, instanceId, userId, control, requestedScope, operationKind, status, expiresAt]
+      properties:
+        id: { type: string }
+        instanceId: { type: string }
+        userId: { type: string, description: Owner id; returned only to that owner. }
+        control: { type: string, example: connector_consent }
+        connector: { type: string, nullable: true }
+        resourceId: { type: string, nullable: true }
+        requestedScope: { type: string, example: write }
+        currentScope: { type: string, nullable: true }
+        operationKind: { type: string }
+        operationFingerprint: { type: string, description: Non-secret immutable digest; never tool arguments. }
+        continuationRef: { type: string, description: Opaque durable reference; not a credential or replay payload. }
+        reason: { type: string }
+        status: { type: string, enum: [pending, approved, claimed, denied, expired, revoked, cancelled, stale, resumed, failed, uncertain] }
+        expiresAt: { type: string, format: date-time }
     ApplicationTailorSettings:
       type: object
       properties:
@@ -6668,8 +6696,9 @@ paths:
       description: |
         A console URL that opens exactly one place: the instance (no query), one of its tabs
         (`section`), the coding session a loop run drives (`run_id`; a chat-driven run opens the
-        Assistant), a runtime task's page (`task_id`) or a secure-input entry page
-        (`secure_input_id`). Give at most one. Built from the same builders the console's route
+        Assistant), a runtime task's page (`task_id`), a secure-input entry page
+        (`secure_input_id`), or the exact Permissions & Connections control for an owner-scoped
+        permission request (`permission_request_id`). Give at most one. Built from the same builders the console's route
         table is tested against, so it lands where it says. A tab this instance does not show is
         a 400 naming the tabs it does; a run, task or request that is not the caller's on this
         instance is a 404. The console is a BrowserRouter, so there is no finer anchor than a
@@ -6682,6 +6711,7 @@ paths:
         - { name: run_id, in: query, required: false, schema: { type: string } }
         - { name: task_id, in: query, required: false, schema: { type: string } }
         - { name: secure_input_id, in: query, required: false, schema: { type: string } }
+        - { name: permission_request_id, in: query, required: false, schema: { type: string } }
       responses:
         "200":
           description: The link
@@ -6696,6 +6726,122 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/permission-requests:
+    get:
+      summary: List an instance owner's permission recovery requests
+      description: |
+        Durable owner-scoped records for blocked tool calls. They expose the least requested
+        scope, current scope, exact connector/resource/operation identity, expiry and lifecycle
+        state, but never arguments, credentials or a replayable external write.
+      operationId: listInstancePermissionRequests
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: Permission requests, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requests]
+                properties:
+                  requests:
+                    type: array
+                    items: { $ref: "#/components/schemas/PermissionRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/permission-requests/{requestId}:
+    get:
+      summary: Get one owner-scoped permission recovery request
+      operationId: getInstancePermissionRequest
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: requestId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The request
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [request]
+                properties: { request: { $ref: "#/components/schemas/PermissionRequest" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/permission-requests/{requestId}/approve:
+    post:
+      summary: Explicitly grant and verify a blocked connector permission once
+      description: |
+        The owner chooses the write-consent mode. The API atomically claims the pending decision,
+        writes the explicit consent, reads the actual binding back, then returns a one-time
+        continuation token. It never replays the blocked external operation; a future consumer
+        must re-check live consent and the request identity before any dispatch.
+      operationId: approveInstancePermissionRequest
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: requestId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode: { type: string, enum: [always, ask] }
+      responses:
+        "200":
+          description: Grant verified and continuation claimed once
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requestId, status, resumeToken, verifiedScope, mode]
+                properties:
+                  requestId: { type: string }
+                  status: { type: string, enum: [claimed] }
+                  resumeToken: { type: string, description: Opaque one-time continuation token; it is not an authorization bypass. }
+                  verifiedScope: { type: string, enum: [write] }
+                  mode: { type: string, enum: [always, ask] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Request is terminal, stale, expired, or could not be verified }
+        "503": { description: The explicit consent could not be saved }
+
+  /v1/instances/{instanceId}/permission-requests/{requestId}/deny:
+    post:
+      summary: Deny a pending permission recovery request
+      operationId: denyInstancePermissionRequest
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: requestId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/PermissionRequestDecision" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Request is no longer pending }
+
+  /v1/instances/{instanceId}/permission-requests/{requestId}/cancel:
+    post:
+      summary: Cancel a pending permission recovery request
+      description: Cancelling prevents a grant and continuation claim; it never changes an existing connector consent.
+      operationId: cancelInstancePermissionRequest
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: requestId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/PermissionRequestDecision" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Request is no longer pending }
   /v1/instances/{instanceId}/description:
     get:
       summary: Describe an instance's execution runtime

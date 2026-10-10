@@ -14,6 +14,7 @@ import type { SettingsField } from "../lib/types";
 import type { ConnectorReach, InstanceConnectorPolicy } from "../lib/connectorState";
 import type { RosterInstance } from "../lib/unsubscribeScope";
 import { MY_INSTANCES_WITH_PAUSED } from "../lib/instancePause";
+import { permissionRequestFocus } from "../lib/permissionRequestFocus";
 
 // Import refactored modules
 import InstanceInfo from "./settings/InstanceInfo";
@@ -62,6 +63,7 @@ interface WorkdriveStatus {
 }
 
 export default function SettingsTab({ instanceId, instanceName, isApply, isCoding, isRepo, isLocalBrowser, isGmailScout, onUnsubscribe }: Props) {
+	const permissionRequest = permissionRequestFocus(window.location.search);
 	const [maintMsg, setMaintMsg] = useState("");
 	const [resyncMsg, setResyncMsg] = useState("");
 	const [agentFields, setAgentFields] = useState<SettingsField[]>([]);
@@ -416,6 +418,7 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 
 			<ConnectorsSection
 				instanceId={instanceId}
+				permissionRequestId={permissionRequest?.requestId}
 				emailStatus={emailStatus}
 				emailPermission={emailPermission}
 				emailMsg={emailMsg}

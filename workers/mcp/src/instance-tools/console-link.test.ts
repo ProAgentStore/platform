@@ -42,6 +42,12 @@ describe("get_console_link (#938)", () => {
 		expect(seen[0]).toBe("https://api.test/v1/instances/i1/console-link?run_id=run+1");
 	});
 
+	it("forwards an exact permission request only through the verified API target", async () => {
+		const { seen, call } = getConsoleLink({ status: 200, body: { url: "u", path: "p", lands: "Permissions & Connections" } });
+		await call({ instance_id: "i1", permission_request_id: "pr 1" });
+		expect(seen[0]).toBe("https://api.test/v1/instances/i1/console-link?permission_request_id=pr+1");
+	});
+
 	it("returns the API-verified Files uploader link through the read-only console-link tool", async () => {
 		const link = {
 			url: "https://proagentstore.online/console/instances/i1/knowledge?subtab=files",

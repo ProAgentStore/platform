@@ -249,6 +249,9 @@ export interface NotifyOptions {
 	event?: string;
 }
 
+/** The observed push channel outcome; never infer a device delivery from a stored bell row. */
+export type NotifyDeliveryOutcome = "sent" | "muted" | "deduped" | "unavailable";
+
 /**
  * Where a notification opens when its producer named nowhere (#897). It used to be `/console/`, the
  * home screen — a notification nobody can act on from where it lands. The instance it concerns is the
@@ -298,7 +301,7 @@ export async function notifyUser(
 	/** Required (#897), and only from `deepLinkFor` (#894): the page for exactly what this is about. */
 	url: DeepLink,
 	opts: NotifyOptions = {},
-): Promise<void> {
+): Promise<NotifyDeliveryOutcome> {
 	const kind: NotificationKind = opts.kind === "alert" ? "alert" : "update";
 	const target = notificationTarget(url, opts.instanceId);
 	if (target.missing) {
@@ -313,6 +316,7 @@ export async function notifyUser(
 	// the bell list is a log, and only an explicit rule from the owner can stop a row being written.
 	let interrupt = true;
 	let record = true;
+	let outcome: NotifyDeliveryOutcome = "unavailable";
 	try {
 		const account = parseAccountPreferences(
 			(await env.DB.prepare("SELECT preferences FROM users WHERE id = ?1").bind(userId).first<{ preferences: string | null }>())?.preferences,
@@ -324,6 +328,7 @@ export async function notifyUser(
 		const decision = resolveNotificationDelivery({ type, severity: kind, event: opts.event, instanceId: opts.instanceId }, { account, instance });
 		interrupt = decision.push.allowed;
 		record = decision.inapp.allowed;
+		if (!interrupt) outcome = "muted";
 	} catch {
 		// Fall open — an unreadable preference must not swallow a notification.
 	}
@@ -339,7 +344,7 @@ export async function notifyUser(
 			)
 				.bind(userId, dedupeKey, new Date(Date.now() - DUPLICATE_WINDOW_MINUTES * 60_000).toISOString())
 				.first();
-			if (dupe) interrupt = false;
+			if (dupe) { interrupt = false; outcome = "deduped"; }
 		} catch {
 			// Fall open, as above. The column may also predate migration 0093 on a stale DB.
 		}
@@ -350,6 +355,7 @@ export async function notifyUser(
 			() => undefined,
 		);
 	}
-	if (!interrupt) return;
-	await sendPushToUser(env, userId, { title, body, url: target.url, tag: notificationTag(type, target.url) }).catch(() => undefined);
+	if (!interrupt) return outcome;
+	const sent = await sendPushToUser(env, userId, { title, body, url: target.url, tag: notificationTag(type, target.url) }).catch(() => 0);
+	return sent > 0 ? "sent" : "unavailable";
 }

@@ -103,6 +103,8 @@ export interface RegistryToolCtx {
 export interface RegistryToolResult {
 	content: string;
 	success: boolean;
+	/** Platform-authored, verified remedy metadata for a missing per-instance permission (#1009). */
+	blocker?: { requestId: string; controlLink: string; currentScope: string | null; requestedScope: string; reason: string; resource: string | null; operation: string };
 	/**
 	 * Opaque binary blocks returned by a remote tool. They deliberately never enter
 	 * `content`: model transcripts and durable event logs are the wrong place for

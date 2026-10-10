@@ -435,7 +435,7 @@ const TABLE: Record<string, Row> = {
 	secure_input_inject: ["secureInput", "runtime", null, "envelope", "dry_run,instance_id,request_id,submit,target,token"],
 	secure_input_request: ["secureInput", "write", null, "envelope", "destination_scope,dry_run,instance_id,label,one_shot,purpose,target,token"],
 	secure_input_status: ["secureInput", "read", null, null, "instance_id,request_id,token"],
-	get_console_link: ["consoleLink", "read", null, null, "instance_id,run_id,section,secure_input_id,target,task_id,token"],
+	get_console_link: ["consoleLink", "read", null, null, "instance_id,permission_request_id,run_id,section,secure_input_id,target,task_id,token"],
 	get_application_runner_settings: ["applications", "read", null, null, "instance_id,token"],
 	set_application_runner_settings: ["applications", "write", null, "envelope", "dry_run,instance_id,settings,token"],
 	list_applications: ["applications", "read", null, null, "company,instance_id,role,since,sort,source,status,token,until,url"],

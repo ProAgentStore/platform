@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { api } from "@proagentstore/sdk/client";
 import ToolPermissions from "../../components/ToolPermissions";
 import AgentAccountChoice from "../../components/AgentAccountChoice";
 import { FileConnectorPanel } from "../../components/FileConnectorPanel";
@@ -30,6 +31,7 @@ interface WorkdriveStatus {
 
 interface Props {
 	instanceId: string;
+	permissionRequestId?: string | null;
 	emailStatus: { connected: boolean; configured: boolean; email?: string | null } | null;
 	emailPermission: boolean | null;
 	emailMsg: string;
@@ -53,6 +55,7 @@ interface Props {
 
 export default function ConnectorsSection({
 	instanceId,
+	permissionRequestId,
 	emailStatus,
 	emailPermission,
 	emailMsg,
@@ -73,6 +76,19 @@ export default function ConnectorsSection({
 	onAddWorkdriveGrant,
 	onRemoveWorkdriveGrant,
 }: Props) {
+	const focusRef = useRef<HTMLDivElement>(null);
+	const [request, setRequest] = useState<{ id:string; connector:string|null; requestedScope:string; currentScope:string|null; reason:string; resourceId:string|null; operationKind:string; status:string } | null>(null);
+	const [requestMsg, setRequestMsg] = useState("");
+	useEffect(() => {
+		if (!permissionRequestId) return;
+		focusRef.current?.scrollIntoView({ block: "center" }); focusRef.current?.focus();
+		api<{ request: typeof request }>(`/v1/instances/${instanceId}/permission-requests/${encodeURIComponent(permissionRequestId)}`).then((d) => setRequest(d.request)).catch((e) => setRequestMsg(e instanceof Error ? e.message : "This permission request is no longer available."));
+	}, [instanceId, permissionRequestId]);
+	const decide = async (decision: "approve" | "deny", mode?: "always" | "ask") => {
+		if (!request) return; setRequestMsg("");
+		try { const d = await api<{ status:string }>(`/v1/instances/${instanceId}/permission-requests/${request.id}/${decision}`, { method:"POST", body: JSON.stringify(mode ? { mode } : {}) }); setRequest({ ...request, status:d.status }); setRequestMsg(decision === "approve" ? "Permission verified. The blocked operation may resume once through its verified continuation." : "Permission request denied; nothing was run."); }
+		catch (e) { setRequestMsg(e instanceof Error ? e.message : "Could not update permission request"); }
+	};
 	const showsEmail = useMemo(() => showsConnector(emailStatus), [emailStatus]);
 	const showsDrive = useMemo(
 		() => showsFileConnector(driveStatus, connectorPolicy, "google_drive"),
@@ -84,12 +100,22 @@ export default function ConnectorsSection({
 	);
 
 	return (
-		<Card className="mb-3 sm:mb-4">
+		<div id="permissions-and-connections" tabIndex={-1} ref={focusRef} data-testid="permissions-and-connections"><Card className="mb-3 sm:mb-4">
 			<h3 className="text-base font-bold mb-1">Permissions &amp; Connections</h3>
 			<p className="text-sm text-muted mb-3">
 				What <b>this agent</b> may do, and which of your connected folders it may read. Connecting or disconnecting an account is account-wide and lives
 				in <b>Preferences → Connections</b>.
 			</p>
+			{request && (
+				<div className="mb-3 rounded border p-3 text-sm" style={{ borderColor: "var(--color-warning-line)", background: "var(--color-warning-soft)" }} data-testid="permission-request">
+					<div className="font-semibold">Permission needed for this instance</div>
+					<p className="text-xs text-muted mt-1">{request.reason}</p>
+					<p className="text-xs text-muted mt-1">Connector: {request.connector ?? "this control"} · Current scope: {request.currentScope ?? "none"} · Requested minimum: {request.requestedScope}</p>
+					<p className="text-xs text-muted mt-1">Resource: {request.resourceId ?? "this instance"} · Operation: {request.operationKind}</p>
+					{request.status === "pending" && <div className="flex gap-2 mt-2"><button type="button" className="btn btn-primary text-xs" onClick={() => void decide("approve", "always")}>Allow write access</button><button type="button" className="btn text-xs" onClick={() => void decide("approve", "ask")}>Ask each time</button><button type="button" className="btn text-xs" onClick={() => void decide("deny")}>Deny</button></div>}
+					{requestMsg && <p className="text-xs mt-2">{requestMsg}</p>}
+				</div>
+			)}
 
 			<ToolPermissions instanceId={instanceId} />
 
@@ -152,6 +178,6 @@ export default function ConnectorsSection({
 			{emailMsg && <div className="text-xs text-muted mt-2">{emailMsg}</div>}
 			{driveMsg && <div className="text-xs text-muted mt-2">{driveMsg}</div>}
 			{workdriveMsg && <div className="text-xs text-muted mt-2">{workdriveMsg}</div>}
-		</Card>
+		</Card></div>
 	);
 }

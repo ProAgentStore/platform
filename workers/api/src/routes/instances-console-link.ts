@@ -14,15 +14,15 @@ import type { Env } from "../types.js";
  * link that lands on a page reading "not found".
  */
 export function registerConsoleLinkRoutes(router: Hono<{ Bindings: Env }>): void {
-	/** GET /v1/instances/:instanceId/console-link?section=|target=files-upload|run_id=|task_id=|secure_input_id= — at most one. */
+	/** GET /v1/instances/:instanceId/console-link?...|permission_request_id= — at most one. */
 	router.get("/:instanceId/console-link", async (c) => {
 		const session = await requireUser(c);
 		const instanceId = c.req.param("instanceId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
 
 		const q = (k: string) => c.req.query(k)?.trim() || "";
-		const given = (["section", "target", "run_id", "task_id", "secure_input_id"] as const).filter((k) => q(k));
-		if (given.length > 1) throw new HttpError(400, `Give one of section, target, run_id, task_id or secure_input_id, not ${given.join(" and ")} — a record's page already sits on its own tab.`);
+		const given = (["section", "target", "run_id", "task_id", "secure_input_id", "permission_request_id"] as const).filter((k) => q(k));
+		if (given.length > 1) throw new HttpError(400, `Give one console-link target, not ${given.join(" and ")} — a record's page already sits on its own tab.`);
 
 		let target: ConsoleTarget = { kind: "instance" };
 		if (q("section")) target = { kind: "section", section: q("section").toLowerCase() };
@@ -48,6 +48,10 @@ export function registerConsoleLinkRoutes(router: Hono<{ Bindings: Env }>): void
 			const req = await c.env.DB.prepare("SELECT id FROM secure_input_requests WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3").bind(q("secure_input_id"), instanceId, session.uid).first();
 			if (!req) throw new HttpError(404, "Secure input request not found on this instance");
 			target = { kind: "secure_input", requestId: q("secure_input_id") };
+		} else if (q("permission_request_id")) {
+			const request = await c.env.DB.prepare("SELECT id FROM instance_permission_requests WHERE id=?1 AND instance_id=?2 AND user_id=?3").bind(q("permission_request_id"), instanceId, session.uid).first();
+			if (!request) throw new HttpError(404, "Permission request not found on this instance");
+			target = { kind: "permission_request", requestId: q("permission_request_id") };
 		}
 
 		const caps = await capabilitiesForInstance(c.env, instanceId, session.uid);
