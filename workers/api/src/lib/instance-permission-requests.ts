@@ -1,10 +1,11 @@
 /** Durable, owner-scoped recovery requests for a missing per-instance grant (#1009). */
 import type { Env } from "../types.js";
+import type { InstancePermissionRequestStatus, InstancePermissionRequestView } from "../agent-types.js";
 import { instancePermissionsLink } from "./console-links.js";
 import { stableStringify } from "./stable-json.js";
 import type { RegistryToolCtx, ToolDef } from "./connectors/types.js";
 
-export type PermissionRequestStatus = "pending" | "approved" | "claimed" | "denied" | "expired" | "revoked" | "cancelled" | "stale" | "resumed" | "failed" | "uncertain";
+export type PermissionRequestStatus = InstancePermissionRequestStatus;
 export interface PermissionBlocker { requestId: string; controlLink: string; currentScope: string | null; requestedScope: string; reason: string; resource: string | null; operation: string; }
 export interface PermissionRequest {
 	id: string; instanceId: string; userId: string; control: string; connector: string | null; resourceId: string | null; requestedScope: string; currentScope: string | null;
@@ -33,6 +34,21 @@ const asRequest = (r: Record<string, unknown>): PermissionRequest => ({
 	id: String(r.id), instanceId: String(r.instance_id), userId: String(r.user_id), control: String(r.control), connector: r.connector ? String(r.connector) : null, resourceId: r.resource_id ? String(r.resource_id) : null,
 	requestedScope: String(r.requested_scope), currentScope: r.current_scope ? String(r.current_scope) : null, operationKind: String(r.operation_kind), operationFingerprint: String(r.operation_fingerprint), continuationRef: String(r.continuation_ref), reason: String(r.reason ?? ""), status: String(r.status) as PermissionRequestStatus, expiresAt: String(r.expires_at),
 });
+
+/** Strip owner and continuation internals before a recovery request reaches the console. */
+export function permissionRequestView(request: PermissionRequest): InstancePermissionRequestView {
+	return {
+		id: request.id,
+		connector: request.connector,
+		resourceId: request.resourceId,
+		requestedScope: request.requestedScope,
+		currentScope: request.currentScope,
+		reason: request.reason,
+		operationKind: request.operationKind,
+		status: request.status,
+		expiresAt: request.expiresAt,
+	};
+}
 export async function auditPermissionRequest(env: Env, req: Pick<PermissionRequest,"id"|"instanceId"|"userId">, event: string, detail: Record<string, unknown> = {}): Promise<void> {
 	await env.DB.prepare("INSERT INTO instance_permission_request_events (id,request_id,instance_id,user_id,event,detail) VALUES (?1,?2,?3,?4,?5,?6)").bind(crypto.randomUUID(),req.id,req.instanceId,req.userId,event,JSON.stringify(detail)).run();
 }

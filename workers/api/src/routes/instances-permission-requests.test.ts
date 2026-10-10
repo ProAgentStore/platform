@@ -30,8 +30,21 @@ async function call(requestId: string, suffix: "approve" | "deny" | "cancel" | "
 	const init: RequestInit = { method:"POST", headers:{"content-type":"application/json"} }; if (body !== undefined) init.body=JSON.stringify(body);
 	const response = await app.request(`/v1/instances/i1/permission-requests/${requestId}/${suffix}`,init,env()); return { status:response.status, body:await response.json() as Record<string,unknown> };
 }
+async function detail(requestId: string) {
+	const app = new Hono<{ Bindings: Env }>(); const routes = new Hono<{ Bindings: Env }>(); registerPermissionRequestRoutes(routes); app.route("/v1/instances", routes);
+	app.onError((e,c) => e instanceof HttpError ? c.json({error:e.message},e.status as 400) : c.json({error:String(e)},500));
+	const response=await app.request(`/v1/instances/i1/permission-requests/${requestId}`,{},env()); return {status:response.status,body:await response.json() as {request:Record<string,unknown>}};
+}
 
 describe("instance permission request routes (#1009)", () => {
+	it("returns an owner-safe console projection, never the continuation fingerprint", async () => {
+		const request=await create(); const response=await detail(request.id);
+		expect(response).toMatchObject({status:200,body:{request:{id:request.id,connector:"github",operationKind:"github_create_issue"}}});
+		expect(response.body.request).not.toHaveProperty("userId");
+		expect(response.body.request).not.toHaveProperty("operationFingerprint");
+		expect(response.body.request).not.toHaveProperty("continuationRef");
+	});
+
 	it("approves one explicit grant, verifies it, and returns exactly one non-replay continuation claim", async () => {
 		const request=await create(); const first=await call(request.id,"approve",{mode:"ask"}); const second=await call(request.id,"approve",{mode:"ask"});
 		expect(first).toMatchObject({status:200,body:{requestId:request.id,status:"claimed",resume:{method:"POST"},verifiedScope:"write",mode:"ask"}});

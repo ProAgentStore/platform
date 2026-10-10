@@ -3,10 +3,10 @@ import type { KnowledgeDoc as WorkerKnowledgeDoc } from "../../../../workers/api
 import type { ConnectionGuideResponse as WorkerConnectionGuideResponse } from "../../../../workers/api/src/lib/connection-guide";
 import type { ApplyDefaultEngineResult as WorkerApplyDefaultEngineResult } from "../../../../workers/api/src/lib/coding-default-engine-types";
 import type { AccountPreferencesResponse as WorkerAccountPreferencesResponse, AccountPreferencesWriteResponse as WorkerAccountPreferencesWriteResponse } from "../../../../workers/api/src/lib/preferences";
-import type { AgentState as WorkerAgentState, ConsentRow as WorkerConsentRow, GmailScoutScanResponse as WorkerGmailScoutScanResponse, ApplicationExecutionProjection as WorkerApplicationExecutionProjection } from "../../../../workers/api/src/agent-types";
+import type { AgentState as WorkerAgentState, ConsentRow as WorkerConsentRow, GmailScoutScanResponse as WorkerGmailScoutScanResponse, ApplicationExecutionProjection as WorkerApplicationExecutionProjection, InstancePermissionRequestView as WorkerInstancePermissionRequestView, InstancePermissionRequestResponse as WorkerInstancePermissionRequestResponse, InstancePermissionRequestDecisionResponse as WorkerInstancePermissionRequestDecisionResponse } from "../../../../workers/api/src/agent-types";
 import type { CollectionRecord as WorkerCollectionRecord, RecordQueryResult as WorkerRecordQueryResult } from "../../../../workers/api/src/agent-storage-types";
 import type { RunnerEvent, RunnerTask } from "../../../../packages/browser-runner/src/types";
-import type { AccountCodingDefaultApplyResponse, AccountPreferencesResponse, AccountPreferencesWriteResponse, ConnectionGuideResponse, ConnectorConsent, InstanceModelState, Credential, DataRecord, KnowledgeDoc, Notification, RecordQueryResponse, RuntimeEvent, RuntimeTask, TriggerAction, ApplicationQueueItem } from "./types";
+import type { AccountCodingDefaultApplyResponse, AccountPreferencesResponse, AccountPreferencesWriteResponse, ConnectionGuideResponse, ConnectorConsent, InstanceModelState, Credential, DataRecord, KnowledgeDoc, Notification, RecordQueryResponse, RuntimeEvent, RuntimeTask, TriggerAction, ApplicationQueueItem, InstancePermissionRequest, InstancePermissionRequestResponse, InstancePermissionRequestDecisionResponse } from "./types";
 import type { GmailScoutScanResponse } from "./gmailScout";
 
 /**
@@ -112,6 +112,20 @@ const _connectorConsentHasNoInventedFields: Extra<ConnectorConsent, WorkerConsen
 	? true
 	: never = true;
 
+// ── Permission-recovery request responses ──────────────────────────────────────────────────
+//
+// The owner-control card must render what was blocked without receiving an owner id or an opaque
+// continuation fingerprint. These contracts are deliberately projections of the private D1 row.
+const _permissionRequestHasNoInventedFields: Extra<InstancePermissionRequest, WorkerInstancePermissionRequestView> extends never
+	? true
+	: never = true;
+const _permissionRequestResponseHasNoInventedFields: Extra<InstancePermissionRequestResponse, WorkerInstancePermissionRequestResponse> extends never
+	? true
+	: never = true;
+const _permissionRequestDecisionHasNoInventedFields: Extra<InstancePermissionRequestDecisionResponse, WorkerInstancePermissionRequestDecisionResponse> extends never
+	? true
+	: never = true;
+
 // ── GmailScoutScanResponse ─────────────────────────────────────────────────────────────────
 //
 // The read-only Scout panel starts a server-side ingestion. Naming the whole envelope matters:
@@ -179,9 +193,12 @@ describe("console response types match the Worker declarations they copy (#617)"
 			_accountPreferencesHasNoInventedFields,
 			_accountPreferencesWriteHasNoInventedFields,
 			_accountCodingApplyHasNoInventedFields,
+			_permissionRequestHasNoInventedFields,
+			_permissionRequestResponseHasNoInventedFields,
+			_permissionRequestDecisionHasNoInventedFields,
 			_gmailScoutScanHasNoInventedFields,
 			_applicationExecutionAcceptsTheProducer.schemaVersion === 1 || true,
-		]).toEqual([true, true, true, true, true, true, true, true, true, true, true]);
+		]).toEqual([true, true, true, true, true, true, true, true, true, true, true, true, true, true]);
 		expect(_instanceModelStateAcceptsTheProducer).toEqual({});
 		expect(_accountPreferencesAcceptsTheProducer).toEqual({});
 		expect(_accountPreferencesWriteAcceptsTheProducer).toEqual({});

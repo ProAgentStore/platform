@@ -192,3 +192,45 @@ export interface ConsentRow {
 	mode: string;
 	created_at: string;
 }
+
+/**
+ * Owner-safe projection of a blocked-operation permission request (#1009).
+ *
+ * The recovery row also holds owner ids and opaque continuation fingerprints.  Those fields are
+ * deliberately not part of the console contract: the console needs the request's explanation
+ * and current lifecycle state, not material that could be mistaken for a replay credential.
+ */
+export type InstancePermissionRequestStatus =
+	| "pending"
+	| "approved"
+	| "claimed"
+	| "denied"
+	| "expired"
+	| "revoked"
+	| "cancelled"
+	| "stale"
+	| "resumed"
+	| "failed"
+	| "uncertain";
+
+export interface InstancePermissionRequestView {
+	id: string;
+	connector: string | null;
+	resourceId: string | null;
+	requestedScope: string;
+	currentScope: string | null;
+	reason: string;
+	operationKind: string;
+	status: InstancePermissionRequestStatus;
+	expiresAt: string;
+}
+
+/** `GET /v1/instances/:id/permission-requests/:requestId`. */
+export interface InstancePermissionRequestResponse {
+	request: InstancePermissionRequestView;
+}
+
+/** The status rendered after the owner chooses Allow, Ask, or Deny. */
+export interface InstancePermissionRequestDecisionResponse {
+	status: InstancePermissionRequestStatus;
+}

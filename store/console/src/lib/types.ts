@@ -536,6 +536,27 @@ export interface ConnectorConsentsResponse {
 	consents?: ConnectorConsent[];
 }
 
+/** Owner-safe permission-recovery detail, from the exact Permissions & Connections control (#1009). */
+export interface InstancePermissionRequest {
+	id: string;
+	connector: string | null;
+	resourceId: string | null;
+	requestedScope: string;
+	currentScope: string | null;
+	reason: string;
+	operationKind: string;
+	status: string;
+	expiresAt: string;
+}
+
+export interface InstancePermissionRequestResponse {
+	request: InstancePermissionRequest;
+}
+
+export interface InstancePermissionRequestDecisionResponse {
+	status: string;
+}
+
 /** One collection record as the Data tab reads it (worker: `CollectionRecord`, agent-storage-types.ts). */
 export interface DataRecord {
 	id: string;

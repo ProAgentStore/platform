@@ -2,7 +2,7 @@
 import type { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { consentModeFor, setConsent, type ConsentMode } from "../lib/connector-consent.js";
-import { auditPermissionRequest, cancelRequest, claimApprovedRequest, consumeClaimedRequest, denyRequest, expireRequest, getRequest, listRequests, markRevokedAfterConsume, markUncertainRequest, permissionOperationFingerprint, revokeRequest, staleRequest, transitionRequest } from "../lib/instance-permission-requests.js";
+import { auditPermissionRequest, cancelRequest, claimApprovedRequest, consumeClaimedRequest, denyRequest, expireRequest, getRequest, listRequests, markRevokedAfterConsume, markUncertainRequest, permissionOperationFingerprint, permissionRequestView, revokeRequest, staleRequest, transitionRequest } from "../lib/instance-permission-requests.js";
 import { getRegistryTool, runRegistryTool } from "../lib/tool-registry.js";
 import { validateAgainstSchema } from "../lib/json-schema-validate.js";
 import { explainRefusal, instanceToolPolicy } from "../lib/instance-tool-policy.js";
@@ -14,11 +14,11 @@ const isRecord=(value: unknown): value is Record<string,unknown> => !!value && t
 export function registerPermissionRequestRoutes(router: Hono<{ Bindings: Env }>): void {
 	router.get("/:instanceId/permission-requests", async (c) => {
 		const session=await requireUser(c); const instanceId=c.req.param("instanceId"); await requireOwnedInstance(c.env,instanceId,session.uid);
-		return c.json({ requests: await listRequests(c.env,instanceId,session.uid) });
+		return c.json({ requests: (await listRequests(c.env,instanceId,session.uid)).map(permissionRequestView) });
 	});
 	router.get("/:instanceId/permission-requests/:requestId", async (c) => {
 		const session=await requireUser(c); const instanceId=c.req.param("instanceId"); await requireOwnedInstance(c.env,instanceId,session.uid);
-		const request=await getRequest(c.env,c.req.param("requestId"),instanceId,session.uid); if (!request) throw new HttpError(404,"Permission request not found"); return c.json({request});
+		const request=await getRequest(c.env,c.req.param("requestId"),instanceId,session.uid); if (!request) throw new HttpError(404,"Permission request not found"); return c.json({request: permissionRequestView(request)});
 	});
 	router.post("/:instanceId/permission-requests/:requestId/deny", async (c) => {
 		const session=await requireUser(c); const instanceId=c.req.param("instanceId"); await requireOwnedInstance(c.env,instanceId,session.uid);

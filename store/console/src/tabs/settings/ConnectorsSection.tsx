@@ -4,6 +4,7 @@ import ToolPermissions from "../../components/ToolPermissions";
 import AgentAccountChoice from "../../components/AgentAccountChoice";
 import { FileConnectorPanel } from "../../components/FileConnectorPanel";
 import { showsConnector, showsFileConnector, type ConnectorReach, type InstanceConnectorPolicy } from "../../lib/connectorState";
+import type { InstancePermissionRequest, InstancePermissionRequestDecisionResponse, InstancePermissionRequestResponse } from "../../lib/types";
 import Card from "../../components/Card";
 
 interface ConnectorGrant {
@@ -77,16 +78,16 @@ export default function ConnectorsSection({
 	onRemoveWorkdriveGrant,
 }: Props) {
 	const focusRef = useRef<HTMLDivElement>(null);
-	const [request, setRequest] = useState<{ id:string; connector:string|null; requestedScope:string; currentScope:string|null; reason:string; resourceId:string|null; operationKind:string; status:string } | null>(null);
+	const [request, setRequest] = useState<InstancePermissionRequest | null>(null);
 	const [requestMsg, setRequestMsg] = useState("");
 	useEffect(() => {
 		if (!permissionRequestId) return;
 		focusRef.current?.scrollIntoView({ block: "center" }); focusRef.current?.focus();
-		api<{ request: typeof request }>(`/v1/instances/${instanceId}/permission-requests/${encodeURIComponent(permissionRequestId)}`).then((d) => setRequest(d.request)).catch((e) => setRequestMsg(e instanceof Error ? e.message : "This permission request is no longer available."));
+		api<InstancePermissionRequestResponse>(`/v1/instances/${instanceId}/permission-requests/${encodeURIComponent(permissionRequestId)}`).then((d) => setRequest(d.request)).catch((e) => setRequestMsg(e instanceof Error ? e.message : "This permission request is no longer available."));
 	}, [instanceId, permissionRequestId]);
 	const decide = async (decision: "approve" | "deny", mode?: "always" | "ask") => {
 		if (!request) return; setRequestMsg("");
-		try { const d = await api<{ status:string }>(`/v1/instances/${instanceId}/permission-requests/${request.id}/${decision}`, { method:"POST", body: JSON.stringify(mode ? { mode } : {}) }); setRequest({ ...request, status:d.status }); setRequestMsg(decision === "approve" ? "Permission verified. The blocked operation may resume once through its verified continuation." : "Permission request denied; nothing was run."); }
+		try { const d = await api<InstancePermissionRequestDecisionResponse>(`/v1/instances/${instanceId}/permission-requests/${request.id}/${decision}`, { method:"POST", body: JSON.stringify(mode ? { mode } : {}) }); setRequest({ ...request, status:d.status }); setRequestMsg(decision === "approve" ? "Permission verified. The blocked operation may resume once through its verified continuation." : "Permission request denied; nothing was run."); }
 		catch (e) { setRequestMsg(e instanceof Error ? e.message : "Could not update permission request"); }
 	};
 	const showsEmail = useMemo(() => showsConnector(emailStatus), [emailStatus]);
