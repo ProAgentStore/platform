@@ -155,6 +155,17 @@ it("dispatches only re-extracted, provenance-pinned uploaded text when both owne
 			.bind(role, id, name, hash, hash).run();
 		uploadedSourceResponses[id] = { source: { id, name, r2Version: "v1", r2Etag: "e1", originalSha256: hash, extractedTextSha256: hash, extractedAt: "2026-10-07T00:00:00.000Z" }, text: role === "resume" ? "Synthetic uploaded resume" : "Synthetic uploaded profile" };
 	}
+	// 0.4.92 pre-dates `uploadedSources`: it would silently ignore the field and read ~/jobs
+	// masters. The API must therefore refuse before it asks the DO for text or creates a run.
+	d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.92' WHERE instance_id = 't1'");
+	const oldRunner = await call("POST", "/t1/applications", { event: leadEvent() });
+	expect(oldRunner).toMatchObject({ status: 409, body: { error: expect.stringMatching(/needs 0\.4\.93 or newer.*No local source was used/i) } });
+	expect(await appCount()).toBe(0);
+	expect(await runCount()).toBe(0);
+	expect(sent.filter((entry) => entry.path === "/local-artifact/run")).toHaveLength(0);
+
+	// The first published compatible release accepts the same pinned fixture text.
+	d1.exec("UPDATE instance_runtime_nodes SET runner_version = '0.4.93' WHERE instance_id = 't1'");
 	const result = await call("POST", "/t1/applications", { event: leadEvent() });
 	expect(result.status).toBe(201);
 	const dispatched = sent.find((entry) => entry.path === "/local-artifact/run")?.body;

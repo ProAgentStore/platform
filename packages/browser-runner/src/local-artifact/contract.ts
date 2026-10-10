@@ -21,6 +21,8 @@ export const LOCAL_ARTIFACT_TASK_TYPE = "local_artifact.generate";
 export const LOCAL_ARTIFACT_RUN_PATH = "/local-artifact/run";
 export const LOCAL_ARTIFACT_STATUS_PATH = "/local-artifact/status";
 export const LOCAL_ARTIFACT_CANCEL_PATH = "/local-artifact/cancel";
+/** First CLI that consumes an explicit uploaded source instead of its local master files. */
+export const LOCAL_ARTIFACT_UPLOADED_SOURCES_MIN_CLI = "0.4.93";
 
 /** The readiness event a completed tailoring run emits, once, through the connection outbox. */
 export const MATERIALS_READY_EVENT = "job.application.materials_ready";

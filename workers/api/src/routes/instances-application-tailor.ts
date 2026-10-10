@@ -13,7 +13,7 @@
 import type { Context, Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { readInstanceConfigPair, patchInstanceConfig } from "../lib/instance-config.js";
-import { cancelTailoring, startTailoring, syncTailorRun } from "../lib/local-artifact/tailor.js";
+import { cancelTailoring, startTailoring, syncTailorRun, uploadedSourcesRunnerProblem } from "../lib/local-artifact/tailor.js";
 import { LOCAL_ARTIFACT_CAPS } from "../lib/local-artifact/contract.js";
 import {
 	APPLICATION_STATUSES,
@@ -146,6 +146,7 @@ export function registerApplicationTailorRoutes(router: Hono<{ Bindings: Env }>)
 		const selections = await listUploadedTailorSourceSelections(c.env, instanceId, uid);
 		const live = await ownedUploadedFiles(c, instanceId, uid);
 		const runner = await getLiveRuntime(c.env, instanceId, uid);
+		const runnerProblem = runner ? uploadedSourcesRunnerProblem(runner.runner_version, runner.runner_node) : null;
 		const byRole = new Map(selections.map((source) => [source.role, source]));
 		const sources = (["resume", "profile"] as const).map((role) => {
 			const selected = byRole.get(role);
@@ -158,7 +159,7 @@ export function registerApplicationTailorRoutes(router: Hono<{ Bindings: Env }>)
 				uploaded: !!current,
 				extracted: current?.extractionStatus === "extracted",
 				availableToRunner,
-				ready: availableToRunner && !!runner,
+				ready: availableToRunner && !!runner && !runnerProblem,
 				isStale: blockers.some((blocker) => blocker === "file_deleted" || blocker === "file_changed_reselect_required"),
 				provenance: current ? {
 					filename: current.name, fileId: current.id, version: current.fileVersion ?? null,
@@ -168,7 +169,7 @@ export function registerApplicationTailorRoutes(router: Hono<{ Bindings: Env }>)
 				blockers,
 			};
 		});
-		const blockers = [...sources.flatMap((source) => source.blockers.map((blocker) => `${source.role}:${blocker}`)), ...(runner ? [] : ["runner_unavailable"])] as string[];
+		const blockers = [...sources.flatMap((source) => source.blockers.map((blocker) => `${source.role}:${blocker}`)), ...(runner ? (runnerProblem ? ["runner_too_old"] : []) : ["runner_unavailable"])] as string[];
 		return c.json({ mode: "uploaded", sources, runner: { available: !!runner }, ready: blockers.length === 0, blockers });
 	});
 

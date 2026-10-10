@@ -21,6 +21,7 @@ import { moveApplication } from "../local-apply/store.js";
 import { capabilitiesForInstance } from "../agent-capabilities.js";
 import { deliverEvent } from "../connections.js";
 import { readInstanceConfigPair } from "../instance-config.js";
+import { cliAtLeast } from "../runner-upgrade.js";
 import type { Env } from "../../types.js";
 import { callRuntime, getLiveRuntime, runtimeJson } from "../../routes/instances-runtime.js";
 import { LOCAL_APPLY_PREFLIGHT_PATH, type LocalApplyPreflightResult } from "../local-apply/contract.js";
@@ -29,6 +30,7 @@ import {
 	LOCAL_ARTIFACT_RUN_PATH,
 	LOCAL_ARTIFACT_STATUS_PATH,
 	LOCAL_ARTIFACT_TASK_TYPE,
+	LOCAL_ARTIFACT_UPLOADED_SOURCES_MIN_CLI,
 	MATERIALS_READY_EVENT,
 	type LocalArtifactLead,
 	type LocalArtifactTaskEnvelope,
@@ -66,6 +68,17 @@ export const LOST_RUNNER_GRACE_MS = 10 * 60_000;
 
 export function notTailorMessage(runtime: string | null | undefined): string {
 	return `This agent is not an Application Tailor (its capabilities.runtime is ${runtime ? `"${runtime}"` : "null"}). The creator declares capabilities.runtime "local_artifact" to enable it.`;
+}
+
+/**
+ * Uploaded sources carry the exact extracted text in the task envelope. Older runners ignore
+ * that unknown field and read their local masters, so they must never receive such a task.
+ * This deliberately does not gate the unchanged local-source contract.
+ */
+export function uploadedSourcesRunnerProblem(runnerVersion: string | null | undefined, node: string | null | undefined): string | null {
+	if (cliAtLeast(runnerVersion, LOCAL_ARTIFACT_UPLOADED_SOURCES_MIN_CLI)) return null;
+	const version = runnerVersion?.trim() || "an unreported version";
+	return `The runner on ${node || "that machine"} is CLI ${version}, which cannot consume the selected uploaded résumé/profile safely (needs ${LOCAL_ARTIFACT_UPLOADED_SOURCES_MIN_CLI} or newer). No local source was used. Update that runner, restart pags up, and retry.`;
 }
 
 /** The `job.application.materials_ready` envelope — handles and hashes, never content. */
@@ -204,6 +217,8 @@ export async function startTailoring(env: Env, instanceId: string, uid: string, 
 	if (!runtime) throw new HttpError(503, "No runner is connected. Run `pags up` on the machine that holds your job materials; the lead will be tailored when it connects.");
 	let uploadedSources: LocalArtifactUploadedSource[] | undefined;
 	if ((await listUploadedTailorSourceSelections(env, instanceId, uid)).length > 0) {
+		const incompatibility = uploadedSourcesRunnerProblem(runtime.runner_version, runtime.runner_node);
+		if (incompatibility) throw new HttpError(409, incompatibility);
 		try { uploadedSources = await materializeUploadedTailorSources(env, instanceId, uid); }
 		catch (err) { throw new HttpError(409, `Uploaded sources are not ready: ${err instanceof Error ? err.message : "unknown error"}. No local or historical résumé was used.`); }
 	}
@@ -292,6 +307,8 @@ export async function retryTailoring(env: Env, instanceId: string, uid: string, 
 	if (!runtime) throw new HttpError(503, "No runner is connected. Run `pags up` on the machine that holds your job materials, then retry.");
 	let uploadedSources: LocalArtifactUploadedSource[] | undefined;
 	if ((await listUploadedTailorSourceSelections(env, instanceId, uid)).length > 0) {
+		const incompatibility = uploadedSourcesRunnerProblem(runtime.runner_version, runtime.runner_node);
+		if (incompatibility) throw new HttpError(409, incompatibility);
 		try { uploadedSources = await materializeUploadedTailorSources(env, instanceId, uid); }
 		catch (err) { throw new HttpError(409, `Uploaded sources are not ready: ${err instanceof Error ? err.message : "unknown error"}. No local or historical résumé was used.`); }
 	}
@@ -472,6 +489,12 @@ export async function dispatchNextQueuedTailoring(env: Env, instanceId: string, 
 	if ("error" in settings) return "queued";
 	let uploadedSources: LocalArtifactUploadedSource[] | undefined;
 	if (run.policy.uploadedSources?.length) {
+		const incompatibility = uploadedSourcesRunnerProblem(runtime.runner_version, runtime.runner_node);
+		if (incompatibility) {
+			await updateTailorRun(env, run, { to: "failed", errorCode: "runner_unsupported", error: incompatibility, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: "runner_unsupported" } }] }, now);
+			await settleApplication(env, instanceId, uid, next.applicationId, run.id, { to: "blocked", blockReason: "runner_unsupported", blockQuestions: [incompatibility] }, now);
+			return "exhausted";
+		}
 		try { uploadedSources = await materializeUploadedTailorSources(env, instanceId, uid, run.policy.uploadedSources); }
 		catch (err) {
 			const error = `Uploaded sources are no longer ready: ${err instanceof Error ? err.message : "unknown error"}`;
