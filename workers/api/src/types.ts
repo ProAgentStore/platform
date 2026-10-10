@@ -39,6 +39,7 @@ export interface Env {
 	BROWSER_TASK: Workflow;
 	/** Durable, agent-generic autonomous loop (#158). */
 	AGENT_LOOP: Workflow;
+	RUNNER_UPDATE: Workflow;
 	/** WebSocket relay DO — one per instance, bridges cloud→runner without tunnels. */
 	RELAY: DurableObjectNamespace;
 	GITHUB_CLIENT_ID: string;

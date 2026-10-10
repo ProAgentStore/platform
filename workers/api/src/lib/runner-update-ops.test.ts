@@ -45,7 +45,7 @@ vi.mock("./runner-client.js", () => ({
 
 const { realSchemaD1 } = await import("./d1-sqlite.js");
 const { claimUpdateOp, advanceUpdateOp, failStaleUpdateOps, latestUpdateOp, latestUpdateOps, liveUpdateOp, reconcileLateUpdateOp, UPDATE_OP_STALE_MS } = await import("./runner-update-ops.js");
-const { startRunnerUpdate } = await import("./runner-update.js");
+const { dispatchQueuedRunnerUpdates, executeRunnerUpdateOperation, startRunnerUpdate } = await import("./runner-update.js");
 type D1 = ReturnType<typeof realSchemaD1>;
 
 let d1: D1;
@@ -54,6 +54,13 @@ const env = () => ({ DB: d1.DB }) as never;
 /** No sleeping, and a clock that ADVANCES — otherwise the re-attach wait never reaches its deadline. */
 const fast = { sleep: async () => undefined, now: () => (NOW += 2_000) };
 let NOW = Date.parse("2026-10-09T01:00:00Z");
+
+/** Test-only Workflow launcher: execution is deliberately separate from the request route. */
+const start = (deps: typeof fast = fast) =>
+	startRunnerUpdate(env(), "u1", NODE, {
+		...deps,
+		startWorkflow: async (params) => executeRunnerUpdateOperation(env(), params, deps),
+	});
 
 beforeEach(() => {
 	d1 = realSchemaD1();
@@ -118,12 +125,20 @@ describe("the operation record (#990)", () => {
 
 	it("fails an operation that stopped reporting, so `running` cannot become the new unknown", async () => {
 		const { op } = await claimUpdateOp(env(), "u1", NODE, { now: NOW });
+		await advanceUpdateOp(env(), "u1", op.id, { state: "running", phase: "installing", detail: "machine acknowledgement pending" }, NOW + 1);
 		expect(await failStaleUpdateOps(env(), NOW + 1000)).toBe(0);
 		expect(await failStaleUpdateOps(env(), NOW + UPDATE_OP_STALE_MS + 1000)).toBe(1);
 		const after = await latestUpdateOp(env(), "u1", NODE);
-		expect(after).toMatchObject({ id: op.id, state: "failed", phase: "claimed", reason: "abandoned_claimed" });
-		expect(after?.detail).toMatch(/phase claimed|check its version/);
+		expect(after).toMatchObject({ id: op.id, state: "failed", phase: "installing", reason: "abandoned_installing" });
+		expect(after?.detail).toMatch(/phase installing|check its version/);
 		expect(after?.endedAt).toBeTruthy();
+	});
+
+	it("keeps a queued durable handoff live for recovery instead of expiring it with a request", async () => {
+		const { op } = await claimUpdateOp(env(), "u1", NODE, { now: NOW });
+		await advanceUpdateOp(env(), "u1", op.id, { state: "running", phase: "queued", detail: "waiting for workflow" }, NOW + 1);
+		expect(await failStaleUpdateOps(env(), NOW + UPDATE_OP_STALE_MS + 1)).toBe(0);
+		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ id: op.id, state: "running", phase: "queued" });
 	});
 
 	it("names the last phase when an interrupted update is abandoned", async () => {
@@ -167,10 +182,11 @@ describe("the idle-node update path, end to end (#990)", () => {
 	it("THE LIVE CASE: an idle connected node installs, restarts, and records the outcome", async () => {
 		// IDLE as the issue reports it: `pags up` connected and serving its agent, with no active
 		// coding session — not a machine with no socket, which is `unreachable` and says so.
-		const { op, started } = await startRunnerUpdate(env(), "u1", NODE, fast);
+		const { op, started } = await start(fast);
 		expect(started).toBe(true);
-		// The caller leaves with a state immediately, which is the property the 20s deadline needs.
-		expect(op.state).toBe("running");
+		// The production route returns while queued; this test launcher deliberately executes the
+		// Workflow so the durable terminal record can be inspected.
+		expect(op.state).toBe("restarted");
 		const final = await latestUpdateOp(env(), "u1", NODE);
 		expect(final).toMatchObject({ id: op.id, state: "restarted", phase: "reattaching", currentVersion: "0.4.84", latestVersion: "0.4.85", restartedBy: "pags-up" });
 		// It held one agent — an idle machine still has a socket — and that agent is back.
@@ -181,10 +197,10 @@ describe("the idle-node update path, end to end (#990)", () => {
 	});
 
 	it("records the version the machine registers after it comes back", async () => {
-		await startRunnerUpdate(env(), "u1", NODE, fast);
+		await start(fast);
 		// The runner re-registers on the new release, as `pags up` does on reconnect.
 		d1.exec(`UPDATE instance_runtime_nodes SET runner_version = '0.4.85' WHERE instance_id = 'i1'`);
-		const again = await startRunnerUpdate(env(), "u1", NODE, fast);
+		const again = await start(fast);
 		expect((await latestUpdateOp(env(), "u1", NODE))?.finalVersion).toBe("0.4.85");
 		expect(again.started).toBe(true);
 	});
@@ -195,14 +211,14 @@ describe("the idle-node update path, end to end (#990)", () => {
 		["waiting for a busy engine", { action: "wait", current: "0.4.84", latest: "0.4.85", waitingFor: ["session-1"] }, "scheduled"],
 	] as const)("propagates the machine's own %s verdict as a terminal state", async (_label, machineReply, state) => {
 		reply = () => machineReply;
-		const { op } = await startRunnerUpdate(env(), "u1", NODE, fast);
+		const { op } = await start(fast);
 		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ id: op.id, state });
 		expect((await row(op.id))?.ended_at, "a terminal state is finished").toBeTruthy();
 	});
 
 	it("records a CLI too old to update itself as `unsupported`, with the one manual step", async () => {
 		reply = () => new Error("Runner /pags/runner/update → 404: not found");
-		const { op } = await startRunnerUpdate(env(), "u1", NODE, fast);
+		const { op } = await start(fast);
 		const final = await latestUpdateOp(env(), "u1", NODE);
 		expect(final).toMatchObject({ id: op.id, state: "unsupported" });
 		expect(final?.detail).toMatch(/npm i -g @proagentstore\/cli/);
@@ -210,7 +226,7 @@ describe("the idle-node update path, end to end (#990)", () => {
 
 	it("records an unreachable machine rather than nothing at all", async () => {
 		d1.exec(`DELETE FROM instance_runtime_nodes`);
-		const { op } = await startRunnerUpdate(env(), "u1", NODE, fast);
+		const { op } = await start(fast);
 		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ id: op.id, state: "unreachable" });
 	});
 
@@ -218,52 +234,58 @@ describe("the idle-node update path, end to end (#990)", () => {
 		reply = () => {
 			throw new Error("relay exploded");
 		};
-		const { op } = await startRunnerUpdate(env(), "u1", NODE, fast);
+		const { op } = await start(fast);
 		const final = await latestUpdateOp(env(), "u1", NODE);
 		// It reaches `failed` with the reason on it, instead of dying with the request.
 		expect(final).toMatchObject({ id: op.id, state: "failed" });
 		expect(final?.detail).toMatch(/relay exploded/);
 	});
 
-	it("the work does not need the caller: it finishes after the response was handed back", async () => {
-		// This is `waitUntil` in the route, modelled: the caller returns as soon as the operation is
-		// claimed, and the update completes on the background promise.
-		let background: Promise<unknown> | null = null;
-		const { op, started } = await startRunnerUpdate(env(), "u1", NODE, { ...fast, background: (p) => { background = p; } });
+	it("queues a durable workflow and returns before any machine work", async () => {
+		const launches: string[] = [];
+		const { op, started } = await startRunnerUpdate(env(), "u1", NODE, {
+			...fast,
+			startWorkflow: async (_params, id) => { launches.push(id); },
+		});
 		expect(started).toBe(true);
-		// At the moment the caller leaves, the work has not finished — and the state says so.
-		expect(op.state).toBe("running");
-		expect(background).not.toBeNull();
-		await background;
-		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ state: "restarted" });
+		expect(launches).toEqual([`runner-update-${op.id}`]);
+		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ id: op.id, state: "running", phase: "queued", executionOwner: "workflow" });
 	});
 
-	it("reconciles a machine reply that arrives after the stale sweep without reopening the operation", async () => {
+	it("recovers the claim-to-workflow gap without replaying a machine command", async () => {
+		const { op } = await claimUpdateOp(env(), "u1", NODE, { now: NOW });
+		const launches: Array<{ id: string; params: unknown }> = [];
+		const recoveryEnv = { DB: d1.DB, RUNNER_UPDATE: { create: async (input: { id: string; params: unknown }) => { launches.push(input); return { id: input.id }; } } } as never;
+		// Simulate the HTTP worker disappearing after D1 claim but before Workflow.create.
+		expect(await dispatchQueuedRunnerUpdates(recoveryEnv)).toBe(1);
+		expect(launches).toHaveLength(1);
+		expect(launches[0]?.id).toBe(`runner-update-${op.id}`);
+		expect(await latestUpdateOp(env(), "u1", NODE)).toMatchObject({ phase: "queued", workflowId: `runner-update-${op.id}`, executionOwner: "workflow" });
+	});
+
+	it("a recovered workflow never replays an interrupted dispatch, and records the late reply", async () => {
 		let releaseReply: ((value: unknown) => void) | undefined;
 		reply = () => new Promise((resolve) => { releaseReply = resolve; });
-		let background: Promise<unknown> | null = null;
-		const { op } = await startRunnerUpdate(env(), "u1", NODE, { ...fast, background: (p) => { background = p; } });
+		let params: Parameters<NonNullable<Parameters<typeof startRunnerUpdate>[3]>["startWorkflow"]>[0] | undefined;
+		const { op } = await startRunnerUpdate(env(), "u1", NODE, { ...fast, startWorkflow: async (p) => { params = p; } });
+		expect(params).toBeDefined();
+		const first = executeRunnerUpdateOperation(env(), params!, fast);
 		await vi.waitFor(async () => expect((await latestUpdateOp(env(), "u1", NODE))?.phase).toBe("installing"));
-		await failStaleUpdateOps(env(), NOW + UPDATE_OP_STALE_MS + 1);
+		// This is a fresh Workflow invocation after an interruption, not a request waitUntil drain.
+		await executeRunnerUpdateOperation(env(), params!, fast);
 		releaseReply?.({ action: "restarting", current: "0.4.84", latest: "0.4.85", restartedBy: "pags-up" });
-		await background;
+		await first;
 		const after = await latestUpdateOp(env(), "u1", NODE);
-		expect(after).toMatchObject({ id: op.id, state: "failed", phase: "installing", reason: "abandoned_installing" });
+		expect(after).toMatchObject({ id: op.id, state: "failed", phase: "installing", reason: "dispatch_interrupted_unconfirmed" });
 		expect(after?.reconciliation).toMatch(/Late machine result.*restarting/);
 		expect(await liveUpdateOp(env(), "u1", NODE)).toBeNull();
 	});
 
 	it("a second call while one is in flight does not contact the machine again", async () => {
-		let calls = 0;
-		reply = () => {
-			calls++;
-			return { action: "restarting", current: "0.4.84", latest: "0.4.85" };
-		};
-		let background: Promise<unknown> | null = null;
-		await startRunnerUpdate(env(), "u1", NODE, { ...fast, background: (p) => { background = p; } });
-		const second = await startRunnerUpdate(env(), "u1", NODE, fast);
+		const launches: string[] = [];
+		await startRunnerUpdate(env(), "u1", NODE, { ...fast, startWorkflow: async (_p, id) => { launches.push(id); } });
+		const second = await startRunnerUpdate(env(), "u1", NODE, { ...fast, startWorkflow: async (_p, id) => { launches.push(id); } });
 		expect(second.started).toBe(false);
-		await background;
-		expect(calls, "one install, however many times the owner asks").toBe(1);
+		expect(launches, "one durable dispatch, however many times the owner asks").toHaveLength(1);
 	});
 });

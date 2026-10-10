@@ -155,6 +155,11 @@ name = "pags-agent-loop"
 binding = "AGENT_LOOP"
 class_name = "AgentLoopWorkflow"
 
+[[workflows]]
+name = "pags-runner-update"
+binding = "RUNNER_UPDATE"
+class_name = "RunnerUpdateWorkflow"
+
 [[migrations]]
 tag = "v1"
 new_classes = ["AgentDO"]

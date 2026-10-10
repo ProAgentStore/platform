@@ -33,7 +33,7 @@ export const RUNNER_UPDATE_STATES = ["running", "scheduled", "restarting", "rest
 export type RunnerUpdateState = (typeof RUNNER_UPDATE_STATES)[number];
 
 /** The last durable control-plane checkpoint; it never pretends to observe an unreported machine step. */
-export const RUNNER_UPDATE_PHASES = ["claimed", "dispatching", "installing", "restarting", "reattaching"] as const;
+export const RUNNER_UPDATE_PHASES = ["claimed", "queued", "dispatching", "installing", "restarting", "reattaching"] as const;
 export type RunnerUpdatePhase = (typeof RUNNER_UPDATE_PHASES)[number];
 
 export const isTerminalUpdateState = (state: string): boolean => state !== "running";
@@ -72,6 +72,10 @@ export interface RunnerUpdateOp {
 	supervisor: string | null;
 	reconciliation: string | null;
 	reconciledAt: string | null;
+	/** The durable executor responsible for this operation, never the request lifetime. */
+	executionOwner: string | null;
+	workflowId: string | null;
+	workflowQueuedAt: string | null;
 	dryRun: boolean;
 	createdAt: string;
 	updatedAt: string;
@@ -97,6 +101,9 @@ interface Row {
 	supervisor: string | null;
 	reconciliation: string | null;
 	reconciled_at: number | null;
+	execution_owner: string | null;
+	workflow_id: string | null;
+	workflow_queued_at: number | null;
 	dry_run: number;
 	created_at: number;
 	updated_at: number;
@@ -140,6 +147,9 @@ const present = (r: Row): RunnerUpdateOp => ({
 	supervisor: r.supervisor,
 	reconciliation: r.reconciliation,
 	reconciledAt: iso(r.reconciled_at),
+	executionOwner: r.execution_owner,
+	workflowId: r.workflow_id,
+	workflowQueuedAt: iso(r.workflow_queued_at),
 	dryRun: r.dry_run === 1,
 	createdAt: iso(r.created_at) ?? "",
 	updatedAt: iso(r.updated_at) ?? "",
@@ -147,7 +157,7 @@ const present = (r: Row): RunnerUpdateOp => ({
 });
 
 const SELECT = `SELECT id, node, machine_id, state, phase, current_version, latest_version, final_version, detail, reason,
- held, reattached, missing, waiting_for, restarted_by, supervisor, reconciliation, reconciled_at, dry_run, created_at, updated_at, ended_at
+ held, reattached, missing, waiting_for, restarted_by, supervisor, reconciliation, reconciled_at, execution_owner, workflow_id, workflow_queued_at, dry_run, created_at, updated_at, ended_at
  FROM runner_update_ops`;
 
 /** The live operation on this machine, when one is in flight. */
@@ -202,8 +212,8 @@ export async function claimUpdateOp(
 	const now = opts.now ?? Date.now();
 	const id = opts.id ?? crypto.randomUUID();
 	const inserted = await env.DB.prepare(
-		`INSERT INTO runner_update_ops (id, user_id, node, machine_id, state, phase, dry_run, requested_by, detail, created_at, updated_at)
-		 VALUES (?1, ?2, ?3, ?4, 'running', 'claimed', ?5, ?6, ?7, ?8, ?8)
+		`INSERT INTO runner_update_ops (id, user_id, node, machine_id, state, phase, execution_owner, dry_run, requested_by, detail, created_at, updated_at)
+		 VALUES (?1, ?2, ?3, ?4, 'running', 'claimed', 'workflow', ?5, ?6, ?7, ?8, ?8)
 		 ON CONFLICT DO NOTHING`,
 	)
 		.bind(id, userId, name, opts.machineId ?? null, opts.dryRun ? 1 : 0, opts.requestedBy ?? "owner", `Asking ${name} to update its \`pags\` CLI and restart.`, now)
@@ -239,6 +249,9 @@ export async function claimUpdateOp(
 			supervisor: null,
 			reconciliation: null,
 			reconciledAt: null,
+			executionOwner: "workflow",
+			workflowId: null,
+			workflowQueuedAt: null,
 			dryRun: opts.dryRun === true,
 			createdAt: new Date(now).toISOString(),
 			updatedAt: new Date(now).toISOString(),
@@ -246,6 +259,57 @@ export async function claimUpdateOp(
 		},
 		claimed: false,
 	};
+}
+
+/** Mark a claimed row for durable Workflow execution before the Workflow is created. */
+export async function queueUpdateWorkflow(env: Pick<Env, "DB">, userId: string, id: string, workflowId: string, now = Date.now()): Promise<boolean> {
+	const res = await env.DB.prepare(
+		`UPDATE runner_update_ops
+		    SET phase = 'queued', execution_owner = 'workflow', workflow_id = ?1, workflow_queued_at = ?2,
+		        detail = 'Queued for durable runner-update workflow execution.', updated_at = ?2
+		  WHERE id = ?3 AND user_id = ?4 AND state = 'running' AND phase = 'claimed'`,
+	)
+		.bind(workflowId, now, id, userId)
+		.run()
+		.catch(() => null);
+	return (res?.meta?.changes ?? 0) > 0;
+}
+
+/**
+ * The one-way dispatch claim. Once this succeeds a machine command may be attempted. A resumed
+ * workflow must never take this claim again: the machine may have seen the first command.
+ */
+export async function claimWorkflowDispatch(env: Pick<Env, "DB">, userId: string, id: string, now = Date.now()): Promise<boolean> {
+	const res = await env.DB.prepare(
+		`UPDATE runner_update_ops
+		    SET phase = 'dispatching', detail = 'Dispatching the update request to the runner; no machine result has been observed yet.', updated_at = ?1
+		  WHERE id = ?2 AND user_id = ?3 AND state = 'running' AND execution_owner = 'workflow' AND phase IN ('claimed', 'queued')`,
+	)
+		.bind(now, id, userId)
+		.run()
+		.catch(() => null);
+	return (res?.meta?.changes ?? 0) > 0;
+}
+
+export interface QueuedUpdateWorkflow {
+	id: string;
+	userId: string;
+	node: string;
+	machineId: string | null;
+	workflowId: string | null;
+}
+
+/** Rows which were claimed but whose Workflow create may have been interrupted with the request. */
+export async function queuedUpdateWorkflows(env: Pick<Env, "DB">, limit = 20): Promise<QueuedUpdateWorkflow[]> {
+	const { results } = await env.DB.prepare(
+		`SELECT id, user_id AS userId, node, machine_id AS machineId, workflow_id AS workflowId FROM runner_update_ops
+		  WHERE state = 'running' AND execution_owner = 'workflow' AND phase IN ('claimed', 'queued')
+		  ORDER BY created_at ASC LIMIT ?1`,
+	)
+		.bind(limit)
+		.all<QueuedUpdateWorkflow>()
+		.catch(() => ({ results: [] as QueuedUpdateWorkflow[] }));
+	return results ?? [];
 }
 
 export interface UpdateOpPatch {
@@ -335,7 +399,7 @@ export async function reconcileLateUpdateOp(env: Pick<Env, "DB">, userId: string
 
 /**
  * An operation whose Worker died before it recorded anything (#990) — the shape the live failure
- * had. Swept by the per-minute cron so a `running` row cannot outlive the request that owned it:
+ * had. Swept by the per-minute cron so a `running` row cannot outlive a failed executor:
  * without this, the one state that is not terminal would be the new way to be unknowable.
  */
 export const UPDATE_OP_STALE_MS = 6 * 60_000;
@@ -348,7 +412,7 @@ export async function failStaleUpdateOps(env: Pick<Env, "DB">, now = Date.now())
 		        reason = 'abandoned_' || phase,
 		        detail = 'The update stopped reporting during phase ' || phase || ', so its outcome was never recorded. The machine may or may not have installed it — check its version before retrying.',
 		        updated_at = ?1, ended_at = ?1
-		  WHERE state = 'running' AND updated_at < ?2`,
+		  WHERE state = 'running' AND phase NOT IN ('claimed', 'queued') AND updated_at < ?2`,
 	)
 		.bind(now, cutoff)
 		.run()

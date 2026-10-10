@@ -15,7 +15,18 @@
  * the runner is away and resumes it — engine conversation included (`--resume`) — once it is back.
  */
 import { aliasNodesFor } from "./machine-identity.js";
-import { advanceUpdateOp, claimUpdateOp, reconcileLateUpdateOp, type RunnerUpdateOp, type RunnerUpdatePhase, UPDATE_STATE_FOR_ACTION } from "./runner-update-ops.js";
+import {
+	advanceUpdateOp,
+	claimUpdateOp,
+	claimWorkflowDispatch,
+	latestUpdateOp,
+	queueUpdateWorkflow,
+	queuedUpdateWorkflows,
+	reconcileLateUpdateOp,
+	type RunnerUpdateOp,
+	type RunnerUpdatePhase,
+	UPDATE_STATE_FOR_ACTION,
+} from "./runner-update-ops.js";
 import { callRunner, relayConnected } from "./runner-client.js";
 import { attachAgentOnNode, liveCarriers, nodeRegistrations, type RepinDeps } from "./runner-repin.js";
 import { RunnerUnreachableError } from "./runner-unreachable.js";
@@ -72,7 +83,7 @@ export interface RunnerUpdateResult {
 	detail?: string;
 }
 
-type UpdateProgress = (phase: Exclude<RunnerUpdatePhase, "claimed">, detail: string, versions?: { current?: string; latest?: string }) => Promise<boolean>;
+type UpdateProgress = (phase: Exclude<RunnerUpdatePhase, "claimed" | "queued">, detail: string, versions?: { current?: string; latest?: string }) => Promise<boolean>;
 
 export async function updateRunnerNode(env: Env, userId: string, rawNode: string, opts: RepinDeps & { dryRun?: boolean; onProgress?: UpdateProgress } = {}): Promise<RunnerUpdateResult> {
 	const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
@@ -209,7 +220,7 @@ export async function updateRunnerNode(env: Env, userId: string, rawNode: string
  *
  * 1. CLAIM the operation in D1 (single-flight per machine) and hand the caller its id immediately,
  *    well inside any client deadline;
- * 2. run the work in the background through `waitUntil`, so the client going away cannot kill it;
+ * 2. hand it to a Cloudflare Workflow, so the client going away cannot kill it;
  * 3. write the terminal outcome to the row whatever happens — including a thrown error, which
  *    previously vanished with the request.
  *
@@ -223,38 +234,107 @@ export interface StartRunnerUpdate {
 	started: boolean;
 }
 
+/** The deterministic id makes create/recovery idempotent without making the machine command replayable. */
+export const runnerUpdateWorkflowId = (opId: string): string => `runner-update-${opId}`;
+
+export interface RunnerUpdateWorkflowParams {
+	opId: string;
+	userId: string;
+	node: string;
+	machineId: string | null;
+}
+
+type StartWorkflow = (params: RunnerUpdateWorkflowParams, id: string) => Promise<unknown>;
+
+const workflowStarter = (env: Pick<Env, "RUNNER_UPDATE">): StartWorkflow =>
+	(params, id) => env.RUNNER_UPDATE.create({ id, params });
+
+/**
+ * Recovery for the narrow D1-claim → Workflow-create gap. A create may be retried safely because
+ * its id is deterministic; a *machine dispatch* may not. The Workflow takes a one-way D1 dispatch
+ * claim before it talks to the runner and, on any resumed post-claim invocation, records an
+ * unconfirmed interruption rather than replaying an install/restart.
+ */
+export async function dispatchQueuedRunnerUpdates(env: Env, limit = 20): Promise<number> {
+	let created = 0;
+	for (const op of await queuedUpdateWorkflows(env, limit)) {
+		const id = op.workflowId || runnerUpdateWorkflowId(op.id);
+		if (!op.workflowId) await queueUpdateWorkflow(env, op.userId, op.id, id);
+		try {
+			await workflowStarter(env)({ opId: op.id, userId: op.userId, node: op.node, machineId: op.machineId }, id);
+			created++;
+		} catch {
+			// Leave it queued. The next cron uses the same Workflow id; it never dispatches directly.
+		}
+	}
+	return created;
+}
+
 export async function startRunnerUpdate(
 	env: Env,
 	userId: string,
 	rawNode: string,
-	opts: RepinDeps & { dryRun?: boolean; background?: (p: Promise<unknown>) => void; machineId?: string | null } = {},
+	opts: RepinDeps & { dryRun?: boolean; machineId?: string | null; startWorkflow?: StartWorkflow } = {},
 ): Promise<StartRunnerUpdate> {
 	const node = normalizeRunnerNode(rawNode);
 	const { op, claimed } = await claimUpdateOp(env, userId, node, { dryRun: opts.dryRun === true, now: opts.now?.(), machineId: opts.machineId });
 	// Already in flight, or the claim could not be recorded: either way nothing new is started, and
 	// the operation the caller gets back is the one that actually exists.
 	if (!claimed) return { op, started: false };
+	const workflowId = runnerUpdateWorkflowId(op.id);
+	// This checkpoint precedes Workflow.create. If the request dies here, cron recreates the same
+	// Workflow id from the durable row; the request itself owns no long-running promise.
+	await queueUpdateWorkflow(env, userId, op.id, workflowId, opts.now?.());
+	try {
+		await (opts.startWorkflow ?? workflowStarter(env))({ opId: op.id, userId, node, machineId: opts.machineId ?? null }, workflowId);
+	} catch {
+		// Deliberately remain queued for scheduled recovery; a route error must not turn into an
+		// unrecorded machine update or cause a direct fallback execution.
+	}
+	return { op: (await latestUpdateOp(env, userId, node, opts.machineId)) ?? op, started: true };
+}
 
-	const run = (async () => {
-		let lastPhase: Exclude<RunnerUpdatePhase, "claimed"> = "dispatching";
-		const checkpoint = async (phase: Exclude<RunnerUpdatePhase, "claimed">, detail: string, versions?: { current?: string; latest?: string }): Promise<boolean> => {
-			const recorded = await advanceUpdateOp(env, userId, op.id, {
+/** Called only by the durable Workflow. Never call this from an HTTP request or waitUntil. */
+export async function executeRunnerUpdateOperation(
+	env: Env,
+	params: RunnerUpdateWorkflowParams,
+	opts: RepinDeps = {},
+): Promise<RunnerUpdateResult | null> {
+	const { opId, userId, node } = params;
+	const dispatched = await claimWorkflowDispatch(env, userId, opId, opts.now?.());
+	if (!dispatched) {
+		const op = await latestUpdateOp(env, userId, node, params.machineId);
+		if (op?.state === "running") {
+			// A prior workflow invocation consumed the one-way dispatch claim. We cannot know whether
+			// its machine command arrived, so fail closed rather than replay an update or restart.
+			await advanceUpdateOp(env, userId, opId, {
+				state: "failed",
+				phase: op.phase,
+				reason: "dispatch_interrupted_unconfirmed",
+				detail: `The durable workflow resumed after dispatch phase ${op.phase}; the machine outcome is unconfirmed, so no install or restart was replayed. Check the runner version before retrying.`,
+			}, opts.now?.());
+		}
+		return null;
+	}
+
+	let lastPhase: Exclude<RunnerUpdatePhase, "claimed" | "queued"> = "dispatching";
+	const checkpoint = async (phase: Exclude<RunnerUpdatePhase, "claimed" | "queued">, detail: string, versions?: { current?: string; latest?: string }): Promise<boolean> => {
+		const recorded = await advanceUpdateOp(env, userId, opId, {
 				state: "running",
 				phase,
 				detail,
 				currentVersion: versions?.current,
 				latestVersion: versions?.latest,
 			}, opts.now?.());
-			// Do not contact or keep waiting on a machine if the operation can no longer report
-			// where it is. A late machine reply is reconciled below without reopening the row.
-			if (!recorded) return false;
-			lastPhase = phase;
-			return true;
-		};
-		try {
-			if (!(await checkpoint("dispatching", `Dispatching the update request to ${node}; no machine result has been observed yet.`))) return null;
-			const result = await updateRunnerNode(env, userId, node, { ...opts, onProgress: checkpoint });
-			const patch = {
+		// Do not contact or keep waiting on a machine if the operation can no longer report
+		// where it is. A late machine reply is reconciled below without reopening the row.
+		if (!recorded) return false;
+		lastPhase = phase;
+		return true;
+	};
+	try {
+		const result = await updateRunnerNode(env, userId, node, { ...opts, onProgress: checkpoint });
+		const patch = {
 				state: UPDATE_STATE_FOR_ACTION[result.action] ?? "failed",
 				phase: result.action === "restarted" ? "reattaching" : "installing",
 				currentVersion: result.current ?? null,
@@ -269,26 +349,22 @@ export async function startRunnerUpdate(
 				restartedBy: result.restartedBy ?? null,
 				supervisor: result.supervisor ?? null,
 			} as const;
-			const completed = await advanceUpdateOp(env, userId, op.id, patch, opts.now?.());
-			if (!completed) {
-				await reconcileLateUpdateOp(env, userId, op.id, `Late machine result after the original operation closed: ${result.action}; ${result.detail ?? "no machine detail was returned"}.`, opts.now?.());
-			}
-			return result;
-		} catch (e) {
-			// The one path that used to lose everything: a throw inside a request nobody is waiting
-			// for. It is now the operation's recorded outcome, with the reason on it.
-			const detail = `The update on ${node} failed: ${(e instanceof Error ? e.message : String(e)).slice(0, 400)}`;
-			const completed = await advanceUpdateOp(env, userId, op.id, {
+		const completed = await advanceUpdateOp(env, userId, opId, patch, opts.now?.());
+		if (!completed) {
+			await reconcileLateUpdateOp(env, userId, opId, `Late machine result after the original operation closed: ${result.action}; ${result.detail ?? "no machine detail was returned"}.`, opts.now?.());
+		}
+		return result;
+	} catch (e) {
+		// The one path that used to lose everything: a throw inside a request nobody is waiting
+		// for. It is now the operation's recorded outcome, with the reason on it.
+		const detail = `The update on ${node} failed: ${(e instanceof Error ? e.message : String(e)).slice(0, 400)}`;
+		const completed = await advanceUpdateOp(env, userId, opId, {
 				state: "failed",
 				phase: lastPhase,
 				reason: "error",
 				detail,
-			}, opts.now?.());
-			if (!completed) await reconcileLateUpdateOp(env, userId, op.id, `Late control-plane failure after the original operation closed: ${detail}`, opts.now?.());
-			return null;
-		}
-	})();
-	if (opts.background) opts.background(run);
-	else await run;
-	return { op, started: true };
+		}, opts.now?.());
+		if (!completed) await reconcileLateUpdateOp(env, userId, opId, `Late control-plane failure after the original operation closed: ${detail}`, opts.now?.());
+		return null;
+	}
 }

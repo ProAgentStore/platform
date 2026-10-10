@@ -656,22 +656,13 @@ terminalRoutes.post("/nodes/:node/update", async (c) => {
 	// outlives the request, so it needs no durable operation.
 	if (dryRun) return c.json(await updateRunnerNode(c.env, session.uid, target, { dryRun: true }));
 
-	// #990: claim a durable operation, start the work in the BACKGROUND, and answer immediately.
+	// #1008: claim a durable operation, queue its Workflow, and answer immediately.
 	//
 	// The live failure was this route awaiting ~205s of work behind a 20s client deadline: the seam
 	// aborted, which cancelled the Worker, and the update died mid-flight having recorded nothing —
-	// an idle node left on 0.4.84 with no outcome and no error anywhere. `waitUntil` is what makes
-	// the work independent of the caller, and the operation row is what makes it knowable.
-	const background = (p: Promise<unknown>) => {
-		try {
-			c.executionCtx.waitUntil(p);
-		} catch {
-			// No execution context (a test, or a runtime that does not provide one): the work is
-			// awaited inline instead, which is slower but never silently skipped.
-			void p;
-		}
-	};
-	const { op, started } = await startRunnerUpdate(c.env, session.uid, target, { ...(body.wait === true ? {} : { background }), machineId });
+	// an idle node left on 0.4.84 with no outcome and no error anywhere. The durable Workflow owns
+	// execution; a request termination cannot cancel or silently abandon the machine work.
+	const { op, started } = await startRunnerUpdate(c.env, session.uid, target, { machineId });
 	// 200 whatever the outcome: `state` is the verdict, and a non-2xx would lose the machine's reason
 	// at the MCP seam. `operationId` is what a timed-out caller polls.
 	return c.json({ operationId: op.id, node: op.node, state: op.state, started, detail: op.detail, poll: `/v1/terminals/nodes/${encodeURIComponent(op.node)}/update`, operation: op });

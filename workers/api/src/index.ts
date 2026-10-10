@@ -63,6 +63,7 @@ import { syncActiveLocalBrowserRuns } from "./lib/local-browser/sync.js";
 import { syncActiveTailorRuns } from "./lib/local-artifact/tailor.js";
 import { syncActiveApplyRuns } from "./lib/local-apply/apply.js";
 import { failStaleUpdateOps } from "./lib/runner-update-ops.js";
+import { dispatchQueuedRunnerUpdates } from "./lib/runner-update.js";
 import { syncLeadWritebacks } from "./lib/local-artifact/store.js";
 import { routeRunEvents } from "./lib/run-event-routing.js";
 import { runTicketQueue } from "./lib/ticket-queue.js";
@@ -88,6 +89,7 @@ export { PipelineRunWorkflow } from "./workflows/pipeline-run.js";
 export { BrowserTaskWorkflow } from "./workflows/browser-task.js";
 // Re-export the durable agent-loop Workflow class for wrangler (#158)
 export { AgentLoopWorkflow } from "./workflows/agent-loop.js";
+export { RunnerUpdateWorkflow } from "./lib/runner-update-workflow.js";
 // Re-export the WebSocket relay DO for wrangler
 export { RelayDO } from "./relay-do.js";
 
@@ -305,6 +307,7 @@ export default {
 		// state, so a row left there by a Worker that died would be the new way for an update to be
 		// unknowable — which is the whole defect the operation record exists to end.
 		ctx.waitUntil(failStaleUpdateOps(env).catch((err) => logUnhandled(env, err, { path: "scheduled:runner-update-ops", method: "CRON" })));
+		ctx.waitUntil(dispatchQueuedRunnerUpdates(env).catch((err) => logUnhandled(env, err, { path: "scheduled:runner-update-workflow", method: "CRON" })));
 		// Backstop for the lead writeback (#953): applications that moved in the last 10 minutes.
 		ctx.waitUntil(syncLeadWritebacks(env, Date.now() - 10 * 60_000).catch((err) => logUnhandled(env, err, { path: "scheduled:application-lead-writeback", method: "CRON" })));
 		// Snapshot yesterday's stats for instances that were active (#313). A sixth independent
