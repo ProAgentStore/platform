@@ -37,14 +37,13 @@ import {
 	parseLocalApplyEvent,
 	parseLocalApplyResult,
 } from "./contract.js";
-import { type ApplicationRunnerSettings, RUNNER_SETTINGS_KEY, effectiveRunnerSettings, evaluateSubmitGate, hostOfUrl } from "./policy.js";
+import { type ApplicationRunnerSettings, RUNNER_SETTINGS_KEY, effectiveRunnerSettings, hostOfUrl } from "./policy.js";
 import {
 	type ApplicationMove,
 	type ApplyRun,
 	type ApplyRunPolicy,
 	type ApplyTraceEvent,
 	activeApplyRuns,
-	applyRunCounts,
 	getApplyRun,
 	getApplyRunByRequest,
 	insertApplyRun,
@@ -63,8 +62,10 @@ import { approvalStageOf, approvalState } from "./approval.js";
 import { type AttentionDeps, requestOwnerAttention } from "../owner-attention.js";
 import { notifyUser } from "../../routes/push.js";
 import { parseAccountPreferences } from "../preferences.js";
-import { consumeSubmitAuthorization, getSubmitAuthorization } from "./approval-store.js";
+import { claimVerifiedOneClickRecovery, consumeSubmitAuthorization, getSubmitAuthorization } from "./approval-store.js";
 import { releaseApprovalIfNothingWasSent, upgradeQueuedRunPolicy } from "./approval-at-dispatch.js";
+import { submitGateFor } from "./submission-gate.js";
+export { submitGateFor } from "./submission-gate.js";
 import { listSupervisorCheckpoints, noteSupervisorDirectiveDelivery, receiveSupervisorCheckpoint, sanitizeSupervisorFacts, type SupervisorDirective } from "./supervision.js";
 import { directApplicationCheckpoint } from "./brain.js";
 
@@ -183,43 +184,6 @@ async function move(env: Env, uid: string, applicationId: string, from: readonly
  * of the owner's applications, and 503 when no runner is connected — before anything is recorded,
  * so the outbox retries.
  */
-/** The gate's verdict for one application on one Runner — what dispatch uses and what the console previews (#958). */
-export async function submitGateFor(
-	env: Env,
-	runnerInstanceId: string,
-	uid: string,
-	app: JobApplication,
-	s: ApplicationRunnerSettings,
-	now: number,
-	/** See {@link applyRunCounts} — set only by the dequeue path (#993). */
-	counting: { excludeRunId?: string; machineOnly?: boolean } = {},
-) {
-	const lead = (app.lead ?? {}) as { leadUrl?: string; lead?: { title?: string; company?: string; location?: string; match_rationale?: string } };
-	const counts = await applyRunCounts(env, runnerInstanceId, uid, now, counting);
-	// The owner's per-application approval (#973). Read here rather than passed in, so EVERY caller
-	// of the gate — the queue rendering a card, a dispatch, a retry — sees the same verdict; a
-	// surface that evaluated the gate without it would show the owner a different answer than the
-	// one their approval actually produces.
-	const auth = await getSubmitAuthorization(env, app.id, uid).catch(() => null);
-	const approval = auth ? { id: auth.id, usable: approvalState(auth, app).usable } : null;
-	const gate = evaluateSubmitGate({
-		settings: s,
-		approval,
-		application: {
-			profileVersion: app.profileVersion,
-			resumeSha: app.resumeArtifact?.sha256 ?? null,
-			coverLetterSha: app.coverLetterArtifact?.sha256 ?? null,
-			blockReason: app.blockReason,
-			submitAttemptedAt: app.submitAttemptedAt,
-			leadUrl: str(lead.leadUrl),
-			lead: lead.lead ?? {},
-		},
-		autoSubmitsToday: counts.autoSubmitsToday,
-		activeRuns: counts.active,
-	});
-	return { ...gate, autoSubmitsToday: counts.autoSubmitsToday, dailyCap: s.autoSubmit.dailyCap, authorizationId: approval?.usable ? approval.id : null };
-}
-
 /** The Runner's effective settings, or why they cannot be used. */
 export async function runnerSettingsFor(env: Env, runnerInstanceId: string, uid: string): Promise<ApplicationRunnerSettings> {
 	const pair = await readInstanceConfigPair(env, runnerInstanceId, uid);
@@ -261,7 +225,7 @@ export function applyTaskEnvelope(run: ApplyRun, app: JobApplication, s: Applica
  * `review: true` (#958 "Request review") pins the run to fill_and_review whatever the policy says:
  * the gate is still evaluated and recorded, with `review_requested` as a failing check.
  */
-export async function startApplicationFill(env: Env, instanceId: string, uid: string, rawEvent: unknown, source: "connection" | "owner", opts: { review?: boolean } = {}): Promise<StartFillOutcome> {
+export async function startApplicationFill(env: Env, instanceId: string, uid: string, rawEvent: unknown, source: "connection" | "owner", opts: { review?: boolean; oneClickRecoveryId?: string } = {}): Promise<StartFillOutcome> {
 	const caps = await capabilitiesForInstance(env, instanceId, uid);
 	if (caps?.runtime !== "local_apply") throw new HttpError(409, notRunnerMessage(caps?.runtime));
 	const ev = rawEvent && typeof rawEvent === "object" && !Array.isArray(rawEvent) ? (rawEvent as Record<string, unknown>) : null;
@@ -295,7 +259,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	if (contractProblem) throw new HttpError(409, contractProblem);
 
 	const now = Date.now();
-	const verdict = await submitGateFor(env, instanceId, uid, app, s, now);
+	const verdict = await submitGateFor(env, instanceId, uid, app, s, now, { oneClickRecoveryId: opts.oneClickRecoveryId });
 	const gate = opts.review
 		? { allowed: false, checks: [...verdict.checks, { check: "review_requested", ok: false, why: "the owner asked to review the filled form before anything is sent" }] }
 		: { allowed: verdict.allowed, checks: verdict.checks };
@@ -315,7 +279,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	// the fact: `mode`, `gateId` and the recorded gate all derive from the outcome below, because
 	// the envelope the runner receives is built from them. Mutating the stored policy afterwards
 	// would have left the runner's own copy still saying `auto_submit`.
-	const spentApproval = gate.allowed && verdict.authorizationId ? await consumeSubmitAuthorization(env, verdict.authorizationId, uid, runId, now) : null;
+	const spentApproval = gate.allowed && verdict.authorizationId ? await consumeSubmitAuthorization(env, verdict.authorizationId, uid, runId, now, opts.oneClickRecoveryId ? { id: opts.oneClickRecoveryId, runnerInstanceId: instanceId } : undefined) : null;
 	const lostApprovalRace = gate.allowed && !!verdict.authorizationId && !spentApproval;
 	const allowed = gate.allowed && !lostApprovalRace;
 	const checks = lostApprovalRace
@@ -331,6 +295,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 		allowDomains: [...new Set([jobHost, ...s.allowDomains])],
 		limits: { maxMinutes: s.maxMinutes, maxPages: s.maxPages, maxActions: s.maxActions },
 		gate: { allowed, gateId, checks },
+		...(opts.oneClickRecoveryId ? { approvalRecoveryId: opts.oneClickRecoveryId } : {}),
 	};
 	const failing = checks.filter((c) => !c.ok).map((c) => c.check);
 	const trace: ApplyTraceEvent[] = [
@@ -536,7 +501,7 @@ async function askForApprovalIfWaiting(env: Env, uid: string, run: ApplyRun): Pr
 	// and the application row names the TAILOR's, so looking it up by `app.instanceId` finds
 	// nothing — and a null context reads as "the fill ended", which would raise "approve to send"
 	// over a run still paused on an unanswered question. The authority on this run is this run.
-	const context = app.fillRunId === run.id ? { status: run.status, pauseReason: run.pause?.reason ?? null } : null;
+	const context = app.fillRunId === run.id ? { ...run, pauseReason: run.pause?.reason ?? null } : null;
 	if (approvalStageOf(app, context) !== "post_fill") return;
 	const existing = await getSubmitAuthorization(env, app.id, uid).catch(() => null);
 	// Already approved: the owner has decided, and the thing to do next is a retry they can see.
@@ -780,13 +745,31 @@ export async function retryFill(env: Env, runnerInstanceId: string, uid: string,
 	// is gone — so a fresh run is the only way to carry the owner's approval to the employer. It is
 	// as safe as the other two for the same reason: the guard below refuses any application that has
 	// already attempted a submit, and the approval it spends is single-use.
-	if (!app.fillRunId || !["blocked", "failed", "awaiting_review"].includes(app.status)) throw new HttpError(409, `A fill can be retried only after a fill run stopped; this application is ${app.status}${app.fillRunId ? "" : " and has not been filled"}.`);
+	const auth = await getSubmitAuthorization(env, app.id, uid).catch(() => null);
+	const oneClick = auth?.kind === "verified_one_click" ? auth : null;
+	const recovering = oneClick?.recoveryId && oneClick.recoveryRunnerInstanceId === runnerInstanceId;
+	if (!app.fillRunId || !["blocked", "failed", "awaiting_review"].includes(app.status) && !(app.status === "materials_ready" && recovering)) throw new HttpError(409, `A fill can be retried only after a fill run stopped; this application is ${app.status}${app.fillRunId ? "" : " and has not been filled"}.`);
 	if (app.submitAttemptedAt) throw new HttpError(409, "A final submit was already attempted for this application; it will not be filled again. Check the employer's site.");
 	const ready = app.readyEvent as { eventId?: unknown } | null;
 	if (!ready || typeof ready.eventId !== "string") throw new HttpError(409, "The application has no materials_ready event to fill from.");
-	const moved = await moveApplication(env, app, uid, { to: "materials_ready", actor: "owner", actorInstanceId: runnerInstanceId, reason: "retry_fill" }, Date.now());
-	if (!moved) throw new HttpError(409, "The application changed while retrying — reload it.");
-	return startApplicationFill(env, runnerInstanceId, uid, { eventId: `${ready.eventId}:retry:${app.stateVersion + 1}`, applicationId: app.id, tailorInstanceId: app.instanceId }, "owner", opts);
+	let recoveryId: string | undefined = recovering ? oneClick?.recoveryId ?? undefined : undefined;
+	if (app.status === "blocked") {
+		const stored = await (async () => {
+			if (!oneClick?.approvedFillRunId) return null;
+			const run = await getApplyRun(env, runnerInstanceId, uid, oneClick.approvedFillRunId);
+			return run ? { auth: oneClick, run } : null;
+		})();
+		if (stored) recoveryId = await claimVerifiedOneClickRecovery(env, { auth: stored.auth, app, run: stored.run, userId: uid, runnerInstanceId }) ?? undefined;
+		if (oneClick && !recoveryId) throw new HttpError(409, "This one-click refusal no longer has a valid recovery authorization; reload it and do not retry automatically.");
+		const moved = await moveApplication(env, app, uid, { to: "materials_ready", actor: "owner", actorInstanceId: runnerInstanceId, reason: "retry_fill" }, Date.now());
+		if (!moved) throw new HttpError(409, "The application changed while retrying — reload it.");
+	} else if (app.status !== "materials_ready") {
+		const moved = await moveApplication(env, app, uid, { to: "materials_ready", actor: "owner", actorInstanceId: runnerInstanceId, reason: "retry_fill" }, Date.now());
+		if (!moved) throw new HttpError(409, "The application changed while retrying — reload it.");
+	} else {
+		recoveryId = oneClick?.recoveryId ?? undefined;
+	}
+	return startApplicationFill(env, runnerInstanceId, uid, { eventId: `${ready.eventId}:retry:${app.stateVersion + (app.status === "materials_ready" ? 0 : 1)}`, applicationId: app.id, tailorInstanceId: app.instanceId }, "owner", { ...opts, ...(recoveryId ? { oneClickRecoveryId: recoveryId } : {}) });
 }
 
 /**
@@ -831,7 +814,7 @@ export async function dispatchNextQueuedFill(env: Env, instanceId: string, uid: 
 		env,
 		uid,
 		run,
-		() => submitGateFor(env, instanceId, uid, app, s, now, { excludeRunId: run.id, machineOnly: true }),
+		() => submitGateFor(env, instanceId, uid, app, s, now, { excludeRunId: run.id, machineOnly: true, oneClickRecoveryId: run.policy.approvalRecoveryId }),
 		now,
 	).catch(() => ({ run, upgraded: false }));
 	let res: Response | null = null;

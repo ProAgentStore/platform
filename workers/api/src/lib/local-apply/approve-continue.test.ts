@@ -99,6 +99,27 @@ const auth = () => getSubmitAuthorization(env, "app-1", "u1");
 const directives = async () => (await d1.DB.prepare("SELECT checkpoint_id, directive, idempotency_key, delivered_at FROM local_apply_supervisor_directives").all<Record<string, unknown>>()).results ?? [];
 const traceOf = async (id = "run-1") => ((await getApplyRun(env, "ap", "u1", id)) as ApplyRun).trace;
 const instanceConfig = async () => (await d1.DB.prepare("SELECT config FROM agent_instances WHERE id = 'ap'").first<{ config: string | null }>())?.config ?? null;
+const runContext = (status: ApplyRun["status"], pause: ApplyRun["pause"]): ApplyRun => ({
+	id: "run-context-1",
+	instanceId: "ap",
+	applicationId: "app-1",
+	requestId: "context-request-1",
+	status,
+	policy: POLICY,
+	pause,
+	result: null,
+	engineAuth: null,
+	errorCode: null,
+	error: null,
+	runnerNode: "mac",
+	runnerVersion: "0.6.0",
+	trace: [],
+	runnerSeq: 0,
+	lastSyncedAt: null,
+	createdAt: NOW,
+	startedAt: NOW,
+	endedAt: null,
+});
 
 describe("which applications are at the post-fill decision (#981)", () => {
 	it("awaiting_review is, whatever the run says — the form is filled and nothing was sent", () => {
@@ -106,18 +127,18 @@ describe("which applications are at the post-fill decision (#981)", () => {
 	});
 
 	it("a run parked at a SUPERVISOR CHECKPOINT is, because that is the same situation one step earlier", () => {
-		expect(isPostFillApproval(appFixture({ status: "blocked" }), { status: "paused", pause: { reason: "supervisor_checkpoint" } })).toBe(true);
+		expect(isPostFillApproval(appFixture({ status: "blocked" }), runContext("paused", { reason: "supervisor_checkpoint" }))).toBe(true);
 	});
 
 	it("a LIVE run parked on a QUESTION is not — approving a submission answers none of it", () => {
 		// Still true after #991, and the reason it is narrowed to an ENDED fill: this form has a
 		// required question unanswered, so pre-authorising its submission is the opposite of what the
 		// owner is being asked. `resume` answers it.
-		for (const reason of ["missing_answer", "captcha", "login_required", "consent_required"]) {
-			expect(isPostFillApproval(appFixture({ status: "blocked" }), { status: "paused", pause: { reason } }), reason).toBe(false);
+		for (const reason of ["missing_answer", "captcha", "login_required", "consent_required"] as const) {
+			expect(isPostFillApproval(appFixture({ status: "blocked" }), runContext("paused", { reason })), reason).toBe(false);
 		}
 		// A queued or running fill is not a decision either — there is nothing stopped to decide on.
-		for (const status of ["queued", "running"]) expect(isPostFillApproval(appFixture({ status: "blocked" }), { status }), status).toBe(false);
+		for (const status of ["queued", "running"] as const) expect(isPostFillApproval(appFixture({ status: "blocked" }), runContext(status, null)), status).toBe(false);
 	});
 
 	/**
@@ -130,17 +151,22 @@ describe("which applications are at the post-fill decision (#981)", () => {
 	 * were retry, defer, archive and not-interested: the safe state had no path to the authorized
 	 * application.
 	 */
-	it("a blocked application whose fill ENDED is the decision — the #991 one-click case", () => {
-		expect(isPostFillApproval(appFixture({ status: "blocked" }), null)).toBe(true);
-		// The run row itself, read terminal, says the same thing.
-		for (const status of ["blocked", "failed", "cancelled", "awaiting_review"]) {
-			expect(isPostFillApproval(appFixture({ status: "blocked" }), { status }), status).toBe(true);
-		}
+	it("only a durably verified one-click refusal is the #1011 blocked decision", () => {
+		const app = appFixture({ status: "blocked", blockReason: "incomplete" });
+		const oneClick = { id: "run-1", instanceId: "ap", status: "blocked", policy: POLICY, result: { outcome: "blocked", blockReason: "incomplete", submitAttempted: false }, trace: [{ type: "policy.decision", detail: { tool: "browser_click", class: "submit", decision: "refused", reason: "fill_and_review", rule: "one_click_apply" } }] } as unknown as ApplyRun;
+		expect(isPostFillApproval(app, oneClick)).toBe(true);
+		for (const change of [
+			{ result: { outcome: "blocked", blockReason: "captcha", submitAttempted: false } },
+			{ status: "failed" },
+			{ policy: { ...POLICY, mode: "auto_submit" } },
+			{ trace: [] },
+			{ trace: [{ type: "submit.attempted" }] },
+		]) expect(isPostFillApproval(app, { ...oneClick, ...change } as ApplyRun)).toBe(false);
 	});
 
 	it("blocked at TAILORING is not: no form, no final control, nothing to authorise", () => {
 		expect(isPostFillApproval(appFixture({ status: "blocked", fillRunId: null }), null)).toBe(false);
-		expect(isPostFillApproval(appFixture({ status: "blocked", fillRunId: null }), { status: "blocked" })).toBe(false);
+		expect(isPostFillApproval(appFixture({ status: "blocked", fillRunId: null }), runContext("blocked", null))).toBe(false);
 	});
 
 	it("materials_ready is NOT: that is #973's pre-fill stage, which dispatches the fill instead", () => {

@@ -23,6 +23,8 @@ export interface GateVerdict {
 	checks: Array<{ check: string; ok: boolean; why?: string }>;
 	/** The usable authorization the verdict counted on, when there was one. */
 	authorizationId: string | null;
+	/** Required to consume a verified-one-click authorization at the durable dequeue consumer. */
+	recoveryId?: string;
 }
 
 /**
@@ -100,7 +102,7 @@ export async function upgradeQueuedRunPolicy(
 	// upgrade follows the verdict, and the approval is spent only when there is one to spend —
 	// the same order `startApplicationFill` uses, for the same reason: `mode`, `gateId` and the
 	// recorded gate all have to derive from one outcome.
-	const spent = verdict.authorizationId ? await consumeSubmitAuthorization(env, verdict.authorizationId, uid, run.id, now) : null;
+	const spent = verdict.authorizationId ? await consumeSubmitAuthorization(env, verdict.authorizationId, uid, run.id, now, verdict.recoveryId ? { id: verdict.recoveryId, runnerInstanceId: run.instanceId } : undefined) : null;
 	// A usable approval that another run spent first is a lost race, not a reason to submit anyway.
 	if (verdict.authorizationId && !spent) return { run, upgraded: false };
 	const gateId = crypto.randomUUID();

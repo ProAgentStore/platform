@@ -161,6 +161,8 @@ export interface ApplyRunPolicy {
 	allowDomains: string[];
 	limits: { maxMinutes: number; maxPages: number; maxActions: number };
 	gate: { allowed: boolean; gateId: string | null; checks: GateCheck[] };
+	/** Durable #1011 recovery claim, never exposed to the browser envelope. */
+	approvalRecoveryId?: string;
 }
 
 export type ApplyTraceEvent = Omit<LocalApplyEvent, "type"> & { type: LocalApplyEvent["type"] | LocalApplyPlatformEventType };

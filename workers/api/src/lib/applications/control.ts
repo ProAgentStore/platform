@@ -35,6 +35,7 @@ import type { FillProgress } from "./fill-progress.js";
 import { projectApplicationExecution, type ApplicationExecutionProjection } from "./execution-projection.js";
 import { type FillViews, NO_FILL_VIEWS, type RunDiagnostic, readFillViews } from "./fill-views.js";
 import { queueFieldsFor, queuePosition } from "./work-queue-store.js";
+import { approvalRuns } from "./approval-runs.js";
 import { type QueueView as RunQueueView, queueView, queuedLabel } from "./work-queue.js";
 import { getSubmitAuthorization, grantSubmitAuthorization } from "../local-apply/approval-store.js";
 import { type ApplyRun, applicationAudit, getApplyRun, moveApplication } from "../local-apply/store.js";
@@ -119,7 +120,7 @@ export interface QueueItem {
 	 * is what the owner could not tell from a terminal `runner_rejected` before.
 	 */
 	queue: (RunQueueView & { label: string }) | null;
-	submitAuthorization: { id: string; usable: boolean; label: string; approvedBy: string; approvedAt: string; approvedStateVersion: number; idempotencyKey: string; consumedAt: string | null; consumedRunId: string | null } | null;
+	submitAuthorization: { id: string; usable: boolean; label: string; approvedBy: string; approvedAt: string; approvedStateVersion: number; idempotencyKey: string; consumedAt: string | null; consumedRunId: string | null; recoveryPending?: boolean } | null;
 	updatedAt: string;
 	actions: ApplicationAction[];
 }
@@ -239,10 +240,9 @@ interface OpenRun {
 }
 
 /** The actions an application in this state can take — the lifecycle table, read for the owner. */
-function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRun | null, submitAllowed: boolean, auth: QueueItem["submitAuthorization"] = null): ApplicationAction[] {
+function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRun | null, approvalRun: ApplyRun | null, submitAllowed: boolean, auth: QueueItem["submitAuthorization"] = null): ApplicationAction[] {
 	const canFill = pipeline.runners.length > 0;
-	// The same test the action itself applies: this stage, nothing approved yet, nothing attempted.
-	const postFillApprovable = canFill && !auth && !app.submitAttemptedAt && isPostFillApproval(app, run);
+	const postFillApprovable = canFill && !auth && !app.submitAttemptedAt && isPostFillApproval(app, approvalRun);
 	switch (app.status) {
 		case "tailoring":
 			return ["cancel"];
@@ -253,6 +253,7 @@ function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRu
 			// approved card shows `start_fill` rather than a second Approve button.
 			return [
 				...(canFill && !auth && !app.submitAttemptedAt ? (["approve_and_proceed"] as const) : []),
+				...(auth?.recoveryPending ? (["retry_fill"] as const) : []),
 				...(canFill && submitAllowed ? (["start_fill"] as const) : []),
 				...(canFill ? (["request_review"] as const) : []),
 				"defer",
@@ -261,16 +262,9 @@ function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRu
 		case "filling":
 			return ["cancel"];
 		case "blocked":
-			// Parked at a supervisor checkpoint IS the filled form waiting on a decision (#981), so the
-			// owner's per-application approval belongs here too — beside `resume`, which answers a
-			// question rather than authorising a submission.
 			if (run) return run.status === "paused" ? [...(postFillApprovable ? (["approve_and_proceed"] as const) : []), "resume", "cancel"] : ["cancel"];
-			// The fill RAN and stopped without sending anything (#991). Live: a real SEEK listing whose
-			// final control is a genuine `one_click_apply`; the runner refused it under
-			// `fill_and_review`, fabricated nothing, attempted nothing, and the application closed
-			// `blocked / incomplete` telling the owner to "approve this application to let it be sent"
-			// — while the only offers here were retry, defer, archive and not-interested. The safe
-			// state had no path to the authorized application, which is the one thing it needed.
+			// A terminal fill remains retryable, but approval is offered only when approvalRuns supplied
+			// the exact verified one-click refusal; generic incomplete states never qualify (#1011).
 			if (app.fillRunId) {
 				return [
 					...(postFillApprovable ? (["approve_and_proceed"] as const) : []),
@@ -307,6 +301,7 @@ function applicationItem(
 	app: JobApplication,
 	pipeline: Pipeline,
 	run: OpenRun | null,
+	approvalRun: ApplyRun | null,
 	policy: QueueItem["submitPolicy"],
 	auth: QueueItem["submitAuthorization"] = null,
 	q: QueueItem["queue"] = null,
@@ -314,7 +309,7 @@ function applicationItem(
 ): QueueItem {
 	const env = (app.lead ?? {}) as { leadUrl?: string; lead?: Record<string, unknown> };
 	const l = env.lead ?? {};
-	const actions = withNotInterested(applicationActions(app, pipeline, run, !!policy?.allowed, auth));
+	const actions = withNotInterested(applicationActions(app, pipeline, run, approvalRun, !!policy?.allowed, auth));
 	const runStatus = run?.status ?? fill.runStatus;
 	const currentRun = app.fillRunId
 		? { id: app.fillRunId, kind: "fill" as const, status: runStatus ?? app.status, instanceId: pipeline.runners[0] ?? "", mode: run?.mode ?? null }
@@ -429,6 +424,7 @@ async function approvalViews(env: Env, uid: string, apps: JobApplication[]): Pro
 			idempotencyKey: auth.idempotencyKey,
 			consumedAt: auth.consumedAt ? iso(auth.consumedAt) : null,
 			consumedRunId: auth.consumedRunId,
+			...(auth.kind === "verified_one_click" && auth.recoveryId && auth.consumedAt === null ? { recoveryPending: true } : {}),
 		});
 	}
 	return out;
@@ -492,13 +488,14 @@ export async function applicationQueue(env: Env, uid: string, instanceId: string
 	const pipeline = await pipelineOf(env, uid, instanceId);
 	const apps = await applicationsOf(env, uid, pipeline.tailors);
 	const runs = await openRuns(env, uid, pipeline.runners);
+	const approval = await approvalRuns(env, uid, pipeline.runners, apps);
 	const previews = await policyPreviews(env, uid, pipeline, apps);
 	const approvals = await approvalViews(env, uid, apps);
 	const queues = await queueViews(env, uid, apps, Date.now());
 	const fills = new Map<string, FillViews>();
 	for (const a of apps) fills.set(a.id, await readFillViews(env, uid, a));
 	const items: QueueItem[] = apps.map((a) =>
-		applicationItem(a, pipeline, a.fillRunId ? (runs.get(a.fillRunId) ?? null) : null, previews.get(a.id) ?? null, approvals.get(a.id) ?? null, queues.get(a.id) ?? null, fills.get(a.id)),
+		applicationItem(a, pipeline, a.fillRunId ? (runs.get(a.fillRunId) ?? null) : null, approval.get(a.id) ?? null, previews.get(a.id) ?? null, approvals.get(a.id) ?? null, queues.get(a.id) ?? null, fills.get(a.id)),
 	);
 	const appLeads = new Set(apps.map((a) => `${a.sourceInstanceId}:${a.leadId}`));
 	const notes: string[] = [];
@@ -547,11 +544,12 @@ export async function getQueueItem(env: Env, uid: string, instanceId: string, re
 		const app = await getOwnedApplication(env, uid, ref.applicationId);
 		if (!app || !pipeline.tailors.includes(app.instanceId)) throw new HttpError(404, "No such application in this pipeline.");
 		const runs = await openRuns(env, uid, pipeline.runners);
+		const approval = await approvalRuns(env, uid, pipeline.runners, [app]);
 		const previews = await policyPreviews(env, uid, pipeline, [app]);
 		const approvals = await approvalViews(env, uid, [app]);
 		const queues = await queueViews(env, uid, [app], Date.now());
 		return {
-			item: applicationItem(app, pipeline, app.fillRunId ? (runs.get(app.fillRunId) ?? null) : null, previews.get(app.id) ?? null, approvals.get(app.id) ?? null, queues.get(app.id) ?? null, await readFillViews(env, uid, app)),
+			item: applicationItem(app, pipeline, app.fillRunId ? (runs.get(app.fillRunId) ?? null) : null, approval.get(app.id) ?? null, previews.get(app.id) ?? null, approvals.get(app.id) ?? null, queues.get(app.id) ?? null, await readFillViews(env, uid, app)),
 			pipeline,
 		};
 	}
@@ -624,8 +622,8 @@ const LEAD_ACTIONS: readonly ApplicationAction[] = ["apply", "skip", "defer", "a
  * `existing`), while anything that is not that exact repeat is still refused: a SPENT authorization
  * is not `usable`, so it does not qualify here.
  */
-function isIdempotentApprovalRepeat(item: QueueItem, app: JobApplication, action: ApplicationAction): boolean {
-	return action === "approve_and_proceed" && !!item.submitAuthorization?.usable && isPostFillApproval(app, item.fillRun);
+function isIdempotentApprovalRepeat(item: QueueItem, app: JobApplication, run: ApplyRun | null, action: ApplicationAction): boolean {
+	return action === "approve_and_proceed" && !!item.submitAuthorization?.usable && isPostFillApproval(app, run);
 }
 
 /**
@@ -671,8 +669,9 @@ export async function performApplicationAction(env: Env, uid: string, instanceId
 	// ── An application ───────────────────────────────────────────────────────────────────────
 	const { item } = await getQueueItem(env, uid, instanceId, { applicationId: input.applicationId });
 	const app = (await getOwnedApplication(env, uid, input.applicationId)) as JobApplication;
+	const correlatedRun = app.fillRunId ? await fillRun(env, uid, pipeline, app).catch(() => null) : null;
 	if ((input.expectedStatus !== app.status && input.expectedStatus !== item.status) || (input.expectedVersion !== undefined && input.expectedVersion !== app.stateVersion)) throw stale(app.status, app.stateVersion);
-	if (!item.actions.includes(input.action) && !isIdempotentApprovalRepeat(item, app, input.action)) {
+	if (!item.actions.includes(input.action) && !isIdempotentApprovalRepeat(item, app, correlatedRun, input.action)) {
 		const why = input.action === "start_fill" && app.status === "materials_ready" ? " — this application's policy does not allow an automatic submit; use request_review" : "";
 		throw new HttpError(409, `An application in ${app.status} cannot ${input.action.replace(/_/g, " ")}${why}${item.actions.length ? ` (it can: ${item.actions.join(", ")})` : ""}.`);
 	}
@@ -703,8 +702,8 @@ export async function performApplicationAction(env: Env, uid: string, instanceId
 			// same permitted action and result (#981). Post-fill (awaiting_review, or parked at a
 			// checkpoint) the form already exists: record the decision and continue the EXACT run, or
 			// say plainly that its session has gone and name `retry_fill`. Pre-fill is #973's path below.
-			if (isPostFillApproval(app, item.fillRun)) {
-				const run = app.fillRunId ? await fillRun(env, uid, pipeline, app).catch(() => null) : null;
+			if (isPostFillApproval(app, correlatedRun)) {
+				const run = correlatedRun;
 				const key = input.idempotencyKey ?? `approve-continue:${app.id}:${app.stateVersion}`;
 				return after(approveContinueResult(await approveAndContinue(env, uid, app, run, { idempotencyKey: key }, now)));
 			}

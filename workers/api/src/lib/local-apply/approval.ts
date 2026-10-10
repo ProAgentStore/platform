@@ -52,11 +52,22 @@ export interface SubmitAuthorization {
 	consumedRunId: string | null;
 	revokedAt: number | null;
 	revokedReason: string | null;
+	/** Ordinary pre-/post-fill approval, or the narrowly verified #1011 recovery. */
+	kind: "standard" | "verified_one_click";
+	approvedRunnerInstanceId: string | null;
+	approvedFillRunId: string | null;
+	approvedJobIdentity: string | null;
+	/** Set before retrying a verified one-click refusal; it is the durable recovery claim. */
+	recoveryId: string | null;
+	recoveryRunnerInstanceId: string | null;
 }
 
 /** The application fields an authorization is measured against. */
 export interface ApprovableApplication {
 	id: string;
+	sourceInstanceId: string;
+	leadId: string;
+	workKey: string | null;
 	status: string;
 	/** The fill run bound to this application, when one has ever run — see {@link approvalStageOf}. */
 	fillRunId: string | null;
@@ -65,7 +76,16 @@ export interface ApprovableApplication {
 	profileVersion: string | null;
 	resumeArtifact: { sha256?: string } | null;
 	coverLetterArtifact: { sha256?: string } | null;
+	blockReason: string | null;
 	submitAttemptedAt: number | null;
+}
+
+/**
+ * The posting facts a one-click recovery is about. Application id already scopes the row, but a
+ * durable posting identity makes a changed/re-pointed lead fail closed at the consumer too.
+ */
+export function jobIdentityOf(app: Pick<ApprovableApplication, "sourceInstanceId" | "leadId" | "workKey" | "lifecycleVersion">): string {
+	return JSON.stringify({ sourceInstanceId: app.sourceInstanceId, leadId: app.leadId, workKey: app.workKey, lifecycleVersion: app.lifecycleVersion });
 }
 
 export function fingerprintOf(app: ApprovableApplication): ApprovalFingerprint {
@@ -115,6 +135,7 @@ export function approvalState(auth: SubmitAuthorization | null, app: ApprovableA
 	// while the thing it authorizes can no longer happen.
 	if (app.submitAttemptedAt !== null) return unusable("submit_attempted");
 	if (!sameFingerprint(auth.fingerprint, fingerprintOf(app))) return unusable("materials_changed");
+	if (auth.kind === "verified_one_click" && auth.approvedJobIdentity !== jobIdentityOf(app)) return unusable("materials_changed");
 	return { usable: true, reason: null, label: "Approved to submit — one application, by the owner." };
 }
 
@@ -136,33 +157,63 @@ export function approvalState(auth: SubmitAuthorization | null, app: ApprovableA
 export const APPROVAL_STAGES = ["pre_fill", "post_fill"] as const;
 export type ApprovalStage = (typeof APPROVAL_STAGES)[number];
 
-/** The run facts the stage depends on. Null when the application has no open run. */
-/**
- * Statuses a fill run is passing THROUGH rather than resting at.
- *
- * Spelled out here rather than imported from the apply store: this module is the pure approval
- * rule and the store imports it, so the dependency would close a cycle. `store.ts`'s
- * `isTerminalApplyRun` is the same statement from the other side, and `approval.test.ts` pins them
- * to the same answer.
- */
-const LIVE_RUN_STATUSES: readonly string[] = ["queued", "running", "paused"];
-const isLiveRunContext = (run: ApprovalRunContext | null): boolean => !!run && LIVE_RUN_STATUSES.includes(run.status);
-
 export interface ApprovalRunContext {
 	status: string;
 	/** `supervisor_checkpoint` | `missing_answer` | … — a paused run's reason, when it is paused. */
 	pauseReason: string | null;
 }
 
+/** Minimal durable runner record needed to prove the exceptional one-click refusal. */
+export interface OneClickRefusalRun {
+	id: string;
+	instanceId: string;
+	status: string;
+	pauseReason?: string | null;
+	policy: { mode: string };
+	result: unknown;
+	trace: Array<{ type: string; detail?: unknown }>;
+}
+
+export interface VerifiedOneClickRefusal {
+	runnerInstanceId: string;
+	fillRunId: string;
+	stateVersion: number;
+	jobIdentity: string;
+}
+
+const record = (value: unknown): Record<string, unknown> | null => value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+
+/**
+ * The only terminal blocked state that represents an owner submission decision (#1011).
+ *
+ * `blocked/incomplete` is deliberately insufficient: the Runner must have durably recorded that
+ * it classified the exact browser click as `one_click_apply`, refused it solely because this was
+ * `fill_and_review`, and never attempted submit. Missing, malformed or conflicting evidence is
+ * unknown and therefore false here — CAPTCHA/login/terms/questions and generic failures cannot
+ * become an approval path by sharing a status word.
+ */
+export function verifiedOneClickRefusal(app: ApprovableApplication, run: OneClickRefusalRun | null): VerifiedOneClickRefusal | null {
+	if (!run || app.status !== "blocked" || app.blockReason !== "incomplete" || !app.fillRunId || app.fillRunId !== run.id) return null;
+	if (run.status !== "blocked" || run.policy.mode !== "fill_and_review" || app.submitAttemptedAt !== null) return null;
+	const result = record(run.result);
+	if (result?.outcome !== "blocked" || result.blockReason !== "incomplete" || result.submitAttempted !== false) return null;
+	if (run.trace.some((event) => event.type === "submit.attempted")) return null;
+	const refused = run.trace.some((event) => {
+		const detail = record(event.detail);
+		return event.type === "policy.decision" && detail?.tool === "browser_click" && detail.class === "submit" && detail.decision === "refused" && detail.reason === "fill_and_review" && detail.rule === "one_click_apply";
+	});
+	if (!refused) return null;
+	return { runnerInstanceId: run.instanceId, fillRunId: run.id, stateVersion: app.stateVersion, jobIdentity: jobIdentityOf(app) };
+}
+
 /**
  * Which stage this application is at, or null when an approval is not a meaningful decision here.
  *
- * ── Why `blocked` after a fill is a submission decision (#991)
+ * ── Why this one `blocked` outcome is a submission decision (#1011)
  *
- * This counted `blocked` ONLY while a run was parked at a supervisor checkpoint, on the reasoning
- * that a `blocked` application is "stopped for some other reason (a missing answer, a captcha, an
- * unusable checkout), and approving a submission is not the answer to any of those". The live
- * one-click case is the counter-example that reasoning missed.
+ * A blocked application is normally stopped for some other reason (a missing answer, CAPTCHA,
+ * login, terms or an unusable checkout), and approving a submission is not the answer to any of
+ * those. The verified one-click refusal is the deliberately narrow exception.
  *
  * Application `435d31c8…` / run `c27d1178…`: a real SEEK listing whose final control is a genuine
  * `one_click_apply`. Everything safe worked — the supervisor continued the initial checkpoint, the
@@ -172,30 +223,20 @@ export interface ApprovalRunContext {
  * the only reachable actions were `retry_fill`, `defer`, `archive` and `mark_not_interested`. The
  * safe state had no supported path to the authorized application.
  *
- * It IS the same situation as `awaiting_review`, and #981's comment there says so in its own words:
- * the run stopped, nothing was sent, and the owner who must decide could not act. The run having
- * ended rather than paused changes only HOW the decision is carried out — `approveAndContinue`
- * already answers `run_ended` with "your approval is recorded and held; `retry_fill` starts a fresh
- * run that spends it and may submit once".
+ * It is the same decision as `awaiting_review`: the form is reviewed, nothing was sent, and the
+ * owner is the only actor allowed to permit the single submit. Its continuation is a fresh run,
+ * but it must use the same canonical application and the persisted recovery binding.
  *
- * `fillRunId` is what keeps this honest: a `blocked` application that never filled is stopped at
- * TAILORING, where there is no form, no final control and nothing a submission decision could mean.
- * That one still answers null, which is the old reasoning kept exactly where it was right.
+ * The application, run, policy decision, result and trace are all part of the proof. A generic
+ * `blocked/incomplete` record—even one with a fill run—still answers null.
  */
-export function approvalStageOf(app: Pick<ApprovableApplication, "status" | "fillRunId">, run: ApprovalRunContext | null): ApprovalStage | null {
+export function approvalStageOf(app: ApprovableApplication, run: OneClickRefusalRun | null): ApprovalStage | null {
 	if (app.status === "materials_ready") return "pre_fill";
 	if (app.status === "awaiting_review") return "post_fill";
 	if (app.status === "blocked" && run?.status === "paused" && run.pauseReason === "supervisor_checkpoint") return "post_fill";
-	// The fill ran and ENDED without sending anything (#991) — the one-click refusal, a run that
-	// reached the final control, a `bridge_unused` stop. The decision is the owner's; the run that
-	// carries it is a fresh one.
-	//
-	// "Ended" is load-bearing. A run still PAUSED on a question (`missing_answer`), a captcha or a
-	// sign-in is live, and its own blocker is the thing to resolve — `resume` answers it. Offering
-	// an approval there would pre-authorise sending a form whose required question is still
-	// unanswered, which is the opposite of what the owner is being asked. Only the checkpoint pause
-	// above is a submission decision, because that is the one where the form is complete and waiting.
-	if (app.status === "blocked" && app.fillRunId && !isLiveRunContext(run)) return "post_fill";
+	// The proof is load-bearing: a run paused on a question, CAPTCHA or sign-in needs its own
+	// resolution; a generic ended run may be retried but is never submission-approvable.
+	if (verifiedOneClickRefusal(app, run)) return "post_fill";
 	return null;
 }
 

@@ -40,7 +40,7 @@
  */
 import { HttpError } from "../auth.js";
 import { deliverSupervisorDirective } from "./apply.js";
-import { type ApprovalRunContext, type ApprovalStage, approvalEligibility, approvalStageOf, approvalState } from "./approval.js";
+import { type ApprovalStage, approvalEligibility, approvalStageOf, approvalState, verifiedOneClickRefusal } from "./approval.js";
 import { getSubmitAuthorization, grantSubmitAuthorization, type GrantOutcome } from "./approval-store.js";
 import { SUPERVISOR_SCHEMA_VERSION, issueSupervisorDirective, listSupervisorCheckpoints } from "./supervision.js";
 import { type ApplyRun, isTerminalApplyRun, updateApplyRun } from "./store.js";
@@ -129,9 +129,8 @@ export async function continueCorrelatedRun(env: Env, uid: string, run: ApplyRun
  * table that offers the button and by the action that performs it — a card that offered a button
  * the service then refused (or hid one it would accept) is the drift this prevents.
  */
-export function isPostFillApproval(app: Pick<JobApplication, "status" | "fillRunId">, run: { status: string; pause?: unknown } | null): boolean {
-	const context: ApprovalRunContext | null = run ? { status: run.status, pauseReason: (run.pause as { reason?: string } | null)?.reason ?? null } : null;
-	return approvalStageOf(app, context) === "post_fill";
+export function isPostFillApproval(app: JobApplication, run: ApplyRun | null): boolean {
+	return approvalStageOf(app, run ? { ...run, pauseReason: run.pause?.reason ?? null } : null) === "post_fill";
 }
 
 export interface ApproveContinueOutcome {
@@ -162,8 +161,7 @@ export async function approveAndContinue(
 	input: { idempotencyKey: string; approvedBy?: string },
 	now: number,
 ): Promise<ApproveContinueOutcome> {
-	const runContext: ApprovalRunContext | null = run ? { status: run.status, pauseReason: run.pause?.reason ?? null } : null;
-	const stage = approvalStageOf(app, runContext);
+	const stage = approvalStageOf(app, run ? { ...run, pauseReason: run.pause?.reason ?? null } : null);
 	if (stage !== "post_fill") throw new HttpError(409, `This application is ${app.status}; there is no filled form waiting for a submission decision.`);
 	const existing = await getSubmitAuthorization(env, app.id, uid);
 	// A LIVE authorization is this very decision, already recorded — a double-clicked button, a
@@ -177,7 +175,19 @@ export async function approveAndContinue(
 		if (!eligible.eligible) throw new HttpError(409, `This application cannot be approved: ${eligible.why}.`);
 	}
 
-	const granted = await grantSubmitAuthorization(env, { app, instanceId: app.instanceId, userId: uid, approvedBy: input.approvedBy ?? "owner", idempotencyKey: input.idempotencyKey }, now);
+	const refusal = run ? verifiedOneClickRefusal(app, run) : null;
+	const granted = await grantSubmitAuthorization(
+		env,
+		{
+			app,
+			instanceId: app.instanceId,
+			userId: uid,
+			approvedBy: input.approvedBy ?? "owner",
+			idempotencyKey: input.idempotencyKey,
+			...(refusal ? { oneClick: refusal } : {}),
+		},
+		now,
+	);
 	const continuation = await continueCorrelatedRun(env, uid, run, `continue:${granted.authorization.id}`, now);
 
 	if (run) {
