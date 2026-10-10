@@ -13,6 +13,7 @@ import InstanceDetail from "./pages/InstanceDetail";
 import Profile from "./pages/Profile";
 import Notifications from "./pages/Notifications";
 import Terminals from "./pages/Terminals";
+import MachinePage from "./pages/MachinePage";
 import Usage from "./pages/Usage";
 import Feedback from "./pages/Feedback";
 import Diagnostics from "./pages/Diagnostics";
@@ -89,6 +90,7 @@ function AuthGate() {
 				<Route path="dashboard" element={<Dashboard />} />
 				<Route path="tools" element={<Dashboard />} />
 				<Route path="terminals" element={<Terminals />} />
+				<Route path="terminals/machines/:machineId" element={<MachinePage />} />
 				<Route path="usage" element={<Usage />} />
 				<Route path="feedback" element={<Feedback />} />
 				<Route path="diagnostics" element={<Diagnostics />} />

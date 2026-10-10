@@ -89,6 +89,7 @@ import { diagnoseAttachment, heartbeatFresh } from "../lib/runtime-attachment.js
 import { saveResourceSample } from "../lib/runner-resources.js";
 import { instanceListName, instanceListView, patchInstanceConfig, removeInstanceConfigKey } from "../lib/instance-config.js";
 import { runnerVersionView } from "../lib/runner-features.js";
+import { getMachinePolicy, reportMachinePolicyStatus } from "../lib/machine-policy.js";
 
 export const instanceRoutes = new Hono<{ Bindings: Env }>();
 
@@ -483,6 +484,10 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 	// exactly as it does today: no id, no alias, no change.
 	const machineId = normalizeMachineId(body.machineId);
 	const machineNames = sanitizeMachineNames(body.machineNames);
+	const bodyFields = body as unknown as Record<string, unknown>;
+	await reportMachinePolicyStatus(c.env, session.uid, machineId, typeof body.autoUpdateStatus === "object" && body.autoUpdateStatus !== null
+			? body.autoUpdateStatus
+			: { status: body.autoUpdateStatus, latestVersion: bodyFields.latestVersion, lastAttemptAt: bodyFields.lastAttemptAt });
 
 	// Multi-machine Coder: each machine registers as an addressable node. The legacy
 	// instance_runtimes row is still updated as the default runtime for browser/apply
@@ -553,10 +558,12 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 	// Read back to confirm (or just return success if readback fails)
 	const runtime = await getRuntime(c.env, instanceId, session.uid);
 	const nodes = runnerNode ? await listRuntimeNodes(c.env, instanceId, session.uid).catch(() => []) : [];
-	return c.json({
-		runtime: runtime ? runtimeResponse(runtime) : { instanceId, endpointUrl, placement, status: "registered" },
-		nodes: nodes.map(runtimeNodeResponse),
-	}, 201);
+		const autoUpdatePolicy = await getMachinePolicy(c.env, session.uid, machineId);
+		return c.json({
+			runtime: runtime ? runtimeResponse(runtime) : { instanceId, endpointUrl, placement, status: "registered" },
+			nodes: nodes.map(runtimeNodeResponse),
+			autoUpdatePolicy,
+		}, 201);
 });
 
 /** Read my registered runtime without exposing its token. */
@@ -690,11 +697,15 @@ instanceRoutes.post("/:instanceId/runtime/heartbeat", async (c) => {
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	await requireRuntime(c.env, instanceId, session.uid);
-	const body = (await c.req.json().catch(() => ({}))) as { runnerNode?: unknown; resources?: unknown };
+		const body = (await c.req.json().catch(() => ({}))) as { runnerNode?: unknown; resources?: unknown; machineId?: unknown; autoUpdateStatus?: unknown; latestVersion?: unknown; lastAttemptAt?: unknown };
 	const node = normalizeRunnerNode(body.runnerNode);
 	await updateRuntimeStatus(c.env, instanceId, session.uid, "online", node);
-	await saveResourceSample(c.env, instanceId, session.uid, node, body.resources).catch(() => undefined); // #924, best-effort: never fails a heartbeat
-	return c.json({ success: true, status: "online" });
+		await saveResourceSample(c.env, instanceId, session.uid, node, body.resources).catch(() => undefined); // #924, best-effort: never fails a heartbeat
+		const machineId = normalizeMachineId(body.machineId);
+		await reportMachinePolicyStatus(c.env, session.uid, machineId, typeof body.autoUpdateStatus === "object" && body.autoUpdateStatus !== null
+			? body.autoUpdateStatus
+			: { status: body.autoUpdateStatus, latestVersion: body.latestVersion, lastAttemptAt: body.lastAttemptAt });
+		return c.json({ success: true, status: "online", autoUpdatePolicy: await getMachinePolicy(c.env, session.uid, machineId) });
 });
 
 /** R2 key for a voice turn's saved audio (owner-scoped path). */

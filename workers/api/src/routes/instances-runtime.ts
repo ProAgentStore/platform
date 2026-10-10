@@ -35,6 +35,8 @@ export interface RuntimeRegistrationBody {
 	/** Hostnames THIS machine has answered to while running the CLI — the backfill that
 	 *  reconnects a pin already stranded on a name the machine has stopped using. */
 	machineNames?: unknown;
+	/** Runner's last auto-update lifecycle observation; policy itself remains cloud-owned. */
+	autoUpdateStatus?: unknown;
 }
 
 export const UPSERT_INSTANCE_RUNTIME_SQL = `INSERT INTO instance_runtimes (

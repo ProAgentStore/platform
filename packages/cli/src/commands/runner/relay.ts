@@ -9,6 +9,7 @@ import { installVersion, latestPublishedVersion, leaveForRestart, planRunnerUpda
 import { diffMembership, instanceLabel, pendingRegistrations, pinnedAway, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance, type ReattachRequest } from "./membership.js";
 import { formatStatusLine } from "./status-line.js";
 import type { PagsRequestOptions } from "./types.js";
+import { autoUpdatePolicyKey, autoUpdateStatusWire, loadAutoUpdatePolicy, mayAutomaticallyRestart, nextAutoUpdateDelayMs, policyFromResponse, policyScheduleAction, saveAutoUpdatePolicy, type AutoUpdatePolicy, type AutoUpdateStatus } from "./auto-update.js";
 
 /**
  * The one relay command this CLI answers ITSELF rather than forwarding to the local runner (#850):
@@ -45,6 +46,45 @@ export async function connectViaRelay(
 	// identity: it moves with the network. The persisted id is what lets the server recognise a
 	// renamed machine as the same one, so a pin made under an old name keeps working (#379).
 	const machine = loadMachineIdentity(runnerNode);
+	// No persisted machine id means no durable physical identity. Failing closed here prevents a
+	// cache shared by two ephemeral containers from becoming a policy identity by accident.
+	const autoUpdateKey = machine.id ? autoUpdatePolicyKey(machine.id) : "";
+	// A cache is an outage aid, never a second authority: every successful registration and beat
+	// replaces it with the owner policy that came from the service.
+	let autoUpdatePolicy: AutoUpdatePolicy = autoUpdateKey ? (loadAutoUpdatePolicy(autoUpdateKey) ?? { autoUpdate: false }) : { autoUpdate: false };
+	// A cache is never authority for an unattended install. It only retains the last status while
+	// disconnected; a successful registration/heartbeat must confirm the current cloud switch.
+	let autoUpdatePolicyAuthoritative = false;
+	let refreshingAutomaticPolicy = false;
+	let scheduleAutomaticUpdate: (initial?: boolean, cancel?: boolean) => void = () => undefined;
+	const saveAutoUpdateStatus = (status: AutoUpdateStatus, extra: Partial<AutoUpdatePolicy> = {}) => {
+		autoUpdatePolicy = {
+			...autoUpdatePolicy,
+			...extra,
+			status,
+			lastAttemptAt: new Date().toISOString(),
+		};
+		if (autoUpdateKey) saveAutoUpdatePolicy(autoUpdateKey, autoUpdatePolicy);
+	};
+	const acceptAutoUpdatePolicy = (response: unknown) => {
+		if (!autoUpdateKey) return;
+		const policy = policyFromResponse(response);
+		if (!policy) return;
+		const action = policyScheduleAction(autoUpdatePolicy, policy, autoUpdatePolicyAuthoritative);
+		autoUpdatePolicy = { ...autoUpdatePolicy, ...policy };
+		autoUpdatePolicyAuthoritative = true;
+		if (autoUpdateKey) saveAutoUpdatePolicy(autoUpdateKey, autoUpdatePolicy);
+		// A disable must cancel a deferred automatic install before it reaches npm.  A manual
+		// `runner_update` remains explicitly requested and is intentionally not cancelled here.
+		if (action === "cancel") {
+			scheduleAutomaticUpdate(false, true);
+			return;
+		}
+		if (refreshingAutomaticPolicy) return;
+		if (action === "start") {
+			scheduleAutomaticUpdate(true);
+		}
+	};
 
 	// Register the runtime (needed for the status badge / getRunnerConn)
 	const capabilities = await requestRunner<{ capabilities?: unknown }>("GET", "/capabilities", { url: localUrl, token: runnerToken, instanceId: instanceIds[0] });
@@ -56,7 +96,7 @@ export async function connectViaRelay(
 	let lastRegisterError = "";
 	const registerRuntime = async (id: string, forceClaim = force): Promise<boolean> => {
 		try {
-			await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime`, opts, {
+			const result = await requestPags<Record<string, unknown>>("POST", `/v1/instances/${apiPathSegment(id)}/runtime`, opts, {
 				endpointUrl: localUrl,
 				token: runnerToken,
 				placement: "local",
@@ -66,7 +106,13 @@ export async function connectViaRelay(
 				machineId: machine.id,
 				machineNames: machine.names,
 				force: forceClaim,
+				autoUpdateStatus: {
+					status: autoUpdateStatusWire(autoUpdatePolicy.status),
+					latestVersion: autoUpdatePolicy.latestVersion,
+					error: autoUpdatePolicy.reason,
+				},
 			});
+			acceptAutoUpdatePolicy(result);
 			registered.add(id);
 			return true;
 		} catch (e) {
@@ -75,6 +121,19 @@ export async function connectViaRelay(
 			lastRegisterError = msg;
 			writeError(`register ${id.slice(0, 8)}… failed: ${msg}`);
 			return false;
+		}
+	};
+	/** A cached policy is only a display hint. Every unattended check re-registers one held agent
+	 * to obtain a fresh owner decision; a network/API failure therefore defers rather than installs. */
+	const refreshAutomaticPolicy = async (): Promise<boolean> => {
+		const id = registered.values().next().value as string | undefined;
+		if (!id) return false;
+		autoUpdatePolicyAuthoritative = false;
+		refreshingAutomaticPolicy = true;
+		try {
+			return await registerRuntime(id) && autoUpdatePolicyAuthoritative;
+		} finally {
+			refreshingAutomaticPolicy = false;
 		}
 	};
 	// The live membership set. A captured array is what made a newly subscribed agent
@@ -108,49 +167,216 @@ export async function connectViaRelay(
 	 *  narrow as the user asked, and saying so is what lets the repin report the real remedy. */
 	/** The facts `runner_update` decides on (#859): versions, how this process runs, which engines are mid-turn. */
 	const updateFacts = async () => {
-		const sessions = await requestRunner<{ sessions?: Array<{ sessionId: string; alive?: boolean; runState?: string }> }>("GET", "/coding/sessions", {
+		const [sessionsResult, healthResult] = await Promise.allSettled([
+			requestRunner<{ sessions?: Array<{ sessionId: string; alive?: boolean; runState?: string }> }>("GET", "/coding/sessions", {
 			url: localUrl,
 			token: runnerToken,
 			instanceId: instanceIds[0],
-		}).catch(() => ({ sessions: [] }));
+			}),
+			requestRunner<{ work?: { codingTurns?: number; localRuns?: number; detail?: string[] } }>("GET", "/health", { url: localUrl, token: runnerToken, instanceId: instanceIds[0] }),
+		]);
+		// An unavailable observation is NEVER evidence that a restart is safe. A local browser/apply
+		// run can be destroyed by a restart just as surely as a coding turn, so fail closed.
+		const observationsUnavailable = sessionsResult.status !== "fulfilled" || healthResult.status !== "fulfilled" || !healthResult.value.work;
+		const sessions = sessionsResult.status === "fulfilled" ? sessionsResult.value : { sessions: [] };
+		const health = healthResult.status === "fulfilled" ? healthResult.value : {};
+		const activeCoding = (sessions.sessions ?? []).filter((s) => s.alive && s.runState && s.runState !== "idle").map((s) => s.sessionId);
+		const localRuns = health.work?.localRuns ?? 0;
+		const codingTurns = health.work?.codingTurns ?? 0;
 		return {
 			current: CLI_VERSION,
 			latest: await latestPublishedVersion(),
 			fromSource: runsFromSource(),
 			restarter: restarterFrom(process.env),
-			busy: (sessions.sessions ?? []).filter((s) => s.alive && s.runState && s.runState !== "idle").map((s) => s.sessionId),
+			// A restart ends browser/application work too. Give these durable names to the same
+			// planner so neither manual nor automatic update can mistake them for an idle machine.
+			busy: observationsUnavailable
+				? ["runner-work-observation-unavailable"]
+				: [...activeCoding, ...Array.from({ length: codingTurns }, (_v, i) => `coding-turn-${i + 1}`), ...Array.from({ length: localRuns }, (_v, i) => health.work?.detail?.[i] || `local-run-${i + 1}`)],
 		};
 	};
 	/**
 	 * Install the release, then leave so whatever supervises this process starts it again (#860) — see
 	 * `leaveForRestart`. Sockets close first, cleanly.
 	 */
-	const installAndRestart = async (plan: Extract<UpdatePlan, { action: "update" }>) => {
-		writeLine(`Updating ${plan.current} → ${plan.latest} (runner_update)…`);
-		await installVersion(plan.latest);
+	let updateInstallInFlight = false;
+	let installedPendingRestart: string | null = null;
+	// Once an unattended install has finished, no new mutating relay command is admitted while we
+	// observe the runner one final time. This turns "idle at the last poll" into a real admission
+	// boundary: a coding turn cannot slip in during npm or the old 500ms restart delay.
+	let automaticRestartDraining = false;
+	const installAndRestart = async (plan: Extract<UpdatePlan, { action: "update" }>, automatic = false): Promise<boolean> => {
+		// An automatic check and a remote manual request may both have observed the same old version.
+		// Only one may ever reach npm/restart; a second observer leaves the first to finish.
+		if (updateInstallInFlight) return false;
+		updateInstallInFlight = true;
+		// Cached policy is deliberately insufficient for unattended mutation. Read the owner's
+		// current switch immediately before npm so an offline runner cannot install after a disable.
+		if (automatic && (!(await refreshAutomaticPolicy()) || !autoUpdatePolicy.autoUpdate)) {
+			updateInstallInFlight = false;
+			return false;
+		}
+		if (installedPendingRestart !== plan.latest) {
+			writeLine(`Updating ${plan.current} → ${plan.latest} (runner_update)…`);
+			try {
+				await installVersion(plan.latest);
+				installedPendingRestart = plan.latest;
+			} catch (error) {
+				updateInstallInFlight = false;
+				throw error;
+			}
+		}
+		// Npm may run for minutes. Block new work, then re-admit restart after it finishes, rather
+		// than trusting the idle snapshot that admitted installation; a run that began during npm
+		// must survive. The short drain also lets a request admitted just before the boundary show up
+		// in /health before we make the final decision.
+		if (automatic) {
+			automaticRestartDraining = true;
+			await new Promise<void>((resolve) => setTimeout(resolve, 500));
+			if (!(await refreshAutomaticPolicy()) || !autoUpdatePolicy.autoUpdate) {
+				automaticRestartDraining = false;
+				updateInstallInFlight = false;
+				return false;
+			}
+		}
+		const finalFacts = await updateFacts();
+		if (finalFacts.busy.length || (automatic && !mayAutomaticallyRestart({ authoritative: autoUpdatePolicyAuthoritative, enabled: autoUpdatePolicy.autoUpdate, workObserved: !finalFacts.busy.includes("runner-work-observation-unavailable"), busy: finalFacts.busy }))) {
+			automaticRestartDraining = false;
+			updateInstallInFlight = false;
+			return false;
+		}
 		writeLine(`Installed ${plan.latest} — restarting; every agent re-attaches on the way back up.`);
-		setTimeout(() => {
-			for (const id of [...attached.keys()]) detach(id);
-			leaveForRestart(plan.restarter);
-		}, 500).unref();
+		for (const id of [...attached.keys()]) detach(id);
+		leaveForRestart(plan.restarter);
+		return true;
 	};
 	/** A deferred update waits for busy engines to finish, re-checking — never cuts a turn off (#859). */
 	let updateWaiting = false;
-	const updateWhenIdle = () => {
+	const updateWhenIdle = (automatic = false) => {
 		if (updateWaiting) return;
 		updateWaiting = true;
 		const until = Date.now() + 60 * 60_000;
 		const tick = () =>
 			setTimeout(async () => {
+				// The policy can change while a coding turn runs. Read our most recently synced value
+				// and then fetch the owner switch again immediately before planning/installation. It
+				// never affects an operator's explicit runner_update command.
+				if (automatic && (!(await refreshAutomaticPolicy()) || !autoUpdatePolicy.autoUpdate)) {
+					saveAutoUpdateStatus("offline", { reason: "The owner policy could not be refreshed; automatic update is deferred." });
+					updateWaiting = false;
+					return;
+				}
 				const plan = planRunnerUpdate(await updateFacts());
 				if (plan.action === "update") {
-					await installAndRestart(plan).catch((e) => writeError(`runner_update: install failed — ${e instanceof Error ? e.message : String(e)}`));
+					if (automatic && !autoUpdatePolicy.autoUpdate) {
+						updateWaiting = false;
+						return;
+					}
+					if (automatic) saveAutoUpdateStatus("running", { latestVersion: plan.latest, reason: undefined });
+					const installed = await installAndRestart(plan, automatic).catch((e) => {
+						if (automatic) saveAutoUpdateStatus("failure", { reason: e instanceof Error ? e.message : String(e) });
+						writeError(`runner_update: install failed — ${e instanceof Error ? e.message : String(e)}`);
+						return false;
+					});
+					if (automatic && !installed && Date.now() < until) {
+						saveAutoUpdateStatus("waiting-for-idle", { latestVersion: plan.latest });
+						tick();
+					} else updateWaiting = false;
+				} else if (plan.action === "wait" && Date.now() < until) {
+					if (automatic) saveAutoUpdateStatus("waiting-for-idle", { latestVersion: plan.latest, reason: undefined });
+					tick();
+				} else {
+					if (automatic && plan.action === "refused") saveAutoUpdateStatus("unsupported", { reason: plan.reason });
 					updateWaiting = false;
-				} else if (plan.action === "wait" && Date.now() < until) tick();
-				else updateWaiting = false;
+				}
 			}, 15_000).unref();
 		tick();
 	};
+
+	/**
+	 * Poll npm only a few times a day after success, and use an exponential, jittered delay when it
+	 * cannot be reached.  This is deliberately separate from the 30-second heartbeat: registry
+	 * trouble must not become a request storm, and one automatic run is single-flight with a
+	 * deferred idle wait.
+	 */
+	let automaticTimer: ReturnType<typeof setTimeout> | null = null;
+	let automaticChecking = false;
+	let automaticFailures = 0;
+	const runAutomaticUpdateCheck = async () => {
+		if (!autoUpdatePolicy.autoUpdate || !autoUpdatePolicyAuthoritative || automaticChecking || updateWaiting) return;
+		automaticChecking = true;
+		try {
+			if (!(await refreshAutomaticPolicy()) || !autoUpdatePolicy.autoUpdate) {
+				saveAutoUpdateStatus("offline", { reason: "The owner policy could not be refreshed; automatic update is deferred." });
+				scheduleAutomaticUpdate();
+				return;
+			}
+			saveAutoUpdateStatus("checking", { reason: undefined });
+			const facts = await updateFacts();
+			// A heartbeat/register response may have disabled updates while npm was answering.
+			if (!autoUpdatePolicy.autoUpdate || !autoUpdatePolicyAuthoritative) return;
+			if (!facts.latest) {
+				automaticFailures++;
+				saveAutoUpdateStatus("failure", { reason: "Could not check the trusted npm registry for a newer CLI release." });
+				scheduleAutomaticUpdate();
+				return;
+			}
+			automaticFailures = 0;
+			const plan = planRunnerUpdate(facts);
+			if (plan.action === "up-to-date") {
+				saveAutoUpdateStatus("verified-success", { latestVersion: facts.latest, reason: undefined });
+				scheduleAutomaticUpdate();
+				return;
+			}
+			if (plan.action === "refused") {
+				saveAutoUpdateStatus("unsupported", { latestVersion: facts.latest, reason: plan.reason });
+				scheduleAutomaticUpdate();
+				return;
+			}
+			if (plan.action === "wait") {
+				saveAutoUpdateStatus("waiting-for-idle", { latestVersion: plan.latest, reason: undefined });
+				updateWhenIdle(true);
+				return;
+			}
+			// Re-check the policy at the final possible point.  This shares the existing safe
+			// installer/restart path and therefore never duplicates the manual update mechanism.
+			if (!autoUpdatePolicy.autoUpdate || !autoUpdatePolicyAuthoritative) return;
+			saveAutoUpdateStatus("running", { latestVersion: plan.latest, reason: undefined });
+			try {
+				const installed = await installAndRestart(plan, true);
+				if (!installed) {
+					saveAutoUpdateStatus("waiting-for-idle", { latestVersion: plan.latest });
+					updateWhenIdle(true);
+					return;
+				}
+				saveAutoUpdateStatus("restarting", { latestVersion: plan.latest, reason: undefined });
+			} catch (e) {
+				automaticFailures++;
+				saveAutoUpdateStatus("failure", { latestVersion: plan.latest, reason: e instanceof Error ? e.message : String(e) });
+				scheduleAutomaticUpdate();
+			}
+		} finally {
+			automaticChecking = false;
+		}
+	};
+	scheduleAutomaticUpdate = (initial = false, cancel = false) => {
+		if (cancel || !autoUpdatePolicy.autoUpdate || !autoUpdatePolicyAuthoritative) {
+			if (automaticTimer) clearTimeout(automaticTimer);
+			automaticTimer = null;
+			return;
+		}
+		// Heartbeats are not scheduling events. Preserve a due timer, otherwise 30-second policy
+		// read-backs continually replace a six-hour delay and automatic update never checks.
+		if (automaticTimer || updateWaiting) return;
+		const delay = initial
+			? Math.round((5_000 + Math.random() * 25_000))
+			: nextAutoUpdateDelayMs(automaticFailures);
+		automaticTimer = setTimeout(() => { automaticTimer = null; void runAutomaticUpdateCheck(); }, delay);
+		automaticTimer.unref();
+	};
+	// Never start unattended work from cache alone. A registration/heartbeat response above sets
+	// authority and schedules the first jittered check; offline policy fetch failure therefore defers.
+	if (autoUpdatePolicyAuthoritative && autoUpdatePolicy.autoUpdate) scheduleAutomaticUpdate(true);
 	const answerUpdate = async (body?: unknown): Promise<{ status: number; result: unknown }> => {
 		const dryRun = (body as { dryRun?: unknown } | undefined)?.dryRun === true;
 		const plan = planRunnerUpdate(await updateFacts());
@@ -160,7 +386,7 @@ export async function connectViaRelay(
 			return { status: 200, result: { ...plan, detail: "Restarts itself as soon as these engines finish their turns — no run is cut off." } };
 		}
 		try {
-			await installAndRestart(plan);
+			if (!(await installAndRestart(plan))) return { status: 409, result: { error: "A runner update is already installing or restarting." } };
 		} catch (e) {
 			return { status: 500, result: { error: `npm could not install ${plan.latest}: ${e instanceof Error ? e.message : String(e)}` } };
 		}
@@ -242,6 +468,9 @@ export async function connectViaRelay(
 				},
 				answerControl,
 				runnerNode,
+				// The final automatic-update drain is an admission gate, not merely another poll:
+				// command work starts only when the old runner is still permitted to serve it.
+				() => !automaticRestartDraining,
 			),
 		);
 		if (label) writeLine(`Attached agent: ${label}`);
@@ -308,7 +537,17 @@ export async function connectViaRelay(
 			});
 			for (const id of [...attached.keys()]) {
 				try {
-					await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime/heartbeat`, opts, { runnerNode, resources });
+					const response = await requestPags<Record<string, unknown>>("POST", `/v1/instances/${apiPathSegment(id)}/runtime/heartbeat`, opts, {
+						runnerNode,
+						machineId: machine.id,
+						resources,
+						autoUpdateStatus: {
+							status: autoUpdateStatusWire(autoUpdatePolicy.status),
+							latestVersion: autoUpdatePolicy.latestVersion,
+							error: autoUpdatePolicy.reason,
+						},
+					});
+					acceptAutoUpdatePolicy(response);
 				} catch (e) {
 					failure = e instanceof Error ? e.message : String(e);
 				}
@@ -475,6 +714,9 @@ export function openRelaySocket(
 	 *  probed the registered name, found no socket, and reported a live machine as disconnected while
 	 *  its heartbeat kept `lastSeenAt` fresh — and the slot it was in never had its own row stamped. */
 	runnerNode: string = hostname(),
+	/** False while an automatic update has finished installing and is making its final safe restart
+	 * admission. Read-only probes still pass; new mutating work receives a retryable 503. */
+	admitMutation: () => boolean = () => true,
 ): RelaySocketHandle {
 	let backoffMs = 1000;
 	let reconnecting = false;
@@ -544,6 +786,13 @@ export function openRelaySocket(
 
 			// Dispatch to local runner HTTP server
 			const method = (cmd.method || "POST").toUpperCase();
+			if (method !== "GET" && method !== "HEAD" && !admitMutation()) {
+				// Do not let a new local/coding request begin between the final idle observation and
+				// the supervised restart. The cloud already treats transient runner unavailability as
+				// retryable; reporting it explicitly is safer than accepting work we are about to cut off.
+				try { ws.send(JSON.stringify({ id: cmd.id, status: 503, result: { error: "Runner is draining for a safe automatic update; retry shortly." } })); } catch { /* WS closed */ }
+				return;
+			}
 			const hasBody = method !== "GET" && method !== "HEAD" && cmd.body !== undefined;
 			try {
 				const headers: Record<string, string> = {};

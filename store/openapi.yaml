@@ -11237,6 +11237,67 @@ paths:
 
   # ── Terminals ─────────────────────────────────────────────────────────────
 
+  /v1/terminals/machines/{machineId}:
+    get:
+      summary: Read one stable physical machine and its auto-update policy
+      description: |
+        Returns the owner-scoped detail for a stable physical machine ID. Hostname aliases are
+        folded by the persisted CLI identity; legacy runners without an ID deliberately cannot use
+        this settings surface. A missing policy means Auto-update is disabled.
+      operationId: getTerminalMachine
+      tags: [Terminals]
+      parameters:
+        - { name: machineId, in: path, required: true, schema: { type: string }, description: Stable physical machine ID, never a hostname. }
+      responses:
+        "200":
+          description: Machine detail and persisted policy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  machine:
+                    type: object
+                    properties:
+                      machineId: { type: string }
+                      node: { type: string }
+                      aka: { type: array, items: { type: string } }
+                      connected: { type: boolean }
+                      runnerVersion: { type: string }
+                      latest_version: { type: string, nullable: true }
+                      auto_update_policy: { type: boolean }
+                      auto_update_status: { type: string, enum: [disabled, enabled, checking, waiting_for_idle, installing, restarting, verified_success, offline, unsupported, failed] }
+                      last_attempt_at: { type: string, nullable: true, format: date-time }
+                      last_error: { type: string, nullable: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: No identified machine belongs to the caller }
+
+  /v1/terminals/machines/{machineId}/policy:
+    put:
+      summary: Set Auto-update for one physical machine
+      description: |
+        Owner-scoped durable policy. It can be changed while the runner is offline and is delivered
+        on its next registration/heartbeat. Existing machines default to off; the setting is never
+        attached to a hostname or an individual agent.
+      operationId: setTerminalMachinePolicy
+      tags: [Terminals]
+      parameters:
+        - { name: machineId, in: path, required: true, schema: { type: string }, description: Stable physical machine ID. }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [auto_update]
+              properties:
+                auto_update: { type: boolean }
+      responses:
+        "200": { description: Saved policy and fresh machine detail }
+        "400": { description: auto_update was not a boolean }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: No identified machine belongs to the caller }
+
   /v1/terminals/nodes:
     get:
       summary: The user's connected CLIs

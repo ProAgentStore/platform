@@ -388,12 +388,16 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	coding_loop_start: "runtime",
 	// It drives a machine: clears a relay socket and makes that machine's runner reconnect (#856).
 	force_runner_attach: "runtime",
+	// Reads the owner-scoped automatic-update policy and lifecycle on one stable physical machine (#859).
+	get_machine_policy: "read",
 	// Installs software on a machine and restarts its runner (#859).
 	runner_update: "runtime",
 	// #990: reads one machine's latest update operation. A read, and deliberately so — it answers
 	// the question a lost `runner_update` reply leaves open, and must not need the scope that
 	// drives a machine to do it.
 	runner_update_status: "read",
+	// Saves a reversible platform policy; the runner applies it later when it is safe and idle (#859).
+	set_machine_policy: "write",
 	coding_session_end: "runtime",
 	coding_session_fresh: "runtime",
 	coding_session_message: "runtime",

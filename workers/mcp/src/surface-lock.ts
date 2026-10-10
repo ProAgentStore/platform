@@ -1095,4 +1095,7 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.99": "sha256:4faab5ec61a297690faee496f79bb2abca1efb0b7e5bfc4de37a0e3ead410e9d",
 	"0.1.100": "sha256:e2adb1bffb398b3baba8a0838b5d0ad2c5fb9c5c4cbf952617ba19c02fa2e4d7", // #995: four Gmail Job Search Scout source tools, all bound to its private lead collection.
 	"0.1.101": "sha256:a3a96500607d1feafca0dca98dface31ad9361c7683d3b48ed9fe7ccfc655288", // #1002: describe_instance is an always-on read projection whose allowlist excludes runtime tokens, credentials, config and traces.
+	// #859 follow-up: stable-physical-machine Auto-update policy read/write for MCP. The reader
+	// returns detail/policy/status; the writer is an owner-scoped, dry-runnable `write` toggle.
+	"0.1.102": "sha256:991179219f9ad3885ce5d656ba33e55697ae3337964482834e351ba8930d1eff",
 };

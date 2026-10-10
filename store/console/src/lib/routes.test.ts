@@ -27,6 +27,7 @@ describe("checkConsoleLink", () => {
 			"/console/",
 			"/console/profile",
 			"/console/notifications",
+			"/console/terminals/machines/machine-123",
 			"/console/instances/i1",
 			"/console/instances/i1/board",
 			"/console/instances/i1/knowledge",

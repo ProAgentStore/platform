@@ -99,6 +99,10 @@ const CONTROL_ARGS: ReadonlySet<string> = new Set([
 	"job_key",
 	"repo_id",
 	"node_id",
+	// Stable physical-machine address for get/set_machine_policy. It selects the record and is
+	// obtained from list_runner_nodes/get_machine_policy; the policy fields themselves read back
+	// through get_machine_policy.
+	"machine_id",
 	// #857: `coding_repo_add.clone` is an instruction — clone before binding — not a stored field.
 	"clone",
 	// #858: `coding_repo_add.clone_protocol` picks the transport for that clone — also not stored.
@@ -277,6 +281,7 @@ const READBACK: Record<string, string | null> = {
 	// #961: the tags are read back on every my_instances entry, and by fleet_snapshot.
 	"set_instance_tags.tags": "my_instances",
 	"force_runner_attach.runner_node": "instance_runner_node",
+	"set_machine_policy.auto_update": "get_machine_policy",
 	"runner_update.runner_node": "list_runner_nodes",
 	// #613: terminal-tab selection is durable instance state, not ephemeral client state. The
 	// matching reader must land with its writer so an MCP-only caller can verify a clear/save.

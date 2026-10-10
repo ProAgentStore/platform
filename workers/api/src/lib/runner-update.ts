@@ -212,10 +212,10 @@ export async function startRunnerUpdate(
 	env: Env,
 	userId: string,
 	rawNode: string,
-	opts: RepinDeps & { dryRun?: boolean; background?: (p: Promise<unknown>) => void } = {},
+	opts: RepinDeps & { dryRun?: boolean; background?: (p: Promise<unknown>) => void; machineId?: string | null } = {},
 ): Promise<StartRunnerUpdate> {
 	const node = normalizeRunnerNode(rawNode);
-	const { op, claimed } = await claimUpdateOp(env, userId, node, { dryRun: opts.dryRun === true, now: opts.now?.() });
+	const { op, claimed } = await claimUpdateOp(env, userId, node, { dryRun: opts.dryRun === true, now: opts.now?.(), machineId: opts.machineId });
 	// Already in flight, or the claim could not be recorded: either way nothing new is started, and
 	// the operation the caller gets back is the one that actually exists.
 	if (!claimed) return { op, started: false };

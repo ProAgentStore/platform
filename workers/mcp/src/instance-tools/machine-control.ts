@@ -17,6 +17,60 @@ import type { InstanceToolsCtx } from "./shared.js";
 export function registerMachineControlTools(server: McpServer, ctx: InstanceToolsCtx): void {
 	const { env, tokenFor, safetyFor } = ctx;
 
+	// ── Per-machine automatic-update policy (#859) ─────────────────────────────
+	//
+	// This is platform policy, keyed by the stable physical machine id rather than a runner's
+	// mutable hostname.  It deliberately lives beside `runner_update`: the owner needs both the
+	// one-off escape hatch and the durable opt-in that tells a reconnecting runner whether it may
+	// update itself.  Reading the detail route, rather than a policy-only projection, also leaves
+	// the caller with the version and lifecycle state needed to understand the setting it changes.
+	server.tool(
+		"get_machine_policy",
+		"Read one physical machine's Auto-update policy and current update detail (#859). `machine_id` is the stable id from the terminals machine detail/list, not a hostname or an agent id, so every hostname alias and every attached agent sees the same owner-scoped policy. Returns the machine detail including `auto_update_policy`, current and latest CLI versions, and `auto_update_status`. Read this before changing the policy; a missing stored policy resolves to Auto-update OFF for existing machines.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			machine_id: z.string().describe("Stable physical machine id from the terminals fleet/detail response; do not use a hostname alias."),
+		},
+		async ({ token, machine_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { machine_id };
+			const denied = await requirePermission(safetyFor(token), "read", "get_machine_policy", input);
+			if (denied) return denied;
+			const data = (await authedCall(`/v1/terminals/machines/${encodeURIComponent(machine_id)}`, sessionToken, {}, env)) as { error?: string };
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
+	server.tool(
+		"set_machine_policy",
+		"Enable or disable Auto-update for one physical machine (#859). The setting is owner-scoped and keyed by stable `machine_id`, so it survives offline periods, runner reconnects, attached-agent changes, and hostname aliases. Existing machines default OFF. Enabling permits an idle runner to check trusted CLI releases and use its safe self-update/restart path; it does not interrupt coding or local application work. Disabling is persisted immediately; a runner rechecks the policy before installation and cancels an update that has not started. Use get_machine_policy to read back the saved policy and lifecycle state.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			machine_id: z.string().describe("Stable physical machine id from the terminals fleet/detail response; do not use a hostname alias."),
+			auto_update: z.boolean().describe("Whether this physical machine may automatically update its PAGS CLI while idle."),
+			dry_run: z.boolean().optional().describe("Report the saved policy change without changing it."),
+		},
+		async ({ token, machine_id, auto_update, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { machine_id, auto_update };
+			const denied = await requirePermission(safetyFor(token), "write", "set_machine_policy", input);
+			if (denied) return denied;
+			const endpoint = `/v1/terminals/machines/${encodeURIComponent(machine_id)}/policy`;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "set_machine_policy", `${auto_update ? "enable" : "disable"} Auto-update for ${machine_id}`, input, {
+					endpoint,
+					method: "PUT",
+					body: { auto_update },
+				});
+			}
+			const data = (await authedCall(endpoint, sessionToken, { method: "PUT", body: JSON.stringify({ auto_update }) }, env)) as { error?: string };
+			if (!data.error) await audit(safetyFor(token), { tool: "set_machine_policy", action: "completed", input, result: data });
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
 	// ── Remote force-reattach (#856) ────────────────────────────────────────────
 	//
 	// An agent whose socket went stale — a frozen or duplicate runner holding its relay slot, or a

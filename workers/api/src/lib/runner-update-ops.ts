@@ -50,6 +50,8 @@ export const UPDATE_STATE_FOR_ACTION: Readonly<Record<string, RunnerUpdateState>
 export interface RunnerUpdateOp {
 	id: string;
 	node: string;
+	/** Stable physical identity when the caller had one; null for pre-identity runners. */
+	machineId: string | null;
 	state: RunnerUpdateState;
 	currentVersion: string | null;
 	latestVersion: string | null;
@@ -72,6 +74,7 @@ export interface RunnerUpdateOp {
 interface Row {
 	id: string;
 	node: string;
+	machine_id: string | null;
 	state: string;
 	current_version: string | null;
 	latest_version: string | null;
@@ -112,6 +115,7 @@ const present = (r: Row): RunnerUpdateOp => ({
 	id: r.id,
 	node: r.node,
 	state: (RUNNER_UPDATE_STATES as readonly string[]).includes(r.state) ? (r.state as RunnerUpdateState) : "failed",
+	machineId: r.machine_id,
 	currentVersion: r.current_version,
 	latestVersion: r.latest_version,
 	finalVersion: r.final_version,
@@ -129,23 +133,25 @@ const present = (r: Row): RunnerUpdateOp => ({
 	endedAt: iso(r.ended_at),
 });
 
-const SELECT = `SELECT id, node, state, current_version, latest_version, final_version, detail, reason,
+const SELECT = `SELECT id, node, machine_id, state, current_version, latest_version, final_version, detail, reason,
  held, reattached, missing, waiting_for, restarted_by, supervisor, dry_run, created_at, updated_at, ended_at
  FROM runner_update_ops`;
 
 /** The live operation on this machine, when one is in flight. */
-export async function liveUpdateOp(env: Pick<Env, "DB">, userId: string, node: string): Promise<RunnerUpdateOp | null> {
-	const row = await env.DB.prepare(`${SELECT} WHERE user_id = ?1 AND node = ?2 AND state = 'running'`)
-		.bind(userId, normalizeRunnerNode(node))
+export async function liveUpdateOp(env: Pick<Env, "DB">, userId: string, node: string, machineId?: string | null): Promise<RunnerUpdateOp | null> {
+	const byMachine = !!machineId;
+	const row = await env.DB.prepare(`${SELECT} WHERE user_id = ?1 AND ${byMachine ? "machine_id" : "node"} = ?2 AND state = 'running'`)
+		.bind(userId, byMachine ? machineId : normalizeRunnerNode(node))
 		.first<Row>()
 		.catch(() => null);
 	return row ? present(row) : null;
 }
 
 /** The most recent operation on this machine, live or finished — what a poll reads. */
-export async function latestUpdateOp(env: Pick<Env, "DB">, userId: string, node: string): Promise<RunnerUpdateOp | null> {
-	const row = await env.DB.prepare(`${SELECT} WHERE user_id = ?1 AND node = ?2 ORDER BY created_at DESC LIMIT 1`)
-		.bind(userId, normalizeRunnerNode(node))
+export async function latestUpdateOp(env: Pick<Env, "DB">, userId: string, node: string, machineId?: string | null): Promise<RunnerUpdateOp | null> {
+	const byMachine = !!machineId;
+	const row = await env.DB.prepare(`${SELECT} WHERE user_id = ?1 AND ${byMachine ? "machine_id" : "node"} = ?2 ORDER BY created_at DESC LIMIT 1`)
+		.bind(userId, byMachine ? machineId : normalizeRunnerNode(node))
 		.first<Row>()
 		.catch(() => null);
 	return row ? present(row) : null;
@@ -177,25 +183,25 @@ export async function claimUpdateOp(
 	env: Pick<Env, "DB">,
 	userId: string,
 	node: string,
-	opts: { dryRun?: boolean; requestedBy?: string; now?: number; id?: string } = {},
+	opts: { dryRun?: boolean; requestedBy?: string; now?: number; id?: string; machineId?: string | null } = {},
 ): Promise<{ op: RunnerUpdateOp; claimed: boolean }> {
 	const name = normalizeRunnerNode(node);
 	const now = opts.now ?? Date.now();
 	const id = opts.id ?? crypto.randomUUID();
 	const inserted = await env.DB.prepare(
-		`INSERT INTO runner_update_ops (id, user_id, node, state, dry_run, requested_by, detail, created_at, updated_at)
-		 VALUES (?1, ?2, ?3, 'running', ?4, ?5, ?6, ?7, ?7)
+		`INSERT INTO runner_update_ops (id, user_id, node, machine_id, state, dry_run, requested_by, detail, created_at, updated_at)
+		 VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7, ?8, ?8)
 		 ON CONFLICT DO NOTHING`,
 	)
-		.bind(id, userId, name, opts.dryRun ? 1 : 0, opts.requestedBy ?? "owner", `Asking ${name} to update its \`pags\` CLI and restart.`, now)
+		.bind(id, userId, name, opts.machineId ?? null, opts.dryRun ? 1 : 0, opts.requestedBy ?? "owner", `Asking ${name} to update its \`pags\` CLI and restart.`, now)
 		.run()
 		.then((r) => (r.meta?.changes ?? 0) > 0)
 		.catch(() => false);
 	if (inserted) {
-		const op = await latestUpdateOp(env, userId, name);
+		const op = await latestUpdateOp(env, userId, name, opts.machineId);
 		if (op) return { op, claimed: true };
 	}
-	const live = await liveUpdateOp(env, userId, name);
+	const live = await liveUpdateOp(env, userId, name, opts.machineId);
 	if (live) return { op: live, claimed: false };
 	// Neither inserted nor live: the insert failed for a reason that is not the claim (a lost D1
 	// write). Reported as a failed operation rather than silently doing the work unrecorded — an
@@ -204,6 +210,7 @@ export async function claimUpdateOp(
 		op: {
 			id,
 			node: name,
+			machineId: opts.machineId ?? null,
 			state: "failed",
 			currentVersion: null,
 			latestVersion: null,

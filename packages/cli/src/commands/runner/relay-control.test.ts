@@ -36,8 +36,8 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-async function open(onControl?: (path: string) => Promise<{ status: number; result: unknown }>) {
-	const handle = openRelaySocket("inst-1", "wss://api.test", async () => "relay-token", "http://127.0.0.1:9", "rt", false, undefined, undefined, onControl);
+async function open(onControl?: (path: string) => Promise<{ status: number; result: unknown }>, admitMutation: () => boolean = () => true) {
+	const handle = openRelaySocket("inst-1", "wss://api.test", async () => "relay-token", "http://127.0.0.1:9", "rt", false, undefined, undefined, onControl, undefined, admitMutation);
 	await vi.waitFor(() => expect(FakeSocket.last?.onmessage).toBeDefined());
 	return { ws: FakeSocket.last, handle };
 }
@@ -87,6 +87,17 @@ describe("the membership-sync control command (#850)", () => {
 		await ws.onmessage?.({ data: JSON.stringify({ id: "c3", path: "/coding/capture", body: {} }) });
 		expect(onControl).not.toHaveBeenCalled();
 		expect(forwarded).toEqual(["http://127.0.0.1:9/coding/capture"]);
+		handle.close();
+	});
+
+	it("does not admit new work during final automatic-update drain", async () => {
+		const { ws, handle } = await open(undefined, () => false);
+		await ws.onmessage?.({ data: JSON.stringify({ id: "drain-1", method: "POST", path: "/coding/run", body: { prompt: "must not start" } }) });
+		expect(forwarded).toEqual([]);
+		expect(JSON.parse(ws.sent[0])).toMatchObject({ id: "drain-1", status: 503, result: { error: expect.stringContaining("draining") } });
+		// Read-only health observation remains available for the final safe admission check.
+		await ws.onmessage?.({ data: JSON.stringify({ id: "drain-2", method: "GET", path: "/health" }) });
+		expect(forwarded).toEqual(["http://127.0.0.1:9/health"]);
 		handle.close();
 	});
 });

@@ -9,11 +9,11 @@ import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { terminalsBusy } from "../lib/pollBusy";
 import { behindLine, type MachineResources, resourceFacts, staleSample } from "../lib/machineHealth";
 import { type RunnerUpdateOpView, type RunnerUpdateResponse, updateOpLine, updateOutcome } from "../lib/runnerPanel";
-import { Terminal, RefreshCw, Bot, GitBranch, Circle, Pin, PinOff } from "lucide-react";
+import { Terminal, RefreshCw, Bot, GitBranch, Circle, Pin, PinOff, Settings2 } from "lucide-react";
 
 interface TerminalInstance { instanceId: string; name: string; agentSlug: string | null; status: string; connected: boolean; bound: boolean; pinnedNode?: string | null }
 interface TerminalSession { sessionId: string; instanceId: string; repoId: string; repoName: string | null; engine: string; status: string; issueNumber?: number; issueTitle?: string; updatedAt: string; terminalTail?: string | null }
-interface TerminalNode { node: string; aka?: string[]; machineId?: string | null; identityHint?: string | null; placement: string; runnerVersion: string; runnerBehind?: string[] | null; lastSeenAt: string | null; connected: boolean; resources?: MachineResources | null; instances: TerminalInstance[]; sessions: TerminalSession[]; update?: RunnerUpdateOpView }
+interface TerminalNode { node: string; aka?: string[]; machineId?: string | null; identityHint?: string | null; placement: string; runnerVersion: string; runnerBehind?: string[] | null; lastSeenAt: string | null; connected: boolean; resources?: MachineResources | null; instances: TerminalInstance[]; sessions: TerminalSession[]; update?: RunnerUpdateOpView; auto_update_policy?: boolean; latest_version?: string | null; auto_update_status?: unknown }
 
 function ago(iso: string | null): string {
 	if (!iso) return "never";
@@ -146,7 +146,11 @@ export default function Terminals() {
 								<div className="min-w-0 flex-1">
 									<div className="font-semibold text-sm flex items-center gap-2 flex-wrap">
 										<Terminal size={14} className="text-muted shrink-0" />
-										<span className="truncate">{n.node}</span>
+										{n.machineId ? (
+											<Link to={`/terminals/machines/${encodeURIComponent(n.machineId)}`} className="truncate hover:text-accent" data-testid="machine-details-link">
+												{n.node}
+											</Link>
+										) : <span className="truncate">{n.node}</span>}
 										{/* Last week's name for the same machine (#393) — the string a stranded pin
 										    still carries, so it is what makes the fold recognisable rather than magic. */}
 										{/* `min-w-0`, NOT `shrink-0`: a flex item that refuses to shrink gives `truncate`
@@ -161,6 +165,11 @@ export default function Terminals() {
 										{n.placement === "managed" ? "cloud" : "local"} · v{n.runnerVersion || "?"} · seen {ago(n.lastSeenAt)}
 									</div>
 								</div>
+								{n.machineId && (
+									<Link to={`/terminals/machines/${encodeURIComponent(n.machineId)}`} className="text-muted hover:text-accent shrink-0" aria-label={`Machine settings for ${n.node}`} title="Machine details and auto-update settings">
+										<Settings2 size={16} />
+									</Link>
+								)}
 								{/* Forgetting a CONNECTED machine is refused by the server anyway (it would
 								    re-register within a heartbeat), so the button is not offered for one —
 								    a control whose only outcome is a refusal reads as broken. */}

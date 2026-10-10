@@ -12,6 +12,7 @@ import { startRunnerUpdate, updateRunnerNode } from "../lib/runner-update.js";
 import { latestUpdateOp, latestUpdateOps, type RunnerUpdateOp } from "../lib/runner-update-ops.js";
 import { detectDuplicateRunners, type DuplicateVerdict, type RunnerProcessIdentity } from "../lib/runner-duplicates.js";
 import { runnerIdentityOf } from "../lib/runner-resources.js";
+import { getMachinePolicy, setMachinePolicy } from "../lib/machine-policy.js";
 import type { Env } from "../types.js";
 
 /**
@@ -162,6 +163,11 @@ export interface TerminalNode {
 	 * it, `runner_update`'s `poll: list_runner_nodes` hint had no state to resolve against.
 	 */
 	update?: RunnerUpdateOp;
+	/** Owner-scoped persisted policy; absent legacy identity is explicitly unsupported. */
+	auto_update_policy?: boolean;
+	/** Last trusted release lookup observed by this runner, null until it has checked. */
+	latest_version?: string | null;
+	auto_update_status?: string;
 }
 
 /** A user-facing name for an instance: its renamed displayName, else the agent name/slug. */
@@ -496,12 +502,74 @@ terminalRoutes.get("/nodes", async (c) => {
 	// `poll: list_runner_nodes` hint always promised and could not deliver: before the operation row
 	// existed there was no state to poll, so a timed-out update was simply unknowable.
 	const ops = await latestUpdateOps(c.env, uid, nodes.flatMap((n) => [n.node, ...n.aka]));
-	for (const n of nodes) {
-		const op = [n.node, ...n.aka].map((name) => ops.get(normalizeRunnerNode(name))).find((o) => o);
+	await Promise.all(nodes.map(async (n) => {
+		const op = n.machineId
+			? await latestUpdateOp(c.env, uid, n.node, n.machineId)
+			: [n.node, ...n.aka].map((name) => ops.get(normalizeRunnerNode(name))).find((o) => o);
 		if (op) n.update = op;
-	}
+		if (!n.machineId) {
+			n.auto_update_policy = false;
+			n.auto_update_status = "unsupported";
+			return;
+		}
+		const policy = await getMachinePolicy(c.env, uid, n.machineId);
+		n.auto_update_policy = policy.autoUpdate;
+		n.latest_version = policy.latestVersion;
+		n.auto_update_status = policy.status;
+	}));
 
 	return c.json({ nodes });
+});
+
+/** Resolve the stable ID to the exact owner-owned machine, never a mutable hostname. */
+async function machineDetail(env: Env, uid: string, rawMachineId: string) {
+	const machineId = normalizeMachineId(rawMachineId);
+	if (!machineId) return null;
+	const rows = (await env.DB.prepare(
+		`SELECT n.instance_id, n.runner_node, n.placement, n.runner_version, n.status, n.last_seen_at, n.updated_at,
+		        n.machine_id, n.resources, i.config AS instance_config, a.name AS agent_name, a.slug AS agent_slug,
+		        a.category AS agent_category, a.config AS agent_config
+		 FROM instance_runtime_nodes n JOIN agent_instances i ON i.id = n.instance_id LEFT JOIN agents a ON a.id = i.agent_id
+		 WHERE n.user_id = ?1 AND n.machine_id = ?2 ORDER BY n.updated_at DESC`,
+	).bind(uid, machineId).all<NodeRow>()).results ?? [];
+	if (!rows.length) return null;
+	const sessions = (await env.DB.prepare(
+		`SELECT s.id, s.instance_id, s.repo_id, s.runner_node, s.client_type, s.status, s.issue_number, s.issue_title, s.updated_at, r.name AS repo_name
+		 FROM coding_sessions s LEFT JOIN coding_repos r ON r.id = s.repo_id WHERE s.user_id = ?1`,
+	).bind(uid).all<SessionRow>()).results ?? [];
+	const machine = groupTerminalNodes(rows, sessions).find((n) => n.machineId === machineId);
+	if (!machine) return null;
+	// Detail is deep-linkable, so it must compute the same live connection fact as the fleet rather
+	// than treating a persisted registration as online. Probe all aliases: a reconnect may hold the
+	// relay under the previous hostname until its next heartbeat.
+	const names = [machine.node, ...machine.aka];
+	const checks = await mapWithConcurrency(machine.instances, PROBE_CONCURRENCY, async (instance) => {
+		for (const name of names) if (await relayConnected(env, instance.instanceId, name).catch(() => false)) return true;
+		return false;
+	});
+	machine.instances.forEach((instance, index) => { instance.connected = checks[index]; });
+	machine.connected = checks.some(Boolean);
+	const policy = await getMachinePolicy(env, uid, machineId);
+	const update = await latestUpdateOp(env, uid, machine.node, machineId);
+	return { ...machine, update: update ?? undefined, auto_update_policy: policy.autoUpdate, latest_version: policy.latestVersion, auto_update_status: policy.status, last_attempt_at: policy.lastAttemptAt, last_error: policy.lastError };
+}
+
+terminalRoutes.get("/machines/:machineId", async (c) => {
+	const session = await requireUser(c);
+	const machine = await machineDetail(c.env, session.uid, c.req.param("machineId"));
+	return machine ? c.json({ machine }) : c.json({ error: "No identified machine is registered under this account." }, 404);
+});
+
+/** Durable owner policy. This intentionally works while the runner is offline. */
+terminalRoutes.put("/machines/:machineId/policy", async (c) => {
+	const session = await requireUser(c);
+	const machine = await machineDetail(c.env, session.uid, c.req.param("machineId"));
+	if (!machine?.machineId) return c.json({ error: "No identified machine is registered under this account." }, 404);
+	const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch((): Record<string, unknown> => ({}));
+	const value = body.auto_update ?? body.autoUpdate;
+	if (typeof value !== "boolean") return c.json({ error: "auto_update must be a boolean." }, 400);
+	const policy = await setMachinePolicy(c.env, session.uid, machine.machineId, value);
+	return c.json({ machine: { ...machine, auto_update_policy: policy.autoUpdate, latest_version: policy.latestVersion, auto_update_status: policy.status, last_attempt_at: policy.lastAttemptAt, last_error: policy.lastError } });
 });
 
 /** The complete, non-mutating answer a caller needs before deleting a machine registration. */
@@ -578,11 +646,15 @@ export async function preflightForgetNode(env: Env, uid: string, rawTarget: stri
  */
 terminalRoutes.post("/nodes/:node/update", async (c) => {
 	const session = await requireUser(c);
+	const target = normalizeRunnerNode(c.req.param("node"));
+	const identity = await c.env.DB.prepare("SELECT machine_id FROM instance_runtime_nodes WHERE user_id = ?1 AND runner_node = ?2 AND machine_id IS NOT NULL LIMIT 1")
+		.bind(session.uid, target).first<{ machine_id: string | null }>().catch(() => null);
+	const machineId = normalizeMachineId(identity?.machine_id);
 	const body = (await c.req.json().catch(() => ({}))) as { dryRun?: unknown; wait?: unknown };
 	const dryRun = body.dryRun === true || c.req.query("dryRun") === "1";
 	// A dry run contacts the machine and answers in one hop — nothing is installed and nothing
 	// outlives the request, so it needs no durable operation.
-	if (dryRun) return c.json(await updateRunnerNode(c.env, session.uid, c.req.param("node"), { dryRun: true }));
+	if (dryRun) return c.json(await updateRunnerNode(c.env, session.uid, target, { dryRun: true }));
 
 	// #990: claim a durable operation, start the work in the BACKGROUND, and answer immediately.
 	//
@@ -599,7 +671,7 @@ terminalRoutes.post("/nodes/:node/update", async (c) => {
 			void p;
 		}
 	};
-	const { op, started } = await startRunnerUpdate(c.env, session.uid, c.req.param("node"), { ...(body.wait === true ? {} : { background }) });
+	const { op, started } = await startRunnerUpdate(c.env, session.uid, target, { ...(body.wait === true ? {} : { background }), machineId });
 	// 200 whatever the outcome: `state` is the verdict, and a non-2xx would lose the machine's reason
 	// at the MCP seam. `operationId` is what a timed-out caller polls.
 	return c.json({ operationId: op.id, node: op.node, state: op.state, started, detail: op.detail, poll: `/v1/terminals/nodes/${encodeURIComponent(op.node)}/update`, operation: op });
@@ -615,7 +687,9 @@ terminalRoutes.post("/nodes/:node/update", async (c) => {
 terminalRoutes.get("/nodes/:node/update", async (c) => {
 	const session = await requireUser(c);
 	const node = normalizeRunnerNode(c.req.param("node"));
-	const op = await latestUpdateOp(c.env, session.uid, node);
+	const identity = await c.env.DB.prepare("SELECT machine_id FROM instance_runtime_nodes WHERE user_id = ?1 AND runner_node = ?2 AND machine_id IS NOT NULL LIMIT 1")
+		.bind(session.uid, node).first<{ machine_id: string | null }>().catch(() => null);
+	const op = await latestUpdateOp(c.env, session.uid, node, normalizeMachineId(identity?.machine_id));
 	return c.json(op ? { node, operation: op, state: op.state } : { node, operation: null, state: null, detail: `No update has been asked for on ${node}.` });
 });
 
