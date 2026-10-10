@@ -2,6 +2,8 @@
 
 > **Review status:** proposal for joint owner review; no feature in this document is implemented or enabled by it.  Scope is the owner brief on [#154](https://github.com/ProAgentStore/platform/issues/154#issuecomment-6092033597), not a reopening of that closed coordination epic.
 >
+> **Inspected source baseline:** [`60d63803`](https://github.com/ProAgentStore/platform/tree/60d63803).  This document, first published afterward, is a proposal and is not deployed behaviour.
+>
 > **Recommendation in one sentence:** add an explicitly opt-in, per-instance *decision service* with its own model/provider selection, budget and evidence contract; preserve every existing deterministic driver, queue, credential and authority boundary when it is off.
 
 ## Executive review guide
@@ -20,16 +22,17 @@ The decision to turn it **on** must grant neither tools, credentials, website ac
 
 The conservative initial product contract is:
 
-1. New instances and all existing instances default to `embedded_brain: off`.
-2. Off means existing deterministic, authorized execution continues: queues, workflows, run persistence, status, pause/resume/cancel and explicit human actions remain available.  There is **no hidden LLM decision call**.
-3. On means a supported adapter may ask the decision model to propose only `continue`, `retry`, `wait`, `request_review`, `stop`, or `escalate`; policy validates the proposal before it is persisted or delivered.
-4. Existing working loops are never silently disabled, enabled, re-modelled, or re-attributed during migration.  The migration writes no enablement row and exposes a compatibility notice where the legacy shared model had been used.
+1. New instances and all existing instances receive the new embedded-decision configuration as `off`; that **new layer makes zero calls** until an owner enables it.
+2. An existing loop that already calls a decision LLM remains in explicit `legacy_compatibility` migration state until deliberately migrated.  Its readiness/UI must identify the legacy decision activity and must not misleadingly call it universal “Brain OFF.”
+3. For a **migrated, supported adapter**, `brain_off` means deterministic, authorized queues/workflows, persistence, status and human controls continue with **no decision-LLM calls in that adapter contract**.  Execution LLM calls remain a separate concern.
+4. On means a supported adapter may ask the decision model to propose only `continue`, `retry`, `wait`, `request_review`, `stop`, or `escalate`; policy validates the proposal before it is persisted or delivered.
+5. Existing working loops are never silently disabled, enabled, re-modelled, or re-attributed.  Joint owner review chooses their migration semantics; migration must expose `legacy_compatibility`, not write an enablement change.
 
 The recommended first release is observation plus safe recovery on adapters which can prove their evidence and single-driver ownership.  Submission-capable and uncertain-effect paths remain policy- or human-controlled.
 
 ## Evidence ledger (current-source review)
 
-Evidence is classified carefully.  “Source-inspected” means present in the checked-out repository at review time; it is not a claim that a real owner machine exercised it.  “Live-verified” means an issue comment reports an actual run.  “Superseded” is useful history, not a current implementation assertion.  “Missing” means no universal contract was found in the inspected surface, rather than proof that no code anywhere can do something similar.
+Evidence is classified carefully.  “Source-inspected” means present in the checked-out repository at review time; it is not a claim that a real owner machine exercised it.  “Source/test-reported” records a linked implementation or test report and does not establish live acceptance.  “Superseded” is useful history, not a current implementation assertion.  “Missing” means no universal contract was found in the inspected surface, rather than proof that no code anywhere can do something similar.
 
 | Status | Evidence and conclusion |
 | --- | --- |
@@ -38,7 +41,7 @@ Evidence is classified carefully.  “Source-inspected” means present in the c
 | **Source-inspected** | [`storage.ts`](../workers/api/src/routes/storage.ts) validates an instance model and marks `modelChosen`; [`user-ai.ts`](../workers/api/src/lib/user-ai.ts) uses owner BYOK credentials and fails closed for a selected Workers AI model whose required credentials are missing; [`workers-ai-protocol.ts`](../workers/api/src/lib/workers-ai-protocol.ts) normalizes Workers AI tool calling.  [`set_instance_model`](../workers/mcp/src/instance-tools/settings.ts) writes the same state setting through MCP. |
 | **Source-inspected** | [`loop-orchestrator.ts`](../workers/api/src/lib/loop-orchestrator.ts) currently names its orchestration model directly, while [`local-apply/brain.ts`](../workers/api/src/lib/local-apply/brain.ts) reuses the selected instance model for a constrained checkpoint.  These different paths reinforce that there is no explicit all-runtime decision-model resolution contract today. |
 | **Source-inspected** | The durable generic loop, Pilot run, driver table, queues, pause gates, triggers and application checkpoint policy listed below exist as distinct primitives.  They are a strong substrate, not a universal toggle. |
-| **Live-verified, bounded** | [#944's current report](https://github.com/ProAgentStore/platform/issues/944#issuecomment-6076700095) records implementation/test coverage for the local browser runtime and says live connected-Codex acceptance remains outstanding.  This must not be represented as either absent implementation or completed acceptance. |
+| **Source/test-reported, limited** | The timestamped [#944 report](https://github.com/ProAgentStore/platform/issues/944#issuecomment-6076700095) describes implementation/test coverage for the local-browser runtime and says live connected-Codex acceptance remains outstanding.  It is evidence of shipped implementation, not live proof. |
 | **Superseded/historical** | [`coordination-primitives.md`](./coordination-primitives.md) and [`supervision.md`](./supervision.md) label themselves historical/superseded.  Their references to #160 being open are stale: [#160 is closed](https://github.com/ProAgentStore/platform/issues/160). |
 | **Missing (in inspected surface)** | No one per-instance universal `brain_enabled` setting, decision-model/provider record, decision budget, common evidence envelope, or all-runtime adapter contract was found.  The supplied intake labels `b8d922e`/`ff0871e8` should therefore be treated as historical audit pointers; the findings above are grounded in current source, not inferred from those labels. |
 
@@ -67,14 +70,14 @@ Provider credentials remain separate by design: cloud decision inference uses th
 
 “All agent types” should mean a common configuration and observable lifecycle contract, not a false promise that each runtime has identical recovery actions on day one.
 
-| Instance/runtime kind | Brain off | Brain-on candidate action set | Initial adapter status / boundary |
+| Instance/runtime kind | Migrated brain off / legacy compatibility | Brain-on candidate action set | Initial adapter status / boundary |
 | --- | --- | --- | --- |
-| Cloud/chat and connector agents | Durable chat/tool loop, authorized deterministic queue execution, state/status and human controls | Observe typed loop progress; continue/wait/retry/escalate/stop within the loop’s existing policy | **Candidate**; requires normalized progress evidence and no-hidden-call verification |
-| Pipeline agents | Existing pipeline state, queue/trigger handling and operator controls | Decide only over declared pipeline checkpoints | **Candidate**; no generic pipeline decision adapter was found |
-| Repo Coder / local CLI | Pilot/driver claim, explicit repository choice, execution engine and existing recovery | Ask Pilot for recovery classification; request a continuation only after its claim/pause/budget checks | **Candidate, high risk**; never interrupt or replace an active executor |
-| Browser and local-browser research | Existing runner, read-only bridge policy, consent pause, result/trace state | Wait for person, request review, resume only after existing consent/recovery condition is cleared | **Partially evidenced**; local-browser implementation is shipped/tested but live Codex acceptance is incomplete ([#944](https://github.com/ProAgentStore/platform/issues/944)) |
-| Local application/artifact flow | Existing checkpoint, directive and submission-gate policy | Existing bounded `continue` / `request_review` / `stop` is the reference adapter | **Existing specialised implementation**, not yet a general configuration contract |
-| Creator-defined agents | Their declared deterministic behaviour, status and human controls | Only actions their manifest explicitly maps to a safe adapter | **Unsupported until declared**; display “decision brain unavailable for this runtime”, not a misleading toggle |
+| Cloud/chat and connector agents | **Migrated:** durable deterministic loop, queues/status/human controls, no decision-LLM call. **Legacy:** report existing orchestration as `legacy_compatibility`. | Observe typed loop progress; continue/wait/retry/escalate/stop within the loop’s existing policy | **Candidate**; requires normalized progress evidence and no-hidden-call verification |
+| Pipeline agents | **Migrated:** declared deterministic pipeline/queue behaviour with no decision-LLM call. **Legacy:** surface any existing decision path as compatibility. | Decide only over declared pipeline checkpoints | **Candidate**; no generic pipeline decision adapter was found |
+| Repo Coder / local CLI | **Legacy:** retain Pilot and legacy model decisions, identified as `legacy_compatibility`. **Migrated:** retain claim/executor/recovery controls without an adapter decision call. | Ask Pilot for recovery classification; request a continuation only after its claim/pause/budget checks | **Candidate, high risk**; never interrupt or replace an active executor |
+| Browser and local-browser research | **Migrated:** existing read-only runner, consent and human controls with no decision-LLM call. **Legacy:** identify any decision path as compatibility. | Wait for person, request review, resume only after existing consent/recovery condition is cleared | **Source/test-reported implementation**; the linked report is not live acceptance proof ([#944 report](https://github.com/ProAgentStore/platform/issues/944#issuecomment-6076700095)) |
+| Local application/artifact flow | **Legacy specialised path:** existing checkpoint/directive policy; show its model decision activity as `legacy_compatibility` until migrated. | Existing bounded `continue` / `request_review` / `stop` is the reference adapter | **Existing specialised implementation**, not yet a general configuration contract |
+| Creator-defined agents | **Migrated only:** declared deterministic behaviour/status/human controls with no decision-LLM call. | Only actions their manifest explicitly maps to a safe adapter | **Unsupported until declared**; display “decision brain unavailable for this runtime”, not a misleading toggle |
 
 In every row, an execution LLM is not necessarily a decision LLM.  An executor can be a cloud model, a local subscription CLI, a deterministic workflow, or no model at all.  The brain must not assume it may call executor tools, rerun uncertain effects, or see sensitive artifacts just because the executor did.
 
@@ -82,16 +85,17 @@ In every row, an execution LLM is not necessarily a decision LLM.  An executor c
 
 ### Configuration, precedence and compatibility
 
-**Recommended schema direction, subject to review:** an owner-scoped `instance_embedded_brains` record keyed by `instance_id` with `enabled`, `decision_model_id`, `decision_provider`, `model_source` (`explicit`, `inherited`, `legacy_compatibility`), spend/turn limits, retry policy, revision, and timestamps.  Keep secrets in existing provider-key storage; store references and attribution only.
+**Recommended schema direction, subject to review:** an owner-scoped `instance_embedded_brains` record keyed by `instance_id` with `mode` (`off`, `on`, `legacy_compatibility`), `decision_model_id`, `decision_provider`, `model_source` (`explicit`, `inherited`, `legacy_compatibility`), spend/turn limits, retry policy, revision, and timestamps.  Keep secrets in existing provider-key storage; store references and attribution only.
 
 Precedence should be deliberately boring:
 
 1. Non-bypassable safety/consent/submit policy and paused status;
 2. an explicit per-instance decision configuration;
 3. a template/creator default only if the owner opted into inheritance;
-4. platform default: **off**.
+4. a visible `legacy_compatibility` state for unmigrated decision paths; and
+5. platform default: **off**.
 
-The conversational model and execution engine resolve independently.  For old instances, retain current `AgentState.model` exactly as chat/existing orchestration uses it.  If an owner chooses to migrate to an embedded brain, the UI may offer “use current selected model as decision model” as an explicit copy, recording `model_source`; it must never silently split or reassign it.  A model can be selected only if its provider credential and the runtime’s required capability are available.  Provider credit exhaustion, missing credential, unsupported input and rate limits become typed waits/failures—not provider fallback.
+The conversational model and execution engine resolve independently.  For old instances, retain current `AgentState.model` exactly as chat/existing orchestration uses it and show `legacy_compatibility` rather than implying it is the new layer’s off state.  If an owner chooses to migrate to an embedded brain, the UI may offer “use current selected model as decision model” as an explicit copy, recording `model_source`; it must never silently split or reassign it.  A model can be selected only if its provider credential and the runtime’s required capability are available.  Provider credit exhaustion, missing credential, unsupported input and rate limits become typed waits/failures—not provider fallback.
 
 **Joint review required:** whether creator templates may nominate an inheritable decision model at all, or may only nominate a catalogue/capability requirement.  The conservative answer is the latter: owner opt-in and explicit provider choice remain mandatory.
 
@@ -101,7 +105,8 @@ Expose a single typed configuration/readiness projection to REST, console and MC
 
 ```text
 embeddedBrain: {
-  enabled, configured, readiness: ready | unsupported | waiting_for_credentials | paused,
+  mode: off | on | legacy_compatibility,
+  configured, readiness: ready | unsupported | waiting_for_credentials | paused | legacy_compatibility,
   decisionModel: { id, provider, source } | null,
   budget: { maxTurns, maxSpend, usedTurns, usedSpend },
   adapter: { kind, supportedActions },
@@ -111,7 +116,7 @@ embeddedBrain: {
 
 Write operations should be narrow and owner-scoped: configure/disable brain, set an explicit decision model, set budgets, and request a decision at a supported checkpoint.  They should offer `dry_run` where intent or readiness is uncertain, apply existing consent/audit conventions, and return why an action was refused.  They must not include a generic “run arbitrary brain” endpoint.
 
-The UI should explain the three model roles separately and show: off/on, readiness, estimated budget, which actions the adapter permits, the most recent evidence-based decision, and a link to the underlying run/trace.  A clear “this does not grant tools or submission permission” note belongs beside enablement.  MCP instructions must say the same and direct callers to existing pause/stop/continue endpoints for human control.
+The UI should explain the three model roles separately and show: `off`/`on`/`legacy_compatibility`, readiness, estimated budget, which actions the adapter permits, the most recent evidence-based decision, and a link to the underlying run/trace.  `legacy_compatibility` must name the retained legacy decision behaviour and the migration choice; it cannot be rendered as a universal off switch.  A clear “this does not grant tools or submission permission” note belongs beside enablement.  MCP instructions must say the same and direct callers to existing pause/stop/continue endpoints for human control.
 
 Instruction precedence is similarly constrained: owner objective and instance instructions describe the desired outcome; runtime adapter instructions define the evidence schema and supported actions; platform policy constrains execution.  A brain receives a compact typed evidence envelope, not unbounded prompt history, browser snapshots, local files, passwords, form values, or raw executor prose by default.
 
@@ -130,13 +135,13 @@ The decision lifecycle needs these invariants:
 
 ### Cost and policy boundaries
 
-Decision inference must have its own reservation/usage attribution and caps, separate from any execution-engine spend and from a parent delegation budget.  Every decision has a maximum input/output size, timeout and allowed tool/action vocabulary.  Decision calls cannot carry tool authority: policy code translates only a validated persisted action into a call to an existing adapter.  This preserves the existing rule that supervision/delegation lends a goal, not privileges.
+Decision inference needs per-instance sublimits and separate reservation/usage attribution from execution-engine spend, but it never receives an independent pool.  Every reservation and retry must also debit and enforce the existing inherited shared/root/account pool, using the same atomic reservation/settlement discipline as the run it serves.  A decision cannot mint budget to evade its parent delegation or account ceiling.  Every decision has a maximum input/output size, timeout and allowed tool/action vocabulary.  Decision calls cannot carry tool authority: policy code translates only a validated persisted action into a call to an existing adapter.  This preserves the existing rule that supervision/delegation lends a goal, not privileges.
 
 ## Issue and design deduplication map
 
 The following are closed, useful substrate or historical context—not candidate tickets to reopen for this feature: [#154](https://github.com/ProAgentStore/platform/issues/154), [#158](https://github.com/ProAgentStore/platform/issues/158), [#204](https://github.com/ProAgentStore/platform/issues/204), [#825](https://github.com/ProAgentStore/platform/issues/825), [#851](https://github.com/ProAgentStore/platform/issues/851), [#852](https://github.com/ProAgentStore/platform/issues/852), [#853](https://github.com/ProAgentStore/platform/issues/853), [#863](https://github.com/ProAgentStore/platform/issues/863), [#864](https://github.com/ProAgentStore/platform/issues/864), [#875](https://github.com/ProAgentStore/platform/issues/875), [#968](https://github.com/ProAgentStore/platform/issues/968), [#982](https://github.com/ProAgentStore/platform/issues/982), [#985](https://github.com/ProAgentStore/platform/issues/985), and [#988](https://github.com/ProAgentStore/platform/issues/988).  [#160](https://github.com/ProAgentStore/platform/issues/160) is also closed despite old prose saying otherwise.
 
-[#943](https://github.com/ProAgentStore/platform/issues/943) remains the open umbrella for a repo-free local CLI browser runner.  [#944](https://github.com/ProAgentStore/platform/issues/944) remains open specifically because its implementation is shipped but its live connected-Codex acceptance is not complete; its live evidence and remaining matrix are recorded [here](https://github.com/ProAgentStore/platform/issues/944#issuecomment-6076700095).  Do not use incomplete acceptance to erase shipped implementation, and do not use merged code to claim live proof.
+At the `60d63803` audit baseline, [#943](https://github.com/ProAgentStore/platform/issues/943) was recorded as the umbrella for a repo-free local CLI browser runner.  The timestamped [#944 report](https://github.com/ProAgentStore/platform/issues/944#issuecomment-6076700095) distinguishes shipped implementation/test coverage from outstanding live connected-Codex proof.  Do not use incomplete acceptance to erase shipped implementation, and do not use merged code to claim live proof.
 
 Historical recovery reports (#391, #505, #522, #541 and #545) should be read before a targeted adapter changes, but are not declared regressions in this review.  A new ticket needs current trace/reproduction evidence, an invariant, and a test of observed behaviour rather than a status-derived conclusion.
 
@@ -147,25 +152,25 @@ These are dependency-ordered proposals, not issue creation requests.  Each is de
 1. **Embedded-brain configuration and model separation** *(first; no runtime behaviour change)*
    - Add default-off owner-scoped configuration/readiness projection; explicit decision provider/model and independent budget fields; compatibility migration with no auto-enable or auto-disable.
    - Dedup: extends model-selection conclusions of [#852](https://github.com/ProAgentStore/platform/issues/852), [#853](https://github.com/ProAgentStore/platform/issues/853), [#863](https://github.com/ProAgentStore/platform/issues/863) and [#875](https://github.com/ProAgentStore/platform/issues/875); does not reopen them.
-   - Acceptance: old cloud/chat, Coder, browser, pipeline, local-apply and creator-defined instances retain their existing model/runtime; missing provider is actionable and fail-closed; configuration exposes unsupported adapters honestly; no decision inference happens while off.
+   - Acceptance: old cloud/chat, Coder, browser, pipeline, local-apply and creator-defined instances retain their existing model/runtime; unmigrated decision paths are explicitly `legacy_compatibility`, never mislabeled off; missing provider is actionable and fail-closed; configuration exposes unsupported adapters honestly; new embedded-brain `off` adds zero calls.
    - Risk/review: migration/cost attribution and whether template inheritance is permitted.  **Recommendation:** explicit owner selection only for v1.
 
 2. **Policy/evidence core and adapter registry** *(depends on 1)*
    - Define closed evidence/action schemas, policy-before-model evaluation, revision/claim checks, typed audit and per-adapter declared capabilities.  Provide a deterministic fake adapter for conformance tests.
    - Dedup: extract the reusable shape demonstrated by [#982](https://github.com/ProAgentStore/platform/issues/982) and [#985](https://github.com/ProAgentStore/platform/issues/985), rather than generalising their application policy implicitly.
-   - Acceptance: policy overrides unsafe proposals; enabling adds no tools/credentials; off makes zero decision calls; unsupported creator runtime returns `unsupported`; audit cites evidence and reason but no private reasoning.
+   - Acceptance: policy overrides unsafe proposals; enabling adds no tools/credentials; a migrated, supported `off` adapter makes zero decision-LLM calls while `legacy_compatibility` records retained legacy behaviour; unsupported creator runtime returns `unsupported`; audit cites evidence and reason but no private reasoning.
    - Risk/review: evidence minimisation and retention.  **Recommendation:** typed counters/state/reason codes only, with opt-in diagnostics under existing privacy rules.
 
 3. **Progress, recovery and event-dedup conformance** *(depends on 2)*
    - Add standard progress snapshots, no-progress/discovery-loop rules, provider-credit wait/backoff, restart/offline reconciliation and idempotent wakes.
    - Dedup: build on [#968](https://github.com/ProAgentStore/platform/issues/968), durable loop runs [#158](https://github.com/ProAgentStore/platform/issues/158), pause [#825](https://github.com/ProAgentStore/platform/issues/825), and queues [#864](https://github.com/ProAgentStore/platform/issues/864).
-   - Acceptance: duplicate event/restart causes one continuation; active executor is not interrupted; uncertain external effect is never replayed; retries cease until a relevant condition changes; each runtime reports working/waiting/stalled/ended separately from progress.
+   - Acceptance: duplicate event/restart causes one continuation; active executor is not interrupted; uncertain external effect is never replayed; retries cease until a relevant condition changes; each runtime reports working/waiting/stalled/ended separately from progress; every decision reservation/retry atomically enforces both its per-instance sublimit and inherited shared/root pool.
    - Risk/review: false positive no-progress cutoff.  **Recommendation:** start conservative with per-adapter thresholds and human-visible reason codes.
 
 4. **Supported runtime adapters: chat/pipeline, Coder, browser/local runner, local application** *(depends on 2 and 3; split by risk if needed)*
    - Each adapter declares checkpoint evidence and action mappings; integrate through existing drivers rather than direct executor control.
    - Dedup: Coder must preserve [#204](https://github.com/ProAgentStore/platform/issues/204) and driver claims; local browser work belongs alongside [#943](https://github.com/ProAgentStore/platform/issues/943)/[#944](https://github.com/ProAgentStore/platform/issues/944), not a parallel runner; local-apply builds on [#982](https://github.com/ProAgentStore/platform/issues/982)/[#985](https://github.com/ProAgentStore/platform/issues/985).
-   - Acceptance across types: brain-off deterministic execution; a safe brain-on continuation; blocked/consent provider state becomes wait/review; no direct tool widening; no active-engine interrupt; no submission without the existing gate.
+   - Acceptance across types: migrated brain-off deterministic execution with no adapter decision-LLM call; explicit `legacy_compatibility` where a legacy decision path persists; a safe brain-on continuation; blocked/consent provider state becomes wait/review; no direct tool widening; no active-engine interrupt; no submission without the existing gate.
    - Risk/review: local/live acceptance prerequisites.  **Recommendation:** do not enable a browser/local adapter in product UI until its own live acceptance criteria are met.
 
 5. **Console/MCP controls, migration messaging and cross-adapter conformance suite** *(last; depends on 1–4)*
