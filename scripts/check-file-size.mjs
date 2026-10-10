@@ -1934,7 +1934,12 @@ const PINS = {
 	// +4 at #991: the console types.ts reason above (three lines) and this line.
 	// +9 at #992: the console types.ts reason (five lines) and the surface-lock.ts reason (two
 	// lines) above, plus these two.
-	"scripts/check-file-size.mjs": 2018, // +3 at #953: the server.ts preflight-route pin and its explanation; this ledger records intentional growth. +3 at #988: two projection pins and their reason; +1 at #953: the console types.ts entry. +2 at #946: the agents.ts pin and its reason; +1 at #944: the reason line for the runner.ts pin; +1 at #898: the board.ts pin; +1 at #924: the mcp runtime.ts pin.
+	"packages/cli/src/commands/runner/relay.ts": 872, // #859 follow-up: relay owns policy refresh, fail-closed workload observation and the final command-admission drain; smaller policy/cache decisions live in auto-update.ts.
+	"workers/api/src/routes/instances.ts": 1176, // #859 follow-up: runtime registration/heartbeat wires the owner policy and lifecycle telemetry; policy queries live in lib/machine-policy.ts.
+	"workers/api/src/routes/instances-runtime.ts": 938, // #859 follow-up: runtime status exposes the resolved physical-machine policy; resolution lives in lib/machine-policy.ts.
+	"workers/api/src/routes/terminals.ts": 878, // #859 follow-up: ordered terminal routes own the stable machine detail and policy endpoints; D1 policy access lives in lib/machine-policy.ts.
+	"workers/mcp/src/surface-lock.ts": 1102, // #859 follow-up: append-only MCP ledger entries for get_machine_policy and set_machine_policy; it is history-checked and deliberately unsplit.
+	"scripts/check-file-size.mjs": 2023, // #859 follow-up adds five explicitly reviewed policy/relay surface pins above; this ledger must describe its own deliberate growth.
 };
 
 /**
