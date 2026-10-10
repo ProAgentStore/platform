@@ -10,6 +10,7 @@ import { diffMembership, instanceLabel, pendingRegistrations, pinnedAway, reatta
 import { formatStatusLine } from "./status-line.js";
 import type { PagsRequestOptions } from "./types.js";
 import { autoUpdatePolicyKey, autoUpdateStatusWire, loadAutoUpdatePolicy, mayAutomaticallyRestart, nextAutoUpdateDelayMs, policyFromResponse, policyScheduleAction, saveAutoUpdatePolicy, type AutoUpdatePolicy, type AutoUpdateStatus } from "./auto-update.js";
+import { AutomaticUpdateController, RelayMutationAdmission } from "./auto-update-controller.js";
 
 /**
  * The one relay command this CLI answers ITSELF rather than forwarding to the local runner (#850):
@@ -204,7 +205,7 @@ export async function connectViaRelay(
 	// Once an unattended install has finished, no new mutating relay command is admitted while we
 	// observe the runner one final time. This turns "idle at the last poll" into a real admission
 	// boundary: a coding turn cannot slip in during npm or the old 500ms restart delay.
-	let automaticRestartDraining = false;
+	const relayMutationAdmission = new RelayMutationAdmission();
 	const installAndRestart = async (plan: Extract<UpdatePlan, { action: "update" }>, automatic = false): Promise<boolean> => {
 		// An automatic check and a remote manual request may both have observed the same old version.
 		// Only one may ever reach npm/restart; a second observer leaves the first to finish.
@@ -231,17 +232,17 @@ export async function connectViaRelay(
 		// must survive. The short drain also lets a request admitted just before the boundary show up
 		// in /health before we make the final decision.
 		if (automatic) {
-			automaticRestartDraining = true;
+			await relayMutationAdmission.drain();
 			await new Promise<void>((resolve) => setTimeout(resolve, 500));
 			if (!(await refreshAutomaticPolicy()) || !autoUpdatePolicy.autoUpdate) {
-				automaticRestartDraining = false;
+				relayMutationAdmission.resume();
 				updateInstallInFlight = false;
 				return false;
 			}
 		}
 		const finalFacts = await updateFacts();
 		if (finalFacts.busy.length || (automatic && !mayAutomaticallyRestart({ authoritative: autoUpdatePolicyAuthoritative, enabled: autoUpdatePolicy.autoUpdate, workObserved: !finalFacts.busy.includes("runner-work-observation-unavailable"), busy: finalFacts.busy }))) {
-			automaticRestartDraining = false;
+			relayMutationAdmission.resume();
 			updateInstallInFlight = false;
 			return false;
 		}
@@ -376,6 +377,19 @@ export async function connectViaRelay(
 	};
 	// Never start unattended work from cache alone. A registration/heartbeat response above sets
 	// authority and schedules the first jittered check; offline policy fetch failure therefore defers.
+	const automaticUpdateController = new AutomaticUpdateController({
+		policy: () => ({ value: autoUpdatePolicy, authoritative: autoUpdatePolicyAuthoritative }),
+		refreshPolicy: refreshAutomaticPolicy,
+		facts: updateFacts,
+		plan: planRunnerUpdate,
+		// This bridge is deliberately the same function used by explicit runner_update. It owns npm,
+		// a fresh authoritative policy, the mutation drain, final local-work observation and restart.
+		installAndRestart,
+		status: saveAutoUpdateStatus,
+	});
+	// `acceptAutoUpdatePolicy` is declared before this controller so startup registration can parse
+	// the response. From here every heartbeat transition drives the real controller timer.
+	scheduleAutomaticUpdate = (initial = false, cancel = false) => automaticUpdateController.onPolicy(cancel ? "cancel" : initial ? "start" : "keep");
 	if (autoUpdatePolicyAuthoritative && autoUpdatePolicy.autoUpdate) scheduleAutomaticUpdate(true);
 	const answerUpdate = async (body?: unknown): Promise<{ status: number; result: unknown }> => {
 		const dryRun = (body as { dryRun?: unknown } | undefined)?.dryRun === true;
@@ -386,7 +400,7 @@ export async function connectViaRelay(
 			return { status: 200, result: { ...plan, detail: "Restarts itself as soon as these engines finish their turns — no run is cut off." } };
 		}
 		try {
-			if (!(await installAndRestart(plan))) return { status: 409, result: { error: "A runner update is already installing or restarting." } };
+			if (!(await automaticUpdateController.installManually(plan))) return { status: 409, result: { error: "A runner update is already installing or restarting." } };
 		} catch (e) {
 			return { status: 500, result: { error: `npm could not install ${plan.latest}: ${e instanceof Error ? e.message : String(e)}` } };
 		}
@@ -470,7 +484,7 @@ export async function connectViaRelay(
 				runnerNode,
 				// The final automatic-update drain is an admission gate, not merely another poll:
 				// command work starts only when the old runner is still permitted to serve it.
-				() => !automaticRestartDraining,
+				() => relayMutationAdmission.begin(),
 			),
 		);
 		if (label) writeLine(`Attached agent: ${label}`);
@@ -714,9 +728,9 @@ export function openRelaySocket(
 	 *  probed the registered name, found no socket, and reported a live machine as disconnected while
 	 *  its heartbeat kept `lastSeenAt` fresh — and the slot it was in never had its own row stamped. */
 	runnerNode: string = hostname(),
-	/** False while an automatic update has finished installing and is making its final safe restart
-	 * admission. Read-only probes still pass; new mutating work receives a retryable 503. */
-	admitMutation: () => boolean = () => true,
+	/** Returns a release handle for an admitted mutation, or null while the safe-update drain is
+	 * closed. Read-only probes do not participate. */
+	beginMutation: () => (() => void) | null = () => () => undefined,
 ): RelaySocketHandle {
 	let backoffMs = 1000;
 	let reconnecting = false;
@@ -786,7 +800,8 @@ export function openRelaySocket(
 
 			// Dispatch to local runner HTTP server
 			const method = (cmd.method || "POST").toUpperCase();
-			if (method !== "GET" && method !== "HEAD" && !admitMutation()) {
+			const releaseMutation = method !== "GET" && method !== "HEAD" ? beginMutation() : null;
+			if (method !== "GET" && method !== "HEAD" && !releaseMutation) {
 				// Do not let a new local/coding request begin between the final idle observation and
 				// the supervised restart. The cloud already treats transient runner unavailability as
 				// retryable; reporting it explicitly is safer than accepting work we are about to cut off.
@@ -811,7 +826,7 @@ export function openRelaySocket(
 				try { ws.send(JSON.stringify({ id: cmd.id, status: res.status, result })); } catch { /* WS closed mid-flight */ }
 			} catch (err) {
 				try { ws.send(JSON.stringify({ id: cmd.id, status: 500, error: err instanceof Error ? err.message : String(err) })); } catch { /* WS closed */ }
-			}
+			} finally { releaseMutation?.(); }
 		};
 
 		ws.onclose = (ev) => {

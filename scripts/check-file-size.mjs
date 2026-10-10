@@ -1934,7 +1934,7 @@ const PINS = {
 	// +4 at #991: the console types.ts reason above (three lines) and this line.
 	// +9 at #992: the console types.ts reason (five lines) and the surface-lock.ts reason (two
 	// lines) above, plus these two.
-	"packages/cli/src/commands/runner/relay.ts": 872, // #859 follow-up: relay owns policy refresh, fail-closed workload observation and the final command-admission drain; smaller policy/cache decisions live in auto-update.ts.
+	"packages/cli/src/commands/runner/relay.ts": 887, // #859 follow-up: relay wires the injected automatic-update controller and in-flight mutation drain; policy/cache and controller sequencing live in sibling modules.
 	"workers/api/src/routes/instances.ts": 1176, // #859 follow-up: runtime registration/heartbeat wires the owner policy and lifecycle telemetry; policy queries live in lib/machine-policy.ts.
 	"workers/api/src/routes/instances-runtime.ts": 938, // #859 follow-up: runtime status exposes the resolved physical-machine policy; resolution lives in lib/machine-policy.ts.
 	"workers/api/src/routes/terminals.ts": 878, // #859 follow-up: ordered terminal routes own the stable machine detail and policy endpoints; D1 policy access lives in lib/machine-policy.ts.

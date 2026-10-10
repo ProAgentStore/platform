@@ -6,6 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MEMBERSHIP_SYNC_PATH, openRelaySocket } from "./relay.js";
 import { RUNNER_UPDATE_PATH } from "./self-update.js";
+import { RelayMutationAdmission } from "./auto-update-controller.js";
 
 vi.mock("../../output.js", () => ({ writeLine: () => undefined, writeError: () => undefined }));
 
@@ -36,8 +37,8 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-async function open(onControl?: (path: string) => Promise<{ status: number; result: unknown }>, admitMutation: () => boolean = () => true) {
-	const handle = openRelaySocket("inst-1", "wss://api.test", async () => "relay-token", "http://127.0.0.1:9", "rt", false, undefined, undefined, onControl, undefined, admitMutation);
+async function open(onControl?: (path: string) => Promise<{ status: number; result: unknown }>, beginMutation: () => (() => void) | null = () => () => undefined) {
+	const handle = openRelaySocket("inst-1", "wss://api.test", async () => "relay-token", "http://127.0.0.1:9", "rt", false, undefined, undefined, onControl, undefined, beginMutation);
 	await vi.waitFor(() => expect(FakeSocket.last?.onmessage).toBeDefined());
 	return { ws: FakeSocket.last, handle };
 }
@@ -91,13 +92,35 @@ describe("the membership-sync control command (#850)", () => {
 	});
 
 	it("does not admit new work during final automatic-update drain", async () => {
-		const { ws, handle } = await open(undefined, () => false);
+		const { ws, handle } = await open(undefined, () => null);
 		await ws.onmessage?.({ data: JSON.stringify({ id: "drain-1", method: "POST", path: "/coding/run", body: { prompt: "must not start" } }) });
 		expect(forwarded).toEqual([]);
 		expect(JSON.parse(ws.sent[0])).toMatchObject({ id: "drain-1", status: 503, result: { error: expect.stringContaining("draining") } });
 		// Read-only health observation remains available for the final safe admission check.
 		await ws.onmessage?.({ data: JSON.stringify({ id: "drain-2", method: "GET", path: "/health" }) });
 		expect(forwarded).toEqual(["http://127.0.0.1:9/health"]);
+		handle.close();
+	});
+
+	it("drains an already-admitted mutation before it lets the final automatic-update probe continue", async () => {
+		const admission = new RelayMutationAdmission();
+		let finishFetch: ((response: Response) => void) | undefined;
+		vi.stubGlobal("fetch", async (url: string) => {
+			forwarded.push(String(url));
+			return new Promise<Response>((resolve) => { finishFetch = resolve; });
+		});
+		const { ws, handle } = await open(undefined, () => admission.begin());
+		const inFlight = ws.onmessage?.({ data: JSON.stringify({ id: "before-drain", method: "POST", path: "/coding/run", body: {} }) });
+		await vi.waitFor(() => expect(forwarded).toEqual(["http://127.0.0.1:9/coding/run"]));
+		let drained = false;
+		const drain = admission.drain().then(() => { drained = true; });
+		await ws.onmessage?.({ data: JSON.stringify({ id: "during-drain", method: "POST", path: "/coding/run", body: {} }) });
+		expect(JSON.parse(ws.sent.at(-1) ?? "{}")).toMatchObject({ id: "during-drain", status: 503 });
+		expect(drained).toBe(false);
+		finishFetch?.(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+		await inFlight;
+		await drain;
+		expect(drained).toBe(true);
 		handle.close();
 	});
 });
