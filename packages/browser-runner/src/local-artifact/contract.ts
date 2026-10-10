@@ -47,6 +47,20 @@ export interface LocalArtifactSource {
 	path: string;
 }
 
+/**
+ * Extracted text for one Files object selected by its owner. It crosses only the existing
+ * authenticated instance→runner relay; it is never exposed by an HTTP/MCP response or trace.
+ */
+export interface LocalArtifactUploadedSource {
+	role: "resume" | "profile";
+	fileId: string;
+	version: string;
+	originalSha256: string;
+	extractedTextSha256: string;
+	extractedAt: string;
+	text: string;
+}
+
 /** The approved lead, exactly as #955's `job.lead.apply_requested` envelope carries it. Immutable. */
 export interface LocalArtifactLead {
 	eventId: string;
@@ -79,6 +93,8 @@ export interface LocalArtifactTaskEnvelope {
 	/** `~/…`, under the machine's home folder. Artifacts go to `<workspace>/applications/<leadId>/<runId>/`. */
 	workspace: string;
 	sources: LocalArtifactSource[];
+	/** Present only for the explicit uploaded-source mode; local `sources` remain unchanged. */
+	uploadedSources?: LocalArtifactUploadedSource[];
 	lead: LocalArtifactLead;
 	policy: LocalArtifactPolicy;
 }

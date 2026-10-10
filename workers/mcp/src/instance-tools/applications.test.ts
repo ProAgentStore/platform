@@ -40,18 +40,57 @@ describe("the Applications tools (#958, #953)", () => {
 			"application_trace",
 			"approve_application",
 			"cancel_application",
+			"clear_application_tailor_uploaded_source",
 			"generate_application_materials",
 			"get_application",
 			"get_application_runner_settings",
+			"get_application_tailor_uploaded_source_readiness",
+			"get_application_tailor_uploaded_sources",
 			"list_applications",
 			"request_application_review",
 			"resume_application",
 			"retry_application",
 			"set_application_runner_settings",
+			"set_application_tailor_uploaded_source",
 			"start_application_fill",
 			"tailoring_run",
 			"triage_application",
 		]);
+	});
+
+	it("reads the Tailor's selected uploaded sources and live readiness unchanged", async () => {
+		const { seen, call } = tools();
+		await call("get_application_tailor_uploaded_sources", { instance_id: "t1" });
+		await call("get_application_tailor_uploaded_source_readiness", { instance_id: "t1" });
+		expect(seen.map((s) => `${s.method} ${s.url}`)).toEqual([
+			"GET https://api.test/v1/instances/t1/application-tailor/uploaded-sources",
+			"GET https://api.test/v1/instances/t1/application-tailor/uploaded-sources/readiness",
+		]);
+	});
+
+	it("selects and clears only the explicit uploaded-source selection route", async () => {
+		const { seen, call } = tools();
+		await call("set_application_tailor_uploaded_source", { instance_id: "t 1", role: "resume", file_id: "file/1" });
+		await call("clear_application_tailor_uploaded_source", { instance_id: "t 1", role: "profile" });
+		expect(seen).toEqual([
+			{ url: "https://api.test/v1/instances/t%201/application-tailor/uploaded-sources/resume", method: "PUT", body: { fileId: "file/1" } },
+			{ url: "https://api.test/v1/instances/t%201/application-tailor/uploaded-sources/profile", method: "DELETE", body: undefined },
+		]);
+	});
+
+	it("does not send any source selection request for a dry run", async () => {
+		const { seen, call } = tools();
+		expect(await call("set_application_tailor_uploaded_source", { instance_id: "t1", role: "resume", file_id: "file-1", dry_run: true })).toMatch(/dryRun/);
+		expect(await call("clear_application_tailor_uploaded_source", { instance_id: "t1", role: "profile", dry_run: true })).toMatch(/dryRun/);
+		expect(seen).toEqual([]);
+	});
+
+	it("keeps uploaded-source reads read-scoped and selections write-scoped", async () => {
+		const reads = tools(["read"]);
+		expect(await reads.call("get_application_tailor_uploaded_sources", { instance_id: "t1" })).toContain("ok");
+		expect(await reads.call("get_application_tailor_uploaded_source_readiness", { instance_id: "t1" })).toContain("ok");
+		expect(await reads.call("set_application_tailor_uploaded_source", { instance_id: "t1", role: "resume", file_id: "file-1" })).toMatch(/requires MCP scope "write"/);
+		expect(reads.seen).toHaveLength(2);
 	});
 
 	it("reads the console's queue, item and trace routes", async () => {

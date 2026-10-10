@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**292 tool registrations.** 266 are always registered; 26 are gated to the console
+**296 tool registrations.** 270 are always registered; 26 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -333,6 +333,10 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `application_run` | ONE fill run as it stands now (pulls the machine): status, pause, policy + submit-gate verdicts, result, and its runner event trace | read | | |
 | `application_run_supervision` | One fill run's supervisor checkpoints and the immutable directive recorded for each | read | | |
 | `tailoring_run` | ONE application's tailoring run as it stands now (pulls the machine while running): policy, result and its runner event trace | read | | |
+| `get_application_tailor_uploaded_sources` | Read the exact owner-selected uploaded résumé/profile Files and provenance; never returns document text or starts a run | read | | |
+| `get_application_tailor_uploaded_source_readiness` | Read live uploaded-source readiness, version/hash provenance and fail-closed blockers before tailoring | read | | |
+| `set_application_tailor_uploaded_source` | Select one exact owner-owned uploaded File as résumé or profile; selection only, no run | write | yes | |
+| `clear_application_tailor_uploaded_source` | Clear an uploaded résumé/profile selection without deleting its File | write | yes | |
 | `triage_application` | apply / skip / defer / archive a lead or application, compare-and-set; defer and archive touch PAGS records only | write | yes | |
 | `generate_application_materials` | Tailor materials for an apply_requested lead, or retry tailoring that stopped | runtime | yes | |
 | `start_application_fill` | Fill under the Runner's policy, which may submit once — accepted only when the item's submit policy allows it | runtime | yes | |

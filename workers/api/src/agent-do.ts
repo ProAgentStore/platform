@@ -374,6 +374,8 @@ export class AgentDO extends DurableObject<Env> {
 				return this.withEngine((e) => storageRoutes.uploadFile(e, request));
 			if (path === "/files/register" && request.method === "POST")
 				return this.withEngine((e) => storageRoutes.registerFile(e, request));
+			if (path.match(/^\/files\/[^/]+\/tailor-source$/) && request.method === "POST")
+				return this.withEngine((e) => storageRoutes.materializeTailorSource(e, path.split("/")[2], request));
 			if (path.match(/^\/files\/[^/]+$/) && request.method === "GET")
 				return this.withEngine((e) => storageRoutes.getFile(e, path.slice("/files/".length)));
 			if (path.match(/^\/files\/[^/]+$/) && request.method === "DELETE")

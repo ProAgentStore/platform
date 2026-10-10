@@ -1102,4 +1102,9 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// owner-scoped, capability-checked Knowledge → Files link. No tool was added; an inputSchema
 	// changed, so clients need a new surface revision. Appended: 0.1.102 is published.
 	"0.1.103": "sha256:acb1face50551a48e764cd6ac219da7bab5e0eca9fb9f992275418a9318be55a",
+	// #1004: four owner-scoped Application Tailor source controls — two reads for exact selected
+	// Files/readiness and two dry-runnable writes for select/clear. They expose provenance and
+	// fail-closed blockers, but never document bytes or dispatch tailoring. 292 registrations
+	// become 296, always-on 266 → 270, gated remains 26. Appended.
+	"0.1.104": "sha256:612a093c7c61d688db4a0398149691be57209e5428d9123274923645fdbcad09",
 };

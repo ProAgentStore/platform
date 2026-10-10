@@ -4,6 +4,7 @@ import { usePolling } from "@proagentstore/sdk/hooks";
 import Button from "../components/Button";
 import Card from "../components/Card";
 import LoadFailed from "../components/LoadFailed";
+import UploadedTailorSourcesSection from "../components/UploadedTailorSourcesSection";
 import { QUEUE_STATUS_LABEL, actionBody, actionLabel, confirmText } from "../lib/applications";
 import { TONE_CLASS } from "../lib/localBrowser";
 import type { ApplicationActionResponse, ApplicationRunnerSettingsView, ApplicationQueueAction, ApplicationQueueItem, ApplicationQueueStatus, ApplicationQueueView, ApplicationTraceView, ConnectionDeliveryList } from "../lib/types";
@@ -16,7 +17,7 @@ import type { ApplicationActionResponse, ApplicationRunnerSettingsView, Applicat
  * The buttons shown are the ones the server says the item allows; the final-submit control appears
  * only when the Runner's policy allows an automatic submit for that application.
  */
-export default function ApplicationsTab({ instanceId }: { instanceId: string }) {
+export default function ApplicationsTab({ instanceId, isTailor = false }: { instanceId: string; isTailor?: boolean }) {
 	const [view, setView] = useState<ApplicationQueueView | null>(null);
 	const [error, setError] = useState("");
 	const [filter, setFilter] = useState<ApplicationQueueStatus | "">("");
@@ -42,6 +43,7 @@ export default function ApplicationsTab({ instanceId }: { instanceId: string }) 
 
 	return (
 		<div className="max-w-4xl">
+			{isTailor && <UploadedTailorSourcesSection instanceId={instanceId} />}
 			<Card className="mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-2">Applications</h3>
 				<fieldset className="flex flex-wrap gap-1.5 border-0 p-0 m-0 min-w-0" aria-label="Filter by status">

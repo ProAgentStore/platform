@@ -4,6 +4,7 @@
  * trace are the real code against a real temp home folder.
  */
 import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -86,6 +87,7 @@ const GOOD = {
 		{ text: "Australian citizen", source: "profile", quote: "Work rights: Australian citizen." },
 	],
 };
+const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 
 /** The CLI answers with Claude Code's stream-json `result` line, then exits. */
 function answer(i: number, draft: unknown, code = 0) {
@@ -141,6 +143,36 @@ describe("a tailoring run", () => {
 		expect(trace).not.toContain("Cloudflare Workers");
 		expect(trace).not.toContain("jane@example.com");
 		expect(s.events.map((e) => e.type)).toEqual(["source.read", "source.read", "engine.auth_checked", "engine.started", "engine.ended", "claims.checked", "artifact.written", "artifact.written"]);
+	});
+
+	it("materializes only the exact uploaded extracted texts under fixed scratch paths, never local masters", async () => {
+		const uploadedResume = RESUME.replace("Jane Citizen", "Synthetic Uploaded Candidate");
+		const uploadedProfile = PROFILE;
+		rmSync(join(jobs(), "resume.md"));
+		rmSync(join(jobs(), "profile.md"));
+		const rt = runtime();
+		rt.start(envelope({
+			uploadedSources: [
+				{ role: "resume", fileId: "fixture_resume", version: "v1", originalSha256: "a".repeat(64), extractedTextSha256: hash(uploadedResume), extractedAt: "2026-10-07T00:00:00.000Z", text: uploadedResume },
+				{ role: "profile", fileId: "fixture_profile", version: "v1", originalSha256: "b".repeat(64), extractedTextSha256: hash(uploadedProfile), extractedAt: "2026-10-07T00:00:00.000Z", text: uploadedProfile },
+			],
+		}));
+		await settle();
+		expect(spawned).toHaveLength(1);
+		expect(readFileSync(join(data, "local-artifact", "tailor-1", "run-1", "sources", "resume.txt"), "utf8")).toBe(uploadedResume);
+		expect(readFileSync(join(data, "local-artifact", "tailor-1", "run-1", "sources", "profile.txt"), "utf8")).toBe(uploadedProfile);
+		const status = rt.status({ runId: "run-1" });
+		expect(status.events.filter((event) => event.type === "source.read").map((event) => event.detail?.path)).toEqual(["uploaded/fixture_resume@v1", "uploaded/fixture_profile@v1"]);
+		expect(JSON.stringify(status.events)).not.toContain("Synthetic Uploaded Candidate");
+	});
+
+	it("refuses an uploaded text whose hash does not match its selected provenance", () => {
+		expect(() => parseArtifactEnvelope(envelope({
+			uploadedSources: [
+				{ role: "resume", fileId: "fixture_resume", version: "v1", originalSha256: "a".repeat(64), extractedTextSha256: "b".repeat(64), extractedAt: "2026-10-07T00:00:00.000Z", text: RESUME },
+				{ role: "profile", fileId: "fixture_profile", version: "v1", originalSha256: "c".repeat(64), extractedTextSha256: hash(PROFILE), extractedAt: "2026-10-07T00:00:00.000Z", text: PROFILE },
+			],
+		}))).toThrow(/does not match/);
 	});
 
 	it("runs the CLI with no tools, in an empty scratch folder, and never with a provider API key", async () => {

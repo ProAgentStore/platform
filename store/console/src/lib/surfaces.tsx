@@ -271,7 +271,7 @@ export const SURFACES: SurfaceDef[] = [
 		// keeps its Data tab's triage buttons; this tab shows its leads too, joined by connections.
 		show: ({ runtime }) => runtime === "local_artifact" || runtime === "local_apply",
 		scroll: true,
-		render: ({ instanceId }) => <ApplicationsTab instanceId={instanceId} />,
+		render: ({ instanceId, caps }) => <ApplicationsTab instanceId={instanceId} isTailor={caps.runtime === "local_artifact"} />,
 	},
 	{
 		id: "activity",

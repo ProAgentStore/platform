@@ -39,11 +39,17 @@ const relay = {
 };
 /** Tasks created on any instance's DO — the downstream consumer of materials_ready. */
 let tasks: Array<{ instance: string; body: Record<string, unknown> }>;
+let uploadedSourceResponses: Record<string, Record<string, unknown>>;
 const agentDO = {
 	idFromName: (n: string) => n,
 	get: (id: string) => ({
 		fetch: async (req: Request) => {
-			if (new URL(req.url).pathname === "/tasks") {
+			const path = new URL(req.url).pathname;
+			if (path.match(/^\/files\/[^/]+\/tailor-source$/)) {
+				const source = uploadedSourceResponses[path.split("/")[2]];
+				return source ? Response.json(source) : Response.json({ error: "not found" }, { status: 404 });
+			}
+			if (path === "/tasks") {
 				tasks.push({ instance: id, body: (await req.json()) as Record<string, unknown> });
 				return Response.json({ ok: true }, { status: 201 });
 			}
@@ -113,6 +119,7 @@ beforeEach(() => {
 	answers = { "/local-artifact/run": { status: 202, body: { runId: "x", taskId: "x", status: "running" } }, "/local-artifact/cancel": { status: 200, body: {} } };
 	sent = [];
 	tasks = [];
+	uploadedSourceResponses = {};
 });
 afterEach(() => d1.close());
 
@@ -127,17 +134,35 @@ async function call(method: string, path: string, body?: unknown) {
 const appCount = async () => (await d1.DB.prepare("SELECT COUNT(*) AS n FROM job_applications").first<{ n: number }>())?.n;
 const runCount = async () => (await d1.DB.prepare("SELECT COUNT(*) AS n FROM local_artifact_runs").first<{ n: number }>())?.n;
 
-it("never dispatches local-source tailoring while an uploaded source is selected but not materialized (#1004)", async () => {
+it("fails closed rather than dispatching local sources when an uploaded selection is incomplete (#1004)", async () => {
 	d1.exec(`INSERT INTO application_tailor_uploaded_sources (
 		instance_id, user_id, role, file_id, file_name, mime_type, file_size,
 		file_created_at, file_updated_at, selected_at
 	) VALUES ('t1', 'u1', 'resume', 'fixture-resume', 'resume.pdf', 'application/pdf', 1,
 		'2026-10-07T00:00:00.000Z', '2026-10-07T00:00:00.000Z', 1)`);
 	const result = await call("POST", "/t1/applications", { event: leadEvent() });
-	expect(result).toMatchObject({ status: 409, body: { error: expect.stringMatching(/secure runner materialization/) } });
+	expect(result).toMatchObject({ status: 409, body: { error: expect.stringMatching(/Select one readable uploaded resume and one readable uploaded profile/) } });
 	expect(await appCount()).toBe(0);
 	expect(await runCount()).toBe(0);
 	expect(sent.filter((entry) => entry.path === "/local-artifact/run")).toHaveLength(0);
+});
+
+it("dispatches only re-extracted, provenance-pinned uploaded text when both owner selections are ready (#1004)", async () => {
+	const resumeHash = "a".repeat(64);
+	const profileHash = "b".repeat(64);
+	for (const [role, id, name, hash] of [["resume", "resume-fixture", "fixture-resume.pdf", resumeHash], ["profile", "profile-fixture", "fixture-profile.txt", profileHash]] as const) {
+		d1.DB.prepare(`INSERT INTO application_tailor_uploaded_sources (instance_id, user_id, role, file_id, file_name, mime_type, file_size, extraction_status, extracted_text_length, indexed_text_length, file_version, file_etag, original_sha256, extracted_text_sha256, extracted_at, file_created_at, file_updated_at, selected_at) VALUES ('t1', 'u1', ?1, ?2, ?3, 'text/plain', 10, 'extracted', 10, 10, 'v1', 'e1', ?4, ?5, '2026-10-07T00:00:00.000Z', '2026-10-07T00:00:00.000Z', '2026-10-07T00:00:00.000Z', 1)`)
+			.bind(role, id, name, hash, hash).run();
+		uploadedSourceResponses[id] = { source: { id, name, r2Version: "v1", r2Etag: "e1", originalSha256: hash, extractedTextSha256: hash, extractedAt: "2026-10-07T00:00:00.000Z" }, text: role === "resume" ? "Synthetic uploaded resume" : "Synthetic uploaded profile" };
+	}
+	const result = await call("POST", "/t1/applications", { event: leadEvent() });
+	expect(result.status).toBe(201);
+	const dispatched = sent.find((entry) => entry.path === "/local-artifact/run")?.body;
+	expect(dispatched?.uploadedSources).toEqual(expect.arrayContaining([
+		expect.objectContaining({ role: "resume", fileId: "resume-fixture", version: "v1", text: "Synthetic uploaded resume" }),
+		expect.objectContaining({ role: "profile", fileId: "profile-fixture", version: "v1", text: "Synthetic uploaded profile" }),
+	]));
+	expect(JSON.stringify(dispatched?.uploadedSources)).not.toMatch(/r2Key|https?:\/\//);
 });
 
 // ── #974: five approved leads must QUEUE behind one machine, not die on it ───────────────────

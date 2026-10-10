@@ -13,8 +13,8 @@
  * one routing table in `agent-do.ts`.
  */
 import type { AgentStorageEngine } from "./agent-storage.js";
-import { decodeBase64Upload, guessMimeType } from "./agent-storage-utils.js";
-import type { ActivityEvent, CollectionField } from "./agent-storage-types.js";
+import { decodeBase64Upload, extractFileText, guessMimeType, sha256Hex } from "./agent-storage-utils.js";
+import type { ActivityEvent, CollectionField, FileMeta } from "./agent-storage-types.js";
 import { json } from "./lib/do-json.js";
 import {
 	JOB_LEAD_COLLECTION,
@@ -401,6 +401,35 @@ export async function getFile(
 			}),
 		},
 	});
+}
+
+/**
+ * Internal-only exact source extraction for Application Tailor. The public API never proxies this
+ * route: it is called by the owner-authorized API worker straight to the instance DO, then passed
+ * over the existing authenticated runner relay. It intentionally re-extracts R2 bytes instead of
+ * serving capped `filetext:` or treating a PDF as UTF-8.
+ */
+export async function materializeTailorSource(
+	engine: Pick<AgentStorageEngine, "fileGet">,
+	id: string,
+	request: Request,
+): Promise<Response> {
+	const body = await request.json<{ user_id?: unknown }>().catch(() => null);
+	if (!body || typeof body.user_id !== "string" || !body.user_id) return json({ error: "user_id required" }, 400);
+	const file = await engine.fileGet(decodeURIComponent(id));
+	if (!file || file.meta.userId !== body.user_id) return json({ error: "Not found" }, 404);
+	const bytes = await new Response(file.body).arrayBuffer();
+	const originalSha256 = await sha256Hex(bytes);
+	if (!file.meta.r2Version || !file.meta.originalSha256 || originalSha256 !== file.meta.originalSha256) return json({ error: "Selected file is stale or its bytes cannot be verified; re-upload and reselect it." }, 409);
+	const extracted = await extractFileText({ name: file.meta.name, mimeType: file.meta.mimeType, data: bytes });
+	if (extracted.status !== "extracted" || !extracted.text.trim()) return json({ error: extracted.error || "Selected file has no readable extracted text." }, 409);
+	const extractedTextSha256 = await sha256Hex(extracted.text);
+	if (!file.meta.extractedTextSha256 || extractedTextSha256 !== file.meta.extractedTextSha256) return json({ error: "Selected file extraction no longer matches its recorded provenance; re-upload and reselect it." }, 409);
+	const source: Pick<FileMeta, "id" | "name" | "r2Version" | "r2Etag" | "originalSha256" | "extractedTextSha256" | "extractedAt"> = {
+		id: file.meta.id, name: file.meta.name, r2Version: file.meta.r2Version, r2Etag: file.meta.r2Etag,
+		originalSha256: file.meta.originalSha256, extractedTextSha256: file.meta.extractedTextSha256, extractedAt: file.meta.extractedAt,
+	};
+	return json({ source, text: extracted.text });
 }
 
 export async function deleteFile(

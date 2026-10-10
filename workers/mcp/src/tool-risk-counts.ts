@@ -186,14 +186,18 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// types/events/channels a rule may name, and `set_instance_notification_policy` replaces that
 	// instance's rules. The write is `write` and not `destructive`: it is reversible by sending
 	// the old list back, and "restore inherited" is a first-class call that removes the override.
-	read: 138, // +1 at #859: get_machine_policy reads one stable machine's owner-scoped auto-update policy.
+	// +2 read at #1004: uploaded Tailor source selection and readiness are owner-scoped
+	// inspections. They return provenance/status only, never résumé content.
+	read: 140, // +1 at #859: get_machine_policy reads one stable machine's owner-scoped auto-update policy.
 	// +2 write at #825: `pause_instance` / `resume_instance`. `write` rather than `destructive` —
 	// nothing is deleted and nothing is unsubscribed, and classing the OFF switch as destructive
 	// would put RESUME behind a scope the caller may not hold, which is the wrong failure mode for
 	// a safety toggle (the reasoning `set_instance_connector_consent` already records). Not `read`
 	// either: switching an agent off is a real change.
 	// +1 write at #906: `secure_input_request`, agent creates a secure input request for a secret.
-	write: 87, // +1 at #859: set_machine_policy saves a reversible owner-scoped auto-update policy.
+	// +2 write at #1004: select or clear one owner-scoped uploaded Tailor source slot;
+	// both are reversible, so they are write rather than destructive.
+	write: 89, // +1 at #859: set_machine_policy saves a reversible owner-scoped auto-update policy.
 	// +1 runtime at #806: `continue_instance_run`. `runtime` rather than `write` for the reason
 	// `start_instance_loop` is — it starts an autonomous run that spends on its own — and the
 	// two must agree, because a caller holding the scope to start one holding a narrower one to

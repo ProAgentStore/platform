@@ -6,6 +6,7 @@
  * source bytes, R2 keys and extraction text stay in the Agent DO/R2 path.
  */
 import type { Env } from "../../types.js";
+import { LOCAL_ARTIFACT_CAPS, type LocalArtifactUploadedSource } from "./contract.js";
 
 type DB = Pick<Env, "DB">;
 
@@ -139,4 +140,38 @@ export async function clearUploadedTailorSource(env: DB, instanceId: string, use
 		"DELETE FROM application_tailor_uploaded_sources WHERE instance_id = ?1 AND user_id = ?2 AND role = ?3",
 	).bind(instanceId, userId, role).run();
 	return (result.meta?.changes ?? 0) > 0;
+}
+
+/** Fetch the exact R2-backed extraction through the owning DO, never the capped search index. */
+export async function materializeUploadedTailorSources(
+	env: Pick<Env, "DB" | "AGENT">,
+	instanceId: string,
+	userId: string,
+	expected?: ReadonlyArray<Omit<LocalArtifactUploadedSource, "text">>,
+): Promise<LocalArtifactUploadedSource[]> {
+	if (!env.AGENT) throw new Error("Instance Files are unavailable");
+	const selected = await listUploadedTailorSourceSelections(env, instanceId, userId);
+	if (selected.length !== 2 || !selected.some((source) => source.role === "resume") || !selected.some((source) => source.role === "profile")) {
+		throw new Error("Select one readable uploaded resume and one readable uploaded profile before tailoring.");
+	}
+	if (expected?.some((wanted) => {
+		const current = selected.find((source) => source.role === wanted.role);
+		return !current || current.id !== wanted.fileId || current.fileVersion !== wanted.version || current.originalSha256 !== wanted.originalSha256 || current.extractedTextSha256 !== wanted.extractedTextSha256 || current.extractedAt !== wanted.extractedAt;
+	})) throw new Error("Uploaded source selection changed while this run waited; reselect and start again.");
+	const stub = env.AGENT.get(env.AGENT.idFromName(instanceId));
+	const sources: LocalArtifactUploadedSource[] = [];
+	for (const choice of selected) {
+		const response = await stub.fetch(new Request(`https://agent/files/${encodeURIComponent(choice.id)}/tailor-source`, {
+			method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user_id: userId }),
+		}));
+		const value = await response.json().catch(() => null) as { error?: unknown; text?: unknown; source?: Record<string, unknown> } | null;
+		if (!response.ok || !value || typeof value.text !== "string" || !value.source) throw new Error(typeof value?.error === "string" ? value.error : `The selected uploaded ${choice.role} could not be read.`);
+		const source = value.source;
+		if (source.id !== choice.id || source.name !== choice.name || source.r2Version !== choice.fileVersion || source.r2Etag !== choice.fileEtag || source.originalSha256 !== choice.originalSha256 || source.extractedTextSha256 !== choice.extractedTextSha256 || source.extractedAt !== choice.extractedAt) throw new Error(`The selected uploaded ${choice.role} changed; reselect its exact version before tailoring.`);
+		const bytes = new TextEncoder().encode(value.text).byteLength;
+		if (!bytes || bytes > LOCAL_ARTIFACT_CAPS.sourceBytes) throw new Error(`The selected uploaded ${choice.role} has ${bytes} extracted UTF-8 bytes; the secure runner transfer limit is ${LOCAL_ARTIFACT_CAPS.sourceBytes} bytes.`);
+		if (!choice.fileVersion || !choice.originalSha256 || !choice.extractedTextSha256 || !choice.extractedAt) throw new Error(`The selected uploaded ${choice.role} has incomplete provenance; re-upload and reselect it.`);
+		sources.push({ role: choice.role, fileId: choice.id, version: choice.fileVersion, originalSha256: choice.originalSha256, extractedTextSha256: choice.extractedTextSha256, extractedAt: choice.extractedAt, text: value.text });
+	}
+	return sources;
 }

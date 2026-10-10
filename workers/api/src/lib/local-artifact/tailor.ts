@@ -58,7 +58,8 @@ import {
 	unemittedReadyApplications,
 	updateTailorRun,
 } from "./store.js";
-import { listUploadedTailorSourceSelections } from "./uploaded-sources.js";
+import { listUploadedTailorSourceSelections, materializeUploadedTailorSources } from "./uploaded-sources.js";
+import type { LocalArtifactUploadedSource } from "./contract.js";
 
 /** How long past its own time limit a run may go unheard from before PAGS stops waiting. */
 export const LOST_RUNNER_GRACE_MS = 10 * 60_000;
@@ -139,9 +140,6 @@ export async function startTailoring(env: Env, instanceId: string, uid: string, 
 
 	const existing = await getApplicationByKey(env, instanceId, uid, key);
 	if (existing) return { kind: "existing", application: existing, run: existing.tailoringRunId ? await getTailorRun(env, instanceId, uid, existing.tailoringRunId) : null };
-	if ((await listUploadedTailorSourceSelections(env, instanceId, uid)).length > 0) {
-		throw new HttpError(409, "Uploaded résumé/profile sources are selected, but secure runner materialization is not available yet. No local or historical résumé was used; clear every uploaded source selection to use local-source mode.");
-	}
 
 	const now = Date.now();
 	const parsed = parseLocalArtifactLead(raw);
@@ -204,10 +202,15 @@ export async function startTailoring(env: Env, instanceId: string, uid: string, 
 	}
 	const runtime = await getLiveRuntime(env, instanceId, uid);
 	if (!runtime) throw new HttpError(503, "No runner is connected. Run `pags up` on the machine that holds your job materials; the lead will be tailored when it connects.");
+	let uploadedSources: LocalArtifactUploadedSource[] | undefined;
+	if ((await listUploadedTailorSourceSelections(env, instanceId, uid)).length > 0) {
+		try { uploadedSources = await materializeUploadedTailorSources(env, instanceId, uid); }
+		catch (err) { throw new HttpError(409, `Uploaded sources are not ready: ${err instanceof Error ? err.message : "unknown error"}. No local or historical résumé was used.`); }
+	}
 
 	const claim = await claimApplication(env, { ...base, workKey, lead: leadForStorage, status: "tailoring" });
 	if (!claim.created) return { kind: "existing", application: claim.app, run: claim.app.tailoringRunId ? await getTailorRun(env, instanceId, uid, claim.app.tailoringRunId) : null };
-	const run = await dispatchTailoring(env, instanceId, uid, claim.app.id, lead, settings.settings, key, source, runtime, now);
+	const run = await dispatchTailoring(env, instanceId, uid, claim.app.id, lead, settings.settings, key, source, runtime, now, uploadedSources);
 	return { kind: "started", application: (await getApplication(env, instanceId, uid, claim.app.id)) as JobApplication, run };
 }
 
@@ -229,8 +232,9 @@ async function dispatchTailoring(
 	source: string,
 	runtime: LiveRuntime,
 	now: number,
+	uploadedSources?: LocalArtifactUploadedSource[],
 ): Promise<TailorRun> {
-	const policy: TailorRunPolicy = { engine: s.engine, authMode: s.authMode, workspace: s.workspace, sources: sourcesOf(s), retainDays: s.retainDays, maxMinutes: s.maxMinutes };
+	const policy: TailorRunPolicy = { engine: s.engine, authMode: s.authMode, workspace: s.workspace, sources: sourcesOf(s), ...(uploadedSources ? { uploadedSources: uploadedSources.map(({ text: _text, ...source }) => source) } : {}), retainDays: s.retainDays, maxMinutes: s.maxMinutes };
 	const runId = crypto.randomUUID();
 	await createTailorRun(env, {
 		id: runId,
@@ -243,7 +247,7 @@ async function dispatchTailoring(
 		now,
 	});
 	let run = (await getTailorRun(env, instanceId, uid, runId)) as TailorRun;
-	const envelope = tailorTaskEnvelope(run, lead, s);
+	const envelope = tailorTaskEnvelope(run, lead, s, uploadedSources);
 	const fail = async (errorCode: string, error: string) => {
 		run = (await updateTailorRun(env, run, { to: "failed", errorCode, error, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: errorCode } }] }, now)) ?? run;
 		await settleApplication(env, instanceId, uid, applicationId, runId, { to: "blocked", blockReason: errorCode, blockQuestions: [error] }, now);
@@ -281,17 +285,19 @@ export async function retryTailoring(env: Env, instanceId: string, uid: string, 
 	}
 	const parsed = parseLocalArtifactLead(app.lead);
 	if ("error" in parsed) throw new HttpError(409, `The application's lead cannot be read (${parsed.error}); re-approve it from the Scout.`);
-	if ((await listUploadedTailorSourceSelections(env, instanceId, uid)).length > 0) {
-		throw new HttpError(409, "Uploaded résumé/profile sources are selected, but secure runner materialization is not available yet. No local or historical résumé was used; clear every uploaded source selection to use local-source mode.");
-	}
 	const pair = await readInstanceConfigPair(env, instanceId, uid);
 	const settings = effectiveTailorSettings((pair?.config as Record<string, unknown> | undefined)?.[TAILOR_SETTINGS_KEY]);
 	if ("error" in settings) throw new HttpError(409, `The Application Tailor settings are invalid: ${settings.error}. Fix them, then retry.`);
 	const runtime = await getLiveRuntime(env, instanceId, uid);
 	if (!runtime) throw new HttpError(503, "No runner is connected. Run `pags up` on the machine that holds your job materials, then retry.");
+	let uploadedSources: LocalArtifactUploadedSource[] | undefined;
+	if ((await listUploadedTailorSourceSelections(env, instanceId, uid)).length > 0) {
+		try { uploadedSources = await materializeUploadedTailorSources(env, instanceId, uid); }
+		catch (err) { throw new HttpError(409, `Uploaded sources are not ready: ${err instanceof Error ? err.message : "unknown error"}. No local or historical résumé was used.`); }
+	}
 	const moved = await moveApplication(env, app, uid, { to: "tailoring", actor: "owner", actorInstanceId: instanceId, reason: "retry_tailoring" }, now);
 	if (!moved) throw new HttpError(409, "The application changed while retrying — reload it.");
-	const run = await dispatchTailoring(env, instanceId, uid, app.id, parsed.lead, settings.settings, `${app.idempotencyKey}:retry:${app.stateVersion + 1}`, "retry", runtime, now);
+	const run = await dispatchTailoring(env, instanceId, uid, app.id, parsed.lead, settings.settings, `${app.idempotencyKey}:retry:${app.stateVersion + 1}`, "retry", runtime, now, uploadedSources);
 	return { application: (await getApplication(env, instanceId, uid, app.id)) as JobApplication, run };
 }
 
@@ -421,7 +427,7 @@ export async function cancelTailoring(env: Env, uid: string, run: TailorRun, now
  * queue (#974), for the reason the Runner's has one: two constructions would be two answers to what
  * this run was asked to do.
  */
-export function tailorTaskEnvelope(run: TailorRun, lead: LocalArtifactTaskEnvelope["lead"], s: ApplicationTailorSettings): LocalArtifactTaskEnvelope {
+export function tailorTaskEnvelope(run: TailorRun, lead: LocalArtifactTaskEnvelope["lead"], s: ApplicationTailorSettings, uploadedSources?: LocalArtifactUploadedSource[]): LocalArtifactTaskEnvelope {
 	return {
 		type: LOCAL_ARTIFACT_TASK_TYPE,
 		runId: run.id,
@@ -431,6 +437,7 @@ export function tailorTaskEnvelope(run: TailorRun, lead: LocalArtifactTaskEnvelo
 		authMode: s.authMode,
 		workspace: s.workspace,
 		sources: run.policy.sources,
+		...(uploadedSources ? { uploadedSources } : {}),
 		lead,
 		policy: { retainDays: s.retainDays, maxMinutes: s.maxMinutes, maxConcurrent: 1 },
 	};
@@ -463,9 +470,19 @@ export async function dispatchNextQueuedTailoring(env: Env, instanceId: string, 
 	const pair = await readInstanceConfigPair(env, instanceId, uid);
 	const settings = effectiveTailorSettings((pair?.config as Record<string, unknown> | undefined)?.[TAILOR_SETTINGS_KEY]);
 	if ("error" in settings) return "queued";
+	let uploadedSources: LocalArtifactUploadedSource[] | undefined;
+	if (run.policy.uploadedSources?.length) {
+		try { uploadedSources = await materializeUploadedTailorSources(env, instanceId, uid, run.policy.uploadedSources); }
+		catch (err) {
+			const error = `Uploaded sources are no longer ready: ${err instanceof Error ? err.message : "unknown error"}`;
+			await updateTailorRun(env, run, { to: "failed", errorCode: "uploaded_source_stale", error, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: "uploaded_source_stale" } }] }, now);
+			await settleApplication(env, instanceId, uid, next.applicationId, run.id, { to: "blocked", blockReason: "uploaded_source_stale", blockQuestions: [error] }, now);
+			return "exhausted";
+		}
+	}
 	let res: Response | null = null;
 	try {
-		res = await callRuntime(env, runtime, LOCAL_ARTIFACT_RUN_PATH, { method: "POST", body: JSON.stringify(tailorTaskEnvelope(run, parsed.lead, settings.settings)) });
+		res = await callRuntime(env, runtime, LOCAL_ARTIFACT_RUN_PATH, { method: "POST", body: JSON.stringify(tailorTaskEnvelope(run, parsed.lead, settings.settings, uploadedSources)) });
 	} catch {
 		await noteQueued(env, "local_artifact_runs", run.id, "The runner did not answer; waiting to try again.", now);
 		return "queued";

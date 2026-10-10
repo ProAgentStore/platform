@@ -33,6 +33,10 @@ export const APPLICATION_TOOL_SCOPES = {
 	application_run: "read",
 	application_run_supervision: "read",
 	tailoring_run: "read",
+	get_application_tailor_uploaded_sources: "read",
+	get_application_tailor_uploaded_source_readiness: "read",
+	set_application_tailor_uploaded_source: "write",
+	clear_application_tailor_uploaded_source: "write",
 	triage_application: "write",
 	approve_application: "destructive",
 	cancel_application: "write",
@@ -220,6 +224,105 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 			if (denied) return denied;
 			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/applications/${encodeURIComponent(application_id)}`, t, {}, env)) as { error?: string };
 			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
+	server.tool(
+		"get_application_tailor_uploaded_sources",
+		"The Application Tailor's explicit uploaded résumé and profile selections. Each selection is an exact owner-scoped Instance File snapshot, never inferred from a filename or a historical/local résumé. Returns metadata and provenance only — never file or extracted text — and does not start tailoring. Read-only.",
+		{ ...who },
+		async (input: Record<string, unknown>) => {
+			const token = tokenOf(input);
+			const instance_id = instanceOf(input);
+			const t = tokenFor(token);
+			if (!t) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "get_application_tailor_uploaded_sources", { instance_id });
+			if (denied) return denied;
+			const data = await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/application-tailor/uploaded-sources`, t, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"get_application_tailor_uploaded_source_readiness",
+		"Whether the Application Tailor's selected uploaded résumé and profile are safe to use. Returns live owner-scoped file provenance (filename, file id, version, original/extracted hashes and extraction time) and every blocker, including stale, missing, unreadable or runner-materialization blockers. Read this before starting tailoring: an uploaded selection fails closed and never falls back to a local or historical résumé. Read-only.",
+		{ ...who },
+		async (input: Record<string, unknown>) => {
+			const token = tokenOf(input);
+			const instance_id = instanceOf(input);
+			const t = tokenFor(token);
+			if (!t) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "get_application_tailor_uploaded_source_readiness", { instance_id });
+			if (denied) return denied;
+			const data = await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/application-tailor/uploaded-sources/readiness`, t, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	const uploadedSourceRole = z.enum(["resume", "profile"]);
+
+	server.tool(
+		"set_application_tailor_uploaded_source",
+		"Select ONE exact uploaded Instance File as the Application Tailor's résumé or profile source. The API verifies the file belongs to this owner and snapshots its version, hashes and extraction metadata; it never selects by filename and never reads bytes through MCP. This changes selection only — it does not start tailoring. Call get_application_tailor_uploaded_source_readiness afterwards, and use dry_run first.",
+		{
+			...who,
+			role: uploadedSourceRole.describe("Which required source this File becomes."),
+			file_id: z.string().describe("Exact File id from list_instance_files for this same instance; copy it unchanged."),
+			dry_run: z.boolean().optional().describe("Describe the selection without saving it."),
+		},
+		async (input: Record<string, unknown>) => {
+			const token = tokenOf(input);
+			const instance_id = instanceOf(input);
+			const role = input.role as "resume" | "profile";
+			const file_id = String(input.file_id ?? "");
+			const t = tokenFor(token);
+			if (!t) return authRequired();
+			const auditInput = { instance_id, role, file_id };
+			const denied = await requirePermission(safetyFor(token), "write", "set_application_tailor_uploaded_source", auditInput);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/application-tailor/uploaded-sources/${encodeURIComponent(role)}`;
+			if (input.dry_run) {
+				return dryRun(safetyFor(token), "set_application_tailor_uploaded_source", "select an exact uploaded Tailor source", auditInput, {
+					endpoint,
+					method: "PUT",
+					body: { fileId: file_id },
+				});
+			}
+			const data = (await authedCall(endpoint, t, { method: "PUT", body: JSON.stringify({ fileId: file_id }) }, env)) as { error?: string };
+			if (data.error) return text(`Error: ${data.error}`);
+			await audit(safetyFor(token), { tool: "set_application_tailor_uploaded_source", action: "completed", input: auditInput });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"clear_application_tailor_uploaded_source",
+		"Clear the selected uploaded résumé or profile source for the Application Tailor. This removes only the source selection record — it never deletes the uploaded File or its extracted text. With no uploaded selections, local-source mode remains explicit and unchanged. Call with dry_run first.",
+		{
+			...who,
+			role: uploadedSourceRole.describe("Which uploaded source selection to clear."),
+			dry_run: z.boolean().optional().describe("Describe the clear without saving it."),
+		},
+		async (input: Record<string, unknown>) => {
+			const token = tokenOf(input);
+			const instance_id = instanceOf(input);
+			const role = input.role as "resume" | "profile";
+			const t = tokenFor(token);
+			if (!t) return authRequired();
+			const auditInput = { instance_id, role };
+			const denied = await requirePermission(safetyFor(token), "write", "clear_application_tailor_uploaded_source", auditInput);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/application-tailor/uploaded-sources/${encodeURIComponent(role)}`;
+			if (input.dry_run) {
+				return dryRun(safetyFor(token), "clear_application_tailor_uploaded_source", "clear an uploaded Tailor source selection", auditInput, {
+					endpoint,
+					method: "DELETE",
+				});
+			}
+			const data = (await authedCall(endpoint, t, { method: "DELETE" }, env)) as { error?: string };
+			if (data.error) return text(`Error: ${data.error}`);
+			await audit(safetyFor(token), { tool: "clear_application_tailor_uploaded_source", action: "completed", input: auditInput });
+			return jsonText(data);
 		},
 	);
 

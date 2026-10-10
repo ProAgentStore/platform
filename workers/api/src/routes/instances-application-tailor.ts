@@ -14,6 +14,7 @@ import type { Context, Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { readInstanceConfigPair, patchInstanceConfig } from "../lib/instance-config.js";
 import { cancelTailoring, startTailoring, syncTailorRun } from "../lib/local-artifact/tailor.js";
+import { LOCAL_ARTIFACT_CAPS } from "../lib/local-artifact/contract.js";
 import {
 	APPLICATION_STATUSES,
 	type ApplicationStatus,
@@ -109,6 +110,7 @@ function sourceBlockers(selected: UploadedTailorFileSnapshot | undefined, live: 
 	if (live.textTruncated) return ["extracted_text_truncated"];
 	if (!live.extractedTextLength) return ["extracted_text_empty"];
 	if (!live.fileVersion || !live.originalSha256 || !live.extractedTextSha256 || !live.extractedAt) return ["provenance_unavailable"];
+	if (live.extractedTextLength > LOCAL_ARTIFACT_CAPS.sourceBytes) return ["extracted_text_too_large"];
 	return [];
 }
 
@@ -149,26 +151,25 @@ export function registerApplicationTailorRoutes(router: Hono<{ Bindings: Env }>)
 			const selected = byRole.get(role);
 			const current = selected ? live.find((file) => file.id === selected.id) : undefined;
 			const blockers = sourceBlockers(selected, current);
-			// No source bytes have a runner transfer route yet. Saying that explicitly prevents the
-			// selection API from looking like consent to run with an unmaterialized document.
+			const availableToRunner = blockers.length === 0;
 			return {
 				role,
 				selected: selected ?? null,
 				uploaded: !!current,
 				extracted: current?.extractionStatus === "extracted",
-				availableToRunner: false,
-				ready: false,
+				availableToRunner,
+				ready: availableToRunner && !!runner,
 				isStale: blockers.some((blocker) => blocker === "file_deleted" || blocker === "file_changed_reselect_required"),
 				provenance: current ? {
 					filename: current.name, fileId: current.id, version: current.fileVersion ?? null,
 					originalHash: current.originalSha256 ?? null, extractedHash: current.extractedTextSha256 ?? null,
 					extractedAt: current.extractedAt ?? null,
 				} : null,
-				blockers: [...blockers, "materialization_unsupported"],
+				blockers,
 			};
 		});
 		const blockers = [...sources.flatMap((source) => source.blockers.map((blocker) => `${source.role}:${blocker}`)), ...(runner ? [] : ["runner_unavailable"])] as string[];
-		return c.json({ mode: "uploaded", sources, runner: { available: !!runner }, ready: false, blockers });
+		return c.json({ mode: "uploaded", sources, runner: { available: !!runner }, ready: blockers.length === 0, blockers });
 	});
 
 	/** Select one exact uploaded Instance File for a required source role. */

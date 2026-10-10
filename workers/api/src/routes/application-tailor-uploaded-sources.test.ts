@@ -107,11 +107,11 @@ describe("Application Tailor uploaded source selection", () => {
 		expect(readiness.body).toMatchObject({
 			mode: "uploaded", ready: false, runner: { available: false },
 			sources: [
-				expect.objectContaining({ role: "resume", selected: expect.objectContaining({ id: "file_resume_1" }), uploaded: true, extracted: true, availableToRunner: false, ready: false, isStale: false, provenance: { filename: "resume.pdf", fileId: "file_resume_1", version: "v1", originalHash: "a".repeat(64), extractedHash: "b".repeat(64), extractedAt: "2026-10-10T00:00:02.000Z" }, blockers: ["materialization_unsupported"] }),
-				expect.objectContaining({ role: "profile", selected: null, uploaded: false, extracted: false, availableToRunner: false, ready: false, blockers: ["not_selected", "materialization_unsupported"] }),
+				expect.objectContaining({ role: "resume", selected: expect.objectContaining({ id: "file_resume_1" }), uploaded: true, extracted: true, availableToRunner: true, ready: false, isStale: false, provenance: { filename: "resume.pdf", fileId: "file_resume_1", version: "v1", originalHash: "a".repeat(64), extractedHash: "b".repeat(64), extractedAt: "2026-10-10T00:00:02.000Z" }, blockers: [] }),
+				expect.objectContaining({ role: "profile", selected: null, uploaded: false, extracted: false, availableToRunner: false, ready: false, blockers: ["not_selected"] }),
 			],
 		});
-		expect(readiness.body.blockers).toEqual(expect.arrayContaining(["profile:not_selected", "runner_unavailable", "resume:materialization_unsupported"]));
+		expect(readiness.body.blockers).toEqual(expect.arrayContaining(["profile:not_selected", "runner_unavailable"]));
 		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM local_artifact_runs").first<{ n: number }>())?.n).toBe(0);
 	});
 
@@ -120,7 +120,7 @@ describe("Application Tailor uploaded source selection", () => {
 		files[0].updatedAt = "2026-10-12T00:00:00.000Z";
 		const readiness = await call("GET", "/i1/application-tailor/uploaded-sources/readiness");
 		const sources = readiness.body.sources as Array<Record<string, unknown>>;
-		expect(sources.find((source) => source.role === "resume")).toMatchObject({ isStale: true, blockers: ["file_changed_reselect_required", "materialization_unsupported"] });
+		expect(sources.find((source) => source.role === "resume")).toMatchObject({ isStale: true, blockers: ["file_changed_reselect_required"] });
 	});
 
 	it("fails readiness closed when the file has no exact extraction provenance", async () => {
@@ -129,6 +129,6 @@ describe("Application Tailor uploaded source selection", () => {
 		expect(selected.status).toBe(200);
 		const readiness = await call("GET", "/i1/application-tailor/uploaded-sources/readiness");
 		const sources = readiness.body.sources as Array<Record<string, unknown>>;
-		expect(sources.find((source) => source.role === "resume")).toMatchObject({ blockers: ["provenance_unavailable", "materialization_unsupported"] });
+		expect(sources.find((source) => source.role === "resume")).toMatchObject({ blockers: ["provenance_unavailable"] });
 	});
 });

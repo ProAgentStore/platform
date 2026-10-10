@@ -7709,6 +7709,57 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{instanceId}/application-tailor/uploaded-sources:
+    get:
+      summary: Read selected uploaded Application Tailor sources
+      description: Returns owner-selected Files handles and provenance only, never source bytes or download links. Reading does not start tailoring.
+      operationId: getApplicationTailorUploadedSources
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200": { description: Selected resume/profile Files provenance, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/application-tailor/uploaded-sources/readiness:
+    get:
+      summary: Inspect uploaded-source readiness
+      description: Revalidates selected Files metadata, extraction/hash provenance and runner availability. It never starts tailoring and reports stale/missing/unreadable inputs as blockers.
+      operationId: getApplicationTailorUploadedSourceReadiness
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200": { description: Readiness, provenance and blockers, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/application-tailor/uploaded-sources/{role}:
+    put:
+      summary: Select an exact uploaded source for Application Tailor
+      description: Owner-scoped. The Files ID is verified through the instance DO and its version/hash provenance is pinned; it never infers a selection from a filename.
+      operationId: setApplicationTailorUploadedSource
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }, { name: role, in: path, required: true, schema: { type: string, enum: [resume, profile] } }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [fileId], properties: { fileId: { type: string } } } } }
+      responses:
+        "200": { description: The recorded selected source provenance, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      summary: Clear one uploaded Application Tailor source selection
+      description: Clears only the selection; it never deletes the Files object or starts tailoring.
+      operationId: clearApplicationTailorUploadedSource
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }, { name: role, in: path, required: true, schema: { type: string, enum: [resume, profile] } }]
+      responses:
+        "200": { description: Clear result, content: { application/json: { schema: { type: object, properties: { cleared: { type: boolean } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/instances/{instanceId}/applications:
     get:
       summary: List job applications

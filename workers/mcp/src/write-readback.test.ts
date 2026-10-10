@@ -158,6 +158,10 @@ const CONTROL_ARGS: ReadonlySet<string> = new Set([
 	// with. This is addressing, not content; it comes from the template's version list
 	// outside the MCP write and is never itself stored by the rollback route.
 	"version_id",
+	// The Tailor uploaded-source role (resume or profile) selects the independent
+	// source slot to write or clear. It is addressing, not separately persisted
+	// content; the resulting selection is visible through the uploaded-sources reader.
+	"role",
 ]);
 
 /**

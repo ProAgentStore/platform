@@ -12,6 +12,7 @@ import {
 	type LocalArtifactFile,
 	type LocalArtifactSource,
 	type LocalArtifactSourceRole,
+	type LocalArtifactUploadedSource,
 	isHomeRelative,
 	isWorkspaceRelative,
 } from "./contract.js";
@@ -450,6 +451,8 @@ export interface TailorRunPolicy {
 	authMode: LocalArtifactAuthMode;
 	workspace: string;
 	sources: LocalArtifactSource[];
+	/** Handle-only uploaded-source provenance pinned for a queued/retried run; never source text. */
+	uploadedSources?: Array<Omit<LocalArtifactUploadedSource, "text">>;
 	retainDays: number;
 	maxMinutes: number;
 }

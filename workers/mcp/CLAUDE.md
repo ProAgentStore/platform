@@ -110,10 +110,10 @@ src/
     ├── mcp-connections.ts 6 tools — PAGS as an MCP CLIENT: presets, per-(endpoint,tool) grants,
 │                     the connection test, and the paused-elicitation inbox (#613)
 ├── guide.ts          1 tool — the per-instance connection guide (#772)
-    ├── applications.ts  17 tools — the job-application queue across Scout → Tailor → Runner (#958):
+    ├── applications.ts  21 tools — the job-application queue across Scout → Tailor → Runner (#958):
     │                     list/get/trace, and the typed decisions (triage, tailor, fill, review, retry,
     │                     resume, cancel) through the console's own action route, the Runner's
-    │                     submission policy (#953), and LIVE run visibility (#971) — a Runner's fill
+    │                     submission policy (#953), uploaded-source selection/readiness (#1004), and LIVE run visibility (#971) — a Runner's fill
     │                     runs, one run as it stands now, its supervisor checkpoints, and a Tailor's
     │                     run (the counterpart of coding_session_capture/coding_timeline)
     ├── recent.ts         4 tools — the instances this account drove most recently, with run health (#787),
@@ -125,13 +125,13 @@ src/
                           surfaces:["coding"]) + 5 loop tools (3 run + 2 objective queue)
 ```
 
-**292 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
+**296 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
 `tools/server-info.ts`, 12 in
 `coding-tools.ts`, 2 in `coding-engine-tools.ts` and 1 in `coding-reauth-tools.ts` — all fifteen behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 240 across `instance-tools/`. 266 are always registered; 26 are
+`storage-tools.ts`, and 244 across `instance-tools/`. 270 are always registered; 26 are
 surface-gated (apply=4, repo=3, coding=19).
 
-These counts add up to the headline: 21 + 1 + 12 + 2 + 1 + 15 + 240 = 292. They said 88 until #602, which made the paragraph sum to 132 — a total the
+These counts add up to the headline: 21 + 1 + 12 + 2 + 1 + 15 + 244 = 296. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added

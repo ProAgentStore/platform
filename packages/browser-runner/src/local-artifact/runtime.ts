@@ -43,6 +43,7 @@ import {
 	type LocalArtifactRunnerEvent,
 	type LocalArtifactSource,
 	type LocalArtifactSourceHash,
+	type LocalArtifactUploadedSource,
 	type LocalArtifactStatusResponse,
 	type LocalArtifactTaskEnvelope,
 	type LocalArtifactValidationDiagnostic,
@@ -112,6 +113,20 @@ export function parseArtifactEnvelope(raw: unknown): ParsedEnvelope {
 		if (sources.some((x) => x.role === r.role)) throw bad(`source ${String(r.role)} is listed twice`);
 		sources.push({ role: r.role as LocalArtifactSource["role"], path: r.path });
 	}
+	const uploadedSources: LocalArtifactUploadedSource[] = [];
+	if (o.uploadedSources !== undefined) {
+		if (!Array.isArray(o.uploadedSources) || o.uploadedSources.length !== 2) throw bad("uploadedSources must contain the selected resume and profile");
+		for (const source of o.uploadedSources) {
+			const r = (source && typeof source === "object" ? source : {}) as Record<string, unknown>;
+			if ((r.role !== "resume" && r.role !== "profile") || uploadedSources.some((x) => x.role === r.role)) throw bad("uploaded sources need one resume and one profile");
+			if (typeof r.fileId !== "string" || !PATH_SEGMENT.test(r.fileId) || typeof r.version !== "string" || !r.version || r.version.length > 300 || typeof r.originalSha256 !== "string" || !/^[a-f0-9]{64}$/.test(r.originalSha256) || typeof r.extractedTextSha256 !== "string" || !/^[a-f0-9]{64}$/.test(r.extractedTextSha256) || typeof r.extractedAt !== "string" || Number.isNaN(Date.parse(r.extractedAt)) || typeof r.text !== "string") throw bad("uploaded source provenance is invalid");
+		const bytes = Buffer.byteLength(r.text, "utf8");
+		if (!bytes || bytes > LOCAL_ARTIFACT_CAPS.sourceBytes) throw bad(`uploaded source must be 1-${LOCAL_ARTIFACT_CAPS.sourceBytes} UTF-8 bytes`);
+		if (sha256(r.text) !== r.extractedTextSha256) throw bad("uploaded source text does not match its extracted-text hash");
+		uploadedSources.push({ role: r.role, fileId: r.fileId, version: r.version, originalSha256: r.originalSha256, extractedTextSha256: r.extractedTextSha256, extractedAt: r.extractedAt, text: r.text });
+		}
+		if (uploadedSources.length !== 2 || !uploadedSources.some((s) => s.role === "resume") || !uploadedSources.some((s) => s.role === "profile")) throw bad("uploaded sources need one resume and one profile");
+	}
 	const p = (o.policy && typeof o.policy === "object" ? o.policy : {}) as Record<string, unknown>;
 	const retainDays = intIn(p.retainDays, 0, 3650);
 	const maxMinutes = intIn(p.maxMinutes, 1, 60);
@@ -127,6 +142,7 @@ export function parseArtifactEnvelope(raw: unknown): ParsedEnvelope {
 		authMode: o.authMode as LocalArtifactTaskEnvelope["authMode"],
 		workspace: o.workspace,
 		sources,
+		...(uploadedSources.length ? { uploadedSources } : {}),
 		policy: { retainDays, maxMinutes, maxConcurrent },
 		...("lead" in lead ? { lead: lead.lead } : { lead: null, leadError: lead.error }),
 	};
@@ -205,11 +221,30 @@ export class LocalArtifactRuntime {
 		}
 		this.sweepArtifacts(run, workspace);
 
-		// Sources: read by the runtime, hashed, handed to the CLI in its prompt. Content never leaves this function except into the prompt.
+		// Sources: uploaded selections arrive only over the authenticated relay, are written beneath
+		// this run's private scratch folder under fixed role names, and never use a user filename/path.
+		// Local mode remains the existing path. Content never reaches events/results/DB.
 		const texts: SourceText[] = [];
 		const hashes: LocalArtifactSourceHash[] = [];
 		const missing: string[] = [];
-		for (const s of e.sources) {
+		if (e.uploadedSources?.length) {
+			const sourceDir = join(run.scratch, "sources");
+			mkdirSync(sourceDir, { recursive: true, mode: 0o700 });
+			for (const s of e.uploadedSources) {
+				const safePath = join(sourceDir, `${s.role}.txt`);
+				try {
+					writeFileSync(safePath, s.text, { encoding: "utf8", flag: "wx", mode: 0o600 });
+					const bytes = Buffer.byteLength(s.text, "utf8");
+					const hash = { role: s.role, path: `uploaded/${s.fileId}@${s.version}`, sha256: s.extractedTextSha256, bytes };
+					texts.push({ role: s.role, text: readFileSync(safePath, "utf8") });
+					hashes.push(hash);
+					this.emit(run, { type: "source.read", detail: hash });
+				} catch (err) {
+					this.emit(run, { type: "source.missing", detail: { role: s.role, path: `uploaded/${s.fileId}` } });
+					missing.push(`The selected uploaded ${s.role} could not be materialized (${err instanceof Error ? err.message : "unknown error"}).`);
+				}
+			}
+		} else for (const s of e.sources) {
 			const shown = `${e.workspace}/${s.path}`;
 			try {
 				const file = resolveSource(workspace, s.path);
@@ -226,7 +261,7 @@ export class LocalArtifactRuntime {
 			}
 		}
 		for (const role of REQUIRED_SOURCE_ROLES) {
-			if (!e.sources.some((s) => s.role === role)) missing.push(`No ${role} source is configured. Choose one in the Application Tailor settings.`);
+			if (e.uploadedSources?.length ? !e.uploadedSources.some((s) => s.role === role) : !e.sources.some((s) => s.role === role)) missing.push(`No ${role} source is configured. Choose one in the Application Tailor settings.`);
 		}
 		if (missing.length) throw new Pause("missing_source", missing);
 
