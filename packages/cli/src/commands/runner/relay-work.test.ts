@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { observedRunnerWork } from "./relay.js";
+import { observedRunnerWork } from "./runner-work-observation.js";
 
 describe("observedRunnerWork (#1007)", () => {
 	it("does not block a restart for retained engines that authoritatively report idle", () => {
