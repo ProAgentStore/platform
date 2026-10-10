@@ -10,6 +10,7 @@
  * and a row that stops reporting is failed rather than left `running` forever.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RunnerUpdateWorkflowParams } from "./runner-update.js";
 
 /**
  * Live sockets, `instanceId@node`, and what the machine answers.
@@ -275,7 +276,7 @@ describe("the idle-node update path, end to end (#990)", () => {
 	it("a recovered workflow never replays an interrupted dispatch, and records the late reply", async () => {
 		let releaseReply: ((value: unknown) => void) | undefined;
 		reply = () => new Promise((resolve) => { releaseReply = resolve; });
-		let params: Parameters<NonNullable<Parameters<typeof startRunnerUpdate>[3]>["startWorkflow"]>[0] | undefined;
+		let params: RunnerUpdateWorkflowParams | undefined;
 		const { op } = await startRunnerUpdate(env(), "u1", NODE, { ...fast, startWorkflow: async (p) => { params = p; } });
 		expect(params).toBeDefined();
 		const first = executeRunnerUpdateOperation(env(), params!, fast);
