@@ -244,6 +244,47 @@ export function registerKnowledgeTools(server: McpServer, ctx: InstanceToolsCtx)
 	);
 
 	server.tool(
+		"upload_instance_file",
+		"Upload synthetic or owner-provided bytes to a private subscribed instance's Files store. The bytes are standard base64, are capped by the existing 12 MiB instance-file limit, and are never fetched from a URL. Returns file metadata and provenance hashes, never file bytes.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			name: z.string().min(1).describe("File name only; it is stored as metadata, never fetched as a path."),
+			mime_type: z.string().min(1).describe("Declared MIME type, for example application/pdf."),
+			content_base64: z.string().min(1).describe("Standard base64 file bytes (optional data: URI prefix). Maximum decoded size is 12 MiB."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, name, mime_type, content_base64, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			// Do not put content_base64 in audit events or dry-run receipts: they are durable and
+			// an uploaded résumé is private. The API/DO remains the single validator for encoding
+			// and decoded-byte limits, so MCP cannot drift from the console upload path.
+			const input = { instance_id, name, mime_type, bytes: "base64 bytes withheld" };
+			const denied = await requirePermission(safetyFor(token), "write", "upload_instance_file", input);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/files`;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "upload_instance_file", "upload private instance file", input, {
+					endpoint,
+					method: "POST",
+					name,
+					mime_type,
+				});
+			}
+			const data = await authedCall(
+				endpoint,
+				sessionToken,
+				{ method: "POST", body: JSON.stringify({ name, mime_type, contentBase64: content_base64 }) },
+				env,
+			);
+			const rec = data as { error?: string; id?: string };
+			if (!rec.error && rec.id) await audit(safetyFor(token), { tool: "upload_instance_file", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
 		"delete_instance_file",
 		"Delete an uploaded file from a subscribed instance (Knowledge → Files). Removes the R2 object, its metadata, and its vectors.",
 		{

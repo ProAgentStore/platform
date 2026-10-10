@@ -12,7 +12,7 @@ Connection methods and the full tool table: [`README.md`](./README.md).
    unless the user explicitly overrides this.
 
 2. **Discover the surface before using it.** The tool list is versioned and
-   *per-connection*: of the 296 tool registrations, 26 are gated to the console surfaces
+   *per-connection*: of the 297 tool registrations, 26 are gated to the console surfaces
    of the agents the connected user actually subscribes to (`apply`, `repo`, `coding`). A
    tool you used last week may be absent today, and a tool present for one user is absent
    for another. Call `tools/list` first; never assume a name exists.
@@ -300,7 +300,7 @@ stop looking and tell the user which console screen to use.
 | **Permission writes** on instance state | `get_instance_state` is read-only and no tool writes `permissions`. Note the one carve-out: `set_instance_model` does `PUT /state`, but with `{model}` only | Console → Settings → Permissions & Connections |
 | **Stripe checkout and customer portal** | Browser redirects — a redirect URL is useless to a headless caller. `billing_status` reads, nothing writes | Console → Profile → Billing |
 | **Binary routes** — voice-audio get/put, R2 multipart upload parts, file byte download (`/files/:fileId`) | MCP results are text; streaming bytes through a text channel is not useful. `list_instance_files` and `delete_instance_file` exist; reading the bytes does not | Console, or the REST API directly |
-| **Uploading a non-text file to an agent** | `upload_agent_file` takes text content only. `upload_resume` is the one binary path, and takes a public URL or base64, scoped to apply agents | — |
+| **Uploading a non-text file to an instance** | `upload_instance_file` accepts owner-provided base64 to the existing private Files route; it does not fetch URLs and returns metadata/hashes only | — |
 | **Arbitrary shell or a generic API proxy** | There is no shell tool and no open proxy. `call_instance_tool` reaches only the connector tools an instance declares and its owner has left enabled | Coding session tools, on a runner the user started |
 | **User deletion** | Not modelled | Console |
 | **Reading another user's data** | Every instance route is `user_id`/`owner_id`-scoped server-side. `list_errors` with `scope: "all"` is the only cross-user read, and is admin-only | — |

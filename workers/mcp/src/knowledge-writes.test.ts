@@ -46,7 +46,7 @@ function setup(opts: { scopes?: string[]; status?: number; body?: unknown } = {}
 		return h({ instance_id: "inst 1", ...args });
 	};
 	const completed = () => [...audit.values()].map((v) => JSON.parse(v) as { tool?: string; action?: string }).filter((e) => e.action === "completed");
-	return { run, calls, completed };
+	return { run, calls, completed, audit };
 }
 
 afterEach(() => vi.unstubAllGlobals());
@@ -115,6 +115,54 @@ describe("ingest_instance_knowledge_url", () => {
 		const h = setup({ scopes: ["read"] });
 		await h.run("ingest_instance_knowledge_url", { url: "https://example.com" });
 		expect(h.calls).toHaveLength(0);
+	});
+});
+
+describe("upload_instance_file", () => {
+	const binaryBase64 = "AAH+/0JpbmFyeQ==";
+	const receipt = {
+		id: "file-1",
+		name: "synthetic.pdf",
+		mimeType: "application/pdf",
+		size: 10,
+		r2Version: "v1",
+		originalSha256: "a".repeat(64),
+		extractedTextSha256: "b".repeat(64),
+		extractionStatus: "complete",
+	};
+
+	it("proxies exact synthetic bytes to the owner-scoped Files route and returns its hash receipt", async () => {
+		const h = setup({ body: receipt, status: 201 });
+		const res = await h.run("upload_instance_file", { name: "synthetic.pdf", mime_type: "application/pdf", content_base64: binaryBase64 });
+		expect(h.calls).toEqual([
+			{
+				url: "https://api.test/v1/instances/inst%201/files",
+				method: "POST",
+				body: { name: "synthetic.pdf", mime_type: "application/pdf", contentBase64: binaryBase64 },
+			},
+		]);
+		expect(JSON.parse(res.content[0].text)).toEqual(receipt);
+		const rawAudit = [...h.audit.values()].join("\n");
+		expect(rawAudit).not.toContain(binaryBase64);
+	});
+
+	it.each([
+		[400, "Malformed base64"],
+		[413, "File is over the 12MB limit"],
+	])("surfaces a %i upload refusal without auditing completion", async (status, error) => {
+		const h = setup({ status, body: { error } });
+		const res = await h.run("upload_instance_file", { name: "synthetic.pdf", mime_type: "application/pdf", content_base64: "not-base64" });
+		expect(res.content[0].text).toContain(error);
+		expect(h.completed()).toHaveLength(0);
+	});
+
+	it("is refused without write scope and dry-run sends no bytes", async () => {
+		const denied = setup({ scopes: ["read"] });
+		await denied.run("upload_instance_file", { name: "synthetic.pdf", mime_type: "application/pdf", content_base64: binaryBase64 });
+		expect(denied.calls).toHaveLength(0);
+		const preview = setup();
+		await preview.run("upload_instance_file", { name: "synthetic.pdf", mime_type: "application/pdf", content_base64: binaryBase64, dry_run: true });
+		expect(preview.calls).toHaveLength(0);
 	});
 });
 

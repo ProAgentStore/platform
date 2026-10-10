@@ -330,6 +330,7 @@ const TABLE: Record<string, Row> = {
 	forget_runner_node: ["runtime", "destructive", "forget_runner_node", "envelope", "confirm,dry_run,node,token"],
 	delete_instance_message: ["observability", "destructive", "delete_instance_message", "envelope", "confirm,dry_run,instance_id,message_id,token"],
 	delete_instance_file: ["knowledge", "destructive", "delete_instance_file", "envelope", "confirm,dry_run,file_id,instance_id,token"],
+	upload_instance_file: ["knowledge", "write", null, "envelope", "content_base64,dry_run,instance_id,mime_type,name,token"],
 	delete_instance_knowledge: ["knowledge", "destructive", "delete_instance_knowledge", "envelope", "confirm,document_id,dry_run,instance_id,token"],
 	delete_instance_memory: ["knowledge", "destructive", "delete_instance_memory", "envelope", "confirm,dry_run,instance_id,key,token"],
 	delete_instance_trigger: ["triggers", "destructive", "delete_instance_trigger", "envelope", "confirm,dry_run,token,trigger_id"],

@@ -1107,4 +1107,9 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// fail-closed blockers, but never document bytes or dispatch tailoring. 292 registrations
 	// become 296, always-on 266 → 270, gated remains 26. Appended.
 	"0.1.104": "sha256:612a093c7c61d688db4a0398149691be57209e5428d9123274923645fdbcad09",
+	// #1004 follow-up: `upload_instance_file` is the owner-scoped binary transport to the
+	// existing instance Files API. It accepts bytes only as standard base64, does not fetch URLs,
+	// and returns FileMeta provenance rather than bytes. 296 registrations become 297, always-on
+	// 270 → 271, gated remains 26. Appended because 0.1.104 is published.
+	"0.1.105": "sha256:a766d44b3ec5aee25df46e0df7d20e0e3cd7879dfb44090e7e449b5417d063d3",
 };

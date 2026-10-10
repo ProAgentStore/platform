@@ -542,6 +542,10 @@ const READBACK: Record<string, string | null> = {
 	// The résumé BYTES. `list_instance_files` returns the metadata; MCP deliberately exposes no
 	// binary download (see the "Deliberately NOT exposed via MCP" list in the platform docs).
 	"upload_resume.content_base64": null,
+	"upload_instance_file.name": "list_instance_files",
+	"upload_instance_file.mime_type": "list_instance_files",
+	// Bytes have no MCP reader and must never become a durable readback or audit payload.
+	"upload_instance_file.content_base64": null,
 
 	// ── agent authoring ──
 	"create_agent.slug": "agent_info",

@@ -346,10 +346,15 @@ instanceStorageRoutes.get("/:id/files", async (c) => {
 instanceStorageRoutes.post("/:id/files", async (c) => {
 	const session = await requireUser(c);
 	const instance = await resolveOwnedInstance(c, session);
+	// Files attached to an instance are private to the authenticated subscription owner.  The
+	// DO deliberately trusts this server boundary (it does not know the browser session), so
+	// never accept a caller-supplied user_id here.  In particular, uploaded Tailor sources list
+	// only this owner's files; omitting the stamp would make a successful upload unselectable.
+	const body = (await c.req.json()) as Record<string, unknown>;
 	return proxyDO(c, instance.id, "/files", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify(await c.req.json()),
+		body: JSON.stringify({ ...body, user_id: session.uid }),
 	});
 });
 

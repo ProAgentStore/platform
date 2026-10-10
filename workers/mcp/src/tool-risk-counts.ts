@@ -197,7 +197,7 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// +1 write at #906: `secure_input_request`, agent creates a secure input request for a secret.
 	// +2 write at #1004: select or clear one owner-scoped uploaded Tailor source slot;
 	// both are reversible, so they are write rather than destructive.
-	write: 89, // +1 at #859: set_machine_policy saves a reversible owner-scoped auto-update policy.
+	write: 90, // +1 at #1004: upload_instance_file is owner-scoped instance storage, not an external fetch.
 	// +1 runtime at #806: `continue_instance_run`. `runtime` rather than `write` for the reason
 	// `start_instance_loop` is — it starts an autonomous run that spends on its own — and the
 	// two must agree, because a caller holding the scope to start one holding a narrower one to

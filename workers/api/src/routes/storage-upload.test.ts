@@ -78,8 +78,9 @@ describe("POST /files with contentBase64 — the MCP and connector path (#762)",
 		const { request } = setup();
 		const up = await request("POST", base, "u1", { name: "Club Championships.docx", contentBase64: b64(BYTES) });
 		expect(up.status).toBe(201);
-		const meta = (await up.json()) as { id: string; size: number; mimeType: string };
-		expect(meta).toMatchObject({ size: BYTES.length, mimeType: DOCX });
+		const meta = (await up.json()) as { id: string; size: number; mimeType: string; userId?: string; originalSha256?: string };
+		expect(meta).toMatchObject({ size: BYTES.length, mimeType: DOCX, ...(base.includes("/instances/") ? { userId: "u1" } : {}) });
+		expect(meta.originalSha256).toBe(await sha256(BYTES));
 
 		const listed = (await (await request("GET", base, "u1")).json()) as { files: Array<{ id: string }> };
 		expect(listed.files.map((f) => f.id)).toEqual([meta.id]);

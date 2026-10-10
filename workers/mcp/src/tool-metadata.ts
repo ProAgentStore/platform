@@ -200,6 +200,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	list_instance_collections: "read",
 	list_instance_connector_grants: "read",
 	list_instance_files: "read",
+	upload_instance_file: "write",
 	list_instance_knowledge: "read",
 	list_connectors: "read",
 	list_instance_connectors: "read",
