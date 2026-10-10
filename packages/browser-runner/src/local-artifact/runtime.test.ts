@@ -166,6 +166,26 @@ describe("a tailoring run", () => {
 		expect(JSON.stringify(status.events)).not.toContain("Synthetic Uploaded Candidate");
 	});
 
+	it("cleans uploaded text immediately after a terminal run while preserving provenance-only audit", async () => {
+		const rt = runtime();
+		rt.start(envelope({
+			uploadedSources: [
+				{ role: "resume", fileId: "fixture_resume", version: "v1", originalSha256: "a".repeat(64), extractedTextSha256: hash(RESUME), extractedAt: "2026-10-07T00:00:00.000Z", text: RESUME },
+				{ role: "profile", fileId: "fixture_profile", version: "v1", originalSha256: "b".repeat(64), extractedTextSha256: hash(PROFILE), extractedAt: "2026-10-07T00:00:00.000Z", text: PROFILE },
+			],
+		}));
+		await settle();
+		answer(0, GOOD);
+		await settle();
+		const status = rt.status({ runId: "run-1" });
+		expect(status.result).toMatchObject({ outcome: "completed", sourceHashes: [
+			expect.objectContaining({ role: "resume", path: "uploaded/fixture_resume@v1", sha256: hash(RESUME) }),
+			expect.objectContaining({ role: "profile", path: "uploaded/fixture_profile@v1", sha256: hash(PROFILE) }),
+		] });
+		expect(existsSync(join(data, "local-artifact", "tailor-1", "run-1", "sources"))).toBe(false);
+		expect(JSON.stringify(status)).not.toContain("Jane Citizen");
+	});
+
 	it("refuses an uploaded text whose hash does not match its selected provenance", () => {
 		expect(() => parseArtifactEnvelope(envelope({
 			uploadedSources: [

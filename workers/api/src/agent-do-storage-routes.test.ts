@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { AgentStorageEngine } from "./agent-storage.js";
 import * as routes from "./agent-do-storage-routes.js";
+import { extractFileText, sha256Hex } from "./agent-storage-utils.js";
+import type { FileMeta } from "./agent-storage-types.js";
 
 /** A fake of just the engine methods one route touches — these routes need nothing else. */
 function fakeEngine<K extends keyof AgentStorageEngine>(
@@ -477,6 +479,43 @@ describe("file routes", () => {
 			size: 12,
 			tags: ["resume"],
 		});
+	});
+
+	it("materializes only an owner-scoped PDF's verified extracted text for the Tailor relay (#1004)", async () => {
+		// This guards the real transfer boundary: PDF bytes must be re-extracted here, rather than
+		// treated as UTF-8 or substituted with the capped search-index copy.
+		const pdf = `%PDF-1.4
+1 0 obj
+<< /Length 54 >>
+stream
+BT
+/F1 12 Tf
+72 720 Td
+(Fixture Candidate Platform Engineer) Tj
+ET
+endstream
+endobj
+%%EOF`;
+		const bytes = new TextEncoder().encode(pdf);
+		const extracted = await extractFileText({ name: "fixture-resume.pdf", mimeType: "application/pdf", data: bytes });
+		expect(extracted).toMatchObject({ status: "extracted", text: "Fixture Candidate Platform Engineer" });
+		const meta: FileMeta = {
+			id: "fixture_resume", agentId: "agent", userId: "owner", name: "fixture-resume.pdf",
+			path: "fixture-resume.pdf", mimeType: "application/pdf", size: bytes.byteLength, tags: [], r2Key: "never-exposed",
+			r2Version: "r2-v1", r2Etag: "etag-v1", originalSha256: await sha256Hex(bytes),
+			extractedTextSha256: await sha256Hex(extracted.text), extractedAt: "2026-10-11T00:00:00.000Z",
+			createdAt: "2026-10-11T00:00:00.000Z", updatedAt: "2026-10-11T00:00:00.000Z",
+		};
+		const engine = fakeEngine<"fileGet">({ fileGet: async () => ({ meta, body: new Response(bytes).body }) });
+		const res = await routes.materializeTailorSource(engine, "fixture_resume", post({ user_id: "owner" }));
+		expect(res.status).toBe(200);
+		const body = await res.json() as { text: string; source: Record<string, unknown> };
+		expect(body.text).toBe(extracted.text);
+		expect(body.text).not.toContain("%PDF-1.4");
+		expect(body.source).toEqual(expect.objectContaining({ id: meta.id, r2Version: meta.r2Version, originalSha256: meta.originalSha256, extractedTextSha256: meta.extractedTextSha256 }));
+
+		const denied = await routes.materializeTailorSource(engine, "fixture_resume", post({ user_id: "other-owner" }));
+		expect(denied.status).toBe(404);
 	});
 
 	it("404s a missing file on read and delete", async () => {

@@ -426,6 +426,15 @@ export class LocalArtifactRuntime {
 	private end(run: Run, r: Partial<LocalArtifactResultEnvelope> & { outcome: LocalArtifactResultEnvelope["outcome"] }): void {
 		if (run.state === "ended") return;
 		if (run.timer) clearTimeout(run.timer);
+		// An uploaded source is a bounded, per-run transfer, not runner state.  The durable
+		// result deliberately contains only its handle and hash; remove the materialized text as
+		// soon as the engine no longer needs it instead of retaining it with generic scratch data.
+		// `end` is the one terminal path (completion, refusal, timeout, cancellation and launch
+		// failure), so a source cannot linger just because a particular failure path was missed.
+		if (run.envelope.uploadedSources?.length) {
+			try { rmSync(join(run.scratch, "sources"), { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+			for (const source of run.envelope.uploadedSources) source.text = "";
+		}
 		run.state = "ended";
 		run.endedAt = this.now();
 		run.result = {
