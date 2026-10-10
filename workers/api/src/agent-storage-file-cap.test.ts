@@ -31,7 +31,7 @@ function mockR2(size = 1_000) {
 	return {
 		_o: objects,
 		put: vi.fn(async (key: string, data: unknown) => { objects.set(key, data); return {}; }),
-		head: vi.fn(async (key: string) => (objects.has(key) ? { size } : null)),
+		head: vi.fn(async (key: string) => (objects.has(key) ? { size, version: "fixture-version", etag: "fixture-etag" } : null)),
 		get: vi.fn(async (key: string) => (objects.has(key) ? { arrayBuffer: async () => new TextEncoder().encode(String(objects.get(key))).buffer } : null)),
 		delete: vi.fn(async () => undefined),
 	};
@@ -78,6 +78,16 @@ function engineWith(opts: { r2?: ReturnType<typeof mockR2>; ai?: unknown; vector
 const ERR = { userId: 1, source: 2, status: 3, message: 4, context: 5 } as const;
 
 describe("#637 — the caller learns the document was capped", () => {
+	it("records exact byte and extracted-text hashes with the R2 object identity", async () => {
+		const { engine, storage } = engineWith();
+		const meta = await engine.fileUpload({ name: "resume.txt", mimeType: "text/plain", data: "Jane Example" });
+		expect(meta).toMatchObject({
+			r2Version: "fixture-version", r2Etag: "fixture-etag",
+			originalSha256: "eea33f8bc01a7ee3b1fa020ec4cdbc0d1ef4198ea370d321d7ede900854d0dac",
+			extractedTextSha256: "eea33f8bc01a7ee3b1fa020ec4cdbc0d1ef4198ea370d321d7ede900854d0dac",
+		});
+		expect(storage._m.get(`file:${meta.id}`)).toMatchObject(meta);
+	});
 	it("records the INDEXED length beside the extracted one, and flags the truncation", async () => {
 		const { engine, storage } = engineWith();
 		const text = "a".repeat(400_000);

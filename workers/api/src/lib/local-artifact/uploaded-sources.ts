@@ -22,6 +22,12 @@ export interface UploadedTailorFileSnapshot {
 	indexedTextLength?: number;
 	textTruncated?: boolean;
 	extractionError?: string;
+	/** Immutable object/version evidence observed by the Files service at selection time. */
+	fileVersion?: string;
+	fileEtag?: string;
+	originalSha256?: string;
+	extractedTextSha256?: string;
+	extractedAt?: string;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -42,6 +48,11 @@ interface Row {
 	indexed_text_length: number | null;
 	text_truncated: number;
 	extraction_error: string | null;
+	file_version: string | null;
+	file_etag: string | null;
+	original_sha256: string | null;
+	extracted_text_sha256: string | null;
+	extracted_at: string | null;
 	file_created_at: string;
 	file_updated_at: string;
 	selected_at: number;
@@ -59,6 +70,11 @@ function present(row: Row): UploadedTailorSourceSelection {
 		...(row.indexed_text_length === null ? {} : { indexedTextLength: Number(row.indexed_text_length) }),
 		...(row.text_truncated ? { textTruncated: true } : {}),
 		...(row.extraction_error ? { extractionError: row.extraction_error } : {}),
+		...(row.file_version ? { fileVersion: row.file_version } : {}),
+		...(row.file_etag ? { fileEtag: row.file_etag } : {}),
+		...(row.original_sha256 ? { originalSha256: row.original_sha256 } : {}),
+		...(row.extracted_text_sha256 ? { extractedTextSha256: row.extracted_text_sha256 } : {}),
+		...(row.extracted_at ? { extractedAt: row.extracted_at } : {}),
 		createdAt: row.file_created_at,
 		updatedAt: row.file_updated_at,
 		selectedAt: Number(row.selected_at),
@@ -73,6 +89,7 @@ export async function listUploadedTailorSourceSelections(env: DB, instanceId: st
 	const { results } = await env.DB.prepare(
 		`SELECT role, file_id, file_name, mime_type, file_size, extraction_status,
 		        extracted_text_length, indexed_text_length, text_truncated, extraction_error,
+		        file_version, file_etag, original_sha256, extracted_text_sha256, extracted_at,
 		        file_created_at, file_updated_at, selected_at
 		   FROM application_tailor_uploaded_sources
 		  WHERE instance_id = ?1 AND user_id = ?2
@@ -91,20 +108,27 @@ export async function selectUploadedTailorSource(
 		`INSERT INTO application_tailor_uploaded_sources (
 		    instance_id, user_id, role, file_id, file_name, mime_type, file_size,
 		    extraction_status, extracted_text_length, indexed_text_length, text_truncated,
-		    extraction_error, file_created_at, file_updated_at, selected_at
-		 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+		    extraction_error, file_version, file_etag, original_sha256, extracted_text_sha256, extracted_at,
+		    file_created_at, file_updated_at, selected_at
+		 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
 		 ON CONFLICT(instance_id, user_id, role) DO UPDATE SET
 		    file_id = excluded.file_id, file_name = excluded.file_name, mime_type = excluded.mime_type,
 		    file_size = excluded.file_size, extraction_status = excluded.extraction_status,
 		    extracted_text_length = excluded.extracted_text_length, indexed_text_length = excluded.indexed_text_length,
 		    text_truncated = excluded.text_truncated, extraction_error = excluded.extraction_error,
+		    file_version = excluded.file_version, file_etag = excluded.file_etag,
+		    original_sha256 = excluded.original_sha256, extracted_text_sha256 = excluded.extracted_text_sha256,
+		    extracted_at = excluded.extracted_at,
 		    file_created_at = excluded.file_created_at, file_updated_at = excluded.file_updated_at,
 		    selected_at = excluded.selected_at`,
 	)
 		.bind(
 			instanceId, userId, role, file.id, file.name, file.mimeType, file.size,
 			file.extractionStatus ?? null, file.extractedTextLength ?? null, file.indexedTextLength ?? null,
-			file.textTruncated ? 1 : 0, file.extractionError ?? null, file.createdAt, file.updatedAt, now,
+			file.textTruncated ? 1 : 0, file.extractionError ?? null,
+			file.fileVersion ?? null, file.fileEtag ?? null, file.originalSha256 ?? null,
+			file.extractedTextSha256 ?? null, file.extractedAt ?? null,
+			file.createdAt, file.updatedAt, now,
 		)
 		.run();
 	return { role, ...file, selectedAt: now };

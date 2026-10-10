@@ -41,6 +41,7 @@ beforeEach(() => {
 	files = [{
 		id: "file_resume_1", name: "resume.pdf", mimeType: "application/pdf", size: 1234,
 		extractionStatus: "extracted", extractedTextLength: 900, indexedTextLength: 900,
+		r2Version: "v1", r2Etag: "etag-1", originalSha256: "a".repeat(64), extractedTextSha256: "b".repeat(64), extractedAt: "2026-10-10T00:00:02.000Z",
 		createdAt: "2026-10-10T00:00:00.000Z", updatedAt: "2026-10-10T00:00:01.000Z",
 	}];
 	fileListRequests = [];
@@ -63,7 +64,7 @@ describe("Application Tailor uploaded source selection", () => {
 	it("records an exact owner-visible Files identity and extraction provenance without starting work", async () => {
 		const selected = await call("PUT", "/i1/application-tailor/uploaded-sources/resume", { fileId: "file_resume_1" });
 		expect(selected.status).toBe(200);
-		expect(selected.body).toMatchObject({ source: { role: "resume", id: "file_resume_1", name: "resume.pdf", extractionStatus: "extracted", extractedTextLength: 900 } });
+		expect(selected.body).toMatchObject({ source: { role: "resume", id: "file_resume_1", name: "resume.pdf", extractionStatus: "extracted", extractedTextLength: 900, fileVersion: "v1", originalSha256: "a".repeat(64), extractedTextSha256: "b".repeat(64) } });
 		expect(fileListRequests).toEqual(["/files?user_id=u1"]);
 		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM local_artifact_runs").first<{ n: number }>())?.n).toBe(0);
 
@@ -75,7 +76,7 @@ describe("Application Tailor uploaded source selection", () => {
 
 	it("replaces only the explicitly named role; it never chooses another candidate", async () => {
 		await call("PUT", "/i1/application-tailor/uploaded-sources/resume", { fileId: "file_resume_1" });
-		files.push({ id: "file_resume_2", name: "new-resume.pdf", mimeType: "application/pdf", size: 4567, extractionStatus: "unsupported", extractionError: "No readable text", createdAt: "2026-10-11T00:00:00.000Z", updatedAt: "2026-10-11T00:00:00.000Z" });
+		files.push({ id: "file_resume_2", name: "new-resume.pdf", mimeType: "application/pdf", size: 4567, extractionStatus: "unsupported", extractionError: "No readable text", r2Version: "v2", createdAt: "2026-10-11T00:00:00.000Z", updatedAt: "2026-10-11T00:00:00.000Z" });
 		await call("PUT", "/i1/application-tailor/uploaded-sources/profile", { fileId: "file_resume_2" });
 		const listed = await call("GET", "/i1/application-tailor/uploaded-sources");
 		expect(listed.body).toMatchObject({ sources: [
@@ -106,7 +107,7 @@ describe("Application Tailor uploaded source selection", () => {
 		expect(readiness.body).toMatchObject({
 			mode: "uploaded", ready: false, runner: { available: false },
 			sources: [
-				expect.objectContaining({ role: "resume", selected: expect.objectContaining({ id: "file_resume_1" }), uploaded: true, extracted: true, availableToRunner: false, ready: false, blockers: ["materialization_unsupported"] }),
+				expect.objectContaining({ role: "resume", selected: expect.objectContaining({ id: "file_resume_1" }), uploaded: true, extracted: true, availableToRunner: false, ready: false, isStale: false, provenance: { filename: "resume.pdf", fileId: "file_resume_1", version: "v1", originalHash: "a".repeat(64), extractedHash: "b".repeat(64), extractedAt: "2026-10-10T00:00:02.000Z" }, blockers: ["materialization_unsupported"] }),
 				expect.objectContaining({ role: "profile", selected: null, uploaded: false, extracted: false, availableToRunner: false, ready: false, blockers: ["not_selected", "materialization_unsupported"] }),
 			],
 		});
@@ -119,6 +120,15 @@ describe("Application Tailor uploaded source selection", () => {
 		files[0].updatedAt = "2026-10-12T00:00:00.000Z";
 		const readiness = await call("GET", "/i1/application-tailor/uploaded-sources/readiness");
 		const sources = readiness.body.sources as Array<Record<string, unknown>>;
-		expect(sources.find((source) => source.role === "resume")).toMatchObject({ blockers: ["file_changed_reselect_required", "materialization_unsupported"] });
+		expect(sources.find((source) => source.role === "resume")).toMatchObject({ isStale: true, blockers: ["file_changed_reselect_required", "materialization_unsupported"] });
+	});
+
+	it("fails readiness closed when the file has no exact extraction provenance", async () => {
+		delete files[0].originalSha256;
+		const selected = await call("PUT", "/i1/application-tailor/uploaded-sources/resume", { fileId: "file_resume_1" });
+		expect(selected.status).toBe(200);
+		const readiness = await call("GET", "/i1/application-tailor/uploaded-sources/readiness");
+		const sources = readiness.body.sources as Array<Record<string, unknown>>;
+		expect(sources.find((source) => source.role === "resume")).toMatchObject({ blockers: ["provenance_unavailable", "materialization_unsupported"] });
 	});
 });

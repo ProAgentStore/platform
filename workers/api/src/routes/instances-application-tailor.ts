@@ -51,6 +51,7 @@ async function storedSettings(c: C, instanceId: string, uid: string): Promise<un
 }
 
 const FILE_EXTRACTION_STATUSES = ["none", "extracted", "unsupported", "failed"] as const;
+const SHA256_HEX = /^[a-f0-9]{64}$/;
 
 /**
  * The Agent DO remains the source of truth for Files. Selection is allowed only from the owned
@@ -82,6 +83,11 @@ async function ownedUploadedFiles(c: C, instanceId: string, uid: string): Promis
 			...(optionalLength(file.indexedTextLength) === undefined ? {} : { indexedTextLength: optionalLength(file.indexedTextLength) }),
 			...(file.textTruncated === true ? { textTruncated: true } : {}),
 			...(typeof file.extractionError === "string" ? { extractionError: file.extractionError } : {}),
+			...(typeof file.r2Version === "string" && file.r2Version ? { fileVersion: file.r2Version } : {}),
+			...(typeof file.r2Etag === "string" && file.r2Etag ? { fileEtag: file.r2Etag } : {}),
+			...(typeof file.originalSha256 === "string" && SHA256_HEX.test(file.originalSha256) ? { originalSha256: file.originalSha256 } : {}),
+			...(typeof file.extractedTextSha256 === "string" && SHA256_HEX.test(file.extractedTextSha256) ? { extractedTextSha256: file.extractedTextSha256 } : {}),
+			...(typeof file.extractedAt === "string" ? { extractedAt: file.extractedAt } : {}),
 			createdAt: file.createdAt,
 			updatedAt: file.updatedAt,
 		}];
@@ -98,10 +104,11 @@ async function ownedUploadedFile(c: C, instanceId: string, uid: string, fileId: 
 function sourceBlockers(selected: UploadedTailorFileSnapshot | undefined, live: UploadedTailorFileSnapshot | undefined): string[] {
 	if (!selected) return ["not_selected"];
 	if (!live) return ["file_deleted"];
-	if (live.name !== selected.name || live.mimeType !== selected.mimeType || live.size !== selected.size || live.createdAt !== selected.createdAt || live.updatedAt !== selected.updatedAt) return ["file_changed_reselect_required"];
+	if (live.name !== selected.name || live.mimeType !== selected.mimeType || live.size !== selected.size || live.createdAt !== selected.createdAt || live.updatedAt !== selected.updatedAt || live.fileVersion !== selected.fileVersion || live.fileEtag !== selected.fileEtag || live.originalSha256 !== selected.originalSha256 || live.extractedTextSha256 !== selected.extractedTextSha256) return ["file_changed_reselect_required"];
 	if (live.extractionStatus !== "extracted") return [live.extractionStatus === "failed" ? "extraction_failed" : "extraction_unavailable"];
 	if (live.textTruncated) return ["extracted_text_truncated"];
 	if (!live.extractedTextLength) return ["extracted_text_empty"];
+	if (!live.fileVersion || !live.originalSha256 || !live.extractedTextSha256 || !live.extractedAt) return ["provenance_unavailable"];
 	return [];
 }
 
@@ -144,7 +151,21 @@ export function registerApplicationTailorRoutes(router: Hono<{ Bindings: Env }>)
 			const blockers = sourceBlockers(selected, current);
 			// No source bytes have a runner transfer route yet. Saying that explicitly prevents the
 			// selection API from looking like consent to run with an unmaterialized document.
-			return { role, selected: selected ?? null, uploaded: !!current, extracted: current?.extractionStatus === "extracted", availableToRunner: false, ready: false, blockers: [...blockers, "materialization_unsupported"] };
+			return {
+				role,
+				selected: selected ?? null,
+				uploaded: !!current,
+				extracted: current?.extractionStatus === "extracted",
+				availableToRunner: false,
+				ready: false,
+				isStale: blockers.some((blocker) => blocker === "file_deleted" || blocker === "file_changed_reselect_required"),
+				provenance: current ? {
+					filename: current.name, fileId: current.id, version: current.fileVersion ?? null,
+					originalHash: current.originalSha256 ?? null, extractedHash: current.extractedTextSha256 ?? null,
+					extractedAt: current.extractedAt ?? null,
+				} : null,
+				blockers: [...blockers, "materialization_unsupported"],
+			};
 		});
 		const blockers = [...sources.flatMap((source) => source.blockers.map((blocker) => `${source.role}:${blocker}`)), ...(runner ? [] : ["runner_unavailable"])] as string[];
 		return c.json({ mode: "uploaded", sources, runner: { available: !!runner }, ready: false, blockers });

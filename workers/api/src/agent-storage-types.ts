@@ -75,6 +75,15 @@ export interface FileMeta {
 	size: number;
 	tags: string[];
 	r2Key: string;
+	/** R2's object identity, retained alongside a content hash; neither is inferred from a name. */
+	r2Version?: string;
+	r2Etag?: string;
+	/** SHA-256 of the original stored bytes (not an R2 ETag). */
+	originalSha256?: string;
+	/** SHA-256 of the complete extracted text, before the index retention cap. */
+	extractedTextSha256?: string;
+	/** When text extraction was attempted for this exact stored object. */
+	extractedAt?: string;
 	extractionStatus?: "none" | "extracted" | "unsupported" | "failed";
 	/** Characters the extractor produced — i.e. how long the document actually is. */
 	extractedTextLength?: number;

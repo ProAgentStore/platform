@@ -3,7 +3,7 @@
  * and auto-vectorization of extracted text.
  */
 import type { ActivityEvent, FileMeta, VectorMeta } from "../agent-storage-types.js";
-import { extractFileText } from "../agent-storage-utils.js";
+import { extractFileText, sha256Hex } from "../agent-storage-utils.js";
 import { logError } from "../lib/error-log.js";
 import { resolveMeterIds } from "../lib/meter-ids.js";
 import type { Env } from "../types.js";
@@ -130,6 +130,7 @@ export function withFiles<TBase extends AgentStorageBaseCtor & GConstructorWith<
 
 			const obj = await this.r2.head(r2Key);
 			const bounded = boundedText(extracted.text);
+			const now = new Date().toISOString();
 			const meta: FileMeta = {
 				id,
 				agentId: this.agentId,
@@ -140,13 +141,18 @@ export function withFiles<TBase extends AgentStorageBaseCtor & GConstructorWith<
 				size: obj?.size || 0,
 				tags: opts.tags || [],
 				r2Key,
+				...(obj?.version ? { r2Version: obj.version } : {}),
+				...(obj?.etag ? { r2Etag: obj.etag } : {}),
+				...(extractableData ? { originalSha256: await sha256Hex(extractableData) } : {}),
+				...(extracted.status === "extracted" && extracted.text ? { extractedTextSha256: await sha256Hex(extracted.text) } : {}),
+				extractedAt: now,
 				extractionStatus: extracted.status,
 				extractedTextLength: bounded.extractedTextLength,
 				indexedTextLength: bounded.indexedTextLength,
 				textTruncated: bounded.textTruncated,
 				extractionError: extracted.error,
-				createdAt: new Date().toISOString(),
-				updatedAt: new Date().toISOString(),
+				createdAt: now,
+				updatedAt: now,
 			};
 
 			// Written BEFORE vectorization, then re-written with `vectorized` once it is known: the
@@ -232,18 +238,22 @@ export function withFiles<TBase extends AgentStorageBaseCtor & GConstructorWith<
 				head.size > MAX_EXTRACT_BYTES
 					? { text: "", status: "unsupported", error: `File is ${Math.round(head.size / (1024 * 1024))} MB; text extraction is capped at ${MAX_EXTRACT_BYTES / (1024 * 1024)} MB. The file is stored and downloadable, but its text is not searchable.` }
 					: { text: "", status: "unsupported" };
+			let originalSha256: string | undefined;
 			if (head.size <= MAX_EXTRACT_BYTES) {
 				const obj = await this.r2.get(opts.r2Key);
 				if (obj) {
+					const bytes = await obj.arrayBuffer();
+					originalSha256 = await sha256Hex(bytes);
 					extracted = await extractFileText({
 						name: opts.name,
 						mimeType: opts.mimeType,
-						data: await obj.arrayBuffer(),
+						data: bytes,
 					});
 				}
 			}
 
 			const bounded = boundedText(extracted.text);
+			const now = new Date().toISOString();
 			const meta: FileMeta = {
 				id: opts.id,
 				agentId: this.agentId,
@@ -254,13 +264,18 @@ export function withFiles<TBase extends AgentStorageBaseCtor & GConstructorWith<
 				size: head.size,
 				tags: opts.tags || [],
 				r2Key: opts.r2Key,
+				...(head.version ? { r2Version: head.version } : {}),
+				...(head.etag ? { r2Etag: head.etag } : {}),
+				...(originalSha256 ? { originalSha256 } : {}),
+				...(extracted.status === "extracted" && extracted.text ? { extractedTextSha256: await sha256Hex(extracted.text) } : {}),
+				extractedAt: now,
 				extractionStatus: extracted.status,
 				extractedTextLength: bounded.extractedTextLength,
 				indexedTextLength: bounded.indexedTextLength,
 				textTruncated: bounded.textTruncated,
 				extractionError: extracted.error,
-				createdAt: new Date().toISOString(),
-				updatedAt: new Date().toISOString(),
+				createdAt: now,
+				updatedAt: now,
 			};
 			await this.doStorage.put(`file:${opts.id}`, meta);
 

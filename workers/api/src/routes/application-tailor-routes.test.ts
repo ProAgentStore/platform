@@ -127,6 +127,19 @@ async function call(method: string, path: string, body?: unknown) {
 const appCount = async () => (await d1.DB.prepare("SELECT COUNT(*) AS n FROM job_applications").first<{ n: number }>())?.n;
 const runCount = async () => (await d1.DB.prepare("SELECT COUNT(*) AS n FROM local_artifact_runs").first<{ n: number }>())?.n;
 
+it("never dispatches local-source tailoring while an uploaded source is selected but not materialized (#1004)", async () => {
+	d1.exec(`INSERT INTO application_tailor_uploaded_sources (
+		instance_id, user_id, role, file_id, file_name, mime_type, file_size,
+		file_created_at, file_updated_at, selected_at
+	) VALUES ('t1', 'u1', 'resume', 'fixture-resume', 'resume.pdf', 'application/pdf', 1,
+		'2026-10-07T00:00:00.000Z', '2026-10-07T00:00:00.000Z', 1)`);
+	const result = await call("POST", "/t1/applications", { event: leadEvent() });
+	expect(result).toMatchObject({ status: 409, body: { error: expect.stringMatching(/secure runner materialization/) } });
+	expect(await appCount()).toBe(0);
+	expect(await runCount()).toBe(0);
+	expect(sent.filter((entry) => entry.path === "/local-artifact/run")).toHaveLength(0);
+});
+
 // ── #974: five approved leads must QUEUE behind one machine, not die on it ───────────────────
 //
 // The production failure: five leads approved at once → one tailoring run and four applications

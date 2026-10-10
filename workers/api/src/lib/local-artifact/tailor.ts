@@ -58,6 +58,7 @@ import {
 	unemittedReadyApplications,
 	updateTailorRun,
 } from "./store.js";
+import { listUploadedTailorSourceSelections } from "./uploaded-sources.js";
 
 /** How long past its own time limit a run may go unheard from before PAGS stops waiting. */
 export const LOST_RUNNER_GRACE_MS = 10 * 60_000;
@@ -138,6 +139,9 @@ export async function startTailoring(env: Env, instanceId: string, uid: string, 
 
 	const existing = await getApplicationByKey(env, instanceId, uid, key);
 	if (existing) return { kind: "existing", application: existing, run: existing.tailoringRunId ? await getTailorRun(env, instanceId, uid, existing.tailoringRunId) : null };
+	if ((await listUploadedTailorSourceSelections(env, instanceId, uid)).length > 0) {
+		throw new HttpError(409, "Uploaded résumé/profile sources are selected, but secure runner materialization is not available yet. No local or historical résumé was used; clear every uploaded source selection to use local-source mode.");
+	}
 
 	const now = Date.now();
 	const parsed = parseLocalArtifactLead(raw);
@@ -277,6 +281,9 @@ export async function retryTailoring(env: Env, instanceId: string, uid: string, 
 	}
 	const parsed = parseLocalArtifactLead(app.lead);
 	if ("error" in parsed) throw new HttpError(409, `The application's lead cannot be read (${parsed.error}); re-approve it from the Scout.`);
+	if ((await listUploadedTailorSourceSelections(env, instanceId, uid)).length > 0) {
+		throw new HttpError(409, "Uploaded résumé/profile sources are selected, but secure runner materialization is not available yet. No local or historical résumé was used; clear every uploaded source selection to use local-source mode.");
+	}
 	const pair = await readInstanceConfigPair(env, instanceId, uid);
 	const settings = effectiveTailorSettings((pair?.config as Record<string, unknown> | undefined)?.[TAILOR_SETTINGS_KEY]);
 	if ("error" in settings) throw new HttpError(409, `The Application Tailor settings are invalid: ${settings.error}. Fix them, then retry.`);

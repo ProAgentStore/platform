@@ -185,6 +185,12 @@ export interface ExtractedFileText {
 	error?: string;
 }
 
+/** Stable content provenance for binary Files; R2 ETags are deliberately not substituted. */
+export async function sha256Hex(data: string | ArrayBuffer | Uint8Array): Promise<string> {
+	const digest = await crypto.subtle.digest("SHA-256", fileBytes(data));
+	return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 export async function extractFileText(input: {
 	name: string;
 	mimeType: string;
