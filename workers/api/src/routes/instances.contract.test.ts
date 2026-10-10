@@ -280,6 +280,7 @@ const ROUTES = [
 	"POST /:instanceId/permission-requests/:requestId/deny",
 	"POST /:instanceId/permission-requests/:requestId/cancel",
 	"POST /:instanceId/permission-requests/:requestId/approve",
+	"POST /:instanceId/permission-requests/:requestId/resume",
 	"GET /:instanceId/local-browser/settings",
 	"PUT /:instanceId/local-browser/settings",
 	"GET /:instanceId/local-browser/preflight",
@@ -484,6 +485,7 @@ const OWNERSHIP: Record<string, string[]> = {
 		"POST /:instanceId/permission-requests/:requestId/deny",
 		"POST /:instanceId/permission-requests/:requestId/cancel",
 		"POST /:instanceId/permission-requests/:requestId/approve",
+		"POST /:instanceId/permission-requests/:requestId/resume",
 	],
 	"instances-local-browser.ts": [
 		"GET /:instanceId/local-browser/settings",
@@ -762,6 +764,7 @@ const GATES: Record<string, [number, number]> = {
 	"POST /:instanceId/permission-requests/:requestId/deny": [401, 404],
 	"POST /:instanceId/permission-requests/:requestId/cancel": [401, 404],
 	"POST /:instanceId/permission-requests/:requestId/approve": [401, 404],
+	"POST /:instanceId/permission-requests/:requestId/resume": [401, 404],
 	"GET /:instanceId/local-browser/settings": [401, 404],
 	"PUT /:instanceId/local-browser/settings": [401, 404],
 	"GET /:instanceId/local-browser/preflight": [401, 404],

@@ -6777,9 +6777,9 @@ paths:
       summary: Explicitly grant and verify a blocked connector permission once
       description: |
         The owner chooses the write-consent mode. The API atomically claims the pending decision,
-        writes the explicit consent, reads the actual binding back, then returns a one-time
-        continuation token. It never replays the blocked external operation; a future consumer
-        must re-check live consent and the request identity before any dispatch.
+        writes the explicit consent, reads the actual binding back, then exposes one exact-payload
+        continuation action. It never replays the blocked external operation; the consumer must
+        re-check live consent and the request identity before any dispatch.
       operationId: approveInstancePermissionRequest
       tags: [Instances]
       parameters:
@@ -6801,11 +6801,17 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [requestId, status, resumeToken, verifiedScope, mode]
+                required: [requestId, status, resume, verifiedScope, mode]
                 properties:
                   requestId: { type: string }
                   status: { type: string, enum: [claimed] }
-                  resumeToken: { type: string, description: Opaque one-time continuation token; it is not an authorization bypass. }
+                  resume:
+                    type: object
+                    description: Exact owner-scoped continuation action; it is not an authorization bypass or replay token.
+                    required: [method, path]
+                    properties:
+                      method: { type: string, enum: [POST] }
+                      path: { type: string }
                   verifiedScope: { type: string, enum: [write] }
                   mode: { type: string, enum: [always, ask] }
         "400": { $ref: "#/components/responses/BadRequest" }
@@ -6813,6 +6819,39 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { description: Request is terminal, stale, expired, or could not be verified }
         "503": { description: The explicit consent could not be saved }
+
+  /v1/instances/{instanceId}/permission-requests/{requestId}/resume:
+    post:
+      summary: Safely retry one verified blocked operation
+      description: |
+        The owner must provide the original operation and exact arguments. The service checks the
+        canonical secret-safe fingerprint, active instance, current policy and live consent, then
+        atomically consumes the claim before entering the normal registry dispatcher. Ask mode
+        produces a fresh per-call approval card; it never approves a historical pending call.
+        A failed post-claim outcome is terminal and is never automatically replayed.
+      operationId: resumeInstancePermissionRequest
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: requestId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation, args]
+              properties:
+                operation: { type: string }
+                args: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: Dispatched, or queued for a new per-call approval when mode is Ask
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Request is terminal, stale, mismatched, revoked, stopped, or already consumed }
+        "503": { description: Continuation outcome was uncertain and will not be retried }
 
   /v1/instances/{instanceId}/permission-requests/{requestId}/deny:
     post:

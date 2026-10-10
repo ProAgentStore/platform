@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realSchemaD1, type RealSchemaD1 } from "./d1-sqlite.js";
-import { cancelRequest, claimApprovedRequest, createOrReuseRequest, denyRequest, expireRequest, getRequest, revokeRequest, staleRequest, transitionRequest } from "./instance-permission-requests.js";
+import { cancelRequest, claimApprovedRequest, consumeClaimedRequest, createOrReuseRequest, denyRequest, expireRequest, getRequest, markUncertainRequest, permissionOperationFingerprint, revokeRequest, staleRequest, transitionRequest } from "./instance-permission-requests.js";
 import { requestOwnerAttention } from "./owner-attention.js";
 import type { Env } from "../types.js";
 
@@ -23,13 +23,22 @@ describe("instance permission requests (#1009)", () => {
 		const approved=(await getRequest(env(),second.request.id,"i1","u1"))!;
 		expect(await claimApprovedRequest(env(),approved)).toBe(true); expect(await claimApprovedRequest(env(),approved)).toBe(false);
 	});
+	it("canonicalizes the exact operation identity and consumes a verified claim only once", async () => {
+		expect(await permissionOperationFingerprint("github_create_issue",{repo:"o/r",title:"one"})).toBe(await permissionOperationFingerprint("github_create_issue",{title:"one",repo:"o/r"}));
+		expect(await permissionOperationFingerprint("github_create_issue",{repo:"o/r",title:"one"})).not.toBe(await permissionOperationFingerprint("github_create_issue",{repo:"o/r",title:"two"}));
+		const {request}=await createOrReuseRequest(env(),{...input(),operationFingerprint:"op-consume"}); await transitionRequest(env(),request,"pending","approved","request.approved");
+		const approved=(await getRequest(env(),request.id,"i1","u1"))!; await claimApprovedRequest(env(),approved);
+		const claimed=(await getRequest(env(),request.id,"i1","u1"))!; expect(await consumeClaimedRequest(env(),claimed)).toBe(true); expect(await consumeClaimedRequest(env(),claimed)).toBe(false);
+		expect(await markUncertainRequest(env(),(await getRequest(env(),request.id,"i1","u1"))!)).toBe(true);
+	});
 	it("cancels, expires, revokes, and stales active requests without ever reopening them", async () => {
 		const cancelled=await createOrReuseRequest(env(),input()); expect(await cancelRequest(env(),cancelled.request)).toBe(true); expect(await cancelRequest(env(),cancelled.request)).toBe(false);
 		const expired=await createOrReuseRequest(env(),{...input(),operationFingerprint:"op-expired"}); expect(await expireRequest(env(),expired.request)).toBe(true);
 		const approved=await createOrReuseRequest(env(),{...input(),operationFingerprint:"op-revoked"}); expect(await transitionRequest(env(),approved.request,"pending","approved","request.approved")).toBe(true);
 		expect(await revokeRequest(env(),(await getRequest(env(),approved.request.id,"i1","u1"))!)).toBe(true);
+		const claimed=await createOrReuseRequest(env(),{...input(),operationFingerprint:"op-cancelled-claim"}); await transitionRequest(env(),claimed.request,"pending","approved","request.approved"); await claimApprovedRequest(env(),(await getRequest(env(),claimed.request.id,"i1","u1"))!); expect(await cancelRequest(env(),(await getRequest(env(),claimed.request.id,"i1","u1"))!)).toBe(true);
 		const stale=await createOrReuseRequest(env(),{...input(),operationFingerprint:"op-stale"}); expect(await staleRequest(env(),stale.request)).toBe(true);
-		for (const [request,status] of [[cancelled.request,"cancelled"],[expired.request,"expired"],[approved.request,"revoked"],[stale.request,"stale"]] as const) {
+		for (const [request,status] of [[cancelled.request,"cancelled"],[expired.request,"expired"],[approved.request,"revoked"],[claimed.request,"cancelled"],[stale.request,"stale"]] as const) {
 			expect((await getRequest(env(),request.id,"i1","u1"))?.status).toBe(status);
 		}
 	});
