@@ -943,7 +943,7 @@ const PINS = {
 	// line harder to read, which is the opposite of what this ratchet is for.
 	// +5 for #754: accept assignedBy:"trigger" from the request body (1 line), cap title (1) and
 	// description (1) at ingest, the updated comment (1), and the AgentTask type annotation (1).
-	"workers/api/src/agent-do.ts": 1284, // +3 at #953: the lead's application-status writeback route (application_* fields only). +1 at #852: `modelChosen`, recorded only with a validated brain pick. +13 at #898: the `truncated` flag on the chat reply, the omitted-history window, and refusing an over-length owner task. +4 at #955 (b547ec47; pin raised at #954): the job-lead triage dispatch — its own DO operation, never a side effect of the generic record update.
+	"workers/api/src/agent-do.ts": 1286, // +2 at #1004: the internal, owner-scoped exact-version Tailor-source materialization route is placed before the generic file GET to keep its narrower semantics reachable. +3 at #953: the lead's application-status writeback route (application_* fields only). +1 at #852: `modelChosen`, recorded only with a validated brain pick. +13 at #898: the `truncated` flag on the chat reply, the omitted-history window, and refusing an over-length owner task. +4 at #955 (b547ec47; pin raised at #954): the job-lead triage dispatch — its own DO operation, never a side effect of the generic record update.
 	// +11 at #980: the `scan` card field a Job Search Scout's run writes, passed through the way
 	// #978's `application` is — a leaf payload module (local-browser/scan-card-payload.ts) so the
 	// GENERIC board still imports nothing from the local-browser domain, plus its parse at read time.
@@ -1938,7 +1938,7 @@ const PINS = {
 	"workers/api/src/routes/instances.ts": 1176, // #859 follow-up: runtime registration/heartbeat wires the owner policy and lifecycle telemetry; policy queries live in lib/machine-policy.ts.
 	"workers/api/src/routes/instances-runtime.ts": 938, // #859 follow-up: runtime status exposes the resolved physical-machine policy; resolution lives in lib/machine-policy.ts.
 	"workers/api/src/routes/terminals.ts": 878, // #859 follow-up: ordered terminal routes own the stable machine detail and policy endpoints; D1 policy access lives in lib/machine-policy.ts.
-	"workers/mcp/src/surface-lock.ts": 1106, // #1003 appends the get_console_link files-upload inputSchema revision; this history-checked ledger is deliberately unsplit. #859 follow-up: append-only MCP ledger entries for get_machine_policy and set_machine_policy.
+	"workers/mcp/src/surface-lock.ts": 1111, // #1004 appends the 0.1.104 uploaded-Tailor-source tool surface record; this history-checked ledger is deliberately unsplit. #1003 appends the get_console_link files-upload inputSchema revision; this history-checked ledger is deliberately unsplit. #859 follow-up: append-only MCP ledger entries for get_machine_policy and set_machine_policy.
 	"store/console/src/tabs/KnowledgeTab.tsx": 818, // #1003 keeps URL-addressable knowledge subtabs beside the existing capability-gated upload surfaces; splitting the tab would separate state from the controls it governs.
 	"scripts/check-file-size.mjs": 2024, // #1003 adds the reviewed KnowledgeTab URL-subtab pin above. #859 follow-up adds five explicitly reviewed policy/relay surface pins above; this ledger must describe its own deliberate growth.
 };
