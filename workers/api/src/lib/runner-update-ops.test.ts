@@ -158,6 +158,15 @@ describe("the operation record (#990)", () => {
 		expect(await liveUpdateOp(env(), "u1", NODE)).toBeNull();
 	});
 
+	it("marks a long late diagnostic as clipped rather than storing it as a complete machine result", async () => {
+		const { op } = await claimUpdateOp(env(), "u1", NODE, { now: NOW });
+		await advanceUpdateOp(env(), "u1", op.id, { state: "failed", reason: "error" }, NOW + 1);
+		await reconcileLateUpdateOp(env(), "u1", op.id, "x".repeat(1_000), NOW + 2);
+		const reconciliation = (await latestUpdateOp(env(), "u1", NODE))?.reconciliation ?? "";
+		expect(reconciliation).toContain("[cut: showing the first");
+		expect(reconciliation.length).toBeLessThanOrEqual(800);
+	});
+
 	it("reads the latest per machine for a list of machines, newest wins", async () => {
 		const a = await claimUpdateOp(env(), "u1", NODE, { now: NOW });
 		await advanceUpdateOp(env(), "u1", a.op.id, { state: "failed", reason: "unreachable" }, NOW);

@@ -26,6 +26,7 @@
  * somebody's laptop.
  */
 import { normalizeRunnerNode } from "./runtime-nodes.js";
+import { clipMarked } from "./clip-marked.js";
 import type { Env } from "../types.js";
 
 /** `running` is in flight; everything else is terminal. */
@@ -391,7 +392,7 @@ export async function reconcileLateUpdateOp(env: Pick<Env, "DB">, userId: string
 		    SET reconciliation = ?1, reconciled_at = ?2, updated_at = ?2
 		  WHERE id = ?3 AND user_id = ?4 AND state != 'running'`,
 	)
-		.bind(reconciliation.slice(0, 800), now, id, userId)
+		.bind(clipMarked(reconciliation, 800, { within: true, what: "diagnostic characters" }), now, id, userId)
 		.run()
 		.catch(() => null);
 	return (res?.meta?.changes ?? 0) > 0;
