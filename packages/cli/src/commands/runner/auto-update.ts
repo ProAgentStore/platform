@@ -163,6 +163,23 @@ export function policyScheduleAction(previous: AutoUpdatePolicy, next: AutoUpdat
 	return "keep";
 }
 
+/**
+ * Fold a registration/heartbeat response into the runner's record (#1020). The service is the AUTHORITY for
+ * the owner's switch, but the lifecycle status it returns is only the echo of what that request reported —
+ * from before anything the controller decided while the request was in flight. So a late echo of
+ * `restarting` must not overwrite a `verified-success` the new process has since verified. On an unchanged
+ * ON (including the first confirmation after a restart, and every policy refresh) only the switch is taken;
+ * the echoed status, version and attempt time are adopted only on a real owner transition — OFF, or ON
+ * from OFF. Returns null for a response that carries no policy (nothing changes, authority included).
+ */
+export function acceptPolicyResponse(local: AutoUpdatePolicy, wasAuthoritative: boolean, response: unknown): { policy: AutoUpdatePolicy; action: "start" | "cancel" | "keep" } | null {
+	const remote = policyFromResponse(response);
+	if (!remote) return null;
+	const action = policyScheduleAction(local, remote, wasAuthoritative);
+	const ownerTransition = action === "cancel" || !local.autoUpdate;
+	return { policy: ownerTransition ? { ...local, ...remote } : { ...local, autoUpdate: remote.autoUpdate }, action };
+}
+
 /** The final unattended admission gate: unknown work is unsafe, never idle. */
 export function mayAutomaticallyRestart(input: { authoritative: boolean; enabled: boolean; workObserved: boolean; busy: readonly string[] }): boolean {
 	return input.authoritative && input.enabled && input.workObserved && input.busy.length === 0;

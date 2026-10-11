@@ -9,7 +9,7 @@ import { deferredUpdateLease, deferredUpdateLeaseActive, installVersion, latestP
 import { diffMembership, instanceLabel, pendingRegistrations, pinnedAway, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance, type ReattachRequest } from "./membership.js";
 import { formatStatusLine } from "./status-line.js";
 import type { PagsRequestOptions } from "./types.js";
-import { autoUpdatePolicyKey, autoUpdateStatusWire, loadAutoUpdatePolicy, mayAutomaticallyRestart, nextAutoUpdateDelayMs, policyFromResponse, policyScheduleAction, saveAutoUpdatePolicy, type AutoUpdatePolicy, type AutoUpdateStatus } from "./auto-update.js";
+import { acceptPolicyResponse, autoUpdatePolicyKey, autoUpdateStatusWire, loadAutoUpdatePolicy, mayAutomaticallyRestart, nextAutoUpdateDelayMs, saveAutoUpdatePolicy, type AutoUpdatePolicy, type AutoUpdateStatus } from "./auto-update.js";
 import { type AutoUpdateDiagnostics, AutomaticUpdateController, RelayMutationAdmission } from "./auto-update-controller.js";
 import { observedRunnerWork } from "./runner-work-observation.js";
 
@@ -73,20 +73,20 @@ export async function connectViaRelay(
 	};
 	const acceptAutoUpdatePolicy = (response: unknown) => {
 		if (!autoUpdateKey) return;
-		const policy = policyFromResponse(response);
-		if (!policy) return;
-		const action = policyScheduleAction(autoUpdatePolicy, policy, autoUpdatePolicyAuthoritative);
-		autoUpdatePolicy = { ...autoUpdatePolicy, ...policy };
+		// The switch is the service's; the lifecycle status is this controller's — a late echo never regresses it (#1020).
+		const accepted = acceptPolicyResponse(autoUpdatePolicy, autoUpdatePolicyAuthoritative, response);
+		if (!accepted) return;
+		autoUpdatePolicy = accepted.policy;
 		autoUpdatePolicyAuthoritative = true;
 		if (autoUpdateKey) saveAutoUpdatePolicy(autoUpdateKey, autoUpdatePolicy);
 		// A disable must cancel a deferred automatic install before it reaches npm.  A manual
 		// `runner_update` remains explicitly requested and is intentionally not cancelled here.
-		if (action === "cancel") {
+		if (accepted.action === "cancel") {
 			scheduleAutomaticUpdate(false, true);
 			return;
 		}
 		if (refreshingAutomaticPolicy) return;
-		if (action === "start") {
+		if (accepted.action === "start") {
 			scheduleAutomaticUpdate(true);
 		}
 	};

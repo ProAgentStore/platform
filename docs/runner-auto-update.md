@@ -68,6 +68,13 @@ to a cap of about an hour), so `next_retry_due_at` stays set; recovery does not 
 Only a fresh ON from the service lets a retry observe work or install. An explicit OFF stops the
 retries.
 
+The status itself is the runner's record, not the service's. Every registration and heartbeat answer
+echoes back the status that request reported, which can be older than a decision the controller made
+while it was in flight. From CLI 0.4.108 a runner takes only the owner's switch from such an answer and
+keeps its own status, so a late `restarting` echo can no longer overwrite the `verified_success` a
+restarted runner has verified (which then lingered until the next six-hourly check). An owner OFF, or
+ON after OFF, still adopts the service's record.
+
 Very old runners that cannot report a stable machine ID still need one manual upgrade/restart. They
 remain visible but their settings link is deliberately unavailable rather than attaching a policy to
 a mutable hostname.
