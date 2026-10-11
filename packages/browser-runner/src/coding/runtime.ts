@@ -470,6 +470,8 @@ export class CodingRuntime {
 				const digest = actDigest(action);
 				const seen = inputId ? session.inputs.check(inputId, digest) : "new";
 				if (seen !== "new") return { ...this.snapshot(sessionId), ...(seen === "duplicate" ? { duplicateInput: inputId } : { inputConflict: inputId }) };
+				// Narrowed BEFORE the input is accepted: an envelope whose constraints cannot be delivered whole is refused here (400), never run.
+				const objective = runObjective(action.objective);
 				// Narrowed rather than trusted: this runner is a published package any caller can
 				// POST to, and an unrecognised author must read as "unstated", not become a label.
 				session.input(action.text, {
@@ -477,7 +479,7 @@ export class CodingRuntime {
 					replay: typeof action.replay === "string" ? action.replay : undefined,
 					inputId,
 					digest,
-					objective: runObjective(action.objective),
+					objective,
 				});
 				break;
 			}

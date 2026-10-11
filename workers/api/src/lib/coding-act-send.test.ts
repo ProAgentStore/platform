@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { actDigest as runnerDigest } from "../../../../packages/browser-runner/src/coding/input-ledger.js";
+import * as runnerEnvelope from "../../../../packages/browser-runner/src/coding/run-objective.js";
+import { MAX_OBJECTIVE_CONSTRAINT_CHARS, MAX_OBJECTIVE_CONSTRAINTS } from "./coding-objective-delivery.js";
 import { actDigest, reconcileAct } from "./coding-act-send.js";
 import type { CodingActionKind, CodingPaneSnapshot } from "./coding-loop.js";
 
@@ -20,6 +22,12 @@ describe("an act's content identity (#1019)", () => {
 		expect(await actDigest(act("go", "FIRST"))).not.toBe(await actDigest(act("go", "CHANGED")));
 		// Delivery metadata is not content: the same act under another id, or with a replay, is the same content.
 		expect(await actDigest({ ...act("go"), inputId: "other" })).toBe(await actDigest(act("go")));
+	});
+});
+
+describe("the objective envelope's bounds (#1019)", () => {
+	it("the cloud never sends what the runner would refuse: both sides hold the same bounds", () => {
+		expect([MAX_OBJECTIVE_CONSTRAINTS, MAX_OBJECTIVE_CONSTRAINT_CHARS]).toEqual([runnerEnvelope.MAX_OBJECTIVE_CONSTRAINTS, runnerEnvelope.MAX_OBJECTIVE_CONSTRAINT_CHARS]);
 	});
 });
 

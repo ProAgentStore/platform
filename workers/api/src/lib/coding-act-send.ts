@@ -17,6 +17,7 @@
  */
 import { RunnerUnreachableError } from "./runner-unreachable.js";
 import type { CodingActionKind, CodingPaneSnapshot } from "./coding-loop.js";
+import type { RunnerGuard, RunStep } from "./runner-availability.js";
 
 export type ActOutcome = "accepted" | "predecessor" | "unknown" | "conflict";
 
@@ -39,8 +40,10 @@ interface Dispatch {
 
 export interface ActSendDeps {
 	sessionId: string;
-	/** One guarded durable step (the runner guard around the retrying step). */
-	step: <T>(label: string, fn: () => Promise<T>) => Promise<T>;
+	/** One durable step with its retries (the workflow's `runRetry`). */
+	run: RunStep;
+	/** The runner guard: drives `run` round by round, reconnecting between rounds. */
+	guard: RunnerGuard;
 	/** Dispatch to whichever runner the run points at NOW. */
 	call: <T>(path: string, body: unknown) => Promise<T>;
 	node: () => string | null;
@@ -82,27 +85,57 @@ export function reconcileAct(seen: CodingPaneSnapshot, id: string, sent: readonl
 	return sameLedger ? "absent" : { outcome: "unknown", objective: maybeObjective, ledger: e.ledger, epoch: e.epoch };
 }
 
+/**
+ * DURABLE INTENT. Before each guarded round may dispatch, a step of its own journals WHAT it is about to send and
+ * WHERE (digest, node, the ledger last seen). A workflow reconstructed from its journal after an eviction mid-send
+ * reads those intents back: the round may have reached a runner, so its act is reconciled before anything is sent
+ * again, and only the ledger and machine every intent targeted can prove it absent. Nothing is ever inferred
+ * "definitely unsent" from a lost memory — only a not-dispatched failure in a round that reached no runner at all.
+ */
 export async function sendAct(deps: ActSendDeps, label: string, compose: () => CodingActionKind): Promise<{ pane: CodingPaneSnapshot; receipt: ActReceipt }> {
+	/** Compositions that MAY have reached a runner: every round's intent, less those proven never dispatched. */
 	const sent: Dispatch[] = [];
-	const done = await deps.step(label, async () => {
+	const dispatchOf = async (a: CodingActionKind): Promise<Dispatch> => ({ digest: await actDigest(a), objective: a.kind === "message" && !!a.objective, node: deps.node(), ledger: deps.engine()?.ledger ?? null });
+	/** This live round: whether its intent was written now (not read back from a journal), and whether any try may have dispatched. */
+	let round = { fresh: true, reached: false };
+	const intended: RunStep = async (name, fn) => {
+		const composed = compose();
+		if (composed.kind !== "message" || !composed.inputId) return deps.run(name, fn);
+		let fresh = false;
+		const intent = (await deps.run(`${name}-intent`, async () => {
+			fresh = true;
+			return dispatchOf(composed);
+		})) as Dispatch;
+		sent.push(intent);
+		round = { fresh, reached: false };
+		try {
+			return await deps.run(name, fn);
+		} catch (e) {
+			// Only a round that wrote its own intent and whose every try failed before dispatch is proven unsent.
+			if (fresh && !round.reached && e instanceof RunnerUnreachableError && !e.dispatched) sent.splice(sent.lastIndexOf(intent), 1);
+			throw e;
+		}
+	};
+	const done = await deps.guard(intended, label, async () => {
 		const action = compose();
 		const id = action.kind === "message" ? (action.inputId ?? null) : null;
-		if (sent.length && id) {
+		// Reconcile first unless this is the first try of a round whose intent was written just now and nothing came before it.
+		if (id && (sent.length > 1 || !round.fresh || round.reached)) {
 			const seen = await deps.call<CodingPaneSnapshot>("/coding/capture", { sessionId: deps.sessionId });
 			const verdict = reconcileAct(seen, id, sent, deps.node());
 			if (verdict !== "absent") return { pane: seen, receipt: { inputId: id, ...verdict } };
 		}
-		const dispatch: Dispatch = { digest: await actDigest(action), objective: action.kind === "message" && !!action.objective, node: deps.node(), ledger: deps.engine()?.ledger ?? null };
-		sent.push(dispatch);
+		const dispatch = await dispatchOf(action);
 		let pane: CodingPaneSnapshot;
 		try {
+			round.reached = true;
 			pane = await deps.call<CodingPaneSnapshot>("/coding/act", { sessionId: deps.sessionId, action: await deps.prepare(action) });
 		} catch (e) {
-			// Never reached a runner: this composition is not a candidate for what was accepted.
-			if (e instanceof RunnerUnreachableError && !e.dispatched) sent.pop();
+			// This try never reached a runner; an earlier try of the round still may have.
+			if (e instanceof RunnerUnreachableError && !e.dispatched) round.reached = false;
 			throw e;
 		}
-		const verdict = id && pane.engine ? reconcileAct(pane, id, sent, deps.node()) : null;
+		const verdict = id && pane.engine ? reconcileAct(pane, id, [...sent, dispatch], deps.node()) : null;
 		const receipt: ActReceipt =
 			verdict && verdict !== "absent"
 				? { inputId: id, ...verdict }

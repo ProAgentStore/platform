@@ -107,6 +107,7 @@ let starts = 0;
 let actIds: string[] = [];
 
 async function route(path: string, body: Record<string, unknown> = {}): Promise<unknown> {
+	if (evicted) throw new Evicted(path); // an evicted instance reaches no runner
 	const m = byName.get(live.node) ?? target;
 	const sid = String(body.sessionId ?? "s1");
 	switch (path) {
@@ -148,10 +149,14 @@ interface Journal {
 	failed: Map<string, unknown>;
 }
 const newJournal = (): Journal => ({ done: new Map(), failed: new Map() });
+/** The workflow instance is EVICTED: the step in flight never completes, and nothing after it runs on this instance. */
+class Evicted extends Error {}
+let evicted = false;
 function fakeStep(j: Journal): WorkflowStep {
 	return {
 		async do(name: string, a: unknown, b?: unknown) {
 			const cb = (typeof a === "function" ? a : b) as () => Promise<unknown>;
+			if (evicted) throw new Evicted(name);
 			if (j.done.has(name)) return j.done.get(name);
 			if (j.failed.has(name)) throw j.failed.get(name); // a step that exhausted its retries replays as that failure
 			try {
@@ -159,11 +164,13 @@ function fakeStep(j: Journal): WorkflowStep {
 				j.done.set(name, v);
 				return v;
 			} catch (e) {
+				if (evicted) throw e; // an evicted step is neither done nor failed — it is reconstructed from the journal
 				j.failed.set(name, e);
 				throw e;
 			}
 		},
 		async sleep() {
+			if (evicted) throw new Evicted("sleep");
 			await wait(15);
 		},
 	} as unknown as WorkflowStep;
@@ -180,6 +187,7 @@ beforeEach(() => {
 	captures = 0;
 	starts = 0;
 	actIds = [];
+	evicted = false;
 	live.node = "A";
 	byName.clear();
 	target = newMachine("A");
@@ -451,5 +459,140 @@ describe("retained controls", () => {
 		expect(executions("one")).toBe(1);
 		expect(executions("two")).toBe(1);
 		expect(objectiveStates()).toEqual(["delivered"]);
+	});
+});
+
+// ── Workflow-instance EVICTION mid-send: the journal is all that survives (#1019) ───────────────────
+
+describe("an evicted workflow instance reconstructed from its journal (#1019 durable intent)", () => {
+	/**
+	 * Evict on the run's FIRST act: `afterDispatch` lets A accept and read it first (the reply is then lost
+	 * with the instance); otherwise the instance dies before anything is dispatched. Then a fresh workflow
+	 * instance is reconstructed from the completed-step journal on `node`, whose runner holds the session.
+	 */
+	async function evictAndReconstruct(opts: { afterDispatch: boolean; node: "A" | "B" }) {
+		let n = 0;
+		hooks.act = async (m, _b, send) => {
+			if (++n !== 1) return send();
+			if (opts.afterDispatch) {
+				const before = readBy(m).length;
+				send();
+				await until(() => readBy(m).length > before && m.rt.snapshot("s1").runState === "idle");
+			}
+			evicted = true;
+			throw new Evicted("instance evicted mid-act");
+		};
+		decisions = [SEND("the evicted act"), SEND("after reconstruction"), FINISH];
+		const j = newJournal();
+		await run(params(), j).catch(() => undefined);
+		expect([...j.done.keys()].some((k) => k.endsWith("-act-intent"))).toBe(true); // the intent outlived the instance
+		evicted = false;
+		hooks.act = undefined;
+		if (opts.node === "B") {
+			const b = newMachine("B");
+			byName.set("B", b);
+			live.node = "B";
+			b.rt.start({ sessionId: "s1", repoId: "r1", workDir: join(b.dir, "work"), clientType: "claude", bin: b.bin } as never); // B's runner resumes the session
+		}
+		decisions = [SEND("after reconstruction"), FINISH];
+		await run(params(), j);
+		return machines.find((m) => m.name === "B");
+	}
+	const unknownFor = (id: string) => events().some((e) => e.event === "coding.run.input_unknown" && e.inputId === id);
+
+	it("accepted + reply lost, reconstructed on the SAME ledger: reconciled from A's receipt — executed once, never re-sent", async () => {
+		await evictAndReconstruct({ afterDispatch: true, node: "A" });
+		expect(executions("the evicted act")).toBe(1);
+		expect(actIds.filter((id) => id === actIds[0])).toHaveLength(1); // one dispatch of that id, ever
+	});
+
+	it("accepted + reply lost, reconstructed on capable B (a different ledger): A1 + B0 — unknown, not a replay", async () => {
+		const b = await evictAndReconstruct({ afterDispatch: true, node: "B" });
+		expect(readBy(target).filter((t) => t.text.includes("the evicted act"))).toHaveLength(1);
+		expect(readBy(b as Machine).some((t) => t.text.includes("the evicted act"))).toBe(false);
+		expect(unknownFor(actIds[0])).toBe(true);
+		expect(events().filter((e) => e.state === "delivered").every((e) => e.consumedInputId !== actIds[0])).toBe(true);
+	});
+
+	it("evicted BEFORE dispatch, reconstructed on the same ledger: that ledger proves it absent — sent exactly once", async () => {
+		await evictAndReconstruct({ afterDispatch: false, node: "A" });
+		expect(executions("the evicted act")).toBe(1);
+		expect(readBy(target).filter((t) => t.text.includes("the evicted act")).map(carriesObjective)).toEqual([true]);
+	});
+
+	it("evicted BEFORE dispatch, reconstructed on B: the intent's uncertainty does not authorize B — unknown, never a false 'unsent'", async () => {
+		const b = await evictAndReconstruct({ afterDispatch: false, node: "B" });
+		expect(executions("the evicted act")).toBe(0);
+		expect(readBy(b as Machine).some((t) => t.text.includes("the evicted act"))).toBe(false);
+		expect(unknownFor(actIds[0])).toBe(true); // the act the evicted instance was about to send is reported unknown, by its own id
+	});
+});
+
+// ── Same id, different content: a conflict is never delivery of the changed content (#1019 case 5) ─────
+
+describe("the workflow never reports changed content delivered under an id the runner holds for other content (#1019 case 5)", () => {
+	/** Before the workflow's FIRST act reaches the runner, the same id was already accepted and READ — with `seeded` content. */
+	function seedSameId(seeded: (action: Record<string, unknown>) => Record<string, unknown>) {
+		let n = 0;
+		hooks.act = async (m, body, send) => {
+			if (++n === 1) {
+				const before = readBy(m).length;
+				m.rt.act("s1", seeded(body.action as Record<string, unknown>) as never);
+				await until(() => readBy(m).length > before && m.rt.snapshot("s1").runState === "idle");
+			}
+			return send();
+		};
+	}
+	const objectiveOf = (a: Record<string, unknown>) => a.objective as Record<string, unknown>;
+
+	it("changed instruction AND objective: the runner refuses it, the engine read only FIRST, and no receipt says delivered", async () => {
+		seedSameId((a) => ({ ...a, text: "FIRST", objective: { ...objectiveOf(a), text: "FIRST OBJECTIVE" } }));
+		decisions = [SEND("CHANGED"), FINISH];
+		await run(params({ objective: "CHANGED UNSEEN OBJECTIVE" }));
+		const read = readBy(target);
+		expect(read).toHaveLength(1);
+		expect(read[0].text).toContain("FIRST OBJECTIVE");
+		expect(machines.flatMap(readBy).some((t) => t.text.includes("CHANGED"))).toBe(false);
+		expect(objectiveStates()).not.toContain("delivered");
+		expect(objectiveStates()).toEqual(["unknown"]);
+		expect(events().some((e) => e.event === "coding.run.input_unknown" && e.outcome === "conflict")).toBe(true);
+	});
+
+	it("same instruction and objective but CHANGED constraints under the same id: a conflict too — never delivered", async () => {
+		d1.exec(`UPDATE coding_repos SET instructions = 'Read-only from now on.' WHERE id = 'r1'`);
+		seedSameId((a) => ({ ...a, objective: { ...objectiveOf(a), constraints: ["- an older constraint set"] } }));
+		decisions = [SEND("summarise"), FINISH];
+		await run();
+		expect(readBy(target)).toHaveLength(1);
+		expect(readBy(target)[0].text).toContain("an older constraint set");
+		expect(objectiveStates()).toEqual(["unknown"]);
+	});
+
+	it("the SAME content under the same id (a retry whose first reply was lost) is the positive: executed once, delivered", async () => {
+		seedSameId((a) => ({ ...a }));
+		decisions = [SEND("same both times"), FINISH];
+		await run();
+		expect(executions("same both times")).toBe(1);
+		expect(objectiveStates()).toEqual(["delivered"]);
+		expect(events().find((e) => e.state === "delivered")).toMatchObject({ consumedInputId: actIds[0] });
+	});
+});
+
+// ── Constraints that do not fit one envelope: refused whole, never cut (#1019 case 6, check-silent-slice) ──
+
+describe("constraints are delivered whole or the objective is refused before anything runs (#1019)", () => {
+	it("a grant line over the envelope bound: the objective is NOT sent, the receipt says refused, the instruction still runs once", async () => {
+		const names = Array.from({ length: 14 }, (_, i) => `worker-pool-process-name-${String(i).padStart(2, "0")}-abcdefgh`);
+		d1.exec(`UPDATE coding_repos SET instructions = '${names.map((n) => `You may kill the ${n} processes.`).join(" ")}' WHERE id = 'r1'`);
+		decisions = [SEND("list the stray workers"), FINISH];
+		await run();
+		const [first] = readBy(target);
+		expect(first.text).toContain("list the stray workers");
+		expect(first.text).not.toContain("RUN OBJECTIVE");
+		expect(executions("list the stray workers")).toBe(1);
+		const refused = events().find((e) => e.state === "refused");
+		expect(refused).toMatchObject({ constraintLines: expect.any(Number) });
+		expect(String(refused?.message)).toContain("a partial set is never sent");
+		expect(objectiveStates()).toEqual(["refused"]);
 	});
 });

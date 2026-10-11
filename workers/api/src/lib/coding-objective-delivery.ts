@@ -25,7 +25,7 @@
  *
  * Pure state, driven by the workflow from journalled values only, so a replay reaches the same verdict.
  */
-import type { ActReceipt } from "./coding-act-send.js";
+import { type ActReceipt, actDigest } from "./coding-act-send.js";
 import type { EngineInputs } from "./coding-engine-inputs.js";
 import type { CodingActionKind } from "./coding-loop.js";
 import type { ObjectiveOrigin } from "./coding-objective-origin.js";
@@ -38,10 +38,18 @@ export const INPUT_IDEMPOTENT_CAPABILITY = "coding.input-idempotent";
 export const ENGINE_IDENTITY_CAPABILITY = "coding.engine-identity";
 /** How many turns per runner generation may carry the objective before an unconfirmed delivery is reported as such. */
 export const MAX_OBJECTIVE_SENDS = 3;
+/**
+ * What one envelope carries — mirrored from browser-runner coding/run-objective.ts, which refuses an envelope
+ * past them. The constraints travel WHOLE or the objective is not sent and the run says so (`refused`): a
+ * partial set would have the engine read the goal without a constraint that binds it.
+ */
+export const MAX_OBJECTIVE_CONSTRAINTS = 20;
+export const MAX_OBJECTIVE_CONSTRAINT_CHARS = 500;
+const envelopeFits = (lines: readonly string[]) => lines.length <= MAX_OBJECTIVE_CONSTRAINTS && lines.every((l) => l.length <= MAX_OBJECTIVE_CONSTRAINT_CHARS);
 
 export type { ObjectiveOrigin } from "./coding-objective-origin.js";
 
-export type ObjectiveDeliveryState = "pending" | "delivered" | "unsupported" | "unconfirmed" | "unknown" | "undelivered";
+export type ObjectiveDeliveryState = "pending" | "delivered" | "unsupported" | "unconfirmed" | "unknown" | "undelivered" | "refused";
 
 /** What a trace or chat line may say about an objective: identity and size, never its bytes. */
 export interface ObjectiveReceipt {
@@ -52,6 +60,8 @@ export interface ObjectiveReceipt {
 	runnerNode: string | null;
 	/** `ledger:epoch` of the engine process this generation is bound to, when the runner names it. */
 	engine: string | null;
+	/** How many constraint lines the envelope carried — or, when `refused`, would have had to carry. Never their text. */
+	constraintLines: number;
 	chars: number;
 	utf8Bytes: number;
 	sha256: string;
@@ -82,7 +92,11 @@ export class ObjectiveDelivery {
 	private attempted: string[] = [];
 	/** The act being sent now, so a generation change mid-send re-records it if its recomposition will carry the objective. */
 	private inflight: string | null = null;
+	/** The constraint lines the act being sent would carry with the objective. */
+	private constraints: readonly string[] = [];
 	private consumedId: string | null = null;
+	/** Per act id, the digest of the objective-bearing composition THIS run sends under it: a read counts only for that content. */
+	private digests = new Map<string, string>();
 
 	private constructor(
 		readonly runId: string,
@@ -134,24 +148,41 @@ export class ObjectiveDelivery {
 		this.consumedId = null;
 		this.engineKey = null;
 		this.state = "pending";
-		this.attempted = this.inflight && this.owed() ? [this.inflight] : [];
+		this.attempted = this.inflight && this.owed() && envelopeFits(this.constraints) ? [this.inflight] : [];
 	}
 
 	private owed(): boolean {
 		return this.state === "pending" && this.supported === true && !!this.text.trim() && this.issued.length + this.uncertain.length + this.attempted.length < MAX_OBJECTIVE_SENDS;
 	}
 
-	/** Before an act is sent: recorded as attempted if it will carry the objective, so a send that never returns is not forgotten. */
-	attempt(action: CodingActionKind): void {
+	/**
+	 * Before an act is sent, OUTSIDE its step: recorded as attempted if it will carry the objective, so a send that never
+	 * returns is not forgotten. Constraints that do not fit one envelope whole settle it `refused` here — before anything runs.
+	 */
+	async attempt(action: CodingActionKind, constraints: readonly string[] = []): Promise<ObjectiveDeliveryState | null> {
 		this.inflight = action.kind === "message" && action.inputId ? action.inputId : null;
-		if (this.inflight && this.owed()) this.attempted.push(this.inflight);
+		this.constraints = constraints;
+		// The content a read must match — computed even when not owed now, since a new generation may make it owed mid-send.
+		if (this.inflight && action.kind === "message") this.digests.set(this.inflight, await actDigest(this.withObjective(action)));
+		if (!this.inflight || !this.owed()) return null;
+		if (!envelopeFits(constraints)) {
+			this.state = "refused";
+			return this.state;
+		}
+		this.attempted.push(this.inflight);
+		return null;
 	}
 
-	/** The action to send: the objective — with the constraints in force now — attached while it is owed, else the action unchanged. */
-	attach(action: CodingActionKind, constraints: readonly string[] = []): CodingActionKind {
+	/** The action to send: the objective — with ALL the constraints {@link attempt} saw — attached while it is owed, else the action unchanged. */
+	attach(action: CodingActionKind): CodingActionKind {
 		if (action.kind !== "message" || !action.inputId || !(this.attempted.includes(action.inputId) || this.owed())) return action;
-		if (this.state !== "pending" || this.supported !== true) return action;
-		return { ...action, objective: { runId: this.runId, text: this.text, origin: this.origin, ...(constraints.length ? { constraints: [...constraints] } : {}) } };
+		if (this.state !== "pending" || this.supported !== true || !envelopeFits(this.constraints)) return action;
+		return this.withObjective(action);
+	}
+
+	private withObjective(action: CodingActionKind): CodingActionKind {
+		if (action.kind !== "message") return action;
+		return { ...action, objective: { runId: this.runId, text: this.text, origin: this.origin, ...(this.constraints.length ? { constraints: [...this.constraints] } : {}) } };
 	}
 
 	/** After the act step, from its JOURNALLED receipt. Only this generation's engine accepting it counts; a predecessor's never does. */
@@ -164,13 +195,21 @@ export class ObjectiveDelivery {
 		else if (r.outcome === "unknown" || r.outcome === "conflict") this.uncertain.push(r.inputId);
 	}
 
-	/** Every snapshot the run reads. Only THIS generation's sends, read by THIS generation's engine, count. */
-	observe(consumedInputs: readonly string[] | undefined, engine?: EngineInputs): ObjectiveDeliveryState | null {
-		if (this.state !== "pending") return null;
-		const read = engine?.consumed ? engine.consumed.filter(([, ep]) => `${engine.ledger}:${ep}` === this.engineKey).map(([id]) => id) : consumedInputs;
-		const id = read?.find((c) => this.issued.includes(c) || this.uncertain.includes(c) || this.attempted.includes(c));
-		if (!id) return null;
-		this.consumedId = id;
+	/**
+	 * Every snapshot the run reads. A read counts only when the runner's OWN ledger shows that id accepted with the
+	 * exact content this run sent the objective in, by the engine process of this generation, and read by that same
+	 * process — so a predecessor's reading, or older content under the same id (a conflict), is never delivery of
+	 * this objective. A runner that cannot name ledger and content cannot confirm it.
+	 */
+	observe(engine: EngineInputs | undefined): ObjectiveDeliveryState | null {
+		if (this.state !== "pending" || !engine?.ledger) return null;
+		const mine = (epoch: number) => `${engine.ledger}:${epoch}` === this.engineKey;
+		const candidates = new Set([...this.issued, ...this.uncertain, ...this.attempted]);
+		const read = engine.consumed.find(
+			([id, ep]) => mine(ep) && candidates.has(id) && engine.accepted.some(([aid, digest, aep]) => aid === id && aep === ep && digest === this.digests.get(id)),
+		);
+		if (!read) return null;
+		this.consumedId = read[0];
 		this.state = "delivered";
 		return this.state;
 	}
@@ -190,6 +229,7 @@ export class ObjectiveDelivery {
 			generation: this.generation,
 			runnerNode: this.runnerNode,
 			engine: this.engineKey,
+			constraintLines: this.constraints.length,
 			chars: [...this.text].length,
 			utf8Bytes: this.utf8Bytes,
 			sha256: this.sha256,
@@ -210,6 +250,8 @@ export class ObjectiveDelivery {
 				return `The run's objective (${size}) was sent with ${this.issued.length} turn(s)${where}, but the engine never confirmed reading any of them — it is not reported as delivered.`;
 			case "unknown":
 				return `The run's objective (${size}) was sent${where}, but no runner receipt settled it — a lost reply, a send that never returned, or a runner holding different content under that turn's id — and no read receipt followed: whether the engine has it is unknown.`;
+			case "refused":
+				return `The run's objective (${size}) was NOT delivered to the engine${where}: the owner's constraints in force (${this.constraints.length} line(s)) do not fit one envelope whole (at most ${MAX_OBJECTIVE_CONSTRAINTS} lines of ${MAX_OBJECTIVE_CONSTRAINT_CHARS} characters), and a partial set is never sent. The Pilot relays it in its own words; every instruction is still screened against all of them.`;
 			case "undelivered":
 				return `The run's objective (${size}) was NOT delivered to the engine${where}: the run ended before any turn carried it to the engine it was owed to.`;
 			default:

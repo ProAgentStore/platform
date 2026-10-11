@@ -1,4 +1,5 @@
 // The run's objective, delivered verbatim with a turn and attributed to the platform (#1019).
+import { RunnerInputError } from "../errors.js";
 
 /**
  * What the platform VERIFIED about where the objective came from — never who typed it. `account` is a
@@ -10,9 +11,13 @@ export type ObjectiveOrigin = { kind: "account" | "supervisor" | "trigger" | "un
 
 const ORIGIN_KINDS = new Set(["account", "supervisor", "trigger", "unverified"]);
 
-/** Bounds on the constraint lines a run objective may carry: they are labels, never an essay. */
-const MAX_CONSTRAINTS = 20;
-const MAX_CONSTRAINT_CHARS = 500;
+/**
+ * Bounds on the constraint lines one objective envelope carries (#1019). Mirrored by the cloud
+ * (workers/api/src/lib/coding-objective-delivery.ts), which never sends an envelope past them. Nothing is
+ * cut to fit: a partial set would have the engine read the objective without a constraint that binds it.
+ */
+export const MAX_OBJECTIVE_CONSTRAINTS = 20;
+export const MAX_OBJECTIVE_CONSTRAINT_CHARS = 500;
 
 /** A run objective as the cloud sent it, or undefined — narrowed, because any caller can POST here (#1019). */
 export function runObjective(raw: unknown): { runId: string; text: string; origin: ObjectiveOrigin; constraints?: string[] } | undefined {
@@ -23,9 +28,26 @@ export function runObjective(raw: unknown): { runId: string; text: string; origi
 	// A label longer than a label is not shortened into a different claim — it is dropped.
 	const label = typeof origin?.by === "string" ? origin.by.replace(/\s+/g, " ").trim() : "";
 	const by = label.length <= 128 ? label : "";
-	// Over-long or excess lines are dropped, never shortened: a truncated constraint is a different one.
-	const lines = Array.isArray(o.constraints) ? o.constraints.filter((c): c is string => typeof c === "string" && !!c.trim() && c.length <= MAX_CONSTRAINT_CHARS).slice(0, MAX_CONSTRAINTS) : [];
+	const lines = objectiveConstraints(o.constraints);
 	return { runId: o.runId, text: o.text, origin: by ? { kind, by } : { kind }, ...(lines.length ? { constraints: lines } : {}) };
+}
+
+/**
+ * The constraint lines, whole — or a refusal of the ENVELOPE, before anything runs (#1019). Never filtered or
+ * cut: dropping one line would deliver the objective as if that constraint did not bind.
+ */
+function objectiveConstraints(raw: unknown): string[] {
+	if (raw === undefined) return [];
+	const refuse = (why: string) => {
+		throw new RunnerInputError(`Run objective refused, nothing was run: its constraints ${why}. A partial set is never delivered.`);
+	};
+	if (!Array.isArray(raw)) return refuse("are not a list");
+	if (raw.length > MAX_OBJECTIVE_CONSTRAINTS) return refuse(`number ${raw.length}, over the ${MAX_OBJECTIVE_CONSTRAINTS} one envelope carries`);
+	for (const c of raw) {
+		if (typeof c !== "string" || !c.trim()) return refuse("include an entry that is not a constraint line");
+		if (c.length > MAX_OBJECTIVE_CONSTRAINT_CHARS) return refuse(`include a ${c.length}-character line, over ${MAX_OBJECTIVE_CONSTRAINT_CHARS}`);
+	}
+	return raw as string[];
 }
 
 /** The attribution sentence: only what the platform verified about the author, never more. */

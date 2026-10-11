@@ -544,7 +544,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		lastEngine = pane?.engine ?? lastEngine;
 		// Read off the JOURNALLED snapshot, so a replay settles delivery exactly as the first pass did.
 		objective?.engine(pane?.engine);
-		const settled = objective?.observe(pane?.consumedInputs, pane?.engine);
+		const settled = objective?.observe(pane?.engine);
 		if (settled) await reportObjective(settled);
 		return pane;
 	};
@@ -556,13 +556,15 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			// Every instruction carries its own id (#1019): deterministic per step, so a step retry or a
 			// guard re-attempt sends the SAME id, and a runner that already accepted it does not run it twice.
 			const withId: CodingActionKind = a.kind === "message" ? { ...a, inputId: a.inputId ?? `act:${runKey}:${label}` } : a;
-			objective?.attempt(withId);
-			// Composed inside every attempt (lib/coding-act-send.ts): after a reconnect, against the engine and runner now there,
-			// with the constraints in force now (#693 replay composed in the step too, so a replayed step re-sends what it sent).
-			const compose = () => (objective ? objective.attach(withId, constraintLines(goal.scopeConstraints ?? activeConstraints(constraintSources(goal)))) : withId);
+			// The constraints in force now ride the objective WHOLE, or it is not sent and the run says so (#1019).
+			const refused = await objective?.attempt(withId, constraintLines(goal.scopeConstraints ?? activeConstraints(constraintSources(goal))));
+			if (refused) await reportObjective(refused);
+			// Composed inside every attempt (lib/coding-act-send.ts): after a reconnect, against the engine and runner now there
+			// (#693 replay composed in the step too, so a replayed step re-sends what it sent).
+			const compose = () => (objective ? objective.attach(withId) : withId);
 			const prepare = (x: CodingActionKind) => withTurnReplay(env, { instanceId, userId, repoId, repoName: goal.repo, clientType: goal.clientType }, x);
 			const node = () => conn.runnerNode ?? null;
-			const { pane, receipt } = await sendAct({ sessionId, step: (l, fn) => guard(runRetry, l, fn), call: (path, body) => callRunner(conn, path, body), node, engine: () => lastEngine, prepare }, label, compose);
+			const { pane, receipt } = await sendAct({ sessionId, run: runRetry, guard, call: (path, body) => callRunner(conn, path, body), node, engine: () => lastEngine, prepare }, label, compose);
 			await measured(Promise.resolve(pane));
 			if (receipt.outcome === "unknown" || receipt.outcome === "conflict") {
 				const why = receipt.outcome === "conflict" ? "the runner holds different content under this id" : "the reply was lost and no runner that could speak for it said whether it ran";
@@ -1084,7 +1086,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			return { consumedInputs: Array.isArray(snap.consumedInputs) ? snap.consumedInputs.filter((x) => typeof x === "string") : [], engine: (snap as CodingPaneSnapshot).engine };
 		})) as { consumedInputs: string[]; engine?: CodingPaneSnapshot["engine"] } | null;
 		objective?.engine(finalDrain?.engine);
-		const lastRead = objective?.observe(finalDrain?.consumedInputs, finalDrain?.engine);
+		const lastRead = objective?.observe(finalDrain?.engine);
 		if (lastRead) await reportObjective(lastRead);
 		// Sent but never confirmed read is reported as such before the run ends (#1019) — never as delivered.
 		const unconfirmed = objective?.finish();

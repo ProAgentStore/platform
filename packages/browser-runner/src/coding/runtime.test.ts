@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { actDigest } from "./input-ledger.js";
+import { RunnerInputError } from "../errors.js";
 import { CodingRuntime } from "./runtime.js";
 import { authenticatedCloneUrl, ensureRepo } from "./repo.js";
 import { defaultStatePath, HeadlessSession } from "./headless.js";
@@ -328,6 +329,22 @@ describe("CodingRuntime over the stream-json engine", () => {
 		// The ledger binds the id to the content that ran: its digest is the FIRST payload's.
 		const [entry] = rt.snapshot("conflict").engine?.accepted ?? [];
 		expect(entry).toEqual(["act:run-1:s3-act", actDigest({ text: "go", objective: objective("FIRST objective") }), expect.any(Number)]);
+	});
+
+	it("an envelope whose constraints cannot travel whole is refused BEFORE acceptance — nothing runs, the id is not taken (#1019)", async () => {
+		rt = new CodingRuntime(join(dir, "base"));
+		rt.start({ sessionId: "refuse", repoId: "r1", workDir: dir, clientType: "claude", bin });
+		const objective = { runId: "run-1", text: "OBJ", origin: { kind: "account" }, constraints: Array.from({ length: 21 }, (_, i) => `- c${i}`) };
+		expect(() => rt.act("refuse", { kind: "message", text: "go", inputId: "act:run-1:s9-act", objective })).toThrow(RunnerInputError);
+		await wait(300);
+		const snap = rt.snapshot("refuse");
+		expect(snap.pane).not.toContain("REPLY:");
+		expect(snap.acceptedInputs).toEqual([]);
+		// The same id with a deliverable envelope is then a NEW input, not a duplicate of the refused one.
+		const ok = rt.act("refuse", { kind: "message", text: "go", inputId: "act:run-1:s9-act", objective: { ...objective, constraints: objective.constraints.slice(1) } });
+		expect(ok.duplicateInput).toBeUndefined();
+		await until(() => rt.snapshot("refuse").pane.includes("REPLY:"));
+		expect(rt.snapshot("refuse").pane).toContain("- c20");
 	});
 
 	it("names its ledger and engine process: a replacement process is a new epoch; ids accepted before it are still refused (#1019)", async () => {
