@@ -117,19 +117,19 @@ function exclusionRanges(text: string): Array<[number, number]> {
 	}
 	return ranges;
 }
-function excludedSpans(text: string): string[] {
-	return exclusionRanges(text).map(([start, end]) => text.slice(start, end).replace(EXCLUDE_LEAD, " "));
+function excludedSpans(text: string, ranges = exclusionRanges(text)): string[] {
+	return ranges.map(([start, end]) => text.slice(start, end).replace(EXCLUDE_LEAD, " "));
 }
 /** `text` with every exclusion clause blanked — what is left is what the owner pointed AT. */
-function withoutExclusions(text: string): string {
+function withoutExclusions(text: string, ranges = exclusionRanges(text)): string {
 	let out = text;
-	for (const [start, end] of exclusionRanges(text)) out = out.slice(0, start) + " ".repeat(end - start) + out.slice(end);
+	for (const [start, end] of ranges) out = out.slice(0, start) + " ".repeat(end - start) + out.slice(end);
 	return out;
 }
 /** The candidates (lower-cased) the owner excluded, plus any run-id-shaped token in an excluded span. */
-function excludedOf(text: string, candidates: readonly string[], uuids = false, match = mentions): string[] {
+function excludedOf(text: string, candidates: readonly string[], uuids = false, match = mentions, ranges = exclusionRanges(text)): string[] {
 	const out = new Set<string>();
-	for (const span of excludedSpans(text)) {
+	for (const span of excludedSpans(text, ranges)) {
 		for (const id of candidates) if (match(span, id)) out.add(id.toLowerCase());
 		if (uuids) for (const t of idTokens(span)) out.add(t);
 	}
@@ -285,17 +285,36 @@ export function parseSessionIntent(said: string, repoNames: readonly string[], s
 	const sharing = (alias: string) => names.filter((n) => short(n).toLowerCase() === alias.toLowerCase());
 	const aliases = (name: string) => [...new Set([name, ...(sharing(short(name)).length === 1 ? [short(name)] : [])])];
 	const sharedShorts = [...new Set(names.map(short).filter((a) => sharing(a).length > 1))];
+	// CANONICAL identities first: a quoted literal or a whole token that IS a repository's name binds that
+	// repository, and is blanked before the raw scan — so `"platform."` can never ALSO read as its prefix
+	// "platform" when both repositories exist. Exclusion clauses are measured on the owner's text as written.
+	const ranges = exclusionRanges(said);
+	const canon = canonicalMentions(said, (t) => names.filter((n) => aliases(n).some((a) => a.toLowerCase() === t.toLowerCase())));
+	// A token belongs to the clause it STARTS in: an unquoted "aipa." ends past a clause cut at the sentence's period.
+	const excludedCanon = canon.filter((c) => ranges.some(([s, e]) => c.start >= s && c.start < e));
+	const pointedCanon = canon.filter((c) => !excludedCanon.includes(c));
+	let residue = said;
+	for (const c of canon) residue = residue.slice(0, c.start) + " ".repeat(c.end - c.start) + residue.slice(c.end);
 	// Exclusions: exact names and unique aliases, plus every repository behind a shared short name.
-	const excludedTokens = new Set(excludedOf(said, [...names.flatMap(aliases), ...sharedShorts], false, repoMention));
+	const excludedTokens = new Set([
+		...excludedOf(residue, [...names.flatMap(aliases), ...sharedShorts], false, repoMention, ranges),
+		...excludedCanon.flatMap((c) => c.repos.map((r) => r.toLowerCase())),
+	]);
 	const isExcluded = (name: string) => aliases(name).some((a) => excludedTokens.has(a.toLowerCase())) || excludedTokens.has(short(name).toLowerCase());
 	const excluded = names.filter(isExcluded);
-	const pointed = withoutExclusions(said);
-	const pointedAt = names.filter((n) => aliases(n).some((a) => repoMention(pointed, a)));
-	const ambiguous = sharedShorts.filter((a) => repoMention(pointed, a)).map((a) => ({ name: a, repos: sharing(a) }));
+	const pointed = withoutExclusions(residue, ranges);
+	const canonNamed = new Set(pointedCanon.flatMap((c) => c.repos));
+	const pointedAt = names.filter((n) => canonNamed.has(n) || aliases(n).some((a) => repoMention(pointed, a)));
+	const ambiguous = [
+		...sharedShorts.filter((a) => repoMention(pointed, a)).map((a) => ({ name: a, repos: sharing(a) })),
+		// An unquoted "platform." whose period may be the sentence's, when both readings are repositories.
+		...pointedCanon.filter((c) => c.repos.length > 1).map((c) => ({ name: c.token, repos: c.repos })),
+	];
 	// One resolution for every explicit target slot: a target is a repository, or unresolved. A slot that
-	// carried a target but could not be read is unresolved too — never "no target", never generic.
+	// carried a target but could not be read is unresolved too — never "no target", never generic. Read from
+	// the text as written (only exclusions blanked), so a canonical literal still fills its slot.
 	const known = new Set(repoNames.flatMap((n) => [n.toLowerCase(), short(n).toLowerCase()]));
-	const unresolved = [...new Set(sessionTargets(pointed).filter((t) => !known.has(t.name.toLowerCase())).map((t) => t.name || "(an unreadable name)"))];
+	const unresolved = [...new Set(sessionTargets(withoutExclusions(said, ranges)).filter((t) => !known.has(t.name.toLowerCase())).map((t) => t.name || "(an unreadable name)"))];
 	const pick = selector ? (names.find((n) => aliases(n).some((a) => a.toLowerCase() === selector.toLowerCase())) ?? selector) : undefined;
 	return {
 		named: pointedAt.filter((n) => !isExcluded(n)),
@@ -333,6 +352,24 @@ const TARGET = `(?:${QUOTED}|${UNQUOTED})`;
 const quotedOf = (m: RegExpMatchArray, first: number) => [m[first], m[first + 1], m[first + 2], m[first + 3]].find((g) => g !== undefined);
 /** An unquoted name ends at the sentence's period — ONE trailing ".", never "-" or "/" or "..". */
 const sentenceTrim = (w: string) => w.replace(/(?<!\.)\.$/, "");
+
+/**
+ * Every whole token of `text` that IS a repository's identity (#1015): a quoted literal exactly as quoted, or
+ * an unquoted run of name characters — whose single trailing period may be the sentence's, so both readings
+ * are tried and, when both are repositories, both returned (ambiguous, never silently one). With its span,
+ * so the raw prefix scan cannot read a shorter repository out of it.
+ */
+function canonicalMentions(text: string, resolve: (token: string) => string[]): Array<{ token: string; start: number; end: number; repos: string[] }> {
+	const out: Array<{ token: string; start: number; end: number; repos: string[] }> = [];
+	for (const m of text.matchAll(new RegExp(`${QUOTED}|${UNQUOTED}`, "g"))) {
+		const quoted = quotedOf(m, 1);
+		const token = quoted ?? m[5] ?? "";
+		const readings = quoted !== undefined ? [quoted] : [...new Set([token, sentenceTrim(token)])];
+		const repos = [...new Set(readings.flatMap(resolve))];
+		if (repos.length) out.push({ token, start: m.index ?? 0, end: (m.index ?? 0) + m[0].length, repos });
+	}
+	return out;
+}
 
 /**
  * Every explicit target slot, with what made it explicit (#1015). Slots: the word before "session" ("the

@@ -265,3 +265,93 @@ describe("explicit target slots keep their literal identity (#1015 audit of e173
 		expect(statuses()).toEqual(["s1:ended", "s2:active"]);
 	});
 });
+
+// ── #1015: a quoted literal and its PREFIX are both repositories ("platform." and "platform"), both open ──
+//
+// Fixture text only. The raw mention scan read "platform" inside `"platform."` (its lookahead blocks a dot
+// only before a word character), so the owner's exact literal ALSO named the shorter repository: with the
+// model selecting "platform" the wrong session was ended and its driver cancelled. A canonical literal now
+// binds its own repository and is blanked before the prefix scan. Every row checks which session ended and
+// WHICH driver run was cancelled — not a count.
+
+describe("a quoted literal never also names its prefix repository (#1015 catalog collision)", () => {
+	const seedRepo = (repoId: string, name: string) => d1.exec(`INSERT OR IGNORE INTO coding_repos (id, instance_id, user_id, name) VALUES ('${repoId}', 'i1', 'u1', '${name}')`);
+	const driven = (sessionId: string, repoId: string, name: string, runId: string) => {
+		seedRepo(repoId, name);
+		d1.exec(`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, client_type, status) VALUES ('${sessionId}', 'i1', '${repoId}', 'u1', 'claude', 'active')`);
+		d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at, session_id) VALUES ('${runId}', 'u1', 'i1', 'synthetic', 'running', 10, ${Date.now()}, '${sessionId}')`);
+	};
+	/** "platform" (s-plat, run-plat) and "platform." (s-dot, run-dot) both open and driven; "aipa" exists with no session. */
+	beforeEach(() => {
+		driven("s-plat", "r-plat", "platform", "run-plat");
+		driven("s-dot", "r-dot", "platform.", "run-dot");
+		seedRepo("r-aipa", "aipa");
+	});
+	const statuses = () => (d1.sqlite.prepare("SELECT id, status FROM coding_sessions ORDER BY id").all() as Array<{ id: string; status: string }>).map((r) => `${r.id}:${r.status}`);
+	const cancelled = () => (d1.sqlite.prepare("SELECT run_id FROM agent_loop_runs WHERE cancel_requested = 1 ORDER BY run_id").all() as Array<{ run_id: string }>).map((r) => r.run_id);
+	const end = async (text: string, input: Record<string, unknown> = {}) =>
+		getRegistryTool("end_coding_session")?.handler({ env, instanceId: "i1", userId: "u1", turn: { author: "owner", text } } as never, input);
+	const QUOTINGS: Array<[string, (x: string) => string]> = [
+		["backtick", (x) => `\`${x}\``],
+		["double-quoted", (x) => `"${x}"`],
+		["curly-quoted", (x) => `“${x}”`],
+	];
+	const SLOTS: Array<[string, (x: string) => string]> = [
+		["X session", (x) => `Please close the ${x} session.`],
+		["session for X", (x) => `Please close the session for ${x}.`],
+		["session named X", (x) => `Please close the session named ${x}.`],
+		["session called X", (x) => `Please close the session called ${x}.`],
+	];
+	/** No selector; the model DISAGREEING (the prefix); agreeing; and an unrelated repository. */
+	const SELECTORS: Array<[string, Record<string, unknown>]> = [
+		["no selector", {}],
+		["model picks platform", { repo: "platform" }],
+		["model picks platform.", { repo: "platform." }],
+		["model picks aipa", { repo: "aipa" }],
+	];
+
+	// 48 positive rows: the owner's exact literal ends exactly that session and cancels exactly its driver.
+	const positive = QUOTINGS.flatMap(([q, quote]) => SLOTS.flatMap(([slot, phrase]) => SELECTORS.map(([sel, input]) => [`${phrase(quote("platform."))} [${q}, ${slot}, ${sel}]`, phrase(quote("platform.")), input] as const)));
+	it("the positive matrix is 48 rows", () => expect(positive).toHaveLength(48));
+	it.each(positive)("%s — ends platform. only, cancels run-dot only", async (_l, text, input) => {
+		await end(text, input);
+		expect(statuses()).toEqual(["s-dot:ended", "s-plat:active"]);
+		expect(cancelled()).toEqual(["run-dot"]);
+	});
+
+	// 12 exclusion rows: excluding the literal leaves its prefix endable; a model that picks the excluded one is refused.
+	const exclusion = QUOTINGS.flatMap(([q, quote]) => SELECTORS.map(([sel, input]) => [`except ${quote("platform.")} [${q}, ${sel}]`, `Close every session except ${quote("platform.")}.`, input, sel] as const));
+	it("the exclusion matrix is 12 rows", () => expect(exclusion).toHaveLength(12));
+	it.each(exclusion)("%s — platform. is never ended; platform is, unless the model picked the excluded one", async (_l, text, input, sel) => {
+		const out = await end(text, input);
+		if (sel === "model picks platform.") {
+			expect(statuses()).toEqual(["s-dot:active", "s-plat:active"]);
+			expect(cancelled()).toEqual([]);
+			expect(JSON.stringify(out)).toContain("said not to end the platform. session");
+		} else {
+			expect(statuses()).toEqual(["s-dot:active", "s-plat:ended"]);
+			expect(cancelled()).toEqual(["run-plat"]);
+		}
+	});
+
+	// ── controls ──
+	it.each(QUOTINGS.flatMap(([q, quote]) => [{}, { repo: "platform." }].map((input) => [q, `Please close the ${quote("platform")} session.`, input] as const)))(
+		"the reverse prefix: quoted 'platform' (%s, selector %j) ends platform only — never platform.",
+		async (_q, text, input) => {
+			await end(text, input);
+			expect(statuses()).toEqual(["s-dot:active", "s-plat:ended"]);
+			expect(cancelled()).toEqual(["run-plat"]);
+		},
+	);
+	it("an UNQUOTED 'platform.' whose period may be the sentence's, with both repositories real, is ambiguous: zero writes", async () => {
+		const out = await end("Please close the session for platform.");
+		expect(statuses()).toEqual(["s-dot:active", "s-plat:active"]);
+		expect(cancelled()).toEqual([]);
+		expect(JSON.stringify(out)).toContain("more than one repository is called");
+	});
+	it("an unquoted 'platform' mid-sentence ends platform only", async () => {
+		await end("Please close the platform session now.");
+		expect(statuses()).toEqual(["s-dot:active", "s-plat:ended"]);
+		expect(cancelled()).toEqual(["run-plat"]);
+	});
+});
