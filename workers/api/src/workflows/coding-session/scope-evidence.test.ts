@@ -657,17 +657,20 @@ describe("the run's objective reaches the engine verbatim, with the run's first 
 			message: r.message,
 			state: (JSON.parse(r.context ?? "{}") as { state?: string }).state,
 		}));
-	/** A runner that advertises the capability, and an engine that reads every turn it is sent. */
-	function capableRunner(opts: { reads?: boolean; stale?: string[] } = {}) {
-		runner["/capabilities"] = () => ({ capabilities: ["coding.sessions", "coding.run-objective"] });
+	/** A runner that advertises the capabilities, accepts each input id once, and an engine that reads every turn it is sent. */
+	function capableRunner(opts: { reads?: boolean; stale?: string[]; caps?: string[] } = {}) {
+		const accepted: string[] = [];
+		runner["/capabilities"] = () => ({ capabilities: opts.caps ?? ["coding.sessions", "coding.run-objective", "coding.run-objective.v2", "coding.input-idempotent"] });
 		runner["/coding/act"] = (body) => {
 			const a = body.action as (typeof bodies)[number];
+			if (a.inputId && accepted.includes(a.inputId)) return { ...pane(), acceptedInputs: [...accepted], duplicateInput: a.inputId };
 			bodies.push(a);
 			acted.push(String(a.text ?? ""));
+			if (a.inputId) accepted.push(a.inputId);
 			if (opts.reads !== false && a.inputId) consumed.push(a.inputId);
-			return pane();
+			return { ...pane(), acceptedInputs: [...accepted] };
 		};
-		runner["/coding/capture"] = () => ({ ...pane(), consumedInputs: [...(opts.stale ?? []), ...consumed] });
+		runner["/coding/capture"] = () => ({ ...pane(), acceptedInputs: [...accepted], consumedInputs: [...(opts.stale ?? []), ...consumed] });
 	}
 	beforeEach(() => {
 		bodies = [];
@@ -678,11 +681,11 @@ describe("the run's objective reaches the engine verbatim, with the run's first 
 		capableRunner();
 		decisions = [SEND("open the issue first"), SEND("now write the test"), FINISH("done")];
 		await run(params({ objective: OBJ }, { loopRunId: "run-A" } as Partial<CodingSessionParams>));
-		expect(bodies[0]).toMatchObject({ text: "open the issue first", objective: { runId: "run-A", text: OBJ }, inputId: "objective:run-A:1" });
+		expect(bodies[0]).toMatchObject({ text: "open the issue first", objective: { runId: "run-A", text: OBJ, origin: { kind: "unverified" } }, inputId: expect.stringMatching(/^act:run-A:s\d+-act$/) });
 		// The second instruction is bare: delivered once, not repeated.
 		expect(bodies[1].objective).toBeUndefined();
 		expect(bodies[1].text).toBe("now write the test");
-		expect(objectiveEvents()).toEqual([{ message: expect.stringContaining("was delivered verbatim to the engine, which read it"), state: "delivered" }]);
+		expect(objectiveEvents()).toEqual([{ message: expect.stringContaining("was delivered verbatim to the engine"), state: "delivered" }]);
 		// The record names the length, never the objective's text.
 		expect(objectiveEvents()[0].message).not.toContain("Implement #1019");
 	});
@@ -718,7 +721,8 @@ describe("the run's objective reaches the engine verbatim, with the run's first 
 		capableRunner({ reads: false });
 		decisions = [SEND("one"), SEND("two"), SEND("three"), SEND("four"), SEND("five"), FINISH("done")];
 		await run(params({ objective: OBJ }, { loopRunId: "run-U" } as Partial<CodingSessionParams>));
-		expect(bodies.map((b) => b.inputId ?? null)).toEqual(["objective:run-U:1", "objective:run-U:2", "objective:run-U:3", null, null]);
+		expect(bodies.map((b) => !!b.objective)).toEqual([true, true, true, false, false]);
+		expect(new Set(bodies.map((b) => b.inputId)).size).toBe(5); // every act its own id
 		expect(objectiveEvents().map((e) => e.state)).toEqual(["unconfirmed"]);
 	});
 
@@ -753,7 +757,7 @@ describe("the run's objective reaches the engine verbatim, with the run's first 
 		await runCodingSessionWorkflow(env, { payload: params({ objective: OBJ }, { loopRunId: "run-T" } as Partial<CodingSessionParams>) } as WorkflowEvent<CodingSessionParams>, retrying);
 		expect(attempted).toHaveLength(2);
 		expect(attempted[1]).toEqual(attempted[0]);
-		expect(attempted[0]).toMatchObject({ objective: { runId: "run-T", text: OBJ }, inputId: "objective:run-T:1" });
+		expect(attempted[0]).toMatchObject({ objective: { runId: "run-T", text: OBJ }, inputId: expect.stringMatching(/^act:run-T:/) });
 		expect(objectiveEvents().map((e) => e.state)).toEqual(["delivered"]);
 	});
 
@@ -769,10 +773,10 @@ describe("the run's objective reaches the engine verbatim, with the run's first 
 	});
 
 	it("the next run on the same retained session gets its own objective, and an earlier run's read receipt does not count for it", async () => {
-		capableRunner({ reads: false, stale: ["objective:run-A:1"] });
+		capableRunner({ reads: false, stale: ["act:run-A:s7-act"] });
 		decisions = [SEND("next run"), FINISH("done")];
 		await run(params({ objective: "the SECOND run's objective" }, { loopRunId: "run-B" } as Partial<CodingSessionParams>));
-		expect(bodies[0]).toMatchObject({ objective: { runId: "run-B", text: "the SECOND run's objective" }, inputId: "objective:run-B:1" });
+		expect(bodies[0]).toMatchObject({ objective: { runId: "run-B", text: "the SECOND run's objective" }, inputId: expect.stringMatching(/^act:run-B:/) });
 		expect(objectiveEvents().map((e) => e.state)).toEqual(["unconfirmed"]);
 	});
 
@@ -784,7 +788,179 @@ describe("the run's objective reaches the engine verbatim, with the run's first 
 		decisions = [SEND("go"), FINISH("done")];
 		await run(params({ objective: OBJ }));
 		expect(bodies[0].objective).toBeUndefined();
-		expect(bodies[0].inputId).toBeUndefined();
 		expect(objectiveEvents()).toEqual([{ message: expect.stringContaining("was NOT delivered"), state: "unsupported" }]);
+	});
+});
+
+// ── #1019 second pass: runner generations, origin, receipts, and no blind duplicate turns ─────────────
+
+describe("objective delivery across runner generations, lost replies and origins (#1019)", () => {
+	const OBJ = "Read-only investigation of the export bug.";
+	let bodies: Array<{ text?: string; objective?: { runId: string; text: string; origin?: { kind: string; by?: string } }; inputId?: string }>;
+	let executed: string[];
+	let consumed: string[];
+	let accepted: string[];
+	const events = (): Array<Record<string, unknown> & { event: string; message: string }> =>
+		(d1.sqlite.prepare("SELECT event, message, context FROM agent_events WHERE event IN ('coding.run.objective', 'coding.run.input_unknown') ORDER BY rowid").all() as Array<{ event: string; message: string; context: string | null }>).map((r) => ({
+			event: r.event,
+			message: r.message,
+			...(JSON.parse(r.context ?? "{}") as Record<string, unknown>),
+		}));
+	const V2 = ["coding.sessions", "coding.run-objective", "coding.run-objective.v2", "coding.input-idempotent"];
+	/** A runner whose capabilities can change between generations, and an engine that runs each accepted input once. */
+	function machine(opts: { caps?: () => string[]; reads?: () => boolean; stale?: () => string[]; reportsAccepted?: boolean; actFails?: (n: number) => Error | null } = {}) {
+		let acts = 0;
+		runner["/capabilities"] = () => ({ capabilities: (opts.caps ?? (() => V2))() });
+		runner["/coding/act"] = (body) => {
+			const a = body.action as (typeof bodies)[number];
+			bodies.push(a);
+			const n = ++acts;
+			if (a.inputId && accepted.includes(a.inputId)) return { ...pane(), acceptedInputs: [...accepted], duplicateInput: a.inputId };
+			executed.push(String(a.text ?? ""));
+			acted.push(String(a.text ?? ""));
+			if (a.inputId) accepted.push(a.inputId);
+			if ((opts.reads ?? (() => true))() && a.inputId) consumed.push(a.inputId);
+			const fail = opts.actFails?.(n);
+			if (fail) throw fail;
+			return { ...pane(), ...(opts.reportsAccepted === false ? {} : { acceptedInputs: [...accepted] }) };
+		};
+		runner["/coding/capture"] = () => ({ ...pane(), ...(opts.reportsAccepted === false ? {} : { acceptedInputs: [...accepted] }), consumedInputs: [...(opts.stale?.() ?? []), ...consumed] });
+	}
+	/** Cloudflare re-runs a failed step's callback; this fake does the same, once per step. */
+	const retryingRun = (p: CodingSessionParams) => {
+		const step = fakeStep(newJournal());
+		const retrying = { ...step, do: async (name: string, a: unknown, b?: unknown) => step.do(name, a as never, b as never).catch(() => step.do(name, a as never, b as never)) } as unknown as WorkflowStep;
+		return runCodingSessionWorkflow(env, { payload: p } as WorkflowEvent<CodingSessionParams>, retrying);
+	};
+	beforeEach(() => {
+		bodies = [];
+		executed = [];
+		consumed = [];
+		accepted = [];
+	});
+
+	it("the verified origin rides the objective: a supervisor's goal is sent as the supervisor's", async () => {
+		machine();
+		decisions = [SEND("go"), FINISH("done")];
+		await run(params({ objective: OBJ, objectiveOrigin: { kind: "supervisor", by: "agent lead-1" } }));
+		expect(bodies[0].objective).toEqual({ runId: expect.any(String), text: OBJ, origin: { kind: "supervisor", by: "agent lead-1" } });
+	});
+
+	it("a runner that renders only the v1 block is never sent the objective — it would call it the owner's", async () => {
+		machine({ caps: () => ["coding.sessions", "coding.run-objective"] });
+		decisions = [SEND("go"), FINISH("done")];
+		await run(params({ objective: OBJ }));
+		expect(bodies[0].objective).toBeUndefined();
+		expect(events().map((e) => e.state)).toEqual(["unsupported"]);
+	});
+
+	it("receipts carry a digest and the UTF-8 byte length at the accepted maximum — never the objective's text", async () => {
+		machine();
+		const long = "€".repeat(8_000); // 8000 characters, 24000 UTF-8 bytes
+		decisions = [SEND("go"), FINISH("done")];
+		await run(params({ objective: long }, { loopRunId: "run-U8" } as Partial<CodingSessionParams>));
+		const [delivered] = events();
+		const { createHash } = await import("node:crypto");
+		expect(delivered).toMatchObject({ state: "delivered", runId: "run-U8", chars: 8_000, utf8Bytes: 24_000, sha256: createHash("sha256").update(long, "utf8").digest("hex"), consumedInputId: bodies[0].inputId, generation: 0 });
+		expect(JSON.stringify(events())).not.toContain("€€");
+		expect(bodies[0].objective?.text).toBe(long);
+	});
+
+	it("a reply lost AFTER the runner accepted the act is reconciled: the engine runs it once, the retry sends nothing new", async () => {
+		machine({ actFails: (n) => (n === 1 ? new Error("relay dropped the reply") : null) });
+		decisions = [SEND("only once please"), FINISH("done")];
+		await retryingRun(params({ objective: OBJ }, { loopRunId: "run-R" } as Partial<CodingSessionParams>));
+		expect(executed.filter((t) => t === "only once please")).toHaveLength(1);
+		expect(bodies).toHaveLength(1); // the retry read the receipt instead of re-sending
+		expect(events().map((e) => e.state)).toEqual(["delivered"]);
+	});
+
+	it("a runner that cannot say whether it ran a lost act is NOT re-sent, and the run says unknown — never delivered", async () => {
+		machine({ reportsAccepted: false, reads: () => false, actFails: (n) => (n === 1 ? new Error("relay dropped the reply") : null) });
+		decisions = [SEND("maybe ran"), FINISH("done")];
+		await retryingRun(params({ objective: OBJ }, { loopRunId: "run-X" } as Partial<CodingSessionParams>));
+		expect(executed.filter((t) => t === "maybe ran")).toHaveLength(1);
+		expect(bodies).toHaveLength(1);
+		const ev = events();
+		expect(ev.map((e) => e.event)).toEqual(["coding.run.input_unknown", "coding.run.objective"]);
+		expect(ev[1]).toMatchObject({ state: "unknown" });
+	});
+
+	/** Run `fn` on the RELAUNCH — the second `/coding/start` (the first is the run's own start). */
+	function onRelaunch(fn: () => void) {
+		const start = runner["/coding/start"];
+		let starts = 0;
+		runner["/coding/start"] = (body) => {
+			if (++starts === 2) fn();
+			return start(body);
+		};
+	}
+	/** Drop the relay before the Nth act (nothing dispatched): the guard waits, reconnects and relaunches. */
+	async function dropBefore(n: number) {
+		const { RunnerUnreachableError } = await import("../../lib/runner-unreachable.js");
+		const act = runner["/coding/act"];
+		let calls = 0;
+		let dropped = false;
+		runner["/coding/act"] = (body) => {
+			if (++calls === n && !dropped) {
+				dropped = true;
+				throw new RunnerUnreachableError("No runner connected", { dispatched: false });
+			}
+			return act(body);
+		};
+	}
+
+	it("capable machine A, then legacy machine B after a reconnect: delivered on A, explicitly NOT delivered on B", async () => {
+		let legacy = false;
+		machine({ caps: () => (legacy ? ["coding.sessions", "coding.run-objective"] : V2) });
+		await dropBefore(2);
+		onRelaunch(() => {
+			legacy = true; // the machine that came back is the older one
+		});
+		decisions = [SEND("on A"), SEND("on B"), SEND("still on B"), FINISH("done")];
+		await run(params({ objective: OBJ }));
+		expect(bodies.map((b) => [b.text, !!b.objective])).toEqual([["on A", true], ["on B", false], ["still on B", false]]);
+		expect(events().map((e) => [e.state, e.generation])).toEqual([["delivered", 0], ["unsupported", 1]]);
+	});
+
+	it("a relaunched engine has not read it: owed again on the new generation, and delivered there too", async () => {
+		machine();
+		await dropBefore(2);
+		decisions = [SEND("first engine"), SEND("dropped, then re-sent as it was"), SEND("relaunched engine's first new turn"), FINISH("done")];
+		await run(params({ objective: OBJ }));
+		// The dropped act is the SAME act re-sent (same id); the re-owed objective rides the next new turn.
+		expect(bodies.map((b) => [b.text, !!b.objective])).toEqual([["first engine", true], ["dropped, then re-sent as it was", false], ["relaunched engine's first new turn", true]]);
+		expect(events().map((e) => [e.state, e.generation])).toEqual([["delivered", 0], ["delivered", 1]]);
+	});
+
+	it("a late receipt for the predecessor's send does not count for the new generation", async () => {
+		let reads = true;
+		machine({ reads: () => reads });
+		await dropBefore(2);
+		onRelaunch(() => {
+			reads = false; // the new engine never confirms; only the old id is ever reported read
+		});
+		decisions = [SEND("first engine"), SEND("dropped, then re-sent"), SEND("relaunched engine"), FINISH("done")];
+		await run(params({ objective: OBJ }));
+		expect(consumed).toEqual([bodies[0].inputId]); // only the predecessor's id was ever read
+		expect(events().map((e) => [e.state, e.generation])).toEqual([["delivered", 0], ["unconfirmed", 1]]);
+	});
+
+	it("a same-id retry of a never-dispatched act is sent, once", async () => {
+		const { RunnerUnreachableError } = await import("../../lib/runner-unreachable.js");
+		let first = true;
+		machine();
+		const act = runner["/coding/act"];
+		runner["/coding/act"] = (body) => {
+			if (first) {
+				first = false;
+				throw new RunnerUnreachableError("No runner connected", { dispatched: false });
+			}
+			return act(body);
+		};
+		decisions = [SEND("deliver me"), FINISH("done")];
+		await retryingRun(params({ objective: OBJ }));
+		expect(executed).toEqual(["deliver me"]);
+		expect(events().map((e) => e.state)).toEqual(["delivered"]);
 	});
 });

@@ -7,6 +7,7 @@ import {
 	type CodingResult,
 } from "../../lib/coding-loop.js";
 import { callRunner, getRunnerConnIgnoringLiveness, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS, type RunnerConn } from "../../lib/runner-client.js";
+import { RunnerUnreachableError } from "../../lib/runner-unreachable.js";
 import { runtimeConnectivity } from "../../lib/instance-connectivity.js";
 import type { CodingSessionParams } from "../coding-session-params.js";
 import { makeRunnerGuard, noRunnerDetail, RUNNER_PROBE_INTERVAL, type RunStep } from "../../lib/runner-availability.js";
@@ -83,6 +84,8 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 	 * the record for the long, resumed runs most likely to have merged something.
 	 */
 	const runStartedAt = (await step.do("run-started-at", async () => Date.now())) as number;
+	/** The run's stable key — what its objective and every act id are named by (#1019). */
+	const runKey = event.payload.loopRunId ?? `${sessionId}@${runStartedAt}`;
 
 	/**
 	 * May this run put code on the trunk? (#314)
@@ -375,6 +378,13 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 				conn = back;
 			}
 			await runWith(startRetry)(`restart-${label}`, startOnRunner);
+			// A relaunched engine — maybe on another machine — has not read the objective, and the machine
+			// may not be able to render it: re-read its capabilities, journalled per reconnect (#1019).
+			if (objective) {
+				const caps = await runRetry(`objective-capabilities-${label}`, () => callRunner(conn, "/capabilities", {})).catch(() => null);
+				const settled = objective.capabilities(caps, { newGeneration: true, runnerNode: conn.runnerNode ?? null });
+				if (settled) await reportObjective(settled);
+			}
 		},
 	});
 	/**
@@ -515,10 +525,13 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 	 */
 	// The run's objective, delivered verbatim with its first turn (#1019) — set once the goal is final, below.
 	let objective: ObjectiveDelivery | null = null;
+	// One step per (state, runner generation): the receipt names the digest, byte length, consumed input
+	// and runner — never the objective's text (#1019).
 	const reportObjective = (state: ObjectiveDeliveryState) =>
-		step.do(`objective-${state}`, async () => {
-			const line = objective?.describe(state) ?? "";
-			await traceCodingRun(env, traceCtx, "coding.run.objective", line, { state, chars: objective?.text.length ?? 0 });
+		step.do(`objective-${state}-g${objective?.generation ?? 0}`, async () => {
+			if (!objective) return;
+			const line = objective.describe(state);
+			await traceCodingRun(env, traceCtx, "coding.run.objective", line, { ...objective.receipt(state) });
 			if (state !== "delivered") await postToChat(`**Loop** — ${line}`);
 		});
 	const measured = async (p: Promise<unknown>): Promise<CodingPaneSnapshot> => {
@@ -530,14 +543,57 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		return pane;
 	};
 
+	/**
+	 * Send one act, reconciling before any RE-send (#1019). A first attempt that may have reached the runner
+	 * (anything but a "no socket at dispatch") is never blindly repeated: the runner's own receipt is read
+	 * first. Accepted → the act's reply was lost, nothing is sent again. Not accepted by an idempotent runner
+	 * → it is safe to send. A runner that cannot say → `unknown`, and the turn is not re-sent: a missed
+	 * instruction the Pilot can see and repeat beats one silently run twice.
+	 */
+	const sendAct = async (label: string, action: CodingActionKind): Promise<{ pane: CodingPaneSnapshot; outcome: "accepted" | "unknown" }> => {
+		let mayHaveReached = false;
+		let outcome: "accepted" | "unknown" = "accepted";
+		const pane = await measured(
+			guard(runRetry, label, async () => {
+				if (mayHaveReached && action.kind === "message" && action.inputId) {
+					const seen = await callRunner<CodingPaneSnapshot>(conn, "/coding/capture", { sessionId });
+					const known = [...(seen.acceptedInputs ?? []), ...(seen.consumedInputs ?? [])];
+					if (known.includes(action.inputId)) return seen;
+					if (!Array.isArray(seen.acceptedInputs)) {
+						outcome = "unknown";
+						return seen;
+					}
+				}
+				mayHaveReached = true;
+				try {
+					// #693 slice 2: the replay is composed INSIDE the step, so a replayed step re-sends what it sent.
+					return await callRunner<CodingPaneSnapshot>(conn, "/coding/act", { sessionId, action: await withTurnReplay(env, { instanceId, userId, repoId, repoName: goal.repo, clientType: goal.clientType }, action) });
+				} catch (e) {
+					if (e instanceof RunnerUnreachableError && !e.dispatched) mayHaveReached = false;
+					throw e;
+				}
+			}),
+		);
+		return { pane, outcome };
+	};
+
 	const deps: CodingDeps = {
 		snapshot: () => measured(guard(runRetry, `s${n++}-snapshot`, capture)),
 		act: async (a: CodingActionKind) => {
-			// The objective rides the action itself (#1019), decided outside the step from journalled state.
-			const action = objective ? objective.attach(a) : a;
-			const pane = await measured(guard(runRetry, `s${n++}-act`, async () => callRunner<CodingPaneSnapshot>(conn, "/coding/act", { sessionId, action: await withTurnReplay(env, { instanceId, userId, repoId, repoName: goal.repo, clientType: goal.clientType }, action) }))); // #693 slice 2: the replay is composed INSIDE the step, so a replayed step re-sends what it sent
-			objective?.sent(action); // only once the act step resolved — a failed send keeps it owed
-			return pane;
+			const label = `s${n++}-act`;
+			// Every instruction carries its own id (#1019): deterministic per step, so a step retry or a
+			// guard re-attempt sends the SAME id, and a runner that already accepted it does not run it twice.
+			const withId: CodingActionKind = a.kind === "message" ? { ...a, inputId: a.inputId ?? `act:${runKey}:${label}` } : a;
+			// The objective rides the action itself, decided outside the step from journalled state.
+			const action = objective ? objective.attach(withId) : withId;
+			const sent = await sendAct(label, action);
+			if (sent.outcome === "unknown") {
+				await step.do(`${label}-unknown`, () =>
+					traceCodingRun(env, traceCtx, "coding.run.input_unknown", `${action.kind === "message" ? action.inputId : label}: the reply was lost and the runner could not say whether it ran it — not re-sent.`, { inputId: action.kind === "message" ? action.inputId : null }),
+				);
+			}
+			objective?.sent(action, sent.outcome); // a send that never reached the runner keeps it owed
+			return sent.pane;
 		},
 		// The spend gate lives in `coding-decide-budget.ts` — the LLM call is the only place this
 		// loop spends money, so it is the only place a budget has to sit (#159).
@@ -887,9 +943,9 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		// The run's observed tool calls (#1019), kept across rounds: a completion claim is judged on the whole run.
 		const evidence = new CompletionEvidence();
 		// The objective goes to the engine only if this machine's runner can render it (#1019).
-		objective = new ObjectiveDelivery(event.payload.loopRunId ?? `${sessionId}@${runStartedAt}`, goal.objective);
+		objective = await ObjectiveDelivery.create(runKey, goal.objective, goal.objectiveOrigin);
 		const caps = await guard(runRetry, "objective-capabilities", () => callRunner(conn, "/capabilities", {})).catch(() => null);
-		const unsupported = objective.capabilities(caps);
+		const unsupported = objective.capabilities(caps, { runnerNode: conn.runnerNode ?? null });
 		if (unsupported) await reportObjective(unsupported);
 		for (let round = 0; round < 12 && !syncGate.blocked; round++) {
 			// The caller's cap when it named one, the historical 40 when it did not (#374).

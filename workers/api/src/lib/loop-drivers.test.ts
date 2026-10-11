@@ -147,6 +147,23 @@ describe("every driver opens an agent_loop_runs row — the fact that makes ONE 
 		expect((b.created[0].params.goal as { repairCheckout?: boolean }).repairCheckout).toBeUndefined();
 	});
 
+	it("the coding driver threads the objective's verified origin into the Pilot's goal — never onto a repair brief (#1019)", async () => {
+		const stub = () =>
+			stubEnv({
+				repos: [{ id: "r1", name: "fws/platform", instance_id: "i1", user_id: "u1", clone_status: "ready" }],
+				session: { id: "s1", client_type: "claude", status: "active" },
+			});
+		const a = stub();
+		await loopDriverFor(caps("CODING_SESSION")).start({ env: a.env, ...base, objectiveOrigin: { kind: "supervisor", by: "agent lead-1" } });
+		expect((a.created[0].params.goal as { objectiveOrigin?: unknown }).objectiveOrigin).toEqual({ kind: "supervisor", by: "agent lead-1" });
+		const b = stub();
+		await loopDriverFor(caps("CODING_SESSION")).start({ env: b.env, ...base, repairCheckout: true, objectiveOrigin: { kind: "account" } });
+		expect((b.created[0].params.goal as { objectiveOrigin?: unknown }).objectiveOrigin).toBeUndefined();
+		const c = stub();
+		await loopDriverFor(caps("CODING_SESSION")).start({ env: c.env, ...base });
+		expect((c.created[0].params.goal as { objectiveOrigin?: unknown }).objectiveOrigin).toBeUndefined();
+	});
+
 	it("the coding driver threads a CONTINUE's widened resume lookback to the Pilot (#806)", async () => {
 		// The note is composed inside the workflow, so a lookback the route held and did not pass
 		// would reach nothing — the continue would silently be an ordinary restart, and the only

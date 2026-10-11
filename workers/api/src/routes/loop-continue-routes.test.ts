@@ -100,6 +100,8 @@ describe("the happy path", () => {
 			noteAdded: false,
 		});
 		expect(start.mock.calls[0][0]).toMatchObject({ instanceId: "i1", userId: "u1", objective: "finish the migration", depth: 0 });
+		// A continuation re-composes an earlier objective: its author is not re-verified, so no origin is claimed (#1019).
+		expect(start.mock.calls[0][0].objectiveOrigin).toBeUndefined();
 	});
 
 	it("widens the resume-note lookback — the whole difference from a restart", async () => {

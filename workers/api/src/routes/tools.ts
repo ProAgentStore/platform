@@ -1219,6 +1219,7 @@ toolRoutes.post("/:id/loop", async (c) => {
 			instanceId,
 			userId: session.uid,
 			objective,
+			objectiveOrigin: body.objective ? { kind: "account", by: "console, API or MCP client" } : undefined, // proves the account, not the author (#1019)
 			maxIterations,
 			repoId,
 			requireRepoChoice,

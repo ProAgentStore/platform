@@ -100,6 +100,8 @@ describe("a successful start", () => {
 		await tryDequeueAndStart(env, "i1", "r1", "owner-1");
 		expect(openBudget).toHaveBeenCalledWith(env, "owner-1", "i1");
 		expect(start.mock.calls[0][0]).toMatchObject({ budgetId: "budget-1" });
+		// A queued entry carries no verified origin: whoever enqueued it, the engine is told "unverified" (#1019).
+		expect(start.mock.calls[0][0].objectiveOrigin).toBeUndefined();
 	});
 
 	it("clamps max_iterations against the ceiling in force AT START, not at enqueue", async () => {

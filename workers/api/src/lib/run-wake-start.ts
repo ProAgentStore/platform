@@ -85,6 +85,8 @@ export async function startWakeLoop(
 		instanceId: target.instance_id,
 		userId: target.user_id,
 		objective,
+		// Standing wiring plus facts about another run — composed by a trigger, never the owner's words (#1019).
+		objectiveOrigin: { kind: "trigger", by: [facts.event ?? "run event", facts.instanceId ? `from agent ${facts.instanceId}` : ""].filter(Boolean).join(" ") },
 		// A wake-up is a ROOT run — nothing delegated it, so it opens its own spend pool, as
 		// `delegateToInstance` does for a root delegation. The account ceilings apply to it there.
 		budgetId: (await openBudget(env, target.user_id, target.instance_id)).id,

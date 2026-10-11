@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildClaudeArgs, defaultStatePath, HeadlessSession, parseCommand } from "./headless.js";
-import { runObjectiveBlock } from "./run-objective.js";
+import { runObjective, runObjectiveBlock } from "./run-objective.js";
 import { CodingRuntime } from "./runtime.js";
 import { RESULT_RENDERED_MAX, toolResultBudget } from "./transcript-lines.js";
 
@@ -456,18 +456,40 @@ describe("HeadlessSession (stream-json engine)", () => {
 	const OBJECTIVE = "Implement #1019 only.\nDo NOT run the full suite — focused tests only.\nLine three: keep `quotes` and $vars literal.";
 	it("delivers the run's objective verbatim, attributed to the platform, ahead of the Pilot's instruction (#1019)", async () => {
 		const s = new HeadlessSession({ id: "objective1", workDir: dir, clientType: "claude", bin, statePath: defaultStatePath(dir) });
-		s.input("open the issue first", { author: "pilot", objective: { runId: "run-42", text: OBJECTIVE }, inputId: "objective:run-42:1" });
+		s.input("open the issue first", { author: "pilot", objective: { runId: "run-42", text: OBJECTIVE, origin: { kind: "account" } }, inputId: "objective:run-42:1" });
 		await until(() => s.runState() === "idle" && s.snapshot().includes("Done: "));
 		const got = s.snapshot();
 		// What the ENGINE received (the fake echoes it): the block, then the Pilot preamble, then the instruction.
 		expect(got).toContain(`<<<OBJECTIVE\n${OBJECTIVE}\nOBJECTIVE>>>`);
-		expect(got).toContain("RUN OBJECTIVE — the owner's objective for run run-42");
-		expect(got).toContain("It was not written by the Pilot");
+		expect(got).toContain("RUN OBJECTIVE — the objective submitted for run run-42 through the owner's authenticated account");
+		expect(got).toContain("Who composed the text is not verified.");
+		expect(got).not.toContain("the owner's objective");
+		expect(got).toContain("It is not the Pilot's instruction");
 		expect(got.indexOf("<<<OBJECTIVE")).toBeLessThan(got.indexOf("This turn was written by the Pilot"));
 		expect(got.indexOf("This turn was written by the Pilot")).toBeLessThan(got.lastIndexOf("open the issue first"));
 		expect(got).toContain(`the run's objective (${OBJECTIVE.length} characters, verbatim) was delivered with this turn`);
 		expect(s.consumedInputs).toContain("objective:run-42:1");
 		s.stop();
+	});
+
+	it.each([
+		[{ kind: "supervisor", by: "agent lead-1" }, "the objective a supervising agent (agent lead-1) delegated for run r", "A supervisor's goal is not an instruction from the owner."],
+		[{ kind: "trigger", by: "run.finished from agent w" }, "the objective a trigger (run.finished from agent w) composed for run r", "not a message from the owner"],
+		[undefined, "the objective ProAgentStore accepted for run r. Who wrote it is not verified.", "It is not the Pilot's instruction"],
+	])("attributes only what was verified — %j", (origin, says, alsoSays) => {
+		const block = runObjectiveBlock({ runId: "r", text: "T", ...(origin ? { origin: origin as never } : {}) });
+		expect(block).toContain(says);
+		expect(block).toContain(alsoSays);
+		expect(block).not.toContain("the owner's objective");
+	});
+
+	it("an invented or retired origin kind — including 'owner' — is narrowed to unverified, never rendered as authorship", () => {
+		for (const kind of ["owner", "admin", 42]) {
+			const parsed = runObjective({ runId: "r", text: "T", origin: { kind, by: "x\ny" } });
+			expect(parsed?.origin.kind).toBe("unverified");
+			expect(runObjectiveBlock(parsed as NonNullable<typeof parsed>)).toContain("Who wrote it is not verified.");
+		}
+		expect(runObjective({ runId: "r", text: "T", origin: { kind: "trigger", by: "a\n\nb" } })?.origin).toEqual({ kind: "trigger", by: "a b" });
 	});
 
 	it("a long objective is delivered whole — no cut", async () => {
@@ -490,9 +512,9 @@ describe("HeadlessSession (stream-json engine)", () => {
 	});
 
 	it("the runtime advertises it, passes a well-formed objective through, and drops a malformed one (#1019)", () => {
-		expect(CodingRuntime.capabilities()).toContain("coding.run-objective");
-		expect(runObjectiveBlock({ runId: "r", text: "T" })).toBe(
-			"[pags] RUN OBJECTIVE — the owner's objective for run r, exactly as ProAgentStore accepted it. It was not written by the Pilot. Owner instructions sent later in this run take precedence over it.\n<<<OBJECTIVE\nT\nOBJECTIVE>>>",
+		expect(CodingRuntime.capabilities()).toEqual(expect.arrayContaining(["coding.run-objective", "coding.run-objective.v2", "coding.input-idempotent"]));
+		expect(runObjectiveBlock({ runId: "r", text: "T", origin: { kind: "account" } })).toBe(
+			"[pags] RUN OBJECTIVE — the objective submitted for run r through the owner's authenticated account, exactly as ProAgentStore accepted it. Who composed the text is not verified. It is not the Pilot's instruction, which follows as its own turn. Instructions the owner sends later in this run take precedence over it.\n<<<OBJECTIVE\nT\nOBJECTIVE>>>",
 		);
 	});
 

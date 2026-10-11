@@ -1,4 +1,4 @@
-import { runObjectiveBlock } from "./run-objective.js";
+import { type ObjectiveOrigin, runObjectiveBlock } from "./run-objective.js";
 import { type ChildProcess, spawn } from "node:child_process";
 import { classifyCommand, commandFromToolInput, type EngineActRecord, fillTargetFromResult, toolCallOk, toolResultMark } from "./engine-acts.js";
 import { type EngineUsageRecord, parseEngineUsage } from "./engine-usage.js";
@@ -191,6 +191,8 @@ export class HeadlessSession {
 	private turnInputId: string | null = null;
 	/** Ids of inputs a COMPLETED turn consumed, newest last and bounded (#1019). See {@link consumedInputs}. */
 	private consumed: string[] = [];
+	/** Ids of inputs handed to the engine, newest last and bounded (#1019): what a retry is reconciled against. */
+	private accepted: string[] = [];
 	/**
 	 * The engine's own last output line of the turn in flight (#545).
 	 *
@@ -421,6 +423,11 @@ export class HeadlessSession {
 		return this.consumed;
 	}
 
+	/** Inputs this session accepted — handed to the engine, whether or not a turn has finished on them. */
+	get acceptedInputs(): readonly string[] {
+		return this.accepted;
+	}
+
 	private credit(id: string | null): void {
 		if (!id) return;
 		this.consumed.push(id);
@@ -605,7 +612,11 @@ export class HeadlessSession {
 	 * handed a summary of the conversation it is already in; when spent it replaces the one-shot
 	 * session-start brief, being the same record composed later.
 	 */
-	input(text: string, opts: { author?: TurnAuthor; replay?: string; inputId?: string; objective?: { runId: string; text: string } } = {}): void {
+	input(text: string, opts: { author?: TurnAuthor; replay?: string; inputId?: string; objective?: { runId: string; text: string; origin?: ObjectiveOrigin } } = {}): void {
+		if (opts.inputId) {
+			this.accepted.push(opts.inputId);
+			if (this.accepted.length > MAX_CONSUMED_INPUTS) this.accepted.shift();
+		}
 		// The Engine reads the preamble, the pane the short marker; the instruction stays evidence.
 		const sent = authoredTurn(text, opts.author);
 		// The brief leads the turn and is spent in the reading (#693). It goes to the ENGINE only:

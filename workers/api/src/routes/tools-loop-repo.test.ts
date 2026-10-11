@@ -63,6 +63,18 @@ beforeEach(() => {
 	enqueueObjective.mockImplementation(async (_env: unknown, input: { repoId?: string }) => ({ id: "qe-1", repoId: input.repoId ?? null, status: "pending" }));
 });
 
+describe("POST /:id/loop — the objective's origin (#1019)", () => {
+	it("an objective submitted through the account (console, API, or an MCP client such as coding_loop_start) is ACCOUNT-submitted — never 'the owner wrote it'", async () => {
+		expect((await post({ objective: "fix it" })).status).toBe(201);
+		expect(driverStart.mock.calls[0][0]).toMatchObject({ objectiveOrigin: { kind: "account", by: "console, API or MCP client" } });
+	});
+
+	it("a caller cannot claim an origin: a body `objectiveOrigin` is ignored", async () => {
+		expect((await post({ objective: "fix it", objectiveOrigin: { kind: "owner" } })).status).toBe(201);
+		expect(driverStart.mock.calls[0][0]).toMatchObject({ objectiveOrigin: { kind: "account" } });
+	});
+});
+
 describe("POST /:id/loop — repo targeting (#877)", () => {
 	it("hands the named repo and coding_loop_start's requireRepoChoice to the driver", async () => {
 		const res = await post({ objective: "fix it", repoId: " r2 ", requireRepoChoice: true });

@@ -110,6 +110,8 @@ export async function delegateToInstance(env: Env, input: DelegateInstanceInput)
 		delegated: true,
 		// AUDIT ONLY — never an authority (lib/execution-authority.ts).
 		onBehalfOf: input.supervisorInstanceId,
+		// …and the engine is told the goal is the supervisor's, not the owner's (#1019).
+		objectiveOrigin: { kind: "supervisor", by: `agent ${input.supervisorInstanceId}` },
 	});
 	if (!started.ok) return { ok: false, status: started.status, error: started.error };
 	const runId = started.runId;

@@ -228,6 +228,8 @@ describe("delegateToInstance routes by the target's declared capability", () => 
 		expect(codingCreated).toHaveLength(1);
 		expect(created).toHaveLength(0); // NOT the generic chat loop
 		expect((codingCreated[0].params as { goal: { objective: string } }).goal.objective).toBe("ship the thing");
+		// The engine is told the goal is the supervisor's, not the owner's (#1019).
+		expect((codingCreated[0].params as { goal: { objectiveOrigin?: unknown } }).goal.objectiveOrigin).toEqual({ kind: "supervisor", by: "agent sup" });
 	});
 
 	it("still uses the chat loop for a non-coding agent", async () => {

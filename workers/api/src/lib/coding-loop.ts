@@ -1,3 +1,4 @@
+import type { ObjectiveOrigin } from "./coding-objective-delivery.js";
 import { clipMarked } from "./clip-marked.js";
 import { runUserWorkersAi, systemPromptSections, systemPromptText, type StreamDeadlines, type SystemPromptBlock } from "./user-ai.js";
 import { hitOutputCap } from "./reply-truncation.js";
@@ -47,6 +48,8 @@ import { CompletionEvidence, evidenceNote, finishRefusalNote, judgeCompletion } 
 export interface CodingGoal {
 	/** What the user wants done in this repo (the high-level task). */
 	objective: string;
+	/** Who the platform verified wrote `objective` (#1019) — what the engine is told. Absent: unverified. */
+	objectiveOrigin?: ObjectiveOrigin;
 	/** Repo display name / path, for context. */
 	repo: string;
 	clientType: "claude" | "gemini" | "codex" | "grok";
@@ -136,6 +139,8 @@ export interface CodingPaneSnapshot {
 	 * runner that predates it — and absent is "not known", never "consumed". See `markDirectivesProcessed`.
 	 */
 	consumedInputs?: string[];
+	/** Ids the runner accepted (handed to the engine), on a `coding.input-idempotent` runner (#1019). Absent: an older runner. */
+	acceptedInputs?: string[];
 	/**
 	 * Why the run was stopped, when it was stopped by something other than the user's Stop button.
 	 *
@@ -155,7 +160,7 @@ export interface CodingPaneSnapshot {
  * re-added, which is exactly how it survived the first fix. The engine is a child process with
  * no PTY; there is no keystroke to send, and the type now says so.
  */
-export type CodingActionKind = { kind: "message"; text: string; author?: "pilot"; inputId?: string; objective?: { runId: string; text: string } } | { kind: "interrupt" };
+export type CodingActionKind = { kind: "message"; text: string; author?: "pilot"; inputId?: string; objective?: { runId: string; text: string; origin: ObjectiveOrigin } } | { kind: "interrupt" };
 
 /**
  * `waiting` is the only NON-TERMINAL member (#541): the Engine cannot work right now for a reason

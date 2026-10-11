@@ -290,6 +290,24 @@ describe("CodingRuntime over the stream-json engine", () => {
 		expect(snap.runState).toBe("idle");
 	});
 
+	it("an input id it already accepted is not run twice — the retry after a lost reply is a no-op (#1019)", async () => {
+		rt = new CodingRuntime(join(dir, "base"));
+		rt.start({ sessionId: "idem", repoId: "r1", workDir: dir, clientType: "claude", bin });
+		const first = rt.act("idem", { kind: "message", text: "only-once", inputId: "act:run-1:s3-act" });
+		expect(first.acceptedInputs).toContain("act:run-1:s3-act");
+		expect(first.duplicateInput).toBeUndefined();
+		await until(() => rt.snapshot("idem").pane.includes("REPLY:only-once"));
+		await until(() => rt.snapshot("idem").runState === "idle");
+		const again = rt.act("idem", { kind: "message", text: "only-once", inputId: "act:run-1:s3-act" });
+		expect(again.duplicateInput).toBe("act:run-1:s3-act");
+		expect(again.runState).toBe("idle"); // nothing new was started
+		expect(rt.snapshot("idem").pane.split("REPLY:only-once").length - 1).toBe(1);
+		// A different id is a different instruction, and runs.
+		rt.act("idem", { kind: "message", text: "only-once", inputId: "act:run-1:s5-act" });
+		await until(() => rt.snapshot("idem").pane.split("REPLY:only-once").length - 1 === 2);
+		expect(rt.snapshot("idem").acceptedInputs).toEqual(["act:run-1:s3-act", "act:run-1:s5-act"]);
+	});
+
 	it("carries the action's author through to the engine, and narrows an invented one (#505)", async () => {
 		// `/coding/act` is a published HTTP surface any caller can POST to. The author has to reach
 		// `HeadlessSession.input` for the fix to exist at all, and an unrecognised value has to

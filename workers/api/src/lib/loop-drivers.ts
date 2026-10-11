@@ -18,6 +18,7 @@
 // Adding an agent type is an entry here — not a route change, not a button, not a branch in the
 // console. And when `capabilities.workflow` is finally retired in favour of composed steps
 // (docs/agent-platform-strategy.md), this is the single place that has to learn the new form.
+import type { ObjectiveOrigin } from "./coding-objective-delivery.js";
 import { createLoopRun, finishLoopRun } from "./agent-loop-store.js";
 import { linkRunToIssue } from "./issue-tickets.js";
 import { MAX_ITERATIONS_CAP, sanitizeMaxIterations } from "./agent-loop.js";
@@ -117,6 +118,12 @@ export interface LoopStartInput {
 	 * how it would have gone missing the moment that duplicate was folded into this table.
 	 */
 	onBehalfOf?: string;
+	/**
+	 * Where the platform VERIFIED `objective` came from (#1019) — a submission through the owner's
+	 * authenticated account, a supervisor's delegation, a trigger's composition. Never a claim about who
+	 * typed it. Absent means unverified, and the engine is told exactly that.
+	 */
+	objectiveOrigin?: ObjectiveOrigin;
 	/**
 	 * Start a REPAIR run (#804): the sync gate lets it through and the Pilot's objective becomes
 	 * the platform's repair brief — bring the checkout back in sync without discarding anything.
@@ -535,7 +542,7 @@ const codingDriver: LoopDriver = {
 				runnerNode: session.runnerNode ?? null,
 				cloneUrl: repo.cloneUrl ?? undefined,
 				branch: repo.branch || undefined,
-				goal: { objective, repo: repo.name, clientType: session.clientType, repairCheckout: input.repairCheckout === true ? true : undefined },
+				goal: { objective, objectiveOrigin: input.repairCheckout === true ? undefined : input.objectiveOrigin, repo: repo.name, clientType: session.clientType, repairCheckout: input.repairCheckout === true ? true : undefined },
 				// The number in the caller's "Max iterations" box, honoured (#374).
 				//
 				// It reached the run ROW and stopped there, so `check_delegation` could report
