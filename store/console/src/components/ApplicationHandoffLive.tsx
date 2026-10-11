@@ -41,8 +41,16 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 	const handoffPath = reconciliation ? "reconciliation/handoff" : "handoff";
 	const base = `/v1/instances/${encodeURIComponent(instanceId)}/application-runs/${encodeURIComponent(runId)}/${handoffPath}?handoff_id=${encodeURIComponent(handoffId)}`;
 	const [frame, setFrame] = useState<{ frame: string; width: number; height: number } | null>(null);
-	const [error, setError] = useState("");
+	// Three lifetimes, three states. A frame poll owns ONLY `frameError`: a successful poll every 500ms
+	// used to clear the one shared error, erasing an input refusal or the read-only notice ~150ms after it
+	// appeared. An input refusal changes only with the next input's outcome; a resume notice only with the
+	// next resume. Ending or closing unmounts the view, which clears all three.
+	const [frameError, setFrameError] = useState("");
+	const [inputNotice, setInputNotice] = useState("");
+	const [resumeNotice, setResumeNotice] = useState("");
 	const [endError, setEndError] = useState("");
+	/** Only the latest input's outcome may set or clear `inputNotice` — an older send resolving late may not. */
+	const inputSeq = useRef(0);
 	const imageRef = useRef<HTMLImageElement>(null);
 	const mobileEntryRef = useRef<HTMLInputElement>(null);
 	const boxRef = useRef<HTMLDivElement>(null);
@@ -55,12 +63,12 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 			const next = await api<{ frame: string; width: number; height: number }>(withPath(base, "frame"));
 			if (!next?.frame || next.frame.length < 30) throw new Error("The runner has no live browser frame.");
 			setFrame(next);
-			setError("");
+			setFrameError("");
 		} catch (e) {
 			// An expired/lost/ended handoff must stay visibly unresolved.  In particular, do not
 			// translate a missing page into "done" — that would erase submit uncertainty.
 			setFrame(null);
-			setError(e instanceof Error ? e.message : String(e));
+			setFrameError(e instanceof Error ? e.message : String(e));
 		}
 	}, [base]);
 
@@ -74,13 +82,16 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 	}, []);
 
 	const send = useCallback(async (body: Record<string, unknown>) => {
+		const seq = ++inputSeq.current;
 		try {
 			await api(withPath(base, "input"), { method: "POST", body: JSON.stringify(body) });
+			// An accepted input is the transition that retires an earlier refusal.
+			if (seq === inputSeq.current) setInputNotice("");
 			return true;
 		} catch {
 			// Never echo a login/OTP value.  The Runner has already enforced the bounded blocker
 			// boundary, so a refusal means this mobile control cannot be an application-fill path.
-			setError("Secure sign-in input is no longer available. Recheck or end this handoff.");
+			if (seq === inputSeq.current) setInputNotice("Secure sign-in input is no longer available. Recheck or end this handoff.");
 			return false;
 		}
 	}, [base]);
@@ -145,13 +156,13 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 		try {
 			const result = await api<ApplicationHandoffResumeResponse>(withPath(base, "resume"), { method: "POST" });
 			if (reconciliation && result?.state === "running") {
-				setError("Authenticated read-only inspection remains live. This session cannot conclude submission status until a validated SEEK receipt/history contract exists.");
+				setResumeNotice("Authenticated read-only inspection remains live. This session cannot conclude submission status until a validated SEEK receipt/history contract exists.");
 				poll();
 				return;
 			}
 			onChanged();
 			onClose();
-		} catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+		} catch (e) { setResumeNotice(e instanceof Error ? e.message : String(e)); }
 	};
 	const end = async () => {
 		setEndError("");
@@ -196,12 +207,13 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 			<p className="basis-full text-xs text-muted-soft">Phone-only sign-in/CAPTCHA control. Text is forwarded once and immediately cleared here; {reconciliation ? "after authentication the read-only Runner rejects further input." : "this remains the existing owner-authorized live handoff only."}</p>
 		</div>
 		{endError && <div data-testid="application-handoff-end-error" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-xs font-semibold break-words">{endError}</div>}
-		{error && frame && <div data-testid="application-handoff-input-error" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-xs font-semibold break-words">{error}</div>}
+		{resumeNotice && <div data-testid="application-handoff-resume-notice" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-xs font-semibold break-words">{resumeNotice}</div>}
+		{inputNotice && <div data-testid="application-handoff-input-error" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-xs font-semibold break-words">{inputNotice}</div>}
 		<div className="flex-1 min-h-0 flex items-center justify-center overflow-hidden bg-black">
 			{frame ? (
 				// biome-ignore lint/a11y/useKeyWithClickEvents: remote browser clicks require pointer coordinates from the rendered screenshot.
 				<img ref={imageRef} src={frame.frame} width={1280} height={720} onClick={click} onMouseMove={move} draggable={false} alt="Live Application Runner browser" className="max-w-full max-h-full object-contain cursor-crosshair select-none" />
-			) : <div className="text-sm text-white/70 max-w-lg text-center px-4">{error ? <><div className="font-semibold text-danger mb-1">Live handoff unavailable</div><div className="text-xs text-white/60 break-words font-mono">{error}</div></> : "Connecting to the existing Runner browser…"}</div>}
+			) : <div className="text-sm text-white/70 max-w-lg text-center px-4">{frameError ? <><div className="font-semibold text-danger mb-1">Live handoff unavailable</div><div className="text-xs text-white/60 break-words font-mono">{frameError}</div></> : "Connecting to the existing Runner browser…"}</div>}
 		</div>
 	</div>;
 }
