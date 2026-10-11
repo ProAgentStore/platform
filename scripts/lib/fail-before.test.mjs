@@ -296,6 +296,7 @@ const crashRun = () => {
 	throw new Error("killed mid-run");
 };
 const toplevel = (dir) => g(dir, "rev-parse", "--show-toplevel");
+const sepFor = () => (process.platform === "win32" ? "\\" : "/");
 const realpathOf = (p) => realpathSync(p);
 
 describe("(a) symlinks are refused before anything changes", () => {
@@ -850,5 +851,190 @@ describe("(4) the mode contract is exact: plain permission bits, or a refusal", 
 			expect(r, mode.toString(8)).toMatchObject({ ok: true });
 			expect(statSync(join(dir, "a.txt")).mode & 0o7777).toBe(mode);
 		}
+	});
+});
+
+// ── #1021 recovery residuals: cleanup after a complete restore (A), and writes before verification (B) ──
+//
+// Every fault here is synthetic: an Error carrying code EACCES, thrown through the helper's `faults` hook.
+// Nothing changes a real permission.
+
+const eacces = (what) => Object.assign(new Error(`EACCES: permission denied, ${what}`), { code: "EACCES" });
+/** Throw a synthetic EACCES once, at the named step for the path that satisfies `match`. */
+function failOnce(step, match) {
+	let fired = false;
+	return (s, d) => {
+		if (fired || s !== step || !match(String(d))) return;
+		fired = true;
+		throw eacces(`${step} ${d}`);
+	};
+}
+const journalFile = (journal) => join(journal, "journal.json");
+const journalState = (journal) => JSON.parse(readFileSync(journalFile(journal), "utf8")).state;
+
+describe("(A) a cleanup that stops after every file is back is a success with cleanup pending, and --restore finishes it", () => {
+	it("EACCES removing a backup: every file reported restored, cleanup pending, journal and remaining backups kept; a retry is idempotent", () => {
+		const dir = fixture();
+		const before = state(dir);
+		const r = failBefore({ cwd: dir, paths: ["a.txt", "b.txt"], command: ["t"], run: () => 0, faults: failOnce("cleanup", (p) => p.endsWith(join("files", "0"))) });
+		expect(r).toMatchObject({ ok: true, phase: "done", exit: 0, mutated: false, cleanupPending: true, restored: ["a.txt", "b.txt"], written: ["a.txt", "b.txt"] });
+		expect(r.detail).toMatch(/every file is back.*EACCES/);
+		expect(state(dir)).toEqual(before);
+		const [journal] = pendingJournals(dir);
+		expect(existsSync(journalFile(journal))).toBe(true);
+		expect(journalState(journal)).toBe("restored");
+		expect(existsSync(join(journal, "files", "0"))).toBe(true);
+		// The retry changes nothing in the working tree: both files are already back.
+		const again = restoreFromJournal(journal, toplevel(dir));
+		expect(again).toMatchObject({ ok: true, restored: [], written: [] });
+		expect(again.cleanupPending).toBeUndefined();
+		expect(pendingJournals(dir)).toEqual([]);
+		expect(state(dir)).toEqual(before);
+	});
+
+	it("EACCES between backups: the first backup is gone, the second and the journal survive; the retry finishes", () => {
+		const dir = fixture();
+		const before = state(dir);
+		const r = failBefore({ cwd: dir, paths: ["a.txt", "b.txt"], command: ["t"], run: () => 0, faults: failOnce("cleanup", (p) => p.endsWith(join("files", "1"))) });
+		expect(r).toMatchObject({ ok: true, cleanupPending: true, restored: ["a.txt", "b.txt"] });
+		const [journal] = pendingJournals(dir);
+		expect(existsSync(join(journal, "files", "0"))).toBe(false);
+		expect(existsSync(join(journal, "files", "1"))).toBe(true);
+		expect(existsSync(journalFile(journal))).toBe(true);
+		expect(restoreFromJournal(journal, toplevel(dir))).toMatchObject({ ok: true, restored: [] });
+		expect(pendingJournals(dir)).toEqual([]);
+		expect(state(dir)).toEqual(before);
+	});
+
+	it("journal.json is never removed before the backups: EACCES on files/ leaves the journal readable", () => {
+		const dir = fixture();
+		const r = failBefore({ cwd: dir, paths: ["a.txt"], command: ["t"], run: () => 0, faults: failOnce("cleanup", (p) => p.endsWith(`${sepFor()}files`)) });
+		expect(r).toMatchObject({ ok: true, cleanupPending: true });
+		const [journal] = pendingJournals(dir);
+		expect(existsSync(journalFile(journal))).toBe(true);
+		expect(journalState(journal)).toBe("restored");
+	});
+
+	it("EACCES removing the emptied run directory: the journal has moved to its authenticated completion marker, and the retry finishes from it", () => {
+		const dir = fixture();
+		const before = state(dir);
+		const r = failBefore({ cwd: dir, paths: ["a.txt", "c.txt"], command: ["t"], run: () => 0, faults: failOnce("cleanup", (p) => !p.endsWith("journal.json") && !p.endsWith(".completed.json") && !p.includes(`${sepFor()}files`)) });
+		expect(r).toMatchObject({ ok: true, cleanupPending: true, restored: ["a.txt", "c.txt"] });
+		const [journal] = pendingJournals(dir);
+		expect(existsSync(journalFile(journal))).toBe(false);
+		expect(JSON.parse(readFileSync(`${journal}.completed.json`, "utf8"))).toMatchObject({ state: "restored", id: journal.split(sepFor()).at(-1) });
+		// Unknown state for the next run until it is finished — never silently ignored.
+		expect(failBefore({ cwd: dir, paths: ["b.txt"], command: ["t"], run: () => 0 })).toMatchObject({ ok: false, exit: EXIT.unknownState, mutated: false });
+		expect(restoreFromJournal(journal, toplevel(dir))).toMatchObject({ ok: true, restored: [] });
+		expect(pendingJournals(dir)).toEqual([]);
+		expect(state(dir)).toEqual(before);
+		// A completed recovery repeated: nothing to find, nothing changed.
+		expect(restoreFromJournal(journal, toplevel(dir))).toMatchObject({ ok: false, exit: EXIT.unknownState });
+		expect(state(dir)).toEqual(before);
+	});
+
+	it("a journal-less run directory that still holds a backup is unknown evidence, never removed by a retry", () => {
+		const dir = fixture();
+		const r = failBefore({ cwd: dir, paths: ["a.txt"], command: ["t"], run: () => 0, faults: failOnce("cleanup", (p) => p.endsWith(join("files", "0"))) });
+		expect(r).toMatchObject({ cleanupPending: true });
+		const [journal] = pendingJournals(dir);
+		rmSync(journalFile(journal)); // the journal is lost, a backup is not
+		const again = restoreFromJournal(journal, toplevel(dir));
+		expect(again).toMatchObject({ ok: false, exit: EXIT.unknownState });
+		expect(existsSync(join(journal, "files", "0"))).toBe(true);
+	});
+
+	it("complete success: written and restored agree, and nothing is left behind", () => {
+		const dir = fixture();
+		const before = state(dir);
+		const r = failBefore({ cwd: dir, paths: ["a.txt", "b.txt", "c.txt"], command: ["t"], run: () => 0 });
+		expect(r).toMatchObject({ ok: true, restored: ["a.txt", "b.txt", "c.txt"], written: ["a.txt", "b.txt", "c.txt"] });
+		expect(r.cleanupPending).toBeUndefined();
+		expect(pendingJournals(dir)).toEqual([]);
+		expect(state(dir)).toEqual(before);
+	});
+});
+
+describe("(B) a file replaced before verification is reported as written, never as untouched", () => {
+	for (const [step, label] of [
+		["restore", "a fault immediately after the rename"],
+		["verify", "EACCES on the first verification read"],
+	]) {
+		it(`${label}: the receipt names the replaced file, the journal and backups are kept, and a retry verifies it`, () => {
+			const dir = fixture();
+			const before = state(dir);
+			const r = failBefore({ cwd: dir, paths: ["a.txt", "b.txt"], command: ["t"], run: () => 0, faults: failOnce(step, (p) => p === "a.txt") });
+			expect(r).toMatchObject({ ok: false, phase: "restore", exit: EXIT.unknownState, mutated: true, written: ["a.txt"], restored: [], stoppedAt: "a.txt" });
+			expect(r.detail).toMatch(/a\.txt was replaced but not yet verified/);
+			expect(read(dir, "a.txt")).toBe(before.files["a.txt"]); // it really was written back
+			const [journal] = pendingJournals(dir);
+			expect(existsSync(journalFile(journal))).toBe(true);
+			expect(existsSync(join(journal, "files", "0"))).toBe(true);
+			expect(restoreFromJournal(journal, toplevel(dir))).toMatchObject({ ok: true, restored: ["b.txt"], written: ["b.txt"] });
+			expect(state(dir)).toEqual(before);
+		});
+	}
+});
+
+describe("(A) finishing a cleanup needs this run's authenticated marker — never an empty directory alone", () => {
+	/** A completed cleanup stopped at its last step: the run directory is gone, the marker is left. */
+	function stoppedAtMarker() {
+		const dir = fixture();
+		const r = failBefore({ cwd: dir, paths: ["a.txt"], command: ["t"], run: () => 0, faults: failOnce("cleanup", (p) => p.endsWith(".completed.json")) });
+		expect(r).toMatchObject({ ok: true, cleanupPending: true });
+		// The run directory is already gone; only its marker is pending.
+		const marker = pendingJournals(dir).find((p) => p.endsWith(".completed.json"));
+		expect(marker).toBeTruthy();
+		return { dir, marker, journal: String(marker).slice(0, -".completed.json".length) };
+	}
+
+	it("EACCES removing the marker itself: the retry finishes from the marker, then nothing is pending", () => {
+		const { dir, marker, journal } = stoppedAtMarker();
+		expect(existsSync(journal)).toBe(false);
+		expect(existsSync(marker)).toBe(true);
+		expect(restoreFromJournal(journal, toplevel(dir))).toMatchObject({ ok: true });
+		expect(pendingJournals(dir)).toEqual([]);
+	});
+
+	it("an unrelated empty directory with no manifest, at a valid-looking journal path, is unknown and kept", () => {
+		const dir = fixture();
+		const fake = join(dir, ".git", "pags-fail-before", "1700000000000-deadbeef");
+		mkdirSync(join(fake, "files"), { recursive: true });
+		const r = restoreFromJournal(fake, toplevel(dir));
+		expect(r).toMatchObject({ ok: false, exit: EXIT.unknownState });
+		expect(existsSync(fake)).toBe(true);
+	});
+
+	it("a tampered marker does not verify: refused, the marker kept", () => {
+		const { dir, marker, journal } = stoppedAtMarker();
+		writeFileSync(marker, readFileSync(marker, "utf8").replace('"state": "restored"', '"state": "applied"'));
+		expect(restoreFromJournal(journal, toplevel(dir))).toMatchObject({ ok: false, exit: EXIT.unknownState });
+		expect(existsSync(marker)).toBe(true);
+	});
+
+	it("another run's marker is not this run's: refused, kept", () => {
+		const { dir, marker } = stoppedAtMarker();
+		const other = join(dir, ".git", "pags-fail-before", "1700000000000-otherrun");
+		cpSync(marker, `${other}.completed.json`);
+		mkdirSync(other);
+		expect(restoreFromJournal(other, toplevel(dir))).toMatchObject({ ok: false, exit: EXIT.unknownState });
+		expect(existsSync(other)).toBe(true);
+		expect(existsSync(`${other}.completed.json`)).toBe(true);
+	});
+
+	it("a marker from another repository is refused from this one", () => {
+		const a = stoppedAtMarker();
+		const b = fixture();
+		expect(restoreFromJournal(a.journal, toplevel(b))).toMatchObject({ ok: false, exit: EXIT.unknownState });
+		expect(existsSync(a.marker)).toBe(true);
+	});
+
+	it("a non-empty run directory beside a valid marker is refused, nothing removed", () => {
+		const { dir, marker, journal } = stoppedAtMarker();
+		mkdirSync(journal);
+		writeFileSync(join(journal, "stray"), "someone's file\n");
+		expect(restoreFromJournal(journal, toplevel(dir))).toMatchObject({ ok: false, exit: EXIT.unknownState });
+		expect(existsSync(join(journal, "stray"))).toBe(true);
+		expect(existsSync(marker)).toBe(true);
 	});
 });

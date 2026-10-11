@@ -64,6 +64,12 @@ What it does, as tested:
 - **I/O errors are receipts:** an unreadable path refuses at preflight with its error code; a restore stopped
   part-way reports exactly which files were put back and where it stopped, keeps the journal and backups, and
   `--restore` finishes it. The CLI never exits on a stack trace.
+- **Cleanup and receipts:** a receipt lists every file it `written` (replaced) separately from those
+  `restored` (verified back), so a stop between the two never reads as "nothing changed". Once every file is
+  back, the journal stays readable until its backups are gone, then moves to an authenticated
+  `<id>.completed.json` marker before the run directory is removed; a stop at any cleanup step is a success
+  with `cleanupPending`, and `--restore` finishes it. An empty directory without a verifying marker is
+  unknown state, never cleaned up.
 - **Complete writes:** every write loops until all bytes are written (repeated zero progress is an error) and
   is checked before the rename.
 - **Mode:** only plain permission bits (0777) are restored, exactly. A setuid, setgid or sticky file is refused

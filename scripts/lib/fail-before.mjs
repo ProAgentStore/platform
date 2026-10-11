@@ -306,7 +306,10 @@ function saveJournal(dir, journal, faults) {
 	renameSync(tmp, join(dir, "journal.json"));
 }
 function loadJournal(dir) {
-	const parsed = JSON.parse(readFileSync(join(dir, "journal.json"), "utf8"));
+	return loadJournalFile(join(dir, "journal.json"));
+}
+function loadJournalFile(file) {
+	const parsed = JSON.parse(readFileSync(file, "utf8"));
 	const { digest, ...body } = parsed;
 	if (parsed.format !== FORMAT || digest !== sha(JSON.stringify(body))) throw new Error("journal digest or format does not verify");
 	return body;
@@ -430,6 +433,9 @@ export function restoreFromJournal(dir, opts = {}) {
 	const callerRoot = typeof opts === "string" ? opts : opts.root;
 	const faults = typeof opts === "string" ? undefined : opts.faults;
 	const stop = (detail, extra = {}) => ({ ok: false, exit: EXIT.unknownState, journal: dir, restored: [], conflicts: [], detail: `${detail} Nothing was changed; the journal is kept.`, ...extra });
+	// The journal moved to its completion marker: only the last cleanup step is left, and it is finished only
+	// when the marker itself verifies — never because a directory happens to be empty.
+	if (!existsSync(join(dir, "journal.json")) && existsSync(completedMarker(dir))) return finishCompleted(dir, callerRoot, faults);
 	let journal;
 	try {
 		journal = loadJournal(dir);
@@ -450,6 +456,15 @@ export function restoreFromJournal(dir, opts = {}) {
 	if (callerRoot !== undefined && !sameRepo(repoIdentity(callerRoot), ident)) {
 		return stop(`The journal belongs to ${journal.repo.root}, not to ${callerRoot}.`);
 	}
+	// A journal marked `restored` has nothing left to write: every file must still be its original, and
+	// only the cleanup remains — some backups may already be gone, and none is needed (#1021).
+	if (journal.state === "restored") {
+		const changed = journal.files.filter((e) => e.original && !same(observe(join(ident.root, e.path)), e.original)).map((e) => e.path);
+		if (changed.length) {
+			return { ok: false, exit: EXIT.conflict, journal: dir, restored: [], written: [], conflicts: changed, detail: `${changed.join(", ")} changed after the restore completed and was left as it is; the journal is kept at ${dir}.` };
+		}
+		return cleanUp(dir, journal, [], [], faults);
+	}
 	// Every path and every backup is verified before ANY file changes.
 	const backups = new Map();
 	try {
@@ -468,44 +483,52 @@ export function restoreFromJournal(dir, opts = {}) {
 		return stop(`Could not verify the journal's paths and backups (${e.code ?? "error"}: ${e.message}).`);
 	}
 	const conflicts = [];
+	/** Files whose original is verified back. */
 	const restored = [];
+	/** Files this call REPLACED (renamed or removed), verified or not — a receipt never under-reports a write. */
+	const written = [];
 	let current = null;
 	try {
 		for (const entry of journal.files) {
 			current = entry.path;
 			const abs = join(ident.root, entry.path);
-		rmOwnTemp(join(dirname(abs), `.${basename(abs)}.${journal.id}.pags-fb-tmp`));
-		rmOwnTemp(join(dirname(abs), `.${basename(abs)}.${journal.id}-r.pags-fb-tmp`));
-		const now = observe(abs);
-		if (!entry.original) continue; // never snapshotted, so never written
-		if (same(now, entry.original)) continue;
-		// Ours only if it is exactly what this run journalled it would write — content, type and mode.
-		if (!entry.applying || !same(now, entry.intent)) {
-			conflicts.push(entry.path);
-			continue;
-		}
-		if (entry.original.type === "file") {
-			mkdirSync(dirname(abs), { recursive: true });
-			writeAtomic(abs, backups.get(entry.path), entry.original.mode, `${journal.id}-r`, faults);
-		} else rmSync(abs);
-		faults?.("restore", entry.path);
-		if (!same(observe(abs), entry.original)) {
-			conflicts.push(entry.path);
-			continue;
-		}
+			rmOwnTemp(join(dirname(abs), `.${basename(abs)}.${journal.id}.pags-fb-tmp`));
+			rmOwnTemp(join(dirname(abs), `.${basename(abs)}.${journal.id}-r.pags-fb-tmp`));
+			const now = observe(abs);
+			if (!entry.original) continue; // never snapshotted, so never written
+			if (same(now, entry.original)) continue; // already back — a retry skips it
+			// Ours only if it is exactly what this run journalled it would write — content, type and mode.
+			if (!entry.applying || !same(now, entry.intent)) {
+				conflicts.push(entry.path);
+				continue;
+			}
+			if (entry.original.type === "file") {
+				mkdirSync(dirname(abs), { recursive: true });
+				writeAtomic(abs, backups.get(entry.path), entry.original.mode, `${journal.id}-r`, faults);
+			} else rmSync(abs);
+			// The rename (or removal) has happened: record it BEFORE anything else can fail.
+			written.push(entry.path);
+			faults?.("restore", entry.path);
+			faults?.("verify", entry.path);
+			if (!same(observe(abs), entry.original)) {
+				conflicts.push(entry.path);
+				continue;
+			}
 			restored.push(entry.path);
 		}
 	} catch (e) {
 		// An ordinary I/O error part-way: say exactly what was put back and where it stopped. The journal and
 		// every backup are kept, so a later --restore finishes it; this is never "nothing changed".
+		const unverified = written.filter((p) => !restored.includes(p));
 		return {
 			ok: false,
 			exit: EXIT.unknownState,
 			journal: dir,
 			restored,
+			written,
 			conflicts,
 			stoppedAt: current,
-			detail: `the restore stopped at ${current} (${e.code ?? "error"}: ${e.message})${restored.length ? ` after putting back ${restored.join(", ")}` : " before putting any file back"}; the journal and its backups are kept at ${dir}. Fix the cause and finish it with --restore.`,
+			detail: `the restore stopped at ${current} (${e.code ?? "error"}: ${e.message})${restored.length ? ` after putting back ${restored.join(", ")}` : " before verifying any file back"}${unverified.length ? `; ${unverified.join(", ")} was replaced but not yet verified` : ""}; the journal and its backups are kept at ${dir}. Fix the cause and finish it with --restore.`,
 		};
 	}
 	if (conflicts.length) {
@@ -514,6 +537,7 @@ export function restoreFromJournal(dir, opts = {}) {
 			exit: EXIT.conflict,
 			journal: dir,
 			restored,
+			written,
 			conflicts,
 			detail: `${conflicts.join(", ")} changed while the comparison ran (content, type or mode) and was left as it is; the original is still in ${dir}. Nothing else was touched.`,
 		};
@@ -527,8 +551,83 @@ export function restoreFromJournal(dir, opts = {}) {
 			}
 		}
 	}
-	rmSync(dir, { recursive: true, force: true });
-	return { ok: true, exit: 0, restored, conflicts: [], detail: "every file is back to its pre-run bytes and mode" };
+	return cleanUp(dir, journal, restored, written, faults);
+}
+
+/** Where a journal moves when only the last cleanup step is left: beside its run directory, never inside it. */
+const completedMarker = (dir) => `${dir}.completed.json`;
+
+/**
+ * Every file is back; remove the evidence in an order that keeps it until it is no longer needed (#1021):
+ * mark the journal `restored`, remove each backup, then `files/`, then MOVE the journal (an atomic rename,
+ * digest intact) to its completion marker, remove the now-empty run directory, and last the marker. A stop
+ * at any step is not a failed restore — the files are back — and leaves a journal or a marker that a retry
+ * can authenticate, so --restore finishes the cleanup and changes nothing else.
+ */
+function cleanUp(dir, journal, restored, written, faults) {
+	try {
+		if (journal.state !== "restored") {
+			journal.state = "restored";
+			saveJournal(dir, journal, faults);
+		}
+		for (const entry of journal.files) {
+			const b = join(dir, entry.backup);
+			faults?.("cleanup", b);
+			rmSync(b, { force: true });
+		}
+		faults?.("cleanup", join(dir, "files"));
+		rmSync(join(dir, "files"), { recursive: true, force: true });
+		faults?.("cleanup", join(dir, "journal.json"));
+		renameSync(join(dir, "journal.json"), completedMarker(dir));
+	} catch (e) {
+		return cleanupPending(dir, restored, written, e);
+	}
+	return finishCompleted(dir, undefined, faults, { restored, written });
+}
+
+function cleanupPending(dir, restored, written, e) {
+	return {
+		ok: true,
+		exit: 0,
+		restored,
+		written,
+		conflicts: [],
+		cleanupPending: true,
+		journal: dir,
+		detail: `every file is back to its pre-run bytes and mode, but removing the journal at ${dir} stopped (${e.code ?? "error"}: ${e.message}). Nothing in the working tree depends on it; run --restore on it again to finish the cleanup — it changes nothing else.`,
+	};
+}
+
+/**
+ * The last cleanup step, from the completion marker. The marker must verify like a journal (digest,
+ * format), say `restored`, name this run directory, and belong to this repository; the run directory, if
+ * still there, must be empty. Anything else is unknown and stays.
+ */
+function finishCompleted(dir, callerRoot, faults, done = { restored: [], written: [] }) {
+	const marker = completedMarker(dir);
+	const stop = (detail) => ({ ok: false, exit: EXIT.unknownState, journal: dir, restored: [], written: [], conflicts: [], detail: `${detail} Nothing was changed; the evidence is kept.` });
+	let journal;
+	try {
+		journal = loadJournalFile(marker);
+	} catch (e) {
+		return stop(`The completion marker ${marker} cannot be trusted (${e.message}).`);
+	}
+	const ident = repoIdentity(journal.repo?.root ?? "/nonexistent");
+	if (!sameRepo(ident, journal.repo) || journal.state !== "restored" || basename(dir) !== journal.id) return stop(`The completion marker ${marker} is not this run's.`);
+	if (realpathSync(dirname(marker)) !== journalRoot(ident)) return stop(`The completion marker ${marker} is not where ${journal.repo.root} keeps its journals.`);
+	if (callerRoot !== undefined && !sameRepo(repoIdentity(callerRoot), ident)) return stop(`The completion marker belongs to ${journal.repo.root}, not to ${callerRoot}.`);
+	try {
+		if (existsSync(dir)) {
+			if (readdirSync(dir).length) return stop(`The run directory ${dir} is not empty.`);
+			faults?.("cleanup", dir);
+			rmdirSync(dir);
+		}
+		faults?.("cleanup", marker);
+		rmSync(marker);
+	} catch (e) {
+		return cleanupPending(dir, done.restored, done.written, e);
+	}
+	return { ok: true, exit: 0, restored: done.restored, written: done.written, conflicts: [], detail: "every file is back to its pre-run bytes and mode" };
 }
 
 function defaultRun(command, root) {
