@@ -538,7 +538,7 @@ export function repairCheckoutObjective(i: RepairBriefInput): string {
 		`WHAT THE PLATFORM FOUND JUST NOW: ${found.length ? found.join(" ") : "the checkout could not be read."}`,
 		"",
 		"THE ONE INVARIANT: every commit and every uncommitted change that exists now must still exist somewhere — a branch or a commit — when you finish. You may MOVE work; you may never delete it.",
-		"- Forbidden, no exceptions: `git reset --hard`, `git checkout -- <path>`, `git checkout .`, `git restore`, `git clean`, `git stash drop`, `git branch -D`, any `--force`, and any `git push`.",
+		"- Forbidden, no exceptions: `git reset --hard`, `git checkout -- <path>`, `git checkout .`, `git restore`, `git clean`, `git stash drop`, `git stash pop`, `git stash apply` (the stash is repo-global: its top entry may be someone else's recovery work), `git branch -D`, any `--force`, and any `git push`.",
 		`- Uncommitted edits or untracked paths in the way (tooling folders such as \`.claude/\` count): park them — \`git checkout -b wip/<YYYY-MM-DD>-<short-reason>\`, \`git add -A\`, \`git commit -m "wip: parked by repair run"\`, then \`git checkout ${branch}\`. Never delete them.`,
 		`- Local commits on \`${branch}\` that are not on \`${upstream}\` (ahead or diverged): save them first with \`git branch wip/<YYYY-MM-DD>-<short-reason>\`, then move the branch with \`git reset --keep ${upstream}\`. Never merge or rebase them on your own initiative.`,
 		`- If the checkout is on another branch, leave that branch as it is and \`git checkout ${branch}\` (park uncommitted work first, as above).`,

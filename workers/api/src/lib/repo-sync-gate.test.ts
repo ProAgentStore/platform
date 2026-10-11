@@ -426,7 +426,7 @@ describe("the repair run — the way out that needs no hands on the machine (#80
 
 		it("forbids every discarding command and any push, by name", () => {
 			const o = repairCheckoutObjective({ ...base, sync: BEHIND });
-			for (const cmd of ["git reset --hard", "git checkout .", "git restore", "git clean", "git stash drop", "git branch -D", "--force", "git push"]) {
+			for (const cmd of ["git reset --hard", "git checkout .", "git restore", "git clean", "git stash drop", "git stash pop", "git stash apply", "git branch -D", "--force", "git push"]) {
 				expect(o).toContain(cmd);
 			}
 			expect(o).toContain("No feature or ticket work");

@@ -93,6 +93,20 @@ git worktree remove --force "$WT"   # only the worktree this command created
 Check every setup step's exit before running the comparison (the `&&` chain does that), and capture the test's
 own exit status rather than a later `echo`, `grep` or pipeline's.
 
+**Guards on the coding agents' own path (#1021).** Guidance alone is not the protection:
+
+- **Pilot refusal (always on):** `no_stash_restore` in `workers/api/src/lib/coding-scope-constraints.ts` is a
+  platform rule, like the termination one. Any Pilot-generated instruction that asks for `git stash pop` or
+  `git stash apply` (the command, through `git -C`, or in prose) is refused before it reaches the engine, and
+  the refusal goes into the step log. An owner directive cannot lift it; the owner's own direct messages are
+  not screened. Tested end to end in `workers/api/src/workflows/coding-session/scope-evidence.test.ts`.
+- **Prompts:** the repair-checkout objective forbids `git stash pop`/`apply` by name, and a dirty-checkout
+  run is told to compare in an isolated `git worktree add --detach` checkout, never the stash.
+- **Not covered:** a command the ENGINE composes itself and runs (the #1021 incident). The runner starts
+  Claude Code with `--dangerously-skip-permissions`; a `--disallowedTools` deny rule's effect under that
+  mode, inside compound commands and `sh -c`, cannot be verified without a live model session, so no runner
+  deny is shipped.
+
 Never do this with `git stash` (#1021). The stash is repo-global, so `pop` restores the top of everyone's stack,
 not what you saved. A save that fails or saves nothing still lets a chained `pop` consume someone else's recovery
 work, and zsh does not split `$SRC="a.ts b.ts"`, so an unquoted path variable is ONE pathspec and the save

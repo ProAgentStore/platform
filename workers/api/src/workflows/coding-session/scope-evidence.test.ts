@@ -277,6 +277,45 @@ describe("termination authority, inert data and test selection", () => {
 	});
 });
 
+describe("the Pilot never asks for a restore from the repo-global stash (#1021)", () => {
+	const RULE = /refused \(owner constraint\): no stash restore: the stash is repo-global.* — set by platform rule; it restores from the repo-global stash/;
+	// Inert fixture text: never executed — these are the instructions a decision WOULD send.
+	const INERT_INCIDENT = 'SRC="src/a.ts src/b.ts"; git stash push -- $SRC; pnpm vitest run src/a.test.ts; git stash pop';
+	const WORKTREE = "compare in an isolated worktree: git worktree add --detach /tmp/old HEAD, copy the new test in, run it there";
+
+	it("refuses the observed compound command, and still sends the isolated-worktree comparison and a plain save", async () => {
+		decisions = [SEND("start"), SEND(INERT_INCIDENT), SEND(WORKTREE), SEND("git stash push -m wip -- src/a.ts"), FINISH("compared")];
+		await run();
+		expect(acted).toEqual(["start", WORKTREE, "git stash push -m wip -- src/a.ts"]);
+		expect(acted.join("\n")).not.toMatch(/stash (?:pop|apply)/);
+		expect(lastLog()).toMatch(RULE);
+	});
+
+	it("refuses a bare apply of a named entry and a pop through `git -C`", async () => {
+		decisions = [SEND("start"), SEND("git stash apply stash@{0}"), SEND("git status"), SEND("git -C /w/widget stash pop"), FINISH("done")];
+		await run();
+		expect(acted).toEqual(["start", "git status"]);
+		expect(lastLog().split("\n").filter((l) => RULE.test(l))).toHaveLength(2);
+	});
+
+	it("refuses prose asking for the restore, and passes a quoted fixture or a clause that forbids it", async () => {
+		const fixture = "Add a test asserting the screen refuses 'git stash pop'";
+		const negated = "Do not git stash pop; compare in an isolated worktree instead";
+		decisions = [SEND("start"), SEND("then pop the stash to get your edits back"), SEND(fixture), SEND(negated), FINISH("done")];
+		await run();
+		expect(acted).toEqual(["start", fixture, negated]);
+		expect(lastLog()).toMatch(RULE);
+	});
+
+	it("an owner directive cannot lift it: the Pilot cannot prove the top entry is one it created", async () => {
+		decisions = [SEND("start"), SEND("git stash pop"), FINISH("done")];
+		onFirstAct(() => directive("You may pop the stash when you are done."));
+		await run();
+		expect(acted).toEqual(["start"]);
+		expect(lastLog()).toMatch(RULE);
+	});
+});
+
 describe("a termination grant is scoped to what it names (#1019)", () => {
 	it("a vitest-only grant allows vitest kills and refuses node, by pattern, by killall and in prose", async () => {
 		decisions = [SEND("start"), SEND("pkill -f node"), SEND("kill $(pgrep -f vitest)"), SEND("killall node"), SEND("pkill -f vitest"), FINISH("done")];

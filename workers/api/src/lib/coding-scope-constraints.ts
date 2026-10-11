@@ -16,6 +16,10 @@
  *      "read-only", which is the defect this exists for. One platform rule is always on: no unscoped
  *      process termination (`killall`, `pkill`, pattern- or pipeline-selected kills) unless the owner
  *      explicitly grants it — advice about capacity ("the machine is low on memory") is not a grant.
+ *      A second is always on and cannot be lifted from a directive: no `git stash pop` / `apply` (#1021).
+ *      The stash is repo-global, so a restore takes the top of EVERYONE's stack — after a save that failed
+ *      or saved nothing, that is someone else's recovery work. The Pilot cannot prove the entry is one it
+ *      just created, so it never asks for a restore; an owner's own direct message is not screened here.
  *
  *   2. {@link screenScopedInstruction} checks ONE generated instruction against them, before it reaches
  *      the transport. It is the same kind of screen as the merge-authority one in `coding-authority.ts`
@@ -41,7 +45,8 @@ export type ScopeKind =
 	| "finish_after_push"
 	| "no_process_inspection"
 	| "no_recursive_collection"
-	| "no_unscoped_termination";
+	| "no_unscoped_termination"
+	| "no_stash_restore";
 
 export interface ScopeConstraint {
 	kind: ScopeKind;
@@ -74,6 +79,7 @@ export const SCOPE_LABEL: Record<ScopeKind, string> = {
 	no_process_inspection: "no collection of process arguments, environment or private logs",
 	no_recursive_collection: "no recursive collection",
 	no_unscoped_termination: "no unscoped process termination",
+	no_stash_restore: "no stash restore: the stash is repo-global, so `git stash pop`/`apply` can take someone else's work — compare old source in an isolated `git worktree add --detach` checkout instead",
 };
 
 /** Any negation — used to keep a clause that negates something from reading as a LIFT. */
@@ -165,6 +171,7 @@ const WORKER_LIMIT = /\b(?:at most|max(?:imum)?(?: of)?|no more than|limit(?: it
 export function activeConstraints(sources: readonly ConstraintSource[]): ScopeConstraint[] {
 	const state = new Map<ScopeKind, ScopeConstraint>();
 	state.set("no_unscoped_termination", { kind: "no_unscoped_termination", source: "platform rule" });
+	state.set("no_stash_restore", { kind: "no_stash_restore", source: "platform rule" });
 	for (const src of sources) {
 		for (const clause of clauses(src.text)) {
 			const limit = WORKER_LIMIT.exec(clause);
@@ -229,6 +236,9 @@ const UNSCOPED_KILL =
 	/\b(?:killall|pkill)\b|\bkill\s+(?:-\S+\s+)*(?:-1|0)\b|\bkill\b[^\n;]*\$\(|\|\s*xargs\s+(?:-\S+\s+)*kill\b|\bfuser\s+-[a-zA-Z]*k|\b(?:kill|terminate|stop)\s+(?:all|every|the other|other)\s+(?:\w+\s+)?process(?:es)?\b/i;
 
 /** Test runner invocations, with the argument text that follows each. */
+/** A restore from the repo-global stash (#1021): the command, or prose asking for it. Saving alone is not one. */
+const STASH_RESTORE =
+	/\bgit\s+(?:-[cC]\s+\S+\s+)*stash\s+(?:pop|apply)\b|\b(?:pop|apply|restore|unstash)\s+(?:the\s+|your\s+|my\s+|that\s+|this\s+)?(?:stash|stashed\s+changes)\b/i;
 const TEST_RUNNER =
 	/\b(?:(?:pnpm|npm|yarn|bun)\s+(?:(?:--filter[=\s]\S+|-F\s+\S+|-C\s+\S+|--dir[=\s]\S+)\s+)*(?:run\s+)?test(?::[\w-]+)?|npx\s+vitest(?:\s+run)?|vitest(?:\s+run)?|npx\s+jest|jest|pytest|go\s+test|cargo\s+test|(?:npx\s+)?playwright\s+test|node\s+--test)(?![\w:-])([^\n`;&|]*)/gi;
 /** Where an unquoted command in prose ends and the sentence resumes: "run pnpm test and report". */
@@ -359,6 +369,8 @@ function breaks(c: ScopeConstraint, said: string): string | null {
 			return PROCESS_INSPECTION.test(said) ? "it collects process arguments, environment or private logs" : null;
 		case "no_recursive_collection":
 			return RECURSIVE_COLLECTION.test(said) ? "it collects recursively" : null;
+		case "no_stash_restore":
+			return STASH_RESTORE.test(said) ? "it restores from the repo-global stash, whose top entry may be someone else's recovery work" : null;
 		case "no_unscoped_termination": {
 			if (!UNSCOPED_KILL.test(said)) return null;
 			if (c.allowed?.includes("*")) return null;

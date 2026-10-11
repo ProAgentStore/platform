@@ -112,6 +112,29 @@ describe("failBefore — the supported comparison never consumes foreign state",
 		expect(pendingJournals(dir)).toEqual([]);
 	});
 
+	it("a real file whose name has a space is ONE path: compared at its base bytes and restored, never refused as joined", () => {
+		const dir = fixture();
+		mkdirSync(join(dir, "src dir"));
+		put(dir, "src dir/a b.txt", "spaced-base\n");
+		g(dir, "add", "src dir/a b.txt");
+		g(dir, "commit", "-q", "-m", "spaced file");
+		put(dir, "src dir/a b.txt", "spaced-OWNED-edit\n");
+		const before = { ...state(dir), spaced: read(dir, "src dir/a b.txt") };
+		let during = null;
+		const r = failBefore({ cwd: dir, paths: ["src dir/a b.txt"], command: ["test-runner"], run: () => {
+				during = read(dir, "src dir/a b.txt");
+				return 0;
+			},
+		});
+		expect(r).toMatchObject({ ok: true, exit: 0 });
+		expect(during).toBe("spaced-base\n");
+		expect({ ...state(dir), spaced: read(dir, "src dir/a b.txt") }).toEqual(before);
+		// Through the CLI the name is one argv entry, so no shell ever splits it.
+		const cli = spawnSync(process.execPath, [CLI, "--path", "src dir/a b.txt", "--", "sh", "-c", 'test "$(cat "src dir/a b.txt")" = spaced-base'], { cwd: dir, encoding: "utf8" });
+		expect(cli.status).toBe(0);
+		expect(read(dir, "src dir/a b.txt")).toBe("spaced-OWNED-edit\n");
+	});
+
 	it("runs the test against the base bytes of exactly the named files, then restores them — index, stash and foreign work untouched", () => {
 		const dir = fixture();
 		const before = state(dir);

@@ -850,7 +850,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			goal.specialInstructions = [
 				goal.specialInstructions,
 				stateNote
-					? `REPOSITORY STATE (read before you start): ${stateNote} You did not create this state. Do NOT revert, stash, reset or discard anything you did not write yourself. If your objective needs a clean tree or a different branch, say so and stop rather than clearing it.`
+					? `REPOSITORY STATE (read before you start): ${stateNote} You did not create this state. Do NOT revert, stash, reset or discard anything you did not write yourself, and never \`git stash pop\`/\`apply\`: the stash is repo-global, so its top entry may be someone else's work (#1021). To test old source against a new test, use an isolated \`git worktree add --detach\` checkout, never the stash. If your objective needs a clean tree or a different branch, say so and stop rather than clearing it.`
 					: "",
 				syncNote
 					? `UPSTREAM SYNC (checked just now, nothing was pulled): ${syncNote} If the checkout is BEHIND and the tree is clean and on its configured branch, make your FIRST instruction a fast-forward (\`git pull --ff-only\`) so you never plan against a stale base, and say in your report what it brought in. If it is dirty or has diverged, do not merge or rebase on your own initiative — report it and ask.`
