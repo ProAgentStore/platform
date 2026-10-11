@@ -45,13 +45,18 @@ import { hitOutputCap } from "./reply-truncation.js";
  * controller's recovery and the run-level classifier read it from there.
  */
 export const INCOMPLETE_TOOL_ARGS_MARKER = "[stream: incomplete-tool-args]";
+/**
+ * The message marker for a stream whose transport ended before `message_stop` mid prose, with no
+ * output cap (#907): the reply was dropped, not finished, so a fresh attempt is a fresh stream.
+ */
+export const TRANSPORT_EOF_MARKER = "[stream: transport-eof]";
 
 /** A stream that did not deliver a well-formed message. Distinct so the caller can label it. */
 export class AnthropicStreamError extends Error {
 	constructor(
 		message: string,
-		/** Set only where the stream stopped mid tool call — the one case marked as a provider stall (#907). */
-		readonly incompleteToolArgs = false,
+		/** Set only where the provider stopped mid-reply — the cases retried as a provider stall (#907). */
+		readonly marker?: typeof INCOMPLETE_TOOL_ARGS_MARKER | typeof TRANSPORT_EOF_MARKER,
 	) {
 		super(message);
 		this.name = "AnthropicStreamError";
@@ -277,24 +282,24 @@ export class AnthropicStreamAssembler {
 		// arguments are whatever fragments happened to arrive, which is the unparseable case with the
 		// error hidden. It is never returned; what differs is WHY it stopped (#907):
 		const openTool = [...this.openTools.values()][0];
-		if (!this.complete) {
-			// The transport ended before `message_stop`. Mid tool call that is the provider stopping
-			// mid-reply — transient, so it carries the stall marker. Mid prose it stays as it was.
-			if (openTool !== undefined) {
-				throw new AnthropicStreamError(`the reply ended mid-stream while the arguments for tool \`${openTool}\` were still arriving`, true);
-			}
-			throw new AnthropicStreamError("the reply ended mid-stream, so it is not the whole answer");
-		}
+		// The provider SAID it ran out of room: the known output-cap outcome (#504), the same on every
+		// attempt — so never a stall, whether or not `message_stop` followed the cap.
+		const capped = hitOutputCap(this.stopReason);
 		if (openTool !== undefined) {
-			// The provider finished and SAID it ran out of room: the known output-cap outcome (#504), the
-			// same on every attempt — not a stall, so no marker.
-			if (hitOutputCap(this.stopReason)) {
+			if (capped) {
 				throw new AnthropicStreamError(
 					`the reply hit the output limit before the arguments for tool \`${openTool}\` finished arriving, so the call is incomplete`,
 				);
 			}
-			throw new AnthropicStreamError(`the arguments for tool \`${openTool}\` never finished arriving`, true);
+			// No cap: the provider stopped mid-reply — transient, so it carries the stall marker.
+			if (!this.complete) {
+				throw new AnthropicStreamError(`the reply ended mid-stream while the arguments for tool \`${openTool}\` were still arriving`, INCOMPLETE_TOOL_ARGS_MARKER);
+			}
+			throw new AnthropicStreamError(`the arguments for tool \`${openTool}\` never finished arriving`, INCOMPLETE_TOOL_ARGS_MARKER);
 		}
+		// The transport ended before `message_stop` mid prose with no cap: a dropped stream, not a finished
+		// reply, so a fresh attempt is a fresh stream (#907). Nothing that arrived is ever returned.
+		if (!this.complete) throw new AnthropicStreamError("the reply ended mid-stream, so it is not the whole answer", capped ? undefined : TRANSPORT_EOF_MARKER);
 		// #504: no arguments AND the provider says it ran out of room. Either half alone is fine — a
 		// no-argument tool is legitimate, and a truncated prose reply is #397's business — but
 		// together they describe a call whose arguments were cut off before the first fragment.

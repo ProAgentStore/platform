@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { classifyCodingFailure } from "./coding-failure.js";
-import { ControllerAiStalled, isControllerAiStall, policyFrom, withControllerAiRecovery } from "./controller-ai-recovery.js";
+import { ControllerAiCancelled, ControllerAiStalled, isControllerAiStall, policyFrom, withControllerAiRecovery } from "./controller-ai-recovery.js";
 import { decideCodingAction, pilotUserBlocks, systemPrompt } from "./coding-loop.js";
 import { encryptKey } from "./crypto.js";
 import {
@@ -986,6 +986,62 @@ describe("SSE termination-boundary matrix (#907)", () => {
 		return { raw, outcome, attempts: fetchMock.mock.calls.length, crossed: classifyCodingFailure(new Error(raw.message)) };
 	}
 
+	// ── A dropped stream mid prose: EOF before message_stop, no tool open, no cap (#907) ─────────────
+	const textHalf: Frame[] = [
+		{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+		{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "half an ans" } },
+	];
+	const completeText = () => anthropicSse({ content: [{ type: "text", text: "the whole answer" }], stop_reason: "end_turn" });
+
+	it("EOF mid prose is a transient dropped stream: retried to the attempt ceiling, then a resumable stall from its message alone", async () => {
+		const env = await envWithAnthropicKey();
+		const fetchMock = vi.fn(async () => sse([start, ...textHalf]));
+		vi.stubGlobal("fetch", fetchMock);
+		const slept: number[] = [];
+		const outcome = await withControllerAiRecovery(policyFrom(), { surface: "pilot", sleep: async (ms: number) => void slept.push(ms) }, () => ask(env)).catch((e: unknown) => e);
+		expect(outcome).toBeInstanceOf(ControllerAiStalled);
+		expect(fetchMock).toHaveBeenCalledTimes(policyFrom().maxAttempts);
+		expect(slept).toEqual(policyFrom().backoffMs.slice(0, policyFrom().maxAttempts - 1));
+		expect((outcome as Error).message).not.toContain("half an ans");
+		expect(classifyCodingFailure(new Error((outcome as Error).message))).toMatchObject({ class: "provider_stall" });
+		const raw = (await ask(env).catch((e: unknown) => e)) as UserAiProviderError;
+		expect(raw.message).toBe("Anthropic: the reply ended mid-stream, so it is not the whole answer [stream: transport-eof]");
+		expect(raw.message).not.toContain("half an ans");
+		expect(isControllerAiStall(new Error(raw.message))).toBe(true);
+		expect(classifyCodingFailure(new Error(raw.message))).toMatchObject({ class: "provider_stall", retryable: true });
+	});
+
+	it("EOF mid prose, then a complete reply: only the next attempt's whole answer is returned", async () => {
+		const env = await envWithAnthropicKey();
+		const fetchMock = vi.fn().mockImplementationOnce(async () => sse([start, ...textHalf])).mockImplementation(async () => completeText());
+		vi.stubGlobal("fetch", fetchMock);
+		const result = JSON.stringify(await recover(env));
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(result).toContain("the whole answer");
+		expect(result).not.toContain("half an ans");
+	});
+
+	it("EOF mid prose, cancelled during the backoff: no further attempt, and nothing partial returned", async () => {
+		const env = await envWithAnthropicKey();
+		const fetchMock = vi.fn(async () => sse([start, ...textHalf]));
+		vi.stubGlobal("fetch", fetchMock);
+		let slept = 0;
+		const outcome = await withControllerAiRecovery(
+			policyFrom(),
+			{
+				surface: "pilot",
+				sleep: async () => {
+					slept++;
+				},
+				isCancelled: async () => slept > 0,
+			},
+			() => ask(env),
+		).catch((e: unknown) => e);
+		expect(outcome).toBeInstanceOf(ControllerAiCancelled);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(String((outcome as Error).message)).not.toContain("half an ans");
+	});
+
 	// ── The two corrected rows (fail before this change) ────────────────────────────────────────────
 
 	it("EOF before message_stop, mid tool call: a transient stall — retried, then resumable from its message alone", async () => {
@@ -1042,7 +1098,10 @@ describe("SSE termination-boundary matrix (#907)", () => {
 	});
 
 	it.each<[string, Frame[], string]>([
-		["EOF before message_stop with no tool open", [start, { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }, { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "half an ans" } }], "Anthropic: the reply ended mid-stream, so it is not the whole answer"],
+		// An explicit cap is the known generation limit even when `message_stop` never followed it.
+		["output cap (max_tokens) with a tool still open, then EOF", [start, toolStart, partial, stopReason("max_tokens")], "Anthropic: the reply hit the output limit before the arguments for tool `send_message` finished arriving, so the call is incomplete"],
+		["output cap (length) with a tool still open, then EOF", [start, toolStart, partial, stopReason("length")], "Anthropic: the reply hit the output limit before the arguments for tool `send_message` finished arriving, so the call is incomplete"],
+		["output cap mid prose, then EOF", [start, ...textHalf, stopReason("max_tokens")], "Anthropic: the reply ended mid-stream, so it is not the whole answer"],
 		["output cap with a closed, argumentless tool (#504)", [start, toolStart, blockStop, stopReason("max_tokens"), messageStop], "Anthropic: the reply hit the output limit before the arguments for tool `send_message` arrived, so the call is incomplete"],
 		["a closed tool whose arguments are malformed JSON", [start, toolStart, partial, blockStop, stopReason("tool_use"), messageStop], "Anthropic: the arguments for tool `send_message` arrived incomplete and could not be read"],
 		["output cap with a closed, malformed tool", [start, toolStart, partial, blockStop, stopReason("max_tokens"), messageStop], "Anthropic: the arguments for tool `send_message` arrived incomplete and could not be read"],

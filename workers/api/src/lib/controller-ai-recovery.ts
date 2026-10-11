@@ -26,7 +26,7 @@
  * one outer layer.
  */
 import type { Env } from "../types.js";
-import { INCOMPLETE_TOOL_ARGS_MARKER } from "./anthropic-stream.js";
+import { INCOMPLETE_TOOL_ARGS_MARKER, TRANSPORT_EOF_MARKER } from "./anthropic-stream.js";
 import { logEvent } from "./events.js";
 import { patchInstanceConfig } from "./instance-config.js";
 import type { StreamDeadlines, StreamPhase } from "./user-ai.js";
@@ -127,7 +127,7 @@ export function setControllerAiSleepForTest(fn: ((ms: number) => Promise<void>) 
 
 // The tool-args marker (#907): a stream that stopped mid tool call is the provider stopping mid-reply.
 // Without it that failure passed straight through, and the bounded recovery below never retried it.
-const STALL_MARKERS = ["did not begin replying", "stopped sending mid-reply", "ended mid-reply", INCOMPLETE_TOOL_ARGS_MARKER];
+const STALL_MARKERS = ["did not begin replying", "stopped sending mid-reply", "ended mid-reply", INCOMPLETE_TOOL_ARGS_MARKER, TRANSPORT_EOF_MARKER];
 
 /** A provider stall — the only failure this recovers. Anything else passes through. */
 export function isControllerAiStall(err: unknown): boolean {

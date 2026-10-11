@@ -33,14 +33,16 @@ Every controller call goes through `controllerAiCall`, which does the following:
 
 ### How a stream's ending decides it (`anthropic-stream.ts` `finish()`)
 
-What matters is why an incomplete tool call stopped. A partial call is never returned in any of these cases.
+What matters is why a reply stopped. Partial text or a partial call is never returned in any of these cases.
 
 | How the stream ended | Outcome |
 |---|---|
-| The transport ended before `message_stop`, mid tool call | Transient. Marked `[stream: incomplete-tool-args]`, retried by this policy, and resumable `provider_stall` from its message alone |
+| The transport ended before `message_stop`, mid tool call, no output cap | Transient. Marked `[stream: incomplete-tool-args]`, retried by this policy, and resumable `provider_stall` from its message alone |
+| The transport ended before `message_stop`, mid prose, no output cap | A dropped stream. Marked `[stream: transport-eof]` and retried the same way; the partial text is never returned |
 | `message_stop` with a tool still open, no output cap | The provider stopped mid-reply. Marked and retried the same way |
-| `max_tokens`/`length` with a tool still open | The known output-cap outcome (#504), the same on every attempt. One attempt, not a stall, `provider_error` once only its message is left |
-| The transport ended mid prose, a malformed closed call, an `error` frame, a non-JSON frame | One attempt, not a stall |
+| `max_tokens`/`length` with a tool still open, with or without `message_stop` after it | The known output-cap outcome (#504), the same on every attempt. One attempt, not a stall, `provider_error` once only its message is left |
+| `max_tokens`/`length` mid prose, then the transport ended | The same output-cap outcome: one attempt, not a stall |
+| A malformed closed call, an `error` frame, a non-JSON frame | One attempt, not a stall |
 
 ### Not nested inside the other two layers
 

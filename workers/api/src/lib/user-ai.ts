@@ -13,7 +13,6 @@ import {
 import {
 	AnthropicStreamAssembler,
 	AnthropicStreamError,
-	INCOMPLETE_TOOL_ARGS_MARKER,
 	type AnthropicMessageBody,
 	parseSseEvents,
 } from "./anthropic-stream.js";
@@ -585,10 +584,10 @@ function asProviderError(err: unknown, meta?: { provider: string; model: string 
 	// A malformed or truncated stream is a transport fact — a lost frame, a mid-stream
 	// `overloaded_error`, tool arguments that arrived half-written. A fresh generation is a fresh
 	// stream, so this is worth exactly one retry.
-	// A tool call whose arguments stopped arriving is the provider stopping mid-reply (#907), so it is
-	// marked as such IN THE MESSAGE — the part of an error that survives a step boundary.
+	// The provider stopping mid-reply — a tool call whose arguments stopped arriving, or a dropped stream
+	// with no output cap (#907) — is marked as such IN THE MESSAGE, the part that survives a step boundary.
 	if (err instanceof AnthropicStreamError) {
-		return new UserAiProviderError(`Anthropic: ${err.message}${err.incompleteToolArgs ? ` ${INCOMPLETE_TOOL_ARGS_MARKER}` : ""}`, 502, undefined, undefined, true);
+		return new UserAiProviderError(`Anthropic: ${err.message}${err.marker ? ` ${err.marker}` : ""}`, 502, undefined, undefined, true);
 	}
 	// The runtime's own abort, raised by a socket we cancelled or one the provider dropped. It says
 	// nothing about HOW LONG anything waited — see `connectionLostMessage`.
