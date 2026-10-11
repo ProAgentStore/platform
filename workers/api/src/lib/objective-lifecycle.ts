@@ -193,9 +193,10 @@ export async function listLifecycle(
  *   carrying a deferral note with no `deferred`; a run with no `started` / `admitted`, or a finished one
  *   with no `run_finished`.
  *
- * KNOWN LIMIT: a `deferred` lost on an entry that has since left `pending` cannot be detected — the
- * queue row keeps no record of past deferrals, so it is not a gap and does not make the coverage
- * `incomplete`. `coverage: "complete"` therefore never vouches for the count of deferrals.
+ * A deferral is expected from the row's `deferred_at` (migration 0216), which nothing clears, so a lost
+ * `deferred` stays a gap after the entry is admitted, cancelled or fails. KNOWN LIMIT: `deferred_at`
+ * holds the LATEST deferral, so `complete` vouches that at least one `deferred` was recorded, not for
+ * how many; and an entry deferred before 0216 that has since left `pending` carries no evidence at all.
  *
  * Each missing one is named in `coverage_gaps` and makes the coverage `incomplete`. A row older than the
  * instance's first recorded event predates the ledger (migration 0212) and reads `unknown` — never a gap
@@ -245,16 +246,15 @@ async function coverageOf(env: Env, userId: string, instanceId: string, h: { req
 		if (r.state === "unknown") expect(r.created_at, ["outcome_unknown"], "r", id, `request ${id} (outcome unknown)`);
 	}
 	for (const id of h.queueEntryIds) {
-		const q = await env.DB.prepare(`SELECT created_at, status, run_id, stop_reason FROM instance_objective_queue WHERE ${scope} AND id = ?3`).bind(userId, instanceId, id).first<{ created_at: number; status: string; run_id: string | null; stop_reason: string | null }>();
+		const q = await env.DB.prepare(`SELECT created_at, status, run_id, stop_reason, deferred_at FROM instance_objective_queue WHERE ${scope} AND id = ?3`).bind(userId, instanceId, id).first<{ created_at: number; status: string; run_id: string | null; stop_reason: string | null; deferred_at: number | null }>();
 		if (!q) continue;
 		expect(q.created_at, ["queued"], "q", id, `queue entry ${id}`);
 		if (q.status === "cancelled") expect(q.created_at, ["cancelled"], "q", id, `queue entry ${id} (cancelled)`);
 		if (q.status === "failed") expect(q.created_at, ["admission_failed"], "q", id, `queue entry ${id} (failed admission)`);
 		if (q.run_id) expect(q.created_at, ["admitted"], "q", id, `queue entry ${id} (admitted to run ${q.run_id})`);
-		// A deferral leaves a trace only while the entry still waits: `requeueEntry` is the one writer of a
-		// PENDING row's `stop_reason`. Once the entry is admitted, cancelled or failed that note is
-		// overwritten, so an earlier lost `deferred` is undetectable from the rows — a known limit.
-		if (q.status === "pending" && q.stop_reason) expect(q.created_at, ["deferred"], "q", id, `queue entry ${id} (deferred)`);
+		// `deferred_at` survives every later status; a pending row's note (`requeueEntry` is its one writer)
+		// still covers an entry deferred before 0216 added the column.
+		if (q.deferred_at !== null || (q.status === "pending" && q.stop_reason)) expect(q.created_at, ["deferred"], "q", id, `queue entry ${id} (deferred)`);
 	}
 	for (const id of h.runIds) {
 		const u = await env.DB.prepare(`SELECT started_at, status, request_id, queue_entry_id FROM agent_loop_runs WHERE ${scope} AND run_id = ?3`).bind(userId, instanceId, id).first<{ started_at: number; status: string; request_id: string | null; queue_entry_id: string | null }>();

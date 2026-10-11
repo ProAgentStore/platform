@@ -528,17 +528,67 @@ describe("a lost history write is reported as a gap, never as a complete history
 		expect(await page("request_id=req-A")).toMatchObject({ coverage: "incomplete", coverage_gaps: [`request req-B (deduplicated onto ${entryId}): no "deduplicated" event`] });
 	});
 
-	it("a `deferred` that failed to write while the entry still waits is a named gap; once admitted it is the documented limit", async () => {
-		const q = await start({ requestId: "req-d", objective: "Work issue #906.", queueIfBusy: true });
-		const entryId = (q.body.entry as { id: string }).id;
-		env = failing({ events: ["deferred"] });
-		expect(await tryDequeueAndStart(env, "i1", "r1", "u1")).toMatchObject({ requeued: true });
-		env = { DB: d1.DB } as unknown as Env;
-		expect(await page(`queue_entry_id=${entryId}`)).toMatchObject({ coverage: "incomplete", coverage_gaps: [`queue entry ${entryId} (deferred): no "deferred" event`] });
-		// Admitted: the row no longer carries the deferral note, so the lost event cannot be seen.
-		startsRun(Date.now());
-		expect(await tryDequeueAndStart(env, "i1", "r1", "u1")).toMatchObject({ started: true });
-		expect(await page(`queue_entry_id=${entryId}`)).toMatchObject({ coverage: "complete", coverage_gaps: [] });
+	describe("a deferral's coverage outlives the entry leaving `pending`", () => {
+		/** Queue req-d and drain it once against a busy repo: deferred, with its `deferred` event lost or kept. */
+		async function deferred(lost: boolean) {
+			const q = await start({ requestId: "req-d", objective: "Work issue #906.", queueIfBusy: true });
+			const entryId = (q.body.entry as { id: string }).id;
+			if (lost) env = failing({ events: ["deferred"] });
+			expect(await tryDequeueAndStart(env, "i1", "r1", "u1")).toMatchObject({ requeued: true });
+			env = { DB: d1.DB } as unknown as Env;
+			return entryId;
+		}
+		const gap = (entryId: string) => `queue entry ${entryId} (deferred): no "deferred" event`;
+		const coverageOf = async (entryId: string) => {
+			const p = await page(`queue_entry_id=${entryId}`);
+			return { coverage: p.coverage, coverage_gaps: p.coverage_gaps };
+		};
+
+		it("lost while pending, then admitted, then finished: a named gap at every stage", async () => {
+			const entryId = await deferred(true);
+			expect(await coverageOf(entryId)).toEqual({ coverage: "incomplete", coverage_gaps: [gap(entryId)] });
+			startsRun(Date.now());
+			expect(await tryDequeueAndStart(env, "i1", "r1", "u1")).toMatchObject({ started: true, runId: "run-1" });
+			// `finishQueueEntry` overwrote the waiting note; the deferral is still known.
+			expect(d1.sqlite.prepare("SELECT stop_reason FROM instance_objective_queue WHERE id = ?").get(entryId)).toEqual({ stop_reason: null });
+			expect(await coverageOf(entryId)).toEqual({ coverage: "incomplete", coverage_gaps: [gap(entryId)] });
+			await finishLoopRun(env, "run-1", "done", "shipped", Date.now());
+			for (const h of ["request_id=req-d", `queue_entry_id=${entryId}`, "run_id=run-1"]) {
+				expect(await page(h)).toMatchObject({ complete: true, coverage: "incomplete", coverage_gaps: [gap(entryId)] });
+			}
+		});
+
+		it("control — recorded, then admitted and finished: complete", async () => {
+			const entryId = await deferred(false);
+			startsRun(Date.now());
+			expect(await tryDequeueAndStart(env, "i1", "r1", "u1")).toMatchObject({ started: true });
+			expect(await coverageOf(entryId)).toEqual({ coverage: "complete", coverage_gaps: [] });
+			await finishLoopRun(env, "run-1", "done", "shipped", Date.now());
+			expect(await coverageOf(entryId)).toEqual({ coverage: "complete", coverage_gaps: [] });
+		});
+
+		for (const lost of [true, false]) {
+			it(`${lost ? "lost" : "control — recorded"}, then cancelled by the owner: ${lost ? "a named gap" : "complete"}`, async () => {
+				const entryId = await deferred(lost);
+				expect((await call("DELETE", `/loop/queue/${entryId}`, undefined, { "X-PAGS-Client": "console" })).status).toBe(200);
+				expect(await coverageOf(entryId)).toEqual(lost ? { coverage: "incomplete", coverage_gaps: [gap(entryId)] } : { coverage: "complete", coverage_gaps: [] });
+			});
+
+			it(`${lost ? "lost" : "control — recorded"}, then its admission fails: ${lost ? "a named gap" : "complete"}`, async () => {
+				const entryId = await deferred(lost);
+				driverStart.mockResolvedValueOnce({ ok: false, status: 409, error: "This coding agent has no repository yet." });
+				expect(await tryDequeueAndStart(env, "i1", "r1", "u1")).toMatchObject({ started: false, requeued: false });
+				expect(await coverageOf(entryId)).toEqual(lost ? { coverage: "incomplete", coverage_gaps: [gap(entryId)] } : { coverage: "complete", coverage_gaps: [] });
+			});
+		}
+
+		it("an entry that was never deferred expects no `deferred`", async () => {
+			const q = await start({ requestId: "req-n", objective: "Work issue #907.", queueIfBusy: true });
+			const entryId = (q.body.entry as { id: string }).id;
+			startsRun(Date.now());
+			expect(await tryDequeueAndStart(env, "i1", "r1", "u1")).toMatchObject({ started: true });
+			expect(await coverageOf(entryId)).toEqual({ coverage: "complete", coverage_gaps: [] });
+		});
 	});
 
 	it("an objective older than the ledger reads `unknown`, not complete and not a gap", async () => {

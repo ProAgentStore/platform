@@ -265,12 +265,15 @@ export async function requeueEntry(env: Env, id: string, note?: string | null): 
 	// row and is already surfaced as `stopReason`, so the entry can say "the repo holds #978's
 	// uncommitted work" instead of sitting pending with nothing recorded — which is indistinguishable
 	// from a queue nobody is draining.
+	// `deferred_at` (#1017) is the deferral's evidence that survives the entry leaving `pending`: the note
+	// above is overwritten by `finishQueueEntry`, and this column is not, so a lost `deferred` event is
+	// still a named gap after admission, cancellation or failure.
 	await env.DB.prepare(
 		`UPDATE instance_objective_queue
-		    SET status = 'pending', started_at = NULL, stop_reason = ?2
+		    SET status = 'pending', started_at = NULL, stop_reason = ?2, deferred_at = ?3
 		  WHERE id = ?1 AND status = 'running'`,
 	)
-		.bind(id, note ? clipMarked(note, QUEUE_NOTE_CHARS) : null)
+		.bind(id, note ? clipMarked(note, QUEUE_NOTE_CHARS) : null, Date.now())
 		.run();
 }
 
