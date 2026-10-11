@@ -237,7 +237,9 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 			if (!t) return authRequired();
 			const denied = await requirePermission(safetyFor(token), "read", "application_handoff", { instance_id, run_id, handoff_id });
 			if (denied) return denied;
-			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/application-runs/${encodeURIComponent(run_id)}/handoff?handoff_id=${encodeURIComponent(handoff_id)}`, t, {}, env)) as { error?: string };
+			// Console resolves its canonical deep link by opaque id.  Keep MCP on that same
+			// owner-scoped resolver (while retaining run_id in the tool schema/audit scope).
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/application-handoffs/${encodeURIComponent(handoff_id)}`, t, {}, env)) as { error?: string };
 			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
 		},
 	);

@@ -161,7 +161,7 @@ describe("the Applications tools (#958, #953)", () => {
 		await call("create_application_handoff", { instance_id: "r 1", run_id: "run/1" });
 		await call("request_application_reconciliation", { instance_id: "r 1", run_id: "run/1" });
 		expect(seen).toEqual([
-			{ url: "https://api.test/v1/instances/r%201/application-runs/run%2F1/handoff?handoff_id=handoff%2F1", method: "GET", body: undefined },
+			{ url: "https://api.test/v1/instances/r%201/application-handoffs/handoff%2F1", method: "GET", body: undefined },
 			{ url: "https://api.test/v1/instances/r%201/application-runs/run%2F1/reconciliation", method: "GET", body: undefined },
 			{ url: "https://api.test/v1/instances/r%201/application-runs/run%2F1/handoff", method: "POST", body: {} },
 			{ url: "https://api.test/v1/instances/r%201/application-runs/run%2F1/reconciliation", method: "POST", body: {} },
