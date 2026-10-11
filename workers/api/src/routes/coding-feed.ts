@@ -137,6 +137,9 @@ export function registerFeedRoutes(codingRoutes: Hono<{ Bindings: Env }>): void 
 				hasMore: page.hasMore,
 				oldestSeq: page.oldestSeq,
 				newestSeq: page.newestSeq,
+				// How old the NEWEST stored snapshot is (#1018). Snapshots are taken by the capture poll, so the
+				// newest one can trail a live pane by minutes; this is history, not current activity.
+				freshness: snapshotFreshness(page.entries, Date.now()),
 			});
 		}
 		// `since` and `before` are opposite directions and `loadTimelineFeed` refuses both at once;
@@ -239,5 +242,16 @@ async function terminalHistoryPage(
 		nextSeq: page.nextSeq,
 		hasMore: page.hasMore,
 		...(q.since === undefined ? { oldestSeq: page.oldestSeq ?? undefined } : {}),
+	};
+}
+
+/** The newest stored snapshot's age, stated so a stale snapshot cannot pass for live activity (#1018). */
+export function snapshotFreshness(entries: Array<{ createdAt?: string }>, now: number): { newestCapturedAt: string | null; ageMs: number | null; note: string } {
+	const newest = entries.length ? entries[entries.length - 1].createdAt ?? null : null;
+	const at = newest ? Date.parse(/Z|[+-]\d\d:?\d\d$/.test(newest) ? newest : `${newest.replace(" ", "T")}Z`) : Number.NaN;
+	return {
+		newestCapturedAt: newest,
+		ageMs: Number.isNaN(at) ? null : Math.max(0, now - at),
+		note: "Stored snapshots, taken while the capture poll runs — the newest can trail the live pane. For what the engine is showing NOW, read coding_session_capture (`source: \"live\"`).",
 	};
 }

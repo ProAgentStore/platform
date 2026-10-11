@@ -1,4 +1,4 @@
-import { pageText } from "./wire-budget.js";
+import { capturePane } from "./capture-page.js";
 import { authedAsyncCall } from "./async-outcome.js";
 /**
  * The coding-surface MCP tools — opening a repo's conversation, watching it, and driving it.
@@ -278,14 +278,15 @@ export function registerCodingSessionTools(
 		// emit — the runner's union is `idle | thinking | responding` — and `offline` was, at the
 		// time, produced only by the timeline route. `state-vocabulary.test.ts` measures this
 		// sentence against the code that emits it, over every tool that publishes a state enum.
-		`Capture the live terminal output from a coding session (what the CLI is showing right now), plus WHY it looks that way. ${runStateSentence()} Only the first three come from an engine — the rest mean nobody looked at one, so read \`runnerConnected\`, \`alive\` and \`ready\` alongside: a stopped engine, an absent machine and a failed probe are different problems with the same look. \`authPrompt\` means the engine is blocked on sign-in, which otherwise looks exactly like a hang. The pane is the runner's last 64 KiB; when the session printed more it starts with a \`[cut: …]\` line and \`paneChars\` gives the whole length. LIVE sessions only — the pane lives on the runner, so an ENDED session answers with an empty pane. That empty pane is not evidence the run did nothing: every snapshot taken while it ran is stored, and coding_terminal returns them in full for a session that has ended. To read what a run DID, use coding_timeline for the narrative and coding_terminal for the pane text; to find out whether the work is stuck, use coding_diagnostics. An agent with NO repo (a bare terminal) has no coding session: this reads its selected or last-used terminal instead — live when it is still there, else the last pane the platform stored for it, marked \`source: "stored"\` with \`capturedAt\`.`,
+		`Capture the live terminal output from a coding session (what the CLI is showing right now), plus WHY it looks that way. ${runStateSentence()} Only the first three come from an engine — the rest mean nobody looked at one, so read \`runnerConnected\`, \`alive\` and \`ready\` alongside: a stopped engine, an absent machine and a failed probe are different problems with the same look. \`authPrompt\` means the engine is blocked on sign-in, which otherwise looks exactly like a hang. The pane is the runner's last 64 KiB; when the session printed more it starts with a \`[cut: …]\` line and \`paneChars\` gives the whole length. A pane too large for one response is paged NEWEST FIRST: the default reply ends at the latest output (\`panePage.newest\`), \`panePage.olderBefore\` passed as \`before\` reads the output just older, and \`nextOffset\` passed as \`offset\` reads forward; \`paneRepresentation\` explains the counts, and \`capturedAt\` + \`source: "live"\` date the reading. LIVE sessions only — the pane lives on the runner, so an ENDED session answers with an empty pane. That empty pane is not evidence the run did nothing: every snapshot taken while it ran is stored, and coding_terminal returns them in full for a session that has ended. To read what a run DID, use coding_timeline for the narrative and coding_terminal for the pane text; to find out whether the work is stuck, use coding_diagnostics. An agent with NO repo (a bare terminal) has no coding session: this reads its selected or last-used terminal instead — live when it is still there, else the last pane the platform stored for it, marked \`source: "stored"\` with \`capturedAt\`.`,
 		{
 			instance_id: z.string().describe("Instance ID"),
 			session_id: z.string().optional().describe("Session ID. If omitted, uses the first active session."),
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
-			offset: z.coerce.number().int().min(0).optional().describe("A pane too large for one response comes back in parts (`panePage.nextOffset`); pass it here to read on."),
+			offset: z.coerce.number().int().min(0).optional().describe("Read FORWARD from this position: pass a page's `panePage.nextOffset` (0 = the oldest output the runner still holds)."),
+			before: z.coerce.number().int().min(0).optional().describe("Read BACK: pass `panePage.olderBefore` for the output just older than that page. Omit both for the NEWEST output, which is the default."),
 		},
-		async ({ instance_id, session_id, token, offset }) => {
+		async ({ instance_id, session_id, token, offset, before }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, env)) as { sessions?: Array<{ id: string; status: string }>; error?: string };
@@ -331,7 +332,7 @@ export function registerCodingSessionTools(
 				// #1015: the session row and the checkout's live owner are separate facts.
 				...((d as { sessionStatus?: string }).sessionStatus ? { sessionStatus: (d as { sessionStatus?: string }).sessionStatus, ownership: (d as { ownership?: unknown }).ownership ?? null } : {}),
 			};
-			return text(pageText({ text: d.pane ?? "", offset, build: (slice, meta) => ({ ...head, pane: slice, ...(meta ? { panePage: meta } : {}) }) }).text);
+			return text(capturePane(head, d.pane ?? "", { offset, before })); // newest-first paging, #1018: capture-page.ts
 		},
 	);
 

@@ -50,7 +50,7 @@ vi.mock("../lib/runner-client.js", async (importOriginal) => ({
 	callRunner,
 }));
 
-import { registerFeedRoutes } from "./coding-feed.js";
+import { registerFeedRoutes, snapshotFreshness } from "./coding-feed.js";
 
 const SECRET = "coding-feed-test-secret";
 const UID = "user-1";
@@ -488,5 +488,25 @@ describe("?terminal=1 — the stored panes, uncut (#699)", () => {
 		// Named wins over the resolution; without it the newer of the two ended sessions answers.
 		expect((await readTerminal("&session_id=csess-a")).body.sessionId).toBe("csess-a");
 		expect((await readTerminal("")).body.sessionId).toBe("csess-b");
+	});
+});
+
+describe("stored terminal snapshots say how old they are (#1018)", () => {
+	it("reports the newest snapshot's capture time and age, and that it is history, not live activity", async () => {
+		seedSession("csess-1", "active", "2026-08-15 10:00:00");
+		// Synthetic pane text — no real terminal output.
+		d1.exec(`INSERT INTO coding_timeline (session_id, instance_id, user_id, type, content, created_at) VALUES ('csess-1', '${INSTANCE}', '${UID}', 'terminal', 'synthetic pane A', '2026-08-15 10:00:00')`);
+		d1.exec(`INSERT INTO coding_timeline (session_id, instance_id, user_id, type, content, created_at) VALUES ('csess-1', '${INSTANCE}', '${UID}', 'terminal', 'synthetic pane B', '2026-08-15 10:05:00')`);
+		const before = Date.now() - Date.parse("2026-08-15T10:05:00Z");
+		const body = (await (await get(`/v1/instances/${INSTANCE}/coding/timeline?terminal=1&limit=2`)).json()) as { freshness: { newestCapturedAt: string; ageMs: number; note: string } };
+		const after = Date.now() - Date.parse("2026-08-15T10:05:00Z");
+		expect(body.freshness.newestCapturedAt).toBe("2026-08-15 10:05:00");
+		expect(body.freshness.ageMs).toBeGreaterThanOrEqual(before);
+		expect(body.freshness.ageMs).toBeLessThanOrEqual(after);
+		expect(body.freshness.note).toContain("coding_session_capture");
+	});
+
+	it("an empty history has no age to claim", () => {
+		expect(snapshotFreshness([], 1)).toMatchObject({ newestCapturedAt: null, ageMs: null });
 	});
 });

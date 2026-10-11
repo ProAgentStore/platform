@@ -90,6 +90,10 @@ export interface PageMeta {
 	hasMore: boolean;
 	/** Present only when a single row could not fit a whole page on its own — see {@link fitPage}. */
 	note?: string;
+	/** Tail pages only (#1018): pass as `before` to read the text immediately OLDER than this page. `null` at the start. */
+	olderBefore?: number | null;
+	/** Tail pages only: true when this page ends at the newest character there is. */
+	newest?: boolean;
 }
 
 /**
@@ -218,4 +222,45 @@ export function pagedToolResult(data: unknown, offset?: number): string {
 	const d = data as Record<string, unknown> | null;
 	if (!d || typeof d !== "object" || typeof d.content !== "string") return JSON.stringify(data);
 	return pageText({ text: d.content, offset, build: (slice, meta) => (meta ? { ...d, content: slice, contentPage: meta } : d) }).text;
+}
+
+/**
+ * {@link pageText} from the OTHER end (#1018): the page that ENDS at `before` (default: the end), as
+ * long as fits the budget. For a live terminal the newest output is the part a caller needs first —
+ * paging forward from character 0 handed back the oldest output and let it pass for current activity.
+ *
+ * Walk back with `before = olderBefore` until it is `null`; the pages tile the text exactly, so
+ * concatenating them oldest-first reconstructs it. `nextOffset` still points forward from the page's
+ * end, so the forward walk ({@link pageText} with `offset`) stays available from any page.
+ */
+export function pageTextTail(input: {
+	text: string;
+	before?: number;
+	budget?: number;
+	build: (slice: string, meta: PageMeta | null) => unknown;
+}): { text: string; meta: PageMeta | null } {
+	const budget = input.budget ?? WIRE_BUDGET_BYTES;
+	const total = input.text.length;
+	const end = Math.max(0, Math.min(Math.trunc(input.before ?? total), total));
+	if (end === total) {
+		const whole = JSON.stringify(input.build(input.text, null));
+		if (wireBytes(whole) <= budget) return { text: whole, meta: null };
+	}
+	const render = (keep: number) => {
+		const start = end - keep;
+		const meta: PageMeta = { offset: start, count: keep, of: total, nextOffset: end < total ? end : null, hasMore: end < total || start > 0, olderBefore: start > 0 ? start : null, newest: end === total };
+		return { text: JSON.stringify(input.build(input.text.slice(start, end), meta)), meta };
+	};
+	let lo = 0;
+	let hi = end;
+	let best = 0;
+	while (lo <= hi) {
+		const mid = (lo + hi) >> 1;
+		if (wireBytes(render(mid).text) <= budget) {
+			best = mid;
+			lo = mid + 1;
+		} else hi = mid - 1;
+	}
+	// Always carry something while there is text behind `before`, or a caller walking back would loop.
+	return render(Math.max(best, Math.min(1, end)));
 }

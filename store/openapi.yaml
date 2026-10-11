@@ -188,6 +188,14 @@ tags:
       reports what it ran — on a raw Codex/Grok session the observed-act half sees nothing, and
       the run note says so.
 
+      **Live pane versus stored snapshots (#1018).** `GET …/coding/sessions/{sessionId}/capture`
+      returns the runner's whole kept pane (its last 64 KiB; `paneChars` is everything the engine
+      printed) in one response. MCP `coding_session_capture` pages it to fit a host's budget,
+      NEWEST FIRST: the default page ends at the latest output, `panePage.olderBefore` → `before`
+      walks back, `panePage.nextOffset` → `offset` walks forward; positions are within that
+      capture. `GET …/coding/timeline?terminal=1` (stored snapshots, `seq` cursor) adds
+      `freshness: {newestCapturedAt, ageMs, note}` — snapshots can trail the live pane.
+
       **One writer per checkout (#1015).** `POST …/coding/sessions/{sessionId}/message` is admitted
       only when no OTHER session of the same repo is owned — a `running` run, a driver claim, or a
       direct turn whose engine the runner has not confirmed idle (`unknown`/offline fails closed). A

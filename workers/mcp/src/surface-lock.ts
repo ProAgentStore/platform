@@ -1121,4 +1121,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.109": "sha256:e3488d8d796b145f0b0bd3aaddf81909367f617a0c754cc468a8ff479011c7c5",
 	// #1017: coding_loop_lifecycle (new read), coding_loop_status `starts_offset`, coding_loop_queue `status` + `offset`.
 	"0.1.110": "sha256:6049477956e2336824e28406b12bccb93f2fbf36aa0ae5d71faa41f56c3dd844",
+	// #1018: coding_session_capture gains `before` (newest-first paging); `offset` now reads forward from a position.
+	"0.1.111": "sha256:d268ea52776037d5e40607f24926775c2577ebb3f1e301ccf47db67f8cda2eb5",
 };
