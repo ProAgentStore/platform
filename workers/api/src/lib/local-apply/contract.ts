@@ -196,7 +196,7 @@ export const LOCAL_APPLY_BLOCK_REASONS: readonly LocalApplyBlockReason[] = [
  * dispatch, naming the update, rather than silently producing the older behaviour (`apply.ts`
  * `runnerContractProblem`).
  *
- * ── Why it moved to 0.4.90 (#953)
+ * ── Why it moved to 0.4.96 (#1013)
  *
  * #953 adds the read-only `/local-apply/preflight` route used before an email lead can enter
  * tailoring. That route lives in `packages/browser-runner`, which ships INSIDE the published CLI.
@@ -204,15 +204,15 @@ export const LOCAL_APPLY_BLOCK_REASONS: readonly LocalApplyBlockReason[] = [
  * not silently look equivalent to a current runner.
  *
  * A behaviour change in the runner is a CONTRACT change, because the cloud's decisions assume it.
- * So this floor moves with it: a machine that cannot observe a post-submit receipt is refused
- * with a sentence that says so, rather than reporting an unhelpful `submit_unconfirmed` state.
+ * So this floor moves with it: #1013's exact-page login/CAPTCHA handoff and post-submit receipt
+ * evidence are refused together rather than silently degrading to an unhelpful `submit_unconfirmed` state.
  *
  * Bump this when the runner's half of the contract changes again, together with the CLI version
  * that ships it — `policy.test.ts` pins the pair, so the floor cannot name a release that has not
  * been published. `cliAtLeast` treats an unreported version as capable, which is the convention
  * every MIN_CLI gate here follows.
  */
-export const LOCAL_APPLY_CONTRACT_MIN_CLI = "0.4.90";
+export const LOCAL_APPLY_CONTRACT_MIN_CLI = "0.4.96";
 
 export type LocalApplyDiagnosticCause = "bridge_unused" | "engine_exited_nonzero" | "timed_out" | "no_engine_output" | "submit_unconfirmed";
 export const LOCAL_APPLY_DIAGNOSTIC_CAUSES: readonly LocalApplyDiagnosticCause[] = ["bridge_unused", "engine_exited_nonzero", "timed_out", "no_engine_output", "submit_unconfirmed"];

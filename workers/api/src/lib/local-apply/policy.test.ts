@@ -69,13 +69,13 @@ describe("evaluateSubmitGate", () => {
 describe("runnerContractProblem (#977)", () => {
 	const node = "pink-laptop";
 
-	it.each([["0.4.90"], ["0.5.0"], ["1.0.0"]])("allows %s — at or above the contract", (version) => {
+	it.each([["0.4.96"], ["0.5.0"], ["1.0.0"]])("allows %s — at or above the contract", (version) => {
 		expect(runnerContractProblem(version, node)).toBeNull();
 	});
 
 	// 0.4.88 is REFUSED from #994 on: it predates the bounded post-submit observation and SEEK's
 	// "application sent" receipt marker.
-	it.each([["0.4.88"], ["0.4.85"], ["0.4.70"], ["0.3.99"]])("refuses %s, naming the version, the minimum and the fix", (version) => {
+	it.each([["0.4.95"], ["0.4.88"], ["0.4.85"], ["0.4.70"], ["0.3.99"]])("refuses %s, naming the version, the minimum and the fix", (version) => {
 		const problem = runnerContractProblem(version, node);
 		expect(problem).toContain(version);
 		expect(problem).toContain(LOCAL_APPLY_CONTRACT_MIN_CLI);
@@ -97,9 +97,9 @@ describe("runnerContractProblem (#977)", () => {
 
 	it("the minimum is the release that ships the current runner contract, not a future guess", () => {
 		// Pinned so bumping the contract minimum is a deliberate edit with a reason, not a drift.
-		// 0.4.89 is #994's release: the first published CLI whose bridge repeatedly observes a
-		// post-submit page and recognises SEEK's "application sent" receipt.
-		expect(LOCAL_APPLY_CONTRACT_MIN_CLI).toBe("0.4.90");
+		// 0.4.96 is #1013's release: it ships exact-page login/CAPTCHA takeover with the prior
+		// post-submit observation/receipt contract.
+		expect(LOCAL_APPLY_CONTRACT_MIN_CLI).toBe("0.4.96");
 	});
 
 	/**

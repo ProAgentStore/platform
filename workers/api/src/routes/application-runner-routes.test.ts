@@ -891,7 +891,7 @@ describe("an outdated runner never silently produces the old result shape (#977)
 		const r = await call("POST", "/ap/application-runs", ev);
 		expect(r.status).toBe(409);
 		expect(r.body.error).toMatch(/predates this application contract/);
-		expect(r.body.error).toMatch(/0\.4\.90 or newer/);
+		expect(r.body.error).toMatch(/0\.4\.96 or newer/);
 		expect(r.body.error).toMatch(/post-submit confirmation/);
 		expect(r.body.error).toMatch(/npm i -g @proagentstore\/cli|runner_update/);
 		// Nothing was spent and nothing moved: no run row, no dispatch, and the application is still
@@ -905,11 +905,11 @@ describe("an outdated runner never silently produces the old result shape (#977)
 		setRunnerVersion("0.4.84");
 		const ev = readyApp("lead-v2");
 		expect((await call("POST", "/ap/application-runs", ev)).status).toBe(409);
-		setRunnerVersion("0.4.90");
+		setRunnerVersion("0.4.96");
 		const ok = await call("POST", "/ap/application-runs", ev);
 		expect(ok.body.run.status).toBe("running");
 		// And the record says WHICH runner executed it — the fact that was missing.
-		expect(await runRow(ok.body.run.id as string)).toMatchObject({ runner_version: "0.4.90" });
+		expect(await runRow(ok.body.run.id as string)).toMatchObject({ runner_version: "0.4.96" });
 	});
 
 	it("stamps the executing runner's version on every run, and returns it over the API", async () => {
@@ -932,7 +932,7 @@ describe("an outdated runner never silently produces the old result shape (#977)
 	});
 
 	it("an up-to-date runner still reports the #975 zero-bridge diagnosis end to end", async () => {
-		setRunnerVersion("0.4.90");
+		setRunnerVersion("0.4.96");
 		const ev = readyApp("lead-v5");
 		const started = await call("POST", "/ap/application-runs", ev);
 		const runId = started.body.run.id as string;
@@ -951,7 +951,7 @@ describe("an outdated runner never silently produces the old result shape (#977)
 		const run = (await call("GET", `/ap/application-runs/${runId}`)).body.run;
 		// The pairing #977 asks for: the diagnosis AND the contract that produced it, on one record.
 		expect(run.result).toMatchObject({ blockReason: "bridge_unused", diagnostic: { cause: "bridge_unused", bridgeCalls: 0 } });
-		expect(run.runnerVersion).toBe("0.4.90");
+		expect(run.runnerVersion).toBe("0.4.96");
 		expect(await appRow("lead-v5")).toMatchObject({ status: "blocked", block_reason: "bridge_unused" });
 		// Still no free text from the CLI, whichever release ran it.
 		expect(JSON.stringify(run.result.diagnostic)).not.toMatch(/[A-Za-z]{200}/);

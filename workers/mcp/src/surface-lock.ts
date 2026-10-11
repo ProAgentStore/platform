@@ -1112,12 +1112,8 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// and returns FileMeta provenance rather than bytes. 296 registrations become 297, always-on
 	// 270 → 271, gated remains 26. Appended because 0.1.104 is published.
 	"0.1.105": "sha256:a766d44b3ec5aee25df46e0df7d20e0e3cd7879dfb44090e7e449b5417d063d3",
-	// #1009: `get_console_link` gains `permission_request_id`, an owner-scoped verified Permissions &
-	// Connections deep link; its input schema moves the published surface to 0.1.106.
+	// #1009: `get_console_link` gains an owner-scoped verified Permissions & Connections deep link; its input schema moves the surface to 0.1.106.
 	"0.1.106": "sha256:f0bfa90be9565db899e641d0c0d15395373a14c07aed61a20aece3ae3772ab4d",
 	"0.1.107": "sha256:343f1ed70ff1da1bd4ae007c038085fdb2de6a83d99b70b810a335dc96476e46", // #1010: owner-scoped review-only material transfer; new always-on schema.
-	// #1013: four exact-run Application Runner tools — two secret-safe reads and two explicit
-	// runtime requests for a bounded browser handoff / authoritative read-only reconciliation.
-	// 298 registrations become 302, `MCP_TOOL_ALWAYS_ON` 272 → 276, gated stays 26.
 	"0.1.108": "sha256:65b8869cb1c5eb398535cc1513497428d1a5b858f37934f70af7fd31b33afec1",
 };

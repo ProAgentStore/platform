@@ -26,15 +26,12 @@ import {
 	LOCAL_APPLY_CANCEL_PATH,
 	LOCAL_APPLY_CONTRACT_MIN_CLI,
 	LOCAL_APPLY_DIRECTIVE_PATH,
-	LOCAL_APPLY_HANDOFF_PATH,
-	LOCAL_APPLY_HANDOFF_STATUS_PATH,
 	LOCAL_APPLY_PAUSE_REASONS,
 	LOCAL_APPLY_RESUME_PATH,
 	LOCAL_APPLY_RUN_PATH,
 	LOCAL_APPLY_STATUS_PATH,
 	LOCAL_APPLY_TASK_TYPE,
 	type LocalApplyPause,
-	type LocalApplyHandoffStatus,
 	type LocalApplyResultEnvelope,
 	type LocalApplyTaskEnvelope,
 	parseLocalApplyEvent,
@@ -52,11 +49,8 @@ import {
 	insertApplyRun,
 	isTerminalApplyRun,
 	markSubmitAttempted,
-	createLocalApplyHandoff,
-	markLocalApplyHandoff,
 	moveApplication,
 	updateApplyRun,
-	usableLocalApplyHandoff,
 } from "./store.js";
 import { claimQueuedDispatch, instancesWithQueuedRuns, nextDueQueuedRun, noteQueued } from "../applications/work-queue-store.js";
 import { QUEUE_MAX_ATTEMPTS, refusalVerdict } from "../applications/work-queue.js";
@@ -74,6 +68,7 @@ import { submitGateFor } from "./submission-gate.js";
 export { submitGateFor } from "./submission-gate.js";
 import { listSupervisorCheckpoints, noteSupervisorDirectiveDelivery, receiveSupervisorCheckpoint, sanitizeSupervisorFacts, type SupervisorDirective } from "./supervision.js";
 import { directApplicationCheckpoint } from "./brain.js";
+import { notifyLiveBrowserBlocker } from "./handoff-notification.js";
 
 /** The event the Runner consumes — #956's readiness event. */
 export const MATERIALS_READY_EVENT = "job.application.materials_ready";
@@ -156,8 +151,8 @@ export async function deliverSupervisorDirective(env: Env, uid: string, run: App
  * Why this machine must not fill an application yet, or null (#977, #989, #994).
  *
  * A runner capability changes only when a new CLI bundles it. #953 adds read-only email-lead
- * preflight; the floor moves with that behaviour so an older runner cannot silently omit the
- * validation that must precede tailoring.
+ * preflight. #1013 also adds an exact-page owner handoff for login/CAPTCHA; the floor moves with
+ * both behaviours so an older runner cannot silently omit either boundary.
  *
  * The live regression this closes: #975's `bridge_unused` + diagnostic shipped and deployed, and a
  * real retry still recorded `blocked: incomplete` with `diagnostic: null` — because the connected
@@ -172,7 +167,7 @@ export async function deliverSupervisorDirective(env: Env, uid: string, run: App
 export function runnerContractProblem(runnerVersion: string | null | undefined, node: string | null | undefined): string | null {
 	const version = runnerVersion?.trim();
 	if (!version || cliAtLeast(version, LOCAL_APPLY_CONTRACT_MIN_CLI)) return null;
-	return `The runner on ${node || "that machine"} is CLI ${version}, which predates this application contract (needs ${LOCAL_APPLY_CONTRACT_MIN_CLI} or newer): it cannot perform the required read-only live-page preflight for email leads, and it predates the current post-submit confirmation evidence, which can leave an opaque submit_unconfirmed outcome. Update it (npm i -g @proagentstore/cli, or runner_update) and restart \`pags up\`, then retry this application.`;
+	return `The runner on ${node || "that machine"} is CLI ${version}, which predates this application contract (needs ${LOCAL_APPLY_CONTRACT_MIN_CLI} or newer): it cannot perform the required read-only live-page preflight or the bounded same-page login/CAPTCHA handoff, and it predates the current post-submit confirmation evidence, which can leave an opaque submit_unconfirmed outcome. Update it (npm i -g @proagentstore/cli, or runner_update) and restart \`pags up\`, then retry this application.`;
 }
 
 export type StartFillOutcome = { kind: "started" | "existing"; application: JobApplication; run: ApplyRun | null };
@@ -539,60 +534,6 @@ async function askForApprovalIfWaiting(env: Env, uid: string, run: ApplyRun): Pr
 }
 
 /**
- * A site login/CAPTCHA is not an application decision and must not be routed to the Board.  Open
- * the single live Runner page first, then use the ordinary owner-attention delivery policy to
- * point the owner's phone at that exact opaque handoff.  The cloud keeps only ids and lifecycle;
- * the page, cookies, typed values and browser storage stay on the Runner.
- *
- * Only `default` participates: it is the already-authorized, live owner browser.  An isolated
- * profile is deliberately not made persistent or recreated merely to send a phone notification.
- */
-const HANDOFF_TTL_MS = 10 * 60_000;
-async function notifyLiveBrowserBlocker(env: Env, uid: string, run: ApplyRun, pause: LocalApplyPause, now: number): Promise<void> {
-	if (!(["login_required", "captcha"] as const).includes(pause.reason as "login_required" | "captcha")) return;
-	if (run.policy.browserProfile !== "default") return;
-	const app = await getOwnedApplication(env, uid, run.applicationId);
-	if (!app || app.fillRunId !== run.id) return;
-	let handoff = await createLocalApplyHandoff(env, { run, app, userId: uid, browserProfile: run.policy.browserProfile, expiresAt: now + HANDOFF_TTL_MS }, now);
-	if (!handoff || !usableLocalApplyHandoff(handoff, now)) return;
-	const runtime = await getLiveRuntime(env, run.instanceId, uid).catch(() => null);
-	if (!runtime) {
-		await markLocalApplyHandoff(env, { continuityId: handoff.continuityId, instanceId: run.instanceId, userId: uid, state: "closed", terminalReason: "runner_restarted" }, now);
-		return;
-	}
-	const request = { handoffId: handoff.continuityId, runId: run.id, applicationId: run.applicationId, browserProfile: run.policy.browserProfile };
-	const path = handoff.state === "requested" ? LOCAL_APPLY_HANDOFF_PATH : LOCAL_APPLY_HANDOFF_STATUS_PATH;
-	const res = await callRuntime(env, runtime, path, { method: "POST", body: JSON.stringify(request) }).catch(() => null);
-	if (!res) {
-		await markLocalApplyHandoff(env, { continuityId: handoff.continuityId, instanceId: run.instanceId, userId: uid, state: "closed", terminalReason: "runner_restarted" }, now);
-		return;
-	}
-	const status = await runtimeJson(res) as LocalApplyHandoffStatus;
-	if (!res.ok || status.state !== "ready") {
-		await markLocalApplyHandoff(env, {
-			continuityId: handoff.continuityId,
-			instanceId: run.instanceId,
-			userId: uid,
-			state: "closed",
-			terminalReason: status.terminalReason ?? "unavailable",
-		}, now);
-		return;
-	}
-	handoff = (await markLocalApplyHandoff(env, { continuityId: handoff.continuityId, instanceId: run.instanceId, userId: uid, state: "ready" }, now)) ?? handoff;
-	const label = pause.reason === "captcha" ? "A CAPTCHA needs your help" : "Sign in to continue an application";
-	await requestOwnerAttention(env, {
-		event: "blocker_required",
-		userId: uid,
-		instanceId: run.instanceId,
-		subject: { kind: "application-handoff", instanceId: run.instanceId, handoffId: handoff.continuityId },
-		about: { kind: "application-handoff", id: handoff.continuityId, state: run.id },
-		notificationType: "apply",
-		title: label,
-		body: "Open the live Application Runner browser on this device, complete the site step, then choose Resume. This does not submit the application.",
-	}, attentionDeps);
-}
-
-/**
  * The runner lost the run. If it was allowed to submit, nobody can say whether it did — so the
  * application is marked as a possible submit and blocked, never left looking like it is safe to retry.
  */
@@ -724,7 +665,7 @@ export async function syncApplyRun(env: Env, uid: string, run: ApplyRun, now = D
 		// The runner has already paused on the exact page.  Only then create the bounded mobile
 		// view and send the normal policy-controlled owner alert; never wake a browser or infer a
 		// successful login from a redirect.
-		await notifyLiveBrowserBlocker(env, uid, current, pause, now).catch(() => undefined);
+		await notifyLiveBrowserBlocker(env, uid, current, pause, now, attentionDeps).catch(() => undefined);
 	} else if (current.status === "running" && run.status === "paused") {
 		await move(env, uid, run.applicationId, ["blocked"], { ...base, to: "filling", reason: "resumed" }, now);
 	}

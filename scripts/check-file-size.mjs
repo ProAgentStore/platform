@@ -687,12 +687,11 @@ const PINS = {
 	// +27 at #896: `liveWork()` — what a restart would destroy — and `requestShutdown`, which is
 	// how `--replace` asks instead of killing. The counts exist so a replace can REFUSE while a
 	// Codex turn, a research run or an application fill is live; `pkill` destroyed them silently.
-	"packages/browser-runner/src/runner.ts": 1399, // #1013: the exact-page local-apply takeover adapter belongs beside the existing live Page/takeover map; splitting it would duplicate ownership of CDP sessions and make the scoped handoff look like a generic task.
+	"packages/browser-runner/src/runner.ts": 1361, // +3 at #957: the localApply runtime (field, construction sharing the research browserFor, shutdown). +6 at #956: the local-artifact runtime is constructed, advertised and shut down beside local-browser's.
 	// New at #953: the four-line read-only email-lead preflight route belongs beside the existing
 	// local-apply routes. Splitting a single ordered route registration would add indirection without
 	// reducing its ownership; the page validation itself stays in local-apply/runtime.ts.
-	"packages/browser-runner/src/server.ts": 827, // #1013: the seven local-apply handoff route literals remain beside local-apply's run/status/resume boundary so the runner's wire surface is auditable as one switch.
-	"packages/browser-runner/src/local-apply/runtime.ts": 918, // #1013: lifecycle-bound handoff operations live with the in-memory Run record they close; a separate module would need to expose that private run/bridge state.
+	"packages/browser-runner/src/server.ts": 804,
 	// New pin at #946: the local browser capability is validated at the three agent write doors (#945) and served back resolved by both capabilities routes (#946) — four lines over the line; splitting the agents router is its own change.
 	"workers/api/src/routes/agents.ts": 804,
 	// +45 at #263: `probeMcpSurface`, so the connection test can ask about resources and prompts
@@ -751,7 +750,7 @@ const PINS = {
 	// a different subject from the dispatch plumbing and read better alone. What is left here is
 	// this file's own: the gate's counting options, the release call on each path that ends a run,
 	// and the comments explaining why the mode could not be trusted from the queued row.
-	"workers/api/src/lib/local-apply/apply.ts": 929, // #1013: the login/CAPTCHA handoff notification is emitted at the pause-to-application CAS seam, before any mobile link exists; separating it would create a second, stale projection path.
+	"workers/api/src/lib/local-apply/apply.ts": 882, // +31 at #953: durable CLI result receipt/reconciliation belongs beside the dispatch and settlement CAS operations, so its evidence cannot diverge from the application outcome. +25 at #953: terminal-outcome notification must stay directly after the same CAS projection that makes it idempotent, while the factual copy/deep-link builder keeps the policy-aware delivery in one place.
 	// +12 at #988: the control surface now attaches the single redacted execution projection to
 	// application queue items. Projection construction itself lives in execution-projection.ts; the remaining lines are the queue's typed field and its one construction boundary. +4 at #997: a runnerless Gmail Scout is classified from its durable Apply handoff, so its intentionally null runtime cannot hide private leads from this queue.
 	"workers/api/src/lib/applications/control.ts": 843,
@@ -1939,7 +1938,7 @@ const PINS = {
 	"workers/api/src/routes/instances.ts": 1178, // #1009 mounts the extracted owner permission-recovery routes (one import, one registrar); lifecycle work remains in instances-permission-requests.ts. #859 follow-up: runtime registration/heartbeat wires the owner policy and lifecycle telemetry; policy queries live in lib/machine-policy.ts.
 	"workers/api/src/routes/instances-runtime.ts": 938, // #859 follow-up: runtime status exposes the resolved physical-machine policy; resolution lives in lib/machine-policy.ts.
 	"workers/api/src/routes/terminals.ts": 878, // #859 follow-up: ordered terminal routes own the stable machine detail and policy endpoints; D1 policy access lives in lib/machine-policy.ts.
-	"workers/mcp/src/surface-lock.ts": 1124, // #1013 appends the 0.1.108 handoff/reconciliation surface hash. This history-checked ledger is deliberately append-only and unsplit. #1009 appends the 0.1.106 permission-request deep-link schema record; this history-checked ledger is deliberately unsplit. #1004 appends the 0.1.105 owner-scoped instance-file upload surface record (and 0.1.104 uploaded-Tailor-source controls); this history-checked ledger is deliberately unsplit. #1003 appends the get_console_link files-upload inputSchema revision; this history-checked ledger is deliberately unsplit. #859 follow-up: append-only MCP ledger entries for get_machine_policy and set_machine_policy.
+	"workers/mcp/src/surface-lock.ts": 1120, // #1009 appends the 0.1.106 permission-request deep-link schema record; this history-checked ledger is deliberately append-only and unsplit. #1004 appends the 0.1.105 owner-scoped instance-file upload surface record (and 0.1.104 uploaded-Tailor-source controls); this history-checked ledger is deliberately unsplit. #1003 appends the get_console_link files-upload inputSchema revision; this history-checked ledger is deliberately unsplit. #859 follow-up: append-only MCP ledger entries for get_machine_policy and set_machine_policy.
 	"store/console/src/tabs/KnowledgeTab.tsx": 818, // #1003 keeps URL-addressable knowledge subtabs beside the existing capability-gated upload surfaces; splitting the tab would separate state from the controls it governs.
 	"scripts/check-file-size.mjs": 2025, // #1008 raises the correlated runner-update safety pin above. #1003 adds the reviewed KnowledgeTab URL-subtab pin above. #859 follow-up adds five explicitly reviewed policy/relay surface pins above; this ledger must describe its own deliberate growth.
 };

@@ -18,14 +18,13 @@ import { LOCAL_BROWSER_TASK_TYPE } from "./local-browser/contract.js";
 import { LocalArtifactRuntime } from "./local-artifact/runtime.js";
 import { LOCAL_ARTIFACT_TASK_TYPE } from "./local-artifact/contract.js";
 import { LocalApplyRuntime } from "./local-apply/runtime.js";
-import { LOCAL_APPLY_TASK_TYPE, type LocalApplyHandoffRequest } from "./local-apply/contract.js";
+import { LOCAL_APPLY_TASK_TYPE } from "./local-apply/contract.js";
+import { createLocalApplyTakeoverAdapter, isLocalApplyTakeover } from "./local-apply/takeover-adapter.js";
 import { WORKFLOW_DRIVEN_TASKS } from "./task-types.js";
-
 /** True for a plain object. */
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-
 /** Coerce a value to a trimmed string ("" for non-strings). */
 function stringValue(value: unknown): string {
 	return typeof value === "string" ? value.trim() : "";
@@ -38,9 +37,7 @@ import type {
 	RunnerTask,
 	TakeoverInput,
 } from "./types.js";
-
 export { HumanHandoffError, RunnerInputError } from "./errors.js";
-
 const CAPABILITIES: RunnerCapability[] = [
 	"browser.playwright",
 	"browser.screenshot",
@@ -50,7 +47,6 @@ const CAPABILITIES: RunnerCapability[] = [
 	"human.takeover",
 	"tmux.control",
 ];
-
 /** How many times a task may attempt an action before handing off to a human. */
 export const MAX_AUTONOMOUS_ATTEMPTS = 3;
 
@@ -67,8 +63,6 @@ const APPROVAL_REQUIRED_TASKS = new Set(["browser.open"]);
  */
 
 const require = createRequire(import.meta.url);
-
-
 export class LocalRunner {
 	private browserContext: BrowserContext | null = null;
 	private chromiumInstallChecked = false;
@@ -129,13 +123,7 @@ export class LocalRunner {
 			dataDir: config.dataDir,
 			selfUrl: () => this.selfUrl,
 			browserFor,
-			takeover: {
-				open: (request) => this.openLocalApplyHandoff(request),
-				state: (handoffId) => this.localApplyHandoffState(handoffId),
-				frame: (handoffId) => this.takeoverFrame(this.localApplyTakeoverKey(handoffId)),
-				input: (handoffId, input) => this.takeoverInput(this.localApplyTakeoverKey(handoffId), input),
-				end: (handoffId) => this.endTakeover(this.localApplyTakeoverKey(handoffId)),
-			},
+			takeover: createLocalApplyTakeoverAdapter({ activePage: () => this.activePage, get: (id) => this.takeovers.get(id), set: (id, page) => this.takeovers.set(id, { page, reason: "local_apply", humanDone: false }), frame: (id) => this.takeoverFrame(id), input: (id, input) => this.takeoverInput(id, input), end: (id) => this.endTakeover(id) }),
 		});
 		// Tasks paused/running on a previous process are orphaned now — their
 		// pages and takeover sessions are gone. Fail them so the board is clean.
@@ -403,34 +391,7 @@ export class LocalRunner {
 
 	/** Active human-takeover task ids (for status/discovery). */
 	listTakeovers(): string[] {
-		// Local-apply handoffs have their own authenticated route and exact run binding.  Never
-		// advertise their opaque ids as generic task takeovers.
-		return [...this.takeovers.keys()].filter((id) => !id.startsWith("local-apply:"));
-	}
-
-	private localApplyTakeoverKey(handoffId: string): string {
-		return `local-apply:${handoffId}`;
-	}
-
-	/**
-	 * Register the page already being driven by the local-apply runtime.  No task row is created:
-	 * application runs are intentionally not generic runner tasks, and the runtime checks the
-	 * run/application/profile tuple before it can call here.
-	 */
-	private async openLocalApplyHandoff(request: LocalApplyHandoffRequest): Promise<void> {
-		if (request.browserProfile !== "default") throw new RunnerInputError("This browser profile has no live handoff page", 409);
-		const key = this.localApplyTakeoverKey(request.handoffId);
-		if (this.takeovers.has(key)) throw new RunnerInputError("A local application handoff already exists", 409);
-		// Do not call getActivePage here: it creates a blank page when the existing page was lost,
-		// which would turn a destroyed browser session into a misleading successful handoff.
-		const page = this.activePage;
-		if (!page || page.isClosed()) throw new RunnerInputError("The local application page is no longer available", 409);
-		this.takeovers.set(key, { page, reason: "local_apply", humanDone: false });
-	}
-
-	private async localApplyHandoffState(handoffId: string): Promise<"ready" | "page_lost"> {
-		const session = this.takeovers.get(this.localApplyTakeoverKey(handoffId));
-		return session && !session.page.isClosed() ? "ready" : "page_lost";
+		return [...this.takeovers.keys()].filter((id) => !isLocalApplyTakeover(id));
 	}
 
 	private requireTakeover(taskId: string): NonNullable<ReturnType<typeof this.takeovers.get>> {

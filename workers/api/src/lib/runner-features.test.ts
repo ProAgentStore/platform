@@ -8,6 +8,7 @@ import { RESOURCES_MIN_CLI } from "./runner-resources.js";
 import { BOOTSTRAP_MIN_CLI, RUNNER_CONTROL_MIN_CLI, RUNNER_FEATURES, runnerFeatureGaps, runnerVersionView } from "./runner-features.js";
 
 const UPLOADED_SOURCES_FEATURE = "Application Tailor uploaded résumé/profile sources";
+const LOCAL_APPLY_HANDOFF_FEATURE = "application live-page preflight and bounded owner login/CAPTCHA handoff";
 
 describe("what a runner version is too old for (#859)", () => {
 	it("the machine in #859 (0.4.60) is behind on clone, force-attach and runner_update — and nothing older", () => {
@@ -16,10 +17,10 @@ describe("what a runner version is too old for (#859)", () => {
 		expect(gaps).not.toContain("fast-forward a stale checkout");
 	});
 
-	it("reports the newest uploaded-source floor while leaving an unknown version unjudged", () => {
-		expect(runnerFeatureGaps(LOCAL_APPLY_CONTRACT_MIN_CLI)?.map((gap) => gap.feature)).toEqual([UPLOADED_SOURCES_FEATURE]);
+	it("reports the newest handoff floor while leaving an unknown version unjudged", () => {
+		expect(runnerFeatureGaps(LOCAL_APPLY_CONTRACT_MIN_CLI)).toEqual([]);
 		// 0.4.71 reports load and memory, and is behind only on the rest of the machine (#924).
-		expect(runnerFeatureGaps(RESOURCES_MIN_CLI)?.map((g) => g.feature)).toEqual(["disk, runner restarts, relay round trip and per-session usage in the resource history", "Codex local browser research (the browser tools approved for codex exec, #952)", "email-lead live-page preflight before application tailoring", UPLOADED_SOURCES_FEATURE]);
+		expect(runnerFeatureGaps(RESOURCES_MIN_CLI)?.map((g) => g.feature)).toEqual(["disk, runner restarts, relay round trip and per-session usage in the resource history", "Codex local browser research (the browser tools approved for codex exec, #952)", LOCAL_APPLY_HANDOFF_FEATURE, UPLOADED_SOURCES_FEATURE]);
 		expect(runnerFeatureGaps("")).toBeNull();
 		expect(runnerVersionView(null)).toEqual({ runnerVersion: null, behind: null });
 	});
@@ -27,7 +28,7 @@ describe("what a runner version is too old for (#859)", () => {
 	it("reports each gap with the version it needs", () => {
 		expect(runnerVersionView("0.4.58").behind).toContain("fast-forward a stale checkout (needs 0.4.59)");
 		expect(runnerVersionView("0.4.92").behind).toContain(`${UPLOADED_SOURCES_FEATURE} (needs 0.4.93)`);
-		expect(runnerFeatureGaps(LOCAL_ARTIFACT_UPLOADED_SOURCES_MIN_CLI)).toEqual([]);
+		expect(runnerFeatureGaps(LOCAL_ARTIFACT_UPLOADED_SOURCES_MIN_CLI)?.map((gap) => gap.feature)).toEqual([LOCAL_APPLY_HANDOFF_FEATURE]);
 		expect(RUNNER_FEATURES.every((f) => /^\d+\.\d+\.\d+$/.test(f.minCli))).toBe(true);
 	});
 
@@ -45,7 +46,7 @@ describe("what a runner version is too old for (#859)", () => {
 			"the engine's own output in a failed run's detail",
 			"engine check before launch (installed + signed in), required by apply-now",
 			"runner_update restarts pags up itself, and service-managed runners",
-			"email-lead live-page preflight before application tailoring",
+			LOCAL_APPLY_HANDOFF_FEATURE,
 			UPLOADED_SOURCES_FEATURE,
 		]);
 	});
@@ -59,7 +60,7 @@ describe("what a runner version is too old for (#859)", () => {
 			"tmux_secure_put / tmux_secure_get (machine-to-machine secret files) (needs 0.4.69)",
 			"the engine's own output in a failed run's detail (needs 0.4.68)",
 			"engine check before launch (installed + signed in), required by apply-now (needs 0.4.67)",
-			"email-lead live-page preflight before application tailoring (needs 0.4.90)",
+			"application live-page preflight and bounded owner login/CAPTCHA handoff (needs 0.4.96)",
 			`${UPLOADED_SOURCES_FEATURE} (needs 0.4.93)`,
 		]);
 		expect(runnerFeatureGaps(ENGINE_CHECK_MIN_CLI)?.map((g) => g.feature)).toEqual([
@@ -69,7 +70,7 @@ describe("what a runner version is too old for (#859)", () => {
 			"relay sockets that keep their machine name when the hostname changes",
 			"tmux_secure_put / tmux_secure_get (machine-to-machine secret files)",
 			"the engine's own output in a failed run's detail",
-			"email-lead live-page preflight before application tailoring",
+			LOCAL_APPLY_HANDOFF_FEATURE,
 			UPLOADED_SOURCES_FEATURE,
 		]);
 	});
@@ -81,16 +82,16 @@ describe("what a runner version is too old for (#859)", () => {
 			"machine CPU load and memory in list_runner_nodes / coding_diagnostics (needs 0.4.71)",
 			"relay sockets that keep their machine name when the hostname changes (needs 0.4.70)",
 			"tmux_secure_put / tmux_secure_get (machine-to-machine secret files) (needs 0.4.69)",
-			"email-lead live-page preflight before application tailoring (needs 0.4.90)",
+			"application live-page preflight and bounded owner login/CAPTCHA handoff (needs 0.4.96)",
 			`${UPLOADED_SOURCES_FEATURE} (needs 0.4.93)`,
 		]);
 	});
 
 	it("a machine on 0.4.70 is behind only on resource telemetry (#924)", () => {
-		expect(runnerFeatureGaps(RELAY_NAME_STABLE_MIN_CLI)?.map((g) => g.feature)).toEqual(["disk, runner restarts, relay round trip and per-session usage in the resource history", "Codex local browser research (the browser tools approved for codex exec, #952)", "machine CPU load and memory in list_runner_nodes / coding_diagnostics", "email-lead live-page preflight before application tailoring", UPLOADED_SOURCES_FEATURE]);
+		expect(runnerFeatureGaps(RELAY_NAME_STABLE_MIN_CLI)?.map((g) => g.feature)).toEqual(["disk, runner restarts, relay round trip and per-session usage in the resource history", "Codex local browser research (the browser tools approved for codex exec, #952)", "machine CPU load and memory in list_runner_nodes / coding_diagnostics", LOCAL_APPLY_HANDOFF_FEATURE, UPLOADED_SOURCES_FEATURE]);
 	});
 
 	it("a machine on 0.4.69 is behind only on resource telemetry (#924) and stable relay names (#922)", () => {
-		expect(runnerFeatureGaps(SECURE_HANDOFF_MIN_CLI)?.map((g) => g.feature)).toEqual(["disk, runner restarts, relay round trip and per-session usage in the resource history", "Codex local browser research (the browser tools approved for codex exec, #952)", "machine CPU load and memory in list_runner_nodes / coding_diagnostics", "relay sockets that keep their machine name when the hostname changes", "email-lead live-page preflight before application tailoring", UPLOADED_SOURCES_FEATURE]);
+		expect(runnerFeatureGaps(SECURE_HANDOFF_MIN_CLI)?.map((g) => g.feature)).toEqual(["disk, runner restarts, relay round trip and per-session usage in the resource history", "Codex local browser research (the browser tools approved for codex exec, #952)", "machine CPU load and memory in list_runner_nodes / coding_diagnostics", "relay sockets that keep their machine name when the hostname changes", LOCAL_APPLY_HANDOFF_FEATURE, UPLOADED_SOURCES_FEATURE]);
 	});
 });

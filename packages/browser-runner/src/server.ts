@@ -12,6 +12,7 @@ import type { CodingAction, StartCodingInput } from "./coding/runtime.js";
 import { probeGitSshIdentity } from "./coding/repo.js";
 import { checkEngine } from "./coding/engine-check.js";
 import { listGithubOrgs, listGithubRepos, searchGithubRepos, getGithubRepoDetail, getGithubCredentialScope, type GithubBrowseInput, type GithubSearchInput, type GithubRepoDetailInput } from "./coding/github-browse.js";
+import { routeLocalApplyHandoff } from "./local-apply/handoff-routes.js";
 
 export function createRunnerServer(runner: LocalRunner) {
 	return createServer(async (req, res) => {
@@ -251,9 +252,7 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	if (req.method === "POST" && path === "/local-artifact/cancel") {
 		return json(res, 200, runner.localArtifact.cancel(await readJson(req)));
 	}
-
 	// Local application execution (#957) — run, status, resume, cancel; PULL like research.
-	// The email-lead preflight is read-only and precedes Tailor material generation (#953).
 	if (req.method === "POST" && path === "/local-apply/preflight") {
 		return json(res, 200, await runner.localApply.preflight(await readJson(req)));
 	}
@@ -263,29 +262,8 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	if (req.method === "POST" && path === "/local-apply/status") {
 		return json(res, 200, runner.localApply.status(await readJson(req)));
 	}
-	// A local-apply handoff is a scoped view of the one existing application page.  These routes
-	// deliberately do not use /takeover/:taskId: a local application run is not a generic task.
-	if (req.method === "POST" && path === "/local-apply/handoff") {
-		return json(res, 200, await runner.localApply.handoff(await readJson(req)));
-	}
-	if (req.method === "POST" && path === "/local-apply/handoff-status") {
-		return json(res, 200, await runner.localApply.handoffStatus(await readJson(req)));
-	}
-	if (req.method === "POST" && path === "/local-apply/handoff/frame") {
-		return json(res, 200, await runner.localApply.handoffFrame(await readJson(req)));
-	}
-	if (req.method === "POST" && path === "/local-apply/handoff/input") {
-		await runner.localApply.handoffInput(await readJson(req));
-		return json(res, 200, { ok: true });
-	}
-	if (req.method === "POST" && path === "/local-apply/handoff/end") {
-		return json(res, 200, await runner.localApply.endHandoff(await readJson(req)));
-	}
-	// "Resume" only closes the remote-control view. It deliberately does not release the apply
-	// bridge; that still requires the existing explicit /local-apply/resume owner action.
-	if (req.method === "POST" && path === "/local-apply/handoff/resume") {
-		return json(res, 200, await runner.localApply.endHandoff(await readJson(req)));
-	}
+	const handoff = await routeLocalApplyHandoff(runner.localApply, req.method, path, () => readJson(req));
+	if (handoff) return json(res, 200, handoff);
 	if (req.method === "POST" && path === "/local-apply/resume") {
 		return json(res, 200, runner.localApply.resume(await readJson(req)));
 	}
@@ -295,7 +273,6 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	if (req.method === "POST" && path === "/local-apply/cancel") {
 		return json(res, 200, runner.localApply.cancel(await readJson(req)));
 	}
-
 	if (req.method === "POST" && path === "/coding/start") {
 		const b = await readJson<StartCodingInput>(req);
 		return json(res, 200, runner.coding.start(b));
