@@ -38,6 +38,13 @@ interface McpAuditEvent {
 	requiredScope?: string;
 }
 
+/** One page of `GET /v1/mcp-audit` (#1016) — `routes/mcp-audit.ts`. */
+interface McpAuditPage {
+	events: McpAuditEvent[];
+	nextCursor: string | null;
+	coverage?: { complete: boolean; detail: string };
+}
+
 export default function Profile() {
 	const { user, signOut } = useAuth();
 	const navigate = useNavigate();
@@ -67,6 +74,9 @@ export default function Profile() {
 	// the only way to read it was `mcp_audit_log`, i.e. through the surface it audits: when the
 	// MCP connection is what broke, the record of what the client did was unreachable.
 	const [mcpEvents, setMcpEvents] = useState<McpAuditEvent[] | null>(null);
+	// Where the next-older page starts, and whether events from before the ledger are all indexed.
+	const [mcpCursor, setMcpCursor] = useState<string | null>(null);
+	const [mcpCoverage, setMcpCoverage] = useState<McpAuditPage["coverage"]>();
 	const [mcpLoading, setMcpLoading] = useState(false);
 	const [mcpErr, setMcpErr] = useState("");
 
@@ -134,11 +144,13 @@ export default function Profile() {
 
 	// Loaded on demand, not on mount: this is a diagnostic most visits do not need, and the
 	// read is up to 100 KV gets.
-	const loadMcpAudit = useCallback(async () => {
+	const loadMcpAudit = useCallback(async (cursor?: string) => {
 		setMcpLoading(true);
 		try {
-			const d = await api<{ events: McpAuditEvent[] }>("/v1/mcp-audit?limit=50");
-			setMcpEvents(d.events || []);
+			const d = await api<McpAuditPage>(`/v1/mcp-audit?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
+			setMcpEvents((prev) => (cursor ? [...(prev ?? []), ...d.events] : d.events));
+			setMcpCursor(d.nextCursor);
+			setMcpCoverage(d.coverage);
 			setMcpErr("");
 		} catch (e) {
 			setMcpErr(e instanceof Error ? e.message : String(e));
@@ -398,12 +410,12 @@ export default function Profile() {
 						What an MCP client did on your account — your own events only, newest first, kept 90 days.
 					</p>
 					{mcpErr ? (
-						<LoadFailed what="your MCP history" detail={mcpErr} onRetry={loadMcpAudit} testId="mcp-audit-load-failed" compact />
+						<LoadFailed what="your MCP history" detail={mcpErr} onRetry={() => loadMcpAudit()} testId="mcp-audit-load-failed" compact />
 					) : mcpEvents === null ? (
 						// Not labelled "Show …": the token row's own control is named "Show", and an
 						// accessible-name query for it matches any button whose name CONTAINS the
 						// word — a strict-mode failure in the e2e sweep, not a near miss.
-						<Button size="lg" onClick={loadMcpAudit} disabled={mcpLoading}>{mcpLoading ? "Loading..." : "Load recent MCP calls"}</Button>
+						<Button size="lg" onClick={() => loadMcpAudit()} disabled={mcpLoading}>{mcpLoading ? "Loading..." : "Load recent MCP calls"}</Button>
 					) : mcpEvents.length === 0 ? (
 						<p className="text-sm text-muted">No MCP tool calls recorded.</p>
 					) : (
@@ -420,7 +432,15 @@ export default function Profile() {
 									</span>
 								</div>
 							))}
+							{mcpCursor && (
+								<Button size="sm" onClick={() => loadMcpAudit(mcpCursor)} disabled={mcpLoading}>
+									{mcpLoading ? "Loading..." : "Load older"}
+								</Button>
+							)}
 						</div>
+					)}
+					{mcpEvents !== null && mcpCoverage && !mcpCoverage.complete && (
+						<p className="text-xs text-muted mt-2" data-testid="mcp-audit-coverage">{mcpCoverage.detail}</p>
 					)}
 				</div>
 

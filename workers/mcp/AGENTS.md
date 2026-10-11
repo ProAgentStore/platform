@@ -243,7 +243,7 @@ list_instance_knowledge { instance_id }                        # find the docume
 delete_instance_knowledge { instance_id, document_id, dry_run: true }
 # read the returned wouldDo, confirm it is the right target with the user, then:
 delete_instance_knowledge { instance_id, document_id, confirm: "delete_instance_knowledge" }
-mcp_audit_log { limit: 10 }                                    # verify what ran
+mcp_audit_log { limit: 10 }                                    # verify what ran (newest first; nextCursor pages older)
 ```
 
 Three independent gates, in this order: the `destructive` scope (absent from the default

@@ -12442,11 +12442,19 @@ paths:
         This is the same ledger `mcp_audit_log` reads, over HTTP. It exists so the history is
         reachable when the MCP connection is not, which is precisely when it is wanted.
         Payloads are redacted on write and again on read.
+
+        Pages cover the whole retained ledger (#1016): pass `nextCursor` back as `cursor` for the
+        next-older page; `nextCursor: null` is the end. Events order by time, then by `id` within
+        one millisecond, so pages never repeat or skip an event. A `tool`-filtered page may be
+        short or empty while `nextCursor` still continues. `coverage.complete: false` means events
+        from before the time-ordered ledger are still being indexed. Each event is a receipt for
+        the TOOL CALL, not for the work it started.
       operationId: getMcpAudit
       tags: [Usage]
       parameters:
         - { name: limit, in: query, schema: { type: integer, default: 100, maximum: 200 } }
-        - { name: tool, in: query, description: Exact tool-name match., schema: { type: string } }
+        - { name: tool, in: query, description: Exact tool-name match., schema: { type: string, maxLength: 100 } }
+        - { name: cursor, in: query, description: The previous page's `nextCursor`. Omit for the newest page., schema: { type: string, maxLength: 2048 } }
       responses:
         "200":
           description: Audit events, newest first
@@ -12456,7 +12464,15 @@ paths:
                 type: object
                 properties:
                   count: { type: integer }
-                  truncated: { type: boolean, description: More than 1000 keys exist for this subject; the window is not exhaustive. }
+                  nextCursor: { type: string, nullable: true, description: Pass back as `cursor` for the next-older page. `null` is the end of the retained ledger. }
+                  coverage:
+                    type: object
+                    properties:
+                      complete: { type: boolean, description: True only once every legacy event still within retention is indexed. }
+                      retentionDays: { type: integer }
+                      legacyIndex: { type: string, enum: [complete, in_progress, not_started] }
+                      detail: { type: string }
+                  semantics: { type: string, description: What an event is a receipt of. }
                   events:
                     type: array
                     items:
@@ -12468,8 +12484,10 @@ paths:
                         tool: { type: string }
                         action: { type: string, description: "`completed` | `dry_run` | `denied` | …" }
                         reason: { type: string, description: "Set when `action` is `denied`: read_only | missing_scope | missing_confirmation." }
+        "400": { description: "`cursor` or `tool` is out of bounds." }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "501": { description: The MCP audit KV namespace is not bound on this deployment. }
+        "503": { description: "A ledger read failed. No events are returned — a partial page is never passed off as the history." }
 
   # ── Stats ─────────────────────────────────────────────────────────────────
 

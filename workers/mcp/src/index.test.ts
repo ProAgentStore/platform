@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 // ── Test harness ────────────────────────────────────────────────────────────
 //
@@ -62,6 +63,7 @@ vi.mock("@modelcontextprotocol/sdk/server/mcp.js", () => ({
 const { PagsMcp } = await import("./index.js");
 const { MCP_TOOL_ALWAYS_ON, MCP_TOOL_COUNT, MCP_TOOL_GATED } = await import("./tool-count.js");
 const { annotationsFor, MCP_RISK_COUNTS, SERVER_INSTRUCTIONS, TOOL_RISK } = await import("./tool-metadata.js");
+const { AUDIT_MIGRATION_KEY, auditIndexKey } = await import("./audit-ledger.js");
 
 // A fetch stub with programmable per-path responses (shared shape with the
 // instance-tools test).
@@ -191,10 +193,11 @@ async function setup(opts: HarnessOpts = {}) {
 		tools,
 		fetchStub,
 		auditStore: store,
-		// Audit rows only: the same KV holds the `recent:` touches (#787), which are not audit events.
+		// Audit rows only: the same KV holds the `recent:` touches (#787), which are not audit events,
+		// and each event is stored twice (#1016) — the owner's `audit_idx:` key is counted once.
 		auditEvents: () =>
 			Array.from(store.entries())
-				.filter(([k]) => k.startsWith("audit:"))
+				.filter(([k]) => k.startsWith("audit_idx:"))
 				.map(([, v]) => JSON.parse(v) as Record<string, unknown>),
 	};
 }
@@ -594,16 +597,110 @@ describe("board config", () => {
 // ── mcp_audit_log: reads back the audit KV, respects read scope ───────────────
 
 describe("mcp_audit_log", () => {
-	it("returns audit events written by prior tool calls", async () => {
+	/**
+	 * KV as it behaves (#1016): lexicographic, at most 1000 keys per list, continued by a cursor
+	 * ("after this key name"), with listing metadata. The harness KV above returns every key in one
+	 * page, which could never show the 1000-key regime the old reader failed in.
+	 */
+	function ledgerKv() {
+		const data = new Map<string, { value: string; metadata?: unknown }>();
+		let failGet = false;
+		const kv = {
+			get: async (k: string) => {
+				if (failGet) throw new Error("KV GET failed");
+				return data.get(k)?.value ?? null;
+			},
+			put: async (k: string, value: string, opts: { metadata?: unknown } = {}) => void data.set(k, { value, metadata: opts.metadata }),
+			delete: async (k: string) => void data.delete(k),
+			list: async ({ prefix = "", limit = 1000, cursor }: { prefix?: string; limit?: number; cursor?: string } = {}) => {
+				const after = cursor ? atob(cursor) : null;
+				const names = Array.from(data.keys()).filter((n) => n.startsWith(prefix) && (after === null || n > after)).sort();
+				const page = names.slice(0, Math.min(limit, 1000));
+				const complete = names.length <= page.length;
+				return {
+					keys: page.map((name) => ({ name, metadata: data.get(name)?.metadata })),
+					list_complete: complete,
+					cursor: complete ? undefined : btoa(page[page.length - 1] ?? ""),
+					cacheStatus: null,
+				};
+			},
+		} as unknown as KVNamespace;
+		return { kv, data, failGets: (on: boolean) => (failGet = on) };
+	}
+
+	/** Call the tool the way a client must: arguments parsed by its PUBLISHED input schema. */
+	async function call(h: Awaited<ReturnType<typeof setup>>, args: Record<string, unknown>) {
+		const tool = h.tools.get("mcp_audit_log")!;
+		const parsed = z.object(tool.schema as z.ZodRawShape).strict().parse(args);
+		return (await tool.handler(parsed)).content[0].text;
+	}
+
+	it("returns audit events written by prior tool calls, as a page", async () => {
 		const h = await setup();
 		// Perform an audited write so there is at least one event.
 		h.fetchStub.respond((u, m) => u.endsWith("/v1/agents") && m === "POST", { body: { id: "ag-x" } });
 		await h.tools.get("create_agent")!.handler({ slug: "x", name: "X" });
 
-		const res = await h.tools.get("mcp_audit_log")!.handler({ limit: 10 });
-		const events = JSON.parse(res.content[0].text) as Array<{ tool?: string }>;
-		expect(Array.isArray(events)).toBe(true);
-		expect(events.some((e) => e.tool === "create_agent")).toBe(true);
+		const page = JSON.parse(await call(h, { limit: 10 })) as { events: Array<{ tool?: string; id?: string }>; nextCursor: unknown; coverage: unknown };
+		expect(page.events.some((e) => e.tool === "create_agent" && typeof e.id === "string")).toBe(true);
+		expect(page).toHaveProperty("nextCursor", null);
+		expect(page).toHaveProperty("coverage");
+	});
+
+	it("returns the latest events past 1000 stored ones and reaches every one by cursor, once", async () => {
+		const { kv, data } = ledgerKv();
+		const h = await setup({ env: { OAUTH_KV: kv } });
+		const base = Date.parse("2026-09-09T03:00:00.000Z");
+		for (let i = 0; i < 1100; i++) {
+			const ms = base + i * 60_000;
+			data.set(auditIndexKey("user-1", ms, `e${String(i).padStart(4, "0")}`), {
+				value: JSON.stringify({ id: `e${String(i).padStart(4, "0")}`, time: new Date(ms).toISOString(), subject: "user-1", tool: "list_agents", action: "completed" }),
+				metadata: { tool: "list_agents", action: "completed" },
+			});
+		}
+		// Another owner's events in the same namespace, newer than all of these.
+		data.set(auditIndexKey("user-2", Date.now(), "theirs"), { value: JSON.stringify({ id: "theirs", subject: "user-2", tool: "delete_agent" }) });
+
+		const ids: string[] = [];
+		let cursor: string | null = null;
+		let first = true;
+		do {
+			const page = JSON.parse(await call(h, { limit: 200, ...(cursor ? { cursor } : {}) })) as { events: Array<{ id: string; subject: string }>; nextCursor: string | null };
+			if (first) expect(page.events[0]?.id).toBe("e1099");
+			first = false;
+			expect(page.events.every((e) => e.subject === "user-1")).toBe(true);
+			ids.push(...page.events.map((e) => e.id));
+			cursor = page.nextCursor;
+		} while (cursor);
+		expect(ids).toHaveLength(1100);
+		expect(new Set(ids).size).toBe(1100);
+		expect(ids[1099]).toBe("e0000");
+	});
+
+	it("says older history is incomplete until the legacy index has finished", async () => {
+		const { kv, data } = ledgerKv();
+		const h = await setup({ env: { OAUTH_KV: kv } });
+		expect(JSON.parse(await call(h, {})).coverage).toMatchObject({ complete: false, legacyIndex: "not_started" });
+		data.set(AUDIT_MIGRATION_KEY, { value: JSON.stringify({ status: "complete", pass: 2 }) });
+		expect(JSON.parse(await call(h, {})).coverage).toMatchObject({ complete: true });
+	});
+
+	it("reports a failed read as an error, never as a page of what it did read", async () => {
+		const { kv, data, failGets } = ledgerKv();
+		const h = await setup({ env: { OAUTH_KV: kv } });
+		data.set(auditIndexKey("user-1", Date.now(), "e1"), { value: JSON.stringify({ id: "e1", tool: "x" }) });
+		failGets(true);
+		const text = await call(h, {});
+		expect(text).toMatch(/^Error: reading the MCP audit ledger failed — no events returned/);
+	});
+
+	it("filters by tool through the published schema", async () => {
+		const h = await setup();
+		h.fetchStub.respond((u, m) => u.endsWith("/v1/agents") && m === "POST", { body: { id: "ag-x" } });
+		await h.tools.get("create_agent")!.handler({ slug: "x", name: "X" });
+		const page = JSON.parse(await call(h, { tool: "update_agent" })) as { events: unknown[] };
+		expect(page.events).toEqual([]);
+		expect(() => z.object(h.tools.get("mcp_audit_log")!.schema as z.ZodRawShape).strict().parse({ cursor: "" })).toThrow();
 	});
 
 	it("refuses without a token", async () => {

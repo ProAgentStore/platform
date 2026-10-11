@@ -1,5 +1,14 @@
 import { jsonText, text, type McpEnv, type TextResult } from "./http.js";
 import { clipMarked } from "./clip-marked.js";
+import {
+	AUDIT_INDEX_PREFIX,
+	AUDIT_TTL_SECONDS,
+	type AuditPage,
+	auditGlobalKey,
+	auditIndexKey,
+	auditKeyMetadata,
+	readAuditPage,
+} from "./audit-ledger.js";
 
 export const MCP_SCOPES = ["read", "write", "runtime", "destructive"] as const;
 export type McpScope = (typeof MCP_SCOPES)[number];
@@ -178,63 +187,46 @@ export async function audit(
 }
 
 async function writeAudit(ctx: SafetyContext, event: Record<string, unknown>): Promise<void> {
-	if (!ctx.env.OAUTH_KV) return;
+	const kv = ctx.env.OAUTH_KV;
+	if (!kv) return;
 	const subject = await subjectFor(ctx);
 	if (!subject) return;
-	const now = new Date().toISOString();
-	const key = `audit:${subject}:${now}:${crypto.randomUUID()}`;
-	await ctx.env.OAUTH_KV.put(
-		key,
-		JSON.stringify({
-			time: now,
-			subject,
-			// Summarise BEFORE redacting: `summarize` decides what is recorded at all, `redact`
-			// masks what survives. The other order would run the value-shape regex over prose
-			// that is about to be discarded, and would mask a secret into a string whose length
-			// then decided whether the field was kept.
-			...(redact(summarize(event)) as Record<string, unknown>),
-		}),
-		{ expirationTtl: 90 * 86_400 },
-	);
+	const ms = Date.now();
+	const id = crypto.randomUUID();
+	// Summarise BEFORE redacting: `summarize` decides what is recorded at all, `redact`
+	// masks what survives. The other order would run the value-shape regex over prose
+	// that is about to be discarded, and would mask a secret into a string whose length
+	// then decided whether the field was kept.
+	const recorded = redact(summarize(event)) as Record<string, unknown>;
+	// The identity fields are written LAST so an audited payload cannot overwrite them.
+	const value = JSON.stringify({ ...recorded, id, time: new Date(ms).toISOString(), subject });
+	// Two keys, one value: the owner's time-ordered index and the cross-owner one the admin
+	// sweep reads (#1016). See `audit-ledger.ts` for why the time is inverted.
+	const options = { expirationTtl: AUDIT_TTL_SECONDS, metadata: auditKeyMetadata(recorded) };
+	await Promise.all([
+		kv.put(auditIndexKey(subject, ms, id), value, options),
+		kv.put(auditGlobalKey(subject, ms, id), value, options),
+	]);
 }
 
+/**
+ * One page of the caller's own audit ledger, newest first (#1016). `cursor` is the previous
+ * page's `nextCursor`; the prefix is always built from the caller's subject, so a cursor cannot
+ * reach another owner's events. A storage failure throws rather than returning a short page.
+ */
 export async function listAuditEvents(
 	ctx: SafetyContext,
-	limit = 50,
-): Promise<unknown[]> {
-	if (!ctx.env.OAUTH_KV) return [];
+	{ limit = 50, cursor, tool }: { limit?: number; cursor?: string; tool?: string } = {},
+): Promise<AuditPage | null> {
+	if (!ctx.env.OAUTH_KV) return null;
 	const subject = await subjectFor(ctx);
-	if (!subject) return [];
-	const safeLimit = Math.max(1, Math.min(200, limit));
-	// KV returns keys in LEXICOGRAPHIC order and the key is `audit:{subject}:{ISO time}:{uuid}`,
-	// which sorts ASCENDING in time. So `list({limit: safeLimit})` handed back the OLDEST
-	// `safeLimit` events, and the `.sort()` below ordered THOSE newest-first — which is why the
-	// answer looked correct while reporting events from months ago (#704). The sibling reader
-	// `workers/api/src/routes/admin-mcp-audit.ts` already over-lists for exactly this reason.
-	//
-	// Over-list to the KV per-call cap, sort the KEY NAMES, and `get` only the top slice: the
-	// sort needs the names, not the values, so this still costs `safeLimit` reads (≤200), not
-	// the admin route's ≤1000. Correct up to 1000 events per subject; past that KV truncates
-	// the listing lexicographically and the window is wrong again — see #704 step 5.
-	const listed = await ctx.env.OAUTH_KV.list({
-		prefix: `audit:${subject}:`,
-		limit: 1000,
+	if (!subject) return null;
+	return readAuditPage(ctx.env.OAUTH_KV, {
+		prefix: `${AUDIT_INDEX_PREFIX}${subject}:`,
+		limit: Math.max(1, Math.min(200, limit)),
+		cursor,
+		tool,
 	});
-	const rows = await Promise.all(
-		listed.keys
-			.sort((a, b) => b.name.localeCompare(a.name))
-			.slice(0, safeLimit)
-			.map(async (key) => {
-				const raw = await ctx.env.OAUTH_KV?.get(key.name);
-				if (!raw) return null;
-				try {
-					return JSON.parse(raw) as unknown;
-				} catch {
-					return { raw };
-				}
-			}),
-	);
-	return rows.filter((row) => row !== null);
 }
 
 // Value shapes that look like a live secret even under an innocent key name.

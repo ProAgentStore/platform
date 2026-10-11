@@ -1,5 +1,6 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
+import { AUDIT_INDEX_PREFIX, type AuditPage, readAuditPage } from "../lib/mcp-audit-ledger.js";
 import { redactSecrets } from "../lib/redact.js";
 import type { Env } from "../types.js";
 
@@ -11,9 +12,8 @@ import type { Env } from "../types.js";
  * the MCP client did was unreachable. `GET /v1/admin/mcp-audit` exists but is `requireAdmin`
  * and cross-user, so it is not an answer for a normal owner.
  *
- * The data lives in the MCP worker's `OAUTH_KV`, one key per event
- * (`audit:{subject}:{ISO time}:{uuid}`) — see the header of `admin-mcp-audit.ts` for the
- * shape and `workers/mcp/src/safety.ts` for the writer. The API worker already binds that
+ * The data lives in the MCP worker's `OAUTH_KV`, in the time-ordered ledger
+ * `lib/mcp-audit-ledger.ts` describes (#1016) — `workers/mcp/src/safety.ts` is the writer. The API worker already binds that
  * namespace (`wrangler.toml`) and `Env.OAUTH_KV` is already declared.
  *
  * Tenant isolation is structural: the KV prefix is built from `session.uid` and there is no
@@ -55,73 +55,58 @@ export interface McpAuditEvent {
 export const MCP_AUDIT_PRESERVE_KEYS = /^session[_-]?id$/i;
 
 export interface McpAuditQuery {
-	/** KV key prefix. `audit:{subject}:` for one owner, `audit:` for the admin sweep. */
+	/** Ledger key prefix: `audit_idx:{subject}:` for one owner, `audit_all:` for the admin sweep. */
 	prefix: string;
 	limit: number;
+	/** The previous page's `nextCursor`. */
+	cursor?: string;
 	tool?: string;
-	/**
-	 * True when `prefix` pins exactly ONE subject. Only then does the key name order by
-	 * time (`audit:{subject}:{ISO}:{uuid}` sorts by subject FIRST), which is what makes it
-	 * safe to slice the names before loading. On a cross-subject sweep the newest-by-name
-	 * keys are just the newest of the last subject alphabetically, so every listed key has
-	 * to be loaded and ordered by its `time` field instead.
-	 */
-	subjectScoped?: boolean;
 }
 
 /**
- * Read events out of the audit KV, newest first.
+ * One page of the audit ledger, newest first, redacted again on read (#1016).
  *
- * Over-lists to the KV per-call cap of 1000 because KV lists LEXICOGRAPHICALLY: the key
- * carries an ISO timestamp, so the first N keys are the OLDEST N. Asking KV for `limit` keys
- * and sorting those is the bug #704 fixed on the MCP side; do not reintroduce it here.
+ * The ledger is keyed by INVERTED time (`lib/mcp-audit-ledger.ts`), so KV's lexicographic order is
+ * newest-first and its list cursor is the continuation. A storage failure throws; the routes turn
+ * it into a 503, never into a short page that looks like the whole history.
  */
-export async function readMcpAuditEvents(
-	kv: KVNamespace,
-	{ prefix, limit, tool, subjectScoped }: McpAuditQuery,
-): Promise<{ count: number; truncated: boolean; events: McpAuditEvent[] }> {
-	const listed = await kv.list({ prefix, limit: 1000 });
-
-	const names = listed.keys.map((k) => k.name).sort((a, b) => b.localeCompare(a));
-	// Load only the window we will return when the names already order by time and nothing
-	// filters them out: the sort needs the names, not the values, so a `limit` of 50 costs
-	// 50 reads rather than up to 1000.
-	const window = subjectScoped && !tool ? names.slice(0, limit) : names;
-
-	const loaded = await Promise.all(
-		window.map(async (name) => {
-			const raw = await kv.get(name);
-			if (!raw) return null;
-			const id = name.slice(name.lastIndexOf(":") + 1);
-			try {
-				return { id, ...(JSON.parse(raw) as McpAuditEvent) };
-			} catch {
-				return { id, raw } as McpAuditEvent;
-			}
-		}),
-	);
-
-	let events = loaded.filter((e): e is McpAuditEvent => e !== null);
-	if (tool) events = events.filter((e) => e.tool === tool);
-	events.sort((a, b) => String(b.time ?? "").localeCompare(String(a.time ?? "")));
-	events = events.slice(0, limit);
-
+export async function readMcpAuditEvents(kv: KVNamespace, query: McpAuditQuery): Promise<AuditPage<McpAuditEvent>> {
+	const page = await readAuditPage(kv, query);
 	// Defense-in-depth: tool input/result are untrusted — redact secret-shaped values on read
 	// (the write-time redact in the MCP worker is the first net, this is the second).
-	const safe = events.map((e) => ({
+	const events = (page.events as McpAuditEvent[]).map((e) => ({
 		...e,
 		input: "input" in e ? redactSecrets(e.input, 0, { allowKeys: MCP_AUDIT_PRESERVE_KEYS }) : e.input,
 		result: "result" in e ? redactSecrets(e.result, 0, { allowKeys: MCP_AUDIT_PRESERVE_KEYS }) : e.result,
 	}));
+	return { ...page, events };
+}
 
-	return { count: safe.length, truncated: listed.list_complete === false, events: safe };
+/** Parse the shared `?cursor=` / `?tool=` query; `null` when either is out of bounds. */
+export function parseAuditPaging(cursor: string | undefined, tool: string | undefined): { cursor?: string; tool?: string } | null {
+	const c = cursor?.trim() || undefined;
+	const t = tool?.trim() || undefined;
+	if ((c && c.length > 2048) || (t && t.length > 100)) return null;
+	return { cursor: c, tool: t };
+}
+
+/** Read a page, or answer 503 naming the failure — a failed read is never an empty history. */
+export async function auditPageOr503(c: Context, kv: KVNamespace, query: McpAuditQuery) {
+	try {
+		return c.json(await readMcpAuditEvents(kv, query));
+	} catch (e) {
+		return c.json(
+			{ error: "MCP audit ledger read failed", detail: e instanceof Error ? e.message : String(e), events: null },
+			503,
+		);
+	}
 }
 
 export const mcpAuditRoutes = new Hono<{ Bindings: Env }>();
 
 /**
  * GET /mcp-audit — the CALLER's own MCP tool-call events, newest first.
- * Query: ?limit= (default 100, max 200) ?tool= (exact match).
+ * Query: ?limit= (default 100, max 200) ?tool= (exact match) ?cursor= (a previous `nextCursor`).
  */
 mcpAuditRoutes.get("/mcp-audit", async (c) => {
 	const session = await requireUser(c);
@@ -140,14 +125,10 @@ mcpAuditRoutes.get("/mcp-audit", async (c) => {
 	}
 
 	const limit = Math.max(1, Math.min(200, Number(c.req.query("limit")) || 100));
-	const tool = c.req.query("tool")?.trim() || undefined;
+	const paging = parseAuditPaging(c.req.query("cursor"), c.req.query("tool"));
+	if (!paging) return c.json({ error: "cursor must be at most 2048 characters and tool at most 100" }, 400);
 
-	// The prefix is the caller's own uid and nothing else reaches it — no `?user=` here.
-	const result = await readMcpAuditEvents(kv, {
-		prefix: `audit:${session.uid}:`,
-		limit,
-		tool,
-		subjectScoped: true,
-	});
-	return c.json(result);
+	// The prefix is the caller's own uid and nothing else reaches it — no `?user=` here, and a
+	// cursor only moves WITHIN the prefix it is listed under.
+	return auditPageOr503(c, kv, { prefix: `${AUDIT_INDEX_PREFIX}${session.uid}:`, limit, ...paging });
 });

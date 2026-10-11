@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import { requireAdmin } from "../lib/auth.js";
 import type { Env } from "../types.js";
-import { readMcpAuditEvents } from "./mcp-audit.js";
+import { AUDIT_GLOBAL_PREFIX, AUDIT_INDEX_PREFIX } from "../lib/mcp-audit-ledger.js";
+import { auditPageOr503, parseAuditPaging } from "./mcp-audit.js";
 
 /**
  * Admin: MCP tool-call audit log (cross-user).
@@ -9,10 +10,10 @@ import { readMcpAuditEvents } from "./mcp-audit.js";
  * WHERE THE DATA LIVES — read this before wiring:
  * The MCP server does NOT record tool calls to a D1 table. It writes them to the
  * MCP worker's KV namespace `OAUTH_KV` (workers/mcp/src/safety.ts → `audit()`),
- * one key per event:
+ * in the time-ordered ledger `lib/mcp-audit-ledger.ts` describes (#1016):
  *
- *     audit:{subject}:{ISO-8601 time}:{uuid}  →  JSON {
- *       time, subject, tool, action, reason?, requiredScope?, scopes?, input?, result?, ...
+ *     audit_all:{inverted time}:{subject}:{uuid}  →  JSON {
+ *       id, time, subject, tool, action, reason?, requiredScope?, scopes?, input?, result?, ...
  *     }
  *
  * `subject` is the authenticated MCP account (user) id. `action` is the allow/deny
@@ -20,8 +21,8 @@ import { readMcpAuditEvents } from "./mcp-audit.js";
  * missing_confirmation), anything else (completed | write | dry_run | …) = allowed.
  * Events expire after 90 days (KV TTL). Secrets are redacted at write time.
  *
- * This route reads that same KV namespace across ALL subjects (no subject prefix),
- * newest-first. The API worker therefore needs the `OAUTH_KV` binding — see the
+ * This route reads that ledger across ALL subjects (`audit_all:`), or one subject's
+ * `audit_idx:{subject}:` index with `?user=`, newest-first, paged by `?cursor=`. The API worker therefore needs the `OAUTH_KV` binding — see the
  * WIRING note at the bottom of this file. Until that binding exists the route returns
  * a 501 with the exact reason instead of pretending there is data.
  */
@@ -34,7 +35,7 @@ export const adminMcpAuditRoutes = new Hono<{ Bindings: Env }>();
 
 /**
  * GET /mcp-audit — recent MCP tool-call events across every user, newest first.
- * Query: ?limit= (default 200, max 500) ?tool= (exact match) ?user= (subject match).
+ * Query: ?limit= (default 200, max 500) ?tool= (exact match) ?user= (subject match) ?cursor=.
  */
 adminMcpAuditRoutes.get("/mcp-audit", async (c) => {
 	await requireAdmin(c);
@@ -53,21 +54,14 @@ adminMcpAuditRoutes.get("/mcp-audit", async (c) => {
 	}
 
 	const limit = Math.max(1, Math.min(500, Number(c.req.query("limit")) || 200));
-	const toolFilter = c.req.query("tool")?.trim() || undefined;
 	const userFilter = c.req.query("user")?.trim() || undefined;
+	const paging = parseAuditPaging(c.req.query("cursor"), c.req.query("tool"));
+	if (!paging) return c.json({ error: "cursor must be at most 2048 characters and tool at most 100" }, 400);
 
-	// Keys are `audit:{subject}:{time}:{uuid}`. To filter by user we narrow the KV list
-	// prefix; otherwise we sweep all `audit:` keys. The listing, ordering and read-time
-	// redaction now live in `mcp-audit.ts` — one reader for the admin sweep and the
-	// owner-scoped route, so the two cannot drift the way the MCP-side reader did (#704).
-	const prefix = userFilter ? `audit:${userFilter}:` : "audit:";
-	const result = await readMcpAuditEvents(kv, {
-		prefix,
-		limit,
-		tool: toolFilter,
-		subjectScoped: Boolean(userFilter),
-	});
-	return c.json(result);
+	// One owner's index when filtering by user, otherwise the cross-owner index — both keyed by
+	// inverted time, so either listing is newest-first and pages by KV cursor (#1016).
+	const prefix = userFilter ? `${AUDIT_INDEX_PREFIX}${userFilter}:` : AUDIT_GLOBAL_PREFIX;
+	return auditPageOr503(c, kv, { prefix, limit, ...paging });
 });
 
 /*

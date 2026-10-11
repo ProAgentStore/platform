@@ -345,17 +345,25 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"mcp_audit_log",
-			"Read recent MCP write, runtime, dry-run, denied, and destructive tool audit events for the authenticated account.",
+			"Read this account's MCP tool audit events (write, runtime, dry-run, denied, destructive), newest first. Returns {events, nextCursor, coverage}: pass nextCursor back as cursor for the next-older page; nextCursor null is the end of the 90-day ledger. coverage.complete false means older legacy events are still being indexed. An event is a receipt for the TOOL CALL, not for the work it started.",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				limit: z.coerce.number().int().min(1).max(200).optional(),
+				cursor: z.string().min(1).max(2048).optional().describe("nextCursor from the previous page. Omit for the newest page."),
+				tool: z.string().min(1).max(100).optional().describe("Only events for this exact tool name. A filtered page may hold fewer than limit events; keep following nextCursor."),
 			},
-			async ({ token, limit }) => {
+			async ({ token, limit, cursor, tool }) => {
 				const sessionToken = this.token(token);
 				if (!sessionToken) return authRequired();
-				const denied = await requirePermission(this.safety(token), "read", "mcp_audit_log", { limit });
+				const denied = await requirePermission(this.safety(token), "read", "mcp_audit_log", { limit, cursor, tool });
 				if (denied) return denied;
-				return jsonText(await listAuditEvents(this.safety(token), limit || 50));
+				try {
+					const page = await listAuditEvents(this.safety(token), { limit: limit || 50, cursor, tool });
+					return page ? jsonText(page) : text("Error: the MCP audit ledger is unavailable on this connection (no audit store or no authenticated subject).");
+				} catch (e) {
+					// Never a short page passed off as the history: the read failed, and the caller is told so.
+					return text(`Error: reading the MCP audit ledger failed — no events returned. ${e instanceof Error ? e.message : String(e)}`);
+				}
 			},
 		);
 

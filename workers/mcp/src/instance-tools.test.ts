@@ -62,7 +62,9 @@ function makeKv(): { kv: KVNamespace; store: Map<string, string> } {
 	const store = new Map<string, string>();
 	const kv = {
 		get: async (key: string) => store.get(key) ?? null,
+		// The cross-owner `audit_all:` copy of each event (#1016) is skipped: one row per event here.
 		put: async (key: string, value: string) => {
+			if (key.startsWith("audit_all:")) return;
 			store.set(key, value);
 		},
 		delete: async (key: string) => {

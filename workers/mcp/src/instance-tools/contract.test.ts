@@ -130,7 +130,9 @@ const ALL_SCOPES = ["read", "write", "runtime", "destructive"];
 const auditStore = new Map<string, string>();
 const auditKv = {
 	get: async (k: string) => auditStore.get(k) ?? null,
+	// The cross-owner `audit_all:` copy of each event (#1016) is skipped: one row per event here.
 	put: async (k: string, v: string) => {
+		if (k.startsWith("audit_all:")) return;
 		auditStore.set(k, v);
 	},
 	list: async () => ({ keys: [], list_complete: true }),

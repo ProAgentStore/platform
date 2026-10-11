@@ -257,7 +257,6 @@ const KNOWN_ANONYMOUS = {
 	"afb6c233": "{ publicKey: string | null }",
 
 	// ── mcp-audit ─────────────────────────────────────────────────────────────
-	"f15508d4": "{ events: McpAuditEvent[] }",
 
 	// ── DataTab / collections ─────────────────────────────────────────────────
 	"94accf36": "{ collections?: Collection[] }",

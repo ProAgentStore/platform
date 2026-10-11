@@ -1123,4 +1123,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.110": "sha256:6049477956e2336824e28406b12bccb93f2fbf36aa0ae5d71faa41f56c3dd844",
 	// #1018: coding_session_capture gains `before` (newest-first paging); `offset` now reads forward from a position.
 	"0.1.111": "sha256:d268ea52776037d5e40607f24926775c2577ebb3f1e301ccf47db67f8cda2eb5",
+	// #1016: mcp_audit_log gains `cursor` + `tool` and answers {events, nextCursor, coverage} from the time-ordered ledger.
+	"0.1.112": "sha256:396aa9ddf3f54ca301d14a2874e4c2e96c2d600a13475358c844e0f0ce133dfa",
 };

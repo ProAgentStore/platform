@@ -145,8 +145,10 @@ describe("audit coverage for a per-call `token` argument", () => {
 
 		await audit(agent.safety(token), { tool: "set_instance_instructions", action: "completed" });
 
-		expect(puts).toHaveLength(1);
-		expect(puts[0]?.key.startsWith("audit:google:1107:")).toBe(true);
+		// One event, two ledger keys (#1016): the owner's index and the cross-owner one.
+		expect(puts).toHaveLength(2);
+		expect(puts[0]?.key.startsWith("audit_idx:google:1107:")).toBe(true);
+		expect(puts[1]?.key.startsWith("audit_all:")).toBe(true);
 		expect(JSON.parse(puts[0]?.value ?? "{}").subject).toBe("google:1107");
 	});
 
@@ -170,7 +172,7 @@ describe("audit coverage for a per-call `token` argument", () => {
 		await audit(ctx, { tool: "a", action: "denied" });
 		await audit(ctx, { tool: "a", action: "completed" });
 
-		expect(puts).toHaveLength(2);
+		expect(puts).toHaveLength(4); // two events, two ledger keys each
 		expect(verify).toHaveBeenCalledTimes(1);
 		verify.mockRestore();
 	});

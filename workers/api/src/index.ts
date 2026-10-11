@@ -40,6 +40,7 @@ import { budgetRoutes } from "./routes/budget.js";
 import { statsRoutes } from "./routes/stats.js";
 import { controllerAiSettingsRoutes } from "./routes/controller-ai-settings.js";
 import { mcpAuditRoutes } from "./routes/mcp-audit.js";
+import { runAuditLedgerBackfill } from "./lib/mcp-audit-ledger.js";
 import { triggerRoutes } from "./routes/triggers.js";
 import { adminRoutes } from "./routes/admin.js";
 import { adminInstanceDetailRoutes } from "./routes/admin-instance-detail.js";
@@ -325,6 +326,11 @@ export default {
 		// The dedup fix (same PR) stopped NEW excess rows; this sweep cleans up the historical ones.
 		// A missed tick is harmless — the table just stays a bit bigger. Swallows its own errors.
 		ctx.waitUntil(sweepTerminalSnapshots(env).catch(() => undefined));
+		// Copy legacy MCP audit keys into the time-ordered ledger (#1016): one bounded, resumable,
+		// idempotent batch per tick; a single KV read per tick once it has finished.
+		if (env.OAUTH_KV) {
+			ctx.waitUntil(runAuditLedgerBackfill(env.OAUTH_KV).catch((err) => logUnhandled(env, err, { path: "scheduled:mcp-audit-ledger", method: "CRON" })));
+		}
 		// Notify on a finished deploy (#6). A fifth independent failure domain — it reaches an
 		// external API (GitHub), which is the most likely of these to be slow or rate-limited,
 		// and it must not be able to stop the trigger sweep or the pump from draining.

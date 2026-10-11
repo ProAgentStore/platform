@@ -151,7 +151,7 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
-- `serverInfo.version`: `0.1.111`
+- `serverInfo.version`: `0.1.112`
 
 That is the same value the published MCP-registry manifest (`server.json`) carries, and both
 are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —
@@ -287,6 +287,8 @@ on the cautious side, so leaving them out costs a host nothing. Declaring a gues
 it exactly what the annotations are for.
 
 Use `mcp_audit_log` to inspect recent MCP write, runtime, dry-run, denied, and destructive tool events for the authenticated account. Audit events are redacted before storage — both by key name (`token`, `secret`, `password`, `credential`, `api_key`, …) and by value shape (`sk-…`, `ghp_…`, `xox…`, `AIza…`, JWTs, bearer headers) — and expire after 90 days.
+
+**It pages, newest first, over the whole retained ledger (#1016).** A call returns `{events, nextCursor, coverage, semantics}`. Pass `nextCursor` back as `cursor` for the next-older page; `nextCursor: null` is the end of the 90-day ledger. Events order by time, then by event `id` within one millisecond, so pages never repeat or skip an event. `tool` filters to one exact tool name; a filtered page may be short, or empty, while `nextCursor` still continues. `coverage.complete: false` means events recorded before the time-ordered ledger existed are still being indexed — the newest events are complete, older pages may be missing those. A failed read answers `Error: …`, never a short page. `GET /v1/mcp-audit` takes the same `cursor` and `tool` and returns the same shape.
 
 **It is a call ledger, not a transcript.** An event records what a call carried — argument key names, byte counts, status — and the id of the record that holds the content (`traceId`, `session_id`, `runId`), never the content itself: no message text, no file contents, no argument values, no response body. Any string longer than an identifier is stored as a byte count under a `…Bytes` key. That applies to refused and dry-run calls exactly as it does to completed ones; until #701 those two paths stored the caller's whole payload verbatim, so the log kept the file it declined to write and four bytes for the one it wrote. To read what was actually sent, follow the id: `traceId` joins an audited `chat_with_instance` to its rows in `GET /v1/instances/:id/messages` and to the `chat.in`/`chat.out` pair in `agent_trace`, which also carry `origin: "mcp"` so an MCP turn is distinguishable from a console one. The rule and its reasoning are ADR 0004.
 

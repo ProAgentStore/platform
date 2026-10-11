@@ -20,6 +20,11 @@ import {
  * insertion order and was never given more keys than the limit, so it agreed with a
  * reader that took the first N and called them the newest.
  */
+/** The events of the caller's newest ledger page — the shape most of these tests assert on. */
+async function eventsOf(ctx: SafetyContext, limit?: number): Promise<Array<Record<string, unknown>>> {
+	return (await listAuditEvents(ctx, { limit }))?.events ?? [];
+}
+
 function makeKv(): KVNamespace {
 	const data = new Map<string, string>();
 	return {
@@ -102,7 +107,7 @@ describe("MCP safety helpers", () => {
 		const body = JSON.parse(result.content[0]?.text || "{}") as Record<string, unknown>;
 
 		expect(body).toMatchObject({ dryRun: true, tool: "create_agent" });
-		const events = await listAuditEvents(ctx);
+		const events = await eventsOf(ctx);
 		expect(events).toHaveLength(1);
 	});
 
@@ -126,7 +131,7 @@ describe("MCP safety helpers", () => {
 				await audit(ctx, { tool: "list_agents", action: "completed", seq: i });
 			}
 
-			const events = (await listAuditEvents(ctx, 10)) as Array<{ seq: number; time: string }>;
+			const events = await eventsOf(ctx, 10);
 
 			expect(events).toHaveLength(10);
 			expect(events.map((e) => e.seq)).toEqual([59, 58, 57, 56, 55, 54, 53, 52, 51, 50]);
@@ -148,7 +153,7 @@ describe("MCP safety helpers", () => {
 			input: { runner_token: "secret", nested: { password: "secret" } },
 		});
 
-		const [event] = await listAuditEvents(ctx);
+		const [event] = await eventsOf(ctx);
 		expect(event).toMatchObject({
 			input: {
 				runner_token: "[redacted]",
@@ -194,7 +199,7 @@ describe("ADR 0004 — an audited value is an identity or a size, never a body",
 			content: CONTENT,
 		});
 
-		const [event] = (await listAuditEvents(ctx)) as Array<Record<string, unknown>>;
+		const [event] = await eventsOf(ctx);
 		const input = event?.input as Record<string, unknown>;
 		expect(input.agent_id).toBe("qa-automation");
 		expect(input.path).toBe("src/agent.ts");
@@ -209,7 +214,7 @@ describe("ADR 0004 — an audited value is an identity or a size, never a body",
 
 		await dryRun(ctx, "chat_with_instance", "send private instance chat message", { instance_id: "e4d2d031", message }, { endpoint: "/v1/instances/e4d2d031/chat", method: "POST" });
 
-		const [event] = (await listAuditEvents(ctx)) as Array<Record<string, unknown>>;
+		const [event] = await eventsOf(ctx);
 		const input = event?.input as Record<string, unknown>;
 		expect(input.instance_id).toBe("e4d2d031");
 		expect(input.message).toBeUndefined();
@@ -221,7 +226,7 @@ describe("ADR 0004 — an audited value is an identity or a size, never a body",
 
 		await requirePermission(ctx, "runtime", "coding_loop_start", { instance_id: "i1", objective: CONTENT });
 
-		const [event] = (await listAuditEvents(ctx)) as Array<Record<string, unknown>>;
+		const [event] = await eventsOf(ctx);
 		const input = event?.input as Record<string, unknown>;
 		expect(input.objective).toBeUndefined();
 		expect(input.objectiveBytes).toBe(new TextEncoder().encode(CONTENT).length);
@@ -240,7 +245,7 @@ describe("ADR 0004 — an audited value is an identity or a size, never a body",
 			{ wrote: [{ path: "a.ts", body: CONTENT }], note: CONTENT },
 		);
 
-		const [event] = (await listAuditEvents(ctx)) as Array<Record<string, unknown>>;
+		const [event] = await eventsOf(ctx);
 		const long = strings(event).filter((s) => s.length > AUDIT_VALUE_MAX);
 		expect(long, `audited string(s) longer than an id: ${long.map((s) => s.slice(0, 40)).join(" | ")}`).toEqual([]);
 		// And the sizes survived — this is a summary, not a deletion.
@@ -260,6 +265,6 @@ describe("ADR 0004 — an audited value is an identity or a size, never a body",
 
 		await audit(ctx, { tool: "chat_with_instance", action: "completed", input: ids });
 
-		expect((await listAuditEvents(ctx))[0]).toMatchObject({ input: ids });
+		expect((await eventsOf(ctx))[0]).toMatchObject({ input: ids });
 	});
 });

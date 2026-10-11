@@ -31,7 +31,8 @@ function setup(opts: { scopes?: string[]; status?: number; body?: unknown } = {}
 	const audit = new Map<string, string>();
 	const kv = {
 		get: async (k: string) => audit.get(k) ?? null,
-		put: async (k: string, v: string) => void audit.set(k, v),
+		// The cross-owner `audit_all:` copy of each event (#1016) is skipped: one row per event here.
+		put: async (k: string, v: string) => void (k.startsWith("audit_all:") || audit.set(k, v)),
 		delete: async (k: string) => void audit.delete(k),
 		list: async () => ({ keys: [...audit.keys()].map((name) => ({ name })), list_complete: true }),
 	} as unknown as KVNamespace;

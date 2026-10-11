@@ -120,7 +120,8 @@ async function listPublishedTools(
 	const store = new Map<string, string>();
 	const kv = {
 		get: async (k: string) => store.get(k) ?? null,
-		put: async (k: string, v: string) => void store.set(k, v),
+		// The cross-owner `audit_all:` copy of each event (#1016) is skipped: one row per event here.
+		put: async (k: string, v: string) => void (k.startsWith("audit_all:") || store.set(k, v)),
 		delete: async (k: string) => void store.delete(k),
 		list: async () => ({ keys: [], list_complete: true, cursor: undefined, cacheStatus: null }),
 	} as unknown as KVNamespace;
