@@ -62,6 +62,8 @@ describe("LocalApplyReconciliationRuntime", () => {
 		pageState = { url: "https://jobs.example.test/history", login: false };
 		await expect(runtime.resume(request)).resolves.toMatchObject({ state: "running" });
 		await expect(runtime.handoffInput({ ...request, input: { type: "text", text: "never forwarded" } })).rejects.toThrow();
+		await runtime.end(request);
+		expect(ended).toBe(1);
 		expect(timers).toHaveLength(1);
 	});
 
