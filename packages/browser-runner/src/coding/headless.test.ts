@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -1171,6 +1171,81 @@ describe("HeadlessSession — a completed turn reports which inputs it consumed 
 		s.input("second", { inputId: "dir-second" });
 		await until(() => s.lastTurn !== null, 12_000, "the second turn to finish");
 		expect(s.consumedInputs).toEqual(["dir-second"]);
+		s.stop();
+	}, 25_000);
+});
+
+/**
+ * A stream-json engine that never finishes a turn on its own, and on SIGTERM flushes a late `result` for
+ * the turn it held before exiting (#1019) — the stale process speaking after its replacement started.
+ */
+const FAKE_CLAUDE_LATE_RESULT = `#!/usr/bin/env node
+const rl = require("node:readline").createInterface({ input: process.stdin });
+process.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: "sess-late" }) + "\\n");
+let held = null;
+rl.on("line", (line) => {
+  let msg; try { msg = JSON.parse(line); } catch { return; }
+  if (msg.type !== "user") return;
+  held = (msg.message?.content || []).map((b) => b.text).join(" ");
+  // Acknowledge the read, so a test signals only once there is a held turn to answer late.
+  process.stdout.write(JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "holding " + held } ] } }) + "\\n");
+});
+process.on("SIGTERM", () => {
+  setTimeout(() => {
+    // Proof, outside the protocol, that this process DID speak late: a marker file in its working dir.
+    if (held) require("node:fs").writeFileSync("late-" + process.pid, held);
+    // Exit only once the write is flushed: a pipe write is asynchronous, and exiting first loses it.
+    if (held) process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "late: " + held }) + "\\n", () => process.exit(0));
+    else process.exit(0);
+  }, 150);
+});
+`;
+
+describe("HeadlessSession — a replaced process cannot speak for its replacement (#1019)", () => {
+	let dir: string;
+	let bin: string;
+
+	beforeAll(() => {
+		dir = mkdtempSync(join(tmpdir(), "pags-stale-"));
+		bin = join(dir, "fake-claude-late.js");
+		writeFileSync(bin, FAKE_CLAUDE_LATE_RESULT);
+		chmodSync(bin, 0o755);
+	});
+	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+	it("old A's late result neither credits new B's input, nor files B's turn report, nor marks B idle", async () => {
+		const s = new HeadlessSession({ id: "stale-a-b", workDir: dir, clientType: "claude", bin, statePath: defaultStatePath(dir) });
+		s.start();
+		await until(() => s.runState() === "idle", 8000, "A to initialise");
+		s.input("turn A", { inputId: "dir-a" });
+		await until(() => s.snapshot().includes("holding turn A"), 4000, "A to read its turn");
+		s.stop(); // A gets SIGTERM and answers late
+		s.start(); // B replaces it before A's late output arrives
+		await until(() => s.runState() === "idle", 8000, "B to initialise");
+		s.input("turn B", { inputId: "dir-b" });
+		await until(() => s.snapshot().includes("holding turn B"), 4000, "B to read its turn");
+		// A really did speak late (its marker), and only then is the absence of its effect meaningful.
+		await until(() => readdirSync(dir).some((f) => f.startsWith("late-")), 4000, "A's late result");
+		await new Promise((r) => setTimeout(r, 300)); // the bytes follow the marker; let them arrive
+		expect(s.consumedInputs).toEqual([]);
+		expect(s.lastTurn).toBeNull();
+		expect(s.runState()).not.toBe("idle");
+		expect(s.snapshot()).not.toContain("late: turn A");
+		s.stop();
+	}, 25_000);
+
+	it("control: the live process's own result still ends its turn and credits its input", async () => {
+		const s = new HeadlessSession({ id: "stale-control", workDir: dir, clientType: "claude", bin, statePath: join(dir, "state-control.json") });
+		s.start();
+		await until(() => s.runState() === "idle", 8000, "the engine to initialise");
+		s.input("only turn", { inputId: "dir-only" });
+		await until(() => s.snapshot().includes("holding only turn"), 4000, "the engine to read its turn");
+		// Its own SIGTERM flush arrives while it is still the session's process only if not yet replaced:
+		// signal it directly, keep it as the current process, and read its own result.
+		(s as unknown as { proc: { kill: (sig: string) => void } }).proc.kill("SIGTERM");
+		await until(() => s.consumedInputs.length === 1, 8000, "its own result");
+		expect(s.consumedInputs).toEqual(["dir-only"]);
+		expect(s.lastTurn).toMatchObject({ verdict: "ok" });
 		s.stop();
 	}, 25_000);
 });

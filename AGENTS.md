@@ -37,23 +37,36 @@ Do not hand-roll it (#920). Each of these produced a false green:
 
 ## Fail-before comparisons (old source, new tests)
 
-To prove a test fails on the code before your fix, use the supported helper. Give each file as its own
-`--path`; everything after `--` is the test argv, run with no shell:
+**Do not use `scripts/fail-before.mjs` on an active checkout or for any production comparison yet.**
+Isolated tests found safety defects in it, tracked under #1021, and it stays off-limits until that issue's
+safety acceptance is complete. The confirmed failure classes:
+
+- **Symlinks and admin paths:** a path's type is not verified, so a symlink, or a path into the repository's
+  own administrative directory, can be written through instead of refused.
+- **Wrong-repository journal:** `--restore <journal>` restores into the repository of the current directory,
+  not the one the journal was written for.
+- **Backup integrity:** a backup's bytes are not checked against their recorded hash before being restored,
+  so a corrupted backup is written back as if it were the original.
+- **Partial setup, restore and file modes:** an interrupted setup or restore, and files whose mode changed,
+  are not recovered or verified completely.
+
+Until then, compare in an **isolated temporary worktree**, which never touches the active checkout or any stash:
 
 ```bash
-node scripts/fail-before.mjs --path workers/api/src/lib/a.ts --path workers/api/src/lib/b.ts \
-  -- npx vitest run --project unit workers/api/src/lib/a.test.ts > /tmp/fb.log 2>&1; echo "exit=$?"; tail -1 /tmp/fb.log
+WT=$(mktemp -d)/old && git worktree add --detach "$WT" HEAD \
+  && cp path/to/new.test.ts "$WT/path/to/new.test.ts" \
+  && ln -s "$PWD/node_modules" "$WT/node_modules" && ln -s "$PWD/workers/api/node_modules" "$WT/workers/api/node_modules" \
+  && (cd "$WT" && npx vitest run --project unit path/to/new.test.ts > /tmp/fb.log 2>&1; echo "exit=$?")
+git worktree remove --force "$WT"   # only the worktree this command created
 ```
 
-It puts the base revision's bytes into exactly those files, runs the test, restores them byte for byte,
-and prints a JSON receipt as its last line. The exit code is the test's own. 64 means it refused and
-nothing changed. 70 means a file changed during the run and was left alone (the original is in the
-journal). 75 means an earlier run did not finish; complete it with `--restore <journal>`.
+Check every setup step's exit before running the comparison (the `&&` chain does that), and capture the test's
+own exit status rather than a later `echo`, `grep` or pipeline's.
 
-Never do this with `git stash` (#1021). The stash is repo-global, so `pop` restores the top of
-everyone's stack, not what you saved. A save that fails or saves nothing still lets a chained `pop`
-consume someone else's recovery work. zsh does not split `$SRC="a.ts b.ts"`, so an unquoted path
-variable is ONE pathspec and the save fails. Never `git stash pop/apply` after a save you did not verify.
+Never do this with `git stash` (#1021). The stash is repo-global, so `pop` restores the top of everyone's stack,
+not what you saved. A save that fails or saves nothing still lets a chained `pop` consume someone else's recovery
+work, and zsh does not split `$SRC="a.ts b.ts"`, so an unquoted path variable is ONE pathspec and the save
+fails. Never apply or pop a stash you did not just verifiably create.
 
 ## Local git hooks (optional)
 

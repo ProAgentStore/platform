@@ -49,6 +49,13 @@ export interface ScopeConstraint {
 	source: string;
 	/** `worker_limit` only: the most test workers allowed. */
 	limit?: number;
+	/**
+	 * `no_unscoped_termination` only: the process names the owner GRANTED termination of (#1019), and who
+	 * granted it. `["*"]` is an explicit blanket grant. A grant narrows the rule rather than removing it:
+	 * "you may kill the stray vitest processes" never authorizes `pkill -f node`.
+	 */
+	allowed?: string[];
+	grantedBy?: string;
 }
 
 /** One place an owner constraint can come from, in the order it was given. */
@@ -129,13 +136,25 @@ const LIFT: Array<{ kind: ScopeKind; re: RegExp }> = [
 	{ kind: "focused_tests", re: /\b(?:(?:you\s+(?:may|can)\s+(?:now\s+)?)?run\s+the\s+(?:full|whole|entire)\s+(?:test\s+)?suite|full\s+suite\s+is\s+(?:fine|ok|okay))\b/i },
 	{ kind: "worker_limit", re: /\bno\s+(?:worker|thread)\s+limit\b|\bany number of workers\b/i },
 	{ kind: "finish_after_push", re: /\b(?:you\s+(?:may|can)\s+(?:now\s+)?)?(?:wait for|watch)\s+(?:the\s+)?(?:ci|deploy)\b/i },
-	// A grant names WHAT may be terminated (#1019). "You may stop after the push" is permission to FINISH,
-	// and it used to lift this prohibition because "stop" matched with nothing after it.
-	{
-		kind: "no_unscoped_termination",
-		re: /\b(?:you\s+(?:may|can)|ok(?:ay)?\s+to|allowed\s+to|go ahead and)\s+(?:(?:kill|terminate|stop)\s+(?:[\w-]+\s+){0,3}(?:process(?:es)?|pids?)\b|(?:use\s+)?(?:pkill|killall)\b)/i,
-	},
 ];
+
+/**
+ * A termination GRANT (#1019): it must name what may be terminated — "You may stop after the push" is
+ * permission to finish, not to kill. Group 1 holds the words before "process(es)" ("the stray vitest"),
+ * group 2 a `pkill`/`killall` target. Read only from a clause with no negation in it.
+ */
+const TERMINATION_GRANT =
+	/\b(?:you\s+(?:may|can)|ok(?:ay)?\s+to|allowed\s+to|go ahead and)\s+(?:(?:kill|terminate|stop)\s+((?:[\w.-]+\s+){0,3})(?:process(?:es)?|pids?)\b|(?:use\s+)?(?:pkill|killall)\b(?:\s+-\S+)*(?:\s+['"]?([\w.-]+))?)/i;
+/** Words that describe WHICH processes without naming any: "the stray", "all those", "any". */
+const NOT_A_NAME = new Set(["the", "a", "an", "any", "all", "every", "stray", "leftover", "old", "running", "those", "these", "other", "my", "your", "hung", "stuck", "orphaned", "zombie", "extra", "duplicate", "of"]);
+
+/** The process names a grant clause names, `["*"]` for a grant that names none, or null if it is no grant. */
+function grantedTargets(clause: string): string[] | null {
+	const m = TERMINATION_GRANT.exec(clause);
+	if (!m) return null;
+	const named = m[2] ? [m[2]] : (m[1] ?? "").trim().split(/\s+/).filter((w) => w && !NOT_A_NAME.has(w.toLowerCase()));
+	return named.length ? named.map((w) => w.toLowerCase()) : ["*"];
+}
 
 const WORKER_LIMIT = /\b(?:at most|max(?:imum)?(?: of)?|no more than|limit(?: it| tests?)? to|only)\s+(\d{1,3})\s+(?:test\s+)?(?:workers?|threads?|jobs?|forks?|processes)\b/i;
 
@@ -159,6 +178,13 @@ export function activeConstraints(sources: readonly ConstraintSource[]): ScopeCo
 			}
 			if (NEGATION.test(clause)) continue;
 			for (const l of LIFT) if (!restricted.has(l.kind) && l.re.test(clause)) state.delete(l.kind);
+			// A termination grant SCOPES the platform rule to what it names; grants accumulate.
+			const granted = grantedTargets(clause);
+			if (granted) {
+				const prev = state.get("no_unscoped_termination");
+				const allowed = [...new Set([...(prev?.allowed ?? []), ...granted])];
+				state.set("no_unscoped_termination", { kind: "no_unscoped_termination", source: "platform rule", allowed, grantedBy: src.label });
+			}
 		}
 	}
 	return [...state.values()];
@@ -227,6 +253,12 @@ const WORD_OPTION = /^(?:--reporter|--pool|--config|-c|--environment|--outputFil
 /** Options whose value SELECTS tests: a name pattern, a project, a shard. */
 const SELECTOR_OPTION = /^(?:-t|--testNamePattern|--test-name-pattern|-k|--grep|-g|-run|--filter|--project|--shard|--testPathPattern|--test-path-pattern|--selectProjects)$/;
 
+/**
+ * A shell redirection token (#1019): `>`, `>>`, `2>`, `&>`, `<`, with or without its target attached
+ * (`>out.log`, `2>/dev/null`) or a descriptor duplication (`2>&1`). It is shell syntax, never an argument.
+ */
+const REDIRECT = /^(?:\d*>>?|&>>?|\d*<)(.*)$/;
+
 /** Shell-ish words: a quoted run stays one token, so `-t "export flow"` is one option and its value. */
 function shellTokens(text: string): string[] {
 	return [...text.matchAll(/"[^"]*"|'[^']*'|\S+/g)].map((m) => m[0]);
@@ -239,7 +271,15 @@ export function testInvocations(text: string): TestInvocation[] {
 		const head = m[0].slice(0, m[0].length - (m[1]?.length ?? 0)).trim();
 		const all = shellTokens((m[1] ?? "").trim());
 		const stop = all.findIndex((t) => !/^["']/.test(t) && PROSE_WORD.test(t.replace(/[,.:)]+$/, "")));
-		const tokens = (stop < 0 ? all : all.slice(0, stop)).map((t) => (/^["']/.test(t) ? t : t.replace(/[,.)]+$/, "")));
+		const words = (stop < 0 ? all : all.slice(0, stop)).map((t) => (/^["']/.test(t) ? t : t.replace(/[,.)]+$/, "")));
+		// Redirections go to the shell, not the runner: `pnpm test > /tmp/out.log` runs the whole suite and
+		// writes its output somewhere. Drop each operator and the target it owns before reading arguments.
+		const tokens: string[] = [];
+		for (let i = 0; i < words.length; i++) {
+			const r = /^["']/.test(words[i]) ? null : REDIRECT.exec(words[i]);
+			if (!r) tokens.push(words[i]);
+			else if (r[1] === "") i++; // `>` alone: the next word is its target
+		}
 		const args = tokens.join(" ");
 		const full = /:full\b/.test(head) || /\.\/\.\.\./.test(args);
 		const pkgFilter = /--filter|-F\s|-C\s|--dir/.test(head);
@@ -319,21 +359,48 @@ function breaks(c: ScopeConstraint, said: string): string | null {
 			return PROCESS_INSPECTION.test(said) ? "it collects process arguments, environment or private logs" : null;
 		case "no_recursive_collection":
 			return RECURSIVE_COLLECTION.test(said) ? "it collects recursively" : null;
-		case "no_unscoped_termination":
-			return UNSCOPED_KILL.test(said) ? "it terminates processes selected by name or pattern, not a process this run started" : null;
+		case "no_unscoped_termination": {
+			if (!UNSCOPED_KILL.test(said)) return null;
+			if (c.allowed?.includes("*")) return null;
+			if (!c.allowed?.length) return "it terminates processes selected by name or pattern, not a process this run started";
+			// Scoped: every process the command would select must be one the owner named.
+			const targets = killTargets(said);
+			const outside = targets.length ? targets.filter((t) => !c.allowed?.some((a) => t.includes(a))) : ["(a target that cannot be read)"];
+			return outside.length ? `it terminates ${outside.join(", ")}, and the owner allowed terminating only ${c.allowed.join(", ")} processes` : null;
+		}
 	}
+}
+
+/**
+ * What an unscoped kill would select, lower-cased: a `pkill`/`killall` pattern, the `pgrep`/`grep` pattern
+ * feeding `kill $(…)` or `| xargs kill`, or the word before "process(es)" in prose. `kill -1` / `kill 0`
+ * select everything and read as `*all*`, which no scoped grant covers.
+ */
+function killTargets(said: string): string[] {
+	const out: string[] = [];
+	for (const m of said.matchAll(/\b(?:pkill|killall)\b(?:\s+-\S+)*\s+(['"]?)([^\s'";|&)]+)\1/gi)) out.push(m[2]);
+	if (/\$\(|\|\s*xargs\b/.test(said)) for (const m of said.matchAll(/\b(?:pgrep|grep)\b(?:\s+-\S+)*\s+(['"]?)([^\s'";|&)]+)\1/gi)) out.push(m[2]);
+	for (const m of said.matchAll(/\b(?:kill|terminate|stop)\s+(?:all|every|the other|other)\s+([\w.-]+)\s+process(?:es)?\b/gi)) out.push(m[1]);
+	if (/\bkill\s+(?:-\S+\s+)*(?:-1|0)\b/.test(said)) out.push("*all*");
+	return out.map((t) => t.toLowerCase());
 }
 
 /** The refusal line for the step log and the owner's chat: the constraint and its source, never its text. */
 export function scopeRefusalNote(r: { constraint: ScopeConstraint; reason: string }): string {
 	const what = r.constraint.kind === "worker_limit" ? `${SCOPE_LABEL.worker_limit} (${r.constraint.limit})` : SCOPE_LABEL[r.constraint.kind];
-	return `${what} — set by ${r.constraint.source}; ${r.reason}. Send an instruction inside it, or ask the owner (ask_owner) if the objective cannot be met within it.`;
+	const scope = r.constraint.allowed?.length ? ` (scoped by ${r.constraint.grantedBy} to: ${r.constraint.allowed.join(", ")})` : "";
+	return `${what} — set by ${r.constraint.source}${scope}; ${r.reason}. Send an instruction inside it, or ask the owner (ask_owner) if the objective cannot be met within it.`;
 }
 
 /** The prompt's list of what binds, so a constraint survives however many directives came after it. */
 export function constraintsBlock(constraints: readonly ScopeConstraint[]): string {
-	const owner = constraints.filter((c) => c.source !== "platform rule");
+	// The platform's termination rule is listed once the owner has SCOPED it, so the Pilot sees the grant's limits.
+	const owner = constraints.filter((c) => c.source !== "platform rule" || !!c.allowed?.length);
 	if (!owner.length) return "";
-	const lines = owner.map((c) => `- ${c.kind === "worker_limit" ? `${SCOPE_LABEL.worker_limit}: at most ${c.limit}` : SCOPE_LABEL[c.kind]} (${c.source})`);
+	const lines = owner.map((c) =>
+		c.allowed?.length
+			? `- ${SCOPE_LABEL[c.kind]} — except ${c.allowed.includes("*") ? "any process (blanket grant)" : `${c.allowed.join(", ")} processes`} (granted by ${c.grantedBy})`
+			: `- ${c.kind === "worker_limit" ? `${SCOPE_LABEL.worker_limit}: at most ${c.limit}` : SCOPE_LABEL[c.kind]} (${c.source})`,
+	);
 	return `\nCONSTRAINTS IN FORCE — derived from every owner rule and directive of this run, however old. The platform REFUSES any instruction that breaks one before it reaches the engine:\n${lines.join("\n")}`;
 }

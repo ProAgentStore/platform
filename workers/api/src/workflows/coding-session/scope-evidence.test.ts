@@ -266,6 +266,32 @@ describe("termination authority, inert data and test selection", () => {
 	});
 });
 
+describe("a termination grant is scoped to what it names (#1019)", () => {
+	it("a vitest-only grant allows vitest kills and refuses node, by pattern, by killall and in prose", async () => {
+		decisions = [SEND("start"), SEND("pkill -f node"), SEND("kill $(pgrep -f vitest)"), SEND("killall node"), SEND("pkill -f vitest"), FINISH("done")];
+		onFirstAct(() => directive("You may kill the stray vitest processes."));
+		await run();
+		expect(acted).toEqual(["start", "kill $(pgrep -f vitest)", "pkill -f vitest"]);
+		const scoped = /refused \(owner constraint\): no unscoped process termination — set by platform rule \(scoped by owner directive 1 \(\d\d:\d\d UTC\) to: vitest\); it terminates node, and the owner allowed terminating only vitest processes/g;
+		expect(lastLog().match(scoped)).toHaveLength(2);
+	});
+
+	it("the same grant does not cover a prose request to stop every node process", async () => {
+		decisions = [SEND("start"), SEND("stop all node processes"), FINISH("done")];
+		onFirstAct(() => directive("You may kill the stray vitest processes."));
+		await run();
+		expect(acted).toEqual(["start"]);
+		expect(lastLog()).toMatch(/it terminates node, and the owner allowed terminating only vitest processes/);
+	});
+
+	it("an explicit blanket grant still covers any process — the owner said so", async () => {
+		decisions = [SEND("start"), SEND("pkill -f node"), FINISH("done")];
+		onFirstAct(() => directive("You may kill any processes."));
+		await run();
+		expect(acted).toEqual(["start", "pkill -f node"]);
+	});
+});
+
 describe("a constraint the owner sends while the provider is generating", () => {
 	it("binds the action that generation produced — it never reaches transport", async () => {
 		decisions = [SEND("start"), SEND("fix the export bug and push"), SEND("Read src/export.ts and report — do not edit anything"), FINISH("reported")];
@@ -421,7 +447,7 @@ describe("completion claims keep their provenance (#1019 second pass)", () => {
 			call("Read", { file_path: "src/Button.tsx" }, "export function Button() {}");
 		});
 		const result = await run();
-		expect(result.detail).toMatch(/rendered in a browser: UNVERIFIED — no browser was driven/);
+		expect(result.detail).toMatch(/rendered in a browser: UNVERIFIED — no browser observed a page/);
 
 		transcript = "$ ";
 		decided = [];
@@ -432,6 +458,135 @@ describe("completion claims keep their provenance (#1019 second pass)", () => {
 		});
 		const seen = await run();
 		expect(seen.detail).toMatch(/rendered in a browser: verified/);
+	});
+});
+
+describe("a test's redirected output is its artifact, not an edit — and not a selector (#1019)", () => {
+	// INERT fixtures: transcript strings the simulated engine "ran". Nothing here executes a command.
+	const NINE = "Test Files  1 passed (1)\n     Tests  9 passed (9)";
+
+	for (const command of ["pnpm test > /tmp/owned-test-output.log", "pnpm test 2>&1 | tee /tmp/owned-test-output.log", "pnpm test &> /tmp/owned-test-output.log"]) {
+		it(`verifies a green full-suite run whose output was captured: ${command}`, async () => {
+			decisions = [SEND("run the suite"), FINISH("All tests pass. The full suite: 9 tests passed.")];
+			engineDoes(() => test(command, NINE));
+			const result = await run();
+			expect(decided).toHaveLength(2); // accepted first time — nothing sent back
+			expect(result.detail).toMatch(/tests pass: verified/);
+			expect(result.detail).toMatch(/full suite: verified/);
+			expect(result.detail).not.toMatch(/CONTRADICTED/);
+		});
+	}
+
+	for (const [label, command] of [
+		["a source edit chained after the captured run", "pnpm test > /tmp/out.log && sed -i 's/a/b/' src/export.ts"],
+		["a redirect that is not the test's own output", "pnpm test > /tmp/out.log; echo patched > src/export.ts"],
+		["the test's output written over a source file", "pnpm test > src/export.ts"],
+		["the test's output tee'd into a config file", "pnpm test | tee config.json"],
+	] as const) {
+		it(`still invalidates the green run: ${label}`, async () => {
+			decisions = [SEND("run the suite"), FINISH("All tests pass."), FINISH("All tests pass.")];
+			engineDoes(() => test(command, NINE));
+			const result = await run();
+			expect(result.detail).toMatch(/tests pass: CONTRADICTED — files changed after the last green run/);
+		});
+	}
+
+	it("a focused run stays focused when its output is captured", async () => {
+		decisions = [SEND("test"), FINISH("The full suite passes."), FINISH("The full suite passes.")];
+		engineDoes(() => test("pnpm vitest run src/export.test.ts > /tmp/out.log", NINE));
+		const result = await run();
+		expect(result.detail).toMatch(/full suite: CONTRADICTED — the last run was a focused subset/);
+	});
+});
+
+describe("a rendered claim needs a browser that SAW the claimed page (#1019)", () => {
+	const nav = (url: string) => call("mcp__playwright__browser_navigate", { url }, `navigated to ${url}`);
+	const look = () => call("mcp__playwright__browser_snapshot", {}, "page snapshot");
+
+	for (const [label, act] of [
+		["closing the browser", () => call("mcp__playwright__browser_close", {}, "closed")],
+		["listing the Playwright tests", () => test("npx playwright test --list", "Listing tests:\n  [chromium] › settings.spec.ts:3:1 › renders\nTotal: 1 test in 1 file")],
+	] as const) {
+		it(`${label} after the edit is not seeing the page`, async () => {
+			decisions = [SEND("check it"), FINISH("The settings page now renders correctly.")];
+			engineDoes(() => {
+				edit("src/Settings.tsx");
+				act();
+			});
+			const result = await run();
+			expect(result.detail).toMatch(/rendered in a browser: UNVERIFIED — no browser observed a page/);
+		});
+	}
+
+	it("a different page than the one claimed does not verify it; the claimed page does", async () => {
+		decisions = [SEND("check it"), FINISH("The settings page now renders correctly.")];
+		engineDoes(() => {
+			edit("src/Settings.tsx");
+			nav("http://localhost:5173/login");
+			look();
+		});
+		const elsewhere = await run();
+		expect(elsewhere.detail).toMatch(/rendered in a browser: UNVERIFIED — the claim is about settings, but the browser last observed http:\/\/localhost:5173\/login/);
+
+		transcript = "$ ";
+		decided = [];
+		decisions = [SEND("check it"), FINISH("The settings page now renders correctly.")];
+		engineDoes(() => {
+			edit("src/Settings.tsx");
+			nav("http://localhost:5173/settings");
+			look();
+			call("mcp__playwright__browser_close", {}, "closed"); // closing afterwards does not undo what was seen
+		});
+		const there = await run();
+		expect(there.detail).toMatch(/rendered in a browser: verified/);
+	});
+});
+
+describe("a compound command's success or count is never borrowed from another invocation (#1019)", () => {
+	const PASS = (n: number) => `Test Files  1 passed (1)\n     Tests  ${n} passed (${n})`;
+
+	it("two test runs joined by && both passed — but no single printed count is the claim's", async () => {
+		decisions = [SEND("test"), FINISH("All 9 tests pass.")];
+		engineDoes(() => test("pnpm vitest run src/a.test.ts && pnpm vitest run src/b.test.ts", `${PASS(9)}\n${PASS(3)}`));
+		const result = await run();
+		expect(result.detail).toMatch(/tests pass: verified — every test invocation/);
+		expect(result.detail).toMatch(/test count: UNVERIFIED — claims 9; the last command ran several test invocations/);
+	});
+
+	it("a later run's summary does not vouch for an earlier one that crashed without printing one", async () => {
+		decisions = [SEND("test"), FINISH("Tests pass."), FINISH("Tests pass.")];
+		engineDoes(() => test("pnpm vitest run src/a.test.ts; pnpm vitest run src/b.test.ts", `Error: Cannot find module './missing'\n${PASS(3)}`));
+		const result = await run();
+		expect(result.detail).toMatch(/tests pass: UNVERIFIED — the exit status of .* belongs to another command/);
+	});
+
+	it("a run skipped by || does not take the earlier run's success as its own", async () => {
+		decisions = [SEND("test"), FINISH("All tests pass with pnpm vitest run src/b.test.ts")];
+		engineDoes(() => test("pnpm test:unit || pnpm vitest run src/b.test.ts", PASS(9)));
+		const result = await run();
+		expect(result.detail).toMatch(/tests pass: UNVERIFIED/);
+	});
+
+	it("a test whose status a pipe hands to `tail` is judged by its single summary — failing when it failed", async () => {
+		decisions = [SEND("test"), FINISH("Tests pass."), FINISH("Tests pass.")];
+		engineDoes(() => test("pnpm vitest run src/a.test.ts | tail -5", "Test Files  1 failed (1)\n     Tests  2 failed | 7 passed (9)"));
+		const failing = await run();
+		expect(failing.detail).toMatch(/tests pass: CONTRADICTED/);
+
+		transcript = "$ ";
+		decided = [];
+		decisions = [SEND("test"), FINISH("Tests pass.")];
+		engineDoes(() => test("pnpm vitest run src/a.test.ts | tail -5", PASS(9)));
+		const passing = await run();
+		expect(passing.detail).toMatch(/tests pass: verified — .*printed one summary — 9 passed, none failed/);
+	});
+
+	it("a test skipped behind a failing && is not reported as a failed test — it did not run", async () => {
+		decisions = [SEND("test"), FINISH("Tests pass.")];
+		engineDoes(() => test("false && pnpm vitest run src/a.test.ts", "", false));
+		const result = await run();
+		expect(result.detail).toMatch(/tests pass: UNVERIFIED/);
+		expect(result.detail).not.toMatch(/tests pass: CONTRADICTED/);
 	});
 });
 

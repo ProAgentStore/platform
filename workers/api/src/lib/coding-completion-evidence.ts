@@ -35,11 +35,28 @@ import { testInvocations, type TestInvocation } from "./coding-scope-constraints
 
 type Observed =
 	| { kind: "edit"; seq: number; path: string | null }
-	| { kind: "test"; seq: number; inv: TestInvocation | null; command: string; ok: boolean | null; output: string | null; outputCut: boolean }
+	| {
+			kind: "test";
+			seq: number;
+			inv: TestInvocation | null;
+			command: string;
+			ok: boolean | null;
+			output: string | null;
+			outputCut: boolean;
+			/** How many test invocations the one call ran — more than one, and no single count belongs to the claim. */
+			invocations: number;
+			/** `other`: the call's exit status belongs to another command in it (`;`, `||`, a pipe), not the tests. */
+			statusOwnedBy: "test" | "other";
+	  }
 	| { kind: "commit"; seq: number; ok: boolean | null; sha: string | null }
 	| { kind: "push"; seq: number; ok: boolean | null; effect: "updated" | "up_to_date" | "rejected" | "unknown" }
 	| { kind: "ci"; seq: number; ok: boolean | null; output: string | null }
-	| { kind: "browser"; seq: number; ok: boolean | null };
+	/**
+	 * A browser act (#1019). `observes` is false for one that sees nothing (closing the browser, a
+	 * `playwright test --list`). `nav` is the URL a navigate went to, `closes` marks a close, and `page` is
+	 * filled by `observe()`: the page the browser was on when the act happened.
+	 */
+	| { kind: "browser"; seq: number; ok: boolean | null; observes: boolean; nav?: string | null; closes?: boolean; page?: string | null };
 
 /** The run's observed record. Held by the workflow across rounds; fed one snapshot pane at a time. */
 export class CompletionEvidence {
@@ -50,6 +67,8 @@ export class CompletionEvidence {
 	sawCalls = false;
 	/** Continuity between two snapshots was lost at least once, so calls may be missing. */
 	gap = false;
+	/** The page the browser is on, as far as this run's own calls show (#1019). Null: none, or unknown. */
+	private page: string | null = null;
 
 	observe(pane: string | undefined): void {
 		if (!pane) return;
@@ -61,15 +80,108 @@ export class CompletionEvidence {
 			if (call.output === null) continue;
 			this.sawCalls = true;
 			const o = classify(call, ++this.seq);
-			if (o) this.observed.push(...o);
+			if (!o) continue;
+			for (const x of o) {
+				if (x.kind === "browser") {
+					if (x.nav !== undefined) this.page = x.nav;
+					if (x.closes) this.page = null;
+					x.page = this.page;
+				}
+			}
+			this.observed.push(...o);
 		}
 	}
 }
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const SHELL_MUTATION = /\b(?:sed|perl)\s+-i\b|(?:^|[;&|]\s*)(?:rm|mv|cp|tee)\s|\s>>?\s*(?!\/dev\/null|&)[\w./~-]+|\bgit\s+(?:apply|am|checkout\s+--|restore|reset\s+--hard|stash\s+pop|cherry-pick|revert|merge|rebase)\b|\bpatch\s+-p/gm;
+/**
+ * A file a write cannot be dismissed as test output: source and configuration. Writing one of these is a
+ * change to what was tested, even when it is the test's own redirect target.
+ */
+const SOURCE_FILE = /\.(?:[cm]?[jt]sx?|py|go|rs|java|kt|rb|php|cs|c|cc|cpp|h|hpp|swift|vue|svelte|css|scss|html|sql|ya?ml|toml|json)$/i;
+
+/**
+ * The simple commands of a shell line, split at `;`, `&&`, `||`, `|`, `&` and newlines outside quotes,
+ * with their offsets. `piped` marks a command whose stdin is the previous one's stdout. A `&` that is part
+ * of a redirection (`2>&1`, `&>`) is not a separator.
+ */
+function simpleCommands(command: string): Array<{ start: number; end: number; piped: boolean; sep: string }> {
+	const out: Array<{ start: number; end: number; piped: boolean; sep: string }> = [];
+	let quote: string | null = null;
+	let start = 0;
+	let piped = false;
+	for (let i = 0; i < command.length; i++) {
+		const c = command[i];
+		if (quote) {
+			if (c === quote) quote = null;
+			continue;
+		}
+		if (c === "'" || c === '"' || c === "`") {
+			quote = c;
+			continue;
+		}
+		const two = command.slice(i, i + 2);
+		const redirectAmp = c === "&" && (command[i - 1] === ">" || command[i + 1] === ">");
+		const sep = two === "&&" || two === "||" ? 2 : c === ";" || c === "\n" || c === "|" || (c === "&" && !redirectAmp) ? 1 : 0;
+		if (!sep) continue;
+		out.push({ start, end: i, piped, sep: sep === 2 ? two : c });
+		piped = sep === 1 && c === "|";
+		start = i + sep;
+		i += sep - 1;
+	}
+	out.push({ start, end: command.length, piped, sep: "" });
+	return out;
+}
+
+/**
+ * Whether one Bash call's exit status speaks for its test invocations (#1019). It does only when the tests
+ * and everything after them are joined by `&&` (0 then means every one of them passed), and the first test
+ * cannot have been skipped. `a; b`, `a || b`, `test | tee`, `test &` each hand the status to another command.
+ * A failure after a `&&` chain may be a later command's, or a test that never ran, so it is not the tests'.
+ */
+function testStatus(command: string, testStarts: readonly number[], ok: boolean | null): boolean | null {
+	if (ok === null || !testStarts.length) return ok;
+	const cmds = simpleCommands(command);
+	const idx = testStarts.map((at) => cmds.findIndex((c) => at >= c.start && at < c.end)).filter((i) => i >= 0);
+	if (!idx.length) return null;
+	const first = Math.min(...idx);
+	const before = first > 0 ? cmds[first - 1].sep : "";
+	if (before === "||") return null; // ran only if the previous one failed — or not at all
+	if (!cmds.slice(first, -1).every((c) => c.sep === "&&")) return null;
+	if (ok === false && (first < cmds.length - 1 || before === "&&")) return null;
+	return ok;
+}
+
+/**
+ * Where a test writes its OWN output (#1019): its stdout/stderr redirection (`pnpm test > /tmp/run.log`) or
+ * a `tee` its output is piped into. That file is evidence the test produced, not a change to what it
+ * tested, so it is no edit after the green run. A target that is a source or config file still is.
+ */
+function testOutputArtifacts(command: string, testStarts: readonly number[]): Array<[number, number]> {
+	const spans: Array<[number, number]> = [];
+	const cmds = simpleCommands(command);
+	for (const [i, cmd] of cmds.entries()) {
+		if (!testStarts.some((at) => at >= cmd.start && at < cmd.end)) continue;
+		const text = command.slice(cmd.start, cmd.end);
+		for (const m of text.matchAll(/(?:\d*|&)>>?\s*(?!&)([^\s;&|<>]+)/g)) {
+			if (!SOURCE_FILE.test(m[1])) spans.push([cmd.start + (m.index ?? 0) - 1, cmd.start + (m.index ?? 0) + m[0].length]);
+		}
+		// The test's output piped on into `tee <files>` — every file it names is the same artifact.
+		for (let j = i + 1; j < cmds.length && cmds[j].piped; j++) {
+			const next = command.slice(cmds[j].start, cmds[j].end);
+			const tee = /^\s*tee\b((?:\s+-[a-z]+)*)((?:\s+[^\s;&|<>]+)*)\s*$/i.exec(next);
+			if (tee?.[2].trim().split(/\s+/).every((f) => f && !SOURCE_FILE.test(f))) spans.push([cmds[j].start - 1, cmds[j].end]);
+		}
+	}
+	return spans;
+}
+
 /** A tool that drives a real browser — the only kind of observation a "renders correctly" claim can rest on. */
 const BROWSER_TOOL = /browser|playwright|puppeteer|screenshot|chrome/i;
+/** The browser acts that SEE the page. Closing, installing, resizing or listing tabs sees nothing. */
+const BROWSER_OBSERVES = /navigate|snapshot|screenshot|wait_?for|evaluate|read_?page|get_?page_?text|find/i;
+const BROWSER_BLIND = /close|install|resize|tabs?\b|console|network|dialog|upload|drag|hover|press|type|select|click/i;
 
 /** The tool's argument as text: the `command` / `file_path` field of its JSON when it parses. */
 function field(input: string, name: string): string | null {
@@ -85,27 +197,52 @@ function field(input: string, name: string): string | null {
 
 function classify(call: EngineToolCall, seq: number): Observed[] | null {
 	if (EDIT_TOOLS.has(call.tool)) return [{ kind: "edit", seq, path: field(call.input, "file_path") ?? field(call.input, "notebook_path") }];
-	if (call.tool !== "Bash") return BROWSER_TOOL.test(call.tool) ? [{ kind: "browser", seq, ok: call.ok }] : null;
+	if (call.tool !== "Bash") {
+		if (!BROWSER_TOOL.test(call.tool)) return null;
+		const name = call.tool.split("__").pop() ?? call.tool;
+		const navigates = /navigate/i.test(name);
+		return [
+			{
+				kind: "browser",
+				seq,
+				ok: call.ok,
+				observes: BROWSER_OBSERVES.test(name) && !BROWSER_BLIND.test(name),
+				...(navigates ? { nav: field(call.input, "url") ?? null } : {}),
+				...(/close/i.test(name) ? { closes: true } : {}),
+			},
+		];
+	}
 	const command = field(call.input, "command") ?? call.input;
 	// ONE call can hold several acts — `pnpm test && sed -i … src/x.ts` tests and THEN edits (#1019). Each
 	// act is ordered by where it sits in the command, inside this call's slot, so an edit after the test
 	// in the same call is after it in the record, and a green run never vouches for content it preceded.
 	const at = (pos: number) => seq + (pos + 1) / (command.length + 2);
-	const last = (re: RegExp) => {
+	const tests = testInvocations(command);
+	// A test's own output file is its artifact, not a source edit — but only that write, at that place.
+	const artifacts = testOutputArtifacts(command, tests.map((t) => t.at));
+	const last = (re: RegExp, skip: Array<[number, number]> = []) => {
 		let pos = -1;
-		for (const m of command.matchAll(new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`))) pos = m.index ?? pos;
+		for (const m of command.matchAll(new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`))) {
+			const at = m.index ?? -1;
+			if (!skip.some(([a, b]) => at >= a && at < b)) pos = at;
+		}
 		return pos;
 	};
 	const out: Observed[] = [];
-	const tests = testInvocations(command);
 	if (tests.length) {
 		// A cut command may have lost the very arguments that decide its scope.
 		const lastInv = tests[tests.length - 1];
-		const inv = call.inputCut ? null : lastInv;
-		out.push({ kind: "test", seq: at(lastInv.at), inv, command, ok: call.ok, output: call.output, outputCut: !!call.outputCut });
-		if (/\bplaywright\s+test\b/.test(lastInv.command)) out.push({ kind: "browser", seq: at(lastInv.at), ok: call.ok });
+		// With several invocations, the scope that can be claimed is the widest one that ran.
+		const scoped = tests.find((t) => t.scope === "full") ?? lastInv;
+		const inv = call.inputCut ? null : scoped;
+		// The status is the tests' only where the shell makes it so (#1019); otherwise it is unknown, and the
+		// verdict rests on the run's own printed summary instead.
+		const ok = testStatus(command, tests.map((t) => t.at), call.ok);
+		out.push({ kind: "test", seq: at(lastInv.at), inv, command, ok, output: call.output, outputCut: !!call.outputCut, invocations: tests.length, statusOwnedBy: ok === call.ok ? "test" : "other" });
+		// A Playwright run renders pages, unless it only lists or describes its tests.
+		if (/\bplaywright\s+test\b/.test(lastInv.command)) out.push({ kind: "browser", seq: at(lastInv.at), ok: call.ok, observes: !/(?:^|\s)(?:--list|--help|-h)(?:\s|$)/.test(lastInv.command) });
 	}
-	const mutation = last(SHELL_MUTATION);
+	const mutation = last(SHELL_MUTATION, artifacts);
 	if (mutation >= 0) out.push({ kind: "edit", seq: at(mutation), path: null });
 	const commit = last(/\bgit\s+commit\b/);
 	if (commit >= 0) out.push({ kind: "commit", seq: at(commit), ok: call.ok, sha: /\[[^\]\s]+\s+([0-9a-f]{7,40})\]/.exec(call.output ?? "")?.[1] ?? null });
@@ -126,8 +263,12 @@ function pushEffect(call: EngineToolCall): "updated" | "up_to_date" | "rejected"
 
 /** What a test run's own output says, read only from the text it printed. */
 export interface TestOutputReading {
+	/** From the run's single summary line. Null when there are several — one count cannot speak for them all. */
 	passed: number | null;
+	/** Summed over every summary line: any failure anywhere in the output counts. */
 	failed: number | null;
+	/** Summary lines printed (vitest/jest `Tests …`, pytest `== … ==`). */
+	summaries: number;
 	/** The runner refused an option, or ran nothing at all. */
 	invalid: string | null;
 }
@@ -139,12 +280,15 @@ export function readTestOutput(output: string | null): TestOutputReading {
 		: /\bno test(?: file)?s? found\b|\bcollected 0 items\b|\bno tests? (?:were )?(?:run|executed|ran)\b/i.test(o)
 			? "it ran no tests"
 			: null;
-	// vitest/jest print "Tests  12 passed (12)" / "Tests: 3 failed, 9 passed, 12 total"; pytest "9 passed, 3 failed".
-	const testsLine = /^\s*Tests:?\s+(.+)$/im.exec(o)?.[1] ?? o;
-	const passed = /(\d[\d,]*)\s+passed/i.exec(testsLine);
-	const failed = /(\d[\d,]*)\s+failed/i.exec(testsLine);
+	// vitest/jest print "Tests  12 passed (12)" / "Tests: 3 failed, 9 passed, 12 total"; pytest "== 9 passed, 3 failed ==".
+	const lines = [...o.matchAll(/^\s*Tests:?\s+(.+)$|^=+\s(.*\b\d[\d,]*\s+(?:passed|failed)\b.*)\s=+$/gim)].map((m) => m[1] ?? m[2]);
 	const num = (m: RegExpExecArray | null) => (m ? Number(m[1].replace(/,/g, "")) : null);
-	return { passed: num(passed), failed: num(failed), invalid };
+	if (lines.length > 1) {
+		const failedAll = lines.map((l) => num(/(\d[\d,]*)\s+failed/i.exec(l))).filter((n): n is number => n !== null);
+		return { passed: null, failed: failedAll.length ? failedAll.reduce((a, b) => a + b, 0) : null, summaries: lines.length, invalid };
+	}
+	const testsLine = lines[0] ?? o;
+	return { passed: num(/(\d[\d,]*)\s+passed/i.exec(testsLine)), failed: num(/(\d[\d,]*)\s+failed/i.exec(testsLine)), summaries: lines.length, invalid };
 }
 
 // ── The claims a finish detail makes ──────────────────────────────────────
@@ -190,13 +334,29 @@ export function judgeCompletion(detail: string, ev: CompletionEvidence): Complet
 		if (!lastTest) verdicts.push({ claim: "tests_pass", status: "unverified", why: unseen });
 		else if (reading?.invalid) verdicts.push({ claim: "tests_pass", status: "contradicted", why: `the last test command (\`${short(lastTest.command)}\`) is not evidence: ${reading.invalid}` });
 		else if (lastTest.ok === false || (reading?.failed ?? 0) > 0) verdicts.push({ claim: "tests_pass", status: "contradicted", why: `the last test run (\`${short(lastTest.command)}\`) failed${reading?.failed ? ` — ${reading.failed} failed` : ""}` });
-		else if (lastTest.ok === null) verdicts.push({ claim: "tests_pass", status: "unverified", why: `the last test run's outcome was not recorded (\`${short(lastTest.command)}\`)` });
+		else if (lastTest.ok === null && lastTest.statusOwnedBy === "other" && !cleanSummary(lastTest, reading))
+			verdicts.push({
+				claim: "tests_pass",
+				status: "unverified",
+				why:
+					reading && reading.summaries > 1
+						? `\`${short(lastTest.command)}\` printed ${reading.summaries} test summaries, and its exit status belongs to another command, so no single result speaks for the claim`
+						: `the exit status of \`${short(lastTest.command)}\` belongs to another command in it, and its output shows no single clean summary`,
+			});
+		else if (lastTest.ok === null && lastTest.statusOwnedBy !== "other") verdicts.push({ claim: "tests_pass", status: "unverified", why: `the last test run's outcome was not recorded (\`${short(lastTest.command)}\`)` });
 		else if (lastEdit && lastEdit.seq > lastTest.seq) verdicts.push({ claim: "tests_pass", status: "contradicted", why: `files changed after the last green run${lastEdit.path ? ` (${lastEdit.path})` : ""}, so it does not test the final revision` });
 		else if (named.length && !named.some((n) => lastTest.inv && canonical(n.command) === canonical(lastTest.inv.command)))
 			verdicts.push({ claim: "tests_pass", status: "unverified", why: `the claim names \`${short(named[named.length - 1].command)}\`, but the last test run was \`${short(lastTest.command)}\` — a different command is not evidence for it` });
 		else if (lastTest.inv?.forwardedAfterDashDash) verdicts.push({ claim: "tests_pass", status: "unverified", why: `options after a bare \`--\` in \`${short(lastTest.command)}\` may never have reached the test runner, so what it selected is unknown` });
+		else if (lastTest.invocations > 1 && lastTest.ok === true)
+			verdicts.push({ claim: "tests_pass", status: "supported", why: `every test invocation in \`${short(lastTest.command)}\` passed (joined by \`&&\`) after the last edit` });
 		else if (reading?.passed === null || reading?.passed === undefined) verdicts.push({ claim: "tests_pass", status: "unverified", why: `the last run exited cleanly but its output${lastTest.outputCut ? " was cut before" : " shows no"} pass count` });
-		else verdicts.push({ claim: "tests_pass", status: "supported", why: `\`${short(lastTest.command)}\` passed ${reading.passed} after the last edit` });
+		else
+			verdicts.push({
+				claim: "tests_pass",
+				status: "supported",
+				why: lastTest.ok === null ? `\`${short(lastTest.command)}\` printed one summary — ${reading.passed} passed, none failed — after the last edit (its exit status belongs to another command)` : `\`${short(lastTest.command)}\` passed ${reading.passed} after the last edit`,
+			});
 	}
 
 	if (CLAIM_FULL.test(detail)) {
@@ -205,18 +365,22 @@ export function judgeCompletion(detail: string, ev: CompletionEvidence): Complet
 			!lastTest
 				? { claim: "full_suite", status: "unverified", why: unseen }
 				: full
-					? { claim: "full_suite", status: lastTest.ok === true ? "supported" : "unverified", why: `\`${short(lastTest.command)}\` selects the whole suite` }
+					? { claim: "full_suite", status: lastTest.ok === true || (lastTest.ok === null && lastTest.statusOwnedBy === "other" && cleanSummary(lastTest, reading)) ? "supported" : "unverified", why: `\`${short(lastTest.command)}\` selects the whole suite` }
 					: { claim: "full_suite", status: lastTest.inv ? "contradicted" : "unverified", why: lastTest.inv ? `the last run was a focused subset (\`${short(lastTest.command)}\`), not the full suite` : "the last test command was cut before its arguments, so its scope is unknown" },
 		);
 	}
 
 	const counts = [...detail.matchAll(CLAIM_COUNT)].map((m) => Number((m[1] ?? m[2] ?? m[3]).replace(/,/g, ""))).filter((n) => n > 0);
 	if (counts.length) {
-		const seen = reading?.passed ?? null;
+		const seen = lastTest && lastTest.invocations > 1 ? null : (reading?.passed ?? null);
 		const claimed = Math.max(...counts);
 		verdicts.push(
 			seen === null
-				? { claim: "test_count", status: "unverified", why: `claims ${claimed}; no count was printed in the record` }
+				? {
+						claim: "test_count",
+						status: "unverified",
+						why: lastTest && (lastTest.invocations > 1 || (reading?.summaries ?? 0) > 1) ? `claims ${claimed}; the last command ran several test invocations, so no one printed count is the claim's` : `claims ${claimed}; no count was printed in the record`,
+					}
 				: seen === claimed
 					? { claim: "test_count", status: "supported", why: `the last run printed ${seen} passed` }
 					: { claim: "test_count", status: "contradicted", why: `claims ${claimed}; the last run printed ${seen} passed` },
@@ -244,21 +408,46 @@ export function judgeCompletion(detail: string, ev: CompletionEvidence): Complet
 	}
 
 	if (CLAIM_RENDERED.test(detail)) {
-		const seen = [...obs].reverse().find((o): o is Extract<Observed, { kind: "browser" }> => o.kind === "browser") ?? null;
+		// Only an act that SAW a page counts — not closing the browser, not listing tests (#1019).
+		const seen = [...obs].reverse().find((o): o is Extract<Observed, { kind: "browser" }> => o.kind === "browser" && o.observes) ?? null;
+		const claimed = claimedPages(detail);
+		const onPage = !seen || !claimed.length || (seen.page != null && claimed.some((p) => seen.page?.toLowerCase().includes(p)));
 		verdicts.push(
 			!seen
-				? { claim: "rendered", status: "unverified", why: "no browser was driven in this run's record — reading the source is not seeing the page" }
+				? { claim: "rendered", status: "unverified", why: "no browser observed a page in this run's record — reading the source, closing a browser or listing tests is not seeing the page" }
 				: seen.ok !== true
 					? { claim: "rendered", status: "unverified", why: "the last browser observation's outcome was not a success" }
 					: lastEdit && lastEdit.seq > seen.seq
 						? { claim: "rendered", status: "unverified", why: "files changed after the last browser observation, so it did not see the final revision" }
-						: { claim: "rendered", status: "supported", why: "a browser was driven after the last edit" },
+						: !onPage
+							? { claim: "rendered", status: "unverified", why: `the claim is about ${claimed.join(", ")}, but the browser last observed ${seen.page ?? "a page whose address this run never recorded"}` }
+							: { claim: "rendered", status: "supported", why: "a browser observed the page after the last edit" },
 		);
 	}
 
 	const correctable = verdicts.filter((v) => v.status === "contradicted" && (v.claim === "tests_pass" || v.claim === "full_suite" || v.claim === "pushed"));
 	const recordNote = !verdicts.length ? null : !ev.sawCalls ? "the engine's tool calls were not observable" : ev.gap ? "some tool calls scrolled out between snapshots, so the record may be incomplete" : null;
 	return { verdicts, correctable, recordNote };
+}
+
+/**
+ * A run whose exit status is another command's may still be judged by what it printed — but only ONE test
+ * invocation with ONE clean summary. With several invocations, one's summary would vouch for another that
+ * crashed, failed or was skipped without printing one (#1019).
+ */
+function cleanSummary(test: { invocations: number }, reading: TestOutputReading | null): boolean {
+	return test.invocations === 1 && reading?.summaries === 1 && (reading.passed ?? 0) > 0 && !reading.failed;
+}
+
+/** The pages a rendered claim names: a route (`/settings`) or "the X page". Lower-cased; empty when none. */
+function claimedPages(detail: string): string[] {
+	const out = new Set<string>();
+	for (const m of detail.matchAll(/(?:^|[\s(`'"])(\/[\w\-/]*[\w-])/g)) out.add(m[1].toLowerCase());
+	for (const m of detail.matchAll(/\b([\w-]+)\s+(?:page|screen|view|route)\b/gi)) {
+		const w = m[1].toLowerCase();
+		if (!["the", "this", "that", "a", "an", "each", "every", "web", "whole"].includes(w)) out.add(w);
+	}
+	return [...out];
 }
 
 /** Two spellings of one test command compare equal: `npx`, spacing and quoting are not a different command. */

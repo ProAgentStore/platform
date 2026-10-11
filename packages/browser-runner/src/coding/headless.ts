@@ -527,8 +527,9 @@ export class HeadlessSession {
 			return;
 		}
 		if (this.procAlive) return;
-		// A new process has read none of what the old one was sent.
+		// A new process has read none of what the old one was sent, and owns none of its half-read line.
 		this.pendingInputs = [];
+		this.buf = "";
 		const args = this.adapter.buildLaunchArgs(this.cmdArgs, this.claudeSessionId);
 
 		const proc = spawn(this.cmdBin, args, {
@@ -549,8 +550,15 @@ export class HeadlessSession {
 		});
 		// Swallow EPIPE when writing to a process that just exited (one-shot turn).
 		proc.stdin?.on("error", () => {});
-		proc.stdout?.on("data", (d: Buffer) => this.onStdout(d.toString("utf8")));
+		// FENCED to this process (#1019). A stopped process can outlive its replacement — it may ignore the
+		// signal, or flush buffered output on its way out — and its late `result` would otherwise be read as
+		// the NEW process's turn end: crediting the new turn's input as consumed, filing its report and
+		// marking it idle while it is still working.
+		proc.stdout?.on("data", (d: Buffer) => {
+			if (this.proc === proc) this.onStdout(d.toString("utf8"));
+		});
 		proc.stderr?.on("data", (d: Buffer) => {
+			if (this.proc !== proc) return;
 			this.lastOutputAt = Date.now();
 			this.sawOutputSinceInput = true;
 			const text = d.toString("utf8").trim();
@@ -688,6 +696,7 @@ export class HeadlessSession {
 			}
 		}
 		this.proc = proc;
+		this.buf = ""; // the replaced turn's half-written line is not this turn's (#1019)
 		// Without an 'error' listener a spawn failure (binary not on PATH) is an uncaught
 		// exception that takes the whole runner down, not just this session.
 		proc.on("error", (err: Error) => {
@@ -700,8 +709,13 @@ export class HeadlessSession {
 			// real reason instead of retrying a binary that does not exist.
 			this.spawnFailed = true;
 		});
-		proc.stdout?.on("data", (d: Buffer) => this.onStdout(d.toString()));
-		proc.stderr?.on("data", (d: Buffer) => this.onStdout(d.toString()));
+		// Fenced like the persistent process (#1019): a turn this one replaced must not speak for it.
+		proc.stdout?.on("data", (d: Buffer) => {
+			if (this.proc === proc) this.onStdout(d.toString());
+		});
+		proc.stderr?.on("data", (d: Buffer) => {
+			if (this.proc === proc) this.onStdout(d.toString());
+		});
 		// The enforced ceiling (#391). `unref` so a pending timer can never keep the runner's
 		// event loop alive past its own shutdown.
 		const maxTurnMs = this.config.maxTurnMs ?? MAX_ONE_SHOT_TURN_MS;
