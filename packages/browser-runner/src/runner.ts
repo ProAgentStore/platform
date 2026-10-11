@@ -18,6 +18,7 @@ import { LOCAL_BROWSER_TASK_TYPE } from "./local-browser/contract.js";
 import { LocalArtifactRuntime } from "./local-artifact/runtime.js";
 import { LOCAL_ARTIFACT_TASK_TYPE } from "./local-artifact/contract.js";
 import { LocalApplyRuntime } from "./local-apply/runtime.js";
+import { LocalApplyReconciliationRuntime } from "./local-apply/reconciliation-runtime.js";
 import { LOCAL_APPLY_TASK_TYPE } from "./local-apply/contract.js";
 import { createRunnerBrowserFactories } from "./local-apply/live-run-browser.js";
 import { createLocalApplyTakeoverAdapter, isLocalApplyTakeover } from "./local-apply/takeover-adapter.js";
@@ -98,6 +99,8 @@ export class LocalRunner {
 	readonly localArtifact: LocalArtifactRuntime;
 	/** Local application execution (#957): a signed-in CLI filling one application through the apply bridge. */
 	readonly localApply: LocalApplyRuntime;
+	/** Browser-only, no-bridge reconciliation for an ended uncertain apply attempt. */
+	readonly localApplyReconciliation: LocalApplyReconciliationRuntime;
 	/** This runner's own local URL, once the server listens — the bridge forwarder calls back to it. */
 	selfUrl: string | null = null;
 	/** Live human-takeover sessions, keyed by task id (the page is kept alive). */
@@ -113,12 +116,14 @@ export class LocalRunner {
 		const { browserFor, applyBrowserFor } = createRunnerBrowserFactories({ headless: config.headless, defaultTools: () => this.getMcp(), sharedPage: () => this.activePage });
 		this.localBrowser = new LocalBrowserRuntime({ dataDir: config.dataDir, selfUrl: () => this.selfUrl, browserFor });
 		this.localArtifact = new LocalArtifactRuntime({ dataDir: config.dataDir });
+		const localApplyTakeover = createLocalApplyTakeoverAdapter({ get: (id) => this.takeovers.get(id), set: (id, page) => this.takeovers.set(id, { page, reason: "local_apply", humanDone: false }), frame: (id) => this.takeoverFrame(id), input: (id, input) => this.takeoverInput(id, input), end: (id) => this.endTakeover(id) });
 		this.localApply = new LocalApplyRuntime({
 			dataDir: config.dataDir,
 			selfUrl: () => this.selfUrl,
 			browserFor: applyBrowserFor,
-			takeover: createLocalApplyTakeoverAdapter({ get: (id) => this.takeovers.get(id), set: (id, page) => this.takeovers.set(id, { page, reason: "local_apply", humanDone: false }), frame: (id) => this.takeoverFrame(id), input: (id, input) => this.takeoverInput(id, input), end: (id) => this.endTakeover(id) }),
+			takeover: localApplyTakeover,
 		});
+		this.localApplyReconciliation = new LocalApplyReconciliationRuntime({ dataDir: config.dataDir, browserFor: applyBrowserFor, takeover: localApplyTakeover });
 		// Tasks paused/running on a previous process are orphaned now — their
 		// pages and takeover sessions are gone. Fail them so the board is clean.
 		const expired = this.store.expireInFlightTasks();
@@ -136,7 +141,7 @@ export class LocalRunner {
 	 */
 	liveWork(): { codingTurns: number; localRuns: number; detail: string[] } {
 		const coding = this.coding.liveWork();
-		const local = [...this.localBrowser.liveWork(), ...this.localArtifact.liveWork(), ...this.localApply.liveWork()];
+		const local = [...this.localBrowser.liveWork(), ...this.localArtifact.liveWork(), ...this.localApply.liveWork(), ...this.localApplyReconciliation.liveWork()];
 		return { codingTurns: coding.length, localRuns: local.length, detail: [...coding, ...local].slice(0, 10) };
 	}
 
@@ -295,6 +300,7 @@ export class LocalRunner {
 		this.localBrowser.closeAll();
 		this.localArtifact.closeAll();
 		this.localApply.closeAll();
+		this.localApplyReconciliation.closeAll();
 		try {
 			this.coding.closeAll();
 		} catch (e) {

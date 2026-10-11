@@ -47,6 +47,18 @@ export const LOCAL_APPLY_HANDOFF_FRAME_PATH = "/local-apply/handoff/frame";
 export const LOCAL_APPLY_HANDOFF_INPUT_PATH = "/local-apply/handoff/input";
 export const LOCAL_APPLY_HANDOFF_RESUME_PATH = "/local-apply/handoff/resume";
 export const LOCAL_APPLY_HANDOFF_END_PATH = "/local-apply/handoff/end";
+/**
+ * A separate, browser-only receipt/history check for an already-ended uncertain attempt.  This is
+ * deliberately not an application run: it receives no engine, sources, artifacts or submit gate.
+ */
+export const LOCAL_APPLY_RECONCILIATION_RUN_PATH = "/local-apply/reconciliation/run";
+export const LOCAL_APPLY_RECONCILIATION_STATUS_PATH = "/local-apply/reconciliation/status";
+export const LOCAL_APPLY_RECONCILIATION_HANDOFF_PATH = "/local-apply/reconciliation/handoff";
+export const LOCAL_APPLY_RECONCILIATION_HANDOFF_STATUS_PATH = "/local-apply/reconciliation/handoff-status";
+export const LOCAL_APPLY_RECONCILIATION_HANDOFF_FRAME_PATH = "/local-apply/reconciliation/handoff/frame";
+export const LOCAL_APPLY_RECONCILIATION_HANDOFF_INPUT_PATH = "/local-apply/reconciliation/handoff/input";
+export const LOCAL_APPLY_RECONCILIATION_HANDOFF_RESUME_PATH = "/local-apply/reconciliation/handoff/resume";
+export const LOCAL_APPLY_RECONCILIATION_HANDOFF_END_PATH = "/local-apply/reconciliation/handoff/end";
 
 export type LocalApplyEngine = "claude" | "codex";
 export const LOCAL_APPLY_ENGINES: readonly LocalApplyEngine[] = ["claude", "codex"];
@@ -470,6 +482,38 @@ export interface LocalApplyHandoffRequest {
 	runId: string;
 	applicationId: string;
 	browserProfile: LocalApplyProfile;
+}
+
+/** An opaque, exact-attempt-bound read-only browser check.  No employer account is claimed. */
+export interface LocalApplyReconciliationEnvelope {
+	type: "local_browser.apply.reconciliation";
+	reconciliationId: string;
+	runId: string;
+	instanceId: string;
+	applicationId: string;
+	browserProfile: LocalApplyProfile;
+	applicationUrl: string;
+	allowDomains: string[];
+	jobIdentity: string;
+	materialFingerprint: { leadVersion: number | null; profileVersion: string | null; resumeSha: string | null; coverLetterSha: string | null };
+}
+
+/** The runner never transports site text/URLs/cookies; it reports only this evidence category. */
+export interface LocalApplyReconciliationStatus {
+	reconciliationId: string;
+	runId: string;
+	applicationId: string;
+	browserProfile: LocalApplyProfile;
+	/** A fresh context is not continuity with a lost ended isolated profile. */
+	context: "same_live_context" | "separate_read_only_context";
+	state: "running" | "paused" | "ended";
+	pauseReason?: "login_required" | "captcha";
+	result?: { state: "no_submission_proven" | "submission_confirmed" | "ambiguous" | "unavailable"; proofKind: "authorized_site_history_no_submission" | "authorized_site_receipt_confirmed" | "ambiguous_site_history" | "authorized_profile_unavailable" };
+}
+
+/** Same opaque handoff bindings, with the reconciliation id preventing original-run substitution. */
+export interface LocalApplyReconciliationHandoffRequest extends LocalApplyHandoffRequest {
+	reconciliationId: string;
 }
 
 /** `POST /local-apply/resume` — the owner has handled the pause; optionally with an answer or a newly allowed site. */

@@ -107,6 +107,15 @@ export function applicationHandoffLink(instanceId: string, handoffId: string): s
 }
 
 /**
+ * One bounded, reconciliation-only handoff (#1013).  This is deliberately a different query
+ * key from a live application handoff: the Console must not present its fill/review controls for
+ * an already-ended, read-only inspection.
+ */
+export function applicationReconciliationHandoffLink(instanceId: string, handoffId: string): string {
+	return `${instanceLink(instanceId)}/applications?reconciliation_handoff=${encodeURIComponent(handoffId)}`;
+}
+
+/**
  * A coding session — the Co-pilot/Terminal view for one run.
  *
  * Satisfies the #338 rule: the `coding_sessions` row is written by `POST /coding/sessions` before

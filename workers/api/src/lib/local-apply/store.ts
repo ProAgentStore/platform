@@ -388,6 +388,42 @@ export async function getLocalApplyReconciliation(env: DB, runId: string, instan
 	return row ? presentReconciliation(row) : null;
 }
 
+/** Opaque mobile-control metadata for the separately-authorized reconciliation browser only. */
+export interface LocalApplyReconciliationHandoff {
+	continuityId: string; reconciliationId: string; runId: string; applicationId: string; instanceId: string;
+	browserProfile: string; state: LocalApplyHandoffState; terminalReason: LocalApplyHandoffTerminalReason | null; expiresAt: number;
+}
+interface ReconciliationHandoffRow { continuity_id: string; reconciliation_id: string; run_id: string; application_id: string; instance_id: string; browser_profile: string; state: LocalApplyHandoffState; terminal_reason: LocalApplyHandoffTerminalReason | null; expires_at: number; }
+const presentReconciliationHandoff = (r: ReconciliationHandoffRow): LocalApplyReconciliationHandoff => ({ continuityId: r.continuity_id, reconciliationId: r.reconciliation_id, runId: r.run_id, applicationId: r.application_id, instanceId: r.instance_id, browserProfile: r.browser_profile, state: r.state, terminalReason: r.terminal_reason, expiresAt: r.expires_at });
+
+export async function createLocalApplyReconciliationHandoff(env: DB, input: { reconciliation: LocalApplyReconciliation; run: ApplyRun; app: JobApplication; userId: string; browserProfile: string; expiresAt: number }, now: number): Promise<LocalApplyReconciliationHandoff | null> {
+	if (!uncertainAttemptBinding(input.app, input.run) || input.reconciliation.state !== "requested" || input.reconciliation.applicationId !== input.app.id || input.reconciliation.runId !== input.run.id || input.reconciliation.instanceId !== input.run.instanceId || !sameFingerprint(input.reconciliation.materialFingerprint, fingerprintOf(input.app)) || input.reconciliation.jobIdentity !== jobIdentityOf(input.app) || input.browserProfile !== input.run.policy.browserProfile || input.expiresAt <= now) return null;
+	await env.DB.prepare(
+		`INSERT INTO local_apply_reconciliation_handoffs (id, continuity_id, reconciliation_id, run_id, application_id, instance_id, user_id, browser_profile, state, expires_at, created_at, updated_at)
+		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'requested', ?9, ?10, ?10
+		 WHERE EXISTS (SELECT 1 FROM local_apply_reconciliations WHERE id = ?3 AND run_id = ?4 AND application_id = ?5 AND instance_id = ?6 AND user_id = ?7 AND reconciliation_state = 'requested')
+		 ON CONFLICT(reconciliation_id) DO NOTHING`,
+	).bind(crypto.randomUUID(), crypto.randomUUID(), input.reconciliation.id, input.run.id, input.app.id, input.run.instanceId, input.userId, input.browserProfile, input.expiresAt, now).run();
+	return getLocalApplyReconciliationHandoff(env, input.reconciliation.id, input.run.instanceId, input.userId);
+}
+export async function getLocalApplyReconciliationHandoff(env: DB, reconciliationId: string, instanceId: string, userId: string): Promise<LocalApplyReconciliationHandoff | null> {
+	const row = await env.DB.prepare("SELECT * FROM local_apply_reconciliation_handoffs WHERE reconciliation_id = ?1 AND instance_id = ?2 AND user_id = ?3").bind(reconciliationId, instanceId, userId).first<ReconciliationHandoffRow>();
+	return row ? presentReconciliationHandoff(row) : null;
+}
+export async function getLocalApplyReconciliationHandoffById(env: DB, instanceId: string, userId: string, continuityId: string): Promise<LocalApplyReconciliationHandoff | null> {
+	const row = await env.DB.prepare("SELECT * FROM local_apply_reconciliation_handoffs WHERE continuity_id = ?1 AND instance_id = ?2 AND user_id = ?3").bind(continuityId, instanceId, userId).first<ReconciliationHandoffRow>();
+	return row ? presentReconciliationHandoff(row) : null;
+}
+export async function markLocalApplyReconciliationHandoff(env: DB, input: { continuityId: string; reconciliationId: string; instanceId: string; userId: string; state: Exclude<LocalApplyHandoffState, "requested">; terminalReason?: LocalApplyHandoffTerminalReason }, now: number): Promise<LocalApplyReconciliationHandoff | null> {
+	if ((input.state === "closed") !== !!input.terminalReason) return null;
+	const result = await env.DB.prepare(
+		`UPDATE local_apply_reconciliation_handoffs SET state = ?1, terminal_reason = ?2, activated_at = CASE WHEN ?1 = 'ready' AND activated_at IS NULL THEN ?3 ELSE activated_at END, ended_at = CASE WHEN ?1 = 'closed' THEN ?3 ELSE ended_at END, updated_at = ?3
+		 WHERE continuity_id = ?4 AND reconciliation_id = ?5 AND instance_id = ?6 AND user_id = ?7 AND state IN ('requested','ready') AND (?1 <> 'ready' OR expires_at > ?3)`,
+	).bind(input.state, input.terminalReason ?? null, now, input.continuityId, input.reconciliationId, input.instanceId, input.userId).run();
+	if ((result.meta?.changes ?? 0) === 0) return null;
+	return getLocalApplyReconciliationHandoff(env, input.reconciliationId, input.instanceId, input.userId);
+}
+
 function validReconciliationProof(state: LocalApplyReconciliationState, proofKind: LocalApplyReconciliationProofKind): boolean {
 	return (state === "no_submission_proven" && proofKind === "authorized_site_history_no_submission") ||
 		(state === "submission_confirmed" && proofKind === "authorized_site_receipt_confirmed") ||

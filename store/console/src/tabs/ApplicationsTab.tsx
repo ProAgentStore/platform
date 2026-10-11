@@ -35,6 +35,9 @@ export default function ApplicationsTab({ instanceId, isTailor = false }: { inst
 	// Canonical #1013 links use query state so the existing `<tab>/<sessionId>` grammar remains
 	// honest. The opaque value is no browser/profile identifier and is re-authorized by the API.
 	const requestedHandoffId = searchParams.get("handoff")?.trim() || undefined;
+	const requestedReconciliationHandoffId = searchParams.get("reconciliation_handoff")?.trim() || undefined;
+	const requestedAnyHandoffId = requestedReconciliationHandoffId ?? requestedHandoffId;
+	const reconciliationHandoff = !!requestedReconciliationHandoffId;
 	const [view, setView] = useState<ApplicationQueueView | null>(null);
 	const [error, setError] = useState("");
 	const [filter, setFilter] = useState<ApplicationQueueStatus | "">("");
@@ -61,12 +64,13 @@ export default function ApplicationsTab({ instanceId, isTailor = false }: { inst
 		setHandoff(null);
 		setHandoffError("");
 		setHandoffOpen(false);
-		if (!requestedHandoffId) return;
-		api<ApplicationHandoffView>(`/v1/instances/${instanceId}/application-handoffs/${encodeURIComponent(requestedHandoffId)}`)
+		if (!requestedAnyHandoffId) return;
+		const resolver = reconciliationHandoff ? "application-reconciliation-handoffs" : "application-handoffs";
+		api<ApplicationHandoffView>(`/v1/instances/${instanceId}/${resolver}/${encodeURIComponent(requestedAnyHandoffId)}`)
 			.then((next) => { if (!cancelled) setHandoff(next); })
 			.catch((e) => { if (!cancelled) setHandoffError(e instanceof Error ? e.message : String(e)); });
 		return () => { cancelled = true; };
-	}, [requestedHandoffId, instanceId]);
+	}, [requestedAnyHandoffId, reconciliationHandoff, instanceId]);
 	usePolling(load, 5000, !!view?.items.some((i) => i.status === "tailoring" || i.status === "filling" || i.fillRun));
 
 	if (error && !view) return <LoadFailed what="applications" detail={error} onRetry={load} />;
@@ -77,9 +81,9 @@ export default function ApplicationsTab({ instanceId, isTailor = false }: { inst
 	return (
 		<div className="max-w-4xl">
 			{isTailor && <UploadedTailorSourcesSection instanceId={instanceId} />}
-			{requestedHandoffId && (
+			{requestedAnyHandoffId && (
 				<Card className="mb-3 sm:mb-4" data-testid="application-handoff">
-					<h3 className="text-base font-bold">Application browser handoff</h3>
+					<h3 className="text-base font-bold">{reconciliationHandoff ? "Read-only application reconciliation" : "Application browser handoff"}</h3>
 					{handoffError ? (
 						<p className="text-sm text-danger mt-2" data-testid="application-handoff-unavailable">This handoff is unavailable: {handoffError}</p>
 					) : !handoff ? (
@@ -87,7 +91,7 @@ export default function ApplicationsTab({ instanceId, isTailor = false }: { inst
 					) : (
 						<>
 							<p className="text-sm text-muted mt-2">
-								{handoff.state === "active" ? "Use the existing Runner browser to complete the site step. Signing in does not by itself change an uncertain submission." : `This handoff is ${handoff.state.replace(/_/g, " ")}.`}
+								{handoff.state === "active" ? reconciliationHandoff ? "Use this separate read-only browser only to sign in or complete the site challenge, then recheck. It cannot fill, upload, submit, or clear uncertainty without authoritative evidence." : "Use the existing Runner browser to complete the site step. Signing in does not by itself change an uncertain submission." : `This handoff is ${handoff.state.replace(/_/g, " ")}.`}
 							</p>
 							{handoff.reason && <p className="text-xs text-muted-soft mt-1">Reason: {handoff.reason.replace(/_/g, " ")}</p>}
 							{handoff.expiresAt && <p className="text-xs text-muted-soft mt-1">Available until {new Date(handoff.expiresAt).toLocaleString()}.</p>}
@@ -148,12 +152,13 @@ export default function ApplicationsTab({ instanceId, isTailor = false }: { inst
 					instanceId={instanceId}
 					runId={handoff.runId}
 					handoffId={handoff.id}
+					reconciliation={reconciliationHandoff}
 					onClose={() => setHandoffOpen(false)}
 					onChanged={() => {
 						setHandoffOpen(false);
 						// Re-resolve rather than treating a local action as a terminal result. The next
 						// status is the worker's durable, evidence-bound statement.
-						if (requestedHandoffId) api<ApplicationHandoffView>(`/v1/instances/${instanceId}/application-handoffs/${encodeURIComponent(requestedHandoffId)}`).then(setHandoff).catch((e) => setHandoffError(e instanceof Error ? e.message : String(e)));
+						if (requestedAnyHandoffId) api<ApplicationHandoffView>(`/v1/instances/${instanceId}/${reconciliationHandoff ? "application-reconciliation-handoffs" : "application-handoffs"}/${encodeURIComponent(requestedAnyHandoffId)}`).then(setHandoff).catch((e) => setHandoffError(e instanceof Error ? e.message : String(e)));
 						load();
 					}}
 				/>

@@ -108,6 +108,7 @@ export const INSTANCE_CHILD_TABLES = [
 	// #1013 — opaque handoff/reconciliation metadata references both the Runner instance and run.
 	// Delete it before the run; neither table carries browser or employer-site material.
 	"local_apply_handoffs",
+	"local_apply_reconciliation_handoffs",
 	"local_apply_reconciliations",
 	// #956 — the run before the application it references (FK).
 	"local_artifact_runs",

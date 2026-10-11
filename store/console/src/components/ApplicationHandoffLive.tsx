@@ -12,16 +12,19 @@ import Button from "./Button";
  * are rendered here but never put in React state outside this mounted, authenticated view, stored
  * in localStorage, or copied into an application trace.
  */
-export default function ApplicationHandoffLive({ instanceId, runId, handoffId, onClose, onChanged }: {
+export default function ApplicationHandoffLive({ instanceId, runId, handoffId, reconciliation = false, onClose, onChanged }: {
 	instanceId: string;
 	runId: string;
 	handoffId: string;
+	/** A reconciliation session permits only login/CAPTCHA input and a read-only recheck. */
+	reconciliation?: boolean;
 	onClose: () => void;
 	onChanged: () => void;
 }) {
 	// Every operation carries the opaque continuity id as well as the run.  A run id alone is not
 	// a capability: this lets the API reject a stale, duplicate, or different-profile handoff.
-	const base = `/v1/instances/${encodeURIComponent(instanceId)}/application-runs/${encodeURIComponent(runId)}/handoff?handoff_id=${encodeURIComponent(handoffId)}`;
+	const handoffPath = reconciliation ? "reconciliation/handoff" : "handoff";
+	const base = `/v1/instances/${encodeURIComponent(instanceId)}/application-runs/${encodeURIComponent(runId)}/${handoffPath}?handoff_id=${encodeURIComponent(handoffId)}`;
 	const [frame, setFrame] = useState<{ frame: string; width: number; height: number } | null>(null);
 	const [error, setError] = useState("");
 	const [endError, setEndError] = useState("");
@@ -107,7 +110,12 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, o
 	};
 	const resume = async () => {
 		try {
-			await api(withPath(base, "resume"), { method: "POST" });
+			const result = await api<{ state?: string }>(withPath(base, "resume"), { method: "POST" });
+			if (reconciliation && result?.state === "running") {
+				setError("Authenticated read-only inspection remains live. This session cannot conclude submission status until a validated SEEK receipt/history contract exists.");
+				poll();
+				return;
+			}
 			onChanged();
 			onClose();
 		} catch (e) { setError(e instanceof Error ? e.message : String(e)); }
@@ -124,10 +132,10 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, o
 	// biome-ignore lint/a11y/noNoninteractiveTabindex: this full-screen remote-control surface must capture keyboard input for the existing Runner browser.
 	return <div ref={boxRef} role="application" aria-label="Live Application Runner browser control" tabIndex={0} onKeyDown={key} className="fixed inset-0 z-[100] bg-black flex flex-col outline-none">
 		<div className="flex items-center gap-3 px-3 sm:px-4 py-2 bg-panel border-b border-line shrink-0">
-			<span className="font-bold text-ink text-sm">🖥 Application Runner — live browser control</span>
-			<span className="text-xs text-muted-soft hidden md:inline">Sign in or complete the site step in this existing browser, then resume. A sign-in alone never changes submission status.</span>
+			<span className="font-bold text-ink text-sm">🖥 {reconciliation ? "Application reconciliation — read-only browser" : "Application Runner — live browser control"}</span>
+			<span className="text-xs text-muted-soft hidden md:inline">{reconciliation ? "Sign in or complete the site challenge only. This browser cannot fill, upload, submit, or clear the original uncertainty." : "Sign in or complete the site step in this existing browser, then resume. A sign-in alone never changes submission status."}</span>
 			<div className="ml-auto flex items-center gap-2">
-				<Button variant="primary" size="lg" onClick={resume}>Resume — done</Button>
+				<Button variant="primary" size="lg" onClick={resume}>{reconciliation ? "Recheck — done" : "Resume — done"}</Button>
 				<Button variant="danger" size="md" onClick={end}>End</Button>
 				<Button variant="secondary" size="md" onClick={onClose}>Close ✕</Button>
 			</div>
