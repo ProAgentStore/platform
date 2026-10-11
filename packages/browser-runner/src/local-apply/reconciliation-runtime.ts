@@ -152,7 +152,7 @@ export class LocalApplyReconciliationRuntime {
 	private async blocker(page: Page | null): Promise<boolean> { const state = page ? await this.pageState(page).catch(() => null) : null; return !!state && (state.login || state.captcha); }
 	private async pageState(page: Page): Promise<{ url: string; login: boolean; captcha: boolean }> {
 		return page.evaluate(() => {
-			const text = (document.body?.innerText ?? "").slice(0, 20000).toLowerCase();
+			const text = (document.body?.innerText ?? "").toLowerCase();
 			const captcha = !!document.querySelector('iframe[src*="hcaptcha.com"], .h-captcha, iframe[src*="challenges.cloudflare.com"], .cf-turnstile, iframe[src*="arkoselabs"], .geetest_holder') || /confirm (that )?you('?re| are) not a robot|i'?m not a robot|verify (that )?you('?re| are) (a )?human|checking (if the site connection is secure|your browser)/.test(text);
 			// Kept in the page: site prose never crosses the runner boundary.  This is deliberately
 			// narrower than a guess; anything unrecognised becomes `ambiguous`.
