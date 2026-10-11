@@ -38,7 +38,7 @@ import { accountTimeZone } from "./account-timezone.js";
 import { fenceUntrusted, withFraming } from "./untrusted-fence.js";
 import type { ConversationTransfer } from "./conversation-transfer.js";
 import { recordTerminalToolUse } from "./terminal-record.js";
-import { attributeStop, controlRefusal } from "./control-intent.js";
+import { attributeStop, controlRefusal, sessionTarget, stopTarget } from "./control-intent.js";
 /**
  * The tool contract now lives in `connectors/types.ts` — a leaf module with no imports
  * that reach back here (#293). It moved because every connector module needs the SHAPE
@@ -272,6 +272,12 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 			const refused = controlRefusal(ctx, "stop_work");
 			if (refused) return { content: refused, success: false };
 			const runId = typeof input.runId === "string" ? input.runId.trim() : "";
+			const [runs, delegatedRuns] = await Promise.all([
+				listLoopRuns(ctx.env, ctx.userId, ctx.instanceId, 20),
+				listDelegatedRuns(ctx.env, ctx.userId, ctx.instanceId, 20).catch(() => [] as LoopRunView[]), // tolerated as in `check_work` (pre-0090 schema)
+			]);
+			const target = stopTarget(ctx, runId, [...runs, ...delegatedRuns].map((r) => r.runId)); // the owner's target, not the model's (#1015)
+			if ("refused" in target) return { content: target.refused, success: false };
 			if (runId) {
 				const run = await getLoopRun(ctx.env, ctx.userId, runId);
 				// The SAME ownership test `check_work` applies, and it must stay the same one: relaxing
@@ -284,17 +290,11 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 				}
 				return { content: describeStopResult([await attributeStop(ctx, await stopOneRun(ctx.env, ctx.userId, run, !own))]), success: true };
 			}
-			const [runs, delegatedRuns] = await Promise.all([
-				listLoopRuns(ctx.env, ctx.userId, ctx.instanceId, 20),
-				// Tolerated exactly as in `check_work`: an API deployed ahead of migration 0090 has no
-				// `delegated_by` column, and a supervisor losing its delegations is a better failure
-				// than every agent losing `stop_work`.
-				listDelegatedRuns(ctx.env, ctx.userId, ctx.instanceId, 20).catch(() => [] as LoopRunView[]),
-			]);
 			const targets = [
 				...stoppableRuns(runs).map((r) => ({ run: r, delegated: false })),
 				...stoppableRuns(delegatedRuns).map((r) => ({ run: r, delegated: true })),
-			];
+			].filter((t) => target.allows(t.run.runId));
+			if (!targets.length && target.named.length) return { content: `None of the runs the owner named (${target.named.join(", ")}) is running and yours to stop, so nothing was stopped.`, success: true };
 			if (!targets.length) {
 				// A real answer, not an error. This sentence is what replaces the fabricated "that's
 				// controlled by the app on your device" (#540) — and it points at the session tool only
@@ -327,7 +327,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 			const refused = controlRefusal(ctx, "end_coding_session");
 			if (refused) return { content: refused, success: false };
 			const { endAgentCodingSession } = await import("./end-coding-session-tool.js");
-			return endAgentCodingSession(ctx.env, ctx.instanceId, ctx.userId, typeof input.repo === "string" ? input.repo : undefined);
+			return endAgentCodingSession(ctx.env, ctx.instanceId, ctx.userId, sessionTarget(ctx, input.repo)); // the owner's repo, not the model's (#1015)
 		},
 	},
 	{

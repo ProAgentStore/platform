@@ -24,6 +24,7 @@ vi.mock("./lib/user-ai.js", async (importOriginal) => ({
 }));
 
 const { runAgentThink } = await import("./agent-think.js");
+const { getRegistryTool } = await import("./lib/tool-registry.js");
 
 let d1: RealSchemaD1;
 let env: Env;
@@ -122,5 +123,73 @@ describe("the owner's explicit request stops exactly its target, attributed to t
 		expect(cancelRequested("run-target")).toBe(1);
 		expect(cancelRequested("run-other")).toBe(0);
 		expect(stopEvents()).toEqual([{ run_id: "run-target", event: "cancelled", actor_kind: "owner", actor_uid: "u1" }]);
+	});
+});
+
+describe("the owner's words bind the TARGET as well as the action (#1015)", () => {
+	it("a run the model selected is not the run the owner named: run-other is untouched", async () => {
+		script = [stopCall({ runId: "run-other" }), { response: "ok" }];
+		const said = await think(turn("Please stop run-target."));
+		expect(cancelRequested("run-other")).toBe(0);
+		expect(cancelRequested("run-target")).toBe(0);
+		expect(said).toContain("nothing was stopped");
+		expect(stopEvents()).toEqual([]);
+	});
+
+	it("an omitted selector does not widen a request for one run into stopping every run", async () => {
+		script = [stopCall({}), { response: "I've asked it to stop." }];
+		await think(turn("Please stop run-target."));
+		expect(cancelRequested("run-target")).toBe(1);
+		expect(cancelRequested("run-other")).toBe(0);
+		expect(stopEvents()).toEqual([{ run_id: "run-target", event: "cancelled", actor_kind: "owner", actor_uid: "u1" }]);
+	});
+
+	it("a genuine all-work stop that names no run still stops everything of yours", async () => {
+		script = [stopCall({}), { response: "I've asked both to stop." }];
+		await think(turn("Stop everything."));
+		expect(cancelRequested("run-target")).toBe(1);
+		expect(cancelRequested("run-other")).toBe(1);
+	});
+
+	it("'stop asking the same question' is about how the agent talks — it stops no run", async () => {
+		script = [stopCall({}), { response: "Understood." }];
+		await think(turn("Please stop asking the same question."));
+		expect(cancelRequested("run-target")).toBe(0);
+		expect(cancelRequested("run-other")).toBe(0);
+		expect(stopEvents()).toEqual([]);
+	});
+});
+
+describe("end_coding_session reads the owner's session words, not generic stop language (#1015)", () => {
+	const seedSession = (id: string, repoId: string, name: string) => {
+		d1.exec(`INSERT OR IGNORE INTO coding_repos (id, instance_id, user_id, name) VALUES ('${repoId}', 'i1', 'u1', '${name}')`);
+		d1.exec(`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, client_type, status) VALUES ('${id}', 'i1', '${repoId}', 'u1', 'claude', 'active')`);
+	};
+	const status = (id: string) => (d1.sqlite.prepare("SELECT status FROM coding_sessions WHERE id = ?").get(id) as { status: string }).status;
+	/** The real handler with the turn the dispatcher sets — the model supplies only `input`. */
+	const end = async (text: string, input: Record<string, unknown> = {}) =>
+		getRegistryTool("end_coding_session")?.handler({ env, instanceId: "i1", userId: "u1", turn: { author: "owner", text } } as never, input);
+
+	it("'stop asking the same question' ends no session", async () => {
+		seedSession("s1", "r1", "platform");
+		const res = await end("Please stop asking the same question.");
+		expect(res?.success).toBe(false);
+		expect(status("s1")).toBe("active");
+	});
+
+	it.each(["Please close the session.", "Please end the session.", "Please finish the session."])("%s ends the one open session", async (text) => {
+		seedSession("s1", "r1", "platform");
+		const res = await end(text);
+		expect(res?.content).toMatch(/Ended the coding session for platform/);
+		expect(status("s1")).toBe("ended");
+	});
+
+	it("with two sessions open, the repo the owner named is ended and a repo the model picked is not", async () => {
+		seedSession("s1", "r1", "platform");
+		seedSession("s2", "r2", "aipa");
+		expect((await end("Please close the session.", { repo: "aipa" }))?.content).toMatch(/Ask which repository/);
+		expect([status("s1"), status("s2")]).toEqual(["active", "active"]);
+		await end("Please close the platform session.", { repo: "platform" });
+		expect([status("s1"), status("s2")]).toEqual(["ended", "active"]);
 	});
 });
