@@ -22,6 +22,7 @@
 import type { Env } from "../types.js";
 import { clipMarked } from "./clip-marked.js";
 import { callRunner, getRunnerConn, READ_TIMEOUT_MS } from "./runner-client.js";
+import { normalizeRunnerNode } from "./runtime-nodes.js";
 
 export type RepoOwner =
 	| { kind: "run"; sessionId: string | null; runId: string; since: number }
@@ -111,11 +112,15 @@ export async function settleDirectTurns(env: Env, scope: Scope, probe: ProbeEngi
 	return remaining;
 }
 
-/** Clear one reservation — only that one: a claim taken since by another send is left alone. */
-export async function releaseReservation(env: Env, sessionId: string, turnId: string): Promise<void> {
-	await env.DB.prepare("UPDATE coding_sessions SET direct_turn_id = NULL, direct_turn_at = NULL, direct_turn_delivered_at = NULL WHERE id = ?1 AND direct_turn_id = ?2")
+/**
+ * Clear one reservation — only that one: a claim taken since by another send is left alone.
+ * True when THIS call cleared it, so of two settlers racing for one claim exactly one acts on it.
+ */
+export async function releaseReservation(env: Env, sessionId: string, turnId: string): Promise<boolean> {
+	const res = await env.DB.prepare("UPDATE coding_sessions SET direct_turn_id = NULL, direct_turn_at = NULL, direct_turn_delivered_at = NULL WHERE id = ?1 AND direct_turn_id = ?2")
 		.bind(sessionId, turnId)
 		.run();
+	return (res.meta?.changes ?? 0) > 0;
 }
 
 export type DirectAdmission =
@@ -174,7 +179,16 @@ export async function repoFreeForRun(env: Env, scope: Scope & { sessionId?: stri
 	return blocking ? { free: false, owner: blocking } : { free: true };
 }
 
-/** The production probe: ask the machine that session is stamped to. No machine is `unknown`. */
+/**
+ * The production probe: ask the machine that session is stamped to. No machine is `unknown`.
+ *
+ * A capture that fails is `unknown` — with one exception: the session's OWN stamped machine
+ * answering that it has no session by this exact id. That is the runner's word that no engine of
+ * this session runs there (`/coding/end` removes it from the runner's map), and reading it as
+ * `unknown` kept a steer's claim on an ended session forever (#1015). A timeout, a disconnect, a
+ * malformed reply, another id, or an unstamped session answered by whichever machine is default
+ * proves nothing, and stays `unknown`.
+ */
 export function runnerEngineProbe(env: Env, instanceId: string, userId: string): ProbeEngine {
 	return async (sessionId) => {
 		const row = await env.DB.prepare("SELECT runner_node FROM coding_sessions WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3")
@@ -182,9 +196,32 @@ export function runnerEngineProbe(env: Env, instanceId: string, userId: string):
 			.first<{ runner_node: string | null }>();
 		const conn = await getRunnerConn(env, instanceId, userId, row?.runner_node ?? null).catch(() => null);
 		if (!conn) return "unknown";
-		const snap = await callRunner<{ alive?: boolean; ready?: boolean }>(conn, "/coding/capture", { sessionId }, { timeoutMs: READ_TIMEOUT_MS }).catch(() => null);
-		return engineProbeFromSnapshot(snap);
+		const stamped = normalizeRunnerNode(row?.runner_node);
+		const onStampedMachine = stamped !== "" && normalizeRunnerNode(conn.runnerNode) === stamped;
+		let absent = false;
+		const snap = await callRunner<{ alive?: boolean; ready?: boolean }>(conn, "/coding/capture", { sessionId }, { timeoutMs: READ_TIMEOUT_MS }).catch((e: unknown) => {
+			absent = onStampedMachine && captureSaysSessionAbsent(e, sessionId);
+			return null;
+		});
+		return absent ? "stopped" : engineProbeFromSnapshot(snap);
 	};
+}
+
+/**
+ * Did `/coding/capture` fail because the runner has no session with exactly this id? The runner
+ * answers a missing session with 500 `{"error":"No coding session: <id>"}`, which `callRunner`
+ * raises as `Runner /coding/capture → 500: <body>`. Anything else is not that answer.
+ */
+export function captureSaysSessionAbsent(e: unknown, sessionId: string): boolean {
+	const msg = e instanceof Error ? e.message : "";
+	const prefix = "Runner /coding/capture → 500: ";
+	if (!msg.startsWith(prefix)) return false;
+	try {
+		const body = JSON.parse(msg.slice(prefix.length)) as { error?: unknown };
+		return body?.error === `No coding session: ${sessionId}`;
+	} catch {
+		return false;
+	}
 }
 
 /** A runner snapshot, reduced. No snapshot is `unknown`, never `idle`. */

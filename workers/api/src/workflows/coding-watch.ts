@@ -51,6 +51,11 @@ export async function runWatchSession(env: Env, event: WorkflowEvent<CodingSessi
 	if (!conn) return { outcome: "failed", detail: "No coding runner connected.", steps: 0 };
 
 	// Wait for the just-sent instruction to run to completion (pane goes idle).
+	//
+	// A watch that cannot finish still SETTLES (#1015). Ending the session mid-watch removes it from
+	// the runner, so the next capture throws; rethrown, that failed the workflow before the release
+	// below, and the direct claim this watcher exists to settle outlived the engine. With no pane the
+	// settle step still runs, and its probe decides the release on the runner's own word.
 	const finalPane = (await step.do(
 		"watch-idle",
 		{ retries: { limit: 1, delay: "2 seconds" as const, backoff: "constant" as const }, timeout: "15 minutes" as const },
@@ -72,7 +77,7 @@ export async function runWatchSession(env: Env, event: WorkflowEvent<CodingSessi
 			}
 			return snap;
 		},
-	)) as CodingPaneSnapshot;
+	).catch(() => null)) as CodingPaneSnapshot | null;
 
 	// Release the direct turn's claim on the checkout (#1015) — only on the runner's word that the
 	// engine is idle or gone — mark the owner's directives the engine has since processed, and start
@@ -99,7 +104,7 @@ export async function runWatchSession(env: Env, event: WorkflowEvent<CodingSessi
 	// Summarize what the agent did, post it to the thread, and ping the user.
 	await step.do("watch-summarize", async () => {
 		const memory = await contextForCopilot(env, sessionId);
-		const reply = await copilotSummary(env, userId, { finished: true, memory, pane: finalPane.pane || "", instanceId }).catch(() => "");
+		const reply = await copilotSummary(env, userId, { finished: true, memory, pane: finalPane?.pane || "", instanceId }).catch(() => "");
 		if (reply) await appendTimeline(env, { sessionId, instanceId, userId, type: "chat_assistant", content: reply });
 		// Save the actual terminal transcript too (deduped) — the audit trail of what
 		// Claude really did, not just the summary. Otherwise the manual chat flow only
@@ -108,7 +113,7 @@ export async function runWatchSession(env: Env, event: WorkflowEvent<CodingSessi
 		// `/capture` and `/explain` stored 8,000, so even a correct compare would have seen a
 		// "change" every time the writers alternated. Nothing downstream depended on the longer
 		// tail: `contextForCopilot` already slices terminal entries to -1200.
-		const pane = finalPane.pane || "";
+		const pane = finalPane?.pane || "";
 		const stored = terminalSnapshotContent(pane);
 		if (stored) {
 			const prev = await lastTerminal(env, sessionId).catch(() => null);

@@ -32,7 +32,7 @@ import { releaseRecoveryClaim, resolveRepoHandoff } from "./coding-handoff-store
 import { referencedIssue } from "./objective-dedupe.js";
 import { checkWorkdirVia } from "./coding-workdir.js";
 import { cloneSourceFor } from "./git-providers.js";
-import { getBoundRunnerConn } from "./runner-client.js";
+import { callRunner, getBoundRunnerConn, getRunnerConn } from "./runner-client.js";
 import { pausedStartRefusal } from "./instance-pause.js";
 import { describeOwner, repoFreeForRun, runnerEngineProbe } from "./coding-ownership.js";
 import { codingRunRefusal } from "./billing.js";
@@ -380,6 +380,14 @@ const codingDriver: LoopDriver = {
 		});
 		if (!handoff.admit) return { ok: false, status: 409, reason: "recovery_required", error: handoff.detail };
 
+		// A direct turn already holding this checkout refuses the run BEFORE a session is opened (#1015).
+		// The check below needs the session it is about to use, so it ran after `ensureActiveSession`
+		// had already launched an engine — one per refused attempt, each left running when the refusal
+		// closed only its row. With no session named, only a direct claim blocks here; a run or driver
+		// is still the post-open check's and `claimSessionDriver`'s to answer.
+		const knownOwner = await repoFreeForRun(env, { instanceId, userId, repoId: repo.id, sessionId: null }, runnerEngineProbe(env, instanceId, userId));
+		if (!knownOwner.free) return { ok: false, status: 409, reason: "busy", error: describeOwner(knownOwner.owner, repo.name) };
+
 		// Open one if there isn't one. Requiring a live session made delegation SINGLE-USE — the
 		// Pilot ended the session its own driver required, so the second goal always 409'd — and
 		// meant a supervisor could not supervise unless a human first sat in the console.
@@ -414,7 +422,14 @@ const codingDriver: LoopDriver = {
 		// watcher that follows the direct turn drains it once the runner confirms the engine idle.
 		const free = await repoFreeForRun(env, { instanceId, userId, repoId: repo.id, sessionId: session.id }, runnerEngineProbe(env, instanceId, userId));
 		if (!free.free) {
-			if (opened) await endSession(env, instanceId, userId, session.id, "ended").catch(() => undefined);
+			// A claim taken in the gap since the check above. The engine this call launched goes with
+			// its row — that session's engine only, on its own machine — and nothing is drained: this
+			// start may itself be a drain, and the owner it lost to drains when it finishes.
+			if (opened) {
+				const conn = await getRunnerConn(env, instanceId, userId, session.runnerNode ?? null).catch(() => null);
+				if (conn) await callRunner(conn, "/coding/end", { sessionId: session.id }).catch(() => undefined);
+				await endSession(env, instanceId, userId, session.id, "ended").catch(() => undefined);
+			}
 			return { ok: false, status: 409, reason: "busy", error: describeOwner(free.owner, repo.name) };
 		}
 

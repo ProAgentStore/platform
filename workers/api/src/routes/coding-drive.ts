@@ -240,12 +240,22 @@ export function registerDriveRoutes(codingRoutes: Hono<{ Bindings: Env }>): void
 	 * things this route does beyond flipping the row (drain the closing turn's spend #267, record who
 	 * paid #554, drain the closing acts #294, refuse to report a stop the engine did not confirm) are
 	 * each here because they were once missing. A second copy would restate them today and stop
-	 * restating them at the next change. The response shape is unchanged.
+	 * restating them at the next change.
 	 */
 	codingRoutes.post("/:instanceId/coding/sessions/:sessionId/end", async (c) => {
 		const { uid, instanceId } = await requireOwned(c);
 		const ended = await endCodingSession(c.env, { instanceId, userId: uid, sessionId: c.req.param("sessionId") });
-		return c.json(ended.warning ? { ok: ended.ok, engineStopped: false, warning: ended.warning } : { ok: ended.ok });
+		// Said as it is (#1015): ending an already-ended session is not a failure — it is also how an
+		// owner releases a steer's claim the watcher could not — so `ok` is "this session is ended",
+		// and `session` says whether this call closed it. The claim and the queue are reported only
+		// when there was one, and the queue only as the drain itself answered.
+		return c.json({
+			ok: ended.session !== null,
+			session: !ended.session ? "not_found" : ended.alreadyEnded ? "already_ended" : "ended",
+			engineStopped: ended.engineStopped,
+			...(ended.warning ? { warning: ended.warning } : {}),
+			...(ended.directTurn ? { directTurn: ended.directTurn } : {}),
+		});
 	});
 
 	/**

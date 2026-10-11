@@ -717,7 +717,8 @@ describe("the coding driver refuses a run whose engine is not signed in, before 
 		expect(sql.some((q) => q.includes("UPDATE agent_loop_runs") && q.includes("stop_reason"))).toBe(true);
 		// Nothing ran: no workflow, no driver claim, no launch.
 		expect(created).toHaveLength(0);
-		expect(sql.some((q) => q.includes("driver_id"))).toBe(false);
+		// A CLAIM is a write; the ownership check before the session opens (#1015) reads `driver_id`.
+		expect(sql.some((q) => q.includes("driver_id") && q.includes("UPDATE coding_sessions"))).toBe(false);
 		expect(commands.map((c) => c.path)).not.toContain("/coding/start");
 	});
 
