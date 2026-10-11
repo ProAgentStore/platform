@@ -37,6 +37,9 @@ const run = (over: Partial<LoopRunView> = {}): LoopRunView => ({
 	interruptions: 0,
 	delegatedBy: null,
 	sessionId: null,
+	// #1017: a run started directly — no originating queue entry or start request.
+	queueEntryId: null,
+	requestId: null,
 	...over,
 });
 
