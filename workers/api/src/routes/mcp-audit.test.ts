@@ -493,6 +493,97 @@ describe("the legacy backfill", () => {
 		expect(f.data.has(auditIndexKey("aaa", NOW, "straggler"))).toBe(true);
 	});
 
+	describe("resuming a record the writer before ac253dd9 left", () => {
+		// That writer summed `unplaceable` over passes and never wrote `passUnplaceable`.
+		const seedState = (f: Fake, state: Record<string, unknown>) =>
+			f.data.set(AUDIT_MIGRATION_KEY, { value: JSON.stringify({ scanned: 0, copied: 0, expired: 0, startedAt: "x", updatedAt: "x", ...state }) });
+		const readState = (f: Fake) => JSON.parse(f.data.get(AUDIT_MIGRATION_KEY)?.value ?? "{}");
+		const exp = Math.floor(NOW / 1000) + 3600;
+		/** Two unplaceable records that sort BEFORE `audit:mmm:…`, and one good record after it. */
+		function seedKeys(f: Fake) {
+			f.data.set("audit:aaa:not-a-time:bad1", { value: JSON.stringify({ tool: "x" }), expiration: exp });
+			f.data.set("audit:bbb:2026-10-11T00:00:00.000Z:bad2", { value: "{not json", expiration: exp });
+			writeLegacy(f, "zzz", NOW - 1000, "good");
+		}
+		const cursorAfterBad = btoa("audit:bbb:2026-10-11T00:00:00.000Z:bad2");
+
+		it("mid-second-pass: recounts instead of dropping what it saw behind the cursor", async () => {
+			const f = fakeKv();
+			seedKeys(f);
+			// Pass 0 saw both bad records (2), pass 1 saw them again (4); only the good one is left.
+			seedState(f, { status: "running", pass: 1, cursor: cursorAfterBad, unplaceable: 4 });
+			expect(await readAuditCoverage(f.kv)).toMatchObject({ complete: false, legacyIndex: "in_progress" });
+
+			// Resuming at the cursor would end this pass with 0 and call the history whole.
+			const first = await runAuditLedgerBackfill(f.kv, { now: f.clock.now, batch: 1 });
+			expect(first).toMatchObject({ status: "running", pass: 1, passUnplaceable: 1 });
+			expect(await readAuditCoverage(f.kv)).toMatchObject({ complete: false, legacyIndex: "in_progress" });
+
+			const { state } = await backfillToCompletion(f);
+			expect(state).toMatchObject({ status: "complete", pass: 2, unplaceable: 2, passUnplaceable: 0 });
+			const coverage = await readAuditCoverage(f.kv);
+			expect(coverage).toMatchObject({ complete: false, legacyIndex: "complete" });
+			expect(coverage.detail).toMatch(/2 unplaceable legacy records could not be indexed/i);
+			expect(f.data.has(auditIndexKey("zzz", NOW - 1000, "good"))).toBe(true);
+		});
+
+		it("mid-first-pass: ends with the distinct count", async () => {
+			const f = fakeKv();
+			seedKeys(f);
+			seedState(f, { status: "running", pass: 0, cursor: cursorAfterBad, unplaceable: 2 });
+			const { state } = await backfillToCompletion(f);
+			expect(state).toMatchObject({ status: "complete", pass: 2, unplaceable: 2 });
+		});
+
+		it("finished with a doubled count: reopens one pass and replaces it with the distinct count", async () => {
+			const f = fakeKv();
+			seedKeys(f);
+			seedState(f, { status: "complete", pass: 2, unplaceable: 4, completedAt: "x" });
+			const before = await readAuditCoverage(f.kv);
+			expect(before).toMatchObject({ complete: false, legacyIndex: "in_progress" });
+			expect(before.detail).not.toMatch(/4 unplaceable/);
+
+			const state = await runAuditLedgerBackfill(f.kv, { now: f.clock.now });
+			expect(state).toMatchObject({ status: "complete", pass: 2, unplaceable: 2, passUnplaceable: 0 });
+			expect((await readAuditCoverage(f.kv)).detail).toMatch(/2 unplaceable legacy records/i);
+		});
+
+		it("a failed recount tick leaves the old record as it was, still partial, and the next tick redoes it", async () => {
+			const f = fakeKv();
+			seedKeys(f);
+			seedState(f, { status: "complete", pass: 2, unplaceable: 4 });
+			const stored = f.data.get(AUDIT_MIGRATION_KEY)?.value;
+			f.failGets((name) => name.endsWith(":good"));
+			await expect(runAuditLedgerBackfill(f.kv, { now: f.clock.now })).rejects.toThrow(/KV GET failed/);
+			expect(f.data.get(AUDIT_MIGRATION_KEY)?.value).toBe(stored);
+			expect(await readAuditCoverage(f.kv)).toMatchObject({ complete: false, legacyIndex: "in_progress" });
+
+			f.failGets(null);
+			const { state } = await backfillToCompletion(f);
+			expect(state).toMatchObject({ status: "complete", unplaceable: 2 });
+		});
+
+		it("recounts once: the recounted record is finished, and further ticks only read it", async () => {
+			const f = fakeKv();
+			seedKeys(f);
+			seedState(f, { status: "complete", pass: 2, unplaceable: 4 });
+			await runAuditLedgerBackfill(f.kv, { now: f.clock.now });
+			const stored = readState(f);
+			const before = { ...f.ops };
+			expect(await runAuditLedgerBackfill(f.kv, { now: f.clock.now })).toEqual(stored);
+			expect(f.ops).toEqual({ ...before, get: before.get + 1 });
+		});
+
+		it("takes an old finished record with nothing unplaceable as it stands", async () => {
+			const f = fakeKv();
+			seedKeys(f);
+			seedState(f, { status: "complete", pass: 2, unplaceable: 0 });
+			const before = { ...f.ops };
+			expect(await runAuditLedgerBackfill(f.kv, { now: f.clock.now })).toMatchObject({ status: "complete", unplaceable: 0 });
+			expect(f.ops).toEqual({ ...before, get: before.get + 1 });
+		});
+	});
+
 	it("costs one read per tick once it has finished", async () => {
 		const f = fakeKv();
 		await backfillToCompletion(f);

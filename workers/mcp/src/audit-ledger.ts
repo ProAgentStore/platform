@@ -84,8 +84,22 @@ export const AUDIT_SEMANTICS =
 
 export async function readAuditCoverage(kv: KVNamespace): Promise<AuditCoverage> {
 	const raw = await kv.get(AUDIT_MIGRATION_KEY);
-	const state = raw ? (JSON.parse(raw) as { status?: string; pass?: number; scanned?: number; unplaceable?: number }) : null;
+	const state = raw
+		? (JSON.parse(raw) as { status?: string; pass?: number; scanned?: number; unplaceable?: number; passUnplaceable?: number })
+		: null;
 	const retentionDays = AUDIT_TTL_SECONDS / 86_400;
+	// A record from the writer before ac253dd9 summed `unplaceable` over passes and never wrote
+	// `passUnplaceable`: a total of observations, not records, which the API's backfill is
+	// recounting (`needsRecount` in its copy). Partial until then, and no number is claimed.
+	if (state && state.passUnplaceable === undefined && (state.unplaceable ?? 0) > 0) {
+		return {
+			complete: false,
+			retentionDays,
+			legacyIndex: "in_progress",
+			detail:
+				"Some legacy records could not be indexed, and their count is being re-established: an earlier indexer counted them once per pass, so its total is not a number of records. Older pages may be missing legacy events until the recount finishes.",
+		};
+	}
 	if (state?.status === "complete") {
 		// Finished is not the same as whole: a legacy record with no parseable subject, time or id was
 		// never indexed, so the history is partial by exactly that many records and must say so.

@@ -104,9 +104,30 @@ async function readMigrationState(kv: KVNamespace): Promise<AuditMigrationState 
 	return raw ? (JSON.parse(raw) as AuditMigrationState) : null;
 }
 
+/**
+ * A record from the writer before ac253dd9, which ADDED each pass's unplaceable count to
+ * `unplaceable` and never wrote `passUnplaceable`. (This writer always writes it at a pass end, and
+ * leaves `unplaceable` at 0 until then, so a nonzero `unplaceable` with no `passUnplaceable` is
+ * only that writer's.) Its number totals observations, not records. Part of it may also be for keys
+ * behind the cursor, which the current pass will not see again. It is neither a distinct count nor
+ * safe to drop, so the backfill recounts and every reader reports partial coverage until then.
+ */
+export function needsRecount(state: Pick<AuditMigrationState, "unplaceable" | "passUnplaceable">): boolean {
+	return state.passUnplaceable === undefined && (state.unplaceable ?? 0) > 0;
+}
+
 export async function readAuditCoverage(kv: KVNamespace): Promise<AuditCoverage> {
 	const state = await readMigrationState(kv);
 	const retentionDays = AUDIT_TTL_SECONDS / 86_400;
+	if (state && needsRecount(state)) {
+		return {
+			complete: false,
+			retentionDays,
+			legacyIndex: "in_progress",
+			detail:
+				"Some legacy records could not be indexed, and their count is being re-established: an earlier indexer counted them once per pass, so its total is not a number of records. Older pages may be missing legacy events until the recount finishes.",
+		};
+	}
 	if (state?.status === "complete") {
 		// Finished is not the same as whole: a legacy record with no parseable subject, time or id was
 		// never indexed, so the history is partial by exactly that many records and must say so.
@@ -212,6 +233,15 @@ export async function runAuditLedgerBackfill(
 		startedAt: nowIso,
 		updatedAt: nowIso,
 	};
+	if (needsRecount(state)) {
+		// Restart the last pass from its beginning: a pass sees every key once, so its count is
+		// distinct. Copies are idempotent, so the repeat costs operations, never duplicates.
+		state.status = "running";
+		state.pass = Math.min(state.pass, BACKFILL_PASSES - 1);
+		state.cursor = undefined;
+		state.passUnplaceable = 0;
+		state.completedAt = undefined;
+	}
 	if (state.status === "complete") return state;
 
 	const listed = await kv.list({ prefix: AUDIT_LEGACY_PREFIX, limit: batch, ...(state.cursor ? { cursor: state.cursor } : {}) });

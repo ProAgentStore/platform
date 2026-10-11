@@ -47,12 +47,33 @@ describe("coverage read from the API's migration record (#1016)", () => {
 	const kvWith = (state: unknown) => ({ get: async (k: string) => (k === AUDIT_MIGRATION_KEY ? JSON.stringify(state) : null) }) as unknown as KVNamespace;
 
 	it("is partial, not complete, when the finished migration left unplaceable records", async () => {
-		const coverage = await readAuditCoverage(kvWith({ status: "complete", pass: 2, scanned: 10, unplaceable: 2 }));
+		const coverage = await readAuditCoverage(kvWith({ status: "complete", pass: 2, scanned: 10, unplaceable: 2, passUnplaceable: 0 }));
 		expect(coverage).toMatchObject({ complete: false, legacyIndex: "complete" });
 		expect(coverage.detail).toMatch(/2 unplaceable legacy records could not be indexed/i);
 	});
 
 	it("is complete only when the finished migration placed every record", async () => {
-		expect(await readAuditCoverage(kvWith({ status: "complete", pass: 2, scanned: 10, unplaceable: 0 }))).toMatchObject({ complete: true, legacyIndex: "complete" });
+		expect(await readAuditCoverage(kvWith({ status: "complete", pass: 2, scanned: 10, unplaceable: 0, passUnplaceable: 0 }))).toMatchObject({ complete: true, legacyIndex: "complete" });
+	});
+
+	// The writer before ac253dd9 summed `unplaceable` over passes and never wrote `passUnplaceable`.
+	it("never reports an old writer's summed count as a number of records, finished or not", async () => {
+		for (const old of [
+			{ status: "complete", pass: 2, scanned: 10, unplaceable: 4 },
+			{ status: "running", pass: 1, cursor: "c", scanned: 7, unplaceable: 3 },
+		]) {
+			const coverage = await readAuditCoverage(kvWith(old));
+			expect(coverage).toMatchObject({ complete: false, legacyIndex: "in_progress" });
+			expect(coverage.detail).toMatch(/being re-established/);
+			expect(coverage.detail).not.toMatch(/\d+ unplaceable/);
+		}
+	});
+
+	it("still reads an old writer's record with nothing unplaceable at face value", async () => {
+		expect(await readAuditCoverage(kvWith({ status: "complete", pass: 2, scanned: 10, unplaceable: 0 }))).toMatchObject({ complete: true });
+		expect(await readAuditCoverage(kvWith({ status: "running", pass: 1, cursor: "c", scanned: 4, unplaceable: 0 }))).toMatchObject({
+			complete: false,
+			legacyIndex: "in_progress",
+		});
 	});
 });
