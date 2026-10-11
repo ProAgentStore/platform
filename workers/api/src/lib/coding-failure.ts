@@ -37,6 +37,7 @@
  * every future stall to `unknown`.
  */
 import { countInterruption } from "./agent-loop-store.js";
+import { INCOMPLETE_TOOL_ARGS_MARKER } from "./anthropic-stream.js";
 import { logError } from "./error-log.js";
 import { isRetryableFailure, resumableRoundOf } from "./resumable-round.js";
 import { isRunnerGone, isRunnerUnreachable } from "./runner-unreachable.js";
@@ -146,6 +147,9 @@ const STALL_MARKERS = [
 	"did not begin replying",
 	"stopped sending mid-reply",
 	"ended mid-reply",
+	// #907: read from the message, because `retryable` does not survive the step boundary. Lower-case,
+	// as `m` is — the marker is already all lower-case.
+	INCOMPLETE_TOOL_ARGS_MARKER,
 	"carried no body to stream",
 	"the reply arrived empty",
 ];

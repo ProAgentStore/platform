@@ -39,9 +39,20 @@
 
 import { hitOutputCap } from "./reply-truncation.js";
 
+/**
+ * The message marker for a tool call whose arguments stopped arriving (#907). It rides in the MESSAGE
+ * because a Workflow step boundary keeps an error's message and drops its properties, and both the
+ * controller's recovery and the run-level classifier read it from there.
+ */
+export const INCOMPLETE_TOOL_ARGS_MARKER = "[stream: incomplete-tool-args]";
+
 /** A stream that did not deliver a well-formed message. Distinct so the caller can label it. */
 export class AnthropicStreamError extends Error {
-	constructor(message: string) {
+	constructor(
+		message: string,
+		/** Set only where the stream stopped mid tool call — the one case marked as a provider stall (#907). */
+		readonly incompleteToolArgs = false,
+	) {
 		super(message);
 		this.name = "AnthropicStreamError";
 	}
@@ -270,7 +281,7 @@ export class AnthropicStreamAssembler {
 		// error hidden. Checked first because it is unambiguous, whatever the stop reason says.
 		const openTool = [...this.openTools.values()][0];
 		if (openTool !== undefined) {
-			throw new AnthropicStreamError(`the arguments for tool \`${openTool}\` never finished arriving`);
+			throw new AnthropicStreamError(`the arguments for tool \`${openTool}\` never finished arriving`, true);
 		}
 		// #504: no arguments AND the provider says it ran out of room. Either half alone is fine — a
 		// no-argument tool is legitimate, and a truncated prose reply is #397's business — but

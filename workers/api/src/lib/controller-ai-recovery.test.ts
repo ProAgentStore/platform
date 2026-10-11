@@ -141,6 +141,37 @@ describe("what counts as a stall", () => {
 		expect(isControllerAiStall(new UserAiProviderError("stopped sending mid-reply", 504, undefined, undefined, false))).toBe(false);
 		expect(isControllerAiStall(new Error("Anthropic (429): rate_limit"))).toBe(false);
 	});
+
+	it("includes a tool call whose arguments stopped arriving — the provider stopping mid-reply (#907)", () => {
+		const incomplete = () => new UserAiProviderError(INCOMPLETE, 502, undefined, undefined, true);
+		expect(isControllerAiStall(incomplete())).toBe(true);
+		// Read from the message, so it still counts once a step boundary has dropped its properties.
+		expect(isControllerAiStall(new Error(INCOMPLETE))).toBe(true);
+		// Controls: credentials, credit, a 4xx and an explicitly non-retryable copy are not retried.
+		expect(isControllerAiStall(new UserAiProviderError("Anthropic (401): invalid x-api-key", 401, 401, undefined, false))).toBe(false);
+		expect(isControllerAiStall(new UserAiProviderError("Anthropic (400): Your credit balance is too low", 400, 400, undefined, false))).toBe(false);
+		expect(isControllerAiStall(new UserAiProviderError("Anthropic (400): invalid_request_error", 400, 400))).toBe(false);
+		expect(isControllerAiStall(new UserAiProviderError(INCOMPLETE, 502, undefined, undefined, false))).toBe(false);
+	});
+});
+
+const INCOMPLETE = "Anthropic: the arguments for tool `send_message` never finished arriving [stream: incomplete-tool-args]";
+
+describe("an incomplete tool call under the recovery policy (#907)", () => {
+	const incomplete = () => new UserAiProviderError(INCOMPLETE, 502, undefined, undefined, true);
+
+	it("is retried, and the next attempt's decision is returned", async () => {
+		const { promise, calls } = harness().run<string | Error>([incomplete(), "decision"]);
+		expect(await promise).toBe("decision");
+		expect(calls).toHaveLength(2);
+	});
+
+	it("exhausts into ControllerAiStalled — the returned-across-the-step stall, never a raw throw", async () => {
+		const { promise, calls } = harness({ attemptMs: 1_000 }).run<string | Error>([incomplete()]);
+		const err = await promise.catch((e: unknown) => e);
+		expect(err).toBeInstanceOf(ControllerAiStalled);
+		expect(calls).toHaveLength(policyFrom().maxAttempts);
+	});
 });
 
 describe("per-instance settings are validated against documented bounds", () => {

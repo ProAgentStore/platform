@@ -128,6 +128,18 @@ describe("classifyCodingFailure — the three classes that used to read identica
 		expect(codingFailureLevel("unknown")).toBe("error");
 	});
 
+	it("files a tool call whose arguments stopped arriving as a resumable stall from its MESSAGE alone (#907)", () => {
+		// A Workflow step boundary keeps an error's message and drops `retryable`, so this is what the
+		// round-level resume actually classifies. It used to fall through to non-resumable `provider_error`.
+		const crossed = new Error("Anthropic: the arguments for tool `send_message` never finished arriving [stream: incomplete-tool-args]");
+		expect(classifyCodingFailure(crossed)).toMatchObject({ class: "provider_stall", retryable: true });
+		// The same provider prefix without the marker, and the provider's own refusals, keep their classes.
+		expect(classifyCodingFailure(new Error("Anthropic: the provider sent a frame that is not JSON")).class).toBe("provider_error");
+		expect(classifyCodingFailure(new Error("Anthropic (401): invalid x-api-key")).class).toBe("provider_credentials");
+		expect(classifyCodingFailure(new Error("Anthropic (400): Your credit balance is too low to access the Anthropic API")).class).toBe("provider_credit");
+		expect(classifyCodingFailure(new Error("Anthropic (429): rate_limit_error")).class).toBe("provider_rate_limit");
+	});
+
 	it("is total — a string, null and undefined are inputs, not crashes", () => {
 		for (const junk of [null, undefined, "boom", 7, {}]) {
 			expect(() => classifyCodingFailure(junk)).not.toThrow();

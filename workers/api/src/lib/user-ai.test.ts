@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { classifyCodingFailure } from "./coding-failure.js";
+import { ControllerAiStalled, isControllerAiStall, policyFrom, withControllerAiRecovery } from "./controller-ai-recovery.js";
 import { decideCodingAction, pilotUserBlocks, systemPrompt } from "./coding-loop.js";
 import { encryptKey } from "./crypto.js";
 import {
@@ -896,5 +897,55 @@ describe("the chat call streams, and its deadlines measure silence (#427)", () =
 		const other = (await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "hi" }] }).catch((e: unknown) => e)) as UserAiProviderError;
 		expect(other.message).not.toContain("settings/billing");
 		expect(classifyCodingFailure(other).class).toBe("provider_error");
+	});
+});
+
+// ── #907: a tool call whose arguments stop arriving, through the real provider path ─────────────
+
+describe("an Anthropic stream that stops mid tool call (#907)", () => {
+	/** The provider opens a `send_message` tool block, sends half its arguments, and ends without closing it. */
+	function openToolStream(): Response {
+		const frames = [
+			{ type: "message_start", message: { usage: {} } },
+			{ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_1", name: "send_message", input: {} } },
+			{ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"text":"run the te' } },
+			{ type: "message_delta", delta: { stop_reason: "tool_use" }, usage: {} },
+			{ type: "message_stop" },
+		];
+		return sseResponse(frames.map((f) => `event: ${f.type}\ndata: ${JSON.stringify(f)}\n\n`).join(""));
+	}
+	const replied = () => anthropicSse({ content: [{ type: "text", text: "next instruction" }], stop_reason: "end_turn" });
+	const ask = (env: Env) => runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "decide" }] }, undefined, { provider: "anthropic" });
+
+	afterEach(() => vi.unstubAllGlobals());
+
+	it("raises a retryable provider error whose MESSAGE carries the stall marker, and sends no partial call", async () => {
+		const env = await envWithAnthropicKey();
+		vi.stubGlobal("fetch", vi.fn(async () => openToolStream()));
+		const err = await ask(env).catch((e: unknown) => e);
+		expect(err).toBeInstanceOf(UserAiProviderError);
+		expect((err as UserAiProviderError).retryable).toBe(true);
+		expect((err as Error).message).toBe("Anthropic: the arguments for tool `send_message` never finished arriving [stream: incomplete-tool-args]");
+	});
+
+	it("is recovered by the controller policy: the first attempt stalls, the second returns the decision", async () => {
+		const env = await envWithAnthropicKey();
+		const fetchMock = vi.fn().mockImplementationOnce(async () => openToolStream()).mockImplementation(async () => replied());
+		vi.stubGlobal("fetch", fetchMock);
+		const result = await withControllerAiRecovery(policyFrom(), { surface: "pilot", sleep: async () => undefined }, () => ask(env));
+		expect(JSON.stringify(result)).toContain("next instruction");
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("exhausted, it becomes a stall the run-level classifier resumes — even with only its message left", async () => {
+		const env = await envWithAnthropicKey();
+		vi.stubGlobal("fetch", vi.fn(async () => openToolStream()));
+		const raw = (await ask(env).catch((e: unknown) => e)) as Error;
+		const stalled = await withControllerAiRecovery(policyFrom(), { surface: "pilot", sleep: async () => undefined }, () => ask(env)).catch((e: unknown) => e);
+		expect(stalled).toBeInstanceOf(ControllerAiStalled);
+		// What a Workflow step boundary hands the round-level resume: the message, no properties.
+		expect(classifyCodingFailure(new Error(raw.message))).toMatchObject({ class: "provider_stall", retryable: true });
+		expect(classifyCodingFailure(new Error((stalled as Error).message))).toMatchObject({ class: "provider_stall" });
+		expect(isControllerAiStall(new Error(raw.message))).toBe(true);
 	});
 });
