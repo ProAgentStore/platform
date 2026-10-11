@@ -645,3 +645,146 @@ describe("a long engine turn keeps the run's claim fresh", () => {
 		expect(seenDuringWait).toBeGreaterThan(stale);
 	});
 });
+
+// ── The run's objective reaches the engine verbatim, with the run's first turn (#1019) ───────────
+
+describe("the run's objective reaches the engine verbatim, with the run's first turn (#1019)", () => {
+	const OBJ = "Implement #1019 only.\nDo NOT run the full suite — focused tests only.";
+	let bodies: Array<{ text?: string; objective?: { runId: string; text: string }; inputId?: string; replay?: string }>;
+	let consumed: string[];
+	const objectiveEvents = () =>
+		(d1.sqlite.prepare("SELECT message, context FROM agent_events WHERE event = 'coding.run.objective' ORDER BY rowid").all() as Array<{ message: string; context: string | null }>).map((r) => ({
+			message: r.message,
+			state: (JSON.parse(r.context ?? "{}") as { state?: string }).state,
+		}));
+	/** A runner that advertises the capability, and an engine that reads every turn it is sent. */
+	function capableRunner(opts: { reads?: boolean; stale?: string[] } = {}) {
+		runner["/capabilities"] = () => ({ capabilities: ["coding.sessions", "coding.run-objective"] });
+		runner["/coding/act"] = (body) => {
+			const a = body.action as (typeof bodies)[number];
+			bodies.push(a);
+			acted.push(String(a.text ?? ""));
+			if (opts.reads !== false && a.inputId) consumed.push(a.inputId);
+			return pane();
+		};
+		runner["/coding/capture"] = () => ({ ...pane(), consumedInputs: [...(opts.stale ?? []), ...consumed] });
+	}
+	beforeEach(() => {
+		bodies = [];
+		consumed = [];
+	});
+
+	it("fresh run: the first turn carries the objective verbatim beside the Pilot's own text, and is confirmed read", async () => {
+		capableRunner();
+		decisions = [SEND("open the issue first"), SEND("now write the test"), FINISH("done")];
+		await run(params({ objective: OBJ }, { loopRunId: "run-A" } as Partial<CodingSessionParams>));
+		expect(bodies[0]).toMatchObject({ text: "open the issue first", objective: { runId: "run-A", text: OBJ }, inputId: "objective:run-A:1" });
+		// The second instruction is bare: delivered once, not repeated.
+		expect(bodies[1].objective).toBeUndefined();
+		expect(bodies[1].text).toBe("now write the test");
+		expect(objectiveEvents()).toEqual([{ message: expect.stringContaining("was delivered verbatim to the engine, which read it"), state: "delivered" }]);
+		// The record names the length, never the objective's text.
+		expect(objectiveEvents()[0].message).not.toContain("Implement #1019");
+	});
+
+	it("a Claude session that keeps its own conversation still gets it — it does not ride the per-turn replay", async () => {
+		capableRunner();
+		decisions = [SEND("go"), FINISH("done")];
+		await run(params({ objective: OBJ, clientType: "claude" }));
+		expect(bodies[0].replay).toBeUndefined();
+		expect(bodies[0].objective?.text).toBe(OBJ);
+	});
+
+	it("a long objective is delivered whole, at the accepted length", async () => {
+		capableRunner();
+		const long = `${"a".repeat(7_997)}END`;
+		decisions = [SEND("go"), FINISH("done")];
+		await run(params({ objective: long }));
+		expect(bodies[0].objective?.text).toBe(long);
+		expect(bodies[0].objective?.text.length).toBe(8_000);
+	});
+
+	it("a later owner directive still outranks it: the out-of-scope instruction never reaches the engine", async () => {
+		capableRunner();
+		decisions = [SEND("start"), SEND("git commit -am wip && git push"), FINISH("stopped")];
+		onFirstAct(() => directive("Read-only from now on."));
+		await run(params({ objective: "implement the export feature and push it" }));
+		expect(bodies.map((b) => b.text)).toEqual(["start"]);
+		expect(bodies[0].objective?.text).toBe("implement the export feature and push it");
+		expect(lastLog()).toMatch(/refused \(owner constraint\): read-only/);
+	});
+
+	it("an engine that never confirms reading it gets it on a bounded number of turns, and the run says unconfirmed — never delivered", async () => {
+		capableRunner({ reads: false });
+		decisions = [SEND("one"), SEND("two"), SEND("three"), SEND("four"), SEND("five"), FINISH("done")];
+		await run(params({ objective: OBJ }, { loopRunId: "run-U" } as Partial<CodingSessionParams>));
+		expect(bodies.map((b) => b.inputId ?? null)).toEqual(["objective:run-U:1", "objective:run-U:2", "objective:run-U:3", null, null]);
+		expect(objectiveEvents().map((e) => e.state)).toEqual(["unconfirmed"]);
+	});
+
+	it("a workflow replay re-sends nothing and re-reports nothing", async () => {
+		capableRunner();
+		decisions = [SEND("go"), FINISH("done")];
+		const journal = newJournal();
+		await run(params({ objective: OBJ }), journal);
+		const sent = bodies.length;
+		await run(params({ objective: OBJ }), journal);
+		expect(bodies).toHaveLength(sent);
+		expect(objectiveEvents().map((e) => e.state)).toEqual(["delivered"]);
+	});
+
+	it("a failed transport is retried with the SAME objective and input id — the platform's step retry, not a new delivery", async () => {
+		capableRunner();
+		const attempted: Array<(typeof bodies)[number]> = [];
+		const act = runner["/coding/act"];
+		runner["/coding/act"] = (body) => {
+			attempted.push(body.action as (typeof bodies)[number]);
+			if (attempted.length === 1) throw new Error("relay dropped the act");
+			return act(body);
+		};
+		// Cloudflare re-runs a failed step's callback (`retries.limit`); the fake journal does the same, once.
+		const journal = newJournal();
+		const step = fakeStep(journal);
+		const retrying = {
+			...step,
+			do: async (name: string, a: unknown, b?: unknown) => step.do(name, a as never, b as never).catch(() => step.do(name, a as never, b as never)),
+		} as unknown as WorkflowStep;
+		decisions = [SEND("go"), FINISH("done")];
+		await runCodingSessionWorkflow(env, { payload: params({ objective: OBJ }, { loopRunId: "run-T" } as Partial<CodingSessionParams>) } as WorkflowEvent<CodingSessionParams>, retrying);
+		expect(attempted).toHaveLength(2);
+		expect(attempted[1]).toEqual(attempted[0]);
+		expect(attempted[0]).toMatchObject({ objective: { runId: "run-T", text: OBJ }, inputId: "objective:run-T:1" });
+		expect(objectiveEvents().map((e) => e.state)).toEqual(["delivered"]);
+	});
+
+	it("a transport that never succeeds ends the run without ever claiming the objective was delivered", async () => {
+		capableRunner();
+		runner["/coding/act"] = () => {
+			throw new Error("relay dropped the act");
+		};
+		decisions = [SEND("go"), FINISH("done")];
+		const r = await run(params({ objective: OBJ }));
+		expect(r.outcome).toBe("failed");
+		expect(objectiveEvents().map((e) => e.state)).not.toContain("delivered");
+	});
+
+	it("the next run on the same retained session gets its own objective, and an earlier run's read receipt does not count for it", async () => {
+		capableRunner({ reads: false, stale: ["objective:run-A:1"] });
+		decisions = [SEND("next run"), FINISH("done")];
+		await run(params({ objective: "the SECOND run's objective" }, { loopRunId: "run-B" } as Partial<CodingSessionParams>));
+		expect(bodies[0]).toMatchObject({ objective: { runId: "run-B", text: "the SECOND run's objective" }, inputId: "objective:run-B:1" });
+		expect(objectiveEvents().map((e) => e.state)).toEqual(["unconfirmed"]);
+	});
+
+	it("a runner without the capability is never sent it, and the run says it was NOT delivered", async () => {
+		runner["/coding/act"] = (body) => {
+			bodies.push(body.action as (typeof bodies)[number]);
+			return pane();
+		};
+		decisions = [SEND("go"), FINISH("done")];
+		await run(params({ objective: OBJ }));
+		expect(bodies[0].objective).toBeUndefined();
+		expect(bodies[0].inputId).toBeUndefined();
+		expect(objectiveEvents()).toEqual([{ message: expect.stringContaining("was NOT delivered"), state: "unsupported" }]);
+	});
+});

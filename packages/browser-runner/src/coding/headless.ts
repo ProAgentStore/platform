@@ -1,3 +1,4 @@
+import { runObjectiveBlock } from "./run-objective.js";
 import { type ChildProcess, spawn } from "node:child_process";
 import { classifyCommand, commandFromToolInput, type EngineActRecord, fillTargetFromResult, toolCallOk, toolResultMark } from "./engine-acts.js";
 import { type EngineUsageRecord, parseEngineUsage } from "./engine-usage.js";
@@ -604,7 +605,7 @@ export class HeadlessSession {
 	 * handed a summary of the conversation it is already in; when spent it replaces the one-shot
 	 * session-start brief, being the same record composed later.
 	 */
-	input(text: string, opts: { author?: TurnAuthor; replay?: string; inputId?: string } = {}): void {
+	input(text: string, opts: { author?: TurnAuthor; replay?: string; inputId?: string; objective?: { runId: string; text: string } } = {}): void {
 		// The Engine reads the preamble, the pane the short marker; the instruction stays evidence.
 		const sent = authoredTurn(text, opts.author);
 		// The brief leads the turn and is spent in the reading (#693). It goes to the ENGINE only:
@@ -618,6 +619,9 @@ export class HeadlessSession {
 		if (!this.alive) this.start();
 		if (replay) this.push("[pags] this engine keeps no memory between turns, so ProAgentStore's record of the conversation so far was delivered with this turn — a reconstruction, not the engine's own memory");
 		else if (seed) this.push("[pags] a context brief from ProAgentStore's record was delivered with this turn — a reconstruction, not the previous conversation");
+		// The run's objective (#1019): to the ENGINE in full, the pane a one-line marker (same budget as the brief).
+		const objective = opts.objective ? runObjectiveBlock(opts.objective) : null;
+		if (opts.objective) this.push(`[pags] the run's objective (${opts.objective.text.length} characters, verbatim) was delivered with this turn`);
 		this.push(`\n❯ [${stamp()}] ${authorTag(opts.author)}${text}`); // ❯ — your turn, timestamped
 		this.run = "thinking";
 		const now = Date.now();
@@ -628,7 +632,8 @@ export class HeadlessSession {
 		try {
 			// Brief first, instruction second, and never the other way round: it is background for
 			// the request, and an engine that reads the request last acts on the request.
-			const withSeed = seed ? `${seed}\n\n${sent}` : sent;
+			// The objective sits between them: background like the brief, and above the instruction it frames.
+			const withSeed = [seed, objective, sent].filter(Boolean).join("\n\n");
 			if (this.adapter.persistent) {
 				// `role` stays "user" — the only role this protocol accepts, which is why the
 				// disambiguation rides in the text instead (#505).

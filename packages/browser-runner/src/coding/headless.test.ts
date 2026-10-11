@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildClaudeArgs, defaultStatePath, HeadlessSession, parseCommand } from "./headless.js";
+import { runObjectiveBlock } from "./run-objective.js";
+import { CodingRuntime } from "./runtime.js";
 import { RESULT_RENDERED_MAX, toolResultBudget } from "./transcript-lines.js";
 
 /**
@@ -450,6 +452,50 @@ describe("HeadlessSession (stream-json engine)", () => {
 		s.stop();
 	});
 
+	// ── The run's objective, verbatim and attributed to the platform (#1019) ──
+	const OBJECTIVE = "Implement #1019 only.\nDo NOT run the full suite — focused tests only.\nLine three: keep `quotes` and $vars literal.";
+	it("delivers the run's objective verbatim, attributed to the platform, ahead of the Pilot's instruction (#1019)", async () => {
+		const s = new HeadlessSession({ id: "objective1", workDir: dir, clientType: "claude", bin, statePath: defaultStatePath(dir) });
+		s.input("open the issue first", { author: "pilot", objective: { runId: "run-42", text: OBJECTIVE }, inputId: "objective:run-42:1" });
+		await until(() => s.runState() === "idle" && s.snapshot().includes("Done: "));
+		const got = s.snapshot();
+		// What the ENGINE received (the fake echoes it): the block, then the Pilot preamble, then the instruction.
+		expect(got).toContain(`<<<OBJECTIVE\n${OBJECTIVE}\nOBJECTIVE>>>`);
+		expect(got).toContain("RUN OBJECTIVE — the owner's objective for run run-42");
+		expect(got).toContain("It was not written by the Pilot");
+		expect(got.indexOf("<<<OBJECTIVE")).toBeLessThan(got.indexOf("This turn was written by the Pilot"));
+		expect(got.indexOf("This turn was written by the Pilot")).toBeLessThan(got.lastIndexOf("open the issue first"));
+		expect(got).toContain(`the run's objective (${OBJECTIVE.length} characters, verbatim) was delivered with this turn`);
+		expect(s.consumedInputs).toContain("objective:run-42:1");
+		s.stop();
+	});
+
+	it("a long objective is delivered whole — no cut", async () => {
+		const long = `${"x".repeat(7_990)}END`;
+		const s = new HeadlessSession({ id: "objective-long", workDir: dir, clientType: "claude", bin, statePath: defaultStatePath(dir) });
+		s.input("go", { objective: { runId: "run-long", text: long } });
+		await until(() => s.runState() === "idle" && s.snapshot().includes("Done: "));
+		expect(s.snapshot()).toContain(`<<<OBJECTIVE\n${long}\nOBJECTIVE>>>`);
+		s.stop();
+	});
+
+	it("a turn with no objective carries none — the second instruction of a run is bare", async () => {
+		const s = new HeadlessSession({ id: "objective-second", workDir: dir, clientType: "claude", bin, statePath: defaultStatePath(dir) });
+		s.input("first", { objective: { runId: "run-2", text: "ONLY ONCE" } });
+		await until(() => s.runState() === "idle" && s.snapshot().includes("Done: "));
+		s.input("second");
+		await until(() => s.runState() === "idle" && (s.snapshot().match(/Done: /g) ?? []).length >= 2);
+		expect(s.snapshot().split("<<<OBJECTIVE").length - 1).toBe(1);
+		s.stop();
+	});
+
+	it("the runtime advertises it, passes a well-formed objective through, and drops a malformed one (#1019)", () => {
+		expect(CodingRuntime.capabilities()).toContain("coding.run-objective");
+		expect(runObjectiveBlock({ runId: "r", text: "T" })).toBe(
+			"[pags] RUN OBJECTIVE — the owner's objective for run r, exactly as ProAgentStore accepted it. It was not written by the Pilot. Owner instructions sent later in this run take precedence over it.\n<<<OBJECTIVE\nT\nOBJECTIVE>>>",
+		);
+	});
+
 	it("reports no brief when the cloud sent none, or sent an empty one", () => {
 		// A `pags up` newer than the cloud, and a repo with no record, are the same case: nothing to
 		// say. `seeded` must read false so the cloud does not tell a user their engine was briefed.
@@ -540,6 +586,18 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 			expect(pane.split("keeps no memory between turns").length - 1).toBe(2);
 			s.stop();
 		}, 30_000);
+
+		it("a raw engine reads the objective after the replay and before the instruction (#1019)", async () => {
+			const s = new HeadlessSession({ id: "objective-raw", workDir: dir, clientType: "grok", command: "grok", bin: codexBin });
+			s.input("do it", { replay: "REPLAY: earlier turns", objective: { runId: "run-raw", text: "RAW OBJECTIVE LINE" } });
+			await until(() => s.runState() === "idle" && s.snapshot().includes("done: "), 12_000, "raw objective turn");
+			const pane = s.snapshot();
+			// The fake echoes the turn it was handed as one argument: replay, then the block, then the instruction.
+			const block = "<<<OBJECTIVE\nRAW OBJECTIVE LINE\nOBJECTIVE>>>\ndo it";
+			expect(pane).toContain(block);
+			expect(pane.indexOf("thinking about: REPLAY: earlier turns")).toBeLessThan(pane.indexOf(block));
+			s.stop();
+		}, 20_000);
 
 		it("the replay supersedes the one-shot session brief — both are the record; the replay is the later composition", async () => {
 			const s = new HeadlessSession({ id: "replay-seed", workDir: dir, clientType: "codex", command: "codex", bin: codexBin, seed: "SEED: from session start" });

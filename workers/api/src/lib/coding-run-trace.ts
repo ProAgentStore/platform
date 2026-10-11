@@ -48,6 +48,8 @@ export type CodingRunEvent =
 	| "coding.run.blocked"
 	/** The platform fast-forwarded (or tried to) a behind checkout before the run started (#802). */
 	| "coding.run.self_heal"
+	/** Whether the run's objective reached the engine verbatim: delivered, unsupported or unconfirmed (#1019). */
+	| "coding.run.objective"
 	/** The run reached a terminal state. Carries the outcome and the stop reason. */
 	| "coding.run.end";
 

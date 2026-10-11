@@ -11,6 +11,7 @@ import { runtimeConnectivity } from "../../lib/instance-connectivity.js";
 import type { CodingSessionParams } from "../coding-session-params.js";
 import { makeRunnerGuard, noRunnerDetail, RUNNER_PROBE_INTERVAL, type RunStep } from "../../lib/runner-availability.js";
 import { CompletionEvidence } from "../../lib/coding-completion-evidence.js";
+import { ObjectiveDelivery, type ObjectiveDeliveryState } from "../../lib/coding-objective-delivery.js";
 import { endSession, getRepo, reassignSessionNode, releaseSessionDriver, touchSessionActivity, touchSessionDriver } from "../../lib/coding-store.js";
 import { markDirectivesProcessed } from "../../lib/coding-ownership.js";
 import { pilotStopSignal, shouldEndSessionAfterRun } from "../../lib/coding-session-lifecycle.js";
@@ -512,16 +513,32 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 	 * pane". Here it sees the JOURNALLED result, which a replay does return, so the size is
 	 * re-measured on every attempt exactly as {@link CodingRunProbe}'s docblock promises.
 	 */
+	// The run's objective, delivered verbatim with its first turn (#1019) — set once the goal is final, below.
+	let objective: ObjectiveDelivery | null = null;
+	const reportObjective = (state: ObjectiveDeliveryState) =>
+		step.do(`objective-${state}`, async () => {
+			const line = objective?.describe(state) ?? "";
+			await traceCodingRun(env, traceCtx, "coding.run.objective", line, { state, chars: objective?.text.length ?? 0 });
+			if (state !== "delivered") await postToChat(`**Loop** — ${line}`);
+		});
 	const measured = async (p: Promise<unknown>): Promise<CodingPaneSnapshot> => {
 		const pane = (await p) as CodingPaneSnapshot;
 		probe.saw(pane?.pane);
+		// Read off the JOURNALLED snapshot, so a replay settles delivery exactly as the first pass did.
+		const settled = objective?.observe(pane?.consumedInputs);
+		if (settled) await reportObjective(settled);
 		return pane;
 	};
 
 	const deps: CodingDeps = {
 		snapshot: () => measured(guard(runRetry, `s${n++}-snapshot`, capture)),
-		act: (a: CodingActionKind) =>
-			measured(guard(runRetry, `s${n++}-act`, async () => callRunner<CodingPaneSnapshot>(conn, "/coding/act", { sessionId, action: await withTurnReplay(env, { instanceId, userId, repoId, repoName: goal.repo, clientType: goal.clientType }, a) }))), // #693 slice 2: the replay is composed INSIDE the step, so a replayed step re-sends what it sent
+		act: async (a: CodingActionKind) => {
+			// The objective rides the action itself (#1019), decided outside the step from journalled state.
+			const action = objective ? objective.attach(a) : a;
+			const pane = await measured(guard(runRetry, `s${n++}-act`, async () => callRunner<CodingPaneSnapshot>(conn, "/coding/act", { sessionId, action: await withTurnReplay(env, { instanceId, userId, repoId, repoName: goal.repo, clientType: goal.clientType }, action) }))); // #693 slice 2: the replay is composed INSIDE the step, so a replayed step re-sends what it sent
+			objective?.sent(action); // only once the act step resolved — a failed send keeps it owed
+			return pane;
+		},
 		// The spend gate lives in `coding-decide-budget.ts` — the LLM call is the only place this
 		// loop spends money, so it is the only place a budget has to sit (#159).
 		// The controller's provider calls run under ONE recovery policy (#907, lib/pilot-decide.ts): an exhausted
@@ -869,6 +886,11 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 
 		// The run's observed tool calls (#1019), kept across rounds: a completion claim is judged on the whole run.
 		const evidence = new CompletionEvidence();
+		// The objective goes to the engine only if this machine's runner can render it (#1019).
+		objective = new ObjectiveDelivery(event.payload.loopRunId ?? `${sessionId}@${runStartedAt}`, goal.objective);
+		const caps = await guard(runRetry, "objective-capabilities", () => callRunner(conn, "/capabilities", {})).catch(() => null);
+		const unsupported = objective.capabilities(caps);
+		if (unsupported) await reportObjective(unsupported);
 		for (let round = 0; round < 12 && !syncGate.blocked; round++) {
 			// The caller's cap when it named one, the historical 40 when it did not (#374).
 			// An interruption is retried in place after a published backoff (#855); anything else — or
@@ -986,8 +1008,8 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		//
 		// Unconditional rather than in the `else` branch: for a session that IS ended below, the
 		// subsequent `/coding/end` drain then simply returns nothing, which is free.
-		await step.do("acts-final-drain", async () => {
-			const snap = await callRunner<{ usage?: unknown; acts?: unknown }>(
+		const finalDrain = (await step.do("acts-final-drain", async () => {
+			const snap = await callRunner<{ usage?: unknown; acts?: unknown; consumedInputs?: string[] }>(
 				conn,
 				"/coding/capture",
 				{ sessionId, drainUsage: true },
@@ -1022,8 +1044,14 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 				writeScope,
 				closing,
 			).catch(() => null);
-			return null;
-		});
+			// The last turn's read receipt often lands only here (#1019): returned, so it is journalled.
+			return { consumedInputs: Array.isArray(snap.consumedInputs) ? snap.consumedInputs.filter((x) => typeof x === "string") : [] };
+		})) as { consumedInputs: string[] } | null;
+		const lastRead = objective?.observe(finalDrain?.consumedInputs);
+		if (lastRead) await reportObjective(lastRead);
+		// Sent but never confirmed read is reported as such before the run ends (#1019) — never as delivered.
+		const unconfirmed = objective?.finish();
+		if (unconfirmed) await reportObjective(unconfirmed);
 		await step.do("end", async () => {
 			// A run closes only the session it OPENED (#271). Ending one a human opened made
 			// delegation single-use and took away a thing the user had created.

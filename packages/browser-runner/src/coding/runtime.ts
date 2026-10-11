@@ -1,3 +1,4 @@
+import { runObjective } from "./run-objective.js";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { RunnerInputError } from "../errors.js";
@@ -123,6 +124,11 @@ export type CodingAction =
 			 * {@link CodingSnapshot.consumedInputs} once a completed turn has read it.
 			 */
 			inputId?: string;
+			/**
+			 * The run's objective, verbatim as the platform accepted it (#1019): delivered ahead of the
+			 * instruction and attributed to the platform, not to whoever wrote `text`.
+			 */
+			objective?: { runId: string; text: string };
 	  }
 	/**
 	 * Still in the union, and refused by `act` (#448). The cloud no longer constructs it — the
@@ -244,7 +250,9 @@ export class CodingRuntime {
 		// a reader of the registration can see which machines can restore a branch invariant; the
 		// cloud still never trusts it, because an older runner simply 404s and the policy reports
 		// that it asked and was not answered.
-		return ["coding.sessions", "coding.stream", "human.takeover", "coding.inspect", "coding.repo-write"];
+		// `coding.run-objective` (#1019): a message may carry the run's objective, delivered verbatim and
+		// attributed to the platform. Advertised so the cloud never claims delivery to a runner without it.
+		return ["coding.sessions", "coding.stream", "human.takeover", "coding.inspect", "coding.repo-write", "coding.run-objective"];
 	}
 
 	/**
@@ -443,6 +451,7 @@ export class CodingRuntime {
 					author: asTurnAuthor(action.author),
 					replay: typeof action.replay === "string" ? action.replay : undefined,
 					inputId: typeof action.inputId === "string" && action.inputId.length <= 128 ? action.inputId : undefined,
+					objective: runObjective(action.objective),
 				});
 				break;
 			case "keys": {

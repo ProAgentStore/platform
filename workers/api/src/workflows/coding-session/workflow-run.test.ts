@@ -688,9 +688,18 @@ describe("controller AI-provider stall recovery in the Pilot's decide (#907)", (
 	const trace = (event: string) => rows<{ context: string }>(`SELECT context FROM agent_events WHERE event = '${event}'`).map((r) => JSON.parse(r.context) as Record<string, unknown>);
 
 	it("a stall then a decision: the run completes, the retry is recorded, nothing partial reached the engine", async () => {
+		// A controlled clock, for this test only: the first attempt's `totalMs` is the ceiling minus the time
+		// since recovery began, and the real clock let an awaited `isCancelled` read cost 1ms (239_999 in CI
+		// job 114505719115). Time moves only when the stubbed backoff sleeps.
+		let t = 1_760_000_000_000;
+		const clock = vi.spyOn(Date, "now").mockImplementation(() => t);
+		setControllerAiSleepForTest(async (ms) => {
+			slept.push(ms);
+			t += ms;
+		});
 		decideCodingAction.mockReset();
 		decideCodingAction.mockRejectedValueOnce(stall()).mockResolvedValueOnce({ finish: { status: "done", detail: "all green" } });
-		const { result } = await run();
+		const { result } = await run().finally(() => clock.mockRestore());
 		expect(result).toMatchObject({ outcome: "done" });
 		expect(decideCalls()).toBe(2);
 		expect(slept).toEqual([2_000]);
