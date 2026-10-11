@@ -154,7 +154,9 @@ export async function authedCall(
 ): Promise<unknown> {
 	return apiCall(path, {
 		...opts,
-		headers: { Authorization: `Bearer ${token}`, ...opts?.headers },
+		// The client CATEGORY, declared (#1017). The API records it as a claim beside the verified uid —
+		// a session token does not prove which client sent it.
+		headers: { Authorization: `Bearer ${token}`, "X-PAGS-Client": "mcp", ...opts?.headers },
 	}, env, onResponse);
 }
 

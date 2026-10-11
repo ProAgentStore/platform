@@ -10519,9 +10519,27 @@ paths:
             Narrow to the entries eligible for ONE repo — its own plus the repo-agnostic ones,
             which is exactly what that repo's next drain will take. Omit for everything pending on
             the instance.
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [pending, all] }
+          description: >
+            `all` (#1017) returns every entry ever queued, any status, newest first, paged with
+            `offset`/`limit` and answered as `{scope:"all", entries, total, offset, nextOffset,
+            complete}`. Each entry carries `requestId` and `attribution` (verified owner, or
+            `unknown` legacy). Default `pending` answers with `scope:"pending"`.
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0 }
+          description: With `status=all`, the previous page's `nextOffset`.
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100 }
       responses:
         "200":
-          description: Pending entries, oldest first
+          description: Pending entries, oldest first (or, with `status=all`, every entry newest first)
           content:
             application/json:
               schema:
@@ -10547,6 +10565,44 @@ paths:
                         requestId: { type: string }
                         objective: { type: string, nullable: true }
                         ageMs: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/loop/lifecycle:
+    get:
+      summary: An objective's lifecycle history (#1017)
+      description: |
+        Owner-scoped, append-only transitions, OLDEST first with a stable `seq` cursor:
+        `requested` · `request_replayed` · `started` · `queued` · `deduplicated` · `not_started` ·
+        `outcome_unknown` · `admitted` · `deferred` · `admission_failed` · `cancelled` · `run_finished`.
+        One handle (`request_id`, `queue_entry_id` or `run_id`) expands through the stored links to
+        that objective's whole history and returns nothing else. Each event names its actor:
+        `{kind:"owner", uid, verified:true, clientClaimed}` — the uid is the HMAC-verified session,
+        `clientClaimed` is the declared `X-PAGS-Client` and only a claim — or `{kind:"platform"}`.
+        A request key is never read as an identity. Recorded since migration 0212; older objectives
+        have no events (`coverage` says so). Read-only: nothing is replayed or requeued.
+      operationId: listObjectiveLifecycle
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: request_id, in: query, required: false, schema: { type: string } }
+        - { name: queue_entry_id, in: query, required: false, schema: { type: string } }
+        - { name: run_id, in: query, required: false, schema: { type: string } }
+        - { name: cursor, in: query, required: false, schema: { type: integer, minimum: 0 }, description: "The previous page's nextCursor" }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100 } }
+      responses:
+        "200":
+          description: One page of lifecycle events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events: { type: array, items: { type: object } }
+                  nextCursor: { type: integer, nullable: true }
+                  complete: { type: boolean }
+                  coverage: { type: string }
+        "400": { description: "cursor is not a previous page's nextCursor" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 

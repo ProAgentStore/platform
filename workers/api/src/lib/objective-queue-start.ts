@@ -28,6 +28,8 @@ import { logError } from "./error-log.js";
 import { loopDriverFor, startRefusalIsWaitable } from "./loop-drivers.js";
 import { dequeueNext, finishQueueEntry, requeueEntry } from "./objective-queue.js";
 import { pausedStartRefusal } from "./instance-pause.js";
+import { recordLifecycle } from "./objective-lifecycle.js";
+import type { ObjectiveQueueEntry } from "./objective-queue.js";
 import type { Env } from "../types.js";
 
 export type QueueDrainResult =
@@ -90,6 +92,7 @@ export async function tryDequeueAndStart(env: Env, instanceId: string, repoId: s
 		} catch (e) {
 			const message = e instanceof Error ? e.message : String(e);
 			await finishQueueEntry(env, entry.id, "failed", `budget refused: ${message}`);
+			await recordLifecycle(env, { ...lifecycleOf(entry), event: "admission_failed", reason: `budget refused: ${message}` });
 			await logError(env, {
 				source: "loop",
 				userId: owner,
@@ -119,6 +122,13 @@ export async function tryDequeueAndStart(env: Env, instanceId: string, repoId: s
 
 		if (started.ok) {
 			await finishQueueEntry(env, entry.id, "started", null, started.runId);
+			// The run names the entry and the request it came from (#1017), so it can be traced back.
+			try {
+				await env.DB.prepare("UPDATE agent_loop_runs SET queue_entry_id = ?2, request_id = COALESCE(request_id, ?3) WHERE run_id = ?1").bind(started.runId, entry.id, entry.requestId ?? null).run();
+			} catch {
+				// A link, not the start: the run has begun either way, and its own row still names it.
+			}
+			await recordLifecycle(env, { ...lifecycleOf(entry), event: "admitted", runId: started.runId });
 			return { drained: true, entryId: entry.id, started: true, runId: started.runId, driver: started.driver };
 		}
 
@@ -133,6 +143,7 @@ export async function tryDequeueAndStart(env: Env, instanceId: string, repoId: s
 		// with nobody told why is the other half of the same complaint.
 		if (startRefusalIsWaitable(started.reason)) {
 			await requeueEntry(env, entry.id, started.error);
+			await recordLifecycle(env, { ...lifecycleOf(entry), event: "deferred", reason: started.error });
 			return { drained: true, entryId: entry.id, started: false, requeued: true, error: started.error };
 		}
 
@@ -140,6 +151,7 @@ export async function tryDequeueAndStart(env: Env, instanceId: string, repoId: s
 		// admission. Waiting does not fix any of them, so the entry FAILS with the driver's own
 		// sentence rather than sitting pending forever with nobody ever told why nothing happened.
 		await finishQueueEntry(env, entry.id, "failed", started.error);
+		await recordLifecycle(env, { ...lifecycleOf(entry), event: "admission_failed", reason: started.error });
 		return { drained: true, entryId: entry.id, started: false, requeued: false, error: started.error };
 	} catch (e) {
 		const message = e instanceof Error ? e.message : String(e);
@@ -179,4 +191,9 @@ export async function drainPendingQueues(env: Env, instanceId: string, userId: s
 	const out: QueueDrainResult[] = [];
 	for (const r of rows.results ?? []) out.push(await tryDequeueAndStart(env, instanceId, r.repo_id ?? null, userId));
 	return out;
+}
+
+/** The handles a drain transition is recorded under — the platform is the actor (#1017). */
+function lifecycleOf(entry: ObjectiveQueueEntry) {
+	return { userId: entry.userId, instanceId: entry.instanceId, queueEntryId: entry.id, requestId: entry.requestId ?? null, actor: { kind: "platform" as const } };
 }

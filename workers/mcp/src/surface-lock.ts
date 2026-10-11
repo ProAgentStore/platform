@@ -1119,4 +1119,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// #1012: one new coding-surface write, `retarget_repository_binding` — moves an idle binding to its
 	// repository's new GitHub name in place (same numeric id only) and refuses live or queued work.
 	"0.1.109": "sha256:e3488d8d796b145f0b0bd3aaddf81909367f617a0c754cc468a8ff479011c7c5",
+	// #1017: coding_loop_lifecycle (new read), coding_loop_status `starts_offset`, coding_loop_queue `status` + `offset`.
+	"0.1.110": "sha256:6049477956e2336824e28406b12bccb93f2fbf36aa0ae5d71faa41f56c3dd844",
 };

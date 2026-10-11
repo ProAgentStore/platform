@@ -123,16 +123,16 @@ src/
     ├── apply.ts          4 tools, gated to surfaces:["apply"]
     ├── repo.ts           3 tools, gated to surfaces:["repo"]
     └── coding.ts         system_status + coding_timeline + coding_loop_trace + coding_terminal (gated to
-                          surfaces:["coding"]) + 5 loop tools (3 run + 2 objective queue)
+                          surfaces:["coding"]) + 6 loop tools (3 run + 3 objective queue: list, cancel, lifecycle)
 ```
 
-**303 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
+**304 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
 `tools/server-info.ts`, 12 in
 `coding-tools.ts`, 2 in `coding-engine-tools.ts`, 1 in `coding-reauth-tools.ts` and 1 in `coding-retarget-tools.ts` — all sixteen behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 250 across `instance-tools/`. 276 are always registered; 27 are
+`storage-tools.ts`, and 251 across `instance-tools/`. 277 are always registered; 27 are
 surface-gated (apply=4, repo=3, coding=20).
 
-These counts add up to the headline: 21 + 1 + 12 + 2 + 1 + 1 + 15 + 250 = 303. They said 88 until #602, which made the paragraph sum to 132 — a total the
+These counts add up to the headline: 21 + 1 + 12 + 2 + 1 + 1 + 15 + 251 = 304. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added

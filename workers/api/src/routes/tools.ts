@@ -43,6 +43,7 @@ import { countLoopRuns, getLoopRun, listLoopRuns, requestCancel } from "../lib/a
 import { runHealth, waitClause } from "../lib/work-report.js";
 import { loopDriverFor, startRefusalIsWaitable } from "../lib/loop-drivers.js";
 import { dispatchLoopStartReceipt, loopStartsPage } from "../lib/loop-start-receipts.js";
+import { clientClaimFrom, trackStartOutcome } from "../lib/objective-lifecycle.js";
 import { findDuplicateObjective } from "../lib/objective-dedupe.js";
 import { describeBusyHolder } from "../lib/loop-busy.js";
 import { instanceRepoCi } from "../lib/repo-ci-health.js";
@@ -1242,9 +1243,12 @@ toolRoutes.post("/:id/loop", async (c) => {
 		}
 		return c.json({ runId: started.runId, driver: started.driver, budgetId: budget.id, maxIterations, status: "running", startState: "started" }, 201);
 	};
+	// What the start became, recorded with its verified actor and linked to this request (#1017).
+	const clientClaimed = clientClaimFrom(c.req.header("X-PAGS-Client"));
+	const tracked = () => trackStartOutcome(c.env, { userId: session.uid, instanceId, requestId: body.requestId ?? null, clientClaimed }, start);
 	return body.requestId
-		? dispatchLoopStartReceipt(c.env, session.uid, instanceId, body.requestId, { objective, maxIterations: body.maxIterations ?? 10, repoId: repoId ?? null, requireRepoChoice, queueIfBusy: body.queueIfBusy === true, repairCheckout, issue: issue ?? null, budget: body.budget ?? null }, start, (operation) => c.executionCtx.waitUntil(operation))
-		: start();
+		? dispatchLoopStartReceipt(c.env, session.uid, instanceId, body.requestId, { objective, maxIterations: body.maxIterations ?? 10, repoId: repoId ?? null, requireRepoChoice, queueIfBusy: body.queueIfBusy === true, repairCheckout, issue: issue ?? null, budget: body.budget ?? null }, tracked, (operation) => c.executionCtx.waitUntil(operation), clientClaimed)
+		: tracked();
 });
 
 // Registered HERE, above `GET /:id/loop/:runId` — Hono matches in order, and `/loop/queue` would

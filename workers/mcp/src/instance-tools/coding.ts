@@ -334,15 +334,16 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 			instance_id: z.string().describe("Instance ID or slug"),
 			run_id: z.string().optional().describe("A run id from coding_loop_start. Omit to list recent runs."),
 			offset: z.coerce.number().int().min(0).optional().describe("Listing only: runs come back newest first in pages that fit one response, with `page.of` (all runs) and `page.nextOffset`; pass it to continue."),
+			starts_offset: z.coerce.number().int().min(0).optional().describe("Listing only: start receipts come back newest first, 20 at a time, with `startsTotal`, `startsNextOffset` and `startsComplete`; pass `startsNextOffset` here to read the next page. Each receipt carries `current` (what became of it now) and `attribution`."),
 		},
-		async ({ token, instance_id, run_id, offset }) => {
+		async ({ token, instance_id, run_id, offset, starts_offset }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const denied = await requirePermission(safetyFor(token), "read", "coding_loop_status", { instance_id, run_id });
 			if (denied) return denied;
 			const id = await resolveId(sessionToken, instance_id);
 			if (run_id) return jsonText(await authedCall(`/v1/instances/${encodeURIComponent(id)}/loop/${encodeURIComponent(run_id)}`, sessionToken, {}, env));
-			return text(loopRunsPage(await authedCall(`/v1/instances/${encodeURIComponent(id)}/loop?include_starts=true&offset=${offset ?? 0}`, sessionToken, {}, env)));
+			return text(loopRunsPage(await authedCall(`/v1/instances/${encodeURIComponent(id)}/loop?include_starts=true&offset=${offset ?? 0}&starts_offset=${starts_offset ?? 0}`, sessionToken, {}, env)));
 		},
 	);
 
@@ -409,14 +410,16 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID or slug"),
 			repo_id: z.string().optional().describe("Narrow to the entries eligible for ONE repo — its own plus the repo-agnostic ones, which is exactly what that repo's next drain will take. Omit for everything pending on the instance."),
+			status: z.enum(["pending", "all"]).optional().describe("`pending` (default): only what is still waiting. `all`: every entry ever queued, any status, newest first, paged with `offset`/`nextOffset` — what became of each (started → `runId`, cancelled, failed admission)."),
+			offset: z.coerce.number().int().min(0).optional().describe("With status `all`: pass the previous page's `nextOffset` to continue."),
 		},
-		async ({ token, instance_id, repo_id }) => {
+		async ({ token, instance_id, repo_id, status, offset }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const denied = await requirePermission(safetyFor(token), "read", "coding_loop_queue", { instance_id, repo_id });
 			if (denied) return denied;
 			const id = await resolveId(sessionToken, instance_id);
-			const qs = repo_id ? `?repo_id=${encodeURIComponent(repo_id)}` : "";
+			const qs = status === "all" ? `?status=all&offset=${offset ?? 0}` : repo_id ? `?repo_id=${encodeURIComponent(repo_id)}` : "";
 			return jsonText(await authedCall(`/v1/instances/${encodeURIComponent(id)}/loop/queue${qs}`, sessionToken, {}, env));
 		},
 	);
@@ -447,6 +450,37 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 			if ((data as { error?: string }).error) return jsonText(data);
 			await audit(safetyFor(token), { tool: "coding_loop_queue_cancel", action: "completed", input: { instance_id: id, entry_id }, result: { ok: true } });
 			return jsonText({ ...(data as object), entryId: entry_id });
+		},
+	);
+
+	// #1017: the history the pending-only queue and a receipt's settled state cannot give. Read-only:
+	// it replays, requeues or repairs nothing — an audit determines what happened without acting on it.
+	server.tool(
+		"coding_loop_lifecycle",
+		"Read the lifecycle of queued and started objectives on an instance: requested → queued / deduplicated / not started → admitted, deferred, cancelled or admission failed → run → run finished. Oldest first, with a stable `seq` cursor: pass `nextCursor` as `cursor` to continue; `complete` says whether more remain. Give ONE of request_id (a coding_loop_start request key), queue_entry_id or run_id and you get that objective's whole history through the stored links — nothing else. Each event names its actor: `owner` (the verified account; `clientClaimed` is the client it SAID it was, a claim, not proof) or `platform` (a queue drain, a run ending). History starts at the release that added it — an older objective has no events here, but coding_loop_status's receipt `current` and coding_loop_queue status `all` still say what became of it. Read-only: it never replays or requeues work.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID or slug"),
+			request_id: z.string().optional().describe("A start request key — reconstructs that objective's history"),
+			queue_entry_id: z.string().optional().describe("A queue entry id (objq-…) — reconstructs that objective's history"),
+			run_id: z.string().optional().describe("A run id — reconstructs the history of the objective it came from"),
+			cursor: z.coerce.number().int().min(0).optional().describe("The previous page's `nextCursor`"),
+			limit: z.coerce.number().int().min(1).max(100).optional().describe("Events per page (default 50, max 100)"),
+		},
+		async ({ token, instance_id, request_id, queue_entry_id, run_id, cursor, limit }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "coding_loop_lifecycle", { instance_id, request_id, queue_entry_id, run_id });
+			if (denied) return denied;
+			const id = await resolveId(sessionToken, instance_id);
+			const qs = new URLSearchParams();
+			if (request_id) qs.set("request_id", request_id);
+			if (queue_entry_id) qs.set("queue_entry_id", queue_entry_id);
+			if (run_id) qs.set("run_id", run_id);
+			if (cursor !== undefined) qs.set("cursor", String(cursor));
+			if (limit !== undefined) qs.set("limit", String(limit));
+			const q = qs.toString();
+			return jsonText(await authedCall(`/v1/instances/${encodeURIComponent(id)}/loop/lifecycle${q ? `?${q}` : ""}`, sessionToken, {}, env));
 		},
 	);
 

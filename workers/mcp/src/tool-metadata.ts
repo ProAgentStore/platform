@@ -128,6 +128,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	coding_instance_deploy_status: "read",
 	coding_loop_trace: "read",
 	coding_loop_queue: "read",
+	coding_loop_lifecycle: "read",
 	coding_loop_status: "read",
 	coding_repos_list: "read",
 	coding_engine_get: "read",

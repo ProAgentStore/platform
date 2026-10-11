@@ -12,7 +12,8 @@ import type { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { describeBusyHolder } from "../lib/loop-busy.js";
 import { storedHandoff } from "../lib/coding-handoff-store.js";
-import { cancelQueueEntry, getQueueEntry, listQueue } from "../lib/objective-queue.js";
+import { cancelQueueEntry, getQueueEntry, listQueue, listQueueHistory } from "../lib/objective-queue.js";
+import { clientClaimFrom, listLifecycle, recordLifecycle } from "../lib/objective-lifecycle.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import type { Env } from "../types.js";
 
@@ -36,6 +37,11 @@ export function registerLoopQueueRoutes(router: Hono<{ Bindings: Env }>): void {
 		const session = await requireUser(c);
 		const instanceId = c.req.param("id");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
+		// `status=all` (#1017): every entry, any status, newest first and paged — what became of each.
+		if (c.req.query("status") === "all") {
+			const page = await listQueueHistory(c.env, instanceId, session.uid, { offset: Number(c.req.query("offset")), limit: Number(c.req.query("limit")) });
+			return c.json({ scope: "all", ...page, complete: page.nextOffset === null });
+		}
 		const repoParam = c.req.query("repo_id");
 		const entries = await listQueue(c.env, instanceId, repoParam === undefined ? undefined : repoParam || null);
 		// What the queue sits BEHIND, and the starts still on their way INTO it (#935). A start inside
@@ -49,7 +55,34 @@ export function registerLoopQueueRoutes(router: Hono<{ Bindings: Env }>): void {
 		// uncommitted work looked like a queue nobody was draining. Stored, never probed: a listing
 		// must not make a relay round trip, and the state is cached at each admission attempt.
 		const handoff = repoParam ? await storedHandoff(c.env, instanceId, session.uid, repoParam).catch(() => null) : null;
-		return c.json({ entries, activeRun, inFlightStarts, handoff: handoff ?? (repoParam ? { state: activeRun ? "working" : "safe_to_start_next", detail: "" } : null) });
+		return c.json({
+			// Labelled (#1017): an entry leaves this list when it starts, is cancelled or fails admission —
+			// `status=all` and `/loop/lifecycle` say what became of it.
+			scope: "pending",
+			entries,
+			activeRun,
+			inFlightStarts,
+			handoff: handoff ?? (repoParam ? { state: activeRun ? "working" : "safe_to_start_next", detail: "" } : null),
+		});
+	});
+
+	/**
+	 * One objective's lifecycle — or the instance's, oldest first — with a stable `seq` cursor (#1017).
+	 * Any one handle (`request_id`, `queue_entry_id`, `run_id`) reconstructs that objective's whole
+	 * history through the stored links, and nothing outside it is returned.
+	 */
+	router.get("/:id/loop/lifecycle", async (c) => {
+		const session = await requireUser(c);
+		const instanceId = c.req.param("id");
+		await requireOwnedInstance(c.env, instanceId, session.uid);
+		const cursor = c.req.query("cursor");
+		if (cursor !== undefined && !/^\d+$/.test(cursor)) throw new HttpError(400, "cursor must be the nextCursor of a previous page");
+		const filter = { requestId: c.req.query("request_id") || undefined, queueEntryId: c.req.query("queue_entry_id") || undefined, runId: c.req.query("run_id") || undefined };
+		const page = await listLifecycle(c.env, { userId: session.uid, instanceId, filter, afterSeq: cursor ? Number(cursor) : 0, limit: Number(c.req.query("limit")) || undefined });
+		return c.json({
+			...page,
+			coverage: "Recorded since migration 0212. An objective older than that has no transition history here; its receipt, queue entry and run rows still say what became of it.",
+		});
 	});
 
 	/**
@@ -64,7 +97,11 @@ export function registerLoopQueueRoutes(router: Hono<{ Bindings: Env }>): void {
 		const instanceId = c.req.param("id");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
 		const entryId = c.req.param("entryId");
-		if (await cancelQueueEntry(c.env, entryId, session.uid)) return c.json({ ok: true, status: "cancelled" });
+		if (await cancelQueueEntry(c.env, entryId, session.uid)) {
+			const entry = await getQueueEntry(c.env, entryId, session.uid);
+			await recordLifecycle(c.env, { userId: session.uid, instanceId, queueEntryId: entryId, requestId: entry?.requestId ?? null, event: "cancelled", actor: { kind: "owner", uid: session.uid, clientClaimed: clientClaimFrom(c.req.header("X-PAGS-Client")) } });
+			return c.json({ ok: true, status: "cancelled" });
+		}
 		const existing = await getQueueEntry(c.env, entryId, session.uid);
 		if (!existing) throw new HttpError(404, "queued objective not found");
 		throw new HttpError(409, `that objective is already ${existing.status} and can no longer be cancelled`);

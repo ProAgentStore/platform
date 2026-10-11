@@ -1,6 +1,7 @@
 import { clipMarked } from "./clip-marked.js";
 import type { Env } from "../types.js";
 import { withinConfirmationWindow } from "./confirmation-window.js";
+import { dispositionFrom, recordLifecycle } from "./objective-lifecycle.js";
 
 export type LoopStartState = "provisioning" | "started" | "queued" | "not_started" | "unknown";
 interface ReceiptRow {
@@ -23,14 +24,55 @@ function receiptView(row: ReceiptRow) {
 /** One page of start receipts — {@link countLoopStarts} says how many there are in all (#954). */
 export const LOOP_STARTS_PAGE = 20;
 
+/**
+ * A page of receipts, newest first, each with what became of it (#1017).
+ *
+ * `result` is what the caller was TOLD (the receipt, immutable); `current` is what is true NOW, read
+ * from the queue entry and run the receipt led to — joined through the settled response's own handles,
+ * so a receipt written before migration 0212 resolves too. `attribution` is the verified owner, or
+ * `unknown` for a receipt from before attribution was recorded. Ties on `created_at` order by request
+ * id, so a page boundary never moves.
+ */
 export async function listLoopStarts(env: Env, userId: string, instanceId: string, offset = 0) {
-	const rows = await env.DB.prepare("SELECT * FROM loop_start_receipts WHERE user_id = ? AND instance_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?")
+	const rows = await env.DB.prepare(
+		`SELECT r.*, q.id AS q_id, q.status AS q_status, q.stop_reason AS q_reason, q.run_id AS q_run,
+		        lr.run_id AS lr_run, lr.status AS lr_status, lr.stop_reason AS lr_reason
+		   FROM loop_start_receipts r
+		   LEFT JOIN instance_objective_queue q
+		     ON q.user_id = r.user_id AND q.instance_id = r.instance_id
+		    AND q.id = COALESCE(json_extract(r.response_json, '$.entry.id'), json_extract(r.response_json, '$.duplicate_of'))
+		   LEFT JOIN agent_loop_runs lr
+		     ON lr.user_id = r.user_id AND lr.instance_id = r.instance_id
+		    AND lr.run_id = COALESCE(json_extract(r.response_json, '$.runId'), q.run_id)
+		  WHERE r.user_id = ? AND r.instance_id = ?
+		  ORDER BY r.created_at DESC, r.request_id DESC LIMIT ? OFFSET ?`,
+	)
 		.bind(userId, instanceId, LOOP_STARTS_PAGE, Math.max(0, Math.trunc(offset)))
-		.all<ReceiptRow>();
+		.all<ReceiptRow & JoinedRow>();
 	return rows.results.map((row) => {
 		const result = row.response_json ? JSON.parse(row.response_json) as Record<string, unknown> : null;
-		return { ...receiptView(row), ...(result ? { result: { runId: result.runId ?? null, queueEntryId: (result.entry as { id?: string } | undefined)?.id ?? null, reason: result.reason ?? null, error: typeof result.error === "string" ? clipMarked(result.error, 500) : null } } : {}) };
+		const receiptReason = result ? (typeof result.error === "string" ? clipMarked(result.error, 300) : typeof result.reason === "string" ? result.reason : null) : null;
+		const current = dispositionFrom({
+			receiptState: row.state,
+			queueEntry: row.q_id ? { id: row.q_id, status: row.q_status ?? "", stop_reason: row.q_reason ?? null, run_id: row.q_run ?? null } : null,
+			run: row.lr_run ? { run_id: row.lr_run, status: row.lr_status ?? "", stop_reason: row.lr_reason ?? null } : null,
+			receiptReason,
+		});
+		const attribution = row.actor_uid ? { kind: "owner" as const, uid: row.actor_uid, verified: true as const, clientClaimed: row.client_claimed ?? null } : { kind: "unknown" as const, legacy: true as const };
+		return { ...receiptView(row), attribution, current, ...(result ? { result: { runId: result.runId ?? null, queueEntryId: (result.entry as { id?: string } | undefined)?.id ?? null, reason: result.reason ?? null, error: typeof result.error === "string" ? clipMarked(result.error, 500) : null } } : {}) };
 	});
+}
+
+interface JoinedRow {
+	actor_uid?: string | null;
+	client_claimed?: string | null;
+	q_id: string | null;
+	q_status: string | null;
+	q_reason: string | null;
+	q_run: string | null;
+	lr_run: string | null;
+	lr_status: string | null;
+	lr_reason: string | null;
 }
 
 /** Every start receipt on the instance — so the newest page never reads as all of them (#954). */
@@ -43,13 +85,14 @@ export async function countLoopStarts(env: Env, userId: string, instanceId: stri
 export async function loopStartsPage(env: Env, userId: string, instanceId: string, offset: number) {
 	const startsOffset = Math.max(0, Math.trunc(offset) || 0);
 	const [starts, startsTotal] = await Promise.all([listLoopStarts(env, userId, instanceId, startsOffset), countLoopStarts(env, userId, instanceId)]);
-	return { starts, startsTotal, startsOffset, startsNextOffset: startsOffset + starts.length < startsTotal ? startsOffset + starts.length : null };
+	const startsNextOffset = startsOffset + starts.length < startsTotal ? startsOffset + starts.length : null;
+	return { starts, startsTotal, startsOffset, startsNextOffset, startsComplete: startsNextOffset === null };
 }
 
 /** Bound confirmation without abandoning the durable start when the caller disconnects. */
-export function dispatchLoopStartReceipt(env: Env, userId: string, instanceId: string, requestId: string, input: unknown, start: () => Promise<Response>, keepAlive: (operation: Promise<unknown>) => void): Promise<Response> {
+export function dispatchLoopStartReceipt(env: Env, userId: string, instanceId: string, requestId: string, input: unknown, start: () => Promise<Response>, keepAlive: (operation: Promise<unknown>) => void, clientClaimed: string | null = null): Promise<Response> {
 	return withinConfirmationWindow(
-		withLoopStartReceipt(env, userId, instanceId, requestId, input, start),
+		withLoopStartReceipt(env, userId, instanceId, requestId, input, start, clientClaimed),
 		() => Response.json({ requestId, startState: "provisioning", approval: "dispatched", polling: { tool: "coding_loop_status", instance_id: instanceId }, guidance: "This request is being processed. Poll its receipt or reuse this requestId with the same arguments; do not submit a new request." }, { status: 202 }),
 		keepAlive,
 	);
@@ -59,11 +102,15 @@ export function dispatchLoopStartReceipt(env: Env, userId: string, instanceId: s
  * Provisioning is a durable observation, not a promise of background execution. If the Worker dies,
  * it remains unresolved and MUST NOT be automatically re-executed; an owner can reconcile the run.
  */
-export async function withLoopStartReceipt(env: Env, userId: string, instanceId: string, requestId: string, input: unknown, start: () => Promise<Response>): Promise<Response> {
+export async function withLoopStartReceipt(env: Env, userId: string, instanceId: string, requestId: string, input: unknown, start: () => Promise<Response>, clientClaimed: string | null = null): Promise<Response> {
 	const inputJson = JSON.stringify(input);
 	const now = Date.now();
-	const inserted = await env.DB.prepare("INSERT OR IGNORE INTO loop_start_receipts (user_id, instance_id, request_id, input_json, state, created_at, updated_at) VALUES (?, ?, ?, ?, 'provisioning', ?, ?)").bind(userId, instanceId, requestId, inputJson, now, now).run();
+	// The verified session uid is the actor (#1017); the request key is the caller's own text and never one.
+	const actor = { kind: "owner" as const, uid: userId, clientClaimed };
+	const inserted = await env.DB.prepare("INSERT OR IGNORE INTO loop_start_receipts (user_id, instance_id, request_id, input_json, state, created_at, updated_at, actor_uid, client_claimed) VALUES (?, ?, ?, ?, 'provisioning', ?, ?, ?, ?)").bind(userId, instanceId, requestId, inputJson, now, now, userId, clientClaimed).run();
+	if (inserted.meta.changes) await recordLifecycle(env, { userId, instanceId, requestId, event: "requested", actor, now });
 	if (!inserted.meta.changes) {
+		await recordLifecycle(env, { userId, instanceId, requestId, event: "request_replayed", actor });
 		const row = await env.DB.prepare("SELECT * FROM loop_start_receipts WHERE user_id = ? AND instance_id = ? AND request_id = ?").bind(userId, instanceId, requestId).first<ReceiptRow>();
 		if (!row) throw new Error("start receipt disappeared");
 		if (row.input_json !== inputJson) return Response.json({ error: "requestId already belongs to a different start; use the original arguments to reconcile it", ...receiptView(row), reason: "request_key_conflict", submissionState: "not_started", originalStart: receiptView(row) }, { status: 409 });
@@ -81,6 +128,7 @@ export async function withLoopStartReceipt(env: Env, userId: string, instanceId:
 		// An exception may follow a successfully dispatched Workflow: never claim no effect.
 		const result = { error: "Start outcome could not be confirmed", requestId, startState: "unknown", approval: "dispatched", polling: { tool: "coding_loop_status", instance_id: instanceId }, guidance: "Poll status and reconcile this request before attempting another start." };
 		await settle("unknown", result, 503);
+		await recordLifecycle(env, { userId, instanceId, requestId, event: "outcome_unknown", actor });
 		return Response.json(result, { status: 503 });
 	}
 	async function settle(state: LoopStartState, result: unknown, status: number) {

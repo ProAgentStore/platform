@@ -6,6 +6,7 @@
 import { clipMarked } from "./clip-marked.js";
 import { statusFor, type LoopStopReason } from "./agent-loop.js";
 import type { Env } from "../types.js";
+import { recordLifecycle } from "./objective-lifecycle.js";
 import { recordRunEvent } from "./run-events.js";
 import { MAX_CONFIGURABLE_OBJECTIVE_CHARS } from "./loop-limits.js";
 
@@ -49,6 +50,8 @@ export interface LoopRunRow {
 	delegated_by: string | null;
 	/** Coding session this run drives (0116). Null for chat/pipeline runs. */
 	session_id: string | null;
+	queue_entry_id?: string | null;
+	request_id?: string | null;
 }
 
 /**
@@ -197,6 +200,9 @@ export interface LoopRunView {
 	 * "the engine is working" instead of only "NOT stalled".
 	 */
 	sessionId: string | null;
+	/** The queue entry a drain started this run from, and the start request behind it (#1017). */
+	queueEntryId: string | null;
+	requestId: string | null;
 }
 
 export function toLoopRunView(row: LoopRunRow): LoopRunView {
@@ -222,6 +228,9 @@ export function toLoopRunView(row: LoopRunRow): LoopRunView {
 		interruptions: row.interruptions ?? 0,
 		delegatedBy: row.delegated_by ?? null,
 		sessionId: row.session_id ?? null,
+		// Where it came from (#1017): the queue entry a drain started it from, and the start request.
+		queueEntryId: row.queue_entry_id ?? null,
+		requestId: row.request_id ?? null,
 	};
 }
 
@@ -644,5 +653,15 @@ export async function finishLoopRun(
 	}
 	// Announce it (#579): every driver closes through here, so this is the one `run.finished` producer.
 	await recordRunEvent(env, runId, "run.finished", finishedAt);
+	// …and close the objective's lifecycle (#1017) — only the write that settled it records the ending.
+	let run: { user_id: string; instance_id: string; session_id: string | null; queue_entry_id: string | null; request_id: string | null } | null = null;
+	try {
+		run = await env.DB.prepare("SELECT user_id, instance_id, session_id, queue_entry_id, request_id FROM agent_loop_runs WHERE run_id = ?1").bind(runId).first();
+	} catch {
+		// Best-effort, like the rest of the lifecycle: the run is settled whether or not its history row lands.
+	}
+	if (run) {
+		await recordLifecycle(env, { userId: run.user_id, instanceId: run.instance_id, runId, sessionId: run.session_id, queueEntryId: run.queue_entry_id, requestId: run.request_id, event: "run_finished", reason: stopReason, actor: { kind: "platform" }, now: finishedAt });
+	}
 	return "applied";
 }

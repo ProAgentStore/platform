@@ -64,7 +64,7 @@ describe("GET /:id/loop/queue", () => {
 		expect(res.status).toBe(200);
 		// `handoff` is null without a repo_id: the state is per-REPO, and an instance-wide read has no
 		// one checkout to report on.
-		expect(await res.json()).toEqual({ entries: [{ id: "objq-1" }], activeRun: null, inFlightStarts: [], handoff: null });
+		expect(await res.json()).toEqual({ scope: "pending", entries: [{ id: "objq-1" }], activeRun: null, inFlightStarts: [], handoff: null });
 	});
 
 	it("reports the per-repo handover state, so a stuck queue says WHY (#984)", async () => {

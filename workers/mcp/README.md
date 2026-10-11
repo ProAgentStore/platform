@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**303 tool registrations.** 276 are always registered; 27 are gated to the console
+**304 tool registrations.** 277 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -489,8 +489,9 @@ immediately instead of a whole transcript.
 | `coding_loop_start` | Same run, started for a coding instance — durable `request_id` receipts distinguish provisioning, started, queued, not_started and unknown; reuse the same key after a lost reply. Client approval is outside the server; poll `coding_loop_status` before retrying. `repo_id` (from `coding_repos_list`) targets one repo of a multi-repo instance; omitted there, it is refused with the registered repo_ids (a single-repo instance needs none). The run lock and `queue_if_busy` are per repo | runtime | yes | |
 | `coding_loop_status` | Status of that run from the server's record (omit `run_id` to list runs and start receipts) | read | | |
 | `coding_loop_stop` | Cooperative stop; omit `run_id` to stop the newest running one | write | no ([why](#tools-with-no-dry-run)) | |
-| `coding_loop_queue` | The objectives queued behind the current run (`coding_loop_start` with `queue_if_busy`), FIFO — the top one starts automatically when the active run ends | read | | |
+| `coding_loop_queue` | The objectives queued behind the current run (`coding_loop_start` with `queue_if_busy`), FIFO — the top one starts automatically when the active run ends. `status: "all"` + `offset` pages every entry ever queued with what became of it (#1017) | read | | |
 | `coding_loop_queue_cancel` | Withdraw a queued objective before it starts; only a pending entry can be withdrawn | write | no ([why](#tools-with-no-dry-run)) | |
+| `coding_loop_lifecycle` | One objective's lifecycle — requested → queued/deduplicated/not started → admitted/deferred/cancelled/admission failed → run → run finished — by `request_id`, `queue_entry_id` or `run_id`, oldest first with a stable `seq` cursor; each event names its actor (`owner`, verified uid + claimed client, or `platform`). Read-only; replays nothing (#1017) | read | | |
 
 ### Triggers
 

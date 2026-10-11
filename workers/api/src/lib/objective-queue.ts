@@ -35,6 +35,9 @@ interface ObjectiveQueueRow {
 	created_at: number;
 	started_at: number | null;
 	finished_at: number | null;
+	request_id?: string | null;
+	actor_uid?: string | null;
+	client_claimed?: string | null;
 }
 
 export interface ObjectiveQueueEntry {
@@ -54,10 +57,14 @@ export interface ObjectiveQueueEntry {
 	createdAt: number;
 	startedAt: number | null;
 	finishedAt: number | null;
+	/** The start request that queued it (#1017); null for an entry queued before 0212 or without a request key. */
+	requestId?: string | null;
+	/** Who queued it, as far as the platform can verify (#1017). `unknown` = before attribution existed. */
+	attribution?: { kind: "owner"; uid: string; verified: true; clientClaimed: string | null } | { kind: "unknown"; legacy: true };
 }
 
 const COLUMNS =
-	"id, instance_id, repo_id, user_id, objective, max_iterations, metadata, status, stop_reason, run_id, created_at, started_at, finished_at";
+	"id, instance_id, repo_id, user_id, objective, max_iterations, metadata, status, stop_reason, run_id, created_at, started_at, finished_at, request_id, actor_uid, client_claimed";
 
 function toEntry(row: ObjectiveQueueRow): ObjectiveQueueEntry {
 	return {
@@ -74,6 +81,8 @@ function toEntry(row: ObjectiveQueueRow): ObjectiveQueueEntry {
 		createdAt: row.created_at,
 		startedAt: row.started_at ?? null,
 		finishedAt: row.finished_at ?? null,
+		requestId: row.request_id ?? null,
+		attribution: row.actor_uid ? { kind: "owner", uid: row.actor_uid, verified: true, clientClaimed: row.client_claimed ?? null } : { kind: "unknown", legacy: true },
 	};
 }
 
@@ -262,4 +271,21 @@ export async function requeueEntry(env: Env, id: string, note?: string | null): 
 	)
 		.bind(id, note ? clipMarked(note, QUEUE_NOTE_CHARS) : null)
 		.run();
+}
+
+/**
+ * Every entry on the instance, ANY status, newest first, one page at a time (#1017) — the history the
+ * pending-only `listQueue` deliberately is not. Ordered by `created_at` then `id`, so a page boundary
+ * is stable even for entries queued in the same millisecond.
+ */
+export async function listQueueHistory(env: Env, instanceId: string, userId: string, page: { offset: number; limit: number }): Promise<{ entries: ObjectiveQueueEntry[]; total: number; offset: number; nextOffset: number | null }> {
+	const offset = Math.max(0, Math.trunc(page.offset) || 0);
+	const limit = Math.max(1, Math.min(100, Math.trunc(page.limit) || 50));
+	const res = await env.DB.prepare(`SELECT ${COLUMNS} FROM instance_objective_queue WHERE instance_id = ?1 AND user_id = ?2 ORDER BY created_at DESC, id DESC LIMIT ?3 OFFSET ?4`)
+		.bind(instanceId, userId, limit, offset)
+		.all<ObjectiveQueueRow>();
+	const count = await env.DB.prepare("SELECT COUNT(*) AS n FROM instance_objective_queue WHERE instance_id = ?1 AND user_id = ?2").bind(instanceId, userId).first<{ n: number }>();
+	const entries = (res.results ?? []).map(toEntry);
+	const total = Number(count?.n ?? 0);
+	return { entries, total, offset, nextOffset: offset + entries.length < total ? offset + entries.length : null };
 }
