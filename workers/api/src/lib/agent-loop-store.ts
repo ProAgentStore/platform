@@ -3,6 +3,7 @@
 // Shape and vocabulary mirror `pipeline-runs.ts` on purpose: a user should not have to learn two
 // mental models for "what did my agent do", and #19/#182 want both histories rendered from one.
 
+import { type Keyset, keysetCursor, olderThan } from "./keyset-cursor.js";
 import { clipMarked } from "./clip-marked.js";
 import { statusFor, type LoopStopReason } from "./agent-loop.js";
 import type { Env } from "../types.js";
@@ -285,6 +286,27 @@ export async function listLoopRuns(env: Env, userId: string, instanceId: string,
 		.bind(userId, instanceId, Math.max(1, Math.min(200, limit)), Math.max(0, Math.trunc(offset) || 0))
 		.all<LoopRunRow>();
 	return (res.results ?? []).map(toLoopRunView);
+}
+
+/**
+ * A page of runs, newest first (#1017). With `after` (a previous page's `nextCursor`) it is a KEYSET
+ * page — strictly older than the last run the reader saw, so runs started or deleted between page reads
+ * neither repeat nor skip one. Without it, the legacy OFFSET page, which a concurrent insert shifts.
+ * Either way `nextCursor` names the last run returned, so an offset reader can switch to the cursor.
+ */
+export async function pageLoopRuns(env: Env, userId: string, instanceId: string, page: { limit: number; offset: number; after: Keyset | null }): Promise<{ runs: LoopRunView[]; more: boolean; nextCursor: string | null }> {
+	const limit = Math.max(1, Math.min(200, page.limit));
+	const where = page.after ? ` AND ${olderThan("started_at", "run_id", 3)}` : "";
+	const res = await env.DB.prepare(
+		`SELECT * FROM agent_loop_runs WHERE user_id = ?1 AND instance_id = ?2${where} ORDER BY started_at DESC, run_id DESC LIMIT ?${page.after ? 5 : 3} OFFSET ?${page.after ? 6 : 4}`,
+	)
+		.bind(...(page.after ? [userId, instanceId, page.after.at, page.after.id, limit + 1, 0] : [userId, instanceId, limit + 1, Math.max(0, Math.trunc(page.offset) || 0)]))
+		.all<LoopRunRow>();
+	const rows = (res.results ?? []).map(toLoopRunView);
+	const runs = rows.slice(0, limit);
+	const more = rows.length > limit;
+	const last = runs[runs.length - 1];
+	return { runs, more, nextCursor: more && last ? keysetCursor(last.startedAt, last.runId) : null };
 }
 
 /** How many runs an instance has in all — so a page of {@link listLoopRuns} can say it is one (#898). */

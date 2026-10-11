@@ -1,4 +1,5 @@
 import { clipMarked } from "./clip-marked.js";
+import { type Keyset, keysetCursor, olderThan } from "./keyset-cursor.js";
 import type { Env } from "../types.js";
 import { withinConfirmationWindow } from "./confirmation-window.js";
 import { dispositionFrom, recordLifecycle } from "./objective-lifecycle.js";
@@ -33,7 +34,9 @@ export const LOOP_STARTS_PAGE = 20;
  * `unknown` for a receipt from before attribution was recorded. Ties on `created_at` order by request
  * id, so a page boundary never moves.
  */
-export async function listLoopStarts(env: Env, userId: string, instanceId: string, offset = 0) {
+export async function listLoopStarts(env: Env, userId: string, instanceId: string, offset = 0, after: Keyset | null = null, limit = LOOP_STARTS_PAGE) {
+	// `after` is a keyset cursor (#1017): receipts strictly older than the last one the reader saw.
+	const keyset = after ? ` AND ${olderThan("r.created_at", "r.request_id", 5)}` : "";
 	const rows = await env.DB.prepare(
 		`SELECT r.*, q.id AS q_id, q.status AS q_status, q.stop_reason AS q_reason, q.run_id AS q_run,
 		        lr.run_id AS lr_run, lr.status AS lr_status, lr.stop_reason AS lr_reason
@@ -44,10 +47,10 @@ export async function listLoopStarts(env: Env, userId: string, instanceId: strin
 		   LEFT JOIN agent_loop_runs lr
 		     ON lr.user_id = r.user_id AND lr.instance_id = r.instance_id
 		    AND lr.run_id = COALESCE(json_extract(r.response_json, '$.runId'), q.run_id)
-		  WHERE r.user_id = ? AND r.instance_id = ?
-		  ORDER BY r.created_at DESC, r.request_id DESC LIMIT ? OFFSET ?`,
+		  WHERE r.user_id = ?1 AND r.instance_id = ?2${keyset}
+		  ORDER BY r.created_at DESC, r.request_id DESC LIMIT ?3 OFFSET ?4`,
 	)
-		.bind(userId, instanceId, LOOP_STARTS_PAGE, Math.max(0, Math.trunc(offset)))
+		.bind(userId, instanceId, limit, after ? 0 : Math.max(0, Math.trunc(offset) || 0), ...(after ? [after.at, after.id] : []))
 		.all<ReceiptRow & JoinedRow>();
 	return rows.results.map((row) => {
 		const result = row.response_json ? JSON.parse(row.response_json) as Record<string, unknown> : null;
@@ -59,7 +62,7 @@ export async function listLoopStarts(env: Env, userId: string, instanceId: strin
 			receiptReason,
 		});
 		const attribution = row.actor_uid ? { kind: "owner" as const, uid: row.actor_uid, verified: true as const, clientClaimed: row.client_claimed ?? null } : { kind: "unknown" as const, legacy: true as const };
-		return { ...receiptView(row), attribution, current, ...(result ? { result: { runId: result.runId ?? null, queueEntryId: (result.entry as { id?: string } | undefined)?.id ?? null, reason: result.reason ?? null, error: typeof result.error === "string" ? clipMarked(result.error, 500) : null } } : {}) };
+		return { ...receiptView(row), attribution, current, ...(result ? { result: { runId: result.runId ?? null, queueEntryId: (result.entry as { id?: string } | undefined)?.id ?? null, duplicate_of: typeof result.duplicate_of === "string" ? result.duplicate_of : null, reason: result.reason ?? null, error: typeof result.error === "string" ? clipMarked(result.error, 500) : null } } : {}) };
 	});
 }
 
@@ -81,12 +84,24 @@ export async function countLoopStarts(env: Env, userId: string, instanceId: stri
 	return Number(row?.n ?? 0);
 }
 
-/** A page of receipts with its place in the whole (#954) — the newest 20 used to be all a caller saw. */
-export async function loopStartsPage(env: Env, userId: string, instanceId: string, offset: number) {
-	const startsOffset = Math.max(0, Math.trunc(offset) || 0);
-	const [starts, startsTotal] = await Promise.all([listLoopStarts(env, userId, instanceId, startsOffset), countLoopStarts(env, userId, instanceId)]);
-	const startsNextOffset = startsOffset + starts.length < startsTotal ? startsOffset + starts.length : null;
-	return { starts, startsTotal, startsOffset, startsNextOffset, startsComplete: startsNextOffset === null };
+/**
+ * A page of receipts with its place in the whole (#954) — the newest 20 used to be all a caller saw.
+ *
+ * `startsNextCursor` (#1017) is the stable continuation: pass it back as `starts_cursor` and the next
+ * page starts strictly after the last receipt returned, whatever was inserted or deleted meanwhile.
+ * `starts_offset` still works and is the WEAKER contract — a receipt written between two offset reads
+ * shifts the second page and repeats a row — kept so an existing caller does not break.
+ */
+export async function loopStartsPage(env: Env, userId: string, instanceId: string, offset: number, after: Keyset | null = null) {
+	const startsOffset = after ? 0 : Math.max(0, Math.trunc(offset) || 0);
+	const [rows, startsTotal] = await Promise.all([listLoopStarts(env, userId, instanceId, startsOffset, after, LOOP_STARTS_PAGE + 1), countLoopStarts(env, userId, instanceId)]);
+	// One row past the page was read only to know whether more exist; it is dropped, never cut from a value.
+	const more = rows.length > LOOP_STARTS_PAGE;
+	const starts = more ? rows.slice(0, -1) : rows;
+	const last = starts[starts.length - 1];
+	const startsNextCursor = more && last ? keysetCursor(last.createdAt, last.requestId) : null;
+	const startsNextOffset = !after && more ? startsOffset + starts.length : null;
+	return { starts, startsTotal, startsOffset, startsNextOffset, startsNextCursor, startsComplete: !more };
 }
 
 /** Bound confirmation without abandoning the durable start when the caller disconnects. */

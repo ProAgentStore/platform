@@ -684,16 +684,17 @@ export function registerCompositionTools(server: McpServer, ctx: InstanceToolsCt
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
 			run_id: z.string().optional(),
-			offset: z.coerce.number().int().min(0).optional().describe("Listing only: runs come back newest first in pages that fit one response, with `page.of` (all runs) and `page.nextOffset`; pass it to continue."),
+			offset: z.coerce.number().int().min(0).optional().describe("Listing only, LEGACY: runs by position; a run started between reads shifts it. Prefer `cursor`."),
+			cursor: z.string().min(1).max(256).optional().describe("Listing only: the previous reply's `page.nextCursor`. Runs come back newest first in pages that fit one response; the cursor continues strictly after the last one returned."),
 		},
-		async ({ token, instance_id, run_id, offset }) => {
+		async ({ token, instance_id, run_id, offset, cursor }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const denied = await requirePermission(safetyFor(token), "read", "check_instance_loop", { instance_id, run_id });
 			if (denied) return denied;
 			if (run_id) return jsonText(await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/loop/${encodeURIComponent(run_id)}`, sessionToken, {}, env));
 			// The same paged listing coding_loop_status returns (#898) — one endpoint, one shape.
-			return text(loopRunsPage(await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/loop?offset=${offset ?? 0}`, sessionToken, {}, env)));
+			return text(loopRunsPage(await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/loop?${cursor ? `cursor=${encodeURIComponent(cursor)}` : `offset=${offset ?? 0}`}`, sessionToken, {}, env)));
 		},
 	);
 

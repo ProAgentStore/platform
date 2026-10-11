@@ -9,6 +9,7 @@
 // See `migrations/0149_instance_objective_queue.sql` for why the table is keyed
 // `(instance_id, repo_id)` and what each `status` means.
 
+import { type Keyset, keysetCursor, olderThan } from "./keyset-cursor.js";
 import { clipMarked } from "./clip-marked.js";
 import type { Env } from "../types.js";
 import { MAX_CONFIGURABLE_OBJECTIVE_CHARS } from "./loop-limits.js";
@@ -278,14 +279,32 @@ export async function requeueEntry(env: Env, id: string, note?: string | null): 
  * pending-only `listQueue` deliberately is not. Ordered by `created_at` then `id`, so a page boundary
  * is stable even for entries queued in the same millisecond.
  */
-export async function listQueueHistory(env: Env, instanceId: string, userId: string, page: { offset: number; limit: number }): Promise<{ entries: ObjectiveQueueEntry[]; total: number; offset: number; nextOffset: number | null }> {
-	const offset = Math.max(0, Math.trunc(page.offset) || 0);
+export async function listQueueHistory(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	page: { offset: number; limit: number; after?: Keyset | null },
+): Promise<{ entries: ObjectiveQueueEntry[]; total: number; offset: number; nextOffset: number | null; nextCursor: string | null; more: boolean }> {
+	// `after` (#1017): a keyset page, strictly older than the last entry the reader saw — stable under
+	// entries queued or removed between reads. Without it, the legacy OFFSET page, which they shift.
+	const after = page.after ?? null;
+	const offset = after ? 0 : Math.max(0, Math.trunc(page.offset) || 0);
 	const limit = Math.max(1, Math.min(100, Math.trunc(page.limit) || 50));
-	const res = await env.DB.prepare(`SELECT ${COLUMNS} FROM instance_objective_queue WHERE instance_id = ?1 AND user_id = ?2 ORDER BY created_at DESC, id DESC LIMIT ?3 OFFSET ?4`)
-		.bind(instanceId, userId, limit, offset)
+	const keyset = after ? ` AND ${olderThan("created_at", "id", 5)}` : "";
+	const res = await env.DB.prepare(`SELECT ${COLUMNS} FROM instance_objective_queue WHERE instance_id = ?1 AND user_id = ?2${keyset} ORDER BY created_at DESC, id DESC LIMIT ?3 OFFSET ?4`)
+		.bind(instanceId, userId, limit + 1, offset, ...(after ? [after.at, after.id] : []))
 		.all<ObjectiveQueueRow>();
 	const count = await env.DB.prepare("SELECT COUNT(*) AS n FROM instance_objective_queue WHERE instance_id = ?1 AND user_id = ?2").bind(instanceId, userId).first<{ n: number }>();
-	const entries = (res.results ?? []).map(toEntry);
-	const total = Number(count?.n ?? 0);
-	return { entries, total, offset, nextOffset: offset + entries.length < total ? offset + entries.length : null };
+	const rows = (res.results ?? []).map(toEntry);
+	const entries = rows.slice(0, limit);
+	const more = rows.length > limit;
+	const last = entries[entries.length - 1];
+	return {
+		entries,
+		total: Number(count?.n ?? 0),
+		offset,
+		nextOffset: !after && more ? offset + entries.length : null,
+		nextCursor: more && last ? keysetCursor(last.createdAt, last.id) : null,
+		more,
+	};
 }

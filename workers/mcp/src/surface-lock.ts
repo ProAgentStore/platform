@@ -1125,4 +1125,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.111": "sha256:d268ea52776037d5e40607f24926775c2577ebb3f1e301ccf47db67f8cda2eb5",
 	// #1016: mcp_audit_log gains `cursor` + `tool` and answers {events, nextCursor, coverage} from the time-ordered ledger.
 	"0.1.112": "sha256:396aa9ddf3f54ca301d14a2874e4c2e96c2d600a13475358c844e0f0ce133dfa",
+	// #1017: keyset `cursor` on coding_loop_status / check_instance_loop / coding_loop_queue, plus `starts_cursor`.
+	"0.1.113": "sha256:6543158a69ac22a62d5a63c9c9b4bbe2317e97a5337f3db5c3f5fd2a0404b898",
 };

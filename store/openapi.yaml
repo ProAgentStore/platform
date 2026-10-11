@@ -10487,7 +10487,27 @@ paths:
         - name: starts_offset
           in: query
           schema: { type: integer, minimum: 0, default: 0 }
-          description: With include_starts, where the receipts page begins — startsNextOffset from the previous page.
+          description: >
+            LEGACY. With include_starts, where the receipts page begins by position. A receipt
+            written between two reads shifts it and repeats one — prefer `starts_cursor`.
+        - name: starts_cursor
+          in: query
+          schema: { type: string }
+          description: >
+            With include_starts (#1017): the previous page's `startsNextCursor`. A keyset
+            continuation — strictly after the last receipt returned, so receipts written or deleted
+            between reads neither repeat nor skip one. 400 when it is not a previous page's cursor.
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+          description: LEGACY. Runs by position; a run started between reads shifts it. Prefer `cursor`.
+        - name: cursor
+          in: query
+          schema: { type: string }
+          description: >
+            The previous page's `nextCursor` (#1017): the runs strictly after the last one returned,
+            stable while runs start or are deleted between reads. 400 when malformed.
       responses:
         "200":
           description: Loop runs, most recent first
@@ -10500,6 +10520,13 @@ paths:
                     type: array
                     items: { type: object, additionalProperties: true }
                   repoCi: { $ref: "#/components/schemas/InstanceRepoCi" }
+                  total: { type: integer }
+                  offset: { type: integer, nullable: true, description: Null on a cursor page. }
+                  nextOffset: { type: integer, nullable: true, description: LEGACY continuation; null on a cursor page. }
+                  nextCursor: { type: string, nullable: true, description: The stable continuation; null at the end. }
+                  complete: { type: boolean }
+                  startsNextCursor: { type: string, nullable: true }
+                  startsComplete: { type: boolean }
                   startsTotal: { type: integer, description: With include_starts, every receipt on the instance — not just this page. }
                   startsOffset: { type: integer }
                   startsNextOffset: { type: integer, nullable: true }
@@ -10558,7 +10585,12 @@ paths:
           in: query
           required: false
           schema: { type: integer, minimum: 0 }
-          description: With `status=all`, the previous page's `nextOffset`.
+          description: LEGACY. With `status=all`, the previous page's `nextOffset` — shifted by an entry queued between reads. Prefer `cursor`.
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string }
+          description: With `status=all` (#1017), the previous page's `nextCursor` — stable while entries are queued or removed between reads.
         - name: limit
           in: query
           required: false
@@ -10660,8 +10692,13 @@ paths:
         that objective's whole history and returns nothing else. Each event names its actor:
         `{kind:"owner", uid, verified:true, clientClaimed}` — the uid is the HMAC-verified session,
         `clientClaimed` is the declared `X-PAGS-Client` and only a claim — or `{kind:"platform"}`.
-        A request key is never read as an identity. Recorded since migration 0212; older objectives
-        have no events (`coverage` says so). Read-only: nothing is replayed or requeued.
+        A request key is never read as an identity — and a DEDUPLICATED request's handle reaches the
+        objective it joined, through its receipt and its own event, without changing whose rows they are.
+
+        `complete` is PAGING only. Whether the history is whole is `coverage`: the objective's receipt,
+        queue entry and run are compared with its recorded events (recording is best-effort), and each
+        missing transition is named in `coverage_gaps`. `unknown` means it predates migration 0212, was
+        not started through a tracked path, or no handle was given. Read-only: nothing is replayed or requeued.
       operationId: listObjectiveLifecycle
       tags: [Tools]
       parameters:
@@ -10681,8 +10718,10 @@ paths:
                 properties:
                   events: { type: array, items: { type: object } }
                   nextCursor: { type: integer, nullable: true }
-                  complete: { type: boolean }
-                  coverage: { type: string }
+                  complete: { type: boolean, description: No more events after this page — not a claim the history is whole. }
+                  coverage: { type: string, enum: [complete, incomplete, unknown] }
+                  coverage_gaps: { type: array, items: { type: string }, description: Each transition the rows show but no event records. }
+                  historyNote: { type: string }
         "400": { description: "cursor is not a previous page's nextCursor" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }

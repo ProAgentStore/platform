@@ -14,6 +14,7 @@ import { describeBusyHolder } from "../lib/loop-busy.js";
 import { storedHandoff } from "../lib/coding-handoff-store.js";
 import { cancelQueueEntry, getQueueEntry, listQueue, listQueueHistory } from "../lib/objective-queue.js";
 import { clientClaimFrom, listLifecycle, recordLifecycle } from "../lib/objective-lifecycle.js";
+import { cursorParam } from "../lib/keyset-cursor.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import type { Env } from "../types.js";
 
@@ -39,8 +40,10 @@ export function registerLoopQueueRoutes(router: Hono<{ Bindings: Env }>): void {
 		await requireOwnedInstance(c.env, instanceId, session.uid);
 		// `status=all` (#1017): every entry, any status, newest first and paged — what became of each.
 		if (c.req.query("status") === "all") {
-			const page = await listQueueHistory(c.env, instanceId, session.uid, { offset: Number(c.req.query("offset")), limit: Number(c.req.query("limit")) });
-			return c.json({ scope: "all", ...page, complete: page.nextOffset === null });
+			// `cursor` (#1017) is the stable continuation; `offset` the weaker legacy one (shifted by entries queued between reads).
+			const after = cursorParam(c.req.query("cursor"), "cursor");
+			const { more, ...page } = await listQueueHistory(c.env, instanceId, session.uid, { offset: Number(c.req.query("offset")), limit: Number(c.req.query("limit")), after });
+			return c.json({ scope: "all", ...page, complete: !more });
 		}
 		const repoParam = c.req.query("repo_id");
 		const entries = await listQueue(c.env, instanceId, repoParam === undefined ? undefined : repoParam || null);
@@ -79,9 +82,11 @@ export function registerLoopQueueRoutes(router: Hono<{ Bindings: Env }>): void {
 		if (cursor !== undefined && !/^\d+$/.test(cursor)) throw new HttpError(400, "cursor must be the nextCursor of a previous page");
 		const filter = { requestId: c.req.query("request_id") || undefined, queueEntryId: c.req.query("queue_entry_id") || undefined, runId: c.req.query("run_id") || undefined };
 		const page = await listLifecycle(c.env, { userId: session.uid, instanceId, filter, afterSeq: cursor ? Number(cursor) : 0, limit: Number(c.req.query("limit")) || undefined });
+		// `complete` is paging; `coverage` / `coverage_gaps` say whether the history itself is whole (#1017).
 		return c.json({
 			...page,
-			coverage: "Recorded since migration 0212. An objective older than that has no transition history here; its receipt, queue entry and run rows still say what became of it.",
+			historyNote:
+				"Recorded since migration 0212; recording is best-effort. `coverage` compares this objective's receipt, queue entry and run with its recorded events: `incomplete` names each missing transition in `coverage_gaps`, `unknown` means it predates the ledger or was not started through a tracked path (or no handle was given). The rows still say what became of it either way.",
 		});
 	});
 

@@ -22,4 +22,18 @@ describe("loopRunsPage", () => {
 		const out = JSON.parse(loopRunsPage({ runs: [run(1)], total: 1, offset: 0 })) as { page: { hasMore: boolean; nextOffset: null } };
 		expect(out.page).toMatchObject({ hasMore: false, nextOffset: null });
 	});
+
+	it("a keyset page cut to fit continues from the last run it SHOWED, not the API's last row (#1017)", () => {
+		const runs = Array.from({ length: 50 }, (_, i) => ({ ...run(i), startedAt: 9_000 - i }));
+		const out = JSON.parse(loopRunsPage({ runs, total: 120, offset: null, nextCursor: "8951:run-49" })) as { runs: Array<{ runId: string; startedAt: number }>; page: { offset: null; nextOffset: null; nextCursor: string; hasMore: boolean } };
+		expect(out.runs.length).toBeLessThan(50);
+		const last = out.runs[out.runs.length - 1];
+		expect(out.page).toMatchObject({ offset: null, nextOffset: null, nextCursor: `${last.startedAt}:${last.runId}`, hasMore: true });
+	});
+
+	it("an uncut keyset page passes the API's cursor through, and ends when it has none", () => {
+		const one = [{ ...run(1), detail: "", startedAt: 5 }];
+		expect(JSON.parse(loopRunsPage({ runs: one, total: 9, offset: null, nextCursor: "5:run-1" })).page).toMatchObject({ nextCursor: "5:run-1", hasMore: true });
+		expect(JSON.parse(loopRunsPage({ runs: one, total: 1, offset: null, nextCursor: null })).page).toMatchObject({ nextCursor: null, hasMore: false });
+	});
 });

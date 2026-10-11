@@ -333,17 +333,20 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID or slug"),
 			run_id: z.string().optional().describe("A run id from coding_loop_start. Omit to list recent runs."),
-			offset: z.coerce.number().int().min(0).optional().describe("Listing only: runs come back newest first in pages that fit one response, with `page.of` (all runs) and `page.nextOffset`; pass it to continue."),
-			starts_offset: z.coerce.number().int().min(0).optional().describe("Listing only: start receipts come back newest first, 20 at a time, with `startsTotal`, `startsNextOffset` and `startsComplete`; pass `startsNextOffset` here to read the next page. Each receipt carries `current` (what became of it now) and `attribution`."),
+			offset: z.coerce.number().int().min(0).optional().describe("Listing only, LEGACY: runs by position; a run started between reads shifts it. Prefer `cursor`."),
+			starts_offset: z.coerce.number().int().min(0).optional().describe("Listing only, LEGACY: start receipts by position. A receipt written between two reads shifts this and repeats one — prefer `starts_cursor`."),
+			cursor: z.string().min(1).max(256).optional().describe("Listing only: the previous reply's `page.nextCursor`. Continues the runs strictly after the last one returned, so runs started or deleted meanwhile neither repeat nor skip one. Preferred over `offset`, which they shift."),
+			starts_cursor: z.string().min(1).max(256).optional().describe("Listing only: the previous reply's `startsNextCursor`. Start receipts come back newest first, 20 at a time, with `startsTotal`, `startsNextCursor` and `startsComplete`; each receipt carries `current` (what became of it now) and `attribution`."),
 		},
-		async ({ token, instance_id, run_id, offset, starts_offset }) => {
+		async ({ token, instance_id, run_id, offset, starts_offset, cursor, starts_cursor }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const denied = await requirePermission(safetyFor(token), "read", "coding_loop_status", { instance_id, run_id });
 			if (denied) return denied;
 			const id = await resolveId(sessionToken, instance_id);
 			if (run_id) return jsonText(await authedCall(`/v1/instances/${encodeURIComponent(id)}/loop/${encodeURIComponent(run_id)}`, sessionToken, {}, env));
-			return text(loopRunsPage(await authedCall(`/v1/instances/${encodeURIComponent(id)}/loop?include_starts=true&offset=${offset ?? 0}&starts_offset=${starts_offset ?? 0}`, sessionToken, {}, env)));
+			const qs = new URLSearchParams({ include_starts: "true", offset: String(offset ?? 0), starts_offset: String(starts_offset ?? 0), ...(cursor ? { cursor } : {}), ...(starts_cursor ? { starts_cursor } : {}) });
+			return text(loopRunsPage(await authedCall(`/v1/instances/${encodeURIComponent(id)}/loop?${qs}`, sessionToken, {}, env)));
 		},
 	);
 
@@ -410,16 +413,17 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID or slug"),
 			repo_id: z.string().optional().describe("Narrow to the entries eligible for ONE repo — its own plus the repo-agnostic ones, which is exactly what that repo's next drain will take. Omit for everything pending on the instance."),
-			status: z.enum(["pending", "all"]).optional().describe("`pending` (default): only what is still waiting. `all`: every entry ever queued, any status, newest first, paged with `offset`/`nextOffset` — what became of each (started → `runId`, cancelled, failed admission)."),
-			offset: z.coerce.number().int().min(0).optional().describe("With status `all`: pass the previous page's `nextOffset` to continue."),
+			status: z.enum(["pending", "all"]).optional().describe("`pending` (default): only what is still waiting. `all`: every entry ever queued, any status, newest first, paged with `cursor`/`nextCursor` — what became of each (started → `runId`, cancelled, failed admission)."),
+			cursor: z.string().min(1).max(256).optional().describe("With status `all`: the previous page's `nextCursor`. Stable while entries are queued or removed between reads."),
+			offset: z.coerce.number().int().min(0).optional().describe("With status `all`, LEGACY: by position — an entry queued between reads shifts it. Prefer `cursor`."),
 		},
-		async ({ token, instance_id, repo_id, status, offset }) => {
+		async ({ token, instance_id, repo_id, status, offset, cursor }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const denied = await requirePermission(safetyFor(token), "read", "coding_loop_queue", { instance_id, repo_id });
 			if (denied) return denied;
 			const id = await resolveId(sessionToken, instance_id);
-			const qs = status === "all" ? `?status=all&offset=${offset ?? 0}` : repo_id ? `?repo_id=${encodeURIComponent(repo_id)}` : "";
+			const qs = status === "all" ? `?status=all${cursor ? `&cursor=${encodeURIComponent(cursor)}` : `&offset=${offset ?? 0}`}` : repo_id ? `?repo_id=${encodeURIComponent(repo_id)}` : "";
 			return jsonText(await authedCall(`/v1/instances/${encodeURIComponent(id)}/loop/queue${qs}`, sessionToken, {}, env));
 		},
 	);
@@ -457,7 +461,7 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 	// it replays, requeues or repairs nothing — an audit determines what happened without acting on it.
 	server.tool(
 		"coding_loop_lifecycle",
-		"Read the lifecycle of queued and started objectives on an instance: requested → queued / deduplicated / not started → admitted, deferred, cancelled or admission failed → run → run finished. Oldest first, with a stable `seq` cursor: pass `nextCursor` as `cursor` to continue; `complete` says whether more remain. Give ONE of request_id (a coding_loop_start request key), queue_entry_id or run_id and you get that objective's whole history through the stored links — nothing else. Each event names its actor: `owner` (the verified account; `clientClaimed` is the client it SAID it was, a claim, not proof) or `platform` (a queue drain, a run ending). History starts at the release that added it — an older objective has no events here, but coding_loop_status's receipt `current` and coding_loop_queue status `all` still say what became of it. Read-only: it never replays or requeues work.",
+		"Read the lifecycle of queued and started objectives on an instance: requested → queued / deduplicated / not started → admitted, deferred, cancelled or admission failed → run → run finished. Oldest first, with a stable `seq` cursor: pass `nextCursor` as `cursor` to continue; `complete` says whether more events remain — it is PAGING, not a claim the history is whole: `coverage` (`complete` / `incomplete` / `unknown`) compares the objective's receipt, queue entry and run with its recorded events, and `coverage_gaps` names each transition that happened but was not recorded. Give ONE of request_id (a coding_loop_start request key), queue_entry_id or run_id and you get that objective's whole history through the stored links — nothing else. Each event names its actor: `owner` (the verified account; `clientClaimed` is the client it SAID it was, a claim, not proof) or `platform` (a queue drain, a run ending). History starts at the release that added it — an older objective has no events here, but coding_loop_status's receipt `current` and coding_loop_queue status `all` still say what became of it. Read-only: it never replays or requeues work.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID or slug"),

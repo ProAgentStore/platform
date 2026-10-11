@@ -38,11 +38,12 @@ import { listConnections, createConnection, deleteConnection, setConnectionEnabl
 import { listDeliveries, replayDelivery } from "../lib/connection-deliveries.js";
 import { listSupervision, createSupervision, deleteSupervision, setSupervisionDirection, setSupervisionEnabled } from "../lib/supervision.js";
 import { delegationDenial } from "../lib/supervision-capability.js";
-import { countLoopRuns, getLoopRun, listLoopRuns, requestCancel } from "../lib/agent-loop-store.js";
+import { countLoopRuns, getLoopRun, pageLoopRuns, requestCancel } from "../lib/agent-loop-store.js";
 // The run verdict, imported rather than re-derived — see `withHealth` (#580 AC3).
 import { runHealth, waitClause } from "../lib/work-report.js";
 import { loopDriverFor, startRefusalIsWaitable } from "../lib/loop-drivers.js";
 import { dispatchLoopStartReceipt, loopStartsPage } from "../lib/loop-start-receipts.js";
+import { cursorParam } from "../lib/keyset-cursor.js";
 import { clientClaimFrom, trackStartOutcome } from "../lib/objective-lifecycle.js";
 import { findDuplicateObjective } from "../lib/objective-dedupe.js";
 import { describeBusyHolder } from "../lib/loop-busy.js";
@@ -1345,12 +1346,16 @@ toolRoutes.get("/:id/loop", async (c) => {
 	// the rest, so an older run was unreachable and its absence read as "never ran".
 	const limit = Math.max(1, Math.min(200, Number(c.req.query("limit")) || 50));
 	const offset = Math.max(0, Math.trunc(Number(c.req.query("offset")) || 0));
-	const [runs, total] = await Promise.all([listLoopRuns(c.env, session.uid, instanceId, limit, offset), countLoopRuns(c.env, session.uid, instanceId)]);
-	const nextOffset = offset + runs.length < total ? offset + runs.length : null;
+	// `cursor` / `starts_cursor` (#1017): keyset continuations, stable under runs and receipts written or
+	// deleted between page reads. `offset` / `starts_offset` remain the weaker legacy contract.
+	const after = cursorParam(c.req.query("cursor"), "cursor");
+	const startsAfter = cursorParam(c.req.query("starts_cursor"), "starts_cursor");
+	const [{ runs, more, nextCursor }, total] = await Promise.all([pageLoopRuns(c.env, session.uid, instanceId, { limit, offset, after }), countLoopRuns(c.env, session.uid, instanceId)]);
+	const nextOffset = !after && more ? offset + runs.length : null;
 	// The repository's pipeline, BESIDE the runs' `health` and never folded into it (#903).
 	const repoCi = await instanceRepoCi(c.env, instanceId, session.uid);
-	const startsPage = c.req.query("include_starts") === "true" ? await loopStartsPage(c.env, session.uid, instanceId, Number(c.req.query("starts_offset"))) : {};
-	return c.json({ runs: runs.map((run) => withHealth(run, now)), total, offset, nextOffset, ...(repoCi ? { repoCi } : {}), ...startsPage });
+	const startsPage = c.req.query("include_starts") === "true" ? await loopStartsPage(c.env, session.uid, instanceId, Number(c.req.query("starts_offset")), startsAfter) : {};
+	return c.json({ runs: runs.map((run) => withHealth(run, now)), total, offset: after ? null : offset, nextOffset, nextCursor, complete: !more, ...(repoCi ? { repoCi } : {}), ...startsPage });
 });
 
 toolRoutes.get("/:id/loop/:runId", async (c) => {

@@ -148,7 +148,7 @@ export const LIFECYCLE_PAGE_MAX = 100;
 export async function listLifecycle(
 	env: Env,
 	input: { userId: string; instanceId: string; filter?: LifecycleFilter; afterSeq?: number; limit?: number },
-): Promise<{ events: LifecycleView[]; nextCursor: number | null; complete: boolean }> {
+): Promise<{ events: LifecycleView[]; nextCursor: number | null; complete: boolean } & LifecycleCoverage> {
 	const limit = Math.max(1, Math.min(LIFECYCLE_PAGE_MAX, input.limit ?? 50));
 	const handles = input.filter && (input.filter.requestId || input.filter.queueEntryId || input.filter.runId) ? await expandHandles(env, input.userId, input.instanceId, input.filter) : null;
 	const where = ["user_id = ?1", "instance_id = ?2", "seq > ?3"];
@@ -174,7 +174,83 @@ export async function listLifecycle(
 	const all = (rows.results ?? []).map(toView);
 	const page = all.slice(0, limit);
 	const more = all.length > limit;
-	return { events: page, nextCursor: more ? page[page.length - 1].seq : null, complete: !more };
+	// `complete` is PAGING (no more events after this page); `coverage` is whether the history itself is whole.
+	const coverage = handles ? await coverageOf(env, input.userId, input.instanceId, handles) : UNFILTERED_COVERAGE;
+	return { events: page, nextCursor: more ? page[page.length - 1].seq : null, complete: !more, ...coverage };
+}
+
+/**
+ * Whether one objective's recorded history is WHOLE (#1017) — a separate question from paging.
+ *
+ * Recording is best-effort (see the header), so a page that reaches the end of the stored events is not
+ * evidence every transition was stored: a failed insert leaves a hole that paging cannot see. So the
+ * objective's own rows — which ARE the transitions, and which the history only describes — are compared
+ * with the events recorded for them, with no write of any kind:
+ *
+ *   a receipt with no `requested`; a queue entry with no `queued`, or a cancelled / failed / admitted
+ *   one with no `cancelled` / `admission_failed` / `admitted`; a run with no `started` / `admitted`, or
+ *   a finished one with no `run_finished`.
+ *
+ * Each missing one is named in `coverage_gaps` and makes the coverage `incomplete`. A row older than the
+ * instance's first recorded event predates the ledger (migration 0212) and reads `unknown` — never a gap
+ * and never complete. A run started outside the tracked start paths (no request, no queue entry) has no
+ * expected events either, so it reads `unknown` too.
+ */
+export interface LifecycleCoverage {
+	coverage: "complete" | "incomplete" | "unknown";
+	coverage_gaps: string[];
+}
+
+const UNFILTERED_COVERAGE: LifecycleCoverage = { coverage: "unknown", coverage_gaps: [] };
+
+async function coverageOf(env: Env, userId: string, instanceId: string, h: { requestIds: string[]; queueEntryIds: string[]; runIds: string[] }): Promise<LifecycleCoverage> {
+	const scope = "user_id = ?1 AND instance_id = ?2";
+	const start = await env.DB.prepare(`SELECT MIN(created_at) AS at FROM objective_lifecycle_events WHERE ${scope}`).bind(userId, instanceId).first<{ at: number | null }>();
+	const ledgerStart = start?.at ?? null;
+	const recorded = new Set<string>();
+	const note = (event: string, kind: string, id: string | null) => id && recorded.add(`${event}|${kind}|${id}`);
+	for (const [col, ids] of [["request_id", h.requestIds], ["queue_entry_id", h.queueEntryIds], ["run_id", h.runIds]] as const) {
+		for (const id of ids) {
+			const rows = await env.DB.prepare(`SELECT event, request_id, queue_entry_id, run_id FROM objective_lifecycle_events WHERE ${scope} AND ${col} = ?3`).bind(userId, instanceId, id).all<{ event: string; request_id: string | null; queue_entry_id: string | null; run_id: string | null }>();
+			for (const e of rows.results ?? []) {
+				note(e.event, "r", e.request_id);
+				note(e.event, "q", e.queue_entry_id);
+				note(e.event, "u", e.run_id);
+			}
+		}
+	}
+	const has = (events: string[], kind: string, id: string) => events.some((e) => recorded.has(`${e}|${kind}|${id}`));
+	const gaps: string[] = [];
+	let legacy = false;
+	const predates = (at: number) => ledgerStart === null || at < ledgerStart;
+	const expect = (at: number, events: string[], kind: string, id: string, what: string) => {
+		if (has(events, kind, id)) return;
+		if (predates(at)) legacy = true;
+		else gaps.push(`${what}: no ${events.map((e) => `"${e}"`).join(" or ")} event`);
+	};
+	for (const id of h.requestIds) {
+		const r = await env.DB.prepare(`SELECT created_at FROM loop_start_receipts WHERE ${scope} AND request_id = ?3`).bind(userId, instanceId, id).first<{ created_at: number }>();
+		if (r) expect(r.created_at, ["requested"], "r", id, `request ${id}`);
+	}
+	for (const id of h.queueEntryIds) {
+		const q = await env.DB.prepare(`SELECT created_at, status, run_id FROM instance_objective_queue WHERE ${scope} AND id = ?3`).bind(userId, instanceId, id).first<{ created_at: number; status: string; run_id: string | null }>();
+		if (!q) continue;
+		expect(q.created_at, ["queued"], "q", id, `queue entry ${id}`);
+		if (q.status === "cancelled") expect(q.created_at, ["cancelled"], "q", id, `queue entry ${id} (cancelled)`);
+		if (q.status === "failed") expect(q.created_at, ["admission_failed"], "q", id, `queue entry ${id} (failed admission)`);
+		if (q.run_id) expect(q.created_at, ["admitted"], "q", id, `queue entry ${id} (admitted to run ${q.run_id})`);
+	}
+	for (const id of h.runIds) {
+		const u = await env.DB.prepare(`SELECT started_at, status, request_id, queue_entry_id FROM agent_loop_runs WHERE ${scope} AND run_id = ?3`).bind(userId, instanceId, id).first<{ started_at: number; status: string; request_id: string | null; queue_entry_id: string | null }>();
+		if (!u) continue;
+		if (!u.request_id && !u.queue_entry_id && !has(["started", "admitted"], "u", id)) {
+			legacy = true; // started outside the tracked paths: nothing was ever expected of it here
+			continue;
+		}
+		expect(u.started_at, ["started", "admitted"], "u", id, `run ${id}`);
+		if (u.status !== "running") expect(u.started_at, ["run_finished"], "u", id, `run ${id} (${u.status})`);
+	}
+	return { coverage: gaps.length ? "incomplete" : legacy || !recorded.size ? "unknown" : "complete", coverage_gaps: gaps };
 }
 
 /** Every handle of the objective `filter` names, found through the stored links (owner-scoped). */
@@ -182,8 +258,34 @@ async function expandHandles(env: Env, userId: string, instanceId: string, filte
 	const requestIds = new Set<string>(filter.requestId ? [filter.requestId] : []);
 	const queueEntryIds = new Set<string>(filter.queueEntryId ? [filter.queueEntryId] : []);
 	const runIds = new Set<string>(filter.runId ? [filter.runId] : []);
-	// Two passes reach a fixed point: request -> entry/run, entry -> request/run, run -> entry/request.
-	for (let pass = 0; pass < 2; pass++) {
+	// Links come from the rows AND from the immutable events (#1017): a DEDUPLICATED request is never
+	// written onto the shared queue entry or run (they keep the original request's id), so the only link
+	// from it to the objective it joined is its own `deduplicated` event — and the only link back from the
+	// objective to it. Following both is what makes any handle, the duplicate's included, reach the whole
+	// connected history. Iterated to a fixed point; bounded so a pathological chain cannot run on.
+	const size = () => requestIds.size + queueEntryIds.size + runIds.size;
+	for (let pass = 0, before = -1; pass < 8 && before !== size(); pass++) {
+		before = size();
+		const linked = async (col: "request_id" | "queue_entry_id" | "run_id", id: string) =>
+			(await env.DB.prepare(`SELECT DISTINCT request_id, queue_entry_id, run_id FROM objective_lifecycle_events WHERE user_id = ?1 AND instance_id = ?2 AND ${col} = ?3`).bind(userId, instanceId, id).all<{ request_id: string | null; queue_entry_id: string | null; run_id: string | null }>()).results ?? [];
+		// The receipt's settled response is immutable and names what the request led to — the entry, the
+		// run, or what it was deduplicated onto — even when the link written onto that row was lost.
+		for (const id of [...requestIds]) {
+			const r = await env.DB.prepare("SELECT response_json FROM loop_start_receipts WHERE user_id = ?1 AND instance_id = ?2 AND request_id = ?3").bind(userId, instanceId, id).first<{ response_json: string | null }>();
+			const body = r?.response_json ? (JSON.parse(r.response_json) as { runId?: unknown; entry?: { id?: unknown }; duplicate_of?: unknown; queued?: unknown }) : null;
+			if (typeof body?.entry?.id === "string") queueEntryIds.add(body.entry.id);
+			if (typeof body?.runId === "string") runIds.add(body.runId);
+			if (typeof body?.duplicate_of === "string") (body.queued === true ? queueEntryIds : runIds).add(body.duplicate_of);
+		}
+		for (const [col, set] of [["request_id", requestIds], ["queue_entry_id", queueEntryIds], ["run_id", runIds]] as const) {
+			for (const id of [...set]) {
+				for (const e of await linked(col, id)) {
+					if (e.request_id) requestIds.add(e.request_id);
+					if (e.queue_entry_id) queueEntryIds.add(e.queue_entry_id);
+					if (e.run_id) runIds.add(e.run_id);
+				}
+			}
+		}
 		for (const id of [...queueEntryIds]) {
 			const q = await env.DB.prepare("SELECT request_id, run_id FROM instance_objective_queue WHERE id = ?1 AND user_id = ?2 AND instance_id = ?3").bind(id, userId, instanceId).first<{ request_id: string | null; run_id: string | null }>();
 			if (q?.request_id) requestIds.add(q.request_id);

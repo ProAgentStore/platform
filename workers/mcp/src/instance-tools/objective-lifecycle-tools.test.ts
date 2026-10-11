@@ -69,4 +69,14 @@ describe("pagination parity for the objective-queue surfaces (#1017)", () => {
 		await tools.get("coding_loop_lifecycle")?.({ instance_id: "i1", run_id: "run-1" });
 		expect(api()[0].headers["X-PAGS-Client"]).toBe("mcp");
 	});
+
+	it("forwards the keyset cursors (#1017) — the stable continuation beside the legacy offsets", async () => {
+		const { tools, api } = setup();
+		await tools.get("coding_loop_status")?.({ instance_id: "i1", cursor: "1700:run-9", starts_cursor: "1600:req-4" });
+		await tools.get("coding_loop_queue")?.({ instance_id: "i1", status: "all", cursor: "1500:objq-2" });
+		const [status, queue] = api();
+		expect(status.url.searchParams.get("cursor")).toBe("1700:run-9");
+		expect(status.url.searchParams.get("starts_cursor")).toBe("1600:req-4");
+		expect(Object.fromEntries(queue.url.searchParams)).toEqual({ status: "all", cursor: "1500:objq-2" });
+	});
 });

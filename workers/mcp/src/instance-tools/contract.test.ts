@@ -295,7 +295,7 @@ const TABLE: Record<string, Row> = {
 	cancel_instance_task: ["runtime", "destructive", "cancel_instance_task", "envelope", "confirm,dry_run,instance_id,task_id,token"],
 	chat_with_instance: ["base", "runtime", null, "envelope", "dry_run,instance_id,message,token"],
 	chat_with_my_agent: ["agentAuthoring", "destructive", "chat_with_my_agent", "envelope", "agent_id,confirm,dry_run,message,token"],
-	check_instance_loop: ["composition", "read", null, null, "instance_id,offset,run_id,token"],
+	check_instance_loop: ["composition", "read", null, null, "cursor,instance_id,offset,run_id,token"],
 	get_instance_connector_account: ["connectorAccounts", "read", null, null, "connector,instance_id,token"],
 	get_instance_loop_limits: ["composition", "read", null, null, "instance_id,token"],
 	get_instance_terminal_session: ["runtime", "read", null, null, "instance_id,token"],
@@ -313,10 +313,10 @@ const TABLE: Record<string, Row> = {
 	// Both were ungated ("none") while they read and mutated MCP-DO memory, which nothing else
 	// could see. Now they read and cancel the SERVER's run record, so they are scoped like every
 	// other read and every other write (#502).
-	coding_loop_status: ["coding", "read", null, null, "instance_id,offset,run_id,starts_offset,token"],
+	coding_loop_status: ["coding", "read", null, null, "cursor,instance_id,offset,run_id,starts_cursor,starts_offset,token"],
 	coding_loop_stop: ["coding", "write", null, null, "instance_id,run_id,token"],
 	coding_loop_lifecycle: ["coding", "read", null, null, "cursor,instance_id,limit,queue_entry_id,request_id,run_id,token"],
-	coding_loop_queue: ["coding", "read", null, null, "instance_id,offset,repo_id,status,token"],
+	coding_loop_queue: ["coding", "read", null, null, "cursor,instance_id,offset,repo_id,status,token"],
 	coding_loop_queue_cancel: ["coding", "write", null, null, "entry_id,instance_id,token"],
 	connector_status: ["connectors", "none", null, null, "provider,token"],
 	create_agent_task: ["agentTasks", "write", null, "envelope", "description,dry_run,instance_id,title,token"],
