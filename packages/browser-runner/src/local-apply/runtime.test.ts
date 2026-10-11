@@ -8,10 +8,12 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
+import type { Page } from "playwright";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BrowserTools } from "../local-browser/bridge.js";
 import type { LocalApplyTaskEnvelope } from "./contract.js";
-import { LocalApplyRuntime, parseApplyEnvelope, type LocalApplyTakeoverAdapter } from "./runtime.js";
+import { LocalApplyRuntime, parseApplyEnvelope } from "./runtime.js";
+import type { LocalApplyTakeoverAdapter } from "./runtime-handoff.js";
 
 class FakeChild extends EventEmitter {
 	stdout = new PassThrough();
@@ -48,6 +50,8 @@ let seek: "ad" | "form" | null;
 let takeover: LocalApplyTakeoverAdapter;
 let takeoverOpen: string[];
 let takeoverInputs: unknown[];
+let takeoverPages: Page[];
+let runPage: Page | null;
 const SEEK_AD = "https://au.seek.com/job/94991284";
 const SEEK_FORM = "https://au.seek.com/job/94991284/apply";
 
@@ -76,7 +80,7 @@ function runtime(options: { handoffTtlMs?: number; now?: () => number } = {}) {
 		homeDir: home,
 		selfUrl: () => "http://127.0.0.1:4999",
 		bridgeScript: "/runner/bridge-stdio.js",
-		browserFor: async () => ({ tools: browser, stop: async () => undefined }),
+		browserFor: async () => ({ tools: browser, stop: async () => undefined, handoffPage: () => runPage }),
 		takeover,
 		...options,
 		spawn: ((command: string, args: string[], opts: { env: NodeJS.ProcessEnv }) => {
@@ -133,8 +137,10 @@ beforeEach(() => {
 	seek = null;
 	takeoverOpen = [];
 	takeoverInputs = [];
+	takeoverPages = [];
+	runPage = { isClosed: () => false } as Page;
 	takeover = {
-		open: async ({ handoffId }) => { takeoverOpen.push(handoffId); },
+		open: async ({ handoffId }, page) => { takeoverOpen.push(handoffId); takeoverPages.push(page); },
 		state: async (handoffId) => takeoverOpen.includes(handoffId) ? "ready" : "page_lost",
 		frame: async () => ({ frame: "data:image/jpeg;base64,SAFE", width: 100, height: 50 }),
 		input: async (_handoffId, input) => { takeoverInputs.push(input); },
@@ -192,6 +198,7 @@ describe("scoped local-apply handoff (#1013)", () => {
 			handoffId: "handoff-opaque-1", runId: "run-1", applicationId: "app-1", browserProfile: "isolated", state: "ready",
 		}));
 		expect(takeoverOpen).toEqual(["handoff-opaque-1"]);
+		expect(takeoverPages).toEqual([runPage]);
 		await expect(rt.handoffFrame(request)).resolves.toEqual({ frame: "data:image/jpeg;base64,SAFE", width: 100, height: 50 });
 		await rt.handoffInput({ ...request, input: { type: "click", x: 10, y: 11 } });
 		expect(takeoverInputs).toEqual([{ type: "click", x: 10, y: 11 }]);
@@ -208,6 +215,15 @@ describe("scoped local-apply handoff (#1013)", () => {
 		await expect(rt.handoffStatus({ ...request, applicationId: "other-app" })).rejects.toThrow(/does not match/);
 		await expect(rt.handoffStatus({ ...request, browserProfile: "default" })).rejects.toThrow(/does not match/);
 		await expect(rt.handoffStatus({ ...request, handoffId: "other-handoff" })).resolves.toMatchObject({ state: "closed", terminalReason: "unavailable" });
+	});
+
+	it("fails closed when the exact isolated run page is stale instead of borrowing another page", async () => {
+		runPage = null;
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		await expect(rt.handoff(request)).resolves.toMatchObject({ state: "closed", terminalReason: "page_lost" });
+		expect(takeoverOpen).toEqual([]);
 	});
 
 	it("reports expiry, destroyed pages, and terminal runs as closed rather than resolved", async () => {

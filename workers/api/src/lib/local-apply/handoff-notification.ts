@@ -12,9 +12,9 @@ import { type ApplyRun, createLocalApplyHandoff, markLocalApplyHandoff, usableLo
 const HANDOFF_TTL_MS = 10 * 60_000;
 
 /**
- * A login or CAPTCHA pause may open one exact-page handoff for the existing owner browser. It
- * never wakes a profile, carries browser material to the cloud, or treats a redirect as proof of
- * a completed site step.
+ * A login or CAPTCHA pause may open one exact-page handoff for the existing run browser. It
+ * never wakes, copies, or makes a profile persistent; it carries no browser material to the
+ * cloud and never treats a redirect as proof of a completed site step.
  */
 export async function notifyLiveBrowserBlocker(
 	env: Env,
@@ -25,7 +25,6 @@ export async function notifyLiveBrowserBlocker(
 	attentionDeps: AttentionDeps<Env>,
 ): Promise<void> {
 	if (!( ["login_required", "captcha"] as const).includes(pause.reason as "login_required" | "captcha")) return;
-	if (run.policy.browserProfile !== "default") return;
 	const app = await getOwnedApplication(env, uid, run.applicationId);
 	if (!app || app.fillRunId !== run.id) return;
 	let handoff = await createLocalApplyHandoff(env, { run, app, userId: uid, browserProfile: run.policy.browserProfile, expiresAt: now + HANDOFF_TTL_MS }, now);

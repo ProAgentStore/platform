@@ -891,7 +891,7 @@ describe("an outdated runner never silently produces the old result shape (#977)
 		const r = await call("POST", "/ap/application-runs", ev);
 		expect(r.status).toBe(409);
 		expect(r.body.error).toMatch(/predates this application contract/);
-		expect(r.body.error).toMatch(/0\.4\.96 or newer/);
+		expect(r.body.error).toMatch(/0\.4\.97 or newer/);
 		expect(r.body.error).toMatch(/post-submit confirmation/);
 		expect(r.body.error).toMatch(/npm i -g @proagentstore\/cli|runner_update/);
 		// Nothing was spent and nothing moved: no run row, no dispatch, and the application is still
@@ -905,11 +905,11 @@ describe("an outdated runner never silently produces the old result shape (#977)
 		setRunnerVersion("0.4.84");
 		const ev = readyApp("lead-v2");
 		expect((await call("POST", "/ap/application-runs", ev)).status).toBe(409);
-		setRunnerVersion("0.4.96");
+		setRunnerVersion("0.4.97");
 		const ok = await call("POST", "/ap/application-runs", ev);
 		expect(ok.body.run.status).toBe("running");
 		// And the record says WHICH runner executed it — the fact that was missing.
-		expect(await runRow(ok.body.run.id as string)).toMatchObject({ runner_version: "0.4.96" });
+		expect(await runRow(ok.body.run.id as string)).toMatchObject({ runner_version: "0.4.97" });
 	});
 
 	it("stamps the executing runner's version on every run, and returns it over the API", async () => {
@@ -932,7 +932,7 @@ describe("an outdated runner never silently produces the old result shape (#977)
 	});
 
 	it("an up-to-date runner still reports the #975 zero-bridge diagnosis end to end", async () => {
-		setRunnerVersion("0.4.96");
+		setRunnerVersion("0.4.97");
 		const ev = readyApp("lead-v5");
 		const started = await call("POST", "/ap/application-runs", ev);
 		const runId = started.body.run.id as string;
@@ -951,7 +951,7 @@ describe("an outdated runner never silently produces the old result shape (#977)
 		const run = (await call("GET", `/ap/application-runs/${runId}`)).body.run;
 		// The pairing #977 asks for: the diagnosis AND the contract that produced it, on one record.
 		expect(run.result).toMatchObject({ blockReason: "bridge_unused", diagnostic: { cause: "bridge_unused", bridgeCalls: 0 } });
-		expect(run.runnerVersion).toBe("0.4.96");
+		expect(run.runnerVersion).toBe("0.4.97");
 		expect(await appRow("lead-v5")).toMatchObject({ status: "blocked", block_reason: "bridge_unused" });
 		// Still no free text from the CLI, whichever release ran it.
 		expect(JSON.stringify(run.result.diagnostic)).not.toMatch(/[A-Za-z]{200}/);
@@ -1422,15 +1422,12 @@ describe("cloud supervision", () => {
 });
 
 describe("settings, access and cancel", () => {
-	it("keeps a login handoff exact, opaque and closed on a lost page without changing submit uncertainty", async () => {
-		// `default` is opt-in; the handoff reuses this live owner-authorized profile and does not
-		// make an isolated run persistent or transferable.
-		await call("PUT", "/ap/application-runner/settings", { browserProfile: "default" });
+	it.each(["login_required", "captcha"] as const)("keeps an isolated %s handoff exact, opaque and closed on a lost page without changing submit uncertainty", async (pauseReason) => {
 		const started = await call("POST", "/ap/application-runs", readyApp("lead-handoff"));
 		const runId = started.body.run.id as string;
-		runner("paused", { pause: { reason: "login_required", question: "Sign in on the employer site" } });
-		answers["/local-apply/handoff"] = { status: 200, body: { handoffId: "ignored-by-relay", runId, applicationId: "lead-handoff", browserProfile: "default", state: "ready", expiresAt: "2026-10-11T01:00:00.000Z" } };
-		answers["/local-apply/handoff-status"] = { status: 200, body: { handoffId: "ignored-by-relay", runId, applicationId: "lead-handoff", browserProfile: "default", state: "ready", expiresAt: "2026-10-11T01:00:00.000Z" } };
+		runner("paused", { pause: { reason: pauseReason, question: "Complete the site step" } });
+		answers["/local-apply/handoff"] = { status: 200, body: { handoffId: "ignored-by-relay", runId, applicationId: "lead-handoff", browserProfile: "isolated", state: "ready", expiresAt: "2026-10-11T01:00:00.000Z" } };
+		answers["/local-apply/handoff-status"] = { status: 200, body: { handoffId: "ignored-by-relay", runId, applicationId: "lead-handoff", browserProfile: "isolated", state: "ready", expiresAt: "2026-10-11T01:00:00.000Z" } };
 
 		const first = await call("POST", `/ap/application-runs/${runId}/handoff`);
 		expect(first.status).toBe(201);
@@ -1443,7 +1440,7 @@ describe("settings, access and cancel", () => {
 		expect(alert).toMatchObject({ type: "apply", kind: "alert", url: `/console/instances/ap/applications?handoff=${encodeURIComponent(handoff.id)}` });
 		expect(JSON.stringify(alert)).not.toMatch(/cookie|token|password|https?:\/\//i);
 		const relayBody = sent.find((s) => s.path === "/local-apply/handoff")?.body;
-		expect(relayBody).toMatchObject({ handoffId: handoff.id, runId, applicationId: "lead-handoff", browserProfile: "default" });
+		expect(relayBody).toMatchObject({ handoffId: handoff.id, runId, applicationId: "lead-handoff", browserProfile: "isolated" });
 		expect(JSON.stringify({ first: first.body, relayBody })).not.toMatch(/cookie|token|password|https?:\/\//i);
 
 		// A duplicate tap only checks the same opaque handoff; another run/id cannot read it.
@@ -1458,7 +1455,7 @@ describe("settings, access and cancel", () => {
 		const closed = await call("GET", `/ap/application-runs/${runId}/handoff?handoff_id=${encodeURIComponent(handoff.id)}`);
 		expect(closed.body.handoff).toMatchObject({ state: "closed", reason: "page_lost" });
 		// A lost login view is never evidence that no submit occurred, nor permission to mint another approval.
-		expect(await appRow("lead-handoff")).toMatchObject({ status: "blocked", block_reason: "login_required", submit_attempted_at: null });
+		expect(await appRow("lead-handoff")).toMatchObject({ status: "blocked", block_reason: pauseReason, submit_attempted_at: null });
 	});
 
 	it("defaults to fill-and-review with auto-submit off, and refuses an API-key mode", async () => {

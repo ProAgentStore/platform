@@ -132,7 +132,7 @@ export function registerApplicationRunnerRoutes(router: Hono<{ Bindings: Env }>)
 	/**
 	 * Create (or read back) the one short-lived remote-control handoff for this still-live apply
 	 * run.  The id returned is opaque; the page, browser profile and any login material never leave
-	 * the runner.  Only a login pause can open one — a terminal uncertain attempt must instead use
+	 * the runner. Only a live login/CAPTCHA pause can open one — a terminal uncertain attempt must instead use
 	 * the separate, read-only reconciliation record below.
 	 */
 	router.post("/:instanceId/application-runs/:runId/handoff", async (c) => {
@@ -140,12 +140,9 @@ export function registerApplicationRunnerRoutes(router: Hono<{ Bindings: Env }>)
 		const run = await syncApplyRun(c.env, uid, stored);
 		const app = await getOwnedApplication(c.env, uid, run.applicationId);
 		if (!app || app.fillRunId !== run.id) throw new HttpError(409, "This application is no longer bound to that exact Runner run.");
-		if (run.status !== "paused" || run.pause?.reason !== "login_required") {
-			throw new HttpError(409, "A live browser handoff is available only while this exact run is paused for site login.");
+		if (run.status !== "paused" || !(["login_required", "captcha"] as const).includes(run.pause?.reason as "login_required" | "captcha")) {
+			throw new HttpError(409, "A live browser handoff is available only while this exact run is paused for site login or a CAPTCHA.");
 		}
-		// `default` is the already-authorized Runner profile.  An isolated profile has no durable
-		// authenticated lifetime to hand over; accepting it here would imply persistence we do not have.
-		if (run.policy.browserProfile !== "default") throw new HttpError(409, "This run uses an isolated browser profile, so no existing authorized site-login handoff is available.");
 		const now = Date.now();
 		let handoff = await createLocalApplyHandoff(c.env, { run, app, userId: uid, browserProfile: run.policy.browserProfile, expiresAt: now + HANDOFF_TTL_MS }, now);
 		if (!handoff) throw new HttpError(409, "The handoff could not be bound to this application run.");

@@ -10,7 +10,6 @@ export function isLocalApplyTakeover(id: string): boolean { return id.startsWith
 
 /** Attach the bounded local-apply view to the runner's existing live-page takeover machinery. */
 export function createLocalApplyTakeoverAdapter(deps: {
-	activePage(): Page | null;
 	get(id: string): { page: Page } | undefined;
 	set(id: string, page: Page): void;
 	frame(id: string): Promise<{ frame: string; width: number; height: number }>;
@@ -19,12 +18,11 @@ export function createLocalApplyTakeoverAdapter(deps: {
 }): LocalApplyTakeoverAdapter {
 	const key = (handoffId: string) => `${prefix}${handoffId}`;
 	return {
-		async open(request: LocalApplyHandoffRequest): Promise<void> {
-			if (request.browserProfile !== "default") throw new RunnerInputError("This browser profile has no live handoff page", 409);
+		async open(request: LocalApplyHandoffRequest, page: Page): Promise<void> {
 			const id = key(request.handoffId);
 			if (deps.get(id)) throw new RunnerInputError("A local application handoff already exists", 409);
-			// Do not create a page here: a destroyed page must remain a lost handoff, never look ready.
-			const page = deps.activePage();
+			// Do not create or substitute a page here. The runtime supplied the page retained by
+			// this exact run/profile; a destroyed page must remain a lost handoff, never look ready.
 			if (!page || page.isClosed()) throw new RunnerInputError("The local application page is no longer available", 409);
 			deps.set(id, page);
 		},

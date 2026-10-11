@@ -19,6 +19,7 @@ import { LocalArtifactRuntime } from "./local-artifact/runtime.js";
 import { LOCAL_ARTIFACT_TASK_TYPE } from "./local-artifact/contract.js";
 import { LocalApplyRuntime } from "./local-apply/runtime.js";
 import { LOCAL_APPLY_TASK_TYPE } from "./local-apply/contract.js";
+import { createLocalApplyBrowserFactory } from "./local-apply/live-run-browser.js";
 import { createLocalApplyTakeoverAdapter, isLocalApplyTakeover } from "./local-apply/takeover-adapter.js";
 import { WORKFLOW_DRIVEN_TASKS } from "./task-types.js";
 /** True for a plain object. */
@@ -117,13 +118,14 @@ export class LocalRunner {
 			await mcp.start({ userDataDir: join(runDir, "profile"), headless: config.headless });
 			return { tools: mcp, stop: () => mcp.stop() };
 		};
+		const applyBrowserFor = createLocalApplyBrowserFactory({ headless: config.headless, defaultBrowser: browserFor, sharedPage: () => this.activePage });
 		this.localBrowser = new LocalBrowserRuntime({ dataDir: config.dataDir, selfUrl: () => this.selfUrl, browserFor });
 		this.localArtifact = new LocalArtifactRuntime({ dataDir: config.dataDir });
 		this.localApply = new LocalApplyRuntime({
 			dataDir: config.dataDir,
 			selfUrl: () => this.selfUrl,
-			browserFor,
-			takeover: createLocalApplyTakeoverAdapter({ activePage: () => this.activePage, get: (id) => this.takeovers.get(id), set: (id, page) => this.takeovers.set(id, { page, reason: "local_apply", humanDone: false }), frame: (id) => this.takeoverFrame(id), input: (id, input) => this.takeoverInput(id, input), end: (id) => this.endTakeover(id) }),
+			browserFor: applyBrowserFor,
+			takeover: createLocalApplyTakeoverAdapter({ get: (id) => this.takeovers.get(id), set: (id, page) => this.takeovers.set(id, { page, reason: "local_apply", humanDone: false }), frame: (id) => this.takeoverFrame(id), input: (id, input) => this.takeoverInput(id, input), end: (id) => this.endTakeover(id) }),
 		});
 		// Tasks paused/running on a previous process are orphaned now — their
 		// pages and takeover sessions are gone. Fail them so the board is clean.

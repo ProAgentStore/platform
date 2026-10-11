@@ -1,9 +1,11 @@
 import { RunnerInputError } from "../errors.js";
 import type { TakeoverInput } from "../types.js";
+import type { Page } from "playwright";
 import type { LocalApplyHandoffRequest, LocalApplyHandoffStatus, LocalApplyHandoffTerminalReason, LocalApplyTaskEnvelope } from "./contract.js";
 
 export interface LocalApplyTakeoverAdapter {
-	open(request: LocalApplyHandoffRequest): Promise<void>;
+	/** The caller supplies the page retained by this exact run/profile. */
+	open(request: LocalApplyHandoffRequest, page: Page): Promise<void>;
 	state(handoffId: string): Promise<"ready" | "page_lost">;
 	frame(handoffId: string): Promise<{ frame: string; width: number; height: number }>;
 	input(handoffId: string, input: TakeoverInput): Promise<void>;
@@ -13,6 +15,7 @@ export interface LocalApplyTakeoverAdapter {
 interface LocalApplyHandoffRun {
 	envelope: Pick<LocalApplyTaskEnvelope, "runId" | "applicationId" | "browserProfile">;
 	state: "running" | "paused" | "ended";
+	browser?: { handoffPage?(): Page | null };
 	handoff?: { handoffId: string; expiresAt: number; state: "ready" | "closed"; terminalReason?: LocalApplyHandoffTerminalReason };
 }
 
@@ -37,8 +40,10 @@ export class LocalApplyHandoffRuntime<T extends LocalApplyHandoffRun> {
 		if (run.state === "ended") return this.closed(run, request.handoffId, "run_ended");
 		if (run.handoff) throw new RunnerInputError("A handoff already exists for this application run", 409);
 		if (!this.host.takeover) return this.closed(run, request.handoffId, "unavailable");
+		const page = run.browser?.handoffPage?.();
+		if (!page || page.isClosed()) return this.closed(run, request.handoffId, "page_lost");
 		try {
-			await this.host.takeover.open(request);
+			await this.host.takeover.open(request, page);
 		} catch {
 			return this.closed(run, request.handoffId, "profile_unavailable");
 		}

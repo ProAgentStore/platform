@@ -25,6 +25,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameS
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { Page } from "playwright";
 import { RunnerInputError } from "../errors.js";
 import { isHomeRelative, isWorkspaceRelative } from "../local-artifact/contract.js";
 import { resolveSource } from "../local-artifact/runtime.js";
@@ -69,6 +70,8 @@ import { LocalApplyHandoffRuntime, type LocalApplyTakeoverAdapter } from "./runt
 export interface RunBrowser {
 	tools: BrowserTools;
 	stop(): Promise<void>;
+	/** The currently live page in this run's own browser context, if it has one. */
+	handoffPage?(): Page | null;
 }
 
 export interface LocalApplyRuntimeDeps {
