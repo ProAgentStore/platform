@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { AutomaticUpdateController } from "./auto-update-controller.js";
-import { acceptPolicyResponse, autoUpdateStatusWire, type AutoUpdatePolicy } from "./auto-update.js";
+import { acceptPolicyResponse, autoUpdateStatusWire, ResponseFence, type AutoUpdatePolicy } from "./auto-update.js";
 import type { UpdateFacts, UpdatePlan } from "./self-update.js";
 
 type QueuedTimer = { fn: () => void; ms: number; unref(): void };
@@ -38,9 +38,11 @@ function runner(opts: { cached: AutoUpdatePolicy; svc: ReturnType<typeof service
 	const clock = { t: 1_000_000 };
 	const cell = { policy: { ...opts.cached }, authoritative: false, refreshing: false };
 	const installs: number[] = [];
+	const fence = new ResponseFence();
 	let controller: AutomaticUpdateController;
-	// relay.ts acceptAutoUpdatePolicy, with its production merge.
-	const accept = (response: unknown) => {
+	// relay.ts acceptAutoUpdatePolicy, with its production fence and merge.
+	const accept = (response: unknown, sent: number) => {
+		if (!fence.accepts(sent)) return;
 		const accepted = acceptPolicyResponse(cell.policy, cell.authoritative, response);
 		if (!accepted) return;
 		cell.policy = accepted.policy;
@@ -51,8 +53,9 @@ function runner(opts: { cached: AutoUpdatePolicy; svc: ReturnType<typeof service
 	};
 	/** A registration or heartbeat: its body is built NOW, its response is delivered when the test says. */
 	const send = () => {
+		const sent = fence.next();
 		const response = opts.svc.receive({ status: autoUpdateStatusWire(cell.policy.status) });
-		return { deliver: () => accept(response) };
+		return { deliver: () => accept(response, sent) };
 	};
 	controller = new AutomaticUpdateController({
 		policy: () => ({ value: cell.policy, authoritative: cell.authoritative }),
@@ -67,7 +70,7 @@ function runner(opts: { cached: AutoUpdatePolicy; svc: ReturnType<typeof service
 				cell.refreshing = false;
 			}
 		},
-		facts: opts.facts ?? (async () => ({ current: "0.4.99", latest: "0.4.99", fromSource: false, restarter: "pags-up", busy: [] })),
+		facts: opts.facts ?? (async () => ({ current: "0.4.99", latest: "0.4.99", fromSource: false, restarter: "pags-up", busy: [], observations: looked(clock.t) })),
 		plan: opts.plan ?? ((f) => (f.current === f.latest ? { action: "up-to-date", current: f.current } : { action: "update", current: f.current, latest: f.latest ?? "", restarter: "pags-up" })),
 		installAndRestart: async () => {
 			installs.push(clock.t);
@@ -100,6 +103,12 @@ function runner(opts: { cached: AutoUpdatePolicy; svc: ReturnType<typeof service
 	};
 	return { cell, controller, timers, send, fire, installs, clock };
 }
+
+/** Both halves of the relay's paired work look answered — what `updateFacts` always reports on a healthy runtime. */
+const looked = (at: number) => [
+	{ source: "sessions" as const, success: true, sampledAt: at },
+	{ source: "health" as const, success: true, sampledAt: at },
+];
 
 /** The process after a successful automatic install: its cache still says `restarting`, the release is now current. */
 const afterRestart = () => ({ autoUpdate: true, status: "restarting" as const, latestVersion: "0.4.99" });
@@ -169,6 +178,19 @@ describe("a late policy echo never regresses the controller's verified state (#1
 		r.send().deliver();
 		expect(r.cell.policy.autoUpdate).toBe(true);
 		expect(r.timers).toHaveLength(1);
+	});
+
+	it("the fence: a stale ON answer delivered after the owner's OFF is dropped on arrival — never even briefly ON", async () => {
+		const svc = service({ autoUpdate: true, status: "verified_success" });
+		const r = runner({ cached: { autoUpdate: true, status: "verified-success" }, svc });
+		r.send().deliver();
+		const staleOn = r.send(); // sent while ON
+		svc.owner(false);
+		r.send().deliver(); // the OFF, sent later, arrives first
+		staleOn.deliver();
+		expect(r.cell.policy.autoUpdate).toBe(false);
+		expect(r.timers).toHaveLength(0);
+		expect(r.installs).toEqual([]);
 	});
 
 	it("a stale ON echo arriving after the owner's OFF cannot re-enable: the next answer is the owner's OFF", async () => {

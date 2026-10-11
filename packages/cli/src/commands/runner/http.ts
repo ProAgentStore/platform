@@ -66,6 +66,8 @@ export async function requestRunner<T>(
 	path: string,
 	opts: RunnerRequestOptions,
 	body?: unknown,
+	/** Aborts the request AND its body read — a bounded caller's late answer is never consumed (#1020). */
+	signal?: AbortSignal,
 ): Promise<T> {
 	const headers: Record<string, string> = {
 		...runnerRequestHeaders(opts),
@@ -75,6 +77,7 @@ export async function requestRunner<T>(
 		method,
 		headers,
 		body: body === undefined ? undefined : JSON.stringify(body),
+		signal,
 	});
 	const { text, data } = await readResponse(res);
 	if (!res.ok) {
@@ -89,6 +92,8 @@ export async function requestPags<T>(
 	path: string,
 	opts: PagsRequestOptions,
 	body?: unknown,
+	/** Aborts the request AND its body read — a bounded caller's late answer is never consumed (#1020). */
+	signal?: AbortSignal,
 ): Promise<T> {
 	const headers: Record<string, string> = {
 		...pagsHeaders(opts.pagsToken),
@@ -101,6 +106,7 @@ export async function requestPags<T>(
 		method,
 		headers,
 		body: body === undefined ? undefined : JSON.stringify(body),
+		signal,
 	});
 	const { text, data } = await readResponse(res);
 	if (!res.ok) {

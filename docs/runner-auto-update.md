@@ -68,6 +68,16 @@ to a cap of about an hour), so `next_retry_due_at` stays set; recovery does not 
 Only a fresh ON from the service lets a retry observe work or install. An explicit OFF stops the
 retries.
 
+`verified_success` is a claim about an UPDATE CYCLE, not about a version (CLI 0.4.109). The runner reports it only
+when its own persisted record shows an attempted install (`installing`/`restarting` with that target, written before
+the restart and read back by the new process), the running and published versions both read as `x.y.z`, the running
+one is at or past the target, and both halves of the local work look (`/coding/sessions`, `/health`) answered. A
+runner that merely finds itself current reports `enabled`; an unreadable version, a restart onto an older version
+than attempted, or a missing/partial health look reports `failed` with the reason, and is retried with backoff.
+Each policy refresh and each work/registry look is bounded at 30 seconds: past it the request is aborted, the check
+counts as failed (`last_check_at` moves, `last_decision_at` does not), a retry is scheduled, and a late answer is
+dropped — it cannot restore authority, override a newer answer, or start an install.
+
 The status itself is the runner's record, not the service's. Every registration and heartbeat answer
 echoes back the status that request reported, which can be older than a decision the controller made
 while it was in flight. From CLI 0.4.108 a runner takes only the owner's switch from such an answer and

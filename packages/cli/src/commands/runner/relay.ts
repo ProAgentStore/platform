@@ -9,7 +9,7 @@ import { deferredUpdateLease, deferredUpdateLeaseActive, installVersion, latestP
 import { diffMembership, instanceLabel, pendingRegistrations, pinnedAway, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance, type ReattachRequest } from "./membership.js";
 import { formatStatusLine } from "./status-line.js";
 import type { PagsRequestOptions } from "./types.js";
-import { acceptPolicyResponse, autoUpdatePolicyKey, autoUpdateStatusWire, loadAutoUpdatePolicy, mayAutomaticallyRestart, nextAutoUpdateDelayMs, saveAutoUpdatePolicy, type AutoUpdatePolicy, type AutoUpdateStatus } from "./auto-update.js";
+import { acceptPolicyResponse, ResponseFence, autoUpdatePolicyKey, autoUpdateStatusWire, loadAutoUpdatePolicy, mayAutomaticallyRestart, nextAutoUpdateDelayMs, saveAutoUpdatePolicy, type AutoUpdatePolicy, type AutoUpdateStatus } from "./auto-update.js";
 import { type AutoUpdateDiagnostics, AutomaticUpdateController, RelayMutationAdmission } from "./auto-update-controller.js";
 import { observedRunnerWork } from "./runner-work-observation.js";
 
@@ -71,8 +71,9 @@ export async function connectViaRelay(
 		};
 		if (autoUpdateKey) saveAutoUpdatePolicy(autoUpdateKey, autoUpdatePolicy);
 	};
-	const acceptAutoUpdatePolicy = (response: unknown) => {
-		if (!autoUpdateKey) return;
+	const policyFence = new ResponseFence(); // a late answer never overrides a newer one (#1020)
+	const acceptAutoUpdatePolicy = (response: unknown, sent: number) => {
+		if (!autoUpdateKey || !policyFence.accepts(sent)) return;
 		// The switch is the service's; the lifecycle status is this controller's — a late echo never regresses it (#1020).
 		const accepted = acceptPolicyResponse(autoUpdatePolicy, autoUpdatePolicyAuthoritative, response);
 		if (!accepted) return;
@@ -99,7 +100,8 @@ export async function connectViaRelay(
 	// and the pane still printed a tick because the success line was unconditional (#497).
 	const registered = new Set<string>();
 	let lastRegisterError = "";
-	const registerRuntime = async (id: string, forceClaim = force): Promise<boolean> => {
+	const registerRuntime = async (id: string, forceClaim = force, signal?: AbortSignal): Promise<boolean> => {
+		const sent = policyFence.next();
 		try {
 			const result = await requestPags<Record<string, unknown>>("POST", `/v1/instances/${apiPathSegment(id)}/runtime`, opts, {
 				endpointUrl: localUrl,
@@ -117,8 +119,9 @@ export async function connectViaRelay(
 					error: autoUpdatePolicy.reason,
 					...autoUpdateDiagnostics(),
 				},
-			});
-			acceptAutoUpdatePolicy(result);
+			}, signal);
+			if (signal?.aborted) return false; // a refresh the controller abandoned: its answer confers nothing
+			acceptAutoUpdatePolicy(result, sent);
 			registered.add(id);
 			return true;
 		} catch (e) {
@@ -131,13 +134,13 @@ export async function connectViaRelay(
 	};
 	/** A cached policy is only a display hint. Every unattended check re-registers one held agent
 	 * to obtain a fresh owner decision; a network/API failure therefore defers rather than installs. */
-	const refreshAutomaticPolicy = async (): Promise<boolean> => {
+	const refreshAutomaticPolicy = async (signal?: AbortSignal): Promise<boolean> => {
 		const id = registered.values().next().value as string | undefined;
 		if (!id) return false;
 		autoUpdatePolicyAuthoritative = false;
 		refreshingAutomaticPolicy = true;
 		try {
-			return await registerRuntime(id) && autoUpdatePolicyAuthoritative;
+			return (await registerRuntime(id, force, signal)) && autoUpdatePolicyAuthoritative;
 		} finally {
 			refreshingAutomaticPolicy = false;
 		}
@@ -172,14 +175,14 @@ export async function connectViaRelay(
 	/** The cloud asking for a membership pass now (#850). A scoped run refuses: it must stay as
 	 *  narrow as the user asked, and saying so is what lets the repin report the real remedy. */
 	/** The facts `runner_update` decides on (#859): versions, how this process runs, which engines are mid-turn. */
-	const updateFacts = async () => {
+	const updateFacts = async (signal?: AbortSignal) => {
 		const [sessionsResult, healthResult] = await Promise.allSettled([
 			requestRunner<{ sessions?: Array<{ sessionId: string; alive?: boolean; runState?: string }> }>("GET", "/coding/sessions", {
 			url: localUrl,
 			token: runnerToken,
 			instanceId: instanceIds[0],
-			}),
-			requestRunner<{ work?: { codingTurns?: number; localRuns?: number; detail?: string[] } }>("GET", "/health", { url: localUrl, token: runnerToken, instanceId: instanceIds[0] }),
+			}, undefined, signal),
+			requestRunner<{ work?: { codingTurns?: number; localRuns?: number; detail?: string[] } }>("GET", "/health", { url: localUrl, token: runnerToken, instanceId: instanceIds[0] }, undefined, signal),
 		]);
 		// An unavailable observation is NEVER evidence that a restart is safe. A local browser/apply
 		// run can be destroyed by a restart just as surely as a coding turn, so fail closed.
@@ -196,7 +199,7 @@ export async function connectViaRelay(
 		return {
 			observations,
 			current: CLI_VERSION,
-			latest: await latestPublishedVersion(),
+			latest: await latestPublishedVersion(undefined, signal),
 			fromSource: runsFromSource(),
 			restarter: restarterFrom(process.env),
 			// A restart ends browser/application work too. Give these durable names to the same
@@ -592,6 +595,7 @@ export async function connectViaRelay(
 			});
 			for (const id of [...attached.keys()]) {
 				try {
+					const sent = policyFence.next();
 					const response = await requestPags<Record<string, unknown>>("POST", `/v1/instances/${apiPathSegment(id)}/runtime/heartbeat`, opts, {
 						runnerNode,
 						machineId: machine.id,
@@ -603,7 +607,7 @@ export async function connectViaRelay(
 							...autoUpdateDiagnostics(),
 						},
 					});
-					acceptAutoUpdatePolicy(response);
+					acceptAutoUpdatePolicy(response, sent);
 				} catch (e) {
 					failure = e instanceof Error ? e.message : String(e);
 				}

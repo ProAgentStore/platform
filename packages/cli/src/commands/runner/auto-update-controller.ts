@@ -1,3 +1,4 @@
+import { isVersion, olderThan } from "../../bootstrap/payload.js";
 import { nextAutoUpdateDelayMs, type AutoUpdatePolicy, type AutoUpdateStatus } from "./auto-update.js";
 import type { UpdateFacts, UpdateObservation, UpdatePlan } from "./self-update.js";
 
@@ -6,9 +7,10 @@ type Timer = ReturnType<typeof setTimeout>;
 
 export interface AutomaticUpdateControllerDeps {
 	policy: () => { value: AutoUpdatePolicy; authoritative: boolean };
-	/** Re-registers against the service; false means cached policy is not usable for mutation. */
-	refreshPolicy: () => Promise<boolean>;
-	facts: () => Promise<UpdateFacts>;
+	/** Re-registers against the service; false means cached policy is not usable for mutation. Aborted when its bound expires. */
+	refreshPolicy: (signal?: AbortSignal) => Promise<boolean>;
+	/** The paired local-work look plus the registry read. Aborted when its bound expires. */
+	facts: (signal?: AbortSignal) => Promise<UpdateFacts>;
 	plan: (facts: UpdateFacts) => UpdatePlan;
 	/** The relay's real npm + final-admission + restart bridge. */
 	installAndRestart: (plan: UpdatePlanAction, automatic: boolean) => Promise<boolean>;
@@ -17,6 +19,8 @@ export interface AutomaticUpdateControllerDeps {
 	clearTimer?: (timer: Timer) => void;
 	random?: () => number;
 	now?: () => number;
+	/** The bound on one policy refresh or one facts look (#1020); its own timer, apart from the scheduling one. */
+	boundTimer?: (fn: () => void, ms: number) => Timer;
 }
 
 /** Why an enabled controller is not installing yet — a normalized class, never raw session data (#1020). */
@@ -37,6 +41,31 @@ export interface AutoUpdateDiagnostics {
 const MAX_OBSERVATIONS = 5;
 /** The deferred re-decision cadence while waiting for local work to finish. */
 export const IDLE_RETRY_MS = 15_000;
+/** How long one policy refresh, or one look at local work and the registry, may take before it counts as failed (#1020). */
+export const OBSERVATION_TIMEOUT_MS = 30_000;
+
+/**
+ * Whether a check on the latest release VERIFIES an update cycle (#1020), or only finds the runner current.
+ * `verified` needs this machine's own record of an attempted install (`running`/`restarting` with its target,
+ * persisted before the restart), readable versions, a running version at or past that target, and a local
+ * runtime that answered the paired work look. Anything less is never `verified-success`.
+ */
+export function updateVerdict(attempt: AutoUpdatePolicy, facts: UpdateFacts): { kind: "verified" | "current" } | { kind: "unverified"; reason: string } {
+	const target = attempt.status === "running" || attempt.status === "restarting" ? attempt.latestVersion : undefined;
+	if (!isVersion(facts.current) || !isVersion(facts.latest)) return { kind: "unverified", reason: `the running (${facts.current}) or published (${facts.latest}) version could not be read` };
+	if (target === undefined) return { kind: "current" };
+	if (!isVersion(target)) return { kind: "unverified", reason: `the attempted update's target (${target}) could not be read` };
+	if (olderThan(facts.current, target)) return { kind: "unverified", reason: `the runner came back on ${facts.current}, not the attempted ${target}` };
+	// Positive health evidence: BOTH halves of the paired look answered in the shape the guard reads. None, one, or a
+	// malformed answer is not a healthy reattachment, and each says which.
+	const observed = facts.observations ?? [];
+	const answered = (source: string) => observed.some((o) => o.source === source && o.success);
+	if (!observed.length) return { kind: "unverified", reason: `the runner is on ${facts.current}, but no health look was taken` };
+	if (!answered("sessions") || !answered("health")) {
+		return { kind: "unverified", reason: `the runner is on ${facts.current}, but its local runtime answered only partly (sessions ${answered("sessions") ? "ok" : "failed"}, health ${answered("health") ? "ok" : "failed"})` };
+	}
+	return { kind: "verified" };
+}
 
 /** The work names `observedRunnerWork` produces, reduced to one class. An empty wait is `unknown`, never idle. */
 export function blockerClassFor(waitingFor: readonly string[]): BlockerClass {
@@ -63,10 +92,12 @@ export class AutomaticUpdateController {
 	private readonly now: () => number;
 	private readonly setTimer: (fn: () => void, ms: number) => Timer;
 	private readonly clearTimer: (timer: Timer) => void;
+	private readonly boundTimer: (fn: () => void, ms: number) => Timer;
 
 	constructor(private readonly deps: AutomaticUpdateControllerDeps) {
 		this.setTimer = deps.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
 		this.clearTimer = deps.clearTimer ?? ((timer) => clearTimeout(timer));
+		this.boundTimer = deps.boundTimer ?? ((fn, ms) => setTimeout(fn, ms));
 		this.now = deps.now ?? Date.now;
 	}
 
@@ -89,7 +120,7 @@ export class AutomaticUpdateController {
 		if (this.checking || this.waiting || !this.retryable()) return;
 		this.checking = true;
 		try {
-			if (!(await this.deps.refreshPolicy()) || !this.enabled()) {
+			if (!(await this.bounded((signal) => this.deps.refreshPolicy(signal))) || !this.enabled()) {
 				this.offline();
 				return;
 			}
@@ -155,9 +186,41 @@ export class AutomaticUpdateController {
 		this.schedule();
 	}
 
+	/**
+	 * One bounded piece of work (#1020): a policy refresh or a facts look. Past {@link OBSERVATION_TIMEOUT_MS} its
+	 * signal is aborted (the relay drops that request's response, so a late answer can never restore authority) and
+	 * this resolves null — the race has settled, so the late result cannot overwrite a newer one or reach planning,
+	 * install or restart. A late rejection is absorbed rather than left unhandled.
+	 */
+	private async bounded<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T | null> {
+		const abort = new AbortController();
+		let timer: Timer | undefined;
+		const expired = new Promise<null>((resolve) => {
+			timer = this.boundTimer(() => {
+				abort.abort();
+				resolve(null);
+			}, OBSERVATION_TIMEOUT_MS);
+			timer.unref?.();
+		});
+		const running = work(abort.signal);
+		running.catch(() => undefined);
+		try {
+			return await Promise.race([running, expired]);
+		} finally {
+			if (timer) this.clearTimer(timer);
+		}
+	}
+
 	private async decide(): Promise<void> {
-		const facts = await this.deps.facts();
+		const facts = await this.bounded((signal) => this.deps.facts(signal));
 		this.checkAt = this.now();
+		if (!facts) {
+			// A CHECK that failed, not a decision: `decisionAt` keeps the last real one.
+			this.failures++;
+			this.deps.status("failure", { reason: `The local work and registry check did not answer within ${OBSERVATION_TIMEOUT_MS / 1000}s; it will be retried.` });
+			this.schedule();
+			return;
+		}
 		if (facts.observations?.length) this.observations = [...this.observations, ...facts.observations].slice(-MAX_OBSERVATIONS);
 		// Authority lost mid-check (a concurrent refresh failed): decide nothing, but keep the retry.
 		if (!this.enabled()) return this.offline();
@@ -165,8 +228,16 @@ export class AutomaticUpdateController {
 		this.decisionAt = this.now();
 		this.blockerClass = plan.action === "wait" ? blockerClassFor(plan.waitingFor) : null;
 		if (plan.action === "up-to-date") {
-			this.failures = 0;
-			this.deps.status("verified-success", { latestVersion: facts.latest ?? undefined, reason: undefined });
+			// Current is not the same claim as a verified update cycle (#1020): only an attempted install that came
+			// back on its target with a healthy runtime is `verified-success`.
+			const verdict = updateVerdict(this.deps.policy().value, facts);
+			if (verdict.kind === "unverified") {
+				this.failures++;
+				this.deps.status("failure", { reason: `Not verified: ${verdict.reason}.` });
+			} else {
+				this.failures = 0;
+				this.deps.status(verdict.kind === "verified" ? "verified-success" : "enabled", { latestVersion: facts.latest ?? undefined, reason: undefined });
+			}
 			this.schedule();
 			return;
 		}
@@ -208,7 +279,7 @@ export class AutomaticUpdateController {
 				// bounded retry instead of finding the old wait still marked in flight.
 				this.waiting = false;
 				try {
-					if (!(await this.deps.refreshPolicy()) || !this.enabled()) {
+					if (!(await this.bounded((signal) => this.deps.refreshPolicy(signal))) || !this.enabled()) {
 						this.offline();
 						return;
 					}

@@ -180,6 +180,24 @@ export function acceptPolicyResponse(local: AutoUpdatePolicy, wasAuthoritative: 
 	return { policy: ownerTransition ? { ...local, ...remote } : { ...local, autoUpdate: remote.autoUpdate }, action };
 }
 
+/**
+ * Orders the policy answers a runner accepts (#1020). Every registration/heartbeat takes a number as it is SENT; an
+ * answer older than one already accepted is dropped, so a late ON cannot land after the owner's OFF, nor restore
+ * authority a newer answer settled. Answers are otherwise taken in whatever order they arrive.
+ */
+export class ResponseFence {
+	private sent = 0;
+	private accepted = 0;
+	next(): number {
+		return ++this.sent;
+	}
+	accepts(sentAs: number): boolean {
+		if (sentAs < this.accepted) return false;
+		this.accepted = sentAs;
+		return true;
+	}
+}
+
 /** The final unattended admission gate: unknown work is unsafe, never idle. */
 export function mayAutomaticallyRestart(input: { authoritative: boolean; enabled: boolean; workObserved: boolean; busy: readonly string[] }): boolean {
 	return input.authoritative && input.enabled && input.workObserved && input.busy.length === 0;

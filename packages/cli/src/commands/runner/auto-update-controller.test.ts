@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { AutomaticUpdateController, IDLE_RETRY_MS } from "./auto-update-controller.js";
-import { nextAutoUpdateDelayMs } from "./auto-update.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { AutomaticUpdateController, IDLE_RETRY_MS, OBSERVATION_TIMEOUT_MS } from "./auto-update-controller.js";
+import { loadAutoUpdatePolicy, nextAutoUpdateDelayMs, saveAutoUpdatePolicy } from "./auto-update.js";
 import { observedRunnerWork } from "./runner-work-observation.js";
 import type { AutoUpdatePolicy, AutoUpdateStatus } from "./auto-update.js";
-import type { UpdateFacts, UpdatePlan } from "./self-update.js";
+import { planRunnerUpdate, type UpdateFacts, type UpdatePlan } from "./self-update.js";
 
 type QueuedTimer = { fn: () => void; ms: number; unref(): void };
 const idleFacts = (): UpdateFacts => ({ current: "0.4.90", latest: "0.4.91", fromSource: false, restarter: "pags-up", busy: [] });
@@ -55,8 +58,10 @@ describe("AutomaticUpdateController — relay-wired unattended update orchestrat
 		expect(h.timers[0].ms).toBe(5_000);
 		h.timers.shift()?.fn();
 		await vi.waitFor(() => expect(h.refresh).toHaveBeenCalledTimes(1));
-		expect(h.facts).toHaveBeenCalledTimes(1);
-		await vi.waitFor(() => expect(h.statuses.at(-1)?.status).toBe("verified-success"));
+		// The refresh is bounded now (#1020): facts follow one await later.
+		await vi.waitFor(() => expect(h.facts).toHaveBeenCalledTimes(1));
+		// No install was attempted, so finding the runner current is `enabled`, never a verified cycle (#1020).
+		await vi.waitFor(() => expect(h.statuses.at(-1)?.status).toBe("enabled"));
 	});
 
 	it("never installs from cached policy when authoritative refresh is offline or disabled", async () => {
@@ -263,7 +268,12 @@ describe("AutomaticUpdateController — liveness and diagnostics (#1020)", () =>
 	});
 
 	it("a versioned reconnect on the latest release reports verified-success with no blocker", async () => {
-		const h = harness({ facts: async () => ({ ...idleFacts(), current: "0.4.91" }), plan: (f) => ({ action: "up-to-date", current: f.current }) });
+		// A reconnect after an ATTEMPTED install carries that attempt's persisted record and a healthy paired look (#1020).
+		const h = harness({
+			policy: { value: { autoUpdate: true, status: "restarting", latestVersion: "0.4.91" }, authoritative: true },
+			facts: async () => ({ ...idleFacts(), current: "0.4.91", observations: [{ source: "sessions", success: true, sampledAt: 1 }, { source: "health", success: true, sampledAt: 1 }] }),
+			plan: (f) => ({ action: "up-to-date", current: f.current }),
+		});
 		await h.controller.runNow();
 		expect(h.install).not.toHaveBeenCalled();
 		expect(h.statuses.at(-1)).toMatchObject({ status: "verified-success", extra: { latestVersion: "0.4.91" } });
@@ -413,3 +423,202 @@ describe("AutomaticUpdateController — policy-refresh retry under the productio
 });
 
 type BlockerExpectation = "active_sessions" | "observation_failure";
+
+// ── #1020: a verified cycle needs an attempted install, readable versions and a healthy look; every look is bounded ──
+
+describe("AutomaticUpdateController — verified update cycle and bounded observation (#1020)", () => {
+	const looked = (sessions = true, health = true) => [
+		{ source: "sessions" as const, success: sessions, sampledAt: 1 },
+		{ source: "health" as const, success: health, sampledAt: 1 },
+	];
+	const upToDate = (f: UpdateFacts): UpdatePlan => planRunnerUpdate(f);
+	const attempted = (target: string): { value: AutoUpdatePolicy; authoritative: boolean } => ({ value: { autoUpdate: true, status: "restarting", latestVersion: target }, authoritative: true });
+	const current = (version: string, latest = version, observations = looked()): (() => Promise<UpdateFacts>) => async () => ({ ...idleFacts(), current: version, latest, observations });
+
+	it("verified-success requires an actual attempted install, not ordinary up-to-date", async () => {
+		const h = harness({ facts: current("0.4.91"), plan: upToDate });
+		await h.controller.runNow();
+		expect(h.statuses.map((s) => s.status)).not.toContain("verified-success");
+		expect(h.statuses.at(-1)?.status).toBe("enabled");
+	});
+
+	it("malformed current version does not produce verified-success — with or without an attempted install", async () => {
+		for (const policy of [undefined, attempted("0.4.91")]) {
+			const h = harness({ policy, facts: current("not-a-version", "0.4.91"), plan: upToDate });
+			await h.controller.runNow();
+			expect(h.statuses.at(-1)).toMatchObject({ status: "failure", extra: { reason: expect.stringContaining("could not be read") } });
+		}
+	});
+
+	it("malformed latest version does not produce verified-success — !olderThan alone is not evidence", async () => {
+		const h = harness({ policy: attempted("0.4.91"), facts: current("0.4.91", "not-a-version"), plan: upToDate });
+		await h.controller.runNow();
+		expect(h.statuses.at(-1)).toMatchObject({ status: "failure", extra: { reason: expect.stringContaining("could not be read") } });
+	});
+
+	it("attempted target mismatch does not produce verified-success", async () => {
+		const h = harness({ policy: attempted("0.4.108"), facts: current("0.4.107"), plan: upToDate });
+		await h.controller.runNow();
+		expect(h.statuses.at(-1)).toMatchObject({ status: "failure", extra: { reason: expect.stringContaining("came back on 0.4.107, not the attempted 0.4.108") } });
+	});
+
+	it.each([
+		["no health look at all", [], "no health look was taken"],
+		["only the sessions half answered", looked(true, false), "answered only partly (sessions ok, health failed)"],
+		["only the health half answered", looked(false, true), "answered only partly (sessions failed, health ok)"],
+		["both halves malformed", looked(false, false), "answered only partly (sessions failed, health failed)"],
+	])("health evidence: %s is not a healthy reattachment", async (_l, observations, reason) => {
+		const h = harness({ policy: attempted("0.4.91"), facts: current("0.4.91", "0.4.91", observations as ReturnType<typeof looked>), plan: upToDate });
+		await h.controller.runNow();
+		expect(h.statuses.at(-1)).toMatchObject({ status: "failure", extra: { reason: expect.stringContaining(reason) } });
+	});
+
+	it("the attempted install survives an ACTUAL restart: the record persisted by one controller verifies in the next", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pags-auto-update-cache-"));
+		const env = { PAGS_AUTO_UPDATE_POLICY_FILE: join(dir, "auto-update.json") } as NodeJS.ProcessEnv;
+		const key = "default:machine-1";
+		try {
+			// Process A: an idle install of 0.4.91 — its status writer is the relay's (merge + persist).
+			let record: AutoUpdatePolicy = { autoUpdate: true };
+			const writer = (status: AutoUpdateStatus, extra: Partial<AutoUpdatePolicy> = {}) => {
+				record = { ...record, ...extra, status };
+				saveAutoUpdatePolicy(key, record, env);
+			};
+			const a = new AutomaticUpdateController({ policy: () => ({ value: record, authoritative: true }), refreshPolicy: async () => true, facts: current("0.4.90", "0.4.91"), plan: planRunnerUpdate, installAndRestart: async () => true, status: writer, setTimer: () => ({ unref() {} }) as unknown as ReturnType<typeof setTimeout>, random: () => 0 });
+			await a.runNow();
+			expect(loadAutoUpdatePolicy(key, env)).toMatchObject({ status: "restarting", latestVersion: "0.4.91" });
+			// Process B: a NEW controller, its policy read back from the file, on the version A installed.
+			const restarted = harness({ policy: { value: loadAutoUpdatePolicy(key, env) as AutoUpdatePolicy, authoritative: true }, facts: current("0.4.91"), plan: upToDate });
+			await restarted.controller.runNow();
+			expect(restarted.statuses.at(-1)?.status).toBe("verified-success");
+			// …while a machine with no persisted attempt, on the same version, is only current.
+			const fresh = harness({ policy: { value: loadAutoUpdatePolicy("default:other", env) ?? { autoUpdate: true }, authoritative: true }, facts: current("0.4.91"), plan: upToDate });
+			await fresh.controller.runNow();
+			expect(fresh.statuses.at(-1)?.status).toBe("enabled");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	/** A harness whose bound timer is controlled: `expire()` fires the pending bound. */
+	function bounded(overrides: Parameters<typeof harness>[0] = {}) {
+		const bounds: Array<{ fn: () => void; ms: number }> = [];
+		const h = harness(overrides);
+		const controller = new AutomaticUpdateController({
+			policy: () => h.state,
+			refreshPolicy: h.refresh,
+			facts: h.facts,
+			plan: h.plan,
+			installAndRestart: h.install,
+			status: (status, extra) => h.statuses.push({ status, extra }),
+			setTimer: (fn, ms) => {
+				const timer = { fn, ms, unref() {} };
+				h.timers.push(timer);
+				return timer as unknown as ReturnType<typeof setTimeout>;
+			},
+			clearTimer: (timer) => {
+				const i = h.timers.indexOf(timer as unknown as (typeof h.timers)[number]);
+				if (i >= 0) h.timers.splice(i, 1);
+				const j = bounds.indexOf(timer as unknown as (typeof bounds)[number]);
+				if (j >= 0) bounds.splice(j, 1);
+			},
+			boundTimer: (fn, ms) => {
+				const timer = { fn, ms, unref() {} };
+				bounds.push(timer);
+				return timer as unknown as ReturnType<typeof setTimeout>;
+			},
+			random: () => 0,
+			now: () => h.clock.t,
+		});
+		const expire = async () => {
+			const b = bounds.shift();
+			expect(b?.ms).toBe(OBSERVATION_TIMEOUT_MS);
+			h.clock.t += OBSERVATION_TIMEOUT_MS;
+			b?.fn();
+			await new Promise((r) => setTimeout(r, 0));
+		};
+		/** The facts look has started and its bound is the only one pending (the refresh's was cleared when it answered). */
+		const factsPending = () => vi.waitFor(() => {
+			expect(h.facts.mock.calls.length).toBeGreaterThan(0);
+			expect(bounds).toHaveLength(1);
+		});
+		return { ...h, controller, bounds, expire, factsPending };
+	}
+
+	it("facts() timeout produces failure status and schedules retry — a failed CHECK, not a decision, and the look is aborted", async () => {
+		let seen: AbortSignal | undefined;
+		const h = bounded({ facts: (signal?: AbortSignal) => { seen = signal; return new Promise<UpdateFacts>(() => undefined); } });
+		const run = h.controller.runNow();
+		await h.factsPending();
+		await h.expire();
+		await run;
+		expect(seen?.aborted).toBe(true);
+		expect(h.statuses.at(-1)).toMatchObject({ status: "failure", extra: { reason: expect.stringContaining("did not answer within 30s") } });
+		expect(h.controller.diagnostics()).toMatchObject({ checkAt: h.clock.t, decisionAt: null });
+		expect(h.timers.map((t) => t.ms)).toEqual([backoff(1)]);
+		expect(h.install).not.toHaveBeenCalled();
+	});
+
+	it("late facts() completion after timeout does not overwrite newer result", async () => {
+		let lateResolve: ((f: UpdateFacts) => void) | undefined;
+		let calls = 0;
+		const h = bounded({
+			facts: () => (++calls === 1 ? new Promise<UpdateFacts>((r) => { lateResolve = r; }) : current("0.4.91")()),
+			plan: (f) => (f.current === "0.4.90" ? updatePlan : upToDate(f)),
+		});
+		const first = h.controller.runNow();
+		await h.factsPending();
+		await h.expire();
+		await first;
+		await h.controller.runNow(); // the newer check: current, nothing to install
+		expect(h.statuses.at(-1)?.status).toBe("enabled");
+		const newer = h.controller.diagnostics();
+		lateResolve?.({ ...idleFacts(), current: "0.4.90", latest: "0.4.91", observations: looked() }); // would plan an install
+		await new Promise((r) => setTimeout(r, 0));
+		expect(h.install).not.toHaveBeenCalled();
+		expect(h.statuses.at(-1)?.status).toBe("enabled");
+		expect(h.controller.diagnostics()).toEqual(newer);
+	});
+
+	it("facts() timeout retry eventually succeeds when facts resolve in time", async () => {
+		let calls = 0;
+		const h = bounded({ policy: attempted("0.4.91"), facts: () => (++calls === 1 ? new Promise<UpdateFacts>(() => undefined) : current("0.4.91")()), plan: upToDate });
+		const first = h.controller.runNow();
+		await h.factsPending();
+		await h.expire();
+		await first;
+		expect(h.statuses.at(-1)?.status).toBe("failure");
+		h.timers.shift()?.fn(); // the backed-off retry
+		await vi.waitFor(() => expect(h.statuses.at(-1)?.status).toBe("verified-success"));
+		expect(calls).toBe(2);
+	});
+
+	it("a policy refresh that never answers is bounded too: aborted, offline, no facts or install, one retry", async () => {
+		let seen: AbortSignal | undefined;
+		const h = bounded({ refresh: (signal?: AbortSignal) => { seen = signal; return new Promise<boolean>(() => undefined); } });
+		const run = h.controller.runNow();
+		await vi.waitFor(() => expect(h.bounds).toHaveLength(1));
+		await h.expire();
+		await run;
+		expect(seen?.aborted).toBe(true);
+		expect(h.statuses.at(-1)?.status).toBe("offline");
+		expect(h.facts).not.toHaveBeenCalled();
+		expect(h.install).not.toHaveBeenCalled();
+		expect(h.timers.map((t) => t.ms)).toEqual([backoff(1)]);
+	});
+
+	it("a bounded look that later REJECTS leaves no unhandled rejection behind", async () => {
+		let reject: ((e: Error) => void) | undefined;
+		const h = bounded({ facts: () => new Promise<UpdateFacts>((_r, j) => { reject = j; }) });
+		const run = h.controller.runNow();
+		await h.factsPending();
+		await h.expire();
+		await run;
+		const unhandled = vi.fn();
+		process.on("unhandledRejection", unhandled);
+		reject?.(new Error("aborted"));
+		await new Promise((r) => setTimeout(r, 10));
+		process.off("unhandledRejection", unhandled);
+		expect(unhandled).not.toHaveBeenCalled();
+	});
+});

@@ -29,6 +29,11 @@ export function payloadRoot(): string {
 	return process.env.PAGS_CLI_CACHE || join(homedir(), ".config", "proagentstore", "cli");
 }
 
+/** Whether `v` reads as a numeric `major.minor.patch` version — the only kind {@link olderThan} compares. */
+export function isVersion(v: unknown): v is string {
+	return typeof v === "string" && /^(\d+)\.(\d+)\.(\d+)/.test(v.trim());
+}
+
 /** Numeric semver compare, `a < b`. Anything unparseable is not "older" — never update on a guess. */
 export function olderThan(a: string, b: string): boolean {
 	const parse = (v: string) => /^(\d+)\.(\d+)\.(\d+)/.exec(v.trim())?.slice(1).map(Number);
@@ -78,9 +83,9 @@ export function newestPayload(payloads: Payload[]): Payload | null {
 }
 
 /** The newest published CLI version, or null when npm could not be asked. */
-export async function latestPublishedVersion(timeoutMs = 30_000): Promise<string | null> {
+export async function latestPublishedVersion(timeoutMs = 30_000, signal?: AbortSignal): Promise<string | null> {
 	try {
-		const { stdout } = await run("npm", ["view", CLI_PACKAGE, "version"], { timeout: timeoutMs });
+		const { stdout } = await run("npm", ["view", CLI_PACKAGE, "version"], { timeout: timeoutMs, signal });
 		return stdout.trim() || null;
 	} catch {
 		return null;
