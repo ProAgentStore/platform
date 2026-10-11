@@ -8202,6 +8202,139 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /v1/instances/{instanceId}/application-runs/{runId}/handoff:
+    get:
+      summary: Read one exact local-apply browser handoff
+      description: Requires the opaque `handoff_id` returned when the owner created the handoff. Returns lifecycle metadata only; never a browser URL, cookies, profile state, page text, typed values or screenshots.
+      operationId: getApplicationHandoff
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+        - { name: handoff_id, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Opaque handoff lifecycle projection. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    post:
+      summary: Create one bounded owner browser handoff for a login pause
+      description: Only an exact paused `login_required` run using the already-authorized local default profile can open a handoff. It returns an opaque id and canonical Console link; it never signs in, persists browser state, submits, changes an approval, or changes submit-attempt facts.
+      operationId: createApplicationHandoff
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+      responses:
+        "201": { description: Short-lived handoff metadata and Console link. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/instances/{instanceId}/application-handoffs/{handoffId}:
+    get:
+      summary: Resolve one opaque application handoff for Console
+      operationId: resolveApplicationHandoff
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: handoffId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Owner-scoped safe lifecycle projection. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/application-runs/{runId}/handoff/frame:
+    get:
+      summary: Read the current scoped handoff frame
+      description: Relays the existing live page only for the exact owner/run/opaque handoff. A closed, expired or destroyed page is reported as closed, never as a completed submission.
+      operationId: getApplicationHandoffFrame
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+        - { name: handoff_id, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Current remote-control frame. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/instances/{instanceId}/application-runs/{runId}/handoff/input:
+    post:
+      summary: Relay one owner input event to the scoped handoff
+      operationId: inputApplicationHandoff
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+        - { name: handoff_id, in: query, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, additionalProperties: true } } }
+      responses:
+        "200": { description: Input relayed to the existing page. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/instances/{instanceId}/application-runs/{runId}/handoff/resume:
+    post:
+      summary: End a scoped handoff and explicitly resume its application run
+      operationId: resumeApplicationHandoff
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+        - { name: handoff_id, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Handoff closed and the paused run explicitly resumed. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/instances/{instanceId}/application-runs/{runId}/handoff/end:
+    post:
+      summary: Close a scoped browser handoff without resuming the run
+      operationId: endApplicationHandoff
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+        - { name: handoff_id, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Handoff closed; no statement about submission outcome. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/instances/{instanceId}/application-runs/{runId}/reconciliation:
+    get:
+      summary: Read secret-safe uncertain-attempt reconciliation state
+      operationId: getApplicationReconciliation
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Durable request/outcome metadata, never site history or raw evidence. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      summary: Request read-only reconciliation of one ended uncertain attempt
+      description: The request cannot assert no submission. It cannot replay a submit, reset `submit_attempted`, mint approval, or treat a login redirect as evidence.
+      operationId: requestApplicationReconciliation
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: runId, in: path, required: true, schema: { type: string } }
+      responses:
+        "201": { description: Reconciliation request metadata. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /v1/instances/{instanceId}/application-runs/{runId}/supervision:
     get:
       summary: Read the Application Runner cloud-brain checkpoints

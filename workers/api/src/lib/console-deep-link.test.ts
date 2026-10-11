@@ -75,6 +75,14 @@ describe("buildConsoleLink", () => {
 		expect(ok({ kind: "local_browser_run", runId: "run 9" }).path).toBe("/console/instances/inst_1/research/run%209");
 	});
 
+	it("links an exact local-apply handoff through an opaque query, never a browser/profile target", () => {
+		const localApply: LinkCaps = { surfaces: [], runtime: "local_apply" };
+		const link = ok({ kind: "application_handoff", handoffId: "handoff a/b?c" }, localApply);
+		expect(link.path).toBe("/console/instances/inst_1/applications?handoff=handoff%20a%2Fb%3Fc");
+		expect(link.url).not.toMatch(/cookie|token|profile|credential/i);
+		expect(buildConsoleLink("inst_1", { kind: "application_handoff", handoffId: "h1" }, CODER)).toHaveProperty("error");
+	});
+
 	it("shows Index for repo chat by its surface, even with no write tools", () => {
 		expect(ok({ kind: "section", section: "indexing" }, REPO_CHAT).path).toBe("/console/instances/inst_1/indexing");
 	});

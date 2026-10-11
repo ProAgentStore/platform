@@ -13,12 +13,25 @@ import type { Context, Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { patchInstanceConfig, readInstanceConfigPair } from "../lib/instance-config.js";
 import { cancelApplyRun, resumeApplyRun, startApplicationFill, syncApplyRun } from "../lib/local-apply/apply.js";
+import { LOCAL_APPLY_HANDOFF_PATH, LOCAL_APPLY_HANDOFF_STATUS_PATH, type LocalApplyHandoffStatus } from "../lib/local-apply/contract.js";
 import { RUNNER_DEFAULTS, RUNNER_SETTINGS_KEY, effectiveRunnerSettings, mergeRunnerSettings } from "../lib/local-apply/policy.js";
-import { applicationAudit, getApplyRun, listApplyRuns } from "../lib/local-apply/store.js";
+import {
+	applicationAudit,
+	createLocalApplyHandoff,
+	getApplyRun,
+	getHandoffById,
+	getLocalApplyHandoffForRun,
+	getLocalApplyReconciliation,
+	markLocalApplyHandoff,
+	requestLocalApplyReconciliation,
+	listApplyRuns,
+	usableLocalApplyHandoff,
+} from "../lib/local-apply/store.js";
 import { SUPERVISOR_SCHEMA_VERSION, isSupervisorDirective, issueSupervisorDirective, listSupervisorCheckpoints } from "../lib/local-apply/supervision.js";
 import { getOwnedApplication } from "../lib/local-artifact/store.js";
+import { applicationHandoffLink } from "../lib/console-links.js";
 import type { Env } from "../types.js";
-import { requireOwnedInstance } from "./instances-runtime.js";
+import { callRuntime, getLiveRuntime, requireOwnedInstance, runtimeJson } from "./instances-runtime.js";
 
 type C = Context<{ Bindings: Env }>;
 
@@ -39,6 +52,34 @@ async function ownedRun(c: C) {
 	const run = await getApplyRun(c.env, instanceId, uid, c.req.param("runId") ?? "");
 	if (!run) throw new HttpError(404, "Application run not found");
 	return { uid, instanceId, run };
+}
+
+const HANDOFF_TTL_MS = 10 * 60_000;
+const runnerHandoffPath = (suffix: "frame" | "input" | "resume" | "end") => `/local-apply/handoff/${suffix}`;
+
+/** A Console/MCP-safe projection: opaque identity and lifecycle only, never site/browser state. */
+function handoffView(handoff: {
+	continuityId: string;
+	runId: string;
+	applicationId: string;
+	state: "requested" | "ready" | "closed";
+	expiresAt: number;
+	terminalReason: string | null;
+}, now = Date.now()) {
+	return {
+		id: handoff.continuityId,
+		runId: handoff.runId,
+		applicationId: handoff.applicationId,
+		// `active` is intentionally a projection, not a durable success state.  A closed
+		// view says nothing about whether an employer submission happened.
+		state: (handoff.state === "requested" || handoff.state === "ready") && handoff.expiresAt > now ? "active" : "closed",
+		expiresAt: new Date(handoff.expiresAt).toISOString(),
+		reason: handoff.terminalReason,
+	};
+}
+
+function handoffRequest(handoff: { continuityId: string; runId: string; applicationId: string; browserProfile: string }) {
+	return { handoffId: handoff.continuityId, runId: handoff.runId, applicationId: handoff.applicationId, browserProfile: handoff.browserProfile };
 }
 
 export function registerApplicationRunnerRoutes(router: Hono<{ Bindings: Env }>): void {
@@ -86,6 +127,124 @@ export function registerApplicationRunnerRoutes(router: Hono<{ Bindings: Env }>)
 	router.post("/:instanceId/application-runs/:runId/resume", async (c) => {
 		const { uid, run } = await ownedRun(c);
 		return c.json({ run: await resumeApplyRun(c.env, uid, run, await c.req.json().catch(() => ({}))) });
+	});
+
+	/**
+	 * Create (or read back) the one short-lived remote-control handoff for this still-live apply
+	 * run.  The id returned is opaque; the page, browser profile and any login material never leave
+	 * the runner.  Only a login pause can open one — a terminal uncertain attempt must instead use
+	 * the separate, read-only reconciliation record below.
+	 */
+	router.post("/:instanceId/application-runs/:runId/handoff", async (c) => {
+		const { uid, instanceId, run: stored } = await ownedRun(c);
+		const run = await syncApplyRun(c.env, uid, stored);
+		const app = await getOwnedApplication(c.env, uid, run.applicationId);
+		if (!app || app.fillRunId !== run.id) throw new HttpError(409, "This application is no longer bound to that exact Runner run.");
+		if (run.status !== "paused" || run.pause?.reason !== "login_required") {
+			throw new HttpError(409, "A live browser handoff is available only while this exact run is paused for site login.");
+		}
+		// `default` is the already-authorized Runner profile.  An isolated profile has no durable
+		// authenticated lifetime to hand over; accepting it here would imply persistence we do not have.
+		if (run.policy.browserProfile !== "default") throw new HttpError(409, "This run uses an isolated browser profile, so no existing authorized site-login handoff is available.");
+		const now = Date.now();
+		let handoff = await createLocalApplyHandoff(c.env, { run, app, userId: uid, browserProfile: run.policy.browserProfile, expiresAt: now + HANDOFF_TTL_MS }, now);
+		if (!handoff) throw new HttpError(409, "The handoff could not be bound to this application run.");
+		if (!usableLocalApplyHandoff(handoff, now)) return c.json({ handoff: handoffView(handoff, now) }, 409);
+		const runtime = await getLiveRuntime(c.env, instanceId, uid).catch(() => null);
+		if (!runtime) {
+			await markLocalApplyHandoff(c.env, { continuityId: handoff.continuityId, instanceId, userId: uid, state: "closed", terminalReason: "runner_restarted" }, now);
+			throw new HttpError(409, "The Runner is disconnected; this handoff is closed rather than treated as complete.");
+		}
+		const path = handoff.state === "requested" ? LOCAL_APPLY_HANDOFF_PATH : LOCAL_APPLY_HANDOFF_STATUS_PATH;
+		const res = await callRuntime(c.env, runtime, path, { method: "POST", body: JSON.stringify(handoffRequest(handoff)) }).catch(() => null);
+		if (!res) {
+			await markLocalApplyHandoff(c.env, { continuityId: handoff.continuityId, instanceId, userId: uid, state: "closed", terminalReason: "runner_restarted" }, now);
+			throw new HttpError(409, "The Runner did not answer; this handoff is closed rather than treated as complete.");
+		}
+		const body = (await runtimeJson(res)) as LocalApplyHandoffStatus & { error?: string };
+		if (!res.ok || body.state !== "ready") {
+			const terminal = body.terminalReason ?? "unavailable";
+			handoff = (await markLocalApplyHandoff(c.env, { continuityId: handoff.continuityId, instanceId, userId: uid, state: "closed", terminalReason: terminal }, now)) ?? handoff;
+			return c.json({ handoff: handoffView(handoff, now) }, 409);
+		}
+		handoff = (await markLocalApplyHandoff(c.env, { continuityId: handoff.continuityId, instanceId, userId: uid, state: "ready" }, now)) ?? handoff;
+		return c.json({ handoff: handoffView(handoff, now), consoleLink: applicationHandoffLink(instanceId, handoff.continuityId) }, 201);
+	});
+
+	/** Resolve only the opaque canonical Console link, still scoped to its owner and Runner. */
+	router.get("/:instanceId/application-handoffs/:handoffId", async (c) => {
+		const { uid, instanceId } = await owned(c);
+		const handoff = await getHandoffById(c.env, instanceId, uid, c.req.param("handoffId") ?? "");
+		if (!handoff) throw new HttpError(404, "Application handoff not found");
+		const now = Date.now();
+		if ((handoff.state === "requested" || handoff.state === "ready") && handoff.expiresAt <= now) {
+			const closed = await markLocalApplyHandoff(c.env, { continuityId: handoff.continuityId, instanceId, userId: uid, state: "closed", terminalReason: "expired" }, now);
+			return c.json(closed ? handoffView(closed, now) : handoffView(handoff, now));
+		}
+		return c.json(handoffView(handoff, now));
+	});
+
+	/** Read-only state for the exact current run; no browser frame or URL is returned here. */
+	router.get("/:instanceId/application-runs/:runId/handoff", async (c) => {
+		const { uid, instanceId, run } = await ownedRun(c);
+		const handoff = await getLocalApplyHandoffForRun(c.env, run.id, instanceId, uid);
+		if (!handoff) throw new HttpError(404, "Application handoff not found");
+		if (c.req.query("handoff_id") !== handoff.continuityId) throw new HttpError(404, "Application handoff not found");
+		return c.json({ handoff: handoffView(handoff) });
+	});
+
+	/** Relay a scoped live-view operation after re-checking owner, run and opaque continuity id. */
+	const relayHandoff = (suffix: "frame" | "input" | "resume" | "end") => async (c: C) => {
+		const { uid, instanceId, run } = await ownedRun(c);
+		const continuityId = c.req.query("handoff_id") ?? "";
+		const handoff = await getLocalApplyHandoffForRun(c.env, run.id, instanceId, uid);
+		if (!handoff || handoff.continuityId !== continuityId) throw new HttpError(404, "Application handoff not found");
+		const now = Date.now();
+		if (!usableLocalApplyHandoff(handoff, now)) throw new HttpError(409, `This application handoff is closed (${handoff.terminalReason ?? handoff.state}).`);
+		const runtime = await getLiveRuntime(c.env, instanceId, uid).catch(() => null);
+		if (!runtime) {
+			await markLocalApplyHandoff(c.env, { continuityId, instanceId, userId: uid, state: "closed", terminalReason: "runner_restarted" }, now);
+			throw new HttpError(409, "The Runner is disconnected; this handoff is closed rather than complete.");
+		}
+		const request = suffix === "input" ? await c.req.json().catch(() => null) : {};
+		if (suffix === "input" && (!request || typeof request !== "object" || Array.isArray(request))) throw new HttpError(400, "A browser input event is required.");
+		const res = await callRuntime(c.env, runtime, runnerHandoffPath(suffix), {
+			method: "POST",
+			body: JSON.stringify({ ...handoffRequest(handoff), ...(suffix === "input" ? { input: request } : {}) }),
+		}).catch(() => null);
+		if (!res) {
+			await markLocalApplyHandoff(c.env, { continuityId, instanceId, userId: uid, state: "closed", terminalReason: "runner_restarted" }, now);
+			throw new HttpError(409, "The Runner did not answer; this handoff is closed rather than complete.");
+		}
+		const payload = await runtimeJson(res);
+		if (!res.ok) {
+			await markLocalApplyHandoff(c.env, { continuityId, instanceId, userId: uid, state: "closed", terminalReason: "page_lost" }, now);
+			throw new HttpError(409, "The live handoff page is no longer available.");
+		}
+		if (suffix === "end") await markLocalApplyHandoff(c.env, { continuityId, instanceId, userId: uid, state: "closed", terminalReason: "unavailable" }, now);
+		if (suffix === "resume") {
+			await markLocalApplyHandoff(c.env, { continuityId, instanceId, userId: uid, state: "closed", terminalReason: "unavailable" }, now);
+			return c.json({ run: await resumeApplyRun(c.env, uid, run, {}) });
+		}
+		return c.json(payload);
+	};
+	router.get("/:instanceId/application-runs/:runId/handoff/frame", relayHandoff("frame"));
+	router.post("/:instanceId/application-runs/:runId/handoff/input", relayHandoff("input"));
+	router.post("/:instanceId/application-runs/:runId/handoff/resume", relayHandoff("resume"));
+	router.post("/:instanceId/application-runs/:runId/handoff/end", relayHandoff("end"));
+
+	/** A request only: results can be recorded solely by a runner-authoritative reconciliation path. */
+	router.get("/:instanceId/application-runs/:runId/reconciliation", async (c) => {
+		const { uid, instanceId, run } = await ownedRun(c);
+		return c.json({ reconciliation: await getLocalApplyReconciliation(c.env, run.id, instanceId, uid) });
+	});
+	router.post("/:instanceId/application-runs/:runId/reconciliation", async (c) => {
+		const { uid, run } = await ownedRun(c);
+		const app = await getOwnedApplication(c.env, uid, run.applicationId);
+		if (!app) throw new HttpError(404, "Application not found");
+		const reconciliation = await requestLocalApplyReconciliation(c.env, { app, run, userId: uid }, Date.now());
+		if (!reconciliation) throw new HttpError(409, "Read-only reconciliation is available only for this exact ended submit_unconfirmed attempt.");
+		return c.json({ reconciliation }, 201);
 	});
 
 	router.post("/:instanceId/application-runs/:runId/cancel", async (c) => {

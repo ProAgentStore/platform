@@ -34,6 +34,8 @@ const ACTIONS = "https://api.test/v1/instances/t1/application-queue/actions";
 describe("the Applications tools (#958, #953)", () => {
 	it("publishes the issue's typed tools", () => {
 		expect(tools().names.sort()).toEqual([
+			"application_handoff",
+			"application_reconciliation",
 			"application_run",
 			"application_run_supervision",
 			"application_runs",
@@ -41,12 +43,14 @@ describe("the Applications tools (#958, #953)", () => {
 			"approve_application",
 			"cancel_application",
 			"clear_application_tailor_uploaded_source",
+			"create_application_handoff",
 			"generate_application_materials",
 			"get_application",
 			"get_application_runner_settings",
 			"get_application_tailor_uploaded_source_readiness",
 			"get_application_tailor_uploaded_sources",
 			"list_applications",
+			"request_application_reconciliation",
 			"request_application_review",
 			"resume_application",
 			"retry_application",
@@ -141,11 +145,38 @@ describe("the Applications tools (#958, #953)", () => {
 			["application_runs", {}],
 			["application_run", { run_id: "run-1" }],
 			["application_run_supervision", { run_id: "run-1" }],
+			["application_handoff", { run_id: "run-1", handoff_id: "handoff-1" }],
+			["application_reconciliation", { run_id: "run-1" }],
 			["tailoring_run", { application_id: "a1" }],
 		] as const) {
 			expect(await call(name, { instance_id: "t1", ...args }), name).toContain("\"ok\"");
 		}
-		expect(seen).toHaveLength(4);
+		expect(seen).toHaveLength(6);
+	});
+
+	it("reads only safe handoff and reconciliation state, and requests each exact-run operation explicitly", async () => {
+		const { seen, call } = tools();
+		await call("application_handoff", { instance_id: "r 1", run_id: "run/1", handoff_id: "handoff/1" });
+		await call("application_reconciliation", { instance_id: "r 1", run_id: "run/1" });
+		await call("create_application_handoff", { instance_id: "r 1", run_id: "run/1" });
+		await call("request_application_reconciliation", { instance_id: "r 1", run_id: "run/1" });
+		expect(seen).toEqual([
+			{ url: "https://api.test/v1/instances/r%201/application-runs/run%2F1/handoff?handoff_id=handoff%2F1", method: "GET", body: undefined },
+			{ url: "https://api.test/v1/instances/r%201/application-runs/run%2F1/reconciliation", method: "GET", body: undefined },
+			{ url: "https://api.test/v1/instances/r%201/application-runs/run%2F1/handoff", method: "POST", body: {} },
+			{ url: "https://api.test/v1/instances/r%201/application-runs/run%2F1/reconciliation", method: "POST", body: {} },
+		]);
+	});
+
+	it("does not contact a Runner during #1013 handoff/reconciliation dry runs and gates both at runtime", async () => {
+		const { seen, call } = tools(["read", "write", "runtime"]);
+		expect(await call("create_application_handoff", { instance_id: "r1", run_id: "run-1", dry_run: true })).toMatch(/dryRun/);
+		expect(await call("request_application_reconciliation", { instance_id: "r1", run_id: "run-1", dry_run: true })).toMatch(/dryRun/);
+		expect(seen).toEqual([]);
+		const noRuntime = tools(["read", "write"]);
+		expect(await noRuntime.call("create_application_handoff", { instance_id: "r1", run_id: "run-1" })).toMatch(/runtime/);
+		expect(await noRuntime.call("request_application_reconciliation", { instance_id: "r1", run_id: "run-1" })).toMatch(/runtime/);
+		expect(noRuntime.seen).toEqual([]);
 	});
 
 	it.each([

@@ -11,7 +11,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BrowserTools } from "../local-browser/bridge.js";
 import type { LocalApplyTaskEnvelope } from "./contract.js";
-import { LocalApplyRuntime, parseApplyEnvelope } from "./runtime.js";
+import { LocalApplyRuntime, parseApplyEnvelope, type LocalApplyTakeoverAdapter } from "./runtime.js";
 
 class FakeChild extends EventEmitter {
 	stdout = new PassThrough();
@@ -45,6 +45,9 @@ let pageUnavailable: "expired" | "unavailable" | null;
  * plain single-page form every other test here uses.
  */
 let seek: "ad" | "form" | null;
+let takeover: LocalApplyTakeoverAdapter;
+let takeoverOpen: string[];
+let takeoverInputs: unknown[];
 const SEEK_AD = "https://au.seek.com/job/94991284";
 const SEEK_FORM = "https://au.seek.com/job/94991284/apply";
 
@@ -67,13 +70,15 @@ const browser: BrowserTools = {
 	},
 };
 
-function runtime() {
+function runtime(options: { handoffTtlMs?: number; now?: () => number } = {}) {
 	return new LocalApplyRuntime({
 		dataDir: join(dir, "data"),
 		homeDir: home,
 		selfUrl: () => "http://127.0.0.1:4999",
 		bridgeScript: "/runner/bridge-stdio.js",
 		browserFor: async () => ({ tools: browser, stop: async () => undefined }),
+		takeover,
+		...options,
 		spawn: ((command: string, args: string[], opts: { env: NodeJS.ProcessEnv }) => {
 			spawned.push({ command, args, env: opts.env });
 			child = new FakeChild();
@@ -126,6 +131,15 @@ beforeEach(() => {
 	clicks = [];
 	pageUnavailable = null;
 	seek = null;
+	takeoverOpen = [];
+	takeoverInputs = [];
+	takeover = {
+		open: async ({ handoffId }) => { takeoverOpen.push(handoffId); },
+		state: async (handoffId) => takeoverOpen.includes(handoffId) ? "ready" : "page_lost",
+		frame: async () => ({ frame: "data:image/jpeg;base64,SAFE", width: 100, height: 50 }),
+		input: async (_handoffId, input) => { takeoverInputs.push(input); },
+		end: async (handoffId) => { takeoverOpen = takeoverOpen.filter((id) => id !== handoffId); },
+	};
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -164,6 +178,57 @@ describe("email job-page preflight", () => {
 		const rt = runtime();
 		await expect(rt.preflight({ jobUrl: "https://jobs.example.com/role/42" })).resolves.toMatchObject({ state: "unavailable", reason: "expired" });
 		expect(spawned).toEqual([]);
+	});
+});
+
+describe("scoped local-apply handoff (#1013)", () => {
+	const request = { handoffId: "handoff-opaque-1", runId: "run-1", applicationId: "app-1", browserProfile: "isolated" as const };
+
+	it("keeps control on the exact live run and only exposes secret-free handoff state", async () => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		await expect(rt.handoff(request)).resolves.toEqual(expect.objectContaining({
+			handoffId: "handoff-opaque-1", runId: "run-1", applicationId: "app-1", browserProfile: "isolated", state: "ready",
+		}));
+		expect(takeoverOpen).toEqual(["handoff-opaque-1"]);
+		await expect(rt.handoffFrame(request)).resolves.toEqual({ frame: "data:image/jpeg;base64,SAFE", width: 100, height: 50 });
+		await rt.handoffInput({ ...request, input: { type: "click", x: 10, y: 11 } });
+		expect(takeoverInputs).toEqual([{ type: "click", x: 10, y: 11 }]);
+		// No URL, page text, browser state, typed answer, or credential can cross status.
+		expect(JSON.stringify(await rt.handoffStatus(request))).not.toMatch(/jobs\.example|cookie|token|Jane Citizen/i);
+	});
+
+	it("rejects duplicate, mismatched application/profile, and stale handoff requests", async () => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		await rt.handoff(request);
+		await expect(rt.handoff(request)).rejects.toThrow(/already exists/);
+		await expect(rt.handoffStatus({ ...request, applicationId: "other-app" })).rejects.toThrow(/does not match/);
+		await expect(rt.handoffStatus({ ...request, browserProfile: "default" })).rejects.toThrow(/does not match/);
+		await expect(rt.handoffStatus({ ...request, handoffId: "other-handoff" })).resolves.toMatchObject({ state: "closed", terminalReason: "unavailable" });
+	});
+
+	it("reports expiry, destroyed pages, and terminal runs as closed rather than resolved", async () => {
+		let now = 1_000;
+		const rt = runtime({ now: () => now, handoffTtlMs: 10 });
+		rt.start(envelope());
+		await settle();
+		await rt.handoff(request);
+		now += 11;
+		await expect(rt.handoffStatus(request)).resolves.toMatchObject({ state: "closed", terminalReason: "expired" });
+
+		const second = runtime();
+		second.start(envelope({ runId: "run-2", requestId: "request-2" }));
+		await settle();
+		const secondRequest = { ...request, handoffId: "handoff-2", runId: "run-2" };
+		await second.handoff(secondRequest);
+		takeoverOpen = [];
+		await expect(second.handoffStatus(secondRequest)).resolves.toMatchObject({ state: "closed", terminalReason: "page_lost" });
+		child.exit(0);
+		await settle();
+		await expect(second.handoffStatus(secondRequest)).resolves.toMatchObject({ state: "closed", terminalReason: "run_ended" });
 	});
 });
 

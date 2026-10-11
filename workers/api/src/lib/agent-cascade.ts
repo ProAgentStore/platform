@@ -105,6 +105,10 @@ export const INSTANCE_CHILD_TABLES = [
 	"application_tailor_uploaded_sources",
 	// #1010 — receipt rows reference the source application and both instances/connections.
 	"application_material_transfers",
+	// #1013 — opaque handoff/reconciliation metadata references both the Runner instance and run.
+	// Delete it before the run; neither table carries browser or employer-site material.
+	"local_apply_handoffs",
+	"local_apply_reconciliations",
 	// #956 — the run before the application it references (FK).
 	"local_artifact_runs",
 	// #957 — the Runner's fill runs (no FK: their application is on the Tailor's instance) and the

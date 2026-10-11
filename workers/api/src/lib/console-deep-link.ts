@@ -21,7 +21,7 @@
  * The console is a BrowserRouter: a `#fragment` is ignored (`checkConsoleLink`), so there is no anchor
  * finer than a tab or a record page. A "field" is answered with the tab that holds it.
  */
-import { codingSessionLink, instanceFilesUploadLink, instanceLink, instancePermissionsLink, instanceRunLink, localBrowserRunLink, secureInputNotificationLink } from "./console-links.js";
+import { applicationHandoffLink, codingSessionLink, instanceFilesUploadLink, instanceLink, instancePermissionsLink, instanceRunLink, localBrowserRunLink, secureInputNotificationLink } from "./console-links.js";
 
 /** The console's public origin. `/console/…` paths resolve here (and on console.proagentstore.online without the prefix). */
 export const CONSOLE_ORIGIN = "https://proagentstore.online";
@@ -74,6 +74,8 @@ export type ConsoleTarget =
 	| { kind: "local_browser_run"; runId: string }
 	/** A runtime task (browser task, approval, takeover) — `RunDetail`. */
 	| { kind: "task"; taskId: string }
+	/** An exact local-apply browser handoff; the opaque id is re-authorized by Console. */
+	| { kind: "application_handoff"; handoffId: string }
 	| { kind: "secure_input"; requestId: string }
 	| { kind: "permission_request"; requestId: string };
 
@@ -122,6 +124,10 @@ export function buildConsoleLink(instanceId: string, target: ConsoleTarget, caps
 			return make(localBrowserRunLink(instanceId, target.runId), "this research run — its steps, any pause waiting on you, and its findings to save or skip");
 		case "task":
 			return make(instanceRunLink(instanceId, target.taskId), "this task's page — its status, screenshots and any takeover or input it waits on");
+		case "application_handoff":
+			return caps.runtime === "local_apply"
+				? make(applicationHandoffLink(instanceId, target.handoffId), "this exact Application Runner browser handoff")
+				: { error: 'This instance does not run the "local_apply" Application Runner, so a handoff link would land on a tab that cannot resolve it.' };
 		case "secure_input":
 			return make(secureInputNotificationLink(instanceId, target.requestId), "the page where the owner enters this secret value");
 		case "permission_request":

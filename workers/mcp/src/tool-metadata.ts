@@ -228,6 +228,13 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	application_runs: "read",
 	application_run: "read",
 	application_run_supervision: "read",
+	// #1013: safe state reads plus the two explicit machine requests. A handoff only exposes an
+	// opaque Console continuity link; reconciliation asks the existing Runner for structured
+	// read-only evidence and cannot accept an owner's assertion as proof.
+	application_handoff: "read",
+	create_application_handoff: "runtime",
+	application_reconciliation: "read",
+	request_application_reconciliation: "runtime",
 	tailoring_run: "read",
 	get_application_tailor_uploaded_sources: "read",
 	get_application_tailor_uploaded_source_readiness: "read",

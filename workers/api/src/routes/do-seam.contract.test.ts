@@ -226,6 +226,7 @@ const PARAMS: Record<string, string> = {
 	uploadId: "upload-1",
 	userId: "u-probe",
 	requestId: "permission-request-1",
+	handoffId: "handoff-1",
 	seq: "1",
 };
 

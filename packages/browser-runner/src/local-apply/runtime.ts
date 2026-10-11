@@ -35,6 +35,7 @@ import { finalText, missingLogin, signInHelp } from "../local-browser/engine.js"
 import { resolveWorkspacePath } from "../local-browser/runtime.js";
 import { ApplyBridge } from "./bridge.js";
 import { confirmationSignals } from "./confirmation.js";
+import type { TakeoverInput } from "../types.js";
 import {
 	type LocalApplySignal,
 	type LocalApplyDiagnosticCause,
@@ -50,6 +51,9 @@ import {
 	type LocalApplyDirectiveRequest,
 	type LocalApplyEngineAuth,
 	type LocalApplyEvent,
+	type LocalApplyHandoffRequest,
+	type LocalApplyHandoffStatus,
+	type LocalApplyHandoffTerminalReason,
 	type LocalApplyPause,
 	type LocalApplyPreflightResult,
 	type LocalApplyProfile,
@@ -69,6 +73,15 @@ export interface RunBrowser {
 	stop(): Promise<void>;
 }
 
+/** Narrow live-page capability supplied by LocalRunner; never a generic task identity. */
+export interface LocalApplyTakeoverAdapter {
+	open(request: LocalApplyHandoffRequest): Promise<void>;
+	state(handoffId: string): Promise<"ready" | "page_lost">;
+	frame(handoffId: string): Promise<{ frame: string; width: number; height: number }>;
+	input(handoffId: string, input: TakeoverInput): Promise<void>;
+	end(handoffId: string): Promise<void>;
+}
+
 export interface LocalApplyRuntimeDeps {
 	dataDir: string;
 	selfUrl(): string | null;
@@ -78,6 +91,8 @@ export interface LocalApplyRuntimeDeps {
 	homeDir?: string;
 	retentionMs?: number;
 	bridgeScript?: string;
+	takeover?: LocalApplyTakeoverAdapter;
+	handoffTtlMs?: number;
 }
 
 const MAX_EVENTS = 1000;
@@ -87,6 +102,7 @@ const SAFE_ID = /^[A-Za-z0-9_.:-]{1,300}$/;
 const HASH = /^[a-f0-9]{64}$/;
 /** One application at a time per agent: two runs on one employer's form is how duplicates happen. */
 const MAX_ACTIVE = 1;
+const HANDOFF_TTL_MS = 10 * 60 * 1000;
 
 interface Run {
 	envelope: LocalApplyTaskEnvelope;
@@ -115,6 +131,7 @@ interface Run {
 	checkpoints: Map<string, { checkpoint?: LocalApplySupervisorCheckpoint; directive?: LocalApplySupervisorDirective }>;
 	endedAt?: number;
 	timer?: ReturnType<typeof setInterval>;
+	handoff?: { handoffId: string; expiresAt: number; state: "ready" | "closed"; terminalReason?: LocalApplyHandoffTerminalReason };
 }
 
 /**
@@ -680,6 +697,127 @@ export class LocalApplyRuntime {
 		};
 	}
 
+	/**
+	 * Open exactly one short-lived owner handoff for this live run.  This is intentionally separate
+	 * from `resume`: taking control of a login page neither answers a pause nor authorises another
+	 * browser action, much less a second submit.
+	 */
+	async handoff(raw: unknown): Promise<LocalApplyHandoffStatus> {
+		const request = this.parseHandoff(raw);
+		const run = this.get(request.runId);
+		this.assertHandoffBinding(run, request);
+		if (run.state === "ended") return this.closedHandoff(run, request.handoffId, "run_ended");
+		if (run.handoff) throw new RunnerInputError("A handoff already exists for this application run", 409);
+		if (!this.deps.takeover) return this.closedHandoff(run, request.handoffId, "unavailable");
+		try {
+			await this.deps.takeover.open(request);
+		} catch {
+			// Do not surface browser errors or URLs at this boundary. A handoff could not become live.
+			return this.closedHandoff(run, request.handoffId, "profile_unavailable");
+		}
+		run.handoff = { handoffId: request.handoffId, expiresAt: this.now() + (this.deps.handoffTtlMs ?? HANDOFF_TTL_MS), state: "ready" };
+		return this.handoffStatus(request);
+	}
+
+	async handoffStatus(raw: unknown): Promise<LocalApplyHandoffStatus> {
+		const request = this.parseHandoff(raw);
+		const run = this.get(request.runId);
+		this.assertHandoffBinding(run, request);
+		if (run.state === "ended") return this.closedHandoff(run, request.handoffId, "run_ended");
+		const handoff = run.handoff;
+		if (!handoff || handoff.handoffId !== request.handoffId) return this.closedHandoff(run, request.handoffId, "unavailable");
+		if (handoff.state === "closed") return this.handoffResponse(run, handoff);
+		if (handoff.expiresAt <= this.now()) {
+			await this.closeHandoff(run, "expired");
+			return this.handoffResponse(run, run.handoff!);
+		}
+		if (!this.deps.takeover || (await this.deps.takeover.state(handoff.handoffId)) !== "ready") {
+			await this.closeHandoff(run, "page_lost");
+		}
+		return this.handoffResponse(run, run.handoff!);
+	}
+
+	async handoffFrame(raw: unknown): Promise<{ frame: string; width: number; height: number }> {
+		const { run, handoff } = await this.requireLiveHandoff(raw);
+		try {
+			return await this.deps.takeover!.frame(handoff.handoffId);
+		} catch {
+			await this.closeHandoff(run, "page_lost");
+			throw new RunnerInputError("The handoff page is no longer available", 409);
+		}
+	}
+
+	async handoffInput(raw: unknown): Promise<void> {
+		const o = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+		const { run, handoff } = await this.requireLiveHandoff(o);
+		const input = o.input;
+		if (!input || typeof input !== "object") throw new RunnerInputError("handoff input is required");
+		try {
+			await this.deps.takeover!.input(handoff.handoffId, input as TakeoverInput);
+		} catch {
+			await this.closeHandoff(run, "page_lost");
+			throw new RunnerInputError("The handoff page is no longer available", 409);
+		}
+	}
+
+	async endHandoff(raw: unknown): Promise<LocalApplyHandoffStatus> {
+		const request = this.parseHandoff(raw);
+		const run = this.get(request.runId);
+		this.assertHandoffBinding(run, request);
+		if (!run.handoff || run.handoff.handoffId !== request.handoffId) return this.closedHandoff(run, request.handoffId, "unavailable");
+		await this.closeHandoff(run, "unavailable");
+		return this.handoffResponse(run, run.handoff);
+	}
+
+	private parseHandoff(raw: unknown): LocalApplyHandoffRequest {
+		const o = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+		const handoffId = typeof o.handoffId === "string" ? o.handoffId : "";
+		const runId = typeof o.runId === "string" ? o.runId : "";
+		const applicationId = typeof o.applicationId === "string" ? o.applicationId : "";
+		const browserProfile = o.browserProfile === "default" || o.browserProfile === "isolated" ? o.browserProfile : null;
+		if (!SAFE_ID.test(handoffId) || !SAFE_ID.test(runId) || !SAFE_ID.test(applicationId) || !browserProfile) throw new RunnerInputError("handoff needs opaque handoffId, runId, applicationId, and browserProfile");
+		return { handoffId, runId, applicationId, browserProfile };
+	}
+
+	private assertHandoffBinding(run: Run, request: LocalApplyHandoffRequest): void {
+		if (run.envelope.applicationId !== request.applicationId || run.envelope.browserProfile !== request.browserProfile) {
+			throw new RunnerInputError("The handoff does not match this application run", 403);
+		}
+	}
+
+	private handoffResponse(run: Run, handoff: NonNullable<Run["handoff"]>): LocalApplyHandoffStatus {
+		return {
+			handoffId: handoff.handoffId,
+			runId: run.envelope.runId,
+			applicationId: run.envelope.applicationId,
+			browserProfile: run.envelope.browserProfile,
+			state: handoff.state,
+			expiresAt: new Date(handoff.expiresAt).toISOString(),
+			...(handoff.terminalReason ? { terminalReason: handoff.terminalReason } : {}),
+		};
+	}
+
+	private closedHandoff(run: Run, handoffId: string, reason: LocalApplyHandoffTerminalReason): LocalApplyHandoffStatus {
+		const handoff = { handoffId, expiresAt: this.now(), state: "closed" as const, terminalReason: reason };
+		if (run.handoff?.handoffId === handoffId) run.handoff = handoff;
+		return this.handoffResponse(run, handoff);
+	}
+
+	private async closeHandoff(run: Run, reason: LocalApplyHandoffTerminalReason): Promise<void> {
+		const handoff = run.handoff;
+		if (!handoff || handoff.state === "closed") return;
+		handoff.state = "closed";
+		handoff.terminalReason = reason;
+		if (this.deps.takeover) await this.deps.takeover.end(handoff.handoffId).catch(() => undefined);
+	}
+
+	private async requireLiveHandoff(raw: unknown): Promise<{ run: Run; handoff: NonNullable<Run["handoff"]> }> {
+		const status = await this.handoffStatus(raw);
+		if (status.state !== "ready") throw new RunnerInputError(`The handoff is closed (${status.terminalReason ?? "unavailable"})`, 409);
+		const run = this.get(status.runId);
+		return { run, handoff: run.handoff! };
+	}
+
 	/** Does this token belong to this run? The bridge forwarder's only credential. */
 	authorizeBridge(runId: string, token: string): boolean {
 		const run = this.runs.get(runId);
@@ -715,6 +853,9 @@ export class LocalApplyRuntime {
 
 	private end(run: Run, r: Partial<LocalApplyResultEnvelope> & { outcome: LocalApplyResultEnvelope["outcome"] }): void {
 		if (run.state === "ended") return;
+		// A terminal application outcome never means that a handoff succeeded.  Tear down only the
+		// live view and retain the explicit closed state for a caller that polls before restart.
+		if (run.handoff?.state === "ready") void this.closeHandoff(run, "run_ended");
 		if (run.state === "paused") this.release(run, "stopped");
 		if (run.timer) clearInterval(run.timer);
 		run.state = "ended";

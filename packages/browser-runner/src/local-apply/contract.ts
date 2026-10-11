@@ -36,6 +36,17 @@ export const LOCAL_APPLY_CANCEL_PATH = "/local-apply/cancel";
 export const LOCAL_APPLY_PREFLIGHT_PATH = "/local-apply/preflight";
 /** Delivers a cloud-persisted supervisory decision to one paused checkpoint. */
 export const LOCAL_APPLY_DIRECTIVE_PATH = "/local-apply/directive";
+/**
+ * A short-lived, owner-authorized view of the *existing* browser page for one local-apply run.
+ * The id is opaque and carries no browser/profile material.  It deliberately is not a task id:
+ * local-apply runs are not generic runner tasks.
+ */
+export const LOCAL_APPLY_HANDOFF_PATH = "/local-apply/handoff";
+export const LOCAL_APPLY_HANDOFF_STATUS_PATH = "/local-apply/handoff-status";
+export const LOCAL_APPLY_HANDOFF_FRAME_PATH = "/local-apply/handoff/frame";
+export const LOCAL_APPLY_HANDOFF_INPUT_PATH = "/local-apply/handoff/input";
+export const LOCAL_APPLY_HANDOFF_RESUME_PATH = "/local-apply/handoff/resume";
+export const LOCAL_APPLY_HANDOFF_END_PATH = "/local-apply/handoff/end";
 
 export type LocalApplyEngine = "claude" | "codex";
 export const LOCAL_APPLY_ENGINES: readonly LocalApplyEngine[] = ["claude", "codex"];
@@ -435,6 +446,30 @@ export interface LocalApplyStatusResponse {
 	events: LocalApplyRunnerEvent[];
 	lastSeq: number;
 	result?: LocalApplyResultEnvelope;
+}
+
+/** Reasons a scoped handoff is closed or cannot be created.  None implies a browser result. */
+export type LocalApplyHandoffTerminalReason = "unavailable" | "profile_unavailable" | "profile_mismatch" | "page_lost" | "expired" | "run_ended" | "runner_restarted";
+export const LOCAL_APPLY_HANDOFF_TERMINAL_REASONS: readonly LocalApplyHandoffTerminalReason[] = ["unavailable", "profile_unavailable", "profile_mismatch", "page_lost", "expired", "run_ended", "runner_restarted"];
+
+/** Secret-free status for the one live page retained by an active local-apply run. */
+export interface LocalApplyHandoffStatus {
+	handoffId: string;
+	runId: string;
+	applicationId: string;
+	browserProfile: LocalApplyProfile;
+	state: "ready" | "closed";
+	expiresAt: string;
+	/** Present only when no page can still be controlled. It is never a submission result. */
+	terminalReason?: LocalApplyHandoffTerminalReason;
+}
+
+/** All four bindings are compared at the runner boundary before a live page is exposed. */
+export interface LocalApplyHandoffRequest {
+	handoffId: string;
+	runId: string;
+	applicationId: string;
+	browserProfile: LocalApplyProfile;
 }
 
 /** `POST /local-apply/resume` — the owner has handled the pause; optionally with an answer or a newly allowed site. */

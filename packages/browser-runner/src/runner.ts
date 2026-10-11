@@ -18,7 +18,7 @@ import { LOCAL_BROWSER_TASK_TYPE } from "./local-browser/contract.js";
 import { LocalArtifactRuntime } from "./local-artifact/runtime.js";
 import { LOCAL_ARTIFACT_TASK_TYPE } from "./local-artifact/contract.js";
 import { LocalApplyRuntime } from "./local-apply/runtime.js";
-import { LOCAL_APPLY_TASK_TYPE } from "./local-apply/contract.js";
+import { LOCAL_APPLY_TASK_TYPE, type LocalApplyHandoffRequest } from "./local-apply/contract.js";
 import { WORKFLOW_DRIVEN_TASKS } from "./task-types.js";
 
 /** True for a plain object. */
@@ -125,7 +125,18 @@ export class LocalRunner {
 		};
 		this.localBrowser = new LocalBrowserRuntime({ dataDir: config.dataDir, selfUrl: () => this.selfUrl, browserFor });
 		this.localArtifact = new LocalArtifactRuntime({ dataDir: config.dataDir });
-		this.localApply = new LocalApplyRuntime({ dataDir: config.dataDir, selfUrl: () => this.selfUrl, browserFor });
+		this.localApply = new LocalApplyRuntime({
+			dataDir: config.dataDir,
+			selfUrl: () => this.selfUrl,
+			browserFor,
+			takeover: {
+				open: (request) => this.openLocalApplyHandoff(request),
+				state: (handoffId) => this.localApplyHandoffState(handoffId),
+				frame: (handoffId) => this.takeoverFrame(this.localApplyTakeoverKey(handoffId)),
+				input: (handoffId, input) => this.takeoverInput(this.localApplyTakeoverKey(handoffId), input),
+				end: (handoffId) => this.endTakeover(this.localApplyTakeoverKey(handoffId)),
+			},
+		});
 		// Tasks paused/running on a previous process are orphaned now — their
 		// pages and takeover sessions are gone. Fail them so the board is clean.
 		const expired = this.store.expireInFlightTasks();
@@ -392,7 +403,34 @@ export class LocalRunner {
 
 	/** Active human-takeover task ids (for status/discovery). */
 	listTakeovers(): string[] {
-		return [...this.takeovers.keys()];
+		// Local-apply handoffs have their own authenticated route and exact run binding.  Never
+		// advertise their opaque ids as generic task takeovers.
+		return [...this.takeovers.keys()].filter((id) => !id.startsWith("local-apply:"));
+	}
+
+	private localApplyTakeoverKey(handoffId: string): string {
+		return `local-apply:${handoffId}`;
+	}
+
+	/**
+	 * Register the page already being driven by the local-apply runtime.  No task row is created:
+	 * application runs are intentionally not generic runner tasks, and the runtime checks the
+	 * run/application/profile tuple before it can call here.
+	 */
+	private async openLocalApplyHandoff(request: LocalApplyHandoffRequest): Promise<void> {
+		if (request.browserProfile !== "default") throw new RunnerInputError("This browser profile has no live handoff page", 409);
+		const key = this.localApplyTakeoverKey(request.handoffId);
+		if (this.takeovers.has(key)) throw new RunnerInputError("A local application handoff already exists", 409);
+		// Do not call getActivePage here: it creates a blank page when the existing page was lost,
+		// which would turn a destroyed browser session into a misleading successful handoff.
+		const page = this.activePage;
+		if (!page || page.isClosed()) throw new RunnerInputError("The local application page is no longer available", 409);
+		this.takeovers.set(key, { page, reason: "local_apply", humanDone: false });
+	}
+
+	private async localApplyHandoffState(handoffId: string): Promise<"ready" | "page_lost"> {
+		const session = this.takeovers.get(this.localApplyTakeoverKey(handoffId));
+		return session && !session.page.isClosed() ? "ready" : "page_lost";
 	}
 
 	private requireTakeover(taskId: string): NonNullable<ReturnType<typeof this.takeovers.get>> {

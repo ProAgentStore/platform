@@ -88,6 +88,7 @@ describe("deepLinkFor — every notification subject opens a real page (#894)", 
 		// A sign-in with no known run still opens the instance's Coding tab, never the console home.
 		expect(links.deepLinkFor({ kind: "engine-sign-in", instanceId: "i1", sessionId: null })).toBe("/console/instances/i1/coding");
 		expect(links.deepLinkFor(s["secure-input"])).toBe("/console/instances/i1/secure-inputs/x2");
+		expect(links.applicationHandoffLink("i1", "handoff_2")).toBe("/console/instances/i1/applications?handoff=handoff_2");
 	});
 });
 

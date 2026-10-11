@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import Button from "../components/Button";
 import Card from "../components/Card";
 import LoadFailed from "../components/LoadFailed";
 import UploadedTailorSourcesSection from "../components/UploadedTailorSourcesSection";
+import ApplicationHandoffLive from "../components/ApplicationHandoffLive";
 import { QUEUE_STATUS_LABEL, actionBody, actionLabel, confirmText } from "../lib/applications";
 import { TONE_CLASS } from "../lib/localBrowser";
 import type { ApplicationActionResponse, ApplicationRunnerSettingsView, ApplicationQueueAction, ApplicationQueueItem, ApplicationQueueStatus, ApplicationQueueView, ApplicationTraceView, ConnectionDeliveryList } from "../lib/types";
@@ -18,11 +20,28 @@ import type { PreparedApplicationTransferReceipt } from "../lib/applicationTrans
  * The buttons shown are the ones the server says the item allows; the final-submit control appears
  * only when the Runner's policy allows an automatic submit for that application.
  */
+/** Secret-free projection returned by the #1013 opaque handoff resolver. */
+interface ApplicationHandoffView {
+	id: string;
+	runId: string;
+	applicationId: string;
+	state: string;
+	expiresAt: string | null;
+	reason: string | null;
+}
+
 export default function ApplicationsTab({ instanceId, isTailor = false }: { instanceId: string; isTailor?: boolean }) {
+	const [searchParams] = useSearchParams();
+	// Canonical #1013 links use query state so the existing `<tab>/<sessionId>` grammar remains
+	// honest. The opaque value is no browser/profile identifier and is re-authorized by the API.
+	const requestedHandoffId = searchParams.get("handoff")?.trim() || undefined;
 	const [view, setView] = useState<ApplicationQueueView | null>(null);
 	const [error, setError] = useState("");
 	const [filter, setFilter] = useState<ApplicationQueueStatus | "">("");
 	const [open, setOpen] = useState<string | null>(null);
+	const [handoff, setHandoff] = useState<ApplicationHandoffView | null>(null);
+	const [handoffError, setHandoffError] = useState("");
+	const [handoffOpen, setHandoffOpen] = useState(false);
 
 	const load = useCallback(async () => {
 		try {
@@ -35,6 +54,19 @@ export default function ApplicationsTab({ instanceId, isTailor = false }: { inst
 	useEffect(() => {
 		load();
 	}, [load]);
+	// The URL contains an opaque continuity id, not a run/profile/browser identifier. Resolve it
+	// only after the owner is authenticated; the worker binds the result to this instance again.
+	useEffect(() => {
+		let cancelled = false;
+		setHandoff(null);
+		setHandoffError("");
+		setHandoffOpen(false);
+		if (!requestedHandoffId) return;
+		api<ApplicationHandoffView>(`/v1/instances/${instanceId}/application-handoffs/${encodeURIComponent(requestedHandoffId)}`)
+			.then((next) => { if (!cancelled) setHandoff(next); })
+			.catch((e) => { if (!cancelled) setHandoffError(e instanceof Error ? e.message : String(e)); });
+		return () => { cancelled = true; };
+	}, [requestedHandoffId, instanceId]);
 	usePolling(load, 5000, !!view?.items.some((i) => i.status === "tailoring" || i.status === "filling" || i.fillRun));
 
 	if (error && !view) return <LoadFailed what="applications" detail={error} onRetry={load} />;
@@ -45,6 +77,28 @@ export default function ApplicationsTab({ instanceId, isTailor = false }: { inst
 	return (
 		<div className="max-w-4xl">
 			{isTailor && <UploadedTailorSourcesSection instanceId={instanceId} />}
+			{requestedHandoffId && (
+				<Card className="mb-3 sm:mb-4" data-testid="application-handoff">
+					<h3 className="text-base font-bold">Application browser handoff</h3>
+					{handoffError ? (
+						<p className="text-sm text-danger mt-2" data-testid="application-handoff-unavailable">This handoff is unavailable: {handoffError}</p>
+					) : !handoff ? (
+						<p className="text-sm text-muted mt-2">Checking the exact owner-authorized Runner handoff…</p>
+					) : (
+						<>
+							<p className="text-sm text-muted mt-2">
+								{handoff.state === "active" ? "Use the existing Runner browser to complete the site step. Signing in does not by itself change an uncertain submission." : `This handoff is ${handoff.state.replace(/_/g, " ")}.`}
+							</p>
+							{handoff.reason && <p className="text-xs text-muted-soft mt-1">Reason: {handoff.reason.replace(/_/g, " ")}</p>}
+							{handoff.expiresAt && <p className="text-xs text-muted-soft mt-1">Available until {new Date(handoff.expiresAt).toLocaleString()}.</p>}
+							<div className="flex flex-wrap gap-2 mt-3">
+								{handoff.state === "active" && <Button size="sm" variant="primary" onClick={() => setHandoffOpen(true)}>Take over live browser</Button>}
+								{handoff.state !== "active" && <span className="text-xs text-muted">Closed or unavailable handoffs are not treated as completed submissions.</span>}
+							</div>
+						</>
+					)}
+				</Card>
+			)}
 			<Card className="mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-2">Applications</h3>
 				<fieldset className="flex flex-wrap gap-1.5 border-0 p-0 m-0 min-w-0" aria-label="Filter by status">
@@ -89,6 +143,21 @@ export default function ApplicationsTab({ instanceId, isTailor = false }: { inst
 			{selected && <Detail key={selected.key} instanceId={instanceId} item={selected} connections={view.connections} onChanged={load} />}
 
 			{view.pipeline.runners[0] && <SubmissionPolicy runnerId={view.pipeline.runners[0]} onChanged={load} />}
+			{handoffOpen && handoff && (
+				<ApplicationHandoffLive
+					instanceId={instanceId}
+					runId={handoff.runId}
+					handoffId={handoff.id}
+					onClose={() => setHandoffOpen(false)}
+					onChanged={() => {
+						setHandoffOpen(false);
+						// Re-resolve rather than treating a local action as a terminal result. The next
+						// status is the worker's durable, evidence-bound statement.
+						if (requestedHandoffId) api<ApplicationHandoffView>(`/v1/instances/${instanceId}/application-handoffs/${encodeURIComponent(requestedHandoffId)}`).then(setHandoff).catch((e) => setHandoffError(e instanceof Error ? e.message : String(e)));
+						load();
+					}}
+				/>
+			)}
 		</div>
 	);
 }

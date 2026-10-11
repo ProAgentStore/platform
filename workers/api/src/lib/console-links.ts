@@ -95,6 +95,18 @@ export function localBrowserRunLink(instanceId: string, runId?: string): string 
 }
 
 /**
+ * One bounded local-apply browser handoff (#1013).
+ *
+ * This deliberately carries only the opaque handoff id.  It is not a browser URL, profile id,
+ * cookie, or capability: after Console authentication the API resolves it again against the
+ * owner and Runner.  Query state keeps it inside the existing Applications tab grammar, rather
+ * than adding a third splat segment that `InstanceDetail` would silently discard.
+ */
+export function applicationHandoffLink(instanceId: string, handoffId: string): string {
+	return `${instanceLink(instanceId)}/applications?handoff=${encodeURIComponent(handoffId)}`;
+}
+
+/**
  * A coding session — the Co-pilot/Terminal view for one run.
  *
  * Satisfies the #338 rule: the `coding_sessions` row is written by `POST /coding/sessions` before
@@ -219,6 +231,8 @@ export type NotificationSubject =
 	 * ever exists.
 	 */
 	| { kind: "application"; instanceId: string; applicationId: string }
+	/** One short-lived, exact-run browser handoff for a login or CAPTCHA pause (#1013). */
+	| { kind: "application-handoff"; instanceId: string; handoffId: string }
 	/** A secure-input request waiting for the owner (#934). */
 	| { kind: "secure-input"; instanceId: string; requestId: string }
 	/** An exact owner-scoped permission request, focused inside Permissions & Connections (#1009). */
@@ -256,6 +270,8 @@ export function deepLinkFor(subject: NotificationSubject): DeepLink {
 				return localBrowserRunLink(subject.instanceId, subject.runId);
 			case "application":
 				return instanceBoardLink(subject.instanceId);
+			case "application-handoff":
+				return applicationHandoffLink(subject.instanceId, subject.handoffId);
 			case "secure-input":
 				return secureInputNotificationLink(subject.instanceId, subject.requestId);
 			case "permission-request":

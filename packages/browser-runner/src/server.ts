@@ -263,6 +263,29 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	if (req.method === "POST" && path === "/local-apply/status") {
 		return json(res, 200, runner.localApply.status(await readJson(req)));
 	}
+	// A local-apply handoff is a scoped view of the one existing application page.  These routes
+	// deliberately do not use /takeover/:taskId: a local application run is not a generic task.
+	if (req.method === "POST" && path === "/local-apply/handoff") {
+		return json(res, 200, await runner.localApply.handoff(await readJson(req)));
+	}
+	if (req.method === "POST" && path === "/local-apply/handoff-status") {
+		return json(res, 200, await runner.localApply.handoffStatus(await readJson(req)));
+	}
+	if (req.method === "POST" && path === "/local-apply/handoff/frame") {
+		return json(res, 200, await runner.localApply.handoffFrame(await readJson(req)));
+	}
+	if (req.method === "POST" && path === "/local-apply/handoff/input") {
+		await runner.localApply.handoffInput(await readJson(req));
+		return json(res, 200, { ok: true });
+	}
+	if (req.method === "POST" && path === "/local-apply/handoff/end") {
+		return json(res, 200, await runner.localApply.endHandoff(await readJson(req)));
+	}
+	// "Resume" only closes the remote-control view. It deliberately does not release the apply
+	// bridge; that still requires the existing explicit /local-apply/resume owner action.
+	if (req.method === "POST" && path === "/local-apply/handoff/resume") {
+		return json(res, 200, await runner.localApply.endHandoff(await readJson(req)));
+	}
 	if (req.method === "POST" && path === "/local-apply/resume") {
 		return json(res, 200, runner.localApply.resume(await readJson(req)));
 	}

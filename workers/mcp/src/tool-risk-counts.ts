@@ -190,7 +190,7 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// the old list back, and "restore inherited" is a first-class call that removes the override.
 	// +2 read at #1004: uploaded Tailor source selection and readiness are owner-scoped
 	// inspections. They return provenance/status only, never résumé content.
-	read: 140, // +1 at #859: get_machine_policy reads one stable machine's owner-scoped auto-update policy.
+	read: 142, // +2 at #1013: bounded application handoff and reconciliation projections are secret-safe reads.
 	// +2 write at #825: `pause_instance` / `resume_instance`. `write` rather than `destructive` —
 	// nothing is deleted and nothing is unsubscribed, and classing the OFF switch as destructive
 	// would put RESUME behind a scope the caller may not hold, which is the wrong failure mode for
@@ -217,7 +217,7 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// browser on the owner's machine; runtime for the reason `coding_loop_start` is.
 	// +5 runtime at #958: generate_application_materials, start_application_fill, request_application_review,
 	// retry_application, resume_application — each starts or continues a run on the owner's machine.
-	runtime: 36,
+	runtime: 38, // +2 at #1013: request the exact Runner's bounded handoff or read-only reconciliation.
 	// +1 read, +8 destructive at #613 (agent-template authoring, write half): builder planning
 	// only computes a proposal; the other eight can delete, overwrite, run a billable template
 	// turn, create an enduring version, or create/scaffold a template. They all require the

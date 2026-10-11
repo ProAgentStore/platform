@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { buildConsoleLink, type ConsoleTarget } from "../lib/console-deep-link.js";
+import { getHandoffById } from "../lib/local-apply/store.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import type { Env } from "../types.js";
 
@@ -21,7 +22,7 @@ export function registerConsoleLinkRoutes(router: Hono<{ Bindings: Env }>): void
 		await requireOwnedInstance(c.env, instanceId, session.uid);
 
 		const q = (k: string) => c.req.query(k)?.trim() || "";
-		const given = (["section", "target", "run_id", "task_id", "secure_input_id", "permission_request_id"] as const).filter((k) => q(k));
+		const given = (["section", "target", "run_id", "task_id", "secure_input_id", "permission_request_id", "application_handoff_id"] as const).filter((k) => q(k));
 		if (given.length > 1) throw new HttpError(400, `Give one console-link target, not ${given.join(" and ")} — a record's page already sits on its own tab.`);
 
 		let target: ConsoleTarget = { kind: "instance" };
@@ -52,6 +53,12 @@ export function registerConsoleLinkRoutes(router: Hono<{ Bindings: Env }>): void
 			const request = await c.env.DB.prepare("SELECT id FROM instance_permission_requests WHERE id=?1 AND instance_id=?2 AND user_id=?3").bind(q("permission_request_id"), instanceId, session.uid).first();
 			if (!request) throw new HttpError(404, "Permission request not found on this instance");
 			target = { kind: "permission_request", requestId: q("permission_request_id") };
+		} else if (q("application_handoff_id")) {
+			// Opaque IDs are never capabilities: re-authorize the exact owner and Runner before
+			// emitting a link.  The Console repeats that check before it can relay any frame/input.
+			const handoff = await getHandoffById(c.env, instanceId, session.uid, q("application_handoff_id"));
+			if (!handoff) throw new HttpError(404, "Application handoff not found on this instance");
+			target = { kind: "application_handoff", handoffId: handoff.continuityId };
 		}
 
 		const caps = await capabilitiesForInstance(c.env, instanceId, session.uid);

@@ -4,7 +4,8 @@
  */
 import type { Env } from "../../types.js";
 import { type ApplicationStatus, type JobApplication, writeBackToLead } from "../local-artifact/store.js";
-import type { LocalApplyEvent, LocalApplyMode, LocalApplyPause, LocalApplyPlatformEventType } from "./contract.js";
+import { fingerprintOf, jobIdentityOf, sameFingerprint, type ApprovalFingerprint } from "./approval.js";
+import type { LocalApplyEvent, LocalApplyHandoffTerminalReason, LocalApplyMode, LocalApplyPause, LocalApplyPlatformEventType } from "./contract.js";
 import type { GateCheck } from "./policy.js";
 
 type DB = Pick<Env, "DB"> & Partial<Pick<Env, "AGENT">>;
@@ -145,6 +146,341 @@ export async function applicationAudit(env: DB, applicationId: string, userId: s
 		.bind(applicationId, userId)
 		.all<{ version: number; from_status: string; to_status: string; actor: string; actor_instance_id: string | null; run_id: string | null; reason: string | null; created_at: number }>();
 	return (results ?? []).map((r) => ({ version: r.version, from: r.from_status, to: r.to_status, actor: r.actor, actorInstanceId: r.actor_instance_id, runId: r.run_id, reason: r.reason, at: r.created_at }));
+}
+
+// ── #1013 bounded live handoff and uncertain-attempt reconciliation ─────────────────────────
+
+/**
+ * Durable metadata for a live browser handoff.  `continuityId` is deliberately opaque: the
+ * actual browser page, its storage, screenshots, and any entered data remain only in the Runner.
+ */
+/** Mirrors the Runner contract: requested in cloud, then ready or permanently closed. */
+export type LocalApplyHandoffState = "requested" | "ready" | "closed";
+
+export interface LocalApplyHandoff {
+	id: string;
+	continuityId: string;
+	runId: string;
+	applicationId: string;
+	instanceId: string;
+	/** Existing declared profile label only; never browser state or credentials. */
+	browserProfile: string;
+	state: LocalApplyHandoffState;
+	terminalReason: LocalApplyHandoffTerminalReason | null;
+	expiresAt: number;
+	createdAt: number;
+	activatedAt: number | null;
+	endedAt: number | null;
+}
+
+interface HandoffRow {
+	id: string;
+	continuity_id: string;
+	run_id: string;
+	application_id: string;
+	instance_id: string;
+	browser_profile: string;
+	state: LocalApplyHandoffState;
+	terminal_reason: LocalApplyHandoffTerminalReason | null;
+	expires_at: number;
+	created_at: number;
+	activated_at: number | null;
+	ended_at: number | null;
+}
+
+const presentHandoff = (r: HandoffRow): LocalApplyHandoff => ({
+	id: r.id,
+	continuityId: r.continuity_id,
+	runId: r.run_id,
+	applicationId: r.application_id,
+	instanceId: r.instance_id,
+	browserProfile: r.browser_profile,
+	state: r.state,
+	terminalReason: r.terminal_reason,
+	expiresAt: r.expires_at,
+	createdAt: r.created_at,
+	activatedAt: r.activated_at,
+	endedAt: r.ended_at,
+});
+
+/** True only while the owner can be relayed to the same still-live Runner page. */
+export function usableLocalApplyHandoff(handoff: LocalApplyHandoff, now: number): boolean {
+	return (handoff.state === "requested" || handoff.state === "ready") && handoff.expiresAt > now;
+}
+
+/**
+ * Handoff creation is idempotent per exact local-apply run.  The caller has already authenticated
+ * the owner, but the binding is checked again here so duplicate taps cannot retarget another run,
+ * application, profile, or Runner instance.
+ */
+export async function createLocalApplyHandoff(
+	env: DB,
+	input: { run: ApplyRun; app: Pick<JobApplication, "id" | "fillRunId">; userId: string; browserProfile: string; expiresAt: number },
+	now: number,
+): Promise<LocalApplyHandoff | null> {
+	if (!input.browserProfile || input.browserProfile !== input.run.policy.browserProfile || input.app.id !== input.run.applicationId || input.app.fillRunId !== input.run.id || input.expiresAt <= now) return null;
+	if (isTerminalApplyRun(input.run.status)) return null;
+	const id = crypto.randomUUID();
+	const continuityId = crypto.randomUUID();
+	await env.DB.prepare(
+		`INSERT INTO local_apply_handoffs
+		   (id, continuity_id, run_id, application_id, instance_id, user_id, browser_profile, state, expires_at, created_at, updated_at)
+		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'requested', ?8, ?9, ?9
+		   FROM local_apply_runs r
+		  WHERE r.id = ?3 AND r.instance_id = ?5 AND r.user_id = ?6 AND r.application_id = ?4
+		    AND r.status IN ('queued', 'running', 'paused')
+		    AND json_extract(r.policy, '$.browserProfile') = ?7
+		    AND EXISTS (SELECT 1 FROM job_applications a WHERE a.id = ?4 AND a.user_id = ?6 AND a.fill_run_id = ?3)
+		 ON CONFLICT(run_id) DO NOTHING`,
+	)
+		.bind(id, continuityId, input.run.id, input.app.id, input.run.instanceId, input.userId, input.browserProfile, input.expiresAt, now)
+		.run();
+	const row = await env.DB.prepare(
+		"SELECT * FROM local_apply_handoffs WHERE run_id = ?1 AND instance_id = ?2 AND user_id = ?3 AND application_id = ?4 AND browser_profile = ?5",
+	)
+		.bind(input.run.id, input.run.instanceId, input.userId, input.app.id, input.browserProfile)
+		.first<HandoffRow>();
+	return row ? presentHandoff(row) : null;
+}
+
+/** Resolve an opaque handoff only inside the exact owner's Runner instance. */
+export async function getHandoffById(env: DB, instanceId: string, userId: string, continuityId: string): Promise<LocalApplyHandoff | null> {
+	const row = await env.DB.prepare("SELECT * FROM local_apply_handoffs WHERE continuity_id = ?1 AND instance_id = ?2 AND user_id = ?3")
+		.bind(continuityId, instanceId, userId)
+		.first<HandoffRow>();
+	return row ? presentHandoff(row) : null;
+}
+
+export async function getLocalApplyHandoffForRun(env: DB, runId: string, instanceId: string, userId: string): Promise<LocalApplyHandoff | null> {
+	const row = await env.DB.prepare("SELECT * FROM local_apply_handoffs WHERE run_id = ?1 AND instance_id = ?2 AND user_id = ?3")
+		.bind(runId, instanceId, userId)
+		.first<HandoffRow>();
+	return row ? presentHandoff(row) : null;
+}
+
+/**
+ * Advance a handoff only while it is active.  A closed handoff never becomes ready again: a Runner
+ * restart or destroyed page is a closed terminal reason, never a successful takeover.
+ */
+export async function markLocalApplyHandoff(
+	env: DB,
+	input: { continuityId: string; instanceId: string; userId: string; state: Exclude<LocalApplyHandoffState, "requested">; terminalReason?: LocalApplyHandoffTerminalReason },
+	now: number,
+): Promise<LocalApplyHandoff | null> {
+	if ((input.state === "closed") !== !!input.terminalReason) return null;
+	const res = await env.DB.prepare(
+		`UPDATE local_apply_handoffs
+		    SET state = ?1, terminal_reason = ?2,
+		        activated_at = CASE WHEN ?1 = 'ready' AND activated_at IS NULL THEN ?3 ELSE activated_at END,
+		        ended_at = CASE WHEN ?1 = 'closed' THEN ?3 ELSE ended_at END, updated_at = ?3
+		  WHERE continuity_id = ?4 AND instance_id = ?5 AND user_id = ?6
+		    AND state IN ('requested', 'ready')
+		    AND (?1 <> 'ready' OR expires_at > ?3)`,
+	)
+		.bind(input.state, input.terminalReason ?? null, now, input.continuityId, input.instanceId, input.userId)
+		.run();
+	if ((res.meta?.changes ?? 0) === 0) return null;
+	return getHandoffById(env, input.instanceId, input.userId, input.continuityId);
+}
+
+export type LocalApplyReconciliationState = "requested" | "no_submission_proven" | "submission_confirmed" | "ambiguous" | "unavailable" | "rejected";
+/** A proof kind has no free text/evidence payload, by design. */
+export type LocalApplyReconciliationProofKind = "authorized_site_history_no_submission" | "authorized_site_receipt_confirmed" | "ambiguous_site_history" | "authorized_profile_unavailable";
+
+export interface LocalApplyReconciliation {
+	id: string;
+	runId: string;
+	applicationId: string;
+	instanceId: string;
+	state: LocalApplyReconciliationState;
+	proofKind: LocalApplyReconciliationProofKind | null;
+	/** Canonical application identity, not an employer URL. */
+	jobIdentity: string;
+	materialFingerprint: ApprovalFingerprint;
+	requestedAt: number;
+	resolvedAt: number | null;
+}
+
+interface ReconciliationRow {
+	id: string;
+	run_id: string;
+	application_id: string;
+	instance_id: string;
+	reconciliation_state: LocalApplyReconciliationState;
+	proof_kind: LocalApplyReconciliationProofKind | null;
+	job_identity: string;
+	material_lead_version: number | null;
+	material_profile_version: string | null;
+	material_resume_sha: string | null;
+	material_cover_letter_sha: string | null;
+	requested_at: number;
+	resolved_at: number | null;
+}
+
+const presentReconciliation = (r: ReconciliationRow): LocalApplyReconciliation => ({
+	id: r.id,
+	runId: r.run_id,
+	applicationId: r.application_id,
+	instanceId: r.instance_id,
+	state: r.reconciliation_state,
+	proofKind: r.proof_kind,
+	jobIdentity: r.job_identity,
+	materialFingerprint: {
+		leadVersion: r.material_lead_version,
+		profileVersion: r.material_profile_version,
+		resumeSha: r.material_resume_sha,
+		coverLetterSha: r.material_cover_letter_sha,
+	},
+	requestedAt: r.requested_at,
+	resolvedAt: r.resolved_at,
+});
+
+const uncertainAttemptBinding = (app: JobApplication, run: ApplyRun): boolean =>
+	app.id === run.applicationId && app.fillRunId === run.id && app.status === "blocked" && app.blockReason === "submit_unconfirmed" && app.submitAttemptedAt !== null && run.status === "blocked";
+
+/** The owner can request site-history reconciliation only for the exact ended uncertain attempt. */
+export async function requestLocalApplyReconciliation(
+	env: DB,
+	input: { app: JobApplication; run: ApplyRun; userId: string; actor?: "owner" | "system" },
+	now: number,
+): Promise<LocalApplyReconciliation | null> {
+	if (!uncertainAttemptBinding(input.app, input.run)) return null;
+	const fp = fingerprintOf(input.app);
+	const identity = jobIdentityOf(input.app);
+	const id = crypto.randomUUID();
+	await env.DB.batch([
+		env.DB.prepare(
+			`INSERT INTO local_apply_reconciliations
+			   (id, run_id, application_id, instance_id, user_id, reconciliation_state, job_identity,
+			    material_lead_version, material_profile_version, material_resume_sha, material_cover_letter_sha,
+			    requested_at, created_at, updated_at)
+			 SELECT ?1, ?2, ?3, ?4, ?5, 'requested', ?6, ?7, ?8, ?9, ?10, ?11, ?11, ?11
+			   FROM local_apply_runs r
+			  WHERE r.id = ?2 AND r.instance_id = ?4 AND r.user_id = ?5 AND r.application_id = ?3 AND r.status = 'blocked'
+			    AND EXISTS (
+			      SELECT 1 FROM job_applications a
+			       WHERE a.id = ?3 AND a.user_id = ?5 AND a.fill_run_id = ?2
+			         AND a.status = 'blocked' AND a.block_reason = 'submit_unconfirmed' AND a.submit_attempted_at IS NOT NULL
+			         AND ?6 = json_object('sourceInstanceId', a.source_instance_id, 'leadId', a.lead_id, 'workKey', a.work_key, 'lifecycleVersion', a.lifecycle_version)
+			         AND a.lifecycle_version IS ?7 AND a.profile_version IS ?8
+			         AND json_extract(a.resume_artifact, '$.sha256') IS ?9 AND json_extract(a.cover_letter_artifact, '$.sha256') IS ?10
+			    )
+			 ON CONFLICT(run_id) DO NOTHING`,
+		)
+			.bind(id, input.run.id, input.app.id, input.run.instanceId, input.userId, identity, fp.leadVersion, fp.profileVersion, fp.resumeSha, fp.coverLetterSha, now),
+		env.DB.prepare(
+			`INSERT OR IGNORE INTO local_apply_reconciliation_events (id, reconciliation_id, user_id, actor, event_type, created_at)
+			 SELECT ?1, ?2, ?3, ?4, 'requested', ?5
+			 WHERE EXISTS (SELECT 1 FROM local_apply_reconciliations WHERE id = ?2)`,
+		)
+			.bind(crypto.randomUUID(), id, input.userId, input.actor ?? "owner", now),
+	]);
+	const row = await env.DB.prepare("SELECT * FROM local_apply_reconciliations WHERE run_id = ?1 AND instance_id = ?2 AND user_id = ?3 AND application_id = ?4")
+		.bind(input.run.id, input.run.instanceId, input.userId, input.app.id)
+		.first<ReconciliationRow>();
+	return row ? presentReconciliation(row) : null;
+}
+
+export async function getLocalApplyReconciliation(env: DB, runId: string, instanceId: string, userId: string): Promise<LocalApplyReconciliation | null> {
+	const row = await env.DB.prepare("SELECT * FROM local_apply_reconciliations WHERE run_id = ?1 AND instance_id = ?2 AND user_id = ?3")
+		.bind(runId, instanceId, userId)
+		.first<ReconciliationRow>();
+	return row ? presentReconciliation(row) : null;
+}
+
+function validReconciliationProof(state: LocalApplyReconciliationState, proofKind: LocalApplyReconciliationProofKind): boolean {
+	return (state === "no_submission_proven" && proofKind === "authorized_site_history_no_submission") ||
+		(state === "submission_confirmed" && proofKind === "authorized_site_receipt_confirmed") ||
+		(state === "ambiguous" && proofKind === "ambiguous_site_history") ||
+		(state === "unavailable" && proofKind === "authorized_profile_unavailable");
+}
+
+/**
+ * Records a closed-vocabulary reconciliation result.  This deliberately cannot clear
+ * `submit_attempted_at`, restart a run, grant an approval, or write a receipt URL.  Consumers must
+ * separately make an explicit audited owner decision before any future continuation.
+ */
+export async function recordLocalApplyReconciliationProof(
+	env: DB,
+	input: { reconciliation: LocalApplyReconciliation; app: JobApplication; run: ApplyRun; userId: string; state: Exclude<LocalApplyReconciliationState, "requested" | "rejected">; proofKind: LocalApplyReconciliationProofKind; actor?: "owner" | "runner" | "system" },
+	now: number,
+): Promise<LocalApplyReconciliation | null> {
+	if (!validReconciliationProof(input.state, input.proofKind) || !uncertainAttemptBinding(input.app, input.run)) return null;
+	if (input.reconciliation.applicationId !== input.app.id || input.reconciliation.runId !== input.run.id || input.reconciliation.instanceId !== input.run.instanceId || input.reconciliation.jobIdentity !== jobIdentityOf(input.app) || !sameFingerprint(input.reconciliation.materialFingerprint, fingerprintOf(input.app))) return null;
+	const res = await env.DB.prepare(
+		`UPDATE local_apply_reconciliations
+		    SET reconciliation_state = ?1, proof_kind = ?2, resolved_at = ?3, updated_at = ?3
+		  WHERE id = ?4 AND run_id = ?5 AND application_id = ?6 AND instance_id = ?7 AND user_id = ?8
+		    AND reconciliation_state = 'requested'
+		    AND job_identity = ?9
+		    AND material_lead_version IS ?10 AND material_profile_version IS ?11
+		    AND material_resume_sha IS ?12 AND material_cover_letter_sha IS ?13
+		    AND EXISTS (
+		      SELECT 1 FROM local_apply_runs r JOIN job_applications a ON a.id = r.application_id
+		       WHERE r.id = ?5 AND r.instance_id = ?7 AND r.user_id = ?8 AND r.application_id = ?6 AND r.status = 'blocked'
+		         AND a.user_id = ?8 AND a.fill_run_id = ?5 AND a.status = 'blocked'
+		         AND a.block_reason = 'submit_unconfirmed' AND a.submit_attempted_at IS NOT NULL
+		         AND ?9 = json_object('sourceInstanceId', a.source_instance_id, 'leadId', a.lead_id, 'workKey', a.work_key, 'lifecycleVersion', a.lifecycle_version)
+		         AND a.lifecycle_version IS ?10 AND a.profile_version IS ?11
+		         AND json_extract(a.resume_artifact, '$.sha256') IS ?12 AND json_extract(a.cover_letter_artifact, '$.sha256') IS ?13
+		    )`,
+	)
+		.bind(input.state, input.proofKind, now, input.reconciliation.id, input.run.id, input.app.id, input.run.instanceId, input.userId, input.reconciliation.jobIdentity, input.reconciliation.materialFingerprint.leadVersion, input.reconciliation.materialFingerprint.profileVersion, input.reconciliation.materialFingerprint.resumeSha, input.reconciliation.materialFingerprint.coverLetterSha)
+		.run();
+	if ((res.meta?.changes ?? 0) === 0) return null;
+	await env.DB.prepare(
+		"INSERT INTO local_apply_reconciliation_events (id, reconciliation_id, user_id, actor, event_type, reason_code, created_at) VALUES (?1, ?2, ?3, ?4, 'proof_recorded', ?5, ?6)",
+	)
+		.bind(crypto.randomUUID(), input.reconciliation.id, input.userId, input.actor ?? "runner", input.proofKind, now)
+		.run();
+	return getLocalApplyReconciliation(env, input.run.id, input.run.instanceId, input.userId);
+}
+
+/**
+ * Strict prerequisite for a later owner-authorized continuation.  It is intentionally only a
+ * predicate: it never creates a run, replaces an approval, or makes an uncertain attempt retryable.
+ */
+export function reconciliationProvesNoSubmission(reconciliation: LocalApplyReconciliation | null, app: JobApplication, run: ApplyRun): boolean {
+	return !!reconciliation && reconciliation.state === "no_submission_proven" && reconciliation.proofKind === "authorized_site_history_no_submission" && uncertainAttemptBinding(app, run) && reconciliation.applicationId === app.id && reconciliation.runId === run.id && reconciliation.instanceId === run.instanceId && reconciliation.jobIdentity === jobIdentityOf(app) && sameFingerprint(reconciliation.materialFingerprint, fingerprintOf(app));
+}
+
+/**
+ * Make the resolution visible in the application's ordinary, append-only lifecycle audit.  It is
+ * deliberately a `blocked → blocked` move: the original `submit_unconfirmed` event is retained,
+ * `submit_attempted_at` remains set, and this operation neither creates a retry nor changes any
+ * submit authorization.  A caller must still require a new explicit owner decision for anything
+ * beyond this historical reconciliation record.
+ */
+export async function auditReconciledNoSubmission(
+	env: DB,
+	input: { reconciliation: LocalApplyReconciliation; app: JobApplication; run: ApplyRun; userId: string; actorInstanceId?: string },
+	now: number,
+): Promise<boolean> {
+	if (!reconciliationProvesNoSubmission(input.reconciliation, input.app, input.run)) return false;
+	const durable = await getLocalApplyReconciliation(env, input.run.id, input.run.instanceId, input.userId);
+	if (!durable || durable.id !== input.reconciliation.id || !reconciliationProvesNoSubmission(durable, input.app, input.run)) return false;
+	const moved = await moveApplication(
+		env,
+		input.app,
+		input.userId,
+		{
+			to: "blocked",
+			actor: "owner",
+			actorInstanceId: input.actorInstanceId,
+			runId: input.run.id,
+			expectRun: input.run.id,
+			reason: "submit_unconfirmed_reconciled_no_submission",
+			questions: ["The authorized profile recorded no submission. This application remains blocked: its original submit attempt marker is retained and any future action requires a separate explicit owner decision."],
+		},
+		now,
+	);
+	if (!moved) return false;
+	await env.DB.prepare(
+		"INSERT INTO local_apply_reconciliation_events (id, reconciliation_id, user_id, actor, event_type, reason_code, created_at) VALUES (?1, ?2, ?3, 'owner', 'state_transition', 'no_submission_proven', ?4)",
+	)
+		.bind(crypto.randomUUID(), input.reconciliation.id, input.userId, now)
+		.run();
+	return true;
 }
 
 // ── Runs ─────────────────────────────────────────────────────────────────────────────────────

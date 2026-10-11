@@ -32,6 +32,10 @@ export const APPLICATION_TOOL_SCOPES = {
 	application_runs: "read",
 	application_run: "read",
 	application_run_supervision: "read",
+	application_handoff: "read",
+	create_application_handoff: "runtime",
+	application_reconciliation: "read",
+	request_application_reconciliation: "runtime",
 	tailoring_run: "read",
 	get_application_tailor_uploaded_sources: "read",
 	get_application_tailor_uploaded_source_readiness: "read",
@@ -208,6 +212,95 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 			if (denied) return denied;
 			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/application-runs/${encodeURIComponent(run_id)}/supervision`, t, {}, env)) as { error?: string };
 			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
+	// ── Exact Application Runner browser continuity (#1013) ──────────────────
+	//
+	// These deliberately expose only the cloud's safe projection: opaque handoff id/link, ids,
+	// lifecycle/expiry reasons and reconciliation state.  Browser cookies, profile state, page
+	// text, screenshots, typed values and any employer-site history do not cross this boundary.
+	// A request cannot assert that a submission did not happen; only the Runner's structured,
+	// read-only evidence can later make an audited transition.
+	const runArg = { run_id: z.string().describe("The exact Application Runner fill run id (`id` from application_runs).") };
+	const handoffArg = { handoff_id: z.string().describe("The opaque handoff id returned by create_application_handoff. It is not a browser URL, profile id, cookie or credential.") };
+	server.tool(
+		"application_handoff",
+		"Read the bounded browser-handoff state for ONE Application Runner run (#1013): opaque continuity id/link, safe lifecycle state, expiry and closed reason only. It never returns a browser URL, profile id, cookie, token, page text, typed value, screenshot or employer-site history. A closed/lost/expired handoff is not a completed submission. Read-only.",
+		{ ...who, ...runArg, ...handoffArg },
+		async (input: Record<string, unknown>) => {
+			const token = tokenOf(input);
+			const instance_id = instanceOf(input);
+			const run_id = String(input.run_id ?? "");
+			const handoff_id = String(input.handoff_id ?? "");
+			const t = tokenFor(token);
+			if (!t) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "application_handoff", { instance_id, run_id, handoff_id });
+			if (denied) return denied;
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/application-runs/${encodeURIComponent(run_id)}/handoff?handoff_id=${encodeURIComponent(handoff_id)}`, t, {}, env)) as { error?: string };
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+	server.tool(
+		"create_application_handoff",
+		"Explicitly request ONE short-lived, exact-owner browser handoff for ONE live Application Runner run (#1013). It reuses only the already-authorized local browser profile for that run; it never signs in, stores credentials, expands profile lifetime, changes OAuth/security settings, submits, resets submit_attempted/submit_unconfirmed, or creates approval. Idempotent while that exact live run/profile remains valid; returns a mobile-usable authenticated Console link. Use dry_run first.",
+		{ ...who, ...runArg, dry_run: z.boolean().optional().describe("Describe the bounded handoff request without contacting the Runner or creating it.") },
+		async (input: Record<string, unknown>) => {
+			const token = tokenOf(input);
+			const instance_id = instanceOf(input);
+			const run_id = String(input.run_id ?? "");
+			const t = tokenFor(token);
+			if (!t) return authRequired();
+			const auditInput = { instance_id, run_id };
+			const denied = await requirePermission(safetyFor(token), "runtime", "create_application_handoff", auditInput);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/application-runs/${encodeURIComponent(run_id)}/handoff`;
+			if (input.dry_run) return dryRun(safetyFor(token), "create_application_handoff", "request one short-lived exact-run browser handoff", auditInput, {
+				endpoint, method: "POST", effect: "The Runner would be asked for an owner-bound live handoff only if this exact run, application and already-authorized profile remain valid. No sign-in, submission, approval, browser-profile change or credential storage would occur.",
+			});
+			const data = (await authedCall(endpoint, t, { method: "POST", body: "{}" }, env)) as { error?: string };
+			if (data.error) return text(`Error: ${data.error}`);
+			await audit(safetyFor(token), { tool: "create_application_handoff", action: "completed", input: auditInput, result: data });
+			return jsonText(data);
+		},
+	);
+	server.tool(
+		"application_reconciliation",
+		"Read the durable, secret-safe reconciliation state for ONE Application Runner run (#1013): whether a runner-authoritative read-only reconciliation was requested/completed and its closed-vocabulary outcome. It never exposes site history, browser/profile state, screenshots, page text, credentials, typed answers or raw evidence. `submit_attempted` and `submit_unconfirmed` remain facts; a login redirect is never evidence of no submission. Read-only.",
+		{ ...who, ...runArg },
+		async (input: Record<string, unknown>) => {
+			const token = tokenOf(input);
+			const instance_id = instanceOf(input);
+			const run_id = String(input.run_id ?? "");
+			const t = tokenFor(token);
+			if (!t) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "application_reconciliation", { instance_id, run_id });
+			if (denied) return denied;
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/application-runs/${encodeURIComponent(run_id)}/reconciliation`, t, {}, env)) as { error?: string };
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+	server.tool(
+		"request_application_reconciliation",
+		"Explicitly ask the exact Application Runner to perform its supported read-only reconciliation for an uncertain attempt (#1013). This does not accept an owner assertion as proof, does not log in, replay a submit, mint an approval, reset submit_attempted/submit_unconfirmed, or infer no submission from a redirect. The Runner may record only its structured authoritative outcome and audited transition. Use dry_run first.",
+		{ ...who, ...runArg, dry_run: z.boolean().optional().describe("Describe the read-only reconciliation request without contacting the Runner.") },
+		async (input: Record<string, unknown>) => {
+			const token = tokenOf(input);
+			const instance_id = instanceOf(input);
+			const run_id = String(input.run_id ?? "");
+			const t = tokenFor(token);
+			if (!t) return authRequired();
+			const auditInput = { instance_id, run_id };
+			const denied = await requirePermission(safetyFor(token), "runtime", "request_application_reconciliation", auditInput);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/application-runs/${encodeURIComponent(run_id)}/reconciliation`;
+			if (input.dry_run) return dryRun(safetyFor(token), "request_application_reconciliation", "request read-only authoritative reconciliation for one uncertain attempt", auditInput, {
+				endpoint, method: "POST", effect: "The Runner would inspect only its supported structured evidence for this exact run. It would not sign in, submit/retry, replace approval, or treat a login redirect as proof.",
+			});
+			const data = (await authedCall(endpoint, t, { method: "POST", body: "{}" }, env)) as { error?: string };
+			if (data.error) return text(`Error: ${data.error}`);
+			await audit(safetyFor(token), { tool: "request_application_reconciliation", action: "completed", input: auditInput, result: data });
+			return jsonText(data);
 		},
 	);
 

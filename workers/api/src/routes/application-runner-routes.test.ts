@@ -1422,6 +1422,45 @@ describe("cloud supervision", () => {
 });
 
 describe("settings, access and cancel", () => {
+	it("keeps a login handoff exact, opaque and closed on a lost page without changing submit uncertainty", async () => {
+		// `default` is opt-in; the handoff reuses this live owner-authorized profile and does not
+		// make an isolated run persistent or transferable.
+		await call("PUT", "/ap/application-runner/settings", { browserProfile: "default" });
+		const started = await call("POST", "/ap/application-runs", readyApp("lead-handoff"));
+		const runId = started.body.run.id as string;
+		runner("paused", { pause: { reason: "login_required", question: "Sign in on the employer site" } });
+		answers["/local-apply/handoff"] = { status: 200, body: { handoffId: "ignored-by-relay", runId, applicationId: "lead-handoff", browserProfile: "default", state: "ready", expiresAt: "2026-10-11T01:00:00.000Z" } };
+		answers["/local-apply/handoff-status"] = { status: 200, body: { handoffId: "ignored-by-relay", runId, applicationId: "lead-handoff", browserProfile: "default", state: "ready", expiresAt: "2026-10-11T01:00:00.000Z" } };
+
+		const first = await call("POST", `/ap/application-runs/${runId}/handoff`);
+		expect(first.status).toBe(201);
+		const handoff = first.body.handoff as { id: string; state: string };
+		expect(handoff).toMatchObject({ state: "active" });
+		expect(first.body.consoleLink).toBe(`/console/instances/ap/applications?handoff=${encodeURIComponent(handoff.id)}`);
+		// The pause producer opens the exact same handoff before it emits the existing, preference-
+		// controlled owner alert.  This is the mobile push's canonical target, not a Board fallback.
+		const alert = await d1.DB.prepare("SELECT type, kind, url, body FROM notifications WHERE user_id = 'u1' ORDER BY created_at DESC LIMIT 1").first<{ type: string; kind: string; url: string; body: string }>();
+		expect(alert).toMatchObject({ type: "apply", kind: "alert", url: `/console/instances/ap/applications?handoff=${encodeURIComponent(handoff.id)}` });
+		expect(JSON.stringify(alert)).not.toMatch(/cookie|token|password|https?:\/\//i);
+		const relayBody = sent.find((s) => s.path === "/local-apply/handoff")?.body;
+		expect(relayBody).toMatchObject({ handoffId: handoff.id, runId, applicationId: "lead-handoff", browserProfile: "default" });
+		expect(JSON.stringify({ first: first.body, relayBody })).not.toMatch(/cookie|token|password|https?:\/\//i);
+
+		// A duplicate tap only checks the same opaque handoff; another run/id cannot read it.
+		const repeated = await call("POST", `/ap/application-runs/${runId}/handoff`);
+		expect(repeated.status).toBe(201);
+		expect(repeated.body.handoff.id).toBe(handoff.id);
+		expect((await call("GET", `/ap/application-runs/${runId}/handoff?handoff_id=wrong`)).status).toBe(404);
+
+		answers["/local-apply/handoff/frame"] = { status: 409, body: { error: "page lost" } };
+		const lost = await call("GET", `/ap/application-runs/${runId}/handoff/frame?handoff_id=${encodeURIComponent(handoff.id)}`);
+		expect(lost.status).toBe(409);
+		const closed = await call("GET", `/ap/application-runs/${runId}/handoff?handoff_id=${encodeURIComponent(handoff.id)}`);
+		expect(closed.body.handoff).toMatchObject({ state: "closed", reason: "page_lost" });
+		// A lost login view is never evidence that no submit occurred, nor permission to mint another approval.
+		expect(await appRow("lead-handoff")).toMatchObject({ status: "blocked", block_reason: "login_required", submit_attempted_at: null });
+	});
+
 	it("defaults to fill-and-review with auto-submit off, and refuses an API-key mode", async () => {
 		const s = (await call("GET", "/ap/application-runner/settings")).body.settings;
 		expect(s).toMatchObject({ engine: "claude", authMode: "machine", browserProfile: "isolated", workspace: "~/jobs", sources: { profile: "profile.md" }, autoSubmit: { enabled: false, dailyCap: 0 } });

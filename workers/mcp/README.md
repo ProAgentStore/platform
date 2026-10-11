@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**298 tool registrations.** 272 are always registered; 26 are gated to the console
+**302 tool registrations.** 276 are always registered; 26 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -333,6 +333,10 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `application_runs` | An Application Runner's fill runs, newest first — which run holds a concurrency slot | read | | |
 | `application_run` | ONE fill run as it stands now (pulls the machine): status, pause, policy + submit-gate verdicts, result, and its runner event trace | read | | |
 | `application_run_supervision` | One fill run's supervisor checkpoints and the immutable directive recorded for each | read | | |
+| `application_handoff` | Read one exact opaque browser handoff's safe state; never returns profile/browser secrets, screenshots or site history | read | | |
+| `create_application_handoff` | Request one short-lived, owner-bound handoff to the exact live Runner browser; never signs in, submits or changes approval | runtime | yes | |
+| `application_reconciliation` | Read one uncertain attempt's durable, secret-safe read-only reconciliation state | read | | |
+| `request_application_reconciliation` | Ask the exact Runner for authoritative read-only reconciliation; no owner assertion, login, replay or approval replacement | runtime | yes | |
 | `tailoring_run` | ONE application's tailoring run as it stands now (pulls the machine while running): policy, result and its runner event trace | read | | |
 | `get_application_tailor_uploaded_sources` | Read the exact owner-selected uploaded résumé/profile Files and provenance; never returns document text or starts a run | read | | |
 | `get_application_tailor_uploaded_source_readiness` | Read live uploaded-source readiness, version/hash provenance and fail-closed blockers before tailoring | read | | |

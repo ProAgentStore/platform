@@ -20,10 +20,10 @@
  */
 
 /** Every tool the server can register, with all surfaces gated on. */
-export const MCP_TOOL_COUNT = 298;
+export const MCP_TOOL_COUNT = 302;
 
 /** Registered for every connection, whatever the user is subscribed to. */
-export const MCP_TOOL_ALWAYS_ON = 272;
+export const MCP_TOOL_ALWAYS_ON = 276;
 
 /** Registered only when the user has an agent with the matching console surface
  *  (`apply`, `repo`, `coding`) — so a Repo Chat user never sees `apply_to_job`. */
