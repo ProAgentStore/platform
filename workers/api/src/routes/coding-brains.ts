@@ -18,7 +18,7 @@
  */
 import type { Context, Hono } from "hono";
 import { HttpError } from "../lib/auth.js";
-import { callRunner, READ_TIMEOUT_MS, type RunnerConn } from "../lib/runner-client.js";
+import { callRunner, READ_TIMEOUT_MS } from "../lib/runner-client.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
 import { appendTimeline, contextForCopilot, lastTerminal } from "../lib/coding-timeline.js";
 import { terminalSnapshotChanged, terminalSnapshotContent } from "../lib/terminal-snapshot.js";
@@ -30,6 +30,8 @@ import { noteUnmeteredHeadlessDrive } from "../lib/engine-metering.js";
 import { startSessionOnRunner } from "../lib/coding-session-open.js";
 import { getSessionRunnerConn, readSpecialInstructions, requireOwned } from "./coding-shared.js";
 import { withTurnReplay } from "../lib/coding-turn-replay.js";
+import { dispatchOwnedTurn } from "../lib/coding-dispatch.js";
+import { describeOwner, runnerEngineProbe } from "../lib/coding-ownership.js";
 import type { Env } from "../types.js";
 
 /**
@@ -56,9 +58,8 @@ async function driveClaude(
 	const session = await getSession(c.env, instanceId, uid, sessionId);
 	if (!session) return { delegated: false, reply: "Coding session not found." };
 	await touchSessionActivity(c.env, instanceId, uid, sessionId);
-	const conn0 = await getSessionRunnerConn(c.env, instanceId, uid, session);
-	if (!conn0) return { delegated: false, reply: "No coding runner connected — start it with: pags up" };
-	let conn: RunnerConn = conn0;
+	const conn = await getSessionRunnerConn(c.env, instanceId, uid, session);
+	if (!conn) return { delegated: false, reply: "No coding runner connected — start it with: pags up" };
 	// NOTE: don't log a `command` turn here — the chat_assistant "On it — I asked
 	// Claude to: …" already records it; a command entry would show a 3rd duplicate
 	// bubble in the thread (loadChat surfaces commands as your turns).
@@ -67,23 +68,35 @@ async function driveClaude(
 	// person, which is how a run came to report a decision back to the owner as his own (#505).
 	// `author` is passed through from the caller — see the docstring. Held by
 	// `lib/turn-author-callsites.test.ts`.
-	// #693 slice 2: an engine with no memory of its own gets the platform's record with the turn.
-	const action = await withTurnReplay(c.env, { instanceId, userId: uid, repoId: session.repoId, clientType: session.clientType }, { kind: "message", text: instruction, author });
-	const act = () => callRunner(conn, "/coding/act", { sessionId, action }).catch(() => null);
-	let snap = await act();
-	const repo = session ? await getRepo(c.env, instanceId, uid, session.repoId) : null;
-	if (snap === null && session && repo) {
-		// Reattach a session lost to a runner restart — and on a machine SWITCH this relocates
-		// the session to the live machine and returns THAT connection, so retry there (the
-		// captured `conn` still points at the old, now-dead machine).
-		const relocated = (await startSessionOnRunner(c.env, instanceId, uid, session, repo)).conn;
-		if (relocated) conn = relocated;
-		snap = await act();
+	const repo = await getRepo(c.env, instanceId, uid, session.repoId);
+	// ONE WRITER PER CHECKOUT (#1015): this door used to send straight to `/coding/act`, re-sending on
+	// any failure, with no ownership check at all. It now goes through the same admission, reservation,
+	// pre-send fence and failure classification as `POST …/message`. A Co-pilot-composed instruction
+	// (`author: "pilot"`) is the CONTROLLER's, and is not recorded as an owner directive.
+	const dispatched = await dispatchOwnedTurn(c.env, {
+		scope: { instanceId, userId: uid, repoId: session.repoId, sessionId },
+		author: author === "pilot" ? "controller" : "owner",
+		ownerText: instruction,
+		persistent: session.clientType === "claude",
+		probe: runnerEngineProbe(c.env, instanceId, uid),
+		// #693 slice 2: an engine with no memory of its own gets the platform's record with the turn.
+		prepare: () => withTurnReplay(c.env, { instanceId, userId: uid, repoId: session.repoId, clientType: session.clientType }, { kind: "message", text: instruction, author }),
+		send: (action) => callRunner(conn, "/coding/act", { sessionId, action }),
+		// Reattach a session lost to a runner restart — on a machine SWITCH this relocates it to the
+		// live machine and returns THAT connection, so the retry goes there (fenced again first).
+		reattach: async () => {
+			if (!repo) return null;
+			const target = (await startSessionOnRunner(c.env, instanceId, uid, session, repo)).conn ?? conn;
+			return (action) => callRunner(target, "/coding/act", { sessionId, action });
+		},
+	});
+	if (!dispatched.ok) {
+		return { delegated: false, reply: dispatched.owner ? describeOwner(dispatched.owner, repo?.name ?? "This repository") : dispatched.detail };
 	}
 	// A headless drive of an engine that reports no token counts is unmetered, and the absence is
 	// recorded rather than left to read as zero (#556). Same rule #348 applied to the terminal
 	// driver; this is the other row of its 2x2.
-	if (snap !== null) await noteUnmeteredHeadlessDrive(c.env, { userId: uid, instanceId, traceId: sessionId }, session);
+	await noteUnmeteredHeadlessDrive(c.env, { userId: uid, instanceId, traceId: sessionId }, session);
 	// Finish watcher (one per send: stamp the session so only the latest notifies).
 	const watchId = `cw-${sessionId}-${Date.now()}`;
 	// A lost stamp does not cost a watcher, it MIS-ATTRIBUTES one: the column still names the
@@ -101,7 +114,7 @@ async function driveClaude(
 	else
 		await c.env.CODING_SESSION.create({
 			id: watchId,
-			params: { instanceId, userId: uid, sessionId, repoId: repo?.id ?? "", runnerNode: session.runnerNode ?? null, mode: "watch", watchId, goal: { objective: instruction, repo: repo?.name ?? "your repo", clientType: session?.clientType ?? "claude" } },
+			params: { instanceId, userId: uid, sessionId, repoId: repo?.id ?? "", runnerNode: session.runnerNode ?? null, mode: "watch", watchId, directTurnId: dispatched.turnId, goal: { objective: instruction, repo: repo?.name ?? "your repo", clientType: session?.clientType ?? "claude" } },
 		}).catch(noWatcher);
 	// Show the user a plain-language summary, NOT the raw (often long/technical)
 	// instruction we sent to the CLI.

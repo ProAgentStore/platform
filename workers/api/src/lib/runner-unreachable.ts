@@ -37,9 +37,17 @@ export class RunnerUnreachableError extends Error {
 	/** The field #339 asks for: the thrower knows, so no catch site has to guess from wording. */
 	readonly retryable = true;
 	readonly runnerUnreachable = true;
-	constructor(message: string) {
+	/**
+	 * Whether the command may have reached the runner (#1015). A 503 is "no socket at dispatch" —
+	 * nothing was sent. A 504 drop is a socket that went away WITH THE COMMAND IN FLIGHT, which proves
+	 * nothing either way. A caller that would re-send on failure must tell these apart, or a lost
+	 * response becomes a duplicate instruction. Defaults to `true`, the conservative reading.
+	 */
+	readonly dispatched: boolean;
+	constructor(message: string, opts: { dispatched?: boolean } = {}) {
 		super(message);
 		this.name = "RunnerUnreachableError";
+		this.dispatched = opts.dispatched ?? true;
 	}
 }
 

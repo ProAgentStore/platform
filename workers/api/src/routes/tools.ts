@@ -234,7 +234,8 @@ toolRoutes.post("/:id/tools/:name", async (c) => {
 	const input = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
 	const invalid = validateAgainstSchema(tool.jsonSchema, input);
 	if (invalid) throw new HttpError(400, invalid);
-	const result = await runRegistryTool(name, { env: c.env, userId: session.uid, instanceId }, input);
+	// The owner invoking a tool directly (console, MCP call_instance_tool) is an explicit owner act (#1015).
+	const result = await runRegistryTool(name, { env: c.env, userId: session.uid, instanceId, turn: { author: "owner", explicit: true } }, input);
 	// Every dispatcher into runRegistryTool writes a row except this one — see the table in #726.
 	// NOT every call: the console Terminal tab polls `*_list_*`/`*_capture_*` through here every
 	// 4s on the active tier (TmuxTab.tsx). Those are reads of the owner's own screen, on the

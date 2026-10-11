@@ -20,6 +20,8 @@ import { RETRIEVAL_EMPTY_MESSAGE, searchKnowledgeFor } from "./retrieval.js";
 import { withTurnReplay } from "./coding-turn-replay.js";
 import type { Env } from "../types.js";
 import { LEGACY_JOB_APPLY_RETIRED_MESSAGE } from "./agent-retirement.js";
+import { dispatchOwnedTurn } from "./coding-dispatch.js";
+import { describeOwner, runnerEngineProbe } from "./coding-ownership.js";
 
 export interface StorageToolCallRequest {
 	name: string;
@@ -723,31 +725,37 @@ export async function executeStorageTool(
 				// of a node-less relay lookup, so the instruction actually reaches the Engine. (CODER-008)
 				const rConn = await getBoundRunnerConn(ctx.env as Env, ctx.agentId, ctx.userId).catch(() => null);
 				if (!rConn) return fail(call.name, "Runner offline — cannot send. Start it with `pags up`.");
-				try {
+				// ONE WRITER PER CHECKOUT (#1015): this tool used to send with no ownership check, so a chat
+				// could drive an engine while another session's run owned the same checkout. It now goes
+				// through the shared admission + reservation + pre-send fence. `msg` is the chat BRAIN's
+				// composition — controller-authored, so it is never recorded as an owner directive, and the
+				// engine sees `author: "pilot"` (#505; `lib/turn-author-callsites.test.ts`).
+				const env = ctx.env as Env;
+				const dispatched = await dispatchOwnedTurn(env, {
+					scope: { instanceId: ctx.agentId, userId: ctx.userId, repoId: rRepo.id, sessionId: rSession.id },
+					author: "controller",
+					ownerText: msg,
+					persistent: rSession.clientType === "claude",
+					probe: runnerEngineProbe(env, ctx.agentId, ctx.userId),
+					// #693 slice 2: an engine with no memory of its own gets the platform's record with the turn.
+					prepare: () => withTurnReplay(env, { instanceId: ctx.agentId as string, userId: ctx.userId as string, repoId: rRepo.id, repoName: rRepo.name, clientType: rSession.clientType }, { kind: "message", text: msg, author: "pilot" }),
 					// Runner expects POST /coding/act with { sessionId, action }
-					// `author: "pilot"` — the chat brain composed `msg`, so an unlabelled turn reaches the
-					// Engine as `role: "user"` (#505). Reasoning: `lib/turn-author-callsites.test.ts`.
-					await callRunner(
-						rConn,
-						"/coding/act",
-						{
-							sessionId: rSession.id,
-							// #693 slice 2: an engine with no memory of its own gets the platform's record with the turn.
-							action: await withTurnReplay(ctx.env as Env, { instanceId: ctx.agentId, userId: ctx.userId, repoId: rRepo.id, repoName: rRepo.name, clientType: rSession.clientType }, { kind: "message", text: msg, author: "pilot" }),
-						},
-						{ timeoutMs: READ_TIMEOUT_MS },
-					);
-					// Set the expectation BEFORE the brain reads back. A one-shot engine runs the turn
-					// and exits, so the very next read_terminal shows "idle" — which reads as a hang
-					// unless you know that is what success looks like.
-					const rOneShot = rSession.clientType !== "claude";
-					const expect = rOneShot
-						? " The engine runs this turn then exits, so it will show as idle when finished — read the terminal for its output, and treat idle as DONE."
-						: " Read the terminal in a moment to see the result.";
-					return ok(call.name, `${rOpening}Sent to ${rName}: "${msg.slice(0, 100)}".${expect}`);
-				} catch {
-					return fail(call.name, `${rOpening}Runner offline — cannot send`);
+					send: (action) => callRunner(rConn, "/coding/act", { sessionId: rSession.id, action }, { timeoutMs: READ_TIMEOUT_MS }),
+				});
+				if (!dispatched.ok) {
+					const who = dispatched.owner ? describeOwner(dispatched.owner, rRepo.name) : dispatched.detail;
+					return fail(call.name, `${rOpening}Not sent to ${rName} — ${who} Nothing reached the engine; do not tell the user it was sent.`);
 				}
+				// Set the expectation BEFORE the brain reads back. A one-shot engine runs the turn
+				// and exits, so the very next read_terminal shows "idle" — which reads as a hang
+				// unless you know that is what success looks like.
+				const rOneShot = rSession.clientType !== "claude";
+				const expect = rOneShot
+					? " The engine runs this turn then exits, so it will show as idle when finished — read the terminal for its output, and treat idle as DONE."
+					: " Read the terminal in a moment to see the result.";
+				// A lost reply proves neither arrival nor loss — say so rather than claim either.
+				const sentWord = dispatched.confirmed ? "Sent" : "Sent (the runner's reply was lost — it may not have arrived; it was NOT re-sent)";
+				return ok(call.name, `${rOpening}${sentWord} to ${rName}: "${msg.slice(0, 100)}".${expect}`);
 			}
 
 			default:

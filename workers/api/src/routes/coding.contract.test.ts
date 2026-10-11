@@ -552,6 +552,9 @@ function ownerEnv(opts: { session?: Record<string, unknown> | null; config?: str
 		return null;
 	};
 
+	// The one piece of state the drive path reads back (#1015): the reservation its admission wrote,
+	// which the pre-send fence checks is still its own before anything reaches the engine.
+	let reservation: string | null = null;
 	const DB = {
 		prepare(sql: string) {
 			const flat = sql.replace(/\s+/g, " ").trim();
@@ -562,10 +565,11 @@ function ownerEnv(opts: { session?: Record<string, unknown> | null; config?: str
 					stmt._binds = binds;
 					return stmt;
 				},
-				first: async () => answer(flat, stmt._binds),
+				first: async () => (/^SELECT direct_turn_id FROM coding_sessions/.test(flat) ? { direct_turn_id: reservation } : answer(flat, stmt._binds)),
 				all: async () => ({ results: [] }),
 				run: async () => {
 					runs.push({ sql: flat, binds: stmt._binds });
+					if (/^UPDATE coding_sessions SET direct_turn_id = \?5/.test(flat)) reservation = String(stmt._binds[4]);
 					return { meta: { changes: 1 } };
 				},
 			};

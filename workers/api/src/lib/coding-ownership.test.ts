@@ -42,6 +42,8 @@ afterEach(() => d1.close());
 
 const runOnB = () =>
 	d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at, session_id) VALUES ('run-B', 'u1', 'i1', 'other issue', 'running', 10, 1, 'B')`);
+/** What the dispatcher records once the send reached the engine (#1015) — only then may an idle probe release it. */
+const delivered = (sid: string) => d1.exec(`UPDATE coding_sessions SET direct_turn_delivered_at = 1 WHERE id = '${sid}'`);
 const claimOf = (sid: string) => d1.sqlite.prepare(`SELECT direct_turn_id FROM coding_sessions WHERE id = '${sid}'`).get() as { direct_turn_id: string | null };
 
 describe("admitting a direct turn", () => {
@@ -60,12 +62,15 @@ describe("admitting a direct turn", () => {
 
 	it("treats a message to the session its OWN run drives as a steer — the run stays the owner", async () => {
 		d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at, session_id) VALUES ('run-A', 'u1', 'i1', 'x', 'running', 10, 1, 'A')`);
-		expect(await admitDirectTurn(env, { ...scope, sessionId: "A" }, probe)).toEqual({ ok: true, kind: "steer", runId: "run-A" });
-		expect(claimOf("A").direct_turn_id).toBeNull();
+		const steer = await admitDirectTurn(env, { ...scope, sessionId: "A" }, probe);
+		expect(steer).toMatchObject({ ok: true, kind: "steer", runId: "run-A" });
+		// A steer RESERVES too (#1015), so a successor admitted while it is on its way sees it.
+		expect(claimOf("A").direct_turn_id).toBe((steer as { turnId: string }).turnId);
 	});
 
 	it("refuses while another session's direct turn is unconfirmed — busy or unknown", async () => {
 		await admitDirectTurn(env, { ...scope, sessionId: "A" }, probe);
+		delivered("A");
 		for (const state of ["busy", "unknown"] as const) {
 			engines.A = state;
 			expect(await admitDirectTurn(env, { ...scope, sessionId: "B" }, probe)).toMatchObject({ ok: false, owner: { kind: "direct", sessionId: "A" } });
@@ -94,6 +99,7 @@ describe("admitting a direct turn", () => {
 describe("a run start against a direct turn (loop, queue drain, delegation)", () => {
 	beforeEach(async () => {
 		await admitDirectTurn(env, { ...scope, sessionId: "A" }, probe);
+		delivered("A");
 	});
 
 	it.each(["busy", "unknown"] as const)("refuses while the direct turn's engine is %s — fail closed", async (state) => {

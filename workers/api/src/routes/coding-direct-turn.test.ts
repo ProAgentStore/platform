@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "../lib/auth.js";
 import { signSession } from "../lib/session.js";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "../lib/d1-sqlite.js";
+import { RunnerUnreachableError } from "../lib/runner-unreachable.js";
 import type { Env } from "../types.js";
 
 const { getRunnerConn, callRunner, drain } = vi.hoisted(() => ({ getRunnerConn: vi.fn(), callRunner: vi.fn(), drain: vi.fn() }));
@@ -127,8 +128,9 @@ describe("a direct follow-up to a retained session while another run works the c
 		// B's engine is mid-turn and B is a persistent (Claude) session: the message queues behind it.
 		const res = await call("POST", "/coding/sessions/B/message", { text: "read-only from now on" });
 		expect(res.status).toBe(200);
-		expect(res.body).toMatchObject({ admission: { kind: "steer", runId: "run-B" }, delivery: { state: "queued", engineBefore: "busy" } });
-		expect(claimOf("B")).toBeNull();
+		expect(res.body).toMatchObject({ admission: { kind: "steer", runId: "run-B" }, delivery: { state: "queued", engineBefore: "busy", confirmed: true } });
+		// The steer holds a reservation (#1015), so no successor is admitted while it is still on its way.
+		expect(claimOf("B")).toBe((res.body.admission as { turnId: string }).turnId);
 		const row = d1.sqlite.prepare("SELECT kind, run_id, delivery, content FROM coding_session_directives WHERE session_id = 'B'").get();
 		expect(row).toEqual({ kind: "steer", run_id: "run-B", delivery: "queued", content: "read-only from now on" });
 	});
@@ -146,9 +148,14 @@ describe("a direct follow-up to a retained session while another run works the c
 
 	it("releases its own claim when nothing could be delivered", async () => {
 		d1.exec("UPDATE agent_loop_runs SET status = 'completed' WHERE run_id = 'run-B'");
-		callRunner.mockImplementation(async (_c: unknown, path: string, body: { sessionId: string }) => (path === "/coding/act" ? null : { pane: "$ ", ...engine[body.sessionId] }));
+		// A relay with NO socket at dispatch: the command was provably never sent (#1015).
+		callRunner.mockImplementation(async (_c: unknown, path: string, body: { sessionId: string }) => {
+			if (path === "/coding/act") throw new RunnerUnreachableError("No runner connected", { dispatched: false });
+			return { pane: "$ ", ...engine[body.sessionId] };
+		});
 		const res = await call("POST", "/coding/sessions/A/message", { text: "hello" });
 		expect(res.status).toBe(409);
+		expect(res.body).toMatchObject({ reason: "not_delivered" });
 		expect(claimOf("A")).toBeNull();
 	});
 });

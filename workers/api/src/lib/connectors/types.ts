@@ -92,6 +92,14 @@ export interface RegistryToolCtx {
 	 */
 	preApprovedTicketId?: string;
 	/**
+	 * Who wrote the turn that led to this call (#1015) — set by the DISPATCHER, never by the model, and
+	 * read by control tools (`stop_work`, `end_coding_session`) as the authority to act. `owner`: the
+	 * owner's own chat turn (`text` is what they wrote) or the owner invoking the tool directly
+	 * (`explicit`). `controller`: a Loop, a supervisor, a pipeline or a trigger. Absent: not asserted,
+	 * which a control tool reads as the controller. See lib/control-intent.ts.
+	 */
+	turn?: { author: "owner" | "controller"; text?: string; explicit?: boolean };
+	/**
 	 * The connector client factory (issue #86) — handlers call
 	 * `ctx.connectorClient(provider)` to mint the provider's token and enforce
 	 * grant/scope, instead of importing token-minting fns directly. Injected by

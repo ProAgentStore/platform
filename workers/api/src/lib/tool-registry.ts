@@ -38,6 +38,7 @@ import { accountTimeZone } from "./account-timezone.js";
 import { fenceUntrusted, withFraming } from "./untrusted-fence.js";
 import type { ConversationTransfer } from "./conversation-transfer.js";
 import { recordTerminalToolUse } from "./terminal-record.js";
+import { attributeStop, controlRefusal } from "./control-intent.js";
 /**
  * The tool contract now lives in `connectors/types.ts` — a leaf module with no imports
  * that reach back here (#293). It moved because every connector module needs the SHAPE
@@ -267,6 +268,9 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 		},
 		handler: async (ctx, input) => {
 			if (!ctx.instanceId || !ctx.userId) return { content: "stop_work needs an owned instance context.", success: false };
+			// Owner intent, not the model's tool choice, authorizes a stop (#1015) — see lib/control-intent.ts.
+			const refused = controlRefusal(ctx, "stop_work");
+			if (refused) return { content: refused, success: false };
 			const runId = typeof input.runId === "string" ? input.runId.trim() : "";
 			if (runId) {
 				const run = await getLoopRun(ctx.env, ctx.userId, runId);
@@ -278,7 +282,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 				if (!run || !(own || run.delegatedBy === ctx.instanceId)) {
 					return { content: `No run ${runId} belongs to you, so nothing was stopped. Do not tell the user you stopped it.`, success: false };
 				}
-				return { content: describeStopResult([await stopOneRun(ctx.env, ctx.userId, run, !own)]), success: true };
+				return { content: describeStopResult([await attributeStop(ctx, await stopOneRun(ctx.env, ctx.userId, run, !own))]), success: true };
 			}
 			const [runs, delegatedRuns] = await Promise.all([
 				listLoopRuns(ctx.env, ctx.userId, ctx.instanceId, 20),
@@ -300,7 +304,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 				const caps = await capabilitiesForInstance(ctx.env, ctx.instanceId, ctx.userId).catch(() => null);
 				return { content: describeNothingToStop({ canEndSession: !!caps?.surfaces?.includes("coding") }), success: true };
 			}
-			const outcomes = await Promise.all(targets.map((t) => stopOneRun(ctx.env, ctx.userId!, t.run, t.delegated)));
+			const outcomes = await Promise.all(targets.map((t) => stopOneRun(ctx.env, ctx.userId!, t.run, t.delegated).then((o) => attributeStop(ctx, o))));
 			return { content: describeStopResult(outcomes), success: true };
 		},
 	},
@@ -320,6 +324,8 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 		},
 		handler: async (ctx, input) => {
 			if (!ctx.instanceId || !ctx.userId) return { content: "end_coding_session needs an owned instance context.", success: false };
+			const refused = controlRefusal(ctx, "end_coding_session");
+			if (refused) return { content: refused, success: false };
 			const { endAgentCodingSession } = await import("./end-coding-session-tool.js");
 			return endAgentCodingSession(ctx.env, ctx.instanceId, ctx.userId, typeof input.repo === "string" ? input.repo : undefined);
 		},

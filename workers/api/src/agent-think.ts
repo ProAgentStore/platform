@@ -1,3 +1,4 @@
+import { chatTurnAuthor } from "./lib/control-intent.js";
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
 import type { AgentStorageEngine } from "./agent-storage.js";
 import type { AgentMessage, AgentState, AgentTask, MemoryEntry } from "./agent-types.js";
@@ -161,7 +162,10 @@ export async function runAgentThink(opts: {
 	// field cannot carry a move nobody asked for. See lib/conversation-transfer.ts.
 }): Promise<{ response: string; toolCalls: string[]; transfer?: ConversationTransfer; truncated?: true }> {
 	const { state, engine, messages, memory, tasks, userId, env, doStorage, broadcast, delegation, resume } = opts;
-	const lastUserMessage = messages.filter((m) => m.role === "user").pop()?.content || "";
+	const lastUser = messages.filter((m) => m.role === "user").pop();
+	const lastUserMessage = lastUser?.content || "";
+	// Who wrote this turn (#1015): the authority a control tool reads, never the model's to claim.
+	const turn = { author: chatTurnAuthor(lastUser?.channel, delegation?.onBehalfOf), text: lastUserMessage };
 
 	// ONE instant for the whole turn. The clock block and the "N minutes ago" work report are read
 	// together by the model, and two separate `Date.now()` calls seconds apart make them disagree —
@@ -760,6 +764,7 @@ export async function runAgentThink(opts: {
 							budgetId: delegation?.budgetId ?? undefined,
 							onBehalfOf: delegation?.onBehalfOf ?? undefined,
 							traceId: delegation?.traceId ?? undefined,
+							turn,
 						},
 						(tc.arguments ?? {}) as Record<string, unknown>,
 					);

@@ -13,7 +13,8 @@ import { resolveCloneCredential } from "../lib/git-credentials.js";
 import { callRunner } from "../lib/runner-client.js";
 import { getSessionRunnerConn, readSpecialInstructions, requireOwned } from "./coding-shared.js";
 import { withTurnReplay } from "../lib/coding-turn-replay.js";
-import { admitDirectTurn, deliveryFor, describeOwner, recordDirective, repoFreeForRun, runnerEngineProbe } from "../lib/coding-ownership.js";
+import { describeOwner, repoFreeForRun, runnerEngineProbe } from "../lib/coding-ownership.js";
+import { dispatchOwnedTurn } from "../lib/coding-dispatch.js";
 import type { Env } from "../types.js";
 
 /**
@@ -69,63 +70,45 @@ export function registerDriveRoutes(codingRoutes: Hono<{ Bindings: Env }>): void
 		const fromChat = body.chat === true;
 		const conn = await getSessionRunnerConn(c.env, instanceId, uid, session);
 		if (!conn) throw new HttpError(409, "No coding runner connected. Start it with: pags up");
-		// ONE WRITER PER CHECKOUT (#1015). A direct turn is admitted only when no other session of this
-		// repo holds it — a running run, a driver claim, or another direct turn whose engine the runner
-		// cannot confirm idle. On this session's own run it is a STEER, and that run stays the owner.
-		// An ended run is not evidence its engine stopped, so the probe asks the machine, not the row.
-		const probe = runnerEngineProbe(c.env, instanceId, uid);
-		const scope = { instanceId, userId: uid, repoId: session.repoId, sessionId };
-		const admission = await admitDirectTurn(c.env, scope, probe);
-		if (!admission.ok) {
-			const repoRow = await getRepo(c.env, instanceId, uid, session.repoId);
-			return c.json({ error: describeOwner(admission.owner, repoRow?.name ?? "This repository"), admitted: false, owner: admission.owner }, 409);
-		}
-		const engineBefore = await probe(sessionId).catch(() => "unknown" as const);
-		const releaseOwnClaim = () =>
-			admission.kind === "direct"
-				? c.env.DB.prepare("UPDATE coding_sessions SET direct_turn_id = NULL, direct_turn_at = NULL WHERE id = ?1 AND direct_turn_id = ?2").bind(sessionId, admission.turnId).run().catch(() => undefined)
-				: Promise.resolve(undefined);
+		// ONE WRITER PER CHECKOUT (#1015), through the one dispatch contract every engine-writing door
+		// shares (lib/coding-dispatch.ts): admitted and RESERVED in one write, fenced again immediately
+		// before the send, and a failed send classified rather than re-sent. On this session's own run
+		// it is a STEER, and that run stays the owner — unless it ended before the send, in which case
+		// this turn continues as the caller's own direct turn and the run stays ended.
 		const ownerText = action.text;
-		if (action.kind === "message" && action.text) {
-			// Log the user's clean text first…
-			await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: fromChat ? "chat_user" : "command", content: action.text }).catch(() => undefined);
-			// …then prepend the combined rules (instance Special Instructions + per-repo
-			// Rules) before sending to the CLI. Manual sends bypass the autonomous brain
-			// (which injects rules into its own prompt), so without this the CLI never sees
-			// them. This makes the rules bind the CLI no matter how it's driven.
-			const repo = session ? await getRepo(c.env, instanceId, uid, session.repoId) : null;
-			const combined = [await readSpecialInstructions(c.env, instanceId, uid), repo?.instructions].filter(Boolean).join("\n\n");
-			if (combined) action.text = `[Project rules — follow these for everything you do:\n${combined}\n]\n\n${action.text}`;
+		const repoRow = await getRepo(c.env, instanceId, uid, session.repoId);
+		const dispatched = await dispatchOwnedTurn(c.env, {
+			scope: { instanceId, userId: uid, repoId: session.repoId, sessionId },
+			author: "owner",
+			ownerText,
+			persistent: session.clientType === "claude",
+			probe: runnerEngineProbe(c.env, instanceId, uid),
+			prepare: async () => {
+				// Log the user's clean text first…
+				await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: fromChat ? "chat_user" : "command", content: action.text }).catch(() => undefined);
+				// …then prepend the combined rules (instance Special Instructions + per-repo Rules). Manual
+				// sends bypass the autonomous brain (which injects rules into its own prompt), so without
+				// this the CLI never sees them. This makes the rules bind the CLI no matter how it's driven.
+				const combined = [await readSpecialInstructions(c.env, instanceId, uid), repoRow?.instructions].filter(Boolean).join("\n\n");
+				const text = combined ? `[Project rules — follow these for everything you do:\n${combined}\n]\n\n${action.text}` : action.text;
+				// #693 slice 2: an engine with no memory of its own gets the platform's record with the turn.
+				return withTurnReplay(c.env, { instanceId, userId: uid, repoId: session.repoId, clientType: session.clientType }, { ...action, text });
+			},
+			send: (sent) => callRunner(conn, "/coding/act", { sessionId, action: sent }),
+			// The runner restarted and lost the in-memory session: reattach (on a machine SWITCH this
+			// relocates it and returns the LIVE machine's connection) and send there, fenced again.
+			reattach: async () => {
+				const fresh = await getSession(c.env, instanceId, uid, sessionId);
+				const repo = fresh ? await getRepo(c.env, instanceId, uid, fresh.repoId) : null;
+				const relocated = fresh && repo ? (await startSessionOnRunner(c.env, instanceId, uid, fresh, repo)).conn : null;
+				const target = relocated ?? conn;
+				return (sent) => callRunner(target, "/coding/act", { sessionId, action: sent });
+			},
+		});
+		if (!dispatched.ok) {
+			const detail = dispatched.owner ? describeOwner(dispatched.owner, repoRow?.name ?? "This repository") : dispatched.detail;
+			return c.json({ error: detail, admitted: false, reason: dispatched.reason, ...(dispatched.owner ? { owner: dispatched.owner } : {}) }, 409);
 		}
-		// #693 slice 2: an engine with no memory of its own gets the platform's record with the turn.
-		const sent = session ? await withTurnReplay(c.env, { instanceId, userId: uid, repoId: session.repoId, clientType: session.clientType }, action) : action;
-		let snap = await callRunner(conn, "/coding/act", { sessionId, action: sent }).catch(() => null);
-		if (snap === null) {
-			// The runner is online but lost the in-memory session (it restarted) — its
-			// tmux pane usually survives, so reattach (CodingSession.start reconnects to
-			// the live tmux, no new CLI) and retry once. On a machine SWITCH, startSessionOnRunner
-			// relocates the session and returns the LIVE machine's connection — retry on that, not
-			// the captured `conn` (which points at the old, now-dead machine → 409).
-			const fresh = await getSession(c.env, instanceId, uid, sessionId);
-			const repo = fresh ? await getRepo(c.env, instanceId, uid, fresh.repoId) : null;
-			const relocated = fresh && repo ? (await startSessionOnRunner(c.env, instanceId, uid, fresh, repo)).conn : null;
-			snap = await callRunner(relocated ?? conn, "/coding/act", { sessionId, action: sent }).catch(() => null);
-		}
-		if (snap === null) {
-			// Nothing was delivered, so this request owns nothing (#1015).
-			await releaseOwnClaim();
-			throw new HttpError(409, "This session isn't live on the runner — open it again (or run pags up).");
-		}
-		// What is KNOWN about this delivery (#1015): delivered to an idle engine, queued behind a running
-		// turn, or interrupting it — and, separately and later, whether the engine has processed it.
-		const delivery = deliveryFor(engineBefore, session.clientType === "claude");
-		const directive = await recordDirective(c.env, {
-			...scope,
-			runId: admission.kind === "steer" ? admission.runId : null,
-			kind: admission.kind,
-			delivery,
-			content: ownerText,
-		}).catch(() => null);
 		await noteUnmeteredHeadlessDrive(c.env, { userId: uid, instanceId, traceId: sessionId }, session);
 
 		// Drove the CLI with a real instruction → spin up a durable watcher that waits
@@ -161,15 +144,18 @@ export function registerDriveRoutes(codingRoutes: Hono<{ Bindings: Env }>): void
 						runnerNode: session.runnerNode ?? null,
 						mode: "watch",
 						watchId,
+						// The turn this watcher settles (#1015): it never releases a newer send's reservation.
+						directTurnId: dispatched.turnId,
 						goal: { objective: action.text, repo: repo?.name ?? "your repo", clientType: session?.clientType ?? "claude" },
 					},
 				}).catch(noWatcher);
 		}
 		return c.json({
-			...(snap as object),
-			admission: admission.kind === "direct" ? { kind: "direct", turnId: admission.turnId } : { kind: "steer", runId: admission.runId },
-			delivery: { state: delivery, engineBefore, directiveId: directive?.id ?? null, processed: false },
-		});
+			...((dispatched.snap as object | null) ?? {}),
+			admission: dispatched.kind === "direct" ? { kind: "direct", turnId: dispatched.turnId } : { kind: "steer", runId: dispatched.runId, turnId: dispatched.turnId },
+			// `confirmed: false` — the send's answer was lost; it may have arrived, so it was NOT re-sent.
+			delivery: { state: dispatched.delivery, engineBefore: dispatched.engineBefore, directiveId: dispatched.directiveId, processed: false, confirmed: dispatched.confirmed },
+		}, dispatched.confirmed ? 200 : 202);
 	});
 
 	/** Hand the session to the autonomous brain (the durable Workflow) with an objective. */

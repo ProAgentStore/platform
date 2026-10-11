@@ -78,7 +78,7 @@ export function registerPermissionRequestRoutes(router: Hono<{ Bindings: Env }>)
 		try {
 			// No preApprovedTicketId: when the owner selected Ask, this re-enters the normal per-call
 			// gate and creates a fresh card. Changing a grant never approves an old call.
-			const result=await runRegistryTool(operation,{env:c.env,userId:session.uid,instanceId},args);
+			const result=await runRegistryTool(operation,{env:c.env,userId:session.uid,instanceId,turn:{author:"owner",explicit:true}},args);
 			if (!result.success) {
 				const current=(await getRequest(c.env,request.id,instanceId,session.uid)) ?? request;
 				if (result.blocker) await markRevokedAfterConsume(c.env,current); else await markUncertainRequest(c.env,current);

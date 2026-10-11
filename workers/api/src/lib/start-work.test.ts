@@ -263,6 +263,9 @@ describe("check_work — the other half: an agent must be able to OBSERVE what i
 	});
 });
 
+/** The owner's own request (#1015): without it stop_work refuses — see lib/control-intent.ts. */
+const OWNER_STOP = { author: "owner" as const, text: "stop" };
+
 describe("stop_work — the third verb, and the one the owner asked for five times (#540)", () => {
 	/**
 	 * Mock D1 that also records WRITES, because the whole tool is a write. Reads dispatch on the SQL
@@ -317,7 +320,7 @@ describe("stop_work — the third verb, and the one the owner asked for five tim
 
 	it("asks the running run to stop, and says ASKED rather than STOPPED", async () => {
 		const { env, writes } = mockEnv({ rows: [runRow()] });
-		const res = await getRegistryTool("stop_work")?.handler({ env, instanceId: "i1", userId: "u1" } as never, {});
+		const res = await getRegistryTool("stop_work")?.handler({ env, instanceId: "i1", userId: "u1", turn: OWNER_STOP } as never, {});
 		expect(res?.success).toBe(true);
 		expect(String(res?.content)).toMatch(/Asked run r1 to stop/);
 		expect(String(res?.content)).toMatch(/REQUEST, not a completed stop/);
@@ -329,7 +332,7 @@ describe("stop_work — the third verb, and the one the owner asked for five tim
 		// The sentence this replaces, verbatim from production: "I can't stop or end your session
 		// from here — that's controlled by the app on your device." No app on his device owns this.
 		const { env, writes } = mockEnv({ rows: [] });
-		const res = await getRegistryTool("stop_work")?.handler({ env, instanceId: "i1", userId: "u1" } as never, {});
+		const res = await getRegistryTool("stop_work")?.handler({ env, instanceId: "i1", userId: "u1", turn: OWNER_STOP } as never, {});
 		// Success, not an error: an error reads as "could not tell", which is what produces a guess.
 		expect(res?.success).toBe(true);
 		expect(String(res?.content)).toMatch(/Nothing is running/);
@@ -338,7 +341,7 @@ describe("stop_work — the third verb, and the one the owner asked for five tim
 
 	it("does not cancel a run that has already finished", async () => {
 		const { env, writes } = mockEnv({ first: runRow({ status: "completed", stop_reason: "done", finished_at: Date.now() }) });
-		const res = await getRegistryTool("stop_work")?.handler({ env, instanceId: "i1", userId: "u1" } as never, { runId: "r1" });
+		const res = await getRegistryTool("stop_work")?.handler({ env, instanceId: "i1", userId: "u1", turn: OWNER_STOP } as never, { runId: "r1" });
 		expect(res?.success).toBe(true);
 		expect(String(res?.content)).toMatch(/had already ended/);
 		expect(writes).toEqual([]);
@@ -348,7 +351,7 @@ describe("stop_work — the third verb, and the one the owner asked for five tim
 		// Relaxing this would give a Lead the power to cancel runs on agents it does not supervise,
 		// which is strictly worse than the read it already has.
 		const { env, writes } = mockEnv({ first: runRow({ instance_id: "other" }) });
-		const res = await getRegistryTool("stop_work")?.handler({ env, instanceId: "i1", userId: "u1" } as never, { runId: "r1" });
+		const res = await getRegistryTool("stop_work")?.handler({ env, instanceId: "i1", userId: "u1", turn: OWNER_STOP } as never, { runId: "r1" });
 		expect(res?.success).toBe(false);
 		expect(String(res?.content)).toMatch(/nothing was stopped/i);
 		expect(writes).toEqual([]);
@@ -356,7 +359,7 @@ describe("stop_work — the third verb, and the one the owner asked for five tim
 
 	it("stops a run it DELEGATED — the other way a run is yours (#318)", async () => {
 		const { env, writes } = mockEnv({ first: runRow({ run_id: "d1", instance_id: "sub-1", delegated_by: "i1" }) });
-		const res = await getRegistryTool("stop_work")?.handler({ env, instanceId: "i1", userId: "u1" } as never, { runId: "d1" });
+		const res = await getRegistryTool("stop_work")?.handler({ env, instanceId: "i1", userId: "u1", turn: OWNER_STOP } as never, { runId: "d1" });
 		expect(res?.success).toBe(true);
 		expect(String(res?.content)).toContain("sub-1");
 		expect(writes.some((w) => w.args.includes("d1"))).toBe(true);
@@ -364,7 +367,7 @@ describe("stop_work — the third verb, and the one the owner asked for five tim
 
 	it("stops the delegated runs too when no runId is given", async () => {
 		const { env, writes } = mockEnv({ rows: [runRow()], delegated: [runRow({ run_id: "d1", instance_id: "sub-1", delegated_by: "i1" })] });
-		const res = await getRegistryTool("stop_work")?.handler({ env, instanceId: "i1", userId: "u1" } as never, {});
+		const res = await getRegistryTool("stop_work")?.handler({ env, instanceId: "i1", userId: "u1", turn: OWNER_STOP } as never, {});
 		expect(writes.map((w) => w.args.find((a) => a === "r1" || a === "d1")).sort()).toEqual(["d1", "r1"]);
 		expect(String(res?.content)).toContain("d1");
 	});
@@ -372,7 +375,7 @@ describe("stop_work — the third verb, and the one the owner asked for five tim
 	it("reports a run that finished between the read and the write as exactly that", async () => {
 		// `requestCancel` matched no row. That is not a failure and it is not a stop.
 		const { env } = mockEnv({ rows: [runRow()], changes: 0 });
-		const res = await getRegistryTool("stop_work")?.handler({ env, instanceId: "i1", userId: "u1" } as never, {});
+		const res = await getRegistryTool("stop_work")?.handler({ env, instanceId: "i1", userId: "u1", turn: OWNER_STOP } as never, {});
 		expect(String(res?.content)).toMatch(/finished on its own/);
 	});
 

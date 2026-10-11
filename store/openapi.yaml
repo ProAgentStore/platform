@@ -199,12 +199,19 @@ tags:
       **One writer per checkout (#1015).** `POST …/coding/sessions/{sessionId}/message` is admitted
       only when no OTHER session of the same repo is owned — a `running` run, a driver claim, or a
       direct turn whose engine the runner has not confirmed idle (`unknown`/offline fails closed). A
-      refusal is `409 {error, admitted:false, owner:{kind:"run"|"driver"|"direct", sessionId, …}}` and
+      refusal is `409 {error, admitted:false, reason:"owned"|"superseded"|"not_delivered", owner?}` and
       nothing reaches the engine. On the session its own run drives the message is a STEER and the run
-      stays owner. A `200` adds `admission:{kind:"direct", turnId}|{kind:"steer", runId}` and
-      `delivery:{state:"delivered"|"queued"|"interrupting", engineBefore, directiveId, processed:false}`
-      — delivery and processing are separate facts; processing is recorded later, once the engine
-      completes a turn that ended after delivery. Loop starts, queue drains and `…/run` refuse
+      stays owner. Admission RESERVES the checkout in one write — a steer too — and the reservation is
+      re-checked immediately before the send, so a run that ends or a successor admitted in between
+      cannot meet a stale instruction: a steer whose run ended meanwhile is sent as the caller's own
+      direct turn (the run stays ended), and a reservation replaced meanwhile sends nothing
+      (`superseded`). The Co-pilot's `…/agent` delegation and the chat tool `send_to_cli` go through the
+      same gate. A `200` adds `admission:{kind:"direct", turnId}|{kind:"steer", runId, turnId}` and
+      `delivery:{state:"accepted"|"delivered"|"queued"|"interrupting", engineBefore, directiveId,
+      processed:false, confirmed}`. A `202` with `confirmed:false` means the runner's reply was lost
+      with the command possibly in flight: it was NOT re-sent and the reservation is kept. Delivery and
+      processing are separate facts; processing is recorded later, once the engine completes a turn
+      that ended after delivery. Loop starts, queue drains and `…/run` refuse
       (`busy`, so a queued objective is requeued, never failed) while a direct turn holds the repo.
       `GET …/capture` adds `sessionStatus` and `ownership:{owners:[…]}`; its `runState` reports a live,
       working engine even when the session row is `ended` (an ended run is not an ended engine).

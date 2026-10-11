@@ -313,6 +313,7 @@ export async function callRunner<T = unknown>(conn: RunnerConn, path: string, bo
 				unresponsive
 					? `Runner relay is ${UNRESPONSIVE_MARKER} — ${NO_SOCKET_MARKER} for this agent.`
 					: `No runner connected — ${NO_SOCKET_MARKER} for this agent.`,
+				{ dispatched: res.status !== 503 },
 			);
 		}
 		throw new Error(`Runner ${path} → ${res.status}: ${detail.slice(0, 200)}`);

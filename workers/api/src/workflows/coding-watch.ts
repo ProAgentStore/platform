@@ -81,7 +81,7 @@ export async function runWatchSession(env: Env, event: WorkflowEvent<CodingSessi
 	// bounded number of times, and past that the next send or run start re-probes it.
 	for (let attempt = 0; attempt < 7; attempt++) {
 		if (attempt > 0) await step.sleep(`direct-turn-wait-${attempt}`, "5 minutes");
-		const settled = (await step.do(`direct-turn-settle-${attempt}`, async () => settleAfterDirectTurn(env, { instanceId, userId, sessionId, repoId: event.payload.repoId, finalPane: attempt === 0 ? finalPane : null }))) as boolean;
+		const settled = (await step.do(`direct-turn-settle-${attempt}`, async () => settleAfterDirectTurn(env, { instanceId, userId, sessionId, repoId: event.payload.repoId, turnId: event.payload.directTurnId, finalPane: attempt === 0 ? finalPane : null }))) as boolean;
 		if (settled) break;
 	}
 
@@ -142,7 +142,7 @@ function sleep(ms: number): Promise<void> {
  */
 export async function settleAfterDirectTurn(
 	env: Env,
-	input: { instanceId: string; userId: string; sessionId: string; repoId?: string | null; finalPane: { lastTurn?: { at?: number } | null } | null },
+	input: { instanceId: string; userId: string; sessionId: string; repoId?: string | null; turnId?: string; finalPane: { lastTurn?: { at?: number } | null } | null },
 	probe = runnerEngineProbe(env, input.instanceId, input.userId),
 ): Promise<boolean> {
 	if (!input.repoId) return true;
@@ -153,8 +153,12 @@ export async function settleAfterDirectTurn(
 		const turnEndedAt = input.finalPane?.lastTurn?.at ?? null;
 		await markDirectivesProcessed(env, { instanceId: input.instanceId, userId: input.userId, sessionId: input.sessionId, turnEndedAt: state === "idle" ? turnEndedAt : null }).catch(() => 0);
 	}
-	const remaining = await settleDirectTurns(env, { instanceId: input.instanceId, userId: input.userId, repoId: input.repoId }, probe);
-	if (remaining.some((o) => o.kind === "direct")) return false;
+	// Scoped to this watcher's own turn (#1015): a newer send's reservation on the same session is that send's to settle.
+	const remaining = await settleDirectTurns(env, { instanceId: input.instanceId, userId: input.userId, repoId: input.repoId }, probe, input.turnId ? { sessionId: input.sessionId, turnId: input.turnId } : undefined);
+	// A newer send on this session holds its own reservation: this watcher's turn is settled, and the
+	// drain belongs to that send's watcher, which will see the checkout free when it truly is.
+	const newer = remaining.some((o) => o.kind === "direct" && input.turnId !== undefined && o.sessionId === input.sessionId && o.turnId !== input.turnId);
+	if (remaining.some((o) => o.kind === "direct") && !newer) return false;
 	if (!remaining.length) await tryDequeueAndStart(env, input.instanceId, input.repoId, input.userId);
 	return true;
 }

@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodingRepo, CodingSessionRecord } from "./coding-types.js";
 import type { AgentStorageEngine } from "../agent-storage.js";
 import type { Env } from "../types.js";
+import { realSchemaD1, seedTenant } from "./d1-sqlite.js";
 import { FENCE_TAG, unfenceUntrusted } from "./untrusted-fence.js";
 
 vi.mock("./coding-store.js", () => ({
@@ -212,6 +213,13 @@ describe("send_to_cli opens a session rather than refusing (#407)", () => {
 	it("opens one and names it before sending", async () => {
 		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(null);
 		vi.mocked(store.createSession).mockResolvedValue(session("csess_new"));
+		// The send reserves the checkout in D1 before it reaches the engine (#1015), so this case needs
+		// the rows the reservation writes to — on the real migrated schema, matching the mocked store.
+		const d1 = realSchemaD1();
+		seedTenant(d1, { userId: "u", instanceIds: ["inst"] });
+		d1.exec(`INSERT INTO coding_repos (id, instance_id, user_id, name, workdir, clone_status) VALUES ('repo_1', 'inst', 'u', 'chess-academy', '/Users/x/dev/chess-academy', 'ready')`);
+		d1.exec(`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, status, client_type) VALUES ('csess_new', 'inst', 'repo_1', 'u', 'active', 'claude')`);
+		(env as { DB?: unknown }).DB = d1.DB;
 		const res = await executeStorageTool(
 			{ name: "send_to_cli", input: { repo_name: "chess-academy", message: "run the tests" } },
 			engine,
@@ -222,6 +230,8 @@ describe("send_to_cli opens a session rather than refusing (#407)", () => {
 		expect(res.content).toContain('Sent to chess-academy: "run the tests"');
 		const act = vi.mocked(runner.callRunner).mock.calls.find((c) => c[1] === "/coding/act");
 		expect(act?.[2]).toMatchObject({ sessionId: "csess_new" });
+		(env as { DB?: unknown }).DB = undefined;
+		d1.close();
 	});
 
 	it("refuses with the runner diagnosis and writes no row when the runner is offline", async () => {

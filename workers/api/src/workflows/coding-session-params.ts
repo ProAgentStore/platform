@@ -33,6 +33,8 @@ export interface CodingSessionParams {
 	mode?: "watch";
 	/** This watcher's id — only the one currently stamped on the session notifies. */
 	watchId?: string;
+	/** Watch mode: the reservation this watcher settles (#1015) — never a newer send's. */
+	directTurnId?: string;
 	/**
 	 * When set, this run is a delegated GOAL (e.g. the Overseer handing work to this Pilot on
 	 * the user's behalf, #155). The Pilot updates this board task's status at its terminal

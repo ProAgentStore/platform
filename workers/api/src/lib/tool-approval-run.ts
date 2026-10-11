@@ -76,7 +76,8 @@ export async function dispatchApprovedToolCall(
 	const { runRegistryTool } = await import("./tool-registry.js");
 	const result = await runRegistryTool(
 		call.tool,
-		{ env, instanceId, userId, preApprovedTicketId: ticketId },
+		// The owner approved this exact call on the board: an explicit owner act (#1015).
+		{ env, instanceId, userId, preApprovedTicketId: ticketId, turn: { author: "owner", explicit: true } },
 		call.args,
 	);
 	await logEvent(env, {
