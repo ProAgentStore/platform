@@ -8,7 +8,7 @@
  * Strings named `INERT_*` are fixture data. The one shell sequence that IS executed (`OBSERVED_UNSAFE`)
  * runs only inside a temp repository, to reproduce the defect the helper exists to prevent.
  */
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync as writeSyncFs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1172,5 +1172,188 @@ process.stdout.write(JSON.stringify(r) + "\\n");
 		expect(h.helper(dir, 0, journal).receipt).toMatchObject({ ok: true, exit: 0 });
 		expect(pendingJournals(dir)).toEqual([]);
 		expect(state(dir)).toEqual(before);
+	});
+});
+
+// ── #1021: a native fault at any validation/cleanup stage AFTER the marker is read keeps the receipt truthful ──
+//
+// Native syscall faults, armed by a preload BEFORE the real helper or CLI is imported (synced into the ESM builtin
+// exports, so the helper's own named `node:fs` imports see them). A fault names the fs function, which matching
+// call fails (`nth`), an optional path match, the error code, and whether it arms at start or only once a
+// `.completed.json` marker has been read. The realpath stages after a marker read are, in order: the marker's
+// repository (worktree root, git dir, common dir), the marker's parent, then — when a caller root is given — the
+// caller's repository (root, git dir, common dir). Ordinary isolated temp repositories; every fault is synthetic.
+
+describe("(A) receipts keep known progress and every diagnostic across native faults at the outer boundaries (#1021)", () => {
+	const helperUrl = pathToFileURL(resolve(import.meta.dirname, "fail-before.mjs")).href;
+	const PRELOAD = `import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const faults = JSON.parse(process.env.PAGS_FB_FAULTS ?? "[]").map((f) => ({ ...f, seen: 0, armed: f.after !== "marker-read" }));
+const real = {};
+for (const name of new Set([...faults.map((f) => f.fn), "readFileSync"])) {
+	real[name] = fs[name];
+	fs[name] = function (...args) {
+		if (name === "readFileSync" && typeof args[0] === "string" && args[0].endsWith(".completed.json")) for (const f of faults) if (f.after === "marker-read") f.armed = true;
+		for (const f of faults) {
+			if (f.fn !== name || !f.armed || f.done) continue;
+			const target = String(name === "renameSync" ? args[1] : args[0]);
+			if (f.match && !target.endsWith(f.match)) continue;
+			if (++f.seen === f.nth) {
+				f.done = true;
+				throw Object.assign(new Error(f.code + ": synthetic " + name + " failure, '" + target + "'"), { code: f.code, syscall: name, path: target });
+			}
+		}
+		return real[name].apply(this, args);
+	};
+}
+syncBuiltinESMExports();
+`;
+	function tools() {
+		const dir = mkdtempSync(join(tmpdir(), "pags-fail-before-boundary-"));
+		repos.push(dir);
+		writeFileSync(join(dir, "preload.mjs"), PRELOAD);
+		writeFileSync(
+			join(dir, "route.mjs"),
+			`const { failBefore, restoreFromJournal } = await import(${JSON.stringify(helperUrl)});
+const [mode, cwd, arg] = process.argv.slice(2);
+const r = mode === "run" ? failBefore({ cwd, paths: JSON.parse(arg), command: ["t"], run: () => 5 }) : restoreFromJournal(arg, { root: cwd });
+process.stdout.write(JSON.stringify(r) + "\\n");
+`,
+		);
+		// Asynchronous on purpose: ~80 child processes run synchronously would block this worker's event loop long
+		// enough for vitest's onTaskUpdate RPC to time out (exit 1 with every test passing).
+		const node = (cwd, args, faults) =>
+			new Promise((settle) => {
+				const child = spawn(process.execPath, ["--import", pathToFileURL(join(dir, "preload.mjs")).href, ...args], { cwd, env: { ...process.env, PAGS_FB_FAULTS: JSON.stringify(faults) } });
+				let stdout = "";
+				child.stdout.on("data", (d) => {
+					stdout += d;
+				});
+				child.on("close", (status) => settle({ status, receipt: JSON.parse(stdout.trim().split("\n").at(-1)) }));
+			});
+		return {
+			helperRun: (cwd, paths, faults) => node(cwd, [join(dir, "route.mjs"), "run", cwd, JSON.stringify(paths)], faults),
+			helperRestore: (cwd, journal, faults) => node(cwd, [join(dir, "route.mjs"), "restore", cwd, journal], faults),
+			cliRun: (cwd, paths, faults) => node(cwd, [CLI, ...paths.flatMap((p) => ["--path", p]), "--", process.execPath, "-e", "process.exit(5)"], faults),
+			cliRestore: (cwd, journal, faults) => node(cwd, [CLI, "--restore", journal], faults),
+		};
+	}
+	const markerOf = (dir) => pendingJournals(dir).find((p) => p.endsWith(".completed.json"));
+	const markerVerifies = (marker) => {
+		const { digest, ...body } = JSON.parse(readFileSync(marker, "utf8"));
+		return body.format === 2 && digest === createHash("sha256").update(JSON.stringify(body)).digest("hex") && body.state === "restored";
+	};
+	const realpathAt = (nth) => ({ fn: "realpathSync", nth, after: "marker-read", code: "EACCES" });
+	/** Stages that fail the marker's VALIDATION: the receipt keeps progress and says the marker did not verify. */
+	const VALIDATION = [
+		["marker read", { fn: "readFileSync", nth: 1, after: "start", code: "EACCES", match: ".completed.json" }],
+		["marker repository root realpath", realpathAt(1)],
+		["marker repository git-dir realpath", realpathAt(2)],
+		["marker repository common-dir realpath", realpathAt(3)],
+		["marker parent realpath", realpathAt(4)],
+	];
+	/** Stages after a verified marker: cleanup itself stops; the receipt keeps progress, cleanup pending. */
+	const CLEANUP = [
+		["run directory read", { fn: "readdirSync", nth: 1, after: "marker-read", code: "EACCES" }],
+		["run directory removal", { fn: "rmdirSync", nth: 1, after: "marker-read", code: "EACCES" }],
+		["marker deletion", { fn: "rmSync", nth: 1, after: "marker-read", code: "EACCES", match: ".completed.json" }],
+	];
+	/** Known in-call progress: full, a subset, and verified-empty (nothing differed from the base). */
+	const PROGRESS = [
+		["full", ["a.txt", "b.txt"], ["a.txt", "b.txt"]],
+		["subset", ["a.txt", "other.txt"], ["a.txt"]],
+		["verified-empty", ["other.txt"], []],
+	];
+	const NOTHING = "Nothing was changed";
+
+	// 1. A full comparison run (test exit 5) whose last cleanup step meets the fault: exit 5, progress kept.
+	const inCall = ["helper", "CLI"].flatMap((route) =>
+		PROGRESS.flatMap(([kind, paths, written]) => [...VALIDATION.map((s) => [...s, true]), ...CLEANUP.map((s) => [...s, false])].map(([stage, fault, validation]) => [route, kind, stage, paths, written, fault, validation])),
+	);
+	it.each(inCall)("%s, %s known progress, fault at %s: exit 5, written/restored kept, cleanup pending, the marker kept; a retry finishes", async (route, _kind, _stage, paths, written, fault, validation) => {
+		const dir = fixture();
+		const before = state(dir);
+		const t = tools();
+		const { status, receipt } = await (route === "helper" ? t.helperRun(dir, paths, [fault]) : t.cliRun(dir, paths, [fault]));
+		expect(status).toBe(route === "helper" ? 0 : 5);
+		expect(receipt).toMatchObject({ ok: true, exit: 5, phase: "done", testExit: 5, mutated: false, written, restored: written, conflicts: [], cleanupPending: true });
+		if (validation) expect(receipt.markerVerified).toBe(false);
+		expect(receipt.detail).toContain(fault.code);
+		expect(receipt.detail).not.toContain(NOTHING);
+		expect(state(dir)).toEqual(before);
+		const marker = markerOf(dir);
+		if (marker) expect(markerVerifies(marker)).toBe(true);
+		expect(pendingJournals(dir).length).toBeGreaterThan(0); // the evidence is kept, not deleted unverified
+		const journal = String(pendingJournals(dir).find((p) => !p.endsWith(".completed.json")) ?? String(marker).slice(0, -".completed.json".length));
+		const retry = await (route === "helper" ? t.helperRestore(dir, journal, []) : t.cliRestore(dir, journal, []));
+		expect(retry.receipt).toMatchObject({ ok: true, exit: 0 });
+		expect(pendingJournals(dir)).toEqual([]);
+		expect(state(dir)).toEqual(before);
+	});
+
+	// 2. A FRESH --restore of a cleanup that stopped with its emptied run directory and marker left: no in-call
+	//    progress, so a validation fault is unknown evidence — refused, kept, never thrown; cleanup faults stay pending.
+	const CALLER = [
+		["caller repository root realpath", realpathAt(5)],
+		["caller repository git-dir realpath", realpathAt(6)],
+		["caller repository common-dir realpath", realpathAt(7)],
+	];
+	const fresh = ["direct restore", "CLI --restore"].flatMap((route) => [...[...VALIDATION, ...CALLER].map((s) => [...s, true]), ...CLEANUP.map((s) => [...s, false])].map(([stage, fault, validation]) => [route, stage, fault, validation]));
+	it.each(fresh)("%s, fresh, fault at %s: a refusal with the evidence kept (validation) or cleanup pending — never a throw", async (route, _stage, fault, validation) => {
+		const dir = fixture();
+		const before = state(dir);
+		failBefore({ cwd: dir, paths: ["a.txt", "b.txt"], command: ["t"], run: () => 0, faults: failOnce("cleanup", (p) => !p.endsWith(".completed.json") && !p.endsWith("journal.json") && !p.includes(`${sepFor()}files`) && !/[/\\]\d+$/.test(p)) });
+		const marker = markerOf(dir);
+		expect(marker).toBeTruthy();
+		const journal = String(marker).slice(0, -".completed.json".length);
+		expect(existsSync(journal)).toBe(true);
+		const markerBytes = readFileSync(marker);
+		const t = tools();
+		const r = await (route === "direct restore" ? t.helperRestore(dir, journal, [fault]) : t.cliRestore(dir, journal, [fault]));
+		expect(r.receipt.phase === "error").toBe(false); // never the generic uncaught receipt
+		expect(r.receipt.journal).toBe(journal);
+		if (validation) {
+			expect(r.receipt).toMatchObject({ ok: false, exit: EXIT.unknownState, restored: [], written: [] });
+			expect(r.receipt.detail).toContain(fault.code);
+			expect(r.receipt.detail).toContain("Nothing was changed; the evidence is kept.");
+			expect(readFileSync(marker).equals(markerBytes)).toBe(true);
+			expect(existsSync(journal)).toBe(true);
+		} else {
+			expect(r.receipt).toMatchObject({ ok: true, exit: 0, cleanupPending: true });
+			expect(r.receipt.detail).toContain(fault.code);
+		}
+		expect(state(dir)).toEqual(before);
+		// Retry only once validation succeeds.
+		const retry = await (route === "direct restore" ? t.helperRestore(dir, journal, []) : t.cliRestore(dir, journal, []));
+		expect(retry.receipt).toMatchObject({ ok: true, exit: 0 });
+		expect(pendingJournals(dir)).toEqual([]);
+	});
+
+	// 3. Setup fails (native EIO renaming b's base bytes into place), the rollback restores a, and its last cleanup
+	//    step meets a validation fault: exit 64 and mutated:false stay — the files ARE back — but both diagnostics,
+	//    the progress and the pending cleanup survive; "nothing was changed" is never claimed.
+	const rollback = ["helper", "CLI"].flatMap((route) => VALIDATION.map(([stage, fault]) => [route, stage, fault]));
+	it.each(rollback)("%s, setup EIO then rollback with a fault at %s: exit 64, both diagnostics, progress and pending cleanup kept", async (route, _stage, fault) => {
+		const dir = fixture();
+		const before = state(dir);
+		const t = tools();
+		const eio = { fn: "renameSync", nth: 1, after: "start", code: "EIO", match: `${sepFor()}b.txt` };
+		const { status, receipt } = await (route === "helper" ? t.helperRun(dir, ["a.txt", "b.txt"], [eio, fault]) : t.cliRun(dir, ["a.txt", "b.txt"], [eio, fault]));
+		expect(status).toBe(route === "helper" ? 0 : EXIT.refused);
+		expect(receipt).toMatchObject({ ok: false, exit: EXIT.refused, phase: "apply", testExit: null, mutated: false, written: ["a.txt"], restored: ["a.txt"], cleanupPending: true, markerVerified: false });
+		expect(receipt.detail).toContain("setup failed (");
+		expect(receipt.detail).toContain("EIO");
+		expect(receipt.detail).toContain(fault.code);
+		expect(receipt.detail).not.toContain(NOTHING);
+		expect(state(dir)).toEqual(before);
+		const marker = markerOf(dir);
+		expect(markerVerifies(marker)).toBe(true);
+		const retry = await (route === "helper" ? t.helperRestore(dir, String(marker).slice(0, -".completed.json".length), []) : t.cliRestore(dir, String(marker).slice(0, -".completed.json".length), []));
+		expect(retry.receipt).toMatchObject({ ok: true, exit: 0 });
+		expect(pendingJournals(dir)).toEqual([]);
+	});
+
+	it("the matrix is bounded to receipt exits: 48 in-call, 22 fresh, 10 rollback", () => {
+		expect([inCall.length, fresh.length, rollback.length]).toEqual([48, 22, 10]);
 	});
 });

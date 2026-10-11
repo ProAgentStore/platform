@@ -83,6 +83,18 @@ function repoIdentity(cwd) {
 	const canon = (p) => realpathSync(isAbsolute(p) ? p : resolve(cwd, p));
 	return { root: canon(top), gitDir: canon(gitDir), commonDir: canon(common) };
 }
+/**
+ * {@link repoIdentity} for a check that must answer rather than throw (#1021): its native realpaths can fail
+ * (EACCES, EIO), and a throw there used to escape a restore that had already written and verified files,
+ * erasing that progress from the receipt. `{ error }` lets each caller refuse in its own words.
+ */
+function identityOf(cwd) {
+	try {
+		return { ident: repoIdentity(cwd) };
+	} catch (e) {
+		return { ident: null, error: `${e.code ?? "error"}: ${e.message}` };
+	}
+}
 const sameRepo = (a, b) => !!a && !!b && a.root === b.root && a.gitDir === b.gitDir && a.commonDir === b.commonDir;
 const within = (p, dir) => p === dir || p.startsWith(dir + sep);
 const journalRoot = (ident) => join(ident.gitDir, JOURNAL_DIR);
@@ -408,7 +420,9 @@ export function failBefore({ cwd, base = "HEAD", paths, command, run = defaultRu
 			testExit: null,
 			exit: back.ok ? EXIT.refused : back.exit,
 			mutated: !back.ok,
-			detail: `setup failed (${e.message}); ${back.ok ? "every file written so far was restored. Nothing was changed." : back.detail}`,
+			// A rollback whose files are back but whose cleanup is pending keeps BOTH diagnostics: the setup failure, and
+			// what is left to finish (#1021). Only a fully finished rollback may say nothing was changed.
+			detail: `setup failed (${e.message}); ${back.ok && !back.cleanupPending ? "every file written so far was restored. Nothing was changed." : back.detail}`,
 		};
 	}
 	// 5. The test, with its real status.
@@ -444,7 +458,9 @@ export function restoreFromJournal(dir, opts = {}) {
 	}
 	// Bound to its repository: the recorded identity must still be that repository, the journal must live in
 	// its git dir, and a caller in a different repository is refused.
-	const ident = repoIdentity(journal.repo?.root ?? "/nonexistent");
+	const own = identityOf(journal.repo?.root ?? "/nonexistent");
+	if (own.error) return stop(`The repository the journal names cannot be resolved (${own.error}).`);
+	const ident = own.ident;
 	if (!sameRepo(ident, journal.repo)) return stop(`The journal was written for ${journal.repo?.root}, which is no longer that repository.`);
 	let realDir;
 	try {
@@ -453,8 +469,10 @@ export function restoreFromJournal(dir, opts = {}) {
 		return stop(`The journal directory ${dir} cannot be resolved.`);
 	}
 	if (realDir !== join(journalRoot(ident), journal.id)) return stop(`The journal is not where ${journal.repo.root} keeps its own journals.`);
-	if (callerRoot !== undefined && !sameRepo(repoIdentity(callerRoot), ident)) {
-		return stop(`The journal belongs to ${journal.repo.root}, not to ${callerRoot}.`);
+	if (callerRoot !== undefined) {
+		const caller = identityOf(callerRoot);
+		if (caller.error) return stop(`The calling repository ${callerRoot} cannot be resolved (${caller.error}).`);
+		if (!sameRepo(caller.ident, ident)) return stop(`The journal belongs to ${journal.repo.root}, not to ${callerRoot}.`);
 	}
 	// A journal marked `restored` has nothing left to write: every file must still be its original, and
 	// only the cleanup remains — some backups may already be gone, and none is needed (#1021).
@@ -582,7 +600,13 @@ function cleanUp(dir, journal, restored, written, faults) {
 	} catch (e) {
 		return cleanupPending(dir, restored, written, e);
 	}
-	return finishCompleted(dir, undefined, faults, { restored, written });
+	// Every file is verified back by now: whatever the last step throws is a cleanup diagnostic, never a
+	// reason to drop that progress from the receipt (#1021).
+	try {
+		return finishCompleted(dir, undefined, faults, { restored, written });
+	} catch (e) {
+		return { ...cleanupPending(dir, restored, written, e), markerVerified: false };
+	}
 }
 
 function cleanupPending(dir, restored, written, e) {
@@ -631,7 +655,9 @@ function finishCompleted(dir, callerRoot, faults, done) {
 	} catch (e) {
 		return stop(`The completion marker ${marker} cannot be trusted (${e.code ? `${e.code}: ` : ""}${e.message}).`);
 	}
-	const ident = repoIdentity(journal.repo?.root ?? "/nonexistent");
+	const own = identityOf(journal.repo?.root ?? "/nonexistent");
+	if (own.error) return stop(`The repository the completion marker names cannot be resolved (${own.error}).`);
+	const ident = own.ident;
 	if (!sameRepo(ident, journal.repo) || journal.state !== "restored" || basename(dir) !== journal.id) return stop(`The completion marker ${marker} is not this run's.`);
 	let markerDir;
 	try {
@@ -640,7 +666,11 @@ function finishCompleted(dir, callerRoot, faults, done) {
 		return stop(`The completion marker's directory cannot be resolved (${e.code ?? "error"}: ${e.message}).`);
 	}
 	if (markerDir !== journalRoot(ident)) return stop(`The completion marker ${marker} is not where ${journal.repo.root} keeps its journals.`);
-	if (callerRoot !== undefined && !sameRepo(repoIdentity(callerRoot), ident)) return stop(`The completion marker belongs to ${journal.repo.root}, not to ${callerRoot}.`);
+	if (callerRoot !== undefined) {
+		const caller = identityOf(callerRoot);
+		if (caller.error) return stop(`The calling repository ${callerRoot} cannot be resolved (${caller.error}).`);
+		if (!sameRepo(caller.ident, ident)) return stop(`The completion marker belongs to ${journal.repo.root}, not to ${callerRoot}.`);
+	}
 	try {
 		if (existsSync(dir)) {
 			if (readdirSync(dir).length) return stop(`The run directory ${dir} is not empty.`);
