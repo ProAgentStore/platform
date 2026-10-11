@@ -308,7 +308,9 @@ export function readTestOutput(output: string | null): TestOutputReading {
 	// No summary line: the rest of the output — never vitest's `Test Files  25 passed (25)`, since a FILE count is
 	// not a test count (#1019).
 	const testsLine = lines[0] ?? o.split("\n").filter((l) => !/\btest\s+files?\b|\bfiles?\s+\d/i.test(l)).join("\n");
-	return { passed: num(/(\d[\d,]*)\s+passed/i.exec(testsLine)), failed: num(/(\d[\d,]*)\s+failed/i.exec(testsLine)), summaries: lines.length, invalid };
+	const passedMatch = /(\d[\d,]*)\s+(?:tests?\s+)?pass(?:ed|ing)\b/i.exec(testsLine) ?? /\bpass(?:ed|ing)\s+(?:all\s+)?(\d[\d,]*)\s+tests?\b/i.exec(testsLine);
+	const failedMatch = /(\d[\d,]*)\s+failed/i.exec(testsLine) ?? /\bfailed\s+(\d[\d,]*)/i.exec(testsLine);
+	return { passed: num(passedMatch), failed: num(failedMatch), summaries: lines.length, invalid };
 }
 
 // ── The claims a finish detail makes ──────────────────────────────────────

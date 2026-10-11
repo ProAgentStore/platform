@@ -742,6 +742,16 @@ describe("a claimed test count is a count of tests, never of files (#1019)", () 
 		expect(result.detail).toMatch(/test count: UNVERIFIED — claims 25; no count was printed in the record/);
 	});
 
+	for (const out of ["376 tests passed", "Passed 376 tests", "Test Files  25 passed (25)\n376 passed"]) {
+		it(`reads a plain printed count in either orientation, never the file count: ${JSON.stringify(out)}`, async () => {
+			decisions = [SEND("test"), FINISH("376 tests passed.")];
+			engineDoes(() => test("pnpm test", out));
+			const result = await run();
+			expect(result.detail).toMatch(/tests pass: verified — `pnpm test` passed 376/);
+			expect(result.detail).toMatch(/test count: verified — the last run printed 376 passed/);
+		});
+	}
+
 	it("reads the test count whichever order the two summary lines come in", async () => {
 		decisions = [SEND("test"), FINISH("376 tests passed.")];
 		engineDoes(() => test("pnpm test", "     Tests  376 passed (376)\n Test Files  25 passed (25)"));
