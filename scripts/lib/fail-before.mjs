@@ -602,19 +602,44 @@ function cleanupPending(dir, restored, written, e) {
  * The last cleanup step, from the completion marker. The marker must verify like a journal (digest,
  * format), say `restored`, name this run directory, and belong to this repository; the run directory, if
  * still there, must be empty. Anything else is unknown and stays.
+ *
+ * `done` is THIS call's own verified progress, passed only by {@link cleanUp}, which moved the journal to the
+ * marker a moment ago after verifying every file back. When the marker then cannot be read or verified, that
+ * progress is still a fact: the receipt keeps it, says the cleanup is pending and that the marker did NOT
+ * verify — never "nothing was changed". A fresh --restore has no `done`: an unreadable or invalid marker is
+ * unknown evidence, refused and kept, exactly as before (#1021).
  */
-function finishCompleted(dir, callerRoot, faults, done = { restored: [], written: [] }) {
+function finishCompleted(dir, callerRoot, faults, done) {
 	const marker = completedMarker(dir);
-	const stop = (detail) => ({ ok: false, exit: EXIT.unknownState, journal: dir, restored: [], written: [], conflicts: [], detail: `${detail} Nothing was changed; the evidence is kept.` });
+	const stop = (detail) =>
+		done
+			? {
+					ok: true,
+					exit: 0,
+					journal: dir,
+					restored: done.restored,
+					written: done.written,
+					conflicts: [],
+					cleanupPending: true,
+					markerVerified: false,
+					detail: `every file is back to its pre-run bytes and mode — verified by this run before its cleanup — but its completion marker could not be verified now: ${detail} The marker and any run directory are kept, unremoved. Run --restore on ${dir} to finish the cleanup once the marker verifies; it changes nothing else.`,
+				}
+			: { ok: false, exit: EXIT.unknownState, journal: dir, restored: [], written: [], conflicts: [], detail: `${detail} Nothing was changed; the evidence is kept.` };
 	let journal;
 	try {
 		journal = loadJournalFile(marker);
 	} catch (e) {
-		return stop(`The completion marker ${marker} cannot be trusted (${e.message}).`);
+		return stop(`The completion marker ${marker} cannot be trusted (${e.code ? `${e.code}: ` : ""}${e.message}).`);
 	}
 	const ident = repoIdentity(journal.repo?.root ?? "/nonexistent");
 	if (!sameRepo(ident, journal.repo) || journal.state !== "restored" || basename(dir) !== journal.id) return stop(`The completion marker ${marker} is not this run's.`);
-	if (realpathSync(dirname(marker)) !== journalRoot(ident)) return stop(`The completion marker ${marker} is not where ${journal.repo.root} keeps its journals.`);
+	let markerDir;
+	try {
+		markerDir = realpathSync(dirname(marker));
+	} catch (e) {
+		return stop(`The completion marker's directory cannot be resolved (${e.code ?? "error"}: ${e.message}).`);
+	}
+	if (markerDir !== journalRoot(ident)) return stop(`The completion marker ${marker} is not where ${journal.repo.root} keeps its journals.`);
 	if (callerRoot !== undefined && !sameRepo(repoIdentity(callerRoot), ident)) return stop(`The completion marker belongs to ${journal.repo.root}, not to ${callerRoot}.`);
 	try {
 		if (existsSync(dir)) {
@@ -625,9 +650,9 @@ function finishCompleted(dir, callerRoot, faults, done = { restored: [], written
 		faults?.("cleanup", marker);
 		rmSync(marker);
 	} catch (e) {
-		return cleanupPending(dir, done.restored, done.written, e);
+		return cleanupPending(dir, done?.restored ?? [], done?.written ?? [], e);
 	}
-	return { ok: true, exit: 0, restored: done.restored, written: done.written, conflicts: [], detail: "every file is back to its pre-run bytes and mode" };
+	return { ok: true, exit: 0, restored: done?.restored ?? [], written: done?.written ?? [], conflicts: [], detail: "every file is back to its pre-run bytes and mode" };
 }
 
 function defaultRun(command, root) {

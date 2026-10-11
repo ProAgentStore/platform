@@ -9,9 +9,11 @@
  * runs only inside a temp repository, to reproduce the defect the helper exists to prevent.
  */
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync as writeSyncFs } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import * as helper from "./fail-before.mjs";
 import { EXIT, failBefore, pendingJournals, quoteForShell, restoreFromJournal } from "./fail-before.mjs";
@@ -1036,5 +1038,139 @@ describe("(A) finishing a cleanup needs this run's authenticated marker — neve
 		expect(restoreFromJournal(journal, toplevel(dir))).toMatchObject({ ok: false, exit: EXIT.unknownState });
 		expect(existsSync(join(journal, "stray"))).toBe(true);
 		expect(existsSync(marker)).toBe(true);
+	});
+});
+
+// ── #1021: the completion marker cannot be READ right after the journal is renamed to it ──────────────────
+//
+// A native-syscall fault, not a seam: a preload replaces the real `fs.readFileSync` (and syncs the ESM
+// builtin exports, so the helper's own `import { readFileSync } from "node:fs"` sees it) BEFORE the real
+// helper or CLI is imported, and throws EACCES for the first N reads of a `.completed.json` marker only.
+// Fixture text only: the scripts below are written to a temp dir and run with `node`, never through a shell.
+
+describe("(A) an unreadable completion marker right after the rename keeps this run's real progress", () => {
+	const helperUrl = pathToFileURL(resolve(import.meta.dirname, "fail-before.mjs")).href;
+	const PRELOAD = `import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+let left = Number(process.env.PAGS_FB_MARKER_READ_FAILS ?? "1");
+const real = fs.readFileSync;
+fs.readFileSync = function (p, ...rest) {
+	if (typeof p === "string" && p.endsWith(".completed.json") && left > 0) {
+		left--;
+		// "tamper": the read succeeds but returns a marker that no longer verifies (its state edited).
+		if (process.env.PAGS_FB_MARKER_READ_MODE === "tamper") return String(real.call(this, p, ...rest)).replace('"state": "restored"', '"state": "applied"');
+		throw Object.assign(new Error("EACCES: permission denied, open '" + p + "'"), { code: "EACCES", errno: -13, syscall: "open", path: p });
+	}
+	return real.call(this, p, ...rest);
+};
+syncBuiltinESMExports();
+`;
+	/** The preload, and a helper-route runner that imports the REAL helper only after the preload ran. */
+	function harness() {
+		const tools = mkdtempSync(join(tmpdir(), "pags-fail-before-native-"));
+		repos.push(tools);
+		writeFileSync(join(tools, "preload.mjs"), PRELOAD);
+		writeFileSync(
+			join(tools, "helper-route.mjs"),
+			`const { failBefore, restoreFromJournal } = await import(${JSON.stringify(helperUrl)});
+const [mode, cwd, journal] = process.argv.slice(2);
+const r = mode === "run" ? failBefore({ cwd, paths: ["a.txt", "b.txt"], command: ["t"], run: () => 0 }) : restoreFromJournal(journal, { root: cwd });
+process.stdout.write(JSON.stringify(r) + "\\n");
+`,
+		);
+		const node = (cwd, args, fails, mode = "eacces") =>
+			spawnSync(process.execPath, ["--import", pathToFileURL(join(tools, "preload.mjs")).href, ...args], { cwd, encoding: "utf8", env: { ...process.env, PAGS_FB_MARKER_READ_FAILS: String(fails), PAGS_FB_MARKER_READ_MODE: mode } });
+		const last = (r) => JSON.parse(r.stdout.trim().split("\n").at(-1));
+		return {
+			helper: (cwd, fails, journal, mode) => {
+				const r = node(cwd, [join(tools, "helper-route.mjs"), journal ? "restore" : "run", cwd, journal ?? ""], fails, mode);
+				return { status: r.status, receipt: last(r) };
+			},
+			cli: (cwd, fails, ...args) => {
+				const r = node(cwd, [CLI, ...args], fails);
+				return { status: r.status, receipt: last(r) };
+			},
+		};
+	}
+	const markerOf = (dir) => pendingJournals(dir).find((p) => p.endsWith(".completed.json"));
+	/** The marker as a verifying journal would read it: format, digest, state and id — read directly, no fault. */
+	const markerVerifies = (marker) => {
+		const { digest, ...body } = JSON.parse(readFileSync(marker, "utf8"));
+		return body.format === 2 && digest === createHash("sha256").update(JSON.stringify(body)).digest("hex") && body.state === "restored" && `${body.id}.completed.json` === basename(marker);
+	};
+
+	const routes = [
+		["helper", (h, dir) => h.helper(dir, 1)],
+		["CLI", (h, dir) => h.cli(dir, 1, "--path", "a.txt", "--path", "b.txt", "--", process.execPath, "-e", "process.exit(0)")],
+	];
+	it.each(routes)("%s: EACCES on the first marker read keeps restored=[a,b] / written=[a,b], cleanup pending, the marker kept; a retry finishes", (route, go) => {
+		const dir = fixture();
+		const before = state(dir);
+		const h = harness();
+		const { status, receipt } = go(h, dir);
+		expect(status).toBe(0);
+		expect(receipt).toMatchObject({ ok: true, exit: 0, restored: ["a.txt", "b.txt"], written: ["a.txt", "b.txt"], conflicts: [], cleanupPending: true, markerVerified: false });
+		expect(receipt.detail).toContain("EACCES");
+		expect(receipt.detail).not.toContain("Nothing was changed");
+		// The working tree, index, stash and refs are exactly as before — the files really are back.
+		expect(state(dir)).toEqual(before);
+		// The valid marker is retained, unremoved, and still verifies; the emptied run directory is kept beside it.
+		const marker = markerOf(dir);
+		expect(marker).toBeTruthy();
+		expect(markerVerifies(marker)).toBe(true);
+		const journal = String(marker).slice(0, -".completed.json".length);
+		expect(existsSync(journal) ? readdirSync(journal) : []).toEqual([]);
+		// A safe retry through the same route, with the fault gone, finishes the cleanup and changes nothing else.
+		const retry = route === "helper" ? h.helper(dir, 0, journal) : h.cli(dir, 0, "--restore", journal);
+		expect(retry.status).toBe(0);
+		expect(retry.receipt).toMatchObject({ ok: true, exit: 0 });
+		expect(pendingJournals(dir)).toEqual([]);
+		expect(state(dir)).toEqual(before);
+	});
+
+	it.each(routes)("%s: a fresh --restore with no in-call progress and an unreadable marker refuses — nothing changed, evidence kept", (route) => {
+		// A completed cleanup stopped at its last step (in-process seam): only the marker is left.
+		const dir = fixture();
+		const before = state(dir);
+		failBefore({ cwd: dir, paths: ["a.txt", "b.txt"], command: ["t"], run: () => 0, faults: failOnce("cleanup", (p) => p.endsWith(".completed.json")) });
+		const marker = markerOf(dir);
+		const journal = String(marker).slice(0, -".completed.json".length);
+		const markerBytes = readFileSync(marker);
+		const h = harness();
+		const { status, receipt } = route === "helper" ? h.helper(dir, 1, journal) : h.cli(dir, 1, "--restore", journal);
+		expect(status).toBe(route === "helper" ? 0 : EXIT.unknownState);
+		expect(receipt).toMatchObject({ ok: false, exit: EXIT.unknownState, restored: [], written: [] });
+		expect(receipt.cleanupPending).toBeUndefined();
+		expect(receipt.detail).toContain("EACCES");
+		expect(receipt.detail).toContain("Nothing was changed; the evidence is kept.");
+		expect(existsSync(marker)).toBe(true);
+		expect(readFileSync(marker).equals(markerBytes)).toBe(true);
+		expect(state(dir)).toEqual(before);
+		// The same retry with the fault gone verifies the marker, then finishes.
+		const retry = route === "helper" ? h.helper(dir, 0, journal) : h.cli(dir, 0, "--restore", journal);
+		expect(retry.receipt).toMatchObject({ ok: true, exit: 0 });
+		expect(pendingJournals(dir)).toEqual([]);
+	});
+
+	it("helper: a marker that reads but does NOT verify in the same call keeps the progress, never claims it valid; a fresh retry verifies the real one", () => {
+		const dir = fixture();
+		const before = state(dir);
+		const h = harness();
+		const { status, receipt } = h.helper(dir, 1, undefined, "tamper");
+		expect(status).toBe(0);
+		expect(receipt).toMatchObject({ ok: true, exit: 0, restored: ["a.txt", "b.txt"], written: ["a.txt", "b.txt"], cleanupPending: true, markerVerified: false });
+		expect(receipt.detail).toContain("cannot be trusted");
+		expect(receipt.detail).not.toContain("Nothing was changed");
+		expect(state(dir)).toEqual(before);
+		const marker = markerOf(dir);
+		expect(markerVerifies(marker)).toBe(true); // the file on disk was never touched
+		// Fresh retry, the same tamper on its read: no in-call progress, so it refuses and keeps the evidence.
+		const journal = String(marker).slice(0, -".completed.json".length);
+		expect(h.helper(dir, 1, journal, "tamper").receipt).toMatchObject({ ok: false, exit: EXIT.unknownState, restored: [], written: [] });
+		expect(existsSync(marker)).toBe(true);
+		// …and with the real marker readable, the retry finishes.
+		expect(h.helper(dir, 0, journal).receipt).toMatchObject({ ok: true, exit: 0 });
+		expect(pendingJournals(dir)).toEqual([]);
+		expect(state(dir)).toEqual(before);
 	});
 });
