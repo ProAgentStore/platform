@@ -47,9 +47,11 @@ type Observed =
 			invocations: number;
 			/** `other`: the call's exit status belongs to another command in it (`;`, `||`, a pipe), not the tests. */
 			statusOwnedBy: "test" | "other";
+			/** Seen only in its output: the runner cut the command before the test runner's name (#1019). */
+			commandCut?: true;
 	  }
 	| { kind: "commit"; seq: number; ok: boolean | null; sha: string | null }
-	| { kind: "push"; seq: number; ok: boolean | null; effect: "updated" | "up_to_date" | "rejected" | "unknown" }
+	| { kind: "push"; seq: number; ok: boolean | null; effect: "updated" | "up_to_date" | "rejected" | "unknown"; commandCut?: true }
 	| { kind: "ci"; seq: number; ok: boolean | null; output: string | null }
 	/**
 	 * A browser act (#1019). `observes` is false for one that sees nothing (closing the browser, a
@@ -241,6 +243,12 @@ function classify(call: EngineToolCall, seq: number): Observed[] | null {
 		out.push({ kind: "test", seq: at(lastInv.at), inv, command, ok, output: call.output, outputCut: !!call.outputCut, invocations: tests.length, statusOwnedBy: ok === call.ok ? "test" : "other" });
 		// A Playwright run renders pages, unless it only lists or describes its tests.
 		if (/\bplaywright\s+test\b/.test(lastInv.command)) out.push({ kind: "browser", seq: at(lastInv.at), ok: call.ok, observes: !/(?:^|\s)(?:--list|--help|-h)(?:\s|$)/.test(lastInv.command) });
+	} else if (call.inputCut && readTestOutput(call.output).summaries > 0) {
+		// The runner cut the command before the test runner's name, but its output printed a test summary
+		// (#1019). The run happened; which command, scope and revision it was is not in the record. What was
+		// cut is the TAIL, so it ran after everything visible: placed at the end of the slot. The call's exit
+		// status is not the tests' — the command around them is unknown.
+		out.push({ kind: "test", seq: at(command.length), inv: null, command, ok: null, output: call.output, outputCut: !!call.outputCut, invocations: 1, statusOwnedBy: "other", commandCut: true });
 	}
 	const mutation = last(SHELL_MUTATION, artifacts);
 	if (mutation >= 0) out.push({ kind: "edit", seq: at(mutation), path: null });
@@ -248,6 +256,9 @@ function classify(call: EngineToolCall, seq: number): Observed[] | null {
 	if (commit >= 0) out.push({ kind: "commit", seq: at(commit), ok: call.ok, sha: /\[[^\]\s]+\s+([0-9a-f]{7,40})\]/.exec(call.output ?? "")?.[1] ?? null });
 	const push = last(/\bgit\s+push\b/);
 	if (push >= 0) out.push({ kind: "push", seq: at(push), ok: call.ok, effect: pushEffect(call) });
+	// Cut before `git push`, yet the output is a push's own (`To <remote>` + a ref update) — not a fetch or
+	// pull, which print `From <remote>`. Like a cut test, it ran after everything visible.
+	else if (call.inputCut && /^To\s+\S+/m.test(call.output ?? "") && pushEffect(call) === "updated") out.push({ kind: "push", seq: at(command.length), ok: call.ok, effect: "updated", commandCut: true });
 	const ci = last(/\bgh\s+(?:run\s+(?:view|watch|list)|pr\s+checks)\b/);
 	if (ci >= 0) out.push({ kind: "ci", seq: at(ci), ok: call.ok, output: call.output });
 	return out;
@@ -281,13 +292,16 @@ export function readTestOutput(output: string | null): TestOutputReading {
 			? "it ran no tests"
 			: null;
 	// vitest/jest print "Tests  12 passed (12)" / "Tests: 3 failed, 9 passed, 12 total"; pytest "== 9 passed, 3 failed ==".
-	const lines = [...o.matchAll(/^\s*Tests:?\s+(.+)$|^=+\s(.*\b\d[\d,]*\s+(?:passed|failed)\b.*)\s=+$/gim)].map((m) => m[1] ?? m[2]);
+	// A line counts only when it carries a count, so prose that starts "Tests …" is no summary.
+	const lines = [...o.matchAll(/^\s*Tests:?\s+(.*\b\d[\d,]*\s+(?:passed|failed)\b.*)$|^=+\s(.*\b\d[\d,]*\s+(?:passed|failed)\b.*)\s=+$/gim)].map((m) => m[1] ?? m[2]);
 	const num = (m: RegExpExecArray | null) => (m ? Number(m[1].replace(/,/g, "")) : null);
 	if (lines.length > 1) {
 		const failedAll = lines.map((l) => num(/(\d[\d,]*)\s+failed/i.exec(l))).filter((n): n is number => n !== null);
 		return { passed: null, failed: failedAll.length ? failedAll.reduce((a, b) => a + b, 0) : null, summaries: lines.length, invalid };
 	}
-	const testsLine = lines[0] ?? o;
+	// No summary line: the rest of the output — never vitest's `Test Files  25 passed (25)`, since a FILE count is
+	// not a test count (#1019).
+	const testsLine = lines[0] ?? o.split("\n").filter((l) => !/\btest\s+files?\b|\bfiles?\s+\d/i.test(l)).join("\n");
 	return { passed: num(/(\d[\d,]*)\s+passed/i.exec(testsLine)), failed: num(/(\d[\d,]*)\s+failed/i.exec(testsLine)), summaries: lines.length, invalid };
 }
 
@@ -295,7 +309,21 @@ export function readTestOutput(output: string | null): TestOutputReading {
 
 const CLAIM_TESTS_PASS = /\b(?:tests?|suite|specs?)\b[^.\n]{0,60}\b(?:pass(?:ed|es|ing)?|green|succeed(?:ed|s)?)\b|\b\d[\d,]*\s+(?:tests?\s+)?pass(?:ed|ing)\b|\ball\s+\d[\d,]*\s+tests?\b/i;
 const CLAIM_FULL = /\b(?:full|whole|entire|complete)\s+(?:test\s+)?suite\b|\ball\s+(?:\d[\d,]*\s+)?tests\b(?!\s+(?:in|of|under|for|from))|\btest:full\b/i;
-const CLAIM_COUNT = /\b(\d[\d,]*)\s+(?:tests?\s+)?pass(?:ed|ing)\b|\ball\s+(\d[\d,]*)\s+tests?\b|\b(\d[\d,]*)\s+tests?\b[^.\n]{0,20}\bpass/gi;
+/**
+ * A claimed TEST count (#1019). A count of files is not one: "25 test files passed" and vitest's own
+ * "Test Files 25 passed" claim nothing about tests, and "376 tests, 25 test files, all passed" claims 376 —
+ * the files clause between the count and "passed" is skipped, not read as the count.
+ */
+const COUNT = String.raw`(?<!\bfiles?\s+)(\d[\d,]*)(?!\s+(?:test\s+)?files?\b)`;
+const CLAIM_COUNT = new RegExp(
+	[
+		String.raw`\b${COUNT}\s+(?:tests?\s+)?pass(?:ed|ing)\b`,
+		String.raw`\ball\s+${COUNT}\s+tests?\b`,
+		String.raw`\b${COUNT}\s+tests?\b(?:\s*,?\s*(?:and\s+)?\d[\d,]*\s+(?:test\s+)?files?\b)?[^.\n]{0,20}\bpass`,
+		String.raw`\bpass(?:ed|ing)\s+(?:all\s+)?${COUNT}\s+tests?\b`,
+	].join("|"),
+	"gi",
+);
 const CLAIM_PUSHED = /\bpushed\b|\bpush(?:ed)?\s+to\s+(?:main|master|origin|the\s+(?:default|main)\s+branch)\b/i;
 /** A claim about what a user SEES — only a browser observation can support it, never reading the source. */
 const CLAIM_RENDERED =
@@ -326,6 +354,8 @@ export function judgeCompletion(detail: string, ev: CompletionEvidence): Complet
 	const lastTest = lastOf("test");
 	const reading = lastTest ? readTestOutput(lastTest.output) : null;
 	const unseen = ev.sawCalls ? "no test run appears in this run's record" : "this engine's tool calls are not observable, so no test run could be checked";
+	/** An act seen only in its output: in the record, but not attributable to a command. */
+	const cutWhy = (act: string, word: string) => `output of a ${act} was observed, but its command was cut before \`${word}\` — which command ran, its scope and the exact revision it carried are unverified`;
 
 	const claimsPass = CLAIM_TESTS_PASS.test(detail);
 	// The test command the claim itself names, if it names one: the run must have been THAT command (#1019).
@@ -334,6 +364,12 @@ export function judgeCompletion(detail: string, ev: CompletionEvidence): Complet
 		if (!lastTest) verdicts.push({ claim: "tests_pass", status: "unverified", why: unseen });
 		else if (reading?.invalid) verdicts.push({ claim: "tests_pass", status: "contradicted", why: `the last test command (\`${short(lastTest.command)}\`) is not evidence: ${reading.invalid}` });
 		else if (lastTest.ok === false || (reading?.failed ?? 0) > 0) verdicts.push({ claim: "tests_pass", status: "contradicted", why: `the last test run (\`${short(lastTest.command)}\`) failed${reading?.failed ? ` — ${reading.failed} failed` : ""}` });
+		else if (lastTest.commandCut)
+			verdicts.push(
+				lastEdit && lastEdit.seq > lastTest.seq
+					? { claim: "tests_pass", status: "contradicted", why: `files changed after the last green run${lastEdit.path ? ` (${lastEdit.path})` : ""}, so it does not test the final revision` }
+					: { claim: "tests_pass", status: "unverified", why: cutWhy("test run", "test runner") },
+			);
 		else if (lastTest.ok === null && lastTest.statusOwnedBy === "other" && !cleanSummary(lastTest, reading))
 			verdicts.push({
 				claim: "tests_pass",
@@ -370,7 +406,7 @@ export function judgeCompletion(detail: string, ev: CompletionEvidence): Complet
 		);
 	}
 
-	const counts = [...detail.matchAll(CLAIM_COUNT)].map((m) => Number((m[1] ?? m[2] ?? m[3]).replace(/,/g, ""))).filter((n) => n > 0);
+	const counts = [...detail.matchAll(CLAIM_COUNT)].map((m) => Number((m[1] ?? m[2] ?? m[3] ?? m[4]).replace(/,/g, ""))).filter((n) => n > 0);
 	if (counts.length) {
 		const seen = lastTest && lastTest.invocations > 1 ? null : (reading?.passed ?? null);
 		const claimed = Math.max(...counts);
@@ -394,6 +430,7 @@ export function judgeCompletion(detail: string, ev: CompletionEvidence): Complet
 		else if (push.effect === "rejected" || push.ok === false) verdicts.push({ claim: "pushed", status: "contradicted", why: "the last push was rejected" });
 		else if (push.effect === "up_to_date") verdicts.push({ claim: "pushed", status: "contradicted", why: "the last push said \"Everything up-to-date\" — it moved nothing" });
 		else if ((lastCommit && lastCommit.seq > push.seq) || (lastEdit && lastEdit.seq > push.seq)) verdicts.push({ claim: "pushed", status: "contradicted", why: "work was committed or edited after the last push, which therefore does not carry the final revision" });
+		else if (push.commandCut) verdicts.push({ claim: "pushed", status: "unverified", why: cutWhy("push that updated a remote ref", "git push") });
 		else if (push.effect === "updated") verdicts.push({ claim: "pushed", status: "supported", why: "the last push updated the remote ref" });
 		else verdicts.push({ claim: "pushed", status: "unverified", why: "the last push's output does not show a ref update" });
 	}
