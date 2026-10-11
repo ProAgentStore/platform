@@ -125,3 +125,31 @@ export function continueBody(note: string | undefined): { note?: string } {
 	const text = (note ?? "").trim();
 	return text ? { note: text } : {};
 }
+
+/** Plain-language endings. The raw reasons are accurate but not self-explanatory. */
+const REASON_LABEL: Record<string, string> = {
+	done: "Finished",
+	escalated: "Needs you",
+	failed: "Failed",
+	max_iterations: "Hit the step limit",
+	budget: "Hit its spend limit",
+	cancelled: "You stopped it",
+	no_progress: "Was repeating itself",
+	// #546. Deliberately not "Failed": the platform cut the invocation off and the objective never
+	// reported, so the run may well have pushed. The word has to send the owner to the repo rather
+	// than to the Retry button.
+	interrupted: "Cut off by the platform",
+	engine_limit: "Hit the coding CLI's usage limit",
+	provider_credit: "Out of AI provider credit",
+	engine_auth: "Coding CLI not signed in",
+	// #1019. Nobody cancelled and nothing failed: the owner's own rules did not fit the engine's envelope whole.
+	constraint_refused: "Stopped: your rules are too long to send",
+};
+
+/**
+ * The ending a run's history row shows. The STOP REASON drives it — the status is coarse (`needs_human` covers four
+ * different endings) — and the raw status is only the fallback for a reason this console does not know yet.
+ */
+export function endingLabel(run: { stopReason?: string | null; status: string }): string {
+	return REASON_LABEL[run.stopReason ?? ""] ?? run.status;
+}

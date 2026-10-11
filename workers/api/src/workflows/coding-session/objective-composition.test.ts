@@ -764,3 +764,24 @@ describe("a refused envelope is the run's own terminal reason, and earlier facts
 		expect(continueRefusal(row as NonNullable<typeof row>)).toContain("you stopped that run");
 	});
 });
+
+// ── #1019: a delivery settled by the act's own pane counts that act ─────────────────────────────────────────────────
+
+describe("the first delivered receipt counts the act that delivered it (#1019)", () => {
+	it("a lost reply reconciled from a capture that already shows the read: delivered with actsSent 1, not 0", async () => {
+		let n = 0;
+		hooks.act = async (m, _b, send) => {
+			const out = send();
+			if (++n !== 1) return out;
+			// The engine finishes reading the act; then the reply is lost. The retry's reconciling capture carries the read.
+			await until(() => readBy(m).length === 1 && m.rt.snapshot("s1").runState === "idle" && (m.rt.snapshot("s1").engine?.consumed ?? []).length === 1);
+			throw new RunnerUnreachableError("Runner disconnected", { dispatched: true });
+		};
+		decisions = [SEND("the only act"), FINISH];
+		await run();
+		const delivered = events().filter((e) => e.state === "delivered");
+		expect(delivered).toHaveLength(1);
+		expect(delivered[0]).toMatchObject({ consumedInputId: actIds[0], actsSent: 1 });
+		expect(executions("the only act")).toBe(1);
+	});
+});

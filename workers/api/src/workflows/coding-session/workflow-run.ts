@@ -569,12 +569,12 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 				return { ...lastPane, cancelled: true, stopReason: refusedStop }; // the loop ends HERE, even on its last step
 			}
 			await objective?.attempt(withId, lines);
-			// Composed inside every attempt (lib/coding-act-send.ts): after a reconnect, against the engine and runner now there
-			// (#693 replay composed in the step too, so a replayed step re-sends what it sent).
+			// Composed inside every attempt (coding-act-send.ts) against the runner now there; the #693 replay is composed in the step too.
 			const compose = () => (objective ? objective.attach(withId) : withId);
 			const prepare = (x: CodingActionKind) => withTurnReplay(env, { instanceId, userId, repoId, repoName: goal.repo, clientType: goal.clientType }, x);
 			const node = () => conn.runnerNode ?? null;
 			const { pane, receipt } = await sendAct({ sessionId, run: runRetry, guard, call: (path, body) => callRunner(conn, path, body), node, engine: () => lastEngine, prepare }, label, compose);
+			objective?.sent(); // counted before its pane can settle a delivery receipt; settlement itself waits for the generation check
 			await measured(Promise.resolve(pane));
 			if (receipt.outcome === "unknown" || receipt.outcome === "conflict") {
 				const why = receipt.outcome === "conflict" ? "the runner holds different content under this id" : "the reply was lost and no runner that could speak for it said whether it ran";

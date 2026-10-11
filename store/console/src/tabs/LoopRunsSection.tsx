@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { loopStopControl, type LoopPhase } from "../lib/loopStopState";
-import { canContinueRun, continueBody, previewLines, type ContinuePreview } from "../lib/loopContinue";
+import { canContinueRun, continueBody, endingLabel, previewLines, type ContinuePreview } from "../lib/loopContinue";
 import { activityLabel, isOpen, runActivity, type RunHealth } from "../lib/workInFlight";
 import Button from "../components/Button";
 import Card from "../components/Card";
@@ -41,20 +41,6 @@ type LoopRun = {
 	finishedAt?: number | null;
 };
 
-/** Plain-language endings. The raw reasons are accurate but not self-explanatory. */
-const REASON_LABEL: Record<string, string> = {
-	done: "Finished",
-	escalated: "Needs you",
-	failed: "Failed",
-	max_iterations: "Hit the step limit",
-	budget: "Hit its spend limit",
-	cancelled: "You stopped it",
-	no_progress: "Was repeating itself",
-	// #546. Deliberately not "Failed": the platform cut the invocation off and the objective never
-	// reported, so the run may well have pushed. The word has to send the owner to the repo rather
-	// than to the Retry button.
-	interrupted: "Cut off by the platform",
-};
 
 const TONE: Record<string, string> = {
 	completed: "text-success",
@@ -267,7 +253,7 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 							) : (
 								<span className="flex items-center gap-2 whitespace-nowrap">
 									<span className={`text-xs font-semibold ${TONE[r.status] ?? "text-muted"}`}>
-										{REASON_LABEL[r.stopReason ?? ""] ?? r.status}
+										{endingLabel(r)}
 									</span>
 									{/*
 									  * Offered only after an ending with no verdict (#806). The reason label stays

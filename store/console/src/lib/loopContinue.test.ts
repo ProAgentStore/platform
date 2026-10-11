@@ -9,7 +9,8 @@
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { canContinueRun, CONTINUABLE_STOP_REASONS, continueBody, previewLines, type ContinuePreview } from "./loopContinue";
+import { statusFor, type LoopStopReason } from "../../../../workers/api/src/lib/agent-loop";
+import { canContinueRun, CONTINUABLE_STOP_REASONS, continueBody, endingLabel, previewLines, type ContinuePreview } from "./loopContinue";
 
 describe("canContinueRun", () => {
 	it.each(["interrupted", "max_iterations", "engine_limit", "provider_credit", "engine_auth"])("offers Continue after %s", (stopReason) => {
@@ -145,5 +146,32 @@ describe("what the stopped run had worked out, and what the owner adds (#806 ite
 		expect(continueBody(undefined)).toEqual({});
 		expect(continueBody("  \n ")).toEqual({});
 		expect(continueBody("  rebase first \n")).toEqual({ note: "rebase first" });
+	});
+});
+
+describe("the run-history badge says how a run ENDED, from its stop reason (#1019)", () => {
+	const source = readFileSync(new URL("../../../../workers/api/src/lib/agent-loop.ts", import.meta.url).pathname, "utf8");
+	const union = /export type LoopStopReason =([\s\S]*?);\n/.exec(source);
+	const reasons = [...(union as RegExpExecArray)[1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]) as LoopStopReason[];
+
+	it("every stop reason the API produces renders as its own words — never the coarse status it files under", () => {
+		expect(reasons).toContain("constraint_refused");
+		for (const reason of reasons) {
+			const row = { stopReason: reason, status: statusFor(reason) }; // exactly what the API stores for that ending
+			expect(endingLabel(row), reason).not.toBe(row.status);
+			expect(endingLabel(row), reason).not.toBe(reason);
+		}
+	});
+
+	it("constraint_refused is the owner's rules being too long — not a cancel, not 'needs_human'", () => {
+		const row = { stopReason: "constraint_refused", status: statusFor("constraint_refused") };
+		expect(row.status).toBe("needs_human");
+		expect(endingLabel(row)).toBe("Stopped: your rules are too long to send");
+		expect(endingLabel(row)).not.toBe(endingLabel({ stopReason: "cancelled", status: "cancelled" }));
+	});
+
+	it("the STOP REASON drives the label; a row with only a status, or an unknown reason, shows the status", () => {
+		expect(endingLabel({ stopReason: null, status: "needs_human" })).toBe("needs_human");
+		expect(endingLabel({ stopReason: "some_future_reason", status: "failed" })).toBe("failed");
 	});
 });

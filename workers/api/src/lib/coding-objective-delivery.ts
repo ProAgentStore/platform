@@ -207,10 +207,17 @@ export class ObjectiveDelivery {
 		return { ...action, objective: { runId: this.runId, text: this.text, origin: this.origin, ...(this.constraints.length ? { constraints: [...this.constraints] } : {}) } };
 	}
 
+	/**
+	 * The act's step has returned (#1019): it counts as sent BEFORE its own pane is read, so a delivery that pane
+	 * settles — a reconciled lost reply, a fast engine — already includes the act that delivered it.
+	 */
+	sent(): void {
+		this.actsSent++;
+	}
+
 	/** After the act step, from its JOURNALLED receipt. Only this generation's engine accepting it counts; a predecessor's never does. */
 	settle(r: ActReceipt): void {
 		this.inflight = null;
-		this.actsSent++;
 		this.attempted = this.attempted.filter((id) => id !== r.inputId);
 		if (!r.objective || !r.inputId) return;
 		const ours = !this.identified || !r.ledger || `${r.ledger}:${r.epoch}` === this.engineKey;
