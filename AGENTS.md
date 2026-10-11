@@ -59,6 +59,15 @@ What it does, as tested:
   (file or journal) is an atomic rename. A failure during setup rolls back exactly what was written; a failed
   rollback or restore keeps the journal with a truthful receipt, and `--restore` finishes it.
 - **Exit status is the test's own** (127 missing command, 128+n on a signal); the argv runs with no shell.
+- **Journal root:** `.git/pags-fail-before` must be a plain directory. A symlink or a file there is unknown
+  state (exit 75), left as it is, and nothing is written through it.
+- **I/O errors are receipts:** an unreadable path refuses at preflight with its error code; a restore stopped
+  part-way reports exactly which files were put back and where it stopped, keeps the journal and backups, and
+  `--restore` finishes it. The CLI never exits on a stack trace.
+- **Complete writes:** every write loops until all bytes are written (repeated zero progress is an error) and
+  is checked before the rename.
+- **Mode:** only plain permission bits (0777) are restored, exactly. A setuid, setgid or sticky file is refused
+  before anything changes.
 
 Remaining limits: POSIX only, regular files only; a foreign write that lands on the same file between the last
 check and the rename is overwritten; the digest detects corruption, not a deliberate forgery; directories created

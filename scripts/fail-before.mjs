@@ -23,6 +23,9 @@ const receipt = (r) => {
 	process.exit(r.exit);
 };
 
+// An unexpected error is still a receipt (#1021): the journal, if any, is kept and its state is unknown.
+process.on("uncaughtException", (e) => receipt({ ok: false, phase: "error", exit: EXIT.unknownState, detail: `${e.code ?? "error"}: ${e.message}. Any journal under .git/pags-fail-before is kept; finish it with --restore.` }));
+
 if (argv[0] === "--restore") {
 	// The journal names its own repository; restoring from any other repository is refused (#1021).
 	const r = restoreFromJournal(resolve(argv[1] ?? ""), { root: process.cwd() });

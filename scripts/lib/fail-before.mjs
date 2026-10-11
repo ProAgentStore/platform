@@ -37,6 +37,7 @@ import {
 	closeSync,
 	constants as fsConstants,
 	existsSync,
+	fstatSync,
 	fsyncSync,
 	lstatSync,
 	mkdirSync,
@@ -58,6 +59,16 @@ export const EXIT = { refused: 64, conflict: 70, unknownState: 75 };
 const JOURNAL_DIR = "pags-fail-before";
 const FORMAT = 2;
 const sha = (buf) => createHash("sha256").update(buf).digest("hex");
+/** The permission bits this helper restores exactly. setuid, setgid and sticky files are refused, not masked. */
+const SUPPORTED_MODE = 0o777;
+/** A write that makes no progress this many times in a row is an error, not a loop. */
+const MAX_ZERO_WRITES = 3;
+
+/**
+ * The two syscalls a test needs to observe synthetically (#1021): short writes, and a stat that reports
+ * mode bits no unprivileged fixture can set. Production never replaces them.
+ */
+export const _io = { writeSync, lstatSync };
 
 function git(cwd, args, opts = {}) {
 	const r = spawnSync("git", args, { cwd, encoding: opts.binary ? "buffer" : "utf8", maxBuffer: 256 * 1024 * 1024 });
@@ -76,13 +87,45 @@ const sameRepo = (a, b) => !!a && !!b && a.root === b.root && a.gitDir === b.git
 const within = (p, dir) => p === dir || p.startsWith(dir + sep);
 const journalRoot = (ident) => join(ident.gitDir, JOURNAL_DIR);
 
+/**
+ * What is at the journal root, never following a link: absent, the plain directory this helper made, or
+ * something else (a symlink, a file) — which is unknown state, and never written through.
+ */
+function journalRootState(ident) {
+	const dir = journalRoot(ident);
+	let st;
+	try {
+		st = _io.lstatSync(dir);
+	} catch (e) {
+		return e.code === "ENOENT" ? "absent" : "bad";
+	}
+	return st.isDirectory() && !st.isSymbolicLink() && realpathSync(dir) === dir ? "dir" : "bad";
+}
+
 /** Journals left by runs that did not finish — every entry, readable or not. Any of them is unknown state. */
 export function pendingJournals(root) {
 	const ident = repoIdentity(root);
 	if (!ident) return [];
 	const dir = journalRoot(ident);
-	if (!existsSync(dir)) return [];
+	const state = journalRootState(ident);
+	if (state === "absent") return [];
+	if (state === "bad") return [dir]; // not a plain directory: unknown evidence, reported and left as it is
 	return readdirSync(dir).map((d) => join(dir, d));
+}
+
+/** Create (or confirm) the plain journal root and this run's own directory, never through a link. */
+function makeRunDir(ident, id) {
+	const root = journalRoot(ident);
+	try {
+		mkdirSync(root, { mode: 0o700 });
+	} catch (e) {
+		if (e.code !== "EEXIST") throw e;
+	}
+	if (journalRootState(ident) !== "dir") throw Object.assign(new Error(`${root} is not a plain directory`), { unknownState: true });
+	const dir = join(root, id);
+	mkdirSync(dir, { mode: 0o700 }); // fails if it exists: the id is this run's alone
+	mkdirSync(join(dir, "files"), { mode: 0o700 });
+	return dir;
 }
 
 /**
@@ -98,14 +141,15 @@ export function quoteForShell(args, shell = "sh") {
 function observe(abs) {
 	let st;
 	try {
-		st = lstatSync(abs);
+		st = _io.lstatSync(abs);
 	} catch (e) {
 		if (e.code === "ENOENT") return { type: "absent" };
 		throw e;
 	}
 	if (st.isSymbolicLink()) return { type: "symlink" };
 	if (!st.isFile()) return { type: "other" };
-	return { type: "file", hash: sha(readFileSync(abs)), mode: st.mode & 0o777 };
+	// Every mode bit, so a setuid/setgid/sticky file can be refused rather than silently stripped.
+	return { type: "file", hash: sha(readFileSync(abs)), mode: st.mode & 0o7777 };
 }
 /** Content, type and mode are ONE state: a mode-only change is a change. */
 const same = (a, b) => !!a && !!b && a.type === b.type && (a.type !== "file" || (a.hash === b.hash && a.mode === b.mode));
@@ -158,6 +202,9 @@ function baseEntry(root, baseSha, rel) {
 export function preflight({ cwd, base = "HEAD", paths, command }) {
 	const ident = repoIdentity(cwd);
 	if (!ident) return { refused: `not a git repository: ${cwd}`, code: EXIT.refused };
+	if (journalRootState(ident) === "bad") {
+		return { refused: `${journalRoot(ident)} is not a plain directory (a symlink or a file is there); it is left as it is and nothing was changed.`, code: EXIT.unknownState };
+	}
 	const pending = pendingJournals(ident.root);
 	if (pending.length) {
 		return {
@@ -180,6 +227,9 @@ export function preflight({ cwd, base = "HEAD", paths, command }) {
 		if (seen.has(rel)) return { refused: `${rel} was given twice. Nothing was changed.`, code: EXIT.refused };
 		seen.add(rel);
 		const now = observe(join(ident.root, rel));
+		if (now.type === "file" && now.mode & ~SUPPORTED_MODE) {
+			return { refused: `${rel} has mode ${now.mode.toString(8)}; only plain permission bits (0777) are restored exactly, so setuid/setgid/sticky files are not supported. Nothing was changed.`, code: EXIT.refused };
+		}
 		if (now.type === "symlink") return { refused: `${rel} is a symlink; only regular files are supported. Nothing was changed.`, code: EXIT.refused };
 		if (now.type === "other") return { refused: `${rel} is not a regular file. Nothing was changed.`, code: EXIT.refused };
 		const atBase = baseEntry(ident.root, baseSha, rel);
@@ -206,14 +256,31 @@ function writeAtomic(abs, bytes, mode, tag, faults) {
 	rmOwnTemp(tmp);
 	const fd = openSync(tmp, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW ?? 0), 0o600);
 	try {
-		writeSync(fd, bytes);
+		writeFully(fd, bytes);
 		fsyncSync(fd);
 	} finally {
 		closeSync(fd);
 	}
+	// Nothing is renamed into place until it is exactly the bytes intended.
+	if (sha(readFileSync(tmp)) !== sha(bytes)) throw new Error(`the write of ${abs} did not complete`);
 	chmodSync(tmp, mode);
 	faults?.("rename", abs);
 	renameSync(tmp, abs);
+}
+/** Write every byte: `writeSync` may write fewer than asked, and repeated zero progress is an error. */
+function writeFully(fd, data) {
+	const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+	let off = 0;
+	let stalls = 0;
+	while (off < buf.length) {
+		const n = _io.writeSync(fd, buf, off, buf.length - off);
+		if (n > 0) {
+			off += n;
+			stalls = 0;
+		} else if (++stalls >= MAX_ZERO_WRITES) throw new Error(`a write made no progress ${MAX_ZERO_WRITES} times (${off} of ${buf.length} bytes)`);
+	}
+	const size = fstatSync(fd).size;
+	if (size !== buf.length) throw new Error(`a write ended at ${size} of ${buf.length} bytes`);
 }
 /** A temp file THIS journal named (its id is in the name) is ours to remove; anything else at the name is not. */
 function rmOwnTemp(tmp) {
@@ -229,11 +296,12 @@ function saveJournal(dir, journal, faults) {
 	const tmp = join(dir, "journal.json.tmp");
 	const fd = openSync(tmp, "w", 0o600);
 	try {
-		writeSync(fd, text);
+		writeFully(fd, text);
 		fsyncSync(fd);
 	} finally {
 		closeSync(fd);
 	}
+	if (readFileSync(tmp, "utf8") !== text) throw new Error("the journal write did not complete");
 	faults?.("journal", journal.state);
 	renameSync(tmp, join(dir, "journal.json"));
 }
@@ -250,11 +318,22 @@ function loadJournal(dir) {
  * write deterministically. Returns a receipt; never throws on a refusal.
  */
 export function failBefore({ cwd, base = "HEAD", paths, command, run = defaultRun, faults }) {
-	const pre = preflight({ cwd, base, paths, command });
+	let pre;
+	try {
+		pre = preflight({ cwd, base, paths, command });
+	} catch (e) {
+		// Preflight writes nothing, so an I/O error here (EACCES, ENOTDIR…) changed nothing — and says which.
+		return { ok: false, phase: "preflight", exit: EXIT.refused, detail: `could not inspect the paths (${e.code ?? "error"}: ${e.message}). Nothing was changed.`, mutated: false };
+	}
 	if ("refused" in pre) return { ok: false, phase: "preflight", exit: pre.code, detail: pre.refused, mutated: false };
 	const { ident, files } = pre;
 	const id = `${Date.now()}-${randomUUID().slice(0, 8)}`;
-	const dir = join(journalRoot(ident), id);
+	let dir;
+	try {
+		dir = makeRunDir(ident, id);
+	} catch (e) {
+		return { ok: false, phase: "snapshot", exit: e.unknownState ? EXIT.unknownState : EXIT.refused, detail: `could not create this run's journal (${e.message}). Nothing was changed.`, mutated: false };
+	}
 	const journal = {
 		format: FORMAT,
 		id,
@@ -265,7 +344,6 @@ export function failBefore({ cwd, base = "HEAD", paths, command, run = defaultRu
 	};
 	// 2–3. The journal exists before any backup; the snapshot writes nothing in the working tree.
 	try {
-		mkdirSync(join(dir, "files"), { recursive: true });
 		saveJournal(dir, journal, faults);
 		for (const [i, entry] of journal.files.entries()) {
 			const abs = join(ident.root, entry.path);
@@ -374,20 +452,28 @@ export function restoreFromJournal(dir, opts = {}) {
 	}
 	// Every path and every backup is verified before ANY file changes.
 	const backups = new Map();
-	for (const entry of journal.files) {
-		const why = pathRefusal(ident, entry.path);
-		if (why) return stop(`The journalled path ${entry.path} ${why}.`);
-		if (entry.original?.type === "file") {
-			const b = join(dir, entry.backup);
-			const bs = observe(b);
-			if (bs.type !== "file" || bs.hash !== entry.original.hash) return stop(`The backup of ${entry.path} does not match its recorded hash.`);
-			backups.set(entry.path, readFileSync(b));
+	try {
+		for (const entry of journal.files) {
+			const why = pathRefusal(ident, entry.path);
+			if (why) return stop(`The journalled path ${entry.path} ${why}.`);
+			if (entry.original?.type === "file") {
+				const b = join(dir, entry.backup);
+				const bs = observe(b);
+				if (bs.type !== "file" || bs.hash !== entry.original.hash) return stop(`The backup of ${entry.path} does not match its recorded hash.`);
+				backups.set(entry.path, readFileSync(b));
+			}
 		}
+	} catch (e) {
+		// Verification writes nothing, so an unreadable backup or path stops here with nothing changed.
+		return stop(`Could not verify the journal's paths and backups (${e.code ?? "error"}: ${e.message}).`);
 	}
 	const conflicts = [];
 	const restored = [];
-	for (const entry of journal.files) {
-		const abs = join(ident.root, entry.path);
+	let current = null;
+	try {
+		for (const entry of journal.files) {
+			current = entry.path;
+			const abs = join(ident.root, entry.path);
 		rmOwnTemp(join(dirname(abs), `.${basename(abs)}.${journal.id}.pags-fb-tmp`));
 		rmOwnTemp(join(dirname(abs), `.${basename(abs)}.${journal.id}-r.pags-fb-tmp`));
 		const now = observe(abs);
@@ -407,7 +493,20 @@ export function restoreFromJournal(dir, opts = {}) {
 			conflicts.push(entry.path);
 			continue;
 		}
-		restored.push(entry.path);
+			restored.push(entry.path);
+		}
+	} catch (e) {
+		// An ordinary I/O error part-way: say exactly what was put back and where it stopped. The journal and
+		// every backup are kept, so a later --restore finishes it; this is never "nothing changed".
+		return {
+			ok: false,
+			exit: EXIT.unknownState,
+			journal: dir,
+			restored,
+			conflicts,
+			stoppedAt: current,
+			detail: `the restore stopped at ${current} (${e.code ?? "error"}: ${e.message})${restored.length ? ` after putting back ${restored.join(", ")}` : " before putting any file back"}; the journal and its backups are kept at ${dir}. Fix the cause and finish it with --restore.`,
+		};
 	}
 	if (conflicts.length) {
 		return {

@@ -9,11 +9,15 @@
  * runs only inside a temp repository, to reproduce the defect the helper exists to prevent.
  */
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync as writeSyncFs } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import * as helper from "./fail-before.mjs";
 import { EXIT, failBefore, pendingJournals, quoteForShell, restoreFromJournal } from "./fail-before.mjs";
+
+/** The helper's test seam; a stand-in when it has none, so this file still loads against an older helper. */
+const _io = helper._io ?? { writeSync: (...a) => writeSyncFs(...a), lstatSync: (...a) => lstatSync(...a) };
 
 const CLI = resolve(import.meta.dirname, "..", "fail-before.mjs");
 const has = (bin) => spawnSync("sh", ["-c", `command -v ${bin}`]).status === 0;
@@ -292,6 +296,7 @@ const crashRun = () => {
 	throw new Error("killed mid-run");
 };
 const toplevel = (dir) => g(dir, "rev-parse", "--show-toplevel");
+const realpathOf = (p) => realpathSync(p);
 
 describe("(a) symlinks are refused before anything changes", () => {
 	it("an UNTRACKED symlink is not replaced by a regular file", () => {
@@ -646,5 +651,204 @@ describe("the CLI's exit statuses are the test's own, through the hardened resto
 		const r = cli(dir, "--path", "a.txt", "--", process.execPath, "-e", "process.exit(process.argv[1] === '$(touch pwned);*' ? 0 : 9)", INERT_ARG);
 		expect(r.status).toBe(0);
 		expect(existsSync(join(dir, "pwned"))).toBe(false);
+	});
+});
+
+// ── #1021 residuals: journal-root identity, I/O receipts, complete writes, the exact mode contract ─────
+//
+// Tests marked [seam] observe a fault through `_io` (a short or stalled write, a stat reporting bits no
+// unprivileged fixture can set); every other test observes the real filesystem in a temp repository.
+
+describe("(1) the journal root is a plain directory, never a link that carries the journal elsewhere", () => {
+	it("a symlinked journal root is unknown state: refused, nothing written through it, the link left as it is", () => {
+		const dir = fixture();
+		// An EMPTY directory elsewhere: nothing there for an "earlier journal" check to trip over by accident.
+		const out = mkdtempSync(join(tmpdir(), "pags-fail-before-elsewhere-"));
+		repos.push(out);
+		const before = state(dir);
+		symlinkSync(out, join(dir, ".git", "pags-fail-before"));
+		let ran = false;
+		const r = failBefore({ cwd: dir, paths: ["a.txt"], command: ["t"], run: () => {
+			ran = true;
+			return 0;
+		} });
+		expect(r).toMatchObject({ ok: false, exit: EXIT.unknownState, mutated: false });
+		expect(ran).toBe(false);
+		expect(readdirSync(out)).toEqual([]);
+		expect(lstatSync(join(dir, ".git", "pags-fail-before")).isSymbolicLink()).toBe(true);
+		expect(state(dir)).toEqual(before);
+	});
+
+	it("a FILE at the journal root is the same refusal, not a crash", () => {
+		const dir = fixture();
+		const before = state(dir);
+		writeFileSync(join(dir, ".git", "pags-fail-before"), "not a directory\n");
+		const r = failBefore({ cwd: dir, paths: ["a.txt"], command: ["t"], run: () => 0 });
+		expect(r).toMatchObject({ ok: false, exit: EXIT.unknownState, mutated: false });
+		expect(readFileSync(join(dir, ".git", "pags-fail-before"), "utf8")).toBe("not a directory\n");
+		expect(state(dir)).toEqual(before);
+	});
+
+	it("pendingJournals reports a non-directory root as unknown evidence instead of throwing", () => {
+		const dir = fixture();
+		writeFileSync(join(dir, ".git", "pags-fail-before"), "x");
+		expect(pendingJournals(dir)).toHaveLength(1);
+	});
+});
+
+describe("(2) ordinary I/O errors return truthful receipts", () => {
+	it("an unreadable owned file is refused at preflight with its error code — nothing changed, nothing thrown", () => {
+		const dir = fixture();
+		chmodSync(join(dir, "a.txt"), 0o000);
+		try {
+			const r = failBefore({ cwd: dir, paths: ["a.txt"], command: ["t"], run: () => 0 });
+			expect(r).toMatchObject({ ok: false, phase: "preflight", exit: EXIT.refused, mutated: false });
+			expect(r.detail).toMatch(/EACCES/);
+			expect(pendingJournals(dir)).toEqual([]);
+		} finally {
+			chmodSync(join(dir, "a.txt"), 0o644);
+		}
+	});
+
+	it("a restore stopped part-way reports exactly what was put back, keeps the journal, and --restore finishes it", () => {
+		const dir = fixture();
+		mkdirSync(join(dir, "sub"));
+		put(dir, "sub/x.txt", "x-base\n");
+		g(dir, "add", "sub/x.txt");
+		g(dir, "commit", "-q", "-m", "sub", "--", "sub/x.txt");
+		put(dir, "sub/x.txt", "x-OWNED\n");
+		const before = state(dir);
+		const r = failBefore({ cwd: dir, paths: ["a.txt", "sub/x.txt"], command: ["t"], run: () => {
+			chmodSync(join(dir, "sub"), 0o555);
+			return 0;
+		} });
+		chmodSync(join(dir, "sub"), 0o755);
+		expect(r).toMatchObject({ ok: false, phase: "restore", exit: EXIT.unknownState, mutated: true, restored: ["a.txt"], stoppedAt: "sub/x.txt" });
+		expect(r.detail).toMatch(/after putting back a\.txt/);
+		expect(read(dir, "a.txt")).toBe("a-OWNED-edit\n");
+		const [journal] = pendingJournals(dir);
+		expect(journal).toBeTruthy();
+		const done = spawnSync(process.execPath, [CLI, "--restore", journal], { cwd: dir, encoding: "utf8" });
+		expect(done.status).toBe(0);
+		expect(read(dir, "sub/x.txt")).toBe("x-OWNED\n");
+		expect(state(dir)).toEqual(before);
+	});
+
+	it("an unreadable backup stops the restore before any write, keeping everything", () => {
+		const dir = fixture();
+		expect(() => failBefore({ cwd: dir, paths: ["a.txt"], command: ["t"], run: crashRun })).toThrow();
+		const [journal] = pendingJournals(dir);
+		chmodSync(join(journal, "files", "0"), 0o000);
+		try {
+			const r = restoreFromJournal(journal, toplevel(dir));
+			expect(r).toMatchObject({ ok: false, exit: EXIT.unknownState, restored: [] });
+			expect(r.detail).toMatch(/EACCES/);
+			expect(read(dir, "a.txt")).toBe("a-base\n");
+		} finally {
+			chmodSync(join(journal, "files", "0"), 0o600);
+		}
+		expect(restoreFromJournal(journal, toplevel(dir))).toMatchObject({ ok: true });
+	});
+
+	it("the CLI turns an unreadable file into an exit-64 receipt, not a stack trace", () => {
+		const dir = fixture();
+		chmodSync(join(dir, "a.txt"), 0o000);
+		try {
+			const r = spawnSync(process.execPath, [CLI, "--path", "a.txt", "--", "true"], { cwd: dir, encoding: "utf8" });
+			expect(r.status).toBe(EXIT.refused);
+			expect(JSON.parse(r.stdout.trim().split("\n").at(-1)).detail).toMatch(/EACCES/);
+		} finally {
+			chmodSync(join(dir, "a.txt"), 0o644);
+		}
+	});
+});
+
+describe("(3) every byte is written before anything is renamed into place", () => {
+	const realWrite = _io.writeSync;
+	afterEach(() => {
+		_io.writeSync = realWrite;
+	});
+
+	it("[seam] short writes are completed: the test sees the whole base file, and the restore is exact", () => {
+		const dir = fixture();
+		const before = state(dir);
+		_io.writeSync = (fd, buf, off, len) => realWrite(fd, buf, off, Math.min(len, 3));
+		let during = null;
+		const r = failBefore({ cwd: dir, paths: ["a.txt", "b.txt"], command: ["t"], run: () => {
+			during = [read(dir, "a.txt"), read(dir, "b.txt")];
+			return 0;
+		} });
+		expect(r).toMatchObject({ ok: true, exit: 0 });
+		expect(during).toEqual(["a-base\n", "b-base\n"]);
+		expect(state(dir)).toEqual(before);
+	});
+
+	it("[seam] a write that stops making progress fails the setup, rolls back exactly, and the test never runs", () => {
+		const dir = fixture();
+		const before = state(dir);
+		let calls = 0;
+		// The journal writes go through; the first working-tree file write stalls.
+		_io.writeSync = (fd, buf, off, len) => (buf.length === Buffer.byteLength("a-base\n") && ++calls ? 0 : realWrite(fd, buf, off, len));
+		let ran = false;
+		const r = failBefore({ cwd: dir, paths: ["a.txt"], command: ["t"], run: () => {
+			ran = true;
+			return 0;
+		} });
+		_io.writeSync = realWrite;
+		expect(ran).toBe(false);
+		expect(r).toMatchObject({ ok: false, mutated: false });
+		expect(r.detail).toMatch(/no progress/);
+		expect(state(dir)).toEqual(before);
+		expect(readdirSync(dir).filter((f) => f.includes("pags-fb-tmp"))).toEqual([]);
+	});
+});
+
+describe("(4) the mode contract is exact: plain permission bits, or a refusal", () => {
+	const realLstat = _io.lstatSync;
+	afterEach(() => {
+		_io.lstatSync = realLstat;
+	});
+
+	// All special bits are OBSERVED synthetically through `_io.lstatSync` — no fixture sets one for real.
+	it.each([
+		["setuid", 0o4000],
+		["setgid", 0o2000],
+		["sticky", 0o1000],
+	])("[seam] a %s bit reported by stat is refused before anything changes — never stripped, never written", (_name, bit) => {
+		const dir = fixture();
+		const before = state(dir);
+		const target = realpathOf(join(dir, "a.txt"));
+		const plain = statSync(target).mode & 0o7777;
+		_io.lstatSync = (p, ...rest) => {
+			const st = realLstat(p, ...rest);
+			return p === target ? Object.assign(Object.create(Object.getPrototypeOf(st)), st, { mode: st.mode | bit }) : st;
+		};
+		let ran = false;
+		const r = failBefore({
+			cwd: dir,
+			paths: ["a.txt"],
+			command: ["t"],
+			run: () => {
+				ran = true;
+				return 0;
+			},
+		});
+		_io.lstatSync = realLstat;
+		expect(r).toMatchObject({ ok: false, phase: "preflight", exit: EXIT.refused, mutated: false });
+		expect(r.detail).toContain(`has mode ${(plain | bit).toString(8)}`);
+		expect(r.detail).toMatch(/setuid\/setgid\/sticky files are not supported/);
+		expect(ran).toBe(false);
+		expect(pendingJournals(dir)).toEqual([]);
+		expect(state(dir)).toEqual(before);
+	});
+
+	it("plain permission bits round-trip exactly (0600, 0640, 0755)", () => {
+		for (const mode of [0o600, 0o640, 0o755]) {
+			const dir = fixture();
+			chmodSync(join(dir, "a.txt"), mode);
+			const r = failBefore({ cwd: dir, paths: ["a.txt"], command: ["t"], run: () => 0 });
+			expect(r, mode.toString(8)).toMatchObject({ ok: true });
+			expect(statSync(join(dir, "a.txt")).mode & 0o7777).toBe(mode);
+		}
 	});
 });
