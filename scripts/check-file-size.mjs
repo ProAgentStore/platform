@@ -732,7 +732,7 @@ const PINS = {
 	// +35 at #883/#879: `effectiveCloneStatus` (a folderless binding is `needs_path`, derived where rows are
 	// mapped so every reader agrees) and `claimFreeSessionDriver` (apply-now's never-steal claim, beside
 	// the claim/release pair it must not diverge from). Both are repo/session persistence.
-	"workers/api/src/lib/coding-store.ts": 878, // +7 at #1012: the binding's numeric GitHub id, version and last-retarget columns on RepoRow/toRepo, and deleteRepo clearing its retarget audits (FK child); the retarget itself lives in coding-repo-retarget.ts.
+	"workers/api/src/lib/coding-store.ts": 879, // +1 at #1015: deleteRepo clears the sessions' directives (FK child of coding_sessions). +7 at #1012: the binding's numeric GitHub id, version and last-retarget columns on RepoRow/toRepo, and deleteRepo clearing its retarget audits (FK child); the retarget itself lives in coding-repo-retarget.ts.
 	// NEW at #981: the Applications control surface crossed 800 adding the post-fill approval stage —
 	// the action table entries that offer it on `awaiting_review` and at a supervisor checkpoint, and
 	// the four-line branch that performs it. The decision, the continuation and the reply shape all
@@ -1021,7 +1021,7 @@ const PINS = {
 	"workers/api/src/lib/user-ai.ts": 850, // +33 at #914: a user message may be prompt blocks, cached within ONE breakpoint budget shared with the system prompt (≤4, 1h never after 5m), flattened for Workers AI.
 	// New entry at #914, crossing LIMIT by 6: the Pilot's prompt split into a 1-hour-cached run prefix
 	// and an uncached round tail, with the measurement that justified it in its doc comment.
-	"workers/api/src/lib/coding-loop.ts": 887, // +18 at #914: pilotUserBlocks — the steps-so-far prefix cached, the clock and terminal after it. +56 at #960: the `ask_owner` decision verb — its tool, prompt rule, decision case and option bounds. +7 at #898: the Pilot step log marks the instruction it shortens; `paneChars` rides on the snapshot.
+	"workers/api/src/lib/coding-loop.ts": 895, // +8 at #1015: CodingGoal.standingInstructions/ownerDirectives (re-read every decision), the merged USER RULES line and the per-round owner-directive block; the block itself lives in coding-owner-directives.ts. +18 at #914: pilotUserBlocks — the steps-so-far prefix cached, the clock and terminal after it. +56 at #960: the `ask_owner` decision verb — its tool, prompt rule, decision case and option bounds. +7 at #898: the Pilot step log marks the instruction it shortens; `paneChars` rides on the snapshot.
 	// +3 at #878: the terminal record hook — an import and a one-line call with its comment after the handler. It belongs HERE for the reason the gates do: every surface dispatches through this function, and recording anywhere else would record one surface. The storage is lib/terminal-record.ts.
 	"workers/api/src/lib/tool-registry.ts": 902, // +3 at #898: truncation made visible (paging, marked cuts, refused over-length writes).
 	// +8 for the #312 stats prompt block. Deliberately not split: the block is two statements
@@ -1850,7 +1850,7 @@ const PINS = {
 	// coding-session.ts by deleting ~700 lines of behaviour to get under LIMIT (end-of-run policies,
 	// sync, closing drain, notify, endSession, the "running" card claim, the sync-gate stop). A real
 	// split must MOVE code without changing it; until then this is the honest size.
-	"workers/api/src/workflows/coding-session/workflow-run.ts": 1101, // +30 at #960: a question is published (agent.needs_input on its card, the ask on the run) and parks as `decision`. +1 at #894: the pause carries its session id, so "Coder needs you" opens the run, not the repo list.
+	"workers/api/src/workflows/coding-session/workflow-run.ts": 1112, // +11 at #1015: the per-decision constraint refresh and the monotonic terminal settlement (no chat/card/notify over a cancellation that settled first); the rules live in coding-standing-constraints.ts and agent-loop-store.ts. +30 at #960: a question is published (agent.needs_input on its card, the ask on the run) and parks as `decision`. +1 at #894: the pause carries its session id, so "Coder needs you" opens the run, not the repo list.
 	// +5 at #754: one new entry for triggers.ts (3 comment lines + 1 pin line) + agent-do raise comment + this.
 	// +7 at #744: 6-line rationale comment for use-voice.ts raise + this note.
 	// +4 at #739: two raised pins (tool-registry, agent-think) + this note + blank line.

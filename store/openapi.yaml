@@ -188,6 +188,19 @@ tags:
       reports what it ran — on a raw Codex/Grok session the observed-act half sees nothing, and
       the run note says so.
 
+      **One writer per checkout (#1015).** `POST …/coding/sessions/{sessionId}/message` is admitted
+      only when no OTHER session of the same repo is owned — a `running` run, a driver claim, or a
+      direct turn whose engine the runner has not confirmed idle (`unknown`/offline fails closed). A
+      refusal is `409 {error, admitted:false, owner:{kind:"run"|"driver"|"direct", sessionId, …}}` and
+      nothing reaches the engine. On the session its own run drives the message is a STEER and the run
+      stays owner. A `200` adds `admission:{kind:"direct", turnId}|{kind:"steer", runId}` and
+      `delivery:{state:"delivered"|"queued"|"interrupting", engineBefore, directiveId, processed:false}`
+      — delivery and processing are separate facts; processing is recorded later, once the engine
+      completes a turn that ended after delivery. Loop starts, queue drains and `…/run` refuse
+      (`busy`, so a queued objective is requeued, never failed) while a direct turn holds the repo.
+      `GET …/capture` adds `sessionStatus` and `ownership:{owners:[…]}`; its `runState` reports a live,
+      working engine even when the session row is `ended` (an ended run is not an ended engine).
+
       **Retarget after a GitHub rename (#1012).** `POST …/coding/repos/{repoId}/retarget` moves
       one binding to the new name of the SAME repository in place — id, instructions, sessions,
       timeline and receipts are kept (delete + re-add would erase them). Body:

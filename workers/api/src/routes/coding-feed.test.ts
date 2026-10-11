@@ -301,11 +301,26 @@ describe("the route resolves a session and says what the engine is doing", () =>
 		const res = await get(`/v1/instances/${INSTANCE}/coding/timeline`);
 		const body = (await res.json()) as { sessionId: string; runState: string; events: { type: string; content: string }[] };
 		expect(body.sessionId).toBe("csess-done");
-		// `ended`, not the runner's `idle`: no runner was asked about a session it no longer holds,
-		// so reporting `idle` would be a reading nobody took (#527).
+		// `ended`, not `idle` (#527). The machine IS asked since #1015 — an ended row can sit over a
+		// live engine — but with no machine to answer, an ended session still reads `ended`.
 		expect(body.runState).toBe("ended");
-		expect(getRunnerConn).not.toHaveBeenCalled();
 		expect(body.events.map((e) => e.type)).toEqual(["command", "outcome"]);
+	});
+
+	it("reports a working engine under an ENDED session as working, not ended (#1015)", async () => {
+		// A run's end step marks the session ended even when the runner's own end failed, and a direct
+		// turn can reactivate a retained session after its run ended. The row is history; the engine
+		// mid-turn is the live fact, and reading the row alone is how a busy checkout looked free.
+		seedSession("csess-done", "ended", "2026-08-15 10:00:00");
+		await append("csess-done", "outcome", "done");
+		getRunnerConn.mockResolvedValue({ node: "mac" });
+		callRunner.mockResolvedValue({ alive: true, ready: false, runState: "responding" });
+		const working = (await (await get(`/v1/instances/${INSTANCE}/coding/timeline`)).json()) as { runState: string };
+		expect(working.runState).toBe("responding");
+		// …and an IDLE engine there is still `ended`: only a live turn overrides the row.
+		callRunner.mockResolvedValue({ alive: true, ready: true, runState: "idle" });
+		const idle = (await (await get(`/v1/instances/${INSTANCE}/coding/timeline`)).json()) as { runState: string };
+		expect(idle.runState).toBe("ended");
 	});
 
 	it("reports `offline` when no runner holds the session, never `idle`", async () => {

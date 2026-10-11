@@ -79,6 +79,7 @@ export const INSTANCE_CHILD_TABLES = [
 	"ticket_runs",
 	"tickets",
 	"coding_timeline",
+	"coding_session_directives",
 	"coding_sessions",
 	"coding_repo_retarget_audits",
 	"coding_repos",

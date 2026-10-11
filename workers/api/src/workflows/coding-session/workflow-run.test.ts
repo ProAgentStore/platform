@@ -36,6 +36,7 @@ import { runCodingSessionWorkflow } from "./workflow-run.js";
 import type { CodingSessionParams } from "../coding-session-params.js";
 import type { CodingDecision, CodingGoal } from "../../lib/coding-loop.js";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "../../lib/d1-sqlite.js";
+import { ownerDirectivesBlock } from "../../lib/coding-owner-directives.js";
 import type { Env } from "../../types.js";
 
 // ── The harness ─────────────────────────────────────────────────────────────────────────────────
@@ -548,5 +549,115 @@ describe("a question parks the run on `decision`, on its card, and the answer co
 		await run(params({ loopRunId: "run-1" }));
 		expect(parked).toEqual({ waiting_reason: "human", waiting_ask: null });
 		expect(rows("SELECT id FROM instance_runtime_task_events WHERE type = 'agent.needs_input'")).toEqual([]);
+	});
+});
+
+// ── #1015: the owner's rules and latest words reach EVERY decision; a settled cancel is final ────
+
+describe("standing rules and owner directives reach every Pilot decision (#1015)", () => {
+	const SEND = (text: string): CodingDecision => ({ action: { kind: "message", text } });
+
+	it("gives a run started WITHOUT rules in its goal (the loop/queue path) the instance + repo rules", async () => {
+		// `loopDriverFor(...).start` builds the goal from the objective alone — the entry point that
+		// used to run with no standing rules at all. The workflow reads them itself.
+		d1.exec(`UPDATE agent_instances SET config = '{"specialInstructions":"Never open a pull request."}' WHERE id = 'i1'`);
+		d1.exec(`UPDATE coding_repos SET instructions = 'Run pnpm test before pushing.' WHERE id = 'r1'`);
+		await run(params({}, {}));
+		expect(decided[0].goal.standingInstructions).toBe("Never open a pull request.\n\nRun pnpm test before pushing.");
+	});
+
+	it("keeps an owner correction in force for every later decision, not just one round", async () => {
+		// The incident: the engine acknowledged a narrower read-only restriction, and a later decision
+		// re-issued the original mutation objective, because a mid-run owner message lived one round.
+		decisions = [SEND("implement the feature"), SEND("run the suite"), { finish: { status: "done", detail: "ok" } }];
+		let acts = 0;
+		runner["/coding/act"] = () => {
+			if (++acts === 1) {
+				// The owner steers mid-run — recorded exactly as `POST …/message` records a steer.
+				d1.exec(`INSERT INTO coding_session_directives (id, session_id, instance_id, user_id, repo_id, run_id, kind, delivery, content, created_at)
+				  VALUES ('dir-1', 's1', 'i1', 'u1', 'r1', NULL, 'steer', 'queued', 'Read-only from now on: no edits, no stash, no pull. Stop after the push and do not wait for CI.', ${Date.now() + 1})`);
+			}
+			return IDLE;
+		};
+		await run();
+		expect(decided).toHaveLength(3);
+		expect(decided[0].goal.ownerDirectives ?? []).toEqual([]);
+		for (const d of decided.slice(1)) {
+			expect(d.goal.ownerDirectives?.map((x) => x.text)).toEqual(["Read-only from now on: no edits, no stash, no pull. Stop after the push and do not wait for CI."]);
+		}
+		// …and the prompt states it as outranking the objective, every round.
+		const block = ownerDirectivesBlock(decided[2].goal.ownerDirectives ?? []);
+		expect(block).toContain("OVERRIDE the objective");
+		expect(block).toContain("do not wait for CI");
+	});
+
+	it("a rules edit made mid-run binds the next decision", async () => {
+		decisions = [SEND("go"), { finish: { status: "done", detail: "ok" } }];
+		runner["/coding/act"] = () => {
+			d1.exec(`UPDATE coding_repos SET instructions = 'Read-only audit: no writes.' WHERE id = 'r1'`);
+			return IDLE;
+		};
+		await run();
+		expect(decided[0].goal.standingInstructions).toBeUndefined();
+		expect(decided[1].goal.standingInstructions).toBe("Read-only audit: no writes.");
+	});
+});
+
+describe("a late terminal write never overwrites a settled cancellation (#1015)", () => {
+	let posts: string[];
+	beforeEach(() => {
+		posts = [];
+		env = {
+			DB: d1.DB,
+			AGENT: {
+				idFromName: (n: string) => n,
+				get: () => ({
+					fetch: async (req: Request) => {
+						posts.push(((await req.json()) as { content: string }).content);
+						return new Response("{}");
+					},
+				}),
+			},
+		} as unknown as Env;
+	});
+	const runFinishedEvents = () => rows<{ n: number }>("SELECT count(*) AS n FROM run_events WHERE run_id = 'run-1' AND event_type = 'run.finished'")[0].n;
+
+	it.each([
+		["a late success", { finish: { status: "done", detail: "all green" } } as CodingDecision],
+		["a late failure", { finish: { status: "failed", detail: "tests red" } } as CodingDecision],
+	])("%s after the owner's stop settled: row stays cancelled, no completion post, card cancelled", async (_label, last) => {
+		seedLoopRun();
+		seedCard("running");
+		decisions = [{ action: { kind: "message", text: "keep going" } }, last];
+		runner["/coding/act"] = () => {
+			// The runner's wait resolves AFTER the stop was settled (the sweeper's enforced cancel).
+			d1.exec(`UPDATE agent_loop_runs SET status = 'cancelled', stop_reason = 'cancelled', detail = 'stopped by owner', finished_at = ${Date.now()} WHERE run_id = 'run-1'`);
+			return IDLE;
+		};
+		await run(params({ loopRunId: "run-1" }));
+		expect(loopRun()).toMatchObject({ status: "cancelled", stop_reason: "cancelled", detail: "stopped by owner" });
+		expect(posts.filter((p) => p.includes("Loop complete") || p.includes("Loop stopped"))).toEqual([]);
+		expect(cardStatus()).toBe("cancelled");
+		expect(runFinishedEvents()).toBe(0);
+	});
+
+	it("still lets the run's real outcome correct a PLATFORM-inferred `interrupted` close (the sweeper's standing rule)", async () => {
+		seedLoopRun();
+		decisions = [{ action: { kind: "message", text: "go" } }, { finish: { status: "done", detail: "pushed" } }];
+		runner["/coding/act"] = () => {
+			d1.exec(`UPDATE agent_loop_runs SET status = 'needs_human', stop_reason = 'interrupted', finished_at = ${Date.now()} WHERE run_id = 'run-1'`);
+			return IDLE;
+		};
+		await run(params({ loopRunId: "run-1" }));
+		expect(loopRun()).toMatchObject({ status: "completed", stop_reason: "done" });
+		expect(posts.some((p) => p.includes("Loop complete"))).toBe(true);
+	});
+
+	it("a run nobody else settled closes exactly as before, and announces once", async () => {
+		seedLoopRun();
+		await run(params({ loopRunId: "run-1" }));
+		expect(loopRun()).toMatchObject({ status: "completed", stop_reason: "done" });
+		expect(posts.filter((p) => p.includes("Loop complete"))).toHaveLength(1);
+		expect(runFinishedEvents()).toBe(1);
 	});
 });

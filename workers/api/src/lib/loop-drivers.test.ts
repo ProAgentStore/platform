@@ -74,6 +74,8 @@ function stubEnv(
 							async all() {
 								if (q.includes("FROM instance_runtimes")) return { results: runtimeRow ? [runtimeRow] : [] };
 								if (q.includes("FROM instance_runtime_nodes")) return { results: [] };
+								// Checkout owners (#1015): none — this fake models an idle repo.
+								if (q.includes("FROM agent_loop_runs r") || q.includes("direct_turn_id")) return { results: [] };
 								return { results: opts.repos ?? [] };
 							},
 							async first() {

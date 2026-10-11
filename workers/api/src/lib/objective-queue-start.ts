@@ -27,6 +27,7 @@ import { openBudget, resolveAccountCeilings } from "./delegation-budget-store.js
 import { logError } from "./error-log.js";
 import { loopDriverFor, startRefusalIsWaitable } from "./loop-drivers.js";
 import { dequeueNext, finishQueueEntry, requeueEntry } from "./objective-queue.js";
+import { pausedStartRefusal } from "./instance-pause.js";
 import type { Env } from "../types.js";
 
 export type QueueDrainResult =
@@ -52,6 +53,11 @@ export type QueueDrainResult =
 export async function tryDequeueAndStart(env: Env, instanceId: string, repoId: string | null, userId: string): Promise<QueueDrainResult> {
 	let entryId: string | null = null;
 	try {
+		// A paused agent claims NOTHING (#1015). Claiming first and letting the pause gate refuse used
+		// to FAIL the entry — pause cancels the run, the run's terminal step drains, and the next
+		// objective was marked failed with "paused" as its epitaph. Left pending, untouched and with no
+		// budget opened, it starts when `POST /:id/resume` drains the queue.
+		if (await instancePaused(env, instanceId, userId)) return { drained: false };
 		const entry = await dequeueNext(env, instanceId, repoId);
 		if (!entry) return { drained: false };
 		entryId = entry.id;
@@ -147,4 +153,30 @@ export async function tryDequeueAndStart(env: Env, instanceId: string, repoId: s
 			? { drained: true, entryId, started: false, requeued: false, error: message }
 			: { drained: false };
 	}
+}
+
+/** Is the instance paused right now? Read fresh; a failed read is NOT a pause (same rule as the driver gate). */
+async function instancePaused(env: Env, instanceId: string, userId: string): Promise<boolean> {
+	try {
+		const row = await env.DB.prepare("SELECT status FROM agent_instances WHERE id = ?1 AND user_id = ?2").bind(instanceId, userId).first<{ status: string | null }>();
+		return row ? pausedStartRefusal(row.status) !== null : false;
+	} catch {
+		// Unreadable is not paused: the driver's own pause gate re-reads, and refuses as `paused` (waitable).
+		return false;
+	}
+}
+
+/**
+ * Drain once per repo that has pending entries (#1015) — what `POST /:id/resume` calls, because a
+ * paused instance's queue has no terminating run left to drain it. One entry per repo, the same rate
+ * as a run's terminal path; each started run drains the next as it ends. Never throws.
+ */
+export async function drainPendingQueues(env: Env, instanceId: string, userId: string): Promise<QueueDrainResult[]> {
+	const rows = await env.DB.prepare("SELECT DISTINCT repo_id FROM instance_objective_queue WHERE instance_id = ?1 AND user_id = ?2 AND status = 'pending'")
+		.bind(instanceId, userId)
+		.all<{ repo_id: string | null }>()
+		.catch(() => ({ results: [] as Array<{ repo_id: string | null }> }));
+	const out: QueueDrainResult[] = [];
+	for (const r of rows.results ?? []) out.push(await tryDequeueAndStart(env, instanceId, r.repo_id ?? null, userId));
+	return out;
 }

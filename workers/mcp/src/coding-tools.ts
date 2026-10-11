@@ -328,6 +328,8 @@ export function registerCodingSessionTools(
 				ready: d.ready,
 				...(typeof d.paneChars === "number" ? { paneChars: d.paneChars } : {}),
 				...(d.authPrompt ? { authPrompt: d.authPrompt } : {}),
+				// #1015: the session row and the checkout's live owner are separate facts.
+				...((d as { sessionStatus?: string }).sessionStatus ? { sessionStatus: (d as { sessionStatus?: string }).sessionStatus, ownership: (d as { ownership?: unknown }).ownership ?? null } : {}),
 			};
 			return text(pageText({ text: d.pane ?? "", offset, build: (slice, meta) => ({ ...head, pane: slice, ...(meta ? { panePage: meta } : {}) }) }).text);
 		},
@@ -389,12 +391,13 @@ export function registerCodingSessionTools(
 				sid = opened.session.id;
 				woke = `${openConversationText(repoLabel(resolved.repo), opened)}\n`;
 			}
-			const sent = (await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/message`, sessionToken, { method: "POST", body: JSON.stringify({ text: message }) }, env)) as { error?: string };
+			const sent = (await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/message`, sessionToken, { method: "POST", body: JSON.stringify({ text: message }) }, env)) as { error?: string; delivery?: { state?: string }; admission?: { kind?: string } };
 			// authedCall returns { error } on any non-2xx (runner offline, dead session) — do
 			// NOT report "sent" for a command that never ran; this is code execution on the user's box.
 			if (sent?.error) return text(`${woke}Error sending to session ${sid}: ${sent.error}`);
 			await audit(safetyFor(token), { tool: "coding_session_message", action: "completed", input: { instance_id, session_id: sid, woke: woke !== "", messageBytes: new TextEncoder().encode(message).length } });
-			return text(`${woke}Sent to session ${sid}: "${message}"`);
+			// #1015: say HOW it was delivered — idle engine, queued behind a turn, or interrupting one — and that processing is not yet observed.
+			return text(`${woke}Sent to session ${sid}: "${message}"${sent?.delivery?.state ? ` — ${sent.admission?.kind === "steer" ? "steer of the run driving it" : "direct turn"}, ${sent.delivery.state}, not yet processed` : ""}`);
 		},
 	);
 

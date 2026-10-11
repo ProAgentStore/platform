@@ -7,6 +7,8 @@ import { terminalSnapshotChanged, terminalSnapshotContent } from "../lib/termina
 import { copilotSummary } from "../lib/coding-copilot.js";
 import { deepLinkFor } from "../lib/console-links.js";
 import { notifyUser } from "../routes/push.js";
+import { listDirectives, markDirectivesProcessed, runnerEngineProbe, settleDirectTurns } from "../lib/coding-ownership.js";
+import { tryDequeueAndStart } from "../lib/objective-queue-start.js";
 import type { Env } from "../types.js";
 
 /**
@@ -72,6 +74,17 @@ export async function runWatchSession(env: Env, event: WorkflowEvent<CodingSessi
 		},
 	)) as CodingPaneSnapshot;
 
+	// Release the direct turn's claim on the checkout (#1015) — only on the runner's word that the
+	// engine is idle or gone — mark the owner's directives the engine has since processed, and start
+	// whatever the claim held back in the queue. Every watcher runs this (each re-probes, so a stale
+	// one cannot release a newer turn). A turn still busy keeps its claim; the watcher looks again a
+	// bounded number of times, and past that the next send or run start re-probes it.
+	for (let attempt = 0; attempt < 7; attempt++) {
+		if (attempt > 0) await step.sleep(`direct-turn-wait-${attempt}`, "5 minutes");
+		const settled = (await step.do(`direct-turn-settle-${attempt}`, async () => settleAfterDirectTurn(env, { instanceId, userId, sessionId, repoId: event.payload.repoId, finalPane: attempt === 0 ? finalPane : null }))) as boolean;
+		if (settled) break;
+	}
+
 	// Bow out if a later send superseded this watcher — only the latest one
 	// notifies, so one completion can't fire several push notifications.
 	const stillLatest = (await step.do("watch-is-latest", async () => {
@@ -121,4 +134,31 @@ export async function runWatchSession(env: Env, event: WorkflowEvent<CodingSessi
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * One settle pass after a direct turn (#1015). True once no direct claim remains on the repo.
+ * Exported so the release + drain rule is tested without a Workflow.
+ */
+export async function settleAfterDirectTurn(
+	env: Env,
+	input: { instanceId: string; userId: string; sessionId: string; repoId?: string | null; finalPane: { lastTurn?: { at?: number } | null } | null },
+	probe = runnerEngineProbe(env, input.instanceId, input.userId),
+): Promise<boolean> {
+	if (!input.repoId) return true;
+	const state = await probe(input.sessionId).catch(() => "unknown" as const);
+	if (state === "idle" || state === "stopped") {
+		const turnEndedAt = input.finalPane?.lastTurn?.at ?? (await latestDirectiveAt(env, input));
+		await markDirectivesProcessed(env, { instanceId: input.instanceId, userId: input.userId, sessionId: input.sessionId, turnEndedAt: state === "idle" ? turnEndedAt : null }).catch(() => 0);
+	}
+	const remaining = await settleDirectTurns(env, { instanceId: input.instanceId, userId: input.userId, repoId: input.repoId }, probe);
+	if (remaining.some((o) => o.kind === "direct")) return false;
+	if (!remaining.length) await tryDequeueAndStart(env, input.instanceId, input.repoId, input.userId);
+	return true;
+}
+
+/** With no `lastTurn` from the runner, an idle engine is credited only up to the newest directive. */
+async function latestDirectiveAt(env: Env, input: { instanceId: string; userId: string; sessionId: string }): Promise<number | null> {
+	const ds = await listDirectives(env, { ...input, sinceMs: 0, limit: 1 }).catch(() => []);
+	return ds.length ? ds[ds.length - 1].createdAt : null;
 }

@@ -13,6 +13,7 @@ import { resolveCloneCredential } from "../lib/git-credentials.js";
 import { callRunner } from "../lib/runner-client.js";
 import { getSessionRunnerConn, readSpecialInstructions, requireOwned } from "./coding-shared.js";
 import { withTurnReplay } from "../lib/coding-turn-replay.js";
+import { admitDirectTurn, deliveryFor, describeOwner, recordDirective, repoFreeForRun, runnerEngineProbe } from "../lib/coding-ownership.js";
 import type { Env } from "../types.js";
 
 /**
@@ -68,6 +69,23 @@ export function registerDriveRoutes(codingRoutes: Hono<{ Bindings: Env }>): void
 		const fromChat = body.chat === true;
 		const conn = await getSessionRunnerConn(c.env, instanceId, uid, session);
 		if (!conn) throw new HttpError(409, "No coding runner connected. Start it with: pags up");
+		// ONE WRITER PER CHECKOUT (#1015). A direct turn is admitted only when no other session of this
+		// repo holds it — a running run, a driver claim, or another direct turn whose engine the runner
+		// cannot confirm idle. On this session's own run it is a STEER, and that run stays the owner.
+		// An ended run is not evidence its engine stopped, so the probe asks the machine, not the row.
+		const probe = runnerEngineProbe(c.env, instanceId, uid);
+		const scope = { instanceId, userId: uid, repoId: session.repoId, sessionId };
+		const admission = await admitDirectTurn(c.env, scope, probe);
+		if (!admission.ok) {
+			const repoRow = await getRepo(c.env, instanceId, uid, session.repoId);
+			return c.json({ error: describeOwner(admission.owner, repoRow?.name ?? "This repository"), admitted: false, owner: admission.owner }, 409);
+		}
+		const engineBefore = await probe(sessionId).catch(() => "unknown" as const);
+		const releaseOwnClaim = () =>
+			admission.kind === "direct"
+				? c.env.DB.prepare("UPDATE coding_sessions SET direct_turn_id = NULL, direct_turn_at = NULL WHERE id = ?1 AND direct_turn_id = ?2").bind(sessionId, admission.turnId).run().catch(() => undefined)
+				: Promise.resolve(undefined);
+		const ownerText = action.text;
 		if (action.kind === "message" && action.text) {
 			// Log the user's clean text first…
 			await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: fromChat ? "chat_user" : "command", content: action.text }).catch(() => undefined);
@@ -93,7 +111,21 @@ export function registerDriveRoutes(codingRoutes: Hono<{ Bindings: Env }>): void
 			const relocated = fresh && repo ? (await startSessionOnRunner(c.env, instanceId, uid, fresh, repo)).conn : null;
 			snap = await callRunner(relocated ?? conn, "/coding/act", { sessionId, action: sent }).catch(() => null);
 		}
-		if (snap === null) throw new HttpError(409, "This session isn't live on the runner — open it again (or run pags up).");
+		if (snap === null) {
+			// Nothing was delivered, so this request owns nothing (#1015).
+			await releaseOwnClaim();
+			throw new HttpError(409, "This session isn't live on the runner — open it again (or run pags up).");
+		}
+		// What is KNOWN about this delivery (#1015): delivered to an idle engine, queued behind a running
+		// turn, or interrupting it — and, separately and later, whether the engine has processed it.
+		const delivery = deliveryFor(engineBefore, session.clientType === "claude");
+		const directive = await recordDirective(c.env, {
+			...scope,
+			runId: admission.kind === "steer" ? admission.runId : null,
+			kind: admission.kind,
+			delivery,
+			content: ownerText,
+		}).catch(() => null);
 		await noteUnmeteredHeadlessDrive(c.env, { userId: uid, instanceId, traceId: sessionId }, session);
 
 		// Drove the CLI with a real instruction → spin up a durable watcher that waits
@@ -133,7 +165,11 @@ export function registerDriveRoutes(codingRoutes: Hono<{ Bindings: Env }>): void
 					},
 				}).catch(noWatcher);
 		}
-		return c.json(snap as object);
+		return c.json({
+			...(snap as object),
+			admission: admission.kind === "direct" ? { kind: "direct", turnId: admission.turnId } : { kind: "steer", runId: admission.runId },
+			delivery: { state: delivery, engineBefore, directiveId: directive?.id ?? null, processed: false },
+		});
 	});
 
 	/** Hand the session to the autonomous brain (the durable Workflow) with an objective. */
@@ -152,19 +188,20 @@ export function registerDriveRoutes(codingRoutes: Hono<{ Bindings: Env }>): void
 		// isn't a duplicate row — it's two Pilots typing into the same tmux pane, each reasoning over
 		// a terminal the other is also writing to. A 409 is the honest answer: the work IS already
 		// running, and starting a second one would corrupt the first.
+		// …and no other writer on the CHECKOUT (#1015): a direct turn or a run on another session.
+		const free = await repoFreeForRun(c.env, { instanceId, userId: uid, repoId: repo.id, sessionId }, runnerEngineProbe(c.env, instanceId, uid));
+		if (!free.free) return c.json({ error: describeOwner(free.owner, repo.name), owner: free.owner }, 409);
 		const driverId = crypto.randomUUID();
 		if (!(await claimSessionDriver(c.env, instanceId, uid, sessionId, driverId))) {
 			throw new HttpError(409, "This session is already being driven — stop the current run before starting another.");
 		}
 
-		const instanceInstructions = await readSpecialInstructions(c.env, instanceId, uid);
-		const repoInstructions = repo.instructions;
-		const combined = [instanceInstructions, repoInstructions].filter(Boolean).join("\n\n");
+		// The owner's rules are read by the WORKFLOW, before every decision (#1015,
+		// lib/coding-standing-constraints.ts) — the same for this route as for `POST /loop` and the queue.
 		const goal: CodingGoal = {
 			objective,
 			repo: repo.name,
 			clientType: session.clientType,
-			specialInstructions: combined || undefined,
 			dryRun: body.dryRun === true,
 		};
 		// One credential seam for every provider (#221) — see lib/git-credentials.ts.

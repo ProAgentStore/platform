@@ -29,6 +29,7 @@ import {
 } from "./coding-turn-outcome.js";
 import type { UsageContext } from "./usage.js";
 import type { Env } from "../types.js";
+import { ownerDirectivesBlock } from "./coding-owner-directives.js";
 
 /**
  * The coding orchestrator's brain loop.
@@ -47,8 +48,12 @@ export interface CodingGoal {
 	/** Repo display name / path, for context. */
 	repo: string;
 	clientType: "claude" | "gemini" | "codex" | "grok";
-	/** The user's free-text rules (Special Instructions), injected at top of prompt. */
+	/** Rules injected at top of prompt: the platform's repo-state notes, and a caller's own (`/run`). */
 	specialInstructions?: string;
+	/** The OWNER's standing rules (instance + repo), re-read before every decision (#1015). */
+	standingInstructions?: string;
+	/** What the owner sent this session during the run, oldest first, re-read every decision (#1015). */
+	ownerDirectives?: Array<{ text: string; at: number; delivery: string; processed: boolean }>;
 	/** Live free-text message the user sent while the agent was paused/stuck. */
 	userHint?: string;
 	/**
@@ -648,7 +653,8 @@ export function systemPrompt(goal: CodingGoal): string {
  */
 export function systemPromptBlocks(goal: CodingGoal): SystemPromptBlock[] {
 	const lines: string[] = [];
-	if (goal.specialInstructions) lines.push(`USER RULES (highest priority):\n${goal.specialInstructions}\n`);
+	const rules = [goal.standingInstructions, goal.specialInstructions].filter(Boolean).join("\n\n");
+	if (rules) lines.push(`USER RULES (highest priority):\n${rules}\n`);
 	lines.push(
 		`You orchestrate a local "${goal.clientType}" AI coding CLI running in a terminal in the repo "${goal.repo}".`,
 		`OBJECTIVE: ${goal.objective}`,
@@ -721,6 +727,8 @@ export function systemPromptBlocks(goal: CodingGoal): SystemPromptBlock[] {
 	// Attributed to the PLATFORM, never folded into `userHint` — see CodingGoal.resumeNote.
 	if (goal.resumeNote) round.push(`\n${goal.resumeNote}`);
 	if (goal.userHint) round.push(`\nThe user just told you: ${goal.userHint}`);
+	// Every round, not one (#1015): the owner's latest words outrank the objective for the whole run.
+	if (goal.ownerDirectives?.length) round.push(ownerDirectivesBlock(goal.ownerDirectives));
 	// Joined exactly as one list would have been, so the flattened text is byte-identical.
 	return [
 		{ text: lines.join("\n"), cache: true, ttl: "1h", label: "run" },

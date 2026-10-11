@@ -922,8 +922,10 @@ describe("POST …/message and the keystroke that was never delivered (#448)", (
 	it("leaves {text} exactly as it was — a message still reaches the engine", async () => {
 		const { status, sent } = await send({ text: "run the tests" });
 		expect(status).toBe(200);
-		expect(sent.map((s) => s.path)).toEqual(["/coding/act"]);
-		expect(sent[0].body.action).toEqual({ kind: "message", text: "run the tests" });
+		// One read-only probe first (#1015 — what the engine was doing decides the delivery state), then
+		// exactly one act carrying the text unchanged.
+		expect(sent.map((s) => s.path)).toEqual(["/coding/capture", "/coding/act"]);
+		expect(sent[1].body.action).toEqual({ kind: "message", text: "run the tests" });
 	});
 
 	it("answers a blank instruction with 400 and never touches the runner (#504)", async () => {

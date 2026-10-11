@@ -66,6 +66,8 @@ export interface RunStateProbe {
 	runnerConnected: boolean;
 	/** What the snapshot reported, or null/undefined when there was no snapshot. */
 	engineRunState?: unknown;
+	/** The runner's own `alive` for this engine, when a live snapshot came back (#1015). */
+	engineAlive?: boolean;
 }
 
 /**
@@ -77,7 +79,14 @@ export interface RunStateProbe {
  * word cannot silently widen this vocabulary without the guard noticing.
  */
 export function resolveRunState(probe: RunStateProbe): CodingRunState {
-	if (!probe.sessionActive) return "ended";
+	// An ENDED row is not an ended engine (#1015). A run's end step marks the session ended even when
+	// its `/coding/end` call failed, and a direct turn can reactivate a retained session's engine after
+	// its run ended — so a LIVE snapshot that says the engine is alive and mid-turn is reported as what
+	// it is. Only that combination overrides the row; an idle or absent engine stays `ended`.
+	if (!probe.sessionActive) {
+		const working = probe.runnerConnected && probe.engineAlive === true && isEngineRunState(probe.engineRunState) && probe.engineRunState !== "idle";
+		return working ? (probe.engineRunState as EngineRunState) : "ended";
+	}
 	if (!probe.runnerConnected) return "offline";
 	return isEngineRunState(probe.engineRunState) ? probe.engineRunState : "unknown";
 }

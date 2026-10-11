@@ -22,6 +22,7 @@ import { readReauthState } from "../lib/engine-reauth-store.js";
 import { reauthExpiryView } from "../lib/engine-reauth-expiry.js";
 import { getSessionRunnerConn, requireOwned } from "./coding-shared.js";
 import { getRuntime, getRuntimeForNode, mirrorRuntimeTask, normalizeRunnerNode } from "./instances-runtime.js";
+import { repoOwners, type RepoOwner } from "../lib/coding-ownership.js";
 import type { Env } from "../types.js";
 
 /**
@@ -320,8 +321,13 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 				sessionActive: session.status === "active",
 				runnerConnected: true,
 				engineRunState: (snap as { runState?: unknown }).runState,
+				engineAlive: (snap as { alive?: unknown }).alive === true,
 			}),
 			runnerConnected: true,
+			// The two measurements #1015 keeps apart: the SESSION row (a run's end marks it ended) and
+			// who owns the checkout right now — a run, a driver claim, or a direct turn.
+			sessionStatus: session.status,
+			ownership: await checkoutOwnership(c.env, { instanceId, userId: uid, repoId: session.repoId }).catch(() => null),
 			auth,
 			invocation,
 			// Always present (#881), so "signed in" and "not asked" are not the same absent field.
@@ -452,4 +458,9 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "system", content: content.slice(0, 2000) });
 		return c.json({ ok: true });
 	});
+}
+
+/** Who holds this repo's checkout, as `capture` reports it (#1015). Reads only; probes nothing. */
+async function checkoutOwnership(env: Env, scope: { instanceId: string; userId: string; repoId: string }): Promise<{ owners: RepoOwner[] }> {
+	return { owners: await repoOwners(env, scope) };
 }

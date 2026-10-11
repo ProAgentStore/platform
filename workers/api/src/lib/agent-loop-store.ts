@@ -601,21 +601,48 @@ export async function isCancelRequested(env: Env, runId: string): Promise<boolea
 	return !!row && row.cancel_requested !== 0;
 }
 
-/** Close a run out. `stopReason` carries WHY; `status` is derived so the two cannot disagree. */
+/** The run row's status once it is no longer `running`, else null (#1015). */
+export async function settledRunStatus(env: Env, runId: string): Promise<string | null> {
+	const row = await env.DB.prepare("SELECT status FROM agent_loop_runs WHERE run_id = ?1").bind(runId).first<{ status: string }>();
+	return row && row.status !== "running" ? row.status : null;
+}
+
+/**
+ * What a terminal write did (#1015). `applied` — this write settled the run. `already` — the run was
+ * settled with this same reason before (a retried step), so the caller's side effects are still its
+ * own. `superseded` — something else settled it first (a cancellation), and the caller must not post,
+ * card or announce its own verdict. `missing` — no row.
+ */
+export type FinishOutcome = "applied" | "already" | "superseded" | "missing";
+
+/**
+ * Close a run out. `stopReason` carries WHY; `status` is derived so the two cannot disagree.
+ *
+ * MONOTONIC (#1015). A late write replaces only a `running` row, or a close the PLATFORM inferred
+ * (`interrupted` — the sweeper's or `retireDisplacedRuns`' guess that the run had died, which the
+ * run's own outcome is allowed to correct; `run-sweeper.ts` states that rule). A settled
+ * cancellation is never overwritten: a workflow that finished after the owner's stop had already
+ * been recorded used to rewrite `cancelled` to `completed` and re-announce the end.
+ */
 export async function finishLoopRun(
 	env: Env,
 	runId: string,
 	stopReason: LoopStopReason,
 	detail: string,
 	finishedAt: number,
-): Promise<void> {
-	await env.DB.prepare(
+): Promise<FinishOutcome> {
+	const res = await env.DB.prepare(
 		`UPDATE agent_loop_runs
 		    SET status = ?2, stop_reason = ?3, detail = ?4, finished_at = ?5
-		  WHERE run_id = ?1`,
+		  WHERE run_id = ?1 AND (status = 'running' OR (status <> 'cancelled' AND stop_reason = 'interrupted' AND ?3 <> 'interrupted'))`,
 	)
 		.bind(runId, statusFor(stopReason), stopReason, clipMarked(detail, 2000), finishedAt) // marked, never silent (#898)
 		.run();
+	if ((res.meta?.changes ?? 0) === 0) {
+		const row = await env.DB.prepare("SELECT stop_reason FROM agent_loop_runs WHERE run_id = ?1").bind(runId).first<{ stop_reason: string | null }>();
+		return !row ? "missing" : row.stop_reason === stopReason ? "already" : "superseded";
+	}
 	// Announce it (#579): every driver closes through here, so this is the one `run.finished` producer.
 	await recordRunEvent(env, runId, "run.finished", finishedAt);
+	return "applied";
 }

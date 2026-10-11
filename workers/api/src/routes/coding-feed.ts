@@ -193,11 +193,13 @@ async function readRunState(
 	uid: string,
 	session: CodingSessionRecord,
 ): Promise<{ runState: string; runnerConnected: boolean }> {
-	if (session.status !== "active") return { runState: resolveRunState({ sessionActive: false, runnerConnected: false }), runnerConnected: false };
+	// An ended session is still ASKED (#1015): its engine can outlive the row, and an ended row
+	// over a working engine must read as working. With no machine it is `ended`, as before.
+	const active = session.status === "active";
 	const conn = await getSessionRunnerConn(env, instanceId, uid, session).catch(() => null);
-	if (!conn) return { runState: resolveRunState({ sessionActive: true, runnerConnected: false }), runnerConnected: false };
-	const snap = await callRunner<{ runState?: string }>(conn, "/coding/capture", { sessionId: session.id }, { timeoutMs: READ_TIMEOUT_MS }).catch(() => null);
-	return { runState: resolveRunState({ sessionActive: true, runnerConnected: true, engineRunState: snap?.runState }), runnerConnected: true };
+	if (!conn) return { runState: resolveRunState({ sessionActive: active, runnerConnected: false }), runnerConnected: false };
+	const snap = await callRunner<{ runState?: string; alive?: boolean }>(conn, "/coding/capture", { sessionId: session.id }, { timeoutMs: READ_TIMEOUT_MS }).catch(() => null);
+	return { runState: resolveRunState({ sessionActive: active, runnerConnected: true, engineRunState: snap?.runState, engineAlive: snap?.alive === true }), runnerConnected: true };
 }
 
 /**

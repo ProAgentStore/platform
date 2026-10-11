@@ -363,6 +363,7 @@ export async function deleteRepo(env: Env, instanceId: string, userId: string, r
 		.all<{ id: string }>();
 	const stmts = [
 		...sessionIds.results.map((row) => env.DB.prepare("DELETE FROM coding_timeline WHERE session_id = ?1").bind(row.id)),
+		env.DB.prepare("DELETE FROM coding_session_directives WHERE session_id IN (SELECT id FROM coding_sessions WHERE repo_id = ?1 AND instance_id = ?2 AND user_id = ?3)").bind(repoId, instanceId, userId),
 		env.DB.prepare("DELETE FROM coding_sessions WHERE repo_id = ?1 AND instance_id = ?2 AND user_id = ?3").bind(repoId, instanceId, userId),
 		env.DB.prepare("DELETE FROM coding_repo_retarget_audits WHERE repo_id = ?1 AND instance_id = ?2 AND user_id = ?3").bind(repoId, instanceId, userId),
 		env.DB.prepare("DELETE FROM coding_repos WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3").bind(repoId, instanceId, userId),

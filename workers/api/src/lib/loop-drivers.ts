@@ -34,6 +34,7 @@ import { checkWorkdirVia } from "./coding-workdir.js";
 import { cloneSourceFor } from "./git-providers.js";
 import { getBoundRunnerConn } from "./runner-client.js";
 import { pausedStartRefusal } from "./instance-pause.js";
+import { describeOwner, repoFreeForRun, runnerEngineProbe } from "./coding-ownership.js";
 import { codingRunRefusal } from "./billing.js";
 import { noSessionMessage } from "./coding-session-lifecycle.js";
 import { noteUnmeteredHeadlessDrive } from "./engine-metering.js";
@@ -165,7 +166,7 @@ export type LoopStartResult =
 			 * Absent rather than `"other"`: a driver that has not thought about this question should
 			 * not be able to answer it by accident.
 			 */
-			reason?: "busy" | "engine_auth" | "recovery_required";
+			reason?: "busy" | "engine_auth" | "recovery_required" | "paused";
 			/**
 			 * Set with `reason: "engine_auth"` (#891): the refused run was RECORDED, finished with that
 			 * stop reason, so sign-in tooling can find it and `continue` can pick it back up.
@@ -182,7 +183,8 @@ export type LoopStartResult =
  * change that leaves two of three call sites behind, so the question is asked in one place.
  */
 export function startRefusalIsWaitable(reason: string | undefined): boolean {
-	return reason === "busy" || reason === "recovery_required";
+	// `paused` (#1015): the owner switched the agent off; resuming it is what unblocks the entry.
+	return reason === "busy" || reason === "recovery_required" || reason === "paused";
 }
 
 export interface LoopDriver {
@@ -406,6 +408,16 @@ const codingDriver: LoopDriver = {
 		}
 		const { session, opened } = ensured;
 
+		// One writer per CHECKOUT, not per session (#1015). A direct turn on any session of this repo —
+		// including a retained one whose run already ended — or a run on another session still owns it.
+		// `busy`, so a queued objective is REQUEUED with this sentence rather than failed, and the
+		// watcher that follows the direct turn drains it once the runner confirms the engine idle.
+		const free = await repoFreeForRun(env, { instanceId, userId, repoId: repo.id, sessionId: session.id }, runnerEngineProbe(env, instanceId, userId));
+		if (!free.free) {
+			if (opened) await endSession(env, instanceId, userId, session.id, "ended").catch(() => undefined);
+			return { ok: false, status: 409, reason: "busy", error: describeOwner(free.owner, repo.name) };
+		}
+
 		// Single-flight, same as `/sessions/:id/run` (#208). Without it a Lead delegating a goal —
 		// or the owner pressing Loop — starts a SECOND Pilot on a session that is already being
 		// driven, and the two interleave `tmux send-keys` into the same pane, each reasoning over
@@ -603,7 +615,7 @@ function withPauseGate(driver: LoopDriver): LoopDriver {
 			// switched off, not to make a dropped D1 read look like one — and the run is about to
 			// make several more reads that will fail honestly if D1 is genuinely down.
 			const refusal = row ? pausedStartRefusal(row.status) : null;
-			if (refusal) return { ok: false, status: 409, error: refusal };
+			if (refusal) return { ok: false, status: 409, reason: "paused", error: refusal };
 			return driver.start(input);
 		},
 	};

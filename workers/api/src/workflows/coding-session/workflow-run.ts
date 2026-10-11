@@ -47,13 +47,14 @@ import {
 import { describeRepoScopeViolation, recordRepoScopeViolations, registeredRepoSlugs, unscopedWrites } from "../../lib/repo-write-scope.js";
 import { actsInWindow } from "../../lib/instance-work.js";
 import { annotateOwnerAttribution } from "../../lib/run-attribution.js";
-import { finishLoopRun, isCancelRequested, recordIteration, recordLiveness, type RunWaitReason, type WaitingAsk } from "../../lib/agent-loop-store.js";
+import { finishLoopRun, settledRunStatus, isCancelRequested, recordIteration, recordLiveness, type RunWaitReason, type WaitingAsk } from "../../lib/agent-loop-store.js";
 import { mirrorRuntimeEvent } from "../../routes/instances-runtime.js";
 import { reauthCompletedSince } from "../../lib/engine-reauth-store.js";
 import { tryDequeueAndStart } from "../../lib/objective-queue-start.js";
+import { refreshGoalConstraints } from "../../lib/coding-standing-constraints.js";
 import { traceCodingRun } from "../../lib/coding-run-trace.js";
 import { codingCrashReport, outcomeWord, runOutcomeNote } from "../../lib/coding-run-report.js";
-import { statusFor, type LoopStopReason } from "../../lib/agent-loop.js";
+import { statusFor, type LoopRunStatus, type LoopStopReason } from "../../lib/agent-loop.js";
 import { PILOT_DEFAULT_MAX_STEPS } from "../../lib/loop-limits.js";
 import { CodingRunProbe, recordCodingFailure } from "../../lib/coding-failure.js";
 import { planInterruptionResume, roundThroughInterruptions, type InterruptionResume } from "../../lib/coding-interrupt.js";
@@ -231,8 +232,11 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			authorityNote,
 			actLine,
 		});
+		// What the run row ends up saying (#1015): this run's verdict, or a cancellation that settled
+		// first — in which case neither the chat nor the card may announce this run's own ending.
+		let settledStatus = statusFor(reason);
 		if (event.payload.loopRunId) {
-			await step.do(`delegation-run-done${suffix}`, async () => {
+			settledStatus = await step.do(`delegation-run-done${suffix}`, async () => {
 				// The Pilot drives its own loop and never called `recordIteration`, so
 				// `check_delegation` reported "iteration: 0 of 10" for a run that took a dozen
 				// steps — the supervisor's only progress signal, permanently reading zero.
@@ -245,7 +249,8 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 				// and never moves" failure this file's own comment forbids — while the next line
 				// posted "**Loop complete**" into the chat. Let the durable step retry, and never
 				// announce a completion that was not recorded.
-				await finishLoopRun(env, event.payload.loopRunId as string, reason, note, Date.now());
+				const finished = await finishLoopRun(env, event.payload.loopRunId as string, reason, note, Date.now());
+				if (finished === "superseded") return ((await settledRunStatus(env, event.payload.loopRunId as string)) ?? statusFor(reason)) as LoopRunStatus;
 				// The result, in the thread the loop was started from. Written HERE rather than by
 				// the console's poll: the browser version only existed if the tab happened to be
 				// open, so a run finished while you were elsewhere was never recorded at all.
@@ -253,6 +258,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 				await postToChat(
 					`${ok ? "**Loop complete**" : `**Loop stopped** (${reason})`}${detail ? `\n\n${detail}` : ""}${actLine ? `\n\n${actLine}` : ""}`,
 				);
+				return statusFor(reason);
 			});
 		}
 		if (event.payload.boardTaskId) {
@@ -266,7 +272,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 					// `statusFor`, not a local ok/fail test (#553): the supervisor's card and the
 					// loop-run row describe ONE run, and this is what stops them landing in
 					// different columns for it.
-					status: statusFor(crashReason ?? stopReasonFor(outcome.outcome)),
+					status: settledStatus,
 					now: new Date().toISOString(),
 					note,
 					// The SAME acts `actLine` was built from, as RECORDS (#568): the card's 300-char
@@ -508,9 +514,11 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		// loop spends money, so it is the only place a budget has to sit (#159).
 		decide: (p) =>
 			step.do(probe.at(`s${n++}-decide`), retry, () =>
-				decideWithinBudget(env, { userId, instanceId, budgetId: event.payload.budgetId, depth: event.payload.depth }, () =>
-					decideCodingAction(env, userId, p, { kind: "coding", instanceId, traceId: event.payload.loopRunId ?? sessionId }),
-				),
+				decideWithinBudget(env, { userId, instanceId, budgetId: event.payload.budgetId, depth: event.payload.depth }, async () => {
+					// The owner's standing rules and latest directives, fresh for THIS decision (#1015).
+					await refreshGoalConstraints(env, p.goal, { instanceId, userId, repoId, sessionId, runStartedAt });
+					return decideCodingAction(env, userId, p, { kind: "coding", instanceId, traceId: event.payload.loopRunId ?? sessionId });
+				}),
 			) as Promise<CodingDecision>,
 		// Poll capture until the CLI goes idle, BACKING OFF as the turn proves long (#523). A
 		// flat 2-second poll spent 2 subrequests per second of Engine work against a ceiling
@@ -1044,7 +1052,9 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			// describing one run cannot disagree. Unconditional, while every session-side writer is
 			// `openOnly` — that asymmetry is what makes "the run outranks the session" a rule rather
 			// than a race.
-			await setCodingSessionCardStatus(env, instanceId, userId, sessionId, statusFor(crashReason ?? stopReasonFor(result.outcome))).catch(() => undefined);
+			// …unless the owner's cancellation settled the run first (#1015): that verdict is final.
+			const cancelledFirst = event.payload.loopRunId ? (await settledRunStatus(env, event.payload.loopRunId)) === "cancelled" : false;
+			await setCodingSessionCardStatus(env, instanceId, userId, sessionId, cancelledFirst ? "cancelled" : statusFor(crashReason ?? stopReasonFor(result.outcome))).catch(() => undefined);
 			await appendTimeline(env, { sessionId, instanceId, userId, type: "outcome", content: `${result.outcome}${result.detail ? ` — ${result.detail}` : ""}` });
 			// The end, in the trace. Paired with `coding.run.start`: an unmatched start is a run
 			// that vanished, which is the shape of every incident in #580 and #546 and was not
@@ -1058,7 +1068,8 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		});
 		// Tell the user the run is over so they can check the results + summary.
 		await step.do("notify-end", async () => {
-			const ok = runSucceeded(result.outcome);
+			const cancelledFirst = event.payload.loopRunId ? (await settledRunStatus(env, event.payload.loopRunId)) === "cancelled" : false;
+			const ok = runSucceeded(result.outcome) && !cancelledFirst;
 			const title = ok ? "✅ Coder finished" : "⚠️ Coder stopped";
 			const body = `${goal.repo}: ${result.detail || result.outcome}`;
 			// A session ends once. `update` — nothing is waiting on the user, so this is what a

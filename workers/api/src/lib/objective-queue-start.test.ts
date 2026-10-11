@@ -36,7 +36,7 @@ vi.mock("./loop-drivers.js", () => ({
 	loopDriverFor: () => ({ id: "coding", label: "the engine", start: (...a: unknown[]) => start(...a) }),
 	// The REAL predicate, not a stub: which refusals are waited for is the decision this file is
 	// about, and a mock that answered it would assert the mock (#984).
-	startRefusalIsWaitable: (reason: string | undefined) => reason === "busy" || reason === "recovery_required",
+	startRefusalIsWaitable: (reason: string | undefined) => reason === "busy" || reason === "recovery_required" || reason === "paused",
 }));
 vi.mock("./agent-capabilities.js", () => ({ capabilitiesForInstance: async () => ({ workflow: "CODING_SESSION" }) }));
 vi.mock("./delegation-budget-store.js", () => ({
@@ -208,5 +208,34 @@ describe("it never throws", () => {
 		const out = await tryDequeueAndStart(env, "i1", "r1", "owner-1");
 		expect(out).toMatchObject({ drained: true, entryId: "objq-1", started: false });
 		expect(logError.mock.calls[0][1].context).toMatchObject({ entryId: "objq-1" });
+	});
+});
+
+describe("a paused instance keeps its queue (#1015)", () => {
+	/** An instance row the drain reads before it claims anything. */
+	const envWithStatus = (status: string) =>
+		({ DB: { prepare: () => ({ bind: () => ({ first: async () => ({ status }) }) }) } }) as unknown as Env;
+
+	it("claims NOTHING while paused — no dequeue, no budget, the entry stays pending and untouched", async () => {
+		dequeueNext.mockResolvedValue(entry());
+		expect(await tryDequeueAndStart(envWithStatus("paused"), "i1", "r1", "owner-1")).toEqual({ drained: false });
+		expect(dequeueNext).not.toHaveBeenCalled();
+		expect(openBudget).not.toHaveBeenCalled();
+		expect(finishQueueEntry).not.toHaveBeenCalled();
+	});
+
+	it("drains as usual once active", async () => {
+		dequeueNext.mockResolvedValue(entry());
+		expect(await tryDequeueAndStart(envWithStatus("active"), "i1", "r1", "owner-1")).toMatchObject({ drained: true, started: true });
+	});
+
+	it("a pause that lands between the claim and the start REQUEUES the entry — it is never failed", async () => {
+		// The driver's own pause gate now refuses with `reason: "paused"`, which is waitable.
+		dequeueNext.mockResolvedValue(entry());
+		start.mockResolvedValue({ ok: false, status: 409, reason: "paused", error: "This agent is paused." });
+		const out = await tryDequeueAndStart(envWithStatus("active"), "i1", "r1", "owner-1");
+		expect(out).toMatchObject({ drained: true, started: false, requeued: true });
+		expect(requeueEntry).toHaveBeenCalledWith(expect.anything(), "objq-1", "This agent is paused.");
+		expect(finishQueueEntry).not.toHaveBeenCalled();
 	});
 });

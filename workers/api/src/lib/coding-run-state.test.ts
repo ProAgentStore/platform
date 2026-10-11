@@ -21,8 +21,14 @@ describe("resolveRunState — three worlds that used to be one answer (#593)", (
 		expect(resolveRunState({ sessionActive: true, runnerConnected: true, engineRunState: null })).toBe("unknown");
 	});
 
-	it("reports an ended session as ended, whatever a stale snapshot says", () => {
+	it("reports an ended session as ended unless a LIVE snapshot shows the engine mid-turn (#1015)", () => {
+		// A snapshot with no `alive` is not a live reading, so the row still decides.
 		expect(resolveRunState({ sessionActive: false, runnerConnected: true, engineRunState: "thinking" })).toBe("ended");
+		expect(resolveRunState({ sessionActive: false, runnerConnected: true, engineRunState: "idle", engineAlive: true })).toBe("ended");
+		expect(resolveRunState({ sessionActive: false, runnerConnected: false, engineRunState: "thinking", engineAlive: true })).toBe("ended");
+		// An ended row over an engine that is alive and working is NOT an ended engine.
+		expect(resolveRunState({ sessionActive: false, runnerConnected: true, engineRunState: "thinking", engineAlive: true })).toBe("thinking");
+		expect(resolveRunState({ sessionActive: false, runnerConnected: true, engineRunState: "responding", engineAlive: true })).toBe("responding");
 	});
 
 	it("passes through the engine's own three words, and only those", () => {

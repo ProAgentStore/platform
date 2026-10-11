@@ -25,6 +25,14 @@ vi.mock("../lib/auth.js", async () => {
 	return { ...actual, requireUser: async () => ({ uid: "u1", roles: [] }) };
 });
 
+// The run start the resume drain hands a queued objective to (#1015) — simulated, so no real run,
+// session or runner is involved. The REAL waitable predicate is kept.
+const { driverStart } = vi.hoisted(() => ({ driverStart: vi.fn() }));
+vi.mock("../lib/loop-drivers.js", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../lib/loop-drivers.js")>();
+	return { ...actual, loopDriverFor: () => ({ id: "coding", label: "the engine", start: (...a: unknown[]) => driverStart(...a) }) };
+});
+
 const { registerInstanceLifecycleRoutes } = await import("./instances-lifecycle.js");
 
 let d1: RealSchemaD1;
@@ -184,6 +192,36 @@ describe("resume", () => {
 		instance("i1", "canceled");
 		expect((await post("/i1/resume")).status).toBe(409);
 		expect(statusOf("i1")).toBe("canceled");
+	});
+});
+
+describe("resume starts what the pause held back in the queue (#1015)", () => {
+	const queued = (id: string, repo: string | null, createdAt: number) =>
+		d1.exec(`INSERT INTO instance_objective_queue (id, instance_id, repo_id, user_id, objective, status, created_at) VALUES (${q(id)}, 'i1', ${repo ? q(repo) : "NULL"}, 'u1', 'queued work', 'pending', ${createdAt})`);
+	const entryRow = (id: string) => one<{ status: string; run_id: string | null }>(`SELECT status, run_id FROM instance_objective_queue WHERE id = ${q(id)}`);
+
+	it("drains the oldest entry once the instance is active again, and only on a real resume", async () => {
+		instance("i1", "paused");
+		queued("objq-1", null, 1);
+		queued("objq-2", null, 2);
+		driverStart.mockResolvedValue({ ok: true, runId: "run-9", driver: "coding" });
+		const body = (await (await post("/i1/resume")).json()) as { queueStarted: number };
+		expect(body.queueStarted).toBe(1);
+		expect(entryRow("objq-1")).toEqual({ status: "started", run_id: "run-9" });
+		// FIFO kept: the second waits for the first run's own terminal drain.
+		expect(entryRow("objq-2")).toEqual({ status: "pending", run_id: null });
+		// A resume of an already-active instance drains nothing.
+		driverStart.mockClear();
+		await post("/i1/resume");
+		expect(driverStart).not.toHaveBeenCalled();
+	});
+
+	it("a refused start keeps the entry pending with its reason — never failed", async () => {
+		instance("i1", "paused");
+		queued("objq-1", null, 1);
+		driverStart.mockResolvedValue({ ok: false, status: 409, reason: "busy", error: "acme/platform is held by a direct engine turn on session A." });
+		await post("/i1/resume");
+		expect(entryRow("objq-1")).toEqual({ status: "pending", run_id: null });
 	});
 });
 

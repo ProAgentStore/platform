@@ -22,6 +22,7 @@
 import type { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { listActiveRuns, requestCancel } from "../lib/agent-loop-store.js";
+import { drainPendingQueues } from "../lib/objective-queue-start.js";
 import { PAUSED_INSTANCE_STATUS, pauseVerdict, resumeVerdict, type LifecycleVerdict } from "../lib/instance-pause.js";
 import { ACTIVE_INSTANCE_STATUS } from "../lib/trigger-eligibility.js";
 import type { Env } from "../types.js";
@@ -129,8 +130,11 @@ export function registerInstanceLifecycleRoutes(router: Hono<{ Bindings: Env }>)
 		const verdict = resumeVerdict(row.status);
 		refuse(verdict);
 		if (verdict.changed) await writeActive(c.env, instanceId);
+		// Queued objectives the pause held back start now (#1015): nothing else would drain them.
+		const drained = verdict.changed ? await drainPendingQueues(c.env, instanceId, session.uid) : [];
 
 		return c.json({
+			queueStarted: drained.filter((d) => d.drained && d.started).length,
 			success: true,
 			status: ACTIVE_INSTANCE_STATUS,
 			changed: verdict.changed,
