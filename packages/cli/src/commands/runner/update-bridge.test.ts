@@ -139,7 +139,7 @@ function machine() {
 	return { env, key, file: env.PAGS_AUTO_UPDATE_POLICY_FILE as string, process, disk: () => loadAutoUpdatePolicy(key, env) };
 }
 
-function controllerOn(cell: PolicyCell, o: { facts: () => Promise<UpdateFacts>; attached: () => string[]; refresh?: () => Promise<boolean>; install?: () => Promise<boolean> }) {
+function controllerOn(cell: PolicyCell, o: { facts: () => Promise<UpdateFacts>; attached: () => string[]; refresh?: () => Promise<boolean>; install?: (plan: Extract<UpdatePlan, { action: "update" }>, automatic: boolean) => Promise<boolean> }) {
 	const timers: Array<{ fn: () => void; ms: number }> = [];
 	const clock = { t: 5_000_000 };
 	const controller = new AutomaticUpdateController({
@@ -173,14 +173,14 @@ describe("A2–A4 — a recovery cycle is persisted, survives failures, and need
 		expect(m.disk()?.recovery).toEqual(cycle("0.4.91", ids(14)));
 	});
 
-	it("CONTROL: all 14 back verifies, and the verified cycle is cleared from the cache", async () => {
+	it("CONTROL: all 14 back verifies, and the verified cycle is kept as terminal evidence", async () => {
 		const m = machine();
 		const cell = m.process();
 		cell.record("restarting", { latestVersion: "0.4.91", recovery: cycle("0.4.91", ids(14)) });
 		const { controller } = controllerOn(cell, { facts: async () => healthy(), attached: () => ids(14) });
 		await controller.runNow();
 		expect(m.disk()).toMatchObject({ status: "verified-success" });
-		expect(m.disk()?.recovery).toBeUndefined();
+		expect(m.disk()?.recovery).toMatchObject({ target: "0.4.91", attachments: ids(14), verifiedAt: expect.any(String) });
 	});
 
 	it("across a restart, through failure and offline checks: the retry never forgets its target or its agents", async () => {
@@ -212,7 +212,12 @@ describe("A2–A4 — a recovery cycle is persisted, survives failures, and need
 		online = true;
 		await procB.controller.runNow();
 		expect(m.disk()?.status).toBe("verified-success");
-		expect(m.disk()?.recovery).toBeUndefined();
+		expect(m.disk()?.recovery).toMatchObject({ target: "0.4.91", attachments: ids(14), verifiedAt: expect.any(String) });
+		// The NEXT ordinary check keeps the verified evidence: status and record, unchanged.
+		const evidence = m.disk()?.recovery;
+		await procB.controller.runNow();
+		expect(m.disk()?.status).toBe("verified-success");
+		expect(m.disk()?.recovery).toEqual(evidence);
 	});
 
 	it("A4: an older runner's cache (an attempt status, no recovery record) is unknown — never verified, never ordinary", async () => {
@@ -452,5 +457,148 @@ describe("B4 — a policy refresh that times out is a check", () => {
 		bounds[0]();
 		await run;
 		expect(controller.diagnostics()).toMatchObject({ checkAt: clock.t, decisionAt: null });
+	});
+});
+
+// ── #1020: an OPEN cycle is never redefined; a RESOLVED one is durable evidence ────────────────────────────────────
+
+describe("an open cycle owns the update until it resolves; a verified one stays (#1020)", () => {
+	/** The controller on a real cache-backed cell, driving the REAL install bridge whose final look can hang once. */
+	function cycleRig(o: { current: () => string; latest: () => string; attached: () => string[] }) {
+		const m = machine();
+		const cell = m.process();
+		const bounds: Array<{ fn: () => void }> = [];
+		let hangFinal = true;
+		const install = vi.fn(async (_version: string) => undefined);
+		const bridge = createInstallBridge({
+			cell,
+			refresh: async () => true,
+			facts: () => (hangFinal ? new Promise<UpdateFacts>(() => undefined) : Promise.resolve(healthy(o.current(), o.latest()))),
+			install,
+			admission: new RelayMutationAdmission(),
+			leaseActive: () => true,
+			detachAll: () => undefined,
+			log: () => undefined,
+			settle: async () => undefined,
+			bound: {
+				timer: (fn) => {
+					const t = { fn, unref() {} };
+					bounds.push(t);
+					return t as unknown as ReturnType<typeof setTimeout>;
+				},
+				// A bound whose work answered is cleared — only the hung one stays to expire.
+				clear: (t) => {
+					const i = bounds.indexOf(t as unknown as (typeof bounds)[number]);
+					if (i >= 0) bounds.splice(i, 1);
+				},
+			},
+		});
+		const rig = controllerOn(cell, { facts: async () => healthy(o.current(), o.latest()), attached: o.attached, install: (p, a) => bridge.run(p, a) });
+		/** Run one check whose final restart look hangs until its bound expires. */
+		const checkWithHungRestart = async () => {
+			hangFinal = true;
+			const run = rig.controller.runNow();
+			// npm has run, so the one pending bound is the final restart look's — never the pre-npm refresh's.
+			await vi.waitFor(() => {
+				expect(install).toHaveBeenCalled();
+				expect(bounds.length).toBe(1);
+			});
+			bounds.shift()?.fn();
+			await run;
+		};
+		const checkThatRestarts = async () => {
+			hangFinal = false;
+			await rig.controller.runNow();
+		};
+		return { m, cell, install, bridge, rig, checkWithHungRestart, checkThatRestarts };
+	}
+
+	it("A: after a timed-out restart, a retry holding 1 agent reuses the OPEN cycle — all 14, same start — and npm runs once", async () => {
+		let held = ids(14);
+		const r = cycleRig({ current: () => "0.4.90", latest: () => "0.4.91", attached: () => held });
+		await r.checkWithHungRestart();
+		const opened = r.m.disk()?.recovery;
+		expect(opened).toMatchObject({ target: "0.4.91", attachments: ids(14) });
+		expect(r.cell.policy.status).toBe("failure"); // the bounded restart look: a failed check, not a restart
+		held = ids(1);
+		r.rig.clock.t += 60_000;
+		await r.checkThatRestarts();
+		expect(r.m.disk()?.recovery).toEqual(opened); // never redefined: 14 agents, original `at`
+		expect(r.install).toHaveBeenCalledTimes(1); // the installed release is reused
+		expect(r.m.disk()?.status).toBe("restarting");
+		// The restarted process reads the cache, holding only 1 identity: 13 originals are still outstanding.
+		const next = r.m.process();
+		const after = controllerOn(next, { facts: async () => healthy("0.4.91", "0.4.91"), attached: () => ids(1) });
+		await after.controller.runNow();
+		expect(next.policy).toMatchObject({ status: "failure", reason: expect.stringContaining("only 1 of its 14 original agents") });
+		expect(r.m.disk()?.recovery?.verifiedAt).toBeUndefined();
+	});
+
+	it("B: 0.4.110 installed while on 0.4.108, restart timed out, the registry then says 0.4.109 — the retry is 0.4.110, npm runs once", async () => {
+		let latest = "0.4.110";
+		const r = cycleRig({ current: () => "0.4.108", latest: () => latest, attached: () => ids(14) });
+		await r.checkWithHungRestart();
+		latest = "0.4.109";
+		await r.checkThatRestarts();
+		expect(r.install.mock.calls).toEqual([["0.4.110"]]);
+		expect(r.m.disk()?.recovery).toMatchObject({ target: "0.4.110", attachments: ids(14) });
+		expect(JSON.stringify(r.m.disk()?.recovery)).not.toContain("0.4.109");
+		expect(r.m.disk()).toMatchObject({ status: "restarting", latestVersion: "0.4.110" });
+	});
+
+	it("B (unchanged control): the registry rolling back to the RUNNING version is the up-to-date path — retained, not verified", async () => {
+		const m = machine();
+		const cell = m.process();
+		cell.record("restarting", { latestVersion: "0.4.91", recovery: cycle("0.4.91", ids(14)) });
+		const { controller } = controllerOn(cell, { facts: async () => healthy("0.4.90", "0.4.90"), attached: () => ids(14) });
+		await controller.runNow();
+		expect(cell.policy).toMatchObject({ status: "failure", reason: expect.stringContaining("came back on 0.4.90, not the attempted 0.4.91") });
+		expect(m.disk()?.recovery).toEqual(cycle("0.4.91", ids(14)));
+	});
+
+	it("B2: an open cycle at its version with 13 of 14 back, and a NEWER release published — not verified, no install, cycle unchanged", async () => {
+		const m = machine();
+		const cell = m.process();
+		cell.record("restarting", { latestVersion: "0.4.91", recovery: cycle("0.4.91", ids(14)) });
+		const install = vi.fn(async () => true);
+		const { controller } = controllerOn(cell, { facts: async () => healthy("0.4.91", "0.4.92"), attached: () => ids(13), install });
+		await controller.runNow();
+		expect(install).not.toHaveBeenCalled();
+		expect(cell.policy).toMatchObject({ status: "failure", reason: expect.stringContaining("only 13 of its 14 original agents") });
+		expect(m.disk()?.recovery).toEqual(cycle("0.4.91", ids(14)));
+	});
+
+	const resolved = { ...cycle("0.4.91", ids(14)), verifiedAt: "2026-10-12T01:00:00.000Z" };
+
+	it("C1: a verified cycle survives the next ordinary check — still verified-success, the record intact", async () => {
+		const m = machine();
+		const cell = m.process();
+		cell.record("verified-success", { latestVersion: "0.4.91", recovery: resolved });
+		// Even with fewer agents now (one was unsubscribed since), a resolved cycle is not re-judged.
+		const { controller } = controllerOn(cell, { facts: async () => healthy("0.4.91", "0.4.91"), attached: () => ids(12) });
+		await controller.runNow();
+		expect(m.disk()).toMatchObject({ status: "verified-success", recovery: resolved });
+	});
+
+	it("C2: it survives a reload — a fresh cell reading the cache, then an ordinary check, still verified-success", async () => {
+		const m = machine();
+		m.process().record("verified-success", { latestVersion: "0.4.91", recovery: resolved });
+		const reloaded = m.process();
+		expect(reloaded.policy.recovery).toEqual(resolved);
+		const { controller } = controllerOn(reloaded, { facts: async () => healthy("0.4.91", "0.4.91"), attached: () => ids(14) });
+		await controller.runNow();
+		expect(m.disk()).toMatchObject({ status: "verified-success", recovery: resolved });
+	});
+
+	it("C3: a newer release replaces ONLY a resolved cycle — a new open cycle with the new target and today's agents", async () => {
+		const m = machine();
+		const cell = m.process();
+		cell.record("verified-success", { latestVersion: "0.4.91", recovery: resolved });
+		const { controller } = controllerOn(cell, { facts: async () => healthy("0.4.91", "0.4.92"), attached: () => ids(3) });
+		await controller.runNow();
+		const next = m.disk()?.recovery;
+		expect(next).toMatchObject({ target: "0.4.92", attachments: ids(3) });
+		expect(next?.verifiedAt).toBeUndefined();
+		expect(m.disk()?.status).toBe("restarting");
 	});
 });

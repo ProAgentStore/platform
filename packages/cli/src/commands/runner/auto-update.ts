@@ -43,6 +43,8 @@ export interface RecoveryCycle {
 	target: string;
 	attachments: string[];
 	at: string;
+	/** Set when the cycle was VERIFIED: a resolved cycle is kept as terminal evidence, and only it may be replaced. */
+	verifiedAt?: string;
 }
 
 export interface AutoUpdatePolicy {
@@ -59,7 +61,8 @@ export function parseRecovery(raw: unknown): RecoveryCycle | undefined {
 	const r = raw as { target?: unknown; attachments?: unknown; at?: unknown } | null | undefined;
 	if (!r || typeof r.target !== "string" || r.target.length > 80 || typeof r.at !== "string" || !Array.isArray(r.attachments)) return undefined;
 	if (r.attachments.length > 200 || !r.attachments.every((a) => typeof a === "string" && a.length > 0 && a.length <= 128)) return undefined;
-	return { target: r.target, attachments: [...r.attachments] as string[], at: r.at };
+	const verifiedAt = typeof (r as { verifiedAt?: unknown }).verifiedAt === "string" && (r as { verifiedAt: string }).verifiedAt ? (r as { verifiedAt: string }).verifiedAt : undefined;
+	return { target: r.target, attachments: [...r.attachments] as string[], at: r.at, ...(verifiedAt ? { verifiedAt } : {}) };
 }
 
 interface PersistedPolicies {

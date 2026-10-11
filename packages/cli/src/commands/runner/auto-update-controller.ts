@@ -85,9 +85,11 @@ export async function boundedWork<T>(work: (signal: AbortSignal) => Promise<T>, 
  * answered, neither malformed), and EVERY original agent attached again. An attempt status with no recovery record
  * comes from an older runner's cache: `unknown`, never verified and never an ordinary no-attempt check.
  */
-export function updateVerdict(attempt: AutoUpdatePolicy, facts: UpdateFacts, attachedNow: readonly string[] = []): { kind: "verified" | "current" } | { kind: "unverified" | "unknown"; reason: string } {
+export function updateVerdict(attempt: AutoUpdatePolicy, facts: UpdateFacts, attachedNow: readonly string[] = []): { kind: "verified" | "current" | "completed" } | { kind: "unverified" | "unknown"; reason: string } {
 	if (!isVersion(facts.current) || !isVersion(facts.latest)) return { kind: "unverified", reason: `the running (${facts.current}) or published (${facts.latest}) version could not be read` };
 	const cycle = attempt.recovery;
+	// A resolved cycle is terminal evidence (#1020): it was verified once and is never re-judged by a later check.
+	if (cycle?.verifiedAt) return { kind: "completed" };
 	if (!cycle) {
 		if (attempt.status === "running" || attempt.status === "restarting") return { kind: "unknown", reason: "an update attempt was recorded by an older runner without the record needed to verify it" };
 		return { kind: "current" };
@@ -257,10 +259,15 @@ export class AutomaticUpdateController {
 		const plan = this.deps.plan(facts);
 		this.decisionAt = this.now();
 		this.blockerClass = plan.action === "wait" ? blockerClassFor(plan.waitingFor) : null;
-		if (plan.action === "up-to-date") {
+		// An OPEN cycle (installed, not yet verified) owns this machine's update until it resolves (#1020). Once its version
+		// is reached it is settled first — whatever the registry now says — and it is never redefined below.
+		const policy = this.deps.policy().value;
+		const open = policy.recovery && !policy.recovery.verifiedAt ? policy.recovery : undefined;
+		const reached = !!open && isVersion(open.target) && isVersion(facts.current) && !olderThan(facts.current, open.target);
+		if (plan.action === "up-to-date" || reached) {
 			// Current is not the same claim as a verified update cycle (#1020): only an attempted install that came
 			// back on its target with a healthy runtime is `verified-success`.
-			const verdict = updateVerdict(this.deps.policy().value, facts, this.deps.attachments?.() ?? []);
+			const verdict = updateVerdict(policy, facts, this.deps.attachments?.() ?? []);
 			if (verdict.kind === "unverified") {
 				// The cycle stays recorded: the retry still knows its target and the agents it must bring back.
 				this.failures++;
@@ -270,8 +277,10 @@ export class AutomaticUpdateController {
 				this.deps.status("enabled", { latestVersion: facts.latest ?? undefined, reason: `Not verified: ${verdict.reason}.` });
 			} else {
 				this.failures = 0;
-				// A verified recovery ends its cycle; an ordinary check had none.
-				this.deps.status(verdict.kind === "verified" ? "verified-success" : "enabled", { latestVersion: facts.latest ?? undefined, reason: undefined, recovery: undefined });
+				// A verified cycle is RESOLVED, not erased: it stays as terminal evidence across checks and reloads. A completed
+				// one keeps its status; an ordinary check leaves the record exactly as it is.
+				const resolved = verdict.kind === "verified" && policy.recovery ? { recovery: { ...policy.recovery, verifiedAt: new Date(this.now()).toISOString() } } : {};
+				this.deps.status(verdict.kind === "current" ? "enabled" : "verified-success", { latestVersion: facts.latest ?? undefined, reason: undefined, ...resolved });
 			}
 			this.schedule();
 			return;
@@ -286,11 +295,16 @@ export class AutomaticUpdateController {
 			this.defer();
 			return;
 		}
-		// The recovery cycle begins with the install, recorded before npm runs: target + the agents held now (#1020).
-		this.deps.status("running", { latestVersion: plan.latest, reason: undefined, recovery: { target: plan.latest, attachments: [...(this.deps.attachments?.() ?? [])], at: new Date(this.now()).toISOString() } });
-		const restarted = await this.install(plan, true);
+		// A NEW cycle begins with the install, recorded before npm runs: target + the agents held now (#1020). An OPEN one is
+		// retried on its own target with its own agents and start — a shrunken membership or a different registry answer
+		// never redefines it, and the bridge then reuses what npm already installed instead of installing again.
+		const target = open && isVersion(open.target) ? open.target : plan.latest;
+		const attempt = { ...plan, latest: target };
+		const recovery = open ?? { target, attachments: [...(this.deps.attachments?.() ?? [])], at: new Date(this.now()).toISOString() };
+		this.deps.status("running", { latestVersion: target, reason: undefined, recovery });
+		const restarted = await this.install(attempt, true);
 		if (restarted) {
-			this.deps.status("restarting", { latestVersion: plan.latest, reason: undefined });
+			this.deps.status("restarting", { latestVersion: target, reason: undefined });
 			return;
 		}
 		// The final, race-safe admission refused (work began during npm, the policy could not be
@@ -299,7 +313,7 @@ export class AutomaticUpdateController {
 		// timer already spent, so returning without a new one left an enabled runner silent forever:
 		// `waiting_for_idle` while idle, with nothing left to re-decide.
 		this.blockerClass = "idle_wait";
-		this.defer(plan.latest);
+		this.defer(target);
 	}
 
 	private defer(latest?: string) {
