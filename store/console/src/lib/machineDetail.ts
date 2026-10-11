@@ -31,6 +31,28 @@ export interface MachineDetail {
 	autoUpdatePolicy?: boolean;
 	auto_update_status?: AutoUpdateStatus | string | null;
 	autoUpdateStatus?: AutoUpdateStatus | string | null;
+	auto_update_diagnostics?: AutoUpdateDiagnostics | null;
+}
+
+/** One paired work observation the runner's update guard made (#1020). `malformed`: it answered, unreadably. */
+export interface UpdateObservation {
+	success: boolean;
+	sampled_at: string;
+	source: string;
+	malformed?: boolean;
+}
+
+/**
+ * What the automatic updater last did, and when — read-only (#1020). Receipt time (`last_heartbeat_at`) is
+ * deliberately separate from the runner's own check and decision times: a heartbeat is not an attempt.
+ */
+export interface AutoUpdateDiagnostics {
+	last_heartbeat_at?: string | null;
+	last_check_at?: string | null;
+	last_decision_at?: string | null;
+	next_retry_due_at?: string | null;
+	blocker_class?: string | null;
+	observations?: UpdateObservation[] | null;
 }
 
 /** The first CLI release containing the runner-side automatic-update controller. */
@@ -94,4 +116,43 @@ export function machineLastAttempt(machine: MachineDetail): string | null {
 
 export function machineStatusDetail(machine: MachineDetail): string {
 	return machine.lastError ?? machine.last_error ?? machineStatusLabel(machineAutoUpdateStatus(machine));
+}
+
+/** Absent on an older API: the diagnostics card is then not shown at all, rather than shown empty. */
+export function machineUpdateDiagnostics(machine: MachineDetail): AutoUpdateDiagnostics | null {
+	return machine.auto_update_diagnostics ?? null;
+}
+
+const BLOCKERS: Record<string, string> = {
+	active_sessions: "A coding session on this machine is not proven idle, so it waits rather than interrupt it.",
+	observation_failure: "It could not read whether this machine is busy, so it waits (it never assumes idle).",
+	idle_wait: "It found the machine idle, but the final safety check before installing refused; it will check again.",
+	unknown: "It is waiting, but did not report why.",
+};
+
+/** The blocker in plain words. Null when nothing is blocking; an unrecognised class is shown as reported. */
+export function machineBlockerLabel(blocker: string | null | undefined): string | null {
+	if (!blocker) return null;
+	return BLOCKERS[blocker] ?? blocker.replace(/_/g, " ");
+}
+
+/** How long heartbeats may run past a due retry before it reads as a timer that is not running. */
+export const RETRY_OVERDUE_GRACE_MS = 60_000;
+
+/**
+ * The retry was due, and the runner has kept reporting well after it without a new decision: its timer is not
+ * running. A runner that has gone quiet is not "overdue" — no heartbeat after the due time says nothing either way.
+ */
+export function machineRetryOverdue(d: AutoUpdateDiagnostics | null): boolean {
+	const due = d?.next_retry_due_at ? Date.parse(d.next_retry_due_at) : Number.NaN;
+	const heard = d?.last_heartbeat_at ? Date.parse(d.last_heartbeat_at) : Number.NaN;
+	const decided = d?.last_decision_at ? Date.parse(d.last_decision_at) : Number.NaN;
+	if (!Number.isFinite(due) || !Number.isFinite(heard)) return false;
+	if (Number.isFinite(decided) && decided >= due) return false;
+	return heard - due > RETRY_OVERDUE_GRACE_MS;
+}
+
+/** One observation's outcome: an unreadable answer is not the same as no answer. */
+export function machineObservationOutcome(o: UpdateObservation): "ok" | "failed" | "unreadable" {
+	return o.success ? "ok" : o.malformed ? "unreadable" : "failed";
 }

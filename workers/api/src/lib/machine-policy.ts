@@ -13,6 +13,8 @@ export interface UpdateObservation {
 	success: boolean;
 	sampledAt: string;
 	source: "sessions" | "health" | "unknown";
+	/** It ANSWERED but in a shape the guard cannot read (#1020): unreadable, which is not the same as failing to answer. */
+	malformed?: true;
 }
 const MAX_OBSERVATIONS = 5;
 
@@ -80,7 +82,7 @@ function epochMs(value: unknown, now: number): number | null {
 }
 
 /** Only the three safe keys of each observation survive — nothing else from the runner is stored. */
-function parseObservations<T extends string | number>(raw: unknown, stamp: (ms: number) => T): Array<{ success: boolean; sampledAt: T; source: UpdateObservation["source"] }> {
+function parseObservations<T extends string | number>(raw: unknown, stamp: (ms: number) => T): Array<{ success: boolean; sampledAt: T; source: UpdateObservation["source"]; malformed?: true }> {
 	if (!Array.isArray(raw)) return [];
 	return raw
 		.flatMap((o) => {
@@ -89,7 +91,8 @@ function parseObservations<T extends string | number>(raw: unknown, stamp: (ms: 
 			const at = epochMs(v.sampledAt ?? v.sampled_at, Number.MAX_SAFE_INTEGER);
 			if (typeof v.success !== "boolean" || at === null) return [];
 			const source: UpdateObservation["source"] = v.source === "sessions" || v.source === "health" ? v.source : "unknown";
-			return [{ success: v.success, sampledAt: stamp(at), source }];
+			// Only a FAILED observation can be unreadable; the flag never rides on a success.
+			return [{ success: v.success, sampledAt: stamp(at), source, ...(v.success === false && v.malformed === true ? { malformed: true as const } : {}) }];
 		})
 		.slice(-MAX_OBSERVATIONS);
 }
@@ -111,7 +114,7 @@ export function machinePolicyWire(policy: MachinePolicy) {
 			last_decision_at: policy.lastDecisionAt,
 			next_retry_due_at: policy.nextRetryDueAt,
 			blocker_class: policy.blockerClass,
-			observations: policy.observations.map((o) => ({ success: o.success, sampled_at: o.sampledAt, source: o.source })),
+			observations: policy.observations.map((o) => ({ success: o.success, sampled_at: o.sampledAt, source: o.source, ...(o.malformed ? { malformed: true } : {}) })),
 		},
 	};
 }

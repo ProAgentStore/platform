@@ -103,6 +103,22 @@ describe("machine policy — receipt time is not decision time (#1020)", () => {
 		expect((await getMachinePolicy(env(), "u1", M)).observations.map((o) => o.sampledAt)).toEqual([3, 4, 5, 6, 7].map((i) => iso(3_900_000 + i)));
 	});
 
+	it("keeps an unreadable observation distinct from a failed one, through storage and the wire — never on a success", async () => {
+		await setMachinePolicy(env(), "u1", M, true);
+		at(4_500_000);
+		const observations = [
+			{ success: false, sampledAt: 4_490_000, source: "sessions", malformed: true },
+			{ success: false, sampledAt: 4_490_000, source: "health" },
+			{ success: true, sampledAt: 4_495_000, source: "health", malformed: true },
+		];
+		await reportMachinePolicyStatus(env(), "u1", M, { status: "waiting_for_idle", blockerClass: "observation_failure", observations });
+		expect(machinePolicyWire(await getMachinePolicy(env(), "u1", M)).auto_update_diagnostics.observations).toEqual([
+			{ success: false, sampled_at: iso(4_490_000), source: "sessions", malformed: true },
+			{ success: false, sampled_at: iso(4_490_000), source: "health" },
+			{ success: true, sampled_at: iso(4_495_000), source: "health" },
+		]);
+	});
+
 	it("keeps every existing wire field and adds the diagnostics beside them", async () => {
 		await setMachinePolicy(env(), "u1", M, true);
 		at(5_000_000);

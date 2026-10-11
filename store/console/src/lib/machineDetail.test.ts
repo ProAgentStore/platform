@@ -3,12 +3,16 @@ import {
 	machineAutoUpdateEnabled,
 	machineAutoUpdateIsBusy,
 	machineAutoUpdateStatus,
+	machineBlockerLabel,
 	machineCanRunAutomaticUpdates,
 	machineFromResponse,
 	machineLastAttempt,
 	machineLatestVersion,
+	machineObservationOutcome,
+	machineRetryOverdue,
 	machineStatusDetail,
 	machineStatusLabel,
+	machineUpdateDiagnostics,
 } from "./machineDetail";
 
 describe("machine details from the terminals API", () => {
@@ -52,5 +56,40 @@ describe("machine details from the terminals API", () => {
 		expect(machineCanRunAutomaticUpdates({ machineId: "unknown" })).toBe(false);
 		expect(machineCanRunAutomaticUpdates({ machineId: "supported", runnerVersion: "0.4.92" })).toBe(true);
 		expect(machineCanRunAutomaticUpdates({ machineId: "newer", runnerVersion: "v0.5.0" })).toBe(true);
+	});
+
+	it("shows no diagnostics for an older API rather than an empty card", () => {
+		expect(machineUpdateDiagnostics({ machineId: "old" })).toBeNull();
+		expect(machineUpdateDiagnostics({ machineId: "new", auto_update_diagnostics: { blocker_class: "idle_wait" } })).toEqual({ blocker_class: "idle_wait" });
+	});
+
+	it("names every blocker class in plain words, and says nothing when nothing blocks", () => {
+		expect(machineBlockerLabel("active_sessions")).toMatch(/coding session .* not proven idle/);
+		expect(machineBlockerLabel("observation_failure")).toMatch(/could not read whether this machine is busy.*never assumes idle/);
+		expect(machineBlockerLabel("idle_wait")).toMatch(/final safety check before installing refused/);
+		expect(machineBlockerLabel("unknown")).toMatch(/did not report why/);
+		expect(machineBlockerLabel("future_class")).toBe("future class");
+		expect(machineBlockerLabel(null)).toBeNull();
+	});
+
+	it("flags a retry overdue only when heartbeats keep arriving past it with no new decision", () => {
+		const due = "2026-10-11T04:40:00.000Z";
+		const late = "2026-10-11T04:45:00.000Z";
+		// Heartbeats well past the due time, no decision since: the timer is not running.
+		expect(machineRetryOverdue({ next_retry_due_at: due, last_heartbeat_at: late, last_decision_at: "2026-10-11T04:39:00.000Z" })).toBe(true);
+		// A decision at or after the due time: the timer ran.
+		expect(machineRetryOverdue({ next_retry_due_at: due, last_heartbeat_at: late, last_decision_at: "2026-10-11T04:40:05.000Z" })).toBe(false);
+		// Within the grace window: not yet.
+		expect(machineRetryOverdue({ next_retry_due_at: due, last_heartbeat_at: "2026-10-11T04:40:30.000Z" })).toBe(false);
+		// A runner that went quiet, nothing scheduled, or no diagnostics: no claim either way.
+		expect(machineRetryOverdue({ next_retry_due_at: due, last_heartbeat_at: "2026-10-11T04:30:00.000Z" })).toBe(false);
+		expect(machineRetryOverdue({ next_retry_due_at: null, last_heartbeat_at: late })).toBe(false);
+		expect(machineRetryOverdue(null)).toBe(false);
+	});
+
+	it("keeps an unreadable observation distinct from a failed one", () => {
+		expect(machineObservationOutcome({ success: true, sampled_at: "t", source: "health" })).toBe("ok");
+		expect(machineObservationOutcome({ success: false, sampled_at: "t", source: "sessions" })).toBe("failed");
+		expect(machineObservationOutcome({ success: false, sampled_at: "t", source: "sessions", malformed: true })).toBe("unreadable");
 	});
 });

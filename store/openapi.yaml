@@ -341,6 +341,36 @@ components:
               status: { type: string, enum: [denied, cancelled] }
 
   schemas:
+    AutoUpdateDiagnostics:
+      type: object
+      nullable: true
+      description: |
+        What the runner's automatic updater last did, and when (#1020). Read-only. Receipt time is
+        separate from the runner's own check and decision times: a heartbeat re-sending a cached status
+        is not an attempt. All fields are null for a runner that predates them. No tokens, process
+        arguments, prompts, paths or terminal contents.
+      properties:
+        last_heartbeat_at: { type: string, nullable: true, format: date-time, description: "When the runner's last status report ARRIVED (receipt only)." }
+        last_check_at: { type: string, nullable: true, format: date-time, description: "The runner's own time for its last work/registry check, including one that failed." }
+        last_decision_at: { type: string, nullable: true, format: date-time, description: "The runner's own time for its last controller decision." }
+        next_retry_due_at: { type: string, nullable: true, format: date-time, description: "When the controller's next timer is due. Heartbeats arriving well past it with no newer decision mean the timer is not running." }
+        blocker_class:
+          type: string
+          nullable: true
+          enum: [idle_wait, active_sessions, observation_failure, unknown]
+          description: Why it is waiting. `active_sessions` — a coding session not proven idle; `observation_failure` — it could not read whether the machine is busy (fail-closed); `idle_wait` — idle, but the final pre-install admission refused; `unknown` — not reported.
+        observations:
+          type: array
+          maxItems: 5
+          description: The last paired work observations, oldest first.
+          items:
+            type: object
+            required: [success, sampled_at, source]
+            properties:
+              success: { type: boolean }
+              sampled_at: { type: string, format: date-time }
+              source: { type: string, enum: [sessions, health, unknown] }
+              malformed: { type: boolean, description: "Present (true) only on a failed observation that ANSWERED in a shape the guard cannot read — unreadable, not unanswered." }
     PermissionBlocker:
       type: object
       description: The structured remedy a blocked tool returns (#1009) — never prose to be re-navigated.
@@ -11930,8 +11960,9 @@ paths:
                       latest_version: { type: string, nullable: true }
                       auto_update_policy: { type: boolean }
                       auto_update_status: { type: string, enum: [disabled, enabled, checking, waiting_for_idle, installing, restarting, verified_success, offline, unsupported, failed] }
-                      last_attempt_at: { type: string, nullable: true, format: date-time }
+                      last_attempt_at: { type: string, nullable: true, format: date-time, description: "The runner's last controller DECISION — a heartbeat alone never advances it." }
                       last_error: { type: string, nullable: true }
+                      auto_update_diagnostics: { $ref: "#/components/schemas/AutoUpdateDiagnostics" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { description: No identified machine belongs to the caller }
 
@@ -11956,7 +11987,21 @@ paths:
               properties:
                 auto_update: { type: boolean }
       responses:
-        "200": { description: Saved policy and fresh machine detail }
+        "200":
+          description: Saved policy and fresh machine detail
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  machine:
+                    type: object
+                    properties:
+                      machineId: { type: string }
+                      auto_update_policy: { type: boolean }
+                      auto_update_status: { type: string, nullable: true }
+                      last_attempt_at: { type: string, nullable: true, format: date-time }
+                      auto_update_diagnostics: { $ref: "#/components/schemas/AutoUpdateDiagnostics" }
         "400": { description: auto_update was not a boolean }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { description: No identified machine belongs to the caller }

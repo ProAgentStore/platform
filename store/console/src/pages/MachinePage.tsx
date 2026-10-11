@@ -11,10 +11,14 @@ import {
 	machineCanRunAutomaticUpdates,
 	machineAutoUpdateIsBusy,
 	machineAutoUpdateStatus,
+	machineBlockerLabel,
 	machineFromResponse,
 	machineLastAttempt,
 	machineLatestVersion,
+	machineObservationOutcome,
+	machineRetryOverdue,
 	machineStatusDetail,
+	machineUpdateDiagnostics,
 	type MachineDetail,
 	type MachineDetailResponse,
 } from "../lib/machineDetail";
@@ -82,6 +86,9 @@ export default function MachinePage() {
 	const enabled = machine ? machineAutoUpdateEnabled(machine) : false;
 	const canRunAutomaticUpdates = machine ? machineCanRunAutomaticUpdates(machine) : false;
 	const lastAttempt = machine ? machineLastAttempt(machine) : null;
+	const diagnostics = machine ? machineUpdateDiagnostics(machine) : null;
+	const blocker = machineBlockerLabel(diagnostics?.blocker_class);
+	const overdue = machineRetryOverdue(diagnostics);
 
 	return (
 		<Page width={960}>
@@ -146,6 +153,41 @@ export default function MachinePage() {
 							<dt className="text-muted">Last attempt</dt><dd>{displayTime(lastAttempt)}</dd>
 						</dl>
 					</Card>
+
+					{diagnostics && (
+						<Card className="p-4" data-testid="machine-auto-update-diagnostics">
+							<h2 className="font-semibold text-sm mb-1">What the updater last did</h2>
+							<p className="text-xs text-muted mb-3">Read-only. Hearing from the runner is not the same as it checking or deciding.</p>
+							<dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+								{blocker && <><dt className="text-muted">Waiting because</dt><dd data-testid="machine-update-blocker">{blocker}</dd></>}
+								<dt className="text-muted">Last heard from</dt><dd>{displayTime(diagnostics.last_heartbeat_at)}</dd>
+								<dt className="text-muted">Last check</dt><dd>{displayTime(diagnostics.last_check_at)}</dd>
+								<dt className="text-muted">Last decision</dt><dd>{displayTime(diagnostics.last_decision_at)}</dd>
+								<dt className="text-muted">Next retry due</dt>
+								<dd data-testid="machine-update-next-retry">
+									{diagnostics.next_retry_due_at ? displayTime(diagnostics.next_retry_due_at) : "None scheduled"}
+									{overdue && <span className="text-warning ml-2" data-testid="machine-update-retry-overdue">Overdue — the runner is still reporting, but its retry has not run.</span>}
+								</dd>
+							</dl>
+							{diagnostics.observations?.length ? (
+								<>
+									<h3 className="text-xs text-muted mt-3 mb-1">Recent busy checks</h3>
+									<ul className="text-xs flex flex-col gap-1" data-testid="machine-update-observations">
+										{diagnostics.observations.map((o, i) => {
+											const outcome = machineObservationOutcome(o);
+											return (
+												// biome-ignore lint/suspicious/noArrayIndexKey: a fixed, ordered list of at most five samples
+												<li key={i}>
+													<span className={outcome === "ok" ? "text-success" : "text-warning"}>{outcome === "ok" ? "Read" : outcome === "unreadable" ? "Unreadable" : "Failed"}</span>{" "}
+													{o.source} · {displayTime(o.sampled_at)}
+												</li>
+											);
+										})}
+									</ul>
+								</>
+							) : null}
+						</Card>
+					)}
 				</div>
 			)}
 		</Page>
