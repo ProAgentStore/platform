@@ -110,6 +110,16 @@ describe("POST /coding/repos/:repoId/retarget (#1012)", () => {
 		expect(retry).toMatchObject({ status: 200, body: { ok: true, idempotent: true } });
 	});
 
+	it("a dry run issues no database write through the API, even with a dangling prepared audit", async () => {
+		d1.exec(`INSERT INTO coding_repo_retarget_audits (id, repo_id, instance_id, user_id, expected_binding_version, previous_owner, previous_name, destination_owner, destination_name, github_repository_id, resulting_binding_version, state, created_at)
+			VALUES ('dangling', 'repo-1', 'i1', 'u1', 1, 'acme', 'platform', 'acme', 'platform-archive', 100, 2, 'prepared', 1)`);
+		d1.issued.length = 0;
+		expect((await retarget({ ...BODY, dryRun: true })).status).toBe(200);
+		expect(d1.issued.filter((st) => /^\s*(INSERT|UPDATE|DELETE|REPLACE)\b/i.test(st.sql))).toEqual([]);
+		expect(d1.sqlite.prepare("SELECT state FROM coding_repo_retarget_audits WHERE id = 'dangling'").get()).toEqual({ state: "prepared" });
+		expect(row()).toEqual(unchanged);
+	});
+
 	it("rejects a destination name GitHub assigns to a different id", async () => {
 		const res = await retarget({ ...BODY, destination: { owner: "acme", name: "platform", githubId: 100 } });
 		expect(res).toMatchObject({ status: 409, body: { canonical: "acme/platform-archive" } });

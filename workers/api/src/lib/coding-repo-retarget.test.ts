@@ -114,6 +114,44 @@ describe("retargetRepositoryBinding (#1012)", () => {
 		expect(audits()).toEqual([]);
 	});
 
+	describe("a dry run is read-only on every branch (#1012 review)", () => {
+		const PREPARED = `INSERT INTO coding_repo_retarget_audits (id, repo_id, instance_id, user_id, expected_binding_version, previous_owner, previous_name, destination_owner, destination_name, github_repository_id, resulting_binding_version, state, created_at)
+			VALUES ('dangling', 'repo-1', 'i1', 'u1', 1, 'acme', 'platform', 'acme', 'platform-archive', 100, 2, 'prepared', 1)`;
+		const writes = () => d1.issued.filter((st) => /^\s*(INSERT|UPDATE|DELETE|REPLACE)\b/i.test(st.sql));
+		const snapshot = () => JSON.stringify([binding(), d1.sqlite.prepare("SELECT * FROM coding_repo_retarget_audits ORDER BY id").all()]);
+
+		it.each<[string, Partial<RetargetRequest>]>([
+			["ready preview", {}],
+			["blocked preview", { routeBlockers: ["local_origin_mismatch"] }],
+			["stale", { expectedCurrent: { owner: "acme", name: "platform", githubId: 100, version: 9 } }],
+			["different repository", { destination: { owner: "acme", name: "platform", githubId: 200 } }],
+		])("%s: zero database writes, a dangling prepared audit left as it is", async (_label, overrides) => {
+			d1.exec(PREPARED);
+			const before = snapshot();
+			d1.issued.length = 0;
+			await retargetRepositoryBinding(env, request({ ...overrides, dryRun: true }));
+			expect(writes()).toEqual([]);
+			expect(snapshot()).toBe(before);
+		});
+
+		it("idempotent (already applied): zero database writes", async () => {
+			expect((await retargetRepositoryBinding(env, request())).kind).toBe("applied");
+			d1.exec(PREPARED.replace("'dangling'", "'dangling-2'"));
+			const before = snapshot();
+			d1.issued.length = 0;
+			expect((await retargetRepositoryBinding(env, request({ dryRun: true }))).kind).toBe("idempotent");
+			expect(writes()).toEqual([]);
+			expect(snapshot()).toBe(before);
+		});
+
+		it("the real apply settles the dangling audit, then applies", async () => {
+			d1.exec(PREPARED);
+			expect((await retargetRepositoryBinding(env, request())).kind).toBe("applied");
+			expect(one<{ state: string }>("SELECT state FROM coding_repo_retarget_audits WHERE id = 'dangling'").state).toBe("conflicted");
+			expect(audits().map((a) => a.state).sort()).toEqual(["applied", "conflicted"]);
+		});
+	});
+
 	it("refuses a route blocker on apply and writes nothing", async () => {
 		expect(await retargetRepositoryBinding(env, request({ routeBlockers: ["local_origin_mismatch"] }))).toEqual({ kind: "busy", blockers: ["local_origin_mismatch"] });
 		expect(binding().github_repo).toBe("acme/platform");

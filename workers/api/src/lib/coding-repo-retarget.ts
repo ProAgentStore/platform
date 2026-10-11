@@ -206,7 +206,6 @@ export async function retargetRepositoryBinding(env: Env, input: RetargetRequest
 	const row = await readRow(env, input);
 	if (!row) return { kind: "not-found" };
 	if (!row.github_repo) return { kind: "not-github" };
-	await settleDanglingAudits(env, row.id);
 
 	const storedId = row.github_repository_id ?? null;
 	const version = row.binding_version ?? 1;
@@ -248,6 +247,8 @@ export async function retargetRepositoryBinding(env: Env, input: RetargetRequest
 	}
 	if (blockers.length) return { kind: "busy", blockers };
 
+	// Apply path only: a dry run must not write anything, including this bookkeeping.
+	await settleDanglingAudits(env, row.id);
 	const auditId = `repo-retarget-${crypto.randomUUID()}`;
 	// Durable intent first. A crash between this and the batch leaves a `prepared` row the next
 	// attempt settles; the batch itself either changes the binding AND marks the audit applied, or
