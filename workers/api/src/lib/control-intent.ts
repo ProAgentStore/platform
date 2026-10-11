@@ -229,40 +229,21 @@ export function sessionTarget(ctx: Pick<RegistryToolCtx, "turn">, repo: unknown)
  */
 export function resolveSessionTarget(req: SessionRequest, repoNames: readonly string[]): { refused: string } | { repo: string | undefined; excluded: string[] } {
 	if (req.explicit) return { repo: req.repo, excluded: [] };
-	// Targets are read WITH inline quotes: in "close the `platform` session" the backticks mark the
-	// target, they do not make it evidence. (Consent is still read from `ownWords`, by controlRefusal.)
-	const said = targetText(req.text);
-	const names = [...new Set([...repoNames, ...(req.repo ? [req.repo] : [])])];
-	// A short name ("platform" for "acme/platform") stands for its repo only when no other repo shares it,
-	// and only as its own token — "owner1/platform" is owner1's, never a mention of "platform" (#1015 audit).
-	const short = (name: string) => name.split("/").pop() ?? name;
-	const sharing = (name: string) => names.filter((n) => short(n).toLowerCase() === short(name).toLowerCase());
-	const aliases = (name: string) => [...new Set([name, ...(sharing(name).length === 1 ? [short(name)] : [])])];
-	const excludedAliases = new Set(excludedOf(said, names.flatMap(aliases), false, repoMention));
-	const isExcluded = (name: string) => aliases(name).some((a) => excludedAliases.has(a.toLowerCase()));
-	const excluded = names.filter(isExcluded);
-	const pointed = withoutExclusions(said);
-	const pointedAt = names.filter((n) => aliases(n).some((a) => repoMention(pointed, a)));
-	// Named AND excluded is a contradiction; dropping it would leave "the session" — the unrelated one.
-	const conflicted = pointedAt.filter(isExcluded);
-	if (conflicted.length) {
-		return { refused: `The owner both asked to end and said not to end the ${conflicted.join(", ")} session, so nothing was ended. Ask them which session they mean.` };
+	const intent = parseSessionIntent(targetText(req.text), repoNames, req.repo);
+	// Validation and selection read the SAME parsed intent — nothing below re-reads the owner's text.
+	if (intent.conflicted.length) {
+		return { refused: `The owner both asked to end and said not to end the ${intent.conflicted.join(", ")} session, so nothing was ended. Ask them which session they mean.` };
 	}
-	// A bare short name two repositories share names neither of them.
-	const ambiguous = [...new Set(names.filter((n) => sharing(n).length > 1).map(short))].filter((a) => repoMention(pointed, a));
-	if (ambiguous.length) {
-		return { refused: `The owner said "${ambiguous[0]}", which more than one repository is called (${names.filter((n) => short(n) === ambiguous[0]).join(", ")}), so nothing was ended. Ask which one they mean.` };
+	if (intent.ambiguous.length) {
+		const [a] = intent.ambiguous;
+		return { refused: `The owner said "${a.name}", which more than one repository is called (${a.repos.join(", ")}), so nothing was ended. Ask which one they mean.` };
 	}
-	// A session the owner named that this agent has no repository for is a target, not "the session".
-	const known = new Set([...repoNames.map((n) => n.toLowerCase()), ...repoNames.map((n) => short(n).toLowerCase())]);
-	const absent = sessionTargetWords(pointed).filter((w) => !known.has(w.toLowerCase()));
-	if (absent.length) {
-		return { refused: `The owner asked to end the ${absent[0]} session, but there is no repository called "${absent[0]}" on this agent, so nothing was ended. Ask them which session they mean.` };
+	if (intent.unresolved.length) {
+		const [u] = intent.unresolved;
+		return { refused: `The owner asked to end the ${u} session, but there is no repository called "${u}" on this agent, so nothing was ended. Ask them which session they mean.` };
 	}
-	const named = pointedAt.filter((n) => !isExcluded(n));
-	// The model's pick resolves by exact name, or by a short name only when it is unique.
-	const pick = req.repo ? names.find((n) => aliases(n).some((a) => a.toLowerCase() === req.repo?.toLowerCase())) ?? req.repo : undefined;
-	if (pick && isExcluded(pick)) return { refused: `The owner said not to end the ${pick} session, so nothing was ended. End only the session they asked for, or ask them which one they mean.` };
+	const { named, excluded, pick } = intent;
+	if (pick && excluded.includes(pick)) return { refused: `The owner said not to end the ${pick} session, so nothing was ended. End only the session they asked for, or ask them which one they mean.` };
 	if (named.length > 1 && !(pick && named.includes(pick))) {
 		return { refused: `The owner named more than one repository (${named.join(", ")}), so nothing was ended. Ask which session they want closed.` };
 	}
@@ -270,22 +251,80 @@ export function resolveSessionTarget(req: SessionRequest, repoNames: readonly st
 	return { repo: undefined, excluded };
 }
 
+/**
+ * Everything the owner's words say about WHICH session, parsed once (#1015). Explicit-but-unresolved,
+ * ambiguous and contradictory targets are states of the result, not things a later step may lose:
+ *
+ * - `named`: repositories the owner pointed at, outside every exclusion, resolved exactly.
+ * - `excluded`: repositories an exclusion reaches. A short name two repositories share excludes BOTH —
+ *   reading too much as excluded only narrows what may be touched.
+ * - `conflicted`: named AND excluded.
+ * - `ambiguous`: a positive short name more than one repository is called.
+ * - `unresolved`: an explicit target that names no repository — including a name whose trailing "-", "/"
+ *   or ".." is part of it ("platform-" is not "platform"), and a label directly after "session".
+ * - `pick`: the model's selector, resolved by exact name or a unique short name — never trusted on its own.
+ */
+export interface SessionIntent {
+	named: string[];
+	excluded: string[];
+	conflicted: string[];
+	ambiguous: Array<{ name: string; repos: string[] }>;
+	unresolved: string[];
+	pick: string | undefined;
+}
+
+export function parseSessionIntent(said: string, repoNames: readonly string[], selector?: string): SessionIntent {
+	const names = [...new Set([...repoNames, ...(selector ? [selector] : [])])];
+	// A short name ("platform" for "acme/platform") stands for its repo only when no other repo shares it,
+	// and only as its own token — "owner1/platform" is owner1's, never a mention of "platform".
+	const short = (name: string) => name.split("/").pop() ?? name;
+	const sharing = (alias: string) => names.filter((n) => short(n).toLowerCase() === alias.toLowerCase());
+	const aliases = (name: string) => [...new Set([name, ...(sharing(short(name)).length === 1 ? [short(name)] : [])])];
+	const sharedShorts = [...new Set(names.map(short).filter((a) => sharing(a).length > 1))];
+	// Exclusions: exact names and unique aliases, plus every repository behind a shared short name.
+	const excludedTokens = new Set(excludedOf(said, [...names.flatMap(aliases), ...sharedShorts], false, repoMention));
+	const isExcluded = (name: string) => aliases(name).some((a) => excludedTokens.has(a.toLowerCase())) || excludedTokens.has(short(name).toLowerCase());
+	const excluded = names.filter(isExcluded);
+	const pointed = withoutExclusions(said);
+	const pointedAt = names.filter((n) => aliases(n).some((a) => repoMention(pointed, a)));
+	const ambiguous = sharedShorts.filter((a) => repoMention(pointed, a)).map((a) => ({ name: a, repos: sharing(a) }));
+	// One resolution for every explicit target slot: a token is a repository, ambiguous, or unresolved.
+	const known = new Set(repoNames.flatMap((n) => [n.toLowerCase(), short(n).toLowerCase()]));
+	const unresolved = [...new Set(sessionTargetWords(pointed).filter((w) => !known.has(w.toLowerCase())))];
+	const pick = selector ? (names.find((n) => aliases(n).some((a) => a.toLowerCase() === selector.toLowerCase())) ?? selector) : undefined;
+	return {
+		named: pointedAt.filter((n) => !isExcluded(n)),
+		excluded,
+		conflicted: pointedAt.filter(isExcluded),
+		ambiguous,
+		unresolved,
+		pick,
+	};
+}
+
 /** Words that describe A session rather than name its repository: "the coding session", "every session". */
 const GENERIC_SESSION_WORD = new Set(
 	"the this that these those my your our its their a an one only current open active running live idle last old previous other same whole entire existing new stale remaining every each all any both coding cli engine terminal repo repository claude codex grok agent".split(" "),
 );
+/** Words that may follow "session" without being its label: "close the session now", "…session for X". */
+const AFTER_SESSION_WORD = new Set(
+	"now please and too again first already itself that this there here which where when just only ever never not no but or if so yet still for at to a an the on of in named called titled with as by".split(" "),
+);
 /**
- * The repository words the owner put in front of "session" ("the platform session", "the
- * `owner/repo` session") or after it ("the session for / named / called platform"). Each is a whole token, so
- * "platform-extra" is "platform-extra" — never "platform".
+ * The explicit target slots, as written (#1015): the word before "session" ("the platform session", "the
+ * `owner/repo` session"), the word after "session for/on/of/in/named/called/titled", and a label directly
+ * after "session" ("the session ghost"). A name keeps every character but ONE trailing sentence period:
+ * "…for platform." names "platform", while "platform-", "platform/" and "platform.." are names no
+ * repository has — so they resolve to nothing instead of to the repository they resemble.
  */
 function sessionTargetWords(text: string): string[] {
 	const words: string[] = [];
 	const token = "([\\w][\\w./-]*)[`'\"’”]?";
-	for (const m of text.matchAll(new RegExp(`(?<![\\w./-])${token}(?:\\s+(?:repo|repository|coding|cli))*\\s+sessions?\\b`, "gi"))) words.push(m[1]);
-	for (const m of text.matchAll(new RegExp(`\\bsessions?\\s+(?:for|on|of|in|named|called|titled)\\s+(?:the\\s+)?[\`'"‘“]?${token}`, "gi"))) words.push(m[1]);
-	// Sentence punctuation is the sentence's, not the name's: "…for platform." names "platform".
-	return words.map((w) => w.replace(/[./-]+$/, "")).filter((w) => w && !GENERIC_SESSION_WORD.has(w.toLowerCase()));
+	const open = "[`'\"‘“]?";
+	for (const m of text.matchAll(new RegExp(`(?<![\\w./-])${open}${token}(?:\\s+(?:repo|repository|coding|cli))*\\s+sessions?\\b`, "gi"))) words.push(m[1]);
+	for (const m of text.matchAll(new RegExp(`\\bsessions?\\s+(?:for|on|of|in|named|called|titled)\\s+(?:the\\s+)?${open}${token}`, "gi"))) words.push(m[1]);
+	for (const m of text.matchAll(new RegExp(`\\bsessions?\\s+${open}${token}`, "gi"))) if (!AFTER_SESSION_WORD.has(m[1].toLowerCase().replace(/\.$/, ""))) words.push(m[1]);
+	return words.map((w) => w.replace(/(?<!\.)\.$/, "")).filter((w) => w && !GENERIC_SESSION_WORD.has(w.toLowerCase()));
 }
 
 /** What each control tool needs the owner to have asked for, in their own words. */

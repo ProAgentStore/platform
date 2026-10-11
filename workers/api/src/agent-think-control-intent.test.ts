@@ -549,3 +549,104 @@ describe("session targets: negation leads, named sessions, sentence punctuation 
 		expect(statuses()).toEqual(["s1:ended"]);
 	});
 });
+
+// ── #1015 follow-up: identity-bearing suffixes, ambiguous exclusions, post-session labels ──────────────
+//
+// Writer-level: every session row's status is read after each call. "Zero writes" means every row is
+// exactly as seeded. Each case below names whether the previous source wrote to the wrong target.
+
+describe("session identity is exact: suffixes, shared names in exclusions, and labels after 'session' (#1015)", () => {
+	const seedRepo = (repoId: string, name: string) => d1.exec(`INSERT OR IGNORE INTO coding_repos (id, instance_id, user_id, name) VALUES ('${repoId}', 'i1', 'u1', '${name}')`);
+	const seedSession = (id: string, repoId: string, name: string) => {
+		seedRepo(repoId, name);
+		d1.exec(`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, client_type, status) VALUES ('${id}', 'i1', '${repoId}', 'u1', 'claude', 'active')`);
+	};
+	const statuses = () => (d1.sqlite.prepare("SELECT id, status FROM coding_sessions ORDER BY id").all() as Array<{ id: string; status: string }>).map((r) => `${r.id}:${r.status}`);
+	const end = async (text: string, input: Record<string, unknown> = {}) =>
+		getRegistryTool("end_coding_session")?.handler({ env, instanceId: "i1", userId: "u1", turn: { author: "owner", text } } as never, input);
+
+	// ── 1. A trailing "-", "/" or ".." is part of the name. Previously stripped → the name read as a known
+	//       repo, nothing matched, and the request fell back to the one open session: WRONG-TARGET WRITES. ──
+	const SUFFIXED = ["platform-", "platform/", "owner1/platform-", "owner1/platform/"];
+	const QUOTES: Array<[string, (x: string) => string]> = [
+		["plain", (x) => x],
+		["backtick", (x) => `\`${x}\``],
+		["double-quoted", (x) => `"${x}"`],
+	];
+	const POSITIONS: Array<[string, (x: string) => string]> = [
+		["X session", (x) => `Please close the ${x} session.`],
+		["session for X", (x) => `Please close the session for ${x}.`],
+		["session named X", (x) => `Please close the session named ${x}.`],
+	];
+	const SELECTORS: Array<Record<string, unknown>> = [{}, { repo: "aipa" }];
+	const suffixCases = SUFFIXED.flatMap((name) => QUOTES.flatMap(([q, quote]) => POSITIONS.flatMap(([p, phrase]) => SELECTORS.map((sel) => [`${phrase(quote(name))} [${q}, ${p}, selector ${JSON.stringify(sel)}]`, phrase(quote(name)), sel] as const))));
+	it.each(suffixCases)("%s — zero writes", async (_label, text, sel) => {
+		seedRepo("r1", "platform");
+		seedRepo("r3", "owner1/platform");
+		seedSession("s2", "r2", "aipa");
+		await end(text, sel);
+		expect(statuses()).toEqual(["s2:active"]);
+	});
+
+	// ── 2. A short name two repositories share, in an EXCLUSION, excludes both. Previously it excluded
+	//       neither, so the one open platform session was ended: WRONG-TARGET WRITES (A, B, C). ──
+	it.each([
+		["A: only owner1/platform open", ["owner1"], "Close every session except platform."],
+		["B: only owner1/platform open", ["owner1"], "Please close the session, not platform."],
+		["C: only owner2/platform open", ["owner2"], "Close every session except platform."],
+		["D: both open", ["owner1", "owner2"], "Close every session except platform."],
+	])("%s — '%s' — zero writes", async (_label, open, text) => {
+		seedRepo("r1", "owner1/platform");
+		seedRepo("r2", "owner2/platform");
+		if (open.includes("owner1")) seedSession("s1", "r1", "owner1/platform");
+		if (open.includes("owner2")) seedSession("s2", "r2", "owner2/platform");
+		const before = statuses();
+		await end(text as string);
+		expect(statuses()).toEqual(before);
+	});
+
+	// ── 3. A label directly after "session" is a target. Previously the bare form was invisible and the
+	//       one open session was ended: WRONG-TARGET WRITES for the two unquoted "session ghost" cases. ──
+	it.each([
+		["Please close the session ghost.", {}],
+		["Please close the session ghost.", { repo: "aipa" }],
+		["Please close the session `ghost`.", {}],
+		["Please close the session `ghost`.", { repo: "aipa" }],
+		["Please close the session other/platform.", {}],
+		["Please close the session other/platform.", { repo: "aipa" }],
+		["Please close session `ghost`.", {}],
+		["Please close session `ghost`.", { repo: "aipa" }],
+	])("'%s' (selector %j) — zero writes", async (text, sel) => {
+		seedRepo("r3", "other/platform");
+		seedSession("s2", "r2", "aipa");
+		await end(text, sel);
+		expect(statuses()).toEqual(["s2:active"]);
+	});
+
+	// ── controls ──
+	it("a generic close still ends the one open session", async () => {
+		seedSession("s2", "r2", "aipa");
+		await end("Please close the session.");
+		expect(statuses()).toEqual(["s2:ended"]);
+	});
+
+	it("'close the session for aipa.' — the sentence's period — ends aipa", async () => {
+		seedSession("s2", "r2", "aipa");
+		await end("Please close the session for aipa.");
+		expect(statuses()).toEqual(["s2:ended"]);
+	});
+
+	it("'close the session aipa.' — a known label directly after 'session' — ends aipa", async () => {
+		seedSession("s1", "r1", "owner1/platform");
+		seedSession("s2", "r2", "aipa");
+		await end("Please close the session aipa.");
+		expect(statuses()).toEqual(["s1:active", "s2:ended"]);
+	});
+
+	it("'Close every session except aipa.' with aipa and owner1/platform open ends owner1/platform only", async () => {
+		seedSession("s1", "r1", "owner1/platform");
+		seedSession("s2", "r2", "aipa");
+		await end("Close every session except aipa.");
+		expect(statuses()).toEqual(["s1:ended", "s2:active"]);
+	});
+});
