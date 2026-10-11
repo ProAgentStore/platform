@@ -206,20 +206,38 @@ class FakeD1 {
 		private readonly issued: IssuedStatement[],
 	) {}
 
-	prepare(sql: string): FakeD1Statement {
+	prepare(sql: string): D1PreparedStatement {
 		assertD1Preparable(sql, this.db);
-		return new FakeD1Statement(this.db, this.issued, sql, []);
+		return new FakeD1Statement(this.db, this.issued, sql, []) as unknown as D1PreparedStatement;
 	}
 
-	async batch<T = Record<string, unknown>>(statements: FakeD1Statement[]): Promise<D1ResultLike<T>[]> {
+	async batch<T = Record<string, unknown>>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
 		const out: D1ResultLike<T>[] = [];
-		for (const s of statements) out.push(await s.all<T>());
-		return out;
+		for (const s of statements) out.push(await (s as unknown as FakeD1Statement).all<T>());
+		return out as unknown as D1Result<T>[];
 	}
 
-	async exec(sql: string): Promise<{ count: number; duration: number }> {
+	async exec(sql: string): Promise<D1ExecResult> {
 		this.db.exec(sql);
-		return { count: 0, duration: 0 };
+		return { count: 0, duration: 0 } as D1ExecResult;
+	}
+
+	/**
+	 * Sessions use the same in-memory connection, which gives the test double the
+	 * same read-your-writes behavior as a D1 session without pretending to model
+	 * replica routing or bookmarks.
+	 */
+	withSession(_constraintOrBookmark?: D1SessionBookmark | D1SessionConstraint): D1DatabaseSession {
+		return {
+			prepare: (sql: string) => this.prepare(sql),
+			batch: <T = unknown>(statements: D1PreparedStatement[]) => this.batch<T>(statements),
+			getBookmark: () => null,
+		};
+	}
+
+	/** D1's deprecated export API is deliberately unavailable to the fixture. */
+	async dump(): Promise<ArrayBuffer> {
+		return new ArrayBuffer(0);
 	}
 }
 

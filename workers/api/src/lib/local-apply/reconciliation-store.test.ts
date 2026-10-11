@@ -32,8 +32,8 @@ function run(id: string, status: ApplyRun["status"], applicationId = "app-1"): A
 function app(overrides: Partial<JobApplication> = {}): JobApplication {
 	return {
 		id: "app-1", instanceId: "tailor", sourceInstanceId: "scout", leadId: "lead", lifecycleVersion: 3, idempotencyKey: "key", workKey: "stable-job", status: "blocked", lead: {}, tailoringRunId: null,
-		resumeArtifact: { role: "resume", path: "applications/resume.pdf", sha256: "a".repeat(64) },
-		coverLetterArtifact: { role: "cover_letter", path: "applications/letter.pdf", sha256: "b".repeat(64) },
+		resumeArtifact: { kind: "resume", path: "applications/resume.pdf", sha256: "a".repeat(64), bytes: 1 },
+		coverLetterArtifact: { kind: "cover_letter", path: "applications/letter.pdf", sha256: "b".repeat(64), bytes: 1 },
 		profileVersion: "profile-1", generatedAt: null, blockReason: "submit_unconfirmed", blockQuestions: [], readyEvent: null, readyEmittedAt: null,
 		createdAt: now, updatedAt: now, stateVersion: 4, fillRunId: "run-1", submitAttemptedAt: now - 1, submittedAt: null, submittedUrl: null,
 		archiveReason: null, archiveEvidence: null, leadDispositionSyncedAt: null,
@@ -81,7 +81,10 @@ describe("#1013 local-apply durable reconciliation", () => {
 		const stored = await current({ DB: d1.DB }, "u1", "app-1");
 		expect(stored?.submitAttemptedAt).toBe(now - 1);
 		expect(reconciliationProvesNoSubmission(await (await import("./store.js")).getLocalApplyReconciliation({ DB: d1.DB }, "run-1", "runner", "u1"), stored!, uncertain)).toBe(true);
-		expect(await auditReconciledNoSubmission({ DB: d1.DB }, { reconciliation: await (await import("./store.js")).getLocalApplyReconciliation({ DB: d1.DB }, "run-1", "runner", "u1")!, app: stored!, run: uncertain, userId: "u1" }, now + 3)).toBe(true);
+		const durable = await (await import("./store.js")).getLocalApplyReconciliation({ DB: d1.DB }, "run-1", "runner", "u1");
+		expect(durable).not.toBeNull();
+		if (!durable) throw new Error("the reconciliation proof was not stored");
+		expect(await auditReconciledNoSubmission({ DB: d1.DB }, { reconciliation: durable, app: stored!, run: uncertain, userId: "u1" }, now + 3)).toBe(true);
 		expect((await current({ DB: d1.DB }, "u1", "app-1"))?.submitAttemptedAt).toBe(now - 1);
 	});
 
