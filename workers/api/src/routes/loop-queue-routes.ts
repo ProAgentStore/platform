@@ -86,7 +86,7 @@ export function registerLoopQueueRoutes(router: Hono<{ Bindings: Env }>): void {
 		return c.json({
 			...page,
 			historyNote:
-				"Recorded since migration 0212; recording is best-effort. `coverage` compares this objective's receipt, queue entry and run with its recorded events: `incomplete` names each missing transition in `coverage_gaps`, `unknown` means it predates the ledger or was not started through a tracked path (or no handle was given). The rows still say what became of it either way.",
+				"Recorded since migration 0212; recording is best-effort. `coverage` compares this objective's receipt, queue entry and run with its recorded events: `incomplete` names each missing transition in `coverage_gaps` (a lost `deferred` is detectable only while its entry is still pending), `unknown` means it predates the ledger or was not started through a tracked path (or no handle was given). The rows still say what became of it either way.",
 		});
 	});
 

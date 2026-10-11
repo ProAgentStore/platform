@@ -414,6 +414,30 @@ describe("keyset cursors stay put while the listing changes between page reads",
 		expect(p2.complete).toBe(true);
 	});
 
+	it("queue history: a deletion on each side of the boundary neither repeats nor skips; OFFSET does", async () => {
+		for (let i = 0; i < 9; i++) d1.exec(`INSERT INTO instance_objective_queue (id, instance_id, repo_id, user_id, objective, status, created_at) VALUES ('q${i}', 'i1', 'r1', 'u1', 'x', 'pending', ${1_000 + Math.floor(i / 3)})`);
+		type Q = { entries: Array<{ id: string }>; nextCursor: string | null; nextOffset: number | null; complete: boolean };
+		const p1 = (await call("GET", "/loop/queue?status=all&limit=4")).body as unknown as Q;
+		const o1 = (await call("GET", "/loop/queue?status=all&limit=4&offset=0")).body as unknown as Q;
+		const seen = p1.entries.map((e) => e.id);
+		const unread = ["q0", "q1", "q2"].find((k) => !seen.includes(k)) as string;
+		d1.exec(`DELETE FROM instance_objective_queue WHERE id IN ('${seen[0]}', '${unread}')`);
+		const rest: string[] = [];
+		let cursor = p1.nextCursor;
+		while (cursor) {
+			const p = (await call("GET", `/loop/queue?status=all&limit=4&cursor=${encodeURIComponent(cursor)}`)).body as unknown as Q;
+			rest.push(...p.entries.map((e) => e.id));
+			cursor = p.nextCursor;
+		}
+		expect(rest.filter((k) => seen.includes(k))).toEqual([]); // no repeat
+		expect(new Set([...seen, ...rest]).size).toBe(8); // every surviving entry once
+		expect(rest).not.toContain(unread);
+		// The legacy offset walk skips one: deleting a row it already read shifts the rest up past the boundary.
+		const o2 = (await call("GET", `/loop/queue?status=all&limit=4&offset=${o1.nextOffset}`)).body as unknown as Q;
+		const viaOffset = new Set([...o1.entries, ...o2.entries].map((e) => e.id));
+		expect([...viaOffset].filter((k) => k !== seen[0] && k !== unread)).toHaveLength(6); // of 7 survivors, one skipped
+	});
+
 	it("refuses a cursor that is not a previous page's, on every keyset continuation", async () => {
 		expect((await call("GET", "/loop?cursor=nope")).status).toBe(400);
 		expect((await call("GET", "/loop?include_starts=true&starts_cursor=nope")).status).toBe(400);
@@ -472,6 +496,49 @@ describe("a lost history write is reported as a gap, never as a complete history
 		const p = await page("request_id=req-2");
 		expect(p).toMatchObject({ complete: true, coverage: "incomplete", coverage_gaps: [`queue entry ${entryId}: no "queued" event`] });
 		expect(counts().queue).toBe(1);
+	});
+
+	it("a settled `not_started` that failed to write: the refusal stands, and the request reads `incomplete` naming it", async () => {
+		env = failing({ events: ["not_started"] });
+		expect((await start({ requestId: "req-ns", objective: "Work issue #903." })).status).toBe(409);
+		env = { DB: d1.DB } as unknown as Env;
+		expect(await page("request_id=req-ns")).toMatchObject({ complete: true, coverage: "incomplete", coverage_gaps: ['request req-ns (not started): no "not_started" event'] });
+	});
+
+	it("a settled `outcome_unknown` that failed to write: still never claimed complete", async () => {
+		env = failing({ events: ["outcome_unknown"] });
+		driverStart.mockRejectedValueOnce(new Error("worker lost"));
+		expect((await start({ requestId: "req-ou", objective: "Work issue #904." })).status).toBe(503);
+		env = { DB: d1.DB } as unknown as Env;
+		expect(await page("request_id=req-ou")).toMatchObject({ coverage: "incomplete", coverage_gaps: ['request req-ou (outcome unknown): no "outcome_unknown" event'] });
+		expect(driverStart).toHaveBeenCalledTimes(1);
+	});
+
+	it("a `deduplicated` that failed to write: the duplicate still reaches the shared entry, and the gap is named", async () => {
+		const a = await start({ requestId: "req-A", objective: "Work issue #905.", queueIfBusy: true });
+		const entryId = (a.body.entry as { id: string }).id;
+		env = failing({ events: ["deduplicated"] });
+		expect((await start({ requestId: "req-B", objective: "Please work issue #905.", queueIfBusy: true })).body).toMatchObject({ duplicate_of: entryId });
+		env = { DB: d1.DB } as unknown as Env;
+		expect(counts().queue).toBe(1);
+		const p = await page("request_id=req-B");
+		expect(p.events.map((e) => e.event)).toEqual(["requested", "queued", "requested"]);
+		expect(p).toMatchObject({ coverage: "incomplete", coverage_gaps: [`request req-B (deduplicated onto ${entryId}): no "deduplicated" event`] });
+		// A and B are one objective: A's handle reaches B through B's receipt, and reads the same gap.
+		expect(await page("request_id=req-A")).toMatchObject({ coverage: "incomplete", coverage_gaps: [`request req-B (deduplicated onto ${entryId}): no "deduplicated" event`] });
+	});
+
+	it("a `deferred` that failed to write while the entry still waits is a named gap; once admitted it is the documented limit", async () => {
+		const q = await start({ requestId: "req-d", objective: "Work issue #906.", queueIfBusy: true });
+		const entryId = (q.body.entry as { id: string }).id;
+		env = failing({ events: ["deferred"] });
+		expect(await tryDequeueAndStart(env, "i1", "r1", "u1")).toMatchObject({ requeued: true });
+		env = { DB: d1.DB } as unknown as Env;
+		expect(await page(`queue_entry_id=${entryId}`)).toMatchObject({ coverage: "incomplete", coverage_gaps: [`queue entry ${entryId} (deferred): no "deferred" event`] });
+		// Admitted: the row no longer carries the deferral note, so the lost event cannot be seen.
+		startsRun(Date.now());
+		expect(await tryDequeueAndStart(env, "i1", "r1", "u1")).toMatchObject({ started: true });
+		expect(await page(`queue_entry_id=${entryId}`)).toMatchObject({ coverage: "complete", coverage_gaps: [] });
 	});
 
 	it("an objective older than the ledger reads `unknown`, not complete and not a gap", async () => {

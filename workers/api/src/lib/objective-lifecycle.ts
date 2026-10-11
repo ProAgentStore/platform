@@ -187,9 +187,15 @@ export async function listLifecycle(
  * objective's own rows — which ARE the transitions, and which the history only describes — are compared
  * with the events recorded for them, with no write of any kind:
  *
- *   a receipt with no `requested`; a queue entry with no `queued`, or a cancelled / failed / admitted
- *   one with no `cancelled` / `admission_failed` / `admitted`; a run with no `started` / `admitted`, or
- *   a finished one with no `run_finished`.
+ *   a receipt with no `requested`, or one that settled deduplicated / not started / outcome unknown with
+ *   no `deduplicated` / `not_started` / `outcome_unknown`; a queue entry with no `queued`, a cancelled /
+ *   failed / admitted one with no `cancelled` / `admission_failed` / `admitted`, or a still-pending one
+ *   carrying a deferral note with no `deferred`; a run with no `started` / `admitted`, or a finished one
+ *   with no `run_finished`.
+ *
+ * KNOWN LIMIT: a `deferred` lost on an entry that has since left `pending` cannot be detected — the
+ * queue row keeps no record of past deferrals, so it is not a gap and does not make the coverage
+ * `incomplete`. `coverage: "complete"` therefore never vouches for the count of deferrals.
  *
  * Each missing one is named in `coverage_gaps` and makes the coverage `incomplete`. A row older than the
  * instance's first recorded event predates the ledger (migration 0212) and reads `unknown` — never a gap
@@ -229,16 +235,26 @@ async function coverageOf(env: Env, userId: string, instanceId: string, h: { req
 		else gaps.push(`${what}: no ${events.map((e) => `"${e}"`).join(" or ")} event`);
 	};
 	for (const id of h.requestIds) {
-		const r = await env.DB.prepare(`SELECT created_at FROM loop_start_receipts WHERE ${scope} AND request_id = ?3`).bind(userId, instanceId, id).first<{ created_at: number }>();
-		if (r) expect(r.created_at, ["requested"], "r", id, `request ${id}`);
+		const r = await env.DB.prepare(`SELECT created_at, state, response_json FROM loop_start_receipts WHERE ${scope} AND request_id = ?3`).bind(userId, instanceId, id).first<{ created_at: number; state: string; response_json: string | null }>();
+		if (!r) continue;
+		expect(r.created_at, ["requested"], "r", id, `request ${id}`);
+		// The receipt's SETTLED state is a transition too: each one is recorded by its own best-effort write.
+		const settled = r.response_json ? (JSON.parse(r.response_json) as { duplicate_of?: unknown }) : null;
+		if (typeof settled?.duplicate_of === "string") expect(r.created_at, ["deduplicated"], "r", id, `request ${id} (deduplicated onto ${settled.duplicate_of})`);
+		else if (r.state === "not_started") expect(r.created_at, ["not_started"], "r", id, `request ${id} (not started)`);
+		if (r.state === "unknown") expect(r.created_at, ["outcome_unknown"], "r", id, `request ${id} (outcome unknown)`);
 	}
 	for (const id of h.queueEntryIds) {
-		const q = await env.DB.prepare(`SELECT created_at, status, run_id FROM instance_objective_queue WHERE ${scope} AND id = ?3`).bind(userId, instanceId, id).first<{ created_at: number; status: string; run_id: string | null }>();
+		const q = await env.DB.prepare(`SELECT created_at, status, run_id, stop_reason FROM instance_objective_queue WHERE ${scope} AND id = ?3`).bind(userId, instanceId, id).first<{ created_at: number; status: string; run_id: string | null; stop_reason: string | null }>();
 		if (!q) continue;
 		expect(q.created_at, ["queued"], "q", id, `queue entry ${id}`);
 		if (q.status === "cancelled") expect(q.created_at, ["cancelled"], "q", id, `queue entry ${id} (cancelled)`);
 		if (q.status === "failed") expect(q.created_at, ["admission_failed"], "q", id, `queue entry ${id} (failed admission)`);
 		if (q.run_id) expect(q.created_at, ["admitted"], "q", id, `queue entry ${id} (admitted to run ${q.run_id})`);
+		// A deferral leaves a trace only while the entry still waits: `requeueEntry` is the one writer of a
+		// PENDING row's `stop_reason`. Once the entry is admitted, cancelled or failed that note is
+		// overwritten, so an earlier lost `deferred` is undetectable from the rows — a known limit.
+		if (q.status === "pending" && q.stop_reason) expect(q.created_at, ["deferred"], "q", id, `queue entry ${id} (deferred)`);
 	}
 	for (const id of h.runIds) {
 		const u = await env.DB.prepare(`SELECT started_at, status, request_id, queue_entry_id FROM agent_loop_runs WHERE ${scope} AND run_id = ?3`).bind(userId, instanceId, id).first<{ started_at: number; status: string; request_id: string | null; queue_entry_id: string | null }>();
@@ -295,6 +311,12 @@ async function expandHandles(env: Env, userId: string, instanceId: string, filte
 			const r = await env.DB.prepare("SELECT queue_entry_id, request_id FROM agent_loop_runs WHERE run_id = ?1 AND user_id = ?2 AND instance_id = ?3").bind(id, userId, instanceId).first<{ queue_entry_id: string | null; request_id: string | null }>();
 			if (r?.queue_entry_id) queueEntryIds.add(r.queue_entry_id);
 			if (r?.request_id) requestIds.add(r.request_id);
+		}
+		// …and back from the shared entry or run to every request deduplicated onto it, through that
+		// request's own immutable receipt — so a duplicate stays reachable even if its event was lost.
+		for (const id of [...queueEntryIds, ...runIds]) {
+			const d = await env.DB.prepare("SELECT request_id FROM loop_start_receipts WHERE user_id = ?1 AND instance_id = ?2 AND json_extract(response_json, '$.duplicate_of') = ?3").bind(userId, instanceId, id).all<{ request_id: string }>();
+			for (const row of d.results ?? []) requestIds.add(row.request_id);
 		}
 		for (const id of [...requestIds]) {
 			const q = await env.DB.prepare("SELECT id, run_id FROM instance_objective_queue WHERE request_id = ?1 AND user_id = ?2 AND instance_id = ?3").bind(id, userId, instanceId).all<{ id: string; run_id: string | null }>();

@@ -10631,9 +10631,22 @@ paths:
               schema:
                 type: object
                 properties:
+                  scope: { type: string, enum: [pending, all], description: Which listing this is — `pending` (default) or the paged `status=all` history. }
                   entries:
                     type: array
                     items: { $ref: "#/components/schemas/ObjectiveQueueEntry" }
+                  total: { type: integer, description: "`status=all` only: every entry ever queued on the instance." }
+                  offset: { type: integer, description: "`status=all` only: the offset this page was read from (0 on a cursor read)." }
+                  nextOffset: { type: integer, nullable: true, description: "`status=all` only. LEGACY continuation — shifted by entries queued or removed between reads. Null on a cursor read or the last page." }
+                  nextCursor: { type: string, nullable: true, description: "`status=all` only: the stable keyset continuation; pass it back as `cursor`. Null on the last page." }
+                  complete: { type: boolean, description: "`status=all` only: no more entries after this page — paging, not a claim about history." }
+                  handoff:
+                    type: object
+                    nullable: true
+                    description: "Pending scope with `repo_id` (#984): why a first-in-line entry may not be draining. Null without `repo_id`."
+                    properties:
+                      state: { type: string }
+                      detail: { type: string }
                   activeRun:
                     type: object
                     nullable: true
@@ -10725,7 +10738,10 @@ paths:
 
         `complete` is PAGING only. Whether the history is whole is `coverage`: the objective's receipt,
         queue entry and run are compared with its recorded events (recording is best-effort), and each
-        missing transition is named in `coverage_gaps`. `unknown` means it predates migration 0212, was
+        missing transition is named in `coverage_gaps` — including a receipt that settled deduplicated,
+        not started or outcome-unknown with no matching event, and a still-pending entry carrying a deferral
+        note with no `deferred`. Known limit: a `deferred` lost on an entry that has since left `pending`
+        leaves no trace in the rows, so `complete` never vouches for the number of deferrals. `unknown` means it predates migration 0212, was
         not started through a tracked path, or no handle was given. Read-only: nothing is replayed or requeued.
       operationId: listObjectiveLifecycle
       tags: [Tools]
