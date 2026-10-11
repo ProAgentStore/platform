@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type MouseEvent, type Keyboar
 import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import Button from "./Button";
+import type { ApplicationHandoffResumeResponse } from "../lib/types";
 
 /**
  * Live control for one #1013 Application Runner handoff.
@@ -110,7 +111,7 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 	};
 	const resume = async () => {
 		try {
-			const result = await api<{ state?: string }>(withPath(base, "resume"), { method: "POST" });
+			const result = await api<ApplicationHandoffResumeResponse>(withPath(base, "resume"), { method: "POST" });
 			if (reconciliation && result?.state === "running") {
 				setError("Authenticated read-only inspection remains live. This session cannot conclude submission status until a validated SEEK receipt/history contract exists.");
 				poll();

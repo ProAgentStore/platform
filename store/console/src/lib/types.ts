@@ -871,6 +871,11 @@ export interface ApplicationActionResponse {
 	result: Record<string, unknown>;
 }
 
+/** Minimal, secret-free lifecycle view returned when an owner rechecks a browser handoff. */
+export interface ApplicationHandoffResumeResponse {
+	state?: string;
+}
+
 export interface ApplicationTraceEntry {
 	at: string;
 	source: "lead" | "delivery" | "tailor" | "runner" | "lifecycle";
