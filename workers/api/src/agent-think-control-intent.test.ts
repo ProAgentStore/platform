@@ -160,6 +160,33 @@ describe("the owner's words bind the TARGET as well as the action (#1015)", () =
 	});
 });
 
+describe("negated run targets (#1015 slice 2)", () => {
+	it("'stop run-target, not run-other' never authorizes run-other, even when the model picks it", async () => {
+		script = [stopCall({ runId: "run-other" }), { response: "ok" }];
+		const said = await think(turn("Please stop run-target, not run-other."));
+		expect(said).toContain("said not to stop run-other");
+		expect([cancelRequested("run-target"), cancelRequested("run-other")]).toEqual([0, 0]);
+		expect(stopEvents()).toEqual([]);
+	});
+
+	it("the positive target of the same sentence still stops — picked, or with the selector omitted", async () => {
+		script = [stopCall({ runId: "run-target" }), { response: "I've asked it to stop." }];
+		await think(turn("Please stop run-target, not run-other."));
+		expect([cancelRequested("run-target"), cancelRequested("run-other")]).toEqual([1, 0]);
+		d1.exec("UPDATE agent_loop_runs SET cancel_requested = 0");
+		script = [stopCall({}), { response: "I've asked it to stop." }];
+		await think(turn("Please stop run-target, not run-other."));
+		expect([cancelRequested("run-target"), cancelRequested("run-other")]).toEqual([1, 0]);
+	});
+
+	it("'stop everything except run-other' leaves run-other running", async () => {
+		script = [stopCall({}), { response: "I've asked it to stop." }];
+		await think(turn("Stop everything except run-other."));
+		expect([cancelRequested("run-target"), cancelRequested("run-other")]).toEqual([1, 0]);
+		expect(stopEvents()).toEqual([{ run_id: "run-target", event: "cancelled", actor_kind: "owner", actor_uid: "u1" }]);
+	});
+});
+
 describe("end_coding_session reads the owner's session words, not generic stop language (#1015)", () => {
 	const seedSession = (id: string, repoId: string, name: string) => {
 		d1.exec(`INSERT OR IGNORE INTO coding_repos (id, instance_id, user_id, name) VALUES ('${repoId}', 'i1', 'u1', '${name}')`);
@@ -191,5 +218,41 @@ describe("end_coding_session reads the owner's session words, not generic stop l
 		expect([status("s1"), status("s2")]).toEqual(["active", "active"]);
 		await end("Please close the platform session.", { repo: "platform" });
 		expect([status("s1"), status("s2")]).toEqual(["ended", "active"]);
+	});
+
+	// ── negated and unresolved targets (#1015 slice 2) ──
+	it("a repo the owner excluded is never ended, even when the model picks it", async () => {
+		seedSession("s1", "r1", "platform");
+		seedSession("s2", "r2", "aipa");
+		const res = await end("Please close the platform session, not aipa.", { repo: "aipa" });
+		expect(res?.content).toMatch(/said not to end the aipa session/);
+		expect([status("s1"), status("s2")]).toEqual(["active", "active"]);
+	});
+
+	it("the repo the owner named is ended beside an excluded one — whether the model picks it or omits the repo", async () => {
+		seedSession("s1", "r1", "platform");
+		seedSession("s2", "r2", "aipa");
+		await end("Please close the platform session, not aipa.", { repo: "platform" });
+		expect([status("s1"), status("s2")]).toEqual(["ended", "active"]);
+		d1.exec("UPDATE coding_sessions SET status = 'active' WHERE id = 's1'");
+		await end("Please close the platform session, not aipa.");
+		expect([status("s1"), status("s2")]).toEqual(["ended", "active"]);
+	});
+
+	it("a repo the owner named with no open session ends nothing — never the one unrelated open session", async () => {
+		seedSession("s2", "r2", "aipa");
+		d1.exec("INSERT OR IGNORE INTO coding_repos (id, instance_id, user_id, name) VALUES ('r1', 'i1', 'u1', 'platform')");
+		for (const input of [{ repo: "aipa" }, {}]) {
+			const res = await end("Please close the platform session.", input);
+			expect(res?.content, JSON.stringify(input)).toMatch(/No open coding session for "platform"/);
+			expect(status("s2")).toBe("active");
+		}
+	});
+
+	it("the only open session is not the fallback when the owner excluded it", async () => {
+		seedSession("s2", "r2", "aipa");
+		const res = await end("Please close the session, not aipa.");
+		expect(res?.content).toMatch(/said not to end/);
+		expect(status("s2")).toBe("active");
 	});
 });

@@ -78,6 +78,23 @@ describe("pickSessionToEnd — it refuses to guess", () => {
 		if (!picked.ok) expect(picked.content).toMatch(/No open coding session for "nonesuch"/);
 	});
 
+	it("an owner-named repo with no matching open session ends nothing; with one it ends that one; with none named the one open session (#1015)", () => {
+		const picked = pickSessionToEnd([s("csess-1", "repo-a")], names, "platform");
+		expect(picked.ok).toBe(false);
+		const match = pickSessionToEnd([s("csess-1", "repo-a"), s("csess-2", "repo-b")], names, "platform");
+		expect(match.ok && match.session.id).toBe("csess-2");
+		const sole = pickSessionToEnd([s("csess-1", "repo-a")], names);
+		expect(sole.ok && sole.session.id).toBe("csess-1");
+	});
+
+	it("never picks a session the owner excluded: not as the only one, and not among several (#1015)", () => {
+		const only = pickSessionToEnd([s("csess-1", "repo-a")], names, undefined, ["aipa"]);
+		expect(only.ok).toBe(false);
+		if (!only.ok) expect(only.content).toMatch(/said not to end/);
+		const rest = pickSessionToEnd([s("csess-1", "repo-a"), s("csess-2", "repo-b")], names, undefined, ["AIPA"]);
+		expect(rest.ok && rest.session.id).toBe("csess-2");
+	});
+
 	it("with nothing open, says so and points at stop_work for a run", () => {
 		const picked = pickSessionToEnd([], names);
 		expect(picked.ok).toBe(false);

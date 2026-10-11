@@ -19,6 +19,7 @@ import { listLoopRuns, requestCancel } from "./agent-loop-store.js";
 import { endCodingSession } from "./coding-session-end.js";
 import { listRepos, listSessions } from "./coding-store.js";
 import type { RegistryToolResult } from "./connectors/types.js";
+import { resolveSessionTarget, type SessionRequest } from "./control-intent.js";
 import type { Env } from "../types.js";
 
 /**
@@ -31,10 +32,17 @@ import type { Env } from "../types.js";
  * silently ending the wrong one is not.
  */
 export function pickSessionToEnd<T extends { id: string; repoId: string }>(
-	sessions: readonly T[],
+	allSessions: readonly T[],
 	repoNameById: ReadonlyMap<string, string>,
 	repo?: string,
+	/** Repositories the owner said NOT to end (#1015): never chosen, not even as the only open session. */
+	excluded: readonly string[] = [],
 ): { ok: true; session: T } | { ok: false; content: string } {
+	const isExcluded = (s: T) => excluded.some((x) => x.toLowerCase() === (repoNameById.get(s.repoId) ?? s.repoId).toLowerCase());
+	const sessions = allSessions.filter((s) => !isExcluded(s));
+	if (!sessions.length && allSessions.length) {
+		return { ok: false, content: "The only open coding session is one the owner said not to end, so nothing was ended. Do not tell the user you ended a session." };
+	}
 	if (!sessions.length) {
 		return {
 			ok: false,
@@ -70,14 +78,19 @@ export async function endAgentCodingSession(
 	env: Env,
 	instanceId: string,
 	userId: string,
-	repo?: string,
+	/** The owner's turn and the model's pick (#1015). Absent: no repo constraint at all. */
+	request?: SessionRequest,
 ): Promise<RegistryToolResult> {
 	const [sessions, repos] = await Promise.all([
 		listSessions(env, instanceId, userId),
 		listRepos(env, instanceId, userId).catch(() => [] as Array<{ id: string; name: string }>),
 	]);
+	// The owner's words decide the target against the instance's REAL repository names — here, where they
+	// are listed, so a repo the owner named binds even when the model picked another (#1015).
+	const target = request ? resolveSessionTarget(request, repos.map((r) => r.name)) : { repo: undefined, excluded: [] };
+	if ("refused" in target) return { content: target.refused, success: true };
 	const open = sessions.filter((s) => s.status === "active" || s.status === "suspended");
-	const picked = pickSessionToEnd(open, new Map(repos.map((r) => [r.id, r.name])), repo);
+	const picked = pickSessionToEnd(open, new Map(repos.map((r) => [r.id, r.name])), target.repo, target.excluded);
 	// Not an error: "there is no session" and "which of the three?" are both complete answers, and a
 	// failed tool result reads to the model as "could not tell" — the state that produces a guess.
 	if (!picked.ok) return { content: picked.content, success: true };

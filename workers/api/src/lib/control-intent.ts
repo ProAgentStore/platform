@@ -78,6 +78,41 @@ export function asksToEndSession(text: string): boolean {
 
 const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 
+const esc = (id: string) => id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** Does `text` mention `id` as a whole token (not as part of a longer id or word)? */
+const mentions = (text: string, id: string) => new RegExp(`(^|[^\\w-])${esc(id)}(?![\\w-])`, "i").test(text);
+/**
+ * Where the owner EXCLUDES a target (#1015): "not X", "except X", "excluding X", "other than X", "apart
+ * from X", "leave X". Each lead covers the rest of its clause, so "not run-a or run-b" excludes both and
+ * "do not stop run-b" excludes run-b. A clause ends at sentence punctuation or a "but" that turns back.
+ * Reading too much as excluded only narrows what may be touched, never widens it.
+ */
+const EXCLUDE_LEAD = /\b(?:not|except(?:\s+for)?|excluding|other\s+than|apart\s+from|leave)\b/gi;
+function excludedSpans(text: string): string[] {
+	const spans: string[] = [];
+	for (const m of text.matchAll(EXCLUDE_LEAD)) {
+		const rest = text.slice((m.index ?? 0) + m[0].length);
+		spans.push(rest.split(/[\n.!?;]|,?\s+but\s+(?!not\b)/i)[0] ?? "");
+	}
+	return spans;
+}
+/** The candidates (lower-cased) the owner excluded, plus any run-id-shaped token in an excluded span. */
+function excludedOf(text: string, candidates: readonly string[], uuids = false): string[] {
+	const out = new Set<string>();
+	for (const span of excludedSpans(text)) {
+		for (const id of candidates) if (mentions(span, id)) out.add(id.toLowerCase());
+		if (uuids) for (const m of span.matchAll(UUID)) out.add(m[0].toLowerCase());
+	}
+	return [...out];
+}
+/** A run's text as targets are read from it: minus fenced blocks and `>` lines, WITH inline quotes. */
+const targetText = (text: string) =>
+	text
+		.replace(/```[\s\S]*?```/g, " ")
+		.split("\n")
+		.filter((line) => !/^\s*>/.test(line))
+		.join("\n");
+
 /**
  * The runs the owner's message NAMES — the target half of their consent (#1015). A stop the owner
  * aimed at one run authorizes that run and nothing else: not another run the model selected, and not
@@ -87,15 +122,17 @@ const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g
  * rather than widening to all. Lower-cased; empty = the owner named no run.
  */
 export function runsNamedBy(text: string, candidates: readonly string[]): string[] {
-	const said = text
-		.replace(/```[\s\S]*?```/g, " ")
-		.split("\n")
-		.filter((line) => !/^\s*>/.test(line))
-		.join("\n");
-	const esc = (id: string) => id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	const named = new Set(candidates.filter((id) => new RegExp(`(^|[^\\w-])${esc(id)}(?![\\w-])`, "i").test(said)).map((id) => id.toLowerCase()));
+	const said = targetText(text);
+	const named = new Set(candidates.filter((id) => mentions(said, id)).map((id) => id.toLowerCase()));
 	for (const m of said.matchAll(UUID)) named.add(m[0].toLowerCase());
-	return [...named];
+	// A run the owner excluded ("stop run-a, not run-b") is mentioned, and is the opposite of named.
+	const excluded = new Set(runsExcludedBy(text, candidates));
+	return [...named].filter((id) => !excluded.has(id));
+}
+
+/** The runs the owner's message EXCLUDES — "not X", "except X", "leave X" (#1015). Lower-cased. */
+export function runsExcludedBy(text: string, candidates: readonly string[]): string[] {
+	return excludedOf(targetText(text), candidates, true);
 }
 
 /**
@@ -106,20 +143,62 @@ export function runsNamedBy(text: string, candidates: readonly string[]): string
  * instance's runs; the model's `runId` is added so a run older than the listing is still recognised.
  */
 export function stopTarget(ctx: Pick<RegistryToolCtx, "turn">, runId: string, candidates: readonly string[]): { refused: string } | { named: string[]; allows: (id: string) => boolean } {
-	const named = ctx.turn?.explicit ? [] : runsNamedBy(ctx.turn?.text ?? "", runId ? [...candidates, runId] : candidates);
+	const all = runId ? [...candidates, runId] : candidates;
+	const text = ctx.turn?.explicit ? "" : (ctx.turn?.text ?? "");
+	const named = runsNamedBy(text, all);
+	// An excluded run is refused even when it is the only one the owner mentioned, and is never in the
+	// "everything" an unnamed stop reaches: "stop everything except run-b" must leave run-b running.
+	const excluded = runsExcludedBy(text, all);
+	if (runId && excluded.includes(runId.toLowerCase())) {
+		return { refused: `The owner said not to stop ${runId}, so nothing was stopped. Stop only what they asked for, or ask them which run they mean.` };
+	}
 	if (runId && named.length && !named.includes(runId.toLowerCase())) {
 		return { refused: `The owner asked to stop ${named.join(", ")}, not ${runId}, so nothing was stopped. Stop the run they named, or ask them which one they mean.` };
 	}
-	return { named, allows: (id) => !named.length || named.includes(id.toLowerCase()) };
+	return { named, allows: (id) => !excluded.includes(id.toLowerCase()) && (!named.length || named.includes(id.toLowerCase())) };
+}
+
+/** What an `end_coding_session` call carries for the target decision: the owner's turn and the model's pick. */
+export interface SessionRequest {
+	explicit: boolean;
+	text: string;
+	repo: string | undefined;
+}
+
+/** The request as the dispatcher and the model left it; resolved against the real repo names by {@link resolveSessionTarget}. */
+export function sessionTarget(ctx: Pick<RegistryToolCtx, "turn">, repo: unknown): SessionRequest {
+	return { explicit: !!ctx.turn?.explicit, text: ctx.turn?.text ?? "", repo: typeof repo === "string" && repo.trim() ? repo.trim() : undefined };
 }
 
 /**
- * The repository an `end_coding_session` targets (#1015): a `repo` the owner never said is the model's
- * pick, so it is dropped and `pickSessionToEnd` either finds the one open session or asks which.
+ * Which repository's session the owner's words let `end_coding_session` end (#1015).
+ *
+ * - A repo the owner EXCLUDED ("…, not aipa") is refused, and is never the session a bare request falls
+ *   back to (`excluded` goes to `pickSessionToEnd`).
+ * - A repo the owner NAMED binds the target, whatever the model picked. If that repo has no open session,
+ *   nothing is ended. It must not fall back to the one open session, which belongs to another repository.
+ * - A repo only the model named is dropped (879620b1), so a bare "close the session" still ends the one
+ *   open session or asks which.
+ *
+ * `repoNames` are this instance's repository names. A name is recognised by its full form or its last
+ * path segment ("acme/platform" or "platform").
  */
-export function sessionTarget(ctx: Pick<RegistryToolCtx, "turn">, repo: unknown): string | undefined {
-	if (typeof repo !== "string" || !repo.trim()) return undefined;
-	return ctx.turn?.explicit || ownWords(ctx.turn?.text ?? "").toLowerCase().includes(repo.trim().toLowerCase()) ? repo : undefined;
+export function resolveSessionTarget(req: SessionRequest, repoNames: readonly string[]): { refused: string } | { repo: string | undefined; excluded: string[] } {
+	if (req.explicit) return { repo: req.repo, excluded: [] };
+	const said = ownWords(req.text);
+	const names = [...new Set([...repoNames, ...(req.repo ? [req.repo] : [])])];
+	const aliases = (name: string) => [...new Set([name, name.split("/").pop() ?? name])];
+	const excludedAliases = new Set(excludedOf(said, names.flatMap(aliases)));
+	const isExcluded = (name: string) => aliases(name).some((a) => excludedAliases.has(a.toLowerCase()));
+	const excluded = names.filter(isExcluded);
+	const named = names.filter((n) => !isExcluded(n) && aliases(n).some((a) => mentions(said, a)));
+	const pick = req.repo ? names.find((n) => aliases(n).some((a) => a.toLowerCase() === req.repo?.toLowerCase())) ?? req.repo : undefined;
+	if (pick && isExcluded(pick)) return { refused: `The owner said not to end the ${pick} session, so nothing was ended. End only the session they asked for, or ask them which one they mean.` };
+	if (named.length > 1 && !(pick && named.includes(pick))) {
+		return { refused: `The owner named more than one repository (${named.join(", ")}), so nothing was ended. Ask which session they want closed.` };
+	}
+	if (named.length) return { repo: pick && named.includes(pick) ? pick : named[0], excluded };
+	return { repo: undefined, excluded };
 }
 
 /** What each control tool needs the owner to have asked for, in their own words. */
