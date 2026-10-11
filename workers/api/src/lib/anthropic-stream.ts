@@ -273,14 +273,26 @@ export class AnthropicStreamAssembler {
 	 * every caller that reads `textParts`.
 	 */
 	finish(): AnthropicMessageBody {
-		if (!this.complete) {
-			throw new AnthropicStreamError("the reply ended mid-stream, so it is not the whole answer");
-		}
 		// A tool block that never closed is a call the stream stopped describing halfway — its
 		// arguments are whatever fragments happened to arrive, which is the unparseable case with the
-		// error hidden. Checked first because it is unambiguous, whatever the stop reason says.
+		// error hidden. It is never returned; what differs is WHY it stopped (#907):
 		const openTool = [...this.openTools.values()][0];
+		if (!this.complete) {
+			// The transport ended before `message_stop`. Mid tool call that is the provider stopping
+			// mid-reply — transient, so it carries the stall marker. Mid prose it stays as it was.
+			if (openTool !== undefined) {
+				throw new AnthropicStreamError(`the reply ended mid-stream while the arguments for tool \`${openTool}\` were still arriving`, true);
+			}
+			throw new AnthropicStreamError("the reply ended mid-stream, so it is not the whole answer");
+		}
 		if (openTool !== undefined) {
+			// The provider finished and SAID it ran out of room: the known output-cap outcome (#504), the
+			// same on every attempt — not a stall, so no marker.
+			if (hitOutputCap(this.stopReason)) {
+				throw new AnthropicStreamError(
+					`the reply hit the output limit before the arguments for tool \`${openTool}\` finished arriving, so the call is incomplete`,
+				);
+			}
 			throw new AnthropicStreamError(`the arguments for tool \`${openTool}\` never finished arriving`, true);
 		}
 		// #504: no arguments AND the provider says it ran out of room. Either half alone is fine — a

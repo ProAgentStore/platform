@@ -949,3 +949,126 @@ describe("an Anthropic stream that stops mid tool call (#907)", () => {
 		expect(isControllerAiStall(new Error(raw.message))).toBe(true);
 	});
 });
+
+// ── #907: the SSE termination-boundary matrix, through the real provider path ────────────────────
+//
+// What decides the outcome is WHY a stream stopped, not merely that a tool call is incomplete:
+// - the transport ended (no `message_stop`) mid tool call → transient: bounded retry, resumable stall;
+// - the provider finished and said it hit the output cap with a tool still open → the known output-cap
+//   outcome (#504): one attempt, never a resumable stall;
+// - `message_stop` with a tool still open and no cap → the provider stopping mid-reply (a87192b0).
+// In every failing row no partial call is returned: the attempt yields an error, never arguments.
+
+describe("SSE termination-boundary matrix (#907)", () => {
+	type Frame = Record<string, unknown>;
+	const sse = (frames: Frame[]) => sseResponse(frames.map((f) => `event: ${f.type}\ndata: ${JSON.stringify(f)}\n\n`).join(""));
+	const start: Frame = { type: "message_start", message: { usage: {} } };
+	const toolStart: Frame = { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_1", name: "send_message", input: {} } };
+	const partial: Frame = { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"text":"run the te' } };
+	const blockStop: Frame = { type: "content_block_stop", index: 0 };
+	const stopReason = (r: string): Frame => ({ type: "message_delta", delta: { stop_reason: r }, usage: {} });
+	const messageStop: Frame = { type: "message_stop" };
+	/** The next attempt: a whole call with complete, NEW arguments. */
+	const completeCall = () => anthropicSse({ content: [{ type: "tool_use", id: "toolu_2", name: "send_message", input: { text: "run the tests" } }], stop_reason: "tool_use" });
+	const ask = (env: Env) => runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "decide" }] }, undefined, { provider: "anthropic" });
+	const recover = (env: Env) => withControllerAiRecovery(policyFrom(), { surface: "pilot", sleep: async () => undefined }, () => ask(env));
+
+	afterEach(() => vi.unstubAllGlobals());
+
+	/** One row, driven through the real recovery policy with every attempt receiving the same stream. */
+	async function row(frames: Frame[]) {
+		const env = await envWithAnthropicKey();
+		const fetchMock = vi.fn(async () => sse(frames));
+		vi.stubGlobal("fetch", fetchMock);
+		const raw = (await ask(env).catch((e: unknown) => e)) as Error;
+		fetchMock.mockClear();
+		const outcome = await recover(env).catch((e: unknown) => e);
+		return { raw, outcome, attempts: fetchMock.mock.calls.length, crossed: classifyCodingFailure(new Error(raw.message)) };
+	}
+
+	// ── The two corrected rows (fail before this change) ────────────────────────────────────────────
+
+	it("EOF before message_stop, mid tool call: a transient stall — retried, then resumable from its message alone", async () => {
+		const { raw, outcome, attempts, crossed } = await row([start, toolStart, partial]);
+		expect(raw).toBeInstanceOf(UserAiProviderError);
+		expect(raw.message).toContain("[stream: incomplete-tool-args]");
+		expect(raw.message).not.toContain("run the te");
+		expect(isControllerAiStall(new Error(raw.message))).toBe(true);
+		expect(outcome).toBeInstanceOf(ControllerAiStalled);
+		expect(attempts).toBe(policyFrom().maxAttempts);
+		// What the Workflow step boundary hands the round-level resume: the message, no properties.
+		expect(crossed).toMatchObject({ class: "provider_stall", retryable: true });
+		expect(classifyCodingFailure(new Error((outcome as Error).message))).toMatchObject({ class: "provider_stall" });
+	});
+
+	it("EOF mid tool call, then a whole call: the next attempt returns only its complete, new arguments", async () => {
+		const env = await envWithAnthropicKey();
+		const fetchMock = vi.fn().mockImplementationOnce(async () => sse([start, toolStart, partial])).mockImplementation(async () => completeCall());
+		vi.stubGlobal("fetch", fetchMock);
+		const result = JSON.stringify(await recover(env));
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(result).toContain('"text":"run the tests"');
+		expect(result).toContain("toolu_2");
+		expect(result).not.toContain("toolu_1");
+	});
+
+	it.each(["max_tokens", "length"])("output cap (%s) with a tool still open, then message_stop: the known output-cap outcome — one attempt, never a resumable stall", async (cap) => {
+		const { raw, outcome, attempts, crossed } = await row([start, toolStart, partial, stopReason(cap), messageStop]);
+		expect(raw.message).toBe("Anthropic: the reply hit the output limit before the arguments for tool `send_message` finished arriving, so the call is incomplete");
+		expect(isControllerAiStall(new Error(raw.message))).toBe(false);
+		expect(attempts).toBe(1);
+		expect(outcome).not.toBeInstanceOf(ControllerAiStalled);
+		expect((outcome as Error).message).toBe(raw.message);
+		expect(crossed.class).not.toBe("provider_stall");
+		expect(crossed).toMatchObject({ class: "provider_error" });
+	});
+
+	// ── Retained rows (unchanged by this change) ────────────────────────────────────────────────────
+
+	it("a complete, valid tool call succeeds on the first attempt", async () => {
+		const env = await envWithAnthropicKey();
+		const fetchMock = vi.fn(async () => completeCall());
+		vi.stubGlobal("fetch", fetchMock);
+		expect(JSON.stringify(await recover(env))).toContain('"text":"run the tests"');
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("message_stop with a tool still open and no cap: the provider stopping mid-reply — retried, resumable", async () => {
+		const { raw, outcome, attempts, crossed } = await row([start, toolStart, partial, stopReason("tool_use"), messageStop]);
+		expect(raw.message).toBe("Anthropic: the arguments for tool `send_message` never finished arriving [stream: incomplete-tool-args]");
+		expect(outcome).toBeInstanceOf(ControllerAiStalled);
+		expect(attempts).toBe(policyFrom().maxAttempts);
+		expect(crossed).toMatchObject({ class: "provider_stall" });
+	});
+
+	it.each<[string, Frame[], string]>([
+		["EOF before message_stop with no tool open", [start, { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }, { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "half an ans" } }], "Anthropic: the reply ended mid-stream, so it is not the whole answer"],
+		["output cap with a closed, argumentless tool (#504)", [start, toolStart, blockStop, stopReason("max_tokens"), messageStop], "Anthropic: the reply hit the output limit before the arguments for tool `send_message` arrived, so the call is incomplete"],
+		["a closed tool whose arguments are malformed JSON", [start, toolStart, partial, blockStop, stopReason("tool_use"), messageStop], "Anthropic: the arguments for tool `send_message` arrived incomplete and could not be read"],
+		["output cap with a closed, malformed tool", [start, toolStart, partial, blockStop, stopReason("max_tokens"), messageStop], "Anthropic: the arguments for tool `send_message` arrived incomplete and could not be read"],
+		["a provider error frame", [start, { type: "error", error: { type: "overloaded_error", message: "Overloaded" } }], "Anthropic: Overloaded"],
+	])("%s: one attempt, not a stall, non-resumable once only its message is left", async (_name, frames, message) => {
+		const { raw, outcome, attempts, crossed } = await row(frames);
+		expect(raw.message).toBe(message);
+		expect(attempts).toBe(1);
+		expect(outcome).not.toBeInstanceOf(ControllerAiStalled);
+		expect(isControllerAiStall(new Error(raw.message))).toBe(false);
+		expect(crossed).toMatchObject({ class: "provider_error" });
+	});
+
+	it("a non-JSON frame: one attempt, not a stall", async () => {
+		const env = await envWithAnthropicKey();
+		const fetchMock = vi.fn(async () => sseResponse("event: x\ndata: not json\n\n"));
+		vi.stubGlobal("fetch", fetchMock);
+		const outcome = (await recover(env).catch((e: unknown) => e)) as Error;
+		expect(outcome.message).toBe("Anthropic: the provider sent a frame that is not JSON");
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(classifyCodingFailure(new Error(outcome.message)).class).toBe("provider_error");
+	});
+
+	it("output cap with a closed, valid tool returns the whole call", async () => {
+		const env = await envWithAnthropicKey();
+		vi.stubGlobal("fetch", vi.fn(async () => sse([start, toolStart, { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"text":"run the tests"}' } }, blockStop, stopReason("max_tokens"), messageStop])));
+		expect(JSON.stringify(await recover(env))).toContain('"text":"run the tests"');
+	});
+});

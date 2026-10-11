@@ -31,6 +31,17 @@ Every controller call goes through `controllerAiCall`, which does the following:
 - **Draws budget per attempt.** Each Pilot attempt reserves and settles its own budget draw.
 - **Emits sanitized telemetry** to the agent trace (`source: controller-ai`, `controller_ai.stall | recovered | exhausted | ceiling | cancelled`): surface, provider, model, attempt, configured deadlines, measured phase, backoff and elapsed time. No prompt, reply, key or pane text.
 
+### How a stream's ending decides it (`anthropic-stream.ts` `finish()`)
+
+What matters is why an incomplete tool call stopped. A partial call is never returned in any of these cases.
+
+| How the stream ended | Outcome |
+|---|---|
+| The transport ended before `message_stop`, mid tool call | Transient. Marked `[stream: incomplete-tool-args]`, retried by this policy, and resumable `provider_stall` from its message alone |
+| `message_stop` with a tool still open, no output cap | The provider stopped mid-reply. Marked and retried the same way |
+| `max_tokens`/`length` with a tool still open | The known output-cap outcome (#504), the same on every attempt. One attempt, not a stall, `provider_error` once only its message is left |
+| The transport ended mid prose, a malformed closed call, an `error` frame, a non-JSON frame | One attempt, not a stall |
+
 ### Not nested inside the other two layers
 
 - **Step retry.** The Pilot's decide step keeps Cloudflare's step retry for non-stall failures. A stall that exhausts recovery is **returned** across the step boundary rather than thrown (`lib/pilot-decide.ts`), so the step retry does not run the whole recovery again.
