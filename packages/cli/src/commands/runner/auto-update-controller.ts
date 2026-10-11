@@ -1,5 +1,5 @@
 import { nextAutoUpdateDelayMs, type AutoUpdatePolicy, type AutoUpdateStatus } from "./auto-update.js";
-import type { UpdateFacts, UpdatePlan } from "./self-update.js";
+import type { UpdateFacts, UpdateObservation, UpdatePlan } from "./self-update.js";
 
 type UpdatePlanAction = Extract<UpdatePlan, { action: "update" }>;
 type Timer = ReturnType<typeof setTimeout>;
@@ -16,6 +16,32 @@ export interface AutomaticUpdateControllerDeps {
 	setTimer?: (fn: () => void, ms: number) => Timer;
 	clearTimer?: (timer: Timer) => void;
 	random?: () => number;
+	now?: () => number;
+}
+
+/** Why an enabled controller is not installing yet — a normalized class, never raw session data (#1020). */
+export type BlockerClass = "idle_wait" | "active_sessions" | "observation_failure" | "unknown";
+
+/**
+ * What the controller last DID, for the status report (#1020). The service stamps its own receipt
+ * time separately, so a heartbeat re-sending these unchanged never reads as a new check or decision.
+ */
+export interface AutoUpdateDiagnostics {
+	checkAt: number | null;
+	decisionAt: number | null;
+	nextRetryDueAt: number | null;
+	blockerClass: BlockerClass | null;
+	observations: UpdateObservation[];
+}
+
+const MAX_OBSERVATIONS = 5;
+/** The deferred re-decision cadence while waiting for local work to finish. */
+export const IDLE_RETRY_MS = 15_000;
+
+/** The work names `observedRunnerWork` produces, reduced to one class. An empty wait is `unknown`, never idle. */
+export function blockerClassFor(waitingFor: readonly string[]): BlockerClass {
+	if (waitingFor.includes("runner-work-observation-unavailable")) return "observation_failure";
+	return waitingFor.length ? "active_sessions" : "unknown";
 }
 
 /**
@@ -29,12 +55,24 @@ export class AutomaticUpdateController {
 	private waiting = false;
 	private installing = false;
 	private failures = 0;
+	private checkAt: number | null = null;
+	private decisionAt: number | null = null;
+	private nextRetryDueAt: number | null = null;
+	private blockerClass: BlockerClass | null = null;
+	private observations: UpdateObservation[] = [];
+	private readonly now: () => number;
 	private readonly setTimer: (fn: () => void, ms: number) => Timer;
 	private readonly clearTimer: (timer: Timer) => void;
 
 	constructor(private readonly deps: AutomaticUpdateControllerDeps) {
 		this.setTimer = deps.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
 		this.clearTimer = deps.clearTimer ?? ((timer) => clearTimeout(timer));
+		this.now = deps.now ?? Date.now;
+	}
+
+	/** The controller's own record, safe to report: times, a normalized class, and observation outcomes. */
+	diagnostics(): AutoUpdateDiagnostics {
+		return { checkAt: this.checkAt, decisionAt: this.decisionAt, nextRetryDueAt: this.nextRetryDueAt, blockerClass: this.blockerClass, observations: [...this.observations] };
 	}
 
 	/** Called only for a true policy transition. `keep` deliberately leaves a due heartbeat timer alone. */
@@ -50,10 +88,10 @@ export class AutomaticUpdateController {
 		this.checking = true;
 		try {
 			if (!(await this.deps.refreshPolicy()) || !this.enabled()) {
-				this.deps.status("offline", { reason: "The owner policy could not be refreshed; automatic update is deferred." });
+				this.offline();
 				return;
 			}
-			await this.decide(false);
+			await this.decide();
 		} catch (error) {
 			this.fail(error);
 		} finally {
@@ -74,25 +112,42 @@ export class AutomaticUpdateController {
 	private schedule(initial = false) {
 		if (!this.enabled() || this.timer || this.waiting) return;
 		const delay = initial ? Math.round(5_000 + (this.deps.random ?? Math.random)() * 25_000) : nextAutoUpdateDelayMs(this.failures, this.deps.random);
-		this.timer = this.setTimer(() => { this.timer = null; void this.runNow(); }, delay);
+		this.timer = this.setTimer(() => { this.timer = null; this.nextRetryDueAt = null; void this.runNow(); }, delay);
 		this.timer.unref?.();
+		this.nextRetryDueAt = this.now() + delay;
 	}
 
 	private cancel() {
 		if (this.timer) this.clearTimer(this.timer);
 		this.timer = null;
+		this.nextRetryDueAt = null;
 	}
 
-	private fail(error: unknown) {
+	/**
+	 * The owner policy could not be re-read, so nothing installs (fail closed) — but the controller keeps
+	 * a timer (#1020). It used to report `offline` and stop, leaving an enabled runner with no callback
+	 * until the next policy transition. `schedule` itself refuses once the policy is disabled.
+	 */
+	private offline() {
+		this.failures++;
+		this.deps.status("offline", { reason: "The owner policy could not be refreshed; automatic update is deferred." });
+		this.schedule();
+	}
+
+		private fail(error: unknown) {
 		this.failures++;
 		this.deps.status("failure", { reason: error instanceof Error ? error.message : String(error) });
 		this.schedule();
 	}
 
-	private async decide(deferred: boolean): Promise<void> {
+	private async decide(): Promise<void> {
 		const facts = await this.deps.facts();
+		this.checkAt = this.now();
+		if (facts.observations?.length) this.observations = [...this.observations, ...facts.observations].slice(-MAX_OBSERVATIONS);
 		if (!this.enabled()) return;
 		const plan = this.deps.plan(facts);
+		this.decisionAt = this.now();
+		this.blockerClass = plan.action === "wait" ? blockerClassFor(plan.waitingFor) : null;
 		if (plan.action === "up-to-date") {
 			this.failures = 0;
 			this.deps.status("verified-success", { latestVersion: facts.latest ?? undefined, reason: undefined });
@@ -111,8 +166,17 @@ export class AutomaticUpdateController {
 		}
 		this.deps.status("running", { latestVersion: plan.latest, reason: undefined });
 		const restarted = await this.install(plan, true);
-		if (restarted) this.deps.status("restarting", { latestVersion: plan.latest, reason: undefined });
-		else if (!deferred) this.defer(plan.latest);
+		if (restarted) {
+			this.deps.status("restarting", { latestVersion: plan.latest, reason: undefined });
+			return;
+		}
+		// The final, race-safe admission refused (work began during npm, the policy could not be
+		// re-read, another install held the single flight). That refusal stays fail-closed — and it
+		// must also be RETRIED, deferred or not (#1020). A deferred callback reaches here with its own
+		// timer already spent, so returning without a new one left an enabled runner silent forever:
+		// `waiting_for_idle` while idle, with nothing left to re-decide.
+		this.blockerClass = "idle_wait";
+		this.defer(plan.latest);
 	}
 
 	private defer(latest?: string) {
@@ -120,20 +184,22 @@ export class AutomaticUpdateController {
 		this.waiting = true;
 		this.timer = this.setTimer(() => {
 			this.timer = null;
+			this.nextRetryDueAt = null;
 			void (async () => {
 				// Clear before deciding: another observed busy period must be able to schedule its next
 				// bounded retry instead of finding the old wait still marked in flight.
 				this.waiting = false;
 				try {
 					if (!(await this.deps.refreshPolicy()) || !this.enabled()) {
-						this.deps.status("offline", { reason: "The owner policy could not be refreshed; automatic update is deferred." });
+						this.offline();
 						return;
 					}
-					await this.decide(true);
+					await this.decide();
 				} catch (error) { this.fail(error); }
 			})();
-		}, 15_000);
+		}, IDLE_RETRY_MS);
 		this.timer.unref?.();
+		this.nextRetryDueAt = this.now() + IDLE_RETRY_MS;
 		this.deps.status("waiting-for-idle", latest ? { latestVersion: latest } : undefined);
 	}
 

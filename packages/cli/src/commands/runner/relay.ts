@@ -5,12 +5,12 @@ import { loadMachineIdentity } from "../../machine.js";
 import { writeError, writeLine } from "../../output.js";
 import { apiPathSegment, clean, pagsApiBase, requestPags, requestRunner } from "./http.js";
 import { CLI_VERSION, runsFromSource } from "./process.js";
-import { deferredUpdateLease, deferredUpdateLeaseActive, installVersion, latestPublishedVersion, leaveForRestart, planRunnerUpdate, restarterFrom, RUNNER_UPDATE_PATH, supervisorNote, type DeferredUpdateLease, type UpdatePlan } from "./self-update.js";
+import { deferredUpdateLease, deferredUpdateLeaseActive, installVersion, latestPublishedVersion, leaveForRestart, planRunnerUpdate, restarterFrom, RUNNER_UPDATE_PATH, supervisorNote, type DeferredUpdateLease, type UpdateObservation, type UpdatePlan } from "./self-update.js";
 import { diffMembership, instanceLabel, pendingRegistrations, pinnedAway, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance, type ReattachRequest } from "./membership.js";
 import { formatStatusLine } from "./status-line.js";
 import type { PagsRequestOptions } from "./types.js";
 import { autoUpdatePolicyKey, autoUpdateStatusWire, loadAutoUpdatePolicy, mayAutomaticallyRestart, nextAutoUpdateDelayMs, policyFromResponse, policyScheduleAction, saveAutoUpdatePolicy, type AutoUpdatePolicy, type AutoUpdateStatus } from "./auto-update.js";
-import { AutomaticUpdateController, RelayMutationAdmission } from "./auto-update-controller.js";
+import { type AutoUpdateDiagnostics, AutomaticUpdateController, RelayMutationAdmission } from "./auto-update-controller.js";
 import { observedRunnerWork } from "./runner-work-observation.js";
 
 /**
@@ -59,6 +59,9 @@ export async function connectViaRelay(
 	let autoUpdatePolicyAuthoritative = false;
 	let refreshingAutomaticPolicy = false;
 	let scheduleAutomaticUpdate: (initial?: boolean, cancel?: boolean) => void = () => undefined;
+	// The controller's own record (#1020), bound once it exists. Times, a normalized blocker class and
+	// observation outcomes only — never session text, process arguments, paths, prompts or tokens.
+	let autoUpdateDiagnostics: () => Partial<AutoUpdateDiagnostics> = () => ({});
 	const saveAutoUpdateStatus = (status: AutoUpdateStatus, extra: Partial<AutoUpdatePolicy> = {}) => {
 		autoUpdatePolicy = {
 			...autoUpdatePolicy,
@@ -112,6 +115,7 @@ export async function connectViaRelay(
 					status: autoUpdateStatusWire(autoUpdatePolicy.status),
 					latestVersion: autoUpdatePolicy.latestVersion,
 					error: autoUpdatePolicy.reason,
+					...autoUpdateDiagnostics(),
 				},
 			});
 			acceptAutoUpdatePolicy(result);
@@ -182,7 +186,15 @@ export async function connectViaRelay(
 		const busy = sessionsResult.status === "fulfilled" && healthResult.status === "fulfilled"
 			? observedRunnerWork({ sessions: sessionsResult.value.sessions, work: healthResult.value.work })
 			: ["runner-work-observation-unavailable"];
+		// Which of the pair answered, and when — so "waiting" can be told apart from "could not look" (#1020).
+		const sampledAt = Date.now();
+		const observations: UpdateObservation[] = [
+			// An answer is a success only when it has the shape the guard reads; malformed is a failed look.
+			{ source: "sessions", success: sessionsResult.status === "fulfilled" && Array.isArray(sessionsResult.value.sessions), sampledAt },
+			{ source: "health", success: healthResult.status === "fulfilled" && !!healthResult.value.work && typeof healthResult.value.work === "object", sampledAt },
+		];
 		return {
+			observations,
 			current: CLI_VERSION,
 			latest: await latestPublishedVersion(),
 			fromSource: runsFromSource(),
@@ -410,6 +422,7 @@ export async function connectViaRelay(
 		},
 		status: saveAutoUpdateStatus,
 	});
+	autoUpdateDiagnostics = () => automaticUpdateController.diagnostics();
 	// `acceptAutoUpdatePolicy` is declared before this controller so startup registration can parse
 	// the response. From here every heartbeat transition drives the real controller timer.
 	scheduleAutomaticUpdate = (initial = false, cancel = false) => automaticUpdateController.onPolicy(cancel ? "cancel" : initial ? "start" : "keep");
@@ -587,6 +600,7 @@ export async function connectViaRelay(
 							status: autoUpdateStatusWire(autoUpdatePolicy.status),
 							latestVersion: autoUpdatePolicy.latestVersion,
 							error: autoUpdatePolicy.reason,
+							...autoUpdateDiagnostics(),
 						},
 					});
 					acceptAutoUpdatePolicy(response);

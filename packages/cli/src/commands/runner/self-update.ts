@@ -72,6 +72,18 @@ export interface UpdateFacts {
 	restarter: Restarter | null;
 	/** Coding sessions whose engine is mid-turn right now. */
 	busy: string[];
+	/**
+	 * The paired work observations `busy` was derived from (#1020): which request answered, and when.
+	 * Never their content — no session text, paths, arguments or tokens. Absent where nothing was asked.
+	 */
+	observations?: UpdateObservation[];
+}
+
+/** One local work observation the updater made. */
+export interface UpdateObservation {
+	source: "sessions" | "health";
+	success: boolean;
+	sampledAt: number;
 }
 
 export type UpdatePlan =

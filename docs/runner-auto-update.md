@@ -40,6 +40,28 @@ toggle off cancels an update that has not begun installing. A receipt is not suc
 page records checking, waiting, installing/restarting, verified reconnect, unsupported, offline, or
 failure with its last attempt.
 
+## Diagnostics: what the controller last did (#1020)
+
+`get_machine_policy` (and the Terminals machine detail) carries `auto_update_diagnostics` beside the
+existing fields. Receipt and action are separate facts:
+
+- `last_heartbeat_at` — when the runner's last status report arrived. A heartbeat re-sends the cached
+  status, so this is telemetry freshness only, never evidence the updater ran.
+- `last_check_at` / `last_decision_at` — the runner's own time for its last work/registry check and its
+  last controller decision. `last_attempt_at` follows the decision time; for a runner older than
+  0.4.101, which reports no decision time, it advances only when the reported status changes.
+- `next_retry_due_at` — when the controller's next timer is due. Heartbeats arriving well after it,
+  with `last_decision_at` unchanged, mean the timer is not running.
+- `blocker_class` — why it is waiting: `active_sessions` (a coding session not proven idle, an
+  unmatched turn, or a local run), `observation_failure` (the paired `/coding/sessions` + `/health`
+  look failed or was malformed — fail closed), `idle_wait` (observed idle, but the final race-safe
+  admission refused; retried), or `unknown`.
+- `observations` — the last five paired looks: `{success, sampled_at, source}` only. No session text,
+  process arguments, paths, prompts or tokens are reported.
+
+Retained engines that report `alive:true, runState:"idle"` and engines that have exited do not block;
+any other or missing lifecycle state does.
+
 Very old runners that cannot report a stable machine ID still need one manual upgrade/restart. They
 remain visible but their settings link is deliberately unavailable rather than attaching a policy to
 a mutable hostname.

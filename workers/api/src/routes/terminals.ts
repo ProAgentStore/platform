@@ -12,7 +12,7 @@ import { startRunnerUpdate, updateRunnerNode } from "../lib/runner-update.js";
 import { latestUpdateOp, latestUpdateOps, type RunnerUpdateOp } from "../lib/runner-update-ops.js";
 import { detectDuplicateRunners, type DuplicateVerdict, type RunnerProcessIdentity } from "../lib/runner-duplicates.js";
 import { runnerIdentityOf } from "../lib/runner-resources.js";
-import { getMachinePolicy, setMachinePolicy } from "../lib/machine-policy.js";
+import { getMachinePolicy, machinePolicyWire, setMachinePolicy } from "../lib/machine-policy.js";
 import type { Env } from "../types.js";
 
 /**
@@ -551,7 +551,7 @@ async function machineDetail(env: Env, uid: string, rawMachineId: string) {
 	machine.connected = checks.some(Boolean);
 	const policy = await getMachinePolicy(env, uid, machineId);
 	const update = await latestUpdateOp(env, uid, machine.node, machineId);
-	return { ...machine, update: update ?? undefined, auto_update_policy: policy.autoUpdate, latest_version: policy.latestVersion, auto_update_status: policy.status, last_attempt_at: policy.lastAttemptAt, last_error: policy.lastError };
+	return { ...machine, update: update ?? undefined, ...machinePolicyWire(policy) };
 }
 
 terminalRoutes.get("/machines/:machineId", async (c) => {
@@ -569,7 +569,7 @@ terminalRoutes.put("/machines/:machineId/policy", async (c) => {
 	const value = body.auto_update ?? body.autoUpdate;
 	if (typeof value !== "boolean") return c.json({ error: "auto_update must be a boolean." }, 400);
 	const policy = await setMachinePolicy(c.env, session.uid, machine.machineId, value);
-	return c.json({ machine: { ...machine, auto_update_policy: policy.autoUpdate, latest_version: policy.latestVersion, auto_update_status: policy.status, last_attempt_at: policy.lastAttemptAt, last_error: policy.lastError } });
+	return c.json({ machine: { ...machine, ...machinePolicyWire(policy) } });
 });
 
 /** The complete, non-mutating answer a caller needs before deleting a machine registration. */
