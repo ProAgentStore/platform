@@ -37,8 +37,9 @@ const DISPATCH_SURFACES = new Set([
 	"agent-think.ts",
 	// POST /v1/instances/:id/tools/:name — runs the tool the caller named.
 	"routes/tools.ts",
-	// POST permission-requests/:requestId/resume — re-runs only the owner-supplied, hash-bound call.
-	"routes/instances-permission-requests.ts",
+	// The verified permission resume (#1009) — re-runs only the exact blocked call the owner approved,
+	// bound to its fingerprint; reached from POST permission-requests/:id/{approve,resume}.
+	"lib/instance-permission-resume.ts",
 	// Runtime Website Builder's fixed, authorised FWS broker.
 	"lib/runtime-builder/workflow.ts",
 ]);

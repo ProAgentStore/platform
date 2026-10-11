@@ -41,6 +41,7 @@ import { statsRoutes } from "./routes/stats.js";
 import { controllerAiSettingsRoutes } from "./routes/controller-ai-settings.js";
 import { mcpAuditRoutes } from "./routes/mcp-audit.js";
 import { runAuditLedgerBackfill } from "./lib/mcp-audit-ledger.js";
+import { sweepExpiredPermissionRequests } from "./lib/instance-permission-resume.js";
 import { triggerRoutes } from "./routes/triggers.js";
 import { adminRoutes } from "./routes/admin.js";
 import { adminInstanceDetailRoutes } from "./routes/admin-instance-detail.js";
@@ -326,6 +327,12 @@ export default {
 		// The dedup fix (same PR) stopped NEW excess rows; this sweep cleans up the historical ones.
 		// A missed tick is harmless — the table just stays a bit bigger. Swallows its own errors.
 		ctx.waitUntil(sweepTerminalSnapshots(env).catch(() => undefined));
+		// Close permission requests past their expiry (#1009) — every fifth tick; bounded, and never a
+		// decided or consumed request. Approve and resume re-check expiry themselves; this is what
+		// makes an unattended request read `expired` instead of `pending` forever.
+		if (new Date(_event.scheduledTime).getUTCMinutes() % 5 === 0) {
+			ctx.waitUntil(sweepExpiredPermissionRequests(env).catch((err) => logUnhandled(env, err, { path: "scheduled:permission-request-expiry", method: "CRON" })));
+		}
 		// Copy legacy MCP audit keys into the time-ordered ledger (#1016): one bounded, resumable,
 		// idempotent batch per tick; a single KV read per tick once it has finished.
 		if (env.OAUTH_KV) {

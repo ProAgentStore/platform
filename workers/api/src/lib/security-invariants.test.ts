@@ -341,7 +341,12 @@ describe("credential storage has exactly one scheme", () => {
 		// `resources`, the machine's CPU/memory heartbeat sample (#924, migration 0173) — load
 		// averages and byte counts, nothing secret. The token_* columns are never named there, and
 		// the assertion below measures that rather than trusting this sentence.
-		const SAFE_NON_CRYPTO_WRITERS = new Set(["routes/terminals.ts", "lib/key-hint-backfill.ts", "lib/runner-resources.ts"]);
+		//
+		// Known-safe exception: lib/instance-permission-requests.ts is the permission-request STORE
+		// (#1009). It writes only lifecycle columns (status, timestamps); the sealed continuation's
+		// envelope columns are written and read exclusively by lib/instance-permission-recovery.ts,
+		// which imports lib/crypto.ts. The assertion below measures that it names none of them.
+		const SAFE_NON_CRYPTO_WRITERS = new Set(["routes/terminals.ts", "lib/key-hint-backfill.ts", "lib/runner-resources.ts", "lib/instance-permission-requests.ts"]);
 		const offenders = writers.filter((w) => !SAFE_NON_CRYPTO_WRITERS.has(w.f.rel) && !/from ["'][^"']*\/crypto\.js["']/.test(w.f.raw)).map((w) => `${w.f.rel} → ${w.writes.join(", ")}`);
 		expect(
 			offenders,
@@ -359,7 +364,7 @@ describe("credential storage has exactly one scheme", () => {
 		// The day one of them starts writing a secret without the envelope, this fails and the
 		// exemption stops covering it — which is the failure mode a bare allowlist has.
 		const ENVELOPE_COLUMN = /\b\w*(?:ciphertext|dek|dek_wrapped)\w*\b|\biv\b/i;
-		for (const rel of ["routes/terminals.ts", "lib/key-hint-backfill.ts", "lib/runner-resources.ts"]) {
+		for (const rel of ["routes/terminals.ts", "lib/key-hint-backfill.ts", "lib/runner-resources.ts", "lib/instance-permission-requests.ts"]) {
 			const file = ALL.find((f) => f.rel === rel);
 			expect(file, `${rel} is exempted from the crypto-import rule but no longer exists — drop the entry`).toBeDefined();
 			const sqlText = (file?.raw ?? "").match(/["'`][^"'`]*\b(?:INSERT\s+INTO|UPDATE)\s+\w+[^"'`]*["'`]/gi) ?? [];

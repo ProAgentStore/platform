@@ -37,6 +37,12 @@ describe("withoutSessionParam — sign-in continues to the full target", () => {
 		expect(withoutSessionParam("https://console.proagentstore.online/instances/i1/knowledge?subtab=files&session=JWT")).toBe("/instances/i1/knowledge?subtab=files");
 	});
 
+	it("keeps a permission-request push's exact control and request through sign-in, on either host (#1009)", () => {
+		expect(withoutSessionParam("https://proagentstore.online/console/instances/i1/settings?focus=permissions&permission_request=req-1&session=JWT")).toBe("/console/instances/i1/settings?focus=permissions&permission_request=req-1");
+		expect(withoutSessionParam("https://console.proagentstore.online/instances/i1/settings?session=JWT&focus=permissions&permission_request=req-1")).toBe("/instances/i1/settings?focus=permissions&permission_request=req-1");
+		expect(notificationClick({ url: "/console/instances/i1/settings?focus=permissions&permission_request=req-1" })).toEqual({ route: "/instances/i1/settings?focus=permissions&permission_request=req-1" });
+	});
+
 	it("leaves a path with no other query bare", () => {
 		expect(withoutSessionParam("https://proagentstore.online/console/instances/i1?session=JWT")).toBe("/console/instances/i1");
 	});

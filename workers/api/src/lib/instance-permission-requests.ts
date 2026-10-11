@@ -3,10 +3,10 @@ import type { Env } from "../types.js";
 import type { InstancePermissionRequestStatus, InstancePermissionRequestView } from "../agent-types.js";
 import { instancePermissionsLink } from "./console-links.js";
 import { stableStringify } from "./stable-json.js";
-import type { RegistryToolCtx, ToolDef } from "./connectors/types.js";
 
 export type PermissionRequestStatus = InstancePermissionRequestStatus;
-export interface PermissionBlocker { requestId: string; controlLink: string; currentScope: string | null; requestedScope: string; reason: string; resource: string | null; operation: string; }
+import type { PermissionBlocker } from "./connectors/types.js";
+export type { PermissionBlocker };
 export interface PermissionRequest {
 	id: string; instanceId: string; userId: string; control: string; connector: string | null; resourceId: string | null; requestedScope: string; currentScope: string | null;
 	operationKind: string; operationFingerprint: string; continuationRef: string; reason: string; status: PermissionRequestStatus; expiresAt: string;
@@ -94,36 +94,7 @@ export const consumeClaimedRequest=(env:Env,req:PermissionRequest)=>transitionRe
 export const markUncertainRequest=(env:Env,req:PermissionRequest)=>transitionRequest(env,req,"resumed","uncertain","continuation.uncertain");
 /** A grant that vanished between the final live read and dispatch is terminal, not retryable. */
 export const markRevokedAfterConsume=(env:Env,req:PermissionRequest)=>transitionRequest(env,req,"resumed","revoked","grant.revoked_during_continuation");
-export function permissionBlocker(req: PermissionRequest): PermissionBlocker { return {requestId:req.id,controlLink:instancePermissionsLink(req.instanceId,req.id),currentScope:req.currentScope,requestedScope:req.requestedScope,reason:req.reason,resource:req.resourceId,operation:req.operationKind}; }
-
-/**
- * Persist and notify about a missing write grant. Kept out of the central dispatcher so that it
- * remains a policy gate, not another ever-growing notification implementation.
- */
-export async function recoverMissingWritePermission(name: string, ctx: RegistryToolCtx, tool: ToolDef, instanceId: string, input: Record<string, unknown>, label: string): Promise<{ name: string; content: string; success: false; blocker?: PermissionBlocker }> {
-	if (!ctx.userId || !tool.connector) return { name, content: `Writing via the ${label} connector isn't permitted for this agent.`, success: false };
-	const fingerprint = await permissionOperationFingerprint(name, input);
-	let created: Awaited<ReturnType<typeof createOrReuseRequest>>;
-	try {
-		created = await createOrReuseRequest(ctx.env, { instanceId, userId: ctx.userId, control: "connector_consent", connector: tool.connector, resourceId: permissionResourceId(tool.connector,input), requestedScope: "write", currentScope: null, operationKind: name, operationFingerprint: fingerprint, continuationRef: fingerprint, reason: `${name} needs write access for ${label}.` });
-	} catch {
-		// A recovery-record failure is a refusal, never a fall-through to an external write.
-		return { name, content: `Writing via the ${label} connector isn't permitted for this agent. Enable write access for ${label} in the instance's Connections settings, then try again.`, success: false };
-	}
-	const blocker = permissionBlocker(created.request);
-	if (!created.reused) {
-		const { requestOwnerAttention } = await import("./owner-attention.js");
-		const { notifyUser } = await import("../routes/push.js");
-		try {
-			let observedPush: "sent" | "muted" | "deduped" | "unavailable" = "unavailable";
-			const outcome = await requestOwnerAttention(ctx.env, { event:"approval_required", userId:ctx.userId, instanceId, subject:{kind:"permission-request",instanceId,requestId:created.request.id}, about:{kind:"permission-request",id:created.request.id,state:"pending"}, title:`Permission needed: ${label} write access`, body:`${name} is blocked until you explicitly grant the minimum write scope.`, notificationType:"permission" }, {
-				notify: async (env, userId, type, title, body, url, opts) => { observedPush = await notifyUser(env, userId, type, title, body, url, opts); },
-				pushed: async () => observedPush,
-			});
-			await auditPermissionRequest(ctx.env,created.request,"notification.outcome",{outcome:outcome.push});
-		} catch {
-			await auditPermissionRequest(ctx.env,created.request,"notification.outcome",{outcome:"unavailable"}).catch(() => undefined);
-		}
-	}
-	return { name, content: `Writing via the ${label} connector needs your explicit permission. Open the verified Permissions & Connections control: ${instancePermissionsLink(instanceId, created.request.id)}`, success:false, blocker };
+export function permissionBlocker(req: PermissionRequest): PermissionBlocker {
+	const remedy = req.control === "tool_enabled" ? `Switch ${req.operationKind} back on for this instance` : `Grant ${req.connector ?? "this connector"} ${req.requestedScope} access for this instance`;
+	return {requestId:req.id,controlLink:instancePermissionsLink(req.instanceId,req.id),control:req.control,currentScope:req.currentScope,requestedScope:req.requestedScope,reason:req.reason,resource:req.resourceId,operation:req.operationKind,expiresAt:req.expiresAt,remedy:`${remedy}, at the linked control. Opening the link grants nothing; the owner must approve explicitly.`};
 }

@@ -775,7 +775,7 @@ export async function runRegistryTool(
 			const label = tool.connector ?? "this";
 			// A missing write consent is a durable owner action; its fingerprint has no raw arguments.
 			if (authority && ctx.userId && tool.connector) {
-				const { recoverMissingWritePermission } = await import("./instance-permission-requests.js");
+				const { recoverMissingWritePermission } = await import("./instance-permission-recovery.js");
 				return recoverMissingWritePermission(name, ctx, tool, authority, input || {}, label);
 			}
 			return { name, content: `Writing via the ${label} connector isn't permitted for this agent. Enable write access for ${label} in the instance's Connections settings, then try again.`, success: false };

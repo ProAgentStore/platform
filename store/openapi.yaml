@@ -341,6 +341,31 @@ components:
               status: { type: string, enum: [denied, cancelled] }
 
   schemas:
+    PermissionBlocker:
+      type: object
+      description: The structured remedy a blocked tool returns (#1009) — never prose to be re-navigated.
+      properties:
+        requestId: { type: string }
+        controlLink: { type: string, description: Same-origin verified Permissions & Connections link for this request. }
+        control: { type: string, enum: [connector_consent, tool_enabled] }
+        currentScope: { type: string, nullable: true }
+        requestedScope: { type: string, description: The minimum scope that unblocks this operation. }
+        reason: { type: string }
+        resource: { type: string, nullable: true }
+        operation: { type: string }
+        expiresAt: { type: string, format: date-time }
+        remedy: { type: string }
+    PermissionResumeOutcome:
+      type: object
+      properties:
+        requestId: { type: string }
+        status: { type: string, enum: [resumed, awaiting_call_approval, claimed, failed, uncertain, revoked, insufficient, stale, expired, cancelled, refused] }
+        verifiedScope: { type: string }
+        mode: { type: string, enum: [always, ask] }
+        detail: { type: string }
+        blocker: { $ref: "#/components/schemas/PermissionBlocker" }
+        result: { type: object, properties: { success: { type: boolean }, content: { type: string } } }
+        resume: { type: object, properties: { method: { type: string }, path: { type: string } } }
     ControllerAiSettingsView:
       type: object
       properties:
@@ -6842,57 +6867,49 @@ paths:
 
   /v1/instances/{instanceId}/permission-requests/{requestId}/approve:
     post:
-      summary: Explicitly grant and verify a blocked connector permission once
+      summary: Explicitly grant and verify a blocked permission, then resume the exact operation once
       description: |
-        The owner chooses the write-consent mode. The API atomically claims the pending decision,
-        writes the explicit consent, reads the actual binding back, then exposes one exact-payload
-        continuation action. It never replays the blocked external operation; the consumer must
-        re-check live consent and the request identity before any dispatch.
+        The owner's explicit act at the verified control. The API atomically claims the pending
+        decision, writes ONLY the grant the request names — write consent for one connector (`mode`
+        required), or switching one declared tool back on — reads it back, and then resumes the exact
+        blocked operation once from its sealed continuation (#1009): instance active, originating run
+        not stopped, arguments matching the approved fingerprint, tool policy and live grant re-checked,
+        claim consumed atomically before dispatch. An `ask` consent keeps its own per-call approval
+        (`awaiting_call_approval`). When no continuation was kept, the request stays `claimed` and the
+        response carries the owner-only `resume` action for the original caller. A failed write is never
+        replayed (`uncertain`). Opening the link never grants anything.
       operationId: approveInstancePermissionRequest
       tags: [Instances]
       parameters:
         - { $ref: "#/components/parameters/InstanceId" }
         - { name: requestId, in: path, required: true, schema: { type: string } }
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
               type: object
-              required: [mode]
               properties:
-                mode: { type: string, enum: [always, ask] }
+                mode: { type: string, enum: [always, ask], description: Required for a connector write consent. }
       responses:
         "200":
-          description: Grant verified and continuation claimed once
+          description: Grant verified; the exact operation resumed, queued for its per-call approval, or claimed for its caller
           content:
             application/json:
-              schema:
-                type: object
-                required: [requestId, status, resume, verifiedScope, mode]
-                properties:
-                  requestId: { type: string }
-                  status: { type: string, enum: [claimed] }
-                  resume:
-                    type: object
-                    description: Exact owner-scoped continuation action; it is not an authorization bypass or replay token.
-                    required: [method, path]
-                    properties:
-                      method: { type: string, enum: [POST] }
-                      path: { type: string }
-                  verifiedScope: { type: string, enum: [write] }
-                  mode: { type: string, enum: [always, ask] }
+              schema: { $ref: "#/components/schemas/PermissionResumeOutcome" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: "The grant was withdrawn or no longer covers the exact operation; carries `blocker`" }
         "404": { $ref: "#/components/responses/NotFound" }
-        "409": { description: Request is terminal, stale, expired, or could not be verified }
-        "503": { description: The explicit consent could not be saved }
+        "409": { description: "Request terminal, expired or could not be verified; or the resume was refused, went stale, failed or is uncertain (`status` says which)" }
+        "503": { description: The resumed operation's outcome is uncertain and will not be retried }
 
   /v1/instances/{instanceId}/permission-requests/{requestId}/resume:
     post:
       summary: Safely retry one verified blocked operation
       description: |
-        The owner-facing client must provide the original operation and exact arguments. The service checks the
+        Used only when approval could not resume the operation itself (no kept continuation). The
+        owner-facing client must provide the original operation and exact arguments. The service checks the
         canonical secret-safe fingerprint, active instance, current policy and live consent, then
         atomically consumes the claim before entering the normal registry dispatcher. Ask mode
         produces a fresh per-call approval card; it never approves a historical pending call.
@@ -6917,10 +6934,14 @@ paths:
       responses:
         "200":
           description: Dispatched, or queued for a new per-call approval when mode is Ask
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PermissionResumeOutcome" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: "The live grant was withdrawn or does not cover the exact operation; carries `blocker`" }
         "404": { $ref: "#/components/responses/NotFound" }
-        "409": { description: Request is terminal, stale, mismatched, revoked, stopped, or already consumed }
+        "409": { description: Request is terminal, stale, mismatched, stopped (instance or originating run), already consumed, or failed/uncertain }
         "503": { description: Continuation outcome was uncertain and will not be retried }
 
   /v1/instances/{instanceId}/permission-requests/{requestId}/deny:

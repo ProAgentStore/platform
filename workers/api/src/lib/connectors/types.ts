@@ -27,6 +27,25 @@ import type { Env } from "../../types.js";
 import type { ConnectorGrant } from "../connector-grants.js";
 import type { ConversationTransfer } from "../conversation-transfer.js";
 
+/**
+ * The structured remedy a blocked tool returns (#1009, #517): the exact verified link, the minimum
+ * scope (`requestedScope`), what was blocked, and the one action that unblocks it — so an assistant
+ * relays a fact instead of inventing navigation. Built by `permissionBlocker` in
+ * lib/instance-permission-requests.ts; declared here so the connector contract stays a leaf.
+ */
+export interface PermissionBlocker {
+	requestId: string;
+	controlLink: string;
+	control: string;
+	currentScope: string | null;
+	requestedScope: string;
+	reason: string;
+	resource: string | null;
+	operation: string;
+	expiresAt: string;
+	remedy: string;
+}
+
 // ── The tool contract (was lib/tool-registry.ts) ─────────────────────────────
 
 export interface RegistryToolCtx {
@@ -112,7 +131,7 @@ export interface RegistryToolResult {
 	content: string;
 	success: boolean;
 	/** Platform-authored, verified remedy metadata for a missing per-instance permission (#1009). */
-	blocker?: { requestId: string; controlLink: string; currentScope: string | null; requestedScope: string; reason: string; resource: string | null; operation: string };
+	blocker?: PermissionBlocker;
 	/**
 	 * Opaque binary blocks returned by a remote tool. They deliberately never enter
 	 * `content`: model transcripts and durable event logs are the wrong place for

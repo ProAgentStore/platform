@@ -44,6 +44,7 @@ import { runHealth, waitClause } from "../lib/work-report.js";
 import { loopDriverFor, startRefusalIsWaitable } from "../lib/loop-drivers.js";
 import { dispatchLoopStartReceipt, loopStartsPage } from "../lib/loop-start-receipts.js";
 import { cursorParam } from "../lib/keyset-cursor.js";
+import { recoverPolicyRefusal } from "../lib/instance-permission-recovery.js";
 import { clientClaimFrom, trackStartOutcome } from "../lib/objective-lifecycle.js";
 import { findDuplicateObjective } from "../lib/objective-dedupe.js";
 import { describeBusyHolder } from "../lib/loop-busy.js";
@@ -228,10 +229,13 @@ toolRoutes.post("/:id/tools/:name", async (c) => {
 	// instance could still be driven to any tool in the registry from here or via MCP.
 	const policy = await instanceToolPolicy(c.env, instanceId, session.uid, instance.config);
 	const entry = policy.find((t) => t.name === name);
+	const input = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
 	if (!entry?.allowed) {
+		// An owner-liftable refusal becomes a request with a verified remedy link (#1009); a creator's declaration never does.
+		const asked = entry ? await recoverPolicyRefusal(c.env, { instanceId, userId: session.uid, operation: name, reason: entry.reason, args: input }).catch(() => null) : null;
+		if (asked) return c.json({ error: explainRefusal(name, entry?.reason ?? "not_declared"), blocker: asked.blocker }, 403);
 		throw new HttpError(403, explainRefusal(name, entry?.reason ?? "not_declared"));
 	}
-	const input = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
 	const invalid = validateAgainstSchema(tool.jsonSchema, input);
 	if (invalid) throw new HttpError(400, invalid);
 	// The owner invoking a tool directly (console, MCP call_instance_tool) is an explicit owner act (#1015).
