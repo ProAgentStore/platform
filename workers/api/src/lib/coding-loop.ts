@@ -1,4 +1,4 @@
-import type { ObjectiveOrigin } from "./coding-objective-delivery.js";
+import type { ObjectiveOrigin } from "./coding-objective-origin.js";
 import { clipMarked } from "./clip-marked.js";
 import { runUserWorkersAi, systemPromptSections, systemPromptText, type StreamDeadlines, type SystemPromptBlock } from "./user-ai.js";
 import { hitOutputCap } from "./reply-truncation.js";

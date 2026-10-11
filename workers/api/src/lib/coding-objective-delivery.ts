@@ -23,6 +23,7 @@
  * Pure state, driven by the workflow from journalled values only, so a replay reaches the same verdict.
  */
 import type { CodingActionKind } from "./coding-loop.js";
+import type { ObjectiveOrigin } from "./coding-objective-origin.js";
 
 /** Advertised by a runner whose `input()` renders `objective` WITH its verified origin (browser-runner coding/run-objective.ts). */
 export const RUN_OBJECTIVE_CAPABILITY = "coding.run-objective.v2";
@@ -31,12 +32,7 @@ export const INPUT_IDEMPOTENT_CAPABILITY = "coding.input-idempotent";
 /** How many turns per runner generation may carry the objective before an unconfirmed delivery is reported as such. */
 export const MAX_OBJECTIVE_SENDS = 3;
 
-/**
- * What the platform VERIFIED about where the objective came from — never who typed it (mirrors the runner's
- * type). `account`: submitted through the owner's authenticated account, which may be an assistant on an
- * MCP client. There is no "owner wrote it" kind, because nothing verifies human authorship.
- */
-export type ObjectiveOrigin = { kind: "account" | "supervisor" | "trigger" | "unverified"; by?: string };
+export type { ObjectiveOrigin } from "./coding-objective-origin.js";
 
 export type ObjectiveDeliveryState = "pending" | "delivered" | "unsupported" | "unconfirmed" | "unknown";
 

@@ -18,7 +18,7 @@
 // Adding an agent type is an entry here — not a route change, not a button, not a branch in the
 // console. And when `capabilities.workflow` is finally retired in favour of composed steps
 // (docs/agent-platform-strategy.md), this is the single place that has to learn the new form.
-import type { ObjectiveOrigin } from "./coding-objective-delivery.js";
+import type { ObjectiveOrigin } from "./coding-objective-origin.js";
 import { createLoopRun, finishLoopRun } from "./agent-loop-store.js";
 import { linkRunToIssue } from "./issue-tickets.js";
 import { MAX_ITERATIONS_CAP, sanitizeMaxIterations } from "./agent-loop.js";
