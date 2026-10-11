@@ -36,6 +36,8 @@ import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { CodingRuntime } from "../../../../../packages/browser-runner/src/coding/runtime.js";
 import type { CodingDecision, CodingGoal } from "../../lib/coding-loop.js";
 import { realSchemaD1, type RealSchemaD1, seedTenant } from "../../lib/d1-sqlite.js";
+import { MAX_OBJECTIVE_CONSTRAINT_CHARS } from "../../lib/coding-objective-delivery.js";
+import { activeConstraints, constraintLines, constraintSources } from "../../lib/coding-scope-constraints.js";
 import { RunnerUnreachableError } from "../../lib/runner-unreachable.js";
 import type { Env } from "../../types.js";
 import type { CodingSessionParams } from "../coding-session-params.js";
@@ -578,21 +580,85 @@ describe("the workflow never reports changed content delivered under an id the r
 	});
 });
 
-// ── Constraints that do not fit one envelope: refused whole, never cut (#1019 case 6, check-silent-slice) ──
+// ── Constraints that do not fit one envelope: refused whole, never cut — and NOTHING reaches the engine ─────────
+//
+// A runner that renders the envelope (v3) must receive the constraints in force WHOLE, or no act at all: the run
+// stops before any engine input, with a refused receipt (#1019). Lines are computed with the production
+// constraintLines(), so the boundary is the real one. Legacy `unsupported` runners keep their own path (case 1 above).
 
-describe("constraints are delivered whole or the objective is refused before anything runs (#1019)", () => {
-	it("a grant line over the envelope bound: the objective is NOT sent, the receipt says refused, the instruction still runs once", async () => {
-		const names = Array.from({ length: 14 }, (_, i) => `worker-pool-process-name-${String(i).padStart(2, "0")}-abcdefgh`);
-		d1.exec(`UPDATE coding_repos SET instructions = '${names.map((n) => `You may kill the ${n} processes.`).join(" ")}' WHERE id = 'r1'`);
+describe("constraints are delivered whole or the run stops before ANY engine input (#1019)", () => {
+	const grants = (names: string[]) => names.map((n) => `You may kill the ${n} processes.`).join(" ");
+	const linesFor = (names: string[]) => constraintLines(activeConstraints(constraintSources({ standingInstructions: grants(names) })));
+	const name = (i: number) => `worker-pool-process-name-${String(i).padStart(2, "0")}-abcdefgh`;
+	/** The most process names whose single grant line still fits one envelope line — and the count one past it. */
+	const atLimit = (() => {
+		let k = 1;
+		while (linesFor(Array.from({ length: k + 1 }, (_, i) => name(i))).every((l) => l.length <= MAX_OBJECTIVE_CONSTRAINT_CHARS)) k++;
+		return k;
+	})();
+	const names = (k: number) => Array.from({ length: k }, (_, i) => name(i));
+	const standing = (k: number) => d1.exec(`UPDATE coding_repos SET instructions = '${grants(names(k))}' WHERE id = 'r1'`);
+	const stopEvents = () => events().filter((e) => e.state === "refused");
+
+	it("one name past the limit: ZERO engine inputs, nothing accepted, a refused receipt, and the run stops naming why", async () => {
+		standing(atLimit + 1);
+		expect(linesFor(names(atLimit + 1)).some((l) => l.length > MAX_OBJECTIVE_CONSTRAINT_CHARS)).toBe(true);
+		decisions = [SEND("list the stray workers"), FINISH];
+		const r = await run();
+		expect(readBy(target)).toEqual([]); // no engine process read anything
+		expect(executions("list the stray workers")).toBe(0);
+		expect(actIds).toEqual([]); // nothing was even dispatched to the runner
+		expect(objectiveStates()).toEqual(["refused"]);
+		expect(stopEvents()[0]).toMatchObject({ constraintLines: linesFor(names(atLimit + 1)).length });
+		expect(String(stopEvents()[0].message)).toContain("a partial set is never sent");
+		expect(String(stopEvents()[0].message)).toContain("stopped before the engine received anything");
+		expect(r).toMatchObject({ outcome: "cancelled", detail: expect.stringContaining("a partial set is never sent") });
+	});
+
+	it("exactly at the limit: delivered WHOLE — one execution, the exact line (with its Unicode em dash) in the engine's bytes", async () => {
+		standing(atLimit);
+		const lines = linesFor(names(atLimit));
+		expect(Math.max(...lines.map((l) => l.length))).toBeLessThanOrEqual(MAX_OBJECTIVE_CONSTRAINT_CHARS);
+		expect(lines.some((l) => l.includes("—"))).toBe(true);
 		decisions = [SEND("list the stray workers"), FINISH];
 		await run();
-		const [first] = readBy(target);
-		expect(first.text).toContain("list the stray workers");
-		expect(first.text).not.toContain("RUN OBJECTIVE");
+		const read = readBy(target);
 		expect(executions("list the stray workers")).toBe(1);
-		const refused = events().find((e) => e.state === "refused");
-		expect(refused).toMatchObject({ constraintLines: expect.any(Number) });
-		expect(String(refused?.message)).toContain("a partial set is never sent");
-		expect(objectiveStates()).toEqual(["refused"]);
+		expect(carriesObjective(read[0])).toBe(true);
+		for (const line of lines) expect(read[0].text).toContain(line); // byte-exact, Unicode included
+		expect(objectiveStates()).toEqual(["delivered"]);
+	});
+
+	it("a replay of the refused run from its journal refuses again: still zero engine inputs, the receipt not re-reported", async () => {
+		standing(atLimit + 1);
+		decisions = [SEND("list the stray workers"), FINISH];
+		const j = newJournal();
+		await run(params(), j);
+		const first = events();
+		decisions = [SEND("list the stray workers"), FINISH];
+		const again = await run(params(), j);
+		expect(readBy(target)).toEqual([]);
+		expect(actIds).toEqual([]);
+		expect(events()).toEqual(first);
+		expect(again).toMatchObject({ outcome: "cancelled" });
+	});
+
+	it("already DELIVERED, then a newer directive makes the set overlong: the next act is stopped — delivery is no bypass", async () => {
+		let n = 0;
+		hooks.act = async (_m, _b, send) => {
+			const out = send();
+			if (++n === 1) {
+				d1.exec(`INSERT INTO coding_session_directives (id, session_id, instance_id, user_id, repo_id, run_id, kind, delivery, content, created_at)
+				  VALUES ('dir-grants', 's1', 'i1', 'u1', 'r1', NULL, 'steer', 'queued', '${grants(names(atLimit + 1))}', ${Date.now()})`);
+			}
+			return out;
+		};
+		decisions = [SEND("first, within the constraints"), SEND("second, after the directive"), FINISH];
+		const r = await run();
+		expect(executions("first, within the constraints")).toBe(1);
+		expect(executions("second, after the directive")).toBe(0);
+		expect(actIds).toHaveLength(1);
+		expect(objectiveStates()).toEqual(["delivered", "refused"]);
+		expect(r).toMatchObject({ outcome: "cancelled" });
 	});
 });

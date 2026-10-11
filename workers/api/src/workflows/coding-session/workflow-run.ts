@@ -538,8 +538,12 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			await traceCodingRun(env, traceCtx, "coding.run.objective", line, { ...objective.receipt(state) });
 			if (state !== "delivered") await postToChat(`**Loop** — ${line}`);
 		});
+	// Set when the required envelope was refused (#1019): nothing more reaches the engine, and the next snapshot ends the run.
+	let refusedStop: string | null = null;
+	let lastPane = {} as CodingPaneSnapshot;
 	const measured = async (p: Promise<unknown>): Promise<CodingPaneSnapshot> => {
 		const pane = (await p) as CodingPaneSnapshot;
+		lastPane = pane;
 		probe.saw(pane?.pane);
 		lastEngine = pane?.engine ?? lastEngine;
 		// Read off the JOURNALLED snapshot, so a replay settles delivery exactly as the first pass did.
@@ -550,15 +554,22 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 	};
 
 	const deps: CodingDeps = {
-		snapshot: () => measured(guard(runRetry, `s${n++}-snapshot`, capture)),
+		snapshot: () => (refusedStop ? Promise.resolve({ ...lastPane, cancelled: true, stopReason: refusedStop }) : measured(guard(runRetry, `s${n++}-snapshot`, capture))),
 		act: async (a: CodingActionKind) => {
 			const label = `s${n++}-act`;
 			// Every instruction carries its own id (#1019): deterministic per step, so a step retry or a
 			// guard re-attempt sends the SAME id, and a runner that already accepted it does not run it twice.
 			const withId: CodingActionKind = a.kind === "message" ? { ...a, inputId: a.inputId ?? `act:${runKey}:${label}` } : a;
-			// The constraints in force now ride the objective WHOLE, or it is not sent and the run says so (#1019).
-			const refused = await objective?.attempt(withId, constraintLines(goal.scopeConstraints ?? activeConstraints(constraintSources(goal))));
-			if (refused) await reportObjective(refused);
+			// The constraints in force now ride the objective WHOLE — or NOTHING is sent: the receipt is journalled and the run
+			// stops before any engine input (#1019). Recomputed from journalled state, so a replay refuses again.
+			const lines = constraintLines(goal.scopeConstraints ?? activeConstraints(constraintSources(goal)));
+			const block = objective?.blocks(lines);
+			if (block?.blocked && objective) {
+				if (block.settled) await reportObjective(block.settled);
+				refusedStop = objective.stopReason();
+				return lastPane;
+			}
+			await objective?.attempt(withId, lines);
 			// Composed inside every attempt (lib/coding-act-send.ts): after a reconnect, against the engine and runner now there
 			// (#693 replay composed in the step too, so a replayed step re-sends what it sent).
 			const compose = () => (objective ? objective.attach(withId) : withId);
@@ -594,6 +605,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		// so a turn survives an eviction rather than restarting its whole 480-second window. NOT known
 		// to save subrequests (`idleWaitIsDurable`); `CODING_IDLE_DURABLE=0` restores the one-step wait.
 		waitIdle: () => {
+			if (refusedStop) return Promise.resolve(lastPane); // nothing was sent, so there is no turn to wait for
 			// ONE increment, above the branch — the counter must not depend on which wait ran. Why: the wiring test.
 			const label = `s${n++}-waitidle`;
 			return measured(

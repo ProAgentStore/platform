@@ -156,21 +156,35 @@ export class ObjectiveDelivery {
 	}
 
 	/**
-	 * Before an act is sent, OUTSIDE its step: recorded as attempted if it will carry the objective, so a send that never
-	 * returns is not forgotten. Constraints that do not fit one envelope whole settle it `refused` here — before anything runs.
+	 * Before EVERY act, outside its step (#1019): when this runner renders the envelope and the constraints in force now
+	 * do not fit it whole, no act may reach the engine — not the objective-bearing one, and not a plain one after the
+	 * objective was delivered, since the engine would then work without a constraint that binds it. `settled` is the
+	 * receipt to journal when this refusal is new. A runner that cannot render the envelope at all keeps its own
+	 * `unsupported` path and is never blocked here.
 	 */
-	async attempt(action: CodingActionKind, constraints: readonly string[] = []): Promise<ObjectiveDeliveryState | null> {
+	blocks(constraints: readonly string[]): { blocked: boolean; settled: ObjectiveDeliveryState | null } {
+		if (this.supported !== true || !this.text.trim() || envelopeFits(constraints)) return { blocked: false, settled: null };
+		this.constraints = constraints;
+		if (this.state === "refused") return { blocked: true, settled: null };
+		this.state = "refused";
+		return { blocked: true, settled: this.state };
+	}
+
+	/** Why the run stopped at a refused envelope — the receipt line, for the run's own outcome. */
+	stopReason(): string {
+		return this.describe("refused");
+	}
+
+	/**
+	 * Before an act is sent, OUTSIDE its step: recorded as attempted if it will carry the objective, so a send that never
+	 * returns is not forgotten. Only reached for constraints that fit ({@link blocks} stops every other act first).
+	 */
+	async attempt(action: CodingActionKind, constraints: readonly string[] = []): Promise<void> {
 		this.inflight = action.kind === "message" && action.inputId ? action.inputId : null;
 		this.constraints = constraints;
 		// The content a read must match — computed even when not owed now, since a new generation may make it owed mid-send.
 		if (this.inflight && action.kind === "message") this.digests.set(this.inflight, await actDigest(this.withObjective(action)));
-		if (!this.inflight || !this.owed()) return null;
-		if (!envelopeFits(constraints)) {
-			this.state = "refused";
-			return this.state;
-		}
-		this.attempted.push(this.inflight);
-		return null;
+		if (this.inflight && this.owed() && envelopeFits(constraints)) this.attempted.push(this.inflight);
 	}
 
 	/** The action to send: the objective — with ALL the constraints {@link attempt} saw — attached while it is owed, else the action unchanged. */
@@ -251,7 +265,7 @@ export class ObjectiveDelivery {
 			case "unknown":
 				return `The run's objective (${size}) was sent${where}, but no runner receipt settled it — a lost reply, a send that never returned, or a runner holding different content under that turn's id — and no read receipt followed: whether the engine has it is unknown.`;
 			case "refused":
-				return `The run's objective (${size}) was NOT delivered to the engine${where}: the owner's constraints in force (${this.constraints.length} line(s)) do not fit one envelope whole (at most ${MAX_OBJECTIVE_CONSTRAINTS} lines of ${MAX_OBJECTIVE_CONSTRAINT_CHARS} characters), and a partial set is never sent. The Pilot relays it in its own words; every instruction is still screened against all of them.`;
+				return `The run's objective (${size}) was NOT delivered to the engine${where}, and the run was stopped before the engine received anything: the owner's constraints in force (${this.constraints.length} line(s)) do not fit one envelope whole (at most ${MAX_OBJECTIVE_CONSTRAINTS} lines of ${MAX_OBJECTIVE_CONSTRAINT_CHARS} characters), and a partial set is never sent. Shorten or merge the standing rules or directives, then continue the run.`;
 			case "undelivered":
 				return `The run's objective (${size}) was NOT delivered to the engine${where}: the run ended before any turn carried it to the engine it was owed to.`;
 			default:
