@@ -414,3 +414,138 @@ describe("session targets the owner gave are resolved exactly or fail closed (#1
 		expect(statuses()).toEqual(["s1:ended", "s2:active"]);
 	});
 });
+
+// ── #1015 external audit of 374cc0f8: token boundaries, negation leads, named sessions, qualified repos ──
+//
+// One fail-closed model: a token that only CONTAINS a real id is not that id, every negation lead
+// excludes, "the session named/for X" names X (sentence punctuation is not part of it), and a short
+// repo name shared by two qualified repos is ambiguous — never the model's pick.
+
+describe("run ids are exact whole tokens, and every negation lead excludes (#1015 audit)", () => {
+	const A = "11111111-1111-4111-8111-111111111111";
+	const B = "22222222-2222-4222-8222-222222222222";
+	const C = "33333333-3333-4333-8333-333333333333";
+	beforeEach(() => {
+		for (const id of [A, B, C]) {
+			d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at) VALUES ('${id}', 'u1', 'i1', 'synthetic objective', 'running', 10, ${Date.now()})`);
+		}
+	});
+	/** [A, B, C, run-target, run-other] — every writer the stop could reach. */
+	const all = () => [A, B, C, "run-target", "run-other"].map(cancelRequested);
+
+	it.each([
+		["extra-A", `Please stop extra-${A}.`],
+		["xA", `Please stop x${A}.`],
+		["_A", `Please stop _${A}.`],
+		["A-extra", `Please stop ${A}-extra.`],
+	])("'%s' is not run A: nothing stops with the selector omitted, and the model's B is refused", async (_name, text) => {
+		script = [stopCall({}), { response: "ok" }];
+		await think(turn(text));
+		expect(all()).toEqual([0, 0, 0, 0, 0]);
+		script = [stopCall({ runId: B }), { response: "ok" }];
+		await think(turn(text));
+		expect(all()).toEqual([0, 0, 0, 0, 0]);
+	});
+
+	it.each([`Never stop ${A}. Stop ${B}.`, `No need to stop ${A}. Stop ${B}.`, `Don't stop ${A}. Stop ${B}.`, `Do not stop ${A}. Stop ${B}.`])("%s never stops A — omitted selector stops B only, the model's A is refused", async (text) => {
+		script = [stopCall({}), { response: "ok" }];
+		await think(turn(text));
+		expect(all()).toEqual([0, 1, 0, 0, 0]);
+		d1.exec("UPDATE agent_loop_runs SET cancel_requested = 0");
+		script = [stopCall({ runId: A }), { response: "ok" }];
+		await think(turn(text));
+		expect(all()).toEqual([0, 0, 0, 0, 0]);
+	});
+
+	// ── controls ──
+	it("the exact id: omitted and correct selectors stop A only; a mismatched selector stops nothing", async () => {
+		for (const [input, expected] of [[{}, [1, 0, 0, 0, 0]], [{ runId: A }, [1, 0, 0, 0, 0]], [{ runId: B }, [0, 0, 0, 0, 0]]] as const) {
+			d1.exec("UPDATE agent_loop_runs SET cancel_requested = 0");
+			script = [stopCall(input), { response: "ok" }];
+			await think(turn(`Please stop ${A}.`));
+			expect(all(), JSON.stringify(input)).toEqual(expected);
+		}
+	});
+
+	it("'never mind' is not a negation of what follows", async () => {
+		script = [stopCall({}), { response: "ok" }];
+		await think(turn(`Never mind, stop ${B}.`));
+		expect(all()).toEqual([0, 1, 0, 0, 0]);
+	});
+
+	it("a global stop still stops everything, and 'everything except A' everything else", async () => {
+		script = [stopCall({}), { response: "ok" }];
+		await think(turn("Stop everything."));
+		expect(all()).toEqual([1, 1, 1, 1, 1]);
+		d1.exec("UPDATE agent_loop_runs SET cancel_requested = 0");
+		script = [stopCall({}), { response: "ok" }];
+		await think(turn(`Stop everything except ${A}.`));
+		expect(all()).toEqual([0, 1, 1, 1, 1]);
+	});
+});
+
+describe("session targets: negation leads, named sessions, sentence punctuation and qualified repos (#1015 audit)", () => {
+	const seedSession = (id: string, repoId: string, name: string) => {
+		d1.exec(`INSERT OR IGNORE INTO coding_repos (id, instance_id, user_id, name) VALUES ('${repoId}', 'i1', 'u1', '${name}')`);
+		d1.exec(`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, client_type, status) VALUES ('${id}', 'i1', '${repoId}', 'u1', 'claude', 'active')`);
+	};
+	const statuses = () => (d1.sqlite.prepare("SELECT id, status FROM coding_sessions ORDER BY id").all() as Array<{ id: string; status: string }>).map((r) => `${r.id}:${r.status}`);
+	const reset = () => d1.exec("UPDATE coding_sessions SET status = 'active'");
+	const end = async (text: string, input: Record<string, unknown> = {}) =>
+		getRegistryTool("end_coding_session")?.handler({ env, instanceId: "i1", userId: "u1", turn: { author: "owner", text } } as never, input);
+
+	it("'Never close the platform session. Close the aipa session.' never closes platform, even when the model picks it", async () => {
+		seedSession("s1", "r1", "platform");
+		seedSession("s2", "r2", "aipa");
+		const text = "Never close the platform session. Close the aipa session.";
+		await end(text, { repo: "platform" });
+		expect(statuses()).toEqual(["s1:active", "s2:active"]);
+		for (const input of [{}, { repo: "aipa" }]) {
+			reset();
+			await end(text, input);
+			expect(statuses(), JSON.stringify(input)).toEqual(["s1:active", "s2:ended"]);
+		}
+	});
+
+	it.each([[{}], [{ repo: "aipa" }]])("'Please close the session named ghost.' with only aipa open ends nothing (input %j)", async (input) => {
+		seedSession("s2", "r2", "aipa");
+		await end("Please close the session named ghost.", input);
+		expect(statuses()).toEqual(["s2:active"]);
+	});
+
+	it("'Please close the session for platform.' — the period is the sentence's: omitted and correct selectors end platform, a mismatched one cannot end aipa", async () => {
+		seedSession("s1", "r1", "platform");
+		seedSession("s2", "r2", "aipa");
+		for (const input of [{}, { repo: "platform" }, { repo: "aipa" }]) {
+			reset();
+			await end("Please close the session for platform.", input);
+			expect(statuses(), JSON.stringify(input)).toEqual(["s1:ended", "s2:active"]);
+		}
+	});
+
+	it("with owner1/platform and owner2/platform, the owner's owner1/platform never authorizes the model's owner2/platform", async () => {
+		seedSession("s1", "r1", "owner1/platform");
+		seedSession("s2", "r2", "owner2/platform");
+		for (const input of [{ repo: "owner2/platform" }, {}, { repo: "owner1/platform" }]) {
+			reset();
+			await end("Please close the owner1/platform session.", input);
+			expect(statuses(), JSON.stringify(input)).toEqual(["s1:ended", "s2:active"]);
+		}
+	});
+
+	it.each([[{}], [{ repo: "owner2/platform" }], [{ repo: "owner1/platform" }]])("a bare 'platform' shared by two repositories is ambiguous: nothing ends (input %j)", async (input) => {
+		seedSession("s1", "r1", "owner1/platform");
+		seedSession("s2", "r2", "owner2/platform");
+		await end("Please close the platform session.", input);
+		expect(statuses()).toEqual(["s1:active", "s2:active"]);
+	});
+
+	it("controls: a generic close ends the one open session; a unique short name still resolves its qualified repo", async () => {
+		seedSession("s1", "r1", "acme/widget");
+		await end("Please close the session.");
+		expect(statuses()).toEqual(["s1:ended"]);
+		reset();
+		await end("Please close the widget session.", { repo: "acme/widget" });
+		expect(statuses()).toEqual(["s1:ended"]);
+	});
+});

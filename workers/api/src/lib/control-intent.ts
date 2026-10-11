@@ -45,7 +45,7 @@ export function ownWords(text: string): string {
 const STOP = "(?:stop|halt|cancel|abort|kill|terminate)";
 /** Closing words — consent to END A SESSION only, and only when the clause names the session. */
 const END = "(?:stop|halt|cancel|abort|kill|terminate|close|end|finish|shut\\s+down|wrap\\s+up)";
-const LEAD = "^(?:(?:ok(?:ay)?|please|pls|just|now|then|so|and|alright|right|hey)[,\\s]+)*";
+const LEAD = "^(?:(?:ok(?:ay)?|please|pls|just|now|then|so|and|alright|right|hey|never\\s+mind)[,\\s]+)*";
 const ASK = "\\b(?:please|can you|could you|would you|will you|i want you to|i need you to|go ahead and)\\s+";
 const ENOUGH = /^(?:that'?s enough|enough)\b/i;
 const negated = (verb: string) => new RegExp(`\\b(?:don'?t|do not|never|no need to|not)\\s+(?:\\w+\\s+){0,2}${verb}\\b`, "i");
@@ -81,18 +81,26 @@ export function asksToEndSession(text: string): boolean {
  * run has, and never as the real id it starts with (#1015). `mentions` already required the exact token;
  * this keeps the id scan from re-adding the prefix behind it.
  */
-const UUID = /(?<![\w-])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[\w-]*/gi;
+const UUID_SHAPE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+/**
+ * Every whole token that CONTAINS an id shape, lower-cased — `extra-<id>`, `x<id>`, `_<id>` and
+ * `<id>-extra` are each their own token, an id no run has, so they narrow to nothing instead of either
+ * matching the real id or vanishing and leaving "stop" to mean every run (#1015 audit).
+ */
+const idTokens = (text: string): string[] => (text.match(/[\w-]+/g) ?? []).filter((t) => UUID_SHAPE.test(t)).map((t) => t.toLowerCase());
 
 const esc = (id: string) => id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** Does `text` mention `id` as a whole token (not as part of a longer id or word)? */
 const mentions = (text: string, id: string) => new RegExp(`(^|[^\\w-])${esc(id)}(?![\\w-])`, "i").test(text);
+/** A repository name as a whole path token: not a segment of a longer `owner/repo` path. */
+const repoMention = (text: string, name: string) => new RegExp(`(^|[^\\w./-])${esc(name)}(?![\\w/-]|\\.[\\w])`, "i").test(text);
 /**
- * Where the owner EXCLUDES a target (#1015): "not X", "except X", "excluding X", "other than X", "apart
- * from X", "leave X". Each lead covers the rest of its clause, so "not run-a or run-b" excludes both and
+ * Where the owner EXCLUDES a target (#1015): "not X", "don't / never / no need to …X", "except X",
+ * "excluding X", "other than X", "apart from X", "leave X" ("never mind" is not one). Each lead covers the rest of its clause, so "not run-a or run-b" excludes both and
  * "do not stop run-b" excludes run-b. A clause ends at sentence punctuation or a "but" that turns back.
  * Reading too much as excluded only narrows what may be touched, never widens it.
  */
-const EXCLUDE_LEAD = /\b(?:not|don'?t|except(?:\s+for)?|excluding|other\s+than|apart\s+from|leave)\b/gi;
+const EXCLUDE_LEAD = /\b(?:not|don'?t|never(?!\s+mind\b)|no\s+need\s+to|except(?:\s+for)?|excluding|other\s+than|apart\s+from|leave)\b/gi;
 /** A clause ends at sentence punctuation, a colon ("Not X: stop Y" turns to Y), or a "but" that turns back. */
 const CLAUSE_END = /[\n.!?;:]|,?\s+but\s+(?!not\b)/i;
 /** Each exclusion as `[start, end)` in `text`: from its lead to the end of its clause. */
@@ -115,11 +123,11 @@ function withoutExclusions(text: string): string {
 	return out;
 }
 /** The candidates (lower-cased) the owner excluded, plus any run-id-shaped token in an excluded span. */
-function excludedOf(text: string, candidates: readonly string[], uuids = false): string[] {
+function excludedOf(text: string, candidates: readonly string[], uuids = false, match = mentions): string[] {
 	const out = new Set<string>();
 	for (const span of excludedSpans(text)) {
-		for (const id of candidates) if (mentions(span, id)) out.add(id.toLowerCase());
-		if (uuids) for (const m of span.matchAll(UUID)) out.add(m[0].toLowerCase());
+		for (const id of candidates) if (match(span, id)) out.add(id.toLowerCase());
+		if (uuids) for (const t of idTokens(span)) out.add(t);
 	}
 	return [...out];
 }
@@ -149,7 +157,7 @@ export function runsNamedBy(text: string, candidates: readonly string[]): string
 function runsPointedAt(text: string, candidates: readonly string[]): string[] {
 	const said = withoutExclusions(targetText(text));
 	const named = new Set(candidates.filter((id) => mentions(said, id)).map((id) => id.toLowerCase()));
-	for (const m of said.matchAll(UUID)) named.add(m[0].toLowerCase());
+	for (const t of idTokens(said)) named.add(t);
 	return [...named];
 }
 
@@ -225,24 +233,34 @@ export function resolveSessionTarget(req: SessionRequest, repoNames: readonly st
 	// target, they do not make it evidence. (Consent is still read from `ownWords`, by controlRefusal.)
 	const said = targetText(req.text);
 	const names = [...new Set([...repoNames, ...(req.repo ? [req.repo] : [])])];
-	const aliases = (name: string) => [...new Set([name, name.split("/").pop() ?? name])];
-	const excludedAliases = new Set(excludedOf(said, names.flatMap(aliases)));
+	// A short name ("platform" for "acme/platform") stands for its repo only when no other repo shares it,
+	// and only as its own token — "owner1/platform" is owner1's, never a mention of "platform" (#1015 audit).
+	const short = (name: string) => name.split("/").pop() ?? name;
+	const sharing = (name: string) => names.filter((n) => short(n).toLowerCase() === short(name).toLowerCase());
+	const aliases = (name: string) => [...new Set([name, ...(sharing(name).length === 1 ? [short(name)] : [])])];
+	const excludedAliases = new Set(excludedOf(said, names.flatMap(aliases), false, repoMention));
 	const isExcluded = (name: string) => aliases(name).some((a) => excludedAliases.has(a.toLowerCase()));
 	const excluded = names.filter(isExcluded);
 	const pointed = withoutExclusions(said);
-	const pointedAt = names.filter((n) => aliases(n).some((a) => mentions(pointed, a)));
+	const pointedAt = names.filter((n) => aliases(n).some((a) => repoMention(pointed, a)));
 	// Named AND excluded is a contradiction; dropping it would leave "the session" — the unrelated one.
 	const conflicted = pointedAt.filter(isExcluded);
 	if (conflicted.length) {
 		return { refused: `The owner both asked to end and said not to end the ${conflicted.join(", ")} session, so nothing was ended. Ask them which session they mean.` };
 	}
+	// A bare short name two repositories share names neither of them.
+	const ambiguous = [...new Set(names.filter((n) => sharing(n).length > 1).map(short))].filter((a) => repoMention(pointed, a));
+	if (ambiguous.length) {
+		return { refused: `The owner said "${ambiguous[0]}", which more than one repository is called (${names.filter((n) => short(n) === ambiguous[0]).join(", ")}), so nothing was ended. Ask which one they mean.` };
+	}
 	// A session the owner named that this agent has no repository for is a target, not "the session".
-	const known = new Set(repoNames.flatMap(aliases).map((a) => a.toLowerCase()));
+	const known = new Set([...repoNames.map((n) => n.toLowerCase()), ...repoNames.map((n) => short(n).toLowerCase())]);
 	const absent = sessionTargetWords(pointed).filter((w) => !known.has(w.toLowerCase()));
 	if (absent.length) {
 		return { refused: `The owner asked to end the ${absent[0]} session, but there is no repository called "${absent[0]}" on this agent, so nothing was ended. Ask them which session they mean.` };
 	}
 	const named = pointedAt.filter((n) => !isExcluded(n));
+	// The model's pick resolves by exact name, or by a short name only when it is unique.
 	const pick = req.repo ? names.find((n) => aliases(n).some((a) => a.toLowerCase() === req.repo?.toLowerCase())) ?? req.repo : undefined;
 	if (pick && isExcluded(pick)) return { refused: `The owner said not to end the ${pick} session, so nothing was ended. End only the session they asked for, or ask them which one they mean.` };
 	if (named.length > 1 && !(pick && named.includes(pick))) {
@@ -258,15 +276,16 @@ const GENERIC_SESSION_WORD = new Set(
 );
 /**
  * The repository words the owner put in front of "session" ("the platform session", "the
- * `owner/repo` session") or after it ("the session for platform"). Each is a whole token, so
+ * `owner/repo` session") or after it ("the session for / named / called platform"). Each is a whole token, so
  * "platform-extra" is "platform-extra" — never "platform".
  */
 function sessionTargetWords(text: string): string[] {
 	const words: string[] = [];
 	const token = "([\\w][\\w./-]*)[`'\"’”]?";
 	for (const m of text.matchAll(new RegExp(`(?<![\\w./-])${token}(?:\\s+(?:repo|repository|coding|cli))*\\s+sessions?\\b`, "gi"))) words.push(m[1]);
-	for (const m of text.matchAll(new RegExp(`\\bsessions?\\s+(?:for|on|of|in)\\s+(?:the\\s+)?[\`'"‘“]?${token}`, "gi"))) words.push(m[1]);
-	return words.filter((w) => !GENERIC_SESSION_WORD.has(w.toLowerCase()));
+	for (const m of text.matchAll(new RegExp(`\\bsessions?\\s+(?:for|on|of|in|named|called|titled)\\s+(?:the\\s+)?[\`'"‘“]?${token}`, "gi"))) words.push(m[1]);
+	// Sentence punctuation is the sentence's, not the name's: "…for platform." names "platform".
+	return words.map((w) => w.replace(/[./-]+$/, "")).filter((w) => w && !GENERIC_SESSION_WORD.has(w.toLowerCase()));
 }
 
 /** What each control tool needs the owner to have asked for, in their own words. */
