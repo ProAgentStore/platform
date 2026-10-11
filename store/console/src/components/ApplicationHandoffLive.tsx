@@ -5,6 +5,20 @@ import Button from "./Button";
 import type { ApplicationHandoffResumeResponse } from "../lib/types";
 
 /**
+ * The only text-bearing relay this component can make.  It is intentionally a browser takeover
+ * event, not an application-field action: the Runner rechecks that a login/CAPTCHA blocker is
+ * still present before accepting it.  Callers clear the native control immediately afterwards.
+ */
+export function mobileTakeoverText(value: string): { type: "text"; text: string } | null {
+	return value ? { type: "text", text: value } : null;
+}
+
+/** Mobile keyboards do not reliably emit physical key events, so expose only login-safe keys. */
+export function mobileTakeoverKey(key: "Enter" | "Backspace"): { type: "key"; key: string; code: string } {
+	return { type: "key", key, code: key === "Enter" ? "Enter" : "Backspace" };
+}
+
+/**
  * Live control for one #1013 Application Runner handoff.
  *
  * The link and this component intentionally know an opaque handoff id only long enough to resolve
@@ -30,6 +44,7 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 	const [error, setError] = useState("");
 	const [endError, setEndError] = useState("");
 	const imageRef = useRef<HTMLImageElement>(null);
+	const mobileEntryRef = useRef<HTMLInputElement>(null);
 	const boxRef = useRef<HTMLDivElement>(null);
 	const lastMove = useRef(0);
 	const frameRef = useRef<typeof frame>(null);
@@ -44,6 +59,7 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 		} catch (e) {
 			// An expired/lost/ended handoff must stay visibly unresolved.  In particular, do not
 			// translate a missing page into "done" — that would erase submit uncertainty.
+			setFrame(null);
 			setError(e instanceof Error ? e.message : String(e));
 		}
 	}, [base]);
@@ -57,11 +73,17 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 		return () => { document.body.style.overflow = old; };
 	}, []);
 
-	const send = useCallback((body: Record<string, unknown>) =>
-		api(withPath(base, "input"), { method: "POST", body: JSON.stringify(body) }).catch(() => {
-			// Per-event input errors are visible in the next frame/state poll.  Never echo typed
-			// text into an error, notification, or trace.
-		}), [base]);
+	const send = useCallback(async (body: Record<string, unknown>) => {
+		try {
+			await api(withPath(base, "input"), { method: "POST", body: JSON.stringify(body) });
+			return true;
+		} catch {
+			// Never echo a login/OTP value.  The Runner has already enforced the bounded blocker
+			// boundary, so a refusal means this mobile control cannot be an application-fill path.
+			setError("Secure sign-in input is no longer available. Recheck or end this handoff.");
+			return false;
+		}
+	}, [base]);
 	const toPoint = (clientX: number, clientY: number) => {
 		const image = imageRef.current;
 		if (!image || !frame) return null;
@@ -72,8 +94,9 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 	const click = (e: MouseEvent) => {
 		const point = toPoint(e.clientX, e.clientY);
 		if (!point) return;
-		send({ type: "click", ...point });
+		void send({ type: "click", ...point });
 		boxRef.current?.focus();
+		if (reconciliation) mobileEntryRef.current?.focus();
 		setTimeout(poll, 150);
 	};
 	const move = (e: MouseEvent) => {
@@ -81,7 +104,7 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 		if (now - lastMove.current < 90) return;
 		lastMove.current = now;
 		const point = toPoint(e.clientX, e.clientY);
-		if (point) send({ type: "move", ...point });
+		if (point) void send({ type: "move", ...point });
 	};
 	useEffect(() => {
 		const image = imageRef.current;
@@ -95,7 +118,7 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 			const current = frameRef.current;
 			const rect = image.getBoundingClientRect();
 			if (!current || !rect.width || !rect.height) return;
-			send({ type: "scroll", x: Math.round(((event.clientX - rect.left) / rect.width) * current.width), y: Math.round(((event.clientY - rect.top) / rect.height) * current.height), deltaX: Math.round(event.deltaX), deltaY: Math.round(event.deltaY) });
+			void send({ type: "scroll", x: Math.round(((event.clientX - rect.left) / rect.width) * current.width), y: Math.round(((event.clientY - rect.top) / rect.height) * current.height), deltaX: Math.round(event.deltaX), deltaY: Math.round(event.deltaY) });
 			setTimeout(poll, 120);
 		};
 		image.addEventListener("wheel", wheel, { passive: false });
@@ -105,10 +128,19 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 		if (e.key === "Escape") { onClose(); return; }
 		if (e.key === "Tab") return;
 		e.preventDefault();
-		if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) send({ type: "text", text: e.key });
-		else send({ type: "key", key: e.key, code: e.code, keyCode: e.keyCode });
+		if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) void send({ type: "text", text: e.key });
+		else void send({ type: "key", key: e.key, code: e.code, keyCode: e.keyCode });
 		setTimeout(poll, 150);
 	};
+	const mobileText = (value: string) => {
+		const event = mobileTakeoverText(value);
+		if (event) void send(event);
+		// Native input is ephemeral: it exists to summon the phone keyboard, never as a credential
+		// store or a rendered echo.  The remote page alone receives its text event.
+		if (mobileEntryRef.current) mobileEntryRef.current.value = "";
+		setTimeout(poll, 150);
+	};
+	const mobileKey = (key: "Enter" | "Backspace") => { void send(mobileTakeoverKey(key)); setTimeout(poll, 150); };
 	const resume = async () => {
 		try {
 			const result = await api<ApplicationHandoffResumeResponse>(withPath(base, "resume"), { method: "POST" });
@@ -141,7 +173,30 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 				<Button variant="secondary" size="md" onClick={onClose}>Close ✕</Button>
 			</div>
 		</div>
+		<div className="shrink-0 flex flex-wrap items-center gap-2 px-3 sm:px-4 py-2 bg-panel border-b border-line" data-testid="application-handoff-mobile-entry">
+			<label className="sr-only" htmlFor="application-handoff-mobile-entry">Secure sign-in or verification entry</label>
+			<input
+				id="application-handoff-mobile-entry"
+				ref={mobileEntryRef}
+				type="text"
+				inputMode="text"
+				enterKeyHint="next"
+				autoComplete="off"
+				autoCapitalize="none"
+				autoCorrect="off"
+				spellCheck={false}
+				data-testid="application-handoff-mobile-text-entry"
+				placeholder="Tap after selecting the login or code field"
+				className="min-w-0 flex-1 rounded border border-line bg-canvas px-3 py-2 text-base text-ink"
+				onChange={(e) => mobileText(e.currentTarget.value)}
+				onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter" || e.key === "Backspace") { e.preventDefault(); mobileKey(e.key); } }}
+			/>
+			<Button type="button" variant="secondary" size="sm" onClick={() => mobileKey("Backspace")}>Delete</Button>
+			<Button type="button" variant="secondary" size="sm" onClick={() => mobileKey("Enter")}>Continue</Button>
+			<p className="basis-full text-xs text-muted-soft">Phone-only sign-in/CAPTCHA control. Text is forwarded once and immediately cleared here; {reconciliation ? "after authentication the read-only Runner rejects further input." : "this remains the existing owner-authorized live handoff only."}</p>
+		</div>
 		{endError && <div data-testid="application-handoff-end-error" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-xs font-semibold break-words">{endError}</div>}
+		{error && frame && <div data-testid="application-handoff-input-error" className="shrink-0 px-3 sm:px-4 py-2 bg-danger-soft border-b border-danger-line text-danger text-xs font-semibold break-words">{error}</div>}
 		<div className="flex-1 min-h-0 flex items-center justify-center overflow-hidden bg-black">
 			{frame ? (
 				// biome-ignore lint/a11y/useKeyWithClickEvents: remote browser clicks require pointer coordinates from the rendered screenshot.

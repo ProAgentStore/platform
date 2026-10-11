@@ -25,6 +25,8 @@ type Session = {
 	pauseReason?: "login_required" | "captcha";
 	result?: NonNullable<LocalApplyReconciliationStatus["result"]>;
 	handoff?: { id: string; expiresAt: number; state: "ready" | "closed"; reason?: LocalApplyHandoffTerminalReason };
+	cancelDeadline?: () => void;
+	finishing?: Promise<LocalApplyReconciliationStatus>;
 };
 
 export interface ReconciliationRuntimeDeps {
@@ -32,13 +34,22 @@ export interface ReconciliationRuntimeDeps {
 	browserFor(profile: LocalApplyProfile, runDir: string): Promise<RunBrowser>;
 	takeover?: LocalApplyTakeoverAdapter;
 	now?: () => number;
+	/** Injectable so the deadline can be exercised without waiting ten minutes in tests. */
+	schedule?: (task: () => void, delayMs: number) => () => void;
 }
 
 /** Dedicated runtime; there is deliberately no bridge, engine, or generic browser-task fallback. */
 export class LocalApplyReconciliationRuntime {
 	private readonly sessions = new Map<string, Session>();
 	private readonly now: () => number;
-	constructor(private readonly deps: ReconciliationRuntimeDeps) { this.now = deps.now ?? (() => Date.now()); }
+	private readonly schedule: (task: () => void, delayMs: number) => () => void;
+	constructor(private readonly deps: ReconciliationRuntimeDeps) {
+		this.now = deps.now ?? (() => Date.now());
+		this.schedule = deps.schedule ?? ((task, delayMs) => {
+			const timer = setTimeout(task, delayMs);
+			return () => clearTimeout(timer);
+		});
+	}
 
 	async start(raw: unknown): Promise<LocalApplyReconciliationStatus> {
 		const envelope = parseEnvelope(raw);
@@ -50,6 +61,9 @@ export class LocalApplyReconciliationRuntime {
 		const browser = await this.deps.browserFor(envelope.browserProfile, join(this.deps.dataDir, "reconciliation", envelope.reconciliationId));
 		const session: Session = { envelope, browser, state: "running", expiresAt: this.now() + TTL_MS };
 		this.sessions.set(envelope.reconciliationId, session);
+		// The deadline belongs to the Runner, not to Console polling.  It is installed before
+		// navigation so an abandoned client cannot retain an owned browser/liveWork indefinitely.
+		session.cancelDeadline = this.schedule(() => { void this.expire(session); }, TTL_MS);
 		try {
 			const page = this.page(session);
 			if (!page) return await this.finish(session, { state: "unavailable", proofKind: "authorized_profile_unavailable" });
@@ -65,7 +79,10 @@ export class LocalApplyReconciliationRuntime {
 		if (session.state === "ended") return this.view(session);
 		if (session.expiresAt <= this.now()) return this.finish(session, { state: "ambiguous", proofKind: "ambiguous_site_history" });
 		if (!this.page(session)) return this.finish(session, { state: "unavailable", proofKind: "authorized_profile_unavailable" });
-		if (session.handoff?.state === "ready" && (session.handoff.expiresAt <= this.now() || !this.deps.takeover || await this.deps.takeover.state(session.handoff.id) !== "ready")) await this.closeHandoff(session, session.handoff.expiresAt <= this.now() ? "expired" : "page_lost");
+		if (session.handoff?.state === "ready" && (session.handoff.expiresAt <= this.now() || !this.deps.takeover || await this.deps.takeover.state(session.handoff.id) !== "ready")) {
+			await this.closeHandoff(session, session.handoff.expiresAt <= this.now() ? "expired" : "page_lost");
+			return this.finish(session, { state: "unavailable", proofKind: "authorized_profile_unavailable" });
+		}
 		return this.view(session);
 	}
 
@@ -86,7 +103,7 @@ export class LocalApplyReconciliationRuntime {
 	async handoffFrame(raw: unknown): Promise<{ frame: string; width: number; height: number }> {
 		const session = await this.liveHandoff(raw);
 		try { return await this.deps.takeover!.frame(session.handoff!.id); }
-		catch { await this.closeHandoff(session, "page_lost"); throw new RunnerInputError("The reconciliation page is no longer available", 409); }
+		catch { await this.closeHandoff(session, "page_lost"); await this.finish(session, { state: "unavailable", proofKind: "authorized_profile_unavailable" }); throw new RunnerInputError("The reconciliation page is no longer available", 409); }
 	}
 
 	async handoffInput(raw: unknown): Promise<void> {
@@ -98,7 +115,7 @@ export class LocalApplyReconciliationRuntime {
 		const blocker = await this.blocker(this.page(session));
 		if (!blocker) throw new RunnerInputError("The read-only reconciliation handoff no longer accepts browser input", 409);
 		try { await this.deps.takeover!.input(session.handoff!.id, request.input as TakeoverInput); }
-		catch { await this.closeHandoff(session, "page_lost"); throw new RunnerInputError("The reconciliation page is no longer available", 409); }
+		catch { await this.closeHandoff(session, "page_lost"); await this.finish(session, { state: "unavailable", proofKind: "authorized_profile_unavailable" }); throw new RunnerInputError("The reconciliation page is no longer available", 409); }
 	}
 
 	async resume(raw: unknown): Promise<LocalApplyReconciliationStatus> {
@@ -107,11 +124,12 @@ export class LocalApplyReconciliationRuntime {
 	}
 
 	async end(raw: unknown): Promise<LocalApplyReconciliationStatus> {
-		const session = this.require(raw);
+		const request = this.handoffRequest(raw);
+		const session = this.require(request);
+		this.assertHandoffBinding(session, request);
+		if (session.handoff?.id !== request.handoffId) throw new RunnerInputError("The reconciliation handoff is closed", 409);
 		if (session.handoff?.state === "ready") await this.closeHandoff(session, "unavailable");
-		session.state = "running";
-		session.pauseReason = undefined;
-		return this.view(session);
+		return this.finish(session, { state: "ambiguous", proofKind: "ambiguous_site_history" });
 	}
 
 	liveWork(): string[] { return [...this.sessions.values()].filter((s) => s.state !== "ended").map((s) => `reconciliation:${s.envelope.reconciliationId}`); }
@@ -133,12 +151,23 @@ export class LocalApplyReconciliationRuntime {
 		return this.finish(session, { state: "ambiguous", proofKind: "ambiguous_site_history" });
 	}
 
+	private async expire(session: Session): Promise<void> {
+		if (session.state !== "ended" && session.expiresAt <= this.now()) await this.finish(session, { state: "ambiguous", proofKind: "ambiguous_site_history" });
+	}
+
 	private async finish(session: Session, result: NonNullable<LocalApplyReconciliationStatus["result"]>): Promise<LocalApplyReconciliationStatus> {
+		if (session.finishing) return session.finishing;
 		if (session.state === "ended") return this.view(session);
-		if (session.handoff?.state === "ready") await this.closeHandoff(session, "unavailable");
+		// Set terminal state synchronously, before any async teardown.  Concurrent End/timeout/page
+		// loss callers then converge on the same result and liveWork stops advertising ownership.
 		session.state = "ended"; session.pauseReason = undefined; session.result = result;
-		await session.browser.stop().catch(() => undefined);
-		return this.view(session);
+		session.cancelDeadline?.(); session.cancelDeadline = undefined;
+		session.finishing = (async () => {
+			if (session.handoff?.state === "ready") await this.closeHandoff(session, "unavailable");
+			await session.browser.stop().catch(() => undefined);
+			return this.view(session);
+		})();
+		return session.finishing;
 	}
 
 	private async closeHandoff(session: Session, reason: LocalApplyHandoffTerminalReason): Promise<void> {
@@ -146,7 +175,10 @@ export class LocalApplyReconciliationRuntime {
 		session.handoff.state = "closed"; session.handoff.reason = reason;
 		await this.deps.takeover?.end(session.handoff.id).catch(() => undefined);
 	}
-	private closedHandoff(session: Session, id: string, reason: LocalApplyHandoffTerminalReason): LocalApplyReconciliationStatus { session.handoff = { id, expiresAt: this.now(), state: "closed", reason }; return this.view(session); }
+	private async closedHandoff(session: Session, id: string, reason: LocalApplyHandoffTerminalReason): Promise<LocalApplyReconciliationStatus> {
+		session.handoff = { id, expiresAt: this.now(), state: "closed", reason };
+		return this.finish(session, { state: "unavailable", proofKind: "authorized_profile_unavailable" });
+	}
 	private page(session: Session): Page | null { const page = session.browser.handoffPage?.(); return page && !page.isClosed() ? page : null; }
 	private permitted(session: Session, raw: string): boolean { try { const host = new URL(raw).hostname.toLowerCase(); return session.envelope.allowDomains.some((d) => domainWithin(host, d)); } catch { return false; } }
 	private async blocker(page: Page | null): Promise<boolean> { const state = page ? await this.pageState(page).catch(() => null) : null; return !!state && (state.login || state.captcha); }
@@ -165,7 +197,7 @@ export class LocalApplyReconciliationRuntime {
 	private require(raw: unknown): Session { const id = typeof (raw as Record<string, unknown> | null)?.reconciliationId === "string" ? (raw as Record<string, unknown>).reconciliationId as string : ""; if (!SAFE_ID.test(id)) throw new RunnerInputError("reconciliationId is required"); const session = this.sessions.get(id); if (!session) throw new RunnerInputError("Reconciliation session not found", 404); return session; }
 	private handoffRequest(raw: unknown): LocalApplyReconciliationHandoffRequest { const o = raw && typeof raw === "object" ? raw as Record<string, unknown> : {}; const handoffId = typeof o.handoffId === "string" ? o.handoffId : ""; const runId = typeof o.runId === "string" ? o.runId : ""; const applicationId = typeof o.applicationId === "string" ? o.applicationId : ""; const reconciliationId = typeof o.reconciliationId === "string" ? o.reconciliationId : ""; const browserProfile = o.browserProfile === "isolated" || o.browserProfile === "default" ? o.browserProfile : null; if (![handoffId, runId, applicationId, reconciliationId].every((v) => SAFE_ID.test(v)) || !browserProfile) throw new RunnerInputError("reconciliation handoff needs opaque ids and browserProfile"); return { handoffId, runId, applicationId, reconciliationId, browserProfile }; }
 	private assertHandoffBinding(session: Session, request: LocalApplyReconciliationHandoffRequest): void { const e = session.envelope; if (e.reconciliationId !== request.reconciliationId || e.runId !== request.runId || e.applicationId !== request.applicationId || e.browserProfile !== request.browserProfile) throw new RunnerInputError("The reconciliation handoff does not match this exact attempt", 403); }
-	private async liveHandoff(raw: unknown): Promise<Session> { const request = this.handoffRequest(raw); const session = this.require(request); this.assertHandoffBinding(session, request); if ((session.state !== "paused" && session.state !== "running") || session.handoff?.id !== request.handoffId || session.handoff.state !== "ready") throw new RunnerInputError("The reconciliation handoff is closed", 409); if (session.handoff.expiresAt <= this.now()) { await this.closeHandoff(session, "expired"); throw new RunnerInputError("The reconciliation handoff is closed", 409); } return session; }
+	private async liveHandoff(raw: unknown): Promise<Session> { const request = this.handoffRequest(raw); const session = this.require(request); this.assertHandoffBinding(session, request); if ((session.state !== "paused" && session.state !== "running") || session.handoff?.id !== request.handoffId || session.handoff.state !== "ready") throw new RunnerInputError("The reconciliation handoff is closed", 409); if (session.handoff.expiresAt <= this.now()) { await this.closeHandoff(session, "expired"); await this.finish(session, { state: "ambiguous", proofKind: "ambiguous_site_history" }); throw new RunnerInputError("The reconciliation handoff is closed", 409); } return session; }
 	private view(session: Session): LocalApplyReconciliationStatus { const e = session.envelope; return { reconciliationId: e.reconciliationId, runId: e.runId, applicationId: e.applicationId, browserProfile: e.browserProfile, context: "separate_read_only_context", state: session.state, ...(session.pauseReason ? { pauseReason: session.pauseReason } : {}), ...(session.result ? { result: session.result } : {}) }; }
 }
 

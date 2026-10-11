@@ -13,7 +13,7 @@ import type { Context, Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { patchInstanceConfig, readInstanceConfigPair } from "../lib/instance-config.js";
 import { cancelApplyRun, resumeApplyRun, startApplicationFill, syncApplyRun } from "../lib/local-apply/apply.js";
-import { LOCAL_APPLY_HANDOFF_PATH, LOCAL_APPLY_HANDOFF_STATUS_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_STATUS_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_FRAME_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_INPUT_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_RESUME_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_END_PATH, LOCAL_APPLY_RECONCILIATION_RUN_PATH, type LocalApplyHandoffStatus, type LocalApplyReconciliationEnvelope, type LocalApplyReconciliationStatus } from "../lib/local-apply/contract.js";
+import { LOCAL_APPLY_HANDOFF_PATH, LOCAL_APPLY_HANDOFF_STATUS_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_STATUS_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_FRAME_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_INPUT_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_RESUME_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_END_PATH, LOCAL_APPLY_RECONCILIATION_RUN_PATH, LOCAL_APPLY_RECONCILIATION_STATUS_PATH, type LocalApplyHandoffStatus, type LocalApplyReconciliationEnvelope, type LocalApplyReconciliationStatus } from "../lib/local-apply/contract.js";
 import { RUNNER_DEFAULTS, RUNNER_SETTINGS_KEY, effectiveRunnerSettings, mergeRunnerSettings } from "../lib/local-apply/policy.js";
 import {
 	applicationAudit,
@@ -336,24 +336,52 @@ export function registerApplicationRunnerRoutes(router: Hono<{ Bindings: Env }>)
 		const { uid, instanceId, run } = await ownedRun(c);
 		const reconciliation = await getLocalApplyReconciliation(c.env, run.id, instanceId, uid);
 		const handoff = reconciliation ? await getLocalApplyReconciliationHandoff(c.env, reconciliation.id, instanceId, uid) : null;
-		if (!reconciliation || !handoff || handoff.continuityId !== (c.req.query("handoff_id") ?? "") || handoff.state !== "ready" || handoff.expiresAt <= Date.now()) throw new HttpError(409, "This reconciliation handoff is closed.");
+		if (!reconciliation || !handoff || handoff.continuityId !== (c.req.query("handoff_id") ?? "") || handoff.state !== "ready") throw new HttpError(409, "This reconciliation handoff is closed.");
 		const runtime = await getLiveRuntime(c.env, instanceId, uid).catch(() => null);
+		const persistTerminal = async (payload: LocalApplyReconciliationStatus, actor: "runner" | "system" = "runner") => {
+			if (payload.reconciliationId !== reconciliation.id || payload.runId !== run.id || payload.applicationId !== run.applicationId || payload.state !== "ended" || !payload.result) return null;
+			const app = await getOwnedApplication(c.env, uid, run.applicationId);
+			if (!app) throw new HttpError(404, "Application not found");
+			const recorded = await recordLocalApplyReconciliationProof(c.env, { reconciliation, app, run, userId: uid, state: payload.result.state, proofKind: payload.result.proofKind, actor }, Date.now());
+			await markLocalApplyReconciliationHandoff(c.env, { continuityId: handoff.continuityId, reconciliationId: reconciliation.id, instanceId, userId: uid, state: "closed", terminalReason: "unavailable" }, Date.now());
+			return recorded;
+		};
+		if (handoff.expiresAt <= Date.now()) {
+			await markLocalApplyReconciliationHandoff(c.env, { continuityId: handoff.continuityId, reconciliationId: reconciliation.id, instanceId, userId: uid, state: "closed", terminalReason: "expired" }, Date.now());
+			// Close the actual owned page, not merely the cloud row.  A live Runner owns its deadline,
+			// but this explicit expiry signal closes promptly if the API saw expiry first.
+			let terminal: LocalApplyReconciliationStatus | null = null;
+			if (runtime) {
+				const ended = await callRuntime(c.env, runtime, LOCAL_APPLY_RECONCILIATION_HANDOFF_END_PATH, { method: "POST", body: JSON.stringify(reconciliationHandoffRequest(handoff)) }).catch(() => null);
+				if (ended?.ok) terminal = await runtimeJson(ended) as LocalApplyReconciliationStatus;
+				else {
+					const status = await callRuntime(c.env, runtime, LOCAL_APPLY_RECONCILIATION_STATUS_PATH, { method: "POST", body: JSON.stringify({ reconciliationId: reconciliation.id }) }).catch(() => null);
+					if (status?.ok) terminal = await runtimeJson(status) as LocalApplyReconciliationStatus;
+				}
+			}
+			if (terminal) await persistTerminal(terminal);
+			else if (!runtime) {
+				// A disconnected Runner cannot retain a controllable handoff through this API. This is
+				// unavailable, not proof of either submission outcome; the attempt facts stay immutable.
+				await persistTerminal({ reconciliationId: reconciliation.id, runId: run.id, applicationId: run.applicationId, browserProfile: handoff.browserProfile as "default" | "isolated", context: "separate_read_only_context", state: "ended", result: { state: "unavailable", proofKind: "authorized_profile_unavailable" } }, "system");
+			}
+			throw new HttpError(409, "This reconciliation handoff is closed.");
+		}
 		if (!runtime) throw new HttpError(409, "The Runner is disconnected; the reconciliation remains unresolved.");
 		const input = suffix === "input" ? await c.req.json().catch(() => null) : undefined;
 		if (suffix === "input" && (!input || typeof input !== "object" || Array.isArray(input))) throw new HttpError(400, "A browser input event is required.");
 		const res = await callRuntime(c.env, runtime, runnerReconciliationHandoffPath(suffix), { method: "POST", body: JSON.stringify({ ...reconciliationHandoffRequest(handoff), ...(input ? { input } : {}) }) }).catch(() => null);
 		if (!res?.ok) {
 			await markLocalApplyReconciliationHandoff(c.env, { continuityId: handoff.continuityId, reconciliationId: reconciliation.id, instanceId, userId: uid, state: "closed", terminalReason: "page_lost" }, Date.now());
+			// A frame/input transport error can be a genuine lost page.  Ask the same exact Runner
+			// session for its terminal result before recording anything; a transient relay error is
+			// never turned into an invented application conclusion.
+			const terminal = await callRuntime(c.env, runtime, LOCAL_APPLY_RECONCILIATION_STATUS_PATH, { method: "POST", body: JSON.stringify({ reconciliationId: reconciliation.id }) }).catch(() => null);
+			if (terminal?.ok) await persistTerminal(await runtimeJson(terminal) as LocalApplyReconciliationStatus);
 			throw new HttpError(409, "The read-only reconciliation browser is no longer available.");
 		}
 		const payload = await runtimeJson(res) as LocalApplyReconciliationStatus;
-		if (suffix === "end") await markLocalApplyReconciliationHandoff(c.env, { continuityId: handoff.continuityId, reconciliationId: reconciliation.id, instanceId, userId: uid, state: "closed", terminalReason: "unavailable" }, Date.now());
-		if (suffix === "resume" && payload.state === "ended" && payload.result) {
-			const app = await getOwnedApplication(c.env, uid, run.applicationId);
-			if (!app) throw new HttpError(404, "Application not found");
-			await recordLocalApplyReconciliationProof(c.env, { reconciliation, app, run, userId: uid, state: payload.result.state, proofKind: payload.result.proofKind, actor: "runner" }, Date.now());
-			await markLocalApplyReconciliationHandoff(c.env, { continuityId: handoff.continuityId, reconciliationId: reconciliation.id, instanceId, userId: uid, state: "closed", terminalReason: "unavailable" }, Date.now());
-		}
+		if (payload.state === "ended" && payload.result) await persistTerminal(payload);
 		return c.json(payload);
 	};
 	router.get("/:instanceId/application-runs/:runId/reconciliation/handoff/frame", relayReconciliationHandoff("frame"));

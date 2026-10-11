@@ -61,7 +61,7 @@ import { runDueDeliveries } from "./lib/connections.js";
 import { runIssueSync } from "./lib/issue-sync.js";
 import { syncActiveLocalBrowserRuns } from "./lib/local-browser/sync.js";
 import { syncActiveTailorRuns } from "./lib/local-artifact/tailor.js";
-import { syncActiveApplyRuns } from "./lib/local-apply/apply.js";
+import { syncActiveApplyReconciliations, syncActiveApplyRuns } from "./lib/local-apply/apply.js";
 import { failStaleUpdateOps } from "./lib/runner-update-ops.js";
 import { dispatchQueuedRunnerUpdates } from "./lib/runner-update.js";
 import { syncLeadWritebacks } from "./lib/local-artifact/store.js";
@@ -303,6 +303,9 @@ export default {
 		ctx.waitUntil(syncActiveTailorRuns(env).catch((err) => logUnhandled(env, err, { path: "scheduled:application-tailor", method: "CRON" })));
 		// The same pull for Application Runner fills (#957).
 		ctx.waitUntil(syncActiveApplyRuns(env).catch((err) => logUnhandled(env, err, { path: "scheduled:application-runner", method: "CRON" })));
+		// The Runner owns the ten-minute reconciliation deadline.  Pull the terminal result here so
+		// expiry remains durable when the owner closes Console instead of polling its handoff.
+		ctx.waitUntil(syncActiveApplyReconciliations(env).catch((err) => logUnhandled(env, err, { path: "scheduled:application-reconciliation", method: "CRON" })));
 		// #990: fail any runner update that stopped reporting. `running` is the only non-terminal
 		// state, so a row left there by a Worker that died would be the new way for an update to be
 		// unknowable — which is the whole defect the operation record exists to end.

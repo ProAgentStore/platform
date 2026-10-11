@@ -28,10 +28,12 @@ import {
 	LOCAL_APPLY_DIRECTIVE_PATH,
 	LOCAL_APPLY_PAUSE_REASONS,
 	LOCAL_APPLY_RESUME_PATH,
+	LOCAL_APPLY_RECONCILIATION_STATUS_PATH,
 	LOCAL_APPLY_RUN_PATH,
 	LOCAL_APPLY_STATUS_PATH,
 	LOCAL_APPLY_TASK_TYPE,
 	type LocalApplyPause,
+	type LocalApplyReconciliationStatus,
 	type LocalApplyResultEnvelope,
 	type LocalApplyTaskEnvelope,
 	parseLocalApplyEvent,
@@ -44,12 +46,15 @@ import {
 	type ApplyRunPolicy,
 	type ApplyTraceEvent,
 	activeApplyRuns,
+	activeLocalApplyReconciliations,
 	getApplyRun,
+	getLocalApplyReconciliation,
 	getApplyRunByRequest,
 	insertApplyRun,
 	isTerminalApplyRun,
 	markSubmitAttempted,
 	moveApplication,
+	recordLocalApplyReconciliationProof,
 	updateApplyRun,
 } from "./store.js";
 import { claimQueuedDispatch, instancesWithQueuedRuns, nextDueQueuedRun, noteQueued } from "../applications/work-queue-store.js";
@@ -864,6 +869,40 @@ export async function syncActiveApplyRuns(env: Env, limit = 25): Promise<number>
 	// than a minute later. Each instance is independent: one that cannot dispatch must not stop the rest.
 	for (const i of await instancesWithQueuedRuns(env, "local_apply_runs", limit)) {
 		await dispatchNextQueuedFill(env, i.instanceId, i.userId, now).catch(() => undefined);
+	}
+	return synced;
+}
+
+/**
+ * Pull terminal outcomes from the Runner-owned reconciliation deadline.  This is deliberately a
+ * cron consumer rather than a Console read: closing a mobile tab must not turn its browser into an
+ * indefinite lease or leave a completed timeout only in process memory.  A failed/offline relay is
+ * not treated as evidence; the requested record stays unresolved until a Runner reports a bounded
+ * terminal result.
+ */
+export async function syncActiveApplyReconciliations(env: Env, limit = 25, now = Date.now()): Promise<number> {
+	let synced = 0;
+	for (const item of await activeLocalApplyReconciliations(env, limit)) {
+		const [run, app] = await Promise.all([
+			getApplyRun(env, item.instanceId, item.userId, item.runId),
+			getOwnedApplication(env, item.userId, item.applicationId),
+		]);
+		if (!run || !app) continue;
+		const runtime = await getLiveRuntime(env, item.instanceId, item.userId).catch(() => null);
+		if (!runtime) continue;
+		const res = await callRuntime(env, runtime, LOCAL_APPLY_RECONCILIATION_STATUS_PATH, {
+			method: "POST", body: JSON.stringify({ reconciliationId: item.id }),
+		}).catch(() => null);
+		if (!res?.ok) continue;
+		const status = await runtimeJson(res) as LocalApplyReconciliationStatus;
+		if (status.reconciliationId !== item.id || status.runId !== run.id || status.applicationId !== app.id || status.state !== "ended" || !status.result) continue;
+		const reconciliation = await getLocalApplyReconciliation(env, run.id, item.instanceId, item.userId);
+		if (!reconciliation) continue;
+		await recordLocalApplyReconciliationProof(env, {
+			reconciliation, app, run, userId: item.userId, state: status.result.state,
+			proofKind: status.result.proofKind, actor: "runner",
+		}, now);
+		synced++;
 	}
 	return synced;
 }

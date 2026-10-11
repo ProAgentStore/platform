@@ -388,6 +388,18 @@ export async function getLocalApplyReconciliation(env: DB, runId: string, instan
 	return row ? presentReconciliation(row) : null;
 }
 
+/**
+ * Bounded cron input for reconciliation runtime cleanup.  The browser owns the actual deadline;
+ * this lets the cloud pull its terminal, closed-vocabulary result into the audited CAS record even
+ * when the owner has closed Console and never polls the handoff again.
+ */
+export async function activeLocalApplyReconciliations(env: DB, limit: number): Promise<Array<{ id: string; runId: string; applicationId: string; instanceId: string; userId: string }>> {
+	const { results } = await env.DB.prepare(
+		"SELECT id, run_id, application_id, instance_id, user_id FROM local_apply_reconciliations WHERE reconciliation_state = 'requested' ORDER BY requested_at LIMIT ?1",
+	).bind(limit).all<{ id: string; run_id: string; application_id: string; instance_id: string; user_id: string }>();
+	return (results ?? []).map((r) => ({ id: r.id, runId: r.run_id, applicationId: r.application_id, instanceId: r.instance_id, userId: r.user_id }));
+}
+
 /** Opaque mobile-control metadata for the separately-authorized reconciliation browser only. */
 export interface LocalApplyReconciliationHandoff {
 	continuityId: string; reconciliationId: string; runId: string; applicationId: string; instanceId: string;
