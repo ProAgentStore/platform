@@ -149,4 +149,20 @@ describe("directives: delivery is recorded, processing is observed separately", 
 		expect(await markDirectivesProcessed(env, { ...scope, sessionId: "B", turnEndedAt: 10_000, skewMs: 0 })).toBe(1);
 		expect((await listDirectives(env, { ...scope, sessionId: "B", sinceMs: 0 })).map((d) => d.processedAt != null)).toEqual([true, false]);
 	});
+
+	it("never credits a directive recorded after the turn ended — the old skew pointed the wrong way (#1019)", async () => {
+		// The engine's turn ended at 100_000; the owner's correction arrived three seconds LATER. The engine
+		// has not seen it. It used to be marked processed because the skew was ADDED to the turn's end.
+		await recordDirective(env, { ...scope, sessionId: "B", runId: null, kind: "steer", delivery: "delivered", content: "stop after the push", now: 103_000 });
+		expect(await markDirectivesProcessed(env, { ...scope, sessionId: "B", turnEndedAt: 100_000 })).toBe(0);
+		// A turn that ends clearly after it does count.
+		expect(await markDirectivesProcessed(env, { ...scope, sessionId: "B", turnEndedAt: 110_000 })).toBe(1);
+	});
+
+	it("records a message whose engine state was unknown as ACCEPTED, not delivered (#1019)", async () => {
+		expect(deliveryFor("unknown", true)).toBe("accepted");
+		expect(deliveryFor("unknown", false)).toBe("accepted");
+		const d = await recordDirective(env, { ...scope, sessionId: "B", runId: null, kind: "direct", delivery: deliveryFor("unknown", true), content: "x", now: 5 });
+		expect((await listDirectives(env, { ...scope, sessionId: "B", sinceMs: 0 })).find((r) => r.id === d.id)?.delivery).toBe("accepted");
+	});
 });

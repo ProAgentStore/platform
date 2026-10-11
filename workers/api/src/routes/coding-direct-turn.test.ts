@@ -112,7 +112,8 @@ describe("a direct follow-up to a retained session while another run works the c
 		expect(drain).not.toHaveBeenCalled();
 
 		// The engine finishes: the watcher releases the claim, marks the directive processed, drains once.
-		engine.A = { alive: true, ready: true, runState: "idle", lastTurn: { at: Date.now() + 1000 } };
+		// A turn that ended clearly AFTER the directive — past the clock-skew allowance (#1019), which no longer credits a near-tie.
+		engine.A = { alive: true, ready: true, runState: "idle", lastTurn: { at: Date.now() + 10_000 } };
 		expect(await settleAfterDirectTurn(env, { ...scope, sessionId: "A", finalPane: { lastTurn: engine.A.lastTurn } }, probe)).toBe(true);
 		expect(claimOf("A")).toBeNull();
 		expect(drain).toHaveBeenCalledTimes(1);
@@ -130,6 +131,17 @@ describe("a direct follow-up to a retained session while another run works the c
 		expect(claimOf("B")).toBeNull();
 		const row = d1.sqlite.prepare("SELECT kind, run_id, delivery, content FROM coding_session_directives WHERE session_id = 'B'").get();
 		expect(row).toEqual({ kind: "steer", run_id: "run-B", delivery: "queued", content: "read-only from now on" });
+	});
+
+	it("credits no directive as processed when the runner reports no completed turn (#1019)", async () => {
+		d1.exec("UPDATE agent_loop_runs SET status = 'completed' WHERE run_id = 'run-B'");
+		expect((await call("POST", "/coding/sessions/A/message", { text: "first" })).status).toBe(200);
+		expect((await call("POST", "/coding/sessions/A/message", { text: "second" })).status).toBe(200);
+		// Idle, but an older runner sends no `lastTurn`: nothing proves either message was read.
+		engine.A = { alive: true, ready: true, runState: "idle" };
+		await settleAfterDirectTurn(env, { ...scope, sessionId: "A", finalPane: null }, runnerEngineProbe(env, "i1", "u1"));
+		const processed = d1.sqlite.prepare("SELECT COUNT(*) AS n FROM coding_session_directives WHERE session_id = 'A' AND processed_at IS NOT NULL").get() as { n: number };
+		expect(processed.n).toBe(0);
 	});
 
 	it("releases its own claim when nothing could be delivered", async () => {

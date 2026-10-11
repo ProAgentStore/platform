@@ -7,7 +7,7 @@ import { terminalSnapshotChanged, terminalSnapshotContent } from "../lib/termina
 import { copilotSummary } from "../lib/coding-copilot.js";
 import { deepLinkFor } from "../lib/console-links.js";
 import { notifyUser } from "../routes/push.js";
-import { listDirectives, markDirectivesProcessed, runnerEngineProbe, settleDirectTurns } from "../lib/coding-ownership.js";
+import { markDirectivesProcessed, runnerEngineProbe, settleDirectTurns } from "../lib/coding-ownership.js";
 import { tryDequeueAndStart } from "../lib/objective-queue-start.js";
 import type { Env } from "../types.js";
 
@@ -148,17 +148,13 @@ export async function settleAfterDirectTurn(
 	if (!input.repoId) return true;
 	const state = await probe(input.sessionId).catch(() => "unknown" as const);
 	if (state === "idle" || state === "stopped") {
-		const turnEndedAt = input.finalPane?.lastTurn?.at ?? (await latestDirectiveAt(env, input));
+		// Only the runner's own turn report is evidence (#1019). An older runner sends none, and its
+		// directives stay "not yet confirmed" rather than being credited to an idle engine on no turn at all.
+		const turnEndedAt = input.finalPane?.lastTurn?.at ?? null;
 		await markDirectivesProcessed(env, { instanceId: input.instanceId, userId: input.userId, sessionId: input.sessionId, turnEndedAt: state === "idle" ? turnEndedAt : null }).catch(() => 0);
 	}
 	const remaining = await settleDirectTurns(env, { instanceId: input.instanceId, userId: input.userId, repoId: input.repoId }, probe);
 	if (remaining.some((o) => o.kind === "direct")) return false;
 	if (!remaining.length) await tryDequeueAndStart(env, input.instanceId, input.repoId, input.userId);
 	return true;
-}
-
-/** With no `lastTurn` from the runner, an idle engine is credited only up to the newest directive. */
-async function latestDirectiveAt(env: Env, input: { instanceId: string; userId: string; sessionId: string }): Promise<number | null> {
-	const ds = await listDirectives(env, { ...input, sinceMs: 0, limit: 1 }).catch(() => []);
-	return ds.length ? ds[ds.length - 1].createdAt : null;
 }

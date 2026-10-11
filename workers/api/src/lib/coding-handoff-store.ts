@@ -122,10 +122,12 @@ export async function getRecoveryClaim(env: Env, instanceId: string, userId: str
 /**
  * A run still calling itself `running` on this repo whose orchestrator heartbeat is gone.
  *
- * The predicate is `claimSessionDriver`'s own takeable condition, deliberately: this returns exactly
- * the runs whose session the next start WOULD steal. A healthy long run heartbeats its claim on
- * every action (`touchSessionDriver`), so a stale `driver_at` is not "it has been a while" — it is
- * "nothing has been home for fifteen minutes".
+ * The predicate starts from `claimSessionDriver`'s own takeable condition: this returns the runs whose
+ * session the next start WOULD steal. A stale `driver_at` alone is not proof of absence, though
+ * (#1019): before the capture loop heartbeated the claim, ONE engine turn longer than
+ * `STALE_DRIVER_MS` left it stale while the run was demonstrably working — its capture loop writing
+ * `last_alive_at` every minute — and this reported a working owner as lost. So the run's own liveness
+ * is reconciled too: a run is heartbeat-lost only when BOTH its claim and its liveness are stale.
  */
 export async function getHeartbeatLostClaim(env: Env, instanceId: string, userId: string, repoId: string, now = Date.now()): Promise<RecoveryClaim | null> {
 	const row = await env.DB.prepare(
@@ -136,6 +138,7 @@ export async function getHeartbeatLostClaim(env: Env, instanceId: string, userId
 		  WHERE r.instance_id = ?1 AND r.user_id = ?2 AND r.status = 'running'
 		    AND s.repo_id = ?3 AND s.status = 'active'
 		    AND (s.driver_at IS NULL OR s.driver_at < ?4)
+		    AND (r.last_alive_at IS NULL OR r.last_alive_at < ?4)
 		  ORDER BY r.started_at DESC LIMIT 1`,
 	)
 		.bind(instanceId, userId, repoId, now - STALE_DRIVER_MS)

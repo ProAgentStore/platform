@@ -10,6 +10,7 @@ import { callRunner, getRunnerConnIgnoringLiveness, getBoundRunnerConn, relayCon
 import { runtimeConnectivity } from "../../lib/instance-connectivity.js";
 import type { CodingSessionParams } from "../coding-session-params.js";
 import { makeRunnerGuard, noRunnerDetail, RUNNER_PROBE_INTERVAL, type RunStep } from "../../lib/runner-availability.js";
+import { CompletionEvidence } from "../../lib/coding-completion-evidence.js";
 import { endSession, getRepo, reassignSessionNode, releaseSessionDriver, touchSessionActivity, touchSessionDriver } from "../../lib/coding-store.js";
 import { pilotStopSignal, shouldEndSessionAfterRun } from "../../lib/coding-session-lifecycle.js";
 import { setCodingSessionCardStatus } from "../../lib/coding-board.js";
@@ -478,6 +479,8 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		if (shouldTouchActivity(lastActivityTouchAt, Date.now())) {
 			lastActivityTouchAt = Date.now();
 			await touchSessionActivity(env, instanceId, userId, sessionId).catch(() => undefined);
+			// The CLAIM too (#1019): one engine turn can outlast STALE_DRIVER_MS with no action between it, and a stale claim is stolen and reported lost.
+			if (event.payload.driverId) await touchSessionDriver(env, instanceId, userId, sessionId, event.payload.driverId).catch(() => undefined);
 			if (event.payload.loopRunId) await recordLiveness(env, event.payload.loopRunId, Date.now(), null).catch(() => undefined);
 		}
 		// Which signals stop a run, which deliberately do not (`suspended`, an unreadable
@@ -518,6 +521,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 				(await step.do(probe.at(`s${n++}-decide`), decideRetry, () =>
 					pilotDecide(env, { userId, instanceId, repoId, sessionId, runStartedAt, loopRunId: event.payload.loopRunId ?? null, budgetId: event.payload.budgetId, depth: event.payload.depth, params: p }),
 				)) as PilotDecideOutcome,
+				p.goal,
 			),
 		// Poll capture until the CLI goes idle, BACKING OFF as the turn proves long (#523). A
 		// flat 2-second poll spent 2 subrequests per second of Engine work against a ceiling
@@ -570,7 +574,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			// was withheld for being empty (#504), or it is a repeat (#522). Without this the fix
 			// is invisible where the defect was visible — the owner watched one instruction go out
 			// nine times and read a success report eleven minutes later.
-			if (type === "empty" || type === "repeated") await postToChat(`**Loop** — ${message}`);
+			if (type === "empty" || type === "repeated" || type === "scope_refused" || type === "evidence") await postToChat(`**Loop** — ${message}`);
 				// Only for a loop the OWNER started (or a supervisor delegated) — a session the
 				// human is driving by hand already shows every keystroke in the terminal, and
 				// echoing it into chat would be noise about work they are watching happen.
@@ -853,12 +857,14 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			return null;
 		});
 
+		// The run's observed tool calls (#1019), kept across rounds: a completion claim is judged on the whole run.
+		const evidence = new CompletionEvidence();
 		for (let round = 0; round < 12 && !syncGate.blocked; round++) {
 			// The caller's cap when it named one, the historical 40 when it did not (#374).
 			// An interruption is retried in place after a published backoff (#855); anything else — or
 			// one past the bound — is rethrown to the terminal catch below.
 			result = await roundThroughInterruptions(
-				() => runCodingLoop(deps, goal, { maxSteps: event.payload.maxSteps ?? PILOT_DEFAULT_MAX_STEPS }),
+				() => runCodingLoop(deps, goal, { maxSteps: event.payload.maxSteps ?? PILOT_DEFAULT_MAX_STEPS, evidence }),
 				roundDeps,
 				{ next: () => ++interruptions },
 			);

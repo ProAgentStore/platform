@@ -30,6 +30,8 @@ import {
 import type { UsageContext } from "./usage.js";
 import type { Env } from "../types.js";
 import { ownerDirectivesBlock } from "./coding-owner-directives.js";
+import { activeConstraints, constraintSources, constraintsBlock, type ScopeConstraint, scopeRefusalNote, screenScopedInstruction } from "./coding-scope-constraints.js";
+import { CompletionEvidence, evidenceNote, finishRefusalNote, judgeCompletion } from "./coding-completion-evidence.js";
 
 /**
  * The coding orchestrator's brain loop.
@@ -54,6 +56,8 @@ export interface CodingGoal {
 	standingInstructions?: string;
 	/** What the owner sent this session during the run, oldest first, re-read every decision (#1015). */
 	ownerDirectives?: Array<{ text: string; at: number; delivery: string; processed: boolean }>;
+	/** What those rules and EVERY directive of the run still require, derived per decision and enforced on each action (#1019). */
+	scopeConstraints?: ScopeConstraint[];
 	/** Live free-text message the user sent while the agent was paused/stuck. */
 	userHint?: string;
 	/**
@@ -239,8 +243,12 @@ const MAX_REFUSALS = 3;
  */
 const MAX_EMPTY_INSTRUCTIONS = 3;
 
-export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { maxSteps?: number } = {}): Promise<CodingResult> {
+export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { maxSteps?: number; evidence?: CompletionEvidence } = {}): Promise<CodingResult> {
 	const maxSteps = opts.maxSteps ?? 30;
+	// The run's observed tool calls (#1019) — held by the workflow ACROSS rounds, so a claim is judged on the whole run.
+	const evidence = opts.evidence ?? new CompletionEvidence();
+	let scopeRefusals = 0;
+	let finishPushedBack = false;
 	const transcript: string[] = [];
 	const actionLog: string[] = [];
 	let refusals = 0;
@@ -275,6 +283,7 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 			snap = await deps.waitIdle();
 			if (snap.cancelled) return { outcome: "cancelled", detail: snap.stopReason, steps: step, transcript };
 		}
+		evidence.observe(snap.pane);
 
 		// THE ENGINE'S OWN VERDICT ON THE LAST TURN (#545), read BEFORE the brain is asked what to
 		// do next — so the note lands in the step log this decision renders, not the one after it.
@@ -315,14 +324,23 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 		if (decision.cancelled) return { outcome: "cancelled", detail: decision.cancelled.why, steps: step, transcript };
 
 		if (decision.finish) {
+			// A completion CLAIM is held to the run's own tool calls (#1019): a contradiction the Pilot can
+			// still fix (stale green run, focused-as-full, a push that moved nothing) goes back to it ONCE.
+			const judged = decision.finish.status === "done" ? judgeCompletion(decision.finish.detail, evidence) : null;
+			if (judged?.correctable.length && !finishPushedBack) {
+				finishPushedBack = true;
+				const note = finishRefusalNote(judged);
+				actionLog.push(note);
+				transcript.push(note);
+				await deps.onEvent?.("evidence", note);
+				continue;
+			}
 			// A `done` reached after the run repeated itself gets the measurement appended (#522). Run
 			// 3c83b0e9 ended "All safely executable tests were run with zero failures" — true, and the
 			// five specs the owner asked for were not among them. The loop cannot honestly rewrite the
 			// brain's summary, so it states the one thing it measured and lets the reader check.
-			const detail =
-				decision.finish.status === "done" && repeatedInstruction
-					? `${decision.finish.detail}\n\n${repeatCaution(repeatedInstruction)}`
-					: decision.finish.detail;
+			const checked = judged ? evidenceNote(judged) : "";
+			const detail = [decision.finish.detail, decision.finish.status === "done" && repeatedInstruction ? repeatCaution(repeatedInstruction) : "", checked].filter(Boolean).join("\n\n");
 			transcript.push(`finish: ${decision.finish.status} — ${detail}`);
 			return {
 				outcome: decision.finish.status === "done" ? "done" : "failed",
@@ -411,6 +429,16 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 			// the honest status: the objective as given cannot be completed under this policy, and
 			// the detail says exactly why so the owner can approve the merge themselves.
 			if (refusals >= MAX_REFUSALS) return { outcome: "failed", detail: refusal, steps: step, transcript };
+			continue;
+		}
+		// THE OWNER'S SCOPE (#1019), enforced on the instruction itself: refused before transport, like the merge screen above.
+		const scoped = decision.action.kind === "message" ? screenScopedInstruction(goal.scopeConstraints ?? activeConstraints(constraintSources(goal)), decision.action.text) : null;
+		if (scoped) {
+			const note = `refused (owner constraint): ${scopeRefusalNote(scoped)}`;
+			actionLog.push(note);
+			transcript.push(note);
+			await deps.onEvent?.("scope_refused", note);
+			if (++scopeRefusals >= MAX_REFUSALS) return { outcome: "failed", detail: `Stopped: the orchestrator kept producing instructions outside the owner's constraints. Last: ${scopeRefusalNote(scoped)}`, steps: step, transcript };
 			continue;
 		}
 
@@ -732,6 +760,8 @@ export function systemPromptBlocks(goal: CodingGoal): SystemPromptBlock[] {
 	if (goal.userHint) round.push(`\nThe user just told you: ${goal.userHint}`);
 	// Every round, not one (#1015): the owner's latest words outrank the objective for the whole run.
 	if (goal.ownerDirectives?.length) round.push(ownerDirectivesBlock(goal.ownerDirectives));
+	const binding = constraintsBlock(goal.scopeConstraints ?? activeConstraints(constraintSources(goal)));
+	if (binding) round.push(binding);
 	// Joined exactly as one list would have been, so the flattened text is byte-identical.
 	return [
 		{ text: lines.join("\n"), cache: true, ttl: "1h", label: "run" },

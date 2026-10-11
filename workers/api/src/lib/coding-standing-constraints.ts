@@ -16,7 +16,8 @@
  */
 import type { Env } from "../types.js";
 import type { CodingGoal } from "./coding-loop.js";
-import { listDirectives } from "./coding-ownership.js";
+import { listDirectives, RUN_DIRECTIVES_MAX } from "./coding-ownership.js";
+import { activeConstraints, constraintSources } from "./coding-scope-constraints.js";
 import { readSpecialInstructions } from "../routes/coding-shared.js";
 
 /** Instance Special Instructions + the repo's own rules, joined as every other surface joins them. */
@@ -39,6 +40,9 @@ export async function refreshGoalConstraints(
 ): Promise<void> {
 	const standing = await readStandingInstructions(env, ctx).catch(() => null);
 	if (standing !== null) goal.standingInstructions = standing;
-	const directives = await listDirectives(env, { instanceId: ctx.instanceId, userId: ctx.userId, sessionId: ctx.sessionId, sinceMs: ctx.runStartedAt }).catch(() => null);
+	// EVERY directive of the run, not the newest ten (#1019): an early "read-only" must still bind after ten more messages.
+	const directives = await listDirectives(env, { instanceId: ctx.instanceId, userId: ctx.userId, sessionId: ctx.sessionId, sinceMs: ctx.runStartedAt, limit: RUN_DIRECTIVES_MAX }).catch(() => null);
 	if (directives) goal.ownerDirectives = directives.map((d) => ({ text: d.content, at: d.createdAt, delivery: d.delivery, processed: d.processedAt != null }));
+	// Derived from everything just read — the set the loop enforces on the action this decision produces.
+	goal.scopeConstraints = activeConstraints(constraintSources(goal));
 }

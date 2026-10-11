@@ -18,10 +18,18 @@ import { isCancelRequested } from "./agent-loop-store.js";
 import { decideWithinBudget } from "./coding-decide-budget.js";
 import { type CodingDecision, type CodingGoal, type CodingPaneSnapshot, decideCodingAction } from "./coding-loop.js";
 import { refreshGoalConstraints } from "./coding-standing-constraints.js";
+import type { ScopeConstraint } from "./coding-scope-constraints.js";
 import { ControllerAiCancelled, ControllerAiStalled, type ControllerAiPolicy, controllerAiCall } from "./controller-ai-recovery.js";
 
-/** What crosses the step boundary: a decision, or a stall the recovery could not get past. Serializable. */
-export type PilotDecideOutcome = { decision: CodingDecision } | { stalled: { message: string; attempts: number } };
+/**
+ * What crosses the step boundary: a decision, or a stall the recovery could not get past. Serializable.
+ *
+ * `constraints` rides with the decision (#1019): the refresh runs INSIDE the step, so on a Workflow
+ * replay it does not run again and the goal would hold the previous decision's constraints while the
+ * journalled decision was made under these. `unwrapPilotDecide` re-applies them, so the action is
+ * screened against the constraints it was decided under, on every attempt and every replay.
+ */
+export type PilotDecideOutcome = { decision: CodingDecision; constraints?: ScopeConstraint[] } | { stalled: { message: string; attempts: number } };
 
 export interface PilotDecideInput {
 	userId: string;
@@ -49,7 +57,7 @@ export async function pilotDecide(env: Env, input: PilotDecideInput, opts: { pol
 					return decideCodingAction(env, input.userId, input.params, { kind: "coding", instanceId: input.instanceId, traceId }, deadlines);
 				}),
 		);
-		return { decision: decision as CodingDecision };
+		return { decision: decision as CodingDecision, constraints: input.params.goal.scopeConstraints };
 	} catch (e) {
 		if (e instanceof ControllerAiStalled) return { stalled: { message: e.message, attempts: e.attempts } };
 		if (e instanceof ControllerAiCancelled) return { decision: { cancelled: { why: e.message } } };
@@ -57,12 +65,13 @@ export async function pilotDecide(env: Env, input: PilotDecideInput, opts: { pol
 	}
 }
 
-/** Outside the step: a decision passes through; an exhausted recovery is raised for the round-level resume. */
-export function unwrapPilotDecide(outcome: PilotDecideOutcome): CodingDecision {
+/** Outside the step: a decision passes through (its constraints applied to `goal`); an exhausted recovery is raised. */
+export function unwrapPilotDecide(outcome: PilotDecideOutcome, goal?: CodingGoal): CodingDecision {
 	if ("stalled" in outcome) {
 		const err = new Error(outcome.stalled.message);
 		err.name = "ControllerAiStalled";
 		throw err;
 	}
+	if (goal && outcome.constraints) goal.scopeConstraints = outcome.constraints;
 	return outcome.decision;
 }

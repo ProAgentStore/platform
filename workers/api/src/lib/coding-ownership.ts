@@ -163,8 +163,17 @@ export function engineProbeFromSnapshot(snap: { alive?: boolean; ready?: boolean
 	return snap.ready === true ? "idle" : "busy";
 }
 
-/** How a message reaches an engine, from what it was doing when the message was sent. */
-export function deliveryFor(probe: EngineProbe, persistent: boolean): "delivered" | "queued" | "interrupting" {
+/** What is known about how a message met the engine (#1015), and `accepted` when nothing is (#1019). */
+export type DirectiveDelivery = "accepted" | "delivered" | "queued" | "interrupting";
+
+/**
+ * How a message reaches an engine, from what it was doing when the message was sent.
+ *
+ * `unknown` is `accepted`, never `delivered` (#1019): the runner took the message, but nobody saw
+ * whether an idle engine read it — and "delivered" was a claim that it had, made on no evidence.
+ */
+export function deliveryFor(probe: EngineProbe, persistent: boolean): DirectiveDelivery {
+	if (probe === "unknown") return "accepted";
 	if (probe !== "busy") return "delivered";
 	// A persistent stream-json engine (Claude) reads stdin after its current turn; a one-shot engine
 	// has that turn's process killed (`headless.ts` "turn aborted — a new instruction arrived").
@@ -176,7 +185,7 @@ export interface Directive {
 	sessionId: string;
 	runId: string | null;
 	kind: "direct" | "steer";
-	delivery: "delivered" | "queued" | "interrupting";
+	delivery: DirectiveDelivery;
 	content: string;
 	createdAt: number;
 	processedAt: number | null;
@@ -205,7 +214,13 @@ export async function recordDirective(
 	return d;
 }
 
-/** A session's directives since `sinceMs`, oldest first — what the Pilot reloads every decision. */
+/**
+ * A session's directives since `sinceMs`, oldest first — what the Pilot reloads every decision.
+ *
+ * The default bound is the NEWEST ten, which is right for display and wrong for constraints: a
+ * "read-only" sent early in a run must still bind after ten more messages (#1019). The Pilot's
+ * reload asks for {@link RUN_DIRECTIVES_MAX} and says when even that was not all of them.
+ */
 export async function listDirectives(env: Env, input: { instanceId: string; userId: string; sessionId: string; sinceMs: number; limit?: number }): Promise<Directive[]> {
 	const rows = await env.DB.prepare(
 		`SELECT id, session_id, run_id, kind, delivery, content, created_at, processed_at FROM coding_session_directives
@@ -219,18 +234,26 @@ export async function listDirectives(env: Env, input: { instanceId: string; user
 		.reverse();
 }
 
+/** The most directives one Pilot reload reads — every one a run has had, in any real run (#1019). */
+export const RUN_DIRECTIVES_MAX = 500;
+
 /**
- * Mark directives the engine has demonstrably processed: it completed a turn that ended after the
- * directive was delivered. `turnEndedAt` is the runner's `lastTurn.at` (the machine's clock), so a
- * small skew allowance applies; no completed turn means nothing is marked.
+ * Mark directives the engine has demonstrably processed: it completed a turn that ended AFTER the
+ * directive was recorded. `turnEndedAt` is the runner's `lastTurn.at` (the machine's clock).
+ *
+ * The skew allowance points the conservative way (#1019). It used to be ADDED to the turn's end, so
+ * a directive recorded up to five seconds after the engine went idle was marked processed by a turn
+ * that finished before the engine ever saw it — an owner told their correction was acknowledged
+ * while it sat unread. Now a directive counts only when the turn ended at least `skewMs` after it:
+ * a clock disagreement can delay the mark, never invent it. No completed turn marks nothing.
  */
 export async function markDirectivesProcessed(env: Env, input: { instanceId: string; userId: string; sessionId: string; turnEndedAt: number | null | undefined; skewMs?: number }): Promise<number> {
 	if (!input.turnEndedAt) return 0;
 	const res = await env.DB.prepare(
 		`UPDATE coding_session_directives SET processed_at = ?4
-		  WHERE session_id = ?1 AND instance_id = ?2 AND user_id = ?3 AND processed_at IS NULL AND created_at <= ?4 + ?5`,
+		  WHERE session_id = ?1 AND instance_id = ?2 AND user_id = ?3 AND processed_at IS NULL AND created_at + ?5 < ?4`,
 	)
-		.bind(input.sessionId, input.instanceId, input.userId, input.turnEndedAt, input.skewMs ?? 5_000)
+		.bind(input.sessionId, input.instanceId, input.userId, input.turnEndedAt, input.skewMs ?? 2_000)
 		.run();
 	return res.meta?.changes ?? 0;
 }
