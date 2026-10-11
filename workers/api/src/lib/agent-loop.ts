@@ -24,7 +24,8 @@ export type LoopStopReason =
 	| "engine_limit" // the coding CLI's OWN usage window was still spent after this run's wait budget (#541)
 	| "provider_credit" // the owner's AI provider account has no credit left — top up, do not retry (#773)
 	| "engine_auth" // the coding CLI is not signed in and nobody signed it in within the park (#881)
-	| "interrupted"; // the PLATFORM cut the invocation off — the objective never reported (#546)
+	| "interrupted" // the PLATFORM cut the invocation off — the objective never reported (#546)
+	| "constraint_refused"; // the owner's constraints in force do not fit the engine's envelope whole: nothing more was sent (#1019)
 
 export interface LoopState {
 	iteration: number;
@@ -234,7 +235,10 @@ export function statusFor(reason: LoopStopReason): LoopRunStatus {
 	//
 	// `engine_auth` is the same shape again (#881): the engine is not signed in, and signing it in
 	// is an owner act — which the re-auth relay makes possible from any device.
-	if (reason === "escalated" || reason === "engine_limit" || reason === "interrupted" || reason === "provider_credit" || reason === "engine_auth") return "needs_human";
+	//
+	// `constraint_refused` too (#1019): nothing failed and nobody cancelled — the owner's own constraints do not fit
+	// the engine's envelope, and only the owner can shorten them.
+	if (reason === "escalated" || reason === "engine_limit" || reason === "interrupted" || reason === "provider_credit" || reason === "engine_auth" || reason === "constraint_refused") return "needs_human";
 	return "failed";
 }
 

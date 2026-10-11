@@ -36,7 +36,9 @@ import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { CodingRuntime } from "../../../../../packages/browser-runner/src/coding/runtime.js";
 import type { CodingDecision, CodingGoal } from "../../lib/coding-loop.js";
 import { realSchemaD1, type RealSchemaD1, seedTenant } from "../../lib/d1-sqlite.js";
+import { getLoopRun } from "../../lib/agent-loop-store.js";
 import { MAX_OBJECTIVE_CONSTRAINT_CHARS } from "../../lib/coding-objective-delivery.js";
+import { continueRefusal } from "../../routes/loop-continue-routes.js";
 import { activeConstraints, constraintLines, constraintSources } from "../../lib/coding-scope-constraints.js";
 import { RunnerUnreachableError } from "../../lib/runner-unreachable.js";
 import type { Env } from "../../types.js";
@@ -612,7 +614,8 @@ describe("constraints are delivered whole or the run stops before ANY engine inp
 		expect(stopEvents()[0]).toMatchObject({ constraintLines: linesFor(names(atLimit + 1)).length });
 		expect(String(stopEvents()[0].message)).toContain("a partial set is never sent");
 		expect(String(stopEvents()[0].message)).toContain("stopped before the engine received anything");
-		expect(r).toMatchObject({ outcome: "cancelled", detail: expect.stringContaining("a partial set is never sent") });
+		// Not `cancelled`: the owner cancelled nothing. A failed act-send whose stop reason is constraint_refused (#1019).
+		expect(r).toMatchObject({ outcome: "failed", detail: expect.stringContaining("a partial set is never sent") });
 	});
 
 	it("exactly at the limit: delivered WHOLE — one execution, the exact line (with its Unicode em dash) in the engine's bytes", async () => {
@@ -640,7 +643,7 @@ describe("constraints are delivered whole or the run stops before ANY engine inp
 		expect(readBy(target)).toEqual([]);
 		expect(actIds).toEqual([]);
 		expect(events()).toEqual(first);
-		expect(again).toMatchObject({ outcome: "cancelled" });
+		expect(again).toMatchObject({ outcome: "failed" });
 	});
 
 	it("already DELIVERED, then a newer directive makes the set overlong: the next act is stopped — delivery is no bypass", async () => {
@@ -659,6 +662,105 @@ describe("constraints are delivered whole or the run stops before ANY engine inp
 		expect(executions("second, after the directive")).toBe(0);
 		expect(actIds).toHaveLength(1);
 		expect(objectiveStates()).toEqual(["delivered", "refused"]);
-		expect(r).toMatchObject({ outcome: "cancelled" });
+		expect(r).toMatchObject({ outcome: "failed" });
+	});
+});
+
+// ── #1019: the refusal is the run's TERMINAL reason — on its last step too — and history it does not rewrite ───────
+
+describe("a refused envelope is the run's own terminal reason, and earlier facts stand (#1019)", () => {
+	const grants = (n: number) => Array.from({ length: n }, (_, i) => `You may kill the worker-pool-process-name-${String(i).padStart(2, "0")}-abcdefgh processes.`).join(" ");
+	const overlong = () => d1.exec(`UPDATE coding_repos SET instructions = '${grants(14)}' WHERE id = 'r1'`);
+	/** The run's own loop row, as the platform opens it — the terminal report and the continue decision read it. */
+	const openRow = () => d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at, session_id) VALUES ('run-C', 'u1', 'i1', 'synthetic', 'running', 10, ${Date.now()}, 's1')`);
+	const notices = () => (d1.sqlite.prepare("SELECT title, body FROM notifications WHERE user_id = 'u1' ORDER BY rowid").all() as Array<{ title: string; body: string }>);
+
+	it.each([
+		["a message", SEND("list the stray workers")],
+		["an interrupt", { action: { kind: "interrupt" } } as CodingDecision],
+	])("refused on its FINAL step (%s): the refusal is the outcome, not max_steps — zero dispatch, one decision", async (_kind, decision) => {
+		overlong();
+		openRow();
+		decisions = [decision, FINISH];
+		const r = await run(params({}, { maxSteps: 1 } as Partial<CodingSessionParams>));
+		expect(r).toMatchObject({ outcome: "failed", detail: expect.stringContaining("a partial set is never sent") });
+		expect(String(r.detail)).not.toContain("gave up after");
+		expect(actIds).toEqual([]);
+		expect(readBy(target)).toEqual([]);
+		expect(decideCodingAction).toHaveBeenCalledTimes(1);
+		expect(await getLoopRun(env, "u1", "run-C")).toMatchObject({ stopReason: "constraint_refused", status: "needs_human" });
+	});
+
+	it("initial refusal: the terminal row is constraint_refused (continuable), the notice says stopped — never finished, never 'you stopped'", async () => {
+		overlong();
+		openRow();
+		decisions = [SEND("list the stray workers"), FINISH];
+		await run();
+		const row = await getLoopRun(env, "u1", "run-C");
+		expect(row).toMatchObject({ stopReason: "constraint_refused", status: "needs_human" });
+		expect(continueRefusal(row as NonNullable<typeof row>)).toBeNull(); // preview and POST share this decision
+		const n = notices();
+		expect(n.map((x) => x.title)).not.toContain("✅ Coder finished");
+		expect(n.some((x) => x.title === "⚠️ Coder stopped" && x.body.includes("a partial set is never sent"))).toBe(true);
+		expect(String(row?.detail ?? "")).not.toContain("you stopped");
+	});
+
+	it("post-delivery refusal: the earlier delivery and read stand in the receipt AND the terminal reason; only the next act is refused", async () => {
+		openRow();
+		let n = 0;
+		hooks.act = async (_m, _b, send) => {
+			const out = send();
+			if (++n === 1) {
+				d1.exec(`INSERT INTO coding_session_directives (id, session_id, instance_id, user_id, repo_id, run_id, kind, delivery, content, created_at)
+				  VALUES ('dir-g', 's1', 'i1', 'u1', 'r1', NULL, 'steer', 'queued', '${grants(14)}', ${Date.now()})`);
+			}
+			return out;
+		};
+		decisions = [SEND("first, within the constraints"), SEND("second, after the directive"), FINISH];
+		const r = await run();
+		expect(executions("first, within the constraints")).toBe(1);
+		expect(executions("second, after the directive")).toBe(0);
+		const refused = events().find((e) => e.state === "refused");
+		expect(refused).toMatchObject({ priorRead: { inputId: actIds[0] }, actsSent: 1 });
+		for (const said of [String(refused?.message), String(r.detail)]) {
+			expect(said).toContain(`was delivered earlier and read by the engine (input ${actIds[0]}`);
+			expect(said).toContain("stopped before its next act reached the engine");
+			expect(said).not.toContain("was NOT delivered");
+			expect(said).not.toContain("before the engine received anything");
+		}
+		const row = await getLoopRun(env, "u1", "run-C");
+		expect(row).toMatchObject({ stopReason: "constraint_refused" });
+		expect(continueRefusal(row as NonNullable<typeof row>)).toBeNull();
+		expect(notices().map((x) => x.title)).not.toContain("✅ Coder finished");
+	});
+
+	it("a replay of the refused run settles the same terminal reason and receipt", async () => {
+		overlong();
+		openRow();
+		decisions = [SEND("list the stray workers"), FINISH];
+		const j = newJournal();
+		const first = await run(params(), j);
+		const ev = events();
+		decisions = [SEND("list the stray workers"), FINISH];
+		const again = await run(params(), j);
+		expect(again).toEqual(first);
+		expect(events()).toEqual(ev);
+		expect(actIds).toEqual([]);
+	});
+
+	it("CONTROL: a genuine owner cancel is still `cancelled` — 'you stopped that run', not continuable", async () => {
+		openRow();
+		let n = 0;
+		hooks.act = async (_m, _b, send) => {
+			const out = send();
+			if (++n === 1) d1.exec("UPDATE agent_loop_runs SET cancel_requested = 1 WHERE run_id = 'run-C'");
+			return out;
+		};
+		decisions = [SEND("first"), SEND("second"), FINISH];
+		const r = await run();
+		expect(r.outcome).toBe("cancelled");
+		const row = await getLoopRun(env, "u1", "run-C");
+		expect(row?.stopReason).toBe("cancelled");
+		expect(continueRefusal(row as NonNullable<typeof row>)).toContain("you stopped that run");
 	});
 });

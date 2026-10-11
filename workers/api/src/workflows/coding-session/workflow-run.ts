@@ -560,14 +560,13 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			// Every instruction carries its own id (#1019): deterministic per step, so a step retry or a
 			// guard re-attempt sends the SAME id, and a runner that already accepted it does not run it twice.
 			const withId: CodingActionKind = a.kind === "message" ? { ...a, inputId: a.inputId ?? `act:${runKey}:${label}` } : a;
-			// The constraints in force now ride the objective WHOLE — or NOTHING is sent: the receipt is journalled and the run
-			// stops before any engine input (#1019). Recomputed from journalled state, so a replay refuses again.
+			// The constraints in force ride the objective WHOLE or nothing is sent; recomputed on replay, so it refuses again (#1019).
 			const lines = constraintLines(goal.scopeConstraints ?? activeConstraints(constraintSources(goal)));
 			const block = objective?.blocks(lines);
 			if (block?.blocked && objective) {
 				if (block.settled) await reportObjective(block.settled);
 				refusedStop = objective.stopReason();
-				return lastPane;
+				return { ...lastPane, cancelled: true, stopReason: refusedStop }; // the loop ends HERE, even on its last step
 			}
 			await objective?.attempt(withId, lines);
 			// Composed inside every attempt (lib/coding-act-send.ts): after a reconnect, against the engine and runner now there
@@ -950,6 +949,12 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 				roundDeps,
 				{ next: () => ++interruptions },
 			);
+			// A refused envelope is neither a failed objective nor an owner cancel: its own, continuable reason (#1019).
+			if (refusedStop) {
+				crashReason = "constraint_refused";
+				result = { ...result, outcome: "failed", detail: refusedStop };
+				break;
+			}
 			// Both are consumed by the round above — cleared so a stale handoff value or a stale platform note isn't re-injected into a later round.
 			goal.userHint = undefined;
 			goal.resumeNote = undefined;

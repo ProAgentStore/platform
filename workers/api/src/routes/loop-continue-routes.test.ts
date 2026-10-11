@@ -251,6 +251,12 @@ describe("which runs may be continued", () => {
 		expect(start).not.toHaveBeenCalled();
 	});
 
+	it("continues a constraint_refused run — the owner shortened their constraints; it was not their cancel (#1019)", async () => {
+		getLoopRun.mockResolvedValue({ ...stoppedRun, status: "needs_human", stopReason: "constraint_refused" });
+		expect((await post("/i1/loop/run-1/continue", {})).status).toBe(201);
+		expect(start).toHaveBeenCalledTimes(1);
+	});
+
 	it.each(["interrupted", "max_iterations", "engine_limit", "provider_credit"])("continues a %s run", async (reason) => {
 		getLoopRun.mockResolvedValue({ ...stoppedRun, stopReason: reason });
 		expect((await post("/i1/loop/run-1/continue", {})).status).toBe(201);

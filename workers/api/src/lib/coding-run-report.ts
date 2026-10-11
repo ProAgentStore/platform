@@ -239,7 +239,7 @@ export function withoutVendorAdvice(message: string): string {
  * is the only way the placeholder could return.
  */
 export function outcomeWord(outcome: string, stopReason?: LoopStopReason | null): string {
-	return stopReason === "interrupted" || stopReason === "provider_credit" ? stopReason : outcome;
+	return stopReason === "interrupted" || stopReason === "provider_credit" || stopReason === "constraint_refused" ? stopReason : outcome;
 }
 
 /**

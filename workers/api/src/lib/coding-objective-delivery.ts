@@ -66,6 +66,10 @@ export interface ObjectiveReceipt {
 	utf8Bytes: number;
 	sha256: string;
 	consumedInputId: string | null;
+	/** An EARLIER verified read of the objective in this run — a past fact a later refusal never retracts. */
+	priorRead: { inputId: string; generation: number } | null;
+	/** Acts of this run already sent to an engine before this receipt. */
+	actsSent: number;
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
@@ -95,6 +99,10 @@ export class ObjectiveDelivery {
 	/** The constraint lines the act being sent would carry with the objective. */
 	private constraints: readonly string[] = [];
 	private consumedId: string | null = null;
+	/** The first verified read of the objective in this run, kept across generations: it happened, whatever follows. */
+	private priorRead: { inputId: string; generation: number } | null = null;
+	/** Every act this run sent (settled from its journalled receipt): what a later refusal must not deny. */
+	private actsSent = 0;
 	/** Per act id, the digest of the objective-bearing composition THIS run sends under it: a read counts only for that content. */
 	private digests = new Map<string, string>();
 
@@ -202,6 +210,7 @@ export class ObjectiveDelivery {
 	/** After the act step, from its JOURNALLED receipt. Only this generation's engine accepting it counts; a predecessor's never does. */
 	settle(r: ActReceipt): void {
 		this.inflight = null;
+		this.actsSent++;
 		this.attempted = this.attempted.filter((id) => id !== r.inputId);
 		if (!r.objective || !r.inputId) return;
 		const ours = !this.identified || !r.ledger || `${r.ledger}:${r.epoch}` === this.engineKey;
@@ -224,6 +233,7 @@ export class ObjectiveDelivery {
 		);
 		if (!read) return null;
 		this.consumedId = read[0];
+		this.priorRead ??= { inputId: read[0], generation: this.generation };
 		this.state = "delivered";
 		return this.state;
 	}
@@ -248,6 +258,8 @@ export class ObjectiveDelivery {
 			utf8Bytes: this.utf8Bytes,
 			sha256: this.sha256,
 			consumedInputId: state === "delivered" ? this.consumedId : null,
+			priorRead: this.priorRead,
+			actsSent: this.actsSent,
 		};
 	}
 
@@ -264,8 +276,17 @@ export class ObjectiveDelivery {
 				return `The run's objective (${size}) was sent with ${this.issued.length} turn(s)${where}, but the engine never confirmed reading any of them — it is not reported as delivered.`;
 			case "unknown":
 				return `The run's objective (${size}) was sent${where}, but no runner receipt settled it — a lost reply, a send that never returned, or a runner holding different content under that turn's id — and no read receipt followed: whether the engine has it is unknown.`;
-			case "refused":
-				return `The run's objective (${size}) was NOT delivered to the engine${where}, and the run was stopped before the engine received anything: the owner's constraints in force (${this.constraints.length} line(s)) do not fit one envelope whole (at most ${MAX_OBJECTIVE_CONSTRAINTS} lines of ${MAX_OBJECTIVE_CONSTRAINT_CHARS} characters), and a partial set is never sent. Shorten or merge the standing rules or directives, then continue the run.`;
+			case "refused": {
+				const why = `the owner's constraints in force now (${this.constraints.length} line(s)) do not fit one envelope whole (at most ${MAX_OBJECTIVE_CONSTRAINTS} lines of ${MAX_OBJECTIVE_CONSTRAINT_CHARS} characters), and a partial set is never sent. Shorten or merge the standing rules or directives, then continue the run.`;
+				// What already happened stands (#1019): a refusal stops the NEXT act, it never rewrites an earlier delivery.
+				if (this.priorRead) {
+					return `The run's objective (${size}) was delivered earlier and read by the engine (input ${this.priorRead.inputId}, engine generation ${this.priorRead.generation}), and the ${this.actsSent} act(s) already sent stand. The run was stopped before its next act reached the engine${where}: ${why}`;
+				}
+				if (this.actsSent) {
+					return `The run's objective (${size}) has no confirmed read, but ${this.actsSent} act(s) of this run were already sent to the engine and stand. The run was stopped before its next act reached the engine${where}: ${why}`;
+				}
+				return `The run's objective (${size}) was NOT delivered to the engine${where}, and the run was stopped before the engine received anything: ${why}`;
+			}
 			case "undelivered":
 				return `The run's objective (${size}) was NOT delivered to the engine${where}: the run ended before any turn carried it to the engine it was owed to.`;
 			default:

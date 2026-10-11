@@ -545,7 +545,9 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 		// (#374). That record used to come from the `/message` route the browser Loop relayed
 		// through, and nothing replaces it once the Pilot drives the engine instead.
 		await deps.onEvent?.("action", label, decision.action);
-		await deps.act(decision.action);
+		// An act the platform refused to send ends the run with ITS reason — on the last step too, not as max_steps (#1019).
+		const acted = await deps.act(decision.action);
+		if (acted?.cancelled) return { outcome: "cancelled", detail: acted.stopReason, steps: step + 1, transcript };
 		// After sending an instruction, let the CLI run to completion before the
 		// next decision — otherwise the brain reasons over a stale (pre-response)
 		// pane and may double-send. waitIdle settles, then polls until idle.
