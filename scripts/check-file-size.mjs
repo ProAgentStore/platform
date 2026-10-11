@@ -690,8 +690,10 @@ const PINS = {
 	"packages/browser-runner/src/runner.ts": 1361, // +3 at #957: the localApply runtime (field, construction sharing the research browserFor, shutdown). +6 at #956: the local-artifact runtime is constructed, advertised and shut down beside local-browser's.
 	// New at #953: the four-line read-only email-lead preflight route belongs beside the existing
 	// local-apply routes. Splitting a single ordered route registration would add indirection without
-	// reducing its ownership; the page validation itself stays in local-apply/runtime.ts.
-	"packages/browser-runner/src/server.ts": 804,
+	// reducing its ownership; the page validation itself stays in local-apply/runtime.ts. +3 at
+	// #1013: a separate reconciliation dispatcher keeps an ended uncertain attempt out of the
+	// mutable application runtime; its policy and evidence logic live in reconciliation-runtime.ts.
+	"packages/browser-runner/src/server.ts": 807,
 	// New pin at #946: the local browser capability is validated at the three agent write doors (#945) and served back resolved by both capabilities routes (#946) — four lines over the line; splitting the agents router is its own change.
 	"workers/api/src/routes/agents.ts": 804,
 	// +45 at #263: `probeMcpSurface`, so the connection test can ask about resources and prompts
@@ -1940,7 +1942,7 @@ const PINS = {
 	"workers/api/src/routes/terminals.ts": 878, // #859 follow-up: ordered terminal routes own the stable machine detail and policy endpoints; D1 policy access lives in lib/machine-policy.ts.
 	"workers/mcp/src/surface-lock.ts": 1120, // #1009 appends the 0.1.106 permission-request deep-link schema record; this history-checked ledger is deliberately append-only and unsplit. #1004 appends the 0.1.105 owner-scoped instance-file upload surface record (and 0.1.104 uploaded-Tailor-source controls); this history-checked ledger is deliberately unsplit. #1003 appends the get_console_link files-upload inputSchema revision; this history-checked ledger is deliberately unsplit. #859 follow-up: append-only MCP ledger entries for get_machine_policy and set_machine_policy.
 	"store/console/src/tabs/KnowledgeTab.tsx": 818, // #1003 keeps URL-addressable knowledge subtabs beside the existing capability-gated upload surfaces; splitting the tab would separate state from the controls it governs.
-	"scripts/check-file-size.mjs": 2025, // #1008 raises the correlated runner-update safety pin above. #1003 adds the reviewed KnowledgeTab URL-subtab pin above. #859 follow-up adds five explicitly reviewed policy/relay surface pins above; this ledger must describe its own deliberate growth.
+	"scripts/check-file-size.mjs": 2026, // #1013 records the three-line reconciliation route exception above, then raises this self-pin too. #1008 raises the correlated runner-update safety pin above. #1003 adds the reviewed KnowledgeTab URL-subtab pin above. #859 follow-up adds five explicitly reviewed policy/relay surface pins above; this ledger must describe its own deliberate growth.
 };
 
 /**
