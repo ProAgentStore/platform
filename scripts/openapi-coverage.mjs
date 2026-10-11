@@ -65,6 +65,11 @@ const EXCLUSIONS = [
 		reason:
 			"Console-internal helpers for the Coder browse pane and the behaviour editor (including `GET /v1/instances/behaviour-schema`); shape follows the console, not a published contract.",
 	},
+	{
+		match: /^[A-Z]+ \/v1\/instances\/\{\}\/(?:application-reconciliation-handoffs\/\{\}|application-runs\/\{\}\/reconciliation\/handoff(?:\/(?:frame|input|resume|end))?)$/,
+		reason:
+			"Read-only reconciliation browser transport. These seven owner-only Console-to-Runner routes carry an opaque, short-lived handoff to a retained local page; their frame/input lifecycle is intentionally not a stable public API contract.",
+	},
 ];
 
 const isExcluded = (key) =>

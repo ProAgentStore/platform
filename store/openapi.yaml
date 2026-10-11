@@ -73,9 +73,12 @@ info:
     - Template-agent storage internals with no first-party caller — `summaries`,
       `summarize`, `users/{userId}/context`, and the two `init-collections` bootstrap
       routes (5 operations).
+    - Read-only application reconciliation browser transport (7 operations) — short-lived,
+      owner-only Console-to-Runner handoffs for a retained local page. Their opaque frame/input
+      lifecycle is intentionally not a stable public API contract.
 
-    That is 68 excluded operations. Everything else — 260 operations across 201 paths — is
-    documented here.
+    The complete, enforced exclusion inventory lives in `scripts/openapi-coverage.mjs`.
+    Everything else is documented here.
   version: 1.0.0
   contact:
     url: https://proagentstore.online
