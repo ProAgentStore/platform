@@ -85,11 +85,15 @@ export async function endCodingSession(
 	// database and leaves the child process running (`coding-session-sweeper` says exactly this).
 	let stopError: string | null = null;
 	const ended = conn
-		? await callRunner<{ usage?: unknown; acts?: unknown; authResolved?: unknown }>(conn, "/coding/end", { sessionId }).catch((e) => {
+		? await callRunner<{ ok?: unknown; usage?: unknown; acts?: unknown; authResolved?: unknown }>(conn, "/coding/end", { sessionId }).catch((e) => {
 				stopError = e instanceof Error ? e.message : String(e);
 				return null;
 			})
 		: null;
+	// A delivered request is not a stop (#1015). The runner's `end()` answers `{ok:true, …}` — every
+	// version has — so only that body confirms it; `{ok:false}`, an empty or malformed body is an
+	// unconfirmed stop, which keeps the direct claim and says the engine may still be running.
+	if (conn && !stopError && (ended as { ok?: unknown } | null)?.ok !== true) stopError = "the runner did not confirm the stop";
 	if (stopError) {
 		await logError(env, {
 			source: "coding",

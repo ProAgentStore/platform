@@ -81,10 +81,16 @@ export async function endAgentCodingSession(
 	/** The owner's turn and the model's pick (#1015). Absent: no repo constraint at all. */
 	request?: SessionRequest,
 ): Promise<RegistryToolResult> {
-	const [sessions, repos] = await Promise.all([
+	const [sessions, listed] = await Promise.all([
 		listSessions(env, instanceId, userId),
-		listRepos(env, instanceId, userId).catch(() => [] as Array<{ id: string; name: string }>),
+		listRepos(env, instanceId, userId).catch(() => null),
 	]);
+	// Without the repository list no target can be checked — an empty list would make every named repo
+	// "unknown" and every bare request "the one open session". Fail closed (#1015).
+	if (!listed) {
+		return { content: "Could not read this agent's repositories, so no session can be matched to what the owner asked — nothing was ended. Say so, and ask them to try again.", success: true };
+	}
+	const repos = listed;
 	// The owner's words decide the target against the instance's REAL repository names — here, where they
 	// are listed, so a repo the owner named binds even when the model picked another (#1015).
 	const target = request ? resolveSessionTarget(request, repos.map((r) => r.name)) : { repo: undefined, excluded: [] };

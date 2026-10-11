@@ -58,6 +58,8 @@ let pilots: Array<Record<string, unknown>>;
 let watchers: Array<Record<string, unknown>>;
 /** Run inside `/coding/start`, to land a concurrent send in the driver's admission gap. */
 let onStart: (() => void) | null;
+/** What the runner answers `/coding/end` with; null = the real runner's `{ok:true, …}` (runtime.ts `end()`). */
+let endAnswer: { raw: string } | null;
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 
@@ -94,6 +96,7 @@ function makeEnv(): Env {
 							return json({ ok: true });
 						case "/coding/end":
 							if (sid) machine.sessions.delete(sid);
+							if (endAnswer) return new Response(endAnswer.raw, { status: 200 });
 							return json({ ok: true, usage: [], acts: [], authResolved: null });
 						case "/coding/engine-check":
 							return json({ checked: true, state: "signed-in" });
@@ -153,6 +156,7 @@ beforeEach(() => {
 	pilots = [];
 	watchers = [];
 	onStart = null;
+	endAnswer = null;
 	env = makeEnv();
 });
 afterEach(() => d1.close());
@@ -400,6 +404,42 @@ describe("ending the ended session is the owner's exact-target way out (exhauste
 		const res = await call("POST", "/coding/sessions/S1/end");
 		expect(res.body).toEqual({ ok: true, session: "ended", engineStopped: true });
 		expect(machine.sessions.has("S1")).toBe(false);
+	});
+
+	// A delivered `/coding/end` is not a confirmed stop: only the runner's `{ok:true}` is (#1015).
+	it.each([
+		["a negative answer", '{"ok":false}'],
+		["an answer with no ok at all", '{"usage":[],"acts":[]}'],
+		["a non-boolean ok", '{"ok":"true"}'],
+		["an empty object", "{}"],
+		["null", "null"],
+	])("%s from the stamped machine keeps the claim, reports the stop unconfirmed, and admits nothing", async (_name, raw) => {
+		const turnId = await steerThenRunEnds();
+		endAnswer = { raw };
+		const res = await call("POST", "/coding/sessions/S1/end");
+		expect(res.status).toBe(200);
+		expect(res.body).toMatchObject({ ok: true, session: "already_ended", engineStopped: false, directTurn: { turnId, released: false, reason: "stop_not_confirmed" } });
+		expect(String(res.body.warning)).toContain("did not confirm it stopped");
+		expect(await claimOf("S1")).toBe(turnId);
+		expect(pilots).toHaveLength(0);
+		expect(await entry()).toMatchObject({ status: "pending" });
+	});
+
+	it("the legacy runner's bare {ok:true} still confirms the stop and releases the exact claim once", async () => {
+		const turnId = await steerThenRunEnds();
+		endAnswer = { raw: '{"ok":true}' };
+		const res = await call("POST", "/coding/sessions/S1/end");
+		expect(res.body).toMatchObject({ ok: true, session: "already_ended", engineStopped: true, directTurn: { turnId, released: true, queue: { attempted: true, started: true } } });
+		expect(res.body).not.toHaveProperty("warning");
+		expect(await claimOf("S1")).toBeNull();
+		expect(pilots).toHaveLength(1);
+	});
+
+	it("a live session whose stop is not confirmed still closes its row, with the warning", async () => {
+		endAnswer = { raw: '{"ok":false}' };
+		const res = await call("POST", "/coding/sessions/S1/end");
+		expect(res.body).toMatchObject({ ok: true, session: "ended", engineStopped: false });
+		expect(String(res.body.warning)).toContain("did not confirm it stopped");
 	});
 
 	it("an unknown session is not found, and not ok", async () => {

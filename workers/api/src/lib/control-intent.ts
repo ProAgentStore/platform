@@ -76,7 +76,12 @@ export function asksToEndSession(text: string): boolean {
 	return askingClauses(text, END).some((c) => /\bsessions?\b/i.test(c));
 }
 
-const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+/**
+ * A run-id-shaped TOKEN — the whole token, so `<a real id>-extra` reads as `<a real id>-extra`, an id no
+ * run has, and never as the real id it starts with (#1015). `mentions` already required the exact token;
+ * this keeps the id scan from re-adding the prefix behind it.
+ */
+const UUID = /(?<![\w-])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[\w-]*/gi;
 
 const esc = (id: string) => id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** Does `text` mention `id` as a whole token (not as part of a longer id or word)? */
@@ -87,14 +92,27 @@ const mentions = (text: string, id: string) => new RegExp(`(^|[^\\w-])${esc(id)}
  * "do not stop run-b" excludes run-b. A clause ends at sentence punctuation or a "but" that turns back.
  * Reading too much as excluded only narrows what may be touched, never widens it.
  */
-const EXCLUDE_LEAD = /\b(?:not|except(?:\s+for)?|excluding|other\s+than|apart\s+from|leave)\b/gi;
-function excludedSpans(text: string): string[] {
-	const spans: string[] = [];
+const EXCLUDE_LEAD = /\b(?:not|don'?t|except(?:\s+for)?|excluding|other\s+than|apart\s+from|leave)\b/gi;
+/** A clause ends at sentence punctuation, a colon ("Not X: stop Y" turns to Y), or a "but" that turns back. */
+const CLAUSE_END = /[\n.!?;:]|,?\s+but\s+(?!not\b)/i;
+/** Each exclusion as `[start, end)` in `text`: from its lead to the end of its clause. */
+function exclusionRanges(text: string): Array<[number, number]> {
+	const ranges: Array<[number, number]> = [];
 	for (const m of text.matchAll(EXCLUDE_LEAD)) {
-		const rest = text.slice((m.index ?? 0) + m[0].length);
-		spans.push(rest.split(/[\n.!?;]|,?\s+but\s+(?!not\b)/i)[0] ?? "");
+		const from = (m.index ?? 0) + m[0].length;
+		const span = text.slice(from).split(CLAUSE_END)[0] ?? "";
+		ranges.push([m.index ?? 0, from + span.length]);
 	}
-	return spans;
+	return ranges;
+}
+function excludedSpans(text: string): string[] {
+	return exclusionRanges(text).map(([start, end]) => text.slice(start, end).replace(EXCLUDE_LEAD, " "));
+}
+/** `text` with every exclusion clause blanked — what is left is what the owner pointed AT. */
+function withoutExclusions(text: string): string {
+	let out = text;
+	for (const [start, end] of exclusionRanges(text)) out = out.slice(0, start) + " ".repeat(end - start) + out.slice(end);
+	return out;
 }
 /** The candidates (lower-cased) the owner excluded, plus any run-id-shaped token in an excluded span. */
 function excludedOf(text: string, candidates: readonly string[], uuids = false): string[] {
@@ -122,13 +140,21 @@ const targetText = (text: string) =>
  * rather than widening to all. Lower-cased; empty = the owner named no run.
  */
 export function runsNamedBy(text: string, candidates: readonly string[]): string[] {
-	const said = targetText(text);
-	const named = new Set(candidates.filter((id) => mentions(said, id)).map((id) => id.toLowerCase()));
-	for (const m of said.matchAll(UUID)) named.add(m[0].toLowerCase());
 	// A run the owner excluded ("stop run-a, not run-b") is mentioned, and is the opposite of named.
 	const excluded = new Set(runsExcludedBy(text, candidates));
-	return [...named].filter((id) => !excluded.has(id));
+	return runsPointedAt(text, candidates).filter((id) => !excluded.has(id));
 }
+
+/** The runs the owner's words point AT, outside every exclusion clause — before any conflict is resolved. */
+function runsPointedAt(text: string, candidates: readonly string[]): string[] {
+	const said = withoutExclusions(targetText(text));
+	const named = new Set(candidates.filter((id) => mentions(said, id)).map((id) => id.toLowerCase()));
+	for (const m of said.matchAll(UUID)) named.add(m[0].toLowerCase());
+	return [...named];
+}
+
+/** "Everything", "all", "the rest" — the words that make an exclusion an all-except rather than a target. */
+const UNIVERSAL = /\b(?:every(?:thing|one)?|all|any(?:thing)?|the\s+rest|others)\b/i;
 
 /** The runs the owner's message EXCLUDES — "not X", "except X", "leave X" (#1015). Lower-cased. */
 export function runsExcludedBy(text: string, candidates: readonly string[]): string[] {
@@ -149,6 +175,16 @@ export function stopTarget(ctx: Pick<RegistryToolCtx, "turn">, runId: string, ca
 	// An excluded run is refused even when it is the only one the owner mentioned, and is never in the
 	// "everything" an unnamed stop reaches: "stop everything except run-b" must leave run-b running.
 	const excluded = runsExcludedBy(text, all);
+	// A run the owner both named and excluded is a contradiction, not a cancelled-out target: it must not
+	// leave an empty named set that reads as "every run".
+	const conflicted = runsPointedAt(text, all).filter((id) => excluded.includes(id));
+	if (conflicted.length) {
+		return { refused: `The owner both asked to stop and said not to stop ${conflicted.join(", ")}, so nothing was stopped. Ask them which run they mean.` };
+	}
+	// Exclusions that name no positive target are an all-except only when the owner said "everything".
+	if (!named.length && excluded.length && !UNIVERSAL.test(withoutExclusions(ownWords(text)))) {
+		return { refused: `The owner said not to stop ${excluded.join(", ")} and named no run to stop, so nothing was stopped. Ask them which run they mean.` };
+	}
 	if (runId && excluded.includes(runId.toLowerCase())) {
 		return { refused: `The owner said not to stop ${runId}, so nothing was stopped. Stop only what they asked for, or ask them which run they mean.` };
 	}
@@ -185,13 +221,28 @@ export function sessionTarget(ctx: Pick<RegistryToolCtx, "turn">, repo: unknown)
  */
 export function resolveSessionTarget(req: SessionRequest, repoNames: readonly string[]): { refused: string } | { repo: string | undefined; excluded: string[] } {
 	if (req.explicit) return { repo: req.repo, excluded: [] };
-	const said = ownWords(req.text);
+	// Targets are read WITH inline quotes: in "close the `platform` session" the backticks mark the
+	// target, they do not make it evidence. (Consent is still read from `ownWords`, by controlRefusal.)
+	const said = targetText(req.text);
 	const names = [...new Set([...repoNames, ...(req.repo ? [req.repo] : [])])];
 	const aliases = (name: string) => [...new Set([name, name.split("/").pop() ?? name])];
 	const excludedAliases = new Set(excludedOf(said, names.flatMap(aliases)));
 	const isExcluded = (name: string) => aliases(name).some((a) => excludedAliases.has(a.toLowerCase()));
 	const excluded = names.filter(isExcluded);
-	const named = names.filter((n) => !isExcluded(n) && aliases(n).some((a) => mentions(said, a)));
+	const pointed = withoutExclusions(said);
+	const pointedAt = names.filter((n) => aliases(n).some((a) => mentions(pointed, a)));
+	// Named AND excluded is a contradiction; dropping it would leave "the session" — the unrelated one.
+	const conflicted = pointedAt.filter(isExcluded);
+	if (conflicted.length) {
+		return { refused: `The owner both asked to end and said not to end the ${conflicted.join(", ")} session, so nothing was ended. Ask them which session they mean.` };
+	}
+	// A session the owner named that this agent has no repository for is a target, not "the session".
+	const known = new Set(repoNames.flatMap(aliases).map((a) => a.toLowerCase()));
+	const absent = sessionTargetWords(pointed).filter((w) => !known.has(w.toLowerCase()));
+	if (absent.length) {
+		return { refused: `The owner asked to end the ${absent[0]} session, but there is no repository called "${absent[0]}" on this agent, so nothing was ended. Ask them which session they mean.` };
+	}
+	const named = pointedAt.filter((n) => !isExcluded(n));
 	const pick = req.repo ? names.find((n) => aliases(n).some((a) => a.toLowerCase() === req.repo?.toLowerCase())) ?? req.repo : undefined;
 	if (pick && isExcluded(pick)) return { refused: `The owner said not to end the ${pick} session, so nothing was ended. End only the session they asked for, or ask them which one they mean.` };
 	if (named.length > 1 && !(pick && named.includes(pick))) {
@@ -199,6 +250,23 @@ export function resolveSessionTarget(req: SessionRequest, repoNames: readonly st
 	}
 	if (named.length) return { repo: pick && named.includes(pick) ? pick : named[0], excluded };
 	return { repo: undefined, excluded };
+}
+
+/** Words that describe A session rather than name its repository: "the coding session", "every session". */
+const GENERIC_SESSION_WORD = new Set(
+	"the this that these those my your our its their a an one only current open active running live idle last old previous other same whole entire existing new stale remaining every each all any both coding cli engine terminal repo repository claude codex grok agent".split(" "),
+);
+/**
+ * The repository words the owner put in front of "session" ("the platform session", "the
+ * `owner/repo` session") or after it ("the session for platform"). Each is a whole token, so
+ * "platform-extra" is "platform-extra" — never "platform".
+ */
+function sessionTargetWords(text: string): string[] {
+	const words: string[] = [];
+	const token = "([\\w][\\w./-]*)[`'\"’”]?";
+	for (const m of text.matchAll(new RegExp(`(?<![\\w./-])${token}(?:\\s+(?:repo|repository|coding|cli))*\\s+sessions?\\b`, "gi"))) words.push(m[1]);
+	for (const m of text.matchAll(new RegExp(`\\bsessions?\\s+(?:for|on|of|in)\\s+(?:the\\s+)?[\`'"‘“]?${token}`, "gi"))) words.push(m[1]);
+	return words.filter((w) => !GENERIC_SESSION_WORD.has(w.toLowerCase()));
 }
 
 /** What each control tool needs the owner to have asked for, in their own words. */

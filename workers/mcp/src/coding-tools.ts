@@ -1,5 +1,6 @@
 import { capturePane } from "./capture-page.js";
 import { authedAsyncCall } from "./async-outcome.js";
+import { endSessionText, type EndSessionResponse } from "./coding-session-end-text.js";
 /**
  * The coding-surface MCP tools — opening a repo's conversation, watching it, and driving it.
  *
@@ -643,11 +644,11 @@ export function registerCodingSessionTools(
 			if (r.error) return jsonText(r);
 			const sid = session_id || (r.sessions || []).find((s) => s.status === "active")?.id;
 			if (!sid) return text("No active coding session found.");
-			const ended = (await authedAsyncCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/end`, sessionToken, { method: "POST" }, env, { tool: "coding_session_end", possibleOutcomes: ["not-started", "stopping", "ended"], poll: { tool: "coding_sessions_list", input: { instance_id } } })) as { error?: string; outcome?: string };
+			const ended = (await authedAsyncCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/end`, sessionToken, { method: "POST" }, env, { tool: "coding_session_end", possibleOutcomes: ["not-started", "stopping", "ended"], poll: { tool: "coding_sessions_list", input: { instance_id } } })) as EndSessionResponse & { error?: string; outcome?: string };
 			if (ended.outcome === "unknown") return jsonText(ended);
 			if (ended?.error) return text(`Error ending session ${sid}: ${ended.error}`);
-			await audit(safetyFor(token), { tool: "coding_session_end", action: "completed", input: { instance_id, session_id: sid } });
-			return text(`Session ${sid} ended.`);
+			if (ended.ok) await audit(safetyFor(token), { tool: "coding_session_end", action: "completed", input: { instance_id, session_id: sid } });
+			return text(endSessionText(sid, ended));
 		},
 	);
 

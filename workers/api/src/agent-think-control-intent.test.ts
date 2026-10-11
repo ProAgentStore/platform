@@ -256,3 +256,161 @@ describe("end_coding_session reads the owner's session words, not generic stop l
 		expect(status("s2")).toBe("active");
 	});
 });
+
+// ── The target-resolution invariant (#1015): a target the owner gave stays a target ──────────────
+//
+// Writer calls are counted directly: `cancel_requested` on every run (what `stop_work` writes) and
+// every session's `status` (what `end_coding_session` writes). An empty, conflicting, absent or
+// colliding target fails closed — it never widens into "all work" or the one unrelated session.
+
+describe("run targets that the owner's words leave empty, conflicting or colliding stop nothing extra (#1015)", () => {
+	const RUN_UUID = "3f2a9c1e-7b4d-4e2a-9f10-5c6d7e8f9a0b";
+	beforeEach(() => {
+		for (const id of ["run-third", RUN_UUID]) {
+			d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at) VALUES ('${id}', 'u1', 'i1', 'synthetic objective', 'running', 10, ${Date.now()})`);
+		}
+	});
+	const all = () => ["run-target", "run-other", "run-third", RUN_UUID].map(cancelRequested);
+
+	it.each([[{}], [{ runId: "run-target" }]])("'Not run-other: please stop run-target.' stops run-target only (selector %j)", async (input) => {
+		script = [stopCall(input), { response: "ok" }];
+		await think(turn("Not run-other: please stop run-target."));
+		expect(all()).toEqual([1, 0, 0, 0]);
+	});
+
+	it("'Not run-other: please stop run-target.' with the model picking an unrelated run stops nothing", async () => {
+		script = [stopCall({ runId: "run-third" }), { response: "ok" }];
+		const said = await think(turn("Not run-other: please stop run-target."));
+		expect(all()).toEqual([0, 0, 0, 0]);
+		expect(said).toContain("nothing was stopped");
+	});
+
+	it.each([[{}], [{ runId: "run-third" }], [{ runId: "run-target" }]])("a contradictory 'stop run-target, not run-target' stops nothing (selector %j)", async (input) => {
+		script = [stopCall(input), { response: "ok" }];
+		const said = await think(turn("Please stop run-target, not run-target."));
+		expect(all()).toEqual([0, 0, 0, 0]);
+		expect(said).toContain("nothing was stopped");
+		expect(stopEvents()).toEqual([]);
+	});
+
+	it.each([[{}], [{ runId: "run-third" }]])("exclusions that swallow every named run do not fall back to all work (selector %j)", async (input) => {
+		script = [stopCall(input), { response: "ok" }];
+		await think(turn("Not run-other, please stop run-target."));
+		expect(all()).toEqual([0, 0, 0, 0]);
+	});
+
+	it.each([[{}], [{ runId: RUN_UUID }]])("a real run id followed by '-extra' is not that run (selector %j)", async (input) => {
+		script = [stopCall(input), { response: "ok" }];
+		await think(turn(`Please stop ${RUN_UUID}-extra.`));
+		expect(all()).toEqual([0, 0, 0, 0]);
+	});
+
+	// ── controls ──
+	it("the exact run id still stops exactly that run", async () => {
+		script = [stopCall({}), { response: "ok" }];
+		await think(turn(`Please stop ${RUN_UUID}.`));
+		expect(all()).toEqual([0, 0, 0, 1]);
+	});
+
+	it("an unknown well-formed run id with the selector omitted stops nothing", async () => {
+		script = [stopCall({}), { response: "ok" }];
+		await think(turn("Please stop 00000000-0000-4000-8000-000000000000."));
+		expect(all()).toEqual([0, 0, 0, 0]);
+	});
+
+	it("a negation-first sentence still stops its positive target", async () => {
+		script = [stopCall({}), { response: "ok" }];
+		await think(turn("Don't stop run-other. Stop run-target."));
+		expect(all()).toEqual([1, 0, 0, 0]);
+	});
+
+	it("a genuine 'everything except' still stops all the rest", async () => {
+		script = [stopCall({}), { response: "ok" }];
+		await think(turn("Stop everything except run-other."));
+		expect(all()).toEqual([1, 0, 1, 1]);
+	});
+});
+
+describe("session targets the owner gave are resolved exactly or fail closed (#1015)", () => {
+	const seedRepo = (repoId: string, name: string) => d1.exec(`INSERT OR IGNORE INTO coding_repos (id, instance_id, user_id, name) VALUES ('${repoId}', 'i1', 'u1', '${name}')`);
+	const seedSession = (id: string, repoId: string, name: string) => {
+		seedRepo(repoId, name);
+		d1.exec(`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, client_type, status) VALUES ('${id}', 'i1', '${repoId}', 'u1', 'claude', 'active')`);
+	};
+	const statuses = () => (d1.sqlite.prepare("SELECT id, status FROM coding_sessions ORDER BY id").all() as Array<{ id: string; status: string }>).map((r) => `${r.id}:${r.status}`);
+	const end = async (text: string, input: Record<string, unknown> = {}) =>
+		getRegistryTool("end_coding_session")?.handler({ env, instanceId: "i1", userId: "u1", turn: { author: "owner", text } } as never, input);
+
+	// ── absent from the catalog ──
+	it.each([[{}], [{ repo: "aipa" }]])("'close the platform session' with no platform repo ends nothing, not the one aipa session (input %j)", async (input) => {
+		seedSession("s2", "r2", "aipa");
+		const res = await end("Please close the platform session.", input);
+		expect(statuses()).toEqual(["s2:active"]);
+		expect(res?.content).toMatch(/no repository called "platform"/);
+	});
+
+	it.each([[{}], [{ repo: "aipa" }]])("'close the ghost session, not platform' ends nothing (input %j)", async (input) => {
+		seedSession("s2", "r2", "aipa");
+		await end("Please close the ghost session, not platform.", input);
+		expect(statuses()).toEqual(["s2:active"]);
+	});
+
+	it.each([[{}], [{ repo: "aipa" }]])("a failed repository lookup ends nothing — not the generic fallback (input %j)", async (input) => {
+		seedSession("s2", "r2", "aipa");
+		d1.exec("ALTER TABLE coding_repos RENAME TO coding_repos_unavailable");
+		const res = await end("Please close the session.", input);
+		expect(statuses()).toEqual(["s2:active"]);
+		expect(res?.content).toMatch(/could not read this agent's repositories/i);
+	});
+
+	// ── quoted target ──
+	it.each([[{}], [{ repo: "aipa" }]])("an inline-code target is still the owner's target: 'close the `platform` session' (input %j)", async (input) => {
+		seedRepo("r1", "platform");
+		seedSession("s2", "r2", "aipa");
+		await end("Please close the `platform` session.", input);
+		expect(statuses()).toEqual(["s2:active"]);
+		seedSession("s1", "r1", "platform");
+		await end("Please close the `platform` session.", input);
+		expect(statuses()).toEqual(["s1:ended", "s2:active"]);
+	});
+
+	// ── conflicting exclusion ──
+	it.each([[{}], [{ repo: "aipa" }], [{ repo: "platform" }]])("'close the platform session, not platform' ends nothing (input %j)", async (input) => {
+		seedRepo("r1", "platform");
+		seedSession("s1", "r1", "platform");
+		seedSession("s2", "r2", "aipa");
+		await end("Please close the platform session, not platform.", input);
+		expect(statuses()).toEqual(["s1:active", "s2:active"]);
+		d1.exec("UPDATE coding_sessions SET status = 'ended' WHERE id = 's1'");
+		await end("Please close the platform session, not platform.", input);
+		expect(statuses()).toEqual(["s1:ended", "s2:active"]);
+	});
+
+	// ── exact prefix collision ──
+	it.each([[{}], [{ repo: "platform" }]])("'close the platform-extra session' does not fall back to the sole platform session (input %j)", async (input) => {
+		seedSession("s1", "r1", "platform");
+		await end("Please close the platform-extra session.", input);
+		expect(statuses()).toEqual(["s1:active"]);
+	});
+
+	it("a qualified 'owner/repo' target resolves to that repository", async () => {
+		seedSession("s1", "r1", "ProAgentStore/platform");
+		seedSession("s2", "r2", "aipa");
+		await end("Please close the ProAgentStore/platform session.");
+		expect(statuses()).toEqual(["s1:ended", "s2:active"]);
+	});
+
+	// ── controls ──
+	it("a generic 'close the coding session' still ends the one open session", async () => {
+		seedSession("s1", "r1", "platform");
+		await end("Please close the coding session.");
+		expect(statuses()).toEqual(["s1:ended"]);
+	});
+
+	it("a genuine 'close every session except aipa' ends the rest", async () => {
+		seedSession("s1", "r1", "platform");
+		seedSession("s2", "r2", "aipa");
+		await end("Close every session except aipa.");
+		expect(statuses()).toEqual(["s1:ended", "s2:active"]);
+	});
+});
