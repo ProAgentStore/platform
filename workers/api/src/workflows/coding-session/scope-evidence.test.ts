@@ -612,7 +612,7 @@ describe("a command the runner cut is still evidence by its output — never by 
 		decisions = [SEND("test"), FINISH("376 tests passed.")];
 		engineDoes(() => cut(`${LONG}pnpm vitest run --reporter=verbose`, LONG, SUMMARY));
 		const result = await run();
-		expect(result.detail).toMatch(/tests pass: UNVERIFIED — output of a test run was observed, but its command was cut before `test runner`/);
+		expect(result.detail).toMatch(/tests pass: UNVERIFIED — output of a test run was observed, but its command was cut — the omitted rest may re-run, mask or change what ran/);
 		expect(result.detail).toMatch(/test count: verified — the last run printed 376 passed/);
 		expect(result.detail).not.toMatch(/no test run appears/);
 	});
@@ -621,18 +621,72 @@ describe("a command the runner cut is still evidence by its output — never by 
 		decisions = [SEND("push"), FINISH("Pushed to main.")];
 		engineDoes(() => cut(`${LONG}git add -A && git commit -m 'feat: export' && git push origin main`, LONG, REF_UPDATE));
 		const result = await run();
-		expect(result.detail).toMatch(/pushed: UNVERIFIED — output of a push that updated a remote ref was observed, but its command was cut before `git push`/);
+		expect(result.detail).toMatch(/pushed: UNVERIFIED — output of a push that updated a remote ref was observed, but its command was cut/);
 		expect(result.detail).not.toMatch(/no push appears/);
 	});
 
-	it("a cut that kept the test runner's name takes the ordinary path, once — only its scope is unknown", async () => {
+	it("a cut that kept the test runner's name is still incomplete: its count is read, its success is not", async () => {
 		decisions = [SEND("test"), FINISH("Full suite: 9 tests passed.")];
-		engineDoes(() => cut("pnpm vitest run src/export.test.ts --reporter=verbose --coverage", "pnpm vitest run src/exp", "Test Files  1 passed (1)\n     Tests  9 passed (9)"));
+		engineDoes(() => cut("pnpm vitest run src/export.test.ts --reporter=verbose || true", "pnpm vitest run src/exp", "Test Files  1 passed (1)\n     Tests  9 passed (9)"));
 		const result = await run();
-		expect(result.detail).toMatch(/tests pass: verified — `pnpm vitest run src\/exp…` passed 9/);
+		expect(result.detail).toMatch(/tests pass: UNVERIFIED — output of a test run was observed, but its command was cut/);
+		expect(result.detail).not.toMatch(/tests pass: verified/);
 		expect(result.detail).toMatch(/full suite: UNVERIFIED — the last test command was cut before its arguments/);
 		expect(result.detail).toMatch(/test count: verified — the last run printed 9 passed/);
-		expect(result.detail).not.toMatch(/was cut before `test runner`/);
+	});
+
+	it("a cut test run whose output shows failures is still contradicted by them", async () => {
+		decisions = [SEND("test"), FINISH("Tests pass."), FINISH("Tests pass.")];
+		engineDoes(() => cut("pnpm vitest run src/export.test.ts --reporter=verbose", "pnpm vitest run src/exp", "Test Files  1 failed (1)\n     Tests  2 failed | 7 passed (9)"));
+		const result = await run();
+		expect(result.detail).toMatch(/tests pass: CONTRADICTED/);
+	});
+
+	for (const [label, out] of [
+		["with its `To <remote>` banner", "To github.com:acme/widget.git\n   80a7ba1f..13da2976  main -> main"],
+		["with no banner", "   80a7ba1f..13da2976  main -> main"],
+		["for a new branch, with no banner", " * [new branch]      feat/export -> feat/export"],
+	] as const) {
+		it(`a cut push's ref update ${label} is an observed push whose attribution stays unverified`, async () => {
+			decisions = [SEND("push"), FINISH("Pushed to main.")];
+			engineDoes(() => cut(`${LONG}git add -A && git commit -m 'feat: export' && git push origin main`, LONG, out));
+			const result = await run();
+			expect(result.detail).toMatch(/pushed: UNVERIFIED — output of a push that updated a remote ref was observed, but its command was cut/);
+		});
+	}
+
+	for (const [label, out] of [
+		["rejected", " ! [rejected]        main -> main (fetch first)\nerror: failed to push some refs to 'github.com:acme/widget.git'"],
+		["up to date", "Everything up-to-date"],
+		["a bannerless fetch onto a remote-tracking ref", "   80a7ba1f..13da2976  main       -> origin/main"],
+	] as const) {
+		it(`a cut command whose output is ${label} is no observed push`, async () => {
+			decisions = [SEND("push"), FINISH("Pushed to main.")];
+			engineDoes(() => cut(`${LONG}git push origin main`, LONG, out));
+			const result = await run();
+			expect(result.detail).toMatch(/pushed: UNVERIFIED — no push appears in this run's record/);
+		});
+	}
+
+	it("an uncut push with no banner is verified by its ref update — the command is in the record", async () => {
+		decisions = [SEND("push"), FINISH("Pushed to main.")];
+		engineDoes(() => push("   80a7ba1f..13da2976  main -> main"));
+		const result = await run();
+		expect(result.detail).toMatch(/pushed: verified — the last push updated the remote ref/);
+	});
+
+	it("a claim that pushed, made over no push at all, is no observed push", async () => {
+		decisions = [SEND("summarise"), FINISH("Pushed to main.")];
+		engineDoes(() => call("Bash", { command: "git log --oneline -1" }, "13da2976 fix: something"));
+		const result = await run();
+		expect(result.detail).toMatch(/pushed: UNVERIFIED — no push appears in this run's record/);
+	});
+
+	it("a count printed by a cut run is known; a different claimed count is unverified, not contradicted", async () => {
+		decisions = [SEND("test"), FINISH("Tests passed: 375.")];
+		engineDoes(() => cut(`${LONG}pnpm vitest run`, LONG, SUMMARY));
+		const result = await run();
+		expect(result.detail).toMatch(/test count: UNVERIFIED — claims 375; the last run printed 376 passed, but its command was cut/);
 	});
 
 	it("a cut command whose output shows no test summary is no test run", async () => {
@@ -665,6 +719,11 @@ describe("a claimed test count is a count of tests, never of files (#1019)", () 
 		["25 tests passed.", /test count: CONTRADICTED — claims 25; the last run printed 376 passed/],
 		["25 test files passed.", null],
 		["Test Files 25 passed (25).", null],
+		["376 tests passed.", /test count: verified — the last run printed 376 passed/],
+		["Passed 376 tests.", /test count: verified — the last run printed 376 passed/],
+		["Tests passed: 376.", /test count: verified — the last run printed 376 passed/],
+		["Tests passed: 375.", /test count: CONTRADICTED — claims 375; the last run printed 376 passed/],
+		["25 test files, 376 tests, all passed.", /test count: verified — the last run printed 376 passed/],
 	] as const) {
 		it(`reads "${claim}" as ${verdict ? "its test count" : "no test count"}`, async () => {
 			decisions = [SEND("test"), FINISH(claim), FINISH(claim)];
