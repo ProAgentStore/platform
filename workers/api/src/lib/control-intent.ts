@@ -101,8 +101,12 @@ const repoMention = (text: string, name: string) => new RegExp(`(^|[^\\w./-])${e
  * Reading too much as excluded only narrows what may be touched, never widens it.
  */
 const EXCLUDE_LEAD = /\b(?:not|don'?t|never(?!\s+mind\b)|no\s+need\s+to|except(?:\s+for)?|excluding|other\s+than|apart\s+from|leave)\b/gi;
-/** A clause ends at sentence punctuation, a colon ("Not X: stop Y" turns to Y), or a "but" that turns back. */
-const CLAUSE_END = /[\n.!?;:]|,?\s+but\s+(?!not\b)/i;
+/**
+ * A clause ends at sentence punctuation, a colon ("Not X: stop Y" turns to Y), or a "but" that turns back.
+ * A period ends it only as the SENTENCE's period — followed by whitespace or the end — so a dotted name
+ * ("except owner1/platform.v1.") keeps its whole identity inside the exclusion (#1015).
+ */
+const CLAUSE_END = /[\n!?;:]|\.(?=\s|$)|,?\s+but\s+(?!not\b)/i;
 /** Each exclusion as `[start, end)` in `text`: from its lead to the end of its clause. */
 function exclusionRanges(text: string): Array<[number, number]> {
 	const ranges: Array<[number, number]> = [];
@@ -288,9 +292,10 @@ export function parseSessionIntent(said: string, repoNames: readonly string[], s
 	const pointed = withoutExclusions(said);
 	const pointedAt = names.filter((n) => aliases(n).some((a) => repoMention(pointed, a)));
 	const ambiguous = sharedShorts.filter((a) => repoMention(pointed, a)).map((a) => ({ name: a, repos: sharing(a) }));
-	// One resolution for every explicit target slot: a token is a repository, ambiguous, or unresolved.
+	// One resolution for every explicit target slot: a target is a repository, or unresolved. A slot that
+	// carried a target but could not be read is unresolved too — never "no target", never generic.
 	const known = new Set(repoNames.flatMap((n) => [n.toLowerCase(), short(n).toLowerCase()]));
-	const unresolved = [...new Set(sessionTargetWords(pointed).filter((w) => !known.has(w.toLowerCase())))];
+	const unresolved = [...new Set(sessionTargets(pointed).filter((t) => !known.has(t.name.toLowerCase())).map((t) => t.name || "(an unreadable name)"))];
 	const pick = selector ? (names.find((n) => aliases(n).some((a) => a.toLowerCase() === selector.toLowerCase())) ?? selector) : undefined;
 	return {
 		named: pointedAt.filter((n) => !isExcluded(n)),
@@ -310,21 +315,61 @@ const GENERIC_SESSION_WORD = new Set(
 const AFTER_SESSION_WORD = new Set(
 	"now please and too again first already itself that this there here which where when just only ever never not no but or if so yet still for at to a an the on of in named called titled with as by".split(" "),
 );
+
+/** One explicit target as written: its literal name, and whether quotes or a label made it literal. */
+interface SessionTarget {
+	name: string;
+	/** Quoted, or after named/called/titled: every character is the name, generic words included. */
+	literal: boolean;
+}
+
+// A quoted name keeps everything between its quotes; an unquoted one is a run of non-space, non-quote
+// characters (so a leading "-", "." or "/" is part of it). Straight single quotes are not quotes here:
+// they are apostrophes far more often than delimiters, and an unquoted token keeps them, so an odd one
+// only makes a name unresolvable — never another name.
+const QUOTED = "`([^`]*)`|\"([^\"]*)\"|“([^”]*)”|‘([^’]*)’";
+const UNQUOTED = "([^\\s`\"“”‘’,;:!?()]+)";
+const TARGET = `(?:${QUOTED}|${UNQUOTED})`;
+const quotedOf = (m: RegExpMatchArray, first: number) => [m[first], m[first + 1], m[first + 2], m[first + 3]].find((g) => g !== undefined);
+/** An unquoted name ends at the sentence's period — ONE trailing ".", never "-" or "/" or "..". */
+const sentenceTrim = (w: string) => w.replace(/(?<!\.)\.$/, "");
+
 /**
- * The explicit target slots, as written (#1015): the word before "session" ("the platform session", "the
- * `owner/repo` session"), the word after "session for/on/of/in/named/called/titled", and a label directly
- * after "session" ("the session ghost"). A name keeps every character but ONE trailing sentence period:
- * "…for platform." names "platform", while "platform-", "platform/" and "platform.." are names no
- * repository has — so they resolve to nothing instead of to the repository they resemble.
+ * Every explicit target slot, with what made it explicit (#1015). Slots: the word before "session" ("the
+ * platform session"), the word after "session for/on/of/in/named/called/titled", and a label directly
+ * after "session" ("the session ghost"). Quotes and the labelling verbs make a name LITERAL: generic
+ * vocabulary inside it is that name ("the session named coding" is not "the coding session"), and quoted
+ * punctuation is part of it. An unquoted name loses only a sentence's period. A labelling verb or a
+ * quote with nothing readable after it yields an empty name — unresolved, never "no target".
  */
-function sessionTargetWords(text: string): string[] {
-	const words: string[] = [];
-	const token = "([\\w][\\w./-]*)[`'\"’”]?";
-	const open = "[`'\"‘“]?";
-	for (const m of text.matchAll(new RegExp(`(?<![\\w./-])${open}${token}(?:\\s+(?:repo|repository|coding|cli))*\\s+sessions?\\b`, "gi"))) words.push(m[1]);
-	for (const m of text.matchAll(new RegExp(`\\bsessions?\\s+(?:for|on|of|in|named|called|titled)\\s+(?:the\\s+)?${open}${token}`, "gi"))) words.push(m[1]);
-	for (const m of text.matchAll(new RegExp(`\\bsessions?\\s+${open}${token}`, "gi"))) if (!AFTER_SESSION_WORD.has(m[1].toLowerCase().replace(/\.$/, ""))) words.push(m[1]);
-	return words.map((w) => w.replace(/(?<!\.)\.$/, "")).filter((w) => w && !GENERIC_SESSION_WORD.has(w.toLowerCase()));
+function sessionTargets(text: string): SessionTarget[] {
+	const out: SessionTarget[] = [];
+	const add = (quoted: string | undefined, bare: string | undefined, literal: boolean, ignore?: Set<string>) => {
+		if (quoted !== undefined) return void out.push({ name: quoted, literal: true });
+		if (bare === undefined) return literal ? void out.push({ name: "", literal: true }) : undefined;
+		const name = sentenceTrim(bare);
+		// A bare sentence period left where an exclusion was blanked is punctuation, not a name.
+		if (!literal && (!name || ignore?.has(name.toLowerCase()) || GENERIC_SESSION_WORD.has(name.toLowerCase()))) return;
+		out.push({ name, literal });
+	};
+	// before "session": "the X session", "the X repo session"
+	for (const m of text.matchAll(new RegExp(`(?:^|[\\s(])${TARGET}(?:\\s+(?:repo|repository|coding|cli))*\\s+sessions?\\b`, "gi"))) add(quotedOf(m, 1), m[5], false);
+	// after a preposition or a labelling verb
+	for (const m of text.matchAll(new RegExp(`\\bsessions?\\s+(for|on|of|in|named|called|titled)\\b(?:\\s+(?:the\\s+)?${TARGET})?`, "gi"))) {
+		const labelled = /^(?:named|called|titled)$/i.test(m[1]);
+		add(quotedOf(m, 2), m[6], labelled, AFTER_SESSION_WORD);
+	}
+	// directly after "session": a label, unless it is a word that merely follows ("now", "for", "named"…)
+	for (const m of text.matchAll(new RegExp(`\\bsessions?\\s+${TARGET}`, "gi"))) {
+		const bare = m[5];
+		if (bare !== undefined && AFTER_SESSION_WORD.has(sentenceTrim(bare).toLowerCase())) continue;
+		add(quotedOf(m, 1), bare, false, AFTER_SESSION_WORD);
+	}
+	// An opened quote that never closes in a target slot is a target nobody can read.
+	if (/\bsessions?\s+(?:(?:for|on|of|in|named|called|titled)\s+(?:the\s+)?)?[`"“‘][^`"”’]*$/i.test(text) || /[`"“‘][^`"”’\s]*\s+sessions?\b/.test(text.replace(new RegExp(QUOTED, "g"), " "))) {
+		out.push({ name: "", literal: true });
+	}
+	return out;
 }
 
 /** What each control tool needs the owner to have asked for, in their own words. */
