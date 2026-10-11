@@ -9,9 +9,9 @@
  * runs only inside a temp repository, to reproduce the defect the helper exists to prevent.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { EXIT, failBefore, pendingJournals, quoteForShell, restoreFromJournal } from "./fail-before.mjs";
 
@@ -259,5 +259,392 @@ describe("the CLI keeps the real exit status and prints a receipt", () => {
 		expect(r.status).toBe(EXIT.refused);
 		expect(lastJson(r.stdout).detail).toMatch(/ONE argument/);
 		expect(state(dir)).toEqual(before);
+	});
+});
+
+// ── #1021 safety matrix ───────────────────────────────────────────────────────────────────────────────
+//
+// Each class below was a defect in the first helper (b9fd69a5). Tests marked [seam] drive a fault through
+// the `faults` hook the hardened helper adds; on the old helper they fail because that seam did not exist,
+// not because of a behaviour they observe. Every other test observes the behaviour directly.
+
+const modeOf = (dir, f) => statSync(join(dir, f)).mode & 0o777;
+const isLink = (dir, f) => lstatSync(join(dir, f)).isSymbolicLink();
+const outside = () => {
+	const d = mkdtempSync(join(tmpdir(), "pags-fail-before-outside-"));
+	repos.push(d);
+	put(d, "target.txt", "OUTSIDE — must never be written\n");
+	return d;
+};
+/** A fault that throws once, on the nth call matching `step` (and `detail`, when given). */
+function faultAt(step, detail, nth = 1) {
+	let seen = 0;
+	let fired = false;
+	return (s, d) => {
+		if (fired || s !== step || (detail !== undefined && d !== detail)) return;
+		if (++seen === nth) {
+			fired = true;
+			throw new Error(`injected ${step} fault`);
+		}
+	};
+}
+const crashRun = () => {
+	throw new Error("killed mid-run");
+};
+const toplevel = (dir) => g(dir, "rev-parse", "--show-toplevel");
+
+describe("(a) symlinks are refused before anything changes", () => {
+	it("an UNTRACKED symlink is not replaced by a regular file", () => {
+		const dir = fixture();
+		symlinkSync("a.txt", join(dir, "lnk.txt"));
+		const before = state(dir);
+		let ran = false;
+		const r = failBefore({ cwd: dir, paths: ["lnk.txt"], command: ["t"], run: () => {
+			ran = true;
+			return 0;
+		} });
+		expect(r).toMatchObject({ ok: false, phase: "preflight", exit: EXIT.refused, mutated: false });
+		expect(r.detail).toMatch(/symlink/);
+		expect(ran).toBe(false);
+		expect(isLink(dir, "lnk.txt")).toBe(true);
+		expect(state(dir)).toEqual(before);
+	});
+
+	it("a TRACKED symlink is never written through to the file it points at", () => {
+		const dir = fixture();
+		const out = outside();
+		symlinkSync(join(out, "target.txt"), join(dir, "tl.txt"));
+		g(dir, "add", "tl.txt");
+		g(dir, "commit", "-q", "-m", "a tracked link", "--", "tl.txt");
+		const r = failBefore({ cwd: dir, paths: ["tl.txt"], command: ["t"], run: () => 0 });
+		expect(r).toMatchObject({ ok: false, exit: EXIT.refused, mutated: false });
+		expect(read(out, "target.txt")).toBe("OUTSIDE — must never be written\n");
+		expect(isLink(dir, "tl.txt")).toBe(true);
+	});
+
+	it("a symlinked parent directory cannot carry a write outside the repository", () => {
+		const dir = fixture();
+		const out = outside();
+		symlinkSync(out, join(dir, "ld"));
+		let ran = false;
+		const r = failBefore({ cwd: dir, paths: ["ld/target.txt"], command: ["t"], run: () => {
+			ran = true;
+			return 0;
+		} });
+		expect(r).toMatchObject({ ok: false, exit: EXIT.refused, mutated: false });
+		expect(r.detail).toMatch(/symlink/);
+		expect(ran).toBe(false);
+		expect(read(out, "target.txt")).toBe("OUTSIDE — must never be written\n");
+	});
+});
+
+describe("(f) git administrative metadata, nested repositories and escapes are refused up front", () => {
+	for (const p of [".git/index", ".git/HEAD", "sub/../.git/config", ".GIT/config"]) {
+		it(`${p} is refused, the index stays byte-identical, and the test never runs`, () => {
+			const dir = fixture();
+			const before = state(dir);
+			const index = readFileSync(join(dir, ".git", "index"));
+			let ran = false;
+			const r = failBefore({ cwd: dir, paths: [p], command: ["t"], run: () => {
+			ran = true;
+			return 0;
+		} });
+			expect(r).toMatchObject({ ok: false, phase: "preflight", exit: EXIT.refused, mutated: false });
+			expect(ran).toBe(false);
+			expect(readFileSync(join(dir, ".git", "index")).equals(index)).toBe(true);
+			expect(state(dir)).toEqual(before);
+		});
+	}
+
+	it("a path inside a nested repository is refused", () => {
+		const dir = fixture();
+		mkdirSync(join(dir, "nested"));
+		g(join(dir, "nested"), "init", "-q");
+		put(dir, "nested/n.txt", "nested work\n");
+		let ran = false;
+		const r = failBefore({ cwd: dir, paths: ["nested/n.txt"], command: ["t"], run: () => {
+			ran = true;
+			return 0;
+		} });
+		expect(r).toMatchObject({ ok: false, exit: EXIT.refused, mutated: false });
+		expect(r.detail).toMatch(/nested repository/);
+		expect(ran).toBe(false);
+		expect(read(dir, "nested/n.txt")).toBe("nested work\n");
+	});
+
+	it("a linked worktree's own admin files are refused from inside that worktree", () => {
+		const dir = fixture();
+		const wt = join(mkdtempSync(join(tmpdir(), "pags-fail-before-wt-")), "wt");
+		repos.push(dirname(wt));
+		g(dir, "worktree", "add", "-q", "--detach", wt, "HEAD");
+		const admin = g(wt, "rev-parse", "--absolute-git-dir");
+		const r = failBefore({ cwd: wt, paths: [join(admin, "HEAD")], command: ["t"], run: () => 0 });
+		expect(r).toMatchObject({ ok: false, exit: EXIT.refused, mutated: false });
+	});
+});
+
+describe("(b) a journal is bound to its repository", () => {
+	it("a journal from repo A is refused in repo B: nothing in B changes, A's journal is kept and still restores A", () => {
+		const a = fixture();
+		const b = fixture();
+		const beforeA = state(a);
+		const beforeB = state(b);
+		expect(() => failBefore({ cwd: a, paths: ["a.txt", "c.txt"], command: ["t"], run: crashRun })).toThrow("killed mid-run");
+		const [journal] = pendingJournals(a);
+		const r = restoreFromJournal(journal, toplevel(b));
+		expect(r).toMatchObject({ ok: false, exit: EXIT.unknownState });
+		expect(r.detail).toMatch(/belongs to/);
+		expect(state(b)).toEqual(beforeB);
+		expect(existsSync(journal)).toBe(true);
+		expect(restoreFromJournal(journal, toplevel(a))).toMatchObject({ ok: true });
+		expect(state(a)).toEqual(beforeA);
+	});
+
+	it("a journal copied into another repository's git dir is refused there", () => {
+		const a = fixture();
+		const b = fixture();
+		const beforeB = state(b);
+		expect(() => failBefore({ cwd: a, paths: ["a.txt"], command: ["t"], run: crashRun })).toThrow();
+		const [journal] = pendingJournals(a);
+		const copy = join(b, ".git", "pags-fail-before", "copied");
+		cpSync(journal, copy, { recursive: true });
+		expect(restoreFromJournal(copy, toplevel(b))).toMatchObject({ ok: false, exit: EXIT.unknownState });
+		expect(state(b)).toEqual(beforeB);
+	});
+
+	it("the CLI's --restore from repo B exits 75 and changes nothing", () => {
+		const a = fixture();
+		const b = fixture();
+		const beforeB = state(b);
+		expect(() => failBefore({ cwd: a, paths: ["a.txt"], command: ["t"], run: crashRun })).toThrow();
+		const [journal] = pendingJournals(a);
+		const r = spawnSync(process.execPath, [CLI, "--restore", journal], { cwd: b, encoding: "utf8" });
+		expect(r.status).toBe(EXIT.unknownState);
+		expect(state(b)).toEqual(beforeB);
+		expect(existsSync(journal)).toBe(true);
+	});
+});
+
+describe("(c) every backup is verified before any file is written", () => {
+	it("a corrupt backup stops the restore before it writes anything — even the files whose backups are fine", () => {
+		const dir = fixture();
+		expect(() => failBefore({ cwd: dir, paths: ["a.txt", "b.txt"], command: ["t"], run: crashRun })).toThrow();
+		const [journal] = pendingJournals(dir);
+		writeFileSync(join(journal, "files", "1"), "CORRUPTED\n");
+		const r = restoreFromJournal(journal, toplevel(dir));
+		expect(r).toMatchObject({ ok: false, exit: EXIT.unknownState, restored: [] });
+		expect(r.detail).toMatch(/backup of b\.txt/);
+		expect(read(dir, "a.txt")).toBe("a-base\n");
+		expect(read(dir, "b.txt")).toBe("b-base\n");
+		expect(existsSync(join(journal, "files", "1"))).toBe(true);
+	});
+
+	it("a missing backup is the same refusal", () => {
+		const dir = fixture();
+		expect(() => failBefore({ cwd: dir, paths: ["a.txt"], command: ["t"], run: crashRun })).toThrow();
+		const [journal] = pendingJournals(dir);
+		rmSync(join(journal, "files", "0"));
+		expect(restoreFromJournal(journal, toplevel(dir))).toMatchObject({ ok: false, exit: EXIT.unknownState });
+		expect(read(dir, "a.txt")).toBe("a-base\n");
+	});
+
+	it("an edited journal manifest does not verify, so it cannot redirect a restore", () => {
+		const dir = fixture();
+		const before = state(dir);
+		expect(() => failBefore({ cwd: dir, paths: ["a.txt"], command: ["t"], run: crashRun })).toThrow();
+		const [journal] = pendingJournals(dir);
+		const file = join(journal, "journal.json");
+		writeFileSync(file, readFileSync(file, "utf8").replace('"path": "a.txt"', '"path": "other.txt"'));
+		expect(restoreFromJournal(journal, toplevel(dir))).toMatchObject({ ok: false, exit: EXIT.unknownState });
+		expect(read(dir, "other.txt")).toBe(before.files["other.txt"]);
+		expect(read(dir, "a.txt")).toBe("a-base\n");
+	});
+});
+
+describe("(e) content, type and mode are one state", () => {
+	it("an owned mode-only change is compared at the base mode, and comes back afterwards", () => {
+		const dir = fixture();
+		chmodSync(join(dir, "other.txt"), 0o755);
+		let during = null;
+		const r = failBefore({ cwd: dir, paths: ["other.txt"], command: ["t"], run: () => {
+			during = modeOf(dir, "other.txt");
+			return 0;
+		} });
+		expect(r).toMatchObject({ ok: true, exit: 0 });
+		expect(during).toBe(0o644);
+		expect(modeOf(dir, "other.txt")).toBe(0o755);
+	});
+
+	it("an executable at the base is executable while the test runs", () => {
+		const dir = fixture();
+		put(dir, "run.sh", "#!/bin/sh\nexit 0\n");
+		chmodSync(join(dir, "run.sh"), 0o755);
+		g(dir, "add", "run.sh");
+		g(dir, "commit", "-q", "-m", "exec", "--", "run.sh");
+		put(dir, "run.sh", "#!/bin/sh\nexit 1\n");
+		chmodSync(join(dir, "run.sh"), 0o644);
+		let during = null;
+		failBefore({ cwd: dir, paths: ["run.sh"], command: ["t"], run: () => {
+			during = modeOf(dir, "run.sh");
+			return 0;
+		} });
+		expect(during).toBe(0o755);
+		expect(modeOf(dir, "run.sh")).toBe(0o644);
+		expect(read(dir, "run.sh")).toBe("#!/bin/sh\nexit 1\n");
+	});
+
+	it("a FOREIGN mode-only change during the run is a conflict: left as it is, reported, journal kept", () => {
+		const dir = fixture();
+		const r = failBefore({ cwd: dir, paths: ["a.txt"], command: ["t"], run: () => {
+			chmodSync(join(dir, "a.txt"), 0o755);
+			return 0;
+		} });
+		expect(r).toMatchObject({ ok: false, phase: "restore", exit: EXIT.conflict, conflicts: ["a.txt"] });
+		expect(read(dir, "a.txt")).toBe("a-base\n");
+		expect(modeOf(dir, "a.txt")).toBe(0o755);
+		expect(pendingJournals(dir)).toHaveLength(1);
+	});
+
+	it("a file replaced by a symlink during the run is a conflict, and the link is not followed", () => {
+		const dir = fixture();
+		const out = outside();
+		const r = failBefore({
+			cwd: dir,
+			paths: ["a.txt"],
+			command: ["t"],
+			run: () => {
+				rmSync(join(dir, "a.txt"));
+				symlinkSync(join(out, "target.txt"), join(dir, "a.txt"));
+				return 0;
+			},
+		});
+		expect(r).toMatchObject({ ok: false, exit: EXIT.conflict, conflicts: ["a.txt"] });
+		expect(read(out, "target.txt")).toBe("OUTSIDE — must never be written\n");
+	});
+});
+
+describe("(d) setup, journal writes and restores are crash- and error-safe", () => {
+	it("a journal directory with no readable journal is unknown state, and stops the next run", () => {
+		const dir = fixture();
+		const before = state(dir);
+		mkdirSync(join(dir, ".git", "pags-fail-before", "crashed-before-first-write"), { recursive: true });
+		const r = failBefore({ cwd: dir, paths: ["a.txt"], command: ["t"], run: () => 0 });
+		expect(r).toMatchObject({ ok: false, exit: EXIT.unknownState, mutated: false });
+		expect(state(dir)).toEqual(before);
+	});
+
+	it("[seam] a journal write that fails AFTER a base write leaves that file recognisably ours, and setup rolls it back", () => {
+		const dir = fixture();
+		const before = state(dir);
+		// Journal saves in `applying`: the state change, a.txt's intent, a.txt's done mark (the third).
+		const r = failBefore({ cwd: dir, paths: ["a.txt", "b.txt"], command: ["t"], run: () => 0, faults: faultAt("journal", "applying", 3) });
+		expect(r).toMatchObject({ ok: false, phase: "apply", exit: EXIT.refused, mutated: false, testExit: null });
+		expect(state(dir)).toEqual(before);
+		expect(pendingJournals(dir)).toEqual([]);
+	});
+
+	it("[seam] a write that fails on the second file rolls back the first exactly, and the test never runs", () => {
+		const dir = fixture();
+		const before = state(dir);
+		let ran = false;
+		const r = failBefore({ cwd: dir, paths: ["a.txt", "c.txt", "b.txt"], command: ["t"], run: () => {
+			ran = true;
+			return 0;
+		}, faults: faultAt("apply", "b.txt") });
+		expect(r).toMatchObject({ ok: false, phase: "apply", mutated: false });
+		expect(ran).toBe(false);
+		expect(state(dir)).toEqual(before);
+	});
+
+	it("[seam] a rollback that is itself interrupted keeps the journal with a truthful receipt; a retry finishes it", () => {
+		const dir = fixture();
+		const before = state(dir);
+		const apply = faultAt("apply", "b.txt");
+		const restore = faultAt("restore", "a.txt");
+		const r = failBefore({ cwd: dir, paths: ["a.txt", "b.txt"], command: ["t"], run: () => 0, faults: (s, d) => {
+				apply(s, d);
+				restore(s, d);
+			},
+		});
+		expect(r).toMatchObject({ ok: false, phase: "apply", mutated: true });
+		const [journal] = pendingJournals(dir);
+		expect(journal).toBeTruthy();
+		expect(restoreFromJournal(journal, toplevel(dir))).toMatchObject({ ok: true });
+		expect(state(dir)).toEqual(before);
+	});
+
+	it("[seam] a restore interrupted after the first file is fully back resumes from the second", () => {
+		const dir = fixture();
+		const before = state(dir);
+		const r = failBefore({ cwd: dir, paths: ["a.txt", "b.txt"], command: ["t"], run: () => 0, faults: faultAt("restore", "a.txt") });
+		expect(r).toMatchObject({ ok: false, phase: "restore", exit: EXIT.unknownState, mutated: true });
+		expect(read(dir, "a.txt")).toBe(before.files["a.txt"]);
+		expect(read(dir, "b.txt")).toBe("b-base\n");
+		const [journal] = pendingJournals(dir);
+		expect(restoreFromJournal(journal, toplevel(dir))).toMatchObject({ ok: true, restored: ["b.txt"] });
+		expect(state(dir)).toEqual(before);
+	});
+
+	it("[seam] a restore interrupted between its temp write and the rename leaves the target untouched, and a retry cleans up after itself", () => {
+		const dir = fixture();
+		const before = state(dir);
+		const r = failBefore({ cwd: dir, paths: ["a.txt"], command: ["t"], run: () => 0, faults: faultAt("rename", join(toplevel(dir), "a.txt"), 2) });
+		expect(r).toMatchObject({ ok: false, mutated: true });
+		expect(read(dir, "a.txt")).toBe("a-base\n"); // never a torn mix of the two
+		expect(readdirSync(dir).filter((f) => f.includes("pags-fb-tmp"))).toHaveLength(1);
+		const [journal] = pendingJournals(dir);
+		expect(restoreFromJournal(journal, toplevel(dir))).toMatchObject({ ok: true });
+		expect(readdirSync(dir).filter((f) => f.includes("pags-fb-tmp"))).toEqual([]);
+		expect(state(dir)).toEqual(before);
+	});
+
+	it("restoring twice is safe: the second call finds no journal, changes nothing and says so", () => {
+		const dir = fixture();
+		const before = state(dir);
+		expect(() => failBefore({ cwd: dir, paths: ["a.txt"], command: ["t"], run: crashRun })).toThrow();
+		const [journal] = pendingJournals(dir);
+		expect(restoreFromJournal(journal, toplevel(dir))).toMatchObject({ ok: true });
+		expect(restoreFromJournal(journal, toplevel(dir))).toMatchObject({ ok: false, exit: EXIT.unknownState });
+		expect(state(dir)).toEqual(before);
+	});
+
+	it("a conflict keeps its evidence: the journal and the original bytes survive for a later decision", () => {
+		const dir = fixture();
+		const r = failBefore({ cwd: dir, paths: ["a.txt"], command: ["t"], run: () => {
+			put(dir, "a.txt", "foreign\n");
+			return 0;
+		} });
+		expect(r).toMatchObject({ ok: false, exit: EXIT.conflict });
+		const [journal] = pendingJournals(dir);
+		expect(readFileSync(join(journal, "files", "0"), "utf8")).toBe("a-OWNED-edit\n");
+		expect(restoreFromJournal(journal, toplevel(dir))).toMatchObject({ ok: false, exit: EXIT.conflict });
+		expect(existsSync(journal)).toBe(true);
+	});
+});
+
+describe("the CLI's exit statuses are the test's own, through the hardened restore", () => {
+	const cli = (dir, ...args) => spawnSync(process.execPath, [CLI, ...args], { cwd: dir, encoding: "utf8" });
+	it("a missing command is 127, with every file restored", () => {
+		const dir = fixture();
+		const before = state(dir);
+		const r = cli(dir, "--path", "a.txt", "--", "pags-no-such-command-1021");
+		expect(r.status).toBe(127);
+		expect(state(dir)).toEqual(before);
+	});
+
+	it("a signal-killed test is 143 (128+TERM), never a success", () => {
+		const dir = fixture();
+		const before = state(dir);
+		const r = cli(dir, "--path", "a.txt", "--", "sh", "-c", "kill -TERM $$");
+		expect(r.status).toBe(143);
+		expect(state(dir)).toEqual(before);
+	});
+
+	it("the argv reaches the test literally, with no shell in between", () => {
+		const dir = fixture();
+		const INERT_ARG = "$(touch pwned);*";
+		const r = cli(dir, "--path", "a.txt", "--", process.execPath, "-e", "process.exit(process.argv[1] === '$(touch pwned);*' ? 0 : 9)", INERT_ARG);
+		expect(r.status).toBe(0);
+		expect(existsSync(join(dir, "pwned"))).toBe(false);
 	});
 });

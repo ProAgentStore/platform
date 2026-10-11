@@ -10,12 +10,12 @@
  *   node scripts/fail-before.mjs --restore .git/pags-fail-before/<id>   finish an interrupted run
  *
  * Exit: the test's own status after a clean restore; 64 refused (nothing changed); 70 a file changed during
- * the run (left as it is, journal kept); 75 an unfinished earlier run (nothing changed).
+ * the run (left as it is, journal kept); 75 unknown state — an unfinished earlier run, or a journal that does
+ * not verify or belongs to another repository (nothing changed, journal kept).
  * The receipt is the last line, as JSON.
  */
 import { EXIT, failBefore, restoreFromJournal } from "./lib/fail-before.mjs";
 import { resolve } from "node:path";
-import { spawnSync } from "node:child_process";
 
 const argv = process.argv.slice(2);
 const receipt = (r) => {
@@ -24,10 +24,9 @@ const receipt = (r) => {
 };
 
 if (argv[0] === "--restore") {
-	const dir = resolve(argv[1] ?? "");
-	const root = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).stdout.trim();
-	const r = restoreFromJournal(dir, root);
-	receipt({ ...r, phase: "restore", exit: r.ok ? 0 : EXIT.conflict });
+	// The journal names its own repository; restoring from any other repository is refused (#1021).
+	const r = restoreFromJournal(resolve(argv[1] ?? ""), { root: process.cwd() });
+	receipt({ ...r, phase: "restore" });
 }
 
 const paths = [];

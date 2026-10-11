@@ -37,20 +37,35 @@ Do not hand-roll it (#920). Each of these produced a false green:
 
 ## Fail-before comparisons (old source, new tests)
 
-**Do not use `scripts/fail-before.mjs` on an active checkout or for any production comparison yet.**
-Isolated tests found safety defects in it, tracked under #1021, and it stays off-limits until that issue's
-safety acceptance is complete. The confirmed failure classes:
+**Status: the hardened `scripts/fail-before.mjs` is delivered under #1021 and awaits independent acceptance.
+Until that acceptance is recorded on #1021, do not use it on an active checkout or for a production comparison.**
+Delivery is not acceptance: the behaviour below is what its isolated tests (`scripts/lib/fail-before.test.mjs`,
+temporary repositories only) show, not a claim that it is safe everywhere.
 
-- **Symlinks and admin paths:** a path's type is not verified, so a symlink, or a path into the repository's
-  own administrative directory, can be written through instead of refused.
-- **Wrong-repository journal:** `--restore <journal>` restores into the repository of the current directory,
-  not the one the journal was written for.
-- **Backup integrity:** a backup's bytes are not checked against their recorded hash before being restored,
-  so a corrupted backup is written back as if it were the original.
-- **Partial setup, restore and file modes:** an interrupted setup or restore, and files whose mode changed,
-  are not recovered or verified completely.
+What it does, as tested:
 
-Until then, compare in an **isolated temporary worktree**, which never touches the active checkout or any stash:
+- **Refused before anything changes:** a symlink at the path or in any parent directory; a symlink or submodule at
+  the base; git administrative metadata (any `.git` component in any case, the git dir and common dir, a linked
+  worktree's admin files); a path inside a nested repository; traversal and canonical escapes; a path given twice;
+  one argument that is several space-joined paths; and any earlier journal directory, readable or not.
+- **Journal bound to its repository:** each journal records the canonical worktree root, git dir and common dir,
+  lives in that git dir, and carries a digest. `--restore` refuses (exit 75) a journal that does not verify, was
+  copied elsewhere, or belongs to a different repository than the one you run it from.
+- **Backups verified first:** every backup must match its recorded hash before any file is written; one bad backup
+  stops the whole restore, and the journal is kept.
+- **Content, type and mode are one state:** the test runs at the base mode, the owned mode comes back after, and a
+  mode-only or type change by anyone else is a conflict (exit 70, left as it is, journal kept).
+- **Crash and error safety:** the intended state of each file is journalled before it is written, and every write
+  (file or journal) is an atomic rename. A failure during setup rolls back exactly what was written; a failed
+  rollback or restore keeps the journal with a truthful receipt, and `--restore` finishes it.
+- **Exit status is the test's own** (127 missing command, 128+n on a signal); the argv runs with no shell.
+
+Remaining limits: POSIX only, regular files only; a foreign write that lands on the same file between the last
+check and the rename is overwritten; the digest detects corruption, not a deliberate forgery; directories created
+for base-only files are removed only when empty; directory entries are not fsynced, so a power loss can lose the
+last rename.
+
+Until acceptance, compare in an **isolated temporary worktree**, which never touches the active checkout or any stash:
 
 ```bash
 WT=$(mktemp -d)/old && git worktree add --detach "$WT" HEAD \
