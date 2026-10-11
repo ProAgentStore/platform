@@ -369,6 +369,9 @@ describe("promotion is a human action", () => {
 		// Spelled by concatenation so the literal is not itself a template placeholder — biome reads
 		// `${…}` inside a plain string as a mistake, and here it is the exact text being asserted.
 		expect([...paths].sort()).toEqual([
+			// #1012 `retarget_repository_binding`: POST to the retarget sub-route, whose body is a GitHub
+			// coordinate and version only — it cannot carry a policy (the route never reads one).
+			`/v1/instances/$\{encodeURIComponent(instance_id)}/coding/repos/$\{encodeURIComponent(repo_id)}/retarget`,
 			// The COLLECTION — list repos, add a repo. Cannot carry a policy: the field is accepted
 			// only by the per-repo route below.
 			`/v1/instances/$\{instance_id}/coding/repos`,

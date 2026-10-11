@@ -30,6 +30,7 @@ import { z } from "zod";
 import { authedCall, authRequired, type McpEnv, jsonText, text } from "./http.js";
 import { registerCodingEngineTools } from "./coding-engine-tools.js";
 import { registerCodingReauthTools } from "./coding-reauth-tools.js";
+import { registerCodingRetargetTools } from "./coding-retarget-tools.js";
 import { github } from "./repo-tools.js";
 import { captureTerminal, messageTerminal } from "./terminal-fallback.js";
 import { audit, dryRun, requireConfirmation, requirePermission, type SafetyContext } from "./safety.js";
@@ -456,6 +457,8 @@ export function registerCodingSessionTools(
 	registerCodingEngineTools(server, env, tokenFor, safetyFor);
 	// Sign an engine back in from any device (#881) — beside the engine choice it signs in.
 	registerCodingReauthTools(server, env, tokenFor, safetyFor);
+	// Move a binding to its repository's new GitHub name in place (#1012).
+	registerCodingRetargetTools(server, env, tokenFor, safetyFor);
 
 	server.tool(
 		"coding_repo_add",

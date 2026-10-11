@@ -80,6 +80,7 @@ export const INSTANCE_CHILD_TABLES = [
 	"tickets",
 	"coding_timeline",
 	"coding_sessions",
+	"coding_repo_retarget_audits",
 	"coding_repos",
 	"agent_trigger_events",
 	"agent_trigger_sync_state",

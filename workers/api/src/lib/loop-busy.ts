@@ -15,7 +15,7 @@
 import type { Env } from "../types.js";
 
 /** A provisioning receipt older than this is reported `unknown` by `listLoopStarts`, so it is not "in flight". */
-const IN_FLIGHT_MS = 5 * 60_000;
+export const IN_FLIGHT_MS = 5 * 60_000;
 
 export interface BusyHolder {
 	/**

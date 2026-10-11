@@ -299,6 +299,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	coding_loop_queue_cancel: "write",
 	coding_loop_stop: "write",
 	coding_repo_add: "write",
+	retarget_repository_binding: "write",
 	coding_engine_set: "write",
 	create_agent: "write",
 	create_collection: "write",

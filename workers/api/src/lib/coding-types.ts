@@ -37,6 +37,10 @@ export interface CodingRepo {
 	userId: string;
 	name: string;
 	githubRepo?: string; // "owner/repo"
+	/** GitHub's immutable numeric repository id, recorded by the first verified retarget (#1012). */
+	githubRepositoryId?: number;
+	/** Compare-and-set token for `POST …/retarget`; changes only when a retarget applies (#1012). */
+	bindingVersion?: number;
 	/**
 	 * Which host this repo lives on (#221, migration 0097). `githubRepo` stays populated for
 	 * GitHub so every existing reader is untouched; this is what lets a GitLab repo be stored

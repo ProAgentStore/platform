@@ -34,6 +34,7 @@ import { parseRepoRef } from "../lib/git-providers.js";
 import { sqlTime } from "../lib/sql-time.js";
 import { getSessionRunnerConn, pickNextIssue, requireOwned } from "./coding-shared.js";
 import { addPairedRepo, duplicateBinding, isUniqueViolation } from "./coding-repo-add.js";
+import { registerRepoRetargetRoutes } from "./coding-repo-retarget.js";
 import type { Env } from "../types.js";
 
 /** "~/dev/stores/pags/platform" → "pags/platform" — a less generic default name. */
@@ -412,12 +413,17 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 			}
 		}
 		await c.env.DB.prepare(
-			"UPDATE coding_repos SET github_repo = COALESCE(?1, github_repo), provider = ?5, repo_slug = ?6, web_url = ?7, updated_at = datetime('now') WHERE id = ?2 AND instance_id = ?3 AND user_id = ?4",
+			// Only a binding that still has no GitHub identity: a stale detect must never overwrite a
+			// coordinate a retarget (#1012) has since moved.
+			"UPDATE coding_repos SET github_repo = COALESCE(?1, github_repo), provider = ?5, repo_slug = ?6, web_url = ?7, updated_at = datetime('now') WHERE id = ?2 AND instance_id = ?3 AND user_id = ?4 AND (github_repo IS NULL OR github_repo = '')",
 		)
 			.bind(githubRepo, repo.id, instanceId, uid, ref.provider, ref.slug, ref.webUrl || null)
 			.run();
 		return c.json({ githubRepo, provider: ref.provider, repoSlug: ref.slug, detected: true });
 	});
+
+	// #1012: retarget the binding in place after a GitHub rename (+ its history read).
+	registerRepoRetargetRoutes(codingRoutes);
 
 	codingRoutes.delete("/:instanceId/coding/repos/:repoId", async (c) => {
 		const { uid, instanceId } = await requireOwned(c);

@@ -522,6 +522,9 @@ const READBACK: Record<string, string | null> = {
 	"remove_repo.repo_url": "ingest_repo_status",
 	"coding_repo_add.path": "coding_repos_list",
 	"coding_repo_add.github_repo": "coding_repos_list",
+	// #1012: the retarget writes the binding's GitHub coordinate, id and version, all listed there.
+	"retarget_repository_binding.expected_current": "coding_repos_list",
+	"retarget_repository_binding.destination": "coding_repos_list",
 	"coding_engine_set.engine_id": "coding_engine_get",
 	"coding_engine_set.model": "coding_engine_get",
 	// #881: which engine a relay signs in is the relay record `coding_diagnostics` returns

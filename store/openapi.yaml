@@ -188,6 +188,25 @@ tags:
       reports what it ran — on a raw Codex/Grok session the observed-act half sees nothing, and
       the run note says so.
 
+      **Retarget after a GitHub rename (#1012).** `POST …/coding/repos/{repoId}/retarget` moves
+      one binding to the new name of the SAME repository in place — id, instructions, sessions,
+      timeline and receipts are kept (delete + re-add would erase them). Body:
+      `{expectedCurrent: {owner, name, version, githubId?}, destination: {owner, name, githubId},
+      dryRun?}`. `version` is the listed `bindingVersion`; `githubId` is required once the binding
+      lists `githubRepositoryId`, and for a binding without one. GitHub must report
+      `destination.owner/name` for `destination.githubId` through the owner's GitHub App, and that
+      id must be the binding's own — a different repository that reused the name is refused (bind
+      it separately). The machine's checkout `origin` must already name the destination; it is
+      never changed here. Answers: `200 {dryRun, ready, changes, blockers, originRemedy?}` for a
+      dry run (no writes); `200 {ok, repo, audit, rollback}` applied; `200 {ok, idempotent}` for a
+      retry after a lost response; `400` invalid input; `403` no GitHub access; `409` identity
+      mismatch, different repository, conflicting binding, or `blockers` (`active_session`,
+      `session_lock`, `active_run`, `queued_work`, `pending_start`, `runner_offline`,
+      `local_origin_unreadable`, `local_origin_mismatch`, `managed_clone_origin_unverifiable`);
+      `412 {actual}` stale version or identity. Nothing is cloned, pushed, started or drained.
+      `GET …/coding/repos/{repoId}/retargets` returns the audit history and labels each session
+      with the coordinate the binding had when it started.
+
       **Standing policies.** `PUT …/coding/repos/{repoId}` also accepts `policies`, a map from a
       closed registry of invariants to `off` | `observe` | `act`. Unknown names and modes are
       **refused (400), never dropped** — a policy that silently never applies is

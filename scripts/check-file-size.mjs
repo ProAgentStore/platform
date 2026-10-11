@@ -732,7 +732,7 @@ const PINS = {
 	// +35 at #883/#879: `effectiveCloneStatus` (a folderless binding is `needs_path`, derived where rows are
 	// mapped so every reader agrees) and `claimFreeSessionDriver` (apply-now's never-steal claim, beside
 	// the claim/release pair it must not diverge from). Both are repo/session persistence.
-	"workers/api/src/lib/coding-store.ts": 871,
+	"workers/api/src/lib/coding-store.ts": 878, // +7 at #1012: the binding's numeric GitHub id, version and last-retarget columns on RepoRow/toRepo, and deleteRepo clearing its retarget audits (FK child); the retarget itself lives in coding-repo-retarget.ts.
 	// NEW at #981: the Applications control surface crossed 800 adding the post-fill approval stage —
 	// the action table entries that offer it on `awaiting_review` and at a supervisor checkpoint, and
 	// the four-line branch that performs it. The decision, the continuation and the reply shape all
@@ -1940,7 +1940,7 @@ const PINS = {
 	"workers/api/src/routes/instances.ts": 1178, // #1009 mounts the extracted owner permission-recovery routes (one import, one registrar); lifecycle work remains in instances-permission-requests.ts. #859 follow-up: runtime registration/heartbeat wires the owner policy and lifecycle telemetry; policy queries live in lib/machine-policy.ts.
 	"workers/api/src/routes/instances-runtime.ts": 938, // #859 follow-up: runtime status exposes the resolved physical-machine policy; resolution lives in lib/machine-policy.ts.
 	"workers/api/src/routes/terminals.ts": 878, // #859 follow-up: ordered terminal routes own the stable machine detail and policy endpoints; D1 policy access lives in lib/machine-policy.ts.
-	"workers/mcp/src/surface-lock.ts": 1120, // #1009 appends the 0.1.106 permission-request deep-link schema record; this history-checked ledger is deliberately append-only and unsplit. #1004 appends the 0.1.105 owner-scoped instance-file upload surface record (and 0.1.104 uploaded-Tailor-source controls); this history-checked ledger is deliberately unsplit. #1003 appends the get_console_link files-upload inputSchema revision; this history-checked ledger is deliberately unsplit. #859 follow-up: append-only MCP ledger entries for get_machine_policy and set_machine_policy.
+	"workers/mcp/src/surface-lock.ts": 1123, // #1012 appends the 0.1.109 retarget_repository_binding record (+3); append-only and unsplit. #1009 appends the 0.1.106 permission-request deep-link schema record; this history-checked ledger is deliberately append-only and unsplit. #1004 appends the 0.1.105 owner-scoped instance-file upload surface record (and 0.1.104 uploaded-Tailor-source controls); this history-checked ledger is deliberately unsplit. #1003 appends the get_console_link files-upload inputSchema revision; this history-checked ledger is deliberately unsplit. #859 follow-up: append-only MCP ledger entries for get_machine_policy and set_machine_policy.
 	"store/console/src/tabs/KnowledgeTab.tsx": 818, // #1003 keeps URL-addressable knowledge subtabs beside the existing capability-gated upload surfaces; splitting the tab would separate state from the controls it governs.
 	"scripts/check-file-size.mjs": 2026, // #1013 records the three-line reconciliation route exception above, then raises this self-pin too. #1008 raises the correlated runner-update safety pin above. #1003 adds the reviewed KnowledgeTab URL-subtab pin above. #859 follow-up adds five explicitly reviewed policy/relay surface pins above; this ledger must describe its own deliberate growth.
 };

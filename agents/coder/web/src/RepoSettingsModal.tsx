@@ -5,6 +5,7 @@ import { repoProviderLabel } from "./repo-title";
 import { repoRepairNotice } from "./repo-repair";
 import { Settings, Trash2, Lock } from "lucide-react";
 import Button from "./Button";
+import RepoRetargetSection from "./RepoRetargetSection";
 
 /**
  * Per-repo settings sheet: name, FOLDER, special instructions (rules), launch URLs, and delete.
@@ -174,6 +175,9 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved, 
 					{repo.cloneStatus && <Detail label="Clone status" value={repo.cloneStatus} />}
 					<Detail label="Repo id" value={repo.id} />
 				</div>
+
+				{/* #1012: a GitHub rename moves the coordinate in place — never delete + re-add. */}
+				<RepoRetargetSection repo={repo} instanceId={instanceId} onApplied={onSaved} />
 
 				<label htmlFor="repo-settings-rules" className="block text-xs font-bold text-muted mb-1">Special instructions (rules for this repo)</label>
 				<textarea

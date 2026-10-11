@@ -32,6 +32,10 @@ export interface RepoRow {
 	user_id: string;
 	name: string;
 	github_repo: string | null;
+	/** #1012 (migration 0209): GitHub's immutable numeric id, the binding's version, its last retarget. */
+	github_repository_id?: number | null;
+	binding_version?: number | null;
+	last_retarget_audit_id?: string | null;
 	provider: string | null;
 	repo_slug: string | null;
 	web_url: string | null;
@@ -83,6 +87,8 @@ export function toRepo(r: RepoRow): CodingRepo {
 		userId: r.user_id,
 		name: r.name,
 		githubRepo: r.github_repo ?? undefined,
+		githubRepositoryId: r.github_repository_id ?? undefined,
+		bindingVersion: r.binding_version ?? 1,
 		// `gitProviderFor` rather than a cast: a row written before migration 0097 (or by a test
 		// fixture) has no `provider` at all, and the answer for one carrying `github_repo` is
 		// GitHub, not the 'local' the column would default to.
@@ -358,6 +364,7 @@ export async function deleteRepo(env: Env, instanceId: string, userId: string, r
 	const stmts = [
 		...sessionIds.results.map((row) => env.DB.prepare("DELETE FROM coding_timeline WHERE session_id = ?1").bind(row.id)),
 		env.DB.prepare("DELETE FROM coding_sessions WHERE repo_id = ?1 AND instance_id = ?2 AND user_id = ?3").bind(repoId, instanceId, userId),
+		env.DB.prepare("DELETE FROM coding_repo_retarget_audits WHERE repo_id = ?1 AND instance_id = ?2 AND user_id = ?3").bind(repoId, instanceId, userId),
 		env.DB.prepare("DELETE FROM coding_repos WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3").bind(repoId, instanceId, userId),
 	];
 	const results = await env.DB.batch(stmts);

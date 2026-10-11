@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**302 tool registrations.** 276 are always registered; 26 are gated to the console
+**303 tool registrations.** 276 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -451,6 +451,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `coding_engine_reauth` | Sign a coding engine back in from any device: runs its subscription login on the runner (Claude paste-code, Codex device-code) and relays the URL, code and result; never an API key. Resumes a run parked on sign-in (#881) | runtime | yes | |
 | `coding_repo_add` | Add a repo as BOTH its local checkout (`path`) and its GitHub identity (from the checkout's origin, or asserted with `github_repo`) in one call; refused with nothing stored when either half is missing. With `clone: true` + `github_repo`, a missing or empty `path` is first cloned on the connected machine with its own git credentials — https, or SSH when https is refused and the machine has a key (`clone_protocol` pins one). A long clone runs in the background: a 202 `{cloning: true}` stores nothing, and repeating the call joins the same clone and binds it when done; lost/slow confirmation returns `outcome: unknown`, `coding_repos_list` polling guidance, and the exact same-argument retry | write | | |
 | `coding_repo_remove` | Detach a repo from a coding instance — the counterpart to `coding_repo_add`; stops any active engine on it first, and deletes no code; lost confirmation returns `outcome: unknown`; poll coding_repos_list and coding_sessions_list | destructive | yes | `coding_repo_remove` |
+| `retarget_repository_binding` | Move an idle binding to its repository's new GitHub name in place after a rename (#1012): same numeric GitHub id only, verified through the owner's GitHub App; keeps id, instructions, sessions and timeline; refuses live/queued work; the machine's origin must already name the destination (never changed here); `dry_run` answers `{ready, changes, blockers}`; retries are idempotent; a stale version answers 412 | write | yes | |
 | `coding_sessions_list` | All sessions, active and ended | — | | |
 | `coding_session_capture` | Live terminal output + run state (LIVE sessions only — an ended one answers with an empty pane) | — | | |
 | `coding_timeline` | What a run is doing, cursored by `since_seq` — objective, each instruction driven, pane tails, outcome. Works on a finished run too | read | | |

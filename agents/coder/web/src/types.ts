@@ -18,6 +18,10 @@ export interface CodingRepo {
 	 */
 	cloneCheckedAt?: string;
 	githubRepo?: string;
+	/** GitHub's numeric repository id, once a verified retarget recorded it (#1012). */
+	githubRepositoryId?: number;
+	/** The retarget compare-and-set token (#1012). */
+	bindingVersion?: number;
 	/** Which host it lives on (#221): local | github | gitlab | bitbucket | other. */
 	provider?: string;
 	/** The provider-neutral coordinate — `group/subgroup/project` on GitLab. */
