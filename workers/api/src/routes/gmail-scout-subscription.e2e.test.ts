@@ -86,7 +86,7 @@ describe("#997 Gmail Scout fresh subscription acceptance", () => {
 			// an explicitly unverified lead and never retains the message body.
 			await ingestGmailCandidates({
 				hits: [{ id: "gmail-message-1" }], existing: [],
-				readMessage: async () => ({ id: "gmail-message-1", threadId: "t", from: "alerts@example.com", to: GMAIL_SCOUT_PINNED_EMAIL, cc: "", subject: "Engineer at Acme", date: "2026-10-09", messageId: "", references: "", snippet: "Location: Melbourne", text: "Apply https://jobs.example.com/role/1?utm_source=gmail", attachments: [] }),
+				readMessage: async () => ({ id: "gmail-message-1", threadId: "t", from: "alerts@example.com", to: GMAIL_SCOUT_PINNED_EMAIL, cc: "", subject: "Engineer at Acme", date: new Date().toISOString(), messageId: "", references: "", snippet: "Location: Melbourne", text: "Apply https://jobs.example.com/role/1?utm_source=gmail", attachments: [] }),
 				insertLead: async (data) => { leads.push({ id: "lead-1", data }); return undefined; },
 			});
 			expect(leads).toHaveLength(1);

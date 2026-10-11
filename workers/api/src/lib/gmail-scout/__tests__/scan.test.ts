@@ -9,7 +9,7 @@ describe("Gmail Scout scan", () => {
 		expect(out).toMatchObject({ ok: false, reason: "ambiguous" });
 	});
 	it("creates display-safe Gmail provenance without retaining the mail body", () => {
-		const lead = candidateFromMessage({ id: "m1", threadId: "t1", from: "alerts@example.com", to: "me@example.com", cc: "", subject: "Senior Engineer at Example", date: "2026-10-09", messageId: "", references: "", snippet: "Location: Sydney", text: "Apply https://jobs.example.com/job/1?utm_source=mail", attachments: [] });
+		const lead = candidateFromMessage({ id: "m1", threadId: "t1", from: "alerts@example.com", to: "me@example.com", cc: "", subject: "Senior Engineer at Example", date: new Date().toISOString(), messageId: "", references: "", snippet: "Location: Sydney", text: "Apply https://jobs.example.com/job/1?utm_source=mail", attachments: [] });
 		expect(lead).toMatchObject({ url: "https://jobs.example.com/job/1", gmail_message_id: "m1", source: "Gmail", source_domain: "jobs.example.com", company: "Example", location: "Sydney" });
 		expect(lead).not.toHaveProperty("text");
 	});
@@ -32,7 +32,7 @@ describe("Gmail Scout scan", () => {
 		const otherScoutLeads: Array<{ data: Record<string, unknown> }> = [];
 		const result = await ingestGmailCandidates({
 			hits: [{ id: "message-1" }],
-			readMessage: async () => ({ id: "message-1", threadId: "thread-1", from: "alerts@example.com", to: "me@example.com", cc: "", subject: "Platform Engineer at Acme", date: "2026-10-09", messageId: "", references: "", snippet: "Location: Melbourne", text: "Role: Platform Engineer\nApply https://jobs.example.com/job/42?ref=weekly", attachments: [] }),
+			readMessage: async () => ({ id: "message-1", threadId: "thread-1", from: "alerts@example.com", to: "me@example.com", cc: "", subject: "Platform Engineer at Acme", date: new Date().toISOString(), messageId: "", references: "", snippet: "Location: Melbourne", text: "Role: Platform Engineer\nApply https://jobs.example.com/job/42?ref=weekly", attachments: [] }),
 			existing,
 			insertLead: async (data) => { scoutLeads.push({ data }); return undefined; },
 		});
