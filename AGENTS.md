@@ -35,6 +35,26 @@ Do not hand-roll it (#920). Each of these produced a false green:
   zsh (the shell here); zsh spells it `${pipestatus[1]}`. Redirect to a file instead of
   piping, as above.
 
+## Fail-before comparisons (old source, new tests)
+
+To prove a test fails on the code before your fix, use the supported helper. Give each file as its own
+`--path`; everything after `--` is the test argv, run with no shell:
+
+```bash
+node scripts/fail-before.mjs --path workers/api/src/lib/a.ts --path workers/api/src/lib/b.ts \
+  -- npx vitest run --project unit workers/api/src/lib/a.test.ts > /tmp/fb.log 2>&1; echo "exit=$?"; tail -1 /tmp/fb.log
+```
+
+It puts the base revision's bytes into exactly those files, runs the test, restores them byte for byte,
+and prints a JSON receipt as its last line. The exit code is the test's own. 64 means it refused and
+nothing changed. 70 means a file changed during the run and was left alone (the original is in the
+journal). 75 means an earlier run did not finish; complete it with `--restore <journal>`.
+
+Never do this with `git stash` (#1021). The stash is repo-global, so `pop` restores the top of
+everyone's stack, not what you saved. A save that fails or saves nothing still lets a chained `pop`
+consume someone else's recovery work. zsh does not split `$SRC="a.ts b.ts"`, so an unquoted path
+variable is ONE pathspec and the save fails. Never `git stash pop/apply` after a save you did not verify.
+
 ## Local git hooks (optional)
 
 `bash scripts/install-hooks.sh` opts a checkout into a fast pre-commit (staged lint) and pre-push
