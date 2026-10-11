@@ -7,6 +7,7 @@ import {
 	auditIndexKey,
 	auditKeyMetadata,
 	BACKFILL_BATCH,
+	readAuditCoverage,
 	runAuditLedgerBackfill,
 } from "../lib/mcp-audit-ledger.js";
 import { signSession } from "../lib/session.js";
@@ -467,8 +468,16 @@ describe("the legacy backfill", () => {
 		f.data.set("audit:mine:not-a-time:bad", { value: JSON.stringify({ tool: "x" }), expiration: Math.floor(NOW / 1000) + 3600 });
 		f.data.set("audit:mine:2026-10-11T00:00:00.000Z:junk", { value: "{not json", expiration: Math.floor(NOW / 1000) + 3600 });
 		const { state } = await backfillToCompletion(f);
-		expect(state.unplaceable).toBe(4); // two keys, two passes
+		// Two DISTINCT records, however many passes listed them — never 4 after two passes.
+		expect(state).toMatchObject({ status: "complete", pass: 2, unplaceable: 2 });
 		expect(Array.from(f.data.keys()).some((k) => k.startsWith("audit_idx:"))).toBe(false);
+		// The scan finished, but the history is NOT whole: two records were never indexed, and every
+		// read says so rather than claiming every event is indexed.
+		const coverage = await readAuditCoverage(f.kv);
+		expect(coverage).toMatchObject({ complete: false, legacyIndex: "complete" });
+		expect(coverage.detail).toMatch(/2 unplaceable legacy records could not be indexed/i);
+		const { app, env } = testApp(f.kv);
+		expect((await getPage(app, env, "/v1/mcp-audit")).body.coverage).toMatchObject({ complete: false, legacyIndex: "complete" });
 	});
 
 	it("collects, on its second pass, a legacy key an old writer added behind the first pass's cursor", async () => {

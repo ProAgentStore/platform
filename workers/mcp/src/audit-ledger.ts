@@ -84,9 +84,20 @@ export const AUDIT_SEMANTICS =
 
 export async function readAuditCoverage(kv: KVNamespace): Promise<AuditCoverage> {
 	const raw = await kv.get(AUDIT_MIGRATION_KEY);
-	const state = raw ? (JSON.parse(raw) as { status?: string; pass?: number; scanned?: number }) : null;
+	const state = raw ? (JSON.parse(raw) as { status?: string; pass?: number; scanned?: number; unplaceable?: number }) : null;
 	const retentionDays = AUDIT_TTL_SECONDS / 86_400;
 	if (state?.status === "complete") {
+		// Finished is not the same as whole: a legacy record with no parseable subject, time or id was
+		// never indexed, so the history is partial by exactly that many records and must say so.
+		if ((state.unplaceable ?? 0) > 0) {
+			const n = state.unplaceable ?? 0;
+			return {
+				complete: false,
+				retentionDays,
+				legacyIndex: "complete",
+				detail: `Indexing finished, but ${n} unplaceable legacy record${n === 1 ? "" : "s"} could not be indexed (unparseable, or missing a subject or time); they are not in this history.`,
+			};
+		}
 		return { complete: true, retentionDays, legacyIndex: "complete", detail: `Every event from the last ${retentionDays} days is indexed; older events have expired.` };
 	}
 	const legacyIndex = state ? "in_progress" : "not_started";

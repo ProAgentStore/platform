@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AUDIT_TTL_SECONDS, auditGlobalKey, auditIndexKey } from "./audit-ledger.js";
+import { AUDIT_MIGRATION_KEY, AUDIT_TTL_SECONDS, auditGlobalKey, auditIndexKey, readAuditCoverage } from "./audit-ledger.js";
 import { audit, type SafetyContext } from "./safety.js";
 
 /**
@@ -40,5 +40,19 @@ describe("writeAudit", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+describe("coverage read from the API's migration record (#1016)", () => {
+	const kvWith = (state: unknown) => ({ get: async (k: string) => (k === AUDIT_MIGRATION_KEY ? JSON.stringify(state) : null) }) as unknown as KVNamespace;
+
+	it("is partial, not complete, when the finished migration left unplaceable records", async () => {
+		const coverage = await readAuditCoverage(kvWith({ status: "complete", pass: 2, scanned: 10, unplaceable: 2 }));
+		expect(coverage).toMatchObject({ complete: false, legacyIndex: "complete" });
+		expect(coverage.detail).toMatch(/2 unplaceable legacy records could not be indexed/i);
+	});
+
+	it("is complete only when the finished migration placed every record", async () => {
+		expect(await readAuditCoverage(kvWith({ status: "complete", pass: 2, scanned: 10, unplaceable: 0 }))).toMatchObject({ complete: true, legacyIndex: "complete" });
 	});
 });

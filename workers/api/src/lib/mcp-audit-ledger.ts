@@ -80,8 +80,14 @@ export interface AuditMigrationState {
 	copied: number;
 	/** Listed but gone, or too close to expiry to copy — expired either way. */
 	expired: number;
-	/** Present but without a parseable time; still listed under the legacy key, never placed. */
+	/**
+	 * DISTINCT legacy records that could not be placed (unparseable, or no subject/time/id) — the
+	 * count from the latest COMPLETED pass. Each pass lists every key once, so a per-pass count is a
+	 * count of records; summing passes counted each one twice. Never indexed, so coverage is partial.
+	 */
 	unplaceable: number;
+	/** The current pass's running count; it becomes `unplaceable` when the pass completes. */
+	passUnplaceable?: number;
 	startedAt: string;
 	updatedAt: string;
 	completedAt?: string;
@@ -102,6 +108,17 @@ export async function readAuditCoverage(kv: KVNamespace): Promise<AuditCoverage>
 	const state = await readMigrationState(kv);
 	const retentionDays = AUDIT_TTL_SECONDS / 86_400;
 	if (state?.status === "complete") {
+		// Finished is not the same as whole: a legacy record with no parseable subject, time or id was
+		// never indexed, so the history is partial by exactly that many records and must say so.
+		if ((state.unplaceable ?? 0) > 0) {
+			const n = state.unplaceable ?? 0;
+			return {
+				complete: false,
+				retentionDays,
+				legacyIndex: "complete",
+				detail: `Indexing finished, but ${n} unplaceable legacy record${n === 1 ? "" : "s"} could not be indexed (unparseable, or missing a subject or time); they are not in this history.`,
+			};
+		}
 		return { complete: true, retentionDays, legacyIndex: "complete", detail: `Every event from the last ${retentionDays} days is indexed; older events have expired.` };
 	}
 	return {
@@ -225,10 +242,16 @@ export async function runAuditLedgerBackfill(
 	);
 
 	state.scanned += outcomes.length;
-	for (const o of outcomes) state[o] += 1;
+	for (const o of outcomes) {
+		if (o === "unplaceable") state.passUnplaceable = (state.passUnplaceable ?? 0) + 1;
+		else state[o] += 1;
+	}
 	state.updatedAt = nowIso;
 	if (listed.list_complete) {
 		state.cursor = undefined;
+		// The pass saw every key once: its count is the distinct count. Replace, never add.
+		state.unplaceable = state.passUnplaceable ?? 0;
+		state.passUnplaceable = 0;
 		state.pass += 1;
 		if (state.pass >= BACKFILL_PASSES) {
 			state.status = "complete";
