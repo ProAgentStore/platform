@@ -167,6 +167,12 @@ const EXCLUSIONS = [
 		match: /^(GET|POST) \/v1\/instances\/\{\}\/secure-inputs/,
 	},
 	{
+		label: "Read-only application reconciliation browser handoff (#1013)",
+		why:
+			"This is an owner-authenticated, opaque-id browser handoff to the exact retained local page. MCP may report durable reconciliation state, but it cannot safely render or operate the owner\u2019s mobile sign-in/CAPTCHA surface; exposing it would turn a bounded human browser step into an agent-controlled input channel.",
+		match: /^GET \/v1\/instances\/\{\}\/application-reconciliation-handoffs\/\{\}$/,
+	},
+	{
 		label: "Permission-recovery decisions and continuation (#1009)",
 		why:
 			"The exact Permissions & Connections control is an explicit owner-facing consent decision. MCP may create a verified `get_console_link(permission_request_id)` handoff, but must not approve, deny, inspect a pending call's arguments, or resume it: an agent-controlled MCP client is not the owner standing at that control, and Ask retains its independent per-call board approval.",

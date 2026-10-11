@@ -65,8 +65,10 @@ export default function ApplicationsTab({ instanceId, isTailor = false }: { inst
 		setHandoffError("");
 		setHandoffOpen(false);
 		if (!requestedAnyHandoffId) return;
-		const resolver = reconciliationHandoff ? "application-reconciliation-handoffs" : "application-handoffs";
-		api<ApplicationHandoffView>(`/v1/instances/${instanceId}/${resolver}/${encodeURIComponent(requestedAnyHandoffId)}`)
+		const resolved = reconciliationHandoff
+			? api<ApplicationHandoffView>(`/v1/instances/${instanceId}/application-reconciliation-handoffs/${encodeURIComponent(requestedAnyHandoffId)}`)
+			: api<ApplicationHandoffView>(`/v1/instances/${instanceId}/application-handoffs/${encodeURIComponent(requestedAnyHandoffId)}`);
+		resolved
 			.then((next) => { if (!cancelled) setHandoff(next); })
 			.catch((e) => { if (!cancelled) setHandoffError(e instanceof Error ? e.message : String(e)); });
 		return () => { cancelled = true; };
@@ -158,7 +160,12 @@ export default function ApplicationsTab({ instanceId, isTailor = false }: { inst
 						setHandoffOpen(false);
 						// Re-resolve rather than treating a local action as a terminal result. The next
 						// status is the worker's durable, evidence-bound statement.
-						if (requestedAnyHandoffId) api<ApplicationHandoffView>(`/v1/instances/${instanceId}/${reconciliationHandoff ? "application-reconciliation-handoffs" : "application-handoffs"}/${encodeURIComponent(requestedAnyHandoffId)}`).then(setHandoff).catch((e) => setHandoffError(e instanceof Error ? e.message : String(e)));
+						if (requestedAnyHandoffId) {
+							const resolved = reconciliationHandoff
+								? api<ApplicationHandoffView>(`/v1/instances/${instanceId}/application-reconciliation-handoffs/${encodeURIComponent(requestedAnyHandoffId)}`)
+								: api<ApplicationHandoffView>(`/v1/instances/${instanceId}/application-handoffs/${encodeURIComponent(requestedAnyHandoffId)}`);
+							resolved.then(setHandoff).catch((e) => setHandoffError(e instanceof Error ? e.message : String(e)));
+						}
 						load();
 					}}
 				/>
