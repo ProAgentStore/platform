@@ -687,7 +687,7 @@ const PINS = {
 	// +27 at #896: `liveWork()` — what a restart would destroy — and `requestShutdown`, which is
 	// how `--replace` asks instead of killing. The counts exist so a replace can REFUSE while a
 	// Codex turn, a research run or an application fill is live; `pkill` destroyed them silently.
-	"packages/browser-runner/src/runner.ts": 1362, // +3 at #957: the localApply runtime (field, construction sharing the research browserFor, shutdown). +6 at #956: the local-artifact runtime is constructed, advertised and shut down beside local-browser's. +1 at #1013: bounded handoff route wiring delegates to the extracted live-run browser factory.
+	"packages/browser-runner/src/runner.ts": 1361, // +3 at #957: the localApply runtime (field, construction sharing the research browserFor, shutdown). +6 at #956: the local-artifact runtime is constructed, advertised and shut down beside local-browser's.
 	// New at #953: the four-line read-only email-lead preflight route belongs beside the existing
 	// local-apply routes. Splitting a single ordered route registration would add indirection without
 	// reducing its ownership; the page validation itself stays in local-apply/runtime.ts.

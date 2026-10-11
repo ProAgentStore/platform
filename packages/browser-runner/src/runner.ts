@@ -19,7 +19,7 @@ import { LocalArtifactRuntime } from "./local-artifact/runtime.js";
 import { LOCAL_ARTIFACT_TASK_TYPE } from "./local-artifact/contract.js";
 import { LocalApplyRuntime } from "./local-apply/runtime.js";
 import { LOCAL_APPLY_TASK_TYPE } from "./local-apply/contract.js";
-import { createLocalApplyBrowserFactory } from "./local-apply/live-run-browser.js";
+import { createRunnerBrowserFactories } from "./local-apply/live-run-browser.js";
 import { createLocalApplyTakeoverAdapter, isLocalApplyTakeover } from "./local-apply/takeover-adapter.js";
 import { WORKFLOW_DRIVEN_TASKS } from "./task-types.js";
 /** True for a plain object. */
@@ -110,15 +110,7 @@ export class LocalRunner {
 		mkdirSync(config.dataDir, { recursive: true });
 		this.store = new RunnerStore(config.dataDir);
 		this.coding = new CodingRuntime(join(config.dataDir, "repos"));
-		// `default` is the runner's own signed-in browser, shared and never closed by a run;
-		// `isolated` is a fresh profile inside the run's folder, removed with it.
-		const browserFor = async (profile: "isolated" | "default", runDir: string) => {
-			if (profile === "default") return { tools: await this.getMcp(), stop: async () => undefined };
-			const mcp = new McpRuntime();
-			await mcp.start({ userDataDir: join(runDir, "profile"), headless: config.headless });
-			return { tools: mcp, stop: () => mcp.stop() };
-		};
-		const applyBrowserFor = createLocalApplyBrowserFactory({ headless: config.headless, defaultBrowser: browserFor, sharedPage: () => this.activePage });
+		const { browserFor, applyBrowserFor } = createRunnerBrowserFactories({ headless: config.headless, defaultTools: () => this.getMcp(), sharedPage: () => this.activePage });
 		this.localBrowser = new LocalBrowserRuntime({ dataDir: config.dataDir, selfUrl: () => this.selfUrl, browserFor });
 		this.localArtifact = new LocalArtifactRuntime({ dataDir: config.dataDir });
 		this.localApply = new LocalApplyRuntime({

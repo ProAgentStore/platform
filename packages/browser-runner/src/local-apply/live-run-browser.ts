@@ -19,6 +19,27 @@ export function createLocalApplyBrowserFactory(options: {
 }
 
 /**
+ * Keep local-apply's browser construction out of `runner.ts`: research uses the generic factory,
+ * while application runs get a page-owning isolated context for the scoped handoff.
+ */
+export function createRunnerBrowserFactories(options: {
+	headless: boolean;
+	defaultTools(): Promise<RunBrowser["tools"]>;
+	sharedPage(): Page | null;
+}): {
+	browserFor(profile: LocalApplyProfile, runDir: string): Promise<RunBrowser>;
+	applyBrowserFor(profile: LocalApplyProfile, runDir: string): Promise<RunBrowser>;
+} {
+	const browserFor = async (profile: LocalApplyProfile, runDir: string): Promise<RunBrowser> => {
+		if (profile === "default") return { tools: await options.defaultTools(), stop: async () => undefined };
+		const mcp = new McpRuntime();
+		await mcp.start({ userDataDir: join(runDir, "profile"), headless: options.headless });
+		return { tools: mcp, stop: () => mcp.stop() };
+	};
+	return { browserFor, applyBrowserFor: createLocalApplyBrowserFactory({ headless: options.headless, defaultBrowser: browserFor, sharedPage: options.sharedPage }) };
+}
+
+/**
  * Start the disposable browser context for one application run and retain only its current live
  * page for the bounded takeover adapter.  This deliberately does not seed, copy, or persist an
  * owner profile: the profile remains the run's existing throwaway `runDir/profile` directory.
