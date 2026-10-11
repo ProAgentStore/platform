@@ -84,6 +84,8 @@ export interface UpdateObservation {
 	source: "sessions" | "health";
 	success: boolean;
 	sampledAt: number;
+	/** It ANSWERED (HTTP 200) but not in the shape the guard reads — unreadable, which is neither healthy nor absent (#1020). */
+	malformed?: boolean;
 }
 
 export type UpdatePlan =

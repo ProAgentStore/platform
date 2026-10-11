@@ -270,7 +270,7 @@ describe("AutomaticUpdateController — liveness and diagnostics (#1020)", () =>
 	it("a versioned reconnect on the latest release reports verified-success with no blocker", async () => {
 		// A reconnect after an ATTEMPTED install carries that attempt's persisted record and a healthy paired look (#1020).
 		const h = harness({
-			policy: { value: { autoUpdate: true, status: "restarting", latestVersion: "0.4.91" }, authoritative: true },
+			policy: { value: { autoUpdate: true, status: "restarting", latestVersion: "0.4.91", recovery: { target: "0.4.91", attachments: [], at: "2026-10-12T00:00:00.000Z" } }, authoritative: true },
 			facts: async () => ({ ...idleFacts(), current: "0.4.91", observations: [{ source: "sessions", success: true, sampledAt: 1 }, { source: "health", success: true, sampledAt: 1 }] }),
 			plan: (f) => ({ action: "up-to-date", current: f.current }),
 		});
@@ -432,7 +432,7 @@ describe("AutomaticUpdateController — verified update cycle and bounded observ
 		{ source: "health" as const, success: health, sampledAt: 1 },
 	];
 	const upToDate = (f: UpdateFacts): UpdatePlan => planRunnerUpdate(f);
-	const attempted = (target: string): { value: AutoUpdatePolicy; authoritative: boolean } => ({ value: { autoUpdate: true, status: "restarting", latestVersion: target }, authoritative: true });
+	const attempted = (target: string): { value: AutoUpdatePolicy; authoritative: boolean } => ({ value: { autoUpdate: true, status: "restarting", latestVersion: target, recovery: { target, attachments: [], at: "2026-10-12T00:00:00.000Z" } }, authoritative: true });
 	const current = (version: string, latest = version, observations = looked()): (() => Promise<UpdateFacts>) => async () => ({ ...idleFacts(), current: version, latest, observations });
 
 	it("verified-success requires an actual attempted install, not ordinary up-to-date", async () => {
@@ -464,9 +464,9 @@ describe("AutomaticUpdateController — verified update cycle and bounded observ
 
 	it.each([
 		["no health look at all", [], "no health look was taken"],
-		["only the sessions half answered", looked(true, false), "answered only partly (sessions ok, health failed)"],
-		["only the health half answered", looked(false, true), "answered only partly (sessions failed, health ok)"],
-		["both halves malformed", looked(false, false), "answered only partly (sessions failed, health failed)"],
+		["only the sessions half answered", looked(true, false), "was not readable (sessions ok, health failed)"],
+		["only the health half answered", looked(false, true), "was not readable (sessions failed, health ok)"],
+		["both halves malformed", looked(false, false), "was not readable (sessions failed, health failed)"],
 	])("health evidence: %s is not a healthy reattachment", async (_l, observations, reason) => {
 		const h = harness({ policy: attempted("0.4.91"), facts: current("0.4.91", "0.4.91", observations as ReturnType<typeof looked>), plan: upToDate });
 		await h.controller.runNow();

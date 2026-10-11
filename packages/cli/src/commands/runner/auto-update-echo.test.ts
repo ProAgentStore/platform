@@ -111,7 +111,7 @@ const looked = (at: number) => [
 ];
 
 /** The process after a successful automatic install: its cache still says `restarting`, the release is now current. */
-const afterRestart = () => ({ autoUpdate: true, status: "restarting" as const, latestVersion: "0.4.99" });
+const afterRestart = () => ({ autoUpdate: true, status: "restarting" as const, latestVersion: "0.4.99", recovery: { target: "0.4.99", attachments: [], at: "2026-10-12T00:00:00.000Z" } });
 
 describe("a late policy echo never regresses the controller's verified state (#1020)", () => {
 	it("restart recovery: a registration sent while `restarting`, delivered AFTER verified-success, does not regress it — and the next report carries verified_success", async () => {

@@ -33,12 +33,33 @@ export function autoUpdateStatusWire(status: AutoUpdateStatus | undefined): stri
 	} as Partial<Record<AutoUpdateStatus, string>>)[status] ?? status;
 }
 
+/**
+ * One automatic update cycle that has not been verified yet (#1020): the version installed, the agents this
+ * machine held when it installed it, and when. Persisted with the policy and read back by the restarted process;
+ * independent of the transient status and of the registry's latest, so a failed or offline check never forgets
+ * it. Cleared only by a verified recovery, the owner's OFF, or a newer attempt.
+ */
+export interface RecoveryCycle {
+	target: string;
+	attachments: string[];
+	at: string;
+}
+
 export interface AutoUpdatePolicy {
 	autoUpdate: boolean;
 	status?: AutoUpdateStatus;
 	latestVersion?: string;
 	lastAttemptAt?: string;
 	reason?: string;
+	recovery?: RecoveryCycle;
+}
+
+/** A persisted recovery record, or undefined when it is absent or does not read as one — never a partial guess. */
+export function parseRecovery(raw: unknown): RecoveryCycle | undefined {
+	const r = raw as { target?: unknown; attachments?: unknown; at?: unknown } | null | undefined;
+	if (!r || typeof r.target !== "string" || r.target.length > 80 || typeof r.at !== "string" || !Array.isArray(r.attachments)) return undefined;
+	if (r.attachments.length > 200 || !r.attachments.every((a) => typeof a === "string" && a.length > 0 && a.length <= 128)) return undefined;
+	return { target: r.target, attachments: [...r.attachments] as string[], at: r.at };
 }
 
 interface PersistedPolicies {
@@ -81,12 +102,14 @@ export function parseAutoUpdatePolicy(value: unknown): AutoUpdatePolicy | null {
 	const latestVersion = raw.latestVersion ?? raw.latest_version;
 	const lastAttemptAt = raw.lastAttemptAt ?? raw.last_attempt_at;
 	const reason = raw.reason;
+	const recovery = parseRecovery(raw.recovery);
 	return {
 		autoUpdate,
 		...(status ? { status } : {}),
 		...(typeof latestVersion === "string" ? { latestVersion } : {}),
 		...(typeof lastAttemptAt === "string" ? { lastAttemptAt } : {}),
 		...(typeof reason === "string" ? { reason } : {}),
+		...(recovery ? { recovery } : {}),
 	};
 }
 
@@ -173,8 +196,10 @@ export function policyScheduleAction(previous: AutoUpdatePolicy, next: AutoUpdat
  * from OFF. Returns null for a response that carries no policy (nothing changes, authority included).
  */
 export function acceptPolicyResponse(local: AutoUpdatePolicy, wasAuthoritative: boolean, response: unknown): { policy: AutoUpdatePolicy; action: "start" | "cancel" | "keep" } | null {
-	const remote = policyFromResponse(response);
-	if (!remote) return null;
+	const parsed = policyFromResponse(response);
+	if (!parsed) return null;
+	// The recovery record is this machine's own evidence, never the service's (#1020).
+	const { recovery: _fromService, ...remote } = parsed;
 	const action = policyScheduleAction(local, remote, wasAuthoritative);
 	const ownerTransition = action === "cancel" || !local.autoUpdate;
 	return { policy: ownerTransition ? { ...local, ...remote } : { ...local, autoUpdate: remote.autoUpdate }, action };

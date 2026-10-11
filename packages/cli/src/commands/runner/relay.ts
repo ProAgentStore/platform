@@ -5,13 +5,14 @@ import { loadMachineIdentity } from "../../machine.js";
 import { writeError, writeLine } from "../../output.js";
 import { apiPathSegment, clean, pagsApiBase, requestPags, requestRunner } from "./http.js";
 import { CLI_VERSION, runsFromSource } from "./process.js";
-import { deferredUpdateLease, deferredUpdateLeaseActive, installVersion, latestPublishedVersion, leaveForRestart, planRunnerUpdate, restarterFrom, RUNNER_UPDATE_PATH, supervisorNote, type DeferredUpdateLease, type UpdateObservation, type UpdatePlan } from "./self-update.js";
+import { deferredUpdateLease, deferredUpdateLeaseActive, installVersion, latestPublishedVersion, leaveForRestart, planRunnerUpdate, restarterFrom, RUNNER_UPDATE_PATH, supervisorNote, type DeferredUpdateLease } from "./self-update.js";
 import { diffMembership, instanceLabel, pendingRegistrations, pinnedAway, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance, type ReattachRequest } from "./membership.js";
 import { formatStatusLine } from "./status-line.js";
 import type { PagsRequestOptions } from "./types.js";
-import { acceptPolicyResponse, ResponseFence, autoUpdatePolicyKey, autoUpdateStatusWire, loadAutoUpdatePolicy, mayAutomaticallyRestart, nextAutoUpdateDelayMs, saveAutoUpdatePolicy, type AutoUpdatePolicy, type AutoUpdateStatus } from "./auto-update.js";
-import { type AutoUpdateDiagnostics, AutomaticUpdateController, RelayMutationAdmission } from "./auto-update-controller.js";
-import { observedRunnerWork } from "./runner-work-observation.js";
+import { autoUpdatePolicyKey, autoUpdateStatusWire, loadAutoUpdatePolicy, saveAutoUpdatePolicy } from "./auto-update.js";
+import { type AutoUpdateDiagnostics, AutomaticUpdateController, boundedWork, RelayMutationAdmission } from "./auto-update-controller.js";
+import { readWorkLook } from "./runner-work-observation.js";
+import { BoundExpired, createInstallBridge, createPolicyChannel, PolicyCell } from "./update-bridge.js";
 
 /**
  * The one relay command this CLI answers ITSELF rather than forwarding to the local runner (#850):
@@ -51,100 +52,51 @@ export async function connectViaRelay(
 	// No persisted machine id means no durable physical identity. Failing closed here prevents a
 	// cache shared by two ephemeral containers from becoming a policy identity by accident.
 	const autoUpdateKey = machine.id ? autoUpdatePolicyKey(machine.id) : "";
-	// A cache is an outage aid, never a second authority: every successful registration and beat
-	// replaces it with the owner policy that came from the service.
-	let autoUpdatePolicy: AutoUpdatePolicy = autoUpdateKey ? (loadAutoUpdatePolicy(autoUpdateKey) ?? { autoUpdate: false }) : { autoUpdate: false };
-	// A cache is never authority for an unattended install. It only retains the last status while
-	// disconnected; a successful registration/heartbeat must confirm the current cloud switch.
-	let autoUpdatePolicyAuthoritative = false;
-	let refreshingAutomaticPolicy = false;
+	// The policy record (#1020, update-bridge.ts). A cache is an outage aid, never a second authority: only a fresh
+	// service answer confirms the owner's switch; the cache carries the status and the unverified recovery cycle.
+	const cell = new PolicyCell(autoUpdateKey ? (loadAutoUpdatePolicy(autoUpdateKey) ?? { autoUpdate: false }) : { autoUpdate: false }, (p) => saveAutoUpdatePolicy(autoUpdateKey, p), !!autoUpdateKey);
 	let scheduleAutomaticUpdate: (initial?: boolean, cancel?: boolean) => void = () => undefined;
 	// The controller's own record (#1020), bound once it exists. Times, a normalized blocker class and
 	// observation outcomes only — never session text, process arguments, paths, prompts or tokens.
 	let autoUpdateDiagnostics: () => Partial<AutoUpdateDiagnostics> = () => ({});
-	const saveAutoUpdateStatus = (status: AutoUpdateStatus, extra: Partial<AutoUpdatePolicy> = {}) => {
-		autoUpdatePolicy = {
-			...autoUpdatePolicy,
-			...extra,
-			status,
-			lastAttemptAt: new Date().toISOString(),
-		};
-		if (autoUpdateKey) saveAutoUpdatePolicy(autoUpdateKey, autoUpdatePolicy);
-	};
-	const policyFence = new ResponseFence(); // a late answer never overrides a newer one (#1020)
-	const acceptAutoUpdatePolicy = (response: unknown, sent: number) => {
-		if (!autoUpdateKey || !policyFence.accepts(sent)) return;
-		// The switch is the service's; the lifecycle status is this controller's — a late echo never regresses it (#1020).
-		const accepted = acceptPolicyResponse(autoUpdatePolicy, autoUpdatePolicyAuthoritative, response);
-		if (!accepted) return;
-		autoUpdatePolicy = accepted.policy;
-		autoUpdatePolicyAuthoritative = true;
-		if (autoUpdateKey) saveAutoUpdatePolicy(autoUpdateKey, autoUpdatePolicy);
-		// A disable must cancel a deferred automatic install before it reaches npm.  A manual
-		// `runner_update` remains explicitly requested and is intentionally not cancelled here.
-		if (accepted.action === "cancel") {
-			scheduleAutomaticUpdate(false, true);
-			return;
-		}
-		if (refreshingAutomaticPolicy) return;
-		if (accepted.action === "start") {
-			scheduleAutomaticUpdate(true);
-		}
-	};
+	const autoUpdateStatusBody = () => ({
+		status: autoUpdateStatusWire(cell.policy.status),
+		latestVersion: cell.policy.latestVersion,
+		error: cell.policy.reason,
+		...autoUpdateDiagnostics(),
+	});
 
 	// Register the runtime (needed for the status badge / getRunnerConn)
 	const capabilities = await requestRunner<{ capabilities?: unknown }>("GET", "/capabilities", { url: localUrl, token: runnerToken, instanceId: instanceIds[0] });
 	const caps = Array.isArray(capabilities.capabilities) ? capabilities.capabilities.filter((item): item is string => typeof item === "string") : [];
-	// Which instances currently hold a runtime registration from THIS machine. Tracked, not
-	// assumed: a register that failed at startup used to be lost forever (nothing retried it),
-	// and the pane still printed a tick because the success line was unconditional (#497).
-	const registered = new Set<string>();
+	// Which instances currently hold a runtime registration from THIS machine (`channel.registered`). Tracked, not
+	// assumed: a register that failed at startup used to be lost forever, and the pane still printed a tick (#497).
 	let lastRegisterError = "";
-	const registerRuntime = async (id: string, forceClaim = force, signal?: AbortSignal): Promise<boolean> => {
-		const sent = policyFence.next();
-		try {
-			const result = await requestPags<Record<string, unknown>>("POST", `/v1/instances/${apiPathSegment(id)}/runtime`, opts, {
-				endpointUrl: localUrl,
-				token: runnerToken,
-				placement: "local",
-				capabilities: caps,
-				runnerVersion: CLI_VERSION,
-				runnerNode,
-				machineId: machine.id,
-				machineNames: machine.names,
-				force: forceClaim,
-				autoUpdateStatus: {
-					status: autoUpdateStatusWire(autoUpdatePolicy.status),
-					latestVersion: autoUpdatePolicy.latestVersion,
-					error: autoUpdatePolicy.reason,
-					...autoUpdateDiagnostics(),
-				},
-			}, signal);
-			if (signal?.aborted) return false; // a refresh the controller abandoned: its answer confers nothing
-			acceptAutoUpdatePolicy(result, sent);
-			registered.add(id);
-			return true;
-		} catch (e) {
-			const msg = e instanceof Error ? e.message : String(e);
-			registered.delete(id);
+	const channel = createPolicyChannel({
+		cell,
+		post: (path, body, signal) => requestPags<Record<string, unknown>>("POST", path, opts, body, signal),
+		body: (_id, forceClaim) => ({
+			endpointUrl: localUrl,
+			token: runnerToken,
+			placement: "local",
+			capabilities: caps,
+			runnerVersion: CLI_VERSION,
+			runnerNode,
+			machineId: machine.id,
+			machineNames: machine.names,
+			force: forceClaim,
+			autoUpdateStatus: autoUpdateStatusBody(),
+		}),
+		force,
+		held: () => attached.keys(),
+		onError: (id, msg) => {
 			lastRegisterError = msg;
 			writeError(`register ${id.slice(0, 8)}… failed: ${msg}`);
-			return false;
-		}
-	};
-	/** A cached policy is only a display hint. Every unattended check re-registers one held agent
-	 * to obtain a fresh owner decision; a network/API failure therefore defers rather than installs. */
-	const refreshAutomaticPolicy = async (signal?: AbortSignal): Promise<boolean> => {
-		const id = registered.values().next().value as string | undefined;
-		if (!id) return false;
-		autoUpdatePolicyAuthoritative = false;
-		refreshingAutomaticPolicy = true;
-		try {
-			return (await registerRuntime(id, force, signal)) && autoUpdatePolicyAuthoritative;
-		} finally {
-			refreshingAutomaticPolicy = false;
-		}
-	};
+		},
+		onAction: (action) => scheduleAutomaticUpdate(action === "start", action === "cancel"),
+	});
+	const registered = channel.registered;
+	const registerRuntime = (id: string, forceClaim = force) => channel.register(id, forceClaim);
 	// The live membership set. A captured array is what made a newly subscribed agent
 	// unreachable until restart (#229); sockets are now added and removed while running.
 	const attached = new Map<string, RelaySocketHandle>();
@@ -184,18 +136,9 @@ export async function connectViaRelay(
 			}, undefined, signal),
 			requestRunner<{ work?: { codingTurns?: number; localRuns?: number; detail?: string[] } }>("GET", "/health", { url: localUrl, token: runnerToken, instanceId: instanceIds[0] }, undefined, signal),
 		]);
-		// An unavailable observation is NEVER evidence that a restart is safe. A local browser/apply
-		// run can be destroyed by a restart just as surely as a coding turn, so fail closed.
-		const busy = sessionsResult.status === "fulfilled" && healthResult.status === "fulfilled"
-			? observedRunnerWork({ sessions: sessionsResult.value.sessions, work: healthResult.value.work })
-			: ["runner-work-observation-unavailable"];
-		// Which of the pair answered, and when — so "waiting" can be told apart from "could not look" (#1020).
-		const sampledAt = Date.now();
-		const observations: UpdateObservation[] = [
-			// An answer is a success only when it has the shape the guard reads; malformed is a failed look.
-			{ source: "sessions", success: sessionsResult.status === "fulfilled" && Array.isArray(sessionsResult.value.sessions), sampledAt },
-			{ source: "health", success: healthResult.status === "fulfilled" && !!healthResult.value.work && typeof healthResult.value.work === "object", sampledAt },
-		];
+		// The guard's reading and each half's outcome, read ONCE (#1020): a local browser/apply run is destroyed by a restart
+		// as surely as a coding turn, so an unavailable or unreadable look fails closed.
+		const { busy, observations } = readWorkLook(sessionsResult, healthResult, Date.now());
 		return {
 			observations,
 			current: CLI_VERSION,
@@ -207,117 +150,55 @@ export async function connectViaRelay(
 			busy,
 		};
 	};
+	// Once an install has finished, no new mutating relay command is admitted while the runner is observed one final
+	// time: a coding turn cannot slip in during npm or the restart delay.
+	const relayMutationAdmission = new RelayMutationAdmission();
 	/**
 	 * Install the release, then leave so whatever supervises this process starts it again (#860) — see
-	 * `leaveForRestart`. Sockets close first, cleanly.
+	 * `leaveForRestart`. Every wait inside it is bounded (#1020, update-bridge.ts).
 	 */
-	let updateInstallInFlight = false;
-	let installedPendingRestart: string | null = null;
-	// Once an unattended install has finished, no new mutating relay command is admitted while we
-	// observe the runner one final time. This turns "idle at the last poll" into a real admission
-	// boundary: a coding turn cannot slip in during npm or the old 500ms restart delay.
-	const relayMutationAdmission = new RelayMutationAdmission();
-	const installAndRestart = async (plan: Extract<UpdatePlan, { action: "update" }>, automatic = false, lease?: DeferredUpdateLease): Promise<boolean> => {
-		// An automatic check and a remote manual request may both have observed the same old version.
-		// Only one may ever reach npm/restart; a second observer leaves the first to finish.
-		if (updateInstallInFlight || (lease && !deferredUpdateLeaseActive(lease))) return false;
-		updateInstallInFlight = true;
-		// Cached policy is deliberately insufficient for unattended mutation. Read the owner's
-		// current switch immediately before npm so an offline runner cannot install after a disable.
-		if (automatic && (!(await refreshAutomaticPolicy()) || !autoUpdatePolicy.autoUpdate)) {
-			updateInstallInFlight = false;
-			return false;
-		}
-		if (installedPendingRestart !== plan.latest) {
-			writeLine(`Updating ${plan.current} → ${plan.latest} (runner_update)…`);
-			try {
-				await installVersion(plan.latest);
-				installedPendingRestart = plan.latest;
-			} catch (error) {
-				updateInstallInFlight = false;
-				throw error;
-			}
-		}
-		// Npm may run for minutes. Block new work, then re-admit restart after it finishes, rather
-		// than trusting the idle snapshot that admitted installation; a run that began during npm
-		// must survive. The short drain also lets a request admitted just before the boundary show up
-		// in /health before we make the final decision.
-		await relayMutationAdmission.drain();
-		await new Promise<void>((resolve) => setTimeout(resolve, 500));
-		if (lease && !deferredUpdateLeaseActive(lease)) {
-			relayMutationAdmission.resume();
-			updateInstallInFlight = false;
-			return false;
-		}
-		if (automatic) {
-			if (!(await refreshAutomaticPolicy()) || !autoUpdatePolicy.autoUpdate) {
-				relayMutationAdmission.resume();
-				updateInstallInFlight = false;
-				return false;
-			}
-		}
-		const finalFacts = await updateFacts();
-		if (finalFacts.busy.length || (automatic && !mayAutomaticallyRestart({ authoritative: autoUpdatePolicyAuthoritative, enabled: autoUpdatePolicy.autoUpdate, workObserved: !finalFacts.busy.includes("runner-work-observation-unavailable"), busy: finalFacts.busy }))) {
-			relayMutationAdmission.resume();
-			updateInstallInFlight = false;
-			return false;
-		}
-		writeLine(`Installed ${plan.latest} — restarting; every agent re-attaches on the way back up.`);
-		for (const id of [...attached.keys()]) detach(id);
-		// The control reply must leave the relay before `process.exit` closes its socket.  The caller
-		// owns the actual exit: an explicit update schedules it after its acknowledgement, while a
-		// deferred or unattended update has no reply to wait for (#1008).
-		return true;
-	};
-	/** A deferred update waits for busy engines to finish, re-checking — never cuts a turn off (#859). */
+	const bridge = createInstallBridge({
+		cell,
+		refresh: channel.refresh,
+		facts: updateFacts,
+		install: installVersion,
+		admission: relayMutationAdmission,
+		leaseActive: deferredUpdateLeaseActive,
+		detachAll: () => {
+			for (const id of [...attached.keys()]) detach(id);
+		},
+		log: writeLine,
+	});
+	/** A deferred MANUAL update waits for busy engines to finish, re-checking — never cuts a turn off (#859). */
 	let updateWaiting = false;
 	let deferredManualLease: DeferredUpdateLease | null = null;
-	const updateWhenIdle = (automatic = false, lease?: DeferredUpdateLease): boolean => {
-		if (updateWaiting || (!automatic && !lease)) return false;
+	const updateWhenIdle = (lease: DeferredUpdateLease): boolean => {
+		if (updateWaiting) return false;
 		updateWaiting = true;
-		if (!automatic) deferredManualLease = lease!;
-		const until = automatic ? Date.now() + 60 * 60_000 : lease!.expiresAt;
+		deferredManualLease = lease;
 		const tick = () =>
 			setTimeout(async () => {
-				if (!automatic && (!deferredManualLease || !deferredUpdateLeaseActive(deferredManualLease))) {
+				if (!deferredManualLease || !deferredUpdateLeaseActive(deferredManualLease)) {
 					writeLine("runner_update: the deferred operation lease expired; no delayed restart was performed.");
 					deferredManualLease = null;
 					updateWaiting = false;
 					return;
 				}
-				// The policy can change while a coding turn runs. Read our most recently synced value
-				// and then fetch the owner switch again immediately before planning/installation. It
-				// never affects an operator's explicit runner_update command.
-				if (automatic && (!(await refreshAutomaticPolicy()) || !autoUpdatePolicy.autoUpdate)) {
-					saveAutoUpdateStatus("offline", { reason: "The owner policy could not be refreshed; automatic update is deferred." });
-					updateWaiting = false;
-					return;
-				}
-				const plan = planRunnerUpdate(await updateFacts());
-				if (plan.action === "update") {
-					if (automatic && !autoUpdatePolicy.autoUpdate) {
-						updateWaiting = false;
-						return;
-					}
-					if (automatic) saveAutoUpdateStatus("running", { latestVersion: plan.latest, reason: undefined });
-					const installed = await installAndRestart(plan, automatic, automatic ? undefined : deferredManualLease ?? undefined).catch((e) => {
-						if (automatic) saveAutoUpdateStatus("failure", { reason: e instanceof Error ? e.message : String(e) });
+				const facts = await boundedWork((signal) => updateFacts(signal));
+				const plan = facts ? planRunnerUpdate(facts) : null;
+				if (plan?.action === "update") {
+					const installed = await bridge.run(plan, false, deferredManualLease).catch((e) => {
 						writeError(`runner_update: install failed — ${e instanceof Error ? e.message : String(e)}`);
 						return false;
 					});
-					if (!installed && Date.now() < until) {
-						saveAutoUpdateStatus("waiting-for-idle", { latestVersion: plan.latest });
-						tick();
-					} else {
+					if (!installed && Date.now() < lease.expiresAt) tick();
+					else {
 						deferredManualLease = null;
 						updateWaiting = false;
 						if (installed) leaveForRestart(plan.restarter);
 					}
-				} else if (plan.action === "wait" && Date.now() < until) {
-					if (automatic) saveAutoUpdateStatus("waiting-for-idle", { latestVersion: plan.latest, reason: undefined });
-					tick();
-				} else {
-					if (automatic && plan.action === "refused") saveAutoUpdateStatus("unsupported", { reason: plan.reason });
+				} else if ((!plan || plan.action === "wait") && Date.now() < lease.expiresAt) tick(); // an unanswered look is retried, not taken as idle
+				else {
 					deferredManualLease = null;
 					updateWaiting = false;
 				}
@@ -326,123 +207,46 @@ export async function connectViaRelay(
 		return true;
 	};
 
-	/**
-	 * Poll npm only a few times a day after success, and use an exponential, jittered delay when it
-	 * cannot be reached.  This is deliberately separate from the 30-second heartbeat: registry
-	 * trouble must not become a request storm, and one automatic run is single-flight with a
-	 * deferred idle wait.
-	 */
-	let automaticTimer: ReturnType<typeof setTimeout> | null = null;
-	let automaticChecking = false;
-	let automaticFailures = 0;
-	const runAutomaticUpdateCheck = async () => {
-		if (!autoUpdatePolicy.autoUpdate || !autoUpdatePolicyAuthoritative || automaticChecking || updateWaiting) return;
-		automaticChecking = true;
-		try {
-			if (!(await refreshAutomaticPolicy()) || !autoUpdatePolicy.autoUpdate) {
-				saveAutoUpdateStatus("offline", { reason: "The owner policy could not be refreshed; automatic update is deferred." });
-				scheduleAutomaticUpdate();
-				return;
-			}
-			saveAutoUpdateStatus("checking", { reason: undefined });
-			const facts = await updateFacts();
-			// A heartbeat/register response may have disabled updates while npm was answering.
-			if (!autoUpdatePolicy.autoUpdate || !autoUpdatePolicyAuthoritative) return;
-			if (!facts.latest) {
-				automaticFailures++;
-				saveAutoUpdateStatus("failure", { reason: "Could not check the trusted npm registry for a newer CLI release." });
-				scheduleAutomaticUpdate();
-				return;
-			}
-			automaticFailures = 0;
-			const plan = planRunnerUpdate(facts);
-			if (plan.action === "up-to-date") {
-				saveAutoUpdateStatus("verified-success", { latestVersion: facts.latest, reason: undefined });
-				scheduleAutomaticUpdate();
-				return;
-			}
-			if (plan.action === "refused") {
-				saveAutoUpdateStatus("unsupported", { latestVersion: facts.latest, reason: plan.reason });
-				scheduleAutomaticUpdate();
-				return;
-			}
-			if (plan.action === "wait") {
-				saveAutoUpdateStatus("waiting-for-idle", { latestVersion: plan.latest, reason: undefined });
-				updateWhenIdle(true);
-				return;
-			}
-			// Re-check the policy at the final possible point.  This shares the existing safe
-			// installer/restart path and therefore never duplicates the manual update mechanism.
-			if (!autoUpdatePolicy.autoUpdate || !autoUpdatePolicyAuthoritative) return;
-			saveAutoUpdateStatus("running", { latestVersion: plan.latest, reason: undefined });
-			try {
-				const installed = await installAndRestart(plan, true);
-				if (!installed) {
-					saveAutoUpdateStatus("waiting-for-idle", { latestVersion: plan.latest });
-					updateWhenIdle(true);
-					return;
-				}
-				saveAutoUpdateStatus("restarting", { latestVersion: plan.latest, reason: undefined });
-			} catch (e) {
-				automaticFailures++;
-				saveAutoUpdateStatus("failure", { latestVersion: plan.latest, reason: e instanceof Error ? e.message : String(e) });
-				scheduleAutomaticUpdate();
-			}
-		} finally {
-			automaticChecking = false;
-		}
-	};
-	scheduleAutomaticUpdate = (initial = false, cancel = false) => {
-		if (cancel || !autoUpdatePolicy.autoUpdate || !autoUpdatePolicyAuthoritative) {
-			if (automaticTimer) clearTimeout(automaticTimer);
-			automaticTimer = null;
-			return;
-		}
-		// Heartbeats are not scheduling events. Preserve a due timer, otherwise 30-second policy
-		// read-backs continually replace a six-hour delay and automatic update never checks.
-		if (automaticTimer || updateWaiting) return;
-		const delay = initial
-			? Math.round((5_000 + Math.random() * 25_000))
-			: nextAutoUpdateDelayMs(automaticFailures);
-		automaticTimer = setTimeout(() => { automaticTimer = null; void runAutomaticUpdateCheck(); }, delay);
-		automaticTimer.unref();
-	};
-	// Never start unattended work from cache alone. A registration/heartbeat response above sets
-	// authority and schedules the first jittered check; offline policy fetch failure therefore defers.
+	// Never start unattended work from cache alone. A registration/heartbeat answer confers authority and schedules
+	// the first jittered check; an offline policy fetch therefore defers. The legacy in-closure checker this replaced
+	// was unreachable — and would have reported any current runner `verified_success` (#1020).
 	const automaticUpdateController = new AutomaticUpdateController({
-		policy: () => ({ value: autoUpdatePolicy, authoritative: autoUpdatePolicyAuthoritative }),
-		refreshPolicy: refreshAutomaticPolicy,
+		policy: () => ({ value: cell.policy, authoritative: cell.authoritative }),
+		refreshPolicy: channel.refresh,
 		facts: updateFacts,
 		plan: planRunnerUpdate,
-		// This bridge is deliberately the same function used by explicit runner_update. It owns npm,
-		// a fresh authoritative policy, the mutation drain, final local-work observation and restart.
+		// The same bridge an explicit runner_update uses: npm, a fresh authoritative policy, the mutation drain, the
+		// final local-work observation and restart — each wait bounded.
 		installAndRestart: async (plan, automatic) => {
-			const installed = await installAndRestart(plan, automatic);
-			// The controller records its `restarting` status in the microtask after this resolves;
-			// leaving on a timer preserves that evidence before the process goes away.
+			const installed = await bridge.run(plan, automatic);
+			// The controller records `restarting` in the microtask after this resolves; leaving on a timer keeps it.
 			if (installed) setTimeout(() => leaveForRestart(plan.restarter), 0).unref();
 			return installed;
 		},
-		status: saveAutoUpdateStatus,
+		status: (status, extra) => cell.record(status, extra),
+		// The agents held now: attached AND registered — recorded with an install, required back after it.
+		attachments: () => [...attached.keys()].filter((id) => registered.has(id)),
 	});
 	autoUpdateDiagnostics = () => automaticUpdateController.diagnostics();
-	// `acceptAutoUpdatePolicy` is declared before this controller so startup registration can parse
-	// the response. From here every heartbeat transition drives the real controller timer.
+	// Startup registration ran before this controller existed; from here every policy transition drives it.
 	scheduleAutomaticUpdate = (initial = false, cancel = false) => automaticUpdateController.onPolicy(cancel ? "cancel" : initial ? "start" : "keep");
-	if (autoUpdatePolicyAuthoritative && autoUpdatePolicy.autoUpdate) scheduleAutomaticUpdate(true);
+	if (cell.authoritative && cell.policy.autoUpdate) scheduleAutomaticUpdate(true);
 	const answerUpdate = async (body?: unknown): Promise<{ status: number; result: unknown }> => {
 		const dryRun = (body as { dryRun?: unknown } | undefined)?.dryRun === true;
-		const plan = planRunnerUpdate(await updateFacts());
+		const facts = await boundedWork((signal) => updateFacts(signal));
+		if (!facts) return { status: 504, result: { error: "The local work and registry look did not answer within 30s; nothing was installed or restarted." } };
+		const plan = planRunnerUpdate(facts);
 		if (dryRun || plan.action === "up-to-date" || plan.action === "refused") return { status: 200, result: { ...plan, dryRun } };
 		if (plan.action === "wait") {
 			const lease = deferredUpdateLease(body);
 			if (!lease) return { status: 400, result: { error: "A busy runner_update needs a current operation lease; no delayed restart was scheduled." } };
-			if (!updateWhenIdle(false, lease)) return { status: 409, result: { error: "A runner update is already waiting for active work to finish." } };
+			if (!updateWhenIdle(lease)) return { status: 409, result: { error: "A runner update is already waiting for active work to finish." } };
 			return { status: 200, result: { ...plan, operationId: lease.operationId, deferredUntil: lease.expiresAt, detail: "This operation may restart only before its recorded lease expires; no delayed restart survives an expired or terminal operation." } };
 		}
 		try {
-			if (!(await installAndRestart(plan))) return { status: 409, result: { error: "A runner update is already installing or restarting." } };
+			if (!(await bridge.run(plan))) return { status: 409, result: { error: "A runner update is already installing or restarting." } };
 		} catch (e) {
+			if (e instanceof BoundExpired) return { status: 504, result: { error: e.message } };
 			return { status: 500, result: { error: `npm could not install ${plan.latest}: ${e instanceof Error ? e.message : String(e)}` } };
 		}
 		const supervisor = supervisorNote(plan.restarter);
@@ -595,19 +399,14 @@ export async function connectViaRelay(
 			});
 			for (const id of [...attached.keys()]) {
 				try {
-					const sent = policyFence.next();
+					const sent = cell.next();
 					const response = await requestPags<Record<string, unknown>>("POST", `/v1/instances/${apiPathSegment(id)}/runtime/heartbeat`, opts, {
 						runnerNode,
 						machineId: machine.id,
 						resources,
-						autoUpdateStatus: {
-							status: autoUpdateStatusWire(autoUpdatePolicy.status),
-							latestVersion: autoUpdatePolicy.latestVersion,
-							error: autoUpdatePolicy.reason,
-							...autoUpdateDiagnostics(),
-						},
+						autoUpdateStatus: autoUpdateStatusBody(),
 					});
-					acceptAutoUpdatePolicy(response, sent);
+					channel.accept(response, sent);
 				} catch (e) {
 					failure = e instanceof Error ? e.message : String(e);
 				}

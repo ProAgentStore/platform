@@ -21,6 +21,8 @@ export interface AutomaticUpdateControllerDeps {
 	now?: () => number;
 	/** The bound on one policy refresh or one facts look (#1020); its own timer, apart from the scheduling one. */
 	boundTimer?: (fn: () => void, ms: number) => Timer;
+	/** The agents this machine holds right now — attached AND registered. Recorded at install, required back after it (#1020). */
+	attachments?: () => readonly string[];
 }
 
 /** Why an enabled controller is not installing yet — a normalized class, never raw session data (#1020). */
@@ -44,26 +46,68 @@ export const IDLE_RETRY_MS = 15_000;
 /** How long one policy refresh, or one look at local work and the registry, may take before it counts as failed (#1020). */
 export const OBSERVATION_TIMEOUT_MS = 30_000;
 
+/** The injectable timer a bound runs on, so tests can expire it deterministically. */
+export interface Bound {
+	timer?: (fn: () => void, ms: number) => Timer;
+	clear?: (timer: Timer) => void;
+	ms?: number;
+}
+
+/**
+ * One bounded piece of work (#1020): past its bound the signal is aborted and this resolves null — the race has
+ * settled, so a late result reaches nothing. A late rejection is absorbed rather than left unhandled. Shared by the
+ * controller's own refresh and facts AND every wait in the install bridge.
+ */
+export async function boundedWork<T>(work: (signal: AbortSignal) => Promise<T>, bound: Bound = {}): Promise<T | null> {
+	const abort = new AbortController();
+	let timer: Timer | undefined;
+	const expired = new Promise<null>((resolve) => {
+		timer = (bound.timer ?? ((fn, ms) => setTimeout(fn, ms)))(() => {
+			abort.abort();
+			resolve(null);
+		}, bound.ms ?? OBSERVATION_TIMEOUT_MS);
+		timer.unref?.();
+	});
+	const running = work(abort.signal);
+	running.catch(() => undefined);
+	try {
+		return await Promise.race([running, expired]);
+	} finally {
+		if (timer) (bound.clear ?? ((t) => clearTimeout(t)))(timer);
+	}
+}
+
 /**
  * Whether a check on the latest release VERIFIES an update cycle (#1020), or only finds the runner current.
- * `verified` needs this machine's own record of an attempted install (`running`/`restarting` with its target,
- * persisted before the restart), readable versions, a running version at or past that target, and a local
- * runtime that answered the paired work look. Anything less is never `verified-success`.
+ * `verified` needs the PERSISTED recovery record of an attempted install (its target and the agents held when it
+ * was installed — kept apart from the transient status, so a failed or offline check never forgets it), readable
+ * versions with the running one at or past that target, a local work look the guard itself could read (both halves
+ * answered, neither malformed), and EVERY original agent attached again. An attempt status with no recovery record
+ * comes from an older runner's cache: `unknown`, never verified and never an ordinary no-attempt check.
  */
-export function updateVerdict(attempt: AutoUpdatePolicy, facts: UpdateFacts): { kind: "verified" | "current" } | { kind: "unverified"; reason: string } {
-	const target = attempt.status === "running" || attempt.status === "restarting" ? attempt.latestVersion : undefined;
+export function updateVerdict(attempt: AutoUpdatePolicy, facts: UpdateFacts, attachedNow: readonly string[] = []): { kind: "verified" | "current" } | { kind: "unverified" | "unknown"; reason: string } {
 	if (!isVersion(facts.current) || !isVersion(facts.latest)) return { kind: "unverified", reason: `the running (${facts.current}) or published (${facts.latest}) version could not be read` };
-	if (target === undefined) return { kind: "current" };
-	if (!isVersion(target)) return { kind: "unverified", reason: `the attempted update's target (${target}) could not be read` };
-	if (olderThan(facts.current, target)) return { kind: "unverified", reason: `the runner came back on ${facts.current}, not the attempted ${target}` };
-	// Positive health evidence: BOTH halves of the paired look answered in the shape the guard reads. None, one, or a
-	// malformed answer is not a healthy reattachment, and each says which.
-	const observed = facts.observations ?? [];
-	const answered = (source: string) => observed.some((o) => o.source === source && o.success);
-	if (!observed.length) return { kind: "unverified", reason: `the runner is on ${facts.current}, but no health look was taken` };
-	if (!answered("sessions") || !answered("health")) {
-		return { kind: "unverified", reason: `the runner is on ${facts.current}, but its local runtime answered only partly (sessions ${answered("sessions") ? "ok" : "failed"}, health ${answered("health") ? "ok" : "failed"})` };
+	const cycle = attempt.recovery;
+	if (!cycle) {
+		if (attempt.status === "running" || attempt.status === "restarting") return { kind: "unknown", reason: "an update attempt was recorded by an older runner without the record needed to verify it" };
+		return { kind: "current" };
 	}
+	if (!isVersion(cycle.target)) return { kind: "unverified", reason: `the attempted update's target (${cycle.target}) could not be read` };
+	if (olderThan(facts.current, cycle.target)) return { kind: "unverified", reason: `the runner came back on ${facts.current}, not the attempted ${cycle.target}` };
+	const observed = facts.observations ?? [];
+	if (!observed.length) return { kind: "unverified", reason: `the runner is on ${facts.current}, but no health look was taken` };
+	const look = (source: string) => {
+		const o = observed.filter((x) => x.source === source).at(-1);
+		return !o ? "missing" : o.malformed ? "malformed" : o.success ? "ok" : "failed";
+	};
+	const sessions = look("sessions");
+	const health = look("health");
+	if (sessions !== "ok" || health !== "ok" || facts.busy.includes("runner-work-observation-unavailable")) {
+		return { kind: "unverified", reason: `the runner is on ${facts.current}, but its local work look was not readable (sessions ${sessions}, health ${health})` };
+	}
+	const back = new Set(attachedNow);
+	const missing = cycle.attachments.filter((id) => !back.has(id));
+	if (missing.length) return { kind: "unverified", reason: `the runner is on ${facts.current}, but only ${cycle.attachments.length - missing.length} of its ${cycle.attachments.length} original agents are attached again` };
 	return { kind: "verified" };
 }
 
@@ -175,6 +219,7 @@ export class AutomaticUpdateController {
 	private offline() {
 		// A refresh that came back OFF is a disable, not an outage: nothing to report or retry.
 		if (!this.retryable()) return;
+		this.checkAt = this.now(); // a refresh that failed or timed out is a check that happened (#1020)
 		this.failures++;
 		this.deps.status("offline", { reason: "The owner policy could not be refreshed; automatic update is deferred." });
 		this.schedule();
@@ -192,23 +237,8 @@ export class AutomaticUpdateController {
 	 * this resolves null — the race has settled, so the late result cannot overwrite a newer one or reach planning,
 	 * install or restart. A late rejection is absorbed rather than left unhandled.
 	 */
-	private async bounded<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T | null> {
-		const abort = new AbortController();
-		let timer: Timer | undefined;
-		const expired = new Promise<null>((resolve) => {
-			timer = this.boundTimer(() => {
-				abort.abort();
-				resolve(null);
-			}, OBSERVATION_TIMEOUT_MS);
-			timer.unref?.();
-		});
-		const running = work(abort.signal);
-		running.catch(() => undefined);
-		try {
-			return await Promise.race([running, expired]);
-		} finally {
-			if (timer) this.clearTimer(timer);
-		}
+	private bounded<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T | null> {
+		return boundedWork(work, { timer: this.boundTimer, clear: this.clearTimer });
 	}
 
 	private async decide(): Promise<void> {
@@ -230,13 +260,18 @@ export class AutomaticUpdateController {
 		if (plan.action === "up-to-date") {
 			// Current is not the same claim as a verified update cycle (#1020): only an attempted install that came
 			// back on its target with a healthy runtime is `verified-success`.
-			const verdict = updateVerdict(this.deps.policy().value, facts);
+			const verdict = updateVerdict(this.deps.policy().value, facts, this.deps.attachments?.() ?? []);
 			if (verdict.kind === "unverified") {
+				// The cycle stays recorded: the retry still knows its target and the agents it must bring back.
 				this.failures++;
 				this.deps.status("failure", { reason: `Not verified: ${verdict.reason}.` });
+			} else if (verdict.kind === "unknown") {
+				this.failures = 0;
+				this.deps.status("enabled", { latestVersion: facts.latest ?? undefined, reason: `Not verified: ${verdict.reason}.` });
 			} else {
 				this.failures = 0;
-				this.deps.status(verdict.kind === "verified" ? "verified-success" : "enabled", { latestVersion: facts.latest ?? undefined, reason: undefined });
+				// A verified recovery ends its cycle; an ordinary check had none.
+				this.deps.status(verdict.kind === "verified" ? "verified-success" : "enabled", { latestVersion: facts.latest ?? undefined, reason: undefined, recovery: undefined });
 			}
 			this.schedule();
 			return;
@@ -251,7 +286,8 @@ export class AutomaticUpdateController {
 			this.defer();
 			return;
 		}
-		this.deps.status("running", { latestVersion: plan.latest, reason: undefined });
+		// The recovery cycle begins with the install, recorded before npm runs: target + the agents held now (#1020).
+		this.deps.status("running", { latestVersion: plan.latest, reason: undefined, recovery: { target: plan.latest, attachments: [...(this.deps.attachments?.() ?? [])], at: new Date(this.now()).toISOString() } });
 		const restarted = await this.install(plan, true);
 		if (restarted) {
 			this.deps.status("restarting", { latestVersion: plan.latest, reason: undefined });
