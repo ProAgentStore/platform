@@ -334,6 +334,24 @@ components:
               status: { type: string, enum: [denied, cancelled] }
 
   schemas:
+    ControllerAiSettingsView:
+      type: object
+      properties:
+        effective:
+          type: object
+          properties:
+            preContentSeconds: { type: integer }
+            silenceSeconds: { type: integer }
+            decisionCeilingSeconds: { type: integer }
+        overrides: { type: object, additionalProperties: { type: integer } }
+        defaults: { type: object, additionalProperties: { type: integer } }
+        bounds: { type: object, additionalProperties: { type: array, items: { type: integer } } }
+        retry:
+          type: object
+          properties:
+            maxAttempts: { type: integer }
+            backoffMs: { type: array, items: { type: integer } }
+        scope: { type: string }
     PermissionRequest:
       type: object
       required: [id, instanceId, userId, control, requestedScope, operationKind, status, expiresAt]
@@ -10573,6 +10591,61 @@ paths:
                         requestId: { type: string }
                         objective: { type: string, nullable: true }
                         ageMs: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/controller-ai:
+    get:
+      summary: Controller AI-provider stall recovery settings (#907)
+      description: |
+        How the controller's OWN AI-provider requests (the Pilot, the Loop and the Co-pilot — not the
+        coding CLI or the runner) recover from a silent stream. `effective` is the stored overrides on
+        the documented defaults; `bounds` and `defaults` are returned so a client renders the control
+        without restating them. A stall is retried up to `retry.maxAttempts` times with
+        `retry.backoffMs` between attempts, inside a wall-clock ceiling that counts attempt time and
+        backoff together.
+      operationId: getControllerAiSettings
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200":
+          description: Effective settings, overrides, defaults and bounds
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ControllerAiSettingsView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Change the controller AI-provider stall recovery settings (#907)
+      description: |
+        A patch of whole seconds inside the bounds — `preContentSeconds` 20–180 (default 60, the
+        budget until the first CONTENT event; framing frames keep a stream alive but never end it),
+        `silenceSeconds` 15–120 (default 45, silence allowed mid-reply), `decisionCeilingSeconds`
+        60–600 (default 240, one decision's whole recovery). `null` returns a key to its default. An
+        out-of-range value or an unknown key is refused with 400 — never silently clamped.
+      operationId: putControllerAiSettings
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                preContentSeconds: { type: integer, minimum: 20, maximum: 180, nullable: true }
+                silenceSeconds: { type: integer, minimum: 15, maximum: 120, nullable: true }
+                decisionCeilingSeconds: { type: integer, minimum: 60, maximum: 600, nullable: true }
+      responses:
+        "200":
+          description: The settings after the change
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ControllerAiSettingsView" }
+        "400": { description: "A value out of range, not a whole number, or an unknown key" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 

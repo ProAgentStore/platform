@@ -1,0 +1,68 @@
+/**
+ * One Pilot decision under the controller recovery policy (#907) — what the workflow's decide step runs.
+ *
+ * Inside the step: each ATTEMPT reserves and settles its own budget draw (`decideWithinBudget`), reloads
+ * the owner's standing rules and directives (#1015), and makes exactly one provider request with that
+ * attempt's deadlines. A stall is retried here, bounded by the policy's attempts and wall-clock ceiling,
+ * with cancellation checked before every attempt and after every backoff.
+ *
+ * Across the step boundary: an exhausted recovery is RETURNED, not thrown. Thrown, Cloudflare's own
+ * step retry (`limit: 2`) would run the whole recovery two more times — the nested multiplication #907
+ * forbids. Outside the step `unwrapPilotDecide` raises it as an ordinary error, which the round-level
+ * resume (`coding-interrupt.ts`, bounded per run) classifies as `provider_stall` and handles once.
+ * A stalled attempt raised before returning anything, so no partial decision ever reaches the engine,
+ * and every completed step is journalled, so nothing already done is replayed.
+ */
+import type { Env } from "../types.js";
+import { isCancelRequested } from "./agent-loop-store.js";
+import { decideWithinBudget } from "./coding-decide-budget.js";
+import { type CodingDecision, type CodingGoal, type CodingPaneSnapshot, decideCodingAction } from "./coding-loop.js";
+import { refreshGoalConstraints } from "./coding-standing-constraints.js";
+import { ControllerAiCancelled, ControllerAiStalled, type ControllerAiPolicy, controllerAiCall } from "./controller-ai-recovery.js";
+
+/** What crosses the step boundary: a decision, or a stall the recovery could not get past. Serializable. */
+export type PilotDecideOutcome = { decision: CodingDecision } | { stalled: { message: string; attempts: number } };
+
+export interface PilotDecideInput {
+	userId: string;
+	instanceId: string;
+	repoId: string;
+	sessionId: string;
+	runStartedAt: number;
+	loopRunId?: string | null;
+	budgetId?: string | null;
+	depth?: number;
+	params: { goal: CodingGoal; actionLog: string[]; snapshot: CodingPaneSnapshot };
+}
+
+export async function pilotDecide(env: Env, input: PilotDecideInput, opts: { policy?: ControllerAiPolicy; sleep?: (ms: number) => Promise<void> } = {}): Promise<PilotDecideOutcome> {
+	const traceId = input.loopRunId ?? input.sessionId;
+	const loopRunId = input.loopRunId;
+	try {
+		const decision = await controllerAiCall(
+			env,
+			{ userId: input.userId, instanceId: input.instanceId, traceId, surface: "pilot", isCancelled: loopRunId ? () => isCancelRequested(env, loopRunId) : undefined, policy: opts.policy, sleep: opts.sleep },
+			(deadlines) =>
+				decideWithinBudget(env, { userId: input.userId, instanceId: input.instanceId, budgetId: input.budgetId, depth: input.depth }, async () => {
+					// The owner's standing rules and latest directives, fresh for THIS attempt (#1015).
+					await refreshGoalConstraints(env, input.params.goal, { instanceId: input.instanceId, userId: input.userId, repoId: input.repoId, sessionId: input.sessionId, runStartedAt: input.runStartedAt });
+					return decideCodingAction(env, input.userId, input.params, { kind: "coding", instanceId: input.instanceId, traceId }, deadlines);
+				}),
+		);
+		return { decision: decision as CodingDecision };
+	} catch (e) {
+		if (e instanceof ControllerAiStalled) return { stalled: { message: e.message, attempts: e.attempts } };
+		if (e instanceof ControllerAiCancelled) return { decision: { cancelled: { why: e.message } } };
+		throw e;
+	}
+}
+
+/** Outside the step: a decision passes through; an exhausted recovery is raised for the round-level resume. */
+export function unwrapPilotDecide(outcome: PilotDecideOutcome): CodingDecision {
+	if ("stalled" in outcome) {
+		const err = new Error(outcome.stalled.message);
+		err.name = "ControllerAiStalled";
+		throw err;
+	}
+	return outcome.decision;
+}

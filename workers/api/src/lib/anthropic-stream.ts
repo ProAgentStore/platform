@@ -127,6 +127,13 @@ export class AnthropicStreamAssembler {
 	private eventsAccepted = 0;
 	/** The `type` field of the most recent accepted event — the caller records this on a stall. */
 	private lastType: string | undefined;
+	/** A content block has begun (#907) — framing (`message_start`, `ping`) is not content. */
+	private sawContent = false;
+
+	/** True once the model has produced content, as opposed to the connection's framing events. */
+	get contentStarted(): boolean {
+		return this.sawContent;
+	}
 
 	get done(): boolean {
 		return this.complete;
@@ -148,6 +155,7 @@ export class AnthropicStreamAssembler {
 		// these on a stall to record what the stream was doing when it went silent.
 		this.eventsAccepted += 1;
 		if (type) this.lastType = type;
+		if (type === "content_block_start" || type === "content_block_delta") this.sawContent = true;
 		switch (type) {
 			case "error": {
 				const err = event.error as { message?: string; type?: string } | undefined;

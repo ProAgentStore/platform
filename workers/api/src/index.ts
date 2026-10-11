@@ -38,6 +38,7 @@ import { terminalRoutes } from "./routes/terminals.js";
 import { usageRoutes } from "./routes/usage.js";
 import { budgetRoutes } from "./routes/budget.js";
 import { statsRoutes } from "./routes/stats.js";
+import { controllerAiSettingsRoutes } from "./routes/controller-ai-settings.js";
 import { mcpAuditRoutes } from "./routes/mcp-audit.js";
 import { triggerRoutes } from "./routes/triggers.js";
 import { adminRoutes } from "./routes/admin.js";
@@ -175,6 +176,7 @@ app.route("/v1/agents", runRoutes); // /v1/agents/:id/run, /executions
 app.route("/v1/instances", instanceRoutes); // /v1/instances/:agentId/subscribe, /my/instances, /:id/chat, etc.
 app.route("/v1/instances", credentialRoutes); // /v1/instances/:id/credentials (vault)
 app.route("/v1/instances", secureInputRoutes); // /v1/instances/:id/secure-inputs (#906)
+app.route("/v1/instances", controllerAiSettingsRoutes); // /v1/instances/:id/controller-ai — provider-stall recovery settings (#907)
 app.route("/v1/profile", profileRoutes); // structured candidate profile
 app.route("/v1/preferences", preferenceRoutes); // account-wide voice + translation defaults (#211)
 app.route("/v1/agents", analyticsRoutes); // /v1/agents/:id/analytics

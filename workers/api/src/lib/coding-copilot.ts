@@ -4,6 +4,8 @@ import { normalizeToolCalls, parseToolCallsFromText } from "./parse-tool-calls.j
 import { canReadHosted, type HostedRepoRef } from "./hosted-repo.js";
 import type { RunnerConn } from "./runner-client.js";
 import { runUserWorkersAi } from "./user-ai.js";
+import type { UsageContext } from "./usage.js";
+import { controllerAiCall } from "./controller-ai-recovery.js";
 import type { Env } from "../types.js";
 import { fenceUntrusted } from "./untrusted-fence.js";
 import { clipMarked } from "./clip-marked.js";
@@ -82,7 +84,7 @@ export async function copilotSummary(env: Env, userId: string | undefined, args:
 	const canReadCode = !!args.conn;
 	const canReadIssues = !!args.repo && canReadHosted(args.repo, "issues");
 	if (!question || (!canReadCode && !canReadIssues)) {
-		const res = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", {
+		const res = (await copilotAi(env, userId, args, {
 			messages,
 			maxTokens: question ? 600 : 160,
 		}, {
@@ -109,7 +111,7 @@ export async function copilotSummary(env: Env, userId: string | undefined, args:
 	const target = { conn: args.conn as RunnerConn, sessionId: args.sessionId, workDir: args.workDir, env, userId, repo: args.repo };
 	const executed = new Set<string>();
 	for (let round = 0; round < 3; round++) {
-		const raw = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", { messages, tools, maxTokens: 600 }, {
+		const raw = (await copilotAi(env, userId, args, { messages, tools, maxTokens: 600 }, {
 			kind: "copilot",
 			instanceId: args.instanceId,
 			traceId: args.sessionId ?? null,
@@ -161,7 +163,7 @@ export async function copilotSummary(env: Env, userId: string | undefined, args:
 		messages.push({ role: "user", content: "Now answer my question using ONLY what you just read, in plain language (max 2 sentences unless I asked for detail). Do NOT paste code, diffs, or file paths." });
 		if (did === 0) break; // only refused/duplicate calls — stop rather than spin
 	}
-	const fin = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", { messages, maxTokens: 600 }, {
+	const fin = (await copilotAi(env, userId, args, { messages, maxTokens: 600 }, {
 		kind: "copilot",
 		instanceId: args.instanceId,
 		traceId: args.sessionId ?? null,
@@ -170,4 +172,15 @@ export async function copilotSummary(env: Env, userId: string | undefined, args:
 		promptSections: [{ label: "copilot.messages", value: messages.map((m) => m.content) }],
 	})) as { response?: string };
 	return scrubOneShotReply(fin.response || "");
+}
+
+/**
+ * Every Co-pilot provider call, under the controller recovery policy (#907). A stall on a tool round is
+ * retried before any tool runs, so a retry re-asks the question — it never repeats a tool's effect.
+ */
+function copilotAi(env: Env, userId: string | undefined, args: { instanceId?: string; sessionId?: string | null }, body: Record<string, unknown>, ctx?: UsageContext): Promise<unknown> {
+	// No account → no stored settings: the documented defaults apply.
+	return controllerAiCall(env, { userId: userId ?? "", instanceId: args.instanceId, traceId: args.sessionId ?? null, surface: "copilot" }, (streamDeadlines) =>
+		runUserWorkersAi(env, userId, "claude-sonnet-4-6", { ...body, streamDeadlines }, ctx),
+	);
 }

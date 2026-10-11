@@ -1,9 +1,7 @@
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import {
-	decideCodingAction,
 	runCodingLoop,
 	type CodingActionKind,
-	type CodingDecision,
 	type CodingDeps,
 	type CodingPaneSnapshot,
 	type CodingResult,
@@ -32,7 +30,6 @@ import { delegationTaskRecord } from "../../lib/delegation.js";
 import { deepLinkFor } from "../../lib/console-links.js";
 import { notifyUser } from "../../routes/push.js";
 import { recordEngineUsage } from "../../lib/usage.js";
-import { decideWithinBudget } from "../../lib/coding-decide-budget.js";
 import type { EngineAuthResolved } from "../../lib/usage-payer.js";
 import { sanitizeEngineUsage } from "../../lib/engine-usage.js";
 import { recordEngineActs, sanitizeEngineActs, summarizeActs } from "../../lib/engine-acts.js";
@@ -51,7 +48,7 @@ import { finishLoopRun, settledRunStatus, isCancelRequested, recordIteration, re
 import { mirrorRuntimeEvent } from "../../routes/instances-runtime.js";
 import { reauthCompletedSince } from "../../lib/engine-reauth-store.js";
 import { tryDequeueAndStart } from "../../lib/objective-queue-start.js";
-import { refreshGoalConstraints } from "../../lib/coding-standing-constraints.js";
+import { type PilotDecideOutcome, pilotDecide, unwrapPilotDecide } from "../../lib/pilot-decide.js";
 import { traceCodingRun } from "../../lib/coding-run-trace.js";
 import { codingCrashReport, outcomeWord, runOutcomeNote } from "../../lib/coding-run-report.js";
 import { statusFor, type LoopRunStatus, type LoopStopReason } from "../../lib/agent-loop.js";
@@ -314,6 +311,8 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 	let conn: RunnerConn = startConn;
 
 	const retry = { retries: { limit: 2, delay: "2 seconds" as const, backoff: "constant" as const }, timeout: "3 minutes" as const };
+	// A decide may spend the whole per-decision recovery ceiling (max 10 min, #907) inside one step.
+	const decideRetry = { ...retry, timeout: "12 minutes" as const };
 	// waitIdle polls internally for minutes, so it needs a longer step budget than `retry`.
 	const idleRetry = { retries: { limit: 1, delay: "2 seconds" as const, backoff: "constant" as const }, timeout: "10 minutes" as const };
 	const startRetry = { retries: { limit: 1, delay: "3 seconds" as const, backoff: "constant" as const }, timeout: "5 minutes" as const };
@@ -512,14 +511,14 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			measured(guard(runRetry, `s${n++}-act`, async () => callRunner<CodingPaneSnapshot>(conn, "/coding/act", { sessionId, action: await withTurnReplay(env, { instanceId, userId, repoId, repoName: goal.repo, clientType: goal.clientType }, a) }))), // #693 slice 2: the replay is composed INSIDE the step, so a replayed step re-sends what it sent
 		// The spend gate lives in `coding-decide-budget.ts` — the LLM call is the only place this
 		// loop spends money, so it is the only place a budget has to sit (#159).
-		decide: (p) =>
-			step.do(probe.at(`s${n++}-decide`), retry, () =>
-				decideWithinBudget(env, { userId, instanceId, budgetId: event.payload.budgetId, depth: event.payload.depth }, async () => {
-					// The owner's standing rules and latest directives, fresh for THIS decision (#1015).
-					await refreshGoalConstraints(env, p.goal, { instanceId, userId, repoId, sessionId, runStartedAt });
-					return decideCodingAction(env, userId, p, { kind: "coding", instanceId, traceId: event.payload.loopRunId ?? sessionId });
-				}),
-			) as Promise<CodingDecision>,
+		// The controller's provider calls run under ONE recovery policy (#907, lib/pilot-decide.ts): an exhausted
+		// stall is returned across the step and raised here, so the step retry never multiplies it.
+		decide: async (p) =>
+			unwrapPilotDecide(
+				(await step.do(probe.at(`s${n++}-decide`), decideRetry, () =>
+					pilotDecide(env, { userId, instanceId, repoId, sessionId, runStartedAt, loopRunId: event.payload.loopRunId ?? null, budgetId: event.payload.budgetId, depth: event.payload.depth, params: p }),
+				)) as PilotDecideOutcome,
+			),
 		// Poll capture until the CLI goes idle, BACKING OFF as the turn proves long (#523). A
 		// flat 2-second poll spent 2 subrequests per second of Engine work against a ceiling
 		// Cloudflare applies per WORKFLOW INSTANCE, so three runs exhausted it at ~2 hours and

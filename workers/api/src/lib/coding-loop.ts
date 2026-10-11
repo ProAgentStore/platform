@@ -1,5 +1,5 @@
 import { clipMarked } from "./clip-marked.js";
-import { runUserWorkersAi, systemPromptSections, systemPromptText, type SystemPromptBlock } from "./user-ai.js";
+import { runUserWorkersAi, systemPromptSections, systemPromptText, type StreamDeadlines, type SystemPromptBlock } from "./user-ai.js";
 import { hitOutputCap } from "./reply-truncation.js";
 import { authorityInstruction, screenInstruction, type MergePolicy } from "./coding-authority.js";
 import {
@@ -170,6 +170,8 @@ export interface CodingDecision {
 	finish?: { status: "done" | "failed"; detail: string };
 	/** The orchestrator can't proceed without a human (stuck handoff). */
 	stuck?: { why: string };
+	/** The run was cancelled while the decision was being recovered (#907) — end as cancelled, send nothing. */
+	cancelled?: { why: string };
 	/**
 	 * Something only the owner can supply (ask-and-hold): a VALUE (`request_user_info`), or a CHOICE
 	 * between options (`ask_owner`, #960) — in which case `field` is the question itself and
@@ -310,6 +312,7 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 
 		const decision = await deps.decide({ goal, actionLog, snapshot: snap });
 		if (decision.thought) await deps.onEvent?.("thought", decision.thought);
+		if (decision.cancelled) return { outcome: "cancelled", detail: decision.cancelled.why, steps: step, transcript };
 
 		if (decision.finish) {
 			// A `done` reached after the run repeated itself gets the measurement appended (#522). Run
@@ -741,6 +744,8 @@ export async function decideCodingAction(
 	userId: string,
 	params: { goal: CodingGoal; actionLog: string[]; snapshot: CodingPaneSnapshot },
 	usageCtx?: UsageContext,
+	/** This attempt's stream deadlines from the controller recovery policy (#907). */
+	streamDeadlines?: StreamDeadlines,
 ): Promise<CodingDecision> {
 	const system = systemPromptBlocks(params.goal);
 	const steps = params.actionLog.length ? params.actionLog.map((a, i) => `${i + 1}. ${a}`).join("\n") : "(none yet)";
@@ -754,6 +759,7 @@ export async function decideCodingAction(
 		],
 		tools: CODING_TOOLS,
 		maxTokens: PILOT_MAX_TOKENS,
+		...(streamDeadlines ? { streamDeadlines } : {}),
 	}, usageCtx
 		? {
 				...usageCtx,

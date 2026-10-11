@@ -34,6 +34,10 @@ export class UserAiCredentialsError extends Error {
 	}
 }
 
+import { type StreamDeadlines, type StreamPhase, streamPhaseSuffix } from "./stream-phase.js";
+export type { StreamDeadlines, StreamPhase } from "./stream-phase.js";
+export { streamPhaseFromMessage, streamPhaseSuffix } from "./stream-phase.js";
+
 export class UserAiProviderError extends Error {
 	/**
 	 * How many SSE events the assembler accepted before the stall deadline fired.
@@ -45,6 +49,15 @@ export class UserAiProviderError extends Error {
 	eventsSeen?: number;
 	/** The `type` of the last SSE event accepted before silence — companion to `eventsSeen`. */
 	lastEventType?: string;
+	/**
+	 * What the stream was doing when it went silent (#907) — measured, never inferred. Also written
+	 * into the message as a `[stream: …]` suffix, because a Workflow step boundary keeps an error's
+	 * message but not its own properties, which is why #734's fields never reached `error_log`.
+	 */
+	streamPhase?: StreamPhase;
+	/** The provider and model THIS request ran on, for telemetry (#907). */
+	provider?: string;
+	model?: string;
 
 	constructor(
 		message: string,
@@ -326,7 +339,7 @@ async function runAnthropic(
 	env: Env,
 	userId: string | undefined,
 	apiKey: string,
-	body: { messages: Array<{ role: string; content: unknown }>; tools?: unknown[]; toolChoice?: "auto" | "none"; maxTokens?: number; timeoutMs?: number },
+	body: { messages: Array<{ role: string; content: unknown }>; tools?: unknown[]; toolChoice?: "auto" | "none"; maxTokens?: number; timeoutMs?: number; streamDeadlines?: StreamDeadlines },
 	ctx?: UsageContext,
 ): Promise<unknown> {
 	const systemMsg = (body.messages || []).find((m) => m.role === "system");
@@ -380,9 +393,12 @@ async function runAnthropic(
 	anthropicBody.stream = true;
 
 	const startedAt = Date.now();
-	const firstTokenMs = body.timeoutMs ?? AI_FIRST_TOKEN_TIMEOUT_MS;
+	const firstTokenMs = body.streamDeadlines?.preContentMs ?? body.timeoutMs ?? AI_FIRST_TOKEN_TIMEOUT_MS;
+	const silenceMs = body.streamDeadlines?.silenceMs ?? AI_STALL_TIMEOUT_MS;
+	const totalMs = Math.min(AI_TOTAL_TIMEOUT_MS, body.streamDeadlines?.totalMs ?? AI_TOTAL_TIMEOUT_MS);
 	const firstTokenDeadline = startedAt + firstTokenMs;
-	const totalDeadline = startedAt + AI_TOTAL_TIMEOUT_MS;
+	const totalDeadline = startedAt + totalMs;
+	const meta = { provider: "anthropic", model: String(anthropicBody.model) };
 	const controller = new AbortController();
 	let res: Response;
 	try {
@@ -403,7 +419,7 @@ async function runAnthropic(
 		);
 	} catch (err) {
 		controller.abort();
-		throw asProviderError(err) ?? err;
+		throw asProviderError(err, meta) ?? err;
 	}
 
 	if (!res.ok) {
@@ -442,10 +458,10 @@ async function runAnthropic(
 
 	let data: AnthropicMessageBody;
 	try {
-		data = await readAnthropicStream(res, { firstTokenDeadline, totalDeadline, firstTokenMs });
+		data = await readAnthropicStream(res, { firstTokenDeadline, totalDeadline, firstTokenMs, silenceMs, totalMs, startedAt });
 	} catch (err) {
 		controller.abort();
-		throw asProviderError(err) ?? err;
+		throw asProviderError(err, meta) ?? err;
 	}
 	if (!data.content.length) {
 		throw new UserAiProviderError("Anthropic: the reply arrived empty — no content blocks", 502);
@@ -515,6 +531,8 @@ class DeadlineExceeded extends Error {
 	eventsSeen?: number;
 	/** The `type` of the last accepted event — annotated by readAnthropicStream. */
 	lastEventType?: string;
+	/** The measured phase (#907) — annotated by readAnthropicStream. */
+	phase?: StreamPhase;
 
 	constructor(
 		readonly kind: AiDeadlineKind,
@@ -549,11 +567,14 @@ function withDeadline<T>(promise: Promise<T>, remainingMs: number, kind: AiDeadl
 }
 
 /** Translate our two internal failures into the error the user reads. Anything else is a real bug. */
-function asProviderError(err: unknown): UserAiProviderError | null {
+function asProviderError(err: unknown, meta?: { provider: string; model: string }): UserAiProviderError | null {
 	if (err instanceof DeadlineExceeded) {
 		// Retryability comes from the SAME table the sentence does (#518), so what the platform does
-		// automatically is what the platform told the user to do.
-		const provErr = new UserAiProviderError(deadlineMessage(err.kind, err.budgetMs), 504, undefined, undefined, isRetryableDeadline(err.kind));
+		// automatically is what the platform told the user to do. The measured phase rides in the
+		// message too (#907): it is the one part of an error a Workflow step boundary keeps.
+		const provErr = new UserAiProviderError(`${deadlineMessage(err.kind, err.budgetMs)}${err.phase ? streamPhaseSuffix(err.phase) : ""}`, 504, undefined, undefined, isRetryableDeadline(err.kind));
+		if (err.phase) provErr.streamPhase = err.phase;
+		if (meta) Object.assign(provErr, meta);
 		// Thread the stream state so `recordCodingFailure` can write what the assembler had seen
 		// before the silence — the fact that settles whether a stall is pre- or post-content (#734).
 		if (err.eventsSeen !== undefined) provErr.eventsSeen = err.eventsSeen;
@@ -582,22 +603,27 @@ function asProviderError(err: unknown): UserAiProviderError | null {
  */
 async function readAnthropicStream(
 	res: Response,
-	deadlines: { firstTokenDeadline: number; totalDeadline: number; firstTokenMs: number },
+	deadlines: { firstTokenDeadline: number; totalDeadline: number; firstTokenMs: number; silenceMs?: number; totalMs?: number; startedAt?: number },
 ): Promise<AnthropicMessageBody> {
+	const silenceMs = deadlines.silenceMs ?? AI_STALL_TIMEOUT_MS;
+	const totalMs = deadlines.totalMs ?? AI_TOTAL_TIMEOUT_MS;
+	const startedAt = deadlines.startedAt ?? Date.now();
+	let lastChunkAt = Date.now();
 	if (!res.body) throw new UserAiProviderError("Anthropic: the response carried no body to stream", 502);
 	const reader = res.body.getReader();
 	const decoder = new TextDecoder();
 	const assembler = new AnthropicStreamAssembler();
 	let buffer = "";
-	let first = true;
 	try {
 		for (;;) {
 			const now = Date.now();
-			const silenceDeadline = first ? deadlines.firstTokenDeadline : now + AI_STALL_TIMEOUT_MS;
-			const kind: AiDeadlineKind =
-				deadlines.totalDeadline < silenceDeadline ? "total" : first ? "first-token" : "stall";
-			const budgetMs =
-				kind === "total" ? AI_TOTAL_TIMEOUT_MS : kind === "first-token" ? deadlines.firstTokenMs : AI_STALL_TIMEOUT_MS;
+			// PRE-CONTENT until the model produces a content block (#907). Framing frames (`message_start`,
+			// `ping`) keep the stream alive exactly as before — the deadline never gets STRICTER — but they
+			// no longer end the pre-content budget: the first byte is not the first answer.
+			const pre = !assembler.contentStarted;
+			const silenceDeadline = pre ? Math.max(deadlines.firstTokenDeadline, lastChunkAt + silenceMs) : now + silenceMs;
+			const kind: AiDeadlineKind = deadlines.totalDeadline < silenceDeadline ? "total" : pre ? "first-token" : "stall";
+			const budgetMs = kind === "total" ? totalMs : kind === "first-token" ? deadlines.firstTokenMs : silenceMs;
 			let chunk: ReadableStreamReadResult<Uint8Array>;
 			try {
 				chunk = await withDeadline(
@@ -612,10 +638,12 @@ async function readAnthropicStream(
 				if (e instanceof DeadlineExceeded) {
 					e.eventsSeen = assembler.eventsSeen;
 					e.lastEventType = assembler.lastEventType;
+					const at = Date.now();
+					e.phase = { contentStarted: assembler.contentStarted, eventsSeen: assembler.eventsSeen, lastEventType: assembler.lastEventType ?? null, silentForMs: at - lastChunkAt, elapsedMs: at - startedAt };
 				}
 				throw e;
 			}
-			first = false;
+			lastChunkAt = Date.now();
 			if (chunk.done) break;
 			buffer += decoder.decode(chunk.value, { stream: true });
 			const { events, rest } = parseSseEvents(buffer);

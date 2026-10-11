@@ -42,6 +42,7 @@ import { isRetryableFailure, resumableRoundOf } from "./resumable-round.js";
 import { isRunnerGone, isRunnerUnreachable } from "./runner-unreachable.js";
 import { isTransientInfraError } from "./transient-error.js";
 import type { Env } from "../types.js";
+import { type StreamPhase, streamPhaseFromMessage } from "./user-ai.js";
 
 /** What killed the run, at the granularity the remedies differ at. */
 export type CodingFailureClass =
@@ -648,14 +649,24 @@ export async function recordCodingFailure(env: Env, r: CodingFailureRecord): Pro
 			// (#734). Present only on a stall/first-token deadline from the Anthropic reader; omitted
 			// on every other failure class so a key-always-present-but-null pattern does not pollute
 			// the context of unrelated rows.
-			...(r.err instanceof Error && typeof (r.err as unknown as { eventsSeen?: number }).eventsSeen === "number"
-				? {
-						events: (r.err as unknown as { eventsSeen: number }).eventsSeen,
-						lastEvent: (r.err as unknown as { lastEventType?: string }).lastEventType ?? null,
-					}
-				: {}),
+			// …and since #907 the whole measured phase, read from the error or — once it has crossed a
+			// Workflow step boundary, which keeps only the message — from the message's `[stream: …]`
+			// suffix. Before this not one of 166 production stalls carried `events`.
+			...streamContext(r.err),
 			stack: r.err instanceof Error ? String(r.err.stack || "").slice(0, 1500) : undefined,
 		},
 	});
 	return f;
+}
+
+/** The measured stream phase of a stall, wherever it survived (#907). Empty for any other failure. */
+function streamContext(err: unknown): Record<string, unknown> {
+	if (!(err instanceof Error)) return {};
+	const own = (err as { streamPhase?: StreamPhase }).streamPhase ?? null;
+	const phase = own ?? streamPhaseFromMessage(err.message);
+	if (!phase) {
+		const events = (err as { eventsSeen?: number }).eventsSeen;
+		return typeof events === "number" ? { events, lastEvent: (err as { lastEventType?: string }).lastEventType ?? null } : {};
+	}
+	return { events: phase.eventsSeen, lastEvent: phase.lastEventType, stream: { ...phase, provider: (err as { provider?: string }).provider ?? null, model: (err as { model?: string }).model ?? null } };
 }

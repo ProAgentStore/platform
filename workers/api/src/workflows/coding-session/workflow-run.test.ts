@@ -37,6 +37,8 @@ import type { CodingSessionParams } from "../coding-session-params.js";
 import type { CodingDecision, CodingGoal } from "../../lib/coding-loop.js";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "../../lib/d1-sqlite.js";
 import { ownerDirectivesBlock } from "../../lib/coding-owner-directives.js";
+import { setControllerAiSleepForTest } from "../../lib/controller-ai-recovery.js";
+import { UserAiProviderError } from "../../lib/user-ai.js";
 import type { Env } from "../../types.js";
 
 // ── The harness ─────────────────────────────────────────────────────────────────────────────────
@@ -659,5 +661,95 @@ describe("a late terminal write never overwrites a settled cancellation (#1015)"
 		expect(loopRun()).toMatchObject({ status: "completed", stop_reason: "done" });
 		expect(posts.filter((p) => p.includes("Loop complete"))).toHaveLength(1);
 		expect(runFinishedEvents()).toBe(1);
+	});
+});
+
+// ── #907: the controller's AI-provider stalls are recovered on the REAL decide path ─────────────────
+
+describe("controller AI-provider stall recovery in the Pilot's decide (#907)", () => {
+	const slept: number[] = [];
+	beforeEach(() => {
+		slept.length = 0;
+		setControllerAiSleepForTest(async (ms) => {
+			slept.push(ms);
+		});
+	});
+	afterEach(() => setControllerAiSleepForTest(null));
+
+	/** A stall exactly as the Anthropic reader raises one. Synthetic — no prompt or reply content. */
+	const stall = () =>
+		Object.assign(new UserAiProviderError("The AI provider did not begin replying within 60s. [stream: phase=pre-content events=1 last=ping silent=60s elapsed=60s]", 504, undefined, undefined, true), {
+			streamPhase: { contentStarted: false, eventsSeen: 1, lastEventType: "ping", silentForMs: 60_000, elapsedMs: 60_000 },
+			provider: "anthropic",
+			model: "claude-sonnet-4-6",
+		});
+	const decideCalls = () => decideCodingAction.mock.calls.length;
+	const acts = () => runnerCalls.filter((c) => c.path === "/coding/act").length;
+	const trace = (event: string) => rows<{ context: string }>(`SELECT context FROM agent_events WHERE event = '${event}'`).map((r) => JSON.parse(r.context) as Record<string, unknown>);
+
+	it("a stall then a decision: the run completes, the retry is recorded, nothing partial reached the engine", async () => {
+		decideCodingAction.mockReset();
+		decideCodingAction.mockRejectedValueOnce(stall()).mockResolvedValueOnce({ finish: { status: "done", detail: "all green" } });
+		const { result } = await run();
+		expect(result).toMatchObject({ outcome: "done" });
+		expect(decideCalls()).toBe(2);
+		expect(slept).toEqual([2_000]);
+		expect(acts()).toBe(0);
+		// Each attempt carried that attempt's deadlines — the documented defaults on an unconfigured instance.
+		expect(decideCodingAction.mock.calls[0][4]).toEqual({ preContentMs: 60_000, silenceMs: 45_000, totalMs: 240_000 });
+		// Telemetry names the provider/model the request ran on and the measured phase — no content.
+		expect(trace("controller_ai.stall")[0]).toMatchObject({ surface: "pilot", provider: "anthropic", model: "claude-sonnet-4-6", attempt: 1, phase: { contentStarted: false, lastEventType: "ping" } });
+		expect(trace("controller_ai.recovered")).toHaveLength(1);
+	});
+
+	it("uses the instance's own validated settings", async () => {
+		d1.exec(`UPDATE agent_instances SET config = '{"controllerAi":{"preContentSeconds":90,"silenceSeconds":30}}' WHERE id = 'i1'`);
+		await run();
+		expect(decideCodingAction.mock.calls[0][4]).toMatchObject({ preContentMs: 90_000, silenceMs: 30_000 });
+	});
+
+	it("exhaustion is RETURNED across the step (never multiplied by the step retry) and ends the run truthfully as a provider stall", async () => {
+		seedLoopRun();
+		decideCodingAction.mockReset();
+		decideCodingAction.mockRejectedValue(stall());
+		const { result, journal } = await run(params({ loopRunId: "run-1" }));
+		// Every decide step recorded a returned `stalled` value — the step itself never threw a stall.
+		const decideSteps = [...journal.done.entries()].filter(([name]) => name.includes("-decide"));
+		expect(decideSteps.length).toBeGreaterThan(0);
+		for (const [, value] of decideSteps) expect(value).toMatchObject({ stalled: { attempts: 4 } });
+		// Four attempts per round; the round-level resume is the one outer layer (bounded per run).
+		expect(decideCalls()).toBe(decideSteps.length * 4);
+		expect(acts()).toBe(0);
+		expect(result.outcome).toBe("failed");
+		const row = loopRun();
+		expect(row.stop_reason).toBe("interrupted");
+		expect(row.detail).toContain("controller's AI provider stalled on 4 attempts");
+		expect(row.detail).toContain("coding CLI, the runner and the repository were not involved");
+		expect(trace("controller_ai.exhausted").length).toBe(decideSteps.length);
+	});
+
+	it("a cancellation during the backoff ends the run as cancelled after one attempt, sending nothing", async () => {
+		seedLoopRun();
+		decideCodingAction.mockReset();
+		decideCodingAction.mockRejectedValue(stall());
+		setControllerAiSleepForTest(async () => {
+			d1.exec("UPDATE agent_loop_runs SET cancel_requested = 1 WHERE run_id = 'run-1'");
+		});
+		const { result } = await run(params({ loopRunId: "run-1" }));
+		expect(result.outcome).toBe("cancelled");
+		expect(decideCalls()).toBe(1);
+		expect(acts()).toBe(0);
+		expect(trace("controller_ai.cancelled")).toHaveLength(1);
+	});
+
+	it("a non-stall provider error is not retried by the recovery", async () => {
+		decideCodingAction.mockReset();
+		decideCodingAction.mockRejectedValue(new UserAiProviderError("Anthropic (401): invalid x-api-key", 400, 401, undefined, false));
+		await run();
+		// One attempt per decide step: the recovery added nothing on top of the workflow's own handling.
+		const decideSteps = decideCodingAction.mock.calls.length;
+		expect(slept).toEqual([]);
+		expect(decideSteps).toBeGreaterThanOrEqual(1);
+		expect(trace("controller_ai.stall")).toEqual([]);
 	});
 });

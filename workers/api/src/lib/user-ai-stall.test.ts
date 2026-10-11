@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { encryptKey } from "./crypto.js";
-import { runUserWorkersAi } from "./user-ai.js";
+import { runUserWorkersAi, streamPhaseFromMessage } from "./user-ai.js";
 import type { Env } from "../types.js";
 
 /**
@@ -116,9 +116,43 @@ afterEach(() => {
 
 describe("a stream that goes quiet, and one that never ends (#427)", () => {
 	it("ends a stalled stream on the stall deadline, well short of the total ceiling", async () => {
-		// The reply started, so the first-token budget no longer applies; what ends it is SILENCE.
-		// Anthropic pings during a long generation, so silence this long is a dead socket rather than
-		// a thinking model — which is exactly the distinction the old single 25s number could not make.
+		// The reply STARTED — a content block arrived — so the first-content budget no longer applies;
+		// what ends it is SILENCE. Until #907 a lone `ping` counted as "started", which let a framing
+		// frame put a model still preparing its first word on the mid-reply clock; that case has its
+		// own test below.
+		const env = await envWithAnthropicKey();
+		let sent = false;
+		const STARTED = 'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n';
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(
+						new ReadableStream<Uint8Array>({
+							pull(controller) {
+								if (sent) return new Promise<void>(() => undefined);
+								sent = true;
+								controller.enqueue(new TextEncoder().encode(PING + STARTED));
+							},
+						}),
+					),
+			),
+		);
+		// "Well short of the total ceiling" is asserted by naming WHICH deadline fired, not by timing
+		// the run. `retryable` is the machine-readable half of the same verdict (#518) and the two
+		// kinds disagree about it — stall is worth retrying, the ceiling never is — so this pins the
+		// stall deadline exactly as a wall-clock bound was trying to. It does so without measuring the
+		// wall clock, which on a loaded box measures the box (#668).
+		await expect(
+			runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "hi" }] }),
+		).rejects.toMatchObject({ status: 504, retryable: true, message: expect.stringMatching(/stopped sending mid-reply/) });
+	});
+
+	it("a framing frame does not start the mid-reply clock: ping then silence is PRE-CONTENT (#907)", async () => {
+		// `message_start` and `ping` arrive at once; the model may still be preparing its first word.
+		// The pre-content budget (here 150ms, the per-call setting the controllers pass) governs, not
+		// the 60ms mid-reply silence — and the error says so, measured, in a form that survives a
+		// Workflow step boundary (the message).
 		const env = await envWithAnthropicKey();
 		let sent = false;
 		vi.stubGlobal(
@@ -136,14 +170,19 @@ describe("a stream that goes quiet, and one that never ends (#427)", () => {
 					),
 			),
 		);
-		// "Well short of the total ceiling" is asserted by naming WHICH deadline fired, not by timing
-		// the run. `retryable` is the machine-readable half of the same verdict (#518) and the two
-		// kinds disagree about it — stall is worth retrying, the ceiling never is — so this pins the
-		// stall deadline exactly as a wall-clock bound was trying to. It does so without measuring the
-		// wall clock, which on a loaded box measures the box (#668).
-		await expect(
-			runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "hi" }] }),
-		).rejects.toMatchObject({ status: 504, retryable: true, message: expect.stringMatching(/stopped sending mid-reply/) });
+		const err = (await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", { messages: [{ role: "user", content: "hi" }], streamDeadlines: { preContentMs: 150, silenceMs: 60, totalMs: 250 } }).catch((e: unknown) => e)) as {
+			message: string;
+			retryable: boolean;
+			streamPhase: { contentStarted: boolean; eventsSeen: number; lastEventType: string; silentForMs: number };
+			provider: string;
+			model: string;
+		};
+		expect(err.message).toMatch(/did not begin replying/);
+		expect(err.retryable).toBe(true);
+		expect(err.streamPhase).toMatchObject({ contentStarted: false, eventsSeen: 1, lastEventType: "ping" });
+		expect(err.streamPhase.silentForMs).toBeGreaterThanOrEqual(60);
+		expect(err).toMatchObject({ provider: "anthropic", model: "claude-sonnet-4-6" });
+		expect(streamPhaseFromMessage(err.message)).toMatchObject({ contentStarted: false, eventsSeen: 1, lastEventType: "ping" });
 	});
 
 	it("records the assembler state at the point of silence — message_start then nothing (#734)", async () => {

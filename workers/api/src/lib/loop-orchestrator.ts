@@ -11,6 +11,7 @@ import { agentFailureOf } from "./agent-loop.js";
 import { classifyCodingFailure, DRIVER_RESUME_POLICY } from "./coding-failure.js";
 import { logEvent } from "./events.js";
 import { parseLoopDecision, type LoopDecisionResult } from "./loop-decide.js";
+import { controllerAiCall } from "./controller-ai-recovery.js";
 import { runUserWorkersAi } from "./user-ai.js";
 import type { Env } from "../types.js";
 import { MAX_CONFIGURABLE_OBJECTIVE_CHARS } from "./loop-limits.js";
@@ -147,7 +148,8 @@ export async function runLoopDecide(
 	const system =buildLoopSystemPrompt(input.iteration, input.maxIterations);
 	const user = buildLoopUserContent(input);
 	try {
-		const res = (await runUserWorkersAi(
+		// Under the controller recovery policy (#907): a provider stall is retried, bounded; anything else is not.
+		const res = (await controllerAiCall(env, { userId, instanceId, traceId: input.traceId, surface: "loop" }, (streamDeadlines) => runUserWorkersAi(
 			env,
 			userId,
 			"claude-sonnet-4-6",
@@ -157,6 +159,7 @@ export async function runLoopDecide(
 					{ role: "user", content: user },
 				],
 				maxTokens: 300,
+				streamDeadlines,
 			},
 			{
 				kind: "chat",
@@ -170,7 +173,7 @@ export async function runLoopDecide(
 					{ label: "loop.transcript", value: input.messages.slice(-6).map((m) => m.content) },
 				],
 			},
-		)) as { response?: string };
+		))) as { response?: string };
 		return parseLoopDecision(res.response || "");
 	} catch (e) {
 		if (isCredentialsError(e)) throw e;
