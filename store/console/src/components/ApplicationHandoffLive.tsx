@@ -187,7 +187,7 @@ export default function ApplicationHandoffLive({ instanceId, runId, handoffId, r
 				spellCheck={false}
 				data-testid="application-handoff-mobile-text-entry"
 				placeholder="Tap after selecting the login or code field"
-				className="min-w-0 flex-1 rounded border border-line bg-canvas px-3 py-2 text-base text-ink"
+				className="min-w-0 flex-1 rounded border border-line bg-paper px-3 py-2 text-base text-ink"
 				onChange={(e) => mobileText(e.currentTarget.value)}
 				onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter" || e.key === "Backspace") { e.preventDefault(); mobileKey(e.key); } }}
 			/>
