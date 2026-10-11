@@ -44,6 +44,8 @@ const { admitDirectTurn, repoFreeForRun, runnerEngineProbe } = await import("../
 const { settleAfterDirectTurn } = await import("../workflows/coding-watch.js");
 const { executeStorageTool } = await import("../lib/storage-tools.js");
 const { getSession } = await import("../lib/coding-store.js");
+const { setControllerAiSleepForTest } = await import("../lib/controller-ai-recovery.js");
+const { UserAiProviderError } = await import("../lib/user-ai.js");
 
 const SECRET = "dispatch-secret";
 let d1: RealSchemaD1;
@@ -273,5 +275,41 @@ describe("the chat door (send_to_cli) goes through the same gate", () => {
 		expect(acts).toEqual([["A", expect.stringContaining("run the tests")]]);
 		expect(claim("A")).toMatchObject({ turn: expect.stringMatching(/^dturn-/), delivered: expect.any(Number) });
 		expect(directives()).toEqual([]);
+	});
+});
+
+describe("the Co-pilot door recovers a stalled controller reply (#907)", () => {
+	const stall = () => new UserAiProviderError("The AI provider stopped sending mid-reply — 45s with no bytes received.", 504, undefined, undefined, true);
+	const DRIVE = { tool_calls: [{ name: "drive_claude", arguments: { instruction: "run pnpm vitest run src/x.test.ts", summary: "running the test" } }] };
+	beforeEach(() => {
+		endRunB();
+		setControllerAiSleepForTest(async () => undefined);
+	});
+	afterEach(() => setControllerAiSleepForTest(null));
+
+	it("re-asks after a stall and delegates once, from the complete answer, with the policy's deadlines", async () => {
+		h.ai.mockRejectedValueOnce(stall()).mockResolvedValueOnce(DRIVE);
+		const res = await call("POST", "/coding/sessions/A/agent", { message: "can you check the test?" });
+		expect(res.body).toMatchObject({ delegated: true });
+		expect(h.ai).toHaveBeenCalledTimes(2);
+		expect((h.ai.mock.calls[0][3] as { streamDeadlines: unknown }).streamDeadlines).toEqual({ preContentMs: 60_000, silenceMs: 45_000, totalMs: 240_000 });
+		expect(acts).toEqual([["A", expect.stringContaining("run pnpm vitest run src/x.test.ts")]]);
+	});
+
+	it("on exhaustion says the provider stalled and sends nothing — never a silent '(no response)'", async () => {
+		h.ai.mockRejectedValue(stall());
+		const res = await call("POST", "/coding/sessions/A/agent", { message: "can you check the test?" });
+		expect(h.ai).toHaveBeenCalledTimes(4);
+		expect(res.body).toMatchObject({ delegated: false });
+		expect(String(res.body.reply)).toMatch(/^The AI provider stalled on 4 attempts over \d+s, so nothing was sent to the coding CLI\. Send your message again\.$/);
+		expect(acts).toEqual([]);
+	});
+
+	it("does not retry a non-stall failure", async () => {
+		h.ai.mockRejectedValue(new UserAiProviderError("Anthropic (401): invalid x-api-key", 401, 401, undefined, false));
+		const res = await call("POST", "/coding/sessions/A/agent", { message: "can you check the test?" });
+		expect(h.ai).toHaveBeenCalledTimes(1);
+		expect(res.body).toMatchObject({ delegated: false, reply: "(no response)" });
+		expect(acts).toEqual([]);
 	});
 });
