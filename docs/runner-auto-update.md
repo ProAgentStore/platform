@@ -62,6 +62,12 @@ existing fields. Receipt and action are separate facts:
 Retained engines that report `alive:true, runState:"idle"` and engines that have exited do not block;
 any other or missing lifecycle state does.
 
+An `offline` status means the owner policy could not be re-read. The runner drops its authority to
+install the moment a refresh fails, but it keeps a backed-off retry timer (about 1 minute, doubling
+to a cap of about an hour), so `next_retry_due_at` stays set; recovery does not wait for a heartbeat.
+Only a fresh ON from the service lets a retry observe work or install. An explicit OFF stops the
+retries.
+
 Very old runners that cannot report a stable machine ID still need one manual upgrade/restart. They
 remain visible but their settings link is deliberately unavailable rather than attaching a policy to
 a mutable hostname.

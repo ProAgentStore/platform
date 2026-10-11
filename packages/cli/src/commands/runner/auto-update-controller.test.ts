@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { AutomaticUpdateController, IDLE_RETRY_MS } from "./auto-update-controller.js";
+import { nextAutoUpdateDelayMs } from "./auto-update.js";
 import { observedRunnerWork } from "./runner-work-observation.js";
 import type { AutoUpdatePolicy, AutoUpdateStatus } from "./auto-update.js";
 import type { UpdateFacts, UpdatePlan } from "./self-update.js";
@@ -241,15 +242,6 @@ describe("AutomaticUpdateController — liveness and diagnostics (#1020)", () =>
 		expect(h.controller.diagnostics().observations.map((o) => o.sampledAt)).toEqual([3, 4, 5, 6, 7]);
 	});
 
-	it("a policy that cannot be refreshed keeps a backed-off timer instead of going silent", async () => {
-		const h = harness({ refresh: async () => false });
-		await h.controller.runNow();
-		expect(h.statuses.at(-1)?.status).toBe("offline");
-		expect(h.install).not.toHaveBeenCalled();
-		expect(h.timers).toHaveLength(1);
-		expect(h.controller.diagnostics().nextRetryDueAt).toBe(h.clock.t + h.timers[0].ms);
-	});
-
 	it("a disabled policy is not kept alive", async () => {
 		const h = harness({ refresh: async () => true });
 		h.state.value.autoUpdate = false;
@@ -276,6 +268,147 @@ describe("AutomaticUpdateController — liveness and diagnostics (#1020)", () =>
 		expect(h.install).not.toHaveBeenCalled();
 		expect(h.statuses.at(-1)).toMatchObject({ status: "verified-success", extra: { latestVersion: "0.4.91" } });
 		expect(h.controller.diagnostics()).toMatchObject({ blockerClass: null, decisionAt: h.clock.t, checkAt: h.clock.t });
+	});
+});
+
+// ── #1020: a failed policy refresh keeps a retry, and only a fresh ON installs ───────────────────
+
+/**
+ * The relay's real `refreshAutomaticPolicy` contract: authority is cleared BEFORE the fetch and
+ * restored only by a successful response. The earlier stub (`refresh: false`, authority left true)
+ * could not reach the defect — production never leaves authority standing after a failed fetch.
+ */
+function productionRefresh() {
+	const net = { up: false, serves: { autoUpdate: true } as AutoUpdatePolicy };
+	let state: { value: AutoUpdatePolicy; authoritative: boolean } | undefined;
+	const refresh = async () => {
+		const s = state as { value: AutoUpdatePolicy; authoritative: boolean };
+		s.authoritative = false;
+		if (!net.up) return false;
+		s.value = { ...s.value, ...net.serves };
+		s.authoritative = true;
+		return s.authoritative;
+	};
+	return { net, refresh, bind: (s: { value: AutoUpdatePolicy; authoritative: boolean }) => { state = s; } };
+}
+const refreshHarness = (overrides: Parameters<typeof harness>[0] = {}) => {
+	const p = productionRefresh();
+	const h = harness({ ...overrides, refresh: p.refresh });
+	p.bind(h.state);
+	return { ...h, net: p.net };
+};
+const backoff = (failures: number) => nextAutoUpdateDelayMs(failures, () => 0);
+
+describe("AutomaticUpdateController — policy-refresh retry under the production authority contract (#1020)", () => {
+	it("initial path: a failed refresh leaves authority unknown, no install, and exactly one retry timer", async () => {
+		const h = refreshHarness();
+		await h.controller.runNow();
+		expect(h.state.authoritative).toBe(false);
+		expect(h.statuses.at(-1)?.status).toBe("offline");
+		expect(h.facts).not.toHaveBeenCalled();
+		expect(h.install).not.toHaveBeenCalled();
+		expect(h.timers.map((t) => t.ms)).toEqual([backoff(1)]);
+		expect(h.controller.diagnostics().nextRetryDueAt).toBe(h.clock.t + backoff(1));
+	});
+
+	it("deferred path: a refresh failing in the idle-wait callback still leaves a retry timer", async () => {
+		const h = refreshHarness({ facts: async () => ({ ...idleFacts(), busy: ["coding session s1 (thinking)"] }), plan: planOver });
+		h.net.up = true;
+		await h.controller.runNow();
+		expect(h.statuses.at(-1)?.status).toBe("waiting-for-idle");
+		h.net.up = false;
+		await fire(h, IDLE_RETRY_MS);
+		await vi.waitFor(() => expect(h.statuses.at(-1)?.status).toBe("offline"));
+		expect(h.state.authoritative).toBe(false);
+		expect(h.timers.map((t) => t.ms)).toEqual([backoff(1)]);
+		expect(h.install).not.toHaveBeenCalled();
+	});
+
+	it("repeated failures back off boundedly, one timer at a time, never observing work or installing", async () => {
+		const h = refreshHarness();
+		await h.controller.runNow();
+		for (let failures = 1; failures <= 9; failures++) {
+			expect(h.timers.map((t) => t.ms)).toEqual([backoff(failures)]);
+			expect(h.timers[0].ms).toBeLessThanOrEqual(backoff(99));
+			h.clock.t += h.timers[0].ms;
+			await fire(h, h.timers[0].ms);
+			await vi.waitFor(() => expect(h.timers).toHaveLength(1));
+		}
+		expect(h.facts).not.toHaveBeenCalled();
+		expect(h.install).not.toHaveBeenCalled();
+	});
+
+	it("heartbeat recovery: restored authority does not add a second timer, and the retry installs exactly once", async () => {
+		const h = refreshHarness();
+		await h.controller.runNow();
+		// The relay's heartbeat: `policyScheduleAction(…, wasAuthoritative=false)` → "start".
+		h.state.authoritative = true;
+		h.controller.onPolicy("start");
+		expect(h.timers).toHaveLength(1);
+		h.net.up = true;
+		await fire(h, backoff(1));
+		await vi.waitFor(() => expect(h.statuses.at(-1)?.status).toBe("restarting"));
+		expect(h.install).toHaveBeenCalledTimes(1);
+		expect(h.install).toHaveBeenCalledWith(updatePlan, true);
+	});
+
+	it("network recovery without a heartbeat: the retry itself re-establishes authority, and busy work still waits", async () => {
+		const h = refreshHarness({ facts: async () => ({ ...idleFacts(), busy: ["local run r1"] }), plan: planOver });
+		await h.controller.runNow();
+		h.net.up = true;
+		await fire(h, backoff(1));
+		await vi.waitFor(() => expect(h.statuses.at(-1)?.status).toBe("waiting-for-idle"));
+		expect(h.state.authoritative).toBe(true);
+		expect(h.install).not.toHaveBeenCalled();
+		expect(h.timers.map((t) => t.ms)).toEqual([IDLE_RETRY_MS]);
+		expect(h.controller.diagnostics()).toMatchObject({ blockerClass: "active_sessions", nextRetryDueAt: h.clock.t + IDLE_RETRY_MS });
+	});
+
+	it("OFF while a retry is pending: the cancel clears it; OFF served by the retry installs nothing and keeps no timer", async () => {
+		const cancelled = refreshHarness();
+		await cancelled.controller.runNow();
+		cancelled.state.value = { ...cancelled.state.value, autoUpdate: false };
+		cancelled.state.authoritative = true;
+		cancelled.controller.onPolicy("cancel");
+		expect(cancelled.timers).toHaveLength(0);
+		expect(cancelled.controller.diagnostics().nextRetryDueAt).toBeNull();
+
+		const served = refreshHarness();
+		await served.controller.runNow();
+		served.net.up = true;
+		served.net.serves = { autoUpdate: false };
+		const before = served.statuses.length;
+		await fire(served, backoff(1));
+		await vi.waitFor(() => expect(served.state.value.autoUpdate).toBe(false));
+		expect(served.timers).toHaveLength(0);
+		expect(served.facts).not.toHaveBeenCalled();
+		expect(served.install).not.toHaveBeenCalled();
+		expect(served.statuses.length).toBe(before);
+	});
+
+	it("authority lost mid-check (a concurrent refresh failed) decides nothing and keeps a retry", async () => {
+		const h = refreshHarness({ facts: async () => { h.state.authoritative = false; return idleFacts(); } });
+		h.net.up = true;
+		await h.controller.runNow();
+		expect(h.plan).not.toHaveBeenCalled();
+		expect(h.install).not.toHaveBeenCalled();
+		expect(h.statuses.at(-1)?.status).toBe("offline");
+		expect(h.timers.map((t) => t.ms)).toEqual([backoff(1)]);
+	});
+
+	it("a start that lands while a decision is in flight is superseded by the idle wait — one timer", async () => {
+		let release: (() => void) | undefined;
+		const h = harness({
+			facts: () => new Promise<UpdateFacts>((resolve) => { release = () => resolve({ ...idleFacts(), busy: ["x"] }); }),
+			plan: planOver,
+		});
+		const run = h.controller.runNow();
+		await vi.waitFor(() => expect(release).toBeTruthy());
+		h.controller.onPolicy("start");
+		expect(h.timers).toHaveLength(1);
+		release?.();
+		await run;
+		expect(h.timers.map((t) => t.ms)).toEqual([IDLE_RETRY_MS]);
 	});
 });
 
