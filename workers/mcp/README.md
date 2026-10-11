@@ -589,7 +589,7 @@ immediately instead of a whole transcript.
 | `list_pipeline_runs` | Declarative-pipeline runs with counts | — | | |
 | `get_instance_pipeline` | Read back a single stored pipeline definition (with validity) | — | | |
 | `mcp_server_info` | Server version, MCP protocol metadata, and deterministic platform catalog revision/count and optional deployment metadata | — | | |
-| `mcp_audit_log` | This account's MCP write/runtime/dry-run/denied events, newest first; `cursor` pages the whole 90-day ledger, `tool` filters (#1016) | read | | |
+| `mcp_audit_log` | This account's MCP write/runtime/dry-run/denied events, newest first; `cursor` pages the whole 90-day ledger, `tool` filters, `receipt` finds the events for one event/run/queue/session id (#1016) | read | | |
 | `whoami` | Which account you are connected as — id, login, sign-in provider, email (Google only), roles, createdAt, token expiry | — | | |
 | `platform_health` | Read-only diagnostic (#198): per-component verdict — gateway, auth, state, runner, coding_loop, connectors.github — with live probe latency and this session's recent p50/p95/p99 per stage; works without a session; the same report is public at `/status` | — | | |
 | `billing_status` | Free vs Pro, paywall enforcement | — | | |

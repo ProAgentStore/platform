@@ -216,7 +216,7 @@ async function writeAudit(ctx: SafetyContext, event: Record<string, unknown>): P
  */
 export async function listAuditEvents(
 	ctx: SafetyContext,
-	{ limit = 50, cursor, tool }: { limit?: number; cursor?: string; tool?: string } = {},
+	{ limit = 50, cursor, tool, receipt }: { limit?: number; cursor?: string; tool?: string; receipt?: string } = {},
 ): Promise<AuditPage | null> {
 	if (!ctx.env.OAUTH_KV) return null;
 	const subject = await subjectFor(ctx);
@@ -226,6 +226,7 @@ export async function listAuditEvents(
 		limit: Math.max(1, Math.min(200, limit)),
 		cursor,
 		tool,
+		receipt,
 	});
 }
 

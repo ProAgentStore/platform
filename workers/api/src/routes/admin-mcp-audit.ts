@@ -35,7 +35,7 @@ export const adminMcpAuditRoutes = new Hono<{ Bindings: Env }>();
 
 /**
  * GET /mcp-audit — recent MCP tool-call events across every user, newest first.
- * Query: ?limit= (default 200, max 500) ?tool= (exact match) ?user= (subject match) ?cursor=.
+ * Query: ?limit= (default 200, max 500) ?tool= (exact match) ?receipt= (exact id) ?user= (subject match) ?cursor=.
  */
 adminMcpAuditRoutes.get("/mcp-audit", async (c) => {
 	await requireAdmin(c);
@@ -55,8 +55,8 @@ adminMcpAuditRoutes.get("/mcp-audit", async (c) => {
 
 	const limit = Math.max(1, Math.min(500, Number(c.req.query("limit")) || 200));
 	const userFilter = c.req.query("user")?.trim() || undefined;
-	const paging = parseAuditPaging(c.req.query("cursor"), c.req.query("tool"));
-	if (!paging) return c.json({ error: "cursor must be at most 2048 characters and tool at most 100" }, 400);
+	const paging = parseAuditPaging(c.req.query());
+	if (!paging) return c.json({ error: "cursor must be at most 2048 characters, tool at most 100 and receipt at most 200" }, 400);
 
 	// One owner's index when filtering by user, otherwise the cross-owner index — both keyed by
 	// inverted time, so either listing is newest-first and pages by KV cursor (#1016).

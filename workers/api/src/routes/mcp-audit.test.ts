@@ -306,6 +306,24 @@ describe("GET /v1/mcp-audit", () => {
 		const { app, env } = testApp(fakeKv().kv);
 		expect((await getPage(app, env, `/v1/mcp-audit?cursor=${"x".repeat(2049)}`)).status).toBe(400);
 		expect((await getPage(app, env, `/v1/mcp-audit?tool=${"x".repeat(101)}`)).status).toBe(400);
+		expect((await getPage(app, env, `/v1/mcp-audit?receipt=${"x".repeat(201)}`)).status).toBe(400);
+	});
+
+	it("correlates by receipt — the event id or a whole id in input/result — across pages, and never by substring", async () => {
+		const f = fakeKv();
+		writeLedger(f, "mine", NOW - 5000, "q1", { tool: "coding_loop_start", action: "queued", result: { queueEntryId: "run_1" } });
+		for (let i = 0; i < 4; i++) writeLedger(f, "mine", NOW - 4000 + i * 1000, `noise${i}`, { input: { instance_id: "inst-2" } });
+		writeLedger(f, "mine", NOW, "s1", { tool: "coding_loop_stop", input: { run_id: "run_10", session_id: "csess_abc" } });
+		writeLedger(f, "theirs", NOW + 1000, "t1", { result: { queueEntryId: "run_1" } });
+		const { app, env } = testApp(f.kv);
+		const byReceipt = async (receipt: string) => (await readAll(app, env, `/v1/mcp-audit?limit=2&receipt=${receipt}`)).ids;
+		expect(await byReceipt("run_1")).toEqual(["q1"]); // reached through a page of non-matches; not the other owner's
+		expect(await byReceipt("run_10")).toEqual(["s1"]);
+		expect(await byReceipt("csess_abc")).toEqual(["s1"]); // the session join key survives read-time redaction
+		expect(await byReceipt("q1")).toEqual(["q1"]);
+		expect(await byReceipt("run_")).toEqual([]);
+		const { body } = await getPage(app, env, "/v1/admin/mcp-audit?receipt=run_1", "admin-1");
+		expect(body.events.map((e) => e.id)).toEqual(["t1", "q1"]);
 	});
 
 	it("says what an event is a receipt of", async () => {

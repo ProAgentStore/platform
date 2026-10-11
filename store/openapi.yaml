@@ -12537,6 +12537,7 @@ paths:
       parameters:
         - { name: limit, in: query, schema: { type: integer, default: 100, maximum: 200 } }
         - { name: tool, in: query, description: Exact tool-name match., schema: { type: string, maxLength: 100 } }
+        - { name: receipt, in: query, description: "Exact correlation: events that are this event id, or carry it as a whole value in input/result (runId, queueEntryId, session_id, task id). Applied per page; keep following nextCursor.", schema: { type: string, maxLength: 200 } }
         - { name: cursor, in: query, description: The previous page's `nextCursor`. Omit for the newest page., schema: { type: string, maxLength: 2048 } }
       responses:
         "200":

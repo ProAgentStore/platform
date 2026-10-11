@@ -605,6 +605,8 @@ describe("mcp_audit_log", () => {
 	function ledgerKv() {
 		const data = new Map<string, { value: string; metadata?: unknown }>();
 		let failGet = false;
+		/** Runs between a page's listing and its reads — where expiry and concurrent deletes land. */
+		let afterList: (() => void) | null = null;
 		const kv = {
 			get: async (k: string) => {
 				if (failGet) throw new Error("KV GET failed");
@@ -617,6 +619,8 @@ describe("mcp_audit_log", () => {
 				const names = Array.from(data.keys()).filter((n) => n.startsWith(prefix) && (after === null || n > after)).sort();
 				const page = names.slice(0, Math.min(limit, 1000));
 				const complete = names.length <= page.length;
+				afterList?.();
+				afterList = null;
 				return {
 					keys: page.map((name) => ({ name, metadata: data.get(name)?.metadata })),
 					list_complete: complete,
@@ -625,7 +629,7 @@ describe("mcp_audit_log", () => {
 				};
 			},
 		} as unknown as KVNamespace;
-		return { kv, data, failGets: (on: boolean) => (failGet = on) };
+		return { kv, data, failGets: (on: boolean) => (failGet = on), onNextList: (fn: () => void) => (afterList = fn) };
 	}
 
 	/** Call the tool the way a client must: arguments parsed by its PUBLISHED input schema. */
@@ -701,6 +705,106 @@ describe("mcp_audit_log", () => {
 		const page = JSON.parse(await call(h, { tool: "update_agent" })) as { events: unknown[] };
 		expect(page.events).toEqual([]);
 		expect(() => z.object(h.tools.get("mcp_audit_log")!.schema as z.ZodRawShape).strict().parse({ cursor: "" })).toThrow();
+	});
+
+	/** One user-1 event at `ms`, as the writer stores it. */
+	function seed(data: Map<string, { value: string; metadata?: unknown }>, ms: number, id: string, extra: Record<string, unknown> = {}) {
+		const tool = (extra.tool as string | undefined) ?? "list_agents";
+		data.set(auditIndexKey("user-1", ms, id), {
+			value: JSON.stringify({ id, time: new Date(ms).toISOString(), subject: "user-1", tool, action: "completed", ...extra }),
+			metadata: { tool, action: "completed" },
+		});
+	}
+
+	type Page = { events: Array<{ id: string; tool?: string }>; nextCursor: string | null; count: number };
+
+	it("orders tied timestamps by event id and pages through them without a repeat or a gap", async () => {
+		const { kv, data } = ledgerKv();
+		const h = await setup({ env: { OAUTH_KV: kv } });
+		const ms = Date.parse("2026-10-11T12:00:00.000Z");
+		for (const id of ["d", "a", "e", "c", "b"]) seed(data, ms, id);
+		seed(data, ms + 1, "newer");
+		const ids: string[] = [];
+		let cursor: string | null = null;
+		do {
+			const page = JSON.parse(await call(h, { limit: 2, ...(cursor ? { cursor } : {}) })) as Page;
+			ids.push(...page.events.map((e) => e.id));
+			cursor = page.nextCursor;
+		} while (cursor);
+		expect(ids).toEqual(["newer", "a", "b", "c", "d", "e"]);
+	});
+
+	it("continues a cursor across a write and a delete at the page boundary", async () => {
+		const { kv, data } = ledgerKv();
+		const h = await setup({ env: { OAUTH_KV: kv } });
+		const base = Date.parse("2026-10-11T12:00:00.000Z");
+		for (let i = 0; i < 6; i++) seed(data, base + i * 1000, `e${i}`);
+		const first = JSON.parse(await call(h, { limit: 3 })) as Page;
+		expect(first.events.map((e) => e.id)).toEqual(["e5", "e4", "e3"]);
+		seed(data, base + 10_000, "late"); // newer than the cursor: belongs to a fresh first page
+		data.delete(auditIndexKey("user-1", base + 2000, "e2")); // the next page's first event
+		const second = JSON.parse(await call(h, { limit: 3, cursor: first.nextCursor })) as Page;
+		expect(second.events.map((e) => e.id)).toEqual(["e1", "e0"]);
+		expect(second.nextCursor).toBeNull();
+		expect((JSON.parse(await call(h, { limit: 1 })) as Page).events[0]?.id).toBe("late");
+	});
+
+	it("drops an event that expired between listing and reading, and still continues", async () => {
+		const { kv, data, onNextList } = ledgerKv();
+		const h = await setup({ env: { OAUTH_KV: kv } });
+		const base = Date.parse("2026-10-11T12:00:00.000Z");
+		for (let i = 0; i < 4; i++) seed(data, base + i * 1000, `e${i}`);
+		onNextList(() => data.delete(auditIndexKey("user-1", base + 2000, "e2"))); // TTL fires mid-read
+		const page = JSON.parse(await call(h, { limit: 2 })) as Page;
+		expect(page.events.map((e) => e.id)).toEqual(["e3"]);
+		expect(page.nextCursor).not.toBeNull();
+		const rest = JSON.parse(await call(h, { limit: 2, cursor: page.nextCursor })) as Page;
+		expect(rest.events.map((e) => e.id)).toEqual(["e1", "e0"]);
+	});
+
+	it("answers an empty ledger as an empty last page, and a filtered-out page as empty but continuing", async () => {
+		const { kv, data } = ledgerKv();
+		const h = await setup({ env: { OAUTH_KV: kv } });
+		expect(JSON.parse(await call(h, {}))).toMatchObject({ events: [], count: 0, nextCursor: null });
+		const base = Date.parse("2026-10-11T12:00:00.000Z");
+		seed(data, base, "old", { tool: "update_agent" });
+		for (let i = 1; i <= 3; i++) seed(data, base + i * 1000, `n${i}`);
+		const empty = JSON.parse(await call(h, { tool: "update_agent", limit: 3 })) as Page;
+		expect(empty.events).toEqual([]);
+		expect(empty.nextCursor).not.toBeNull();
+		const found = JSON.parse(await call(h, { tool: "update_agent", limit: 3, cursor: empty.nextCursor })) as Page;
+		expect(found.events.map((e) => e.id)).toEqual(["old"]);
+	});
+
+	it("correlates by receipt: the event id, or a whole id in input/result — never a substring", async () => {
+		const { kv, data } = ledgerKv();
+		const h = await setup({ env: { OAUTH_KV: kv } });
+		const base = Date.parse("2026-10-11T12:00:00.000Z");
+		seed(data, base, "q1", { tool: "coding_loop_start", action: "queued", input: { instance_id: "inst-1" }, result: { queueEntryId: "run_1" } });
+		seed(data, base + 1000, "s1", { tool: "coding_loop_stop", input: { instance_id: "inst-1", run_id: "run_10" }, result: { ok: true } });
+		seed(data, base + 2000, "m1", { tool: "coding_session_message", input: { nested: [{ session_id: "csess_abc" }] } });
+		const ids = async (receipt: string) => (JSON.parse(await call(h, { receipt })) as Page).events.map((e) => e.id);
+		expect(await ids("run_1")).toEqual(["q1"]);
+		expect(await ids("run_10")).toEqual(["s1"]);
+		expect(await ids("csess_abc")).toEqual(["m1"]);
+		expect(await ids("inst-1")).toEqual(["s1", "q1"]);
+		expect(await ids("m1")).toEqual(["m1"]);
+		expect(await ids("run_")).toEqual([]);
+		expect(() => z.object(h.tools.get("mcp_audit_log")!.schema as z.ZodRawShape).strict().parse({ receipt: "x".repeat(201) })).toThrow();
+	});
+
+	it("smoke: a new authorized write is found by the receipt it returned, through a read-only lookup", async () => {
+		const h = await setup();
+		h.fetchStub.respond((u, m) => u.endsWith("/v1/agents") && m === "POST", { body: { id: "ag-receipt-1" } });
+		const created = await h.tools.get("create_agent")!.handler({ slug: "x", name: "X" });
+		expect(created.content[0].text).toContain("ag-receipt-1");
+		const callsBefore = h.fetchStub.calls.length;
+		const page = JSON.parse(await call(h, { receipt: "ag-receipt-1" })) as Page & { semantics: string };
+		expect(page.events).toHaveLength(1);
+		expect(page.events[0]).toMatchObject({ tool: "create_agent", action: "completed", result: { id: "ag-receipt-1" } });
+		expect(JSON.stringify(page.events[0])).not.toContain("session-token");
+		expect(page.semantics).toMatch(/not that the engine turn, run, deploy or external task/);
+		expect(h.fetchStub.calls.slice(callsBefore).every((c) => c.method === "GET")).toBe(true); // the lookup wrote nothing
 	});
 
 	it("refuses without a token", async () => {

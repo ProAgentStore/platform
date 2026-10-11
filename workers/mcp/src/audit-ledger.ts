@@ -127,13 +127,29 @@ export async function readAuditCoverage(kv: KVNamespace): Promise<AuditCoverage>
 }
 
 /**
+ * Exact correlation (#1016): the event IS the receipt (its own `id`), or its `input`/`result` holds
+ * that id as a whole string value at any depth — a run, queue entry, session, task or request id
+ * the tool call returned or acted on. Whole-value equality, never a substring: `run_1` must not
+ * match `run_10`.
+ */
+export function carriesReceipt(event: Record<string, unknown>, receipt: string): boolean {
+	if (event.id === receipt) return true;
+	const holds = (value: unknown, depth: number): boolean => {
+		if (value === receipt) return true;
+		if (depth > 8 || !value || typeof value !== "object") return false;
+		return Object.values(value).some((item) => holds(item, depth + 1));
+	};
+	return holds(event.input, 0) || holds(event.result, 0);
+}
+
+/**
  * One page of the ledger under `prefix`, newest first. A storage failure THROWS — the caller must
  * report it, never return the events it did get as though they were the whole page. A key that
  * lists but no longer reads expired or was deleted between the two calls; it is genuinely gone.
  */
 export async function readAuditPage(
 	kv: KVNamespace,
-	{ prefix, limit, cursor, tool }: { prefix: string; limit: number; cursor?: string; tool?: string },
+	{ prefix, limit, cursor, tool, receipt }: { prefix: string; limit: number; cursor?: string; tool?: string; receipt?: string },
 ): Promise<AuditPage> {
 	const [listed, coverage] = await Promise.all([
 		kv.list<AuditKeyMetadata>({ prefix, limit, ...(cursor ? { cursor } : {}) }),
@@ -153,7 +169,9 @@ export async function readAuditPage(
 			}
 		}),
 	);
-	const events = loaded.filter((e): e is Record<string, unknown> => e !== null && (!tool || e.tool === tool));
+	const events = loaded.filter(
+		(e): e is Record<string, unknown> => e !== null && (!tool || e.tool === tool) && (!receipt || carriesReceipt(e, receipt)),
+	);
 	return {
 		events,
 		count: events.length,

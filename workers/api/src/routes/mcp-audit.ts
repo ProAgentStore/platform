@@ -61,6 +61,8 @@ export interface McpAuditQuery {
 	/** The previous page's `nextCursor`. */
 	cursor?: string;
 	tool?: string;
+	/** Exact receipt id — see `carriesReceipt`. */
+	receipt?: string;
 }
 
 /**
@@ -82,12 +84,13 @@ export async function readMcpAuditEvents(kv: KVNamespace, query: McpAuditQuery):
 	return { ...page, events };
 }
 
-/** Parse the shared `?cursor=` / `?tool=` query; `null` when either is out of bounds. */
-export function parseAuditPaging(cursor: string | undefined, tool: string | undefined): { cursor?: string; tool?: string } | null {
-	const c = cursor?.trim() || undefined;
-	const t = tool?.trim() || undefined;
-	if ((c && c.length > 2048) || (t && t.length > 100)) return null;
-	return { cursor: c, tool: t };
+/** Parse the shared `?cursor=` / `?tool=` / `?receipt=` query; `null` when any is out of bounds. */
+export function parseAuditPaging(query: { cursor?: string; tool?: string; receipt?: string }): { cursor?: string; tool?: string; receipt?: string } | null {
+	const cursor = query.cursor?.trim() || undefined;
+	const tool = query.tool?.trim() || undefined;
+	const receipt = query.receipt?.trim() || undefined;
+	if ((cursor && cursor.length > 2048) || (tool && tool.length > 100) || (receipt && receipt.length > 200)) return null;
+	return { cursor, tool, receipt };
 }
 
 /** Read a page, or answer 503 naming the failure — a failed read is never an empty history. */
@@ -106,7 +109,8 @@ export const mcpAuditRoutes = new Hono<{ Bindings: Env }>();
 
 /**
  * GET /mcp-audit — the CALLER's own MCP tool-call events, newest first.
- * Query: ?limit= (default 100, max 200) ?tool= (exact match) ?cursor= (a previous `nextCursor`).
+ * Query: ?limit= (default 100, max 200) ?tool= (exact match) ?receipt= (exact event/run/queue/session id)
+ * ?cursor= (a previous `nextCursor`).
  */
 mcpAuditRoutes.get("/mcp-audit", async (c) => {
 	const session = await requireUser(c);
@@ -125,8 +129,8 @@ mcpAuditRoutes.get("/mcp-audit", async (c) => {
 	}
 
 	const limit = Math.max(1, Math.min(200, Number(c.req.query("limit")) || 100));
-	const paging = parseAuditPaging(c.req.query("cursor"), c.req.query("tool"));
-	if (!paging) return c.json({ error: "cursor must be at most 2048 characters and tool at most 100" }, 400);
+	const paging = parseAuditPaging(c.req.query());
+	if (!paging) return c.json({ error: "cursor must be at most 2048 characters, tool at most 100 and receipt at most 200" }, 400);
 
 	// The prefix is the caller's own uid and nothing else reaches it — no `?user=` here, and a
 	// cursor only moves WITHIN the prefix it is listed under.
