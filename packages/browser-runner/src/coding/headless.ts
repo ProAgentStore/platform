@@ -1,3 +1,4 @@
+import { InputLedger } from "./input-ledger.js";
 import { type ObjectiveOrigin, runObjectiveBlock } from "./run-objective.js";
 import { type ChildProcess, spawn } from "node:child_process";
 import { classifyCommand, commandFromToolInput, type EngineActRecord, fillTargetFromResult, toolCallOk, toolResultMark } from "./engine-acts.js";
@@ -107,8 +108,6 @@ type Run = "idle" | "thinking";
  */
 const MAX_PENDING_USAGE = 200;
 
-/** How many consumed-input ids a session reports (#1019). Re-sent on every snapshot, so bounded; the oldest fall off. */
-export const MAX_CONSUMED_INPUTS = 50;
 
 /**
  * How many un-drained consequential acts a session holds (#294).
@@ -189,10 +188,8 @@ export class HeadlessSession {
 	private pendingInputs: Array<string | null> = [];
 	/** The id of the input the current one-shot turn was spawned for (#1019). */
 	private turnInputId: string | null = null;
-	/** Ids of inputs a COMPLETED turn consumed, newest last and bounded (#1019). See {@link consumedInputs}. */
-	private consumed: string[] = [];
-	/** Ids of inputs handed to the engine, newest last and bounded (#1019): what a retry is reconciled against. */
-	private accepted: string[] = [];
+	/** Inputs accepted and consumed, bound to their content and the engine process that read them (#1019). */
+	readonly inputs = new InputLedger();
 	/**
 	 * The engine's own last output line of the turn in flight (#545).
 	 *
@@ -420,18 +417,12 @@ export class HeadlessSession {
 	 * credit for something it had not read.
 	 */
 	get consumedInputs(): readonly string[] {
-		return this.consumed;
+		return this.inputs.consumedIds;
 	}
 
 	/** Inputs this session accepted — handed to the engine, whether or not a turn has finished on them. */
 	get acceptedInputs(): readonly string[] {
-		return this.accepted;
-	}
-
-	private credit(id: string | null): void {
-		if (!id) return;
-		this.consumed.push(id);
-		if (this.consumed.length > MAX_CONSUMED_INPUTS) this.consumed.shift();
+		return this.inputs.acceptedIds;
 	}
 
 	/** The engine process's pid while one is running — what per-session resource attribution reads (#924). */
@@ -537,6 +528,7 @@ export class HeadlessSession {
 		if (this.procAlive) return;
 		// A new process has read none of what the old one was sent, and owns none of its half-read line.
 		this.pendingInputs = [];
+		this.inputs.newEngine();
 		this.buf = "";
 		const args = this.adapter.buildLaunchArgs(this.cmdArgs, this.claudeSessionId);
 
@@ -612,11 +604,7 @@ export class HeadlessSession {
 	 * handed a summary of the conversation it is already in; when spent it replaces the one-shot
 	 * session-start brief, being the same record composed later.
 	 */
-	input(text: string, opts: { author?: TurnAuthor; replay?: string; inputId?: string; objective?: { runId: string; text: string; origin?: ObjectiveOrigin } } = {}): void {
-		if (opts.inputId) {
-			this.accepted.push(opts.inputId);
-			if (this.accepted.length > MAX_CONSUMED_INPUTS) this.accepted.shift();
-		}
+	input(text: string, opts: { author?: TurnAuthor; replay?: string; inputId?: string; digest?: string; objective?: { runId: string; text: string; origin?: ObjectiveOrigin; constraints?: string[] } } = {}): void {
 		// The Engine reads the preamble, the pane the short marker; the instruction stays evidence.
 		const sent = authoredTurn(text, opts.author);
 		// The brief leads the turn and is spent in the reading (#693). It goes to the ENGINE only:
@@ -628,6 +616,7 @@ export class HeadlessSession {
 		const seed = replay ?? this.pendingSeed;
 		this.pendingSeed = null;
 		if (!this.alive) this.start();
+		if (opts.inputId) this.inputs.accept(opts.inputId, opts.digest ?? ""); // after start(): accepted by the process that will read it
 		if (replay) this.push("[pags] this engine keeps no memory between turns, so ProAgentStore's record of the conversation so far was delivered with this turn — a reconstruction, not the engine's own memory");
 		else if (seed) this.push("[pags] a context brief from ProAgentStore's record was delivered with this turn — a reconstruction, not the previous conversation");
 		// The run's objective (#1019): to the ENGINE in full, the pane a one-line marker (same budget as the brief).
@@ -786,7 +775,7 @@ export class HeadlessSession {
 			// verdict: evidence about this platform's timers, not about the engine's health.
 			this.turnReport = turnReportFromExit(code, signal, this.turnLastLine, Date.now(), this.turnTail);
 			// A turn we killed did not finish reading its input (#1019).
-			if (this.turnReport.verdict !== "killed") this.credit(inputId);
+			if (this.turnReport.verdict !== "killed") this.inputs.consume(inputId);
 			this.run = "idle";
 			this.proc = null;
 		});
@@ -957,7 +946,7 @@ export class HeadlessSession {
 				// own `is_error` — the same claim, in the words the engine states it in. Without
 				// this the field would exist for three engines and silently not for the flagship.
 				this.turnReport = turnReportFromResult(ev.isError, failure, Date.now(), this.turnTail);
-				this.credit(this.pendingInputs.shift() ?? null);
+				this.inputs.consume(this.pendingInputs.shift() ?? null);
 				// The same event that ends the turn also reports what the turn COST (#267). It was
 				// parsed and thrown away, which is why Engine spend was absent from the ledger.
 				// An errored turn still burned tokens, so this is recorded regardless of is_error.

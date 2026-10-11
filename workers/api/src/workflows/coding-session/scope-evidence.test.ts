@@ -10,6 +10,7 @@
  * Deliberately imports nothing #1019 added, so this file runs unchanged against the code before it —
  * which is how its fail-before evidence was taken (see the commit message).
  */
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { callRunner, decideCodingAction } = vi.hoisted(() => ({ callRunner: vi.fn(), decideCodingAction: vi.fn() }));
@@ -71,6 +72,16 @@ let env: Env;
 /** The engine's transcript so far — what every capture returns, growing as the engine works. */
 let transcript: string;
 const pane = () => ({ pane: transcript, runState: "idle", ready: true, alive: true });
+/**
+ * The runner's content digest (browser-runner coding/input-ledger.ts `actDigest`), re-derived HERE from the
+ * contract rather than imported, so a drift between what the cloud and the runner hash fails a test (#1019).
+ */
+const digestOf = (a: { text?: unknown; author?: unknown; objective?: { runId?: unknown; text?: unknown; origin?: { kind?: unknown; by?: unknown }; constraints?: unknown[] } }) => {
+	const str = (v: unknown) => (typeof v === "string" ? v : null);
+	const o = a.objective;
+	const objective = o ? [str(o.runId), str(o.text), str(o.origin?.kind), str(o.origin?.by), (o.constraints ?? []).filter((c) => typeof c === "string")] : null;
+	return createHash("sha256").update(JSON.stringify([str(a.text), str(a.author), objective])).digest("hex");
+};
 
 beforeEach(() => {
 	d1 = realSchemaD1();
@@ -660,17 +671,23 @@ describe("the run's objective reaches the engine verbatim, with the run's first 
 	/** A runner that advertises the capabilities, accepts each input id once, and an engine that reads every turn it is sent. */
 	function capableRunner(opts: { reads?: boolean; stale?: string[]; caps?: string[] } = {}) {
 		const accepted: string[] = [];
-		runner["/capabilities"] = () => ({ capabilities: opts.caps ?? ["coding.sessions", "coding.run-objective", "coding.run-objective.v2", "coding.input-idempotent"] });
+		const ledger: Array<[string, string, number]> = [];
+		// One ledger, one engine process: the stale ids belong to an earlier run of the same session.
+		const engine = () => ({ ledger: "L-cap", epoch: 0, accepted: ledger.slice(-16), consumed: [...(opts.stale ?? []), ...consumed].map((id) => [id, 0] as [string, number]) });
+		runner["/capabilities"] = () => ({ capabilities: opts.caps ?? ["coding.sessions", "coding.run-objective", "coding.run-objective.v2", "coding.run-objective.v3", "coding.input-idempotent", "coding.engine-identity"] });
 		runner["/coding/act"] = (body) => {
 			const a = body.action as (typeof bodies)[number];
-			if (a.inputId && accepted.includes(a.inputId)) return { ...pane(), acceptedInputs: [...accepted], duplicateInput: a.inputId };
+			if (a.inputId && accepted.includes(a.inputId)) return { ...pane(), acceptedInputs: [...accepted], engine: engine(), duplicateInput: a.inputId };
 			bodies.push(a);
 			acted.push(String(a.text ?? ""));
-			if (a.inputId) accepted.push(a.inputId);
+			if (a.inputId) {
+				accepted.push(a.inputId);
+				ledger.push([a.inputId, digestOf(a), 0]);
+			}
 			if (opts.reads !== false && a.inputId) consumed.push(a.inputId);
-			return { ...pane(), acceptedInputs: [...accepted] };
+			return { ...pane(), acceptedInputs: [...accepted], engine: engine() };
 		};
-		runner["/coding/capture"] = () => ({ ...pane(), acceptedInputs: [...accepted], consumedInputs: [...(opts.stale ?? []), ...consumed] });
+		runner["/coding/capture"] = () => ({ ...pane(), acceptedInputs: [...accepted], consumedInputs: [...(opts.stale ?? []), ...consumed], engine: engine() });
 	}
 	beforeEach(() => {
 		bodies = [];
@@ -806,25 +823,43 @@ describe("objective delivery across runner generations, lost replies and origins
 			message: r.message,
 			...(JSON.parse(r.context ?? "{}") as Record<string, unknown>),
 		}));
-	const V2 = ["coding.sessions", "coding.run-objective", "coding.run-objective.v2", "coding.input-idempotent"];
+	const V3 = ["coding.sessions", "coding.run-objective", "coding.run-objective.v2", "coding.run-objective.v3", "coding.input-idempotent", "coding.engine-identity"];
 	/** A runner whose capabilities can change between generations, and an engine that runs each accepted input once. */
 	function machine(opts: { caps?: () => string[]; reads?: () => boolean; stale?: () => string[]; reportsAccepted?: boolean; actFails?: (n: number) => Error | null } = {}) {
 		let acts = 0;
-		runner["/capabilities"] = () => ({ capabilities: (opts.caps ?? (() => V2))() });
+		// Every relaunch (a /coding/start after the run's own) spawns a new engine process: a new epoch of one ledger.
+		let epoch = 0;
+		let starts = 0;
+		const ledger: Array<[string, string, number]> = [];
+		const reads: Array<[string, number]> = [];
+		const engine = () => ({ engine: { ledger: "L-m", epoch, accepted: ledger.slice(-16), consumed: [...(opts.stale?.() ?? []).map((id) => [id, -1] as [string, number]), ...reads].slice(-16) } });
+		const start = runner["/coding/start"];
+		runner["/coding/start"] = (body) => {
+			if (++starts > 1) epoch++;
+			return { ...(start(body) as object), ...(opts.reportsAccepted === false ? {} : engine()) };
+		};
+		runner["/capabilities"] = () => ({ capabilities: (opts.caps ?? (() => V3))() });
 		runner["/coding/act"] = (body) => {
 			const a = body.action as (typeof bodies)[number];
 			bodies.push(a);
 			const n = ++acts;
-			if (a.inputId && accepted.includes(a.inputId)) return { ...pane(), acceptedInputs: [...accepted], duplicateInput: a.inputId };
+			const ids = () => (opts.reportsAccepted === false ? {} : { acceptedInputs: [...accepted], ...engine() });
+			if (a.inputId && accepted.includes(a.inputId)) return { ...pane(), ...ids(), duplicateInput: a.inputId };
 			executed.push(String(a.text ?? ""));
 			acted.push(String(a.text ?? ""));
-			if (a.inputId) accepted.push(a.inputId);
-			if ((opts.reads ?? (() => true))() && a.inputId) consumed.push(a.inputId);
+			if (a.inputId) {
+				accepted.push(a.inputId);
+				ledger.push([a.inputId, digestOf(a), epoch]);
+			}
+			if ((opts.reads ?? (() => true))() && a.inputId) {
+				consumed.push(a.inputId);
+				reads.push([a.inputId, epoch]);
+			}
 			const fail = opts.actFails?.(n);
 			if (fail) throw fail;
-			return { ...pane(), ...(opts.reportsAccepted === false ? {} : { acceptedInputs: [...accepted] }) };
+			return { ...pane(), ...ids() };
 		};
-		runner["/coding/capture"] = () => ({ ...pane(), ...(opts.reportsAccepted === false ? {} : { acceptedInputs: [...accepted] }), consumedInputs: [...(opts.stale?.() ?? []), ...consumed] });
+		runner["/coding/capture"] = () => ({ ...pane(), ...(opts.reportsAccepted === false ? {} : { acceptedInputs: [...accepted], ...engine() }), consumedInputs: [...(opts.stale?.() ?? []), ...consumed] });
 	}
 	/** Cloudflare re-runs a failed step's callback; this fake does the same, once per step. */
 	const retryingRun = (p: CodingSessionParams) => {
@@ -912,7 +947,7 @@ describe("objective delivery across runner generations, lost replies and origins
 
 	it("capable machine A, then legacy machine B after a reconnect: delivered on A, explicitly NOT delivered on B", async () => {
 		let legacy = false;
-		machine({ caps: () => (legacy ? ["coding.sessions", "coding.run-objective"] : V2) });
+		machine({ caps: () => (legacy ? ["coding.sessions", "coding.run-objective"] : V3) });
 		await dropBefore(2);
 		onRelaunch(() => {
 			legacy = true; // the machine that came back is the older one
@@ -926,10 +961,11 @@ describe("objective delivery across runner generations, lost replies and origins
 	it("a relaunched engine has not read it: owed again on the new generation, and delivered there too", async () => {
 		machine();
 		await dropBefore(2);
-		decisions = [SEND("first engine"), SEND("dropped, then re-sent as it was"), SEND("relaunched engine's first new turn"), FINISH("done")];
+		decisions = [SEND("first engine"), SEND("dropped, then recomposed"), SEND("relaunched engine's next turn"), FINISH("done")];
 		await run(params({ objective: OBJ }));
-		// The dropped act is the SAME act re-sent (same id); the re-owed objective rides the next new turn.
-		expect(bodies.map((b) => [b.text, !!b.objective])).toEqual([["first engine", true], ["dropped, then re-sent as it was", false], ["relaunched engine's first new turn", true]]);
+		// The dropped act keeps its id but is RECOMPOSED for the relaunched engine, which is owed the objective (#1019 case 1):
+		// the cached pre-relaunch payload (bare, because the predecessor had read it) is never what reaches the new engine.
+		expect(bodies.map((b) => [b.text, !!b.objective])).toEqual([["first engine", true], ["dropped, then recomposed", true], ["relaunched engine's next turn", false]]);
 		expect(events().map((e) => [e.state, e.generation])).toEqual([["delivered", 0], ["delivered", 1]]);
 	});
 

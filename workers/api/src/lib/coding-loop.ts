@@ -1,3 +1,4 @@
+import type { EngineInputs } from "./coding-engine-inputs.js";
 import type { ObjectiveOrigin } from "./coding-objective-origin.js";
 import { clipMarked } from "./clip-marked.js";
 import { runUserWorkersAi, systemPromptSections, systemPromptText, type StreamDeadlines, type SystemPromptBlock } from "./user-ai.js";
@@ -141,6 +142,10 @@ export interface CodingPaneSnapshot {
 	consumedInputs?: string[];
 	/** Ids the runner accepted (handed to the engine), on a `coding.input-idempotent` runner (#1019). Absent: an older runner. */
 	acceptedInputs?: string[];
+	/** Which input ledger and engine process answered, and whether this act's id was a same-content duplicate or a conflict (#1019). */
+	engine?: EngineInputs;
+	duplicateInput?: string;
+	inputConflict?: string;
 	/**
 	 * Why the run was stopped, when it was stopped by something other than the user's Stop button.
 	 *
@@ -160,7 +165,7 @@ export interface CodingPaneSnapshot {
  * re-added, which is exactly how it survived the first fix. The engine is a child process with
  * no PTY; there is no keystroke to send, and the type now says so.
  */
-export type CodingActionKind = { kind: "message"; text: string; author?: "pilot"; inputId?: string; objective?: { runId: string; text: string; origin: ObjectiveOrigin } } | { kind: "interrupt" };
+export type CodingActionKind = { kind: "message"; text: string; author?: "pilot"; inputId?: string; objective?: { runId: string; text: string; origin: ObjectiveOrigin; constraints?: string[] } } | { kind: "interrupt" };
 
 /**
  * `waiting` is the only NON-TERMINAL member (#541): the Engine cannot work right now for a reason

@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { actDigest } from "./input-ledger.js";
 import { CodingRuntime } from "./runtime.js";
 import { authenticatedCloneUrl, ensureRepo } from "./repo.js";
 import { defaultStatePath, HeadlessSession } from "./headless.js";
@@ -306,6 +307,46 @@ describe("CodingRuntime over the stream-json engine", () => {
 		rt.act("idem", { kind: "message", text: "only-once", inputId: "act:run-1:s5-act" });
 		await until(() => rt.snapshot("idem").pane.split("REPLY:only-once").length - 1 === 2);
 		expect(rt.snapshot("idem").acceptedInputs).toEqual(["act:run-1:s3-act", "act:run-1:s5-act"]);
+	});
+
+	it("the same id with CHANGED content is refused as a conflict — never skipped as a duplicate, never run (#1019)", async () => {
+		rt = new CodingRuntime(join(dir, "base"));
+		rt.start({ sessionId: "conflict", repoId: "r1", workDir: dir, clientType: "claude", bin });
+		const objective = (text: string) => ({ runId: "run-1", text, origin: { kind: "account" } });
+		rt.act("conflict", { kind: "message", text: "go", inputId: "act:run-1:s3-act", objective: objective("FIRST objective") });
+		await until(() => rt.snapshot("conflict").runState === "idle" && rt.snapshot("conflict").pane.includes("REPLY:"));
+		const changed = rt.act("conflict", { kind: "message", text: "go", inputId: "act:run-1:s3-act", objective: objective("CHANGED objective") });
+		expect(changed.inputConflict).toBe("act:run-1:s3-act");
+		expect(changed.duplicateInput).toBeUndefined();
+		// The unchanged retry stays an idempotent no-op.
+		const same = rt.act("conflict", { kind: "message", text: "go", inputId: "act:run-1:s3-act", objective: objective("FIRST objective") });
+		expect(same.duplicateInput).toBe("act:run-1:s3-act");
+		await wait(300);
+		const pane = rt.snapshot("conflict").pane;
+		expect(pane.split("REPLY:").length - 1).toBe(1); // executed once
+		expect(pane).not.toContain("CHANGED objective");
+		// The ledger binds the id to the content that ran: its digest is the FIRST payload's.
+		const [entry] = rt.snapshot("conflict").engine?.accepted ?? [];
+		expect(entry).toEqual(["act:run-1:s3-act", actDigest({ text: "go", objective: objective("FIRST objective") }), expect.any(Number)]);
+	});
+
+	it("names its ledger and engine process: a replacement process is a new epoch; ids accepted before it are still refused (#1019)", async () => {
+		rt = new CodingRuntime(join(dir, "base"));
+		const started = rt.start({ sessionId: "epochs", repoId: "r1", workDir: dir, clientType: "claude", bin });
+		const e0 = started.engine;
+		expect(e0).toMatchObject({ ledger: expect.any(String), epoch: 1 });
+		rt.act("epochs", { kind: "message", text: "before", inputId: "act:r:1" });
+		await until(() => (rt.snapshot("epochs").engine?.consumed ?? []).length === 1);
+		// The engine process dies; the relaunch spawns a new one in the SAME session.
+		const session = (rt as unknown as { sessions: Map<string, HeadlessSession> }).sessions.get("epochs");
+		session?.stop();
+		const relaunched = rt.start({ sessionId: "epochs", repoId: "r1", workDir: dir, clientType: "claude", bin });
+		expect(relaunched.engine).toMatchObject({ ledger: e0?.ledger, epoch: 2 });
+		expect(relaunched.engine?.consumed).toEqual([["act:r:1", 1]]); // read by epoch 1, never credited to 2
+		expect(rt.act("epochs", { kind: "message", text: "before", inputId: "act:r:1" }).duplicateInput).toBe("act:r:1");
+		// A re-created session is a different ledger: its empty record speaks for nobody else's.
+		rt.end("epochs");
+		expect(rt.start({ sessionId: "epochs", repoId: "r1", workDir: dir, clientType: "claude", bin }).engine?.ledger).not.toBe(e0?.ledger);
 	});
 
 	it("carries the action's author through to the engine, and narrows an invented one (#505)", async () => {

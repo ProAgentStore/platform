@@ -1,3 +1,4 @@
+import { actDigest, type EngineInputs } from "./input-ledger.js";
 import { runObjective } from "./run-objective.js";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -128,7 +129,7 @@ export type CodingAction =
 			 * The run's objective, verbatim as the platform accepted it (#1019): delivered ahead of the
 			 * instruction and attributed to the platform, not to whoever wrote `text`.
 			 */
-			objective?: { runId: string; text: string; origin?: { kind?: string; by?: string } };
+			objective?: { runId: string; text: string; origin?: { kind?: string; by?: string }; constraints?: string[] };
 	  }
 	/**
 	 * Still in the union, and refused by `act` (#448). The cloud no longer constructs it — the
@@ -181,8 +182,12 @@ export interface CodingSnapshot {
 	 * on every snapshot from a `coding.input-idempotent` runner, so "absent" means an older runner.
 	 */
 	acceptedInputs?: string[];
-	/** Set when this act carried an inputId the session had already accepted: nothing was sent again. */
+	/** Set when this act carried an inputId the session had already accepted WITH THE SAME CONTENT: nothing was sent again. */
 	duplicateInput?: string;
+	/** Set when this act's inputId was already accepted with DIFFERENT content (#1019): refused, nothing was sent. */
+	inputConflict?: string;
+	/** Whose input record this is, which engine process is current, and the newest entries bound to content and process (#1019). */
+	engine?: EngineInputs;
 	/**
 	 * Measured engine spend since the last drain (#267) — present ONLY when the caller asked to
 	 * drain, so the many read-only capture callers (chat context, sign-in detection, repo status)
@@ -262,7 +267,9 @@ export class CodingRuntime {
 		// sends the objective only to a v2 runner, so an older one is never made to call it the owner's.
 		// `coding.input-idempotent`: a message whose inputId this session already accepted is not run again,
 		// and every snapshot lists the accepted ids, so a retry after a lost reply can be reconciled.
-		return ["coding.sessions", "coding.stream", "human.takeover", "coding.inspect", "coding.repo-write", "coding.run-objective", "coding.run-objective.v2", "coding.input-idempotent"];
+		// `.v3` renders the owner's constraints in force with the objective; `coding.engine-identity`: every snapshot
+		// names its input ledger and engine process, and an id is deduplicated together with its content (input-ledger.ts).
+		return ["coding.sessions", "coding.stream", "human.takeover", "coding.inspect", "coding.repo-write", "coding.run-objective", "coding.run-objective.v2", "coding.run-objective.v3", "coding.input-idempotent", "coding.engine-identity"];
 	}
 
 	/**
@@ -447,6 +454,7 @@ export class CodingRuntime {
 			...(session.lastTurn ? { lastTurn: session.lastTurn } : {}),
 			...(session.consumedInputs.length ? { consumedInputs: [...session.consumedInputs] } : {}),
 			acceptedInputs: [...session.acceptedInputs],
+			engine: session.inputs.report(),
 			...(opts.drainUsage ? { usage: session.takeUsage(), acts: session.takeActs() } : {}),
 		};
 	}
@@ -457,14 +465,18 @@ export class CodingRuntime {
 		switch (action.kind) {
 			case "message": {
 				const inputId = typeof action.inputId === "string" && action.inputId.length <= 128 ? action.inputId : undefined;
-				// The same input twice is a retry after a lost reply, not a second instruction (#1019).
-				if (inputId && session.acceptedInputs.includes(inputId)) return { ...this.snapshot(sessionId), duplicateInput: inputId };
+				// The same input twice is a retry after a lost reply, not a second instruction (#1019) — but only with
+				// the same content: a changed payload under an accepted id is refused, never credited as the first.
+				const digest = actDigest(action);
+				const seen = inputId ? session.inputs.check(inputId, digest) : "new";
+				if (seen !== "new") return { ...this.snapshot(sessionId), ...(seen === "duplicate" ? { duplicateInput: inputId } : { inputConflict: inputId }) };
 				// Narrowed rather than trusted: this runner is a published package any caller can
 				// POST to, and an unrecognised author must read as "unstated", not become a label.
 				session.input(action.text, {
 					author: asTurnAuthor(action.author),
 					replay: typeof action.replay === "string" ? action.replay : undefined,
 					inputId,
+					digest,
 					objective: runObjective(action.objective),
 				});
 				break;

@@ -392,15 +392,21 @@ export function scopeRefusalNote(r: { constraint: ScopeConstraint; reason: strin
 	return `${what} — set by ${r.constraint.source}${scope}; ${r.reason}. Send an instruction inside it, or ask the owner (ask_owner) if the objective cannot be met within it.`;
 }
 
+/** One line per constraint in force — the SAME lines the Pilot's prompt and the engine's objective envelope carry (#1019). */
+export function constraintLines(constraints: readonly ScopeConstraint[]): string[] {
+	// The platform's termination rule is listed once the owner has SCOPED it, so the Pilot sees the grant's limits.
+	return constraints
+		.filter((c) => c.source !== "platform rule" || !!c.allowed?.length)
+		.map((c) =>
+			c.allowed?.length
+				? `- ${SCOPE_LABEL[c.kind]} — except ${c.allowed.includes("*") ? "any process (blanket grant)" : `${c.allowed.join(", ")} processes`} (granted by ${c.grantedBy})`
+				: `- ${c.kind === "worker_limit" ? `${SCOPE_LABEL.worker_limit}: at most ${c.limit}` : SCOPE_LABEL[c.kind]} (${c.source})`,
+		);
+}
+
 /** The prompt's list of what binds, so a constraint survives however many directives came after it. */
 export function constraintsBlock(constraints: readonly ScopeConstraint[]): string {
-	// The platform's termination rule is listed once the owner has SCOPED it, so the Pilot sees the grant's limits.
-	const owner = constraints.filter((c) => c.source !== "platform rule" || !!c.allowed?.length);
-	if (!owner.length) return "";
-	const lines = owner.map((c) =>
-		c.allowed?.length
-			? `- ${SCOPE_LABEL[c.kind]} — except ${c.allowed.includes("*") ? "any process (blanket grant)" : `${c.allowed.join(", ")} processes`} (granted by ${c.grantedBy})`
-			: `- ${c.kind === "worker_limit" ? `${SCOPE_LABEL.worker_limit}: at most ${c.limit}` : SCOPE_LABEL[c.kind]} (${c.source})`,
-	);
+	const lines = constraintLines(constraints);
+	if (!lines.length) return "";
 	return `\nCONSTRAINTS IN FORCE — derived from every owner rule and directive of this run, however old. The platform REFUSES any instruction that breaks one before it reaches the engine:\n${lines.join("\n")}`;
 }
