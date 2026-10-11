@@ -64,6 +64,8 @@ const IN_SYNC = { checked: true, branch: "main", upstream: "origin/main", localH
 
 let decisions: CodingDecision[];
 let decided: { goal: CodingGoal; actionLog: string[] }[];
+/** Runs WHILE the provider generates decision N (1-based) — the owner acting mid-generation. */
+let duringGeneration: Record<number, () => void>;
 let d1: RealSchemaD1;
 let env: Env;
 /** The engine's transcript so far — what every capture returns, growing as the engine works. */
@@ -91,9 +93,11 @@ beforeEach(() => {
 	callRunner.mockReset();
 	callRunner.mockImplementation(async (_conn: unknown, path: string, body: Record<string, unknown> = {}) => runner[path]?.(body) ?? {});
 	decided = [];
+	duringGeneration = {};
 	decideCodingAction.mockReset();
 	decideCodingAction.mockImplementation(async (_env: unknown, _uid: unknown, p: { goal: CodingGoal; actionLog: string[] }) => {
 		decided.push({ goal: structuredClone(p.goal), actionLog: [...p.actionLog] });
+		duringGeneration[decided.length]?.();
 		return decisions.length > 1 ? decisions.shift() : decisions[0];
 	});
 });
@@ -118,10 +122,12 @@ async function run(p: CodingSessionParams = params(), journal: Journal = newJour
 const SEND = (text: string): CodingDecision => ({ action: { kind: "message", text } });
 const FINISH = (detail: string): CodingDecision => ({ finish: { status: "done", detail } });
 let dirSeq = 0;
-/** The owner steers mid-run — recorded exactly as `POST …/message` records a steer. */
-function directive(content: string, at = Date.now() + ++dirSeq, delivery = "queued") {
+/** The owner steers mid-run — recorded exactly as `POST …/message` records a steer. Returns the directive id. */
+function directive(content: string, at = Date.now() + ++dirSeq, delivery = "queued"): string {
+	const id = `dir-${dirSeq}-${at}`;
 	d1.exec(`INSERT INTO coding_session_directives (id, session_id, instance_id, user_id, repo_id, run_id, kind, delivery, content, created_at)
-	  VALUES ('dir-${dirSeq}-${at}', 's1', 'i1', 'u1', 'r1', NULL, 'steer', '${delivery}', '${content.replace(/'/g, "''")}', ${at})`);
+	  VALUES ('${id}', 's1', 'i1', 'u1', 'r1', NULL, 'steer', '${delivery}', '${content.replace(/'/g, "''")}', ${at})`);
+	return id;
 }
 /** Run `fn` on the first engine act only — the moment the owner steers. */
 function onFirstAct(fn: () => void) {
@@ -218,6 +224,57 @@ describe("a later owner constraint binds the actions the Pilot generates", () =>
 		const replayed = await run(params(), journal);
 		expect(acted).toEqual([]);
 		expect(replayed.outcome).toBe(first.outcome);
+	});
+});
+
+// ── 1b. The corrections of #1019's second pass, through the same real workflow ──────────────────
+
+describe("termination authority, inert data and test selection", () => {
+	it("permission to finish after the push does not lift the termination prohibition", async () => {
+		decisions = [SEND("start"), SEND("pkill -f vitest to free memory"), SEND("run `pnpm vitest run src/export.test.ts --maxWorkers=1`"), FINISH("done")];
+		onFirstAct(() => directive("You may stop after the push."));
+		await run();
+		expect(acted).toEqual(["start", "run `pnpm vitest run src/export.test.ts --maxWorkers=1`"]);
+		expect(lastLog()).toMatch(/refused \(owner constraint\): no unscoped process termination — set by platform rule/);
+	});
+
+	it("an explicit grant naming the processes still lifts it", async () => {
+		decisions = [SEND("start"), SEND("pkill -f vitest"), FINISH("done")];
+		onFirstAct(() => directive("You may kill the stray vitest processes."));
+		await run();
+		expect(acted).toEqual(["start", "pkill -f vitest"]);
+	});
+
+	it("passes a quoted fixture string presented as data, and still refuses the same command asked for or left unquoted", async () => {
+		const fixture = "Add a test case to src/scope.test.ts asserting the screen refuses 'pkill -f node'";
+		decisions = [SEND("start"), SEND(fixture), SEND("run `pkill -f node` — it is only test data"), SEND("Add a fixture string 'ok' and pkill -f node"), SEND("'killall node'"), FINISH("done")];
+		const result = await run();
+		expect(acted).toEqual(["start", fixture]);
+		// Three refusals in a row is the loop's bound: the third (a bare quoted kill) ends the run, naming the rule.
+		const refusals = lastLog().split("\n").filter((l) => l.startsWith("refused (owner constraint): no unscoped process termination"));
+		expect(refusals).toHaveLength(2);
+		expect(result.outcome).toBe("failed");
+		expect(result.detail).toMatch(/outside the owner's constraints\. Last: no unscoped process termination/);
+	});
+
+	it("does not read a worker-limit value as a focused selector, and keeps a genuine focused invocation", async () => {
+		decisions = [SEND("start"), SEND("run `pnpm vitest run --maxWorkers 4`"), SEND("run `pnpm test -- --max-workers 4`"), SEND('run `pnpm vitest run -t "export flow" --maxWorkers 4`'), FINISH("done")];
+		onFirstAct(() => directive("Only run the focused tests, at most 4 workers."));
+		await run();
+		expect(acted).toEqual(["start", 'run `pnpm vitest run -t "export flow" --maxWorkers 4`']);
+		expect(lastLog().match(/refused \(owner constraint\): focused tests only/g)).toHaveLength(2);
+	});
+});
+
+describe("a constraint the owner sends while the provider is generating", () => {
+	it("binds the action that generation produced — it never reaches transport", async () => {
+		decisions = [SEND("start"), SEND("fix the export bug and push"), SEND("Read src/export.ts and report — do not edit anything"), FINISH("reported")];
+		// Directive 2 is being generated when the owner says read-only; the prompt that produced it never saw it.
+		duringGeneration[2] = () => directive("Read-only from now on.");
+		await run();
+		expect(decided[1].goal.ownerDirectives ?? []).toHaveLength(0);
+		expect(acted).toEqual(["start", "Read src/export.ts and report — do not edit anything"]);
+		expect(decided[2].actionLog.join("\n")).toMatch(/refused \(owner constraint\): read-only/);
 	});
 });
 
@@ -328,6 +385,56 @@ describe("a completion claim is checked against the final revision", () => {
 	});
 });
 
+describe("completion claims keep their provenance (#1019 second pass)", () => {
+	it("a test then an edit in ONE tool call does not verify the edited content", async () => {
+		decisions = [SEND("test then tweak"), FINISH("All tests pass."), FINISH("All tests pass.")];
+		engineDoes(() => call("Bash", { command: "pnpm test && sed -i 's/a/b/' src/export.ts" }, GREEN));
+		const result = await run();
+		expect(result.detail).toMatch(/tests pass: CONTRADICTED — files changed after the last green run/);
+	});
+
+	it("an edit then a test in one call does verify it", async () => {
+		decisions = [SEND("tweak then test"), FINISH("All tests pass.")];
+		engineDoes(() => call("Bash", { command: "sed -i 's/a/b/' src/export.ts && pnpm test" }, GREEN));
+		const result = await run();
+		expect(result.detail).toMatch(/tests pass: verified/);
+	});
+
+	it("a claim naming a different test command than the one that ran stays unverified", async () => {
+		decisions = [SEND("test"), FINISH("pnpm test:unit passes")];
+		engineDoes(() => test("pnpm vitest run src/export.test.ts", "Test Files  1 passed (1)\n     Tests  9 passed (9)"));
+		const result = await run();
+		expect(result.detail).toMatch(/tests pass: UNVERIFIED — the claim names `pnpm test:unit`, but the last test run was `pnpm vitest run src\/export\.test\.ts`/);
+	});
+
+	it("reads a worker-limited whole-suite run as the full suite, not as a focused subset", async () => {
+		decisions = [SEND("test"), FINISH("The full suite passes.")];
+		engineDoes(() => test("pnpm vitest run --maxWorkers 4"));
+		const result = await run();
+		expect(result.detail).toMatch(/full suite: verified/);
+	});
+
+	it("does not take a rendered-browser claim from a run that only read the source", async () => {
+		decisions = [SEND("check the button"), FINISH("The button now renders correctly.")];
+		engineDoes(() => {
+			edit("src/Button.tsx");
+			call("Read", { file_path: "src/Button.tsx" }, "export function Button() {}");
+		});
+		const result = await run();
+		expect(result.detail).toMatch(/rendered in a browser: UNVERIFIED — no browser was driven/);
+
+		transcript = "$ ";
+		decided = [];
+		decisions = [SEND("check the button"), FINISH("The button now renders correctly.")];
+		engineDoes(() => {
+			edit("src/Button.tsx");
+			call("mcp__playwright__browser_snapshot", { url: "http://localhost:5173" }, "button 'Save'");
+		});
+		const seen = await run();
+		expect(seen.detail).toMatch(/rendered in a browser: verified/);
+	});
+});
+
 // ── 3. Pending versus processed, as the Pilot is told it ───────────────────────────────────────
 
 describe("directive state reaches the Pilot as it is, not as acknowledged", () => {
@@ -342,6 +449,25 @@ describe("directive state reaches the Pilot as it is, not as acknowledged", () =
 		const [processed, queued] = decided[1].goal.ownerDirectives ?? [];
 		expect(processed).toMatchObject({ processed: true });
 		expect(queued).toMatchObject({ delivery: "queued", processed: false });
+	});
+
+	it("marks a directive processed only when the runner reports a completed turn consumed it — not because a turn ended after it", async () => {
+		let consumed: string[] = [];
+		let ids: { read: string; queued: string } | null = null;
+		const capture = runner["/coding/capture"];
+		runner["/coding/capture"] = (body) => ({ ...(capture(body) as object), lastTurn: { verdict: "ok", exitCode: null, signal: null, at: Date.now() + 60_000 }, consumedInputs: consumed });
+		decisions = [SEND("start"), SEND("next"), FINISH("ok")];
+		onFirstAct(() => {
+			ids = { read: directive("stay on the export module"), queued: directive("also skip the docs") };
+			// The turn that ended consumed only the first; the second was queued behind it.
+			consumed = [ids.read];
+		});
+		await run();
+		const processed = (id: string) => (d1.sqlite.prepare("SELECT processed_at FROM coding_session_directives WHERE id = ?").get(id) as { processed_at: number | null }).processed_at;
+		expect(ids).not.toBeNull();
+		const { read, queued } = ids as unknown as { read: string; queued: string };
+		expect(processed(read)).not.toBeNull();
+		expect(processed(queued)).toBeNull();
 	});
 });
 

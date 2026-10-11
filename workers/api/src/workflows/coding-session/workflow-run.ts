@@ -12,6 +12,7 @@ import type { CodingSessionParams } from "../coding-session-params.js";
 import { makeRunnerGuard, noRunnerDetail, RUNNER_PROBE_INTERVAL, type RunStep } from "../../lib/runner-availability.js";
 import { CompletionEvidence } from "../../lib/coding-completion-evidence.js";
 import { endSession, getRepo, reassignSessionNode, releaseSessionDriver, touchSessionActivity, touchSessionDriver } from "../../lib/coding-store.js";
+import { markDirectivesProcessed } from "../../lib/coding-ownership.js";
 import { pilotStopSignal, shouldEndSessionAfterRun } from "../../lib/coding-session-lifecycle.js";
 import { setCodingSessionCardStatus } from "../../lib/coding-board.js";
 import { startSessionOnRunnerConn } from "../../lib/coding-session-relaunch.js";
@@ -169,6 +170,8 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 
 	/** When the activity heartbeat last cost a subrequest (#523) — see `shouldTouchActivity`. */
 	let lastActivityTouchAt = 0;
+	/** Owner-directive ids this run has already recorded as consumed (#1019) — so a poll writes only on news. */
+	const creditedInputs = new Set<string>();
 
 	/**
 	 * Put a line in the OWNER'S CHAT THREAD.
@@ -429,6 +432,13 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		);
 		await appendEngineUsageTimeline(env, { sessionId, instanceId, userId }, pilotUsageRecords);
 		const reported = sanitizeEngineActs(acts);
+		// An owner directive the runner says a completed turn READ is processed (#1019) — the steer of a
+		// running Pilot otherwise never got past "queued", because only a direct turn's watcher marked any.
+		const fresh = (pane.consumedInputs ?? []).filter((id) => !creditedInputs.has(id));
+		if (fresh.length) {
+			await markDirectivesProcessed(env, { instanceId, userId, sessionId, consumed: fresh }).catch(() => 0);
+			for (const id of fresh) creditedInputs.add(id);
+		}
 		// What this run actually DID (#294). Stamped with the loop-run id when there is one, so
 		// `/trace?trace_id=<runId>` reconstructs exactly what a delegation did — the record whose
 		// absence let run 73ffc073 merge its own PRs to `main` and report only "done".

@@ -118,6 +118,11 @@ export type CodingAction =
 			 * Spent only when the engine holds no conversation of its own — see `HeadlessSession.input`.
 			 */
 			replay?: string;
+			/**
+			 * The cloud's id for this input (#1019) — an owner directive's id. Reported back in
+			 * {@link CodingSnapshot.consumedInputs} once a completed turn has read it.
+			 */
+			inputId?: string;
 	  }
 	/**
 	 * Still in the union, and refused by `act` (#448). The cloud no longer constructs it — the
@@ -160,6 +165,11 @@ export interface CodingSnapshot {
 	 * Absent = not measured (no turn has finished, or the runner predates the field). Never "fine".
 	 */
 	lastTurn?: EngineTurnReport;
+	/**
+	 * Ids (from `inputId`) of inputs a completed turn consumed, newest last (#1019). Absent when none
+	 * has, or on a runner that predates the field — never read as "nothing was consumed".
+	 */
+	consumedInputs?: string[];
 	/**
 	 * Measured engine spend since the last drain (#267) — present ONLY when the caller asked to
 	 * drain, so the many read-only capture callers (chat context, sign-in detection, repo status)
@@ -417,6 +427,7 @@ export class CodingRuntime {
 			// last turn end" is exactly the question asked about a session that just stopped, and
 			// the omitted-when-null shape keeps "not measured" distinguishable from a verdict.
 			...(session.lastTurn ? { lastTurn: session.lastTurn } : {}),
+			...(session.consumedInputs.length ? { consumedInputs: [...session.consumedInputs] } : {}),
 			...(opts.drainUsage ? { usage: session.takeUsage(), acts: session.takeActs() } : {}),
 		};
 	}
@@ -428,7 +439,11 @@ export class CodingRuntime {
 			case "message":
 				// Narrowed rather than trusted: this runner is a published package any caller can
 				// POST to, and an unrecognised author must read as "unstated", not become a label.
-				session.input(action.text, { author: asTurnAuthor(action.author), replay: typeof action.replay === "string" ? action.replay : undefined });
+				session.input(action.text, {
+					author: asTurnAuthor(action.author),
+					replay: typeof action.replay === "string" ? action.replay : undefined,
+					inputId: typeof action.inputId === "string" && action.inputId.length <= 128 ? action.inputId : undefined,
+				});
 				break;
 			case "keys": {
 				// A snapshot is no longer the whole answer (#448). `key()` records the attempt and

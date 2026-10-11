@@ -38,8 +38,10 @@ const SECRET = "direct-turn-secret";
 let d1: RealSchemaD1;
 let env: Env;
 /** What the simulated engine is doing, per session. */
-let engine: Record<string, { alive: boolean; ready: boolean; runState: string; lastTurn?: { at: number } }>;
+let engine: Record<string, { alive: boolean; ready: boolean; runState: string; lastTurn?: { at: number }; consumedInputs?: string[] }>;
 let acts: string[];
+/** The input id each `/coding/act` carried, as the runner received it (#1019). */
+let inputIds: Array<string | undefined>;
 
 beforeEach(() => {
 	d1 = realSchemaD1();
@@ -52,9 +54,13 @@ beforeEach(() => {
 	env = { DB: d1.DB, SESSION_SIGNING_KEY: SECRET, CODING_SESSION: { create: async () => ({ id: "cw" }) } } as unknown as Env;
 	engine = { A: { alive: true, ready: true, runState: "idle" }, B: { alive: true, ready: false, runState: "responding" } };
 	acts = [];
+	inputIds = [];
 	getRunnerConn.mockResolvedValue({ kind: "relay", instanceId: "i1", runnerNode: "n1", relayName: "i1:node:n1" });
-	callRunner.mockImplementation(async (_conn: unknown, path: string, body: { sessionId: string }) => {
-		if (path === "/coding/act") acts.push(body.sessionId);
+	callRunner.mockImplementation(async (_conn: unknown, path: string, body: { sessionId: string; action?: { inputId?: string } }) => {
+		if (path === "/coding/act") {
+			acts.push(body.sessionId);
+			inputIds.push(body.action?.inputId);
+		}
 		return { pane: "$ ", ...engine[body.sessionId] };
 	});
 	drain.mockResolvedValue({ drained: false });
@@ -113,9 +119,11 @@ describe("a direct follow-up to a retained session while another run works the c
 		expect(drain).not.toHaveBeenCalled();
 
 		// The engine finishes: the watcher releases the claim, marks the directive processed, drains once.
-		// A turn that ended clearly AFTER the directive — past the clock-skew allowance (#1019), which no longer credits a near-tie.
-		engine.A = { alive: true, ready: true, runState: "idle", lastTurn: { at: Date.now() + 10_000 } };
-		expect(await settleAfterDirectTurn(env, { ...scope, sessionId: "A", finalPane: { lastTurn: engine.A.lastTurn } }, probe)).toBe(true);
+		// Processed because the runner reports the turn consumed THIS directive's id (#1019) — the id the send carried.
+		expect(inputIds[0]).toMatch(/^dir-/);
+		expect((sent.body.delivery as { directiveId: string }).directiveId).toBe(inputIds[0]);
+		engine.A = { alive: true, ready: true, runState: "idle", lastTurn: { at: Date.now() + 10_000 }, consumedInputs: [inputIds[0] as string] };
+		expect(await settleAfterDirectTurn(env, { ...scope, sessionId: "A", finalPane: engine.A }, probe)).toBe(true);
 		expect(claimOf("A")).toBeNull();
 		expect(drain).toHaveBeenCalledTimes(1);
 		expect(drain).toHaveBeenCalledWith(env, "i1", "r1", "u1");
@@ -144,6 +152,32 @@ describe("a direct follow-up to a retained session while another run works the c
 		await settleAfterDirectTurn(env, { ...scope, sessionId: "A", finalPane: null }, runnerEngineProbe(env, "i1", "u1"));
 		const processed = d1.sqlite.prepare("SELECT COUNT(*) AS n FROM coding_session_directives WHERE session_id = 'A' AND processed_at IS NOT NULL").get() as { n: number };
 		expect(processed.n).toBe(0);
+	});
+
+	it("a directive queued during turn A is not processed when A ends after it — only when the runner reports it consumed (#1019)", async () => {
+		d1.exec("UPDATE agent_loop_runs SET status = 'completed' WHERE run_id = 'run-B'");
+		// A persistent (Claude) engine: the owner sends turn A, then a second message while A is running.
+		d1.exec("UPDATE coding_sessions SET client_type = 'claude' WHERE id = 'A'");
+		const first = await call("POST", "/coding/sessions/A/message", { text: "turn A" });
+		expect(first.status).toBe(200);
+		engine.A = { alive: true, ready: false, runState: "responding" };
+		const queued = await call("POST", "/coding/sessions/A/message", { text: "also skip the docs" });
+		expect(queued.status).toBe(200);
+		expect(queued.body).toMatchObject({ delivery: { state: "queued", engineBefore: "busy" } });
+		const [turnAInput, queuedInput] = inputIds.filter(Boolean) as string[];
+		const probe = runnerEngineProbe(env, "i1", "u1");
+		const processedOf = (id: string) => (d1.sqlite.prepare("SELECT processed_at FROM coding_session_directives WHERE id = ?").get(id) as { processed_at: number | null }).processed_at;
+
+		// Turn A ends — AFTER the queued directive was recorded — having consumed only its own input.
+		engine.A = { alive: true, ready: true, runState: "idle", lastTurn: { at: Date.now() + 60_000 }, consumedInputs: [turnAInput] };
+		await settleAfterDirectTurn(env, { ...scope, sessionId: "A", finalPane: engine.A }, probe);
+		expect(processedOf(turnAInput)).not.toBeNull();
+		expect(processedOf(queuedInput)).toBeNull();
+
+		// The turn that read it reports it; only now is it processed.
+		engine.A = { ...engine.A, lastTurn: { at: Date.now() + 90_000 }, consumedInputs: [turnAInput, queuedInput] };
+		await settleAfterDirectTurn(env, { ...scope, sessionId: "A", finalPane: engine.A }, probe);
+		expect(processedOf(queuedInput)).not.toBeNull();
 	});
 
 	it("releases its own claim when nothing could be delivered", async () => {

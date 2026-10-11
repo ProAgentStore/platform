@@ -71,6 +71,27 @@ export const SCOPE_LABEL: Record<ScopeKind, string> = {
 
 /** Any negation — used to keep a clause that negates something from reading as a LIFT. */
 const NEGATION = /\b(?:do not|don't|dont|never|no|not|without|avoid)\b/i;
+/**
+ * A quoted span the instruction presents as DATA — a fixture, a probe string, the input a test asserts
+ * is refused — rather than as something to run (#1019). Quotes alone are not that: "run `pkill node`"
+ * quotes a command it asks for. Only a span whose own clause frames it as data, and asks for nothing
+ * to be executed, is set aside; every unquoted command in the same instruction is still screened.
+ */
+const QUOTED = /"[^"\n]*"|(?<![\w])'[^'\n]*'(?![\w])|`[^`\n]*`/g;
+const DATA_FRAME =
+	/\b(?:fixtures?|literals?|test (?:data|inputs?|strings?|cases?|vectors?)|probes?(?: strings?)?|sample (?:inputs?|strings?|text)|as (?:data|a string|text|input)|asserts?|asserting|expects?|expecting|refuses?|rejects?|blocks?|flags?)\b/i;
+const EXEC_VERB = /\b(?:run|runs|running|execute[sd]?|exec|invoke[sd]?|call|eval|type|enter|paste|send|use|try|do)\b|\$\(|\|\s*(?:sh|bash|zsh)\b/i;
+const CLAUSE_EDGE = /\n|[.;!?](?=\s|$)|,\s+|\s+(?:then|and then)\s+|\s+—\s+/;
+
+function inertData(text: string): string {
+	return text.replace(QUOTED, (span, offset: number) => {
+		const before = text.slice(0, offset).split(CLAUSE_EDGE).pop() ?? "";
+		const after = text.slice(offset + span.length).split(CLAUSE_EDGE)[0] ?? "";
+		const frame = `${before} ${after}`.replace(QUOTED, " ");
+		return DATA_FRAME.test(frame) && !EXEC_VERB.test(frame) ? " (quoted data) " : span;
+	});
+}
+
 /** The negations that make a clause of an INSTRUCTION a prohibition rather than a request. */
 const PROHIBITION = /\b(?:do not|don't|dont|never|avoid|without|no need to)\b/i;
 
@@ -108,7 +129,12 @@ const LIFT: Array<{ kind: ScopeKind; re: RegExp }> = [
 	{ kind: "focused_tests", re: /\b(?:(?:you\s+(?:may|can)\s+(?:now\s+)?)?run\s+the\s+(?:full|whole|entire)\s+(?:test\s+)?suite|full\s+suite\s+is\s+(?:fine|ok|okay))\b/i },
 	{ kind: "worker_limit", re: /\bno\s+(?:worker|thread)\s+limit\b|\bany number of workers\b/i },
 	{ kind: "finish_after_push", re: /\b(?:you\s+(?:may|can)\s+(?:now\s+)?)?(?:wait for|watch)\s+(?:the\s+)?(?:ci|deploy)\b/i },
-	{ kind: "no_unscoped_termination", re: /\b(?:you\s+(?:may|can)|ok(?:ay)?\s+to|allowed\s+to|go ahead and)\s+(?:kill|terminate|stop)\b/i },
+	// A grant names WHAT may be terminated (#1019). "You may stop after the push" is permission to FINISH,
+	// and it used to lift this prohibition because "stop" matched with nothing after it.
+	{
+		kind: "no_unscoped_termination",
+		re: /\b(?:you\s+(?:may|can)|ok(?:ay)?\s+to|allowed\s+to|go ahead and)\s+(?:(?:kill|terminate|stop)\s+(?:[\w-]+\s+){0,3}(?:process(?:es)?|pids?)\b|(?:use\s+)?(?:pkill|killall)\b)/i,
+	},
 ];
 
 const WORKER_LIMIT = /\b(?:at most|max(?:imum)?(?: of)?|no more than|limit(?: it| tests?)? to|only)\s+(\d{1,3})\s+(?:test\s+)?(?:workers?|threads?|jobs?|forks?|processes)\b/i;
@@ -180,7 +206,7 @@ const UNSCOPED_KILL =
 const TEST_RUNNER =
 	/\b(?:(?:pnpm|npm|yarn|bun)\s+(?:(?:--filter[=\s]\S+|-F\s+\S+|-C\s+\S+|--dir[=\s]\S+)\s+)*(?:run\s+)?test(?::[\w-]+)?|npx\s+vitest(?:\s+run)?|vitest(?:\s+run)?|npx\s+jest|jest|pytest|go\s+test|cargo\s+test|(?:npx\s+)?playwright\s+test|node\s+--test)(?![\w:-])([^\n`;&|]*)/gi;
 /** Where an unquoted command in prose ends and the sentence resumes: "run pnpm test and report". */
-const PROSE_WORD = /^(?:and|then|to|for|with|so|but|or|again|now|first|after|before|until|once|which|that|report|show|tell|see|check|fix|on|in|it|the|a|an)$/i;
+const PROSE_WORD = /^(?:and|then|to|for|with|so|but|or|again|now|first|after|before|until|once|which|that|report|show|tell|see|check|fix|on|in|it|the|a|an|pass|passes|passed|passing|fails?|failed|failing|green|is|are|was|were)$/i;
 
 export interface TestInvocation {
 	command: string;
@@ -190,6 +216,20 @@ export interface TestInvocation {
 	requestedWorkers: number | null;
 	/** Options written after a bare `--` that a package-manager script may forward verbatim or drop. */
 	forwardedAfterDashDash: boolean;
+	/** Where the invocation starts in the text it was read from — orders it against other work in one command. */
+	at: number;
+}
+
+/** Options that take a NUMBER and select nothing: `--maxWorkers 4` is a worker cap, never a test called "4". */
+const NUMERIC_OPTION = /^(?:--max-?workers|--maxWorkers|--min-?workers|--minWorkers|--workers|-j|--jobs|-n|--numprocesses|--parallel|--bail|--retry|--test-?[tT]imeout|--hook-?[tT]imeout|--timeout|--seed)$/;
+/** Options that take a word and select nothing (`--reporter dot`, `-c vitest.config.ts`). */
+const WORD_OPTION = /^(?:--reporter|--pool|--config|-c|--environment|--outputFile|--output-file|--root|-r|--dir|--color|--log-?level|--loglevel|-p|--(?:poolOptions|coverage)\.[\w.]+)$/;
+/** Options whose value SELECTS tests: a name pattern, a project, a shard. */
+const SELECTOR_OPTION = /^(?:-t|--testNamePattern|--test-name-pattern|-k|--grep|-g|-run|--filter|--project|--shard|--testPathPattern|--test-path-pattern|--selectProjects)$/;
+
+/** Shell-ish words: a quoted run stays one token, so `-t "export flow"` is one option and its value. */
+function shellTokens(text: string): string[] {
+	return [...text.matchAll(/"[^"]*"|'[^']*'|\S+/g)].map((m) => m[0]);
 }
 
 /** Every test invocation in a piece of shell or instruction text. */
@@ -197,16 +237,36 @@ export function testInvocations(text: string): TestInvocation[] {
 	const out: TestInvocation[] = [];
 	for (const m of text.matchAll(TEST_RUNNER)) {
 		const head = m[0].slice(0, m[0].length - (m[1]?.length ?? 0)).trim();
-		const all = (m[1] ?? "").trim().split(/\s+/).filter(Boolean);
-		const stop = all.findIndex((t) => PROSE_WORD.test(t.replace(/[,.:)]+$/, "")));
-		const tokens = (stop < 0 ? all : all.slice(0, stop)).map((t) => t.replace(/[,.)]+$/, ""));
+		const all = shellTokens((m[1] ?? "").trim());
+		const stop = all.findIndex((t) => !/^["']/.test(t) && PROSE_WORD.test(t.replace(/[,.:)]+$/, "")));
+		const tokens = (stop < 0 ? all : all.slice(0, stop)).map((t) => (/^["']/.test(t) ? t : t.replace(/[,.)]+$/, "")));
 		const args = tokens.join(" ");
 		const full = /:full\b/.test(head) || /\.\/\.\.\./.test(args);
 		const pkgFilter = /--filter|-F\s|-C\s|--dir/.test(head);
-		const positional = tokens.filter((t) => t !== "--" && t !== "run" && !t.startsWith("-"));
-		const filterFlag = /(?:^|\s)(?:-t|--testNamePattern|-k|--grep|-run|--filter|--project|-p)(?:[=\s]|$)/.test(args);
-		const scope: TestInvocation["scope"] = full ? "full" : positional.length || filterFlag || pkgFilter ? "focused" : "full";
-		out.push({ command: `${head}${args ? ` ${args}` : ""}`, scope, requestedWorkers: requestedWorkers(args), forwardedAfterDashDash: /(?:pnpm|npm|yarn)\b/.test(head) && tokens.includes("--") });
+		// Walk the arguments as the runner would read them (#1019): an option's VALUE is consumed with it,
+		// so it is never mistaken for a positional selector; the bare `--` a package script forwards
+		// past is a delimiter, not an argument. Only a positional or a selecting option narrows the run.
+		let selected = false;
+		for (let i = 0; i < tokens.length; i++) {
+			const t = tokens[i];
+			if (t === "--" || t === "run") continue;
+			if (t.startsWith("-")) {
+				const [name, inline] = t.split(/=(.*)/s, 2);
+				if (SELECTOR_OPTION.test(name)) {
+					selected = true;
+					if (inline === undefined) i++;
+				} else if (inline === undefined && NUMERIC_OPTION.test(name)) {
+					if (/^\d+%?$/.test(tokens[i + 1] ?? "")) i++;
+				} else if (inline === undefined && WORD_OPTION.test(name)) {
+					if (tokens[i + 1] !== undefined && !tokens[i + 1].startsWith("-")) i++;
+				}
+				continue;
+			}
+			// A bare number is an option's stray value, never a test file.
+			if (!/^\d+%?$/.test(t)) selected = true;
+		}
+		const scope: TestInvocation["scope"] = full ? "full" : selected || pkgFilter ? "focused" : "full";
+		out.push({ command: `${head}${args ? ` ${args}` : ""}`, scope, requestedWorkers: requestedWorkers(args), forwardedAfterDashDash: /(?:pnpm|npm|yarn)\b/.test(head) && tokens.includes("--"), at: m.index ?? 0 });
 	}
 	return out;
 }
@@ -226,7 +286,7 @@ const FULL_SUITE_PROSE = /\b(?:full|whole|entire|complete)\s+(?:test\s+)?suite\b
  * broken constraint is named; the reason says what the instruction would do, not what the owner wrote.
  */
 export function screenScopedInstruction(constraints: readonly ScopeConstraint[], text: string): { constraint: ScopeConstraint; reason: string } | null {
-	const said = affirmative(text);
+	const said = affirmative(inertData(text));
 	for (const c of constraints) {
 		const reason = breaks(c, said);
 		if (reason) return { constraint: c, reason };

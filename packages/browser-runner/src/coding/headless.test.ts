@@ -1069,6 +1069,112 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 	}, 25_000);
 });
 
+/**
+ * A stream-json engine whose FIRST turn is held until `TURN_GATE` exists on disk (#1019), so a second
+ * input can be queued while that turn is provably still running. Later turns answer immediately.
+ * A file and not a timer, for the reason FAKE_CODEX_GATED_USAGE gives.
+ */
+const FAKE_CLAUDE_GATED = `#!/usr/bin/env node
+const fs = require("node:fs");
+const rl = require("node:readline").createInterface({ input: process.stdin });
+process.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: "sess-gated" }) + "\\n");
+const queue = [];
+let busy = false;
+let first = true;
+const answer = (text) => process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "done: " + text }) + "\\n");
+const next = () => {
+  if (busy || !queue.length) return;
+  busy = true;
+  const text = queue.shift();
+  const finish = () => { answer(text); busy = false; next(); };
+  if (!first) return finish();
+  first = false;
+  const tick = () => (fs.existsSync(process.env.TURN_GATE) ? finish() : setTimeout(tick, 20));
+  tick();
+};
+rl.on("line", (line) => {
+  let msg; try { msg = JSON.parse(line); } catch { return; }
+  if (msg.type !== "user") return;
+  queue.push((msg.message?.content || []).map((b) => b.text).join(" "));
+  next();
+});
+`;
+
+describe("HeadlessSession — a completed turn reports which inputs it consumed (#1019)", () => {
+	let dir: string;
+	let bin: string;
+	let pauser: string;
+	let gate: string;
+
+	beforeAll(() => {
+		dir = mkdtempSync(join(tmpdir(), "pags-consumed-"));
+		bin = join(dir, "fake-claude-gated.js");
+		writeFileSync(bin, FAKE_CLAUDE_GATED);
+		chmodSync(bin, 0o755);
+		pauser = join(dir, "fake-pauser.js");
+		writeFileSync(pauser, FAKE_PAUSER);
+		chmodSync(pauser, 0o755);
+		gate = join(dir, "turn-gate");
+	});
+	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+	it("does not credit an input queued during turn A to turn A's end — only the turn that read it", async () => {
+		const prev = process.env.TURN_GATE;
+		process.env.TURN_GATE = gate;
+		try {
+			const s = new HeadlessSession({ id: "consumed-sj", workDir: dir, clientType: "claude", bin, statePath: defaultStatePath(dir) });
+			s.start();
+			await until(() => s.runState() === "idle", 8000, "the engine to initialise");
+			s.input("turn A", { inputId: "dir-a" });
+			await until(() => s.runState() !== "idle", 4000, "turn A to start");
+			// Queued behind A, which is still held open by the gate: written, not read.
+			s.input("queued during A", { inputId: "dir-q" });
+			expect(s.consumedInputs).toEqual([]);
+			writeFileSync(gate, "");
+			await until(() => s.consumedInputs.length === 2, 8000, "both turns to end");
+			// A's end credited A; the queued input was credited only by the turn that answered it.
+			expect(s.consumedInputs).toEqual(["dir-a", "dir-q"]);
+			s.stop();
+		} finally {
+			if (prev === undefined) delete process.env.TURN_GATE;
+			else process.env.TURN_GATE = prev;
+		}
+	}, 20_000);
+
+	it("an input sent with no id holds its place, so a later id is never credited to the earlier turn", async () => {
+		const prev = process.env.TURN_GATE;
+		process.env.TURN_GATE = join(dir, "gate-2");
+		try {
+			const s = new HeadlessSession({ id: "consumed-sj-2", workDir: dir, clientType: "claude", bin, statePath: join(dir, "state-2.json") });
+			s.start();
+			await until(() => s.runState() === "idle", 8000, "the engine to initialise");
+			s.input("pilot turn"); // no id: the Pilot's own instruction
+			await until(() => s.runState() !== "idle", 4000, "the first turn to start");
+			s.input("owner steer", { inputId: "dir-steer" });
+			await until(() => s.lastTurn !== null, 300, "never").catch(() => undefined);
+			expect(s.consumedInputs).toEqual([]);
+			writeFileSync(join(dir, "gate-2"), "");
+			await until(() => s.consumedInputs.length === 1, 8000, "the steer's own turn to end");
+			expect(s.consumedInputs).toEqual(["dir-steer"]);
+			s.stop();
+		} finally {
+			if (prev === undefined) delete process.env.TURN_GATE;
+			else process.env.TURN_GATE = prev;
+		}
+	}, 20_000);
+
+	it("a one-shot turn killed by its successor consumed nothing; the successor's turn consumed its own input", async () => {
+		const s = new HeadlessSession({ id: "consumed-raw", workDir: dir, clientType: "codex", command: "codex", bin: pauser });
+		s.start();
+		s.input("slow one", { inputId: "dir-killed" });
+		await until(() => s.snapshot().includes("part 1: slow one"), 6000, "the first turn to start");
+		s.input("second", { inputId: "dir-second" });
+		await until(() => s.lastTurn !== null, 12_000, "the second turn to finish");
+		expect(s.consumedInputs).toEqual(["dir-second"]);
+		s.stop();
+	}, 25_000);
+});
+
 describe("HeadlessSession — a stream-json turn reports its own error (#545)", () => {
 	let dir: string;
 	let bin: string;

@@ -132,6 +132,11 @@ export interface CodingPaneSnapshot {
 	 */
 	lastTurn?: EngineTurnReport;
 	/**
+	 * Ids of inputs (owner directives) a COMPLETED engine turn consumed, from the runner (#1019). Absent on a
+	 * runner that predates it — and absent is "not known", never "consumed". See `markDirectivesProcessed`.
+	 */
+	consumedInputs?: string[];
+	/**
 	 * Why the run was stopped, when it was stopped by something other than the user's Stop button.
 	 *
 	 * Without it every halt reported the bare outcome "cancelled", which is indistinguishable from
@@ -150,7 +155,7 @@ export interface CodingPaneSnapshot {
  * re-added, which is exactly how it survived the first fix. The engine is a child process with
  * no PTY; there is no keystroke to send, and the type now says so.
  */
-export type CodingActionKind = { kind: "message"; text: string; author?: "pilot" } | { kind: "interrupt" };
+export type CodingActionKind = { kind: "message"; text: string; author?: "pilot"; inputId?: string } | { kind: "interrupt" };
 
 /**
  * `waiting` is the only NON-TERMINAL member (#541): the Engine cannot work right now for a reason

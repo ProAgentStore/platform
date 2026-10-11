@@ -224,10 +224,11 @@ export interface Directive {
 
 export async function recordDirective(
 	env: Env,
-	input: Scope & { sessionId: string; runId: string | null; kind: Directive["kind"]; delivery: Directive["delivery"]; content: string; now?: number },
+	input: Scope & { sessionId: string; runId: string | null; kind: Directive["kind"]; delivery: Directive["delivery"]; content: string; now?: number; id?: string },
 ): Promise<Directive> {
 	const d: Directive = {
-		id: `dir-${crypto.randomUUID()}`,
+		// The dispatcher mints the id BEFORE the send so it rides to the runner as the input's id (#1019).
+		id: input.id ?? newDirectiveId(),
 		sessionId: input.sessionId,
 		runId: input.runId,
 		kind: input.kind,
@@ -265,26 +266,37 @@ export async function listDirectives(env: Env, input: { instanceId: string; user
 		.reverse();
 }
 
+/** A directive id, minted before the send so the runner can report the turn that consumed it (#1019). */
+export function newDirectiveId(): string {
+	return `dir-${crypto.randomUUID()}`;
+}
+
 /** The most directives one Pilot reload reads — every one a run has had, in any real run (#1019). */
 export const RUN_DIRECTIVES_MAX = 500;
 
 /**
- * Mark directives the engine has demonstrably processed: it completed a turn that ended AFTER the
- * directive was recorded. `turnEndedAt` is the runner's `lastTurn.at` (the machine's clock).
+ * Mark directives the engine has demonstrably processed: the ids the RUNNER reports a completed turn
+ * consumed (`consumedInputs`, #1019), and nothing else.
  *
- * The skew allowance points the conservative way (#1019). It used to be ADDED to the turn's end, so
- * a directive recorded up to five seconds after the engine went idle was marked processed by a turn
- * that finished before the engine ever saw it — an owner told their correction was acknowledged
- * while it sat unread. Now a directive counts only when the turn ended at least `skewMs` after it:
- * a clock disagreement can delay the mark, never invent it. No completed turn marks nothing.
+ * Time cannot say it. This used to mark every directive recorded before the last turn's end — but a
+ * directive QUEUED while turn A runs is recorded before A ends without A ever reading it, so the
+ * owner was told a correction had been acted on while it sat unread behind A. The runner correlates
+ * a turn with the input it answered (`HeadlessSession.consumedInputs`); the cloud only records it.
+ * A runner that predates the field reports nothing, and its directives stay accepted / delivered /
+ * queued — "not yet confirmed" — rather than being credited on a clock.
  */
-export async function markDirectivesProcessed(env: Env, input: { instanceId: string; userId: string; sessionId: string; turnEndedAt: number | null | undefined; skewMs?: number }): Promise<number> {
-	if (!input.turnEndedAt) return 0;
+export async function markDirectivesProcessed(
+	env: Env,
+	input: { instanceId: string; userId: string; sessionId: string; consumed: readonly string[] | null | undefined; now?: number },
+): Promise<number> {
+	const ids = [...new Set(input.consumed ?? [])].filter((id) => typeof id === "string" && id.startsWith("dir-")).slice(-100);
+	if (!ids.length) return 0;
 	const res = await env.DB.prepare(
 		`UPDATE coding_session_directives SET processed_at = ?4
-		  WHERE session_id = ?1 AND instance_id = ?2 AND user_id = ?3 AND processed_at IS NULL AND created_at + ?5 < ?4`,
+		  WHERE session_id = ?1 AND instance_id = ?2 AND user_id = ?3 AND processed_at IS NULL
+		    AND id IN (SELECT value FROM json_each(?5))`,
 	)
-		.bind(input.sessionId, input.instanceId, input.userId, input.turnEndedAt, input.skewMs ?? 2_000)
+		.bind(input.sessionId, input.instanceId, input.userId, input.now ?? Date.now(), JSON.stringify(ids))
 		.run();
 	return res.meta?.changes ?? 0;
 }

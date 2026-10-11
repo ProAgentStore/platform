@@ -53,8 +53,15 @@ export async function pilotDecide(env: Env, input: PilotDecideInput, opts: { pol
 			(deadlines) =>
 				decideWithinBudget(env, { userId: input.userId, instanceId: input.instanceId, budgetId: input.budgetId, depth: input.depth }, async () => {
 					// The owner's standing rules and latest directives, fresh for THIS attempt (#1015).
-					await refreshGoalConstraints(env, input.params.goal, { instanceId: input.instanceId, userId: input.userId, repoId: input.repoId, sessionId: input.sessionId, runStartedAt: input.runStartedAt });
-					return decideCodingAction(env, input.userId, input.params, { kind: "coding", instanceId: input.instanceId, traceId }, deadlines);
+					const ctx = { instanceId: input.instanceId, userId: input.userId, repoId: input.repoId, sessionId: input.sessionId, runStartedAt: input.runStartedAt };
+					await refreshGoalConstraints(env, input.params.goal, ctx);
+					const decided = await decideCodingAction(env, input.userId, input.params, { kind: "coding", instanceId: input.instanceId, traceId }, deadlines);
+					// …and AGAIN once the provider has answered (#1019). A generation takes seconds to minutes, and a
+					// directive the owner sent meanwhile is not in the prompt that produced this action — but it binds
+					// the action all the same. The loop screens against the constraints returned below, so work the
+					// owner forbade mid-generation is refused before transport rather than one decision too late.
+					await refreshGoalConstraints(env, input.params.goal, ctx);
+					return decided;
 				}),
 		);
 		return { decision: decision as CodingDecision, constraints: input.params.goal.scopeConstraints };

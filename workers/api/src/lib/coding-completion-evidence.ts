@@ -38,7 +38,8 @@ type Observed =
 	| { kind: "test"; seq: number; inv: TestInvocation | null; command: string; ok: boolean | null; output: string | null; outputCut: boolean }
 	| { kind: "commit"; seq: number; ok: boolean | null; sha: string | null }
 	| { kind: "push"; seq: number; ok: boolean | null; effect: "updated" | "up_to_date" | "rejected" | "unknown" }
-	| { kind: "ci"; seq: number; ok: boolean | null; output: string | null };
+	| { kind: "ci"; seq: number; ok: boolean | null; output: string | null }
+	| { kind: "browser"; seq: number; ok: boolean | null };
 
 /** The run's observed record. Held by the workflow across rounds; fed one snapshot pane at a time. */
 export class CompletionEvidence {
@@ -66,7 +67,9 @@ export class CompletionEvidence {
 }
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
-const SHELL_MUTATION = /\b(?:sed|perl)\s+-i\b|(?:^|[;&|]\s*)(?:rm|mv|cp|tee)\s|\s>>?\s*(?!\/dev\/null|&)[\w./~-]+|\bgit\s+(?:apply|am|checkout\s+--|restore|reset\s+--hard|stash\s+pop|cherry-pick|revert|merge|rebase)\b|\bpatch\s+-p/m;
+const SHELL_MUTATION = /\b(?:sed|perl)\s+-i\b|(?:^|[;&|]\s*)(?:rm|mv|cp|tee)\s|\s>>?\s*(?!\/dev\/null|&)[\w./~-]+|\bgit\s+(?:apply|am|checkout\s+--|restore|reset\s+--hard|stash\s+pop|cherry-pick|revert|merge|rebase)\b|\bpatch\s+-p/gm;
+/** A tool that drives a real browser — the only kind of observation a "renders correctly" claim can rest on. */
+const BROWSER_TOOL = /browser|playwright|puppeteer|screenshot|chrome/i;
 
 /** The tool's argument as text: the `command` / `file_path` field of its JSON when it parses. */
 function field(input: string, name: string): string | null {
@@ -82,19 +85,34 @@ function field(input: string, name: string): string | null {
 
 function classify(call: EngineToolCall, seq: number): Observed[] | null {
 	if (EDIT_TOOLS.has(call.tool)) return [{ kind: "edit", seq, path: field(call.input, "file_path") ?? field(call.input, "notebook_path") }];
-	if (call.tool !== "Bash") return null;
+	if (call.tool !== "Bash") return BROWSER_TOOL.test(call.tool) ? [{ kind: "browser", seq, ok: call.ok }] : null;
 	const command = field(call.input, "command") ?? call.input;
+	// ONE call can hold several acts — `pnpm test && sed -i … src/x.ts` tests and THEN edits (#1019). Each
+	// act is ordered by where it sits in the command, inside this call's slot, so an edit after the test
+	// in the same call is after it in the record, and a green run never vouches for content it preceded.
+	const at = (pos: number) => seq + (pos + 1) / (command.length + 2);
+	const last = (re: RegExp) => {
+		let pos = -1;
+		for (const m of command.matchAll(new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`))) pos = m.index ?? pos;
+		return pos;
+	};
 	const out: Observed[] = [];
 	const tests = testInvocations(command);
 	if (tests.length) {
 		// A cut command may have lost the very arguments that decide its scope.
-		const inv = call.inputCut ? null : tests[tests.length - 1];
-		out.push({ kind: "test", seq, inv, command, ok: call.ok, output: call.output, outputCut: !!call.outputCut });
+		const lastInv = tests[tests.length - 1];
+		const inv = call.inputCut ? null : lastInv;
+		out.push({ kind: "test", seq: at(lastInv.at), inv, command, ok: call.ok, output: call.output, outputCut: !!call.outputCut });
+		if (/\bplaywright\s+test\b/.test(lastInv.command)) out.push({ kind: "browser", seq: at(lastInv.at), ok: call.ok });
 	}
-	if (SHELL_MUTATION.test(command)) out.push({ kind: "edit", seq, path: null });
-	if (/\bgit\s+commit\b/.test(command)) out.push({ kind: "commit", seq, ok: call.ok, sha: /\[[^\]\s]+\s+([0-9a-f]{7,40})\]/.exec(call.output ?? "")?.[1] ?? null });
-	if (/\bgit\s+push\b/.test(command)) out.push({ kind: "push", seq, ok: call.ok, effect: pushEffect(call) });
-	if (/\bgh\s+(?:run\s+(?:view|watch|list)|pr\s+checks)\b/.test(command)) out.push({ kind: "ci", seq, ok: call.ok, output: call.output });
+	const mutation = last(SHELL_MUTATION);
+	if (mutation >= 0) out.push({ kind: "edit", seq: at(mutation), path: null });
+	const commit = last(/\bgit\s+commit\b/);
+	if (commit >= 0) out.push({ kind: "commit", seq: at(commit), ok: call.ok, sha: /\[[^\]\s]+\s+([0-9a-f]{7,40})\]/.exec(call.output ?? "")?.[1] ?? null });
+	const push = last(/\bgit\s+push\b/);
+	if (push >= 0) out.push({ kind: "push", seq: at(push), ok: call.ok, effect: pushEffect(call) });
+	const ci = last(/\bgh\s+(?:run\s+(?:view|watch|list)|pr\s+checks)\b/);
+	if (ci >= 0) out.push({ kind: "ci", seq: at(ci), ok: call.ok, output: call.output });
 	return out;
 }
 
@@ -135,10 +153,13 @@ const CLAIM_TESTS_PASS = /\b(?:tests?|suite|specs?)\b[^.\n]{0,60}\b(?:pass(?:ed|
 const CLAIM_FULL = /\b(?:full|whole|entire|complete)\s+(?:test\s+)?suite\b|\ball\s+(?:\d[\d,]*\s+)?tests\b(?!\s+(?:in|of|under|for|from))|\btest:full\b/i;
 const CLAIM_COUNT = /\b(\d[\d,]*)\s+(?:tests?\s+)?pass(?:ed|ing)\b|\ball\s+(\d[\d,]*)\s+tests?\b|\b(\d[\d,]*)\s+tests?\b[^.\n]{0,20}\bpass/gi;
 const CLAIM_PUSHED = /\bpushed\b|\bpush(?:ed)?\s+to\s+(?:main|master|origin|the\s+(?:default|main)\s+branch)\b/i;
+/** A claim about what a user SEES — only a browser observation can support it, never reading the source. */
+const CLAIM_RENDERED =
+	/\b(?:renders?|rendered|rendering|displays?)\b[^.\n]{0,40}\b(?:correctly|properly|fine|as expected)\b|\b(?:verified|confirmed|checked|tested)\b[^.\n]{0,30}\b(?:in the browser|visually|on screen|in the UI)\b|\bscreenshot\b[^.\n]{0,30}\b(?:shows|confirms)\b|\b(?:page|ui|button|modal|dialog|layout|form)\s+(?:now\s+)?(?:shows|displays|renders|appears)\b/i;
 const CLAIM_CI = /\bCI\b[^.\n]{0,40}\b(?:green|pass(?:ed|es|ing)?|success(?:ful)?|succeeded)\b|\bdeploy(?:ed|ment)?\b[^.\n]{0,30}\b(?:succeeded|is live|went out|green|successful)\b|\b(?:is|are)\s+(?:now\s+)?(?:live|deployed)\b/i;
 
 export interface ClaimVerdict {
-	claim: "tests_pass" | "full_suite" | "test_count" | "pushed" | "external_ci";
+	claim: "tests_pass" | "full_suite" | "test_count" | "pushed" | "external_ci" | "rendered";
 	/** `supported`: the record shows it. `unverified`: it does not show it either way. `contradicted`: it shows otherwise. */
 	status: "supported" | "unverified" | "contradicted";
 	why: string;
@@ -163,12 +184,16 @@ export function judgeCompletion(detail: string, ev: CompletionEvidence): Complet
 	const unseen = ev.sawCalls ? "no test run appears in this run's record" : "this engine's tool calls are not observable, so no test run could be checked";
 
 	const claimsPass = CLAIM_TESTS_PASS.test(detail);
+	// The test command the claim itself names, if it names one: the run must have been THAT command (#1019).
+	const named = testInvocations(detail);
 	if (claimsPass) {
 		if (!lastTest) verdicts.push({ claim: "tests_pass", status: "unverified", why: unseen });
 		else if (reading?.invalid) verdicts.push({ claim: "tests_pass", status: "contradicted", why: `the last test command (\`${short(lastTest.command)}\`) is not evidence: ${reading.invalid}` });
 		else if (lastTest.ok === false || (reading?.failed ?? 0) > 0) verdicts.push({ claim: "tests_pass", status: "contradicted", why: `the last test run (\`${short(lastTest.command)}\`) failed${reading?.failed ? ` — ${reading.failed} failed` : ""}` });
 		else if (lastTest.ok === null) verdicts.push({ claim: "tests_pass", status: "unverified", why: `the last test run's outcome was not recorded (\`${short(lastTest.command)}\`)` });
 		else if (lastEdit && lastEdit.seq > lastTest.seq) verdicts.push({ claim: "tests_pass", status: "contradicted", why: `files changed after the last green run${lastEdit.path ? ` (${lastEdit.path})` : ""}, so it does not test the final revision` });
+		else if (named.length && !named.some((n) => lastTest.inv && canonical(n.command) === canonical(lastTest.inv.command)))
+			verdicts.push({ claim: "tests_pass", status: "unverified", why: `the claim names \`${short(named[named.length - 1].command)}\`, but the last test run was \`${short(lastTest.command)}\` — a different command is not evidence for it` });
 		else if (lastTest.inv?.forwardedAfterDashDash) verdicts.push({ claim: "tests_pass", status: "unverified", why: `options after a bare \`--\` in \`${short(lastTest.command)}\` may never have reached the test runner, so what it selected is unknown` });
 		else if (reading?.passed === null || reading?.passed === undefined) verdicts.push({ claim: "tests_pass", status: "unverified", why: `the last run exited cleanly but its output${lastTest.outputCut ? " was cut before" : " shows no"} pass count` });
 		else verdicts.push({ claim: "tests_pass", status: "supported", why: `\`${short(lastTest.command)}\` passed ${reading.passed} after the last edit` });
@@ -218,9 +243,27 @@ export function judgeCompletion(detail: string, ev: CompletionEvidence): Complet
 		);
 	}
 
+	if (CLAIM_RENDERED.test(detail)) {
+		const seen = [...obs].reverse().find((o): o is Extract<Observed, { kind: "browser" }> => o.kind === "browser") ?? null;
+		verdicts.push(
+			!seen
+				? { claim: "rendered", status: "unverified", why: "no browser was driven in this run's record — reading the source is not seeing the page" }
+				: seen.ok !== true
+					? { claim: "rendered", status: "unverified", why: "the last browser observation's outcome was not a success" }
+					: lastEdit && lastEdit.seq > seen.seq
+						? { claim: "rendered", status: "unverified", why: "files changed after the last browser observation, so it did not see the final revision" }
+						: { claim: "rendered", status: "supported", why: "a browser was driven after the last edit" },
+		);
+	}
+
 	const correctable = verdicts.filter((v) => v.status === "contradicted" && (v.claim === "tests_pass" || v.claim === "full_suite" || v.claim === "pushed"));
 	const recordNote = !verdicts.length ? null : !ev.sawCalls ? "the engine's tool calls were not observable" : ev.gap ? "some tool calls scrolled out between snapshots, so the record may be incomplete" : null;
 	return { verdicts, correctable, recordNote };
+}
+
+/** Two spellings of one test command compare equal: `npx`, spacing and quoting are not a different command. */
+function canonical(command: string): string {
+	return command.replace(/^npx\s+/, "").replace(/["']/g, "").replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 /** A command as a label beside its verdict — marked when cut, so it never reads as the whole command. */
@@ -232,7 +275,7 @@ function short(command: string): string {
 export function evidenceNote(j: CompletionJudgement): string {
 	if (!j.verdicts.length) return "";
 	const word = { supported: "verified", unverified: "UNVERIFIED", contradicted: "CONTRADICTED" } as const;
-	const label = { tests_pass: "tests pass", full_suite: "full suite", test_count: "test count", pushed: "pushed", external_ci: "CI/deploy" } as const;
+	const label = { tests_pass: "tests pass", full_suite: "full suite", test_count: "test count", pushed: "pushed", external_ci: "CI/deploy", rendered: "rendered in a browser" } as const;
 	const lines = j.verdicts.map((v) => `- ${label[v.claim]}: ${word[v.status]} — ${v.why}`);
 	if (j.recordNote) lines.push(`- note: ${j.recordNote}`);
 	return `Evidence check (the platform's reading of this run's own tool calls):\n${lines.join("\n")}`;

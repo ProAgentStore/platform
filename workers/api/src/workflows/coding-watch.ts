@@ -142,17 +142,14 @@ function sleep(ms: number): Promise<void> {
  */
 export async function settleAfterDirectTurn(
 	env: Env,
-	input: { instanceId: string; userId: string; sessionId: string; repoId?: string | null; turnId?: string; finalPane: { lastTurn?: { at?: number } | null } | null },
+	input: { instanceId: string; userId: string; sessionId: string; repoId?: string | null; turnId?: string; finalPane: { consumedInputs?: string[] | null } | null },
 	probe = runnerEngineProbe(env, input.instanceId, input.userId),
 ): Promise<boolean> {
 	if (!input.repoId) return true;
-	const state = await probe(input.sessionId).catch(() => "unknown" as const);
-	if (state === "idle" || state === "stopped") {
-		// Only the runner's own turn report is evidence (#1019). An older runner sends none, and its
-		// directives stay "not yet confirmed" rather than being credited to an idle engine on no turn at all.
-		const turnEndedAt = input.finalPane?.lastTurn?.at ?? null;
-		await markDirectivesProcessed(env, { instanceId: input.instanceId, userId: input.userId, sessionId: input.sessionId, turnEndedAt: state === "idle" ? turnEndedAt : null }).catch(() => 0);
-	}
+	// Only the runner's correlation of a completed turn with the input it read is evidence (#1019) — not
+	// a turn that merely ended after the directive was sent, which is how a message queued behind that
+	// turn was credited to it. An older runner reports none, and its directives stay "not yet confirmed".
+	await markDirectivesProcessed(env, { instanceId: input.instanceId, userId: input.userId, sessionId: input.sessionId, consumed: input.finalPane?.consumedInputs }).catch(() => 0);
 	// Scoped to this watcher's own turn (#1015): a newer send's reservation on the same session is that send's to settle.
 	const remaining = await settleDirectTurns(env, { instanceId: input.instanceId, userId: input.userId, repoId: input.repoId }, probe, input.turnId ? { sessionId: input.sessionId, turnId: input.turnId } : undefined);
 	// A newer send on this session holds its own reservation: this watcher's turn is settled, and the

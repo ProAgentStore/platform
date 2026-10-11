@@ -36,6 +36,7 @@ import {
 	type DirectiveDelivery,
 	type EngineProbe,
 	type ProbeEngine,
+	newDirectiveId,
 	recordDirective,
 	releaseReservation,
 	type RepoOwner,
@@ -106,7 +107,11 @@ export async function dispatchOwnedTurn(env: Env, input: DispatchInput): Promise
 	let runId = admission.kind === "steer" ? admission.runId : null;
 
 	const engineBefore = await input.probe(scope.sessionId).catch((): EngineProbe => "unknown");
-	const action = await input.prepare();
+	// An owner's message carries its directive id to the runner, which reports back the turn that
+	// actually consumed it (#1019) — the only evidence `processed` is allowed to rest on.
+	const directiveId = input.author === "owner" ? newDirectiveId() : null;
+	const prepared = await input.prepare();
+	const action: CodingActionKind = directiveId && prepared.kind === "message" ? { ...prepared, inputId: directiveId } : prepared;
 
 	/** The fence: still this call's reservation, no other owner, and — for a steer — its run still running. */
 	const fence = async (): Promise<DispatchResult | null> => {
@@ -150,7 +155,7 @@ export async function dispatchOwnedTurn(env: Env, input: DispatchInput): Promise
 			const delivery: DirectiveDelivery = failure ? "accepted" : deliveryFor(engineBefore, input.persistent);
 			const directive =
 				input.author === "owner"
-					? await recordDirective(env, { ...scope, runId: kind === "steer" ? runId : null, kind, delivery, content: input.ownerText }).catch(() => null)
+					? await recordDirective(env, { ...scope, id: directiveId ?? undefined, runId: kind === "steer" ? runId : null, kind, delivery, content: input.ownerText }).catch(() => null)
 					: null;
 			return { ok: true, kind, runId: kind === "steer" ? runId : null, turnId, delivery, confirmed: !failure, snap: failure ? null : snap, engineBefore, directiveId: directive?.id ?? null };
 		}

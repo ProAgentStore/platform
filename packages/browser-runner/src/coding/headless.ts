@@ -106,6 +106,9 @@ type Run = "idle" | "thinking";
  */
 const MAX_PENDING_USAGE = 200;
 
+/** How many consumed-input ids a session reports (#1019). Re-sent on every snapshot, so bounded; the oldest fall off. */
+export const MAX_CONSUMED_INPUTS = 50;
+
 /**
  * How many un-drained consequential acts a session holds (#294).
  *
@@ -178,6 +181,15 @@ export class HeadlessSession {
 	private stopped = false;
 	/** How the last COMPLETED turn ended (#545). Null until one has. See {@link EngineTurnReport}. */
 	private turnReport: EngineTurnReport | null = null;
+	/**
+	 * Inputs written to the persistent process and not yet answered by a turn end, oldest first (#1019).
+	 * `null` holds the place of an input sent without an id, so the ids after it stay aligned.
+	 */
+	private pendingInputs: Array<string | null> = [];
+	/** The id of the input the current one-shot turn was spawned for (#1019). */
+	private turnInputId: string | null = null;
+	/** Ids of inputs a COMPLETED turn consumed, newest last and bounded (#1019). See {@link consumedInputs}. */
+	private consumed: string[] = [];
 	/**
 	 * The engine's own last output line of the turn in flight (#545).
 	 *
@@ -393,6 +405,27 @@ export class HeadlessSession {
 		return this.turnReport;
 	}
 
+	/**
+	 * Ids of inputs a completed turn demonstrably consumed (#1019), newest last.
+	 *
+	 * The cloud used to mark an owner's message "processed" when ANY turn ended after it was sent —
+	 * but a message queued behind a running turn arrives before that turn ends without being read
+	 * by it. So consumption is correlated here, where the inputs are written: a one-shot turn
+	 * consumed the input it was spawned for (unless we killed it); a persistent engine answers its
+	 * inputs in order, so a turn end credits only the OLDEST outstanding one. If the engine folded
+	 * two queued inputs into one turn, the second is credited one turn late — a delay, never a
+	 * credit for something it had not read.
+	 */
+	get consumedInputs(): readonly string[] {
+		return this.consumed;
+	}
+
+	private credit(id: string | null): void {
+		if (!id) return;
+		this.consumed.push(id);
+		if (this.consumed.length > MAX_CONSUMED_INPUTS) this.consumed.shift();
+	}
+
 	/** The engine process's pid while one is running — what per-session resource attribution reads (#924). */
 	get pid(): number | null {
 		return this.procAlive ? (this.proc?.pid ?? null) : null;
@@ -494,6 +527,8 @@ export class HeadlessSession {
 			return;
 		}
 		if (this.procAlive) return;
+		// A new process has read none of what the old one was sent.
+		this.pendingInputs = [];
 		const args = this.adapter.buildLaunchArgs(this.cmdArgs, this.claudeSessionId);
 
 		const proc = spawn(this.cmdBin, args, {
@@ -561,7 +596,7 @@ export class HeadlessSession {
 	 * handed a summary of the conversation it is already in; when spent it replaces the one-shot
 	 * session-start brief, being the same record composed later.
 	 */
-	input(text: string, opts: { author?: TurnAuthor; replay?: string } = {}): void {
+	input(text: string, opts: { author?: TurnAuthor; replay?: string; inputId?: string } = {}): void {
 		// The Engine reads the preamble, the pane the short marker; the instruction stays evidence.
 		const sent = authoredTurn(text, opts.author);
 		// The brief leads the turn and is spent in the reading (#693). It goes to the ENGINE only:
@@ -591,7 +626,9 @@ export class HeadlessSession {
 				// disambiguation rides in the text instead (#505).
 				const msg = JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text: withSeed }] } });
 				this.proc?.stdin?.write(`${msg}\n`);
+				this.pendingInputs.push(opts.inputId ?? null);
 			} else {
+				this.turnInputId = opts.inputId ?? null;
 				// Raw CLI: spawn THIS turn. See `oneShot` — there is no persistent process to
 				// write to, because a non-interactive binary would never have read it.
 				this.runOneShot(withSeed);
@@ -624,6 +661,7 @@ export class HeadlessSession {
 		this.sawStructuredEvent = false;
 		this.structuredOutputRejected = false;
 		const resumedCodexThreadId = this.codexResumeThreadId;
+		const inputId = this.turnInputId;
 		const turnArgs = resumedCodexThreadId
 			? buildCodexResumeArgs(this.cmdArgs, resumedCodexThreadId, text)
 			: this.adapter.buildTurnArgs(this.cmdArgs, text);
@@ -717,6 +755,8 @@ export class HeadlessSession {
 			// A signal means WE ended it (the wedge ceiling, an interrupt), which is the `killed`
 			// verdict: evidence about this platform's timers, not about the engine's health.
 			this.turnReport = turnReportFromExit(code, signal, this.turnLastLine, Date.now(), this.turnTail);
+			// A turn we killed did not finish reading its input (#1019).
+			if (this.turnReport.verdict !== "killed") this.credit(inputId);
 			this.run = "idle";
 			this.proc = null;
 		});
@@ -887,6 +927,7 @@ export class HeadlessSession {
 				// own `is_error` — the same claim, in the words the engine states it in. Without
 				// this the field would exist for three engines and silently not for the flagship.
 				this.turnReport = turnReportFromResult(ev.isError, failure, Date.now(), this.turnTail);
+				this.credit(this.pendingInputs.shift() ?? null);
 				// The same event that ends the turn also reports what the turn COST (#267). It was
 				// parsed and thrown away, which is why Engine spend was absent from the ledger.
 				// An errored turn still burned tokens, so this is recorded regardless of is_error.

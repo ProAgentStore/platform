@@ -143,26 +143,36 @@ describe("engine probe and delivery vocabulary", () => {
 });
 
 describe("directives: delivery is recorded, processing is observed separately", () => {
-	it("lists a run's directives oldest first and marks only those a later completed turn covers", async () => {
-		await recordDirective(env, { ...scope, sessionId: "B", runId: null, kind: "steer", delivery: "queued", content: "read-only from now on", now: 1_000 });
+	it("lists a run's directives oldest first and marks only those the runner says a completed turn consumed", async () => {
+		const first = await recordDirective(env, { ...scope, sessionId: "B", runId: null, kind: "steer", delivery: "queued", content: "read-only from now on", now: 1_000 });
 		await recordDirective(env, { ...scope, sessionId: "B", runId: null, kind: "steer", delivery: "queued", content: "and do not stash", now: 60_000 });
 		expect((await listDirectives(env, { ...scope, sessionId: "B", sinceMs: 0 })).map((d) => d.content)).toEqual(["read-only from now on", "and do not stash"]);
 		expect(await listDirectives(env, { ...scope, sessionId: "B", sinceMs: 2_000 })).toHaveLength(1);
 
-		// No completed turn reported: nothing is claimed processed.
-		expect(await markDirectivesProcessed(env, { ...scope, sessionId: "B", turnEndedAt: null })).toBe(0);
-		// A turn that ended after the first but before the second covers only the first.
-		expect(await markDirectivesProcessed(env, { ...scope, sessionId: "B", turnEndedAt: 10_000, skewMs: 0 })).toBe(1);
-		expect((await listDirectives(env, { ...scope, sessionId: "B", sinceMs: 0 })).map((d) => d.processedAt != null)).toEqual([true, false]);
+		// No consumption reported (an older runner, or no completed turn): nothing is claimed processed.
+		expect(await markDirectivesProcessed(env, { ...scope, sessionId: "B", consumed: undefined })).toBe(0);
+		expect(await markDirectivesProcessed(env, { ...scope, sessionId: "B", consumed: [] })).toBe(0);
+		// The runner correlated a completed turn with the FIRST input only.
+		expect(await markDirectivesProcessed(env, { ...scope, sessionId: "B", consumed: [first.id], now: 70_000 })).toBe(1);
+		expect((await listDirectives(env, { ...scope, sessionId: "B", sinceMs: 0 })).map((d) => d.processedAt)).toEqual([70_000, null]);
+		// Re-reported on a later snapshot, it is not re-stamped.
+		expect(await markDirectivesProcessed(env, { ...scope, sessionId: "B", consumed: [first.id], now: 90_000 })).toBe(0);
 	});
 
-	it("never credits a directive recorded after the turn ended — the old skew pointed the wrong way (#1019)", async () => {
-		// The engine's turn ended at 100_000; the owner's correction arrived three seconds LATER. The engine
-		// has not seen it. It used to be marked processed because the skew was ADDED to the turn's end.
-		await recordDirective(env, { ...scope, sessionId: "B", runId: null, kind: "steer", delivery: "delivered", content: "stop after the push", now: 103_000 });
-		expect(await markDirectivesProcessed(env, { ...scope, sessionId: "B", turnEndedAt: 100_000 })).toBe(0);
-		// A turn that ends clearly after it does count.
-		expect(await markDirectivesProcessed(env, { ...scope, sessionId: "B", turnEndedAt: 110_000 })).toBe(1);
+	it("a directive queued during turn A is not processed because A ended after it — only correlated consumption counts (#1019)", async () => {
+		// The owner steers at 50_000 while turn A is running; A ends at 100_000 without having read it.
+		const queued = await recordDirective(env, { ...scope, sessionId: "B", runId: null, kind: "steer", delivery: "queued", content: "stop after the push", now: 50_000 });
+		// A's end consumed only A's own input (an id this session never recorded as a directive).
+		expect(await markDirectivesProcessed(env, { ...scope, sessionId: "B", consumed: ["dir-turn-a-input"], now: 100_000 })).toBe(0);
+		expect((await listDirectives(env, { ...scope, sessionId: "B", sinceMs: 0 }))[0]).toMatchObject({ delivery: "queued", processedAt: null });
+		// The turn that actually read it reports it.
+		expect(await markDirectivesProcessed(env, { ...scope, sessionId: "B", consumed: ["dir-turn-a-input", queued.id], now: 130_000 })).toBe(1);
+		expect((await listDirectives(env, { ...scope, sessionId: "B", sinceMs: 0 }))[0]).toMatchObject({ delivery: "queued", processedAt: 130_000 });
+	});
+
+	it("never marks another session's directive, whatever id the runner reports", async () => {
+		const other = await recordDirective(env, { ...scope, sessionId: "A", runId: null, kind: "direct", delivery: "delivered", content: "x", now: 1 });
+		expect(await markDirectivesProcessed(env, { ...scope, sessionId: "B", consumed: [other.id] })).toBe(0);
 	});
 
 	it("records a message whose engine state was unknown as ACCEPTED, not delivered (#1019)", async () => {
