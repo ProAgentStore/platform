@@ -52,6 +52,8 @@ vi.mock("../lib/loop-drivers.js", async () => {
 const { toolRoutes } = await import("./tools.js");
 const { tryDequeueAndStart } = await import("../lib/objective-queue-start.js");
 const { createLoopRun, finishLoopRun } = await import("../lib/agent-loop-store.js");
+const { recordLifecycle } = await import("../lib/objective-lifecycle.js");
+const { requeueEntry } = await import("../lib/objective-queue.js");
 
 let d1: RealSchemaD1;
 let env: Env;
@@ -596,5 +598,185 @@ describe("a lost history write is reported as a gap, never as a complete history
 		await start({ requestId: "req-3", objective: "Work issue #902." }); // the ledger's first event, after the legacy receipt
 		expect(await page("request_id=legacy-1")).toMatchObject({ coverage: "unknown", coverage_gaps: [] });
 		expect(await page("request_id=req-3")).toMatchObject({ coverage: "complete" });
+	});
+});
+
+// ── #1017: every deferral is counted, and an uncounted history never reads complete ───────────────
+
+describe("deferral coverage counts each deferral, through every status and handle", () => {
+	/** Drops the `deferred` event write for the listed ordinals only (bind ?13 is `deferral_seq`). */
+	function losingDeferrals(ordinals: number[], legacyEvent = false) {
+		const real = d1.DB;
+		return {
+			DB: {
+				...real,
+				batch: real.batch.bind(real),
+				prepare(sql: string) {
+					const st = real.prepare(sql);
+					if (!sql.includes("INSERT INTO objective_lifecycle_events")) return st;
+					return {
+						bind: (...args: unknown[]) =>
+							args[6] === "deferred" && (legacyEvent || ordinals.includes(Number(args[12])))
+								? { run: async () => { throw new Error("D1 write failed (injected)"); } }
+								: st.bind(...args),
+					};
+				},
+			},
+		} as unknown as Env;
+	}
+	const real = () => ({ DB: d1.DB }) as unknown as Env;
+	/** Queue req-m and drain it `times` times against a busy repo, losing the deferrals listed. */
+	async function deferTimes(times: number, lost: number[] = []) {
+		const q = await start({ requestId: "req-m", objective: "Work issue #908.", queueIfBusy: true });
+		const entryId = (q.body.entry as { id: string }).id;
+		for (let n = 1; n <= times; n++) {
+			env = lost.includes(n) ? losingDeferrals([n]) : real();
+			expect(await tryDequeueAndStart(env, "i1", "r1", "u1")).toMatchObject({ requeued: true });
+		}
+		env = real();
+		return entryId;
+	}
+	const row = (id: string) => d1.sqlite.prepare("SELECT status, deferral_count, deferred_at, stop_reason FROM instance_objective_queue WHERE id = ?").get(id) as Record<string, unknown>;
+	const cov = async (handle: string) => {
+		const p = await page(handle);
+		return { coverage: p.coverage, coverage_gaps: p.coverage_gaps };
+	};
+	const gapOf = (id: string, n: number, of: number) => `queue entry ${id} (deferral ${n} of ${of}): no "deferred" event`;
+	/** The same coverage from every handle the objective has. */
+	async function everyHandle(entryId: string, runId: string | null, want: { coverage: string; coverage_gaps: string[] }) {
+		for (const h of ["request_id=req-m", `queue_entry_id=${entryId}`, ...(runId ? [`run_id=${runId}`] : [])]) expect(await cov(h), h).toEqual(want);
+	}
+
+	it("all recorded: two deferrals, two events — complete", async () => {
+		const id = await deferTimes(2);
+		expect(row(id)).toMatchObject({ status: "pending", deferral_count: 2 });
+		await everyHandle(id, null, { coverage: "complete", coverage_gaps: [] });
+	});
+
+	for (const [label, lost] of [
+		["first recorded, later lost", [2]],
+		["first lost, later recorded", [1]],
+		["several lost", [1, 3]],
+	] as const) {
+		it(`${label}: a named gap per lost deferral, in every reachable status and from every handle`, async () => {
+			const times = Math.max(2, ...lost);
+			const id = await deferTimes(times, [...lost]);
+			const gaps = lost.map((n) => gapOf(id, n, times));
+			// pending
+			await everyHandle(id, null, { coverage: "incomplete", coverage_gaps: gaps });
+			// running: read while the drain holds the claim, from inside the start itself
+			let whileClaimed: unknown = null;
+			driverStart.mockImplementationOnce(async (input: { env: Env; instanceId: string; userId: string; objective: string }) => {
+				whileClaimed = { status: row(id).status, ...(await cov(`queue_entry_id=${id}`)) };
+				await createLoopRun(input.env, { runId: "run-1", userId: input.userId, instanceId: input.instanceId, objective: input.objective, maxIterations: 10, startedAt: Date.now() });
+				return { ok: true, runId: "run-1", driver: "coding" };
+			});
+			expect(await tryDequeueAndStart(env, "i1", "r1", "u1")).toMatchObject({ started: true, runId: "run-1" });
+			expect(whileClaimed).toEqual({ status: "running", coverage: "incomplete", coverage_gaps: gaps });
+			// admitted, run running — then finished
+			await everyHandle(id, "run-1", { coverage: "incomplete", coverage_gaps: gaps });
+			await finishLoopRun(env, "run-1", "done", "shipped", Date.now());
+			await everyHandle(id, "run-1", { coverage: "incomplete", coverage_gaps: gaps });
+		});
+	}
+
+	it("a lost deferral stays a gap after an owner cancel, and after a failed admission", async () => {
+		const cancelled = await deferTimes(2, [2]);
+		expect((await call("DELETE", `/loop/queue/${cancelled}`, undefined, { "X-PAGS-Client": "console" })).status).toBe(200);
+		expect(await cov(`queue_entry_id=${cancelled}`)).toEqual({ coverage: "incomplete", coverage_gaps: [gapOf(cancelled, 2, 2)] });
+
+		const q = await start({ requestId: "req-f", objective: "Work issue #909.", queueIfBusy: true });
+		const failed = (q.body.entry as { id: string }).id;
+		env = losingDeferrals([1]);
+		await tryDequeueAndStart(env, "i1", "r1", "u1");
+		env = real();
+		await tryDequeueAndStart(env, "i1", "r1", "u1");
+		driverStart.mockResolvedValueOnce({ ok: false, status: 409, error: "This coding agent has no repository yet." });
+		expect(await tryDequeueAndStart(env, "i1", "r1", "u1")).toMatchObject({ started: false, requeued: false });
+		expect(row(failed)).toMatchObject({ status: "failed", deferral_count: 2 });
+		expect(await cov(`queue_entry_id=${failed}`)).toEqual({ coverage: "incomplete", coverage_gaps: [gapOf(failed, 1, 2)] });
+	});
+
+	it("idempotent bookkeeping: a repeated `deferred` write and a requeue that moved nothing count nothing extra", async () => {
+		const id = await deferTimes(1);
+		const before = (d1.sqlite.prepare("SELECT count(*) AS n FROM objective_lifecycle_events WHERE event = 'deferred'").get() as { n: number }).n;
+		// The same deferral's event written again (a retried bookkeeping write): dropped, not a second deferral.
+		await recordLifecycle(env, { userId: "u1", instanceId: "i1", queueEntryId: id, requestId: "req-m", event: "deferred", reason: "again", deferralSeq: 1, actor: { kind: "platform" } });
+		// A requeue of a row that is no longer claimed (a retried step): no deferral, no count.
+		expect(await requeueEntry(env, id, "retried")).toEqual({ requeued: false, deferralSeq: null });
+		expect(row(id)).toMatchObject({ deferral_count: 1 });
+		expect((d1.sqlite.prepare("SELECT count(*) AS n FROM objective_lifecycle_events WHERE event = 'deferred'").get() as { n: number }).n).toBe(before);
+		expect(await cov(`queue_entry_id=${id}`)).toEqual({ coverage: "complete", coverage_gaps: [] });
+	});
+
+	it("a counted entry never deferred expects none — the no-deferral control", async () => {
+		const q = await start({ requestId: "req-m", objective: "Work issue #908.", queueIfBusy: true });
+		const id = (q.body.entry as { id: string }).id;
+		expect(row(id)).toMatchObject({ deferral_count: 0 });
+		startsRun(Date.now());
+		expect(await tryDequeueAndStart(env, "i1", "r1", "u1")).toMatchObject({ started: true });
+		await everyHandle(id, "run-1", { coverage: "complete", coverage_gaps: [] });
+	});
+
+	describe("rows queued before the count existed (deferral_count NULL) never read complete on deferral grounds", () => {
+		/** A row as an older writer left it: uncounted; `deferred_at` too when `pre0216`; its event unsequenced or lost. */
+		async function legacyDeferred(opts: { pre0216: boolean; event: "recorded" | "lost" }) {
+			const q = await start({ requestId: "req-m", objective: "Work issue #908.", queueIfBusy: true });
+			const id = (q.body.entry as { id: string }).id;
+			env = opts.event === "lost" ? losingDeferrals([], true) : real();
+			expect(await tryDequeueAndStart(env, "i1", "r1", "u1")).toMatchObject({ requeued: true });
+			env = real();
+			d1.exec(`UPDATE instance_objective_queue SET deferral_count = NULL${opts.pre0216 ? ", deferred_at = NULL" : ""} WHERE id = '${id}'`);
+			d1.exec("UPDATE objective_lifecycle_events SET deferral_seq = NULL WHERE event = 'deferred'");
+			expect(row(id)).toMatchObject({ status: "pending", stop_reason: BUSY.error });
+			return id;
+		}
+		const legacyGap = (id: string) => `queue entry ${id} (deferred): no "deferred" event`;
+
+		it("pre-0216, pending with its waiting note and no event: a gap", async () => {
+			const id = await legacyDeferred({ pre0216: true, event: "lost" });
+			expect(await cov(`queue_entry_id=${id}`)).toEqual({ coverage: "incomplete", coverage_gaps: [legacyGap(id)] });
+		});
+
+		it("pre-0216, the same entry then cancelled: still a gap — a cancel does not erase the note", async () => {
+			const id = await legacyDeferred({ pre0216: true, event: "lost" });
+			expect((await call("DELETE", `/loop/queue/${id}`, undefined, { "X-PAGS-Client": "console" })).status).toBe(200);
+			expect(row(id)).toMatchObject({ status: "cancelled", stop_reason: BUSY.error });
+			for (const h of ["request_id=req-m", `queue_entry_id=${id}`]) expect(await cov(h)).toEqual({ coverage: "incomplete", coverage_gaps: [legacyGap(id)] });
+		});
+
+		it("pre-0216, admitted and finished: `unknown`, never a fabricated gap and never complete", async () => {
+			const id = await legacyDeferred({ pre0216: true, event: "lost" });
+			startsRun(Date.now());
+			expect(await tryDequeueAndStart(env, "i1", "r1", "u1")).toMatchObject({ started: true, runId: "run-1" });
+			d1.exec(`UPDATE instance_objective_queue SET deferred_at = NULL, deferral_count = NULL WHERE id = '${id}'`);
+			expect(row(id)).toMatchObject({ stop_reason: null, deferred_at: null });
+			await finishLoopRun(env, "run-1", "done", "shipped", Date.now());
+			await everyHandle(id, "run-1", { coverage: "unknown", coverage_gaps: [] });
+		});
+
+		it("pre-0218 with a recorded event: how many deferrals is unknowable — `unknown`, not complete", async () => {
+			for (const pre0216 of [true, false]) {
+				const id = await legacyDeferred({ pre0216, event: "recorded" });
+				expect(await cov(`queue_entry_id=${id}`), `pre0216=${pre0216}`).toEqual({ coverage: "unknown", coverage_gaps: [] });
+				d1.exec(`DELETE FROM instance_objective_queue WHERE id = '${id}'`);
+				d1.exec("DELETE FROM objective_lifecycle_events");
+				d1.exec("DELETE FROM loop_start_receipts");
+			}
+		});
+
+		it("0216-era (`deferred_at` set, uncounted) with its event lost: a gap", async () => {
+			const id = await legacyDeferred({ pre0216: false, event: "lost" });
+			expect(await cov(`queue_entry_id=${id}`)).toEqual({ coverage: "incomplete", coverage_gaps: [legacyGap(id)] });
+		});
+
+		it("uncounted and never deferred (no marker at all): `unknown`, unlike a counted zero", async () => {
+			const q = await start({ requestId: "req-m", objective: "Work issue #908.", queueIfBusy: true });
+			const id = (q.body.entry as { id: string }).id;
+			d1.exec(`UPDATE instance_objective_queue SET deferral_count = NULL WHERE id = '${id}'`);
+			startsRun(Date.now());
+			expect(await tryDequeueAndStart(env, "i1", "r1", "u1")).toMatchObject({ started: true });
+			await everyHandle(id, "run-1", { coverage: "unknown", coverage_gaps: [] });
+		});
 	});
 });

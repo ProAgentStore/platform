@@ -142,9 +142,11 @@ export async function tryDequeueAndStart(env: Env, instanceId: string, repoId: s
 		// started on top of it. The refusal is recorded on the row, because an entry that sits pending
 		// with nobody told why is the other half of the same complaint.
 		if (startRefusalIsWaitable(started.reason)) {
-			await requeueEntry(env, entry.id, started.error);
-			await recordLifecycle(env, { ...lifecycleOf(entry), event: "deferred", reason: started.error });
-			return { drained: true, entryId: entry.id, started: false, requeued: true, error: started.error };
+			// Only a requeue that moved the claimed row is a deferral, and its event carries the ordinal that
+			// row now counts (#1017), so a repeated bookkeeping write for it lands on the same deferral.
+			const requeue = await requeueEntry(env, entry.id, started.error);
+			if (requeue.requeued) await recordLifecycle(env, { ...lifecycleOf(entry), event: "deferred", reason: started.error, deferralSeq: requeue.deferralSeq });
+			return { drained: true, entryId: entry.id, started: false, requeued: requeue.requeued, error: started.error };
 		}
 
 		// Everything else is structural — no repo on the agent, no runner, a checkout that failed

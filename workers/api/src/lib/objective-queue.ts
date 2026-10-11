@@ -113,8 +113,8 @@ export async function enqueueObjective(env: Env, input: EnqueueInput): Promise<O
 	const objective = input.objective.slice(0, OBJECTIVE_MAX);
 	await env.DB.prepare(
 		`INSERT INTO instance_objective_queue
-		   (id, instance_id, repo_id, user_id, objective, max_iterations, metadata, status, created_at)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8)`,
+		   (id, instance_id, repo_id, user_id, objective, max_iterations, metadata, status, created_at, deferral_count)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8, 0)`,
 	)
 		.bind(id, input.instanceId, input.repoId ?? null, input.userId, objective, input.maxIterations ?? null, input.metadata ?? null, createdAt)
 		.run();
@@ -260,7 +260,17 @@ export async function finishQueueEntry(
 /** How much of the waiting reason a pending row carries. `clipMarked`, because it is a sentence. */
 const QUEUE_NOTE_CHARS = 500;
 
-export async function requeueEntry(env: Env, id: string, note?: string | null): Promise<void> {
+/**
+ * What a requeue did (#1017). `requeued` is false when no claimed row moved (a retry, or an entry no longer
+ * `running`): that is not a deferral, and no `deferred` event is owed for it. `deferralSeq` is this
+ * deferral's ordinal, or null for a row queued before 0218 (its earlier deferrals were never counted).
+ */
+export interface Requeued {
+	requeued: boolean;
+	deferralSeq: number | null;
+}
+
+export async function requeueEntry(env: Env, id: string, note?: string | null): Promise<Requeued> {
 	// `stop_reason` carries WHY it is still waiting (#984). The column is otherwise null on a pending
 	// row and is already surfaced as `stopReason`, so the entry can say "the repo holds #978's
 	// uncommitted work" instead of sitting pending with nothing recorded — which is indistinguishable
@@ -268,13 +278,16 @@ export async function requeueEntry(env: Env, id: string, note?: string | null): 
 	// `deferred_at` (#1017) is the deferral's evidence that survives the entry leaving `pending`: the note
 	// above is overwritten by `finishQueueEntry`, and this column is not, so a lost `deferred` event is
 	// still a named gap after admission, cancellation or failure.
-	await env.DB.prepare(
+	// `deferral_count + 1` stays NULL on a pre-0218 row: one more deferral of an uncounted history is not a count.
+	const row = await env.DB.prepare(
 		`UPDATE instance_objective_queue
-		    SET status = 'pending', started_at = NULL, stop_reason = ?2, deferred_at = ?3
-		  WHERE id = ?1 AND status = 'running'`,
+		    SET status = 'pending', started_at = NULL, stop_reason = ?2, deferred_at = ?3, deferral_count = deferral_count + 1
+		  WHERE id = ?1 AND status = 'running'
+		  RETURNING deferral_count`,
 	)
 		.bind(id, note ? clipMarked(note, QUEUE_NOTE_CHARS) : null, Date.now())
-		.run();
+		.first<{ deferral_count: number | null }>();
+	return row ? { requeued: true, deferralSeq: row.deferral_count } : { requeued: false, deferralSeq: null };
 }
 
 /**

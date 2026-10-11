@@ -72,7 +72,7 @@ beforeEach(() => {
 	// undefined and would fail for a reason that has nothing to do with the code under test.
 	logError.mockResolvedValue(undefined);
 	finishQueueEntry.mockResolvedValue(undefined);
-	requeueEntry.mockResolvedValue(undefined);
+	requeueEntry.mockResolvedValue({ requeued: true, deferralSeq: 1 });
 	resolveAccountCeilings.mockResolvedValue({ loopMaxIterations: 50 });
 	openBudget.mockResolvedValue({ id: "budget-1" });
 	start.mockResolvedValue({ ok: true, runId: "run-1", driver: "coding" });
