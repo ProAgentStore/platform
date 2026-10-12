@@ -7066,21 +7066,29 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/gmail-scout/scan:
     post:
-      summary: Scan Gmail job alerts
-      description: Read the configured Gmail mailbox and store deduplicated candidates as new leads in this Scout's private collection. Mail is never modified and no application is started.
+      summary: Scan Gmail job alerts now
+      description: |
+        "Scan now" (#1023): the SAME read-only scan the 6-hourly schedule runs. It rejects digests,
+        multi-listing mail and non-job links, dedups, and stores each new posting in this Scout's private
+        collection as `unverified`. Nothing is handed to the Tailor or Runner (`handoff: "none"`); mail
+        is never modified and no application is started. Every scan writes a durable receipt (trigger,
+        status, hits, candidates, added, deduped, rejection counts by reason — never mail content). If a
+        scan is already running for this Scout, its receipt is returned with `reused: true`.
       operationId: scanGmailScout
       tags: [Instances]
       parameters:
         - { $ref: "#/components/parameters/InstanceId" }
       responses:
-        "200": { $ref: "#/components/responses/OkObject" }
+        "200": { description: "The scan and its receipt: `{ scan: { mailbox, candidates, added, deduped, lastMessageId, rejected, receipt, reused, handoff } }`", content: { application/json: { schema: { type: object } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: "The Gmail source is disabled or not configured; `{ error, receipt }` with the failed receipt." }
+        "502": { description: "The mailbox could not be read (unavailable, or its read token failed); `{ error, receipt }` with the failed receipt." }
   /v1/instances/{instanceId}/gmail-scout/status:
     get:
       summary: Gmail Job Search Scout scan status
-      description: Read mailbox binding, last scan, candidate/dedupe counts, failures and private lead counts.
+      description: Read mailbox binding, last scan, candidate/dedupe counts, failures, private lead counts, and the 10 most recent scan `receipts` (#1023), scheduled or on demand.
       operationId: getGmailScoutStatus
       tags: [Instances]
       parameters:

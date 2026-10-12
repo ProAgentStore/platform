@@ -134,11 +134,39 @@ export interface AgentPermissions {
 
 /** One completed Gmail Job Search Scout ingest, returned by its manual scan endpoint. */
 export interface GmailScoutScanResult {
-	mailbox: string;
+	/** The mailbox label read; null when this answer is a scan already running (`reused`). */
+	mailbox: string | null;
 	candidates: number;
 	added: number;
 	deduped: number;
 	lastMessageId: string | null;
+	/** #1023: why examined messages did not become leads, by category — never their content. */
+	rejected: Partial<Record<"missing_fields" | "stale" | "security_alert" | "digest" | "multiple_listings" | "no_specific_job_url" | "no_work_key", number>>;
+	/** #1023: the durable receipt for this scan (or for the scan already running, when `reused`). */
+	receipt: GmailScoutScanReceiptView;
+	/** True when a scan was already running for this Scout and this call returned its receipt instead of reading again. */
+	reused: boolean;
+	/** A scan hands nothing to the Tailor or Runner; a lead waits for the owner's explicit apply. */
+	handoff: "none";
+}
+
+/** One Gmail Scout scan receipt (#1023) — counts and rejection categories, never mail content. */
+export interface GmailScoutScanReceiptView {
+	id: string;
+	instanceId: string;
+	trigger: "schedule" | "on_demand";
+	triggeredBy: string | null;
+	status: "running" | "completed" | "failed";
+	startedAt: string;
+	completedAt: string | null;
+	hits: number | null;
+	candidates: number | null;
+	added: number | null;
+	deduped: number | null;
+	rejected: GmailScoutScanResult["rejected"];
+	errorMessage: string | null;
+	lastMessageId: string | null;
+	handoff: "none";
 }
 
 /** `POST /v1/instances/:id/gmail-scout/scan` response. */

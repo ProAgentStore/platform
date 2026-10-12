@@ -96,9 +96,10 @@ export const INSTANCE_CHILD_TABLES = [
 	"instance_mcp_consent",
 	"mcp_input_requests",
 	"secure_input_requests",
-	// #995 — Gmail Scout configuration and its scan cursor are scoped to the instance.
+	// #995/#1023 — Gmail Scout configuration, its scan cursor and scan receipts are scoped to the instance.
 	"gmail_scout_configs",
 	"gmail_scout_scan_state",
+	"gmail_scout_scan_receipts",
 	// #945 — events before their run (FK), consent beside them.
 	"local_browser_run_events",
 	"local_browser_runs",

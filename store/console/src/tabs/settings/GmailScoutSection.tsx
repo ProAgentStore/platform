@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import Button from "../../components/Button";
 import Card from "../../components/Card";
-import type { GmailScoutScanResponse } from "../../lib/gmailScout";
+import { type GmailScoutScanReceipt, type GmailScoutScanResponse, rejectionSummary, scanNowMessage } from "../../lib/gmailScout";
 
 const GMAIL_SCOUT_MAILBOX = "serge.pro.job@gmail.com";
 
@@ -12,6 +12,8 @@ type Status = {
 	state: { lastScanAt: string | null; candidateCount: number; dedupeCount: number; failureCount: number; lastFailureAt: string | null; lastFailureMessage: string | null };
 	leadCount: number;
 	newLeadCount: number;
+	/** #1023 — absent on an older API. */
+	receipts?: GmailScoutScanReceipt[];
 };
 
 /** The owner-facing control plane for the dedicated, read-only Gmail Scout source (#995). */
@@ -50,7 +52,7 @@ export default function GmailScoutSection({ instanceId }: { instanceId: string }
 		setBusy(true); setMessage("");
 		try {
 			const result = await api<GmailScoutScanResponse>(`/v1/instances/${instanceId}/gmail-scout/scan`, { method: "POST" });
-			setMessage(`Scan complete: ${result.scan.added} lead(s) added, ${result.scan.deduped} duplicate(s) skipped.`);
+			setMessage(scanNowMessage(result.scan));
 			await load();
 		} catch (error) {
 			setMessage(error instanceof Error ? error.message : "Gmail scan failed.");
@@ -74,6 +76,21 @@ export default function GmailScoutSection({ instanceId }: { instanceId: string }
 			<div><span className="block text-xs text-muted-soft">Duplicates</span>{state?.dedupeCount ?? 0}</div>
 			<div><span className="block text-xs text-muted-soft">New leads</span>{status?.newLeadCount ?? 0} / {status?.leadCount ?? 0}</div>
 		</div>
+		{status?.receipts?.length ? (
+			<div className="mt-4" data-testid="gmail-scout-receipts">
+				<h3 className="text-xs text-muted-soft mb-1">Recent scans</h3>
+				<ul className="flex flex-col gap-1 text-xs">
+					{status.receipts.slice(0, 5).map((r) => (
+						<li key={r.id}>
+							{new Date(r.startedAt).toLocaleString()} · {r.trigger === "on_demand" ? "Scan now" : "Scheduled"} ·{" "}
+							<span className={r.status === "failed" ? "text-danger" : "text-muted"}>{r.status}</span>
+							{r.status === "completed" ? ` · ${r.added ?? 0} added, ${r.deduped ?? 0} duplicate(s)${rejectionSummary(r.rejected) ? `, skipped: ${rejectionSummary(r.rejected)}` : ""}` : ""}
+							{r.status === "failed" && r.errorMessage ? ` · ${r.errorMessage}` : ""}
+						</li>
+					))}
+				</ul>
+			</div>
+		) : null}
 		{state?.failureCount ? <p className="mt-3 text-sm text-danger">{state.failureCount} scan failure(s){state.lastFailureAt ? `; latest ${new Date(state.lastFailureAt).toLocaleString()}` : ""}: {state.lastFailureMessage || "Unknown failure"}</p> : null}
 	</Card>;
 }

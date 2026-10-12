@@ -2,6 +2,7 @@ import type { Context, Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { getGmailScoutConfig, gmailScoutSourceMode, putGmailScoutConfig } from "../lib/gmail-scout/config.js";
 import { gmailScoutStatus, scanGmailScout } from "../lib/gmail-scout/scan.js";
+import { listGmailScoutReceipts } from "../lib/gmail-scout/receipts.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 
@@ -52,6 +53,21 @@ export function registerGmailScoutRoutes(router: Hono<{ Bindings: Env }>): void 
 			throw new HttpError(400, error instanceof Error ? error.message : "Could not configure Gmail Scout.");
 		}
 	});
-	router.post("/:instanceId/gmail-scout/scan", async (c) => { const { instanceId, uid } = await owned(c); return c.json({ scan: await scanGmailScout(c.env, instanceId, uid) }); });
+	/**
+	 * "Scan now" (#1023): the scheduler's own scan path, triggered by the owner. Answers the scan and its
+	 * durable receipt; a scan already running for this Scout is returned (`reused`) rather than repeated.
+	 * A failure still answers its receipt: 409 when the source is disabled, 502 when the mailbox could
+	 * not be read. Nothing is handed to the Tailor or Runner.
+	 */
+	router.post("/:instanceId/gmail-scout/scan", async (c) => {
+		const { instanceId, uid } = await owned(c);
+		try {
+			return c.json({ scan: await scanGmailScout(c.env, instanceId, uid, { trigger: "on_demand", triggeredBy: uid }) });
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "Gmail scan failed.";
+			const [receipt] = await listGmailScoutReceipts(c.env, instanceId, 1);
+			return c.json({ error: message, receipt: receipt ?? null }, /not configured or is disabled/.test(message) ? 409 : 502);
+		}
+	});
 	router.get("/:instanceId/gmail-scout/status", async (c) => c.json(await gmailScoutStatus(c.env, (await owned(c)).instanceId, new URL(c.req.url).searchParams)));
 }

@@ -13,6 +13,7 @@ import type { Env } from "../../types.js";
 import { capabilitiesForInstance } from "../agent-capabilities.js";
 import { getGmailScoutConfig, getGmailScoutScanState } from "../gmail-scout/config.js";
 import { emailPermitted } from "../connectors/gmail.js";
+import { listGmailScoutReceipts } from "../gmail-scout/receipts.js";
 
 /** Scheduled Gmail scans run this often (see `runDueGmailScoutScans`); a source silent for longer is stale. */
 export const GMAIL_SCOUT_SCAN_INTERVAL_MS = 6 * 60 * 60_000;
@@ -46,6 +47,19 @@ export interface SourceHealth {
 	lastScanAt: string | null;
 	lastFailureAt: string | null;
 	lastFailureMessage: string | null;
+	/** #1023: the latest scan's receipt — scheduled or on demand — so the owner sees what it found. */
+	lastReceipt: LatestReceipt | null;
+}
+
+/** The parts of a scan receipt health reports: who started it, how it ended, and what it found. */
+export interface LatestReceipt {
+	id: string;
+	trigger: "schedule" | "on_demand";
+	status: "running" | "completed" | "failed";
+	completedAt: string | null;
+	added: number | null;
+	candidates: number | null;
+	deduped: number | null;
 }
 
 export interface PipelineHealth {
@@ -66,7 +80,7 @@ export interface EdgeFact {
 export interface SourceFact {
 	instanceId: string;
 	runtime: string | null;
-	gmail: { enabled: boolean; emailPermitted: boolean; lastScanAt: string | null; lastFailureAt: string | null; lastFailureMessage: string | null } | null;
+	gmail: { enabled: boolean; emailPermitted: boolean; lastScanAt: string | null; lastFailureAt: string | null; lastFailureMessage: string | null; lastReceipt?: LatestReceipt | null } | null;
 }
 
 /** SQLite `datetime('now')` text is UTC without a zone; read it as UTC. */
@@ -96,7 +110,7 @@ export function pipelineHealthFrom(input: { pipeline: { scouts: string[]; tailor
 		else if (g && !lastScanAt) add("source_never_scanned", `Scout ${s.instanceId} has never scanned its mailbox.`);
 		else if (g && lastScanAt && input.now - Date.parse(lastScanAt) > SOURCE_STALE_AFTER_MS) add("source_stale", `Scout ${s.instanceId} last scanned at ${lastScanAt}, more than ${SOURCE_STALE_AFTER_MS / 3_600_000} hours ago.`);
 		const ready = kind === "browser" || (!!g && g.enabled && g.emailPermitted && !failing && !!lastScanAt && input.now - Date.parse(lastScanAt) <= SOURCE_STALE_AFTER_MS);
-		return { instanceId: s.instanceId, kind, ready, scheduled: !!g && g.enabled, lastScanAt, lastFailureAt, lastFailureMessage: g?.lastFailureMessage ?? null };
+		return { instanceId: s.instanceId, kind, ready, scheduled: !!g && g.enabled, lastScanAt, lastFailureAt, lastFailureMessage: g?.lastFailureMessage ?? null, lastReceipt: g?.lastReceipt ?? null };
 	});
 	return { ok: problems.length === 0, problems, sources };
 }
@@ -105,9 +119,11 @@ export function pipelineHealthFrom(input: { pipeline: { scouts: string[]; tailor
 export async function pipelineHealth(env: Env, uid: string, pipeline: { scouts: string[]; tailors: string[]; runners: string[] }, edges: EdgeFact[], now = Date.now()): Promise<PipelineHealth> {
 	const sources = await Promise.all(
 		pipeline.scouts.map(async (instanceId): Promise<SourceFact> => {
-			const [caps, config, state] = await Promise.all([capabilitiesForInstance(env, instanceId, uid), getGmailScoutConfig(env, instanceId), getGmailScoutScanState(env, instanceId)]);
+			const [caps, config, state, receipts] = await Promise.all([capabilitiesForInstance(env, instanceId, uid), getGmailScoutConfig(env, instanceId), getGmailScoutScanState(env, instanceId), listGmailScoutReceipts(env, instanceId, 1)]);
+			const r = receipts[0];
+			const lastReceipt: LatestReceipt | null = r ? { id: r.id, trigger: r.trigger, status: r.status, completedAt: r.completedAt, added: r.added, candidates: r.candidates, deduped: r.deduped } : null;
 			const gmail = config
-				? { enabled: config.enabled, emailPermitted: await emailPermitted(env, instanceId).catch(() => false), lastScanAt: state.lastScanAt, lastFailureAt: state.lastFailureAt, lastFailureMessage: state.lastFailureMessage }
+				? { enabled: config.enabled, emailPermitted: await emailPermitted(env, instanceId).catch(() => false), lastScanAt: state.lastScanAt, lastFailureAt: state.lastFailureAt, lastFailureMessage: state.lastFailureMessage, lastReceipt }
 				: null;
 			return { instanceId, runtime: caps?.runtime ?? null, gmail };
 		}),
