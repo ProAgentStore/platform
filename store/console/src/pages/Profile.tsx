@@ -6,6 +6,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/AuthContext";
 import { api, getToken } from "@proagentstore/sdk/client";
 import { keyUsageLabel } from "../lib/keyUsage";
+import { appendMcpAuditPage, mcpAuditCoverageNote, type McpAuditPageView } from "../lib/mcpAuditPaging";
 
 interface ProfileField {
 	key: string;
@@ -39,11 +40,7 @@ interface McpAuditEvent {
 }
 
 /** One page of `GET /v1/mcp-audit` (#1016) — `routes/mcp-audit.ts`. */
-interface McpAuditPage {
-	events: McpAuditEvent[];
-	nextCursor: string | null;
-	coverage?: { complete: boolean; detail: string };
-}
+type McpAuditPage = McpAuditPageView<McpAuditEvent>;
 
 export default function Profile() {
 	const { user, signOut } = useAuth();
@@ -148,8 +145,8 @@ export default function Profile() {
 		setMcpLoading(true);
 		try {
 			const d = await api<McpAuditPage>(`/v1/mcp-audit?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
-			setMcpEvents((prev) => (cursor ? [...(prev ?? []), ...d.events] : d.events));
-			setMcpCursor(d.nextCursor);
+			setMcpEvents((prev) => appendMcpAuditPage(prev, d, cursor).events);
+			setMcpCursor(d.nextCursor || null);
 			setMcpCoverage(d.coverage);
 			setMcpErr("");
 		} catch (e) {
@@ -439,8 +436,8 @@ export default function Profile() {
 							)}
 						</div>
 					)}
-					{mcpEvents !== null && mcpCoverage && !mcpCoverage.complete && (
-						<p className="text-xs text-muted mt-2" data-testid="mcp-audit-coverage">{mcpCoverage.detail}</p>
+					{mcpEvents !== null && mcpAuditCoverageNote(mcpCoverage) && (
+						<p className="text-xs text-muted mt-2" data-testid="mcp-audit-coverage">{mcpAuditCoverageNote(mcpCoverage)}</p>
 					)}
 				</div>
 

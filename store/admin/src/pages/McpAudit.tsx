@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { Empty, ErrorBox, Loading, Panel } from "../lib/ui";
 import Button from "../components/Button";
+import { appendAuditPage, auditCoverageNote, type McpAuditPage } from "../lib/mcp-audit-paging";
 
 interface McpAuditEvent {
 	time?: string;
@@ -36,16 +37,28 @@ export default function McpAudit() {
 	const [err, setErr] = useState("");
 	const [tool, setTool] = useState("");
 	const [user, setUser] = useState("");
+	// #1016: where the next-older page starts (`null` = the end of the retained ledger), and coverage.
+	const [cursor, setCursor] = useState<string | null>(null);
+	const [coverage, setCoverage] = useState<McpAuditPage<McpAuditEvent>["coverage"]>();
+	const [loadingOlder, setLoadingOlder] = useState(false);
 
-	function load() {
-		setEvents(null);
+	/** No cursor: a fresh sweep (Apply). With one: the next-older page, appended. */
+	function load(from?: string) {
+		if (from) setLoadingOlder(true);
+		else setEvents(null);
 		setErr("");
 		const qs = new URLSearchParams({ limit: "200" });
 		if (tool.trim()) qs.set("tool", tool.trim());
 		if (user.trim()) qs.set("user", user.trim());
-		api<{ events: McpAuditEvent[] }>(`/v1/admin/mcp-audit?${qs.toString()}`)
-			.then((r) => setEvents(r.events))
-			.catch((e) => setErr(e.message));
+		if (from) qs.set("cursor", from);
+		api<McpAuditPage<McpAuditEvent>>(`/v1/admin/mcp-audit?${qs.toString()}`)
+			.then((r) => {
+				setEvents((prev) => appendAuditPage(prev, r, from).events);
+				setCursor(r.nextCursor || null);
+				setCoverage(r.coverage);
+			})
+			.catch((e) => setErr(e.message))
+			.finally(() => setLoadingOlder(false));
 	}
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: load once on mount; `load` is recreated each render so listing it would refetch on every render
@@ -79,7 +92,7 @@ export default function McpAudit() {
 				{/* Filled accent, like Audit's own Apply. It was a soft tint with an ad-hoc
 				    `border-accent/30` — an alpha invented at one call site, which is what §1 of
 				    DESIGN-SYSTEM.md objects to, and the two audit pages now agree. */}
-				<Button variant="primary" size="lg" onClick={load}>
+				<Button variant="primary" size="lg" onClick={() => load()}>
 					Apply
 				</Button>
 			</div>
@@ -117,6 +130,19 @@ export default function McpAudit() {
 								</tbody>
 							</table>
 						</div>
+					)}
+					{cursor && (
+						<div className="mt-3">
+							<Button onClick={() => load(cursor)} disabled={loadingOlder} data-testid="mcp-audit-load-older">
+								{loadingOlder ? "Loading..." : "Load older"}
+							</Button>
+						</div>
+					)}
+					{events.length > 0 && !cursor && <p className="text-xs text-muted mt-3">End of the retained ledger.</p>}
+					{auditCoverageNote(coverage) && (
+						<p className="text-xs text-muted mt-2" data-testid="mcp-audit-coverage">
+							{auditCoverageNote(coverage)}
+						</p>
 					)}
 				</Panel>
 			)}
