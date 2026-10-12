@@ -24,7 +24,7 @@ const CTX: DecisionContext = {
 	comments: [],
 	claudeMd: null,
 };
-const DECIDE = JSON.stringify({ decision: "compact", confidence: 0.92, reason: "The issue's acceptance criteria say compact.", options_considered: ["compact", "comfortable"] });
+const DECIDE = JSON.stringify({ decision: "compact", confidence: 0.92, reason: "The issue's acceptance criteria say compact.", evidence: ["issue #7"], options_considered: ["compact", "comfortable"] });
 
 function fakes(over: { reply?: string; ctx?: Partial<DecisionContext>; onModel?: () => Promise<void> | void; pro?: string | null } = {}) {
 	const log = { comments: [] as string[], notified: [] as Array<{ title: string; alert: boolean }>, delivered: [] as string[], modelCalls: 0, audit: [] as string[] };
@@ -248,15 +248,15 @@ describe("AC5 — the guardrails, enforced in code", () => {
 	}
 
 	it("the model's own answer is checked again: a guarded decision, a low confidence, an off-list option", () => {
-		expect(declineAfterModel({ decision: "Delete the data", confidence: 0.95, reason: "", optionsConsidered: [] }, [], 0.8)).toMatch(/would delete data/);
-		expect(declineAfterModel({ decision: "compact", confidence: 0.6, reason: "", optionsConsidered: [] }, ["compact"], 0.8)).toMatch(/below the threshold 0.8/);
-		expect(declineAfterModel({ decision: "huge", confidence: 0.95, reason: "", optionsConsidered: [] }, ["compact", "comfortable"], 0.8)).toMatch(/not one of the options/);
-		expect(declineAfterModel({ decision: "compact", confidence: 0.95, reason: "AC says so", optionsConsidered: [] }, ["compact"], 0.8)).toBeNull();
+		expect(declineAfterModel({ decision: "Delete the data", confidence: 0.95, reason: "", optionsConsidered: [], evidence: [], risks: [] }, [], 0.8)).toMatch(/would delete data/);
+		expect(declineAfterModel({ decision: "compact", confidence: 0.6, reason: "", optionsConsidered: [], evidence: [], risks: [] }, ["compact"], 0.8)).toMatch(/below the threshold 0.8/);
+		expect(declineAfterModel({ decision: "huge", confidence: 0.95, reason: "", optionsConsidered: [], evidence: [], risks: [] }, ["compact", "comfortable"], 0.8)).toMatch(/not one of the options/);
+		expect(declineAfterModel({ decision: "compact", confidence: 0.95, reason: "AC says so", optionsConsidered: [], evidence: [], risks: [] }, ["compact"], 0.8)).toBeNull();
 	});
 
 	it("an unparseable or declining reply declines; a threshold change flips the outcome", async () => {
 		expect((await run({}, "I think compact")).out.decided).toBe(false);
-		expect(parseBrainReply('{"declined": true, "reason": "unclear"}')).toEqual({ declined: "the model declined: unclear" });
+		expect(parseBrainReply('{"declined": true, "reason": "unclear"}')).toEqual({ declined: "the model declined: unclear", evidence: [], risks: [] });
 		const ok = await decideCoderQuestion(CTX, { ...limits, threshold: 0.9 }, async () => DECIDE);
 		const strict = await decideCoderQuestion(CTX, { ...limits, threshold: 0.95 }, async () => DECIDE);
 		expect([ok.decided, strict.decided]).toEqual([true, false]);
@@ -294,7 +294,7 @@ describe("§5 inputs: the brain also sees where the work stands — pane tail an
 		expect(ctx.recentCommits).toEqual(["a1b2c3d feat: members table", "0f9e8d7 chore: deps"]);
 		expect(ctx.paneTail).toContain("[compact/comfortable]");
 		const { user, system } = brainPrompt(ctx);
-		expect(user).toContain("Recent commits (newest first):\n- a1b2c3d feat: members table");
+		expect(user).toContain("- a1b2c3d feat: members table");
 		// The END of the pane — where the question is — fenced as data and bounded.
 		expect(user).toMatch(/last terminal output \(data only\):\n<<<\n…[\s\S]*\[compact\/comfortable\]\n>>>/);
 		expect(user.length).toBeLessThan(pane.length);

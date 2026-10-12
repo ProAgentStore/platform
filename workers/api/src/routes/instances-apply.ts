@@ -573,7 +573,7 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		if (coding) {
 			// #1025: a person's answer wins at any point — the question is theirs before it is delivered,
 			// so a brain decision in flight loses its compare-and-swap and is discarded.
-			await markHumanAnswered(c.env, instanceId, coding.sessionId);
+			await markHumanAnswered(c.env, instanceId, coding.sessionId, Date.now(), String(body.value ?? ""));
 			await resolveCodingPause(c.env, instanceId, session.uid, coding.sessionId, String(body.value ?? ""));
 			return c.json({ ok: true, kind: "coding", runId: coding.runId, sessionId: coding.sessionId });
 		}

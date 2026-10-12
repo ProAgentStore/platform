@@ -6,6 +6,8 @@
  * its own audit trail. A HUMAN answer is accepted from every open state — it wins at any point.
  */
 import type { Env } from "../types.js";
+import { clipMarked } from "./clip-marked.js";
+import { redactText } from "./local-browser/contract.js";
 
 export type CoderQuestionState = "waiting_human" | "brain_deciding" | "answered_human" | "answered_brain" | "escalated" | "unresolved" | "expired";
 export const OPEN_QUESTION_STATES: readonly CoderQuestionState[] = ["waiting_human", "brain_deciding", "escalated"];
@@ -33,6 +35,9 @@ export interface CoderQuestion {
 	reason: string | null;
 	model: string | null;
 	promptHash: string | null;
+	/** #1026: the source labels the brain cited, and the risks it named — on a decision, and on a decline when given. */
+	evidence: string[];
+	risks: string[];
 	history: Array<{ at: number; from: CoderQuestionState | null; to: CoderQuestionState; note: string }>;
 }
 
@@ -70,6 +75,8 @@ function asQuestion(r: Row): CoderQuestion {
 		reason: r.reason ? String(r.reason) : null,
 		model: r.model ? String(r.model) : null,
 		promptHash: r.prompt_hash ? String(r.prompt_hash) : null,
+		evidence: json<string[]>(r.evidence, []),
+		risks: json<string[]>(r.risks, []),
 		history: json(r.history, []),
 	};
 }
@@ -153,15 +160,16 @@ export async function transitionCoderQuestion(
 	from: readonly CoderQuestionState[],
 	to: CoderQuestionState,
 	note: string,
-	fields: Partial<{ escalatedAt: number; resolvedAt: number; answeredBy: "human" | "brain"; decision: string; confidence: number; reason: string; model: string; promptHash: string }> = {},
+	fields: Partial<{ escalatedAt: number; resolvedAt: number; answeredBy: "human" | "brain"; decision: string; confidence: number; reason: string; model: string; promptHash: string; evidence: string[]; risks: string[] }> = {},
 	now = Date.now(),
 ): Promise<boolean> {
-	const placeholders = from.map((_, i) => `?${i + 12}`).join(", ");
+	const placeholders = from.map((_, i) => `?${i + 14}`).join(", ");
 	const res = await env.DB.prepare(
 		`UPDATE coder_questions SET state = ?2,
 		        escalated_at = COALESCE(?3, escalated_at), resolved_at = COALESCE(?4, resolved_at), answered_by = COALESCE(?5, answered_by),
 		        decision = COALESCE(?6, decision), confidence = COALESCE(?7, confidence), reason = COALESCE(?8, reason),
 		        model = COALESCE(?9, model), prompt_hash = COALESCE(?10, prompt_hash),
+		        evidence = COALESCE(?12, evidence), risks = COALESCE(?13, risks),
 		        history = json_insert(history, '$[#]', json(?11))
 		  WHERE id = ?1 AND state IN (${placeholders})`,
 	)
@@ -177,6 +185,8 @@ export async function transitionCoderQuestion(
 			fields.model ?? null,
 			fields.promptHash ?? null,
 			JSON.stringify({ at: now, from: from.length === 1 ? from[0] : null, to, note }),
+			fields.evidence ? JSON.stringify(fields.evidence) : null,
+			fields.risks ? JSON.stringify(fields.risks) : null,
 			...from,
 		)
 		.run();
@@ -187,11 +197,16 @@ export async function transitionCoderQuestion(
  * A person answered the question waiting on this session. Wins from every open state — including
  * `brain_deciding`, whose in-flight decision is then discarded by its own failed swap.
  */
-export async function markHumanAnswered(env: Pick<Env, "DB">, instanceId: string, sessionId: string, now = Date.now()): Promise<string | null> {
+/**
+ * A person answered. `answer` (#1026) is recorded as the decision, so the brain's later grounding sees what the owner
+ * chose before — credential-shaped text redacted and clipped, since these routes also carry values like a 2FA code.
+ */
+export async function markHumanAnswered(env: Pick<Env, "DB">, instanceId: string, sessionId: string, now = Date.now(), answer?: string): Promise<string | null> {
 	const open = await env.DB.prepare("SELECT id FROM coder_questions WHERE instance_id = ?1 AND session_id = ?2 AND state IN ('waiting_human','brain_deciding','escalated') ORDER BY asked_at DESC LIMIT 1")
 		.bind(instanceId, sessionId)
 		.first<{ id: string }>();
 	if (!open) return null;
-	const moved = await transitionCoderQuestion(env, open.id, OPEN_QUESTION_STATES, "answered_human", "answered by a person", { answeredBy: "human", resolvedAt: now }, now);
+	const decision = answer?.trim() ? clipMarked(redactText(answer.trim()), 300, { within: true }) : undefined;
+	const moved = await transitionCoderQuestion(env, open.id, OPEN_QUESTION_STATES, "answered_human", "answered by a person", { answeredBy: "human", resolvedAt: now, ...(decision ? { decision } : {}) }, now);
 	return moved ? open.id : null;
 }

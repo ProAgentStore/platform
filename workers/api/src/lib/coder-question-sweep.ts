@@ -19,6 +19,7 @@ import type { Env } from "../types.js";
 import { readCoderBrain, type CoderBrainSettings } from "./coder-brain.js";
 import { type BrainModelCall, type DecisionContext, byokBrainCall, decideCoderQuestion } from "./coder-brain-decide.js";
 import { type CoderQuestion, captureCoderQuestion, openCoderQuestions, transitionCoderQuestion } from "./coder-question-store.js";
+import { gatherGrounding } from "./coder-brain-grounding.js";
 import { resolveCodingPause } from "./coding-answer.js";
 import { appendTimeline, lastTerminal } from "./coding-timeline.js";
 import { codingRunRefusal } from "./billing.js";
@@ -44,7 +45,7 @@ export interface CoderQuestionEffects {
 	notify: (q: CoderQuestion, title: string, body: string, alert: boolean) => Promise<void>;
 	/** Deliver a value to the parked run through the person's own answer path. */
 	deliver: (q: CoderQuestion, value: string) => Promise<void>;
-	/** Gather the brain's context (issue, comments, CLAUDE.md, recent commits, and the pane tail read now). */
+	/** Gather the brain's context: the issue, comments, CLAUDE.md, recent commits, the pane tail read now, and the #1026 grounding. */
 	context: (q: CoderQuestion) => Promise<DecisionContext>;
 	/** The model call for this instance's configured brain model. */
 	model: (q: CoderQuestion, model: string) => BrainModelCall;
@@ -69,16 +70,19 @@ export function defaultEffects(env: Env): CoderQuestionEffects {
 			const recentCommits = q.repo ? await listRecentCommits(env, q.userId, q.repo).catch(() => []) : [];
 			// Read at decision time from the session's own stored snapshot: the question row never holds pane content.
 			const paneTail = await lastTerminal(env, q.sessionId).catch(() => null);
+			const commentTexts = comments.map((c) => `${c.author}: ${c.body}`);
+			const grounding = await gatherGrounding(env, { userId: q.userId, instanceId: q.instanceId, repo: q.repo, issueNumber: q.issueNumber, question: q.question, why: q.why, options: q.options, issueBody: issue?.body ?? "", comments: commentTexts, paneTail }).catch(() => ({}));
 			return {
 				question: q.question,
 				options: q.options,
 				why: q.why,
 				repo: q.repo,
 				issue: issue ? { number: issue.number, title: issue.title, body: issue.body ?? "", labels: issue.labels } : null,
-				comments: comments.map((c) => `${c.author}: ${c.body}`),
+				comments: commentTexts,
 				claudeMd,
 				recentCommits,
 				paneTail,
+				...grounding,
 			};
 		},
 		model: (q, model) => byokBrainCall(env, q.userId, q.instanceId, model),
@@ -169,23 +173,32 @@ async function decide(env: Env, q: CoderQuestion, brain: CoderBrainSettings, fx:
 		const d = outcome.result;
 		// The compare-and-swap is the human-precedence check: if a person answered while the model ran,
 		// this fails and the decision is discarded — never delivered, never posted.
-		const won = await transitionCoderQuestion(env, q.id, ["brain_deciding"], "answered_brain", `decided: ${d.decision}`, { answeredBy: "brain", resolvedAt: now, decision: d.decision, confidence: d.confidence, reason: d.reason, model: brain.model, promptHash: outcome.promptHash }, now);
+		const won = await transitionCoderQuestion(env, q.id, ["brain_deciding"], "answered_brain", `decided: ${d.decision}`, { answeredBy: "brain", resolvedAt: now, decision: d.decision, confidence: d.confidence, reason: d.reason, model: brain.model, promptHash: outcome.promptHash, evidence: d.evidence, risks: d.risks }, now);
 		if (!won) {
 			await fx.audit(q, "A person answered while the brain was deciding — the brain's decision was discarded.");
 			return "none";
 		}
 		await fx.deliver(q, `Decided by the coder brain (no answer from the owner in ${brain.humanTimeoutMinutes} minutes): ${d.decision}. Reason: ${d.reason}`);
-		const comment = `**🧠 Decided by coder brain:** ${d.decision}\n\n**Reason:** ${d.reason}\n\n**Options considered:** ${(d.optionsConsidered.length ? d.optionsConsidered : q.options).join(", ") || "(free answer)"}\n\nConfidence ${d.confidence.toFixed(2)} (threshold ${brain.confidenceThreshold}), model \`${brain.model}\`. Nobody answered within ${brain.humanTimeoutMinutes} minutes; reply on this issue if this is wrong.`;
+		const comment = `**🧠 Decided by coder brain:** ${d.decision}\n\n**Reason:** ${d.reason}\n\n**Evidence:** ${d.evidence.join("; ")}${d.risks.length ? `\n\n**Risks:** ${d.risks.join("; ")}` : ""}\n\n**Options considered:** ${(d.optionsConsidered.length ? d.optionsConsidered : q.options).join(", ") || "(free answer)"}\n\nConfidence ${d.confidence.toFixed(2)} (threshold ${brain.confidenceThreshold}), model \`${brain.model}\`. Nobody answered within ${brain.humanTimeoutMinutes} minutes; reply on this issue if this is wrong.`;
 		await fx.postComment(q, comment).catch(() => false);
 		await fx.notify(q, "🧠 Coder brain decided", `${repoIssue(q)}: "${q.question}" → ${d.decision}. ${clipMarked(d.reason, 200, { within: true })}`, false);
-		await fx.audit(q, `Answered by the coder brain (${brain.model}, confidence ${d.confidence.toFixed(2)}): ${d.decision} — ${d.reason}`);
+		await fx.audit(q, `Answered by the coder brain (${brain.model}, confidence ${d.confidence.toFixed(2)}, evidence: ${d.evidence.join("; ")}): ${d.decision} — ${d.reason}`);
 		return "decided";
 	}
-	const escalated = await transitionCoderQuestion(env, q.id, ["brain_deciding"], "escalated", `declined: ${outcome.reason}`, { escalatedAt: now, reason: outcome.reason, model: brain.model, ...(outcome.promptHash ? { promptHash: outcome.promptHash } : {}) }, now);
+	const escalated = await transitionCoderQuestion(env, q.id, ["brain_deciding"], "escalated", `declined: ${outcome.reason}`, {
+		escalatedAt: now,
+		reason: outcome.reason,
+		model: brain.model,
+		...(outcome.promptHash ? { promptHash: outcome.promptHash } : {}),
+		...(outcome.confidence !== undefined ? { confidence: outcome.confidence } : {}),
+		...(outcome.evidence?.length ? { evidence: outcome.evidence } : {}),
+		...(outcome.risks?.length ? { risks: outcome.risks } : {}),
+	}, now);
 	if (!escalated) return "none";
-	await fx.postComment(q, `**⚠️ The coder brain could not decide** because ${outcome.reason}.\n\nThe question is still waiting: ${q.question}${optionsLine(q)}\n\nPlease answer it within ${brain.escalationTimeoutMinutes} minutes; after that the coder finishes what does not depend on it and closes this issue with what is left.`).catch(() => false);
+	const settle = outcome.whatWouldSettleIt ? `\n\n**What would settle it:** ${outcome.whatWouldSettleIt}` : "";
+	await fx.postComment(q, `**⚠️ The coder brain could not decide** because ${outcome.reason}.${settle}\n\nThe question is still waiting: ${q.question}${optionsLine(q)}\n\nPlease answer it within ${brain.escalationTimeoutMinutes} minutes; after that the coder finishes what does not depend on it and closes this issue with what is left.`).catch(() => false);
 	await fx.notify(q, "⚠️ Coder still needs your answer", `${repoIssue(q)}: ${q.question} — the brain could not decide because ${outcome.reason}. ${brain.escalationTimeoutMinutes} minutes left.`, true);
-	await fx.audit(q, `The coder brain declined (${outcome.reason}); escalated to the owner.`);
+	await fx.audit(q, `The coder brain declined (${brain.model}${outcome.confidence !== undefined ? `, confidence ${outcome.confidence.toFixed(2)}` : ""}${outcome.evidence?.length ? `, evidence: ${outcome.evidence.join("; ")}` : ""}): ${outcome.reason}; escalated to the owner.`);
 	return "escalated";
 }
 

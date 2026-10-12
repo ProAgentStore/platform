@@ -481,6 +481,20 @@ export async function listRecentCommits(env: Env, userId: string, githubRepo: st
 	});
 }
 
+/** The file names in one repo directory (#1026: which docs exist), or [] — never file contents. */
+export async function listRepoDir(env: Env, userId: string, githubRepo: string, path: string): Promise<string[]> {
+	const parsed = parseRepo(githubRepo);
+	if (!parsed) return [];
+	const token = await installationTokenForOwner(env, userId, parsed.owner);
+	const res = await fetch(`https://api.github.com/repos/${parsed.owner}/${parsed.name}/contents/${path.split("/").map(encodeURIComponent).join("/")}`, {
+		headers: GH_HEADERS(token),
+		signal: AbortSignal.timeout(15_000),
+	}).catch(() => null);
+	if (!res?.ok) return [];
+	const rows = (await res.json().catch(() => [])) as unknown;
+	return Array.isArray(rows) ? rows.flatMap((r: { type?: string; path?: string }) => (r?.type === "file" && typeof r.path === "string" ? [r.path] : [])) : [];
+}
+
 export async function readRepoText(env: Env, userId: string, githubRepo: string, path: string, maxBytes = 20_000): Promise<string | null> {
 	const parsed = parseRepo(githubRepo);
 	if (!parsed) return null;
