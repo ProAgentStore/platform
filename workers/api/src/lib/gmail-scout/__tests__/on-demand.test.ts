@@ -6,7 +6,7 @@
  * No real mailbox is read, no credential is touched, nothing is handed downstream.
  */
 import { Hono } from "hono";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "../../d1-sqlite.js";
 import { HttpError } from "../../auth.js";
 import { signSession } from "../../session.js";
@@ -88,6 +88,7 @@ beforeEach(() => {
 	env = { DB: d1.DB, AGENT: agent, SESSION_SIGNING_KEY: SECRET } as unknown as Env;
 });
 afterEach(() => {
+	vi.unstubAllGlobals();
 	setGmailScoutMailboxForTest(null);
 	d1.close();
 });
@@ -230,5 +231,40 @@ describe("the Scan now route (Console) and its receipt", () => {
 		const res = await post("/v1/instances/scout/gmail-scout/scan");
 		expect(res.status).toBe(502);
 		expect(res.body).toMatchObject({ error: expect.stringMatching(/503/), receipt: { status: "failed", trigger: "on_demand" } });
+	});
+});
+
+describe("#1024: a one-item provider alert, through the same scan", () => {
+	const JK = "0123456789abcdef";
+	const CANONICAL = `https://au.indeed.com/viewjob?jk=${JK}`;
+	const INDEED = () => [msg("m-indeed", "Platform Engineer at Acme", `<a href="https://au.indeed.com/rc/clk/dl?jk=${JK}&amp;tk=SECRETTK&amp;alid=SECRETALID">Platform Engineer</a> Acme Pty Ltd - Sydney NSW`, "Indeed <alert@indeed.com>")];
+	const page = (status: number) => new Response(status === 200 ? `<script type="application/ld+json">${JSON.stringify({ "@type": "JobPosting", title: "Platform Engineer", hiringOrganization: { name: "Acme Pty Ltd" } })}</script>` : "", { status });
+
+	it("scheduled and on-demand scans both resolve it to one unverified canonical lead; no receipt carries a token or the mail", async () => {
+		const requested: string[] = [];
+		vi.stubGlobal("fetch", async (url: string) => {
+			requested.push(String(url));
+			return page(200);
+		});
+		const onDemand = await scanGmailScout(env, "scout", "u1", { trigger: "on_demand", mailbox: fakeMailbox(INDEED()).factory });
+		await runDueGmailScoutScans(env, Date.now(), 5, fakeMailbox(INDEED()).factory);
+		const [scheduled] = (await listGmailScoutReceipts(env, "scout-b")).filter((r) => r.trigger === "schedule");
+		for (const r of [onDemand.receipt, scheduled]) expect(r).toMatchObject({ status: "completed", hits: 1, candidates: 1, added: 1, rejected: {}, handoff: "none" });
+		for (const id of ["scout", "scout-b"]) {
+			const lead = dos.get(id)?.leads.find((l) => l.data.gmail_message_id === "m-indeed");
+			expect(lead?.data).toMatchObject({ url: CANONICAL, status: "unverified", verification: { state: "unverified" } });
+			expect(JSON.stringify(lead)).not.toMatch(/SECRET/);
+		}
+		expect(requested.every((u) => u === CANONICAL)).toBe(true);
+		const receipts = JSON.stringify(await listGmailScoutReceipts(env, "scout"));
+		for (const leaked of ["SECRET", "indeed.com", "Platform Engineer", "Acme"]) expect(receipts).not.toContain(leaked);
+		expect(deliveries()).toBe(0);
+	});
+
+	it("a posting it cannot check is counted by reason on the receipt, and nothing is stored", async () => {
+		vi.stubGlobal("fetch", async () => page(403));
+		const { receipt } = await scanGmailScout(env, "scout", "u1", { trigger: "on_demand", mailbox: fakeMailbox(INDEED()).factory });
+		expect(receipt).toMatchObject({ status: "completed", added: 0, rejected: { posting_unverifiable: 1 } });
+		expect(dos.get("scout")?.leads.some((l) => l.data.gmail_message_id === "m-indeed")).toBe(false);
 	});
 });

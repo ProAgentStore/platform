@@ -141,7 +141,7 @@ export interface GmailScoutScanResult {
 	deduped: number;
 	lastMessageId: string | null;
 	/** #1023: why examined messages did not become leads, by category — never their content. */
-	rejected: Partial<Record<"missing_fields" | "stale" | "security_alert" | "digest" | "multiple_listings" | "no_specific_job_url" | "no_work_key", number>>;
+	rejected: Partial<Record<"missing_fields" | "stale" | "security_alert" | "digest" | "multiple_listings" | "no_specific_job_url" | "no_work_key" | "redirect_unresolved" | "posting_not_live" | "posting_unverifiable" | "posting_mismatch", number>>;
 	/** #1023: the durable receipt for this scan (or for the scan already running, when `reused`). */
 	receipt: GmailScoutScanReceiptView;
 	/** True when a scan was already running for this Scout and this call returned its receipt instead of reading again. */

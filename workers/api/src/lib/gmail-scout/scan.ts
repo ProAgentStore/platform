@@ -8,6 +8,7 @@ import { canonicalJobUrl, jobIdentity, workKeyForLead } from "../job-lead-triage
 import { clipMarked } from "../clip-marked.js";
 import { getGmailScoutConfig, getGmailScoutScanState, resolveGmailScoutAccount } from "./config.js";
 import { GMAIL_SCOUT_SCAN_INTERVAL_MS } from "../applications/pipeline-health.js";
+import { resolveProviderJobAlert } from "./provider-redirect.js";
 import { completeGmailScoutReceipt, failGmailScoutReceipt, type GmailScoutRejection, type GmailScoutScanTrigger, listGmailScoutReceipts, openGmailScoutReceipt, pruneGmailScoutReceipts } from "./receipts.js";
 
 // A recent alert is an intake clue, not vacancy verification.  We deliberately keep the window
@@ -119,11 +120,17 @@ export function classifyGmailMessage(message: GmailMessage, now = Date.now()): {
 	const url = specificJobUrl(message.text) ?? specificJobUrl(message.snippet);
 	if (!url) return { rejected: "no_specific_job_url" };
 	if (!workKeyForLead({ url })) return { rejected: "no_work_key" };
+	return { candidate: candidateFor(message, url) };
+}
+
+/** The lead a message becomes once its posting URL is known — from the mail itself, or resolved (#1024). */
+function candidateFor(message: GmailMessage, url: string, resolvedCompany?: string): ScoutCandidate {
 	const host = new URL(url).hostname.toLowerCase();
 	const subject = clipMarked(message.subject, 300, { within: true });
 	const sender = clipMarked(message.from, 300, { within: true });
 	const receivedAt = clipMarked(message.date, 100, { within: true });
-	return { candidate: {
+	const metadata = extractVisibleMetadata(message);
+	return {
 		url,
 		title: clipMarked(message.subject.trim(), 300, { within: true }) || "Job suggestion",
 		source: "Gmail",
@@ -134,8 +141,9 @@ export function classifyGmailMessage(message: GmailMessage, now = Date.now()): {
 		gmail_from: sender,
 		gmail_date: receivedAt,
 		gmail_provenance: { provider: "gmail", message_id: message.id, subject, sender, received_at: receivedAt, source_domain: host },
-		...extractVisibleMetadata(message),
-	} };
+		...metadata,
+		company: metadata.company ?? resolvedCompany,
+	};
 }
 function stub(env: Env, id: string) { return env.AGENT.get(env.AGENT.idFromName(id)); }
 
@@ -204,11 +212,20 @@ export async function ingestGmailCandidates(input: {
 	existing: { data?: Record<string, unknown> }[];
 	/** `false` means the owning Scout returned an existing unchanged lead (a concurrent duplicate). */
 	insertLead: (data: Record<string, unknown>) => Promise<boolean | undefined>;
+	/** How a provider redirect is resolved (#1024); the global `fetch` in production. */
+	fetchImpl?: typeof fetch;
 }): Promise<{ candidates: number; added: number; deduped: number; rejected: Partial<Record<GmailScoutRejection, number>> }> {
 	let added = 0, deduped = 0, candidates = 0;
 	const rejected: Partial<Record<GmailScoutRejection, number>> = {};
 	for (const hit of input.hits) {
-		const classified = classifyGmailMessage(await input.readMessage(hit.id));
+		const message = await input.readMessage(hit.id);
+		let classified: ReturnType<typeof classifyGmailMessage> = classifyGmailMessage(message);
+		// #1024: a one-item provider alert carries only a redirect. Resolve it — after the digest,
+		// multi-listing and security checks above have already passed — or say exactly why not.
+		if ("rejected" in classified && classified.rejected === "no_specific_job_url") {
+			const resolved = await resolveProviderJobAlert(message, input.fetchImpl);
+			if (resolved) classified = "rejected" in resolved ? resolved : { candidate: candidateFor(message, resolved.url, resolved.company) };
+		}
 		if ("rejected" in classified) {
 			rejected[classified.rejected] = (rejected[classified.rejected] ?? 0) + 1;
 			continue;

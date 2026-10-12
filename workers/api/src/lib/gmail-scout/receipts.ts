@@ -10,7 +10,7 @@ export type GmailScoutScanTrigger = "schedule" | "on_demand";
 export type GmailScoutReceiptStatus = "running" | "completed" | "failed";
 
 /** Why a message examined by a scan did not become a lead. Categories only — never the message. */
-export type GmailScoutRejection = "missing_fields" | "stale" | "security_alert" | "digest" | "multiple_listings" | "no_specific_job_url" | "no_work_key";
+export type GmailScoutRejection = "missing_fields" | "stale" | "security_alert" | "digest" | "multiple_listings" | "no_specific_job_url" | "no_work_key" | "redirect_unresolved" | "posting_not_live" | "posting_unverifiable" | "posting_mismatch";
 
 export interface GmailScoutScanReceipt {
 	id: string;
