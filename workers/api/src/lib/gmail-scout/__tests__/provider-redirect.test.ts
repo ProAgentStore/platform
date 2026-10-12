@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import type { GmailMessage } from "../../gmail.js";
 import { classifyGmailMessage, ingestGmailCandidates } from "../scan.js";
-import { resolveProviderJobAlert } from "../provider-redirect.js";
+import { providerPostingUrl, resolveProviderJobAlert } from "../provider-redirect.js";
 
 const JK = "0123456789abcdef";
 const CANONICAL = `https://au.indeed.com/viewjob?jk=${JK}`;
@@ -173,6 +173,149 @@ describe("#1024: anything short of exactly one live matching posting is refused,
 		const p = live();
 		expect(await resolveProviderJobAlert(alert({ text: "https://au.indeed.com/account/unsubscribe?tk=SECRETTK" }), p.fetchImpl)).toBeNull();
 		expect(await reason(alert({ text: "no links" }), p)).toEqual({ no_specific_job_url: 1 });
+		expect(p.requested).toEqual([]);
+	});
+});
+
+// ── #1050: SEEK and LinkedIn ────────────────────────────────────────────────────────────────────────
+//
+// Both put the posting id in the link and wrap it in the owner's personal tracking parameters. The
+// fixtures model the alert shapes those providers send for ONE job (title, logo and apply links, plus
+// footer links), with every personal parameter marked SECRET; the real messages are not read here.
+
+const SEEK_ID = "81234567";
+const SEEK_CANONICAL = `https://www.seek.com.au/job/${SEEK_ID}`;
+const seekLink = (n: number) => `https://www.seek.com.au/job/${SEEK_ID}?type=standard&amp;ref=jobalert&amp;tracking=SEEKSECRETTRACK-${n}&amp;sol=SEEKSECRETSOL`;
+const seekAlert = (over: Partial<GmailMessage> = {}) =>
+	alert({
+		id: "m-seek",
+		from: "SEEK <noreply@s.seek.com.au>",
+		snippet: "Platform Engineer Acme Pty Ltd Sydney NSW",
+		text: `<a href="${seekLink(1)}">Platform Engineer</a> Acme Pty Ltd - Sydney NSW
+<a href="${seekLink(2)}"><img src="https://image-service-cdn.seek.com.au/logo.png"></a> <a href="${seekLink(3)}">Apply now</a>
+<a href="https://www.seek.com.au/my-activity/saved-searches?unsubscribe=SEEKSECRETUNSUB">Unsubscribe</a>`,
+		...over,
+	});
+
+const LI_ID = "4012345678";
+const LI_CANONICAL = `https://www.linkedin.com/jobs/view/${LI_ID}`;
+const liLink = (n: number) =>
+	`https://www.linkedin.com/comm/jobs/view/${LI_ID}/?trackingId=LISECRETTRACK${n}%3D%3D&amp;refId=LISECRETREF&amp;lipi=urn%3Ali%3Apage%3Aemail&amp;midToken=LISECRETMID&amp;midSig=LISECRETSIG&amp;trk=eml-job&amp;eid=LISECRETEID&amp;otpToken=LISECRETOTP`;
+const liAlert = (over: Partial<GmailMessage> = {}) =>
+	alert({
+		id: "m-linkedin",
+		from: "LinkedIn Job Alerts <jobalerts-noreply@linkedin.com>",
+		snippet: "Platform Engineer Acme Pty Ltd Sydney NSW",
+		text: `<a href="${liLink(1)}">Platform Engineer</a> Acme Pty Ltd · Sydney NSW <a href="${liLink(2)}">View job</a>
+<a href="https://www.linkedin.com/comm/jobs/search?keywords=platform&amp;midToken=LISECRETMID">See all jobs</a>
+<a href="https://www.linkedin.com/comm/psettings/email-unsubscribe?lipi=x&amp;midToken=LISECRETMID">Unsubscribe</a>`,
+		...over,
+	});
+const SECRET_RE = /SECRET|tracking=|trackingId|refId|midToken|otpToken/;
+const rejectedBy = async (message: GmailMessage, p: { fetchImpl: typeof fetch }) => (await ingest(message, p.fetchImpl)).result.rejected;
+
+describe("#1050: SEEK alerts", () => {
+	it("the classifier keeps the posting id only — the alert's tracking never reaches a lead", () => {
+		const out = classifyGmailMessage(seekAlert());
+		expect(out).toMatchObject({ candidate: { url: SEEK_CANONICAL, source_domain: "www.seek.com.au" } });
+		expect(JSON.stringify(out)).not.toMatch(SECRET_RE);
+	});
+
+	it("a live posting matching the mail becomes ONE unverified lead, checked at its canonical URL only", async () => {
+		const p = provider({ [SEEK_CANONICAL]: () => new Response(postingPage([POSTING])) });
+		const { result, stored } = await ingest(seekAlert(), p.fetchImpl);
+		expect(result).toMatchObject({ added: 1, rejected: {}, awaiting: [] });
+		expect(stored[0]).toMatchObject({ url: SEEK_CANONICAL, status: "unverified", verification: { canonical_job_url: SEEK_CANONICAL } });
+		expect(p.requested).toEqual([SEEK_CANONICAL]); // the three tracking links were never requested
+		expect(JSON.stringify({ result, stored, requested: p.requested })).not.toMatch(SECRET_RE);
+	});
+
+	it("canonicalises SEEK's hosts: its web hosts are kept, a mail/click subdomain goes to the country site", () => {
+		expect(providerPostingUrl(`https://au.seek.com/job/${SEEK_ID}?tracking=SEEKSECRET`)).toBe(`https://au.seek.com/job/${SEEK_ID}`);
+		expect(providerPostingUrl(`https://click.s.seek.com.au/job/${SEEK_ID}?tracking=SEEKSECRET`)).toBe(SEEK_CANONICAL);
+		expect(providerPostingUrl(`https://www.seek.co.nz/job/${SEEK_ID}?tracking=SEEKSECRET`)).toBe(`https://www.seek.co.nz/job/${SEEK_ID}`);
+		expect(providerPostingUrl(`https://www.seek.com.au/jobs?jobId=${SEEK_ID}&tracking=SEEKSECRET`)).toBe(SEEK_CANONICAL);
+	});
+
+	it("a look-alike host is never SEEK, and a SEEK link that names no posting is not a posting", () => {
+		for (const url of [`https://www.seek.com.au.evil.example/job/${SEEK_ID}`, `https://seek.com.au-jobs.example/job/${SEEK_ID}`, `https://notseek.com.au/job/${SEEK_ID}`]) expect(providerPostingUrl(url)).toBeNull();
+		for (const url of ["https://www.seek.com.au/my-activity/saved-searches", "https://www.seek.com.au/jobs?keywords=platform", "https://www.seek.com.au/job/abc"]) expect(providerPostingUrl(url)).toBeNull();
+	});
+
+	it("two different postings in one alert: multiple_listings, and nothing is fetched", async () => {
+		const p = provider({});
+		const text = `<a href="${seekLink(1)}">Platform Engineer</a><a href="https://www.seek.com.au/job/87654321?tracking=SEEKSECRET">Data Engineer</a>`;
+		expect(await rejectedBy(seekAlert({ text }), p)).toEqual({ multiple_listings: 1 });
+		expect(p.requested).toEqual([]);
+	});
+
+	it("the posting redirected off SEEK (or anywhere) is refused as not live, and the redirect is not followed", async () => {
+		const p = provider({ [SEEK_CANONICAL]: () => new Response(null, { status: 301, headers: { location: "https://jobs.evil.example/job?id=81234567" } }) });
+		expect(await rejectedBy(seekAlert(), p)).toEqual({ posting_not_live: 1 });
+		expect(p.requested).toEqual([SEEK_CANONICAL]);
+	});
+
+	it("an expired or mismatched posting is refused by name", async () => {
+		expect(await rejectedBy(seekAlert(), provider({ [SEEK_CANONICAL]: () => new Response(postingPage([{ ...POSTING, validThrough: "2020-01-01T00:00:00Z" }])) }))).toEqual({ posting_not_live: 1 });
+		expect(await rejectedBy(seekAlert(), provider({ [SEEK_CANONICAL]: () => new Response(postingPage([{ ...POSTING, title: "Senior Data Scientist" }])) }))).toEqual({ posting_mismatch: 1 });
+	});
+
+	it("a page the server cannot check waits for browser verification at the canonical URL", async () => {
+		for (const [res, why] of [[() => new Response("blocked", { status: 403 }), "server_fetch_refused"], [() => new Response("<html>no data</html>"), "no_structured_posting"]] as const) {
+			const { result, stored } = await ingest(seekAlert(), provider({ [SEEK_CANONICAL]: res }).fetchImpl);
+			expect(stored[0]).toMatchObject({ url: SEEK_CANONICAL, status: "awaiting_browser_verification", verification: { reason: why, canonical_job_url: SEEK_CANONICAL } });
+			expect(result.awaiting).toEqual([expect.objectContaining({ canonicalUrl: SEEK_CANONICAL, reason: why })]);
+			expect(JSON.stringify({ result, stored })).not.toMatch(SECRET_RE);
+		}
+	});
+});
+
+describe("#1050: LinkedIn alerts", () => {
+	it("the classifier keeps the posting id only — no trackingId, refId, midToken or otpToken", () => {
+		const out = classifyGmailMessage(liAlert());
+		expect(out).toMatchObject({ candidate: { url: LI_CANONICAL, source_domain: "www.linkedin.com" } });
+		expect(JSON.stringify(out)).not.toMatch(SECRET_RE);
+	});
+
+	it("LinkedIn's sign-in wall is not a gone posting: it waits for browser verification, and the wall is not followed", async () => {
+		const p = provider({ [LI_CANONICAL]: () => new Response(null, { status: 302, headers: { location: "https://www.linkedin.com/authwall?trk=gf&sessionRedirect=x" } }) });
+		const { result, stored } = await ingest(liAlert(), p.fetchImpl);
+		expect(stored[0]).toMatchObject({ url: LI_CANONICAL, status: "awaiting_browser_verification", verification: { reason: "server_fetch_refused", canonical_job_url: LI_CANONICAL } });
+		expect(result.awaiting).toEqual([expect.objectContaining({ canonicalUrl: LI_CANONICAL, reason: "server_fetch_refused" })]);
+		expect(p.requested).toEqual([LI_CANONICAL]);
+		expect(JSON.stringify({ result, stored, requested: p.requested })).not.toMatch(SECRET_RE);
+	});
+
+	// `Response` cannot be built with LinkedIn's non-standard 999, so the answer is modelled by its shape.
+	it("LinkedIn's bot answer (999) waits for the browser too", async () => {
+		expect(await resolveProviderJobAlert(liAlert(), provider({ [LI_CANONICAL]: () => ({ status: 999, headers: new Headers(), text: async () => "" }) as unknown as Response }).fetchImpl)).toEqual({ awaitingBrowser: { url: LI_CANONICAL, reason: "server_fetch_refused" } });
+	});
+
+	it("a guest page with a live posting matching the mail is accepted, from a direct or slugged link", async () => {
+		const live = () => provider({ [LI_CANONICAL]: () => new Response(postingPage([POSTING])) });
+		expect(await resolveProviderJobAlert(liAlert(), live().fetchImpl)).toEqual({ url: LI_CANONICAL, company: "Acme Pty Ltd" });
+		const slug = `<a href="https://www.linkedin.com/jobs/view/platform-engineer-at-acme-${LI_ID}?refId=LISECRETREF">Platform Engineer</a> Acme Pty Ltd`;
+		expect(await resolveProviderJobAlert(liAlert({ text: slug }), live().fetchImpl)).toEqual({ url: LI_CANONICAL, company: "Acme Pty Ltd" });
+	});
+
+	it("two different postings — including one named by currentJobId — are multiple_listings, and nothing is fetched", async () => {
+		const p = provider({});
+		const text = `<a href="${liLink(1)}">Platform Engineer</a><a href="https://www.linkedin.com/jobs/search/?currentJobId=4099999999&amp;refId=LISECRETREF">Data Engineer</a>`;
+		expect(await resolveProviderJobAlert(liAlert({ text }), p.fetchImpl)).toEqual({ rejected: "multiple_listings" });
+		expect(p.requested).toEqual([]);
+	});
+
+	it("a redirect that is not LinkedIn's own sign-in wall is refused as not live", async () => {
+		for (const location of ["https://www.linkedin.com/jobs/search?keywords=platform", "https://evil.example/authwall"]) {
+			expect(await resolveProviderJobAlert(liAlert(), provider({ [LI_CANONICAL]: () => new Response(null, { status: 302, headers: { location } }) }).fetchImpl)).toEqual({ rejected: "posting_not_live" });
+		}
+	});
+
+	it("an unsupported LinkedIn link (an opaque wrapper, a look-alike host) is not a posting, and nothing is requested", async () => {
+		const p = provider({});
+		const wrapper = "https://www.linkedin.com/e/v2?e=LISECRETE&amp;a=jobs&amp;midToken=LISECRETMID";
+		expect(await rejectedBy(liAlert({ text: `<a href="${wrapper}">Platform Engineer</a>` }), p)).toEqual({ no_specific_job_url: 1 });
+		expect(providerPostingUrl(`https://www.linkedin.com.evil.example/jobs/view/${LI_ID}`)).toBeNull();
 		expect(p.requested).toEqual([]);
 	});
 });

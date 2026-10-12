@@ -279,6 +279,30 @@ describe("#1024: a one-item provider alert, through the same scan", () => {
 	});
 });
 
+describe("#1050: a LinkedIn alert, through the same scan", () => {
+	const CANONICAL = "https://www.linkedin.com/jobs/view/4012345678";
+	const link = "https://www.linkedin.com/comm/jobs/view/4012345678/?trackingId=SECRETTRACK&amp;refId=SECRETREF&amp;midToken=SECRETMID&amp;otpToken=SECRETOTP";
+	const LINKEDIN = () => [msg("m-li", "Platform Engineer at Acme", `<a href="${link}">Platform Engineer</a> Acme Pty Ltd · Sydney`, "LinkedIn Job Alerts <jobalerts-noreply@linkedin.com>")];
+
+	it("behind LinkedIn's sign-in wall, the canonical posting is stored awaiting browser verification and queued — no token anywhere", async () => {
+		const requested: string[] = [];
+		vi.stubGlobal("fetch", async (url: string) => {
+			requested.push(String(url));
+			return new Response(null, { status: 302, headers: { location: "https://www.linkedin.com/authwall?trk=x" } });
+		});
+		const { receipt } = await scanGmailScout(env, "scout", "u1", { trigger: "on_demand", mailbox: fakeMailbox(LINKEDIN()).factory });
+		expect(receipt).toMatchObject({ status: "completed", added: 1, rejected: {}, awaitingBrowserVerification: 1, handoff: "none" });
+		const lead = dos.get("scout")?.leads.find((l) => l.data.gmail_message_id === "m-li");
+		expect(lead?.data).toMatchObject({ url: CANONICAL, status: "awaiting_browser_verification", verification: { reason: "server_fetch_refused", canonical_job_url: CANONICAL } });
+		const queued = await d1.DB.prepare("SELECT state, canonical_url FROM job_lead_browser_verifications WHERE instance_id = 'scout'").all<Record<string, unknown>>();
+		expect(queued.results).toEqual([{ state: "awaiting", canonical_url: CANONICAL }]);
+		// Only the canonical posting was requested, the wall was not followed, and nothing downstream moved.
+		expect(requested).toEqual([CANONICAL]);
+		expect(JSON.stringify({ lead, queued: queued.results, receipts: await listGmailScoutReceipts(env, "scout") })).not.toMatch(/SECRET|trackingId|otpToken/);
+		expect(deliveries()).toBe(0);
+	});
+});
+
 describe("#1022: pre-fix junk leads are reported, never archived", () => {
 	it("pipeline health counts stored untouched leads today's rules reject, and leaves every lead as it was", async () => {
 		const leads = dos.get("scout")?.leads ?? [];

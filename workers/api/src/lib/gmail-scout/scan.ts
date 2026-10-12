@@ -8,7 +8,7 @@ import { canonicalJobUrl, jobIdentity, workKeyForLead } from "../job-lead-triage
 import { clipMarked } from "../clip-marked.js";
 import { GMAIL_SCOUT_SCAN_INTERVAL_MS, getGmailScoutConfig, getGmailScoutScanState, resolveGmailScoutAccount } from "./config.js";
 import { enqueueBrowserVerification } from "../job-lead-browser-verification.js";
-import { resolveProviderJobAlert, type ServerCheckGap } from "./provider-redirect.js";
+import { providerPostingUrl, resolveProviderJobAlert, type ServerCheckGap } from "./provider-redirect.js";
 
 /** A lead stored `awaiting_browser_verification` (#1030), to be queued for the Scout's browser. */
 export interface AwaitingBrowserLead {
@@ -76,7 +76,8 @@ function specificJobUrls(text: string): Set<string> {
 		const url = canonicalJobUrl(raw.replace(/[).,;\]]+$/, ""));
 		if (url && isSpecificJobUrl(url)) {
 			const u = new URL(url);
-			out.add(`${u.host}${u.pathname}`);
+			// One provider posting is one job, whichever of its links or tracking forms the mail used (#1050).
+			out.add(providerPostingUrl(url) ?? `${u.host}${u.pathname}`);
 		}
 	}
 	return out;
@@ -130,7 +131,9 @@ export function classifyGmailMessage(message: GmailMessage, now = Date.now()): {
 	const url = specificJobUrl(message.text) ?? specificJobUrl(message.snippet);
 	if (!url) return { rejected: "no_specific_job_url" };
 	if (!workKeyForLead({ url })) return { rejected: "no_work_key" };
-	return { candidate: candidateFor(message, url) };
+	// A provider posting link keeps only its id (#1050): SEEK's `tracking` and LinkedIn's `trackingId`,
+	// `refId`, `midToken`, `otpToken` are the owner's personal parameters and never reach a lead.
+	return { candidate: candidateFor(message, providerPostingUrl(url) ?? url) };
 }
 
 /**
@@ -250,7 +253,9 @@ export async function ingestGmailCandidates(input: {
 		let serverGap: ServerCheckGap | null = null;
 		// #1024: a one-item provider alert carries only a redirect. Resolve it — after the digest,
 		// multi-listing and security checks above have already passed — or say exactly why not.
-		if ("rejected" in classified && classified.rejected === "no_specific_job_url") {
+		// #1050: a SEEK or LinkedIn posting link is checked the same way, rather than accepted unchecked.
+		const providerPosting = "candidate" in classified && providerPostingUrl(classified.candidate.url) !== null;
+		if (providerPosting || ("rejected" in classified && classified.rejected === "no_specific_job_url")) {
 			const resolved = await resolveProviderJobAlert(message, input.fetchImpl);
 			if (resolved && "awaitingBrowser" in resolved) {
 				// Resolved to ONE canonical posting, but the page could not be checked here: a browser

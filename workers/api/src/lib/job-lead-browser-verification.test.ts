@@ -42,6 +42,7 @@ vi.mock("./local-browser/store.js", async (importOriginal) => ({
 const { applyJobLeadBrowserVerification } = await import("../agent-do-storage-routes.js");
 const { MAX_ATTEMPTS, RETRY_BACKOFF_MS, listLeadVerifications, outcomeFromRun, runLeadBrowserVerification, verificationObjective, verifyLeadNow, enqueueBrowserVerification } = await import("./job-lead-browser-verification.js");
 const { planJobLeadTriage, planBrowserVerificationOutcome } = await import("./job-lead-triage.js");
+const { ingestGmailCandidates } = await import("./gmail-scout/scan.js");
 
 const CANONICAL = "https://au.indeed.com/viewjob?jk=0123456789abcdef";
 let d1: RealSchemaD1;
@@ -412,5 +413,58 @@ describe("the Scout's browser source policy is the instance's own (#1049)", () =
 		await runLeadBrowserVerification(env, 2_000);
 		expect(started).toEqual([]);
 		expect(await queue()).toMatchObject({ state: "awaiting", lastDetail: expect.stringMatching(/no longer fit this agent/) });
+	});
+});
+
+describe("#1050: a LinkedIn Gmail alert reaches the owner's per-site consent with its canonical posting only", () => {
+	const LI = "https://www.linkedin.com/jobs/view/4012345678";
+	const link = "https://www.linkedin.com/comm/jobs/view/4012345678/?trackingId=SECRETTRACK&amp;midToken=SECRETMID&amp;otpToken=SECRETOTP";
+	const message = { id: "m-li", threadId: "t", from: "LinkedIn Job Alerts <jobalerts-noreply@linkedin.com>", to: "", cc: "", subject: "Platform Engineer at Acme", date: new Date().toUTCString(), messageId: "", references: "", snippet: "Platform Engineer Acme Sydney", text: `<a href="${link}">Platform Engineer</a> Acme`, attachments: [] };
+	const takeovers = () => d1.sqlite.prepare("SELECT subject_id, reason, state FROM browser_takeovers WHERE instance_id = 's1'").all() as Array<Record<string, string>>;
+
+	it("asks once for www.linkedin.com, opens nothing until allowed, then hands only an ACTIVE posting to the Tailor", async () => {
+		d1.exec("DELETE FROM local_browser_domain_consent");
+		d1.exec("DELETE FROM job_lead_browser_verifications");
+		leads.clear();
+		// The scan's own ingest, with LinkedIn answering the server with its sign-in wall.
+		const wall = (async () => new Response(null, { status: 302, headers: { location: "https://www.linkedin.com/authwall" } })) as unknown as typeof fetch;
+		const { awaiting } = await ingestGmailCandidates({
+			hits: [{ id: "m-li" }],
+			readMessage: async () => message as never,
+			existing: [],
+			insertLead: async (data) => {
+				leads.set("lead-li", { id: "lead-li", data } as unknown as CollectionRecord);
+				return { created: true, id: "lead-li" };
+			},
+			fetchImpl: wall,
+		});
+		// …and the scan's own queueing of what it could not check (scan.ts, #1030).
+		for (const a of awaiting) await enqueueBrowserVerification(env, { instanceId: "s1", userId: "u1", leadId: a.leadId, workKey: a.workKey, canonicalUrl: a.canonicalUrl, expectedTitle: a.title, expectedCompany: a.company, reason: a.reason }, 1_000);
+		const li = () => leads.get("lead-li")!.data as Record<string, unknown>;
+		expect(li()).toMatchObject({ url: LI, status: "awaiting_browser_verification" });
+
+		await runLeadBrowserVerification(env, 2_000);
+		expect(started).toEqual([]);
+		expect(takeovers()).toEqual([{ subject_id: "site-consent:www.linkedin.com", reason: "consent_required", state: "requested" }]);
+		// Not appliable while it waits: the final-application gates are untouched.
+		expect(planJobLeadTriage(leads.get("lead-li")!, { action: "apply", sourceInstanceId: "s1" })).toMatchObject({ ok: false });
+
+		d1.exec("INSERT INTO local_browser_domain_consent (instance_id, user_id, domain, scope, decision, decided_at) VALUES ('s1', 'u1', 'linkedin.com', 'navigate', 'allow', 3)");
+		await runLeadBrowserVerification(env, 2_000 + 6 * 60_000);
+		expect(started).toHaveLength(1);
+		expect(started[0].objective.match(/https?:\/\/\S+/g)?.every((u) => u.startsWith(LI))).toBe(true);
+		runs.set("run-1", { id: "run-1", status: "completed", result: { findings: [{ title: "x", url: LI, evidence: "", fields: { verification_outcome: "active" } }], summary: "active" } });
+		await runLeadBrowserVerification(env, 2_000 + 7 * 60_000);
+		expect(li()).toMatchObject({ status: "new", verification: { state: "live" } });
+
+		const written = JSON.stringify({
+			lead: li(),
+			started,
+			queue: d1.sqlite.prepare("SELECT * FROM job_lead_browser_verifications").all(),
+			attempts: d1.sqlite.prepare("SELECT * FROM job_lead_browser_verification_attempts").all(),
+			takeovers: takeovers(),
+			pushes,
+		});
+		expect(written).not.toMatch(/SECRET|trackingId|midToken|otpToken/);
 	});
 });

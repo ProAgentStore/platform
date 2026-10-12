@@ -45,7 +45,7 @@ function harness(opts: { policy?: Partial<ControllerAiPolicy>; attemptMs?: numbe
 		},
 	};
 	const run = <T>(results: Array<T | Error>) => {
-		const calls: Array<{ attempt: number; deadlines: { preContentMs?: number; silenceMs?: number; totalMs?: number } }> = [];
+		const calls: Array<{ attempt: number; deadlines: { preContentMs?: number; silenceMs?: number; totalMs?: number; attempt?: number } }> = [];
 		const promise = withControllerAiRecovery(policy, deps, async (deadlines, attempt) => {
 			calls.push({ attempt, deadlines });
 			// A real request is cut at its own `totalMs` — the clamp is how the ceiling binds attempt time.
