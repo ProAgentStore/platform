@@ -13,7 +13,7 @@ import { signSession } from "../../session.js";
 import { pipelineHealth } from "../../applications/pipeline-health.js";
 import { GMAIL_SCOUT_PINNED_EMAIL } from "../config.js";
 import { type GmailScoutScanReceipt, listGmailScoutReceipts } from "../receipts.js";
-import { type GmailScoutMailbox, type GmailScoutMailboxFactory, runDueGmailScoutScans, scanGmailScout, setGmailScoutMailboxForTest } from "../scan.js";
+import { type GmailScoutMailbox, type GmailScoutMailboxFactory, gmailScoutStatus, runDueGmailScoutScans, scanGmailScout, setGmailScoutMailboxForTest } from "../scan.js";
 import type { GmailMessage } from "../../gmail.js";
 import type { Env } from "../../../types.js";
 import type { GmailScoutScanResult } from "../../../agent-types.js";
@@ -258,6 +258,9 @@ describe("#1024: a one-item provider alert, through the same scan", () => {
 		expect(requested.every((u) => u === CANONICAL)).toBe(true);
 		const receipts = JSON.stringify(await listGmailScoutReceipts(env, "scout"));
 		for (const leaked of ["SECRET", "indeed.com", "Platform Engineer", "Acme"]) expect(receipts).not.toContain(leaked);
+		// Status (Console + MCP gmail_scout_status) carries counts and receipts, never the alert or its tokens.
+		const status = JSON.stringify(await gmailScoutStatus(env, "scout"));
+		for (const leaked of ["SECRET", "indeed.com", "Platform Engineer", "Acme"]) expect(status).not.toContain(leaked);
 		expect(deliveries()).toBe(0);
 	});
 
@@ -265,6 +268,9 @@ describe("#1024: a one-item provider alert, through the same scan", () => {
 		vi.stubGlobal("fetch", async () => page(403));
 		const { receipt } = await scanGmailScout(env, "scout", "u1", { trigger: "on_demand", mailbox: fakeMailbox(INDEED()).factory });
 		expect(receipt).toMatchObject({ status: "completed", added: 0, rejected: { posting_unverifiable: 1 } });
+		const status = JSON.stringify(await gmailScoutStatus(env, "scout"));
+		expect(status).toContain("posting_unverifiable");
+		for (const leaked of ["SECRET", "indeed.com", "Platform Engineer"]) expect(status).not.toContain(leaked);
 		expect(dos.get("scout")?.leads.some((l) => l.data.gmail_message_id === "m-indeed")).toBe(false);
 	});
 });
