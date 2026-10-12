@@ -457,7 +457,7 @@ describe("no submit path under the default fill-and-review policy", () => {
 	});
 
 	it("offers the final-submit control only when the policy allows it — and request_review still never submits", async () => {
-		await call("PUT", "/ap/application-runner/settings", { allowDomains: ["example.com"], autoSubmit: { enabled: true, roles: ["engineer"], dailyCap: 2 } });
+		await call("PUT", "/ap/application-runner/settings", { allowDomains: ["example.com"], autoSubmit: { enabled: true, roles: ["engineer"], dailyCap: 2 }, acknowledgeRealSubmissions: true });
 		readyApp("f2");
 		readyApp("f3");
 		const q = await call("GET", "/t1/application-queue");

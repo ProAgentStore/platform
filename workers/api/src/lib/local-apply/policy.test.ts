@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { type GateInput, RUNNER_DEFAULTS, evaluateSubmitGate, mergeRunnerSettings } from "./policy";
+import { type GateInput, RUNNER_DEFAULTS, acknowledgeAutoSubmit, evaluateSubmitGate, mergeRunnerSettings } from "./policy";
 import { LOCAL_APPLY_CONTRACT_MIN_CLI } from "./contract.js";
 import { runnerContractProblem } from "./apply.js";
 import { cliAtLeast } from "../runner-upgrade.js";
@@ -32,7 +32,7 @@ describe("mergeRunnerSettings", () => {
 });
 
 const PASSING: GateInput = {
-	settings: { ...RUNNER_DEFAULTS, allowDomains: ["example.com"], autoSubmit: { enabled: true, roles: ["engineer"], locations: ["sydney"], exclude: ["contract"], minSalary: null, dailyCap: 2 } },
+	settings: { ...RUNNER_DEFAULTS, allowDomains: ["example.com"], autoSubmit: { enabled: true, roles: ["engineer"], locations: ["sydney"], exclude: ["contract"], minSalary: null, dailyCap: 2, acknowledgedAt: "2026-10-13T00:00:00.000Z" } },
 	application: { profileVersion: "v1", resumeSha: "a", coverLetterSha: "b", blockReason: null, submitAttemptedAt: null, leadUrl: "https://jobs.example.com/1", lead: { title: "Staff Engineer", company: "Globex", location: "Sydney NSW" } },
 	autoSubmitsToday: 0,
 	activeRuns: 0,
@@ -119,5 +119,35 @@ describe("runnerContractProblem (#977)", () => {
 		// bumping the CLI is what ships a runner change, and why not bumping it shipped nothing.
 		const pkg = JSON.parse(readFileSync(join(ROOT, "packages/cli/package.json"), "utf8")) as { scripts?: Record<string, string> };
 		expect(pkg.scripts?.build, "the CLI must rebuild and bundle the runner, or its version says nothing about the runner's behaviour").toMatch(/--filter @proagentstore\/browser-runner build[\s\S]*copy-browser-runner/);
+	});
+});
+
+describe("explicit acknowledgement for standing auto-submit (#1039)", () => {
+	const ready = { ...RUNNER_DEFAULTS, allowDomains: ["example.com"], autoSubmit: { ...RUNNER_DEFAULTS.autoSubmit, roles: ["engineer"], dailyCap: 1 } };
+	const on = { ...ready, autoSubmit: { ...ready.autoSubmit, enabled: true } };
+	const at = "2026-10-13T01:00:00.000Z";
+
+	it("switching it ON needs the acknowledgement, and stamps it", () => {
+		expect(acknowledgeAutoSubmit(ready, on, false, at)).toEqual({ error: expect.stringMatching(/acknowledgeRealSubmissions: true.*cannot be undone/) });
+		expect(acknowledgeAutoSubmit(ready, on, true, at)).toMatchObject({ settings: { autoSubmit: { enabled: true, acknowledgedAt: at } } });
+	});
+
+	it("staying on keeps the original stamp; switching off needs nothing and clears it", () => {
+		const acknowledged = { ...on, autoSubmit: { ...on.autoSubmit, acknowledgedAt: at } };
+		expect(acknowledgeAutoSubmit(acknowledged, { ...acknowledged, autoSubmit: { ...acknowledged.autoSubmit, dailyCap: 3 } }, false, "later")).toMatchObject({ settings: { autoSubmit: { dailyCap: 3, acknowledgedAt: at } } });
+		expect(acknowledgeAutoSubmit(acknowledged, ready, false, "later")).toMatchObject({ settings: { autoSubmit: { enabled: false, acknowledgedAt: null } } });
+	});
+
+	it("the gate refuses a policy enabled WITHOUT an acknowledgement — fail closed, nothing rewritten", () => {
+		const legacy = { ...PASSING, settings: { ...PASSING.settings, autoSubmit: { ...PASSING.settings.autoSubmit, acknowledgedAt: null } } };
+		expect(evaluateSubmitGate(PASSING).allowed).toBe(true);
+		const out = evaluateSubmitGate(legacy);
+		expect(out.allowed).toBe(false);
+		expect(out.checks.find((c) => c.check === "auto_submit_enabled")).toMatchObject({ ok: false, why: expect.stringMatching(/without the owner's acknowledgement/) });
+	});
+
+	it("a disabled policy merged from storage carries no acknowledgement", () => {
+		const r = mergeRunnerSettings(RUNNER_DEFAULTS, { autoSubmit: { enabled: false, acknowledgedAt: at } });
+		expect("settings" in r && r.settings.autoSubmit.acknowledgedAt).toBeNull();
 	});
 });

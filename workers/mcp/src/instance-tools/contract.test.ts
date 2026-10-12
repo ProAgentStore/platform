@@ -443,7 +443,7 @@ const TABLE: Record<string, Row> = {
 	get_console_link: ["consoleLink", "read", null, null, "instance_id,permission_request_id,run_id,section,secure_input_id,target,task_id,token"],
 	list_instance_permission_requests: ["consoleLink", "read", null, null, "instance_id,token"],
 	get_application_runner_settings: ["applications", "read", null, null, "instance_id,token"],
-	set_application_runner_settings: ["applications", "write", null, "envelope", "dry_run,instance_id,settings,token"],
+	set_application_runner_settings: ["applications", "write", null, "envelope", "confirm,dry_run,instance_id,settings,token"],
 	list_applications: ["applications", "read", null, null, "company,instance_id,role,since,sort,source,status,token,until,url"],
 	get_application: ["applications", "read", null, null, "application_id,instance_id,record_id,scout_instance_id,token"],
 	application_trace: ["applications", "read", null, null, "application_id,instance_id,token"],

@@ -103,7 +103,7 @@ function readyApp(id: string, over: { title?: string; url?: string } = {}) {
 	return { eventType: "job.application.materials_ready", eventId: `t1:${id}:1:materials`, applicationId: id, tailorInstanceId: "t1", leadId: id };
 }
 const enableAutoSubmit = (over: Record<string, unknown> = {}) =>
-	call("PUT", "/ap/application-runner/settings", { allowDomains: ["example.com"], autoSubmit: { enabled: true, roles: ["engineer"], dailyCap: 1, ...over } });
+	call("PUT", "/ap/application-runner/settings", { allowDomains: ["example.com"], autoSubmit: { enabled: true, roles: ["engineer"], dailyCap: 1, ...over }, acknowledgeRealSubmissions: true });
 
 describe("end to end: approved lead → materials_ready → filled and awaiting review, exactly once", () => {
 	it("chains the Tailor into the Runner, writes the lifecycle back with an audit row per move, and never dispatches twice", async () => {
@@ -1498,3 +1498,36 @@ describe("deleting an agent", () => {
 		expect({ apps: await n("job_applications"), audit: await n("job_application_events"), runs: await n("local_apply_runs") }).toEqual(left);
 	});
 });
+
+describe("explicit acknowledgement for standing auto-submit (#1039)", () => {
+	const policy = { allowDomains: ["example.com"], autoSubmit: { enabled: true, roles: ["engineer"], dailyCap: 1 } };
+
+	it("enabling without acknowledgeRealSubmissions is refused, and nothing is saved", async () => {
+		const res = await call("PUT", "/ap/application-runner/settings", policy);
+		expect(res).toMatchObject({ status: 400, body: { acknowledgementRequired: true, error: expect.stringMatching(/acknowledgeRealSubmissions: true/) } });
+		expect((await call("GET", "/ap/application-runner/settings")).body.settings.autoSubmit).toMatchObject({ enabled: false, acknowledgedAt: null });
+	});
+
+	it("enabling with it stamps acknowledgedAt server-side — a client-sent stamp is ignored", async () => {
+		const forged = await call("PUT", "/ap/application-runner/settings", { ...policy, autoSubmit: { ...policy.autoSubmit, acknowledgedAt: "2020-01-01T00:00:00.000Z" } });
+		expect(forged.status).toBe(400);
+		const before = Date.now();
+		const res = await call("PUT", "/ap/application-runner/settings", { ...policy, acknowledgeRealSubmissions: true });
+		expect(res.status).toBe(200);
+		const at = Date.parse(res.body.settings.autoSubmit.acknowledgedAt);
+		expect(at).toBeGreaterThanOrEqual(before - 1000);
+		expect((await call("GET", "/ap/application-runner/settings")).body.settings.autoSubmit.acknowledgedAt).toBe(res.body.settings.autoSubmit.acknowledgedAt);
+	});
+
+	it("the prerequisites still apply even with the acknowledgement", async () => {
+		const res = await call("PUT", "/ap/application-runner/settings", { autoSubmit: { enabled: true }, acknowledgeRealSubmissions: true });
+		expect(res).toMatchObject({ status: 400, body: { error: expect.stringMatching(/cannot be enabled yet/) } });
+	});
+
+	it("disabling never needs it, and clears the acknowledgement", async () => {
+		await call("PUT", "/ap/application-runner/settings", { ...policy, acknowledgeRealSubmissions: true });
+		const off = await call("PUT", "/ap/application-runner/settings", { autoSubmit: { enabled: false } });
+		expect(off).toMatchObject({ status: 200, body: { settings: { autoSubmit: { enabled: false, acknowledgedAt: null } } } });
+	});
+});
+

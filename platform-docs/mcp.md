@@ -151,7 +151,7 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
-- `serverInfo.version`: `0.1.123`
+- `serverInfo.version`: `0.1.124`
 
 That is the same value the published MCP-registry manifest (`server.json`) carries, and both
 are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —
@@ -259,6 +259,7 @@ Destructive or overwrite-style tools require an exact `confirm` value. By conven
 - `rollback_agent_version`: `confirm: "rollback_agent_version"`
 - `execute_agent_builder_plan`: `confirm: "execute_agent_builder_plan"`
 - `runner_restart`: `confirm: "runner_restart"`, and only with `force: true` (#1032)
+- `set_application_runner_settings`: `confirm: "auto_submit_real_submissions"`, and only when enabling auto-submit — the owner's acknowledgement that submissions are real and irreversible (#1039)
 - `remove_repo`: `confirm: "remove_all_repos"`, and only when removing **all** indexed repos
 
 ### Tool annotations

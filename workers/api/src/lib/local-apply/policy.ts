@@ -6,7 +6,8 @@
  * the final Submit. `auto_submit` is never a setting on its own — it is the outcome of the gate
  * below, evaluated per application at dispatch, and EVERY check must pass:
  *
- *   auto_submit_enabled  the owner separately switched it on;
+ *   auto_submit_enabled  the owner separately switched it on, acknowledging that submissions are
+ *                        real and irreversible (#1039: `acknowledgedAt`, stamped by the server);
  *   materials_complete   a versioned profile and both approved artifacts, with hashes;
  *   domain_allowlisted   the job's site is on the instance's own allow list (not just "the job's URL");
  *   role / location / exclusion / salary   the lead matches the owner's approved criteria;
@@ -33,6 +34,12 @@ export interface AutoSubmitPolicy {
 	minSalary: number | null;
 	/** Auto-submissions per rolling 24h. 0 = none. */
 	dailyCap: number;
+	/**
+	 * When the owner acknowledged that auto-submit sends real, irreversible applications (#1039).
+	 * Stamped by the server when it is enabled with `acknowledgeRealSubmissions: true`, cleared when it
+	 * is disabled; a client cannot set it. Enabled without it, the gate refuses every submission.
+	 */
+	acknowledgedAt: string | null;
 }
 
 export interface ApplicationRunnerSettings {
@@ -59,7 +66,7 @@ export const RUNNER_DEFAULTS: ApplicationRunnerSettings = {
 	maxMinutes: 20,
 	maxPages: 30,
 	maxActions: 300,
-	autoSubmit: { enabled: false, roles: [], locations: [], exclude: [], minSalary: null, dailyCap: 0 },
+	autoSubmit: { enabled: false, roles: [], locations: [], exclude: [], minSalary: null, dailyCap: 0, acknowledgedAt: null },
 };
 export const RUNNER_SETTINGS_KEY = "applicationRunner";
 
@@ -138,12 +145,36 @@ export function mergeRunnerSettings(current: ApplicationRunnerSettings, patch: u
 			if (!intIn(a.dailyCap, 0, 50)) return { error: "autoSubmit.dailyCap must be a whole number from 0 to 50" };
 			next.autoSubmit.dailyCap = a.dailyCap as number;
 		}
+		// Round-trips the stored stamp. The settings ROUTE strips any client-sent value first and stamps
+		// it itself (`acknowledgeAutoSubmit`), so this is never how an acknowledgement is made.
+		if (a.acknowledgedAt !== undefined) {
+			if (a.acknowledgedAt !== null && (typeof a.acknowledgedAt !== "string" || Number.isNaN(Date.parse(a.acknowledgedAt)))) return { error: "autoSubmit.acknowledgedAt must be a timestamp, or null" };
+			next.autoSubmit.acknowledgedAt = a.acknowledgedAt as string | null;
+		}
 	}
 	// #953: auto-submit cannot be ENABLED until the policy it would run under exists. The gate would
 	// refuse every application anyway; refusing the switch says so where the owner is looking.
 	const missing = autoSubmitPrerequisites(next);
 	if (next.autoSubmit.enabled && missing.length) return { error: `Auto-submit cannot be enabled yet — it needs ${missing.join(", ")}.` };
+	// A disabled policy carries no acknowledgement: enabling again needs a new one.
+	if (!next.autoSubmit.enabled) next.autoSubmit.acknowledgedAt = null;
 	return { settings: next };
+}
+
+export const AUTO_SUBMIT_ACKNOWLEDGEMENT_REQUIRED =
+	"Enabling auto-submit requires acknowledgeRealSubmissions: true in the request body. Auto-submit sends real job applications to third-party sites, and a submission cannot be undone.";
+
+/**
+ * The owner's explicit acknowledgement for STANDING auto-submit (#1039), applied by the settings route
+ * to a merged change. Switching it ON — from off — requires `acknowledged` and stamps `acknowledgedAt`;
+ * staying on keeps the stamp it was enabled with; switching off needs nothing. Pure, so the rule is
+ * tested as a rule. Every other prerequisite and the per-application gate are unchanged.
+ */
+export function acknowledgeAutoSubmit(current: ApplicationRunnerSettings, next: ApplicationRunnerSettings, acknowledged: boolean, nowIso: string): { settings: ApplicationRunnerSettings } | { error: string } {
+	const enabling = next.autoSubmit.enabled && !current.autoSubmit.enabled;
+	if (enabling && !acknowledged) return { error: AUTO_SUBMIT_ACKNOWLEDGEMENT_REQUIRED };
+	if (!next.autoSubmit.enabled) return { settings: { ...next, autoSubmit: { ...next.autoSubmit, acknowledgedAt: null } } };
+	return { settings: { ...next, autoSubmit: { ...next.autoSubmit, acknowledgedAt: enabling ? nowIso : current.autoSubmit.acknowledgedAt } } };
 }
 
 /**
@@ -211,7 +242,9 @@ export function evaluateSubmitGate(i: GateInput): { allowed: boolean; checks: Ga
 	const salary = typeof app.lead.salary === "number" ? app.lead.salary : null;
 	const approved = i.approval?.usable === true;
 	const checks: GateCheck[] = [
-		{ check: "auto_submit_enabled", ok: a.enabled, why: "the owner has not enabled auto-submit" },
+		// #1039: enabled is not enough — the owner must have acknowledged that submissions are real. A
+		// policy enabled before that existed fails here and runs fill-and-review until re-enabled.
+		{ check: "auto_submit_enabled", ok: a.enabled && !!a.acknowledgedAt, why: a.enabled ? "auto-submit was enabled without the owner's acknowledgement that submissions are real and irreversible — enable it again with that acknowledgement" : "the owner has not enabled auto-submit" },
 		{ check: "materials_complete", ok: !!app.profileVersion && !!app.resumeSha && !!app.coverLetterSha, why: "no versioned profile and complete artifact set" },
 		{ check: "domain_allowlisted", ok: !!host && i.settings.allowDomains.some((d) => domainWithin(host, d)), why: `${host ?? "the job's site"} is not on the instance's allow list` },
 		{ check: "role_matches", ok: has(app.lead.title, a.roles), why: "the title matches no approved role" },

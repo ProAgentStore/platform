@@ -353,7 +353,7 @@ describe("#953: the submission policy", () => {
 		const noProfile = await call("PUT", "/ap/application-runner/settings", { sources: { profile: null }, allowDomains: ["example.com"], autoSubmit: { enabled: true, roles: ["engineer"], dailyCap: 1 } });
 		expect(noProfile.status).toBe(400);
 		expect(noProfile.body.error).toMatch(/profile source/);
-		const ok = await call("PUT", "/ap/application-runner/settings", { allowDomains: ["example.com"], autoSubmit: { enabled: true, roles: ["engineer"], dailyCap: 1 } });
+		const ok = await call("PUT", "/ap/application-runner/settings", { allowDomains: ["example.com"], autoSubmit: { enabled: true, roles: ["engineer"], dailyCap: 1 }, acknowledgeRealSubmissions: true });
 		expect(ok.status).toBe(200);
 		expect(ok.body.settings.autoSubmit).toMatchObject({ enabled: true, roles: ["engineer"], dailyCap: 1 });
 		// And with it enabled, the one thing that turns it off again is the owner.

@@ -1,3 +1,5 @@
+import { AutoSubmitConfirmDialog, AutoSubmitDangerBanner, ManualReviewBadge } from "../components/AutoSubmitPolicy";
+import { type AutoSubmitAllowance, type AutoSubmitRules, disablePayload, enablePayload, rulesPayload } from "../lib/autoSubmitPolicy";
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
@@ -155,7 +157,7 @@ export default function ApplicationsTab({ instanceId, isTailor = false }: { inst
 
 			{selected && <Detail key={selected.key} instanceId={instanceId} item={selected} connections={view.connections} onChanged={load} />}
 
-			{view.pipeline.runners[0] && <SubmissionPolicy runnerId={view.pipeline.runners[0]} onChanged={load} />}
+			{view.pipeline.runners[0] && <SubmissionPolicy runnerId={view.pipeline.runners[0]} allowance={view.limits.find((l) => l.runnerInstanceId === view.pipeline.runners[0])} onChanged={load} />}
 			{handoffOpen && handoff && (
 				<ApplicationHandoffLive
 					instanceId={instanceId}
@@ -198,7 +200,11 @@ function Limits({ view, instanceId, onChanged }: { view: ApplicationQueueView; i
 		<div className="mt-3 flex flex-col gap-1 text-xs text-muted">
 			{view.limits.map((l) => (
 				<span key={l.runnerInstanceId}>
-					Auto-submit: {l.autoSubmitEnabled ? `on — ${l.remaining} of ${l.dailyCap} left today` : "off (every application stops for your review)"}
+					{l.autoSubmitEnabled ? (
+						<span className="text-danger font-semibold" data-testid="auto-submit-status-on">⚠ Auto-submit ON — real applications are submitted automatically; {l.remaining} of {l.dailyCap} left today</span>
+					) : (
+						"Auto-submit: off — manual review (every application stops for your review)"
+					)}
 				</span>
 			))}
 			{view.connections.map((c) => (
@@ -413,20 +419,26 @@ function Detail({ instanceId, item, connections, onChanged }: { instanceId: stri
 const list = (v: string) => v.split(",").map((x) => x.trim()).filter(Boolean);
 
 /**
- * The handoff + submission policy (#953) — the Runner's settings. Fill-and-review is the default and
- * the server refuses to enable auto-submit until a profile source, approved roles, an allowed site
- * and a daily cap exist; its sentence is shown as it comes back.
+ * The handoff + submission policy (#953) — the Runner's settings. Manual review (fill-and-review) is
+ * the default. Auto-submit is never a checkbox (#1039): it is turned on only through a confirmation
+ * that shows the exact rules and requires the owner's acknowledgement that submissions are real and
+ * irreversible (the server requires it too, as MCP's set_application_runner_settings does), and while
+ * it is on a danger banner offers the one-click way out. The server's refusals are shown as they come.
  */
-function SubmissionPolicy({ runnerId, onChanged }: { runnerId: string; onChanged: () => void }) {
+function SubmissionPolicy({ runnerId, allowance, onChanged }: { runnerId: string; allowance?: AutoSubmitAllowance | null; onChanged: () => void }) {
 	const [s, setS] = useState<ApplicationRunnerSettingsView["settings"] | null>(null);
-	const [draft, setDraft] = useState({ profile: "", answers: "", allowDomains: "", roles: "", locations: "", exclude: "", dailyCap: "0", enabled: false });
+	const [draft, setDraft] = useState({ profile: "", answers: "", allowDomains: "", roles: "", locations: "", exclude: "", minSalary: "", dailyCap: "0" });
 	const [msg, setMsg] = useState("");
+	const [busy, setBusy] = useState(false);
+	const [confirming, setConfirming] = useState(false);
+	const [acknowledged, setAcknowledged] = useState(false);
+	const [confirmError, setConfirmError] = useState("");
 	const load = useCallback(async () => {
 		try {
 			const v = await api<ApplicationRunnerSettingsView>(`/v1/instances/${runnerId}/application-runner/settings`);
 			setS(v.settings);
 			const a = v.settings.autoSubmit;
-			setDraft({ profile: v.settings.sources.profile ?? "", answers: v.settings.sources.answers ?? "", allowDomains: v.settings.allowDomains.join(", "), roles: a.roles.join(", "), locations: a.locations.join(", "), exclude: a.exclude.join(", "), dailyCap: String(a.dailyCap), enabled: a.enabled });
+			setDraft({ profile: v.settings.sources.profile ?? "", answers: v.settings.sources.answers ?? "", allowDomains: v.settings.allowDomains.join(", "), roles: a.roles.join(", "), locations: a.locations.join(", "), exclude: a.exclude.join(", "), minSalary: a.minSalary === null ? "" : String(a.minSalary), dailyCap: String(a.dailyCap) });
 			if (v.error) setMsg(v.error);
 		} catch (e) {
 			setMsg(e instanceof Error ? e.message : String(e));
@@ -436,23 +448,51 @@ function SubmissionPolicy({ runnerId, onChanged }: { runnerId: string; onChanged
 		load();
 	}, [load]);
 	if (!s) return null;
+	const draftRules: AutoSubmitRules = {
+		allowDomains: list(draft.allowDomains),
+		roles: list(draft.roles),
+		locations: list(draft.locations),
+		exclude: list(draft.exclude),
+		minSalary: draft.minSalary.trim() ? Number(draft.minSalary) : null,
+		dailyCap: Number(draft.dailyCap) || 0,
+	};
+	const savedRules: AutoSubmitRules = { allowDomains: s.allowDomains, ...s.autoSubmit };
+	const put = async (body: Record<string, unknown>) => {
+		await api(`/v1/instances/${runnerId}/application-runner/settings`, { method: "PUT", body: JSON.stringify(body) });
+		await load();
+		onChanged();
+	};
 	const save = async () => {
 		setMsg("");
 		try {
-			await api(`/v1/instances/${runnerId}/application-runner/settings`, {
-				method: "PUT",
-				body: JSON.stringify({
-					sources: { profile: draft.profile.trim() || null, answers: draft.answers.trim() || null },
-					allowDomains: list(draft.allowDomains),
-					autoSubmit: { enabled: draft.enabled, roles: list(draft.roles), locations: list(draft.locations), exclude: list(draft.exclude), dailyCap: Number(draft.dailyCap) || 0 },
-				}),
-			});
+			await put(rulesPayload(draftRules, { profile: draft.profile.trim() || null, answers: draft.answers.trim() || null }));
 			setMsg("Saved.");
-			await load();
-			onChanged();
 		} catch (e) {
 			setMsg(e instanceof Error ? e.message : String(e));
 		}
+	};
+	const enable = async () => {
+		setBusy(true);
+		setConfirmError("");
+		try {
+			await put(enablePayload(draftRules));
+			setConfirming(false);
+			setMsg("Auto-submit is on.");
+		} catch (e) {
+			// The server's refusal as it is — a missing prerequisite, or the acknowledgement.
+			setConfirmError(e instanceof Error ? e.message : String(e));
+		}
+		setBusy(false);
+	};
+	const disable = async () => {
+		setBusy(true);
+		try {
+			await put(disablePayload());
+			setMsg("Auto-submit is off. Every application stops for your review.");
+		} catch (e) {
+			setMsg(e instanceof Error ? e.message : String(e));
+		}
+		setBusy(false);
 	};
 	const field = (key: keyof typeof draft, label: string, hint: string) => (
 		<label className="flex flex-col gap-0.5 text-xs">
@@ -462,7 +502,11 @@ function SubmissionPolicy({ runnerId, onChanged }: { runnerId: string; onChanged
 	);
 	return (
 		<Card className="mt-3 sm:mt-4">
-			<h3 className="text-base font-bold mb-1">Submission policy</h3>
+			{s.autoSubmit.enabled && <AutoSubmitDangerBanner rules={savedRules} allowance={allowance} onDisable={() => void disable()} busy={busy} />}
+			<div className="flex flex-wrap items-center gap-2 mb-1">
+				<h3 className="text-base font-bold">Submission policy</h3>
+				{!s.autoSubmit.enabled && <ManualReviewBadge />}
+			</div>
 			<p className="text-sm text-muted mb-2">
 				By default every application is filled on your machine and stops for your review — nothing is submitted. Auto-submit applies only to applications that match every rule below, up to the daily cap.
 			</p>
@@ -473,16 +517,32 @@ function SubmissionPolicy({ runnerId, onChanged }: { runnerId: string; onChanged
 				{field("roles", "Approved roles", "engineer, developer")}
 				{field("locations", "Approved locations (optional)", "Sydney, Remote")}
 				{field("exclude", "Exclude when the job mentions", "contract, unpaid")}
+				{field("minSalary", "Minimum salary (optional)", "120000")}
 				{field("dailyCap", "Auto-submits per day", "0")}
 			</div>
-			<label className="flex gap-2 items-center text-sm mb-2">
-				<input type="checkbox" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} />
-				Enable auto-submit for applications that match this policy
-			</label>
-			<Button size="sm" variant="primary" onClick={save}>
-				Save policy
-			</Button>
+			<div className="flex flex-wrap gap-2">
+				<Button size="sm" variant="primary" onClick={save}>
+					Save rules
+				</Button>
+				{!s.autoSubmit.enabled && (
+					<Button size="sm" variant="danger" onClick={() => { setAcknowledged(false); setConfirmError(""); setConfirming(true); }} data-testid="auto-submit-enable">
+						Enable auto-submit…
+					</Button>
+				)}
+			</div>
 			{msg && <p className="text-xs mt-2">{msg}</p>}
+			{confirming && (
+				<AutoSubmitConfirmDialog
+					rules={draftRules}
+					allowance={allowance}
+					acknowledged={acknowledged}
+					onAcknowledge={setAcknowledged}
+					onConfirm={() => void enable()}
+					onCancel={() => setConfirming(false)}
+					busy={busy}
+					error={confirmError}
+				/>
+			)}
 		</Card>
 	);
 }

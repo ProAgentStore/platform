@@ -916,7 +916,7 @@ export interface ApplicationRunnerSettingsView {
 		maxMinutes: number;
 		maxPages: number;
 		maxActions: number;
-		autoSubmit: { enabled: boolean; roles: string[]; locations: string[]; exclude: string[]; minSalary: number | null; dailyCap: number };
+		autoSubmit: { enabled: boolean; roles: string[]; locations: string[]; exclude: string[]; minSalary: number | null; dailyCap: number; acknowledgedAt?: string | null }; // acknowledgedAt (#1039): server-set when the owner acknowledged real submissions
 	};
 	error?: string;
 }

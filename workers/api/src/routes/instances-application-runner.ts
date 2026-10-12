@@ -14,7 +14,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { patchInstanceConfig, readInstanceConfigPair } from "../lib/instance-config.js";
 import { cancelApplyRun, resumeApplyRun, startApplicationFill, syncApplyRun } from "../lib/local-apply/apply.js";
 import { LOCAL_APPLY_HANDOFF_PATH, LOCAL_APPLY_HANDOFF_STATUS_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_STATUS_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_FRAME_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_INPUT_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_RESUME_PATH, LOCAL_APPLY_RECONCILIATION_HANDOFF_END_PATH, LOCAL_APPLY_RECONCILIATION_RUN_PATH, LOCAL_APPLY_RECONCILIATION_STATUS_PATH, type LocalApplyHandoffStatus, type LocalApplyReconciliationEnvelope, type LocalApplyReconciliationStatus } from "../lib/local-apply/contract.js";
-import { RUNNER_DEFAULTS, RUNNER_SETTINGS_KEY, effectiveRunnerSettings, mergeRunnerSettings } from "../lib/local-apply/policy.js";
+import { RUNNER_DEFAULTS, RUNNER_SETTINGS_KEY, acknowledgeAutoSubmit, effectiveRunnerSettings, mergeRunnerSettings } from "../lib/local-apply/policy.js";
 import {
 	applicationAudit,
 	createLocalApplyReconciliationHandoff,
@@ -117,14 +117,27 @@ export function registerApplicationRunnerRoutes(router: Hono<{ Bindings: Env }>)
 		return c.json("error" in effective ? { settings: RUNNER_DEFAULTS, error: effective.error } : { settings: effective.settings });
 	});
 
-	/** Patch semantics: only the fields sent change. Auto-submit stays off until `autoSubmit.enabled` is sent true. */
+	/**
+	 * Patch semantics: only the fields sent change. Auto-submit stays off until `autoSubmit.enabled` is
+	 * sent true WITH `acknowledgeRealSubmissions: true` (#1039) — the server stamps `acknowledgedAt`; a
+	 * client-sent one is ignored. Turning it off never needs an acknowledgement.
+	 */
 	router.put("/:instanceId/application-runner/settings", async (c) => {
 		const { uid, instanceId } = await owned(c);
-		const current = effectiveRunnerSettings(await storedSettings(c, instanceId, uid));
-		const merged = mergeRunnerSettings("error" in current ? RUNNER_DEFAULTS : current.settings, await c.req.json().catch(() => null));
+		const stored = effectiveRunnerSettings(await storedSettings(c, instanceId, uid));
+		const current = "error" in stored ? RUNNER_DEFAULTS : stored.settings;
+		const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+		const { acknowledgeRealSubmissions, ...patch } = body && typeof body === "object" && !Array.isArray(body) ? body : ({} as Record<string, unknown>);
+		if (patch.autoSubmit && typeof patch.autoSubmit === "object" && !Array.isArray(patch.autoSubmit)) {
+			const { acknowledgedAt: _ignored, ...autoSubmit } = patch.autoSubmit as Record<string, unknown>;
+			patch.autoSubmit = autoSubmit;
+		}
+		const merged = mergeRunnerSettings(current, body === null ? null : patch);
 		if ("error" in merged) return c.json({ error: merged.error }, 400);
-		await patchInstanceConfig(c.env, instanceId, uid, RUNNER_SETTINGS_KEY, merged.settings);
-		return c.json({ settings: merged.settings });
+		const acknowledged = acknowledgeAutoSubmit(current, merged.settings, acknowledgeRealSubmissions === true, new Date().toISOString());
+		if ("error" in acknowledged) return c.json({ error: acknowledged.error, acknowledgementRequired: true }, 400);
+		await patchInstanceConfig(c.env, instanceId, uid, RUNNER_SETTINGS_KEY, acknowledged.settings);
+		return c.json({ settings: acknowledged.settings });
 	});
 
 	router.get("/:instanceId/application-runs", async (c) => {

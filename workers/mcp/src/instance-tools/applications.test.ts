@@ -240,6 +240,28 @@ describe("the Runner's submission policy over MCP (#953)", () => {
 			{ url: "https://api.test/v1/instances/ap/application-runner/settings", method: "PUT", body: { autoSubmit: { enabled: false } } },
 		]);
 	});
+
+	// #1039: the MCP counterpart of the console's confirmation dialog.
+	it("enabling auto-submit without the confirmation is refused, and nothing is sent", async () => {
+		const { seen, call } = tools();
+		const out = await call("set_application_runner_settings", { instance_id: "ap", settings: { autoSubmit: { enabled: true } } });
+		expect(out).toMatch(/auto_submit_real_submissions/);
+		expect(seen).toEqual([]);
+		expect(await call("set_application_runner_settings", { instance_id: "ap", settings: { autoSubmit: { enabled: true } }, confirm: "yes" })).toMatch(/auto_submit_real_submissions/);
+		expect(seen).toEqual([]);
+	});
+
+	it("with confirm: \"auto_submit_real_submissions\" it passes the acknowledgement through", async () => {
+		const { seen, call } = tools();
+		await call("set_application_runner_settings", { instance_id: "ap", settings: { autoSubmit: { enabled: true, roles: ["engineer"] } }, confirm: "auto_submit_real_submissions" });
+		expect(seen).toEqual([{ url: "https://api.test/v1/instances/ap/application-runner/settings", method: "PUT", body: { autoSubmit: { enabled: true, roles: ["engineer"] }, acknowledgeRealSubmissions: true } }]);
+	});
+
+	it("a dry run of enabling says submissions are real, without contacting the API", async () => {
+		const { seen, call } = tools();
+		expect(await call("set_application_runner_settings", { instance_id: "ap", settings: { autoSubmit: { enabled: true } }, dry_run: true })).toMatch(/submitted for real.*cannot be undone/);
+		expect(seen).toEqual([]);
+	});
 });
 
 // ── #986: an MCP reader is told how far the fill got, in the same words as the console ────────

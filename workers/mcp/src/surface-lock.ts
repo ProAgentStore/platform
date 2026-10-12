@@ -1147,4 +1147,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.122": "sha256:81a8a7c4627b851255e19fb24c3fc03ece541c2e1880b5441b428f1c3dda7508",
 	// #1030: job_lead_browser_verifications (read) and verify_job_lead_now (runtime).
 	"0.1.123": "sha256:0510ff6f23d1a5949b97e0c3e759636291359218004d6729a13aceb91fda72c1",
+	// #1039: set_application_runner_settings takes `confirm` (auto_submit_real_submissions) to enable auto-submit.
+	"0.1.124": "sha256:78ce02d39068ccc6b7fb4abf09ae34afa3b8a504bc9801d87d4f196362bfba06",
 };

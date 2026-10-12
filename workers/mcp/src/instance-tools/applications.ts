@@ -440,7 +440,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 
 	server.tool(
 		"set_application_runner_settings",
-		"Change an Application Runner's handoff and submission policy. Only the fields you pass change. Auto-submit is REFUSED until a profile source, at least one approved role, at least one allowed site and a daily cap of at least 1 exist — and even then each application is submitted only when it matches every rule. Never takes a provider API key. Call with dry_run first.",
+		"Change an Application Runner's handoff and submission policy. Only the fields you pass change. Manual review (fill_and_review) is the default. Auto-submit sends REAL job applications to third-party sites, and a submission cannot be undone: sending autoSubmit.enabled: true requires confirm: \"auto_submit_real_submissions\", which is the owner's acknowledgement of that (#1039), and the server stamps autoSubmit.acknowledgedAt. It is also REFUSED until a profile source, at least one approved role, at least one allowed site and a daily cap of at least 1 exist — and even then each application is submitted only when it matches every rule. Turning it off (enabled: false) needs no confirmation. Never takes a provider API key. Call with dry_run first.",
 		{
 			...who,
 			settings: z
@@ -466,6 +466,7 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 						.optional(),
 				})
 				.describe("The fields to change, as GET returns them."),
+			confirm: z.string().optional().describe('When enabling auto-submit, pass "auto_submit_real_submissions" to confirm that submissions are real and irreversible third-party actions. Required when settings.autoSubmit.enabled is true.'),
 			dry_run: z.boolean().optional().describe("Describe the change without saving it."),
 		},
 		async (input: Record<string, unknown>) => {
@@ -476,14 +477,24 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 			const auditInput = { instance_id };
 			const denied = await requirePermission(safetyFor(token), "write", "set_application_runner_settings", auditInput);
 			if (denied) return denied;
+			const enabling = (input.settings as { autoSubmit?: { enabled?: unknown } } | undefined)?.autoSubmit?.enabled === true;
 			if (input.dry_run) {
 				return dryRun(safetyFor(token), "set_application_runner_settings", "change an Application Runner's submission policy", auditInput, {
 					endpoint: `/v1/instances/${instance_id}/application-runner/settings`,
 					method: "PUT",
-					effect: "The Runner's settings would be patched with the fields given; auto-submit stays refused until its prerequisites exist.",
+					effect: enabling
+						? "Auto-submit would be ENABLED: matching applications would be submitted for real, without review, and a submission cannot be undone. Needs confirm \"auto_submit_real_submissions\" and the policy prerequisites."
+						: "The Runner's settings would be patched with the fields given; auto-submit stays refused until its prerequisites exist.",
 				});
 			}
-			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/application-runner/settings`, t, { method: "PUT", body: JSON.stringify(input.settings ?? {}) }, env)) as { error?: string };
+			// #1039: the owner's acknowledgement that submissions are real — the MCP counterpart of the
+			// console's confirmation dialog, checked after the dry run like every confirmed tool.
+			if (enabling) {
+				const unconfirmed = await requireConfirmation(safetyFor(token), "set_application_runner_settings", input.confirm as string | undefined, "auto_submit_real_submissions", auditInput);
+				if (unconfirmed) return unconfirmed;
+			}
+			const body = { ...((input.settings as Record<string, unknown>) ?? {}), ...(enabling ? { acknowledgeRealSubmissions: true } : {}) };
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/application-runner/settings`, t, { method: "PUT", body: JSON.stringify(body) }, env)) as { error?: string };
 			if (data.error) return text(`Error: ${data.error}`);
 			await audit(safetyFor(token), { tool: "set_application_runner_settings", action: "completed", input: auditInput });
 			return jsonText(data);
