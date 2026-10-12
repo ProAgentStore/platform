@@ -12,7 +12,8 @@ import { startRunnerUpdate, updateRunnerNode } from "../lib/runner-update.js";
 import { latestUpdateOp, latestUpdateOps, type RunnerUpdateOp } from "../lib/runner-update-ops.js";
 import { detectDuplicateRunners, type DuplicateVerdict, type RunnerProcessIdentity } from "../lib/runner-duplicates.js";
 import { runnerIdentityOf } from "../lib/runner-resources.js";
-import { getMachinePolicy, machinePolicyWire, setMachinePolicy } from "../lib/machine-policy.js";
+import { getMachinePolicy, machinePolicyWire, setMachinePolicy, type MachinePolicy } from "../lib/machine-policy.js";
+import { machineAutoUpdateStuck, publishedCli, stuckNow, type AutoUpdateStuck } from "../lib/auto-update-stuck.js";
 import type { Env } from "../types.js";
 
 /**
@@ -168,6 +169,8 @@ export interface TerminalNode {
 	/** Last trusted release lookup observed by this runner, null until it has checked. */
 	latest_version?: string | null;
 	auto_update_status?: string;
+	/** Auto-update ON but not catching up (#1034) — `lib/auto-update-stuck.ts`. Remedy: runner_update. */
+	auto_update_stuck?: AutoUpdateStuck | null;
 }
 
 /** A user-facing name for an instance: its renamed displayName, else the agent name/slug. */
@@ -502,6 +505,7 @@ terminalRoutes.get("/nodes", async (c) => {
 	// `poll: list_runner_nodes` hint always promised and could not deliver: before the operation row
 	// existed there was no state to poll, so a timed-out update was simply unknowable.
 	const ops = await latestUpdateOps(c.env, uid, nodes.flatMap((n) => [n.node, ...n.aka]));
+	const policies = new Map<TerminalNode, MachinePolicy>();
 	await Promise.all(nodes.map(async (n) => {
 		const op = n.machineId
 			? await latestUpdateOp(c.env, uid, n.node, n.machineId)
@@ -516,7 +520,11 @@ terminalRoutes.get("/nodes", async (c) => {
 		n.auto_update_policy = policy.autoUpdate;
 		n.latest_version = policy.latestVersion;
 		n.auto_update_status = policy.status;
+		policies.set(n, policy);
 	}));
+	// #1034: the registry is asked only when some connected machine has auto-update ON.
+	const published = [...policies].some(([n, p]) => p.autoUpdate && n.connected) ? await publishedCli() : undefined;
+	if (published !== undefined) for (const [n, p] of policies) n.auto_update_stuck = machineAutoUpdateStuck(n, p, published);
 
 	return c.json({ nodes });
 });
@@ -551,7 +559,7 @@ async function machineDetail(env: Env, uid: string, rawMachineId: string) {
 	machine.connected = checks.some(Boolean);
 	const policy = await getMachinePolicy(env, uid, machineId);
 	const update = await latestUpdateOp(env, uid, machine.node, machineId);
-	return { ...machine, update: update ?? undefined, ...machinePolicyWire(policy) };
+	return { ...machine, update: update ?? undefined, ...machinePolicyWire(policy), auto_update_stuck: await stuckNow(machine, policy, publishedCli) };
 }
 
 terminalRoutes.get("/machines/:machineId", async (c) => {
@@ -569,7 +577,7 @@ terminalRoutes.put("/machines/:machineId/policy", async (c) => {
 	const value = body.auto_update ?? body.autoUpdate;
 	if (typeof value !== "boolean") return c.json({ error: "auto_update must be a boolean." }, 400);
 	const policy = await setMachinePolicy(c.env, session.uid, machine.machineId, value);
-	return c.json({ machine: { ...machine, ...machinePolicyWire(policy) } });
+	return c.json({ machine: { ...machine, ...machinePolicyWire(policy), auto_update_stuck: await stuckNow(machine, policy, publishedCli) } });
 });
 
 /** The complete, non-mutating answer a caller needs before deleting a machine registration. */

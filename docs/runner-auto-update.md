@@ -85,6 +85,57 @@ keeps its own status, so a late `restarting` echo can no longer overwrite the `v
 restarted runner has verified (which then lingered until the next six-hourly check). An owner OFF, or
 ON after OFF, still adopts the service's record.
 
+## Stuck: ON, connected, and not catching up (#1034)
+
+A runner's `auto_update_status` is its own record, so a controller that has stopped making progress
+keeps reporting, for example, `waiting_for_idle` with a fresh heartbeat. On 2026-10-12 a machine
+showed "auto-update: on" and `waiting_for_idle` while running 0.4.94 with 0.4.111 published. Its
+own check had last seen 0.4.98.
+
+**Controllers before CLI 0.4.101 can wedge this way.** When the final race-safe admission refused
+an install from a deferred (busy-to-idle) callback, that path re-armed no timer (#1020). The runner
+then held `waiting_for_idle` with no retry until the policy was toggled or the process restarted.
+0.4.101 retries that refusal, and 0.4.111 bounds every check, but a runner stuck on an older
+controller cannot fetch that fix itself. It needs **one manual `runner_update`**; after that the
+policy carries it forward.
+
+The platform detects this from outside instead of trusting the status. It reads the published
+`@proagentstore/cli` release times from the npm registry (cached about 10 minutes) and sets
+`auto_update_stuck` on the machine when all of these hold:
+
+- the policy is ON and the machine is connected now;
+- the machine does not already report `unsupported`;
+- the machine's CLI is older than the published `latest`; and
+- either the first release it is missing was published more than **24 hours** ago
+  (`behind_published`), or its own check last saw a version that has newer releases published
+  more than 24 hours ago (`stale_latest`, since the runner checks about every six hours).
+
+`auto_update_stuck` carries `reason`, `behind_since`, `published_version`, `releases_behind`,
+`remedy: "runner_update"` and a plain-language `detail`. It appears on `list_runner_nodes` (each
+machine row of `GET /v1/terminals/nodes`), on `get_machine_policy` / the machine detail, and on
+the Terminals page and the machine page, with **Update CLI** offered on a connected machine. The
+stored status is left as the runner reported it; the stuck flag is what says it is not progressing.
+An unreadable registry or runner version is never reported as stuck. Offline machines and machines
+with the policy off are not flagged.
+
+The platform does **not** start that update by itself. #1034 lists a server-initiated one-time
+`runner_update` only as optional, and nothing in its discussion asks for it. The investigation in
+#1020 took the cautious line on owner machines: it forced no update, kept the update guard
+fail-closed, and noted that filing an issue does not authorise a forced update. A stuck machine is
+therefore surfaced with its remedy, and the owner, or an agent they authorise, runs
+`runner_update`. That uses the usual wait-for-turn semantics.
+
+**A timed-out `runner_update` is re-checked before it is called failed (#1034).** The relay gives
+the update command about two minutes. A machine that is slow to install, or that restarts before its
+reply gets through, used to leave the operation `failed` ("relay connected but the update command
+timed out") even when the update had landed. On pink-laptop, the run reported as failed had in fact
+installed 0.4.111 and restarted. Now, after a timeout, the platform re-reads the version the machine
+registers for up to 150 seconds. If it has moved past the version from before the command, the
+operation continues as a restart: held agents are waited for and re-attached, and the result is
+`restarted`, with the lost reply named in its detail. If the version does not move, the operation is
+`failed` and says which version the machine still reports. Dry runs install nothing and are not
+re-read.
+
 Very old runners that cannot report a stable machine ID still need one manual upgrade/restart. They
 remain visible but their settings link is deliberately unavailable rather than attaching a policy to
 a mutable hostname.

@@ -32,6 +32,21 @@ export interface MachineDetail {
 	auto_update_status?: AutoUpdateStatus | string | null;
 	autoUpdateStatus?: AutoUpdateStatus | string | null;
 	auto_update_diagnostics?: AutoUpdateDiagnostics | null;
+	auto_update_stuck?: AutoUpdateStuck | null;
+}
+
+/**
+ * Auto-update is ON but not happening (#1034): the platform compared this connected machine's CLI, and
+ * the release its own check last saw, with the registry. The runner's status can still read
+ * `waiting_for_idle`; this overrides it. Absent on an older API, null when not stuck.
+ */
+export interface AutoUpdateStuck {
+	reason: "behind_published" | "stale_latest" | string;
+	behind_since: string;
+	published_version: string;
+	releases_behind: number;
+	remedy: "runner_update" | string;
+	detail: string;
 }
 
 /** One paired work observation the runner's update guard made (#1020). `malformed`: it answered, unreadably. */

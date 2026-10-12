@@ -152,6 +152,11 @@ export default function MachinePage() {
 							<dt className="text-muted">Detail</dt><dd>{machineStatusDetail(machine)}</dd>
 							<dt className="text-muted">Last attempt</dt><dd>{displayTime(lastAttempt)}</dd>
 						</dl>
+						{machine.auto_update_stuck && (
+							<p role="alert" className="text-sm text-warning mt-3" data-testid="machine-auto-update-stuck">
+								<strong>Stuck.</strong> {machine.auto_update_stuck.detail}
+							</p>
+						)}
 					</Card>
 
 					{diagnostics && (

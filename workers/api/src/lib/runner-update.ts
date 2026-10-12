@@ -30,6 +30,7 @@ import {
 import { callRunner, relayConnected } from "./runner-client.js";
 import { attachAgentOnNode, liveCarriers, nodeRegistrations, type RepinDeps } from "./runner-repin.js";
 import { RunnerUnreachableError } from "./runner-unreachable.js";
+import { cliAtLeast } from "./runner-upgrade.js";
 import { normalizeRunnerNode } from "./runtime-nodes.js";
 import type { Env } from "../types.js";
 
@@ -41,6 +42,23 @@ const UPDATE_TIMEOUT_MS = 115_000;
 const REATTACH_WAIT_MS = 90_000;
 /** Must expire before the stale-operation sweep, so a terminal row cannot hide a local retry. */
 export const DEFERRED_UPDATE_LEASE_MS = 5 * 60_000;
+/**
+ * After the update command's relay times out, how long the machine's registered version is re-read
+ * before the attempt is called failed (#1034). Bounded well inside the stale-operation sweep.
+ */
+export const TIMEOUT_RECHECK_MS = 150_000;
+const TIMEOUT_RECHECK_EVERY_MS = 10_000;
+
+/** The CLI version the machine most recently registered under any of its names. */
+async function registeredVersion(env: Env, userId: string, names: ReadonlySet<string>): Promise<string | null> {
+	return env.DB.prepare(
+		`SELECT runner_version FROM instance_runtime_nodes WHERE user_id = ?1 AND runner_node IN (${[...names].map((_, i) => `?${i + 2}`).join(",")}) ORDER BY updated_at DESC LIMIT 1`,
+	)
+		.bind(userId, ...names)
+		.first<{ runner_version: string | null }>()
+		.then((r) => r?.runner_version ?? null)
+		.catch(() => null);
+}
 
 /** What the machine answered — `self-update.ts`'s plan, or `restarting`. */
 interface MachineReply {
@@ -114,6 +132,21 @@ export async function updateRunnerNode(env: Env, userId: string, rawNode: string
 	if (carriers.length === 0) {
 		return { node, action: "unreachable", held, detail: `No \`pags up\` is connected on ${node}, so nothing there can be asked to update. It has to be started at the machine.` };
 	}
+	// The version before the command: what a lost reply is later reconciled against (#1034).
+	const before = opts.dryRun ? null : await registeredVersion(env, userId, names);
+	/** Set when the reply was lost but the machine's registered version shows the update landed. */
+	let landedSilently = false;
+	/** The version the machine registers once it moves past `from`, within the grace period; null if it does not. */
+	async function versionAfterTimeout(from: string): Promise<string | null> {
+		if ((await opts.onProgress?.("installing", `The update command on ${node} timed out; re-reading the version it registers to see whether the update landed anyway.`)) === false) return null;
+		const until = now() + TIMEOUT_RECHECK_MS;
+		while (now() < until) {
+			await sleep(TIMEOUT_RECHECK_EVERY_MS);
+			const v = await registeredVersion(env, userId, names);
+			if (v && cliAtLeast(v, from) && !cliAtLeast(from, v)) return v;
+		}
+		return null;
+	}
 	let reply: MachineReply | null = null;
 	for (const carrier of carriers) {
 		try {
@@ -140,7 +173,17 @@ export async function updateRunnerNode(env: Env, userId: string, rawNode: string
 				};
 			}
 			if (/→ 504:.*Relay command timed out/.test(message)) {
-				return { node, action: "failed", held, detail: `${node}'s relay is connected but the update command timed out. The update may still be in flight; poll list_runner_nodes before retrying. If coding_diagnostics still reports an unresponsive runner, try force_runner_attach for an affected instance on this node to recover a stale agent socket, then check coding_diagnostics again. If remote recovery fails, restart \`pags up\` at the machine.` };
+				// A timed-out reply is not a failed update: on pink-laptop the install landed and the
+				// machine restarted on the new release while this said `failed` (#1034). Re-read the
+				// version the machine registers before concluding anything.
+				const after = before ? await versionAfterTimeout(before) : null;
+				if (after) {
+					reply = { action: "restarting", current: before!, latest: after };
+					landedSilently = true;
+					break;
+				}
+				const reread = before ? ` It still reports ${before} after ${TIMEOUT_RECHECK_MS / 1000}s of re-reading its registered version.` : "";
+				return { node, action: "failed", held, detail: `${node}'s relay is connected but the update command timed out.${reread} The update may still be in flight; poll list_runner_nodes before retrying. If coding_diagnostics still reports an unresponsive runner, try force_runner_attach for an affected instance on this node to recover a stale agent socket, then check coding_diagnostics again. If remote recovery fails, restart \`pags up\` at the machine.` };
 			}
 			return { node, action: "failed", held, detail: `${node} could not update: ${message.replace(/^Runner \/pags\/runner\/update → \d+: /, "").slice(0, 400)}` };
 		}
@@ -201,18 +244,14 @@ export async function updateRunnerNode(env: Env, userId: string, rawNode: string
 		if (attempt.attached) reattached.push(id);
 		else missing.push({ instanceId: id, detail: attempt.detail ?? "not attached" });
 	}
-	const version = await env.DB.prepare(
-		`SELECT runner_version FROM instance_runtime_nodes WHERE user_id = ?1 AND runner_node IN (${[...names].map((_, i) => `?${i + 2}`).join(",")}) ORDER BY updated_at DESC LIMIT 1`,
-	)
-		.bind(userId, ...names)
-		.first<{ runner_version: string | null }>()
-		.then((r) => r?.runner_version ?? null)
-		.catch(() => null);
-	const supervisor = reply.restartedBy ? reply.supervisor : LEGACY_SUPERVISOR_NOTE;
-	const outcome =
+	const version = await registeredVersion(env, userId, names);
+	// A lost reply says nothing about the supervisor, so no legacy note is guessed for it.
+	const supervisor = reply.restartedBy ? reply.supervisor : landedSilently ? undefined : LEGACY_SUPERVISOR_NOTE;
+	const lost = landedSilently ? `The update command's reply was lost to a relay timeout, but ${node} now registers ${reply.latest} (it ran ${reply.current}). ` : "";
+	const outcome = lost + (
 		missing.length === 0
 			? `${node} updated ${reply.current} → ${reply.latest} and restarted; all ${held.length} agent(s) it held are attached again.`
-			: `${node} updated ${reply.current} → ${reply.latest} and restarted, but ${missing.length} of ${held.length} agent(s) did not re-attach — see missing; force_runner_attach takes a slot over.`;
+			: `${node} updated ${reply.current} → ${reply.latest} and restarted, but ${missing.length} of ${held.length} agent(s) did not re-attach — see missing; force_runner_attach takes a slot over.`);
 	return {
 		...base,
 		action: "restarted",

@@ -21,6 +21,9 @@ let reply: () => unknown = () => ({ action: "up-to-date", current: "0.4.62" });
 let syncAttaches = new Set<string>();
 const sent: Array<{ via: string; path: string; body: unknown }> = [];
 let polls = 0;
+/** The CLI version the machine has registered, and what it moves to once the platform starts polling (#1034). */
+let registered = "0.4.63";
+let registersAfterSleep: string | null = null;
 
 vi.mock("./runner-client.js", () => ({
 	relayConnected: async (_env: unknown, id: string, node: string) => live.has(`${id}@${node}`),
@@ -59,7 +62,7 @@ const env = {
 		prepare: (sql: string) => ({
 			bind: () => ({
 				all: async () => ({ results: rows }),
-				first: async () => (/runner_version/.test(sql) ? { runner_version: "0.4.63" } : null),
+				first: async () => (/runner_version/.test(sql) ? { runner_version: registered } : null),
 			}),
 		}),
 	},
@@ -71,6 +74,7 @@ const deps = {
 	sleep: async (ms: number) => {
 		clock += ms;
 		polls++;
+		if (registersAfterSleep) registered = registersAfterSleep;
 		for (const [id, after] of Object.entries(comesBack)) if (polls >= after) live.add(`${id}@Macmini`);
 	},
 };
@@ -84,6 +88,8 @@ beforeEach(() => {
 	comesBack = {};
 	polls = 0;
 	clock = 0;
+	registered = "0.4.63";
+	registersAfterSleep = null;
 	for (const id of [CODER, OTHER, THIRD]) live.add(`${id}@Macmini`);
 	reply = () => ({ action: "restarting", current: "0.4.61", latest: "0.4.63" });
 });
@@ -165,6 +171,33 @@ describe("runner_update — every other outcome says what happened (#859)", () =
 		expect(out.detail).toMatch(/may still be in flight; poll list_runner_nodes before retrying/);
 		expect(out.detail).toMatch(/force_runner_attach.*check coding_diagnostics again.*If remote recovery fails, restart/);
 		expect(sent).toHaveLength(1);
+	});
+
+	it("a timed-out reply is reconciled as restarted when the machine then registers a newer version (#1034)", async () => {
+		reply = () => new Error("Runner /pags/runner/update → 504: Relay command timed out");
+		registered = "0.4.94";
+		registersAfterSleep = "0.4.111";
+		const out = await update();
+		expect(out).toMatchObject({ action: "restarted", current: "0.4.94", latest: "0.4.111", version: "0.4.111", missing: [] });
+		expect(out.detail).toMatch(/reply was lost to a relay timeout, but Macmini now registers 0\.4\.111 \(it ran 0\.4\.94\)/);
+		expect(out).not.toHaveProperty("supervisor");
+		expect(sent.filter((s) => s.path === "/pags/runner/update")).toHaveLength(1);
+	});
+
+	it("a timed-out reply stays failed when the registered version does not move within the grace period (#1034)", async () => {
+		reply = () => new Error("Runner /pags/runner/update → 504: Relay command timed out");
+		const out = await update();
+		expect(out.action).toBe("failed");
+		expect(out.detail).toMatch(/still reports 0\.4\.63 after 150s/);
+		expect(clock).toBeGreaterThanOrEqual(150_000);
+	});
+
+	it("a dry run's timeout is not re-read: nothing was installed", async () => {
+		reply = () => new Error("Runner /pags/runner/update → 504: Relay command timed out");
+		registersAfterSleep = "0.4.64";
+		const out = await update(true);
+		expect(out.action).toBe("failed");
+		expect(clock).toBe(0);
 	});
 
 	it("a frozen socket is skipped for the next one; no connected runner at all is unreachable", async () => {

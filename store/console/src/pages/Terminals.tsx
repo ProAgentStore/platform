@@ -8,12 +8,13 @@ import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { terminalsBusy } from "../lib/pollBusy";
 import { behindLine, type MachineResources, resourceFacts, staleSample } from "../lib/machineHealth";
+import type { AutoUpdateStuck } from "../lib/machineDetail";
 import { type RunnerUpdateOpView, type RunnerUpdateResponse, updateOpLine, updateOutcome } from "../lib/runnerPanel";
 import { Terminal, RefreshCw, Bot, GitBranch, Circle, Pin, PinOff, Settings2 } from "lucide-react";
 
 interface TerminalInstance { instanceId: string; name: string; agentSlug: string | null; status: string; connected: boolean; bound: boolean; pinnedNode?: string | null }
 interface TerminalSession { sessionId: string; instanceId: string; repoId: string; repoName: string | null; engine: string; status: string; issueNumber?: number; issueTitle?: string; updatedAt: string; terminalTail?: string | null }
-interface TerminalNode { node: string; aka?: string[]; machineId?: string | null; identityHint?: string | null; placement: string; runnerVersion: string; runnerBehind?: string[] | null; lastSeenAt: string | null; connected: boolean; resources?: MachineResources | null; instances: TerminalInstance[]; sessions: TerminalSession[]; update?: RunnerUpdateOpView; auto_update_policy?: boolean; latest_version?: string | null; auto_update_status?: unknown }
+interface TerminalNode { node: string; aka?: string[]; machineId?: string | null; identityHint?: string | null; placement: string; runnerVersion: string; runnerBehind?: string[] | null; lastSeenAt: string | null; connected: boolean; resources?: MachineResources | null; instances: TerminalInstance[]; sessions: TerminalSession[]; update?: RunnerUpdateOpView; auto_update_policy?: boolean; latest_version?: string | null; auto_update_status?: unknown; auto_update_stuck?: AutoUpdateStuck | null }
 
 function ago(iso: string | null): string {
 	if (!iso) return "never";
@@ -207,10 +208,12 @@ export default function Terminals() {
 							    #990: and the LAST update's own outcome, which rides on the machine's row, so a
 							    reply this page never received (the live failure) can no longer hide it. The note
 							    from a click this session wins while it is there; otherwise the durable one shows. */}
-							{(behindLine(n.runnerBehind) || updateNote[n.node] || updateOpLine(n.update)) && (
+							{(behindLine(n.runnerBehind) || n.auto_update_stuck || updateNote[n.node] || updateOpLine(n.update)) && (
 								<div className="px-4 py-2 text-xs border-b border-line/60 flex flex-wrap items-center gap-2">
 									{behindLine(n.runnerBehind) && <span className="text-warning">{behindLine(n.runnerBehind)}</span>}
-									{behindLine(n.runnerBehind) && n.connected && (
+									{/* #1034: auto-update is on but not happening — its status alone would read as healthy. */}
+									{n.auto_update_stuck && <span className="text-warning basis-full" data-testid="machine-auto-update-stuck">Auto-update stuck: {n.auto_update_stuck.detail}</span>}
+									{(behindLine(n.runnerBehind) || n.auto_update_stuck) && n.connected && (
 										<Button size="sm" onClick={() => void updateCli(n)} disabled={updateNote[n.node]?.tone === "pending" || n.update?.state === "running"} data-testid="machine-update">
 											Update CLI
 										</Button>
