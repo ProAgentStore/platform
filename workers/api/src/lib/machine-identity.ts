@@ -159,6 +159,19 @@ export function foldNodesByMachine<T extends NodeRegistration>(rows: readonly T[
 	return out;
 }
 
+/**
+ * One agent's pin candidates: its own machines first, under the names it knows them by, then every
+ * other machine of the owner's, once each (#1037). A pin or attach finds a carrier owner-wide
+ * (`runner-repin.ts`), so a healthy machine this agent never registered on is a real choice. A
+ * machine already listed — by id, or by name when it has none — is not added again.
+ */
+export function pinCandidates<T extends NodeRegistration>(own: readonly T[], owner: readonly T[]): T[] {
+	const mine = foldNodesByMachine(own);
+	const ids = new Set(mine.map((m) => normalizeMachineId(m.machineId)).filter(Boolean));
+	const names = new Set(mine.map((m) => m.node));
+	return [...mine, ...foldNodesByMachine(owner.filter((r) => r.node && !names.has(r.node) && !ids.has(normalizeMachineId(r.machineId))))];
+}
+
 // ── Which id a NAME resolves to, and the names one machine answers to (#393) ────────────────
 
 /**

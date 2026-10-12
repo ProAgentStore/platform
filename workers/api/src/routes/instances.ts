@@ -85,7 +85,7 @@ export {
 	UPSERT_INSTANCE_RUNTIME_SQL,
 	validateRuntimeEndpointUrl,
 } from "./instances-runtime.js";
-import { foldNodesByMachine, freshestVersion, namesOfMachine, normalizeMachineId, sanitizeMachineNames } from "../lib/machine-identity.js";
+import { freshestVersion, namesOfMachine, normalizeMachineId, pinCandidates, sanitizeMachineNames } from "../lib/machine-identity.js";
 import { parseBoundRunnerNode } from "../lib/runtime-nodes.js";
 import { diagnoseAttachment, heartbeatFresh } from "../lib/runtime-attachment.js";
 import { saveResourceSample } from "../lib/runner-resources.js";
@@ -593,12 +593,6 @@ instanceRoutes.get("/:instanceId/runner-node", async (c) => {
 		.first<{ config: string | null }>();
 	const runnerNode = parseBoundRunnerNode(cfgRow?.config);
 	const nodes = await listRuntimeNodes(c.env, instanceId, session.uid).catch(() => []);
-	// Distinct MACHINES known for this instance. One laptop used to appear three times here —
-	// `Mac`, `RLs-MacBook-Air.local`, `RLs-MacBook-Air` — because a registration is keyed by a
-	// hostname that moves under it (#379). Rows sharing a `machine_id` collapse to their freshest
-	// name; rows without one stay separate, because without the proof they ARE separate.
-	const machines = foldNodesByMachine(nodes.map((n) => ({ node: normalizeRunnerNode(n.runner_node), machineId: n.machine_id ?? null, lastSeenAt: n.last_seen_at })));
-
 	// Machine-level liveness: which of the user's machines are running a runner AT ALL
 	// (any of their instances holds a live relay socket) — the same node-level truth the
 	// Terminals page shows. This lets the picker distinguish "machine offline" from
@@ -609,18 +603,11 @@ instanceRoutes.get("/:instanceId/runner-node", async (c) => {
 	).bind(session.uid).all<{ instance_id: string; runner_node: string; runner_version: string | null; machine_id: string | null; last_seen_at: string | null }>();
 	const userRows = allNodeRows.results ?? [];
 
-	// Candidates are every machine the OWNER has, not just the ones this agent registered on (#1037):
-	// a pin or attach finds a carrier owner-wide (`runner-repin.ts`), so a healthy machine this agent
-	// never reached is a real choice, read below as `nodeOnline: true, connected: false`. This agent's
-	// own names come first and keep their spelling; another machine is added once, by machine id.
-	const knownIds = new Set(machines.map((m) => normalizeMachineId(m.machineId)).filter(Boolean));
-	const knownNames = new Set(machines.map((m) => m.node));
-	const others = foldNodesByMachine(
-		[...userRows].reverse()
-			.map((r) => ({ node: normalizeRunnerNode(r.runner_node), machineId: r.machine_id, lastSeenAt: r.last_seen_at }))
-			.filter((r) => r.node && !knownNames.has(r.node) && !knownIds.has(normalizeMachineId(r.machineId))),
-	);
-	const available = [...new Set([...machines, ...others].map((n) => n.node).filter(Boolean))];
+	// Distinct MACHINES (rows sharing a `machine_id` are one, #379): this agent's own first, then the
+	// owner's others, since a pin finds a carrier owner-wide (#1037). See `pinCandidates`.
+	const reg = (node: string, machineId: string | null | undefined, lastSeenAt: string | null) => ({ node: normalizeRunnerNode(node), machineId: machineId ?? null, lastSeenAt });
+	const machines = pinCandidates(nodes.map((n) => reg(n.runner_node, n.machine_id, n.last_seen_at)), [...userRows].reverse().map((r) => reg(r.runner_node, r.machine_id, r.last_seen_at)));
+	const available = [...new Set(machines.map((n) => n.node).filter(Boolean))];
 	const idsByNode = new Map<string, string[]>();
 	for (const r of userRows) {
 		const nn = normalizeRunnerNode(r.runner_node);
