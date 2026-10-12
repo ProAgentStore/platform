@@ -18,12 +18,13 @@
  * posting id — never the personalised alert URL, which never left the scan. Every attempt is a row in
  * `job_lead_browser_verification_attempts`: what was dispatched, which run, what came back.
  */
-import { readBrowserVerification } from "./browser-verification.js";
+import { type BrowserVerificationSettings, readBrowserVerification } from "./browser-verification.js";
+import { closeLiveTakeoverFor, requestTakeover } from "./browser-takeovers.js";
 import { deepLinkFor } from "./console-links.js";
 import { BROWSER_VERIFICATION_OUTCOMES, type BrowserVerificationOutcome } from "./job-lead-triage.js";
-import { getLocalBrowserRun, type LocalBrowserRun } from "./local-browser/store.js";
+import { getLocalBrowserRun, listDomainConsent, type LocalBrowserRun, readLocalBrowserSettings } from "./local-browser/store.js";
 import { localBrowserCapability, startLocalBrowserRun } from "./local-browser/start.js";
-import { domainWithin } from "./local-browser/policy.js";
+import { domainWithin, effectiveLocalBrowserPolicy, type LocalBrowserCapability } from "./local-browser/policy.js";
 import { agentName } from "./local-browser/sync.js";
 import { notifyUser } from "../routes/push.js";
 import type { LeadVerification, LeadVerificationListResponse, VerificationAttempt, VerificationState } from "./job-lead-browser-verification-types.js";
@@ -243,6 +244,71 @@ async function noRuntime(env: Env, row: LeadRow, fallback: "wait" | "mark_unveri
 	return "awaiting";
 }
 
+/** The site a posting is on — the host the browser would open. */
+function hostOf(url: string): string {
+	try {
+		return new URL(url).hostname.toLowerCase();
+	} catch {
+		return "";
+	}
+}
+
+/** The durable request for the owner's decision on one new site (#1049) — one per site, not per lead. */
+const consentSubject = (host: string) => `site-consent:${host}`;
+
+type SourceGate = { kind: "open" } | { kind: "refused"; detail: string; why: string } | { kind: "needs_consent"; state: VerificationState };
+
+/**
+ * May the Scout's browser open this posting's site (#1049)?
+ *
+ *   - denied (the instance's or the agent's denied sites, or the owner declined the site) → refused;
+ *   - an allowed-sites list that does not cover it → refused;
+ *   - an allowed-sites list that covers it, or the owner already allowed the site → open;
+ *   - an EMPTY allowed-sites list and no decision yet → the owner is asked, once and durably (a takeover
+ *     request, reason `consent_required`, pushed by the notification policy), and the lead waits — up to
+ *     the browser verification `waitLimitMinutes`, after which it is closed as unverifiable.
+ * Invalid saved settings are not a reason to open anything: the lead waits and says why (fail closed).
+ */
+async function sourceGate(env: Env, row: LeadRow, cap: LocalBrowserCapability, verification: BrowserVerificationSettings, now: number): Promise<SourceGate> {
+	const host = hostOf(row.canonical_url);
+	if (!host) return { kind: "refused", detail: "The posting has no site the browser could open.", why: "the posting has no readable site" };
+	const { settings } = await readLocalBrowserSettings(env, row.instance_id, row.user_id);
+	const policy = effectiveLocalBrowserPolicy(cap, settings);
+	if ("error" in policy) {
+		await setLead(env, row, { state: "awaiting", nextAttemptAt: now + WAIT_RETRY_MS, lastDetail: `${policy.error} Nothing was opened; fix them in Settings → Local browser research.` }, now);
+		return { kind: "needs_consent", state: "awaiting" };
+	}
+	if (policy.denyDomains.some((d) => domainWithin(host, d))) {
+		return { kind: "refused", detail: `${host} is on this Scout's denied sites.`, why: `${host} is on this Scout's denied sites` };
+	}
+	if (policy.allowDomains.length) {
+		return policy.allowDomains.some((d) => domainWithin(host, d))
+			? { kind: "open" }
+			: { kind: "refused", detail: `${host} is outside this Scout's allowed sites (${policy.allowDomains.join(", ")}).`, why: `${host} is outside this Scout's allowed sites` };
+	}
+	const decision = (await listDomainConsent(env, row.instance_id, row.user_id, now)).find((c) => c.scope === "navigate" && domainWithin(host, c.domain));
+	if (decision?.decision === "deny") return { kind: "refused", detail: `You declined ${host} for this Scout's browser.`, why: `you declined ${host}` };
+	if (decision?.decision === "allow") {
+		await closeLiveTakeoverFor(env, row.user_id, row.instance_id, "manual", consentSubject(host), "resumed", now).catch(() => undefined);
+		return { kind: "open" };
+	}
+	if (now - row.awaiting_since >= verification.waitLimitMinutes * 60_000) {
+		return { kind: "refused", detail: `Nobody allowed ${host} within ${verification.waitLimitMinutes} minutes, so it was not opened.`, why: `${host} was not allowed in time` };
+	}
+	const asked = await requestTakeover(env, { userId: row.user_id, instanceId: row.instance_id, subjectKind: "manual", subjectId: consentSubject(host), reason: "consent_required", mobileAllowed: verification.allowMobile, now }).catch(() => null);
+	if (asked?.created) {
+		const agent = await agentName(env, row.user_id, row.instance_id);
+		await notifyUser(env, row.user_id, "local-browser", `${agent} wants to open a new job site`, `Allow or decline ${host} for this Scout's browser verification — nothing is opened until you decide.`, deepLinkFor({ kind: "browser-takeover", instanceId: row.instance_id, takeover: asked.takeover }), {
+			kind: "alert",
+			instanceId: row.instance_id,
+			key: `site-consent:${row.instance_id}:${host}`,
+			event: "takeover_required",
+		}).catch(() => undefined);
+	}
+	await setLead(env, row, { state: "awaiting", nextAttemptAt: now + WAIT_RETRY_MS, lastDetail: `Waiting for you to allow or decline ${host} (Settings → Local browser research, or set_local_browser_consent). Nothing was opened.` }, now);
+	return { kind: "needs_consent", state: "awaiting" };
+}
+
 /** Hand one due lead to the Scout's browser. */
 export async function dispatchLeadVerification(env: Env, row: LeadRow, now = Date.now()): Promise<VerificationState> {
 	const { settings } = await readBrowserVerification(env, row.instance_id, row.user_id);
@@ -258,20 +324,16 @@ export async function dispatchLeadVerification(env: Env, row: LeadRow, now = Dat
 		await setLead(env, row, { state: "awaiting", nextAttemptAt: now + WAIT_RETRY_MS, lastDetail: "This Scout's agent does not declare a local browser, so it cannot verify in a browser. Nothing was dispatched; the lead waits." }, now);
 		return "awaiting";
 	}
-	// A posting outside the sites the Scout may open would be blocked by the runner: refuse it here, with the reason.
-	const host = (() => {
-		try {
-			return new URL(row.canonical_url).hostname.toLowerCase();
-		} catch {
-			return "";
-		}
-	})();
-	if (cap.cap.allowDomains.length && !cap.cap.allowDomains.some((d) => domainWithin(host, d))) {
-		const receiptId = await recordAttempt(env, row, { attempt: row.attempts, state: "refused", detail: `The posting's site is outside this Scout's allowed sites (${cap.cap.allowDomains.join(", ")}).` }, now);
-		return settle(env, row, "temporarily_unverifiable", { attempt: row.attempts, receiptId, exhausted: true, detail: "The posting's site is outside the sites this Scout may open in a browser.", why: "its site is outside the sites this Scout may open" }, now);
+	// The Scout's browser source policy (#1049): THIS instance's allowed and denied sites (Settings → Local
+	// browser research, or set_instance_local_browser_settings) within the agent's ceiling, and the owner's
+	// per-site consent. Decided here, before a run or an attempt is spent, so a site the Scout may not
+	// open is refused with its reason and a new one waits for the owner's durable decision.
+	const gate = await sourceGate(env, row, cap.cap, settings, now);
+	if (gate.kind === "refused") {
+		const receiptId = await recordAttempt(env, row, { attempt: row.attempts, state: "refused", detail: gate.detail }, now);
+		return settle(env, row, "temporarily_unverifiable", { attempt: row.attempts, receiptId, exhausted: true, detail: gate.detail, why: gate.why }, now);
 	}
-	// Per-domain consent is not decided here: each run carries the owner's consented domains, and a new
-	// domain pauses the run for consent (local-browser/sync.ts → a durable takeover, #1031).
+	if (gate.kind === "needs_consent") return gate.state;
 	const attempt = row.attempts + 1;
 	const started = await startLocalBrowserRun(env, row.instance_id, row.user_id, {
 		objective: verificationObjective({ canonicalUrl: row.canonical_url, expectedTitle: row.expected_title, expectedCompany: row.expected_company }),

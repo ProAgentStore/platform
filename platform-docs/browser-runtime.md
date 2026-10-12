@@ -193,11 +193,23 @@ browser, under the instance's browser verification settings. Only the canonical 
 the personalised alert link.
 
 The Gmail Scout declares a local browser for this (#1048). It runs research only, on your own Codex or
-Claude subscription, and opens only indeed.com and its country sites. Browser verification is still
-off until you turn it on for the Scout and pin a machine, and each new domain still asks for your
-consent. A posting on any other site is not opened; the lead is closed as unverifiable, and the
-attempt records why. If the Scout's agent ever stops declaring a local browser, waiting leads stay
-waiting rather than being closed.
+Claude subscription. Browser verification is off until you turn it on for the Scout and pin a machine.
+
+Which job sites it may open is each Scout's own **browser source policy** (#1049), set in Settings →
+Local browser research or with MCP `set_instance_local_browser_settings` (`allow_domains`,
+`deny_domains`):
+
+- **Denied sites** are never opened; the lead is closed as unverifiable and the attempt records why.
+- **An allowed-sites list** opens only those sites (each covers its subdomains, e.g. `indeed.com` covers
+  `au.indeed.com`); a posting elsewhere is refused the same way.
+- **No list** (the default) means any public job site — but a NEW site is opened only after you decide.
+  The Scout asks once, durably (a takeover request, reason `consent_required`, pushed as
+  `takeover_required`), and the lead waits without spending an attempt. Allow or decline the site in
+  Local browser research or with `set_local_browser_consent`; the decision stands for later leads. A site
+  you declined is refused. Unanswered past the browser verification wait limit, the lead is closed.
+
+Saved settings that no longer fit the agent open nothing: the lead waits and says why. If the Scout's
+agent ever stops declaring a local browser, waiting leads stay waiting rather than being closed.
 
 The run reports one typed outcome:
 

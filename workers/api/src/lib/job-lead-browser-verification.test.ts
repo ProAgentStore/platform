@@ -57,6 +57,9 @@ beforeEach(async () => {
 	d1.exec(`INSERT INTO users (id, github_login) VALUES ('u1', 'u1')`);
 	d1.exec(`INSERT INTO agents (id, owner_id, slug, name, config) VALUES ('scout', 'u1', 't1030-scout', 'Scout', '{"capabilities":{"surfaces":[],"runtime":"local_browser","localBrowser":{}}}')`);
 	d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES ('s1', 'scout', 'u1', 'active', '{"browserVerification":{"enabled":true}}')`);
+	// The owner has allowed indeed.com for this Scout's browser (#1049): with no allowed-sites list, a site
+	// is opened only after that durable decision. The consent flow itself is tested in its own describe.
+	d1.exec(`INSERT INTO local_browser_domain_consent (instance_id, user_id, domain, scope, decision, decided_at) VALUES ('s1', 'u1', 'indeed.com', 'navigate', 'allow', 1)`);
 	leads = new Map([["lead-1", { id: "lead-1", data: { status: "awaiting_browser_verification", lifecycle_version: 0, url: CANONICAL, title: "Platform Engineer", company: "Acme", verification: { state: "awaiting_browser_verification", canonical_job_url: CANONICAL, reason: "server_fetch_refused" } } } as unknown as CollectionRecord]]);
 	const engine = {
 		recordGet: async (_c: string, id: string) => leads.get(id) ?? null,
@@ -313,9 +316,101 @@ describe("the Scout must declare a local browser, and may open only its allowed 
 		expect(started).toEqual([]);
 		const { leads: [row], attempts } = await listLeadVerifications(env, "s1", "u1");
 		expect(row).toMatchObject({ state: "unverifiable" });
-		expect(attempts).toEqual([expect.objectContaining({ state: "refused", runId: null, detail: expect.stringMatching(/outside this Scout's allowed sites \(indeed\.com\)/) })]);
+		expect(attempts).toEqual([expect.objectContaining({ state: "refused", runId: null, detail: expect.stringMatching(/www\.indeed\.co\.uk is outside this Scout's allowed sites \(indeed\.com\)/) })]);
 		expect(lead().status).toBe("unverifiable");
 		expect(pushes.map((p) => p.event)).toEqual(["browser_verification_failed"]);
-		expect(pushes[0].body).toMatch(/outside the sites this Scout may open/);
+		expect(pushes[0].body).toMatch(/outside this Scout's allowed sites/);
+	});
+});
+
+describe("the Scout's browser source policy is the instance's own (#1049)", () => {
+	const SEEK = "https://www.seek.com.au/job/81234567";
+	const LINKEDIN = "https://www.linkedin.com/jobs/view/4012345678";
+	const setCanonical = (url: string) => d1.DB.prepare("UPDATE job_lead_browser_verifications SET canonical_url = ?1").bind(url).run();
+	const setSites = (access: Record<string, unknown>) => d1.exec(`UPDATE agent_instances SET config = json_set(config, '$.localBrowser', json('${JSON.stringify({ access })}')) WHERE id = 's1'`);
+	const takeovers = () => d1.sqlite.prepare("SELECT subject_kind, subject_id, reason, state FROM browser_takeovers WHERE instance_id = 's1'").all() as Array<Record<string, string>>;
+
+	it("SEEK, with no allowed-sites list: the owner is asked once, durably; nothing opens until they allow it; then only an ACTIVE verdict reaches the Tailor", async () => {
+		d1.exec(`DELETE FROM local_browser_domain_consent`);
+		await setCanonical(SEEK);
+		await runLeadBrowserVerification(env, 2_000);
+		expect(started).toEqual([]);
+		expect(await queue()).toMatchObject({ state: "awaiting", attempts: 0, lastDetail: expect.stringMatching(/allow or decline www\.seek\.com\.au/) });
+		expect(takeovers()).toEqual([{ subject_kind: "manual", subject_id: "site-consent:www.seek.com.au", reason: "consent_required", state: "requested" }]);
+		expect(pushes).toEqual([expect.objectContaining({ event: "takeover_required", body: expect.stringMatching(/Allow or decline www\.seek\.com\.au/) })]);
+		// Asked once: a later tick does not ask again while the request is live.
+		await runLeadBrowserVerification(env, 2_000 + 6 * 60_000);
+		expect(pushes).toHaveLength(1);
+		expect(started).toEqual([]);
+
+		// The owner allows seek.com.au — a durable decision — and the next tick opens it and closes the request.
+		d1.exec(`INSERT INTO local_browser_domain_consent (instance_id, user_id, domain, scope, decision, decided_at) VALUES ('s1', 'u1', 'seek.com.au', 'navigate', 'allow', 3)`);
+		await runLeadBrowserVerification(env, 2_000 + 12 * 60_000);
+		expect(started).toHaveLength(1);
+		expect(started[0].objective).toContain(SEEK);
+		expect(takeovers()[0].state).toBe("resumed");
+		expect(lead().status).toBe("awaiting_browser_verification"); // not appliable while it is checked
+		finish("run-1", "active");
+		await runLeadBrowserVerification(env, 2_000 + 13 * 60_000);
+		expect(lead()).toMatchObject({ status: "new", verification: { state: "live" } });
+	});
+
+	it("a site the owner declined is refused, with a receipt, and never opened", async () => {
+		d1.exec(`DELETE FROM local_browser_domain_consent`);
+		d1.exec(`INSERT INTO local_browser_domain_consent (instance_id, user_id, domain, scope, decision, decided_at) VALUES ('s1', 'u1', 'seek.com.au', 'navigate', 'deny', 1)`);
+		await setCanonical(SEEK);
+		await runLeadBrowserVerification(env, 2_000);
+		expect(started).toEqual([]);
+		const { leads: [row], attempts } = await listLeadVerifications(env, "s1", "u1");
+		expect(row).toMatchObject({ state: "unverifiable" });
+		expect(attempts).toEqual([expect.objectContaining({ state: "refused", detail: "You declined www.seek.com.au for this Scout's browser." })]);
+	});
+
+	it("unanswered past the wait limit, the lead is closed as unverifiable with the reason", async () => {
+		d1.exec(`DELETE FROM local_browser_domain_consent`);
+		d1.exec(`UPDATE agent_instances SET config = json_set(config, '$.browserVerification.waitLimitMinutes', 10) WHERE id = 's1'`);
+		await setCanonical(SEEK);
+		await runLeadBrowserVerification(env, 2_000);
+		await runLeadBrowserVerification(env, 1_000 + 10 * 60_000);
+		expect(await queue()).toMatchObject({ state: "unverifiable" });
+		expect(pushes.at(-1)).toMatchObject({ event: "browser_verification_failed", body: expect.stringMatching(/www\.seek\.com\.au was not allowed in time/) });
+	});
+
+	it("LinkedIn on the instance's own allowed-sites list opens without asking; Indeed, outside it, is refused", async () => {
+		d1.exec(`DELETE FROM local_browser_domain_consent`);
+		setSites({ allowDomains: ["linkedin.com"] });
+		await setCanonical(LINKEDIN);
+		await runLeadBrowserVerification(env, 2_000);
+		expect(started).toHaveLength(1);
+		expect(takeovers()).toEqual([]);
+
+		await d1.DB.prepare("UPDATE job_lead_browser_verifications SET state = 'awaiting', attempts = 0, next_attempt_at = 0, canonical_url = ?1").bind(CANONICAL).run();
+		await runLeadBrowserVerification(env, 3_000);
+		expect(started).toHaveLength(1);
+		expect((await listLeadVerifications(env, "s1", "u1")).attempts[0]).toMatchObject({ state: "refused", detail: "au.indeed.com is outside this Scout's allowed sites (linkedin.com)." });
+	});
+
+	it("a denied host is refused even when the owner had allowed it — denial wins", async () => {
+		d1.exec(`INSERT INTO local_browser_domain_consent (instance_id, user_id, domain, scope, decision, decided_at) VALUES ('s1', 'u1', 'linkedin.com', 'navigate', 'allow', 1)`);
+		setSites({ denyDomains: ["linkedin.com"] });
+		await setCanonical(LINKEDIN);
+		await runLeadBrowserVerification(env, 2_000);
+		expect(started).toEqual([]);
+		expect((await listLeadVerifications(env, "s1", "u1")).attempts[0]).toMatchObject({ state: "refused", detail: "www.linkedin.com is on this Scout's denied sites." });
+		expect(lead().status).toBe("unverifiable");
+	});
+
+	it("Indeed with the owner's standing decision is dispatched as before", async () => {
+		await runLeadBrowserVerification(env, 2_000);
+		expect(started).toHaveLength(1);
+		expect(takeovers()).toEqual([]);
+	});
+
+	it("saved settings that no longer fit the agent open nothing — the lead waits and says why (fail closed)", async () => {
+		d1.exec(`UPDATE agents SET config = '{"capabilities":{"surfaces":[],"runtime":"local_browser","localBrowser":{"allowDomains":["indeed.com"]}}}' WHERE id = 'scout'`);
+		setSites({ allowDomains: ["seek.com.au"] });
+		await runLeadBrowserVerification(env, 2_000);
+		expect(started).toEqual([]);
+		expect(await queue()).toMatchObject({ state: "awaiting", lastDetail: expect.stringMatching(/no longer fit this agent/) });
 	});
 });
