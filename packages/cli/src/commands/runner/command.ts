@@ -103,7 +103,7 @@ export function createRunnerCommand(): Command {
 			const runner = spawn(spec.command, spec.args, {
 				cwd: spec.cwd,
 				stdio: ["ignore", "pipe", "pipe"],
-				shell: process.platform === "win32",
+				shell: spec.shell,
 				// #896: the runtime answers `/health` with the lock's identity and stops for a
 				// request quoting its nonce — so a contender can prove who is on that port, and a
 				// replace is an authorisation rather than a signal aimed at a name pattern.

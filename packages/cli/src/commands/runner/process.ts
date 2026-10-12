@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, win32 } from "node:path";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -54,7 +54,17 @@ export function bundledRunnerPath(): string {
 	return fileURLToPath(new URL("./browser-runner/index.js", import.meta.url));
 }
 
-export function runnerSpawnSpec(opts: RunnerStartOptions): { command: string; args: string[]; cwd: string } {
+/**
+ * Whether spawning `command` needs a shell. Only a bare name on Windows does — `pnpm` and
+ * `pags-browser-runner` are `.cmd` shims that only `cmd.exe` resolves. An absolute path such as
+ * `process.execPath` must NOT go through the shell: Node joins command + args into one unquoted
+ * `cmd.exe` string, so `C:\Program Files\nodejs\node.exe` runs `C:\Program` (#1033).
+ */
+export function spawnNeedsShell(command: string, platform: NodeJS.Platform = process.platform): boolean {
+	return platform === "win32" && !win32.isAbsolute(command);
+}
+
+export function runnerSpawnSpec(opts: RunnerStartOptions): { command: string; args: string[]; cwd: string; shell: boolean } {
 	const root = findWorkspaceRoot();
 	const localPackage = resolve(root, "packages", "browser-runner", "src", "index.ts");
 	const bundledPackage = bundledRunnerPath();
@@ -71,7 +81,7 @@ export function runnerSpawnSpec(opts: RunnerStartOptions): { command: string; ar
 		command = process.execPath;
 		args = [bundledPackage, ...runnerArgs];
 	}
-	return { command, args, cwd };
+	return { command, args, cwd, shell: spawnNeedsShell(command) };
 }
 
 export function startRunnerForeground(opts: RunnerStartOptions): Promise<void> {
@@ -81,7 +91,7 @@ export function startRunnerForeground(opts: RunnerStartOptions): Promise<void> {
 		const child = spawn(spec.command, spec.args, {
 			cwd: spec.cwd,
 			stdio: "inherit",
-			shell: process.platform === "win32",
+			shell: spec.shell,
 		});
 		child.on("error", reject);
 		child.on("exit", (code) => {
