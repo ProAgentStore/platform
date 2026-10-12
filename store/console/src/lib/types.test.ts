@@ -8,6 +8,8 @@ import type { CollectionRecord as WorkerCollectionRecord, RecordQueryResult as W
 import type { RunnerEvent, RunnerTask } from "../../../../packages/browser-runner/src/types";
 import type { AccountCodingDefaultApplyResponse, AccountPreferencesResponse, AccountPreferencesWriteResponse, ConnectionGuideResponse, ConnectorConsent, InstanceModelState, Credential, DataRecord, KnowledgeDoc, Notification, RecordQueryResponse, RuntimeEvent, RuntimeTask, TriggerAction, ApplicationQueueItem, InstancePermissionRequest, InstancePermissionRequestResponse, InstancePermissionRequestDecisionResponse } from "./types";
 import type { GmailScoutScanResponse, LeadVerification, LeadVerificationListResponse } from "./gmailScout";
+import type { RemoteAuthRequestResponse, RemoteAuthRequestView } from "./remoteAuth";
+import type { RemoteAuthRequestResponse as WorkerRemoteAuthRequestResponse, RemoteAuthRequestView as WorkerRemoteAuthRequestView } from "../../../../workers/api/src/lib/remote-auth";
 import type { BrowserTakeover, BrowserTakeoverListResponse, BrowserTakeoverTransitionResponse } from "./browserTakeovers";
 import type { BrowserTakeover as WorkerBrowserTakeover, BrowserTakeoverListResponse as WorkerBrowserTakeoverListResponse, BrowserTakeoverTransitionResponse as WorkerBrowserTakeoverTransitionResponse } from "../../../../workers/api/src/lib/browser-takeover-types";
 import type { LeadVerification as WorkerLeadVerification, LeadVerificationListResponse as WorkerLeadVerificationListResponse } from "../../../../workers/api/src/lib/job-lead-browser-verification-types";
@@ -152,6 +154,10 @@ const _browserTakeoverTransitionAcceptsTheProducer: BrowserTakeoverTransitionRes
 const _leadVerificationHasNoInventedFields: Extra<LeadVerification, WorkerLeadVerification> extends never ? true : never = true;
 const _leadVerificationListHasNoInventedFields: Extra<LeadVerificationListResponse, WorkerLeadVerificationListResponse> extends never ? true : never = true;
 const _leadVerificationListAcceptsTheProducer: LeadVerificationListResponse = {} as WorkerLeadVerificationListResponse;
+// #1005: the remote sign-in request page reads exactly what the Worker returns.
+const _remoteAuthViewHasNoInventedFields: Extra<RemoteAuthRequestView, WorkerRemoteAuthRequestView> extends never ? true : never = true;
+const _remoteAuthViewAcceptsTheProducer: RemoteAuthRequestView = {} as WorkerRemoteAuthRequestView;
+const _remoteAuthResponseAcceptsTheProducer: RemoteAuthRequestResponse = {} as WorkerRemoteAuthRequestResponse;
 
 // #988: queue detail uses the named Worker projection instead of rebuilding lifecycle/checkpoint
 // semantics in the browser. This compile-time assignment catches incompatible widening.
@@ -226,7 +232,8 @@ describe("console response types match the Worker declarations they copy (#617)"
 			_browserTakeoverTransitionHasNoInventedFields,
 			_leadVerificationHasNoInventedFields,
 			_leadVerificationListHasNoInventedFields,
-		]).toEqual([true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true]);
+			_remoteAuthViewHasNoInventedFields,
+		]).toEqual([true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true]);
 		expect(_instanceModelStateAcceptsTheProducer).toEqual({});
 		expect(_accountPreferencesAcceptsTheProducer).toEqual({});
 		expect(_accountPreferencesWriteAcceptsTheProducer).toEqual({});
@@ -235,6 +242,8 @@ describe("console response types match the Worker declarations they copy (#617)"
 		expect(_browserTakeoverListAcceptsTheProducer).toEqual({});
 		expect(_browserTakeoverTransitionAcceptsTheProducer).toEqual({});
 		expect(_leadVerificationListAcceptsTheProducer).toEqual({});
+		expect(_remoteAuthViewAcceptsTheProducer).toEqual({});
+		expect(_remoteAuthResponseAcceptsTheProducer).toEqual({});
 	});
 
 	it("declares every trigger action the Worker's TRIGGER_ACTIONS has, and no more", () => {

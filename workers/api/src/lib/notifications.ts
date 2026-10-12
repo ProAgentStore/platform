@@ -130,6 +130,12 @@ export const NOTIFICATION_TYPES: NotificationTypeSpec[] = [
 		alerts: false,
 	},
 	{
+		id: "remote-auth",
+		label: "Remote sign-in requests",
+		description: "One of your machines asking you to approve a ProAppStore MCP sign-in (#1005). The link opens that exact request; you sign in at ProAppStore.",
+		alerts: true,
+	},
+	{
 		id: "spend",
 		label: "Spend alerts",
 		description: "Your agents' charged AI spend over the last 24 hours reaching the alert you set on the Usage page (#1040). At most once a day.",

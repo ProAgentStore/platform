@@ -103,6 +103,12 @@ const EXCLUSIONS = [
 		match: /^[A-Z]+ \/v1\/auth\/[a-z]+\/link\/start$/,
 	},
 	{
+		label: "PAS remote sign-in requests (#1005)",
+		why:
+			"The request page exists to hand the OWNER to ProAppStore's own approval page in their own browser, where they sign in and consent. Giving its approval link to a model tool would invite an agent to drive another store's sign-in, which the design forbids; the request is relayed by the owner's machine with the `pags` CLI, not by an agent.",
+		match: /^[A-Z]+ \/v1\/remote-auth\//,
+	},
+	{
 		label: "Web Push subscription plumbing",
 		why:
 			"A push subscription is a browser object (a VAPID key and an endpoint minted by the user's own browser). There is nothing for a server-side caller to subscribe WITH.",

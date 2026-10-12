@@ -53,6 +53,11 @@ export function usageLink(): string {
 	return `${BASE}/usage`;
 }
 
+/** One PAS remote sign-in request (#1005) — account-level, like the machine that asked for it. */
+export function remoteAuthRequestLink(requestId: string): string {
+	return `${BASE}/remote-auth/${encodeURIComponent(requestId)}`;
+}
+
 /** An instance with no tab named — `InstanceDetail` opens the Assistant. */
 export function instanceLink(instanceId: string): string {
 	return `${BASE}/instances/${encodeURIComponent(instanceId)}`;
@@ -277,7 +282,9 @@ export type NotificationSubject =
 	/** Account-level: the Profile (candidate profile, API keys). */
 	| { kind: "profile" }
 	/** Account-level: the Usage page — spend, drivers and limits (#1040). */
-	| { kind: "usage" };
+	| { kind: "usage" }
+	/** One PAS remote sign-in request a machine relayed (#1005): the page that shows it and links to PAS. */
+	| { kind: "remote-auth-request"; requestId: string };
 
 export type NotificationSubjectKind = NotificationSubject["kind"];
 
@@ -323,6 +330,8 @@ export function deepLinkFor(subject: NotificationSubject): DeepLink {
 				return profileLink();
 			case "usage":
 				return usageLink();
+			case "remote-auth-request":
+				return remoteAuthRequestLink(subject.requestId);
 		}
 	})();
 	return link as DeepLink;

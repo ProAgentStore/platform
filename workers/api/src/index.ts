@@ -36,6 +36,7 @@ import { githubRoutes } from "./routes/github.js";
 import { relayRoutes } from "./routes/relay.js";
 import { terminalRoutes } from "./routes/terminals.js";
 import { usageRoutes } from "./routes/usage.js";
+import { remoteAuthRoutes } from "./routes/remote-auth.js";
 import { budgetRoutes } from "./routes/budget.js";
 import { statsRoutes } from "./routes/stats.js";
 import { controllerAiSettingsRoutes } from "./routes/controller-ai-settings.js";
@@ -205,6 +206,7 @@ app.route("/v1/github", githubRoutes); // GitHub App: /status, /install-url, /in
 app.route("/v1/relay", relayRoutes); // WebSocket relay: /connect, /status
 app.route("/v1/terminals", terminalRoutes); // platform: /v1/terminals/nodes — all the user's CLIs
 app.route("/v1/usage", usageRoutes); // platform: /v1/usage — token/cost transparency across agents
+app.route("/v1/remote-auth", remoteAuthRoutes); // #1005: PAS remote sign-in requests relayed by the owner's machine (PAGS never calls PAS)
 app.route("/v1/budget", budgetRoutes); // platform: /v1/budget/limits — account daily circuit breakers
 app.route("/v1", statsRoutes); // per-agent stats cards: /v1/stats/sources, /v1/instances/:id/stats, /v1/agents/:id/stats-schema
 app.route("/v1", mcpAuditRoutes); // platform: /v1/mcp-audit — the caller's OWN MCP tool-call history

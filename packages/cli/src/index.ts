@@ -10,6 +10,7 @@ import { initCommand } from "./commands/init.js";
 import { loginCommand, logoutCommand, whoamiCommand } from "./commands/login.js";
 import { machinesCommand } from "./commands/machines.js";
 import { mcpCommand } from "./commands/mcp.js";
+import { remoteAuthCommand } from "./commands/remote-auth.js";
 import { publishCommand } from "./commands/publish.js";
 import { runnerCommand } from "./commands/runner.js";
 import { downCommand, upCommand } from "./commands/up.js";
@@ -38,6 +39,7 @@ program.addCommand(publishCommand);
 program.addCommand(runnerCommand);
 program.addCommand(machinesCommand);
 program.addCommand(mcpCommand);
+program.addCommand(remoteAuthCommand);
 
 try {
 	await program.parseAsync();

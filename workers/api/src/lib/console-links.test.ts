@@ -66,6 +66,7 @@ describe("deepLinkFor — every notification subject opens a real page (#894)", 
 		instances: { kind: "instances" },
 		profile: { kind: "profile" },
 		usage: { kind: "usage" },
+		"remote-auth-request": { kind: "remote-auth-request", requestId: other },
 	});
 
 	for (const [kind, subject] of Object.entries(sample("inst_1", "id_2"))) {

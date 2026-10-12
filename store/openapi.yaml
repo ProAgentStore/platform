@@ -13069,6 +13069,77 @@ paths:
 
   # ── Usage ─────────────────────────────────────────────────────────────────
 
+  /v1/remote-auth/requests:
+    post:
+      summary: Relay a PAS remote sign-in request (the owner's machine)
+      description: |
+        #1005, design A (#1006). The PAS companion client on the owner's machine creates a sign-in request at
+        ProAppStore (broker v2, PAS #355) and relays its PUBLIC details here through `pags remote-auth relay`,
+        with the owner's PAGS login. ProAgentStore never calls PAS and never accepts a PAS credential: the
+        resource must be the PAS MCP endpoint, scopes `[]`, the approval URL an https PAS page with no
+        credential-shaped parameter, and the expiry within the hour. The first relay of a PAS request id pushes
+        the owner a same-origin link to `/console/remote-auth/:id`; a repeat is the same request (200, no
+        second push); the same PAS id with different details, or from another machine, is refused (409).
+      operationId: relayRemoteAuthRequest
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [request_id, agent, machine, resource, scopes, approval_url, expires_at]
+              properties:
+                request_id: { type: string, description: "The PAS broker's req_… id." }
+                agent: { type: object, properties: { id: { type: string }, label: { type: string } } }
+                machine: { type: object, properties: { id: { type: string }, label: { type: string } } }
+                resource: { type: string }
+                scopes: { type: array, items: { type: string }, maxItems: 0 }
+                approval_url: { type: string, description: ProAppStore's own approval page — linked, never called. }
+                expires_at: { oneOf: [{ type: integer }, { type: string, format: date-time }] }
+                relayed_by: { type: object, properties: { node: { type: string }, machine_id: { type: string } } }
+      responses:
+        "200": { description: "A repeat relay of the same request: `{ request, duplicate: true, url }`." }
+        "201": { description: "Stored and the owner notified: `{ request, duplicate: false, url }`." }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { description: The same PAS request id was already relayed with different details or from another machine. }
+  /v1/remote-auth/requests/{requestId}:
+    get:
+      summary: One PAS remote sign-in request (the owner's page)
+      description: "#1005. Owner-scoped. Public details only, with `effectiveState` (a request past its expiry reads `expired`). Sent with `Cache-Control: no-store` and `Referrer-Policy: no-referrer`."
+      operationId: getRemoteAuthRequest
+      tags: [Auth]
+      parameters:
+        - { name: requestId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "`{ request }`", content: { application/json: { schema: { type: object } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/remote-auth/requests/{requestId}/state:
+    post:
+      summary: Report the PAS broker state the machine observed
+      description: "#1005. Only the machine that relayed the request may report. Forward-only: a terminal state (connected, denied, expired, cancelled, failed) is final, and `connected` follows an approval. A repeated report is idempotent (`changed: false`)."
+      operationId: reportRemoteAuthState
+      tags: [Auth]
+      parameters:
+        - { name: requestId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [state]
+              properties:
+                state: { type: string, enum: [pending, approving, approved_awaiting_machine, consumed, connected, denied, expired, cancelled, failed] }
+                relayed_by: { type: object, properties: { node: { type: string }, machine_id: { type: string } } }
+      responses:
+        "200": { description: "`{ request, changed }`" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: A disallowed transition, or a report from another machine. }
   /v1/usage:
     get:
       summary: Token and cost usage

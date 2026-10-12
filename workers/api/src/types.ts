@@ -1,4 +1,8 @@
 export interface Env {
+	/** #1005: comma-separated PAS origins an approval page may be on (default: api.proappstore.online, proappstore.online). Linked, never called. */
+	REMOTE_AUTH_APPROVAL_ORIGINS?: string;
+	/** #1005: the PAS MCP origin a relayed resource must name (default https://mcp.proappstore.online). */
+	REMOTE_AUTH_MCP_ORIGIN?: string;
 	DB: D1Database;
 	STORAGE: R2Bucket;
 	AGENT: DurableObjectNamespace;
