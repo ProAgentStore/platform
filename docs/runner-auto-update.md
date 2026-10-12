@@ -136,6 +136,33 @@ operation continues as a restart: held agents are waited for and re-attached, an
 `failed` and says which version the machine still reports. Dry runs install nothing and are not
 re-read.
 
+## Windows
+
+How `pags up` is installed and kept running on Windows is in
+[platform-docs/windows.md](../platform-docs/windows.md). What matters for updates:
+
+**The restart itself needs no setup.** `pags up` starts its runner child with
+`PAGS_UP_SUPERVISED=2` (`packages/cli/src/commands/up.ts`), so the child's restarter is `pags-up`
+(`restarterFrom` in `commands/runner/self-update.ts`). After an install the child exits with code 75
+and `pags up` restarts itself on the new release. That holds under the Task Scheduler wrapper too,
+so `PAGS_SERVICE` and `PAGS_RESTART_COMMAND` are not needed there.
+
+**Each restart nests a process (#1036, open).** `pags up` restarts itself with `execFileSync`, which
+starts the new `pags up` as a child and blocks the old one until it exits. Every update adds one more
+waiting parent, and under the Task Scheduler wrapper the process count grows by one each time. To
+clear it, restart the task (`Stop-ScheduledTask` then `Start-ScheduledTask -TaskName "pags up"`) or
+the machine after an update.
+
+**Self-update cannot run npm on Windows yet.** *Read from the source, not yet reproduced on a
+Windows machine.* Every npm call in the update path runs through `execFile("npm", …)` with no shell:
+the release check (`latestPublishedVersion`, `packages/cli/src/bootstrap/payload.ts`), the global
+install (`installVersion`, `commands/runner/self-update.ts`) and the stub's cache install
+(`npmInstallInto`, `bootstrap/payload.ts`). On Windows `npm` is `npm.cmd`, and a `.cmd` file cannot be
+started without a shell. So the release check comes back empty and the update is refused ("npm could
+not be asked for the latest @proagentstore/cli"), whether it was started by the Auto-update policy or
+by `runner_update`. Until that is fixed, update a Windows machine by hand: `npm i -g
+@proagentstore/cli`, then restart the task.
+
 Very old runners that cannot report a stable machine ID still need one manual upgrade/restart. They
 remain visible but their settings link is deliberately unavailable rather than attaching a policy to
 a mutable hostname.
