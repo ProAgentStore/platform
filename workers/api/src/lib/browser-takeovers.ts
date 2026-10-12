@@ -10,16 +10,15 @@
  * racing writers cannot both move it, and repeating a transition already made is a no-op, not an
  * error. Nothing here stores a URL, frame, cookie, token, session or page content.
  */
+import {
+	type BrowserTakeover,
+	TAKEOVER_REASONS,
+	type TakeoverEndReason,
+	type TakeoverReason,
+	type TakeoverState,
+	type TakeoverSubject,
+} from "./browser-takeover-types.js";
 import type { Env } from "../types.js";
-
-export const TAKEOVER_STATES = ["requested", "active", "resumed", "ended", "expired"] as const;
-export type TakeoverState = (typeof TAKEOVER_STATES)[number];
-export const TAKEOVER_REASONS = ["login_required", "captcha", "consent_required", "access_blocked", "paywall", "write_affordance", "manual"] as const;
-export type TakeoverReason = (typeof TAKEOVER_REASONS)[number];
-export const TAKEOVER_SUBJECTS = ["local_browser_run", "runtime_task", "manual"] as const;
-export type TakeoverSubject = (typeof TAKEOVER_SUBJECTS)[number];
-export const TAKEOVER_END_REASONS = ["declined", "run_finished", "resumed_at_machine", "expired"] as const;
-export type TakeoverEndReason = (typeof TAKEOVER_END_REASONS)[number];
 
 /** How long a request waits for a person before the cron expires it. */
 export const TAKEOVER_TTL_MS = 60 * 60_000;
@@ -40,23 +39,6 @@ export function canTransitionTakeover(from: TakeoverState, to: TakeoverState): b
 }
 
 export const takeoverReasonOf = (raw: unknown): TakeoverReason => (TAKEOVER_REASONS.includes(raw as TakeoverReason) ? (raw as TakeoverReason) : "manual");
-
-export interface BrowserTakeover {
-	id: string;
-	instanceId: string;
-	agentId: string;
-	subjectKind: TakeoverSubject;
-	subjectId: string;
-	state: TakeoverState;
-	reason: TakeoverReason;
-	mobileAllowed: boolean;
-	endReason: TakeoverEndReason | null;
-	expiresAt: string;
-	createdAt: string;
-	activatedAt: string | null;
-	endedAt: string | null;
-	updatedAt: string;
-}
 
 interface Row {
 	id: string;

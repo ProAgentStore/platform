@@ -3,7 +3,7 @@ import { api } from "@proagentstore/sdk/client";
 import Button from "../../components/Button";
 import Card from "../../components/Card";
 import LoadFailed from "../../components/LoadFailed";
-import { type BrowserTakeover, isLive, takeoverLine } from "../../lib/browserTakeovers";
+import { type BrowserTakeover, type BrowserTakeoverListResponse, isLive, takeoverLine } from "../../lib/browserTakeovers";
 import { type BrowserRuntimesView, type BrowserVerificationSettings, type BrowserVerificationView, changedFields, EVENT_WORDS, machineLine } from "../../lib/browserVerification";
 
 const input = "bg-paper border border-line rounded px-2 py-1.5 text-sm";
@@ -29,7 +29,7 @@ export default function BrowserVerificationSection({ instanceId }: { instanceId:
 		try {
 			const [v, t] = await Promise.all([
 				api<BrowserVerificationView>(`/v1/instances/${instanceId}/browser-verification`),
-				api<{ takeovers: BrowserTakeover[] }>(`/v1/instances/${instanceId}/browser-takeovers?limit=10`).catch(() => ({ takeovers: [] })),
+				api<BrowserTakeoverListResponse>(`/v1/instances/${instanceId}/browser-takeovers?limit=10`).catch((): BrowserTakeoverListResponse => ({ takeovers: [] })),
 			]);
 			setTakeovers(t.takeovers);
 			setData(v);

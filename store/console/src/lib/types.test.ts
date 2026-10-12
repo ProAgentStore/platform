@@ -7,7 +7,10 @@ import type { AgentState as WorkerAgentState, ConsentRow as WorkerConsentRow, Gm
 import type { CollectionRecord as WorkerCollectionRecord, RecordQueryResult as WorkerRecordQueryResult } from "../../../../workers/api/src/agent-storage-types";
 import type { RunnerEvent, RunnerTask } from "../../../../packages/browser-runner/src/types";
 import type { AccountCodingDefaultApplyResponse, AccountPreferencesResponse, AccountPreferencesWriteResponse, ConnectionGuideResponse, ConnectorConsent, InstanceModelState, Credential, DataRecord, KnowledgeDoc, Notification, RecordQueryResponse, RuntimeEvent, RuntimeTask, TriggerAction, ApplicationQueueItem, InstancePermissionRequest, InstancePermissionRequestResponse, InstancePermissionRequestDecisionResponse } from "./types";
-import type { GmailScoutScanResponse } from "./gmailScout";
+import type { GmailScoutScanResponse, LeadVerification, LeadVerificationListResponse } from "./gmailScout";
+import type { BrowserTakeover, BrowserTakeoverListResponse, BrowserTakeoverTransitionResponse } from "./browserTakeovers";
+import type { BrowserTakeover as WorkerBrowserTakeover, BrowserTakeoverListResponse as WorkerBrowserTakeoverListResponse, BrowserTakeoverTransitionResponse as WorkerBrowserTakeoverTransitionResponse } from "../../../../workers/api/src/lib/browser-takeover-types";
+import type { LeadVerification as WorkerLeadVerification, LeadVerificationListResponse as WorkerLeadVerificationListResponse } from "../../../../workers/api/src/lib/job-lead-browser-verification-types";
 import type { PreparedApplicationTransferReceipt } from "./applicationTransfer";
 
 /**
@@ -137,6 +140,19 @@ const _gmailScoutScanHasNoInventedFields: Extra<GmailScoutScanResponse, WorkerGm
 	: never = true;
 const _gmailScoutScanAcceptsTheProducer: GmailScoutScanResponse = {} as WorkerGmailScoutScanResponse;
 
+// ── Browser takeovers (#1031) + Gmail lead browser verification (#1030) ──────────────────────
+//
+// The TakeoverBanner and the Scout's verification list read these envelopes (#1045). The row types
+// are checked too: an envelope with no invented keys still drifts if its rows do.
+const _browserTakeoverHasNoInventedFields: Extra<BrowserTakeover, WorkerBrowserTakeover> extends never ? true : never = true;
+const _browserTakeoverListHasNoInventedFields: Extra<BrowserTakeoverListResponse, WorkerBrowserTakeoverListResponse> extends never ? true : never = true;
+const _browserTakeoverListAcceptsTheProducer: BrowserTakeoverListResponse = {} as WorkerBrowserTakeoverListResponse;
+const _browserTakeoverTransitionHasNoInventedFields: Extra<BrowserTakeoverTransitionResponse, WorkerBrowserTakeoverTransitionResponse> extends never ? true : never = true;
+const _browserTakeoverTransitionAcceptsTheProducer: BrowserTakeoverTransitionResponse = {} as WorkerBrowserTakeoverTransitionResponse;
+const _leadVerificationHasNoInventedFields: Extra<LeadVerification, WorkerLeadVerification> extends never ? true : never = true;
+const _leadVerificationListHasNoInventedFields: Extra<LeadVerificationListResponse, WorkerLeadVerificationListResponse> extends never ? true : never = true;
+const _leadVerificationListAcceptsTheProducer: LeadVerificationListResponse = {} as WorkerLeadVerificationListResponse;
+
 // #988: queue detail uses the named Worker projection instead of rebuilding lifecycle/checkpoint
 // semantics in the browser. This compile-time assignment catches incompatible widening.
 const _applicationExecutionAcceptsTheProducer: NonNullable<ApplicationQueueItem["execution"]> = {} as WorkerApplicationExecutionProjection;
@@ -205,12 +221,20 @@ describe("console response types match the Worker declarations they copy (#617)"
 			_permissionRequestDecisionHasNoInventedFields,
 			_gmailScoutScanHasNoInventedFields,
 			_applicationExecutionAcceptsTheProducer.schemaVersion === 1 || true,
-		]).toEqual([true, true, true, true, true, true, true, true, true, true, true, true, true, true]);
+			_browserTakeoverHasNoInventedFields,
+			_browserTakeoverListHasNoInventedFields,
+			_browserTakeoverTransitionHasNoInventedFields,
+			_leadVerificationHasNoInventedFields,
+			_leadVerificationListHasNoInventedFields,
+		]).toEqual([true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true]);
 		expect(_instanceModelStateAcceptsTheProducer).toEqual({});
 		expect(_accountPreferencesAcceptsTheProducer).toEqual({});
 		expect(_accountPreferencesWriteAcceptsTheProducer).toEqual({});
 		expect(_accountCodingApplyAcceptsTheProducer).toEqual({});
 		expect(_gmailScoutScanAcceptsTheProducer).toEqual({});
+		expect(_browserTakeoverListAcceptsTheProducer).toEqual({});
+		expect(_browserTakeoverTransitionAcceptsTheProducer).toEqual({});
+		expect(_leadVerificationListAcceptsTheProducer).toEqual({});
 	});
 
 	it("declares every trigger action the Worker's TRIGGER_ACTIONS has, and no more", () => {

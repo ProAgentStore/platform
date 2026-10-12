@@ -19,6 +19,16 @@ export interface BrowserTakeover {
 	endedAt: string | null;
 }
 
+/** `GET …/browser-takeovers` — guarded against the Worker's own declaration in `types.test.ts`. */
+export interface BrowserTakeoverListResponse {
+	takeovers: BrowserTakeover[];
+}
+
+/** `PATCH …/browser-takeovers/:takeoverId` — the console reads only the takeover back. */
+export interface BrowserTakeoverTransitionResponse {
+	takeover: BrowserTakeover;
+}
+
 export const isLive = (t: BrowserTakeover): boolean => t.state === "requested" || t.state === "active";
 
 /** The device the console is on, as the takeover routes take it: the owner's own statement. */

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import Button from "./Button";
-import { type BrowserTakeover, deviceKind, isLive, remoteViewBlocked, takeoverLine } from "../lib/browserTakeovers";
+import { type BrowserTakeover, type BrowserTakeoverListResponse, type BrowserTakeoverTransitionResponse, deviceKind, isLive, remoteViewBlocked, takeoverLine } from "../lib/browserTakeovers";
 
 /**
  * The durable takeover for one run or task (#1031), read from the record — so what the page says about
@@ -15,7 +15,7 @@ export default function TakeoverBanner({ instanceId, subjectKind, subjectId }: {
 
 	const load = useCallback(async () => {
 		try {
-			const r = await api<{ takeovers: BrowserTakeover[] }>(`/v1/instances/${instanceId}/browser-takeovers?subject_kind=${subjectKind}&subject_id=${encodeURIComponent(subjectId)}&limit=1`);
+			const r = await api<BrowserTakeoverListResponse>(`/v1/instances/${instanceId}/browser-takeovers?subject_kind=${subjectKind}&subject_id=${encodeURIComponent(subjectId)}&limit=1`);
 			setTakeover(r.takeovers[0] ?? null);
 		} catch {
 			// An older API without the route: no banner, nothing broken.
@@ -33,7 +33,7 @@ export default function TakeoverBanner({ instanceId, subjectKind, subjectId }: {
 		setBusy(true);
 		setErr("");
 		try {
-			const r = await api<{ takeover: BrowserTakeover }>(`/v1/instances/${instanceId}/browser-takeovers/${takeover.id}`, { method: "PATCH", body: JSON.stringify({ state, device: deviceKind() }) });
+			const r = await api<BrowserTakeoverTransitionResponse>(`/v1/instances/${instanceId}/browser-takeovers/${takeover.id}`, { method: "PATCH", body: JSON.stringify({ state, device: deviceKind() }) });
 			setTakeover(r.takeover);
 		} catch (e) {
 			setErr(e instanceof Error ? e.message : String(e));

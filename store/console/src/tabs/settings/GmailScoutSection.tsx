@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import Button from "../../components/Button";
 import Card from "../../components/Card";
-import { type GmailScoutScanReceipt, type GmailScoutScanResponse, type LeadVerification, leadVerificationLine, rejectionSummary, scanNowMessage } from "../../lib/gmailScout";
+import { type GmailScoutScanReceipt, type GmailScoutScanResponse, type LeadVerification, type LeadVerificationListResponse, leadVerificationLine, rejectionSummary, scanNowMessage } from "../../lib/gmailScout";
 
 const GMAIL_SCOUT_MAILBOX = "serge.pro.job@gmail.com";
 
@@ -30,7 +30,7 @@ export default function GmailScoutSection({ instanceId }: { instanceId: string }
 		try {
 			const value = await api<Status>(`/v1/instances/${instanceId}/gmail-scout/status`);
 			setStatus(value);
-			const v = await api<{ leads: LeadVerification[] }>(`/v1/instances/${instanceId}/job-leads/browser-verifications?limit=20`).catch(() => ({ leads: [] }));
+			const v = await api<LeadVerificationListResponse>(`/v1/instances/${instanceId}/job-leads/browser-verifications?limit=20`).catch((): LeadVerificationListResponse => ({ leads: [] }));
 			setVerifications(v.leads);
 			setMailbox(value.config?.pinnedEmail ?? GMAIL_SCOUT_MAILBOX);
 			setEnabled(value.config?.enabled ?? true);

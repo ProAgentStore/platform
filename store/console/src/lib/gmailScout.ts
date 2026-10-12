@@ -85,6 +85,11 @@ export interface LeadVerification {
 	lastDetail: string | null;
 }
 
+/** `GET …/job-leads/browser-verifications` — the panel reads the leads, not the per-attempt receipts. */
+export interface LeadVerificationListResponse {
+	leads: LeadVerification[];
+}
+
 const STATE_WORDS: Record<LeadVerificationState, string> = {
 	awaiting: "waiting for the browser",
 	dispatched: "being checked in the browser",

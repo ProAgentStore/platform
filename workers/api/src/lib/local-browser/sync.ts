@@ -10,7 +10,8 @@
 import { syncScanCard } from "./scan-board.js";
 import { HttpError } from "../auth.js";
 import { readBrowserVerification } from "../browser-verification.js";
-import { type BrowserTakeover, requestTakeover, takeoverReasonOf } from "../browser-takeovers.js";
+import type { BrowserTakeover } from "../browser-takeover-types.js";
+import { requestTakeover, takeoverReasonOf } from "../browser-takeovers.js";
 import { deepLinkFor } from "../console-links.js";
 import { instanceListName } from "../instance-config.js";
 import type { Env } from "../../types.js";

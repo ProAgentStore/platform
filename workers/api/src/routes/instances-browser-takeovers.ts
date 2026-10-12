@@ -15,20 +15,16 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { readBrowserVerification } from "../lib/browser-verification.js";
 import {
 	type BrowserTakeover,
-	getTakeover,
-	latestTakeoverFor,
-	LIVE_TAKEOVER_STATES,
-	listTakeovers,
-	requestTakeover,
+	type BrowserTakeoverListResponse,
+	type BrowserTakeoverTransitionResponse,
 	TAKEOVER_REASONS,
 	TAKEOVER_STATES,
 	TAKEOVER_SUBJECTS,
 	type TakeoverReason,
 	type TakeoverState,
 	type TakeoverSubject,
-	takeoverReasonOf,
-	transitionTakeover,
-} from "../lib/browser-takeovers.js";
+} from "../lib/browser-takeover-types.js";
+import { getTakeover, latestTakeoverFor, LIVE_TAKEOVER_STATES, listTakeovers, requestTakeover, takeoverReasonOf, transitionTakeover } from "../lib/browser-takeovers.js";
 import { deepLinkFor } from "../lib/console-links.js";
 import { getLocalBrowserRun } from "../lib/local-browser/store.js";
 import { resumeLocalBrowserRun } from "../lib/local-browser/sync.js";
@@ -99,7 +95,8 @@ export function registerBrowserTakeoverRoutes(router: Hono<{ Bindings: Env }>): 
 			...(c.req.query("subject_id") ? { subjectId: c.req.query("subject_id") } : {}),
 			limit: Number(c.req.query("limit")) || 20,
 		});
-		return c.json({ takeovers });
+		const body: BrowserTakeoverListResponse = { takeovers };
+		return c.json(body);
 	});
 
 	router.post("/:instanceId/browser-takeovers", async (c) => {
@@ -167,6 +164,8 @@ export function registerBrowserTakeoverRoutes(router: Hono<{ Bindings: Env }>): 
 		const out = await transitionTakeover(c.env, uid, instanceId, takeover.id, body.state, body.state === "ended" ? { endReason: "declined" } : {});
 		// A resume above may already have closed it (resumed); that is the outcome asked for.
 		if (!out.ok && out.takeover?.state !== body.state) throw new HttpError(409, out.error);
-		return c.json({ takeover: out.takeover, changed: out.ok ? out.changed : false });
+		// Past the guard it is never null: a move made carries it, a refused one only gets here with its state.
+		const moved: BrowserTakeoverTransitionResponse = { takeover: out.takeover as BrowserTakeover, changed: out.ok ? out.changed : false };
+		return c.json(moved);
 	});
 }

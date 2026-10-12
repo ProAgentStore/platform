@@ -22,6 +22,7 @@ import { readBrowserVerification } from "./browser-verification.js";
 import { BROWSER_VERIFICATION_OUTCOMES, type BrowserVerificationOutcome } from "./job-lead-triage.js";
 import { getLocalBrowserRun, type LocalBrowserRun } from "./local-browser/store.js";
 import { startLocalBrowserRun } from "./local-browser/start.js";
+import type { LeadVerification, LeadVerificationListResponse, VerificationAttempt, VerificationState } from "./job-lead-browser-verification-types.js";
 import type { Env } from "../types.js";
 
 export const MAX_ATTEMPTS = 3;
@@ -31,36 +32,6 @@ export const RETRY_BACKOFF_MS = [5 * 60_000, 30 * 60_000, 2 * 60 * 60_000] as co
 export const WAIT_RETRY_MS = 5 * 60_000;
 /** The field a verification run reports its outcome in. */
 export const OUTCOME_FIELD = "verification_outcome";
-
-export type VerificationState = "awaiting" | "dispatched" | "active" | "expired" | "mismatch" | "unverifiable" | "superseded";
-
-export interface LeadVerification {
-	instanceId: string;
-	leadId: string;
-	workKey: string | null;
-	canonicalUrl: string;
-	expectedTitle: string | null;
-	expectedCompany: string | null;
-	state: VerificationState;
-	attempts: number;
-	nextAttemptAt: string;
-	awaitingSince: string;
-	lastOutcome: BrowserVerificationOutcome | null;
-	lastDetail: string | null;
-	updatedAt: string;
-}
-
-export interface VerificationAttempt {
-	id: string;
-	leadId: string;
-	attempt: number;
-	runId: string | null;
-	state: "dispatched" | "completed" | "no_runtime" | "refused";
-	outcome: BrowserVerificationOutcome | null;
-	detail: string | null;
-	createdAt: string;
-	completedAt: string | null;
-}
 
 type DB = Pick<Env, "DB">;
 const iso = (ms: number | null): string | null => (ms ? new Date(ms).toISOString() : null);
@@ -163,7 +134,7 @@ export async function enqueueBrowserVerification(
 		.run();
 }
 
-export async function listLeadVerifications(env: DB, instanceId: string, userId: string, limit = 50): Promise<{ leads: LeadVerification[]; attempts: VerificationAttempt[] }> {
+export async function listLeadVerifications(env: DB, instanceId: string, userId: string, limit = 50): Promise<LeadVerificationListResponse> {
 	const lim = Math.max(1, Math.min(200, limit));
 	const [leads, attempts] = await Promise.all([
 		env.DB.prepare("SELECT * FROM job_lead_browser_verifications WHERE instance_id = ?1 AND user_id = ?2 ORDER BY updated_at DESC LIMIT ?3").bind(instanceId, userId, lim).all<LeadRow>(),
