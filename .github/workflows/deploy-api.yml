@@ -10,6 +10,12 @@ on:
       # entry an edit to the shared chain would trigger no deploy at all — the duplication it
       # replaced was at least watched, because it lived in the path above.
       - '.github/actions/build-platform/**'
+      # The deploy itself runs through these (#1046): a change to the retry policy or the
+      # trigger check must ship through the deploy it governs.
+      - 'scripts/deploy-worker.mjs'
+      - 'scripts/lib/deploy-worker.mjs'
+      - 'scripts/verify-api-triggers.mjs'
+      - 'scripts/lib/verify-triggers.mjs'
   workflow_dispatch: {}
 
 concurrency:
@@ -67,18 +73,41 @@ jobs:
           command: d1 migrations apply pags --remote
 
       - name: Deploy API worker
+        id: deploy
+        # Retried on Cloudflare's own transient API failures only, up to 3 attempts (#1046):
+        # four of six deploys on 2026-10-12 uploaded the Worker and then failed on ONE workflow
+        # trigger or a malformed API response. Anything else — auth, validation, build — fails at
+        # once as before. The step ends in one status (deployed | deployed_after_retry | failed |
+        # retryable_failure), on the summary and as `steps.deploy.outputs.status`; only the first
+        # two are green.
+        #
         # --var API_BUILD overrides the wrangler.toml "dev" default with the real 12-char git SHA
         # (#735) so every server-side error_log row carries the build that wrote it. 12 chars
         # matches the client-side convention from #539 and is collision-free in practice (the
         # birthday bound is ~2^48, orders of magnitude beyond any realistic repo history).
         run: |
           SHORT_SHA=$(git rev-parse --short=12 HEAD)
-          cd workers/api && pnpm exec wrangler deploy --var "API_BUILD:${SHORT_SHA}"
+          node scripts/deploy-worker.mjs --cwd workers/api -- --var "API_BUILD:${SHORT_SHA}"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Verify triggers
+        # The release's final trigger state, read back from Cloudflare (#1046): every [[workflows]]
+        # entry in wrangler.toml must exist and be bound to proagentstore-api and its class, and the
+        # crons must match. Runs after a FAILED deploy too — the Worker may be live with one trigger
+        # missing (bb7c11e0: pags-job-apply), and this table is what says which part shipped. A
+        # mismatch, or a read that keeps failing, is red.
+        if: ${{ !cancelled() && steps.deploy.outcome != 'skipped' }}
+        run: node scripts/verify-api-triggers.mjs --cwd workers/api
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Smoke test
+        # Still runs when only the trigger check above is red: the Worker is deployed, and its
+        # health is a separate fact the run should report (#1046).
+        if: ${{ !cancelled() && steps.deploy.outcome == 'success' }}
         # The admin perimeter's mode is asserted, not just the 200 (#108 C4). `/health` reports
         # `adminPerimeter` = off | audit | enforce, derived from Worker SECRETS — which live outside
         # this repo, so a `wrangler secret delete`, a typo'd value or a deploy that lost them turns

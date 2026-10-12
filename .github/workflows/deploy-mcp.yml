@@ -6,6 +6,8 @@ on:
       - 'workers/mcp/**'
       - '.github/workflows/deploy-mcp.yml'
       - 'scripts/smoke-mcp-deployment.mjs'
+      - 'scripts/deploy-worker.mjs'
+      - 'scripts/lib/deploy-worker.mjs'
   # Manual trigger — see ci.yml. A stuck push event must not mean an unshippable repo.
   workflow_dispatch:
 
@@ -38,12 +40,13 @@ jobs:
         run: echo "DEPLOY_TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
 
       - name: Deploy MCP worker
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: workers/mcp
-          command: deploy --var GIT_COMMIT_SHA:${{ github.sha }} --var DEPLOY_TIMESTAMP:${{ env.DEPLOY_TIMESTAMP }}
+        # Retried on Cloudflare's transient API failures only (#1046) — two MCP deploys failed on
+        # "Received a malformed response from the API". Status: steps.deploy.outputs.status.
+        id: deploy
+        run: node scripts/deploy-worker.mjs --cwd workers/mcp -- --var "GIT_COMMIT_SHA:${{ github.sha }}" --var "DEPLOY_TIMESTAMP:${{ env.DEPLOY_TIMESTAMP }}"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Smoke test deployment identity
         run: node scripts/smoke-mcp-deployment.mjs
