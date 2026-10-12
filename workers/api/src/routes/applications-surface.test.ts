@@ -181,6 +181,20 @@ describe("the queue: every state, from any member of the pipeline", () => {
 	});
 });
 
+describe("the queue reports pipeline health (#1022)", () => {
+	it("is ok for an intact pipeline, and names a disabled Tailor → Runner edge instead of dropping the Runner silently", async () => {
+		const healthy = await call("GET", "/t1/application-queue");
+		expect(healthy.body.health).toMatchObject({ ok: true, problems: [] });
+		expect(healthy.body.health.sources).toEqual([expect.objectContaining({ instanceId: "scout", kind: "browser", ready: true })]);
+		d1.exec("UPDATE agent_connections SET enabled = 0 WHERE id = 'c-ready'");
+		const broken = await call("GET", "/t1/application-queue");
+		expect(broken.body.pipeline.runners).toEqual([]);
+		expect(broken.body.health.ok).toBe(false);
+		expect(broken.body.health.problems.map((p: { code: string }) => p.code)).toEqual(["edge_disabled", "no_runner"]);
+		expect(broken.body.health.problems[0]).toMatchObject({ connectionId: "c-ready" });
+	});
+});
+
 describe("one transition whichever member of the pipeline it is made from", () => {
 	it("defer from the Tailor's tab and defer on the Runner write the same transition and audit row", async () => {
 		readyApp("a1");

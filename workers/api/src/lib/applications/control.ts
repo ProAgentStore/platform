@@ -28,6 +28,7 @@ import { JOB_LEAD_APPLY_EVENT, JOB_LEAD_TRANSITIONS, type JobLeadStatus, jobLead
 import { MATERIALS_READY_EVENT } from "../local-artifact/contract.js";
 import { type JobApplication, getOwnedApplication, getTailorRun } from "../local-artifact/store.js";
 import { cancelTailoring, retryTailoring, startTailoring } from "../local-artifact/tailor.js";
+import { type PipelineHealth, pipelineHealth } from "./pipeline-health.js";
 import { cancelApplyRun, ownerFillEvent, resumeApplyRun, retryFill, runnerSettingsFor, startApplicationFill, submitGateFor } from "../local-apply/apply.js";
 import { approvalEligibility, approvalState } from "../local-apply/approval.js";
 import { approveAndContinue, approveContinueResult, isPostFillApproval } from "../local-apply/approve-continue.js";
@@ -455,6 +456,8 @@ export interface QueueView {
 	/** The connections that carry the flow, with their outbox health — dead letters can be replayed. */
 	connections: Array<{ id: string; eventType: string; sourceInstanceId: string; targetInstanceId: string; action: string; enabled: boolean; pending: number; delivered: number; dead: number }>;
 	notes: string[];
+	/** #1022: disabled edges, dead letters, missing members and every Scout source's readiness. */
+	health: PipelineHealth;
 }
 
 /** Narrowing the queue (#953): every text filter is a case-insensitive "contains"; dates bound `updatedAt`. */
@@ -532,7 +535,7 @@ export async function applicationQueue(env: Env, uid: string, instanceId: string
 	const connections = (conns ?? [])
 		.filter((c) => members.includes(c.source_instance_id) || members.includes(c.target_instance_id))
 		.map((c) => ({ id: c.id, eventType: c.event_type, sourceInstanceId: c.source_instance_id, targetInstanceId: c.target_instance_id, action: c.action, enabled: c.enabled === 1, pending: Number(c.pending ?? 0), delivered: Number(c.delivered ?? 0), dead: Number(c.dead ?? 0) }));
-	return { pipeline, items: filtered, counts, limits, connections, notes };
+	return { pipeline, items: filtered, counts, limits, connections, notes, health: await pipelineHealth(env, uid, pipeline, connections) };
 }
 
 /** One item, current: an application by id, or a lead by Scout + record. */

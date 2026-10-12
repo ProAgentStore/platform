@@ -864,6 +864,15 @@ export interface ApplicationQueueView {
 	limits: Array<{ runnerInstanceId: string; autoSubmitEnabled: boolean; dailyCap: number; usedToday: number; remaining: number }>;
 	connections: Array<{ id: string; eventType: string; sourceInstanceId: string; targetInstanceId: string; action: string; enabled: boolean; pending: number; delivered: number; dead: number }>;
 	notes: string[];
+	/** #1022 — absent on an older API. */
+	health?: ApplicationPipelineHealth;
+}
+
+/** Whether the pipeline can move work now: every disabled edge, dead letter, missing member and source problem. */
+export interface ApplicationPipelineHealth {
+	ok: boolean;
+	problems: Array<{ code: string; message: string; instanceId?: string; connectionId?: string }>;
+	sources: Array<{ instanceId: string; kind: "gmail" | "browser" | "none"; ready: boolean; scheduled: boolean; lastScanAt: string | null; lastFailureAt: string | null; lastFailureMessage: string | null }>;
 }
 
 export interface ApplicationActionResponse {

@@ -7,6 +7,7 @@ import { getMessage, listMessages, type GmailMessage } from "../gmail.js";
 import { canonicalJobUrl, jobIdentity, workKeyForLead } from "../job-lead-triage.js";
 import { clipMarked } from "../clip-marked.js";
 import { getGmailScoutConfig, getGmailScoutScanState, resolveGmailScoutAccount } from "./config.js";
+import { GMAIL_SCOUT_SCAN_INTERVAL_MS } from "../applications/pipeline-health.js";
 
 // A recent alert is an intake clue, not vacancy verification.  We deliberately keep the window
 // short and require the Runner's browser preflight before a lead can be treated as live.
@@ -189,9 +190,11 @@ export async function ingestGmailCandidates(input: {
 export async function scanGmailScout(env: Env, instanceId: string, userId: string): Promise<GmailScoutScanResult> {
 	const config = await getGmailScoutConfig(env, instanceId);
 	if (!config?.enabled) throw new Error("Gmail Scout is not configured or is disabled.");
-	if (!(await emailPermitted(env, instanceId))) throw new Error("Email access is not enabled for this Scout.");
-	const account = await resolveGmailScoutAccount(env, instanceId, userId, config.pinnedEmail);
 	try {
+		// Inside the try (#1022): a mailbox that lost its permission or its connected account is a
+		// FAILING source, and must say so — before, it threw unrecorded and read as `failureCount: 0`.
+		if (!(await emailPermitted(env, instanceId))) throw new Error("Email access is not enabled for this Scout.");
+		const account = await resolveGmailScoutAccount(env, instanceId, userId, config.pinnedEmail);
 		const token = await connectorClient(env, "gmail", { userId, instanceId }).token({ scope: "read" });
 		const state = await getGmailScoutScanState(env, instanceId);
 		const hits = await listMessages(token, gmailScoutQuery(state.lastMessageIdCursor), 25);
@@ -213,6 +216,37 @@ export async function scanGmailScout(env: Env, instanceId: string, userId: strin
 			VALUES (?1,1,datetime('now'),?2) ON CONFLICT(instance_id) DO UPDATE SET failure_count=failure_count+1,last_failure_at=datetime('now'),last_failure_message=excluded.last_failure_message`).bind(instanceId, message).run();
 		throw error;
 	}
+}
+
+/**
+ * Scan every enabled Gmail Scout that is due (#1022). Before this a Scout scanned only when its owner
+ * asked, so one silently stopped finding leads for days. Due = no scan, and no failure, within
+ * {@link GMAIL_SCOUT_SCAN_INTERVAL_MS} — a failing source is retried on the same cadence, never every
+ * minute. Bounded per tick; each scan records its own success or failure, so this swallows nothing.
+ */
+export async function runDueGmailScoutScans(env: Env, now = Date.now(), limit = 5): Promise<{ scanned: number; failed: number }> {
+	const cutoff = Math.floor((now - GMAIL_SCOUT_SCAN_INTERVAL_MS) / 1000);
+	const { results } = await env.DB.prepare(
+		`SELECT c.instance_id AS instanceId, i.user_id AS userId FROM gmail_scout_configs c
+		   JOIN agent_instances i ON i.id = c.instance_id
+		   LEFT JOIN gmail_scout_scan_state s ON s.instance_id = c.instance_id
+		  WHERE c.enabled = 1 AND i.status = 'active'
+		    AND (s.last_scan_at IS NULL OR s.last_scan_at < datetime(?1, 'unixepoch'))
+		    AND (s.last_failure_at IS NULL OR s.last_failure_at < datetime(?1, 'unixepoch'))
+		  ORDER BY COALESCE(s.last_scan_at, '') LIMIT ?2`,
+	)
+		.bind(cutoff, limit)
+		.all<{ instanceId: string; userId: string }>();
+	let scanned = 0, failed = 0;
+	for (const due of results ?? []) {
+		try {
+			await scanGmailScout(env, due.instanceId, due.userId);
+			scanned++;
+		} catch {
+			failed++; // recorded on the Scout's own scan state by scanGmailScout
+		}
+	}
+	return { scanned, failed };
 }
 
 export async function gmailScoutStatus(env: Env, instanceId: string, query?: URLSearchParams) {

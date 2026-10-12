@@ -1,0 +1,56 @@
+import { describe, expect, it } from "vitest";
+import { pipelineHealthFrom, SOURCE_STALE_AFTER_MS, type EdgeFact, type SourceFact } from "./pipeline-health.js";
+
+const NOW = Date.parse("2026-10-12T12:00:00.000Z");
+const sql = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
+const PIPELINE = { scouts: ["scout"], tailors: ["tailor"], runners: ["runner"] };
+const edge = (over: Partial<EdgeFact> = {}): EdgeFact => ({ id: "c-ready", eventType: "job.application.materials_ready", sourceInstanceId: "tailor", targetInstanceId: "runner", enabled: true, dead: 0, ...over });
+const gmail = (over: Partial<NonNullable<SourceFact["gmail"]>> = {}): SourceFact => ({
+	instanceId: "scout",
+	runtime: null,
+	gmail: { enabled: true, emailPermitted: true, lastScanAt: sql(NOW - 60 * 60_000), lastFailureAt: null, lastFailureMessage: null, ...over },
+});
+const health = (edges: EdgeFact[], sources: SourceFact[], pipeline = PIPELINE) => pipelineHealthFrom({ pipeline, edges, sources, now: NOW });
+const codes = (h: ReturnType<typeof health>) => h.problems.map((p) => p.code);
+
+describe("pipeline health (#1022)", () => {
+	it("a healthy pipeline: enabled edges, a recently scanned scheduled mailbox — ok, nothing to report", () => {
+		const h = health([edge()], [gmail()]);
+		expect(h).toMatchObject({ ok: true, problems: [] });
+		expect(h.sources[0]).toMatchObject({ kind: "gmail", ready: true, scheduled: true, lastScanAt: new Date(NOW - 60 * 60_000).toISOString() });
+	});
+
+	it("names a disabled edge instead of letting its member silently drop out", () => {
+		const h = health([edge({ enabled: false })], [gmail()], { ...PIPELINE, runners: [] });
+		expect(codes(h)).toEqual(["edge_disabled", "no_runner"]);
+		expect(h.problems[0]).toMatchObject({ connectionId: "c-ready", message: expect.stringMatching(/Tailor → Runner connection c-ready is disabled/) });
+	});
+
+	it("reports dead letters as replayable", () => {
+		expect(health([edge({ dead: 2 })], [gmail()]).problems).toEqual([{ code: "edge_dead_letters", connectionId: "c-ready", message: expect.stringMatching(/2 hand-offs .* can be replayed/) }]);
+	});
+
+	it("a Scout with no mailbox and no browser runtime cannot find leads, and says so", () => {
+		const h = health([edge()], [{ instanceId: "scout", runtime: null, gmail: null }]);
+		expect(codes(h)).toEqual(["source_unavailable"]);
+		expect(h.sources[0]).toMatchObject({ kind: "none", ready: false, scheduled: false });
+	});
+
+	it("a browser Scout is scanned by its runner, not on this schedule", () => {
+		expect(health([edge()], [{ instanceId: "scout", runtime: "local_browser", gmail: null }]).sources[0]).toMatchObject({ kind: "browser", ready: true, scheduled: false });
+	});
+
+	it("distinguishes disabled, permission off, failing, never scanned and stale", () => {
+		expect(codes(health([edge()], [gmail({ enabled: false })]))).toEqual(["source_disabled"]);
+		expect(codes(health([edge()], [gmail({ emailPermitted: false })]))).toEqual(["source_email_off"]);
+		const failing = health([edge()], [gmail({ lastFailureAt: sql(NOW - 60_000), lastFailureMessage: "Email access is not enabled for this Scout." })]);
+		expect(failing.problems).toEqual([{ code: "source_failing", instanceId: "scout", message: expect.stringMatching(/last scan failed: Email access is not enabled/) }]);
+		expect(failing.sources[0].ready).toBe(false);
+		expect(codes(health([edge()], [gmail({ lastScanAt: null })]))).toEqual(["source_never_scanned"]);
+		expect(codes(health([edge()], [gmail({ lastScanAt: sql(NOW - SOURCE_STALE_AFTER_MS - 60_000) })]))).toEqual(["source_stale"]);
+	});
+
+	it("a failure OLDER than the last successful scan is history, not a failing source", () => {
+		expect(health([edge()], [gmail({ lastFailureAt: sql(NOW - 3 * 60 * 60_000), lastFailureMessage: "old" })]).ok).toBe(true);
+	});
+});

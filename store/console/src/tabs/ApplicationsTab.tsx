@@ -118,6 +118,13 @@ export default function ApplicationsTab({ instanceId, isTailor = false }: { inst
 					))}
 				</fieldset>
 				<Limits view={view} instanceId={instanceId} onChanged={load} />
+				{view.health && !view.health.ok && (
+					<ul className="mt-2 flex flex-col gap-1 text-xs text-warning" data-testid="application-pipeline-problems" aria-label="Pipeline problems">
+						{view.health.problems.map((p) => (
+							<li key={`${p.code}:${p.instanceId ?? p.connectionId ?? ""}`}>{p.message}</li>
+						))}
+					</ul>
+				)}
 				{view.notes.map((n) => (
 					<p key={n} className="text-xs text-muted mt-1">
 						{n}

@@ -70,6 +70,7 @@ import { dispatchQueuedRunnerUpdates } from "./lib/runner-update.js";
 import { syncLeadWritebacks } from "./lib/local-artifact/store.js";
 import { routeRunEvents } from "./lib/run-event-routing.js";
 import { runTicketQueue } from "./lib/ticket-queue.js";
+import { runDueGmailScoutScans } from "./lib/gmail-scout/scan.js";
 import { runCommitCloseWatch } from "./lib/commit-close-watch.js";
 import { runDeployWatch } from "./lib/deploy-watch.js";
 import { runCiHealthWatch } from "./lib/repo-ci-health.js";
@@ -287,6 +288,11 @@ export default {
 		// released. Its own failure domain — a pickup that fails leaves the ticket for the next tick.
 		ctx.waitUntil(
 			runTicketQueue(env).catch((err) => logUnhandled(env, err, { path: "scheduled:ticket-queue", method: "CRON" })),
+		);
+		// Scheduled Gmail Scout scans (#1022): a Scout scanned only when asked, so one stopped finding
+		// leads for days unnoticed. Each scan records its own outcome on the Scout's scan state.
+		ctx.waitUntil(
+			runDueGmailScoutScans(env).catch((err) => logUnhandled(env, err, { path: "scheduled:gmail-scout", method: "CRON" })),
 		);
 		// Close runs whose Workflow died mid-step (#207C). A third independent failure domain: a
 		// row stuck at `running` forever tells every supervisor its subordinate is still working.
