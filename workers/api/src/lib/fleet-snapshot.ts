@@ -17,7 +17,11 @@
 import type { InstanceHealth } from "./instance-activity.js";
 import type { IssueSummary } from "./github-issues.js";
 
-export const FLEET_STATUSES = ["decision_blocked", "idle_needs_work", "hard_blocked", "working", "unknown", "idle"] as const;
+/**
+ * Most-needs-attention first. `paused` (#1028) sits just before `idle`: the owner paused it, so it
+ * needs nothing from them and takes no work until resumed.
+ */
+export const FLEET_STATUSES = ["decision_blocked", "idle_needs_work", "hard_blocked", "working", "unknown", "paused", "idle"] as const;
 export type FleetStatus = (typeof FLEET_STATUSES)[number];
 
 /** Labels that mean "a person has to do this", so an agent picking it up would only stall on it. */
@@ -72,6 +76,11 @@ export function tallyIssues(repos: readonly RepoIssues[]): IssueTally {
 }
 
 export interface FleetFacts {
+	/**
+	 * `agent_instances.status` (#1028). Before this the snapshot never read it, so a PAUSED coder fell
+	 * through to the backlog checks and read as idle_needs_work / unknown / hard_blocked.
+	 */
+	instanceStatus?: string | null;
 	health: InstanceHealth;
 	/** The open run's park reason (`RUN_WAIT_REASONS`), or null. */
 	waitingReason: string | null;
@@ -94,6 +103,9 @@ const HARD_PARKS = new Set(["human", "engine_auth"]);
  * act: a question waiting on them, then anything stuck, then work in flight, then the backlog.
  */
 export function deriveFleetStatus(f: FleetFacts): { status: FleetStatus; reason: string } {
+	// #1028: a paused instance takes no work, whatever its runs or backlog say — so this is checked
+	// before every run, question and backlog verdict, and its backlog is never offered as work.
+	if (f.instanceStatus === "paused") return { status: "paused", reason: "Paused — it takes no work until it is resumed (resume_instance), so its backlog is not offered." };
 	if (f.health === "waiting" && f.waitingReason === "decision") {
 		const q = f.runQuestion;
 		return {

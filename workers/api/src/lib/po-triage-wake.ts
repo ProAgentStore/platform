@@ -88,6 +88,11 @@ export async function runPoTriage(
 	const slot = slotOf(now);
 	const brain = await readCoderBrain(env, iid, uid);
 	if (!brain?.poEnabled) return { skipped: true, reason: "The coder brain or its product-owner triage is off for this instance.", slot };
+	// #1028: refuse a paused (or otherwise inactive) instance HERE, before any GitHub read or comment —
+	// not only at the queue gate, and not by trusting the fleet classifier, which never read
+	// instance status. A paused coder's wake does nothing at all.
+	const inst = await env.DB.prepare("SELECT status FROM agent_instances WHERE id = ?1 AND user_id = ?2").bind(iid, uid).first<{ status: string }>();
+	if (inst?.status !== "active") return { skipped: true, reason: `The instance is ${inst?.status ?? "missing"}, so product-owner triage does not run.`, slot };
 	const dryRun = config.dryRun !== false;
 	const reportId = crypto.randomUUID();
 	const claim = await env.DB.prepare(

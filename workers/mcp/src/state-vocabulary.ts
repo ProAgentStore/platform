@@ -324,7 +324,7 @@ export interface StateVocabulary {
  * `workers/api/src/lib/fleet-snapshot.ts` (`state-vocabulary.test.ts` holds the two equal), in the
  * order the snapshot sorts by: most-needs-attention first.
  */
-export const FLEET_STATUSES = ["decision_blocked", "idle_needs_work", "hard_blocked", "working", "unknown", "idle"] as const;
+export const FLEET_STATUSES = ["decision_blocked", "idle_needs_work", "hard_blocked", "working", "unknown", "paused", "idle"] as const;
 
 export const BACKED_VOCABULARIES: Record<string, StateVocabulary> = {
 	"coding run state": {

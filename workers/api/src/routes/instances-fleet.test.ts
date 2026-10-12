@@ -25,6 +25,7 @@ const ISSUES: Record<string, unknown> = {
 	"acme/todo": { issues: [issue(1), issue(2, ["needs-human"])], page: 1, hasMore: false },
 	"acme/nh": { issues: [issue(3, ["blocked-on-serge"])], page: 1, hasMore: false },
 	"acme/broken": { issues: [], page: 1, hasMore: false, unreadable: true },
+	"acme/paused-todo": { issues: [issue(11), issue(12)], page: 1, hasMore: false },
 };
 
 let d1: RealSchemaD1;
@@ -113,6 +114,47 @@ describe("GET /my/snapshot (#961)", () => {
 		await call("/v1/instances/my/snapshot?tag=store");
 		const repos = listIssuesPage.mock.calls.map((c) => c[2]);
 		expect(repos.filter((r) => r === "acme/todo")).toHaveLength(1);
+	});
+
+	/**
+	 * #1028, the live case: DoorDrop (paused, open unlabelled issues) read idle_needs_work, Properties
+	 * (paused, repo unreadable) read unknown, and the paused Leads coder (a run parked on a person) read
+	 * hard_blocked — the snapshot never selected `agent_instances.status`.
+	 */
+	it("a paused coder is `paused` — never idle_needs_work, unknown or hard_blocked — and its backlog is neither read nor offered (#1028)", async () => {
+		const paused = (id: string) =>
+			d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES ('${id}', 'ag', 'u1', 'paused', '${JSON.stringify({ displayName: id, tags: ["held"] })}')`);
+		paused("i-doordrop");
+		paused("i-properties");
+		paused("i-leads");
+		d1.exec(`INSERT INTO coding_repos (id, instance_id, user_id, name, github_repo, provider, clone_status, default_client) VALUES
+		           ('pd', 'i-doordrop', 'u1', 'pt', 'acme/paused-todo', 'github', 'ready', 'claude'),
+		           ('pp', 'i-properties', 'u1', 'pb', 'acme/broken', 'github', 'ready', 'claude')`);
+		d1.exec(`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, status, max_iterations, started_at, last_alive_at, last_progress_at, waiting_reason, waiting_until, parked_since)
+		         VALUES ('r-leads', 'u1', 'i-leads', 'Fix leads', 'running', 10, ${now}, ${now}, ${now}, 'human', ${now + 600_000}, ${now})`);
+		const { body } = await call("/v1/instances/my/snapshot?tag=held");
+		const rows = body.instances as Snap[];
+		expect(Object.fromEntries(rows.map((r) => [r.instanceId, r.status]))).toEqual({ "i-doordrop": "paused", "i-properties": "paused", "i-leads": "paused" });
+		for (const r of rows) {
+			expect(r.reason).toMatch(/Paused — it takes no work until it is resumed/);
+			expect(r.issues).toBeNull(); // no `next` work suggestion, however many issues are open
+		}
+		expect(body.counts).toMatchObject({ paused: 3, idle_needs_work: 0, unknown: 0, hard_blocked: 0 });
+		// A paused coder's repo is not read at all.
+		expect(listIssuesPage.mock.calls.map((c) => c[2])).not.toContain("acme/paused-todo");
+		// And it can be asked for by status, like any other.
+		const only = (await call("/v1/instances/my/snapshot?status=paused")).body.instances as Snap[];
+		expect(only.map((r) => r.instanceId).sort()).toEqual(["i-doordrop", "i-leads", "i-properties"]);
+	});
+
+	it("active coders are unchanged by a paused neighbour sharing their repo (#1028)", async () => {
+		d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES ('i-p-share', 'ag', 'u1', 'paused', '${JSON.stringify({ displayName: "share", tags: ["store"] })}')`);
+		d1.exec(`INSERT INTO coding_repos (id, instance_id, user_id, name, github_repo, provider, clone_status, default_client) VALUES ('ps', 'i-p-share', 'u1', 'todo', 'acme/todo', 'github', 'ready', 'claude')`);
+		const rows = (await call("/v1/instances/my/snapshot?tag=store")).body.instances as Snap[];
+		const by = Object.fromEntries(rows.map((r) => [r.instanceId, r.status]));
+		expect(by).toMatchObject({ "i-todo": "idle_needs_work", "i-todo2": "idle_needs_work", "i-unk": "unknown", "i-nh": "hard_blocked", "i-p-share": "paused" });
+		expect(rows.find((r) => r.instanceId === "i-todo")?.issues?.next.map((n) => n.number)).toEqual([1]);
+		expect(rows.map((r) => r.status)).toEqual(["decision_blocked", "idle_needs_work", "idle_needs_work", "hard_blocked", "hard_blocked", "working", "unknown", "paused", "idle"]);
 	});
 
 	it("filters by status, and refuses a status that does not exist", async () => {

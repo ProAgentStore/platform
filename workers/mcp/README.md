@@ -275,7 +275,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `get_creator_dashboard` | Creator totals, subscribers, usage and per-agent ranking | — | | |
 | `get_usage_dashboard` | Subscriber usage totals and the last 30 days by day and agent | — | | |
 | `account_activity` | Every instance's live health (`working`/`waiting`/`stalled`/`idle`), queue depth and last outcome, in one call — two queries, uncapped, unlike `recent_instances` (#815) | read | | |
-| `fleet_snapshot` | Every instance carrying a tag (or all), each with one derived `status` (`decision_blocked`/`idle_needs_work`/`hard_blocked`/`working`/`unknown`/`idle`), its reason, the run it is working on, the question waiting on you and its open-issue summary — most-needs-attention first (#961) | read | | |
+| `fleet_snapshot` | Every instance carrying a tag (or all), each with one derived `status` (`decision_blocked`/`idle_needs_work`/`hard_blocked`/`working`/`unknown`/`paused`/`idle`), its reason, the run it is working on, the question waiting on you and its open-issue summary — most-needs-attention first (#961) | read | | |
 | `recent_instances` | The instances you are driving or drove most recently over MCP — every instance with a run open comes first (`active-run`), then your own recency (`recent-touch`); `limit` (default 5, max 20) with `total` / `truncated` / `working` so a cut is never silent (#787, #192) | read | | |
 | `chat_with_instance` | The real runtime chat path (your state, your credentials) | runtime | yes | |
 | `instance_messages` | Recent messages, newest page first — page older ones with `before` = the previous call's `nextCursor` (#566) | — | | |

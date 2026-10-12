@@ -50,8 +50,18 @@ describe("deriveFleetStatus (#961)", () => {
 		expect(deriveFleetStatus(facts({ issues: repo(0, 0, false) }))).toMatchObject({ status: "unknown", reason: expect.stringContaining("could not be read") });
 	});
 
+	it("a paused instance is `paused` before any run, question or backlog verdict (#1028)", () => {
+		expect(deriveFleetStatus(facts({ instanceStatus: "paused", issues: repo(3, 1) }))).toMatchObject({ status: "paused", reason: expect.stringContaining("resume_instance") });
+		expect(deriveFleetStatus(facts({ instanceStatus: "paused", issues: repo(0, 0, false) })).status).toBe("paused");
+		expect(deriveFleetStatus(facts({ instanceStatus: "paused", issues: repo(0, 2) })).status).toBe("paused");
+		expect(deriveFleetStatus(facts({ instanceStatus: "paused", health: "waiting", waitingReason: "human" })).status).toBe("paused");
+		// Active (or not stated) is exactly the old behaviour.
+		expect(deriveFleetStatus(facts({ instanceStatus: "active", issues: repo(3, 1) })).status).toBe("idle_needs_work");
+		expect(deriveFleetStatus(facts({ instanceStatus: "active", issues: repo(0, 0, false) })).status).toBe("unknown");
+	});
+
 	it("orders most-needs-attention first", () => {
-		const sorted = (["idle", "working", "decision_blocked", "hard_blocked", "unknown", "idle_needs_work"] as const).slice().sort(fleetOrder);
-		expect(sorted).toEqual(["decision_blocked", "idle_needs_work", "hard_blocked", "working", "unknown", "idle"]);
+		const sorted = (["idle", "paused", "working", "decision_blocked", "hard_blocked", "unknown", "idle_needs_work"] as const).slice().sort(fleetOrder);
+		expect(sorted).toEqual(["decision_blocked", "idle_needs_work", "hard_blocked", "working", "unknown", "paused", "idle"]);
 	});
 });

@@ -66,16 +66,18 @@ export function registerFleetRoutes(router: Hono<{ Bindings: Env }>): void {
 
 		const roster = (
 			await c.env.DB.prepare(
-				`SELECT i.id, i.config, a.name, a.slug FROM agent_instances i JOIN agents a ON a.id = i.agent_id
+				`SELECT i.id, i.status, i.config, a.name, a.slug FROM agent_instances i JOIN agents a ON a.id = i.agent_id
 				  WHERE i.user_id = ?1 AND i.status != 'canceled'`,
 			)
 				.bind(uid)
-				.all<{ id: string; config: string | null; name: string | null; slug: string | null }>()
+				.all<{ id: string; status: string | null; config: string | null; name: string | null; slug: string | null }>()
 		).results ?? [];
 		const members = roster
-			.map((r) => ({ id: r.id, name: instanceListName(r.config, r.name), slug: r.slug, tags: tagsOf(parseConfigBlob(r.config)) }))
+			.map((r) => ({ id: r.id, instanceStatus: r.status, name: instanceListName(r.config, r.name), slug: r.slug, tags: tagsOf(parseConfigBlob(r.config)) }))
 			.filter((m) => matchesTags(m.tags, wanted));
 		const ids = new Set(members.map((m) => m.id));
+		// #1028: a paused instance's repos are not read — its backlog is not work anyone can take.
+		const workable = new Set(members.filter((m) => m.instanceStatus !== "paused").map((m) => m.id));
 
 		const [runs, queueDepths, decisionRows, owner, repoRows] = await Promise.all([
 			readLatestRuns(c.env, uid, now - LOOKBACK_MS),
@@ -96,7 +98,7 @@ export function registerFleetRoutes(router: Hono<{ Bindings: Env }>): void {
 		const secrets = new Map(owner.map((o) => [o.instanceId, o.pending] as const));
 		const reposOf = new Map<string, string[]>();
 		for (const r of repoRows.results ?? []) {
-			if (!ids.has(r.instance_id)) continue;
+			if (!ids.has(r.instance_id) || !workable.has(r.instance_id)) continue;
 			const list = reposOf.get(r.instance_id) ?? [];
 			if (!list.some((x) => x.toLowerCase() === r.github_repo.toLowerCase())) list.push(r.github_repo);
 			reposOf.set(r.instance_id, list);
@@ -119,6 +121,7 @@ export function registerFleetRoutes(router: Hono<{ Bindings: Env }>): void {
 			const issues = repos?.length ? tallyIssues(repos.map(repoIssues)) : null;
 			const decision = decisions.get(m.id) ?? null;
 			const verdict = deriveFleetStatus({
+				instanceStatus: m.instanceStatus,
 				health,
 				waitingReason: open?.waitingReason ?? null,
 				queueDepth: queueDepths.get(m.id) ?? 0,

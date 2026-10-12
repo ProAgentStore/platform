@@ -168,11 +168,26 @@ describe("gates: nothing new is queued (#1027)", () => {
 	};
 	const held = async () => JSON.parse(reports()[0].report).items.find((i: { number: number }) => i.number === 4).action as string;
 
-	it("for a paused instance", async () => {
+	it("for a paused instance — refused outright: no GitHub read, no comment, no queue, no report (#1028)", async () => {
 		d1.exec("UPDATE agent_instances SET status = 'paused' WHERE id = 'coder'");
-		expect((await wake()) as { gate: string }).toMatchObject({ gate: expect.stringMatching(/paused/) });
+		const { deps, log } = github();
+		const r = await runPoTriage(env, { instance_id: "coder", user_id: "u1" }, { dryRun: false }, at("2026-10-12T01:17:00Z"), deps);
+		expect(r).toMatchObject({ skipped: true, reason: "The instance is paused, so product-owner triage does not run." });
+		expect(log.listed).toBe(0);
+		expect(log.posted).toEqual([]);
 		expect(queued()).toHaveLength(0);
-		expect(await held()).toBe("held");
+		expect(reports()).toHaveLength(0);
+	});
+
+	it("even when the trigger is dispatched by hand, a paused coder is refused before anything is read (#1028)", async () => {
+		d1.exec("UPDATE agent_instances SET status = 'paused' WHERE id = 'coder'");
+		const { deps, log } = github();
+		// Dry-run too: a paused instance does not even report.
+		expect(await runPoTriage(env, { instance_id: "coder", user_id: "u1" }, {}, at("2026-10-12T01:17:00Z"), deps)).toMatchObject({ skipped: true });
+		expect(log.listed).toBe(0);
+		d1.exec("UPDATE agent_instances SET status = 'active' WHERE id = 'coder'");
+		expect(await runPoTriage(env, { instance_id: "coder", user_id: "u1" }, {}, at("2026-10-12T01:18:00Z"), deps)).toMatchObject({ skipped: false });
+		expect(log.listed).toBe(1);
 	});
 
 	it("for an account over its daily budget", async () => {

@@ -2777,7 +2777,7 @@ paths:
                         name: { type: string, nullable: true }
                         slug: { type: string, nullable: true }
                         tags: { type: array, items: { type: string } }
-                        status: { type: string, enum: [decision_blocked, idle_needs_work, hard_blocked, working, unknown, idle] }
+                        status: { type: string, enum: [decision_blocked, idle_needs_work, hard_blocked, working, unknown, paused, idle] }
                         reason: { type: string }
                         health: { type: string, enum: [working, waiting, stalled, idle] }
                         work: { type: object, nullable: true, additionalProperties: true }
