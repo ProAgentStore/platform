@@ -113,6 +113,8 @@ export const INSTANCE_CHILD_TABLES = [
 	// #1030 — the browser verification queue of a Scout's Gmail leads and its attempt receipts.
 	"job_lead_browser_verifications",
 	"job_lead_browser_verification_attempts",
+	// #1056 — owner-selected job URL intake receipts (canonical URL or rejection category only).
+	"job_lead_intake_receipts",
 	// #1004 — explicit uploaded-source choices are instance-owned provenance, not agent-global data.
 	"application_tailor_uploaded_sources",
 	// #1010 — receipt rows reference the source application and both instances/connections.

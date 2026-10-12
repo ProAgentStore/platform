@@ -205,7 +205,7 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// +1 at #1004: upload_instance_file is owner-scoped instance storage, not an external fetch.
 	// +1 write at #1027: set_coder_brain turns the coder brain and its product-owner triage on or off. `write`, not
 	// `destructive`: off disables the triage triggers and deletes nothing; on again restores them.
-	write: 95, // +1 at #1052: gmail_scout_reprocess reads selected or windowed historical job mail into private Scout leads; additive, never moves the cursor. +1 at #1031: browser_takeover_request records a takeover request and notifies the owner. +1 at #1031: set_instance_browser_verification turns a declared local browser on for one instance. +1 at #1012: retarget_repository_binding moves an idle binding's coordinate in place; it refuses live work and never drives a runner.
+	write: 96, // +1 at #1056: job_lead_intake_url adds one owner-chosen posting as a lead awaiting browser verification; additive, idempotent, never a handoff. +1 at #1052: gmail_scout_reprocess reads selected or windowed historical job mail into private Scout leads; additive, never moves the cursor. +1 at #1031: browser_takeover_request records a takeover request and notifies the owner. +1 at #1031: set_instance_browser_verification turns a declared local browser on for one instance. +1 at #1012: retarget_repository_binding moves an idle binding's coordinate in place; it refuses live work and never drives a runner.
 	// +1 runtime at #806: `continue_instance_run`. `runtime` rather than `write` for the reason
 	// `start_instance_loop` is — it starts an autonomous run that spends on its own — and the
 	// two must agree, because a caller holding the scope to start one holding a narrower one to

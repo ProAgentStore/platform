@@ -8364,6 +8364,41 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { description: Not waiting for verification }
+  /v1/instances/{instanceId}/job-leads/manual-url:
+    post:
+      summary: Add one owner-selected job posting by URL
+      description: |
+        #1056. ONE public Indeed, SEEK or LinkedIn posting URL becomes a lead in this Job Search Scout, stored
+        only as the provider's canonical posting URL (tracking ids, referral codes and signed-in tokens are
+        dropped before anything is stored or logged) and as `awaiting_browser_verification`: browser
+        verification, behind the Scout's per-site consent (#1049), is the only way it becomes `new` with
+        `verification.state: live`, and triage refuses Apply until then. Idempotent per owner and canonical
+        posting — the same job again, into any of the owner's Scouts, answers the first lead with
+        `duplicate: true`. Every attempt writes a durable receipt (`created`/`duplicate`/`rejected`; a rejection
+        keeps only its reason category and host). Nothing is handed to the Tailor or Runner (`handoff: "none"`)
+        and nothing is submitted. `dry_run` validates and writes nothing. Not search or discovery.
+      operationId: intakeManualJobUrl
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, description: The public job posting URL, as copied. }
+                dry_run: { type: boolean }
+      responses:
+        "200": { description: "A duplicate (the first intake's lead) or a dry run: `{ ok, dryRun, duplicate, receipt, canonicalUrl, provider, leadId, instanceId, verificationState, handoff }`", content: { application/json: { schema: { type: object } } } }
+        "201": { description: "Created: the lead awaits browser verification. Same shape as 200.", content: { application/json: { schema: { type: object } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: This instance is not a Job Search Scout. }
+        "422": { description: "Not a canonical job posting URL: `{ error, reason: not_https | private_target | provider_not_allowed | no_posting_id, receipt }` — never the URL." }
   /v1/instances/{instanceId}/job-leads/{recordId}/triage:
     post:
       summary: Record an explicit Job Search Scout lead decision

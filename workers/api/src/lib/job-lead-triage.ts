@@ -113,7 +113,8 @@ export type JobLeadTriageInput = {
 };
 
 /** One entry of a lead's `lifecycle` audit trail. `browser_verification` is #1030's, never a triage action. */
-export type JobLeadLifecycleEntry = { from: JobLeadStatus; to: JobLeadStatus; action: JobLeadTriageAction | "browser_verification"; version: number; at: string; note?: string };
+/** `intake` (#1056): how an owner-selected lead entered — `from` is null, there was no state before it. */
+export type JobLeadLifecycleEntry = { from: JobLeadStatus | null; to: JobLeadStatus; action: JobLeadTriageAction | "browser_verification" | "intake"; version: number; at: string; note?: string };
 
 export type JobLeadTriagePlan =
 	| { ok: true; transitioned: boolean; patch: Record<string, unknown> | null; event: JobLeadApplyEvent | null }

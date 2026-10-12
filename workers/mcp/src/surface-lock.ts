@@ -1153,4 +1153,5 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// #1040: usage_drivers (read); set_budget_limits gains spend_alert_micros.
 	"0.1.126": "sha256:49f14b588a9603e60f2dd06bbe65d472aabf6dcb98fb2f1e370d6efd0e1c2164",
 	"0.1.127": "sha256:ead552eb6a4b7abf7f40005e7f44bcdb6c1781428a6ccea41d484e383589ecc4",
+	"0.1.128": "sha256:911e1a902debf28ca70163009faf975ab6bae1e0c75c00a7fb79bb86960898da",
 };

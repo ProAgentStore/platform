@@ -337,6 +337,7 @@ const ROUTES = [
 	"POST /:instanceId/resync-identity",
 	"GET /:instanceId/job-leads/browser-verifications",
 	"POST /:instanceId/job-leads/:recordId/browser-verification",
+	"POST /:instanceId/job-leads/manual-url",
 	"POST /:instanceId/job-leads/:recordId/triage",
 	"GET /:instanceId/application-tailor/settings",
 	"PUT /:instanceId/application-tailor/settings",
@@ -544,7 +545,7 @@ const OWNERSHIP: Record<string, string[]> = {
 	"instances-runner-attach.ts": ["PUT /:instanceId/runner-node", "POST /:instanceId/runner-attach"],
 	"instances-runner-setup.ts": ["GET /:instanceId/runner-setup"],
 	"instances-lifecycle.ts": ["POST /:instanceId/pause", "POST /:instanceId/resume"],
-	"instances-job-leads.ts": ["GET /:instanceId/job-leads/browser-verifications", "POST /:instanceId/job-leads/:recordId/browser-verification", "POST /:instanceId/job-leads/:recordId/triage"],
+	"instances-job-leads.ts": ["GET /:instanceId/job-leads/browser-verifications", "POST /:instanceId/job-leads/:recordId/browser-verification", "POST /:instanceId/job-leads/manual-url", "POST /:instanceId/job-leads/:recordId/triage"],
 	"instances-gmail-scout.ts": [
 		"GET /:instanceId/gmail-scout/config",
 		"PUT /:instanceId/gmail-scout/config",
@@ -878,6 +879,7 @@ const GATES: Record<string, [number, number]> = {
 	// reads the lead or can enqueue a downstream application handoff.
 	"GET /:instanceId/job-leads/browser-verifications": [401, 404],
 	"POST /:instanceId/job-leads/:recordId/browser-verification": [401, 404],
+	"POST /:instanceId/job-leads/manual-url": [401, 404],
 	"POST /:instanceId/job-leads/:recordId/triage": [401, 404],
 	"GET /:instanceId/gmail-scout/config": [401, 404],
 	"PUT /:instanceId/gmail-scout/config": [401, 404],

@@ -99,6 +99,9 @@ type Fetch = typeof fetch;
 
 const providerFor = (host: string) => PROVIDERS.find((p) => p.host.test(host)) ?? null;
 
+/** The job provider a host belongs to (`indeed`, `seek`, `linkedin`), or null — the allowlist owner-pasted URLs are held to (#1056). */
+export const jobProviderOf = (host: string): string | null => providerFor(host)?.name ?? null;
+
 /** A provider job link in `raw`, or null. `&amp;` is decoded, since the body is raw HTML. */
 function providerJobLink(raw: string): { url: URL; provider: Provider } | null {
 	try {

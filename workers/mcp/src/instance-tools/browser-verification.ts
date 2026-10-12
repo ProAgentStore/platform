@@ -231,4 +231,29 @@ export function registerBrowserVerificationTools(server: McpServer, ctx: Instanc
 			return jsonText(data);
 		},
 	);
+
+	server.tool(
+		"job_lead_intake_url",
+		"Add ONE job posting the owner chose, by its public URL, to this Job Search Scout (#1056). Only an Indeed, SEEK or LinkedIn posting URL is accepted, and only its canonical form is kept — tracking ids, referral codes and signed-in tokens in the pasted link are dropped before anything is stored or logged; a private/internal target, a non-https link, another site, or a search/listing page is refused with a reason category (`not_https`, `private_target`, `provider_not_allowed`, `no_posting_id`), never echoing the URL. Idempotent per owner and posting: the same job pasted again — into any Scout — returns the first lead with `duplicate: true`. The lead waits for browser verification behind the Scout's per-site consent (#1049); only one verified active can be applied for, through triage. Nothing is handed to the Tailor or Runner (`handoff: \"none\"`) and nothing is ever submitted. Not search or discovery. Call with dry_run first.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Job Search Scout instance ID from my_instances."),
+			url: z.string().describe("The public job posting URL, as copied (personal tracking is stripped)."),
+			dry_run: z.boolean().optional().describe("Validate and preview without writing anything."),
+		},
+		async ({ token, instance_id, url, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			// The pasted URL may carry personal tokens: it is never part of the permission or audit input.
+			const input = { instance_id };
+			const denied = await requirePermission(safetyFor(token), "write", "job_lead_intake_url", input);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/job-leads/manual-url`;
+			if (dry_run) return dryRun(safetyFor(token), "job_lead_intake_url", "add one owner-chosen job posting as a lead awaiting browser verification", input, { endpoint, method: "POST" });
+			const data = (await authedCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify({ url }) }, env)) as { error?: string };
+			if (data.error) return jsonText(data);
+			await audit(safetyFor(token), { tool: "job_lead_intake_url", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
 }
