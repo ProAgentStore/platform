@@ -7,10 +7,12 @@
  * getting a raise. `engine-auth.ts` READS this env; this builds it.
  *
  *  1. {@link mergeEnv} — the platform's overlay over the machine's, where empty means REMOVE.
- *  2. {@link engineSpawnEnv} — that, plus the `gh` guard ahead of the real binary on `PATH`.
+ *  2. {@link engineSpawnEnv} — that, plus the `gh` guard ahead of the real binary on `PATH`, and the
+ *     `git` stash guard (#1021) ahead of both.
  */
 
 import { ghGuardEnv } from "./gh-guard.js";
+import { gitGuardEnv } from "./git-guard.js";
 
 /**
  * Merge the platform's resolved engine env over the machine's, where an EMPTY value means
@@ -42,6 +44,7 @@ export function mergeEnv(base: NodeJS.ProcessEnv, overlay: Record<string, string
  * `ghGuardEnv` returns its input untouched whenever the guard cannot be installed, so this is safe
  * in front of every spawn: the failure mode is the machine's own `gh`, never a missing one.
  */
-export function engineSpawnEnv(overlay: Record<string, string> | undefined, ghScope: readonly string[] | undefined, ghGuardRoot?: string): NodeJS.ProcessEnv {
-	return ghGuardEnv(mergeEnv(process.env, overlay), ghScope, ghGuardRoot);
+export function engineSpawnEnv(overlay: Record<string, string> | undefined, ghScope: readonly string[] | undefined, ghGuardRoot?: string, gitGuardRoot?: string): NodeJS.ProcessEnv {
+	// The git guard needs no scope: no session may restore or discard the stash by position (#1021).
+	return gitGuardEnv(ghGuardEnv(mergeEnv(process.env, overlay), ghScope, ghGuardRoot), gitGuardRoot);
 }

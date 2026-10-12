@@ -110,10 +110,16 @@ own exit status rather than a later `echo`, `grep` or pipeline's.
   not screened. Tested end to end in `workers/api/src/workflows/coding-session/scope-evidence.test.ts`.
 - **Prompts:** the repair-checkout objective forbids `git stash pop`/`apply` by name, and a dirty-checkout
   run is told to compare in an isolated `git worktree add --detach` checkout, never the stash.
-- **Not covered:** a command the ENGINE composes itself and runs (the #1021 incident). The runner starts
-  Claude Code with `--dangerously-skip-permissions`; a `--disallowedTools` deny rule's effect under that
-  mode, inside compound commands and `sh -c`, cannot be verified without a live model session, so no runner
-  deny is shipped.
+- **Engine git guard (always on, every engine):** a command the ENGINE composes itself (the #1021 incident)
+  meets a generated `git` shim first on the Engine's `PATH`
+  (`packages/browser-runner/src/coding/git-guard.ts`, the `gh` guard's mechanism). `git stash pop`, `drop`
+  and `clear` are refused, and `apply`/`branch` are allowed only with an exact object id (what
+  `git stash create` printed), all before git runs (exit 3, `pags: refused`). It binds whatever the
+  permission mode, inside compound commands and `sh -c`, because it is the `git` the shell resolves.
+  Tested against real temporary repositories in `git-guard.test.ts`, including the incident command
+  before and after. Gaps: an absolute `/usr/bin/git`, a rewritten `PATH`, or a git alias bypasses it;
+  it does not install on Windows. It ships with the runner, so it reaches a machine with the CLI
+  release that carries it.
 
 Never do this with `git stash` (#1021). The stash is repo-global, so `pop` restores the top of everyone's stack,
 not what you saved. A save that fails or saves nothing still lets a chained `pop` consume someone else's recovery
