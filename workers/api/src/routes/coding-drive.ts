@@ -1,4 +1,5 @@
 import type { Hono } from "hono";
+import { markHumanAnswered } from "../lib/coder-question-store.js";
 import { HttpError } from "../lib/auth.js";
 import type { CodingActionKind, CodingGoal } from "../lib/coding-loop.js";
 import { resolveCodingPause } from "../lib/coding-answer.js";
@@ -228,6 +229,8 @@ export function registerDriveRoutes(codingRoutes: Hono<{ Bindings: Env }>): void
 		const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
 		// `body.value` is the human's answer to a blocked engine — a 2FA code, a field the agent could
 		// not fill, a choice it asked for (#960). One delivery path with `/input`: `lib/coding-answer.ts`.
+		// #1025: a person's answer wins over a coder-brain decision at any point.
+		await markHumanAnswered(c.env, instanceId, c.req.param("sessionId"));
 		await resolveCodingPause(c.env, instanceId, uid, c.req.param("sessionId"), typeof body.value === "string" ? body.value : undefined);
 		return c.json({ ok: true });
 	});

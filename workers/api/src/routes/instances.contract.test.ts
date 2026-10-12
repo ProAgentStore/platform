@@ -304,6 +304,7 @@ const ROUTES = [
 	"GET /:instanceId/gmail-scout/status",
 	"GET /:instanceId/coder-brain",
 	"PUT /:instanceId/coder-brain",
+	"GET /:instanceId/coder-questions",
 	"GET /:instanceId/po-triage/reports",
 	"GET /:instanceId/description",
 	"POST /:instanceId/runner-attach",
@@ -537,7 +538,7 @@ const OWNERSHIP: Record<string, string[]> = {
 		"POST /:instanceId/gmail-scout/scan",
 		"GET /:instanceId/gmail-scout/status",
 	],
-	"instances-coder-brain.ts": ["GET /:instanceId/coder-brain", "PUT /:instanceId/coder-brain", "GET /:instanceId/po-triage/reports"],
+	"instances-coder-brain.ts": ["GET /:instanceId/coder-brain", "PUT /:instanceId/coder-brain", "GET /:instanceId/coder-questions", "GET /:instanceId/po-triage/reports"],
 	"instances-description.ts": ["GET /:instanceId/description"],
 	"instances-application-tailor.ts": [
 		"GET /:instanceId/application-tailor/settings",
@@ -862,6 +863,7 @@ const GATES: Record<string, [number, number]> = {
 	// #1027: the coder brain switch and triage reports open with the instance-owner check.
 	"GET /:instanceId/coder-brain": [401, 404],
 	"PUT /:instanceId/coder-brain": [401, 404],
+	"GET /:instanceId/coder-questions": [401, 404],
 	"GET /:instanceId/po-triage/reports": [401, 404],
 	// #1002's execution projection uses requireOwnedInstance before every dependent read.
 	"GET /:instanceId/description": [401, 404],

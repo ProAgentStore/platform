@@ -1,8 +1,10 @@
 /**
- * The per-instance coder brain switch (#1025 §1, minimal slice built for #1027).
+ * The per-instance coder brain settings (#1025 §1; the triage flag is #1027's).
  *
- * Two flags, both default OFF: `enabled` (the brain itself) and `poEnabled` (the scheduled
- * product-owner triage of #1027, which needs the brain on). Stored on the instance config as
+ * Both switches default OFF: `enabled` (the brain itself — it may answer a stuck coder's question
+ * after the human timeout, #1025) and `poEnabled` (the scheduled product-owner triage of #1027,
+ * which needs the brain on). Beside them, #1025's knobs: the `model` (a `BRAIN_MODELS` id), the two
+ * timeouts, the per-run decision cap and the confidence threshold. Stored on the instance config as
  * `coderBrain`. One writer, {@link setCoderBrain}, and one reader, {@link readCoderBrain} — so the
  * #664 failure (a flag exists and nothing honours it) cannot recur: the wake asks the reader, and
  * the writer keeps the wake's triggers in step.
@@ -16,13 +18,35 @@ import type { Env } from "../types.js";
 import { advanceCron } from "./cron-schedule.js";
 import { patchInstanceConfig } from "./instance-config.js";
 import { isValidTimeZone } from "./cron-time.js";
+import { brainModel } from "./brain-models.js";
 
 export interface CoderBrainSettings {
 	enabled: boolean;
 	poEnabled: boolean;
+	/** A `BRAIN_MODELS` id. Runs on the owner's own provider key (BYOK), billed like every brain call. */
+	model: string;
+	/** How long a question waits for a person before the brain may decide. */
+	humanTimeoutMinutes: number;
+	/** How long an escalated question waits again before the run is told to finish what it can. */
+	escalationTimeoutMinutes: number;
+	/** The most questions the brain may answer in one run; past it, it declines. */
+	maxDecisionsPerRun: number;
+	/** Below this confidence the brain declines rather than decides. */
+	confidenceThreshold: number;
 }
 
-export const CODER_BRAIN_OFF: CoderBrainSettings = { enabled: false, poEnabled: false };
+export const CODER_BRAIN_DEFAULTS = { model: "claude-sonnet-4-6", humanTimeoutMinutes: 30, escalationTimeoutMinutes: 60, maxDecisionsPerRun: 3, confidenceThreshold: 0.8 } as const;
+export const CODER_BRAIN_OFF: CoderBrainSettings = { enabled: false, poEnabled: false, ...CODER_BRAIN_DEFAULTS };
+
+/** Each numeric knob's bounds — the writer refuses outside them, the reader clamps a stored stray. */
+const BOUNDS = {
+	humanTimeoutMinutes: [1, 1440],
+	escalationTimeoutMinutes: [1, 1440],
+	maxDecisionsPerRun: [0, 20],
+	confidenceThreshold: [0.5, 1],
+} as const;
+type NumericKnob = keyof typeof BOUNDS;
+const inBounds = (k: NumericKnob, v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= BOUNDS[k][0] && v <= BOUNDS[k][1] && (k === "confidenceThreshold" || Number.isInteger(v));
 export const PO_TRIAGE_ACTION = "run_po_triage" as const;
 export const PO_TRIAGE_DEFAULT_TIMEZONE = "Australia/Melbourne";
 
@@ -38,9 +62,29 @@ export function coderBrainFrom(config: unknown): CoderBrainSettings {
 	}
 	const cb = parsed && typeof parsed === "object" ? (parsed as { coderBrain?: unknown }).coderBrain : undefined;
 	if (!cb || typeof cb !== "object") return CODER_BRAIN_OFF;
-	const enabled = (cb as { enabled?: unknown }).enabled === true;
-	// The PO layer uses the brain: with the brain off it is off, whatever was stored.
-	return { enabled, poEnabled: enabled && (cb as { poEnabled?: unknown }).poEnabled === true };
+	const c = cb as Record<string, unknown>;
+	const enabled = c.enabled === true;
+	const knob = (k: NumericKnob) => (inBounds(k, c[k]) ? c[k] : CODER_BRAIN_DEFAULTS[k]);
+	return {
+		enabled,
+		// The PO layer uses the brain: with the brain off it is off, whatever was stored.
+		poEnabled: enabled && c.poEnabled === true,
+		model: typeof c.model === "string" && brainModel(c.model) ? c.model : CODER_BRAIN_DEFAULTS.model,
+		humanTimeoutMinutes: knob("humanTimeoutMinutes"),
+		escalationTimeoutMinutes: knob("escalationTimeoutMinutes"),
+		maxDecisionsPerRun: knob("maxDecisionsPerRun"),
+		confidenceThreshold: knob("confidenceThreshold"),
+	};
+}
+
+/** Why a settings patch is refused, or null. The writer's validation, exported for the route's 400. */
+export function coderBrainPatchProblem(patch: Partial<Record<keyof CoderBrainSettings, unknown>>): string | null {
+	for (const k of ["enabled", "poEnabled"] as const) if (patch[k] !== undefined && typeof patch[k] !== "boolean") return `${k} must be true or false.`;
+	if (patch.model !== undefined && !(typeof patch.model === "string" && brainModel(patch.model))) return "model must be one of the brain models (see BRAIN_MODELS).";
+	for (const k of Object.keys(BOUNDS) as NumericKnob[]) {
+		if (patch[k] !== undefined && !inBounds(k, patch[k])) return `${k} must be ${k === "confidenceThreshold" ? "a number" : "a whole number"} from ${BOUNDS[k][0]} to ${BOUNDS[k][1]}.`;
+	}
+	return null;
 }
 
 /** The ONE reader. Null when the instance is not the caller's. */
@@ -64,11 +108,13 @@ export function poTriageDefaultMinute(instanceId: string): number {
  * on → enabled (a default hourly one, dry run, created if there is none); off → all disabled.
  */
 export async function setCoderBrain(env: Env, instanceId: string, userId: string, patch: Partial<CoderBrainSettings>): Promise<{ settings: CoderBrainSettings; triggers: { created: string | null; enabled: number; disabled: number } }> {
+	const problem = coderBrainPatchProblem(patch);
+	if (problem) throw new Error(problem);
 	const current = await readCoderBrain(env, instanceId, userId);
 	if (!current) throw new Error("instance not found");
 	const enabled = typeof patch.enabled === "boolean" ? patch.enabled : current.enabled;
 	const poEnabled = enabled && (typeof patch.poEnabled === "boolean" ? patch.poEnabled : current.poEnabled);
-	const settings = { enabled, poEnabled };
+	const settings: CoderBrainSettings = { ...current, ...patch, enabled, poEnabled };
 	if (!(await patchInstanceConfig(env, instanceId, userId, "coderBrain", settings))) throw new Error("instance not found");
 	const triggers = await syncPoTriageTriggers(env, instanceId, userId, poEnabled);
 	return { settings, triggers };

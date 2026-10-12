@@ -118,6 +118,12 @@ export const NOTIFICATION_TYPES: NotificationTypeSpec[] = [
 		alerts: true,
 	},
 	{
+		id: "coder_question",
+		label: "Coder questions",
+		description: "A coder brain decision, escalation or unresolved question on a stuck coding run (#1025). The question itself arrives as a Coder alert.",
+		alerts: true,
+	},
+	{
 		id: "po_triage_digest",
 		label: "Product-owner triage",
 		description: "A short digest after a coder's scheduled issue triage — what was queued, what waits on you, what needs detail (#1027). Sent only when something changed.",

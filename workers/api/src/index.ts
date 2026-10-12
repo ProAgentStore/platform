@@ -71,6 +71,7 @@ import { syncLeadWritebacks } from "./lib/local-artifact/store.js";
 import { routeRunEvents } from "./lib/run-event-routing.js";
 import { runTicketQueue } from "./lib/ticket-queue.js";
 import { runDueGmailScoutScans } from "./lib/gmail-scout/scan.js";
+import { runDueCoderQuestions } from "./lib/coder-question-sweep.js";
 import { runCommitCloseWatch } from "./lib/commit-close-watch.js";
 import { runDeployWatch } from "./lib/deploy-watch.js";
 import { runCiHealthWatch } from "./lib/repo-ci-health.js";
@@ -293,6 +294,11 @@ export default {
 		// leads for days unnoticed. Each scan records its own outcome on the Scout's scan state.
 		ctx.waitUntil(
 			runDueGmailScoutScans(env).catch((err) => logUnhandled(env, err, { path: "scheduled:gmail-scout", method: "CRON" })),
+		);
+		// The coder brain's timers (#1025): every open question's human / escalation timeout, read from
+		// `coder_questions` each tick so they survive a restart. Its own failure domain.
+		ctx.waitUntil(
+			runDueCoderQuestions(env).catch((err) => logUnhandled(env, err, { path: "scheduled:coder-questions", method: "CRON" })),
 		);
 		// Close runs whose Workflow died mid-step (#207C). A third independent failure domain: a
 		// row stuck at `running` forever tells every supervisor its subordinate is still working.

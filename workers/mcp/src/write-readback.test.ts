@@ -274,6 +274,11 @@ const READBACK: Record<string, string | null> = {
 	"gmail_scout_config_set.enabled": "gmail_scout_config_get",
 	"set_coder_brain.enabled": "po_triage_reports",
 	"set_coder_brain.po_enabled": "po_triage_reports",
+	"set_coder_brain.model": "coder_questions",
+	"set_coder_brain.human_timeout_minutes": "coder_questions",
+	"set_coder_brain.escalation_timeout_minutes": "coder_questions",
+	"set_coder_brain.max_decisions_per_run": "coder_questions",
+	"set_coder_brain.confidence_threshold": "coder_questions",
 	"set_instance_instructions.instructions": "get_instance_instructions",
 	// #992: the policy is read back WITH its resolution — `get_instance_notification_policy`
 	// returns the stored rules and the effective state per channel, which is the half a writer

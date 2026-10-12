@@ -120,7 +120,7 @@ src/
     ├── mcp-connections.ts 6 tools — PAGS as an MCP CLIENT: presets, per-(endpoint,tool) grants,
 │                     the connection test, and the paused-elicitation inbox (#613)
 ├── guide.ts          1 tool — the per-instance connection guide (#772)
-├── coder-brain.ts    2 tools — the coder brain + product-owner triage switch and its triage reports (#1027)
+├── coder-brain.ts    3 tools — the coder brain switch and knobs (#1025, #1027), its questions (#1025) and triage reports (#1027)
     ├── applications.ts  26 tools — the job-application queue across Scout → Tailor → Runner (#958):
     │                     list/get/trace, and the typed decisions (triage, tailor, fill, review, retry,
     │                     resume, cancel) through the console's own action route, the Runner's
@@ -137,13 +137,13 @@ src/
                           surfaces:["coding"]) + 6 loop tools (3 run + 3 objective queue: list, cancel, lifecycle)
 ```
 
-**307 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
+**308 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
 `tools/server-info.ts`, 12 in
 `coding-tools.ts`, 2 in `coding-engine-tools.ts`, 1 in `coding-reauth-tools.ts` and 1 in `coding-retarget-tools.ts` — all sixteen behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 254 across `instance-tools/`. 280 are always registered; 27 are
+`storage-tools.ts`, and 255 across `instance-tools/`. 281 are always registered; 27 are
 surface-gated (apply=4, repo=3, coding=20).
 
-These counts add up to the headline: 21 + 1 + 12 + 2 + 1 + 1 + 15 + 254 = 307. They said 88 until #602, which made the paragraph sum to 132 — a total the
+These counts add up to the headline: 21 + 1 + 12 + 2 + 1 + 1 + 15 + 255 = 308. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added

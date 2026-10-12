@@ -83,7 +83,7 @@ export interface PauseDeps {
 	 * the run (what coding_loop_status, the fleet and the board read). Optional so a test or a caller
 	 * with nothing to publish to still pauses; the workflow always provides it.
 	 */
-	ask?: (ask: { question: string; options: string[]; why: string; field: string; taskId: string }) => Promise<void>;
+	ask?: (ask: { question: string; options: string[]; why: string; field: string; taskId: string }) => Promise<unknown>;
 	/** Has the human resolved it, and with what value? */
 	takeoverStatus: () => Promise<{ resolved: boolean; value?: string }>;
 	/** Close the takeover once it is resolved. */
@@ -151,6 +151,27 @@ export interface PauseDeps {
 	now: () => number;
 }
 
+/**
+ * How long a QUESTION may wait (#1025), as the question's own record says: `waitMs` is when the run
+ * stops waiting, `humanMs` how long the owner has before the coder brain may decide. Absent → the
+ * plain 15-minute handoff. With the brain on, the run stays parked while the minute sweep owns the
+ * timers, and the answer still arrives the one way every answer does: the takeover resolving.
+ */
+export interface QuestionWait {
+	waitMs: number;
+	humanMs: number;
+	brain: boolean;
+}
+
+/** What `ask` returned, when it is a {@link QuestionWait} — a publish-only `ask` returns nothing. */
+function asQuestionWait(v: unknown): QuestionWait | null {
+	const w = v as Partial<QuestionWait> | null | undefined;
+	return w && typeof w.waitMs === "number" && typeof w.humanMs === "number" ? { waitMs: w.waitMs, humanMs: w.humanMs, brain: w.brain === true } : null;
+}
+
+/** Past the first 15 minutes a brain-held question is polled once a minute — the sweep's own cadence. */
+export const BRAIN_WAIT_POLL_MS = 60_000;
+
 export type PauseVerdict =
 	| { resume: true; userHint?: string; resumeNote?: string; ownerTurn?: boolean }
 	| { resume: false; result: CodingResult };
@@ -191,7 +212,10 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 	// A QUESTION is published as one (#960): its event on the card and its park on the run, before the
 	// pushes below point anyone at it. Best-effort for the same reason the card is — a lost event is a
 	// visibility bug; failing the pause is a work bug.
-	if (cardId && deps.ask) await deps.ask({ question: label, options, why: result.detail ?? "", field: result.fieldNeeded ?? label, taskId: cardId }).catch(() => undefined);
+	const wait = cardId && deps.ask ? asQuestionWait(await deps.ask({ question: label, options, why: result.detail ?? "", field: result.fieldNeeded ?? label, taskId: cardId }).catch(() => undefined)) : null;
+	const giveUpMs = Math.max(HANDOFF_GIVE_UP_MS, wait?.waitMs ?? 0);
+	const minutes = Math.round((wait?.brain ? wait.humanMs : giveUpMs) / 60_000);
+	const clock = wait?.brain ? `You have ${minutes} minutes to answer before the coder brain may decide (only if the issue already settles it).` : `You have ${minutes} minutes to respond before the run gives up.`;
 	// The board FIRST, before the two pushes. It is the surface that persists, so if anything after
 	// this throws, the durable record still says the run is waiting on somebody — rather than the
 	// state that produced #553, where the notification fired and the board said everything was fine.
@@ -201,7 +225,7 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 	// A question opens the card its answer box is on; a takeover opens the run (#894).
 	const notificationUrl = cardId ? deepLinkFor({ kind: "task", instanceId: deps.instanceId, taskId: cardId }) : handoffLink(deps);
 	const offered = options.length ? ` Options: ${options.join(" | ")}.` : "";
-	const body = `${deps.repo}: ${label}.${offered} You have ${HANDOFF_GIVE_UP_MS / 60_000} minutes to respond before the run gives up.`;
+	const body = `${deps.repo}: ${label}.${offered} ${clock}`;
 	await deps.notify(reason === "needs_input" ? "❓ Coder has a question" : "🙋 Coder needs you", body, `coding-handoff:${reason}:${round}`, true, notificationUrl);
 	// …AND in the thread the run was started from (#541 item d). A runner disconnect has always been
 	// announced in chat; a handoff never was, so the conversation the owner started the run from said
@@ -213,14 +237,19 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 	// sat here for the full fifteen minutes and then reported that they had been waiting on someone.
 	await deps.announce(
 		reason === "needs_input"
-			? `❓ **Coder has a question** — paused on ${deps.repo}: ${label}${offered ? `\n\n${offered.trim()}` : ""}\n\nAnswer it on the run's card${cardId ? ` (\`${cardId}\`)` : ""} or with answer_instance_input — no need to take the session over. The run continues from where it stopped. If nobody answers within ${HANDOFF_GIVE_UP_MS / 60_000} minutes it stops and reports that it is waiting on you.`
+			? `❓ **Coder has a question** — paused on ${deps.repo}: ${label}${offered ? `\n\n${offered.trim()}` : ""}\n\nAnswer it on the run's card${cardId ? ` (\`${cardId}\`)` : ""} or with answer_instance_input — no need to take the session over. The run continues from where it stopped. ${wait?.brain ? clock : `If nobody answers within ${minutes} minutes it stops and reports that it is waiting on you.`}`
 			: `🙋 **Coder needs you** — paused on ${deps.repo}: ${label}. Open the session and take over; the run resumes where it stopped. If nobody does within ${HANDOFF_GIVE_UP_MS / 60_000} minutes it stops and reports that it is waiting on you.`,
 	);
 
 	let resolved = false;
 	let value: string | undefined;
-	for (let poll = 0; poll < HANDOFF_WAIT_POLLS && !resolved; poll++) {
-		await deps.sleep(`wait-${round}-${poll}`, HANDOFF_POLL_MS);
+	// The first 15 minutes at 5s, then (a brain-held question only) once a minute up to its bound —
+	// the sweep acts once a minute, and a long wait at 5s would be a thousand journalled sleeps.
+	const extraPolls = Math.ceil((giveUpMs - HANDOFF_GIVE_UP_MS) / BRAIN_WAIT_POLL_MS);
+	const totalPolls = HANDOFF_WAIT_POLLS + extraPolls;
+	const remainingMs = (poll: number) => (poll < HANDOFF_WAIT_POLLS ? (HANDOFF_WAIT_POLLS - poll - 1) * HANDOFF_POLL_MS + extraPolls * BRAIN_WAIT_POLL_MS : (totalPolls - poll - 1) * BRAIN_WAIT_POLL_MS);
+	for (let poll = 0; poll < totalPolls && !resolved; poll++) {
+		await deps.sleep(`wait-${round}-${poll}`, poll < HANDOFF_WAIT_POLLS ? HANDOFF_POLL_MS : BRAIN_WAIT_POLL_MS);
 		// The park's end, published (#596). It used to be withheld: `waiting_until` was rendered
 		// unconditionally as "expected to resume in …", so a give-up time under it would have told an
 		// owner to sit and wait for a run that was about to stop waiting for THEM. The renderer now
@@ -230,8 +259,8 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 		// Computed from the polls REMAINING rather than from a deadline captured before the loop, so
 		// it names the same absolute instant on every tick and stays right after a Workflow replay —
 		// where the loop restarts and a captured deadline would have slid forward by a whole wait.
-		const until = deps.now() + (HANDOFF_WAIT_POLLS - poll - 1) * HANDOFF_POLL_MS;
-		if (poll % HANDOFF_TICK_EVERY === 0 && !(await deps.tick({ until }))) {
+		const until = deps.now() + remainingMs(poll);
+		if ((poll >= HANDOFF_WAIT_POLLS || poll % HANDOFF_TICK_EVERY === 0) && !(await deps.tick({ until }))) {
 			return { resume: false, result: { ...result, outcome: "cancelled", detail: "Stopped by you." } };
 		}
 		const status = await deps.takeoverStatus().catch(() => ({ resolved: false }) as { resolved: boolean; value?: string });
@@ -249,7 +278,7 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 			resume: false,
 			result: {
 				...result,
-				detail: `Waiting on you: ${label}. ${reason === "needs_input" ? "Nobody answered" : "Nobody took the session over"} within ${HANDOFF_GIVE_UP_MS / 60_000} minutes, so the run stopped here.`,
+				detail: `Waiting on you: ${label}. ${reason === "needs_input" ? "Nobody answered" : "Nobody took the session over"} within ${Math.round(giveUpMs / 60_000)} minutes, so the run stopped here.`,
 			},
 		};
 	}

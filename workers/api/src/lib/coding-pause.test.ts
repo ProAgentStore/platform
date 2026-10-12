@@ -434,3 +434,48 @@ describe("the sign-in pause opens the run's session, where the sign-in prompt is
 	});
 });
 
+
+describe("resolvePause — a question the coder brain holds stays parked past 15 minutes (#1025)", () => {
+	const question: CodingResult = { outcome: "needs_input", detail: "the issue asks for a denser list", fieldNeeded: "Which table layout?", options: ["compact", "comfortable"] } as CodingResult;
+	const withAsk = (s: Spy, wait: { waitMs: number; humanMs: number; brain: boolean } | null) => {
+		s.deps.taskId = "csess-s1";
+		s.deps.ask = async () => wait ?? undefined;
+		return s;
+	};
+
+	it("brain on: polls 15 minutes at 5s, then once a minute up to the question's own bound — and the push goes out before the first sleep", async () => {
+		const s = withAsk(spy(), { waitMs: 100 * 60_000, humanMs: 30 * 60_000, brain: true });
+		const order: string[] = [];
+		const sleep = s.deps.sleep;
+		s.deps.sleep = async (l, ms) => {
+			order.push("sleep");
+			await sleep(l, ms);
+		};
+		const notify = s.deps.notify;
+		s.deps.notify = async (...a) => {
+			order.push("notify");
+			await notify(...a);
+		};
+		const v = await resolvePause(s.deps, { round: 1, result: question, state: { waits: 0, spentMs: 0 } });
+		expect(order[0]).toBe("notify");
+		expect(v).toMatchObject({ resume: false, result: { detail: expect.stringMatching(/within 100 minutes/) } });
+		expect(s.slept.filter((ms) => ms === HANDOFF_POLL_MS)).toHaveLength(HANDOFF_WAIT_POLLS);
+		expect(s.slept.filter((ms) => ms === 60_000)).toHaveLength(85);
+		expect(s.notified[0]).toMatchObject({ title: "❓ Coder has a question", alert: true });
+		expect(s.announced[0]).toMatch(/30 minutes to answer before the coder brain may decide/);
+	});
+
+	it("brain on: an answer delivered late — by a person or the brain, through the takeover — still resumes the run", async () => {
+		const s = withAsk(spy({ resolveAfter: HANDOFF_WAIT_POLLS + 20 }), { waitMs: 100 * 60_000, humanMs: 30 * 60_000, brain: true });
+		const v = await resolvePause(s.deps, { round: 1, result: question, state: { waits: 0, spentMs: 0 } });
+		expect(v).toMatchObject({ resume: true, ownerTurn: true });
+	});
+
+	it("brain off: unchanged — 15 minutes, then the run stops waiting", async () => {
+		const s = withAsk(spy(), { waitMs: HANDOFF_GIVE_UP_MS, humanMs: HANDOFF_GIVE_UP_MS, brain: false });
+		const v = await resolvePause(s.deps, { round: 1, result: question, state: { waits: 0, spentMs: 0 } });
+		expect(s.slept).toHaveLength(HANDOFF_WAIT_POLLS);
+		expect(v).toMatchObject({ resume: false, result: { detail: expect.stringMatching(/within 15 minutes/) } });
+		expect(s.announced[0]).toMatch(/If nobody answers within 15 minutes it stops/);
+	});
+});

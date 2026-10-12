@@ -7112,8 +7112,9 @@ paths:
     put:
       summary: Turn the coder brain or its product-owner triage on or off
       description: |
-        The one writer of the coder brain switch (MCP `set_coder_brain`). Body `{ enabled?, poEnabled? }`; triage needs the
-        brain on and a coding instance (409 otherwise). Turning triage on creates a `run_po_triage` cron trigger when the
+        The one writer of the coder brain settings (MCP `set_coder_brain`). Body `{ enabled?, poEnabled?, model?,
+        humanTimeoutMinutes?, escalationTimeoutMinutes?, maxDecisionsPerRun?, confidenceThreshold? }` (#1025, all validated;
+        400 otherwise). The brain and triage need a coding instance (409 otherwise); triage needs the brain on. Turning triage on creates a `run_po_triage` cron trigger when the
         instance has none (hourly at a minute derived from the instance, never :00, Australia/Melbourne, dry run). Turning
         the brain or triage off disables every `run_po_triage` trigger; nothing is deleted.
       operationId: putCoderBrain
@@ -7126,6 +7127,24 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { description: "Product-owner triage needs a coding instance." }
+  /v1/instances/{instanceId}/coder-questions:
+    get:
+      summary: Coder questions and their audit trail
+      description: |
+        The questions this coder's runs stopped on (#1025), newest first: state (waiting_human, brain_deciding,
+        answered_human, answered_brain, escalated, unresolved, expired), who answered, the brain's decision, confidence,
+        reason and model, and the full state history. Plus the brain settings. `state` filters; `limit` 1-100.
+      operationId: listCoderQuestions
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: state, in: query, required: false, schema: { type: string, enum: [waiting_human, brain_deciding, answered_human, answered_brain, escalated, unresolved, expired] } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100 } }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/po-triage/reports:
     get:
       summary: Product-owner triage reports

@@ -1,4 +1,5 @@
 import { LEGACY_JOB_APPLY_RETIRED_MESSAGE } from "../lib/agent-retirement.js";
+import { markHumanAnswered } from "../lib/coder-question-store.js";
 import { overLimit } from "../lib/write-limits.js";
 import type { Hono } from "hono";
 import { decisionRunForCard, resolveCodingPause } from "../lib/coding-answer.js";
@@ -563,6 +564,9 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		if (!body.taskId) return c.json({ error: "taskId required" }, 400);
 		const coding = await decisionRunForCard(c.env, instanceId, session.uid, body.taskId);
 		if (coding) {
+			// #1025: a person's answer wins at any point — the question is theirs before it is delivered,
+			// so a brain decision in flight loses its compare-and-swap and is discarded.
+			await markHumanAnswered(c.env, instanceId, coding.sessionId);
 			await resolveCodingPause(c.env, instanceId, session.uid, coding.sessionId, String(body.value ?? ""));
 			return c.json({ ok: true, kind: "coding", runId: coding.runId, sessionId: coding.sessionId });
 		}

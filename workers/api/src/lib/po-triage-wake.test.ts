@@ -70,7 +70,7 @@ describe("off is off (#1027)", () => {
 		expect(await runPoTriage(env, { instance_id: "coder", user_id: "u1" }, { dryRun: false }, at("2026-10-12T01:17:00Z"), deps)).toMatchObject({ skipped: true });
 		expect(log.listed).toBe(0);
 		expect(reports()).toHaveLength(0);
-		expect(await readCoderBrain(env, "coder", "u1")).toEqual({ enabled: false, poEnabled: false });
+		expect(await readCoderBrain(env, "coder", "u1")).toMatchObject({ enabled: false, poEnabled: false });
 	});
 });
 
@@ -237,6 +237,6 @@ describe("the switch (#1025 §1 slice)", () => {
 
 	it("PO triage cannot be on while the brain is off", async () => {
 		await setCoderBrain(env, "coder", "u1", { enabled: false, poEnabled: true });
-		expect(await readCoderBrain(env, "coder", "u1")).toEqual({ enabled: false, poEnabled: false });
+		expect(await readCoderBrain(env, "coder", "u1")).toMatchObject({ enabled: false, poEnabled: false });
 	});
 });

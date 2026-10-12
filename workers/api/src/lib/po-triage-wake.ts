@@ -28,8 +28,7 @@ import { readCoderBrain } from "./coder-brain.js";
 import { listRepos } from "./coding-store.js";
 import { deepLinkFor } from "./console-links.js";
 import { DAILY_CEILING_MICROS, DAILY_TOKEN_CEILING, resolveAccountCeilings } from "./delegation-budget-store.js";
-import { installationTokenForOwner } from "./github-app.js";
-import { invalidateIssueCaches, listIssueComments, listIssuesPage, readIssue } from "./github-issues.js";
+import { listIssueComments, listIssuesPage, postIssueComment, readIssue } from "./github-issues.js";
 import { loopDriverFor } from "./loop-drivers.js";
 import { findDuplicateObjective } from "./objective-dedupe.js";
 import { enqueueObjective } from "./objective-queue.js";
@@ -129,7 +128,7 @@ async function triage(env: Env, iid: string, uid: string, dryRun: boolean, slot:
 	const report: PoReport = { dryRun, slot, gate: await queueGate(env, iid, uid), repos: [], items: [], counts };
 	const listOpen = deps.listOpenIssues ?? ((repo) => defaultListOpenIssues(env, uid, repo));
 	const listComments = deps.listComments ?? ((repo, n) => listIssueComments(env, uid, repo, n));
-	const postComment = deps.postComment ?? ((repo, n, body) => defaultPostComment(env, uid, repo, n, body));
+	const postComment = deps.postComment ?? ((repo, n, body) => postIssueComment(env, uid, repo, n, body));
 	const repos = (await listRepos(env, iid, uid)).filter((r) => r.githubRepo);
 
 	for (const repo of repos) {
@@ -237,19 +236,6 @@ async function defaultListOpenIssues(env: Env, uid: string, repo: string): Promi
 	return { issues, complete: !page.hasMore && page.issues.length <= MAX_ISSUES_PER_REPO, unreadable: false };
 }
 
-async function defaultPostComment(env: Env, uid: string, repo: string, number: number, body: string): Promise<boolean> {
-	const owner = repo.split("/")[0] ?? "";
-	const token = await installationTokenForOwner(env, uid, owner);
-	if (!token) return false;
-	const res = await fetch(`https://api.github.com/repos/${repo}/issues/${number}/comments`, {
-		method: "POST",
-		headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "proagentstore-po-triage/1.0", "Content-Type": "application/json" },
-		body: JSON.stringify({ body }),
-		signal: AbortSignal.timeout(15_000),
-	});
-	if (res.ok) await invalidateIssueCaches(env, uid, repo).catch(() => undefined);
-	return res.ok;
-}
 
 function defaultNotify(env: Env, uid: string, iid: string, slot: string) {
 	return async (title: string, body: string) => {

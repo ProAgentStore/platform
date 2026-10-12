@@ -1,9 +1,13 @@
 import type { Context, Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
-import { PO_TRIAGE_ACTION, readCoderBrain, setCoderBrain } from "../lib/coder-brain.js";
+import { type CoderBrainSettings, PO_TRIAGE_ACTION, coderBrainPatchProblem, readCoderBrain, setCoderBrain } from "../lib/coder-brain.js";
+import { type CoderQuestionState, listCoderQuestions } from "../lib/coder-question-store.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
+
+const PATCH_KEYS = ["enabled", "poEnabled", "model", "humanTimeoutMinutes", "escalationTimeoutMinutes", "maxDecisionsPerRun", "confidenceThreshold"] as const;
+const QUESTION_STATES: readonly CoderQuestionState[] = ["waiting_human", "brain_deciding", "answered_human", "answered_brain", "escalated", "unresolved", "expired"];
 
 /** The coder brain switch (#1025 §1) and the product-owner triage reports it gates (#1027). */
 export function registerCoderBrainRoutes(router: Hono<{ Bindings: Env }>): void {
@@ -28,18 +32,31 @@ export function registerCoderBrainRoutes(router: Hono<{ Bindings: Env }>): void 
 		return c.json(await view(c.env, instanceId, uid));
 	});
 
-	/** The one writer (`set_coder_brain`). Turning the PO layer on needs a coding instance. */
+	/**
+	 * The one writer (`set_coder_brain`). The brain and the PO layer act on coding runs, so turning
+	 * either on needs a coding instance. #1025's knobs ride the same patch, validated by the writer.
+	 */
 	router.put("/:instanceId/coder-brain", async (c) => {
 		const { instanceId, uid } = await owned(c);
-		const b = (await c.req.json().catch(() => ({}))) as { enabled?: unknown; poEnabled?: unknown };
-		if (b.enabled !== undefined && typeof b.enabled !== "boolean") throw new HttpError(400, "enabled must be true or false.");
-		if (b.poEnabled !== undefined && typeof b.poEnabled !== "boolean") throw new HttpError(400, "poEnabled must be true or false.");
-		if (b.poEnabled === true) {
+		const b = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+		const patch = Object.fromEntries(PATCH_KEYS.filter((k) => b[k] !== undefined).map((k) => [k, b[k]])) as Partial<CoderBrainSettings>;
+		const problem = coderBrainPatchProblem(patch);
+		if (problem) throw new HttpError(400, problem);
+		if (patch.enabled === true || patch.poEnabled === true) {
 			const caps = await capabilitiesForInstance(c.env, instanceId, uid).catch(() => null);
-			if (caps?.workflow !== "CODING_SESSION") throw new HttpError(409, "Product-owner triage queues coding runs, so it needs a coding instance (a Repo Coder).");
+			if (caps?.workflow !== "CODING_SESSION") throw new HttpError(409, "The coder brain acts on coding runs, so it needs a coding instance (a Repo Coder).");
 		}
-		const { triggers } = await setCoderBrain(c.env, instanceId, uid, { enabled: b.enabled as boolean | undefined, poEnabled: b.poEnabled as boolean | undefined });
+		const { triggers } = await setCoderBrain(c.env, instanceId, uid, patch);
 		return c.json({ ...(await view(c.env, instanceId, uid)), changed: triggers });
+	});
+
+	/** #1025: the questions this coder parked on, each with its full state history (the audit trail). */
+	router.get("/:instanceId/coder-questions", async (c) => {
+		const { instanceId, uid } = await owned(c);
+		const q = new URL(c.req.url).searchParams;
+		const state = q.get("state");
+		if (state && !(QUESTION_STATES as readonly string[]).includes(state)) throw new HttpError(400, `state must be one of ${QUESTION_STATES.join(", ")}.`);
+		return c.json({ settings: await readCoderBrain(c.env, instanceId, uid), questions: await listCoderQuestions(c.env, instanceId, uid, { state: (state as CoderQuestionState) || undefined, limit: Number(q.get("limit")) || 20 }) });
 	});
 
 	router.get("/:instanceId/po-triage/reports", async (c) => {

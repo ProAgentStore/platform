@@ -1,4 +1,5 @@
 import { installationTokenForOwner } from "./github-app.js";
+import { clipMarked } from "./clip-marked.js";
 import { githubAuthContext, githubConditionalJson, invalidateGithubCache } from "./github-cache.js";
 import type { Env } from "../types.js";
 
@@ -440,4 +441,37 @@ export async function listIssueComments(
 	} catch {
 		return [];
 	}
+}
+
+/**
+ * Post one comment on an issue with the owner's installation token (#1025, #1027). False when there
+ * is no token or GitHub refused; the caller records that instead of claiming the comment landed.
+ */
+export async function postIssueComment(env: Env, userId: string, githubRepo: string, number: number, body: string): Promise<boolean> {
+	const parsed = parseRepo(githubRepo);
+	if (!parsed || !Number.isFinite(number)) return false;
+	const token = await installationTokenForOwner(env, userId, parsed.owner);
+	if (!token) return false;
+	const res = await fetch(`https://api.github.com/repos/${parsed.owner}/${parsed.name}/issues/${number}/comments`, {
+		method: "POST",
+		headers: { ...GH_HEADERS(token), "Content-Type": "application/json" },
+		body: JSON.stringify({ body }),
+		signal: AbortSignal.timeout(15_000),
+	}).catch(() => null);
+	if (res?.ok) await invalidateIssueCaches(env, userId, githubRepo).catch(() => undefined);
+	return !!res?.ok;
+}
+
+/** A text file from a repo's default branch, or null (#1025: the repo's CLAUDE.md for the brain). */
+export async function readRepoText(env: Env, userId: string, githubRepo: string, path: string, maxBytes = 20_000): Promise<string | null> {
+	const parsed = parseRepo(githubRepo);
+	if (!parsed) return null;
+	const token = await installationTokenForOwner(env, userId, parsed.owner);
+	const res = await fetch(`https://api.github.com/repos/${parsed.owner}/${parsed.name}/contents/${path.split("/").map(encodeURIComponent).join("/")}`, {
+		headers: { ...GH_HEADERS(token), Accept: "application/vnd.github.raw" },
+		signal: AbortSignal.timeout(15_000),
+	}).catch(() => null);
+	if (!res?.ok) return null;
+	const text = await res.text().catch(() => "");
+	return clipMarked(text, maxBytes);
 }

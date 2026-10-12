@@ -192,7 +192,8 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// inspections. They return provenance/status only, never résumé content.
 	// +2 at #1013: bounded application handoff and reconciliation projections are secret-safe reads.
 	// +1 read at #1027: po_triage_reports reads the coder brain switch, its triggers and the triage reports.
-	read: 145, // +1 at #1009: list_instance_permission_requests reads the owner's own recovery requests and their verified links; it decides nothing. +1 at #1017: coding_loop_lifecycle reads an objective's transition history; it replays nothing.
+	// +1 read at #1025: coder_questions reads the questions a coder's runs stopped on and their audit trail.
+	read: 146, // +1 at #1009: list_instance_permission_requests reads the owner's own recovery requests and their verified links; it decides nothing. +1 at #1017: coding_loop_lifecycle reads an objective's transition history; it replays nothing.
 	// +2 write at #825: `pause_instance` / `resume_instance`. `write` rather than `destructive` —
 	// nothing is deleted and nothing is unsubscribed, and classing the OFF switch as destructive
 	// would put RESUME behind a scope the caller may not hold, which is the wrong failure mode for

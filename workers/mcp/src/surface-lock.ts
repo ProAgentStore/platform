@@ -1135,4 +1135,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.116": "sha256:cb3f884929ef355f03ca508ce81ed614ea02316f444cd0022cff7b135748d033",
 	// #1028: fleet_snapshot's `status` filter gains `paused`.
 	"0.1.117": "sha256:3e690e79c80551a33f31ecc250205cc34362f6ccb6249ba5e00ab3a534adbde4",
+	// #1025: set_coder_brain gains the brain's knobs; coder_questions (read).
+	"0.1.118": "sha256:52317fec2315d582a0fdcb49e7a80cc4fa6dd978688afe789023a50cddaa94fb",
 };

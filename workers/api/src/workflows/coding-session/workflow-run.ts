@@ -1,4 +1,5 @@
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
+import { captureAndAnnounceQuestion, HUMAN_ONLY_WAIT_MS } from "../../lib/coder-question-sweep.js";
 import {
 	runCodingLoop,
 	type CodingActionKind,
@@ -706,8 +707,11 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 					createdAt: new Date().toISOString(),
 				});
 				if (event.payload.loopRunId) await recordLiveness(env, event.payload.loopRunId, Date.now(), { reason: "decision", ask });
-				return null;
-			}).then(() => undefined);
+				// #1025: the question, durably — posted on the issue, timed by the minute sweep. Inside
+				// the step, so a replay returns the journalled wait instead of capturing it twice.
+				const captured = await captureAndAnnounceQuestion(env, { instanceId, userId, sessionId, runId: event.payload.loopRunId ?? null, taskId: ask.taskId, question: ask.question, options: ask.options, why: ask.why || null }).catch(() => null);
+				return captured ? { waitMs: captured.waitMs, humanMs: captured.humanMs, brain: captured.waitMs > HUMAN_ONLY_WAIT_MS } : null;
+			});
 		},
 		takeoverStatus: () =>
 			runRetry(`hstatus-${round}-${n++}`, () => callRunner(conn, "/coding/takeover-status", { sessionId })) as Promise<{ resolved: boolean; value?: string }>,

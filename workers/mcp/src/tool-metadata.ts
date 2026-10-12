@@ -278,6 +278,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	gmail_scout_config_get: "read",
 	gmail_scout_status: "read",
 	po_triage_reports: "read",
+	coder_questions: "read",
 	get_instance_local_browser_settings: "read",
 	list_local_browser_runs: "read",
 	set_instance_local_browser_settings: "write",
