@@ -1,4 +1,5 @@
-import { Cpu } from "lucide-react";
+import { AlertTriangle, Cpu } from "lucide-react";
+import { apiCodingSessionBanner, sessionEngineLine } from "./api-coding";
 import { engineAuthBadge, type EngineAuthReport } from "./engine-auth-view";
 import { engineInvocationBadge, type EngineInvocationReport } from "./engine-invocation-mode";
 
@@ -17,13 +18,23 @@ import { engineInvocationBadge, type EngineInvocationReport } from "./engine-inv
  * this takes the two `/capture` reports and nothing else, which is why it could leave CodingTab.
  * Null reports — an older runner — render nothing.
  */
-export default function EngineCredentialStrip({ auth, invocation: invocationReport }: { auth: EngineAuthReport | null; invocation: EngineInvocationReport | null }) {
+export default function EngineCredentialStrip({ auth, invocation: invocationReport, command }: { auth: EngineAuthReport | null; invocation: EngineInvocationReport | null; command?: string | null }) {
 	const badge = engineAuthBadge(auth);
 	const invocation = engineInvocationBadge(invocationReport);
-	if (!badge && !invocation) return null;
+	// #1042: engine, model and billing on every session; a persistent banner while it codes on an API key.
+	const engineLine = sessionEngineLine(auth, command);
+	const apiBanner = apiCodingSessionBanner(auth);
+	if (!badge && !invocation && !engineLine) return null;
 	const warn = badge?.tone === "warn" || invocation?.tone === "warn";
 	return (
+		<>
+		{apiBanner && (
+			<div role="alert" data-testid="api-coding-banner" className="mb-2 rounded-lg border border-danger px-3 py-2 text-xs font-bold text-danger flex items-start gap-1.5">
+				<AlertTriangle size={14} className="shrink-0 mt-0.5" /> <span>{apiBanner}</span>
+			</div>
+		)}
 		<div className={`mb-2 rounded-lg border px-3 py-2 ${warn ? "border-warning-line bg-warning-soft" : "border-line"}`}>
+			{engineLine && <p className="text-xs font-semibold" data-testid="session-engine-line">{engineLine}</p>}
 			{badge && <div className="flex items-center gap-1.5 text-xs font-bold">
 				<Cpu size={12} className={warn ? "text-warning" : "text-muted"} />
 				<span>{badge.label}</span>
@@ -42,5 +53,6 @@ export default function EngineCredentialStrip({ auth, invocation: invocationRepo
 			)}
 			{invocationReport?.warning && <p className="text-xs text-warning mt-1">{invocationReport.warning}</p>}
 		</div>
+		</>
 	);
 }

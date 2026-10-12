@@ -165,7 +165,7 @@ nothing gets:
 |---|---|---|---|
 | `claude` | Claude Code | `claude --dangerously-skip-permissions` | unset → `auto` |
 | `codex` | Codex | `codex exec --json --sandbox danger-full-access` | unset → `auto` |
-| `gemini` | Gemini CLI | `gemini --approval-mode yolo --skip-trust --prompt` | `api-key` |
+| `gemini` | Gemini CLI | `gemini --approval-mode yolo --skip-trust --prompt` | `auto` (machine login) |
 | `grok` | Grok | `grok --permission-mode bypassPermissions -p` | unset → `auto` |
 | `local` | Local model (Ollama) | `ollama run llama3` | `machine` |
 
@@ -291,7 +291,8 @@ running `api-key` engine does not lose its sign-in because its owner picked a mo
 - `subscription` — Claude uses the stored `claude setup-token`; Codex uses its local `codex login` with
   `OPENAI_API_KEY` removed, so a valid ChatGPT subscription is authoritative. Other engines have no
   shipped subscription credential and use their machine login instead.
-- `api-key` — the engine's provider key from the vault (including Codex's `OPENAI_API_KEY`; per-token billing)
+- `api-key` — the engine's provider key from the vault (including Codex's `OPENAI_API_KEY`; per-token billing).
+  Only with the owner's console confirmation (#1042), below.
 
 Every mode except `api-key` actively **strips** the provider key from the engine's env (an empty
 value means remove, see the runner's `mergeEnv`). A developer with `ANTHROPIC_API_KEY` exported in
@@ -346,3 +347,29 @@ This is a property of the path, not a bug awaiting a fix — see the table in
 [ADR 0003](adr/0003-a-coder-engine-reports-its-own-turns.md), which makes reporting your own turns
 the admission requirement for a Coder engine precisely so this stays confined to the operator
 family.
+
+## Subscription CLI by default; API-key coding only by confirmed choice (#1042)
+
+Actual coding runs on a subscription-authenticated local CLI. No shipped preset uses `api-key` (Gemini
+used to; migration 0226 moved every stored `api-key` preset to its CLI login and lists them in
+`apiCodingMigrated`). The advisory brain (Pilot, Co-pilot, chat) is separate and may still use a
+provider key.
+
+- **Choosing it.** In the coder UI's ⚙ CLI engines panel, a preset's sign-in can be set to its provider's
+  API key — offered only when that key is stored in Profile → API Keys. Saving opens a blocking
+  confirmation naming the provider, model and billing source, saying it is likely more costly and billed
+  separately from any subscription. Only that confirmation sends `acknowledgeApiCoding`, and the API
+  records it in `config.apiCodingOptIns` for the preset's exact command: a new model is a new bill and is
+  confirmed again.
+- **Who cannot.** A request from MCP (`X-PAGS-Client: mcp`) can never record a confirmation, select an
+  unconfirmed API-key engine, or change a confirmed one's model (`coding_engine_set` is refused). The
+  account default skips a coder whose default would be unconfirmed API-key coding (`api-key-not-confirmed`).
+- **At spawn.** `resolveEngineEnv` refuses an unconfirmed `api-key` preset, and a confirmed one with no key
+  stored, with the reason as the session's start error. Nothing falls back: not to the machine login, and
+  no subscription engine ever receives a key. A signed-out subscription CLI stops the same way (engine
+  preflight, #879).
+- **While running.** Every session shows its engine, model and how it bills; an API-key session shows a
+  persistent banner.
+- **Cloudflare Workers AI** models (Llama 4 Scout, Llama 3.3 70B, Qwen 2.5 Coder 32B) are listed as
+  "coming soon" once Cloudflare credentials are stored — there is no coding engine for them yet, so they
+  cannot be selected. DeepSeek is not offered.

@@ -18,6 +18,8 @@ export interface EngineChoiceOption {
 	model: string | null;
 	modelSelectable: boolean;
 	suggestions: { value: string; label: string }[];
+	/** #1042 — absent on an older API, which is read as subscription (it never billed a key by default). */
+	billing?: "subscription" | "api-key";
 }
 
 export interface EngineChoice {
@@ -70,4 +72,10 @@ export function choiceBody(engineId: string, model?: string): { engineId: string
 /** "Last ran on …" — observed from the engine's own usage report, so it is stated as an observation. */
 export function observedLine(choice: EngineChoice): string | null {
 	return choice.lastObserved ? `The last measured engine turn on this agent ran ${choice.lastObserved.model}.` : null;
+}
+
+/** Subscription CLIs first, API-key engines after, each API one labelled with what it costs (#1042). */
+export function engineOptionsForCard(choice: EngineChoice): Array<{ id: string; label: string }> {
+	const label = (e: EngineChoiceOption) => (e.billing === "api-key" ? `${e.label} — API key, billed per token` : e.label);
+	return [...choice.engines.filter((e) => e.billing !== "api-key"), ...choice.engines.filter((e) => e.billing === "api-key")].map((e) => ({ id: e.id, label: label(e) }));
 }

@@ -5,7 +5,7 @@
  * while a model is pinned, and rewriting an engine's command when the owner only switched engines.
  */
 import { describe, expect, it } from "vitest";
-import { CLI_DEFAULT, OTHER_MODEL, choiceBody, chosenEngine, modelOptions, observedLine, type EngineChoice, type EngineChoiceOption } from "./engineChoice";
+import { CLI_DEFAULT, OTHER_MODEL, choiceBody, chosenEngine, engineOptionsForCard, modelOptions, observedLine, type EngineChoice, type EngineChoiceOption } from "./engineChoice";
 
 const engine = (over: Partial<EngineChoiceOption> = {}): EngineChoiceOption => ({
 	id: "claude",
@@ -82,5 +82,18 @@ describe("the observed model", () => {
 		expect(observedLine(choice({ lastObserved: { model: "claude-fable-5-1", at: "2026-09-19 10:00:00" } }))).toBe(
 			"The last measured engine turn on this agent ran claude-fable-5-1.",
 		);
+	});
+});
+
+describe("engineOptionsForCard (#1042)", () => {
+	const opt = (id: string, billing?: "subscription" | "api-key"): EngineChoiceOption => ({ id, label: id, command: id, model: null, modelSelectable: false, suggestions: [], ...(billing ? { billing } : {}) });
+
+	it("lists subscription CLIs first and labels each API-key engine with what it costs", () => {
+		const choice: EngineChoice = { defaultEngineId: "a", engines: [opt("api", "api-key"), opt("claude", "subscription"), opt("old")], lastObserved: null, appliesTo: "" };
+		expect(engineOptionsForCard(choice)).toEqual([
+			{ id: "claude", label: "claude" },
+			{ id: "old", label: "old" },
+			{ id: "api", label: "api — API key, billed per token" },
+		]);
 	});
 });

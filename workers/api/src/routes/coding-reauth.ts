@@ -21,7 +21,8 @@
  */
 import type { Context, Hono } from "hono";
 import { HttpError } from "../lib/auth.js";
-import { deriveClientType, engineAuthFor, readEngines } from "../lib/coding-engines.js";
+import { deriveClientType } from "../lib/coding-command.js";
+import { engineAuthFor, readEngines } from "../lib/coding-engines.js";
 import type { CodingClientType } from "../lib/coding-types.js";
 import {
 	type ReauthMethod,

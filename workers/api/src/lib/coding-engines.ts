@@ -9,12 +9,13 @@
 //
 // Pure move — no behaviour changed.
 
-import { commandEngineParts } from "./coding-command.js";
+import { commandEngineParts, deriveClientType } from "./coding-command.js";
 import { writeEngineModel } from "./coding-engine-model.js";
 import { getUserProviderKey } from "./user-ai.js";
 import { parseAccountPreferences } from "./preferences.js";
 import { reusedSessionEngineNotice } from "./coding-session-lifecycle.js";
 import { payerForEngineAuth, type EngineAuthResolved, type PayerOrUnknown } from "./usage-payer.js";
+import { API_CODING_PROVIDERS, ApiCodingRefused, apiCodingConfirmed, apiCodingMissingKeyMessage, apiCodingNotConfirmedMessage, parseApiCodingOptIns, type ApiCodingOptIns } from "./coding-api-policy.js";
 import type { CodingClientType, CodingSessionRecord } from "./coding-types.js";
 import type { Env } from "../types.js";
 
@@ -30,7 +31,8 @@ export async function resolveEngineEnv(
 	uid: string,
 	session: CodingSessionRecord,
 ): Promise<Record<string, string> | undefined> {
-	const { engines } = await readEngines(env, instanceId, uid);
+	const { engines, apiCodingOptIns } = await readEngines(env, instanceId, uid);
+	const engine = engineFor(engines, session.launchCommand);
 	const auth = engineAuthFor(engines, session.launchCommand);
 	// An inherited provider key is NOT "the machine's login" — it is per-token billing wearing
 	// the machine's clothes. Every mode except "api-key" therefore REMOVES it (empty value =
@@ -38,14 +40,20 @@ export async function resolveEngineEnv(
 	// their shell does not silently pay per token for an engine they asked to run on their
 	// subscription. This is the whole point of the modes existing; before it, all four behaved
 	// identically whenever the shell had a key.
-	const providerKeyEnv = ENGINE_API_KEYS[session.clientType]?.envVar;
+	const providerKeyEnv = API_CODING_PROVIDERS[session.clientType]?.envVar;
 	const stripProviderKey = providerKeyEnv ? { [providerKeyEnv]: "" } : {};
 
 	if (auth === "machine") return providerKeyEnv ? stripProviderKey : undefined;
 	if (auth === "api-key") {
-		const spec = ENGINE_API_KEYS[session.clientType];
+		// #1042: API-key CODING only with the owner's console confirmation for exactly this command,
+		// and with the key actually stored. Either missing STOPS the spawn with the reason — it never
+		// quietly runs on the machine's login instead, and nothing falls back the other way either.
+		const label = engine?.label ?? session.clientType;
+		if (!engine || !apiCodingConfirmed(apiCodingOptIns, engine)) throw new ApiCodingRefused("api-key-not-confirmed", apiCodingNotConfirmedMessage(label));
+		const spec = API_CODING_PROVIDERS[session.clientType];
 		const key = spec ? await getUserProviderKey(env, uid, spec.provider) : null;
-		return key ? { [spec.envVar]: key } : undefined;
+		if (!key) throw new ApiCodingRefused("api-key-missing", apiCodingMissingKeyMessage(label, session.clientType));
+		return { [spec.envVar]: key };
 	}
 	// Codex's ChatGPT subscription is deliberately the inverse of Claude's setup-token: Codex
 	// keeps the login in its own local auth store, so there is no token to inject. Removing an
@@ -82,21 +90,6 @@ export function asClient(v: unknown): CodingClientType {
 	return CLIENTS.includes(v as CodingClientType) ? (v as CodingClientType) : "claude";
 }
 
-/**
- * Derive the engine client type from a launch command's real binary — skipping
- * `FOO=bar` env prefixes and wrappers like `npx`/`bunx`/`env`. This decides whether
- * the runner uses the structured Claude engine (claude) or runs the CLI raw (else).
- * An unknown binary maps to "codex" so it runs RAW, not mis-driven as Claude.
- */
-export function deriveClientType(command: string): CodingClientType {
-	const { bin: base } = commandEngineParts(command);
-	if (!base) return "claude";
-	if (base === "claude" || base.startsWith("claude")) return "claude";
-	if (base.startsWith("gemini")) return "gemini";
-	if (base.startsWith("grok")) return "grok";
-	if (base.startsWith("codex")) return "codex";
-	return "codex"; // an unknown binary → run it raw (NOT as Claude stream-json)
-}
 
 export type EngineInvocationMode = "structured" | "raw";
 
@@ -165,13 +158,6 @@ export interface CodingEngine {
 	auth?: EngineAuth;
 }
 
-/** The env var + vault provider an engine's "api-key" auth mode injects. */
-const ENGINE_API_KEYS: Record<CodingClientType, { envVar: string; provider: string }> = {
-	claude: { envVar: "ANTHROPIC_API_KEY", provider: "anthropic" },
-	gemini: { envVar: "GEMINI_API_KEY", provider: "google" },
-	codex: { envVar: "OPENAI_API_KEY", provider: "openai" },
-	grok: { envVar: "XAI_API_KEY", provider: "xai" },
-};
 
 /**
  * The sign-in method for a session — sessions persist the launch command, not the
@@ -179,14 +165,19 @@ const ENGINE_API_KEYS: Record<CodingClientType, { envVar: string; provider: stri
  * start/Restart; a command with no matching preset falls back to "auto".
  */
 export function engineAuthFor(engines: CodingEngine[], launchCommand: string | null | undefined): EngineAuth {
-	// Exact first; then the same command with a different MODEL (#792). Choosing a model rewrites
-	// the preset's command, and a session already running on the old one must not lose its preset's
-	// sign-in over it — for an `api-key` engine that would strip its key mid-session.
-	const sansModel = (c: string) => writeEngineModel(c, null);
-	const eng = launchCommand
-		? (engines.find((e) => e.command === launchCommand) ?? engines.find((e) => sansModel(e.command) === sansModel(launchCommand)))
-		: undefined;
+	const eng = engineFor(engines, launchCommand);
 	return eng?.auth && ENGINE_AUTHS.has(eng.auth) ? eng.auth : "auto";
+}
+
+/**
+ * The preset a session's launch command came from. Exact first; then the same command with a
+ * different MODEL (#792): choosing a model rewrites the preset's command, and a session already
+ * running on the old one must not lose its preset's sign-in over it.
+ */
+export function engineFor(engines: CodingEngine[], launchCommand: string | null | undefined): CodingEngine | undefined {
+	if (!launchCommand) return undefined;
+	const sansModel = (c: string) => writeEngineModel(c, null);
+	return engines.find((e) => e.command === launchCommand) ?? engines.find((e) => sansModel(e.command) === sansModel(launchCommand));
 }
 
 /**
@@ -357,7 +348,9 @@ export const DEFAULT_ENGINES: CodingEngine[] = [
 	// `--skip-trust` is not optional alongside yolo: without it Gemini prints
 	// "Approval mode overridden to \"default\" because the current folder is not trusted" and
 	// goes back to asking — in a headless run, with nobody to ask. Verified live.
-	{ id: "gemini", label: "Gemini CLI", command: "gemini --approval-mode yolo --skip-trust --prompt", auth: "api-key" },
+	// Signs in with the machine's own Google login (`gemini` → Login with Google), never a key: #1042
+	// makes every shipped preset a subscription/local CLI. API-key coding is an owner's confirmed choice.
+	{ id: "gemini", label: "Gemini CLI", command: "gemini --approval-mode yolo --skip-trust --prompt" },
 	// `-p/--single`, NOT `--prompt`: grok has `--prompt-file` and `--prompt-json` but no
 	// `--prompt`, so the old preset died on an unknown/ambiguous flag before reaching the model.
 	{ id: "grok", label: "Grok", command: "grok --permission-mode bypassPermissions -p" },
@@ -384,7 +377,11 @@ export const ENGINE_WRITE_FLAGS: Record<CodingClientType, string[]> = {
 export type EngineDefaultSource = "instance" | "account" | "platform";
 
 /** Read the instance's engine presets (seeded defaults when unset). */
-export async function readEngines(env: Env, instanceId: string, userId: string): Promise<{ engines: CodingEngine[]; defaultEngineId: string; defaultEngineSource: EngineDefaultSource; accountDefaultEngineId?: string }> {
+export async function readEngines(
+	env: Env,
+	instanceId: string,
+	userId: string,
+): Promise<{ engines: CodingEngine[]; defaultEngineId: string; defaultEngineSource: EngineDefaultSource; accountDefaultEngineId?: string; apiCodingOptIns: ApiCodingOptIns; apiCodingMigrated: string[] }> {
 	const row = await env.DB.prepare(
 		`SELECT i.config, u.preferences
 		   FROM agent_instances i
@@ -393,7 +390,7 @@ export async function readEngines(env: Env, instanceId: string, userId: string):
 	)
 		.bind(instanceId, userId)
 		.first<{ config: string; preferences?: string | null }>();
-	let cfg: { codingEngines?: CodingEngine[]; defaultEngineId?: string } = {};
+	let cfg: { codingEngines?: CodingEngine[]; defaultEngineId?: string; apiCodingOptIns?: unknown; apiCodingMigrated?: unknown } = {};
 	try {
 		cfg = JSON.parse(row?.config || "{}");
 	} catch {
@@ -414,7 +411,9 @@ export async function readEngines(env: Env, instanceId: string, userId: string):
 		: undefined;
 	const defaultEngineId = explicitDefault ?? inheritedDefault ?? engines[0].id;
 	const defaultEngineSource: EngineDefaultSource = explicitDefault ? "instance" : inheritedDefault ? "account" : "platform";
-	return { engines, defaultEngineId, defaultEngineSource, ...(accountDefaultEngineId ? { accountDefaultEngineId } : {}) };
+	return { engines, defaultEngineId, defaultEngineSource, ...(accountDefaultEngineId ? { accountDefaultEngineId } : {}), apiCodingOptIns: parseApiCodingOptIns(cfg.apiCodingOptIns),
+		apiCodingMigrated: Array.isArray(cfg.apiCodingMigrated) ? cfg.apiCodingMigrated.filter((id): id is string => typeof id === "string") : [],
+	};
 }
 
 /** The launch command + derived client type for an engine id (falls back to the default engine). */

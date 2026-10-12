@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
 	DEFAULT_ENGINES,
 	ENGINE_WRITE_FLAGS,
-	deriveClientType,
 	engineAuthFor,
 	engineAuthReport,
 	engineAuthWarning,
@@ -12,6 +11,7 @@ import {
 	resolveEngineEnv,
 	type CodingEngine,
 } from "./coding-engines.js";
+import { deriveClientType } from "./coding-command.js";
 import type { Env } from "../types.js";
 
 /** Env whose vault holds only the providers listed. */
@@ -164,8 +164,12 @@ describe("default engine presets", () => {
 		expect(byId("local").auth).toBe("machine");
 	});
 
-	it("defaults gemini to api-key — its individual Google sign-in is deprecated", () => {
-		expect(byId("gemini").auth).toBe("api-key");
+	// #1042: no shipped preset codes on an API key. Gemini used to default to one (3f02972c: its
+	// individual Google sign-in was deprecated); now it runs on the machine's own Google login, and
+	// where there is none it stops visibly — API-key Gemini is an owner's confirmed console choice.
+	it("ships every preset on a subscription or local CLI — none on an API key (#1042)", () => {
+		expect(DEFAULT_ENGINES.filter((e) => e.auth === "api-key")).toEqual([]);
+		expect(byId("gemini").auth).toBeUndefined();
 	});
 });
 

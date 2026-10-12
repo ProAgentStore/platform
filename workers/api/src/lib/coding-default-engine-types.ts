@@ -12,7 +12,9 @@ export type ApplyDefaultEngineSkipReason =
 	/** The machine definitely cannot run the default engine: not installed, or not signed in. */
 	| "engine-unavailable"
 	/** The machine's CLI is too old to confirm it can run the default engine. */
-	| "runner-outdated";
+	| "runner-outdated"
+	/** The default engine codes on an API key this coder's owner has not confirmed in the console (#1042). */
+	| "api-key-not-confirmed";
 
 export interface ApplyDefaultEngineItem {
 	instanceId: string;

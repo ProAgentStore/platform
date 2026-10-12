@@ -1,5 +1,6 @@
 import { listActiveRuns } from "./agent-loop-store.js";
-import { DEFAULT_ENGINES, resolveEngine } from "./coding-engines.js";
+import { DEFAULT_ENGINES, readEngines, resolveEngine } from "./coding-engines.js";
+import { apiCodingConfirmed, apiCodingNotConfirmedMessage } from "./coding-api-policy.js";
 import { endCodingSession } from "./coding-session-end.js";
 import { continuityForNewSession, startSessionOnRunner } from "./coding-session-open.js";
 import { claimFreeSessionDriver, createSession, getRepo, releaseSessionDriver } from "./coding-store.js";
@@ -47,6 +48,7 @@ const SKIP_REASONS: ApplyDefaultEngineSkipReason[] = [
 	"unreadable",
 	"engine-unavailable",
 	"runner-outdated",
+	"api-key-not-confirmed",
 	"stop-failed",
 	"start-failed",
 ];
@@ -191,6 +193,14 @@ export async function applyDefaultCodingEngineToIdle(
 		item.to = desired.command;
 		if ((session.launchCommand || "").trim() === desired.command.trim()) {
 			skip("already-default", { to: desired.command });
+			continue;
+		}
+		// #1042: an account default never moves a coder onto API-key coding its owner has not confirmed
+		// for that coder in the console — and never off a working session to a spawn that would refuse.
+		const { engines, apiCodingOptIns } = await readEngines(env, session.instanceId, userId);
+		const preset = engines.find((e) => e.command === desired.command);
+		if (preset?.auth === "api-key" && !apiCodingConfirmed(apiCodingOptIns, preset)) {
+			skip("api-key-not-confirmed", { to: desired.command, detail: apiCodingNotConfirmedMessage(preset.label) });
 			continue;
 		}
 		// Cheap refusals first, without a claim — most busy coders stop here.

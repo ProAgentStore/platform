@@ -88,7 +88,8 @@ describe("what a coding engine signs in with decides whether its spend can be at
 						bind() {
 							return {
 								async first() {
-									return { config: JSON.stringify({ codingEngines: [{ id: "key", label: "K", command: "claude --key", auth: "api-key" }] }) };
+									// #1042: API-key coding runs only with the owner's console confirmation for this command.
+									return { config: JSON.stringify({ codingEngines: [{ id: "key", label: "K", command: "claude --key", auth: "api-key" }], apiCodingOptIns: { key: { command: "claude --key", provider: "anthropic", model: null, acknowledgedAt: "2026-10-13T00:00:00Z" } } }) };
 								},
 								async all() { return { results: [] }; },
 							};

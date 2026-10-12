@@ -3,6 +3,7 @@ import { HttpError } from "../lib/auth.js";
 import { requirePro } from "../lib/billing.js";
 import { ENGINE_AUTHS, engineAuthFor, engineAuthReport, engineInvocationReport, readEngines, resolveEngine, reusedEngineNotice, type CodingEngine, type EngineAuth, type EngineAuthResolved } from "../lib/coding-engines.js";
 import { readEngineChoice, writeEngineChoice } from "../lib/coding-engine-choice.js";
+import { apiCodingOptInsForSave, apiCodingView, isMcpRequest } from "../lib/coding-api-policy.js";
 import { resolveRunState } from "../lib/coding-run-state.js";
 import { continuityForNewSession, startSessionOnRunner } from "../lib/coding-session-open.js";
 import { createSession, endSession, getActiveSessionForRepo, getRepo, getSession, listSessions, touchSessionActivity } from "../lib/coding-store.js";
@@ -49,13 +50,16 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 	/** The engine presets (CLI launch commands) the user can start sessions with. */
 	codingRoutes.get("/:instanceId/coding/engines", async (c) => {
 		const { uid, instanceId } = await requireOwned(c);
-		return c.json(await readEngines(c.env, instanceId, uid));
+		const view = await readEngines(c.env, instanceId, uid);
+		// Which provider credentials exist — names only, never a value (#1042: API options are credential-gated).
+		const { results } = await c.env.DB.prepare("SELECT DISTINCT provider FROM user_api_keys WHERE user_id = ?1").bind(uid).all<{ provider: string }>();
+		return c.json({ ...view, apiCoding: apiCodingView(new Set((results ?? []).map((r) => r.provider)), view.apiCodingOptIns, view.apiCodingMigrated) });
 	});
 
 	/** Save the engine presets + default. Each = { id, label, command, auth? }. */
 	codingRoutes.put("/:instanceId/coding/engines", async (c) => {
 		const { uid, instanceId } = await requireOwned(c);
-		const body = (await c.req.json().catch(() => ({}))) as { engines?: unknown; defaultEngineId?: unknown };
+		const body = (await c.req.json().catch(() => ({}))) as { engines?: unknown; defaultEngineId?: unknown; acknowledgeApiCoding?: unknown };
 		const raw = Array.isArray(body.engines) ? body.engines : [];
 		// Sanitize: id (slug), label, command are all required; cap the count + lengths.
 		const seen = new Set<string>();
@@ -73,11 +77,13 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 		}
 		if (!engines.length) throw new HttpError(400, "At least one engine with a label and command is required.");
 		const defaultEngineId = engines.some((e) => e.id === body.defaultEngineId) ? String(body.defaultEngineId) : engines[0].id;
+		const apiCodingOptIns = apiCodingOptInsForSave(engines, (await readEngines(c.env, instanceId, uid)).apiCodingOptIns, body.acknowledgeApiCoding, isMcpRequest(c.req.header("X-PAGS-Client")));
 		// Two keys, two patches (#231) — still strictly better than one whole-blob write, which
 		// could drop an unrelated key entirely rather than merely interleaving these two.
 		await patchInstanceConfig(c.env, instanceId, uid, "codingEngines", engines);
 		await patchInstanceConfig(c.env, instanceId, uid, "defaultEngineId", defaultEngineId);
-		return c.json({ engines, defaultEngineId });
+		await patchInstanceConfig(c.env, instanceId, uid, "apiCodingOptIns", apiCodingOptIns);
+		return c.json({ engines, defaultEngineId, apiCodingOptIns });
 	});
 
 	/**
@@ -92,8 +98,8 @@ export function registerSessionOpenRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 
 	codingRoutes.put("/:instanceId/coding/engine-choice", async (c) => {
 		const { uid, instanceId } = await requireOwned(c);
-		const body = (await c.req.json().catch(() => ({}))) as { engineId?: unknown; model?: unknown };
-		return c.json(await writeEngineChoice(c.env, instanceId, uid, body));
+		const body = (await c.req.json().catch(() => ({}))) as { engineId?: unknown; model?: unknown; acknowledgeApiCoding?: unknown };
+		return c.json(await writeEngineChoice(c.env, instanceId, uid, body, { fromMcp: isMcpRequest(c.req.header("X-PAGS-Client")) }));
 	});
 
 	/** Create a coding session against a repo and start it on the runner (best-effort). */

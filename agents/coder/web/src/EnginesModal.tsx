@@ -8,18 +8,9 @@ import { engineInvocationNote } from "./engine-invocation-mode";
 import { engineMeteringNote } from "./engine-metering-note";
 import { Cpu, Gauge, History, Trash2, Wallet } from "lucide-react";
 import Button from "./Button";
+import ApiCodingConfirmDialog from "./ApiCodingConfirmDialog";
+import { apiKeyChoice, pendingApiConfirmations, subscriptionFirst, type ApiCodingView, type PendingApiConfirmation } from "./api-coding";
 
-/** The engine's vault-key name shown in the api-key option label. */
-function apiKeyName(command: string): string {
-	for (const t of command.trim().split(/\s+/)) {
-		const base = (t.split("/").pop() || "").toLowerCase();
-		if (base.startsWith("claude")) return "Anthropic";
-		if (base.startsWith("gemini")) return "Google";
-		if (base.startsWith("grok")) return "xAI";
-		if (base.startsWith("codex")) return "OpenAI";
-	}
-	return "provider";
-}
 
 /**
  * Instance-wide engine presets editor: label + launch command + sign-in method
@@ -47,6 +38,9 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 	 * is where 99.62% of a real account's value ended up with nothing on any surface saying why.
 	 */
 	const [hasClaudeCodeToken, setHasClaudeCodeToken] = useState<boolean | null>(null);
+	// #1042: which API-key alternatives are usable (key stored), what was confirmed, what the migration switched.
+	const [apiView, setApiView] = useState<ApiCodingView | null>(null);
+	const [confirming, setConfirming] = useState<PendingApiConfirmation[] | null>(null);
 
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -66,15 +60,30 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 		return () => { live = false; };
 	}, []);
 
-	const update = (i: number, patch: Partial<CodingEngine>) =>
+	useEffect(() => {
+		let live = true;
+		void api<{ apiCoding?: ApiCodingView }>(`/v1/instances/${instanceId}/coding/engines`)
+			.then((d) => { if (live) setApiView(d.apiCoding ?? null); })
+			.catch(() => {});
+		return () => { live = false; };
+	}, [instanceId]);
+
+		const update = (i: number, patch: Partial<CodingEngine>) =>
 		setEngines((prev) => prev.map((e, j) => (j === i ? { ...e, ...patch } : e)));
 
-	const save = async () => {
+	// An API-key preset that is new or changed since it was confirmed opens the blocking dialog first;
+	// only its confirmation sends `acknowledgeApiCoding` (#1042).
+	const save = async (acknowledged: string[] = []) => {
+		const pending = pendingApiConfirmations(engines, apiView).filter((p) => !acknowledged.includes(p.engine.id));
+		if (pending.length) {
+			setConfirming(pending);
+			return;
+		}
 		setSaving(true);
 		try {
 			await api(`/v1/instances/${instanceId}/coding/engines`, {
 				method: "PUT",
-				body: JSON.stringify({ engines, defaultEngineId: defaultId }),
+				body: JSON.stringify({ engines, defaultEngineId: defaultId, ...(acknowledged.length ? { acknowledgeApiCoding: acknowledged } : {}) }),
 			});
 			onSaved();
 			onClose();
@@ -97,9 +106,15 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 				</p>
 
 				<div className="flex flex-col gap-2">
-					{engines.map((e, i) => {
+					{apiView && apiView.migrated.length > 0 && (
+						<p className="text-xs text-muted border border-line rounded-lg p-2" data-testid="api-coding-migrated">
+							Switched to the subscription CLI by #1042: {apiView.migrated.join(", ")}. They no longer code on an API key; choose API key again below to re-confirm it.
+						</p>
+					)}
+					{subscriptionFirst(engines).map(({ engine: e, index: i }) => {
 						const isClaude = isClaudeEngine(e.command);
-						const isCodex = apiKeyName(e.command) === "OpenAI";
+						const apiChoice = apiKeyChoice(e.command, apiView);
+						const isCodex = apiChoice.option?.clientType === "codex";
 						const signInId = `engine-${e.id}-auth`;
 						const needsWrite = missingWriteFlag(e.command);
 						const invocation = engineInvocationNote(e.command);
@@ -167,7 +182,11 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 										</option>
 										{isClaude && <option value="subscription">Subscription token (from claude setup-token)</option>}
 										{isCodex && <option value="subscription">ChatGPT subscription (from codex login) — no per-token charge</option>}
-										<option value="api-key">{apiKeyName(e.command)} API key — billed per token to your own account</option>
+										<option value="api-key" disabled={!apiChoice.available && e.auth !== "api-key"}>
+											{apiChoice.option
+												? `${apiChoice.option.providerLabel} API key — billed per token, needs confirmation${apiChoice.available ? "" : " (add the key in Profile → API Keys first)"}`
+												: "API key — not supported for this CLI"}
+										</option>
 									</select>
 									<label className="text-xs text-muted flex items-center gap-1 ml-auto">
 										<input type="radio" name="default-engine" checked={defaultId === e.id} onChange={() => setDefaultId(e.id)} />
@@ -248,14 +267,33 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 					})}
 				</div>
 
+				{apiView?.cloudflare && (
+					<div className="mt-3 border border-line rounded-lg p-2.5 text-xs text-muted" data-testid="api-coding-cloudflare">
+						<b>Cloudflare Workers AI — coming soon.</b> Your Cloudflare credentials are stored; these models are not yet available as coding engines:{" "}
+						{apiView.cloudflare.models.map((m) => m.label).join(", ")}.
+					</div>
+				)}
+
 				<Button size="md" className="mt-2" onClick={() => setEngines((prev) => [...prev, { id: `engine-${prev.length + 1}`, label: "", command: "" }])}>
 					+ Add engine
 				</Button>
 
 				<div className="flex gap-2 justify-end mt-4">
 					<Button size="md" onClick={onClose}>Cancel</Button>
-					<Button variant="primary" size="md" onClick={save} disabled={saving}>{saving ? "Saving…" : "Save"}</Button>
+					<Button variant="primary" size="md" onClick={() => void save()} disabled={saving}>{saving ? "Saving…" : "Save"}</Button>
 				</div>
+				{confirming && (
+					<ApiCodingConfirmDialog
+						pending={confirming}
+						busy={saving}
+						onCancel={() => setConfirming(null)}
+						onConfirm={() => {
+							const ids = confirming.map((p) => p.engine.id);
+							setConfirming(null);
+							void save(ids);
+						}}
+					/>
+				)}
 			</div>
 		</div>
 	);

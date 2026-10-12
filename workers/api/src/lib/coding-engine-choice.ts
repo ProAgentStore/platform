@@ -10,9 +10,11 @@
 // choosing one rewrites that command and nothing else.
 
 import { HttpError } from "./auth.js";
-import { deriveClientType, readEngines, type CodingEngine } from "./coding-engines.js";
+import { deriveClientType } from "./coding-command.js";
+import { readEngines, type CodingEngine } from "./coding-engines.js";
 import { MODEL_SUGGESTIONS, isValidModelId, modelFlagEngine, readEngineModel, writeEngineModel, type ModelSuggestion } from "./coding-engine-model.js";
 import { patchInstanceConfig } from "./instance-config.js";
+import { MCP_API_CODING_REFUSAL, apiCodingConfirmed, apiCodingOptInFor, apiCodingWarning } from "./coding-api-policy.js";
 import type { CodingClientType } from "./coding-types.js";
 import type { Env } from "../types.js";
 
@@ -27,6 +29,8 @@ export interface EngineChoiceOption {
 	/** False for a binary whose model flag we do not know (a local model, a custom wrapper). */
 	modelSelectable: boolean;
 	suggestions: ModelSuggestion[];
+	/** How it bills (#1042): the machine's subscription/local CLI login, or a provider API key per token. */
+	billing: "subscription" | "api-key";
 }
 
 export interface EngineChoiceView {
@@ -62,6 +66,7 @@ const toOption = (e: CodingEngine): EngineChoiceOption => {
 		model: readEngineModel(e.command),
 		modelSelectable: flagEngine !== null,
 		suggestions: flagEngine ? MODEL_SUGGESTIONS[flagEngine] : [],
+		billing: e.auth === "api-key" ? "api-key" : "subscription",
 	};
 };
 
@@ -98,11 +103,25 @@ export async function writeEngineChoice(
 	env: Env,
 	instanceId: string,
 	userId: string,
-	input: { engineId?: unknown; model?: unknown },
+	input: { engineId?: unknown; model?: unknown; acknowledgeApiCoding?: unknown },
+	opts: { fromMcp?: boolean } = {},
 ): Promise<EngineChoiceView> {
-	const { engines } = await readEngines(env, instanceId, userId);
+	const { engines, apiCodingOptIns } = await readEngines(env, instanceId, userId);
 	const engine = engines.find((e) => e.id === input.engineId);
 	if (!engine) throw new HttpError(400, `No engine "${String(input.engineId ?? "")}" on this agent — choose one of: ${engines.map((e) => e.id).join(", ")}.`);
+	// #1042: an API-key engine may be chosen only as the owner confirmed it — for exactly the command it
+	// will run. A new model on it is a new billing choice: the console confirms it again; MCP never can.
+	if (engine.auth === "api-key") {
+		const model = input.model === undefined ? undefined : input.model === null || input.model === "" ? null : input.model;
+		const command = model === undefined || (model !== null && !isValidModelId(model)) ? engine.command : writeEngineModel(engine.command, model as string | null);
+		if (!apiCodingConfirmed(apiCodingOptIns, { id: engine.id, command })) {
+			if (opts.fromMcp) throw new HttpError(403, MCP_API_CODING_REFUSAL);
+			if (input.acknowledgeApiCoding !== true) {
+				throw new HttpError(409, `"${engine.label}" codes on a provider API key. ${apiCodingWarning(deriveClientType(command), readEngineModel(command))} Confirm it in the console to choose it.`);
+			}
+			await patchInstanceConfig(env, instanceId, userId, "apiCodingOptIns", { ...apiCodingOptIns, [engine.id]: apiCodingOptInFor({ command }, deriveClientType(command)) });
+		}
+	}
 
 	if (input.model !== undefined) {
 		const model = input.model === null || input.model === "" ? null : input.model;

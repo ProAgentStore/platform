@@ -5,7 +5,8 @@ import { describe, expect, it } from "vitest";
 // coding route modules needed, which is exactly why they are no longer in any one of them.
 import { ownerOf, parseGithubRepo, pickNextIssue } from "./coding-shared.js";
 // Engine presets + sign-in moved to lib/ so the workflow stops importing a routes module.
-import { type CodingEngine, deriveClientType, engineAuthFor } from "../lib/coding-engines.js";
+import { deriveClientType } from "../lib/coding-command.js";
+import { type CodingEngine, engineAuthFor } from "../lib/coding-engines.js";
 import { delegationTaskRecord } from "../lib/delegation.js";
 
 /**

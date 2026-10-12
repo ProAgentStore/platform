@@ -1,5 +1,6 @@
 import { HttpError } from "../auth.js";
-import { readEngines, deriveClientType } from "../coding-engines.js";
+import { deriveClientType } from "../coding-command.js";
+import { readEngines } from "../coding-engines.js";
 import { startPipelineRun } from "../pipeline-run-start.js";
 import { callRuntime, getLiveRuntime, mirrorRuntimeTask, runtimeJson } from "../../routes/instances-runtime.js";
 import type { Env } from "../../types.js";

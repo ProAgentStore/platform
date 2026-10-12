@@ -12,6 +12,7 @@ import { cloneSourceFor } from "./git-providers.js";
 import { resolveEngine, resolveEngineEnv } from "./coding-engines.js";
 import { checkWorkdirVia, cloneStatusForVerdict } from "./coding-workdir.js";
 import { preflightEngine } from "./engine-preflight.js";
+import { ApiCodingRefused } from "./coding-api-policy.js";
 import { createSession, endSession, getActiveSessionForRepo, getLastFinishedSessionForRepo, getRepo, reassignSessionNode, updateRepoClone } from "./coding-store.js";
 import { seedBriefForRepo } from "./coding-seed-brief.js";
 import { appendTimeline } from "./coding-timeline.js";
@@ -283,7 +284,15 @@ export async function startSessionOnRunner(
 		}
 	}
 	const credential = await resolveCloneCredential(env, uid, repo);
-	const engineEnv = await resolveEngineEnv(env, instanceId, uid, session);
+	let engineEnv: Awaited<ReturnType<typeof resolveEngineEnv>>;
+	try {
+		engineEnv = await resolveEngineEnv(env, instanceId, uid, session);
+	} catch (e) {
+		// #1042: unconfirmed API-key coding, or a confirmed one with no key, STOPS here with the reason
+		// shown — nothing is launched on another credential instead.
+		if (e instanceof ApiCodingRefused) return { conn: null, resumed: false, seeded: false, startError: e.message, engineUnavailable: true };
+		throw e;
+	}
 	// Read AFTER the relocation above, so a session that just moved machines is briefed from the
 	// record the machine it left is not carrying. Unconditional apart from an explicit clean slate:
 	// this call cannot know whether the runner already holds this session (a warm re-attach ignores

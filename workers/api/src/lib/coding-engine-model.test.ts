@@ -93,16 +93,17 @@ describe("what the dropdown suggests", () => {
 
 describe("a RUNNING session keeps its preset's sign-in when the owner picks a model (#792)", () => {
 	// Sessions persist the command they launched with, and the preset is matched back by command.
-	// Choosing a model rewrites the preset's command — so without this, a Gemini session (`api-key`)
-	// would fall to `auto` mid-session and have its key stripped on the next turn.
-	const engines: CodingEngine[] = DEFAULT_ENGINES.map((e) => (e.id === "gemini" ? { ...e, command: writeEngineModel(e.command, "g-2") } : e));
+	// Choosing a model rewrites the preset's command — so without this, a session on a preset with an
+	// explicit sign-in (here `machine`) would fall to `auto` mid-session and change how it signs in.
+	// (#1042: no shipped preset is `api-key` any more, so the sign-in is set on the preset here.)
+	const engines: CodingEngine[] = DEFAULT_ENGINES.map((e) => (e.id === "gemini" ? { ...e, auth: "machine", command: writeEngineModel(e.command, "g-2") } : e));
 
 	it("matches the old command to the re-modelled preset", () => {
-		expect(engineAuthFor(engines, preset("gemini"))).toBe("api-key");
+		expect(engineAuthFor(engines, preset("gemini"))).toBe("machine");
 	});
 
 	it("still prefers an exact match, and still falls to auto for a command no preset has", () => {
-		expect(engineAuthFor(engines, engines.find((e) => e.id === "gemini")?.command)).toBe("api-key");
+		expect(engineAuthFor(engines, engines.find((e) => e.id === "gemini")?.command)).toBe("machine");
 		expect(engineAuthFor(engines, "gemini --something-else")).toBe("auto");
 	});
 });

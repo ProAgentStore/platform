@@ -102,7 +102,8 @@ describe("choosing a model", () => {
 		await writeEngineChoice(env, "inst-1", "u1", { engineId: "claude", model: "opus" });
 		const { engines } = await readEngines(env, "inst-1", "u1");
 		expect(engines.map((e) => e.id)).toEqual(DEFAULT_ENGINES.map((e) => e.id));
-		expect(engines.find((e) => e.id === "gemini")?.auth).toBe("api-key");
+		// The shipped preset that sets a sign-in (#1042: none is `api-key` any more) keeps it.
+		expect(engines.find((e) => e.id === "local")?.auth).toBe("machine");
 	});
 
 	it("`null` hands the choice back to the CLI; a second choice replaces the first", async () => {

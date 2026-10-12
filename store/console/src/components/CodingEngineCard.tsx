@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import Button from "./Button";
 import Card from "./Card";
-import { CLI_DEFAULT, OTHER_MODEL, choiceBody, chosenEngine, modelOptions, observedLine, type EngineChoice } from "../lib/engineChoice";
+import { engineOptionsForCard, CLI_DEFAULT, OTHER_MODEL, choiceBody, chosenEngine, modelOptions, observedLine, type EngineChoice } from "../lib/engineChoice";
 
 /**
  * Which coding CLI this agent opens sessions with, and which model it runs (#792).
@@ -54,7 +54,7 @@ export default function CodingEngineCard({ instanceId }: { instanceId: string })
 							onChange={(e) => save(e.target.value)}
 							className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 block w-full sm:w-auto"
 						>
-							{choice.engines.map((e) => (
+							{engineOptionsForCard(choice).map((e) => (
 								<option key={e.id} value={e.id}>{e.label}</option>
 							))}
 						</select>
