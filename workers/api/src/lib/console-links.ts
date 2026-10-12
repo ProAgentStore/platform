@@ -259,6 +259,8 @@ export type NotificationSubject =
 	| { kind: "application-handoff"; instanceId: string; handoffId: string }
 	/** One durable browser takeover (#1031). */
 	| { kind: "browser-takeover"; instanceId: string; takeover: { id: string; subjectKind: string; subjectId: string } }
+	/** A browser verification's verdict (#1031): Settings, where the instance's verification queue is listed. */
+	| { kind: "browser-verification"; instanceId: string }
 	/** A secure-input request waiting for the owner (#934). */
 	| { kind: "secure-input"; instanceId: string; requestId: string }
 	/** An exact owner-scoped permission request, focused inside Permissions & Connections (#1009). */
@@ -300,6 +302,8 @@ export function deepLinkFor(subject: NotificationSubject): DeepLink {
 				return applicationHandoffLink(subject.instanceId, subject.handoffId);
 			case "browser-takeover":
 				return browserTakeoverLink(subject.instanceId, subject.takeover);
+			case "browser-verification":
+				return instanceSettingsLink(subject.instanceId);
 			case "secure-input":
 				return secureInputNotificationLink(subject.instanceId, subject.requestId);
 			case "permission-request":

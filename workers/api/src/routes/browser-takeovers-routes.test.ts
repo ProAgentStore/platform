@@ -96,6 +96,16 @@ describe("a paused run asks for a takeover BEFORE anything is shown (#1031)", ()
 	});
 });
 
+describe("a run's end is pushed only where it IS the verdict (#1031)", () => {
+	it("a Gmail-lead verification run is left to its dispatcher, which reads the outcome first", async () => {
+		d1.exec(`INSERT INTO job_lead_browser_verification_attempts (id, instance_id, user_id, lead_id, attempt, run_id, state, created_at) VALUES ('att-1', 'i1', 'u1', 'lead-1', 1, 'run-1', 'dispatched', 1)`);
+		await call("PUT", "/i1/browser-verification", { enabled: true, takeover: "never" });
+		await pause("captcha");
+		expect(await d1.DB.prepare("SELECT status FROM local_browser_runs WHERE id = 'run-1'").first()).toEqual({ status: "failed" });
+		expect((await notifications()).filter((n) => /browser verification/.test(n.title))).toEqual([]);
+	});
+});
+
 describe("the takeover routes (#1031)", () => {
 	it("an owner can ask for a takeover; asking again joins it", async () => {
 		const first = await call("POST", "/i1/browser-takeovers", { subjectKind: "runtime_task", subjectId: "task-9", reason: "login_required" });

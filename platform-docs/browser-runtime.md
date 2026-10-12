@@ -177,6 +177,13 @@ completions are notification events (`takeover_required`, `approval_required`,
 `browser_verification_failed`, `browser_verification_completed`), so the instance's notification
 policy decides which of them push. Their links carry only ids, never a page URL, token or session.
 
+For a Gmail job lead, the push is sent once its verification reaches a final verdict, not when a run
+ends. A run can finish and still report that it could not read the posting, and that is not a
+completed verification. An open, closed or different job is `browser_verification_completed`. A
+lead closed as unverifiable is `browser_verification_failed`, whether every attempt failed or no
+eligible browser was available under the `fallback`. An attempt that will be retried sends nothing.
+The push names the job by title and links to Settings, never to the posting.
+
 ### Verifying Gmail job leads
 
 A Gmail Scout resolves a one-job provider alert to the posting's canonical URL, which carries only

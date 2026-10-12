@@ -19,9 +19,12 @@
  * `job_lead_browser_verification_attempts`: what was dispatched, which run, what came back.
  */
 import { readBrowserVerification } from "./browser-verification.js";
+import { deepLinkFor } from "./console-links.js";
 import { BROWSER_VERIFICATION_OUTCOMES, type BrowserVerificationOutcome } from "./job-lead-triage.js";
 import { getLocalBrowserRun, type LocalBrowserRun } from "./local-browser/store.js";
 import { startLocalBrowserRun } from "./local-browser/start.js";
+import { agentName } from "./local-browser/sync.js";
+import { notifyUser } from "../routes/push.js";
 import type { LeadVerification, LeadVerificationListResponse, VerificationAttempt, VerificationState } from "./job-lead-browser-verification-types.js";
 import type { Env } from "../types.js";
 
@@ -177,8 +180,38 @@ async function applyToLead(env: Env, row: LeadRow, body: { outcome: BrowserVerif
 	return (await res.json()) as { transitioned: boolean; status: string };
 }
 
+const VERDICT_WORDS: Partial<Record<VerificationState, string>> = {
+	active: "is open — ready to triage",
+	expired: "has closed",
+	mismatch: "turned out to be a different job",
+	unverifiable: "could not be verified",
+};
+
+/**
+ * A verification reached its verdict (#1031), pushed as the event the instance's notification policy
+ * decides: `browser_verification_failed` when it could not be verified — no eligible browser, or every
+ * attempt unreadable — else `browser_verification_completed`. Only a FINAL verdict: an attempt that will be
+ * retried is not one. The text names the job by title, never its URL; the link is Settings, by id.
+ */
+async function notifyVerdict(env: Env, row: LeadRow, state: VerificationState, why: string | null): Promise<void> {
+	const words = VERDICT_WORDS[state];
+	if (!words) return;
+	const failed = state === "unverifiable";
+	const agent = await agentName(env, row.user_id, row.instance_id);
+	const job = row.expected_title ? `“${row.expected_title}”${row.expected_company ? ` at ${row.expected_company}` : ""}` : "A job lead";
+	await notifyUser(
+		env,
+		row.user_id,
+		"local-browser",
+		failed ? `✕ ${agent} could not verify a job` : `✓ ${agent} verified a job`,
+		`${job} ${words}${failed && why ? ` — ${why}` : ""}.`,
+		deepLinkFor({ kind: "browser-verification", instanceId: row.instance_id }),
+		{ kind: failed ? "alert" : "update", instanceId: row.instance_id, key: `lead-verification:${row.lead_id}`, event: failed ? "browser_verification_failed" : "browser_verification_completed" },
+	);
+}
+
 /** Close a lead's verification with a final outcome, applied to the lead. */
-async function settle(env: Env, row: LeadRow, outcome: BrowserVerificationOutcome, opts: { attempt: number; receiptId: string; exhausted: boolean; detail: string }, now: number): Promise<VerificationState> {
+async function settle(env: Env, row: LeadRow, outcome: BrowserVerificationOutcome, opts: { attempt: number; receiptId: string; exhausted: boolean; detail: string; why?: string }, now: number): Promise<VerificationState> {
 	const applied = await applyToLead(env, row, { outcome, attempt: opts.attempt, receipt_id: opts.receiptId, exhausted: opts.exhausted, detail: opts.detail });
 	// The owner moved the lead on first: recorded on the attempt, never applied to the lead.
 	if (applied && !applied.transitioned && applied.status !== "awaiting_browser_verification") {
@@ -191,6 +224,8 @@ async function settle(env: Env, row: LeadRow, outcome: BrowserVerificationOutcom
 	}
 	const state: VerificationState = outcome === "temporarily_unverifiable" ? "unverifiable" : outcome;
 	await setLead(env, row, { state, attempts: opts.attempt, lastOutcome: outcome, lastDetail: opts.detail }, now);
+	// Best-effort: a failed push never undoes the verdict it reports.
+	await notifyVerdict(env, row, state, opts.why ?? (state === "unverifiable" ? `${opts.attempt} attempt(s) could not read the posting` : null)).catch(() => undefined);
 	return state;
 }
 
@@ -201,7 +236,7 @@ async function settle(env: Env, row: LeadRow, outcome: BrowserVerificationOutcom
 async function noRuntime(env: Env, row: LeadRow, fallback: "wait" | "mark_unverifiable", waitLimitMinutes: number, detail: string, now: number): Promise<VerificationState> {
 	const receiptId = await recordAttempt(env, row, { attempt: row.attempts, state: "no_runtime", detail }, now);
 	if (fallback === "mark_unverifiable" || now - row.awaiting_since >= waitLimitMinutes * 60_000) {
-		return settle(env, row, "temporarily_unverifiable", { attempt: row.attempts, receiptId, exhausted: true, detail: `${detail} The fallback (${fallback}) closed it as unverifiable.` }, now);
+		return settle(env, row, "temporarily_unverifiable", { attempt: row.attempts, receiptId, exhausted: true, detail: `${detail} The fallback (${fallback}) closed it as unverifiable.`, why: `no eligible browser was available (fallback: ${fallback})` }, now);
 	}
 	await setLead(env, row, { state: "awaiting", nextAttemptAt: now + WAIT_RETRY_MS, lastDetail: `${detail} Waiting (fallback: wait).` }, now);
 	return "awaiting";

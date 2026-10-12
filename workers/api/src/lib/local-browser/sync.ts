@@ -58,7 +58,8 @@ const PAUSE_WORDS: Record<LocalBrowserPauseReason, string> = {
  * makes no progress until a person acts, and only someone with the run page open would see it.
  * Best-effort — a failed notification must not undo the pause it reports.
  */
-async function agentName(env: Env, uid: string, instanceId: string): Promise<string> {
+/** The instance's display name for a notification title. */
+export async function agentName(env: Env, uid: string, instanceId: string): Promise<string> {
 	const row = await env.DB.prepare("SELECT i.config, a.name FROM agent_instances i JOIN agents a ON a.id = i.agent_id WHERE i.id = ?1 AND i.user_id = ?2")
 		.bind(instanceId, uid)
 		.first<{ config: string | null; name: string | null }>();
@@ -110,6 +111,10 @@ async function onPaused(env: Env, uid: string, instanceId: string, run: LocalBro
  */
 async function notifyEnded(env: Env, uid: string, instanceId: string, run: LocalBrowserRun): Promise<void> {
 	if (!(await readBrowserVerification(env, instanceId, uid)).settings.enabled) return;
+	// A Gmail-lead verification run (#1030) is pushed by its dispatcher once the run's OUTCOME is read: a
+	// run that COMPLETED may still have found it "could not verify", which is not a completed verification.
+	const leadRun = await env.DB.prepare("SELECT 1 AS hit FROM job_lead_browser_verification_attempts WHERE run_id = ?1 AND user_id = ?2 LIMIT 1").bind(run.id, uid).first().catch(() => null);
+	if (leadRun) return;
 	const agent = await agentName(env, uid, instanceId);
 	const ok = run.status === "completed";
 	await notifyUser(

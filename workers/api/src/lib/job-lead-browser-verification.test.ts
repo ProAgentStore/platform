@@ -26,6 +26,14 @@ vi.mock("./local-browser/start.js", async (importOriginal) => ({
 		return { kind: "started", run };
 	},
 }));
+/** Every push the dispatcher sends (#1031): what it says, where it links, which policy event decides it. */
+const pushes = vi.hoisted(() => [] as Array<{ title: string; body: string; url: string; event?: string; kind?: string }>);
+vi.mock("../routes/push.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../routes/push.js")>()),
+	notifyUser: async (_env: unknown, _uid: string, _type: string, title: string, body: string, url: string, opts: { event?: string; kind?: string }) => {
+		pushes.push({ title, body, url, event: opts.event, kind: opts.kind });
+	},
+}));
 vi.mock("./local-browser/store.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("./local-browser/store.js")>()),
 	getLocalBrowserRun: async (_env: unknown, _inst: string, _uid: string, id: string) => runs.get(id) ?? null,
@@ -42,6 +50,7 @@ let env: Env;
 
 beforeEach(async () => {
 	runs.clear();
+	pushes.length = 0;
 	started.length = 0;
 	startAs = "running";
 	d1 = realSchemaD1();
@@ -212,5 +221,68 @@ describe("planBrowserVerificationOutcome (#1030)", () => {
 		for (const status of ["apply_requested", "tailoring", "blocked"]) {
 			expect(planBrowserVerificationOutcome(rec({ status, lifecycle_version: 3 }), { ...base, outcome: "expired" })).toEqual({ ok: true, transitioned: false, to: status, patch: null });
 		}
+	});
+});
+
+describe("the verdict is pushed once it is final — and as what it is (#1031)", () => {
+	it("no eligible browser under mark_unverifiable: a failure push, though no run ever started", async () => {
+		startAs = "offline";
+		d1.exec(`UPDATE agent_instances SET config = '{"browserVerification":{"enabled":true,"fallback":"mark_unverifiable"}}' WHERE id = 's1'`);
+		await runLeadBrowserVerification(env, 2_000);
+		expect(await queue()).toMatchObject({ state: "unverifiable" });
+		expect(pushes).toEqual([
+			{
+				title: expect.stringMatching(/could not verify a job/),
+				body: expect.stringMatching(/“Platform Engineer” at Acme could not be verified — no eligible browser was available \(fallback: mark_unverifiable\)/),
+				url: "/console/instances/s1/settings",
+				event: "browser_verification_failed",
+				kind: "alert",
+			},
+		]);
+	});
+
+	it("wait: nothing while it waits, one failure push when the limit closes it", async () => {
+		startAs = "offline";
+		d1.exec(`UPDATE agent_instances SET config = '{"browserVerification":{"enabled":true,"fallback":"wait","waitLimitMinutes":10}}' WHERE id = 's1'`);
+		await runLeadBrowserVerification(env, 2_000);
+		expect(pushes).toEqual([]);
+		await runLeadBrowserVerification(env, 1_000 + 10 * 60_000);
+		expect(pushes.map((p) => p.event)).toEqual(["browser_verification_failed"]);
+	});
+
+	it("a COMPLETED run that could not read the posting is not a completed verification: no push until the last attempt, then a failure", async () => {
+		let now = 2_000;
+		for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+			await runLeadBrowserVerification(env, now);
+			finish(`run-${attempt}`, null); // completed, with no typed outcome
+			await runLeadBrowserVerification(env, now + 1);
+			if (attempt < MAX_ATTEMPTS) expect(pushes, `after attempt ${attempt}`).toEqual([]);
+			now = now + 1 + RETRY_BACKOFF_MS[Math.min(attempt, RETRY_BACKOFF_MS.length) - 1];
+		}
+		expect(pushes.map((p) => p.event)).toEqual(["browser_verification_failed"]);
+		expect(pushes[0].body).toMatch(/could not be verified — 3 attempt\(s\) could not read the posting/);
+	});
+
+	it("a real verdict — open, closed or a different job — is a completion push", async () => {
+		await runLeadBrowserVerification(env, 2_000);
+		finish("run-1", "active");
+		await runLeadBrowserVerification(env, 3_000);
+		expect(pushes).toEqual([expect.objectContaining({ event: "browser_verification_completed", kind: "update", body: "“Platform Engineer” at Acme is open — ready to triage." })]);
+	});
+
+	it("never carries the posting URL", async () => {
+		startAs = "offline";
+		d1.exec(`UPDATE agent_instances SET config = '{"browserVerification":{"enabled":true,"fallback":"mark_unverifiable"}}' WHERE id = 's1'`);
+		await runLeadBrowserVerification(env, 2_000);
+		expect(JSON.stringify(pushes)).not.toMatch(/https?:|indeed/);
+	});
+
+	it("a lead the owner moved on is not pushed", async () => {
+		await runLeadBrowserVerification(env, 2_000);
+		leads.set("lead-1", { ...leads.get("lead-1")!, data: { ...lead(), status: "archived", lifecycle_version: 5 } } as CollectionRecord);
+		finish("run-1", "active");
+		await runLeadBrowserVerification(env, 3_000);
+		expect(await queue()).toMatchObject({ state: "superseded" });
+		expect(pushes).toEqual([]);
 	});
 });
