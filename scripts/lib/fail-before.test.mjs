@@ -23,8 +23,12 @@ const _io = helper._io ?? { writeSync: (...a) => writeSyncFs(...a), lstatSync: (
 
 const CLI = resolve(import.meta.dirname, "..", "fail-before.mjs");
 const installed = (bin) => spawnSync("sh", ["-c", `command -v ${bin}`]).status === 0;
-/** Locally a missing shell skips its test; under CI it must be present, so the test fails instead of silently skipping. */
-const has = (bin) => installed(bin) || !!process.env.CI;
+/**
+ * A missing shell skips its test — except where PAGS_REQUIRE_SHELLS is set (ci.yml, which installs
+ * zsh), so there the test fails instead of silently skipping. Not plain `CI`: the API deploy workflow
+ * also runs the suite, without zsh, and a skip there must not block a deploy.
+ */
+const has = (bin) => installed(bin) || !!process.env.PAGS_REQUIRE_SHELLS;
 const repos = [];
 afterEach(() => {
 	for (const d of repos.splice(0)) rmSync(d, { recursive: true, force: true });
