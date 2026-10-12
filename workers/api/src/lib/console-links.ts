@@ -48,6 +48,11 @@ export function instancesLink(): string {
 	return `${BASE}/instances`;
 }
 
+/** The Usage page — spend, its drivers, savings and the budget limits (#1040). */
+export function usageLink(): string {
+	return `${BASE}/usage`;
+}
+
 /** An instance with no tab named — `InstanceDetail` opens the Assistant. */
 export function instanceLink(instanceId: string): string {
 	return `${BASE}/instances/${encodeURIComponent(instanceId)}`;
@@ -270,7 +275,9 @@ export type NotificationSubject =
 	/** Several instances at once (#897): the instance list. */
 	| { kind: "instances" }
 	/** Account-level: the Profile (candidate profile, API keys). */
-	| { kind: "profile" };
+	| { kind: "profile" }
+	/** Account-level: the Usage page — spend, drivers and limits (#1040). */
+	| { kind: "usage" };
 
 export type NotificationSubjectKind = NotificationSubject["kind"];
 
@@ -314,6 +321,8 @@ export function deepLinkFor(subject: NotificationSubject): DeepLink {
 				return instancesLink();
 			case "profile":
 				return profileLink();
+			case "usage":
+				return usageLink();
 		}
 	})();
 	return link as DeepLink;

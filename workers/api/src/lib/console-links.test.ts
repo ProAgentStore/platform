@@ -65,6 +65,7 @@ describe("deepLinkFor — every notification subject opens a real page (#894)", 
 		agent: { kind: "agent", agentId: id },
 		instances: { kind: "instances" },
 		profile: { kind: "profile" },
+		usage: { kind: "usage" },
 	});
 
 	for (const [kind, subject] of Object.entries(sample("inst_1", "id_2"))) {

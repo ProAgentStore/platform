@@ -130,6 +130,12 @@ export const NOTIFICATION_TYPES: NotificationTypeSpec[] = [
 		alerts: false,
 	},
 	{
+		id: "spend",
+		label: "Spend alerts",
+		description: "Your agents' charged AI spend over the last 24 hours reaching the alert you set on the Usage page (#1040). At most once a day.",
+		alerts: false,
+	},
+	{
 		id: "subscribe",
 		label: "New subscribers",
 		description: "Someone subscribing to an agent you publish.",

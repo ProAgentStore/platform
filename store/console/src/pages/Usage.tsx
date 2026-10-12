@@ -6,6 +6,7 @@ import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { AlertTriangle, BarChart3, Info, RefreshCw, Shield } from "lucide-react";
 import Card from "../components/Card";
+import SpendDrivers from "../components/SpendDrivers";
 import { CHARGED_COVERAGE_NOTE, CHARGED_LEGEND, chargedCell, chargedCoverageNote, dayTokens, enginePayerSessionsNote, hasChargedFigures, showsInstanceBreakdown, tokenSplitLabel, unknownPayerRemedy } from "../lib/usageFigures";
 /**
  * The response shape, imported from the module that PRODUCES it (#608).
@@ -470,6 +471,7 @@ export default function Usage() {
 				<p className="text-center py-8 text-muted text-sm">Couldn’t load usage.</p>
 			)}
 
+			<SpendDrivers />
 			{/* Budget limits — always shown below the usage data regardless of range / empty state */}
 			<BudgetPanel />
 		</Page>

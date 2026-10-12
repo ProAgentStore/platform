@@ -1606,6 +1606,7 @@ describe("set_budget_limits — a patch must not clear what it does not name (#5
 			"perTreeDelegations",
 			"perTreeMaxDepth",
 			"loopMaxIterations",
+			"spendAlertMicros",
 		]);
 	});
 });

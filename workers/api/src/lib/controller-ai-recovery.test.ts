@@ -73,9 +73,11 @@ describe("withControllerAiRecovery (#907)", () => {
 		const h = harness();
 		const { promise, calls } = h.run([stall(), stall(), "ok"]);
 		await promise;
-		expect(calls[0].deadlines).toEqual({ preContentMs: 60_000, silenceMs: 45_000, totalMs: 240_000 });
+		expect(calls[0].deadlines).toEqual({ preContentMs: 60_000, silenceMs: 45_000, totalMs: 240_000, attempt: 1 });
 		// 50s attempt + 2s backoff spent: 188s left for the second.
 		expect(calls[1].deadlines.totalMs).toBe(240_000 - 52_000);
+		// The attempt number rides with the deadlines so the usage ledger records the retry (#1040).
+		expect(calls[1].deadlines.attempt).toBe(2);
 	});
 
 	it("exhausts after the configured attempts with a truthful, classifiable error", async () => {

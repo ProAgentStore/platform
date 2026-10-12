@@ -128,6 +128,35 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 		},
 	);
 
+	// #1040: what is DRIVING spend, and whether a change saved anything — the two questions after
+	// usage_summary's "what did I spend". Read-only; ids, labels and counts, never prompt text.
+	server.tool(
+		"usage_drivers",
+		"What is driving your AI spend, and did a change save anything (#1040). view `drivers` (default): one window's top spend by instance, model, phase (`source · phase`, e.g. `copilot · decide`), objective (trace id — pass it to agent_trace) and day; totals with cache-read share, tool-call turns, retried calls and duplicated calls; and `opportunities`, each with an ESTIMATED saving in micros, the basis of the estimate and where to act — retries, duplicated calls, uncached repeated context, and advisory calls repriced on a cheaper Brain (never the Pilot, an approval or a submission). Nothing is changed. view `savings`: a baseline window against the current one, per objective (per call when objectives were not recorded), with `savedMicros` (positive = saved), `verdict` and a one-line `summary` — use it to verify a saving against a baseline. All figures are list-price estimates; prompt and reply text are never recorded. Set limits and the daily spend alert with set_budget_limits.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			view: z.enum(["drivers", "savings"]).optional().describe("`drivers` (default) or `savings`."),
+			days: z.coerce.number().optional().describe("Current window: the last N days (1–90, default 7). The default baseline is the N days before it."),
+			from: z.string().optional().describe("Current window start, YYYY-MM-DD (UTC). Overrides `days`."),
+			to: z.string().optional().describe("Current window end, YYYY-MM-DD (UTC), exclusive. Default now."),
+			baseline_from: z.string().optional().describe("savings only: baseline start, YYYY-MM-DD — e.g. the week before a change."),
+			baseline_to: z.string().optional().describe("savings only: baseline end, YYYY-MM-DD, exclusive. Default the current window's start."),
+		},
+		async ({ token, view, days, from, to, baseline_from, baseline_to }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const q = new URLSearchParams();
+			if (days !== undefined) q.set("days", String(days));
+			if (from) q.set("from", from);
+			if (to) q.set("to", to);
+			if (baseline_from) q.set("baselineFrom", baseline_from);
+			if (baseline_to) q.set("baselineTo", baseline_to);
+			const qs = q.toString() ? `?${q.toString()}` : "";
+			const data = view === "savings" ? await authedCall(`/v1/usage/savings${qs}`, sessionToken, {}, env) : await authedCall(`/v1/usage/drivers${qs}`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
 	server.tool(
 		"keys_status",
 		"Which AI providers have a BYOK key stored for your account (names only — values are never exposed). Useful when chat says BYOK is required.",
@@ -203,7 +232,7 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"set_budget_limits",
-		"Patch your per-account AI-spend limits — the two daily circuit breakers and the four per-tree run knobs. Only the fields you pass are changed; anything you omit keeps its stored value. Pass null for a field to clear that override so it inherits from the platform default. Values are clamped server-side to the platform maximum ($10 000 / 100B tokens per 24h). Returns the re-resolved effective limits after the write — same shape as get_budget_limits. Read get_budget_limits first to see the current state.",
+		"Patch your per-account AI-spend limits — the two daily circuit breakers, the four per-tree run knobs and the daily spend alert. Only the fields you pass are changed; anything you omit keeps its stored value. Pass null for a field to clear that override so it inherits from the platform default. Values are clamped server-side to the platform maximum ($10 000 / 100B tokens per 24h). Returns the re-resolved effective limits after the write — same shape as get_budget_limits. Read get_budget_limits first to see the current state.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			token_ceiling: z.coerce.number().nullable().optional().describe("Daily token ceiling. null clears the override (inherit); omit to leave unchanged."),
@@ -212,6 +241,7 @@ export function registerAccountTools(server: McpServer, ctx: InstanceToolsCtx): 
 			per_tree_delegations: z.coerce.number().nullable().optional().describe("Max delegations in one run tree. null clears the override; omit to leave unchanged."),
 			per_tree_max_depth: z.coerce.number().nullable().optional().describe("Max delegation depth in one run tree. null clears the override; omit to leave unchanged."),
 			loop_max_iterations: z.coerce.number().nullable().optional().describe("Cap on Loop iterations. null clears the override; omit to leave unchanged."),
+			spend_alert_micros: z.coerce.number().nullable().optional().describe("Daily spend ALERT in micros: a notification when 24h charged spend reaches it, at most once a day. Never stops anything. null clears it; omit to leave unchanged."),
 			dry_run: z.boolean().optional(),
 		},
 		async (args) => {
@@ -451,4 +481,5 @@ const BUDGET_LIMIT_FIELDS = [
 	["per_tree_delegations", "perTreeDelegations"],
 	["per_tree_max_depth", "perTreeMaxDepth"],
 	["loop_max_iterations", "loopMaxIterations"],
+	["spend_alert_micros", "spendAlertMicros"],
 ] as const;

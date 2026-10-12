@@ -287,7 +287,7 @@ const TABLE: Record<string, Row> = {
 		"envelope",
 		// All six columns of account_budget_limits (#501) — a field this tool cannot name is a
 		// field an MCP caller cannot set, and used to be one it silently cleared.
-		"charged_micros_ceiling,dry_run,loop_max_iterations,per_tree_cost_micros,per_tree_delegations,per_tree_max_depth,token,token_ceiling",
+		"charged_micros_ceiling,dry_run,loop_max_iterations,per_tree_cost_micros,per_tree_delegations,per_tree_max_depth,spend_alert_micros,token,token_ceiling",
 	],
 	call_instance_tool: ["base", "write", null, null, "input,instance_id,offset,token,tool"],
 	cancel_instance: ["base", "destructive", "cancel_instance", "envelope", "confirm,dry_run,instance_id,token"],
@@ -585,6 +585,7 @@ const TABLE: Record<string, Row> = {
 	update_profile: ["account", "write", null, "envelope", "dry_run,fields,token"],
 	upload_resume: ["apply", "write", null, "envelope", "content_base64,dry_run,filename,instance_id,token,url"],
 	usage_summary: ["account", "none", null, null, "range,token"],
+	usage_drivers: ["account", "none", null, null, "baseline_from,baseline_to,days,from,to,token,view"],
 	// `offset`/`limit` at #595: 315 sources measured at 151,700 bytes, 2.3x a calling host's
 	// 64 KiB limit, so the inventory is paged. Still ungated — paging a read changes nothing
 	// about what it may see.

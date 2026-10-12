@@ -44,6 +44,7 @@ interface BudgetLimitRow {
 	delegations: number | null;
 	max_depth: number | null;
 	loop_max_iterations: number | null;
+	spend_alert_micros: number | null;
 }
 
 /**
@@ -62,6 +63,8 @@ export const BUDGET_LIMIT_FIELDS = [
 	{ column: "delegations", field: "perTreeDelegations", max: MAX_PER_TREE_DELEGATIONS },
 	{ column: "max_depth", field: "perTreeMaxDepth", max: MAX_PER_TREE_DEPTH },
 	{ column: "loop_max_iterations", field: "loopMaxIterations", max: MAX_LOOP_ITERATIONS },
+	// An alert, not a ceiling (#1040): a push when 24h charged spend reaches it; it never stops a run.
+	{ column: "spend_alert_micros", field: "spendAlertMicros", max: MAX_CHARGED_MICROS },
 ] as const satisfies readonly { column: keyof BudgetLimitRow; field: string; max: number }[];
 
 type BudgetLimitColumn = (typeof BUDGET_LIMIT_FIELDS)[number]["column"];
@@ -105,7 +108,7 @@ async function readLimitRows(
 		const rows = await db
 			.prepare(
 				`SELECT user_id, token_ceiling, charged_micros_ceiling,
-				        per_tree_cost_micros, delegations, max_depth, loop_max_iterations
+				        per_tree_cost_micros, delegations, max_depth, loop_max_iterations, spend_alert_micros
 				   FROM account_budget_limits
 				  WHERE user_id IN (?1, '__platform__')`,
 			)
@@ -182,6 +185,7 @@ function buildResponse(
 			perTreeDelegations: perAccountRow?.delegations ?? null,
 			perTreeMaxDepth: perAccountRow?.max_depth ?? null,
 			loopMaxIterations: perAccountRow?.loop_max_iterations ?? null,
+			spendAlertMicros: perAccountRow?.spend_alert_micros ?? null,
 		},
 		/** The effective value after resolution. */
 		effective: {
@@ -216,6 +220,7 @@ function buildResponse(
 			perTreeDelegations: MAX_PER_TREE_DELEGATIONS,
 			perTreeMaxDepth: MAX_PER_TREE_DEPTH,
 			loopMaxIterations: MAX_LOOP_ITERATIONS,
+			spendAlertMicros: MAX_CHARGED_MICROS,
 		},
 		/**
 		 * Whether these ceilings are currently enforced. When false the limits are stored and
@@ -252,7 +257,7 @@ budgetRoutes.get("/limits", async (c) => {
  *
  * Patch semantics, matching the convention `PUT /v1/instances/:id/behaviour` already established
  * in this codebase (`applyBehaviourPatch`): a field ABSENT from the body is left as stored; a field
- * present as `null` clears the per-account override so it inherits from the next tier. All six
+ * present as `null` clears the per-account override so it inherits from the next tier. Every field
  * resolving to null = the row is deleted (full inherit).
  *
  * This used to be a full replace, where absent also meant "clear". It read as coherent because the
@@ -301,15 +306,16 @@ budgetRoutes.put("/limits", async (c) => {
 	} else {
 		await c.env.DB.prepare(
 			`INSERT INTO account_budget_limits
-			   (user_id, token_ceiling, charged_micros_ceiling, per_tree_cost_micros, delegations, max_depth, loop_max_iterations)
-			 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+			   (user_id, token_ceiling, charged_micros_ceiling, per_tree_cost_micros, delegations, max_depth, loop_max_iterations, spend_alert_micros)
+			 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
 			 ON CONFLICT (user_id) DO UPDATE SET
 			   token_ceiling          = excluded.token_ceiling,
 			   charged_micros_ceiling = excluded.charged_micros_ceiling,
 			   per_tree_cost_micros   = excluded.per_tree_cost_micros,
 			   delegations            = excluded.delegations,
 			   max_depth              = excluded.max_depth,
-			   loop_max_iterations    = excluded.loop_max_iterations`,
+			   loop_max_iterations    = excluded.loop_max_iterations,
+			   spend_alert_micros     = excluded.spend_alert_micros`,
 		)
 			.bind(
 				uid,
@@ -319,6 +325,7 @@ budgetRoutes.put("/limits", async (c) => {
 				next.delegations,
 				next.max_depth,
 				next.loop_max_iterations,
+				next.spend_alert_micros,
 			)
 			.run();
 	}

@@ -17,7 +17,7 @@ import {
 	parseSseEvents,
 } from "./anthropic-stream.js";
 import { endOnUserTurn, mergeContent, pairToolBlocks } from "./anthropic-tool-turns.js";
-import { recordUsage, type UsageContext } from "./usage.js";
+import { recordUsage, workersAiToolCallCount, type UsageContext } from "./usage.js";
 import { fromWorkersAiResult, toWorkersAiBody, WorkersAiUnsupportedContentError, workersAiModelFor } from "./workers-ai-protocol.js";
 import { isWorkersAiModel } from "./brain-models.js";
 import { redactCloudflareUpstream } from "./cloudflare-redact.js";
@@ -122,6 +122,7 @@ export async function runUserWorkersAi(
 	 *  `provider`: the provider this TURN already ran on (#853 finding 9) — it continues there or fails. */
 	opts?: { honorModel?: boolean; provider?: AiProvider },
 ): Promise<unknown> {
+	if (ctx) ctx = { ...ctx, attempt: (body as { streamDeadlines?: StreamDeadlines } | null)?.streamDeadlines?.attempt ?? ctx.attempt }; // #1040: retries on the ledger
 	if (ctx?.promptSections?.length) {
 		await logPromptSectionEstimates(env, {
 			userId,
@@ -491,7 +492,7 @@ async function runAnthropic(
 	// Ledger the call for the Usage page. Best-effort: recordUsage swallows all errors,
 	// so it can never break the AI call — it's a small awaited D1 insert on the return path.
 	if (ctx) {
-		await recordUsage(env, { ...ctx, userId, provider: "anthropic", model: (anthropicBody.model as string) || "claude-sonnet-4-6" }, usage);
+		await recordUsage(env, { ...ctx, userId, provider: "anthropic", model: (anthropicBody.model as string) || "claude-sonnet-4-6" }, { ...usage, toolCalls: toolUse.length });
 	}
 
 	// WHY the response carries the provider's verdict (#397): `stop_reason: "max_tokens"` sits in
@@ -762,7 +763,7 @@ async function runCloudflareAi(
 		const cu = (data as { usage?: Record<string, number> })?.usage || {};
 		await recordUsage(env, { ...ctx, userId, provider: "cloudflare", model }, {
 			input: cu.prompt_tokens || cu.input_tokens || 0,
-			output: cu.completion_tokens || cu.output_tokens || 0,
+			output: cu.completion_tokens || cu.output_tokens || 0, toolCalls: workersAiToolCallCount(data),
 		});
 	}
 	// One result shape for every brain, whichever habit the model has (#851) — see workers-ai-protocol.

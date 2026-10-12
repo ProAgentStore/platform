@@ -22,6 +22,8 @@ export interface StreamDeadlines {
 	silenceMs?: number;
 	/** Wall-clock cap for this one request, never above `AI_TOTAL_TIMEOUT_MS`. */
 	totalMs?: number;
+	/** Which attempt this is under the controller recovery policy — recorded on the usage row (#1040). */
+	attempt?: number;
 }
 
 /** The measured phase as a message suffix (#907) — parsed back by `streamPhaseFromMessage`. */

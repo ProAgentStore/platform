@@ -303,6 +303,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	system_status: "read",
 	ticket_thread: "read",
 	usage_summary: "read",
+	usage_drivers: "read",
 	vector_stats: "read",
 	whoami: "read",
 

@@ -292,7 +292,7 @@ describe("the Co-pilot door recovers a stalled controller reply (#907)", () => {
 		const res = await call("POST", "/coding/sessions/A/agent", { message: "can you check the test?" });
 		expect(res.body).toMatchObject({ delegated: true });
 		expect(h.ai).toHaveBeenCalledTimes(2);
-		expect((h.ai.mock.calls[0][3] as { streamDeadlines: unknown }).streamDeadlines).toEqual({ preContentMs: 60_000, silenceMs: 45_000, totalMs: 240_000 });
+		expect((h.ai.mock.calls[0][3] as { streamDeadlines: unknown }).streamDeadlines).toEqual({ preContentMs: 60_000, silenceMs: 45_000, totalMs: 240_000, attempt: 1 });
 		expect(acts).toEqual([["A", expect.stringContaining("run pnpm vitest run src/x.test.ts")]]);
 	});
 

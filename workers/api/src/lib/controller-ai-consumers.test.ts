@@ -39,7 +39,7 @@ describe("the Loop orchestrator (#907)", () => {
 		const out = await runLoopDecide(env, "u1", "inst1", decideInput);
 		expect(out).toMatchObject({ decision: "continue", nextInstruction: "run the tests" });
 		expect(runUserWorkersAi).toHaveBeenCalledTimes(2);
-		expect((runUserWorkersAi.mock.calls[0][3] as { streamDeadlines: unknown }).streamDeadlines).toEqual({ preContentMs: 60_000, silenceMs: 45_000, totalMs: 240_000 });
+		expect((runUserWorkersAi.mock.calls[0][3] as { streamDeadlines: unknown }).streamDeadlines).toEqual({ preContentMs: 60_000, silenceMs: 45_000, totalMs: 240_000, attempt: 1 });
 	});
 
 	it("does not retry a non-stall failure", async () => {

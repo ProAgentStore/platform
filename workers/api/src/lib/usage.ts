@@ -35,11 +35,15 @@ export interface UsageContext {
 	promptSections?: readonly PromptSectionInput[];
 	promptSource?: string | null;
 	promptPhase?: string | null;
+	/** 1 for a first call, 2+ for a controller retry after a provider stall (#907, #1040). */
+	attempt?: number | null;
 }
 
 export interface UsageTokens {
 	input: number;
 	output: number;
+	/** How many tool calls the reply requested (#1040) — a count, never the calls themselves. */
+	toolCalls?: number;
 	/**
 	 * Prompt-cache tokens, kept SEPARATE from `input` (#212).
 	 *
@@ -86,9 +90,12 @@ export async function recordUsage(
 		// calls we most want to see, and undercount spend (a cache read is not free).
 		if (input === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0) return;
 		const cost = estimateCostMicros(args.model, input, output, { read: cacheRead, write: cacheWrite, write1h: n(usage.cacheWrite1h) });
+		// #1040: what the call served (objective, phase), whether it asked for tools, and whether it was a
+		// retry — ids, closed labels and counts only, clipped, never prompt or reply text.
+		const label = (v: unknown) => (typeof v === "string" && v ? v.slice(0, 64) : null);
 		await env.DB.prepare(
-			`INSERT INTO ai_usage (id, user_id, agent_id, instance_id, provider, model, kind, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_micros, payer, created_at)
-			 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'byok-api', datetime('now'))`,
+			`INSERT INTO ai_usage (id, user_id, agent_id, instance_id, provider, model, kind, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_micros, payer, created_at, trace_id, source, phase, tool_calls, attempt)
+			 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'byok-api', datetime('now'), ?13, ?14, ?15, ?16, ?17)`,
 		)
 			.bind(
 				crypto.randomUUID(),
@@ -103,6 +110,11 @@ export async function recordUsage(
 				cacheRead,
 				cacheWrite,
 				cost,
+				typeof args.traceId === "string" && args.traceId ? args.traceId.slice(0, 128) : null,
+				label(args.promptSource ?? args.kind),
+				label(args.promptPhase),
+				n(usage.toolCalls),
+				Math.max(1, n(args.attempt) || 1),
 			)
 			.run();
 	} catch {
@@ -679,4 +691,11 @@ export async function accountUsageSince(env: Env, userId: string, hours = 24): P
 		// rather than freeze every agent on a transient D1 blip.
 		return { chargedMicros: 0, tokens: 0 };
 	}
+}
+
+/** Tool calls a Workers AI reply requested, whichever shape it came back in (#1040). */
+export function workersAiToolCallCount(data: unknown): number {
+	const r = (data && typeof data === "object" && "result" in data ? (data as { result: unknown }).result : data) as { tool_calls?: unknown; choices?: Array<{ message?: { tool_calls?: unknown } }> } | null;
+	const calls = r?.tool_calls ?? r?.choices?.[0]?.message?.tool_calls;
+	return Array.isArray(calls) ? calls.length : 0;
 }

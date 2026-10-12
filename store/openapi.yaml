@@ -13020,6 +13020,66 @@ paths:
                   range: { type: string }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /v1/usage/drivers:
+    get:
+      summary: What is driving your AI spend
+      description: |
+        One window of the `ai_usage` ledger (#1040): top spend by instance, model, phase
+        (`source · phase`), objective (trace id) and day; totals including cache-read share,
+        tool-call turns, retried calls and duplicated calls; and savings `opportunities`, each an
+        ESTIMATE in micros with its basis and where to act. Nothing is changed. The ledger holds
+        ids, labels and counts — never prompt or reply text.
+      operationId: getUsageDrivers
+      tags: [Usage]
+      parameters:
+        - { name: days, in: query, description: "Current window: the last N days (1–90).", schema: { type: integer, default: 7 } }
+        - { name: from, in: query, description: Current window start (UTC date). Overrides `days`., schema: { type: string, format: date } }
+        - { name: to, in: query, description: Current window end (UTC date, exclusive). Default now., schema: { type: string, format: date } }
+      responses:
+        "200":
+          description: Spend drivers
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  totals: { type: object, additionalProperties: true }
+                  opportunities: { type: array, items: { type: object, additionalProperties: true } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/usage/savings:
+    get:
+      summary: Verify a saving against a baseline
+      description: |
+        A baseline window against the current one (#1040), per objective when both recorded
+        objectives and per call otherwise, so less work cannot pose as a saving. Returns both
+        windows' metrics, `savedMicros` (positive = saved), a `verdict` and a one-line `summary`.
+        The default baseline is the same length immediately before the current window.
+      operationId: getUsageSavings
+      tags: [Usage]
+      parameters:
+        - { name: days, in: query, description: "Current window: the last N days (1–90).", schema: { type: integer, default: 7 } }
+        - { name: from, in: query, description: Current window start (UTC date). Overrides `days`., schema: { type: string, format: date } }
+        - { name: to, in: query, description: Current window end (UTC date, exclusive). Default now., schema: { type: string, format: date } }
+        - { name: baselineFrom, in: query, description: Baseline start (UTC date)., schema: { type: string, format: date } }
+        - { name: baselineTo, in: query, description: Baseline end (UTC date, exclusive). Default the current window's start., schema: { type: string, format: date } }
+      responses:
+        "200":
+          description: Baseline-versus-current comparison
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  verdict: { type: string, enum: [saving, regression, no-change, insufficient-data] }
+                  savedMicros: { type: integer }
+                  summary: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /v1/mcp-audit:
     get:
       summary: Your own MCP tool-call history

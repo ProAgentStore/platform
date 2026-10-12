@@ -502,6 +502,7 @@ const READBACK: Record<string, string | null> = {
 	"set_budget_limits.per_tree_delegations": "usage_summary",
 	"set_budget_limits.per_tree_max_depth": "usage_summary",
 	"set_budget_limits.loop_max_iterations": "usage_summary",
+	"set_budget_limits.spend_alert_micros": "get_budget_limits",
 	// #613: every section `set_account_preferences` writes comes back from the one GET it patches.
 	"set_account_preferences.timezone": "get_account_preferences",
 	"set_account_preferences.notifications": "get_account_preferences",

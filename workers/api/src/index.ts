@@ -61,6 +61,7 @@ import { mcpRoutes } from "./routes/mcp.js";
 import { cloudflareAccessGate, cloudflareAccessMode } from "./lib/cf-access.js";
 import { runDueTriggers } from "./lib/triggers.js";
 import { runDueDeliveries } from "./lib/connections.js";
+import { runSpendAlerts } from "./lib/spend-alerts.js";
 import { runIssueSync } from "./lib/issue-sync.js";
 import { syncActiveLocalBrowserRuns } from "./lib/local-browser/sync.js";
 import { syncActiveTailorRuns } from "./lib/local-artifact/tailor.js";
@@ -345,6 +346,9 @@ export default {
 		// The dedup fix (same PR) stopped NEW excess rows; this sweep cleans up the historical ones.
 		// A missed tick is harmless — the table just stays a bit bigger. Swallows its own errors.
 		ctx.waitUntil(sweepTerminalSnapshots(env).catch(() => undefined));
+		// Daily spend alerts (#1040): an owner's 24h charged spend reaching the alert they set. Bounded,
+		// at most one push per account per day, and it never stops anything.
+		ctx.waitUntil(runSpendAlerts(env).catch((err) => logUnhandled(env, err, { path: "scheduled:spend-alerts", method: "CRON" })));
 		// Close permission requests past their expiry (#1009) — every fifth tick; bounded, and never a
 		// decided or consumed request. Approve and resume re-check expiry themselves; this is what
 		// makes an unattended request read `expired` instead of `pending` forever.

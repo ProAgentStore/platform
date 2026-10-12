@@ -1150,4 +1150,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// #1039: set_application_runner_settings takes `confirm` (auto_submit_real_submissions) to enable auto-submit.
 	"0.1.124": "sha256:78ce02d39068ccc6b7fb4abf09ae34afa3b8a504bc9801d87d4f196362bfba06",
 	"0.1.125": "sha256:a0a82d90bf114a8400cbb58dc5b910cc6569048443a928b1e67cbd029f216f3c",
+	// #1040: usage_drivers (read); set_budget_limits gains spend_alert_micros.
+	"0.1.126": "sha256:49f14b588a9603e60f2dd06bbe65d472aabf6dcb98fb2f1e370d6efd0e1c2164",
 };

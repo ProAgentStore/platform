@@ -4,6 +4,8 @@ import { aggregateUsage, type UsageRow } from "../lib/usage.js";
 import { instanceLabels, usageRowsSql, USAGE_INSTANCE_NAMES_SQL } from "../lib/usage-ids.js";
 import { instanceListView } from "../lib/instance-config.js";
 import { unmeteredUsageSummary } from "../lib/engine-metering.js";
+import { HttpError } from "../lib/auth.js";
+import { compareWindows, DRIVER_ROW_CAP, type DriverRow, spendDrivers, type SpendDrivers } from "../lib/usage-drivers.js";
 import type { Env } from "../types.js";
 
 /**
@@ -80,4 +82,82 @@ usageRoutes.get("/", async (c) => {
 	// and the MCP contract test asserts the `usage_summary` description documents every one — so it
 	// is deliberately left as a plain object literal that both can parse.
 	return c.json({ range, ...summary, unmetered });
+});
+
+const DAY_MS = 86_400_000;
+
+/** A `YYYY-MM-DD` query value as UTC midnight ms, or undefined when absent. */
+function dayParam(v: string | undefined, name: string): number | undefined {
+	if (!v) return undefined;
+	const ms = /^\d{4}-\d{2}-\d{2}$/.test(v) ? Date.parse(`${v}T00:00:00Z`) : Number.NaN;
+	if (!Number.isFinite(ms)) throw new HttpError(400, `${name} must be a date as YYYY-MM-DD.`);
+	return ms;
+}
+
+/**
+ * The windows a drivers/savings request names (#1040). `days` (1–90, default 7) is the current
+ * window ending now; the baseline is the `days` before it unless `baselineFrom`/`baselineTo` name one
+ * — e.g. the week before a change, against the week after it. `to` dates are exclusive.
+ */
+function windows(q: (k: string) => string | undefined) {
+	const days = Math.max(1, Math.min(90, Math.floor(Number(q("days")) || 7)));
+	const curTo = dayParam(q("to"), "to") ?? Date.now();
+	const curFrom = dayParam(q("from"), "from") ?? curTo - days * DAY_MS;
+	const span = curTo - curFrom;
+	if (span <= 0) throw new HttpError(400, "from must be before to.");
+	const baseTo = dayParam(q("baselineTo"), "baselineTo") ?? curFrom;
+	const baseFrom = dayParam(q("baselineFrom"), "baselineFrom") ?? baseTo - span;
+	if (baseTo <= baseFrom) throw new HttpError(400, "baselineFrom must be before baselineTo.");
+	const sql = (ms: number) => new Date(ms).toISOString().replace("T", " ").slice(0, 19);
+	return { current: { from: sql(curFrom), to: sql(curTo) }, baseline: { from: sql(baseFrom), to: sql(baseTo) } };
+}
+
+/** One owner's ledger rows in `[from, to)` (UTC `YYYY-MM-DD HH:MM:SS`), bounded by {@link DRIVER_ROW_CAP}. */
+async function readDriverRows(env: Env, userId: string, from: string, to: string): Promise<{ rows: DriverRow[]; truncated: boolean }> {
+	const rows =
+		(
+			await env.DB.prepare(
+				`SELECT instance_id, provider, model, kind, source, phase, trace_id, tool_calls, attempt,
+				        input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_micros, payer, created_at
+				   FROM ai_usage
+				  WHERE user_id = ?1 AND created_at >= ?2 AND created_at < ?3
+				  ORDER BY created_at DESC
+				  LIMIT ?4`,
+			)
+				.bind(userId, from, to, DRIVER_ROW_CAP)
+				.all<DriverRow>()
+		).results ?? [];
+	return { rows, truncated: rows.length >= DRIVER_ROW_CAP };
+}
+
+async function driversFor(env: Env, uid: string, w: { from: string; to: string }): Promise<SpendDrivers> {
+	const { rows, truncated } = await readDriverRows(env, uid, w.from, w.to);
+	const d = spendDrivers(rows, w);
+	const instRows = (await env.DB.prepare(USAGE_INSTANCE_NAMES_SQL).bind(uid).all<{ id: string; config: string | null; agent_name: string | null }>()).results ?? [];
+	const names = instanceLabels(instRows.map((r) => ({ id: r.id, displayName: instanceListView(r.config).displayName, agentName: r.agent_name })));
+	for (const b of d.byInstance) if (names[b.key]) b.label = names[b.key];
+	return truncated ? { ...d, truncated } : d;
+}
+
+/**
+ * GET /v1/usage/drivers — what is driving spend in one window (#1040): top instances, models,
+ * phases, objectives and days, plus the ledger-proven waste (retries, duplicates, uncached repeated
+ * context) and the estimated saving of each opportunity. Ids, labels and counts only.
+ */
+usageRoutes.get("/drivers", async (c) => {
+	const session = await requireUser(c);
+	const { current } = windows((k) => c.req.query(k));
+	return c.json(await driversFor(c.env, session.uid, current));
+});
+
+/**
+ * GET /v1/usage/savings — a baseline window against the current one, per objective (or per call
+ * when objectives were not recorded), so a change can be shown to have saved money rather than to
+ * have coincided with less work (#1040).
+ */
+usageRoutes.get("/savings", async (c) => {
+	const session = await requireUser(c);
+	const w = windows((k) => c.req.query(k));
+	const [baseline, current] = await Promise.all([driversFor(c.env, session.uid, w.baseline), driversFor(c.env, session.uid, w.current)]);
+	return c.json(compareWindows(baseline, current));
 });

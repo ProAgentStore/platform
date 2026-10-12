@@ -705,7 +705,7 @@ describe("controller AI-provider stall recovery in the Pilot's decide (#907)", (
 		expect(slept).toEqual([2_000]);
 		expect(acts()).toBe(0);
 		// Each attempt carried that attempt's deadlines — the documented defaults on an unconfigured instance.
-		expect(decideCodingAction.mock.calls[0][4]).toEqual({ preContentMs: 60_000, silenceMs: 45_000, totalMs: 240_000 });
+		expect(decideCodingAction.mock.calls[0][4]).toEqual({ preContentMs: 60_000, silenceMs: 45_000, totalMs: 240_000, attempt: 1 });
 		// Telemetry names the provider/model the request ran on and the measured phase — no content.
 		expect(trace("controller_ai.stall")[0]).toMatchObject({ surface: "pilot", provider: "anthropic", model: "claude-sonnet-4-6", attempt: 1, phase: { contentStarted: false, lastEventType: "ping" } });
 		expect(trace("controller_ai.recovered")).toHaveLength(1);

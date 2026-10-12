@@ -12,7 +12,7 @@ Connection methods and the full tool table: [`README.md`](./README.md).
    unless the user explicitly overrides this.
 
 2. **Discover the surface before using it.** The tool list is versioned and
-   *per-connection*: of the 318 tool registrations, 27 are gated to the console surfaces
+   *per-connection*: of the 319 tool registrations, 27 are gated to the console surfaces
    of the agents the connected user actually subscribes to (`apply`, `repo`, `coding`). A
    tool you used last week may be absent today, and a tool present for one user is absent
    for another. Call `tools/list` first; never assume a name exists.
@@ -284,7 +284,7 @@ work.
 | Work board | `instance_board`, `set_board_item_status`, `update_board_ticket`, `create_instance_ticket`, `run_instance_task`, `approve_instance_task` |
 | Local runtime | `register_instance_runtime`, `instance_runtime_status`, coding session tools |
 | Automate | `create_instance_trigger`, `run_instance_trigger`, `create_connection`, `create_supervision` |
-| Observe | `agent_trace`, `list_errors`, `instance_activity`, `list_pipeline_runs`, `usage_summary`, `mcp_audit_log` |
+| Observe | `agent_trace`, `list_errors`, `instance_activity`, `list_pipeline_runs`, `usage_summary`, `usage_drivers`, `mcp_audit_log` |
 | Account reads | `billing_status`, `keys_status`, `email_status`, `connector_status`, `get_profile` |
 
 ## Not supported via MCP

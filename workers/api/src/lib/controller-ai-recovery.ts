@@ -217,7 +217,7 @@ export async function withControllerAiRecovery<T>(policy: ControllerAiPolicy, de
 			throw new ControllerAiStalled(attempt - 1, "ceiling", now() - start, phases);
 		}
 		try {
-			const result = await call({ preContentMs: Math.min(policy.preContentMs, remaining), silenceMs: policy.silenceMs, totalMs: Math.max(1, remaining) }, attempt);
+			const result = await call({ preContentMs: Math.min(policy.preContentMs, remaining), silenceMs: policy.silenceMs, totalMs: Math.max(1, remaining), attempt }, attempt);
 			await finish("recovered", attempt);
 			return result;
 		} catch (err) {

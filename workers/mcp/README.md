@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**318 tool registrations.** 291 are always registered; 27 are gated to the console
+**319 tool registrations.** 292 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -608,10 +608,11 @@ immediately instead of a whole transcript.
 | `platform_health` | Read-only diagnostic (#198): per-component verdict — gateway, auth, state, runner, coding_loop, connectors.github — with live probe latency and this session's recent p50/p95/p99 per stage; works without a session; the same report is public at `/status` | — | | |
 | `billing_status` | Free vs Pro, paywall enforcement | — | | |
 | `usage_summary` | Token usage + estimated cost by agent/model/activity | — | | |
+| `usage_drivers` | What drives spend — top instances, models, phases, objectives, days; retries, duplicates, cache share, estimated savings opportunities — or (`view: savings`) a baseline window against the current one, per objective (#1040) | — | | |
 | `keys_status` | Which providers have a BYOK key — **names only** | — | | |
 | `email_status` | Gmail configured/connected | — | | |
 | `get_budget_limits` | Effective daily AI-spend ceilings, which tier each came from, 24h consumption, and distance to limit | — | | |
-| `set_budget_limits` | Patch per-account budget limits — the two daily ceilings plus the four per-tree/loop knobs; omitted fields keep their stored value, null clears an override; returns re-resolved effective limits | write | yes | |
+| `set_budget_limits` | Patch per-account budget limits — the two daily ceilings plus the four per-tree/loop knobs and the daily spend alert (#1040); omitted fields keep their stored value, null clears an override; returns re-resolved effective limits | write | yes | |
 | `list_notifications` | The account notification feed, newest first, with `unreadCount` — what your agents and runs have been telling you (#613) | — | | |
 | `mark_notification_read` | Mark one notification read by id; fails for an id that is not yours rather than reporting success | write | yes | |
 | `mark_all_notifications_read` | Mark every unread notification read, account-wide | write | yes | |
