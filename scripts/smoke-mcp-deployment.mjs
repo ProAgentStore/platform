@@ -42,6 +42,55 @@ export function assertIdentity(actual, expected) {
 		throw new Error("MCP deployment health/timestamp missing");
 }
 
+/**
+ * Poll the public endpoint until it serves exactly the expected identity (#1051). A successful
+ * Workers deploy can take a while to reach every edge, so a stale identity is retried — but only
+ * until the bounded window closes, and only an exact match ever succeeds: an older version is
+ * never accepted. Every attempt logs expected vs observed and elapsed time.
+ */
+export async function pollIdentity({
+	expected,
+	fetchHealth,
+	windowMs = 180_000,
+	intervalMs = 10_000,
+	now = Date.now,
+	sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+	log = console.log,
+}) {
+	const started = now();
+	const elapsed = () => `${((now() - started) / 1000).toFixed(1)}s`;
+	let failure;
+	let observed;
+	for (let attempt = 1; ; attempt++) {
+		let current;
+		try {
+			current = await fetchHealth();
+			observed = current;
+			assertIdentity(current, expected);
+			log(
+				`MCP deployment verified after ${elapsed()} (attempt ${attempt}): ${expected.server_version} ${expected.build_commit}`,
+			);
+			return { attempts: attempt, elapsedMs: now() - started };
+		} catch (error) {
+			failure = error;
+			log(
+				`attempt ${attempt} at ${elapsed()}: expected ${expected.server_version} ${expected.build_commit}, observed ${current?.server_version ?? "-"} ${current?.build_commit ?? "-"} — ${error.message}`,
+			);
+		}
+		if (now() - started + intervalMs > windowMs) break;
+		await sleep(intervalMs);
+	}
+	throw new Error(
+		[
+			`MCP deployment not serving the expected identity after ${elapsed()} (window ${windowMs / 1000}s).`,
+			`Last error: ${failure.message}`,
+			`Expected: ${JSON.stringify(expected)}`,
+			`Observed: ${observed ? JSON.stringify(observed) : "no successful health response"}`,
+			"If the observed build is the previous commit, the new version never went live: check the deploy step's Current Version ID in the Cloudflare dashboard (Workers > proagentstore-mcp > Deployments) and that the mcp.proagentstore.online route points at it, then re-run this workflow.",
+		].join("\n"),
+	);
+}
+
 async function main() {
 	const sources = await Promise.all(
 		["server-version", "tool-count", "surface-lock"].map((name) =>
@@ -51,26 +100,17 @@ async function main() {
 			),
 		),
 	);
-	const expected = expectedIdentity(...sources, process.env.GITHUB_SHA);
-	let failure;
-	for (let attempt = 0; attempt < 5; attempt++) {
-		try {
+	await pollIdentity({
+		expected: expectedIdentity(...sources, process.env.GITHUB_SHA),
+		fetchHealth: async () => {
 			const response = await fetch("https://mcp.proagentstore.online/health", {
 				signal: AbortSignal.timeout(10000),
 				cache: "no-store",
 			});
 			if (!response.ok) throw new Error(`MCP health HTTP ${response.status}`);
-			assertIdentity(await response.json(), expected);
-			console.log(
-				`MCP deployment verified: ${expected.server_version} ${expected.build_commit}`,
-			);
-			return;
-		} catch (error) {
-			failure = error;
-		}
-		if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, 5000));
-	}
-	throw failure;
+			return response.json();
+		},
+	});
 }
 
 if (
