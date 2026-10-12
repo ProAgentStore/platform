@@ -18,6 +18,9 @@ env:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    # An overall bound (#1047): a full run takes ~17 minutes, and without one a hung step
+    # blocks until GitHub's six-hour default.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -277,7 +280,13 @@ jobs:
       # WebKit is not a second opinion, it is the engine every phone runs. The mobile geometry
       # guards are scoped to it in playwright.config.ts (#384); without the binary here that
       # project fails to launch rather than skipping.
-      - run: pnpm exec playwright install --with-deps chromium webkit
+      #
+      # `--with-deps` runs apt-get, and nothing bounded it: run 38264810876's log froze at apt
+      # `Get:60` (#1047). The wrapper runs the same command with an 8-minute bound per attempt,
+      # a 30s heartbeat, diagnostics on a stall, and up to 3 attempts — both browsers, always.
+      - name: Install Playwright browsers (bounded, with diagnostics)
+        timeout-minutes: 30
+        run: node scripts/install-playwright-browsers.mjs
       - run: pnpm test:e2e
       - name: Typecheck API worker
         run: cd workers/api && npx tsc --noEmit
