@@ -188,6 +188,32 @@ describe("notifications: events the policy decides, links that carry ids only (#
 	});
 });
 
+describe("a push never quotes a URL or token from the run's objective (#1031)", () => {
+	// The real objectives: a lead verification's starts with the posting URL; an owner's research objective is free text.
+	const OBJECTIVES = [
+		"Verify one job posting, read-only. Open https://www.seek.com.au/job/81234567 and decide whether it is the job, and whether it is still open.",
+		"Check https://jobs.example.com/apply?ref=PERSONALREF&session=PERSONALSESSION for openings, token=sk-ant-api03-PERSONALSECRETKEY0123456789",
+	];
+	it.each(OBJECTIVES)("pause and end pushes name the site by host only: %s", async (objective) => {
+		d1.exec(`UPDATE local_browser_runs SET objective = '${objective.replace(/'/g, "''")}' WHERE id = 'run-1'`);
+		await pause("captcha"); // takeover_required
+		await call("PUT", "/i1/browser-verification", { enabled: true, takeover: "never" });
+		d1.exec(`UPDATE local_browser_runs SET status = 'running' WHERE id = 'run-1'`);
+		await pause("captcha"); // ends the attempt: browser_verification_failed
+		const rows = await notifications();
+		expect(rows.length).toBeGreaterThanOrEqual(2);
+		for (const r of rows) expect(`${r.title} ${r.body}`).not.toMatch(/https?:|\/job\/|PERSONAL|sk-ant|session=|ref=/i);
+		expect(rows.map((r) => r.body).join(" ")).toMatch(/www\.seek\.com\.au|jobs\.example\.com/); // the host still says which site
+	});
+
+	it("pushSafeObjective: host only, credentials redacted, bounded", async () => {
+		const { pushSafeObjective } = await import("../lib/local-browser/sync.js");
+		expect(pushSafeObjective("Open https://www.linkedin.com/jobs/view/4012345678/?trackingId=X and check it")).toBe("Open www.linkedin.com and check it");
+		expect(pushSafeObjective("check the posting ".repeat(20))).toHaveLength(80);
+		expect(pushSafeObjective("use token sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123")).not.toContain("sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123");
+	});
+});
+
 describe("the mobile preference applies to the remote view itself (#1031)", () => {
 	it("a phone is refused the frame when mobile takeover is off; a desktop is not", async () => {
 		await call("PUT", "/i1/browser-verification", { enabled: true, allowMobile: false });

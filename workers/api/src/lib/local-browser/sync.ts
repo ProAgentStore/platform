@@ -26,6 +26,7 @@ import {
 	type LocalBrowserPauseReason,
 	parseLocalBrowserEvent,
 	parseLocalBrowserResult,
+	redactText,
 } from "./contract.js";
 import { isTerminal } from "./policy.js";
 import {
@@ -58,6 +59,24 @@ const PAUSE_WORDS: Record<LocalBrowserPauseReason, string> = {
  * makes no progress until a person acts, and only someone with the run page open would see it.
  * Best-effort — a failed notification must not undo the pause it reports.
  */
+/**
+ * A run's objective as a push may quote it (#1031: never a URL, token, session or secret). A push body travels
+ * through the platform push services, and an objective is free text: a lead verification's begins with the
+ * posting URL, and an owner's research objective may hold any link — tracking parameters and signed-in tokens
+ * included. Every URL is reduced to its host, credential-shaped text is redacted, and the result is clipped.
+ */
+export function pushSafeObjective(objective: string, max = 80): string {
+	const hosted = objective.replace(/\b(?:https?|wss?|ftp):\/\/[^\s"'<>]+/gi, (raw) => {
+		try {
+			return new URL(raw).hostname;
+		} catch {
+			return "a link";
+		}
+	});
+	const safe = redactText(hosted).replace(/\s+/g, " ").trim();
+	return safe.length > max ? `${safe.slice(0, max - 1).trimEnd()}…` : safe;
+}
+
 /** The instance's display name for a notification title. */
 export async function agentName(env: Env, uid: string, instanceId: string): Promise<string> {
 	const row = await env.DB.prepare("SELECT i.config, a.name FROM agent_instances i JOIN agents a ON a.id = i.agent_id WHERE i.id = ?1 AND i.user_id = ?2")
@@ -75,7 +94,7 @@ async function notifyPaused(env: Env, uid: string, instanceId: string, run: Loca
 	const agent = await agentName(env, uid, instanceId);
 	const why = reason ? PAUSE_WORDS[reason] : "is waiting for you";
 	const link = takeover ? deepLinkFor({ kind: "browser-takeover", instanceId, takeover }) : deepLinkFor({ kind: "local-browser-run", instanceId, runId: run.id });
-	await notifyUser(env, uid, "local-browser", `⏸ ${agent} ${why}`, `Research run “${run.objective.slice(0, 80)}” is paused until you act.`, link, {
+	await notifyUser(env, uid, "local-browser", `⏸ ${agent} ${why}`, `Research run “${pushSafeObjective(run.objective)}” is paused until you act.`, link, {
 		kind: "alert",
 		instanceId,
 		key: `local-browser:${run.id}:${now}`,
@@ -122,7 +141,7 @@ async function notifyEnded(env: Env, uid: string, instanceId: string, run: Local
 		uid,
 		"local-browser",
 		ok ? `✓ ${agent} finished a browser verification` : `✕ ${agent}'s browser verification did not finish`,
-		ok ? `“${run.objective.slice(0, 80)}” finished.` : `“${run.objective.slice(0, 80)}” ended without a result${run.errorCode ? ` (${run.errorCode})` : ""}.`,
+		ok ? `“${pushSafeObjective(run.objective)}” finished.` : `“${pushSafeObjective(run.objective)}” ended without a result${run.errorCode ? ` (${run.errorCode})` : ""}.`,
 		deepLinkFor({ kind: "local-browser-run", instanceId, runId: run.id }),
 		{ kind: ok ? "update" : "alert", instanceId, key: `local-browser-ended:${run.id}`, event: ok ? "browser_verification_completed" : "browser_verification_failed" },
 	);
