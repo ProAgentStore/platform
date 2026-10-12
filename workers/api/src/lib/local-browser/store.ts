@@ -4,6 +4,7 @@
  * check from becoming a cross-tenant read.
  */
 import type { Env } from "../../types.js";
+import { closeLiveTakeoverFor } from "../browser-takeovers.js";
 import { sqlLiteralList } from "../sql.js";
 import type { LocalBrowserEvent, LocalBrowserPlatformEventType, LocalBrowserResultEnvelope } from "./contract.js";
 import { ACTIVE_RUN_STATUSES, type EffectiveLocalBrowserPolicy, type LocalBrowserRunStatus, type LocalBrowserSettings, canTransition } from "./policy.js";
@@ -221,6 +222,11 @@ export async function transitionLocalBrowserRun(env: DB, instanceId: string, use
 		)
 		.run();
 	if ((res.meta?.changes ?? 0) === 0) return null;
+	// The run's takeover follows the run (#1031), from the one place a run's state is written, so no
+	// path that resumes or ends a run can leave its takeover open: paused → running hands it back,
+	// and any end closes it. Best-effort: a takeover row never blocks the run it describes.
+	if (run.status === "paused" && t.to === "running") await closeLiveTakeoverFor(env, userId, instanceId, "local_browser_run", runId, "resumed", now).catch(() => undefined);
+	else if (terminal) await closeLiveTakeoverFor(env, userId, instanceId, "local_browser_run", runId, "ended", now, "run_finished").catch(() => undefined);
 	return getLocalBrowserRun(env, instanceId, userId, runId);
 }
 

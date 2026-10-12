@@ -221,6 +221,7 @@ const PARAMS: Record<string, string> = {
 	docId: "doc-1",
 	taskId: "task-1",
 	runId: "site-builder-run-1",
+	takeoverId: "takeover-1",
 	artifactId: "a".repeat(64),
 	turnId: "turn-1",
 	uploadId: "upload-1",

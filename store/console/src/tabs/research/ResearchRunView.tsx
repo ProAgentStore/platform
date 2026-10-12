@@ -1,3 +1,4 @@
+import TakeoverBanner from "../../components/TakeoverBanner";
 import { telemetryRows } from "../../lib/scanSchedule";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -77,6 +78,8 @@ export default function ResearchRunView({ instanceId, runId }: { instanceId: str
 
 	return (
 		<div className="max-w-3xl flex flex-col gap-3 sm:gap-4">
+			{/* #1031: a paused run's durable takeover — resume or decline it here, or with browser_takeover_transition. */}
+			<TakeoverBanner instanceId={instanceId} subjectKind="local_browser_run" subjectId={runId} />
 			<div className="flex flex-wrap items-center gap-2">
 				<Button variant="ghost" size="sm" onClick={() => navigate(`/instances/${instanceId}/research`)}>
 					← All runs

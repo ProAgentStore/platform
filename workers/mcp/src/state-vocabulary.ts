@@ -249,6 +249,9 @@ export const REPO_CI_STATES = ["failing", "unknown", "pending", "passing", "none
  */
 export const BROWSER_RUNTIME_INELIGIBILITY = ["not_attached", "unhealthy", "runner_too_old", "not_probed"] as const;
 
+/** A durable browser takeover's state (#1031) — a COPY of `TAKEOVER_STATES` in `workers/api/src/lib/browser-takeovers.ts`. */
+export const BROWSER_TAKEOVER_STATES = ["requested", "active", "resumed", "ended", "expired"] as const;
+
 /**
  * The statuses `clear_finished_tasks` actually sweeps.
  *
@@ -367,6 +370,11 @@ export const BACKED_VOCABULARIES: Record<string, StateVocabulary> = {
 	"browser runtime ineligibility": {
 		sources: ["workers/api/src/lib/browser-verification-runtimes.ts"],
 		values: BROWSER_RUNTIME_INELIGIBILITY,
+	},
+	// #1031. browser_takeover_list / _get publish a takeover's state.
+	"browser takeover state": {
+		sources: ["workers/api/src/lib/browser-takeovers.ts"],
+		values: BROWSER_TAKEOVER_STATES,
 	},
 	// #961. `fleet_snapshot` publishes it; the API derives it in one pure function.
 	"fleet status": {

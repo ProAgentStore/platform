@@ -1143,4 +1143,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.120": "sha256:98d81f5d01edeb88e6db4ffd54551a50c412632d49db18f9a6524dfec4660da2",
 	// #1031: get/set_instance_browser_verification (read/write) and list_eligible_browser_runtimes (read).
 	"0.1.121": "sha256:c38a2254bad1d57b90d7378ea586a7a5d6f2c4892b28902ac5077c94a3c9c3c1",
+	// #1031: browser_takeover_list/get (read), browser_takeover_request (write), browser_takeover_transition (runtime).
+	"0.1.122": "sha256:81a8a7c4627b851255e19fb24c3fc03ece541c2e1880b5441b428f1c3dda7508",
 };

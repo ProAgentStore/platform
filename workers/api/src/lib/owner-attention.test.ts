@@ -39,13 +39,25 @@ const deps = (over: Partial<AttentionDeps<Env>> = {}): AttentionDeps<Env> => ({ 
 
 describe("the event vocabulary is data, usable by any agent (#991)", () => {
 	it("declares each kind of attention with what it means, and what may be turned off", () => {
-		expect(OWNER_ATTENTION_EVENTS.map((e) => e.id)).toEqual(["approval_required", "input_required", "blocker_required", "decision_required"]);
+		expect(OWNER_ATTENTION_EVENTS.map((e) => e.id)).toEqual([
+			"approval_required",
+			"input_required",
+			"blocker_required",
+			"takeover_required",
+			"browser_verification_failed",
+			"browser_verification_completed",
+			"decision_required",
+		]);
 		for (const e of OWNER_ATTENTION_EVENTS) {
 			expect(e.label.length, e.id).toBeGreaterThan(3);
 			expect(e.description.length, e.id).toBeGreaterThan(20);
-			// Every one is a human BLOCKED on it, which is what makes it an alert rather than news.
-			expect(e.kind, e.id).toBe("alert");
+			// A `*_required` event is a human BLOCKED on it, which is what makes it an alert rather than
+			// news. #1031 added the first events that are not: a verification finished (news, `update`)
+			// or failed (an `alert` — nothing waits, but the owner must hear it). They are here because a
+			// policy rule can only select an event this vocabulary names.
+			if (e.id.endsWith("_required")) expect(e.kind, e.id).toBe("alert");
 		}
+		expect(OWNER_ATTENTION_EVENTS.find((e) => e.id === "browser_verification_completed")?.kind).toBe("update");
 		expect(isOwnerAttentionEvent("approval_required")).toBe(true);
 		expect(isOwnerAttentionEvent("something_invented")).toBe(false);
 	});

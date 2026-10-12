@@ -1,3 +1,5 @@
+import { closeLiveTakeoverFor, transitionTakeover } from "../lib/browser-takeovers.js";
+import { takeoverGate } from "./instances-browser-takeovers.js";
 import { LEGACY_JOB_APPLY_RETIRED_MESSAGE } from "../lib/agent-retirement.js";
 import { markHumanAnswered } from "../lib/coder-question-store.js";
 import { overLimit } from "../lib/write-limits.js";
@@ -425,6 +427,8 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		const taskId = c.req.param("taskId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
 		const runtime = await requireLiveRuntime(c.env, instanceId, session.uid);
+		// #1031: no remote view without a durable takeover; showing the frame opens it (→ active).
+		await takeoverGate(c.env, session.uid, instanceId, runtime, taskId, { open: true, device: c.req.query("device") });
 		const res = await callRuntime(c.env, runtime, `/takeover/${encodeURIComponent(taskId)}/frame`);
 		return c.json((await runtimeJson(res)) as object, runtimeStatus(res, 200));
 	});
@@ -436,6 +440,7 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		const taskId = c.req.param("taskId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
 		const runtime = await requireLiveRuntime(c.env, instanceId, session.uid);
+		await takeoverGate(c.env, session.uid, instanceId, runtime, taskId, { open: true, device: c.req.query("device") });
 		const body = await c.req.text();
 		const res = await callRuntime(c.env, runtime, `/takeover/${encodeURIComponent(taskId)}/input`, { method: "POST", body });
 		return c.json((await runtimeJson(res)) as object, runtimeStatus(res, 200));
@@ -448,7 +453,9 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		const taskId = c.req.param("taskId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
 		const runtime = await requireLiveRuntime(c.env, instanceId, session.uid);
+		const takeover = await takeoverGate(c.env, session.uid, instanceId, runtime, taskId, { open: false });
 		const res = await callRuntime(c.env, runtime, `/takeover/${encodeURIComponent(taskId)}/resume`, { method: "POST" });
+		if (res.ok) await transitionTakeover(c.env, session.uid, instanceId, takeover.id, "resumed").catch(() => undefined);
 		return c.json((await runtimeJson(res)) as object, runtimeStatus(res, 200));
 	});
 
@@ -603,6 +610,8 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		await requireOwnedInstance(c.env, instanceId, session.uid);
 		const runtime = await requireLiveRuntime(c.env, instanceId, session.uid);
 		const res = await callRuntime(c.env, runtime, `/takeover/${encodeURIComponent(taskId)}/end`, { method: "POST" });
+		// Ending is never gated — a person must always be able to let go — but it is recorded (#1031).
+		if (res.ok) await closeLiveTakeoverFor(c.env, session.uid, instanceId, "runtime_task", taskId, "ended", Date.now(), "declined").catch(() => undefined);
 		return c.json((await runtimeJson(res)) as object, runtimeStatus(res, 200));
 	});
 

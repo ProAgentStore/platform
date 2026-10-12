@@ -102,6 +102,21 @@ export function localBrowserRunLink(instanceId: string, runId?: string): string 
  * owner and Runner.  Query state keeps it inside the existing Applications tab grammar, rather
  * than adding a third splat segment that `InstanceDetail` would silently discard.
  */
+/**
+ * One durable browser takeover (#1031): the page of the thing that is waiting — the research run, or
+ * the runner task whose remote view the console opens — with `?takeover=<id>` so it shows that
+ * takeover's state. Ids only: never the page a run is on, a session or a token.
+ */
+export function browserTakeoverLink(instanceId: string, takeover: { id: string; subjectKind: string; subjectId: string }): string {
+	const page =
+		takeover.subjectKind === "local_browser_run"
+			? localBrowserRunLink(instanceId, takeover.subjectId)
+			: takeover.subjectKind === "runtime_task"
+				? instanceRunLink(instanceId, takeover.subjectId)
+				: instanceSettingsLink(instanceId);
+	return `${page}?takeover=${encodeURIComponent(takeover.id)}`;
+}
+
 export function applicationHandoffLink(instanceId: string, handoffId: string): string {
 	return `${instanceLink(instanceId)}/applications?handoff=${encodeURIComponent(handoffId)}`;
 }
@@ -242,6 +257,8 @@ export type NotificationSubject =
 	| { kind: "application"; instanceId: string; applicationId: string }
 	/** One short-lived, exact-run browser handoff for a login or CAPTCHA pause (#1013). */
 	| { kind: "application-handoff"; instanceId: string; handoffId: string }
+	/** One durable browser takeover (#1031). */
+	| { kind: "browser-takeover"; instanceId: string; takeover: { id: string; subjectKind: string; subjectId: string } }
 	/** A secure-input request waiting for the owner (#934). */
 	| { kind: "secure-input"; instanceId: string; requestId: string }
 	/** An exact owner-scoped permission request, focused inside Permissions & Connections (#1009). */
@@ -281,6 +298,8 @@ export function deepLinkFor(subject: NotificationSubject): DeepLink {
 				return instanceBoardLink(subject.instanceId);
 			case "application-handoff":
 				return applicationHandoffLink(subject.instanceId, subject.handoffId);
+			case "browser-takeover":
+				return browserTakeoverLink(subject.instanceId, subject.takeover);
 			case "secure-input":
 				return secureInputNotificationLink(subject.instanceId, subject.requestId);
 			case "permission-request":

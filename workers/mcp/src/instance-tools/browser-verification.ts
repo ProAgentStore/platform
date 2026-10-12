@@ -85,4 +85,106 @@ export function registerBrowserVerificationTools(server: McpServer, ctx: Instanc
 			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
 		},
 	);
+
+	// ── Durable takeovers (#1031) — the same rows the console's takeover banner and list read ──
+	const TAKEOVER_STATES = ["requested", "active", "resumed", "ended", "expired"] as const;
+	const TAKEOVER_SUBJECTS = ["local_browser_run", "runtime_task", "manual"] as const;
+	const TAKEOVER_REASONS = ["login_required", "captcha", "consent_required", "access_blocked", "paywall", "write_affordance", "manual"] as const;
+
+	server.tool(
+		"browser_takeover_list",
+		"List one instance's browser takeovers, newest first (#1031). A takeover is recorded BEFORE any remote control is shown, and moves requested → active (opened) → resumed (handed back to the run), or ended (declined, or the run finished) / expired (nobody came before expiresAt). Each row carries its subject (local_browser_run / runtime_task / manual and its id), reason, mobileAllowed, endReason and times — ids only, never a page URL, frame, cookie, token or session. Filter by state or subject. Read-only.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances. Copy it exactly."),
+			state: z.enum(TAKEOVER_STATES).optional().describe("Only takeovers in this state."),
+			subject_kind: z.enum(TAKEOVER_SUBJECTS).optional().describe("Only takeovers about this kind of thing."),
+			subject_id: z.string().optional().describe("Only takeovers about this run or task id."),
+			limit: z.coerce.number().int().min(1).max(100).optional(),
+		},
+		async ({ token, instance_id, state, subject_kind, subject_id, limit }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "browser_takeover_list", { instance_id });
+			if (denied) return denied;
+			const q = new URLSearchParams();
+			if (state) q.set("state", state);
+			if (subject_kind) q.set("subject_kind", subject_kind);
+			if (subject_id) q.set("subject_id", subject_id);
+			if (limit) q.set("limit", String(limit));
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/browser-takeovers${q.size ? `?${q}` : ""}`, sessionToken, {}, env)) as { error?: string };
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
+	server.tool(
+		"browser_takeover_get",
+		"One browser takeover by id (#1031): its state (requested | active | resumed | ended | expired), subject, reason, mobileAllowed, endReason and times. Read-only.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances. Copy it exactly."),
+			takeover_id: z.string().describe("Takeover id from browser_takeover_list or browser_takeover_request."),
+		},
+		async ({ token, instance_id, takeover_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "browser_takeover_get", { instance_id, takeover_id });
+			if (denied) return denied;
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/browser-takeovers/${encodeURIComponent(takeover_id)}`, sessionToken, {}, env)) as { error?: string };
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
+	server.tool(
+		"browser_takeover_request",
+		"Ask the owner to take over a browser (#1031): records a `requested` takeover and notifies them with a link to it (their notification policy decides whether it pushes). Idempotent per subject — while one is live, asking again answers it with created:false. subject_kind local_browser_run needs a PAUSED run (its pause reason is used); runtime_task needs the runner task id; manual needs neither. Refused when the instance's browser verification takeover is \"never\". Call with dry_run first.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances. Copy it exactly."),
+			subject_kind: z.enum(TAKEOVER_SUBJECTS).optional().describe("What is waiting: a local browser run, a runner task, or manual (default)."),
+			subject_id: z.string().optional().describe("The run id or runner task id it is about."),
+			reason: z.enum(TAKEOVER_REASONS).optional().describe("Why a person is needed. Defaults to the run's pause reason, else manual."),
+			dry_run: z.boolean().optional().describe("Preview the request without recording it."),
+		},
+		async ({ token, instance_id, subject_kind, subject_id, reason, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, subject_kind, subject_id, reason };
+			const denied = await requirePermission(safetyFor(token), "write", "browser_takeover_request", input);
+			if (denied) return denied;
+			const body = { ...(subject_kind ? { subjectKind: subject_kind } : {}), ...(subject_id ? { subjectId: subject_id } : {}), ...(reason ? { reason } : {}) };
+			if (dry_run) return dryRun(safetyFor(token), "browser_takeover_request", "ask the owner to take over a browser", input, { endpoint: `/v1/instances/${encodeURIComponent(instance_id)}/browser-takeovers`, method: "POST", body });
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/browser-takeovers`, sessionToken, { method: "POST", body: JSON.stringify(body) }, env)) as { error?: string };
+			if (data.error) return text(`Error: ${data.error}`);
+			await audit(safetyFor(token), { tool: "browser_takeover_request", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"browser_takeover_transition",
+		"Move a browser takeover (#1031): `active` — it is being taken over now (pass device \"mobile\" from a phone; refused when the owner turned mobile takeover off); `resumed` — hand it back, which RESUMES the paused run or runner task; `ended` — decline it (a runner task's takeover session is ended too; a paused local browser run stays paused until resumed or cancelled). `expired` is set only when a request runs out of time. Repeating a move already made is a no-op. Call with dry_run first.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances. Copy it exactly."),
+			takeover_id: z.string().describe("Takeover id from browser_takeover_list."),
+			state: z.enum(["active", "resumed", "ended"]).describe("The state to move it to."),
+			device: z.enum(["mobile", "desktop"]).optional().describe("Where it is being taken over from, for the owner's mobile preference."),
+			dry_run: z.boolean().optional().describe("Preview the move without making it."),
+		},
+		async ({ token, instance_id, takeover_id, state, device, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, takeover_id, state, device };
+			// `runtime`: resuming hands a paused run or task back to the machine.
+			const denied = await requirePermission(safetyFor(token), "runtime", "browser_takeover_transition", input);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/browser-takeovers/${encodeURIComponent(takeover_id)}`;
+			if (dry_run) return dryRun(safetyFor(token), "browser_takeover_transition", `move takeover ${takeover_id} to ${state}`, input, { endpoint, method: "PATCH" });
+			const data = (await authedCall(endpoint, sessionToken, { method: "PATCH", body: JSON.stringify({ state, ...(device ? { device } : {}) }) }, env)) as { error?: string };
+			if (data.error) return text(`Error: ${data.error}`);
+			await audit(safetyFor(token), { tool: "browser_takeover_transition", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
 }

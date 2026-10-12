@@ -266,6 +266,13 @@ const READBACK: Record<string, string | null> = {
 	"set_instance_browser_verification.wait_limit_minutes": "get_instance_browser_verification",
 	"set_instance_browser_verification.takeover": "get_instance_browser_verification",
 	"set_instance_browser_verification.allow_mobile": "get_instance_browser_verification",
+	"browser_takeover_request.subject_kind": "browser_takeover_list",
+	"browser_takeover_request.subject_id": "browser_takeover_list",
+	"browser_takeover_request.reason": "browser_takeover_list",
+	"browser_takeover_transition.state": "browser_takeover_get",
+	"browser_takeover_transition.takeover_id": "browser_takeover_get",
+	// The caller's own statement of where it is, checked against the preference and not kept.
+	"browser_takeover_transition.device": null,
 	"set_instance_local_browser_settings.auth_mode": "get_instance_local_browser_settings",
 	"set_instance_local_browser_settings.workspace_path": "get_instance_local_browser_settings",
 	"set_instance_local_browser_settings.browser_profile": "get_instance_local_browser_settings",

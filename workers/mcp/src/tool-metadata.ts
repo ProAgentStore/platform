@@ -284,6 +284,11 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	get_instance_browser_verification: "read",
 	set_instance_browser_verification: "write",
 	list_eligible_browser_runtimes: "read",
+	// Durable browser takeovers (#1031): read the records, ask for one, and move one — resuming drives the machine.
+	browser_takeover_list: "read",
+	browser_takeover_get: "read",
+	browser_takeover_request: "write",
+	browser_takeover_transition: "runtime",
 	list_local_browser_runs: "read",
 	set_instance_local_browser_settings: "write",
 	cancel_local_browser_run: "write",

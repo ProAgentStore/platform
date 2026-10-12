@@ -3,6 +3,7 @@ import { api } from "@proagentstore/sdk/client";
 import Button from "../../components/Button";
 import Card from "../../components/Card";
 import LoadFailed from "../../components/LoadFailed";
+import { type BrowserTakeover, isLive, takeoverLine } from "../../lib/browserTakeovers";
 import { type BrowserRuntimesView, type BrowserVerificationSettings, type BrowserVerificationView, changedFields, EVENT_WORDS, machineLine } from "../../lib/browserVerification";
 
 const input = "bg-paper border border-line rounded px-2 py-1.5 text-sm";
@@ -21,10 +22,16 @@ export default function BrowserVerificationSection({ instanceId }: { instanceId:
 	const [error, setError] = useState("");
 	const [msg, setMsg] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
 	const [saving, setSaving] = useState(false);
+	// The durable takeovers (#1031) — the same rows browser_takeover_list reads.
+	const [takeovers, setTakeovers] = useState<BrowserTakeover[]>([]);
 
 	const load = useCallback(async () => {
 		try {
-			const v = await api<BrowserVerificationView>(`/v1/instances/${instanceId}/browser-verification`);
+			const [v, t] = await Promise.all([
+				api<BrowserVerificationView>(`/v1/instances/${instanceId}/browser-verification`),
+				api<{ takeovers: BrowserTakeover[] }>(`/v1/instances/${instanceId}/browser-takeovers?limit=10`).catch(() => ({ takeovers: [] })),
+			]);
+			setTakeovers(t.takeovers);
 			setData(v);
 			setForm(v.settings);
 			setError("");
@@ -54,6 +61,15 @@ export default function BrowserVerificationSection({ instanceId }: { instanceId:
 			setMsg({ tone: "warn", text: e instanceof Error ? e.message : String(e) });
 		}
 		setSaving(false);
+	};
+
+	const decline = async (id: string) => {
+		try {
+			await api(`/v1/instances/${instanceId}/browser-takeovers/${id}`, { method: "PATCH", body: JSON.stringify({ state: "ended" }) });
+			await load();
+		} catch (e) {
+			setMsg({ tone: "warn", text: e instanceof Error ? e.message : String(e) });
+		}
 	};
 
 	const check = async () => {
@@ -135,6 +151,20 @@ export default function BrowserVerificationSection({ instanceId }: { instanceId:
 					})}
 					<li className="mt-1">{runtimes.selected ? <>Would run on <b>{runtimes.selected}</b>.</> : <span className="text-warning">{runtimes.detail}</span>}</li>
 				</ul>
+			)}
+			{takeovers.length > 0 && (
+				<div className="mt-4" data-testid="bv-takeovers">
+					<div className="text-xs font-semibold mb-1">Recent takeovers</div>
+					<ul className="text-xs flex flex-col gap-1">
+						{takeovers.map((t) => (
+							<li key={t.id} className="flex flex-wrap gap-2 items-center">
+								<span className={takeoverLine(t).tone === "warn" ? "text-warning" : "text-muted"}>{takeoverLine(t).text}</span>
+								<span className="text-muted-soft">{t.subjectKind.replace(/_/g, " ")} · {t.createdAt.slice(0, 16).replace("T", " ")}</span>
+								{isLive(t) && <Button size="sm" variant="ghost" onClick={() => void decline(t.id)}>Decline</Button>}
+							</li>
+						))}
+					</ul>
+				</div>
 			)}
 		</Card>
 	);

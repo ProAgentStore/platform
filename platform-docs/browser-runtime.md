@@ -152,3 +152,27 @@ Coder also supports multiple connected machines for the same private instance. E
 ## When Not To Use A Browser Runtime
 
 Most server-only agents should use hosted Worker execution or standard instance chat. Do not require `pags up` for agents that only need text processing, API calls, knowledge search, or document drafting.
+
+## Browser verification and takeovers
+
+An agent that declares a local browser (`capabilities.runtime: "local_browser"`) can verify pages the
+server cannot fetch, in the owner's own browser. Each instance chooses, in **Settings → Browser
+verification** or with `set_instance_browser_verification`:
+
+- **enabled**: on only for an agent that declares the capability. The setting turns a declared
+  capability on; it never adds one.
+- **runtime**: `pinned` (only the machine the agent is pinned to) or `any_eligible` (any eligible
+  machine, the pinned one first). `list_eligible_browser_runtimes` shows each machine's heartbeat,
+  attachment (transport only), health and CLI version, apart from each other.
+- **fallback** when no eligible machine is available: `wait` (up to `waitLimitMinutes`) or
+  `mark_unverifiable`.
+- **takeover**: `prompt` asks the owner to take over when a run needs a person; `never` ends that
+  attempt instead. **allowMobile** says whether a takeover may be answered from a phone.
+
+The machine pin, site consent and notifications are set where they always were. A paused run's
+**takeover** is recorded before any remote control is shown, and moves `requested → active → resumed`,
+or `ended` / `expired`. The Console and `browser_takeover_list` read the same records. The runner's
+remote view is refused for a task with no live takeover. Takeover requests, approvals, failures and
+completions are notification events (`takeover_required`, `approval_required`,
+`browser_verification_failed`, `browser_verification_completed`), so the instance's notification
+policy decides which of them push. Their links carry only ids, never a page URL, token or session.

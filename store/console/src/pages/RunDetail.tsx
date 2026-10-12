@@ -1,3 +1,5 @@
+import TakeoverBanner from "../components/TakeoverBanner";
+import { deviceKind } from "../lib/browserTakeovers";
 import { useState, useEffect, useCallback, useRef, useMemo, useId, type ReactNode } from "react";
 import Button from "../components/Button";
 import Page from "../components/Page";
@@ -164,7 +166,7 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 
 	const poll = useCallback(async () => {
 		try {
-			const f = await api<{ frame: string; width: number; height: number }>(`/v1/instances/${instanceId}/takeover/${taskId}/frame`);
+			const f = await api<{ frame: string; width: number; height: number }>(`/v1/instances/${instanceId}/takeover/${taskId}/frame?device=${deviceKind()}`);
 			if (f?.frame && f.frame.length > 30) { setFrame(f); setConnErr(""); }
 			else setConnErr("The runner returned an empty frame (no live page to capture).");
 		} catch (e) { setConnErr(e instanceof Error ? e.message : String(e)); }
@@ -207,7 +209,7 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 	 * the one action here whose result the frame cannot show.
 	 */
 	const send = useCallback((body: Record<string, unknown>) =>
-		api(`/v1/instances/${instanceId}/takeover/${taskId}/input`, { method: "POST", body: JSON.stringify(body) }).catch(() => {}), [instanceId, taskId]);
+		api(`/v1/instances/${instanceId}/takeover/${taskId}/input?device=${deviceKind()}`, { method: "POST", body: JSON.stringify(body) }).catch(() => {}), [instanceId, taskId]);
 
 	const toXY = (clientX: number, clientY: number) => {
 		const img = imgRef.current; if (!img || !frame) return null;
@@ -535,6 +537,8 @@ export default function RunDetail() {
 				</Card>
 			)}
 
+			{/* The durable takeover for this task (#1031): what the page says about being asked is a recorded fact. */}
+			<TakeoverBanner instanceId={instanceId} subjectKind="runtime_task" subjectId={taskId} />
 			{needsHuman && kind === "value" && (
 				<div className="bg-amber-500/10 border border-amber-500/40 rounded-xl p-4 sm:p-5 mb-5">
 					<div className="text-lg font-bold text-ink">✏️ The agent needs one answer to continue</div>

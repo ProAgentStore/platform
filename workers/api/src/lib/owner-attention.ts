@@ -82,6 +82,27 @@ export const OWNER_ATTENTION_EVENTS: OwnerAttentionEventSpec[] = [
 		pushOptional: true,
 	},
 	{
+		id: "takeover_required",
+		label: "Take over the browser",
+		description: "A browser run is paused on something only a person can do — a sign-in, a captcha, a consent — and asks you to take over. It waits until you do, or until the request expires.",
+		kind: "alert",
+		pushOptional: true,
+	},
+	{
+		id: "browser_verification_failed",
+		label: "Browser verification failed",
+		description: "A browser verification ended without a result — the site could not be checked, or the attempt was stopped.",
+		kind: "alert",
+		pushOptional: true,
+	},
+	{
+		id: "browser_verification_completed",
+		label: "Browser verification finished",
+		description: "A browser verification finished with a result.",
+		kind: "update",
+		pushOptional: true,
+	},
+	{
 		id: "decision_required",
 		label: "A choice is needed",
 		description: "A run has finished what it can do on its own and is waiting for you to choose what happens next.",

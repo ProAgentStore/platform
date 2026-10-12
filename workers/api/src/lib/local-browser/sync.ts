@@ -9,12 +9,15 @@
  */
 import { syncScanCard } from "./scan-board.js";
 import { HttpError } from "../auth.js";
+import { readBrowserVerification } from "../browser-verification.js";
+import { type BrowserTakeover, requestTakeover, takeoverReasonOf } from "../browser-takeovers.js";
 import { deepLinkFor } from "../console-links.js";
 import { instanceListName } from "../instance-config.js";
 import type { Env } from "../../types.js";
 import { callRuntime, getLiveRuntime, runtimeJson } from "../../routes/instances-runtime.js";
 import { notifyUser } from "../../routes/push.js";
 import {
+	LOCAL_BROWSER_CANCEL_PATH,
 	LOCAL_BROWSER_PAUSE_REASONS,
 	LOCAL_BROWSER_RESUME_PATH,
 	LOCAL_BROWSER_STATUS_PATH,
@@ -54,17 +57,69 @@ const PAUSE_WORDS: Record<LocalBrowserPauseReason, string> = {
  * makes no progress until a person acts, and only someone with the run page open would see it.
  * Best-effort — a failed notification must not undo the pause it reports.
  */
-async function notifyPaused(env: Env, uid: string, instanceId: string, run: LocalBrowserRun, reason: LocalBrowserPauseReason | null, now: number): Promise<void> {
+async function agentName(env: Env, uid: string, instanceId: string): Promise<string> {
 	const row = await env.DB.prepare("SELECT i.config, a.name FROM agent_instances i JOIN agents a ON a.id = i.agent_id WHERE i.id = ?1 AND i.user_id = ?2")
 		.bind(instanceId, uid)
 		.first<{ config: string | null; name: string | null }>();
-	const agent = instanceListName(row?.config, row?.name) ?? "Your agent";
+	return instanceListName(row?.config, row?.name) ?? "Your agent";
+}
+
+/**
+ * The pause's notification carries its durable takeover (#1031): the link opens that takeover and the
+ * event is the one the instance's notification policy decides — a stop before acting on a page is an
+ * approval; anything else a takeover. Ids only in the link, never the page the run is on.
+ */
+async function notifyPaused(env: Env, uid: string, instanceId: string, run: LocalBrowserRun, reason: LocalBrowserPauseReason | null, now: number, takeover: BrowserTakeover | null): Promise<void> {
+	const agent = await agentName(env, uid, instanceId);
 	const why = reason ? PAUSE_WORDS[reason] : "is waiting for you";
-	await notifyUser(env, uid, "local-browser", `⏸ ${agent} ${why}`, `Research run “${run.objective.slice(0, 80)}” is paused until you act.`, deepLinkFor({ kind: "local-browser-run", instanceId, runId: run.id }), {
+	const link = takeover ? deepLinkFor({ kind: "browser-takeover", instanceId, takeover }) : deepLinkFor({ kind: "local-browser-run", instanceId, runId: run.id });
+	await notifyUser(env, uid, "local-browser", `⏸ ${agent} ${why}`, `Research run “${run.objective.slice(0, 80)}” is paused until you act.`, link, {
 		kind: "alert",
 		instanceId,
 		key: `local-browser:${run.id}:${now}`,
+		event: reason === "write_affordance" ? "approval_required" : "takeover_required",
 	});
+}
+
+/**
+ * A run just paused for a person. Under browser verification's `takeover: "never"` (#1031) the owner
+ * asked not to be brought in: the attempt ends `failed` (`takeover_declined`) and the runner is told to
+ * stop. Otherwise a durable takeover is requested BEFORE anything is shown, and the owner is notified.
+ */
+async function onPaused(env: Env, uid: string, instanceId: string, run: LocalBrowserRun, reason: LocalBrowserPauseReason | null, now: number): Promise<LocalBrowserRun> {
+	const { settings } = await readBrowserVerification(env, instanceId, uid);
+	if (settings.enabled && settings.takeover === "never") {
+		const runtime = await getLiveRuntime(env, instanceId, uid).catch(() => null);
+		if (runtime) await callRuntime(env, runtime, LOCAL_BROWSER_CANCEL_PATH, { method: "POST", body: JSON.stringify({ runId: run.id }) }).catch(() => undefined);
+		const failed = await transitionLocalBrowserRun(env, instanceId, uid, run.id, { to: "failed", errorCode: "takeover_declined", error: "The run needed a person, and this instance's browser verification is set never to ask for a takeover." }, now);
+		if (!failed) return run;
+		await appendLocalBrowserEvents(env, instanceId, uid, run.id, [{ type: "run.ended", at: new Date(now).toISOString(), detail: { status: "failed", errorCode: "takeover_declined" } }], now);
+		await notifyEnded(env, uid, instanceId, failed).catch(() => undefined);
+		return failed;
+	}
+	const requested = await requestTakeover(env, { userId: uid, instanceId, subjectKind: "local_browser_run", subjectId: run.id, reason: takeoverReasonOf(reason), mobileAllowed: settings.allowMobile, now }).catch(() => null);
+	await notifyPaused(env, uid, instanceId, run, reason, now, requested?.takeover ?? null).catch(() => undefined);
+	return run;
+}
+
+/**
+ * A verification ended (#1031): completed, or failed with its code. Only for an instance that has
+ * browser verification ON — a plain research agent's runs are not verifications and stay as quiet as
+ * they were. The event is what the notification policy decides; the link is the run, by id.
+ */
+async function notifyEnded(env: Env, uid: string, instanceId: string, run: LocalBrowserRun): Promise<void> {
+	if (!(await readBrowserVerification(env, instanceId, uid)).settings.enabled) return;
+	const agent = await agentName(env, uid, instanceId);
+	const ok = run.status === "completed";
+	await notifyUser(
+		env,
+		uid,
+		"local-browser",
+		ok ? `✓ ${agent} finished a browser verification` : `✕ ${agent}'s browser verification did not finish`,
+		ok ? `“${run.objective.slice(0, 80)}” finished.` : `“${run.objective.slice(0, 80)}” ended without a result${run.errorCode ? ` (${run.errorCode})` : ""}.`,
+		deepLinkFor({ kind: "local-browser-run", instanceId, runId: run.id }),
+		{ kind: ok ? "update" : "alert", instanceId, key: `local-browser-ended:${run.id}`, event: ok ? "browser_verification_completed" : "browser_verification_failed" },
+	);
 }
 
 /** Store a runner's events and apply the two that move a run: a pause, and its resume. */
@@ -84,11 +139,10 @@ export async function ingestRunnerEvents(
 		if (e.type === "run.paused" && current.status === "running") {
 			const paused = await transitionLocalBrowserRun(env, instanceId, uid, run.id, { to: "paused", pauseReason: e.pauseReason }, now);
 			if (paused) {
-				current = paused;
-				await notifyPaused(env, uid, instanceId, paused, e.pauseReason ?? null, now).catch(() => undefined);
+				current = await onPaused(env, uid, instanceId, paused, e.pauseReason ?? null, now).catch(() => paused);
 				// A scan waiting on a login, a captcha or a consent decision belongs in "Needs you"
 				// on the board, not only in a notification that scrolls away (#980).
-				await syncScanCard(env, instanceId, uid, paused);
+				await syncScanCard(env, instanceId, uid, current);
 			}
 		}
 		else if (e.type === "run.resumed" && current.status === "paused") {
@@ -118,6 +172,7 @@ export async function applyRunnerResult(env: Env, instanceId: string, uid: strin
 	if (!moved) throw new HttpError(409, `The run cannot end from "${run.status}"`);
 	await appendLocalBrowserEvents(env, instanceId, uid, run.id, [{ type: "run.ended", at: new Date(now).toISOString(), detail: { status: to, findings: parsed.findings.length, sourceFailures: parsed.sourceFailures.length, engineAuth: parsed.engineAuth } }], now);
 	await syncScanCard(env, instanceId, uid, moved);
+	await notifyEnded(env, uid, instanceId, moved).catch(() => undefined);
 	return moved;
 }
 
@@ -141,6 +196,7 @@ async function endLost(env: Env, instanceId: string, uid: string, run: LocalBrow
 	if (failed) {
 		await appendLocalBrowserEvents(env, instanceId, uid, run.id, [{ type: "run.ended", at: new Date(now).toISOString(), detail: { status: "failed", errorCode: "runner_lost" } }], now);
 		await syncScanCard(env, instanceId, uid, failed);
+		await notifyEnded(env, uid, instanceId, failed).catch(() => undefined);
 	}
 	return failed ?? run;
 }
@@ -178,10 +234,7 @@ export async function syncLocalBrowserRun(env: Env, instanceId: string, uid: str
 	if (body.state === "paused" && current.status === "running") {
 		const reason = LOCAL_BROWSER_PAUSE_REASONS.includes(body.pauseReason as LocalBrowserPauseReason) ? (body.pauseReason as LocalBrowserPauseReason) : null;
 		const paused = await transitionLocalBrowserRun(env, instanceId, uid, run.id, { to: "paused", pauseReason: reason }, now);
-		if (paused) {
-			current = paused;
-			await notifyPaused(env, uid, instanceId, paused, reason, now).catch(() => undefined);
-		}
+		if (paused) current = await onPaused(env, uid, instanceId, paused, reason, now).catch(() => paused);
 	} else if (body.state === "running" && current.status === "paused") {
 		current = (await transitionLocalBrowserRun(env, instanceId, uid, run.id, { to: "running" }, now)) ?? current;
 	}

@@ -341,6 +341,27 @@ components:
               status: { type: string, enum: [denied, cancelled] }
 
   schemas:
+    BrowserTakeoverState:
+      type: string
+      enum: [requested, active, resumed, ended, expired]
+    BrowserTakeover:
+      type: object
+      description: A durable browser takeover (#1031). Ids, a closed vocabulary and times only.
+      properties:
+        id: { type: string }
+        instanceId: { type: string }
+        agentId: { type: string }
+        subjectKind: { type: string, enum: [local_browser_run, runtime_task, manual] }
+        subjectId: { type: string }
+        state: { $ref: "#/components/schemas/BrowserTakeoverState" }
+        reason: { type: string, enum: [login_required, captcha, consent_required, access_blocked, paywall, write_affordance, manual] }
+        mobileAllowed: { type: boolean }
+        endReason: { type: string, nullable: true, enum: [declined, run_finished, resumed_at_machine, expired, null] }
+        expiresAt: { type: string }
+        createdAt: { type: string }
+        activatedAt: { type: string, nullable: true }
+        endedAt: { type: string, nullable: true }
+        updatedAt: { type: string }
     BrowserVerificationSettings:
       type: object
       description: Browser verification settings (#1031). Every field optional in a patch.
@@ -7227,6 +7248,88 @@ paths:
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 50 } }
       responses:
         "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/browser-takeovers:
+    get:
+      summary: List an instance's durable browser takeovers
+      description: |
+        #1031. A takeover is recorded BEFORE any remote control is shown: requested → active (opened) →
+        resumed (handed back), or ended (declined, or the run finished) / expired (nobody came before
+        `expiresAt`, set by the per-minute cron). Ids, a closed vocabulary and times only — never a page
+        URL, frame, cookie, token or session. The runner's remote view (`…/takeover/:taskId/frame`,
+        `…/input`) is refused without a live takeover for that task.
+      operationId: listBrowserTakeovers
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: state, in: query, schema: { $ref: "#/components/schemas/BrowserTakeoverState" } }
+        - { name: subject_kind, in: query, schema: { type: string, enum: [local_browser_run, runtime_task, manual] } }
+        - { name: subject_id, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+      responses:
+        "200":
+          description: Newest first
+          content:
+            application/json:
+              schema: { type: object, properties: { takeovers: { type: array, items: { $ref: "#/components/schemas/BrowserTakeover" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      summary: Ask the owner to take over a browser
+      description: Records a `requested` takeover and notifies the owner with a link to it (the notification policy decides the push). Idempotent per subject while one is live (`created:false`). A `local_browser_run` subject must be paused; refused under browser verification `takeover:"never"`.
+      operationId: requestBrowserTakeover
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                subjectKind: { type: string, enum: [local_browser_run, runtime_task, manual], default: manual }
+                subjectId: { type: string }
+                reason: { type: string, enum: [login_required, captcha, consent_required, access_blocked, paywall, write_affordance, manual] }
+      responses:
+        "200": { description: The live takeover already asked for, content: { application/json: { schema: { type: object, properties: { takeover: { $ref: "#/components/schemas/BrowserTakeover" }, created: { type: boolean } } } } } }
+        "201": { description: A new takeover, content: { application/json: { schema: { type: object, properties: { takeover: { $ref: "#/components/schemas/BrowserTakeover" }, created: { type: boolean } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/browser-takeovers/{takeoverId}:
+    get:
+      summary: One browser takeover
+      operationId: getBrowserTakeover
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: takeoverId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: The takeover, content: { application/json: { schema: { type: object, properties: { takeover: { $ref: "#/components/schemas/BrowserTakeover" } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      summary: Move a browser takeover
+      description: "`active` — opened (with `device: mobile`, refused when the owner turned mobile takeover off); `resumed` — handed back, which resumes the paused run or runner task; `ended` — declined. `expired` is the cron's alone. Repeating a move already made is a no-op."
+      operationId: transitionBrowserTakeover
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: takeoverId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [state]
+              properties:
+                state: { type: string, enum: [active, resumed, ended] }
+                device: { type: string, enum: [mobile, desktop] }
+      responses:
+        "200": { description: The takeover after the move, content: { application/json: { schema: { type: object, properties: { takeover: { $ref: "#/components/schemas/BrowserTakeover" }, changed: { type: boolean } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/browser-verification:
