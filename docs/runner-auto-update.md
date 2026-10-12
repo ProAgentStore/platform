@@ -147,11 +147,21 @@ How `pags up` is installed and kept running on Windows is in
 and `pags up` restarts itself on the new release. That holds under the Task Scheduler wrapper too,
 so `PAGS_SERVICE` and `PAGS_RESTART_COMMAND` are not needed there.
 
-**Each restart nests a process (#1036, open).** `pags up` restarts itself with `execFileSync`, which
-starts the new `pags up` as a child and blocks the old one until it exits. Every update adds one more
-waiting parent, and under the Task Scheduler wrapper the process count grows by one each time. To
-clear it, restart the task (`Stop-ScheduledTask` then `Start-ScheduledTask -TaskName "pags up"`) or
-the machine after an update.
+**A restart leaves no blocked parent (#1036, CLI 0.4.113).** Up to 0.4.112, `pags up` restarted
+itself with `execFileSync`: the new `pags up` ran as a child and the old one waited on it forever, so
+every update or `r` added one idle process (six deep on one machine after two days). Now
+(`packages/cli/src/commands/up-restart.ts`):
+
+- under a service (`PAGS_SERVICE=1`) `pags up` exits with code 75 and the service starts the new
+  release; with `PAGS_RESTART_COMMAND` it starts that command detached and exits;
+- in a terminal or tmux pane on macOS and Linux it replaces itself in place (`process.execve`, Node
+  22.15 or later): same pid, same terminal, nothing left behind;
+- where that is not available, Windows included, the first restart turns the process into one thin
+  launcher that runs `pags up` again whenever it asks for a restart. That is two processes for good,
+  however many updates follow. Restarting the Task Scheduler task clears the launcher too.
+
+A machine still running an older `pags up` keeps its existing chain until that process is restarted
+once at the machine.
 
 **Self-update cannot run npm on Windows yet.** *Read from the source, not yet reproduced on a
 Windows machine.* Every npm call in the update path runs through `execFile("npm", …)` with no shell:

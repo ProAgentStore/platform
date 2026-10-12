@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { Command } from "commander";
 import { requireSession } from "./login.js";
@@ -9,6 +8,7 @@ import { hostname } from "node:os";
 import { writeLine } from "../output.js";
 import { clearScreen, printLogo, printStatus, printStep, waitForKey, type TuiState } from "../tui.js";
 import { parseStatusLine } from "./runner/status-line.js";
+import { processRestartDeps, restartPagsUp } from "./up-restart.js";
 import { restartUpArgs, RUNNER_RESTART_EXIT_CODE, SUPERVISED_ENV, SUPERVISOR_RESTARTS } from "./runner/self-update.js";
 import { holderMessage, inspectHolder, isTakeable, lockPath, readLock, releaseLock } from "../runner-lock.js";
 import { replaceHolder } from "../runner-replace.js";
@@ -325,27 +325,16 @@ export const upCommand = new Command("up")
 		});
 
 		/**
-		 * `pags up` again with the SAME flags, on this terminal, leaving with its exit status. Node cannot
-		 * exec in place, so this process waits, blocked, while the new one owns the terminal — blocked
-		 * rather than awaiting, so it never reads a keystroke meant for the new one. `process.argv[1]` is
-		 * the installed `pags` (the #862 stub when there is one), so the new process runs the newest CLI.
+		 * `pags up` again with the SAME flags, leaving no blocked ancestor behind (#1036): the service or
+		 * restart command takes over, or this process is replaced in place on the same terminal — see
+		 * `up-restart.ts`. Stdin is released first so the new process reads every keystroke.
 		 */
 		function restartUp(why: string, env: NodeJS.ProcessEnv = {}): never {
 			writeLine(`  ${why}`);
-			try {
-				if (process.stdin.isTTY) process.stdin.setRawMode(false);
-				process.stdin.pause();
-				// execFileSync (argv, no shell) so an instance id/slug can't be mis-quoted.
-				execFileSync(process.execPath, [process.argv[1], ...restartUpArgs(opts)], { stdio: "inherit", env: { ...process.env, ...env } });
-			} catch (e) {
-				// Restarting IS what `r` promises. Swallowing the failure and exiting 0 told the
-				// shell — and anything scripting `pags up` — that the runner had been restarted
-				// while nothing was left running and no agent could be reached from the cloud.
-				const status = (e as { status?: number }).status;
-				writeLine(`  Restart failed${typeof status === "number" ? ` (exit ${status})` : ""} — the runner is NOT running. Run 'pags up' again.`);
-				process.exit(typeof status === "number" && status !== 0 ? status : 1);
-			}
-			process.exit(0);
+			if (process.stdin.isTTY) process.stdin.setRawMode(false);
+			process.stdin.pause();
+			restartPagsUp(restartUpArgs(opts), env, { ...processRestartDeps(), log: (line) => writeLine(`  ${line}`) });
+			process.exit(1); // unreachable: every path above replaces or exits this process
 		}
 
 		const shutdown = () => {
