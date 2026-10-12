@@ -1131,4 +1131,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.114": "sha256:fd85ec9dac10fa1235776ce8030ce815d85bdfd3ad83a1efe669e0b57cb566e1",
 	// #1009: list_instance_permission_requests — a read-only inspection of an instance's recovery requests.
 	"0.1.115": "sha256:b445f0921d2bea792a85f9225eb4ed1e430c0dc6149ab6fbdd2bcd24e795256d",
+	// #1027: set_coder_brain (the brain + product-owner triage switch) and po_triage_reports (read).
+	"0.1.116": "sha256:cb3f884929ef355f03ca508ce81ed614ea02316f444cd0022cff7b135748d033",
 };

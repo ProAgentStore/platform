@@ -118,6 +118,12 @@ export const NOTIFICATION_TYPES: NotificationTypeSpec[] = [
 		alerts: true,
 	},
 	{
+		id: "po_triage_digest",
+		label: "Product-owner triage",
+		description: "A short digest after a coder's scheduled issue triage — what was queued, what waits on you, what needs detail (#1027). Sent only when something changed.",
+		alerts: false,
+	},
+	{
 		id: "subscribe",
 		label: "New subscribers",
 		description: "Someone subscribing to an agent you publish.",

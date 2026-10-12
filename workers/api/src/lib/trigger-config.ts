@@ -94,6 +94,8 @@ const ACTION_KEYS: Record<TriggerAction, readonly string[]> = {
 	// decide the next step"); the event's own facts are appended by the executor, so the wiring does
 	// not have to restate them and cannot go stale when the payload shape grows.
 	start_loop: ["objective", "mapping"],
+	// #1027: dryRun (default true) reports and notifies without commenting or queueing.
+	run_po_triage: ["dryRun"],
 };
 
 /** Config that belongs to the SCHEDULE rather than the action, so it is cron-only. */
@@ -117,6 +119,7 @@ export const MAPPING_TARGETS: Record<TriggerAction, readonly string[]> = {
 	start_application_fill: [],
 	// A webhook may carry the instruction for this one turn (#968), as it may for research.
 	start_loop: ["objective"],
+	run_po_triage: [],
 };
 
 export const MAX_MAPPING_ENTRIES = 12;

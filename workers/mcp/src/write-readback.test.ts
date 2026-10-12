@@ -272,6 +272,8 @@ const READBACK: Record<string, string | null> = {
 	// read-only MCP tool; scan itself has no caller-provided content to classify.
 	"gmail_scout_config_set.pinned_email": "gmail_scout_config_get",
 	"gmail_scout_config_set.enabled": "gmail_scout_config_get",
+	"set_coder_brain.enabled": "po_triage_reports",
+	"set_coder_brain.po_enabled": "po_triage_reports",
 	"set_instance_instructions.instructions": "get_instance_instructions",
 	// #992: the policy is read back WITH its resolution — `get_instance_notification_policy`
 	// returns the stored rules and the effective state per channel, which is the half a writer

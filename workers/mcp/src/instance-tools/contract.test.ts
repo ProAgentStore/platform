@@ -15,6 +15,7 @@ import { registerGuideTools } from "./guide.js";
 import { registerConsoleLinkTools } from "./console-link.js";
 import { registerLocalBrowserTools } from "./local-browser.js";
 import { registerGmailScoutTools } from "./gmail-scout.js";
+import { registerCoderBrainTools } from "./coder-brain.js";
 import { registerApplicationTools } from "./applications.js";
 import { registerInstanceTools } from "./index.js";
 import { registerKnowledgeTools } from "./knowledge.js";
@@ -480,6 +481,8 @@ const TABLE: Record<string, Row> = {
 	gmail_scout_status: ["gmailScout", "read", null, null, "instance_id,token"],
 	gmail_scout_config_set: ["gmailScout", "write", null, "envelope", "dry_run,enabled,instance_id,pinned_email,token"],
 	gmail_scout_scan: ["gmailScout", "write", null, "envelope", "dry_run,instance_id,token"],
+	po_triage_reports: ["coderBrain", "read", null, null, "instance_id,limit,token"],
+	set_coder_brain: ["coderBrain", "write", null, "envelope", "dry_run,enabled,instance_id,po_enabled,token"],
 	run_instance_trigger: ["triggers", "runtime", null, "envelope", "dry_run,payload,token,trigger_id"],
 	// #980: the in-place change the console's scan-schedule controls make — enable/disable, move
 	// the cadence, rewrite the config. `write`, no confirmation: disabling keeps the trigger.
@@ -599,6 +602,7 @@ const REGISTRARS: Record<string, (s: unknown, c: InstanceToolsCtx) => void> = {
 	consoleLink: registerConsoleLinkTools as any,
 	localBrowser: registerLocalBrowserTools as any,
 	gmailScout: registerGmailScoutTools as any,
+	coderBrain: registerCoderBrainTools as any,
 	applications: registerApplicationTools as any,
 	knowledge: registerKnowledgeTools as any,
 	machineControl: registerMachineControlTools as any,

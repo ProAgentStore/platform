@@ -73,6 +73,7 @@ import { registerApplicationTailorRoutes } from "./instances-application-tailor.
 import { registerApplicationRunnerRoutes } from "./instances-application-runner.js";
 import { registerApplicationsRoutes } from "./instances-applications.js";
 import { registerGmailScoutRoutes } from "./instances-gmail-scout.js";
+import { registerCoderBrainRoutes } from "./instances-coder-brain.js";
 import { registerInstanceDescriptionRoutes } from "./instances-description.js";
 import { instanceRoutes } from "./instances.js";
 
@@ -301,6 +302,9 @@ const ROUTES = [
 	"PUT /:instanceId/gmail-scout/config",
 	"POST /:instanceId/gmail-scout/scan",
 	"GET /:instanceId/gmail-scout/status",
+	"GET /:instanceId/coder-brain",
+	"PUT /:instanceId/coder-brain",
+	"GET /:instanceId/po-triage/reports",
 	"GET /:instanceId/description",
 	"POST /:instanceId/runner-attach",
 	"GET /:instanceId/runner-setup",
@@ -455,6 +459,7 @@ const HELPERS: Record<string, (app: Hono<{ Bindings: Env }>) => void> = {
 	"instances-application-runner.ts": registerApplicationRunnerRoutes,
 	"instances-applications.ts": registerApplicationsRoutes,
 	"instances-gmail-scout.ts": registerGmailScoutRoutes,
+	"instances-coder-brain.ts": registerCoderBrainRoutes,
 	"instances-description.ts": registerInstanceDescriptionRoutes,
 	"instances-terminal.ts": registerConnectorBindingRoutes,
 	"instances-terminal-history.ts": registerTerminalHistoryRoutes,
@@ -532,6 +537,7 @@ const OWNERSHIP: Record<string, string[]> = {
 		"POST /:instanceId/gmail-scout/scan",
 		"GET /:instanceId/gmail-scout/status",
 	],
+	"instances-coder-brain.ts": ["GET /:instanceId/coder-brain", "PUT /:instanceId/coder-brain", "GET /:instanceId/po-triage/reports"],
 	"instances-description.ts": ["GET /:instanceId/description"],
 	"instances-application-tailor.ts": [
 		"GET /:instanceId/application-tailor/settings",
@@ -853,6 +859,10 @@ const GATES: Record<string, [number, number]> = {
 	"PUT /:instanceId/gmail-scout/config": [401, 404],
 	"POST /:instanceId/gmail-scout/scan": [401, 404],
 	"GET /:instanceId/gmail-scout/status": [401, 404],
+	// #1027: the coder brain switch and triage reports open with the instance-owner check.
+	"GET /:instanceId/coder-brain": [401, 404],
+	"PUT /:instanceId/coder-brain": [401, 404],
+	"GET /:instanceId/po-triage/reports": [401, 404],
 	// #1002's execution projection uses requireOwnedInstance before every dependent read.
 	"GET /:instanceId/description": [401, 404],
 	// Application Tailor (#956): every route opens with the instance-owner check.

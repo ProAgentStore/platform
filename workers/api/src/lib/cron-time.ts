@@ -145,18 +145,58 @@ export function cronFields(expression: string): CronFields {
 	return { minute, hour, day, month, weekday };
 }
 
-/** One cron field against one value. `*` matches anything; weekday 7 is Sunday, same as 0. */
-export function matchesCronField(part: string, value: number): boolean {
-	return part === "*" || Number(part) === value || (part === "7" && value === 0);
+/** Each field's bounds. Weekday allows 7, which is Sunday, the same as 0. */
+export const CRON_FIELD_BOUNDS = { minute: [0, 59], hour: [0, 23], day: [1, 31], month: [1, 12], weekday: [0, 7] } as const;
+
+const fieldCache = new Map<string, ReadonlySet<number> | null>();
+
+/**
+ * The values one cron field names within `[min, max]` (#1027): `*`, `n`, a range `a-b`, a step
+ * `*\/s`, `a-b/s` or `n/s` (n through max), and comma lists of any of those, e.g. `22-23,0-6`.
+ * Null when the field is malformed or out of range. A weekday 7 also names Sunday (0).
+ */
+export function cronFieldValues(part: string, min: number, max: number): ReadonlySet<number> | null {
+	const key = `${part}|${min}|${max}`;
+	if (fieldCache.has(key)) return fieldCache.get(key) ?? null;
+	let out: Set<number> | null = new Set<number>();
+	for (const item of part.split(",")) {
+		const m = item.match(/^(?:(\*)|(\d+)(?:-(\d+))?)(?:\/(\d+))?$/);
+		if (!m) {
+			out = null;
+			break;
+		}
+		const lo = m[1] ? min : Number(m[2]);
+		const hi = m[1] ? max : m[3] !== undefined ? Number(m[3]) : m[4] !== undefined ? max : lo;
+		const step = m[4] !== undefined ? Number(m[4]) : 1;
+		if (lo < min || hi > max || lo > hi || step < 1) {
+			out = null;
+			break;
+		}
+		for (let v = lo; v <= hi; v += step) out.add(v);
+	}
+	if (out && max === 7 && out.has(7)) out.add(0);
+	fieldCache.set(key, out);
+	return out;
+}
+
+/**
+ * One cron field against one value, within that field's bounds (default: the minute field's).
+ * Sunday-as-7 applies to the weekday field only: before #1027 it applied to EVERY field, so a
+ * minute of `7` also matched minute 0 and "7 9 * * *" fired at 09:00 as well as 09:07.
+ */
+export function matchesCronField(part: string, value: number, min = 0, max = 59): boolean {
+	if (part === "*") return true;
+	return cronFieldValues(part, min, max)?.has(value) ?? false;
 }
 
 function matchesAll(fields: CronFields, wall: Date): boolean {
+	const b = CRON_FIELD_BOUNDS;
 	return (
-		matchesCronField(fields.minute, wall.getUTCMinutes()) &&
-		matchesCronField(fields.hour, wall.getUTCHours()) &&
-		matchesCronField(fields.day, wall.getUTCDate()) &&
-		matchesCronField(fields.month, wall.getUTCMonth() + 1) &&
-		matchesCronField(fields.weekday, wall.getUTCDay())
+		matchesCronField(fields.minute, wall.getUTCMinutes(), ...b.minute) &&
+		matchesCronField(fields.hour, wall.getUTCHours(), ...b.hour) &&
+		matchesCronField(fields.day, wall.getUTCDate(), ...b.day) &&
+		matchesCronField(fields.month, wall.getUTCMonth() + 1, ...b.month) &&
+		matchesCronField(fields.weekday, wall.getUTCDay(), ...b.weekday)
 	);
 }
 

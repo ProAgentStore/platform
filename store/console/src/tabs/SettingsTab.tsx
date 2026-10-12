@@ -25,6 +25,7 @@ import MiscellaneousSection from "./settings/MiscellaneousSection";
 import NotificationPolicySection from "./settings/NotificationPolicySection";
 import LocalBrowserSection from "./settings/LocalBrowserSection";
 import GmailScoutSection from "./settings/GmailScoutSection";
+import CoderBrainSection from "./settings/CoderBrainSection";
 
 interface Props {
 	instanceId: string;
@@ -410,6 +411,7 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 
 			<BrainModelCard instanceId={instanceId} />
 			{isCoding && <CodingEngineCard instanceId={instanceId} />}
+			{isCoding && <CoderBrainSection instanceId={instanceId} />}
 			{isLocalBrowser && <LocalBrowserSection instanceId={instanceId} />}
 			{isGmailScout && <GmailScoutSection instanceId={instanceId} />}
 

@@ -137,6 +137,13 @@ describe("trigger schedules", () => {
 		expect(() => normalizeSchedule("every 1 minute")).toThrow(HttpError);
 	});
 
+	it("accepts ranges, lists and steps — business hours, nights, chosen days (#1027)", () => {
+		for (const cron of ["20 9-17 * * 1-5", "40 22-23,0-6 * * *", "5 8 * * 1,3,5", "*/15 * * * *", "0,30 * * * *", "17 * * * *"]) expect(normalizeSchedule(cron)).toBe(cron);
+		// The 5-minute floor still holds for every new form, including across the hour boundary.
+		for (const cron of ["* * * * *", "*/2 * * * *", "0-10 * * * *", "0,3 * * * *", "58,1 * * * *"]) expect(() => normalizeSchedule(cron)).toThrow(/5 minutes/);
+		for (const cron of ["0 24 * * *", "0 9-5 * * *", "0 * 0 * *", "0 * * * 8", "x * * * *", "0 */0 * * *"]) expect(() => normalizeSchedule(cron)).toThrow(HttpError);
+	});
+
 	it("computes the next run for aliases and intervals", () => {
 		const base = new Date("2026-07-12T02:03:22.000Z");
 		expect(nextRunAt("@hourly", base)).toBe("2026-07-12T03:03:00.000Z");

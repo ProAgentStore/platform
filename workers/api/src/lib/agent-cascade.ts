@@ -100,6 +100,8 @@ export const INSTANCE_CHILD_TABLES = [
 	"gmail_scout_configs",
 	"gmail_scout_scan_state",
 	"gmail_scout_scan_receipts",
+	// #1027 — one product-owner triage report per wake.
+	"po_triage_reports",
 	// #945 — events before their run (FK), consent beside them.
 	"local_browser_run_events",
 	"local_browser_runs",

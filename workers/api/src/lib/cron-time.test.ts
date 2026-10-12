@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	cronFields,
 	isValidTimeZone,
+	cronFieldValues,
 	matchesCronField,
 	nextCronInstant,
 	resolveWallTime,
@@ -119,9 +120,58 @@ describe("nextCronInstant", () => {
 	});
 
 	it("matches a weekday given as either 0 or 7 for Sunday", () => {
-		expect(matchesCronField("7", 0)).toBe(true);
-		expect(matchesCronField("0", 0)).toBe(true);
+		expect(matchesCronField("7", 0, 0, 7)).toBe(true);
+		expect(matchesCronField("0", 0, 0, 7)).toBe(true);
 		expect(matchesCronField("*", 5)).toBe(true);
 		expect(matchesCronField("3", 4)).toBe(false);
+	});
+
+	it("a MINUTE of 7 is minute 7, never minute 0 (Sunday-as-7 is the weekday field's rule only)", () => {
+		expect(matchesCronField("7", 0)).toBe(false);
+		// Before #1027 "7 9 * * *" matched 09:00 too, so it fired at 09:00 and again at 09:07.
+		expect(new Date(nextCronInstant(cronFields("7 9 * * *"), new Date("2026-07-12T08:30:00Z"), "UTC") as number).toISOString()).toBe("2026-07-12T09:07:00.000Z");
+	});
+});
+
+describe("ranges, lists and steps (#1027)", () => {
+	it("names the right values for each form", () => {
+		expect([...(cronFieldValues("9-17", 0, 23) ?? [])]).toEqual([9, 10, 11, 12, 13, 14, 15, 16, 17]);
+		expect([...(cronFieldValues("1,3,5", 0, 7) ?? [])]).toEqual([1, 3, 5]);
+		expect([...(cronFieldValues("*/15", 0, 59) ?? [])]).toEqual([0, 15, 30, 45]);
+		expect([...(cronFieldValues("22-23,0-6", 0, 23) ?? [])].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6, 22, 23]);
+		expect([...(cronFieldValues("9-17/4", 0, 23) ?? [])]).toEqual([9, 13, 17]);
+		expect([...(cronFieldValues("50/5", 0, 59) ?? [])]).toEqual([50, 55]);
+		expect(cronFieldValues("7", 0, 7)?.has(0)).toBe(true);
+	});
+
+	it("refuses malformed and out-of-range fields", () => {
+		for (const [part, min, max] of [["24", 0, 23], ["5-2", 0, 59], ["*/0", 0, 59], ["1,,2", 0, 59], ["a", 0, 59], ["0", 1, 31], ["1-", 0, 59]] as const) {
+			expect(cronFieldValues(part, min, max)).toBeNull();
+		}
+	});
+
+	it("business hours in Melbourne fire only inside them, on weekdays, across the October DST change", () => {
+		// 4 Oct 2026 (Sunday) Melbourne moves from AEST (+10) to AEDT (+11).
+		const fields = cronFields("20 9-17 * * 1-5");
+		let from = new Date("2026-10-01T00:00:00Z");
+		const fires: string[] = [];
+		for (let i = 0; i < 30; i++) {
+			const next = nextCronInstant(fields, from, "Australia/Melbourne") as number;
+			fires.push(new Date(next).toISOString());
+			from = new Date(next);
+		}
+		for (const iso of fires) {
+			const wall = new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Melbourne", hour: "numeric", minute: "numeric", weekday: "short", hour12: false }).formatToParts(new Date(iso));
+			const hour = Number(wall.find((p) => p.type === "hour")?.value);
+			const minute = Number(wall.find((p) => p.type === "minute")?.value);
+			const weekday = wall.find((p) => p.type === "weekday")?.value;
+			expect(minute).toBe(20);
+			expect(hour).toBeGreaterThanOrEqual(9);
+			expect(hour).toBeLessThanOrEqual(17);
+			expect(["Sat", "Sun"]).not.toContain(weekday);
+		}
+		// Monday 5 Oct, first day of AEDT: 09:20 local is 22:20 UTC the day before (was 23:20 under AEST).
+		expect(fires).toContain("2026-10-04T22:20:00.000Z");
+		expect(fires).toContain("2026-10-01T23:20:00.000Z");
 	});
 });

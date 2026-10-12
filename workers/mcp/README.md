@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**305 tool registrations.** 278 are always registered; 27 are gated to the console
+**307 tool registrations.** 280 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -356,6 +356,8 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `gmail_scout_status` | Read mailbox binding, scan counts and failures | read | | |
 | `gmail_scout_config_set` | Configure the pinned, read-only Gmail source | write | yes | |
 | `gmail_scout_scan` | Scan configured Gmail job alerts into new private Scout leads | write | yes | |
+| `set_coder_brain` | Turn a coder's brain and its scheduled product-owner triage on or off (#1027); on creates a dry-run `run_po_triage` trigger, off disables them | write | yes | |
+| `po_triage_reports` | Read the brain switch, the triage triggers and recent triage reports (per-issue category, reason, action) | read | | |
 | `get_instance_local_browser_settings` | A local browser research agent's chosen settings, the effective run policy, the agent's ceilings and the runner pin; no credentials | read | | |
 | `set_instance_local_browser_settings` | Patch engine, sign-in mode, workspace, browser profile, sites, limits, retention and result collection; refuses anything outside the agent's ceiling | write | yes | |
 | `list_local_browser_runs` | A local browser research agent's runs, or one run with its redacted trace (pages, consent, pauses, findings) | read | | |

@@ -23,6 +23,7 @@ import { registerConsoleLinkRoutes } from "./instances-console-link.js";
 import { registerPermissionRequestRoutes } from "./instances-permission-requests.js";
 import { registerLocalBrowserRoutes } from "./instances-local-browser.js";
 import { registerGmailScoutRoutes } from "./instances-gmail-scout.js";
+import { registerCoderBrainRoutes } from "./instances-coder-brain.js";
 import { registerInstanceDescriptionRoutes } from "./instances-description.js";
 import { registerRunnerAttachRoutes, registerRunnerPinRoutes } from "./instances-runner-attach.js";
 import { registerRunnerSetupRoutes } from "./instances-runner-setup.js";
@@ -1087,6 +1088,7 @@ registerConsoleLinkRoutes(instanceRoutes); // a precise console URL for an agent
 registerPermissionRequestRoutes(instanceRoutes); // durable owner permission recovery (#1009)
 registerLocalBrowserRoutes(instanceRoutes); // local CLI browser research: settings, consent, runs (#945)
 registerGmailScoutRoutes(instanceRoutes); // read-only Gmail alert ingestion into this Scout's private leads (#995)
+registerCoderBrainRoutes(instanceRoutes); // the coder brain switch + product-owner triage reports (#1025, #1027)
 registerInstanceDescriptionRoutes(instanceRoutes); // one secret-safe runtime projection for MCP / Console (#1002)
 registerRunnerAttachRoutes(instanceRoutes); // the remote `pags up --force`, for one agent (#856)
 registerRunnerSetupRoutes(instanceRoutes); // the local coding runner setup checklist (#868)

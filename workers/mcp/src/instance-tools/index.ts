@@ -23,6 +23,7 @@ import { registerGuideTools } from "./guide.js";
 import { registerConsoleLinkTools } from "./console-link.js";
 import { registerLocalBrowserTools } from "./local-browser.js";
 import { registerGmailScoutTools } from "./gmail-scout.js";
+import { registerCoderBrainTools } from "./coder-brain.js";
 import { registerKnowledgeTools } from "./knowledge.js";
 import { registerMachineControlTools } from "./machine-control.js";
 import { registerMcpConnectionTools } from "./mcp-connections.js";
@@ -60,6 +61,7 @@ export function registerInstanceTools(
 	// Local CLI browser research (#945) — ungated; the API 409s an agent of another runtime.
 	registerLocalBrowserTools(server, ctx);
 	registerGmailScoutTools(server, ctx);
+	registerCoderBrainTools(server, ctx);
 	registerApplicationTools(server, ctx);
 	// "What was I working on?" (#787) — ungated for the same reason as the guide: the question
 	// belongs to every agent type, and the run lookup answers for every instance.

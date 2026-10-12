@@ -7097,6 +7097,51 @@ paths:
         "200": { $ref: "#/components/responses/OkObject" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/coder-brain:
+    get:
+      summary: Coder brain and product-owner triage switch
+      description: The instance's coder brain settings (`enabled`, `poEnabled`, both default off) and its `run_po_triage` cron triggers (#1025, #1027).
+      operationId: getCoderBrain
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Turn the coder brain or its product-owner triage on or off
+      description: |
+        The one writer of the coder brain switch (MCP `set_coder_brain`). Body `{ enabled?, poEnabled? }`; triage needs the
+        brain on and a coding instance (409 otherwise). Turning triage on creates a `run_po_triage` cron trigger when the
+        instance has none (hourly at a minute derived from the instance, never :00, Australia/Melbourne, dry run). Turning
+        the brain or triage off disables every `run_po_triage` trigger; nothing is deleted.
+      operationId: putCoderBrain
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: "Product-owner triage needs a coding instance." }
+  /v1/instances/{instanceId}/po-triage/reports:
+    get:
+      summary: Product-owner triage reports
+      description: |
+        The switch, the `run_po_triage` triggers and the most recent wake reports (#1027; `limit` 1-50, default 10). Each
+        report lists every open issue read with its category (waiting_on_human, blocked, needs_detail, ready), a one-line
+        reason and the action taken, plus counts and the digest sent (null when nothing changed). No issue text is stored.
+      operationId: listPoTriageReports
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 50 } }
+      responses:
+        "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/local-browser/settings:
     get:
       summary: Local CLI browser research settings

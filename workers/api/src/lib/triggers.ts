@@ -44,6 +44,7 @@ import type { Env } from "../types.js";
  *  because this is still where triggers are validated, stored and run. */
 import { TRIGGER_ACTIONS } from "./trigger-types.js";
 import { startWakeLoop } from "./run-wake-start.js";
+import { runPoTriage } from "./po-triage-wake.js";
 import { startApplicationFillForTrigger } from "./trigger-application-fill.js";
 import type { TriggerAction, TriggerConfig, TriggerEventType, TriggerRow, TriggerType } from "./trigger-types.js";
 export type { TriggerAction, TriggerConfig, TriggerEventType, TriggerRow, TriggerType };
@@ -299,6 +300,9 @@ export async function executeTriggerAction(
 		// #968 — have this agent take its NEXT TURN. The whole decision lives in `run-wake-start.ts`
 		// beside its pure half, because this dispatch chain is long enough already.
 		resultPayload = await startWakeLoop(env, target, payload, config, mapped);
+	} else if (target.action === "run_po_triage") {
+		// #1027: the product-owner wake. It decides its own skips (brain off, a second window this minute).
+		resultPayload = await runPoTriage(env, target, config);
 	} else if (target.action === "run_browse") {
 		// #172: schedule a generic browser task — fire the BROWSER_TASK workflow at the
 		// configured start URL. Runner-offline (503) or a run already active (409) aren't
@@ -515,6 +519,7 @@ function successMessage(action: TriggerAction, payload: unknown): string {
 	if (action === "generate_application_materials") return `application ${stringValue(result.applicationId).slice(0, 8)} ${stringValue(result.outcome) || "started"} (${stringValue(result.status) || "?"})`;
 	if (action === "start_application_fill") return `application ${stringValue(result.applicationId).slice(0, 8)} fill ${stringValue(result.outcome) || "started"} (${stringValue(result.mode) || stringValue(result.status) || "?"})`;
 	if (action === "run_browse") return result.skipped ? `browser run skipped — ${stringValue(result.reason) || "runner offline / busy"}` : `started browser run (task ${stringValue(result.taskId).slice(0, 8)})`;
+	if (action === "run_po_triage") return result.skipped === true ? `triage skipped — ${stringValue(result.reason)}` : `triage ${result.dryRun ? "(dry run) " : ""}report ${stringValue(result.reportId).slice(0, 8)}${stringValue(result.gate) ? ` — held: ${stringValue(result.gate)}` : ""}`;
 	if (action === "log_event" && stringValue(result.message)) return stringValue(result.message).slice(0, 300);
 	return `${action} dispatched`;
 }

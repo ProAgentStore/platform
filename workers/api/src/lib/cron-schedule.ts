@@ -11,7 +11,7 @@
  */
 
 import { HttpError } from "./auth.js";
-import { cronFields, isValidTimeZone, nextCronInstant } from "./cron-time.js";
+import { CRON_FIELD_BOUNDS, cronFieldValues, cronFields, isValidTimeZone, nextCronInstant } from "./cron-time.js";
 
 export function normalizeSchedule(value: unknown): string {
 	const raw = typeof value === "string" ? value.trim().toLowerCase().replace(/\s+/g, " ") : "";
@@ -27,29 +27,28 @@ export function normalizeSchedule(value: unknown): string {
 		return `every ${minutes} minutes`;
 	}
 	const parts = raw.split(" ");
-	if (parts.length === 5 && parts.every((p) => p === "*" || /^\d+$/.test(p))) {
-		const [minute, hour, day, month, weekday] = parts;
-		const valid =
-			validRange(minute, 0, 59) &&
-			validRange(hour, 0, 23) &&
-			validRange(day, 1, 31) &&
-			validRange(month, 1, 12) &&
-			validRange(weekday, 0, 7);
-		if (!valid) throw new HttpError(400, "cron expression has an out-of-range field");
-		// Enforce the same 5-minute floor as the `every N` form. The grammar only allows `*`
-		// or a literal digit per field (no `*/N`), so a `*` minute means EVERY minute — which
-		// would fire per worker-cron tick, bypassing the interval floor and multiplying
-		// connector-scan / AI cost. Require a specific minute (≥ hourly) instead.
-		if (minute === "*") throw new HttpError(400, "minimum cron interval is 5 minutes — pin a specific minute, or use 'every N minutes'");
+	if (parts.length === 5 && parts.every((p) => /^[\d*,/-]+$/.test(p))) {
+		// #1027: each field may be `*`, `n`, a range `9-17`, a list `1,3,5`, a step `*\/15` or
+		// `9-17/2`, or a list of those (`22-23,0-6`) — business hours, nights, chosen days.
+		const order = ["minute", "hour", "day", "month", "weekday"] as const;
+		const values = order.map((f, i) => cronFieldValues(parts[i], CRON_FIELD_BOUNDS[f][0], CRON_FIELD_BOUNDS[f][1]));
+		if (values.some((v) => !v || v.size === 0)) throw new HttpError(400, "cron expression has an out-of-range or malformed field");
+		// The same 5-minute floor as the `every N` form: a minute field naming two minutes closer
+		// than 5 apart (including across the hour) would fire per worker tick and multiply
+		// connector-scan / AI cost. `*` names every minute, so it is refused as before.
+		if (minuteGap(values[0] as ReadonlySet<number>) < 5) throw new HttpError(400, "minimum cron interval is 5 minutes — pin a specific minute, or use 'every N minutes'");
 		return parts.join(" ");
 	}
-	throw new HttpError(400, "unsupported schedule; use @hourly, @daily, every N minutes, or a simple 5-field cron");
+	throw new HttpError(400, "unsupported schedule; use @hourly, @daily, every N minutes, or a 5-field cron (ranges, lists and steps allowed)");
 }
 
-function validRange(part: string, min: number, max: number): boolean {
-	if (part === "*") return true;
-	const n = Number(part);
-	return Number.isInteger(n) && n >= min && n <= max;
+/** The smallest gap, in minutes, between consecutive minutes a field names, wrapping the hour. */
+function minuteGap(minutes: ReadonlySet<number>): number {
+	const sorted = [...minutes].sort((a, b) => a - b);
+	if (sorted.length < 2) return 60;
+	let gap = sorted[0] + 60 - sorted[sorted.length - 1];
+	for (let i = 1; i < sorted.length; i++) gap = Math.min(gap, sorted[i] - sorted[i - 1]);
+	return gap;
 }
 
 /**

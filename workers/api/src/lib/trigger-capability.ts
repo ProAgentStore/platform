@@ -36,6 +36,7 @@ const ACTION_LABELS: Record<TriggerAction, string> = {
 	generate_application_materials: "Tailor application materials",
 	start_application_fill: "Fill the application",
 	start_loop: "Take the next turn",
+	run_po_triage: "Product-owner triage",
 };
 
 /**
@@ -63,6 +64,8 @@ const REQUIREMENTS: Partial<Record<TriggerAction, ActionRequirement>> = {
 	run_local_browser: { runtime: "local_browser", does: "run local browser research" },
 	generate_application_materials: { runtime: "local_artifact", does: "tailor application materials" },
 	start_application_fill: { runtime: "local_apply", does: "fill job applications" },
+	// #1027: triages the coder's own GitHub backlog and queues coding runs.
+	run_po_triage: { workflow: "CODING_SESSION", does: "triage a coder's issues" },
 };
 
 /** The capability an action needs, as one short phrase — null when it needs nothing declared. */
