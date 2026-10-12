@@ -497,6 +497,59 @@ describe("retry, cancel and resume", () => {
 		expect((await call("POST", "/t1/application-queue/actions", { action: "retry_fill", application_id: "rf", expected_status: "blocked" })).status).toBe(409);
 	});
 
+	/**
+	 * The live #1022 sequence: a fill ended at review, the owner's retry moved the card back to
+	 * materials_ready but its dispatch was refused (no runner), and every later Request review / Approve
+	 * then answered with the FIRST run — "existing" — and left the card at materials_ready.
+	 */
+	async function stuckAfterRefusedRetry(id: string) {
+		readyApp(id);
+		const first = (await act("ap", { action: "request_review", application_id: id, expected_status: "materials_ready" })).body.result.runId as string;
+		answers["/local-apply/status"] = { status: 200, body: { state: "ended", lastSeq: 0, events: [], result: { runId: first, outcome: "awaiting_review", mode: "fill_and_review", traceId: first, engineAuth: "machine-login", filled: 0, uploaded: [], submitAttempted: false, summary: "" } } };
+		await call("GET", `/ap/application-runs/${first}`);
+		getBoundRunnerConn.mockResolvedValueOnce(null);
+		const refused = await act("ap", { action: "retry_fill", application_id: id, expected_status: "awaiting_review" });
+		expect(refused.status).toBe(503);
+		const stuck = (await call("GET", `/t1/application-queue/item?application_id=${id}`)).body.item;
+		expect(stuck).toMatchObject({ status: "materials_ready", fillRunId: first });
+		return { first, version: stuck.stateVersion as number };
+	}
+
+	it("Request review on a card a refused retry left at materials_ready starts a NEW run and moves the card (#1022)", async () => {
+		const { first, version } = await stuckAfterRefusedRetry("sr");
+		const review = await act("ap", { action: "request_review", application_id: "sr", expected_status: "materials_ready", expected_version: version });
+		expect(review.body.result).toMatchObject({ outcome: "started", mode: "fill_and_review" });
+		expect(review.body.result.runId).not.toBe(first);
+		expect(review.body.item).toMatchObject({ status: "filling", fillRunId: review.body.result.runId });
+		expect(dispatches("/local-apply/run")).toHaveLength(2);
+		expect(dispatches("/local-apply/run")[1].body.requestId).toBe(`t1:sr:1:materials:retry:${version}`);
+	});
+
+	it("Approve & proceed on that card is spent by the run it starts — exactly one, never the stale one (#1022)", async () => {
+		await call("PUT", "/ap/application-runner/settings", { allowDomains: ["example.com"] });
+		const { first, version } = await stuckAfterRefusedRetry("sa");
+		const approved = await act("ap", { action: "approve_and_proceed", application_id: "sa", expected_status: "materials_ready", expected_version: version });
+		expect(approved.body.result).toMatchObject({ outcome: "started", mode: "auto_submit" });
+		const runId = approved.body.result.runId as string;
+		expect(runId).not.toBe(first);
+		expect(approved.body.result.authorizationConsumedBy).toBe(runId);
+		expect(dispatches("/local-apply/run")).toHaveLength(2);
+		// The approval is single-use: the card now offers no second Approve, and a repeat cannot start another run.
+		expect(approved.body.item.actions).not.toContain("approve_and_proceed");
+		const again = await act("ap", { action: "approve_and_proceed", application_id: "sa", expected_status: "filling" });
+		expect(again.status).toBe(409);
+		expect(dispatches("/local-apply/run")).toHaveLength(2);
+	});
+
+	it("the first fill still dispatches under the Tailor's own event, so a redelivered event converges on it", async () => {
+		readyApp("fe");
+		const r = await act("ap", { action: "request_review", application_id: "fe", expected_status: "materials_ready" });
+		expect(dispatches("/local-apply/run")[0].body.requestId).toBe("t1:fe:1:materials");
+		const replay = await call("POST", "/ap/application-runs", { eventId: "t1:fe:1:materials", applicationId: "fe", tailorInstanceId: "t1" });
+		expect(replay.body.run?.id ?? replay.body.runId).toBe(r.body.result.runId);
+		expect(dispatches("/local-apply/run")).toHaveLength(1);
+	});
+
 	it("a paused fill offers resume with the owner's answer, and cancel", async () => {
 		readyApp("pz");
 		const started = await call("POST", "/t1/application-queue/actions", { action: "request_review", application_id: "pz", expected_status: "materials_ready" });

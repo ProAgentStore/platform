@@ -741,6 +741,23 @@ export async function cancelApplyRun(env: Env, uid: string, run: ApplyRun, now =
 }
 
 /**
+ * The event an OWNER-started fill dispatches from (#1022). The first fill keeps the Tailor's own
+ * `materials_ready` event, so a redelivered connection still converges on that one run. Once ANY fill
+ * has run, that key is spent: `startApplicationFill` returns the run recorded under it as `existing`
+ * BEFORE it looks at the application, so an owner's Request review, Start fill or Approve & proceed on
+ * an application back at `materials_ready` (after a retry whose dispatch was refused, say) answered
+ * with the long-ended first run and never moved the card — and an Approve recorded an authorization
+ * no run would ever spend. Such a start uses the same per-attempt key {@link retryFill} does: a
+ * repeated click on the same state still finds the run it started; a new decision starts a new one.
+ */
+export function ownerFillEvent(app: JobApplication): Record<string, unknown> | null {
+	const ready = app.readyEvent as { eventId?: unknown } | null;
+	if (!ready || typeof ready.eventId !== "string") return null;
+	if (!app.fillRunId) return app.readyEvent as Record<string, unknown>;
+	return { eventId: `${ready.eventId}:retry:${app.stateVersion}`, applicationId: app.id, tailorInstanceId: app.instanceId };
+}
+
+/**
  * Retry a fill that stopped (#958): blocked or failed after a fill run, and NEVER after any submit
  * attempt. The application goes back to `materials_ready` (audited), and a fresh run starts under a
  * per-attempt key, so a repeated click finds the run it started.

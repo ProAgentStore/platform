@@ -752,10 +752,10 @@ const PINS = {
 	// a different subject from the dispatch plumbing and read better alone. What is left here is
 	// this file's own: the gate's counting options, the release call on each path that ends a run,
 	// and the comments explaining why the mode could not be trusted from the queued row.
-	"workers/api/src/lib/local-apply/apply.ts": 882, // +31 at #953: durable CLI result receipt/reconciliation belongs beside the dispatch and settlement CAS operations, so its evidence cannot diverge from the application outcome. +25 at #953: terminal-outcome notification must stay directly after the same CAS projection that makes it idempotent, while the factual copy/deep-link builder keeps the policy-aware delivery in one place.
+	"workers/api/src/lib/local-apply/apply.ts": 888, // +6 at #1022: ownerFillEvent — an owner start after any fill gets a per-attempt key; +31 at #953: durable CLI result receipt/reconciliation belongs beside the dispatch and settlement CAS operations, so its evidence cannot diverge from the application outcome. +25 at #953: terminal-outcome notification must stay directly after the same CAS projection that makes it idempotent, while the factual copy/deep-link builder keeps the policy-aware delivery in one place.
 	// +12 at #988: the control surface now attaches the single redacted execution projection to
 	// application queue items. Projection construction itself lives in execution-projection.ts; the remaining lines are the queue's typed field and its one construction boundary. +4 at #997: a runnerless Gmail Scout is classified from its durable Apply handoff, so its intentionally null runtime cannot hide private leads from this queue.
-	"workers/api/src/lib/applications/control.ts": 843,
+	"workers/api/src/lib/applications/control.ts": 844, // +1 at #1022: owner starts dispatch from ownerFillEvent, never the spent ready event.
 	// -1 at #325: the JSON-string coercion create_agent and update_agent each had inline moved
 	// to `http.ts` as `parseJsonArg`, which is where the two copies could stop disagreeing about
 	// what a MALFORMED string means (create silently dropped it, update refused). Pin lowered so

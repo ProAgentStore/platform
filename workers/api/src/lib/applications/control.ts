@@ -28,7 +28,7 @@ import { JOB_LEAD_APPLY_EVENT, JOB_LEAD_TRANSITIONS, type JobLeadStatus, jobLead
 import { MATERIALS_READY_EVENT } from "../local-artifact/contract.js";
 import { type JobApplication, getOwnedApplication, getTailorRun } from "../local-artifact/store.js";
 import { cancelTailoring, retryTailoring, startTailoring } from "../local-artifact/tailor.js";
-import { cancelApplyRun, resumeApplyRun, retryFill, runnerSettingsFor, startApplicationFill, submitGateFor } from "../local-apply/apply.js";
+import { cancelApplyRun, ownerFillEvent, resumeApplyRun, retryFill, runnerSettingsFor, startApplicationFill, submitGateFor } from "../local-apply/apply.js";
 import { approvalEligibility, approvalState } from "../local-apply/approval.js";
 import { approveAndContinue, approveContinueResult, isPostFillApproval } from "../local-apply/approve-continue.js";
 import type { FillProgress } from "./fill-progress.js";
@@ -711,7 +711,8 @@ export async function performApplicationAction(env: Env, uid: string, instanceId
 			// grant is idempotent (unique on the application), and `startApplicationFill` is already
 			// replay-safe on the event id — so a double-click, a retried MCP call and a redelivered
 			// event all converge on one authorization and one run, never a second submission.
-			if (!app.readyEvent) throw new HttpError(409, "The application has no materials_ready event to fill from.");
+			const event = ownerFillEvent(app);
+			if (!event) throw new HttpError(409, "The application has no materials_ready event to fill from.");
 			const existingAuth = await getSubmitAuthorization(env, app.id, uid);
 			const eligible = approvalEligibility(app, existingAuth);
 			if (!eligible.eligible) throw new HttpError(409, `This application cannot be approved: ${eligible.why}.`);
@@ -728,7 +729,7 @@ export async function performApplicationAction(env: Env, uid: string, instanceId
 				},
 				now,
 			);
-			const out = await startApplicationFill(env, runner, uid, app.readyEvent, "owner");
+			const out = await startApplicationFill(env, runner, uid, event, "owner");
 			// Named for what it is. It used to be `after`, which SHADOWED the `after()` helper every
 			// other branch returns through — invisible until a second statement in this block needed it.
 			const spent = await getSubmitAuthorization(env, app.id, uid);
@@ -748,8 +749,9 @@ export async function performApplicationAction(env: Env, uid: string, instanceId
 		}
 		case "start_fill":
 		case "request_review": {
-			if (!app.readyEvent) throw new HttpError(409, "The application has no materials_ready event to fill from.");
-			const out = await startApplicationFill(env, runner, uid, app.readyEvent, "owner", { review: input.action === "request_review" });
+			const event = ownerFillEvent(app);
+			if (!event) throw new HttpError(409, "The application has no materials_ready event to fill from.");
+			const out = await startApplicationFill(env, runner, uid, event, "owner", { review: input.action === "request_review" });
 			return after({ outcome: out.kind, runId: out.run?.id ?? null, mode: out.run?.policy.mode ?? null });
 		}
 		case "retry_fill": {
