@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { BrowserTools } from "../local-browser/bridge.js";
-import { ApplyBridge, type ApplyBridgeHost, groundingRefusal } from "./bridge.js";
+import { ApplyBridge, type ApplyBridgeHost, CREDENTIAL_NAME, groundingRefusal } from "./bridge.js";
 import type { LocalApplyEvent, LocalApplyPause } from "./contract.js";
 
 interface PageFlags {
@@ -39,6 +39,10 @@ const SNAPSHOT = [
 	'- button "Apply for this job" [ref=e21]',
 	'- button "Quick apply" [ref=e22]',
 	'- button "Save and continue" [ref=e23]',
+	// #1014: an emailed one-time-code sign-in screen has no password field — only the code box.
+	'- textbox "Enter the 6-digit code we emailed you" [ref=e30]',
+	'- textbox "Sign-in code" [ref=e31]',
+	'- textbox "Postcode" [ref=e32]',
 ].join("\n");
 /** What the commit-guard probe reads from the page for each ref. */
 const FACTS: Record<string, { submits: boolean; method: string; name: string }> = {
@@ -466,6 +470,30 @@ describe("pauses — a person handles it, the run never works around it", () => 
 		await bridge.callTool("browser_type", { target: "e11", text: "x", source_quote: "x" });
 		expect(pauses[0].reason).toBe("login_required");
 		expect(sent("browser_type")).toHaveLength(0);
+	});
+
+	it.each(["e30", "e31"])("an emailed one-time-code box (%s) pauses as a sign-in for the owner's takeover; the code is never typed or echoed (#1014)", async (target) => {
+		const { bridge, pauses, sent } = await onForm();
+		const res = await bridge.callTool("browser_type", { target, text: "482913", source_quote: "482913" });
+		expect(pauses).toHaveLength(1);
+		expect(pauses[0].reason).toBe("login_required");
+		expect(JSON.stringify(pauses)).not.toContain("482913");
+		expect(sent("browser_type")).toHaveLength(0);
+		expect(res.isError).toBe(true); // nobody resumed it: the run stops rather than guessing
+	});
+
+	it("when the owner handles the sign-in in the exact session, the run continues from a fresh snapshot (#1013 fallback)", async () => {
+		const { bridge, pauses, sent } = await onForm({}, { resume: () => "resumed" });
+		const res = await bridge.callTool("browser_type", { target: "e30", text: "482913", source_quote: "482913" });
+		expect(pauses[0].reason).toBe("login_required");
+		expect(res.isError).toBeFalsy();
+		expect(JSON.stringify(res)).toMatch(/owner handled the sign-in/);
+		expect(sent("browser_type")).toHaveLength(0);
+	});
+
+	it("an ordinary code answer (a postcode, a promo code) is not a sign-in", () => {
+		for (const name of ["Postcode", "Promo code", "Referral code", "Post code", "Country code"]) expect(CREDENTIAL_NAME.test(name), name).toBe(false);
+		for (const name of ["Verification code", "Security code", "Login code", "Enter the code we sent to your email", "6 digit code", "One-time passcode", "Password"]) expect(CREDENTIAL_NAME.test(name), name).toBe(true);
 	});
 
 	it("request_answer pauses with the question; an unanswered one leaves the run blocked", async () => {

@@ -89,8 +89,15 @@ const PAGINATION_NAME = /^(next|previous|prev|more|load more|show more|see more|
 const STEP_NAME = /^(next|continue|back|previous|add( another)?|upload|attach|browse|choose( a)? file|select( a)? file|remove|edit|expand|collapse|show more)\b/i;
 /** A tick that is a legal or privacy agreement: the owner's call, not the CLI's. */
 const CONSENT_NAME = /\b(agree|consent|terms|privacy|acknowledge|certify|accept|declaration|gdpr)\b/i;
-/** A field that is a credential: a sign-in, never an application answer. */
-const CREDENTIAL_NAME = /password|passcode|one[- ]?time|\botp\b|verification code|security code|2fa|two[- ]factor/i;
+/**
+ * A field that is a credential: a sign-in, never an application answer. It includes the box an emailed or texted
+ * one-time code goes into (#1014) — "Enter the 6-digit code we emailed you", "Sign-in code" — which has no password
+ * field beside it, so the page check never sees a sign-in: the CLI is stopped at the field and the owner takes the
+ * exact session over (#1013). The Runner holds no mailbox access and never reads, asks for or types a code itself.
+ * Ordinary "code" answers (a postcode, a promo or referral code) are not credentials.
+ */
+export const CREDENTIAL_NAME =
+	/password|passcode|one[- ]?time|\botp\b|2fa|two[- ]factor|\b(?:verification|security|sign[- ]?in|log[- ]?in|login|access|authentication|confirmation) code\b|\b\d[- ]?digit code\b|\bcode (?:that )?we (?:sent|emailed|texted)\b|\bcode (?:sent|emailed|texted) to\b/i;
 /** Keys that move between fields without entering or activating anything. */
 const SAFE_KEYS = /^(Tab|Shift\+Tab|Arrow(Up|Down|Left|Right)|Escape|Home|End|PageUp|PageDown)$/;
 
