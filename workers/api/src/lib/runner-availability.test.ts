@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
 	isRunnerGone,
+	isRunnerSessionAbsent,
 	isRunnerUnreachable,
 	isRunnerUnresponsive,
 	makeRunnerGuard,
@@ -219,6 +220,37 @@ describe("makeRunnerGuard", () => {
 		expect(reconnect).toHaveBeenCalledTimes(1);
 		// Same logical step, re-run under a fresh durable name (Workflow step names are unique).
 		expect(run.names).toEqual(["s7-snapshot", "s7-snapshot-r1"]);
+	});
+
+	it("relaunches a session a restarted runner lost over a LIVE relay, then re-runs the step — without waiting (#1053)", async () => {
+		const wait = waitDeps([ONLINE]);
+		const reconnect = vi.fn(async () => undefined);
+		const absent = new Error('Runner /coding/capture → 500: {"error":"No coding session: s1"}');
+		const guard = makeRunnerGuard({ wait, reconnect, sessionLost: async (e) => isRunnerSessionAbsent(e) });
+		const run = stepper();
+		let attempts = 0;
+		const out = await guard(run, "s4-waitidle", async () => {
+			if (attempts++ === 0) throw absent;
+			return "pane";
+		});
+		expect(out).toBe("pane");
+		expect(reconnect).toHaveBeenCalledWith("s4-waitidle-lost0");
+		expect(run.names).toEqual(["s4-waitidle", "s4-waitidle-r1"]);
+		expect(wait.slept).toEqual([]);
+	});
+
+	it("a lost session the run does not own (sessionLost says no) still fails immediately", async () => {
+		const reconnect = vi.fn(async () => undefined);
+		const guard = makeRunnerGuard({ wait: waitDeps([ONLINE]), reconnect, sessionLost: async () => false });
+		await expect(guard(stepper(), "s0", async () => { throw new Error('Runner /coding/capture → 500: {"error":"No coding session: s1"}'); })).rejects.toThrow("No coding session");
+		expect(reconnect).not.toHaveBeenCalled();
+	});
+
+	it("names only the runner's own no-such-session answer as a lost session", () => {
+		expect(isRunnerSessionAbsent(new Error('Runner /coding/act → 500: {"error":"No coding session: csess_1"}'))).toBe(true);
+		expect(isRunnerSessionAbsent(new Error("Runner /coding/act → 500: typecheck failed"))).toBe(false);
+		expect(isRunnerSessionAbsent(new Error('Runner /coding/act → 409: {"error":"No coding session: s1"}'))).toBe(false);
+		expect(isRunnerSessionAbsent("No coding session: s1")).toBe(false);
 	});
 
 	it("ends the run only when the runner never comes back, with the diagnosed remedy", async () => {

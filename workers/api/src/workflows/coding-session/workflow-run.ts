@@ -10,10 +10,11 @@ import {
 import { callRunner, getRunnerConnIgnoringLiveness, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS, type RunnerConn } from "../../lib/runner-client.js";
 import { runtimeConnectivity } from "../../lib/instance-connectivity.js";
 import type { CodingSessionParams } from "../coding-session-params.js";
-import { makeRunnerGuard, noRunnerDetail, RUNNER_PROBE_INTERVAL, type RunStep } from "../../lib/runner-availability.js";
+import { isRunnerSessionAbsent, makeRunnerGuard, noRunnerDetail, RUNNER_PROBE_INTERVAL, type RunStep } from "../../lib/runner-availability.js";
 import { CompletionEvidence } from "../../lib/coding-completion-evidence.js";
 import { ObjectiveDelivery, type ObjectiveDeliveryState } from "../../lib/coding-objective-delivery.js";
 import { sendAct } from "../../lib/coding-act-send.js";
+import { decideTurnRecovery, describeTurnRecovery, recoveryInstruction, turnRecoveryRecord, type InflightTurn } from "../../lib/coding-turn-recovery.js";
 import { activeConstraints, constraintLines, constraintSources } from "../../lib/coding-scope-constraints.js";
 import { endSession, getRepo, reassignSessionNode, releaseSessionDriver, touchSessionActivity, touchSessionDriver } from "../../lib/coding-store.js";
 import { markDirectivesProcessed } from "../../lib/coding-ownership.js";
@@ -368,6 +369,10 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 				await touchSessionActivity(env, instanceId, userId, sessionId).catch(() => undefined);
 			},
 		},
+		// The runner restarted and lost the session the run still owns (#1053) — never one the owner ended.
+		sessionLost: async (e) =>
+			isRunnerSessionAbsent(e) &&
+			(await env.DB.prepare("SELECT status FROM coding_sessions WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3").bind(sessionId, instanceId, userId).first<{ status: string }>())?.status === "active",
 		reconnect: async (label) => {
 			// The machine that comes back may not be the machine that went away — a user closing
 			// one laptop and opening another is the ordinary case. Re-resolve live (pin-aware),
@@ -541,6 +546,11 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		});
 	// Set when the required envelope was refused (#1019): nothing more reaches the engine, and the next snapshot ends the run.
 	let refusedStop: string | null = null;
+	// #1053: the turn the run waits on (its checkpoint), whether the act in flight is that turn's one recovery,
+	// and — when a lost turn cannot be resumed — the run's ending.
+	let inflight: InflightTurn | null = null;
+	let sendingRecovery = false;
+	let lostTurnStop: string | null = null;
 	let lastPane = {} as CodingPaneSnapshot;
 	const measured = async (p: Promise<unknown>): Promise<CodingPaneSnapshot> => {
 		const pane = (await p) as CodingPaneSnapshot;
@@ -554,8 +564,42 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		return pane;
 	};
 
+	/**
+	 * Did the turn the run just waited on survive (#1053)? A relaunched engine is idle, so the wait returns
+	 * either way — this is where a lost turn is told apart from a finished one. Decided from journalled values
+	 * (`lib/coding-turn-recovery.ts`), recorded once as an owner-scoped diagnostic, then: resumed ONCE under a
+	 * deterministic id, or the run ends `turn_lost` so its queue lock is released. Never silently skipped.
+	 */
+	async function settleTurn(pane: CodingPaneSnapshot): Promise<CodingPaneSnapshot> {
+		const turn = inflight;
+		inflight = null;
+		if (!turn) return pane;
+		const d = decideTurnRecovery(turn, pane, conn.runnerNode ?? null);
+		if (d.decision === "intact") return pane;
+		const label = `s${n++}-turn-recovery`;
+		const line = (await step.do(label, async () => {
+			const record = turnRecoveryRecord(turn, pane, d, { runId: event.payload.loopRunId ?? null, sessionId, node: conn.runnerNode ?? null, detectedAt: Date.now() });
+			const text = describeTurnRecovery(record);
+			await traceCodingRun(env, traceCtx, "coding.run.turn_recovery", text, record);
+			await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: text }).catch(() => undefined);
+			await postToChat(text);
+			return text;
+		})) as string;
+		if (d.decision === "block") {
+			lostTurnStop = line;
+			return { ...pane, cancelled: true, stopReason: line };
+		}
+		sendingRecovery = true;
+		const acted = await deps.act({ kind: "message", author: "pilot", text: recoveryInstruction(turn), inputId: d.resumeInputId }).finally(() => {
+			sendingRecovery = false;
+		});
+		return acted?.cancelled ? acted : deps.waitIdle();
+	}
 	const deps: CodingDeps = {
-		snapshot: () => (refusedStop ? Promise.resolve({ ...lastPane, cancelled: true, stopReason: refusedStop }) : measured(guard(runRetry, `s${n++}-snapshot`, capture))),
+		snapshot: () => {
+			const stop = refusedStop ?? lostTurnStop;
+			return stop ? Promise.resolve({ ...lastPane, cancelled: true, stopReason: stop }) : measured(guard(runRetry, `s${n++}-snapshot`, capture));
+		},
 		act: async (a: CodingActionKind) => {
 			const label = `s${n++}-act`;
 			// Every instruction carries its own id (#1019): deterministic per step, so a step retry or a
@@ -574,6 +618,7 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			const compose = () => (objective ? objective.attach(withId) : withId);
 			const prepare = (x: CodingActionKind) => withTurnReplay(env, { instanceId, userId, repoId, repoName: goal.repo, clientType: goal.clientType }, x);
 			const node = () => conn.runnerNode ?? null;
+			const before = { engine: lastEngine, node: node() }; // where this act is dispatched — the checkpoint when its reply is lost
 			const { pane, receipt } = await sendAct({ sessionId, run: runRetry, guard, call: (path, body) => callRunner(conn, path, body), node, engine: () => lastEngine, prepare }, label, compose);
 			objective?.sent(); // counted before its pane can settle a delivery receipt; settlement itself waits for the generation check
 			await measured(Promise.resolve(pane));
@@ -582,6 +627,14 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 				await step.do(`${label}-unknown`, () => traceCodingRun(env, traceCtx, "coding.run.input_unknown", `${receipt.inputId ?? label}: ${why} — not re-sent.`, { inputId: receipt.inputId, outcome: receipt.outcome }));
 			}
 			objective?.settle(receipt); // from the journalled receipt: a predecessor's acceptance never counts for its replacement
+			// The turn's checkpoint (#1053): the process that ACCEPTED it, or — reply lost — the one it was sent to.
+			if (withId.kind === "message" && withId.inputId) {
+				const owner =
+					receipt.outcome === "accepted" || receipt.outcome === "predecessor"
+						? { ledger: receipt.ledger, epoch: receipt.epoch, node: node() }
+						: { ledger: before.engine?.ledger ?? null, epoch: before.engine?.epoch ?? null, node: before.node };
+				inflight = { inputId: withId.inputId, ...owner, receipt: receipt.outcome, sentAt: Date.now(), recovery: sendingRecovery };
+			}
 			return pane;
 		},
 		// The spend gate lives in `coding-decide-budget.ts` — the LLM call is the only place this
@@ -605,14 +658,14 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 		// so a turn survives an eviction rather than restarting its whole 480-second window. NOT known
 		// to save subrequests (`idleWaitIsDurable`); `CODING_IDLE_DURABLE=0` restores the one-step wait.
 		waitIdle: () => {
-			if (refusedStop) return Promise.resolve(lastPane); // nothing was sent, so there is no turn to wait for
+			if (refusedStop || lostTurnStop) return Promise.resolve(lastPane); // nothing was sent, so there is no turn to wait for
 			// ONE increment, above the branch — the counter must not depend on which wait ran. Why: the wiring test.
 			const label = `s${n++}-waitidle`;
 			return measured(
 				idleWaitIsDurable(env)
 					? awaitEngineIdle(durableIdleDeps({ label, capture: (name) => guard(runRetry, name, capture), sleep: (name, ms) => step.sleep(name, ms) }))
 					: guard(runIdle, label, () => awaitEngineIdle({ capture, sleep })),
-			);
+			).then(settleTurn);
 		},
 		onEvent: (type, message, data) => {
 			// Incremented OUTSIDE step.do: a step that exhausts its retries re-runs its body,
@@ -957,6 +1010,12 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 			if (refusedStop) {
 				crashReason = "constraint_refused";
 				result = { ...result, outcome: "failed", detail: refusedStop };
+				break;
+			}
+			// A lost engine turn that could not be resumed exactly once (#1053): blocked on the owner, never re-sent.
+			if (lostTurnStop) {
+				crashReason = "turn_lost";
+				result = { ...result, outcome: "failed", detail: lostTurnStop };
 				break;
 			}
 			// Both are consumed by the round above — cleared so a stale handoff value or a stale platform note isn't re-injected into a later round.

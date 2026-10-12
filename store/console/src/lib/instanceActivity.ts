@@ -125,6 +125,7 @@ const OUTCOME_WORD: Record<string, string> = {
 	needs_human: "asked a question",
 	cancelled: "was stopped",
 	constraint_refused: "was stopped: your constraints are too long to send whole",
+	turn_lost: "lost an engine turn to a runner restart",
 	failed: "failed",
 };
 

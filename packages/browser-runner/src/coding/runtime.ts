@@ -223,7 +223,9 @@ export class CodingRuntime {
 	 */
 	liveWork(): string[] {
 		return [...this.sessions.entries()].flatMap(([sessionId, s]) => {
-			const engine = (s as unknown as { clientType?: string }).clientType ?? "";
+			// The engine lives on the session's CONFIG (#1053): reading a top-level `clientType` — which a
+			// HeadlessSession does not have — labelled every live Claude turn "coding turn is lost on a restart".
+			const engine = s.config?.clientType ?? "";
 			const consequence = engine === "claude" ? "Claude conversation resumes after a restart" : `${engine || "coding"} turn is lost on a restart`;
 			try {
 				// `alive: false` is an observed inactive session. Any other answer (including a

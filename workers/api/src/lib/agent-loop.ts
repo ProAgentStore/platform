@@ -25,7 +25,8 @@ export type LoopStopReason =
 	| "provider_credit" // the owner's AI provider account has no credit left — top up, do not retry (#773)
 	| "engine_auth" // the coding CLI is not signed in and nobody signed it in within the park (#881)
 	| "interrupted" // the PLATFORM cut the invocation off — the objective never reported (#546)
-	| "constraint_refused"; // the owner's constraints in force do not fit the engine's envelope whole: nothing more was sent (#1019)
+	| "constraint_refused" // the owner's constraints in force do not fit the engine's envelope whole: nothing more was sent (#1019)
+	| "turn_lost"; // a runner restart or engine relaunch cut a turn off and it could not be resumed exactly once: nothing was re-sent (#1053)
 
 export interface LoopState {
 	iteration: number;
@@ -238,7 +239,9 @@ export function statusFor(reason: LoopStopReason): LoopRunStatus {
 	//
 	// `constraint_refused` too (#1019): nothing failed and nobody cancelled — the owner's own constraints do not fit
 	// the engine's envelope, and only the owner can shorten them.
-	if (reason === "escalated" || reason === "engine_limit" || reason === "interrupted" || reason === "provider_credit" || reason === "engine_auth" || reason === "constraint_refused") return "needs_human";
+	//
+	// `turn_lost` (#1053): the turn may have half-run before the restart, so somebody has to look at the worktree.
+	if (reason === "escalated" || reason === "engine_limit" || reason === "interrupted" || reason === "provider_credit" || reason === "engine_auth" || reason === "constraint_refused" || reason === "turn_lost") return "needs_human";
 	return "failed";
 }
 

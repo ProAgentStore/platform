@@ -52,6 +52,8 @@ export type CodingRunEvent =
 	| "coding.run.objective"
 	/** An act whose reply was lost and could not be reconciled: not re-sent, because it may already have run (#1019). */
 	| "coding.run.input_unknown"
+	/** A turn a runner restart or engine relaunch cut off: resumed exactly once, or the run stopped `turn_lost` (#1053). */
+	| "coding.run.turn_recovery"
 	/** The run reached a terminal state. Carries the outcome and the stop reason. */
 	| "coding.run.end";
 

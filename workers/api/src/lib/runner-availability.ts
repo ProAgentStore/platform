@@ -235,6 +235,12 @@ export function makeRunnerGuard(cfg: {
 	wait: RunnerWaitDeps;
 	/** Re-point at whatever machine is live now, and make sure the session exists on it. */
 	reconnect: (label: string) => Promise<void>;
+	/**
+	 * Did this error mean the runner is up but no longer holds a session the run still owns (#1053)? A runner
+	 * that restarted between two calls answers `No coding session` over a live relay, which the probe below
+	 * would otherwise read as a genuine failure. Absent: no such check, the pre-#1053 behaviour.
+	 */
+	sessionLost?: (e: unknown) => Promise<boolean>;
 	waitMsPerLoss?: number;
 	totalWaitMs?: number;
 }): RunnerGuard {
@@ -249,6 +255,11 @@ export function makeRunnerGuard(cfg: {
 				return (await run(round === 0 ? name : `${name}-r${round}`, fn)) as T;
 			} catch (e) {
 				if (isRunnerGone(e) || round >= RECONNECT_ROUNDS) throw e;
+				// The machine is back but the engine is not: relaunch it, as a heal would, and re-run the step (#1053).
+				if (cfg.sessionLost && (await cfg.sessionLost(e).catch(() => false))) {
+					await cfg.reconnect(`${name}-lost${round}`);
+					continue;
+				}
 				// A genuine failure must still fail IMMEDIATELY — that is the acceptance criterion this
 				// change is most likely to break. So when the error does not say it is a disconnect, ask
 				// the relay: a live socket means the runner is fine and this error is about something
@@ -288,6 +299,12 @@ export function makeRunnerGuard(cfg: {
 			}
 		}
 	}
+}
+
+/** The runner answered that it holds no coding session with the id asked about — it restarted and lost it (#1053). */
+export function isRunnerSessionAbsent(e: unknown): boolean {
+	const msg = e instanceof Error ? e.message : "";
+	return /^Runner \/coding\/\S+ → 500: .*"error":"No coding session: /.test(msg);
 }
 
 /**

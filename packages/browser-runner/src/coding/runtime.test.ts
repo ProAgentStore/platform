@@ -62,8 +62,8 @@ describe("CodingRuntime liveWork (#1007)", () => {
 
 	it("does not block an update for retained idle sessions", () => {
 		const runtime = runtimeWithSessions([
-			["idle-claude", { clientType: "claude", alive: true, runState: () => "idle" }],
-			["idle-codex", { clientType: "codex", alive: true, runState: () => "idle" }],
+			["idle-claude", { config: { clientType: "claude" }, alive: true, runState: () => "idle" }],
+			["idle-codex", { config: { clientType: "codex" }, alive: true, runState: () => "idle" }],
 		]);
 
 		expect(runtime.liveWork()).toEqual([]);
@@ -71,9 +71,9 @@ describe("CodingRuntime liveWork (#1007)", () => {
 
 	it("reports genuinely in-flight thinking and responding turns", () => {
 		const runtime = runtimeWithSessions([
-			["thinking", { clientType: "claude", alive: true, runState: () => "thinking" }],
-			["responding", { clientType: "codex", alive: true, runState: () => "responding" }],
-			["stopped", { clientType: "grok", alive: false, runState: () => "thinking" }],
+			["thinking", { config: { clientType: "claude" }, alive: true, runState: () => "thinking" }],
+			["responding", { config: { clientType: "codex" }, alive: true, runState: () => "responding" }],
+			["stopped", { config: { clientType: "grok" }, alive: false, runState: () => "thinking" }],
 		]);
 
 		expect(runtime.liveWork()).toEqual([
@@ -85,7 +85,7 @@ describe("CodingRuntime liveWork (#1007)", () => {
 	it("tracks a retained engine across an idle → tool-executing → idle transition", () => {
 		let state = "idle";
 		const runtime = runtimeWithSessions([
-			["csess-transition", { clientType: "codex", alive: true, runState: () => state }],
+			["csess-transition", { config: { clientType: "codex" }, alive: true, runState: () => state }],
 		]);
 
 		// The invariant: a restart may pass the two authoritative idle observations, but neither
@@ -97,11 +97,28 @@ describe("CodingRuntime liveWork (#1007)", () => {
 		expect(runtime.liveWork()).toEqual([]);
 	});
 
+	it("names the engine from a REAL session's config — a live Claude turn is never reported as lost (#1053)", () => {
+		const real = (id: string, clientType: "claude" | "codex") => {
+			const session = new HeadlessSession({ id, workDir: "/tmp/does-not-matter", clientType });
+			Object.defineProperty(session, "alive", { get: () => true });
+			session.runState = () => "thinking";
+			return session;
+		};
+		const runtime = runtimeWithSessions([
+			["csess-claude", real("csess-claude", "claude")],
+			["csess-codex", real("csess-codex", "codex")],
+		]);
+		expect(runtime.liveWork()).toEqual([
+			"coding session csess-claude (thinking): Claude conversation resumes after a restart",
+			"coding session csess-codex (thinking): codex turn is lost on a restart",
+		]);
+	});
+
 	it("fails closed when a retained session's state cannot be observed", () => {
 		const runtime = runtimeWithSessions([
-			["run-state-throws", { clientType: "claude", alive: true, runState: () => { throw new Error("probe failed"); } }],
-			["malformed-state", { clientType: "codex", alive: true, runState: () => "unknown" }],
-			["unknown-alive", { clientType: "grok", alive: undefined, runState: () => "idle" }],
+			["run-state-throws", { config: { clientType: "claude" }, alive: true, runState: () => { throw new Error("probe failed"); } }],
+			["malformed-state", { config: { clientType: "codex" }, alive: true, runState: () => "unknown" }],
+			["unknown-alive", { config: { clientType: "grok" }, alive: undefined, runState: () => "idle" }],
 		]);
 
 		expect(runtime.liveWork()).toEqual([
