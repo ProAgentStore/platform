@@ -341,6 +341,23 @@ components:
               status: { type: string, enum: [denied, cancelled] }
 
   schemas:
+    BrowserVerificationSettings:
+      type: object
+      description: Browser verification settings (#1031). Every field optional in a patch.
+      properties:
+        enabled: { type: boolean }
+        runtime: { type: string, enum: [pinned, any_eligible] }
+        fallback: { type: string, enum: [wait, mark_unverifiable] }
+        waitLimitMinutes: { type: integer, minimum: 1, maximum: 1440 }
+        takeover: { type: string, enum: [prompt, never] }
+        allowMobile: { type: boolean }
+    BrowserVerificationView:
+      type: object
+      properties:
+        settings: { $ref: "#/components/schemas/BrowserVerificationSettings" }
+        capability: { type: object, properties: { declared: { type: boolean }, engine: { type: string, nullable: true }, detail: { type: string } } }
+        runnerNode: { type: string, nullable: true }
+        notificationEvents: { type: array, items: { type: string } }
     RunnerHealthState:
       type: string
       description: What a runner `/health` probe found (#880, #1032). `not_attempted` = there was no socket to ask through, or no time left.
@@ -7210,6 +7227,88 @@ paths:
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 50 } }
       responses:
         "200": { $ref: "#/components/responses/OkObject" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/browser-verification:
+    get:
+      summary: Browser verification settings for one instance
+      description: |
+        #1031. The owner's half of browser verification: whether this instance verifies in the owner's
+        local browser, on which machine (`pinned` — the agent's pin; `any_eligible`), what happens when
+        no eligible machine is available (`wait` up to `waitLimitMinutes`, or `mark_unverifiable`), and
+        how a person is brought in (`takeover`, `allowMobile`). `capability.declared` says whether the
+        agent declares a local browser; only then can it be enabled. The pin (`PUT …/runner-node`), site
+        consent (`PUT …/local-browser/consent`) and notifications (`…/notification-policy`) are separate.
+      operationId: getBrowserVerification
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: Settings, capability, pin and the events this raises
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BrowserVerificationView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Change browser verification settings (patch)
+      description: Only the fields sent change. Enabling needs a declared local browser; an out-of-range value is refused with the reason, never clamped. `runnerNode` and `consent` are refused here.
+      operationId: setBrowserVerification
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BrowserVerificationSettings" }
+      responses:
+        "200":
+          description: The saved settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BrowserVerificationView" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/browser-verification/runtimes:
+    get:
+      summary: Which machines could run this instance's browser verification now
+      description: |
+        #1031. Each of the owner's machines with its facts apart — heartbeat, attachment (the relay holds
+        this agent's socket: transport only), health (`/health` through that socket), CLI version — and
+        `eligible` with a `reason` (not_attached, unhealthy, runner_too_old, not_probed). `selected` is the
+        machine the `runtime` setting would use; null means the fallback applies. Probes live.
+      operationId: listBrowserVerificationRuntimes
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: The machines and the selection
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runtime: { type: string, enum: [pinned, any_eligible] }
+                  runnerNode: { type: string, nullable: true }
+                  selected: { type: string, nullable: true }
+                  fallback: { type: string, enum: [wait, mark_unverifiable] }
+                  detail: { type: string }
+                  machines:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        node: { type: string }
+                        aka: { type: array, items: { type: string } }
+                        pinned: { type: boolean }
+                        heartbeat: { type: object, properties: { lastSeenAt: { type: string, nullable: true }, fresh: { type: boolean } } }
+                        attached: { type: boolean }
+                        health: { type: object, properties: { state: { $ref: "#/components/schemas/RunnerHealthState" }, error: { type: string } } }
+                        runnerVersion: { type: string, nullable: true }
+                        eligible: { type: boolean }
+                        reason: { type: string, enum: [not_attached, unhealthy, runner_too_old, not_probed] }
+                        detail: { type: string }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/local-browser/settings:

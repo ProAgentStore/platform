@@ -260,6 +260,12 @@ const READBACK: Record<string, string | null> = {
 	// An instruction for this one call (save past a duplicate), not state anything keeps.
 	"review_local_browser_finding.force": null,
 	"set_instance_local_browser_settings.engine": "get_instance_local_browser_settings",
+	"set_instance_browser_verification.enabled": "get_instance_browser_verification",
+	"set_instance_browser_verification.runtime": "get_instance_browser_verification",
+	"set_instance_browser_verification.fallback": "get_instance_browser_verification",
+	"set_instance_browser_verification.wait_limit_minutes": "get_instance_browser_verification",
+	"set_instance_browser_verification.takeover": "get_instance_browser_verification",
+	"set_instance_browser_verification.allow_mobile": "get_instance_browser_verification",
 	"set_instance_local_browser_settings.auth_mode": "get_instance_local_browser_settings",
 	"set_instance_local_browser_settings.workspace_path": "get_instance_local_browser_settings",
 	"set_instance_local_browser_settings.browser_profile": "get_instance_local_browser_settings",

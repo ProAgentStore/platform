@@ -193,7 +193,7 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// +2 at #1013: bounded application handoff and reconciliation projections are secret-safe reads.
 	// +1 read at #1027: po_triage_reports reads the coder brain switch, its triggers and the triage reports.
 	// +1 read at #1025: coder_questions reads the questions a coder's runs stopped on and their audit trail.
-	read: 146, // +1 at #1009: list_instance_permission_requests reads the owner's own recovery requests and their verified links; it decides nothing. +1 at #1017: coding_loop_lifecycle reads an objective's transition history; it replays nothing.
+	read: 148, // +2 at #1031: get_instance_browser_verification and list_eligible_browser_runtimes read settings and live eligibility. +1 at #1009: list_instance_permission_requests reads the owner's own recovery requests and their verified links; it decides nothing. +1 at #1017: coding_loop_lifecycle reads an objective's transition history; it replays nothing.
 	// +2 write at #825: `pause_instance` / `resume_instance`. `write` rather than `destructive` —
 	// nothing is deleted and nothing is unsubscribed, and classing the OFF switch as destructive
 	// would put RESUME behind a scope the caller may not hold, which is the wrong failure mode for
@@ -205,7 +205,7 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// +1 at #1004: upload_instance_file is owner-scoped instance storage, not an external fetch.
 	// +1 write at #1027: set_coder_brain turns the coder brain and its product-owner triage on or off. `write`, not
 	// `destructive`: off disables the triage triggers and deletes nothing; on again restores them.
-	write: 92, // +1 at #1012: retarget_repository_binding moves an idle binding's coordinate in place; it refuses live work and never drives a runner.
+	write: 93, // +1 at #1031: set_instance_browser_verification turns a declared local browser on for one instance. +1 at #1012: retarget_repository_binding moves an idle binding's coordinate in place; it refuses live work and never drives a runner.
 	// +1 runtime at #806: `continue_instance_run`. `runtime` rather than `write` for the reason
 	// `start_instance_loop` is — it starts an autonomous run that spends on its own — and the
 	// two must agree, because a caller holding the scope to start one holding a narrower one to

@@ -298,6 +298,9 @@ const ROUTES = [
 	"GET /:instanceId/local-browser/runs/:runId/events",
 	"POST /:instanceId/local-browser/runs/:runId/events",
 	"POST /:instanceId/local-browser/runs/:runId/result",
+	"GET /:instanceId/browser-verification",
+	"PUT /:instanceId/browser-verification",
+	"GET /:instanceId/browser-verification/runtimes",
 	"GET /:instanceId/gmail-scout/config",
 	"PUT /:instanceId/gmail-scout/config",
 	"POST /:instanceId/gmail-scout/scan",
@@ -528,6 +531,7 @@ const OWNERSHIP: Record<string, string[]> = {
 		"POST /:instanceId/local-browser/runs/:runId/events",
 		"POST /:instanceId/local-browser/runs/:runId/result",
 	],
+	"instances-browser-verification.ts": ["GET /:instanceId/browser-verification", "PUT /:instanceId/browser-verification", "GET /:instanceId/browser-verification/runtimes"],
 	"instances-runner-attach.ts": ["PUT /:instanceId/runner-node", "POST /:instanceId/runner-attach"],
 	"instances-runner-setup.ts": ["GET /:instanceId/runner-setup"],
 	"instances-lifecycle.ts": ["POST /:instanceId/pause", "POST /:instanceId/resume"],
@@ -822,6 +826,9 @@ const GATES: Record<string, [number, number]> = {
 	"GET /:instanceId/local-browser/runs/:runId/events": [401, 404],
 	"POST /:instanceId/local-browser/runs/:runId/events": [401, 404],
 	"POST /:instanceId/local-browser/runs/:runId/result": [401, 404],
+	"GET /:instanceId/browser-verification": [401, 404],
+	"PUT /:instanceId/browser-verification": [401, 404],
+	"GET /:instanceId/browser-verification/runtimes": [401, 404],
 	// Owner-scoped before it reads the pin or touches a relay (#856): a stranger learns nothing about the agent's machines.
 	"POST /:instanceId/runner-attach": [401, 404],
 	// Owner-scoped before it reads a heartbeat, an installation or a repo (#868): a stranger learns nothing about the owner's machines.

@@ -14,6 +14,7 @@ import { registerConnectorAccountTools, registerConnectorGrantTools } from "./co
 import { registerGuideTools } from "./guide.js";
 import { registerConsoleLinkTools } from "./console-link.js";
 import { registerLocalBrowserTools } from "./local-browser.js";
+import { registerBrowserVerificationTools } from "./browser-verification.js";
 import { registerGmailScoutTools } from "./gmail-scout.js";
 import { registerCoderBrainTools } from "./coder-brain.js";
 import { registerApplicationTools } from "./applications.js";
@@ -469,6 +470,9 @@ const TABLE: Record<string, Row> = {
 	cancel_application: ["applications", "write", null, "envelope", "application_id,dry_run,expected_status,expected_version,instance_id,record_id,scout_instance_id,token"],
 	local_browser_preflight: ["localBrowser", "read", null, null, "instance_id,token"],
 	get_instance_local_browser_settings: ["localBrowser", "read", null, null, "instance_id,token"],
+	get_instance_browser_verification: ["browserVerification", "read", null, null, "instance_id,token"],
+	set_instance_browser_verification: ["browserVerification", "write", null, "envelope", "allow_mobile,dry_run,enabled,fallback,instance_id,runtime,takeover,token,wait_limit_minutes"],
+	list_eligible_browser_runtimes: ["browserVerification", "read", null, null, "instance_id,token"],
 	set_instance_local_browser_settings: ["localBrowser", "write", null, "envelope", "allow_domains,auth_mode,browser_profile,collection,deny_domains,dry_run,engine,instance_id,limits,token,trace_retention_days,workspace_path"],
 	list_local_browser_runs: ["localBrowser", "read", null, null, "after,instance_id,limit,run_id,token"],
 	start_local_browser_run: ["localBrowser", "runtime", null, "envelope", "dry_run,instance_id,objective,request_id,token"],
@@ -603,6 +607,7 @@ const REGISTRARS: Record<string, (s: unknown, c: InstanceToolsCtx) => void> = {
 	guide: registerGuideTools as any,
 	consoleLink: registerConsoleLinkTools as any,
 	localBrowser: registerLocalBrowserTools as any,
+	browserVerification: registerBrowserVerificationTools as any,
 	gmailScout: registerGmailScoutTools as any,
 	coderBrain: registerCoderBrainTools as any,
 	applications: registerApplicationTools as any,

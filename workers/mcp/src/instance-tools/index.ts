@@ -22,6 +22,7 @@ import { registerConnectorAccountTools, registerConnectorGrantTools } from "./co
 import { registerGuideTools } from "./guide.js";
 import { registerConsoleLinkTools } from "./console-link.js";
 import { registerLocalBrowserTools } from "./local-browser.js";
+import { registerBrowserVerificationTools } from "./browser-verification.js";
 import { registerGmailScoutTools } from "./gmail-scout.js";
 import { registerCoderBrainTools } from "./coder-brain.js";
 import { registerKnowledgeTools } from "./knowledge.js";
@@ -60,6 +61,7 @@ export function registerInstanceTools(
 	registerConsoleLinkTools(server, ctx); // a precise console URL to hand the owner (#938)
 	// Local CLI browser research (#945) — ungated; the API 409s an agent of another runtime.
 	registerLocalBrowserTools(server, ctx);
+	registerBrowserVerificationTools(server, ctx);
 	registerGmailScoutTools(server, ctx);
 	registerCoderBrainTools(server, ctx);
 	registerApplicationTools(server, ctx);

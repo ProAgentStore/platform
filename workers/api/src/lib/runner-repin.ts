@@ -177,7 +177,7 @@ export interface AgentAttachOptions extends RepinDeps {
 const ATTACH_HEALTH_TIMEOUT_MS = 5_000;
 
 /** Probe `/health` through THIS agent's socket on the machine, under whichever of its names holds it. */
-async function healthAfterAttach(env: Env, instanceId: string, userId: string, names: readonly string[], budgetMs: number): Promise<PostAttachHealth> {
+export async function healthAfterAttach(env: Env, instanceId: string, userId: string, names: readonly string[], budgetMs: number): Promise<PostAttachHealth> {
 	if (budgetMs < 1_000) return { state: "not_attempted", error: "No time was left in this request to check the runner's health." };
 	for (const name of names) {
 		if (!(await relayConnected(env, instanceId, name).catch(() => false))) continue;

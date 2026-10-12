@@ -280,6 +280,10 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	po_triage_reports: "read",
 	coder_questions: "read",
 	get_instance_local_browser_settings: "read",
+	// Browser verification (#1031): the owner's settings for a declared local browser, and live eligibility.
+	get_instance_browser_verification: "read",
+	set_instance_browser_verification: "write",
+	list_eligible_browser_runtimes: "read",
 	list_local_browser_runs: "read",
 	set_instance_local_browser_settings: "write",
 	cancel_local_browser_run: "write",

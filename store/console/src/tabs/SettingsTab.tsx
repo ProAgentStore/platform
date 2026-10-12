@@ -24,6 +24,7 @@ import VoiceTranslationSection from "./settings/VoiceTranslationSection";
 import MiscellaneousSection from "./settings/MiscellaneousSection";
 import NotificationPolicySection from "./settings/NotificationPolicySection";
 import LocalBrowserSection from "./settings/LocalBrowserSection";
+import BrowserVerificationSection from "./settings/BrowserVerificationSection";
 import GmailScoutSection from "./settings/GmailScoutSection";
 import CoderBrainSection from "./settings/CoderBrainSection";
 
@@ -413,6 +414,7 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 			{isCoding && <CodingEngineCard instanceId={instanceId} />}
 			{isCoding && <CoderBrainSection instanceId={instanceId} />}
 			{isLocalBrowser && <LocalBrowserSection instanceId={instanceId} />}
+			{isLocalBrowser && <BrowserVerificationSection instanceId={instanceId} />}
 			{isGmailScout && <GmailScoutSection instanceId={instanceId} />}
 
 			<RunnerPanel instanceId={instanceId} />

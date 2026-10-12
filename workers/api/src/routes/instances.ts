@@ -21,6 +21,7 @@ import { registerChatRoutes } from "./instances-chat.js";
 import { registerGuideRoutes } from "./instances-guide.js";
 import { registerConsoleLinkRoutes } from "./instances-console-link.js";
 import { registerPermissionRequestRoutes } from "./instances-permission-requests.js";
+import { registerBrowserVerificationRoutes } from "./instances-browser-verification.js";
 import { registerLocalBrowserRoutes } from "./instances-local-browser.js";
 import { registerGmailScoutRoutes } from "./instances-gmail-scout.js";
 import { registerCoderBrainRoutes } from "./instances-coder-brain.js";
@@ -1091,6 +1092,7 @@ registerGuideRoutes(instanceRoutes);
 registerConsoleLinkRoutes(instanceRoutes); // a precise console URL for an agent to hand over (#938)
 registerPermissionRequestRoutes(instanceRoutes); // durable owner permission recovery (#1009)
 registerLocalBrowserRoutes(instanceRoutes); // local CLI browser research: settings, consent, runs (#945)
+registerBrowserVerificationRoutes(instanceRoutes); // a declared local browser turned on per instance, eligible machines (#1031)
 registerGmailScoutRoutes(instanceRoutes); // read-only Gmail alert ingestion into this Scout's private leads (#995)
 registerCoderBrainRoutes(instanceRoutes); // the coder brain switch + product-owner triage reports (#1025, #1027)
 registerInstanceDescriptionRoutes(instanceRoutes); // one secret-safe runtime projection for MCP / Console (#1002)

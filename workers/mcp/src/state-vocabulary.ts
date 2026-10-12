@@ -244,6 +244,12 @@ export function repoCiSentence(): string {
 export const REPO_CI_STATES = ["failing", "unknown", "pending", "passing", "none"] as const;
 
 /**
+ * Why a machine is not eligible for browser verification (#1031) — a COPY of `RuntimeIneligibility` in
+ * `workers/api/src/lib/browser-verification-runtimes.ts`, which this worker cannot import.
+ */
+export const BROWSER_RUNTIME_INELIGIBILITY = ["not_attached", "unhealthy", "runner_too_old", "not_probed"] as const;
+
+/**
  * The statuses `clear_finished_tasks` actually sweeps.
  *
  * ── The defect (#609)
@@ -356,6 +362,11 @@ export const BACKED_VOCABULARIES: Record<string, StateVocabulary> = {
 	"repository ci state": {
 		sources: ["workers/api/src/lib/repo-ci-health.ts"],
 		values: REPO_CI_STATES,
+	},
+	// #1031. list_eligible_browser_runtimes publishes why a machine is not eligible.
+	"browser runtime ineligibility": {
+		sources: ["workers/api/src/lib/browser-verification-runtimes.ts"],
+		values: BROWSER_RUNTIME_INELIGIBILITY,
 	},
 	// #961. `fleet_snapshot` publishes it; the API derives it in one pure function.
 	"fleet status": {

@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**309 tool registrations.** 282 are always registered; 27 are gated to the console
+**312 tool registrations.** 285 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -361,6 +361,9 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `po_triage_reports` | Read the brain switch, the triage triggers and recent triage reports (per-issue category, reason, action) | read | | |
 | `get_instance_local_browser_settings` | A local browser research agent's chosen settings, the effective run policy, the agent's ceilings and the runner pin; no credentials | read | | |
 | `set_instance_local_browser_settings` | Patch engine, sign-in mode, workspace, browser profile, sites, limits, retention and result collection; refuses anything outside the agent's ceiling | write | yes | |
+| `get_instance_browser_verification` | Browser verification settings for one instance (#1031): enabled, runtime (pinned / any_eligible), fallback, wait limit, takeover preference, mobile; plus whether the agent declares a local browser, its pin, and the events it raises (push decided by the notification policy) | read | | |
+| `set_instance_browser_verification` | Change those settings; turning it on needs a declared local browser, out-of-range values are refused, never clamped. Not the pin, consent or notifications | write | yes | |
+| `list_eligible_browser_runtimes` | Each of your machines with heartbeat, attachment (transport only), health, version and eligibility apart, and the machine the runtime setting would use | read | | |
 | `list_local_browser_runs` | A local browser research agent's runs, or one run with its redacted trace (pages, consent, pauses, findings) | read | | |
 | `start_local_browser_run` | Start a read-only research run: the Codex or Claude Code CLI signed in on the owner's machine researches in a real browser through the runner's policy bridge; idempotent on `request_id` | runtime | yes | |
 | `cancel_local_browser_run` | Stop an active research run; the findings already recorded stay | write | | |

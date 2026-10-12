@@ -1141,4 +1141,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.119": "sha256:96390595c60b1576428c6caf0b595c5a5bf0cdcebafc60b1e185ed7d0b666daa",
 	// #1032: runner_restart (runtime); force_runner_attach reports transport + post-attach health.
 	"0.1.120": "sha256:98d81f5d01edeb88e6db4ffd54551a50c412632d49db18f9a6524dfec4660da2",
+	// #1031: get/set_instance_browser_verification (read/write) and list_eligible_browser_runtimes (read).
+	"0.1.121": "sha256:c38a2254bad1d57b90d7378ea586a7a5d6f2c4892b28902ac5077c94a3c9c3c1",
 };
