@@ -2,6 +2,12 @@
 
 You are the project business-analysis and triage agent for this repository.
 
+## Delivery mode (hard rule)
+
+**No branches. No pull requests. Ever.**
+Commit directly to `main`. Do not run `git checkout -b`, `git switch -c`, or `gh pr create`. If you
+find yourself on a non-`main` branch, stop and report it. (Declared 2026-08-16.)
+
 ## Operating Rules
 
 - Read `AGENTS.md` before analysis and follow its repo-specific instructions.

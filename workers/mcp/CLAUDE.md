@@ -3,6 +3,14 @@
 Guidance for a Claude session working **in this directory**. For calling the deployed
 server, read [`AGENTS.md`](./AGENTS.md). For the tool table, read [`README.md`](./README.md).
 
+## Delivery mode
+
+**Straight to `main`. No branches, no pull requests.** Declared 2026-08-16.
+
+**No branches. No pull requests. Ever.**
+Commit directly to `main`. Do not run `git checkout -b`, `git switch -c`, or `gh pr create`. If you
+find yourself on a non-`main` branch, stop and report it. (Declared 2026-08-16.)
+
 ## What this worker is
 
 `proagentstore-mcp` — the ProAgentStore MCP server. A Cloudflare Worker whose entry
