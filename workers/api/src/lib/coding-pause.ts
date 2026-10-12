@@ -109,7 +109,8 @@ export interface PauseDeps {
 	 * which STOPS the engine until someone answers. A usage-limit park needs nothing from anyone
 	 * and must not ping like a question, or people learn to stop reading these.
 	 */
-	notify: (title: string, body: string, key: string, alert: boolean, url?: DeepLink) => Promise<void>;
+	/** `type` (#1025): a question is a `coder_question` notification — the type its later brain decision, escalation and close use too. */
+	notify: (title: string, body: string, key: string, alert: boolean, url?: DeepLink, type?: "coder_question") => Promise<void>;
 	/** One line into the owner's chat thread. A pause nobody can see looks like a hang (#252). */
 	announce: (message: string) => Promise<void>;
 	/**
@@ -226,7 +227,7 @@ async function waitForHuman(deps: PauseDeps, input: { round: number; result: Cod
 	const notificationUrl = cardId ? deepLinkFor({ kind: "task", instanceId: deps.instanceId, taskId: cardId }) : handoffLink(deps);
 	const offered = options.length ? ` Options: ${options.join(" | ")}.` : "";
 	const body = `${deps.repo}: ${label}.${offered} ${clock}`;
-	await deps.notify(reason === "needs_input" ? "❓ Coder has a question" : "🙋 Coder needs you", body, `coding-handoff:${reason}:${round}`, true, notificationUrl);
+	await deps.notify(reason === "needs_input" ? "❓ Coder has a question" : "🙋 Coder needs you", body, `coding-handoff:${reason}:${round}`, true, notificationUrl, reason === "needs_input" ? "coder_question" : undefined);
 	// …AND in the thread the run was started from (#541 item d). A runner disconnect has always been
 	// announced in chat; a handoff never was, so the conversation the owner started the run from said
 	// nothing at all while the run waited on him, and then reported that it had failed.

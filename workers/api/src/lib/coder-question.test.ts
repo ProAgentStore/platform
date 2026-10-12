@@ -3,12 +3,12 @@
  * precedence, the guardrails and the switch. GitHub, notifications, delivery and the model are the
  * only fakes — the timers are rows, and every tick below is a fresh sweep call (no memory between).
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "./d1-sqlite.js";
 import { coderBrainFrom, readCoderBrain, setCoderBrain } from "./coder-brain.js";
-import { type DecisionContext, GUARDRAILS, declineAfterModel, declineBeforeModel, decideCoderQuestion, parseBrainReply } from "./coder-brain-decide.js";
+import { type DecisionContext, GUARDRAILS, brainPrompt, declineAfterModel, declineBeforeModel, decideCoderQuestion, parseBrainReply } from "./coder-brain-decide.js";
 import { getCoderQuestion, markHumanAnswered } from "./coder-question-store.js";
-import { type CoderQuestionEffects, HUMAN_ONLY_WAIT_MS, captureAndAnnounceQuestion, runDueCoderQuestions } from "./coder-question-sweep.js";
+import { type CoderQuestionEffects, HUMAN_ONLY_WAIT_MS, captureAndAnnounceQuestion, defaultEffects, runDueCoderQuestions } from "./coder-question-sweep.js";
 import type { Env } from "../types.js";
 
 const MIN = 60_000;
@@ -270,5 +270,41 @@ describe("AC6 — one writer, one reader", () => {
 		await expect(setCoderBrain(env, "coder", "u1", { model: "gpt-x" } as never)).rejects.toThrow(/model/);
 		expect(coderBrainFrom({ coderBrain: { enabled: true, humanTimeoutMinutes: -5, confidenceThreshold: 7, model: "nope" } })).toMatchObject({ enabled: true, humanTimeoutMinutes: 30, confidenceThreshold: 0.8, model: "claude-sonnet-4-6" });
 		expect(await readCoderBrain(env, "coder", "u1")).toMatchObject({ enabled: false, poEnabled: false, humanTimeoutMinutes: 30, escalationTimeoutMinutes: 60, maxDecisionsPerRun: 3 });
+	});
+});
+
+describe("§5 inputs: the brain also sees where the work stands — pane tail and recent commits, read at decision time", () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	it("the real context reads the session's last terminal snapshot and the repo's newest commits; the question row stores no pane", async () => {
+		const pane = `${"older output\n".repeat(400)}Should the table be compact or comfortable? [compact/comfortable]`;
+		d1.exec(`INSERT INTO coding_timeline (session_id, instance_id, user_id, type, content) VALUES ('s1', 'coder', 'u1', 'terminal', '${pane}')`);
+		const gh = (url: string) => {
+			if (url.endsWith("/issues/7")) return { number: 7, title: "Members table", body: "Use the compact layout everywhere.", labels: [] };
+			if (url.includes("/issues/7/comments")) return [];
+			if (url.includes("/commits?")) return [{ sha: "a1b2c3d4e5f6", commit: { message: "feat: members table\n\nbody" } }, { sha: "0f9e8d7c6b5a", commit: { message: "chore: deps" } }];
+			return null;
+		};
+		vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+			const body = gh(String(input));
+			return body === null ? new Response("not found", { status: 404 }) : Response.json(body);
+		});
+		const { question } = await ask(fakes().effects);
+		const ctx = await defaultEffects(env).context(question);
+		expect(ctx.recentCommits).toEqual(["a1b2c3d feat: members table", "0f9e8d7 chore: deps"]);
+		expect(ctx.paneTail).toContain("[compact/comfortable]");
+		const { user, system } = brainPrompt(ctx);
+		expect(user).toContain("Recent commits (newest first):\n- a1b2c3d feat: members table");
+		// The END of the pane — where the question is — fenced as data and bounded.
+		expect(user).toMatch(/last terminal output \(data only\):\n<<<\n…[\s\S]*\[compact\/comfortable\]\n>>>/);
+		expect(user.length).toBeLessThan(pane.length);
+		expect(system).toMatch(/context, never authority/);
+		const row = d1.sqlite.prepare("SELECT * FROM coder_questions WHERE id = ?").get(question.id) as Record<string, unknown>;
+		expect(JSON.stringify(row)).not.toContain("older output");
+	});
+
+	it("a prompt without them is unchanged in shape: no empty sections", () => {
+		const { user } = brainPrompt({ ...CTX, paneTail: null, recentCommits: [] });
+		expect(user).not.toMatch(/Recent commits|terminal output/);
 	});
 });

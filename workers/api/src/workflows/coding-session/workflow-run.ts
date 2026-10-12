@@ -776,10 +776,10 @@ export async function runCodingSessionWorkflow(env: Env, event: WorkflowEvent<Co
 				return runRetry(`reauth-start-${round}`, () => startOnRunner());
 			}).then(() => undefined),
 		sleep: (label, ms) => step.sleep(label, ms),
-		notify: (title, body, key, alert, url) =>
+		notify: (title, body, key, alert, url, type) =>
 			runRetry(`notify-${key}-${round}`, async () => {
 				const opts = { key: `${key}:${sessionId}`, kind: alert ? ("alert" as const) : undefined, instanceId };
-				return await notifyUser(env, userId, "coding", title, body, url ?? deepLinkFor({ kind: "coding-session", instanceId, sessionId }), opts).then(() => null, () => null);
+				return await notifyUser(env, userId, type ?? "coding", title, body, url ?? deepLinkFor({ kind: "coding-session", instanceId, sessionId }), opts).then(() => null, () => null);
 			}).then(() => undefined),
 		announce: postToChat,
 		// The board, which is where the owner would look for "does anything want me?" (#553).

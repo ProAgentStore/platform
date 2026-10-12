@@ -20,11 +20,11 @@ import { readCoderBrain, type CoderBrainSettings } from "./coder-brain.js";
 import { type BrainModelCall, type DecisionContext, byokBrainCall, decideCoderQuestion } from "./coder-brain-decide.js";
 import { type CoderQuestion, captureCoderQuestion, openCoderQuestions, transitionCoderQuestion } from "./coder-question-store.js";
 import { resolveCodingPause } from "./coding-answer.js";
-import { appendTimeline } from "./coding-timeline.js";
+import { appendTimeline, lastTerminal } from "./coding-timeline.js";
 import { codingRunRefusal } from "./billing.js";
 import { deepLinkFor } from "./console-links.js";
 import { logEvent } from "./events.js";
-import { listIssueComments, postIssueComment, readIssue, readRepoText } from "./github-issues.js";
+import { listIssueComments, listRecentCommits, postIssueComment, readIssue, readRepoText } from "./github-issues.js";
 import { notifyUser } from "../routes/push.js";
 
 /** Past both timeouts the run also needs time for the sweep's minute and one model call. */
@@ -44,7 +44,7 @@ export interface CoderQuestionEffects {
 	notify: (q: CoderQuestion, title: string, body: string, alert: boolean) => Promise<void>;
 	/** Deliver a value to the parked run through the person's own answer path. */
 	deliver: (q: CoderQuestion, value: string) => Promise<void>;
-	/** Gather the brain's context (issue, comments, CLAUDE.md). */
+	/** Gather the brain's context (issue, comments, CLAUDE.md, recent commits, and the pane tail read now). */
 	context: (q: CoderQuestion) => Promise<DecisionContext>;
 	/** The model call for this instance's configured brain model. */
 	model: (q: CoderQuestion, model: string) => BrainModelCall;
@@ -66,6 +66,9 @@ export function defaultEffects(env: Env): CoderQuestionEffects {
 			const issue = q.repo && q.issueNumber ? await readIssue(env, q.userId, q.repo, q.issueNumber).catch(() => null) : null;
 			const comments = q.repo && q.issueNumber ? await listIssueComments(env, q.userId, q.repo, q.issueNumber).catch(() => []) : [];
 			const claudeMd = q.repo ? await readRepoText(env, q.userId, q.repo, "CLAUDE.md").catch(() => null) : null;
+			const recentCommits = q.repo ? await listRecentCommits(env, q.userId, q.repo).catch(() => []) : [];
+			// Read at decision time from the session's own stored snapshot: the question row never holds pane content.
+			const paneTail = await lastTerminal(env, q.sessionId).catch(() => null);
 			return {
 				question: q.question,
 				options: q.options,
@@ -74,6 +77,8 @@ export function defaultEffects(env: Env): CoderQuestionEffects {
 				issue: issue ? { number: issue.number, title: issue.title, body: issue.body ?? "", labels: issue.labels } : null,
 				comments: comments.map((c) => `${c.author}: ${c.body}`),
 				claudeMd,
+				recentCommits,
+				paneTail,
 			};
 		},
 		model: (q, model) => byokBrainCall(env, q.userId, q.instanceId, model),

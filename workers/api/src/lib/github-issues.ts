@@ -463,6 +463,24 @@ export async function postIssueComment(env: Env, userId: string, githubRepo: str
 }
 
 /** A text file from a repo's default branch, or null (#1025: the repo's CLAUDE.md for the brain). */
+/** The repo's newest commits on its default branch as `<sha7> <subject>` lines (#1025: the brain's view of where work stands). */
+export async function listRecentCommits(env: Env, userId: string, githubRepo: string, limit = 10): Promise<string[]> {
+	const parsed = parseRepo(githubRepo);
+	if (!parsed) return [];
+	const token = await installationTokenForOwner(env, userId, parsed.owner);
+	const res = await fetch(`https://api.github.com/repos/${parsed.owner}/${parsed.name}/commits?per_page=${Math.max(1, Math.min(30, limit))}`, {
+		headers: GH_HEADERS(token),
+		signal: AbortSignal.timeout(15_000),
+	}).catch(() => null);
+	if (!res?.ok) return [];
+	const rows = (await res.json().catch(() => [])) as Array<{ sha?: string; commit?: { message?: string } }>;
+	return rows.flatMap((r) => {
+		const sha = r.sha?.match(/^[0-9a-f]{7}/)?.[0];
+		const subject = r.commit?.message?.split("\n")[0]?.trim();
+		return sha && subject ? [`${sha} ${subject}`] : [];
+	});
+}
+
 export async function readRepoText(env: Env, userId: string, githubRepo: string, path: string, maxBytes = 20_000): Promise<string | null> {
 	const parsed = parseRepo(githubRepo);
 	if (!parsed) return null;

@@ -18,7 +18,7 @@ interface Spy {
 	deps: PauseDeps;
 	slept: number[];
 	announced: string[];
-	notified: Array<{ title: string; alert: boolean; url?: string }>;
+	notified: Array<{ title: string; alert: boolean; url?: string; type?: string }>;
 	ticks: number;
 	takeovers: number;
 	endTakeovers: number;
@@ -64,8 +64,8 @@ function spy(over: Partial<{ resolveAfter: number; cancelAfterTicks: number; tim
 		sleep: async (_label, ms) => {
 			s.slept.push(ms);
 		},
-		notify: async (title, _body, _key, alert, url) => {
-			s.notified.push({ title, alert, url });
+		notify: async (title, _body, _key, alert, url, type) => {
+			s.notified.push({ title, alert, url, ...(type ? { type } : {}) });
 		},
 		announce: async (m) => {
 			s.announced.push(m);
@@ -204,6 +204,7 @@ describe("resolvePause — a human handoff still times out, and is reported as w
 		expect(s.announced.some((m) => m.includes("Coder needs you"))).toBe(true);
 		expect(s.notified).toHaveLength(1);
 		expect(s.notified[0].title).toBe("🙋 Coder needs you");
+		expect(s.notified[0].type).toBeUndefined(); // a takeover stays a `coding` notification; only a question is `coder_question`
 		expect(s.notified[0].alert).toBe(true);
 		expect(s.notified[0].url).toBeDefined();
 	});
@@ -461,7 +462,8 @@ describe("resolvePause — a question the coder brain holds stays parked past 15
 		expect(v).toMatchObject({ resume: false, result: { detail: expect.stringMatching(/within 100 minutes/) } });
 		expect(s.slept.filter((ms) => ms === HANDOFF_POLL_MS)).toHaveLength(HANDOFF_WAIT_POLLS);
 		expect(s.slept.filter((ms) => ms === 60_000)).toHaveLength(85);
-		expect(s.notified[0]).toMatchObject({ title: "❓ Coder has a question", alert: true });
+		// #1025: the question is a `coder_question` notification from the first push, like its later decision/escalation.
+		expect(s.notified[0]).toMatchObject({ title: "❓ Coder has a question", alert: true, type: "coder_question" });
 		expect(s.announced[0]).toMatch(/30 minutes to answer before the coder brain may decide/);
 	});
 
