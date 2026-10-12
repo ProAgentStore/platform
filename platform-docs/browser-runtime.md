@@ -190,7 +190,16 @@ A Gmail Scout resolves a one-job provider alert to the posting's canonical URL, 
 the posting id. When the server cannot check that page (blocked, or no structured posting), the lead
 is not thrown away. It is stored `awaiting_browser_verification` and checked in the Scout's own
 browser, under the instance's browser verification settings. Only the canonical URL is sent, never
-the personalised alert link. The run reports one typed outcome:
+the personalised alert link.
+
+The Gmail Scout declares a local browser for this (#1048). It runs research only, on your own Codex or
+Claude subscription, and opens only indeed.com and its country sites. Browser verification is still
+off until you turn it on for the Scout and pin a machine, and each new domain still asks for your
+consent. A posting on any other site is not opened; the lead is closed as unverifiable, and the
+attempt records why. If the Scout's agent ever stops declaring a local browser, waiting leads stay
+waiting rather than being closed.
+
+The run reports one typed outcome:
 
 - **active**: the lead becomes `new`, and only then can it be applied for and reach the Tailor.
 - **expired** or **mismatch**: the lead is closed.

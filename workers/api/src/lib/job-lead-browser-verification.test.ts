@@ -286,3 +286,36 @@ describe("the verdict is pushed once it is final — and as what it is (#1031)",
 		expect(pushes).toEqual([]);
 	});
 });
+
+describe("the Scout must declare a local browser, and may open only its allowed sites (#1048)", () => {
+	it("an agent that declares no local browser dispatches nothing and the lead WAITS — even under mark_unverifiable", async () => {
+		d1.exec(`UPDATE agents SET config = '{"capabilities":{"surfaces":[],"runtime":null,"tools":["gmail_search","gmail_read_message"]}}' WHERE id = 'scout'`);
+		d1.exec(`UPDATE agent_instances SET config = '{"browserVerification":{"enabled":true,"fallback":"mark_unverifiable"}}' WHERE id = 's1'`);
+		await runLeadBrowserVerification(env, 2_000);
+		expect(started).toEqual([]);
+		expect(await queue()).toMatchObject({ state: "awaiting", attempts: 0, lastDetail: expect.stringMatching(/does not declare a local browser/) });
+		expect(lead().status).toBe("awaiting_browser_verification");
+		expect((await listLeadVerifications(env, "s1", "u1")).attempts).toEqual([]);
+		expect(pushes).toEqual([]);
+	});
+
+	it("a posting on an allowed site (indeed.com covers its country sites) is dispatched", async () => {
+		d1.exec(`UPDATE agents SET config = '{"capabilities":{"surfaces":[],"runtime":"local_browser","localBrowser":{"allowDomains":["indeed.com"]}}}' WHERE id = 'scout'`);
+		await runLeadBrowserVerification(env, 2_000);
+		expect(started).toHaveLength(1);
+		expect(await queue()).toMatchObject({ state: "dispatched" });
+	});
+
+	it("a posting outside the allowed sites is refused with a receipt and the reason, and never opened", async () => {
+		d1.exec(`UPDATE agents SET config = '{"capabilities":{"surfaces":[],"runtime":"local_browser","localBrowser":{"allowDomains":["indeed.com"]}}}' WHERE id = 'scout'`);
+		await d1.DB.prepare("UPDATE job_lead_browser_verifications SET canonical_url = 'https://www.indeed.co.uk/viewjob?jk=0123456789abcdef'").run();
+		await runLeadBrowserVerification(env, 2_000);
+		expect(started).toEqual([]);
+		const { leads: [row], attempts } = await listLeadVerifications(env, "s1", "u1");
+		expect(row).toMatchObject({ state: "unverifiable" });
+		expect(attempts).toEqual([expect.objectContaining({ state: "refused", runId: null, detail: expect.stringMatching(/outside this Scout's allowed sites \(indeed\.com\)/) })]);
+		expect(lead().status).toBe("unverifiable");
+		expect(pushes.map((p) => p.event)).toEqual(["browser_verification_failed"]);
+		expect(pushes[0].body).toMatch(/outside the sites this Scout may open/);
+	});
+});

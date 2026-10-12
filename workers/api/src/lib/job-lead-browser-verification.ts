@@ -22,7 +22,8 @@ import { readBrowserVerification } from "./browser-verification.js";
 import { deepLinkFor } from "./console-links.js";
 import { BROWSER_VERIFICATION_OUTCOMES, type BrowserVerificationOutcome } from "./job-lead-triage.js";
 import { getLocalBrowserRun, type LocalBrowserRun } from "./local-browser/store.js";
-import { startLocalBrowserRun } from "./local-browser/start.js";
+import { localBrowserCapability, startLocalBrowserRun } from "./local-browser/start.js";
+import { domainWithin } from "./local-browser/policy.js";
 import { agentName } from "./local-browser/sync.js";
 import { notifyUser } from "../routes/push.js";
 import type { LeadVerification, LeadVerificationListResponse, VerificationAttempt, VerificationState } from "./job-lead-browser-verification-types.js";
@@ -249,6 +250,28 @@ export async function dispatchLeadVerification(env: Env, row: LeadRow, now = Dat
 		await setLead(env, row, { state: "awaiting", nextAttemptAt: now + WAIT_RETRY_MS, lastDetail: "Browser verification is off for this Scout. Turn it on in Settings → Browser verification (set_instance_browser_verification)." }, now);
 		return "awaiting";
 	}
+	// The agent must DECLARE a local browser (#1048). One that does not — a template changed after the owner
+	// turned verification on — has no browser to be "unavailable": that is not the fallback's case, so the
+	// lead waits and says why, rather than being closed as unverifiable by a `mark_unverifiable` fallback.
+	const cap = await localBrowserCapability(env, row.instance_id, row.user_id);
+	if ("error" in cap) {
+		await setLead(env, row, { state: "awaiting", nextAttemptAt: now + WAIT_RETRY_MS, lastDetail: "This Scout's agent does not declare a local browser, so it cannot verify in a browser. Nothing was dispatched; the lead waits." }, now);
+		return "awaiting";
+	}
+	// A posting outside the sites the Scout may open would be blocked by the runner: refuse it here, with the reason.
+	const host = (() => {
+		try {
+			return new URL(row.canonical_url).hostname.toLowerCase();
+		} catch {
+			return "";
+		}
+	})();
+	if (cap.cap.allowDomains.length && !cap.cap.allowDomains.some((d) => domainWithin(host, d))) {
+		const receiptId = await recordAttempt(env, row, { attempt: row.attempts, state: "refused", detail: `The posting's site is outside this Scout's allowed sites (${cap.cap.allowDomains.join(", ")}).` }, now);
+		return settle(env, row, "temporarily_unverifiable", { attempt: row.attempts, receiptId, exhausted: true, detail: "The posting's site is outside the sites this Scout may open in a browser.", why: "its site is outside the sites this Scout may open" }, now);
+	}
+	// Per-domain consent is not decided here: each run carries the owner's consented domains, and a new
+	// domain pauses the run for consent (local-browser/sync.ts → a durable takeover, #1031).
 	const attempt = row.attempts + 1;
 	const started = await startLocalBrowserRun(env, row.instance_id, row.user_id, {
 		objective: verificationObjective({ canonicalUrl: row.canonical_url, expectedTitle: row.expected_title, expectedCompany: row.expected_company }),
