@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
 import { COARSE_RETENTION_MS, DENSE_RETENTION_MS, type HistoryTier, parseResourceSample, resourceHistory, type RunnerResourceSample, type RunnerResourcesView, resourcesView } from "../lib/runner-resources.js";
 import { relayConnected } from "../lib/runner-client.js";
+import { instanceSocketsUnder } from "../lib/machine-sockets.js";
 import { mapWithConcurrency } from "../lib/map-concurrency.js";
 import { lastTerminal } from "../lib/coding-timeline.js";
 import { normalizeRunnerNode, parseBoundRunnerNode } from "../lib/runtime-nodes.js";
@@ -470,15 +471,11 @@ terminalRoutes.get("/nodes", async (c) => {
 	// machine seen seconds ago read `connected: false`. `coding_diagnostics` resolves the same aliases
 	// (`getBoundRunnerConn`), which is how the two came to disagree about one runner.
 	await Promise.all(nodes.map(async (n) => {
-		const names = [n.node, ...n.aka];
-		const anyName = async (instanceId: string) => {
-			for (const name of names) if (await relayConnected(c.env, instanceId, name).catch(() => false)) return true;
-			return false;
-		};
 		// EVERY instance (#898 N1). This probed the first 25 and stamped the rest `connected: false`,
 		// so seven agents pinned to live machines read as disconnected purely by list position.
 		// Each probe is one hibernated-DO `/status`; the bound is on concurrency, never on coverage.
-		const checks = await mapWithConcurrency(n.instances, PROBE_CONCURRENCY, (i) => anyName(i.instanceId));
+		// The rule is shared with instance_runner_node's `nodeOnline` (#1055).
+		const checks = await instanceSocketsUnder(c.env, n.instances.map((i) => i.instanceId), [n.node, ...n.aka], PROBE_CONCURRENCY);
 		n.instances.forEach((i, idx) => { i.connected = checks[idx]; });
 		n.connected = checks.some(Boolean);
 	}));
@@ -554,10 +551,7 @@ async function machineDetail(env: Env, uid: string, rawMachineId: string) {
 	// than treating a persisted registration as online. Probe all aliases: a reconnect may hold the
 	// relay under the previous hostname until its next heartbeat.
 	const names = [machine.node, ...machine.aka];
-	const checks = await mapWithConcurrency(machine.instances, PROBE_CONCURRENCY, async (instance) => {
-		for (const name of names) if (await relayConnected(env, instance.instanceId, name).catch(() => false)) return true;
-		return false;
-	});
+	const checks = await instanceSocketsUnder(env, machine.instances.map((i) => i.instanceId), names, PROBE_CONCURRENCY);
 	machine.instances.forEach((instance, index) => { instance.connected = checks[index]; });
 	machine.connected = checks.some(Boolean);
 	const policy = await getMachinePolicy(env, uid, machineId);
@@ -641,10 +635,7 @@ export async function preflightForgetNode(env: Env, uid: string, rawTarget: stri
 	// Every instance (#898 N2): a machine whose only live socket was past the 25th read "not
 	// connected", and the safety check this probe exists for was skipped.
 	const probeIds = [...new Set(rows.filter((r) => names.has(normalizeRunnerNode(r.runner_node))).map((r) => r.instance_id))];
-	const probes = await mapWithConcurrency(probeIds, PROBE_CONCURRENCY, async (id) => {
-		for (const name of names) if (await relayConnected(env, id, name).catch(() => false)) return true;
-		return false;
-	});
+	const probes = await instanceSocketsUnder(env, probeIds, [...names], PROBE_CONCURRENCY);
 
 	return { ok: true, target, names: [...names], connected: probes.some(Boolean), blockers, verdict: diagnoseForget(probes.some(Boolean), blockers) };
 }

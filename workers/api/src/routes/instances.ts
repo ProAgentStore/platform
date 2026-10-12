@@ -48,6 +48,7 @@ import { registerFleetRoutes } from "./instances-fleet.js";
 import { instanceCapFor, isEntitled, isPaywallEnforced, requirePro } from "../lib/billing.js";
 import { retireSubscriptionSql } from "../lib/subscription-standing.js";
 import { liveAliasForPin, liveNodeIgnoringPin, relayConnected } from "../lib/runner-client.js";
+import { instanceSocketsUnder } from "../lib/machine-sockets.js";
 import type { Env } from "../types.js";
 import {
 	callRuntime,
@@ -621,11 +622,10 @@ instanceRoutes.get("/:instanceId/runner-node", async (c) => {
 	// CONNECTED with, which after a rename is not the one this agent registered under.
 	const registrations = userRows.map((r) => ({ node: r.runner_node, machineId: r.machine_id, instanceId: r.instance_id, lastSeenAt: r.last_seen_at, version: r.runner_version }));
 	const namesOf = (node: string) => namesOfMachine(node, registrations);
-	const machineOnline = async (names: readonly string[]): Promise<boolean> => {
-		const probes = names.flatMap((name) => (idsByNode.get(name) ?? []).map((id) => [id, name] as const)).slice(0, 25);
-		const checks = await Promise.all(probes.map(([id, name]) => relayConnected(c.env, id, name).catch(() => false)));
-		return checks.some(Boolean);
-	};
+	// Up for ANY agent: any of its instances holds a socket under any of its names — list_runner_nodes' rule (#1055);
+	// probing only the 25 oldest (instance, name) pairs read machines with later-registered agents as down.
+	const machineOnline = async (names: readonly string[]): Promise<boolean> =>
+		(await instanceSocketsUnder(c.env, [...new Set(names.flatMap((name) => idsByNode.get(name) ?? []))], names)).some(Boolean);
 
 	// Report both flags per node: `connected` = THIS agent's own socket; `nodeOnline` =
 	// the machine is up for any agent — each under ANY of the machine's names. Include the pinned

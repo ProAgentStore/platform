@@ -19,6 +19,7 @@ vi.mock("../lib/auth.js", async () => {
 	return { ...actual, requireUser: async () => ({ uid: "u1", roles: [] }) };
 });
 const { instanceRoutes } = await import("./instances.js");
+const { terminalRoutes } = await import("./terminals.js");
 
 const MINI = "8de74159-5e07-4e44-8472-56cc7b728cef";
 const PINK = "e4fdf96a-0ebc-4dd6-bbd1-1f3a4b69599e";
@@ -97,5 +98,59 @@ describe("instance_runner_node across a machine's names (#949)", () => {
 		// The Mac mini is still ONE machine under this agent's spelling — its other agent's name is an alias, not a second tile.
 		expect(body.nodes).not.toContain("Macmini.modem");
 		expect(body.nodes.filter((n) => n === "Sergeys-Mac-mini.local")).toHaveLength(1);
+	});
+});
+
+describe("nodeOnline agrees with list_runner_nodes (#1055)", () => {
+	/**
+	 * pink-laptop on 2026-10-13: up, serving nine agents — but not this one — and registered by many more over its
+	 * life. The route probed only the 25 OLDEST (instance, name) pairs, each under the one name it registered with,
+	 * so the machine read `nodeOnline: false` while list_runner_nodes showed it connected.
+	 */
+	beforeEach(() => {
+		const old = Array.from({ length: 30 }, (_, i) => `old${i}`);
+		d1.exec(`INSERT INTO agent_instances (id, agent_id, user_id, status, config) VALUES ${[...old, "late", "renamed"].map((id) => `('${id}', 'coder', 'u1', 'active', '{}')`).join(", ")}`);
+		for (const id of old) {
+			d1.exec(`INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, runner_version, machine_id, status, last_seen_at, updated_at)
+			         VALUES ('${id}', 'u1', 'pink-laptop', 'relay://', '0.4.60', '${PINK}', 'online', '2026-09-01 00:00:00', '2026-09-01 00:00:00')`);
+		}
+		// Registered LAST, under the machine's two names.
+		d1.exec(`INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, runner_version, machine_id, status, last_seen_at, updated_at)
+		         VALUES ('late', 'u1', 'pink-laptop', 'relay://', '0.4.117', '${PINK}', 'online', '2026-10-12 18:21:55', '2026-10-12 18:21:55'),
+		                ('renamed', 'u1', 'Pinks-MacBook', 'relay://', '0.4.117', '${PINK}', 'online', '2026-10-12 18:21:54', '2026-10-12 18:21:54')`);
+	});
+
+	async function fleet() {
+		const app = new Hono<{ Bindings: Env }>().route("/v1/terminals", terminalRoutes);
+		const res = await app.request("/v1/terminals/nodes", {}, { DB: d1.DB, RELAY: relay } as unknown as Env);
+		return ((await res.json()) as { nodes: Array<{ node: string; aka: string[]; connected: boolean }> }).nodes;
+	}
+	/** Every node `instance_runner_node` reports must read online exactly when list_runner_nodes reads that machine connected — under whichever of its names. */
+	async function expectAgreement(instance: string) {
+		const [{ nodesDetail }, machines] = await Promise.all([runnerNode(instance), fleet()]);
+		for (const d of nodesDetail) {
+			const names = [d.node as string, ...((d.aka as string[] | undefined) ?? [])];
+			const machine = machines.find((m) => names.some((n) => n === m.node || m.aka.includes(n)));
+			expect(machine, `no list_runner_nodes machine for ${d.node}`).toBeDefined();
+			expect(d.nodeOnline, `${d.node} (aka ${names.slice(1).join(", ") || "none"})`).toBe(machine?.connected);
+		}
+		return nodesDetail;
+	}
+
+	it("a machine up for agents registered past the 25th reads online — this agent holds no socket there", async () => {
+		live.add("late:node:pink-laptop");
+		const detail = await expectAgreement("other");
+		expect(detail.find((n) => n.node === "pink-laptop" || (n.aka as string[] | undefined)?.includes("pink-laptop"))).toMatchObject({ connected: false, nodeOnline: true });
+	});
+
+	it("a socket under the machine's OTHER name counts, whichever name the instance registered with", async () => {
+		live.add("late:node:Pinks-MacBook"); // registered as pink-laptop, connected under the alias
+		const detail = await expectAgreement("other");
+		expect(detail.find((n) => [n.node, ...((n.aka as string[] | undefined) ?? [])].includes("Pinks-MacBook"))).toMatchObject({ nodeOnline: true });
+	});
+
+	it("still offline when no instance holds a socket under any name", async () => {
+		const detail = await expectAgreement("other");
+		expect(detail.every((n) => n.nodeOnline === false)).toBe(true);
 	});
 });
