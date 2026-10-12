@@ -1137,4 +1137,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.117": "sha256:3e690e79c80551a33f31ecc250205cc34362f6ccb6249ba5e00ab3a534adbde4",
 	// #1025: set_coder_brain gains the brain's knobs; coder_questions (read).
 	"0.1.118": "sha256:52317fec2315d582a0fdcb49e7a80cc4fa6dd978688afe789023a50cddaa94fb",
+	// #1038: mcp_audit_log gains request_id + session_id (find what one MCP request did after a lost reply).
+	"0.1.119": "sha256:96390595c60b1576428c6caf0b595c5a5bf0cdcebafc60b1e185ed7d0b666daa",
 };

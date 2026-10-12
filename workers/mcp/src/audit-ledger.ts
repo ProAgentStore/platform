@@ -149,7 +149,7 @@ export function carriesReceipt(event: Record<string, unknown>, receipt: string):
  */
 export async function readAuditPage(
 	kv: KVNamespace,
-	{ prefix, limit, cursor, tool, receipt }: { prefix: string; limit: number; cursor?: string; tool?: string; receipt?: string },
+	{ prefix, limit, cursor, tool, receipt, requestId, mcpSessionId }: { prefix: string; limit: number; cursor?: string; tool?: string; receipt?: string; requestId?: string; mcpSessionId?: string },
 ): Promise<AuditPage> {
 	const [listed, coverage] = await Promise.all([
 		kv.list<AuditKeyMetadata>({ prefix, limit, ...(cursor ? { cursor } : {}) }),
@@ -170,7 +170,13 @@ export async function readAuditPage(
 		}),
 	);
 	const events = loaded.filter(
-		(e): e is Record<string, unknown> => e !== null && (!tool || e.tool === tool) && (!receipt || carriesReceipt(e, receipt)),
+		(e): e is Record<string, unknown> =>
+			e !== null &&
+			(!tool || e.tool === tool) &&
+			(!receipt || carriesReceipt(e, receipt)) &&
+			// The MCP request that wrote it (#1038) — exact; a request id repeats across sessions.
+			(!requestId || e.requestId === requestId) &&
+			(!mcpSessionId || e.mcpSessionId === mcpSessionId),
 	);
 	return {
 		events,

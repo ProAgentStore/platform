@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { confirmWithin, isUnknownOutcome, type UnknownOutcome } from "./async-outcome.js";
 import { apiBase, authedCall, jsonText, text, type McpEnv } from "./http.js";
 
 type Env = McpEnv;
@@ -182,6 +183,39 @@ export async function putRepoFile(
 	);
 	if (!res.ok) return `! ${path}: ${res.text}`;
 	return `${existing.sha ? "+" : "+"} ${existing.sha ? "Updated" : "Created"} ${path}`;
+}
+
+/**
+ * {@link putRepoFile} for `write_agent_file`: a GitHub answer that does not come back in time is
+ * UNKNOWN, not failed (#1038) — the commit may have landed. The write is not aborted; half a write
+ * is worse than a late one.
+ */
+export function putRepoFileConfirmed(env: Env, org: string, agentId: string, path: string, content: string, message?: string): Promise<string | UnknownOutcome> {
+	return confirmWithin(() => putRepoFile(env, org, repoNameFor(agentId), path, content, message), {
+		tool: "write_agent_file",
+		possibleOutcomes: ["not-started", "written"],
+		poll: { tool: "read_agent_file", input: { agent_id: agentId, path } },
+	});
+}
+
+/** {@link putRepoFile} per file, in order, for `batch_write_agent_files` (#1038). An unknown answer
+ *  names the files already confirmed (`lines`) beside the listing to check the rest against. */
+export async function putRepoFilesConfirmed(
+	env: Env,
+	org: string,
+	agentId: string,
+	files: ReadonlyArray<{ path: string; content: string }>,
+	message?: string,
+): Promise<{ lines: string[]; unknown?: UnknownOutcome }> {
+	const lines: string[] = [];
+	const out = await confirmWithin(
+		async () => {
+			for (const file of files) lines.push(await putRepoFile(env, org, repoNameFor(agentId), file.path, file.content, message));
+			return lines;
+		},
+		{ tool: "batch_write_agent_files", possibleOutcomes: ["not-started", "partially-written", "written"], poll: { tool: "list_agent_repo_files", input: { agent_id: agentId } }, timeoutMs: 60_000 },
+	);
+	return isUnknownOutcome(out) ? { lines: [...lines], unknown: out } : { lines };
 }
 
 export async function listRepoFiles(

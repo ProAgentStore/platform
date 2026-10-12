@@ -1,3 +1,4 @@
+import { correlationFromExtra, withCallCorrelation } from "./call-context.js";
 import type { TextResult } from "./http.js";
 import { recordLatency } from "./latency.js";
 import { titleFor } from "./tool-metadata.js";
@@ -72,7 +73,7 @@ export function installRegistrationPipeline(
 		}
 		const handler = args[i] as AnyFn;
 		const metadata = opts.metadata?.(name) ?? {};
-		const gated = async (...handlerArgs: unknown[]) => {
+		const run = async (...handlerArgs: unknown[]) => {
 			// A tool may carry its own `token` argument (acting as someone other than the
 			// connection), so gate the identity the handler will actually use, not just
 			// the connection's.
@@ -99,6 +100,10 @@ export function installRegistrationPipeline(
 			if (!blocked && opts.touch) await opts.touch(name, first as Record<string, unknown> | undefined, provided);
 			return metadata.outputSchema ? withStructuredContent(result) : result;
 		};
+
+		// Every handler runs inside its own request's correlation (#1038), so whatever it audits
+		// carries the JSON-RPC id and session the caller can look it up by after a lost reply.
+		const gated = (...handlerArgs: unknown[]) => withCallCorrelation(correlationFromExtra(handlerArgs[1]), () => run(...handlerArgs));
 
 		const description = typeof args[1] === "string" ? (args[1] as string) : undefined;
 		// The zod raw shape, if this call site passed one: the last object between the

@@ -1,4 +1,4 @@
-import { authedAsyncCall } from "../async-outcome.js";
+import { authedAsyncCall, isUnknownOutcome } from "../async-outcome.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authRequired, authedCall, chatReplyText, jsonResult, jsonText, structuredText, text } from "../http.js";
@@ -263,11 +263,22 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 			// tools later; MCP_READ_ONLY mode should block it. Reads still work via the agent.
 			const denied = await requirePermission(safetyFor(token), "write", "call_instance_tool", { tool });
 			if (denied) return denied;
-			const data = await authedCall(
+			// A connector WRITE (github_create_issue, …) whose reply is lost may still have landed
+			// (#1038): a gateway error or a dropped upstream answers `outcome: "unknown"` with the read
+			// to settle it, never a failure. 100s is the edge's own limit on this hop, so a slow call
+			// that would have answered still does.
+			const data = await authedAsyncCall(
 				`/v1/instances/${instance_id}/tools/${encodeURIComponent(tool)}`,
 				sessionToken,
 				{ method: "POST", body: JSON.stringify(input || {}) },
 				env,
+				{
+					tool: "call_instance_tool",
+					possibleOutcomes: ["not-started", "completed", "failed"],
+					poll: { tool: "list_instance_tools", input: { instance_id, allowed_only: true } },
+					hint: `To settle it, read the resource back with a tool list_instance_tools marks mutates:false (e.g. github_list_issues after github_create_issue), or find this call in mcp_audit_log by request_id + session_id.`,
+					timeoutMs: 100_000,
+				},
 			);
 			// This tool recorded NOTHING on either side (#701): no MCP audit row, and no
 			// `agent_events` row either, because `routes/tools.ts` calls `runRegistryTool`
@@ -281,7 +292,7 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 			const args = JSON.stringify(input || {});
 			await audit(safetyFor(token), {
 				tool: "call_instance_tool",
-				action: "completed",
+				action: isUnknownOutcome(data) ? "unknown" : "completed",
 				input: {
 					instance_id,
 					invoked: tool,
@@ -300,7 +311,7 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 				//
 				// `error` is still consulted for the transport failures `http.ts` synthesises on a
 				// non-2xx, which carry no `success` field at all.
-				result: { ok: auditOk(data) },
+				result: isUnknownOutcome(data) ? { ok: null, outcome: "unknown" } : { ok: auditOk(data) },
 			});
 			return text(pagedToolResult(data, offset));
 		},

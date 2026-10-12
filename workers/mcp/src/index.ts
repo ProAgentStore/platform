@@ -8,6 +8,9 @@ import { registerCodingSessionTools } from "./coding-tools.js";
 import { registerInstanceTools } from "./instance-tools/index.js";
 import { registerStorageTools } from "./storage-tools.js";
 import { loginHandler } from "./oauth-provider.js";
+import { isUnknownOutcome } from "./async-outcome.js";
+import { currentCallCorrelation } from "./call-context.js";
+import { keepSseAlive } from "./sse-keepalive.js";
 import { installRegistrationPipeline, type RegistrationTarget } from "./registration.js";
 import { PLATFORM_GUIDE } from "./platform-guide.js";
 import { timed, withRequestTiming } from "./latency.js";
@@ -27,6 +30,8 @@ import {
 	listRepoFiles,
 	agentOwnershipError,
 	putRepoFile,
+	putRepoFileConfirmed,
+	putRepoFilesConfirmed,
 	repoNameFor,
 	triggerDeploy,
 	type AgentSummary,
@@ -96,6 +101,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 	private safety(provided?: string): SafetyContext {
 		return {
 			env: this.env,
+			correlation: currentCallCorrelation,
 			subject: provided ? undefined : this.subject,
 			scopes: provided ? null : this.scopes,
 			// A per-call `token` is an IDENTITY, not an anonymiser: it resolves to an audit
@@ -345,21 +351,30 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"mcp_audit_log",
-			"Read this account's MCP tool audit events (write, runtime, dry-run, denied, destructive), newest first. Returns {events, nextCursor, coverage}: pass nextCursor back as cursor for the next-older page; receipt finds the events for one run/queue/session/event id; nextCursor null is the end of the 90-day ledger. coverage.complete false means older legacy events are still being indexed. An event is a receipt for the TOOL CALL, not for the work it started.",
+			"Read this account's MCP tool audit events (write, runtime, dry-run, denied, destructive), newest first. Returns {events, nextCursor, coverage}: pass nextCursor back as cursor for the next-older page; receipt finds the events for one run/queue/session/event id; request_id + session_id find what ONE MCP request did (every event records the JSON-RPC id and mcp-session-id of the call that wrote it), which is how to settle a write whose reply was lost; nextCursor null is the end of the 90-day ledger. coverage.complete false means older legacy events are still being indexed. An event is a receipt for the TOOL CALL, not for the work it started.",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				limit: z.coerce.number().int().min(1).max(200).optional(),
 				cursor: z.string().min(1).max(2048).optional().describe("nextCursor from the previous page. Omit for the newest page."),
 				tool: z.string().min(1).max(100).optional().describe("Only events for this exact tool name. A filtered page may hold fewer than limit events; keep following nextCursor."),
 				receipt: z.string().min(1).max(200).optional().describe("Only events that ARE this event id or carry it as a whole value in input/result (a runId, queueEntryId, session_id, task id the call returned or acted on). Exact match; applied per page, so keep following nextCursor."),
+				request_id: z.coerce.string().min(1).max(200).optional().describe("Only events written by the MCP request with this JSON-RPC id (7 and \"7\" are the same). Ids restart in every session, so pair it with session_id. Exact match; applied per page."),
+				session_id: z.string().min(1).max(200).optional().describe("Only events written in this MCP session (the mcp-session-id header of the connection). Exact match; applied per page."),
 			},
-			async ({ token, limit, cursor, tool, receipt }) => {
+			async ({ token, limit, cursor, tool, receipt, request_id, session_id }) => {
 				const sessionToken = this.token(token);
 				if (!sessionToken) return authRequired();
 				const denied = await requirePermission(this.safety(token), "read", "mcp_audit_log", { limit, cursor, tool, receipt });
 				if (denied) return denied;
 				try {
-					const page = await listAuditEvents(this.safety(token), { limit: limit || 50, cursor, tool, receipt });
+					const page = await listAuditEvents(this.safety(token), {
+						limit: limit || 50,
+						cursor,
+						tool,
+						receipt,
+						requestId: request_id,
+						mcpSessionId: session_id,
+					});
 					return page ? jsonText(page) : text("Error: the MCP audit ledger is unavailable on this connection (no audit store or no authenticated subject).");
 				} catch (e) {
 					// Never a short page passed off as the history: the read failed, and the caller is told so.
@@ -794,16 +809,10 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				if (unconfirmed) return unconfirmed;
 				const ownershipError = await agentOwnershipError(this.env, sessionToken, agent_id); if (ownershipError) return ownershipError;
 				const org = this.env.GITHUB_ORG || "ProAgentStore";
-				const result = await putRepoFile(
-					this.env,
-					org,
-					repoNameFor(agent_id),
-					path,
-					content,
-					message,
-				);
-				await audit(this.safety(token), { tool: "write_agent_file", action: "completed", input: { agent_id, path, message }, result });
-				return text(result);
+				const result = await putRepoFileConfirmed(this.env, org, agent_id, path, content, message);
+				const unknown = isUnknownOutcome(result); // the commit may have landed (#1038)
+				await audit(this.safety(token), { tool: "write_agent_file", action: unknown ? "unknown" : "completed", input: { agent_id, path, message }, result: unknown ? { outcome: "unknown" } : result });
+				return unknown ? jsonText(result) : text(result);
 			},
 		);
 
@@ -847,21 +856,9 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				if (unconfirmed) return unconfirmed;
 				const ownershipError = await agentOwnershipError(this.env, sessionToken, agent_id); if (ownershipError) return ownershipError;
 				const org = this.env.GITHUB_ORG || "ProAgentStore";
-				const lines: string[] = [];
-				for (const file of files) {
-					lines.push(
-						await putRepoFile(
-							this.env,
-							org,
-							repoNameFor(agent_id),
-							file.path,
-							file.content,
-							message,
-						),
-					);
-				}
-				await audit(this.safety(token), { tool: "batch_write_agent_files", action: "completed", input, result: lines });
-				return text(lines.join("\n"));
+				const { lines, unknown } = await putRepoFilesConfirmed(this.env, org, agent_id, files, message);
+				await audit(this.safety(token), { tool: "batch_write_agent_files", action: unknown ? "unknown" : "completed", input, result: unknown ? { outcome: "unknown", confirmed: lines } : lines });
+				return unknown ? jsonText({ ...unknown, confirmed: lines }) : text(lines.join("\n"));
 			},
 		);
 
@@ -1054,9 +1051,11 @@ type ProviderEnv = Env & { OAUTH_PROVIDER: OAuthHelpers };
 export default withRequestTiming(new OAuthProvider<ProviderEnv>({
 	apiRoute: "/mcp",
 	// `/mcp/i/<instanceId>` (#783) and `/mcp/t/<agentSlug>` (#771) reach the same transport, pinned via `ctx.props`.
-	apiHandler: withPinnedType(withPinnedInstance(PagsMcp.serve("/mcp") as ExportedHandler<ProviderEnv> & {
+	// Every SSE stream it answers is pinged while open, so a long tool call or an idle GET stream is
+	// never a silent connection for something in between to cut (#1038, `sse-keepalive.ts`).
+	apiHandler: keepSseAlive(withPinnedType(withPinnedInstance(PagsMcp.serve("/mcp") as ExportedHandler<ProviderEnv> & {
 		fetch: NonNullable<ExportedHandler<ProviderEnv>["fetch"]>;
-	})) as ExportedHandler<ProviderEnv> & {
+	}))) as ExportedHandler<ProviderEnv> & {
 		fetch: NonNullable<ExportedHandler<ProviderEnv>["fetch"]>;
 	},
 	defaultHandler: loginHandler as ExportedHandler<ProviderEnv>,

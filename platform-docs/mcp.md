@@ -151,7 +151,7 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
-- `serverInfo.version`: `0.1.118`
+- `serverInfo.version`: `0.1.119`
 
 That is the same value the published MCP-registry manifest (`server.json`) carries, and both
 are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —
@@ -286,7 +286,7 @@ Both spec defaults for the omitted pair (`idempotentHint` false, `openWorldHint`
 on the cautious side, so leaving them out costs a host nothing. Declaring a guess would cost
 it exactly what the annotations are for.
 
-Use `mcp_audit_log` to inspect recent MCP write, runtime, dry-run, denied, and destructive tool events for the authenticated account. Audit events are redacted before storage — both by key name (`token`, `secret`, `password`, `credential`, `api_key`, …) and by value shape (`sk-…`, `ghp_…`, `xox…`, `AIza…`, JWTs, bearer headers) — and expire after 90 days.
+Use `mcp_audit_log` to inspect recent MCP write, runtime, dry-run, denied, and destructive tool events for the authenticated account. Every event records the JSON-RPC `requestId` and the `mcpSessionId` of the call that wrote it, so a client whose reply was lost can pass `request_id` + `session_id` to find out what that call did (#1038). Writes that cannot confirm their outcome in time answer `outcome: "unknown"` with a `poll` tool to settle it, never a failure they may not have had. Audit events are redacted before storage — both by key name (`token`, `secret`, `password`, `credential`, `api_key`, …) and by value shape (`sk-…`, `ghp_…`, `xox…`, `AIza…`, JWTs, bearer headers) — and expire after 90 days.
 
 **It pages, newest first, over the whole retained ledger (#1016).** A call returns `{events, nextCursor, coverage, semantics}`. Pass `nextCursor` back as `cursor` for the next-older page; `nextCursor: null` is the end of the 90-day ledger. Events order by time, then by event `id` within one millisecond, so pages never repeat or skip an event. `tool` filters to one exact tool name; a filtered page may be short, or empty, while `nextCursor` still continues. `coverage.complete: false` means events recorded before the time-ordered ledger existed are still being indexed — the newest events are complete, older pages may be missing those. A failed read answers `Error: …`, never a short page. `receipt` correlates: it keeps only events that ARE that event id or carry it as a whole value in `input`/`result` — the `runId`, `queueEntryId`, `session_id` or task id a call returned or acted on — exactly, never as a substring, and like `tool` it is applied per page. `GET /v1/mcp-audit` takes the same `cursor`, `tool` and `receipt` and returns the same shape.
 

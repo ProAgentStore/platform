@@ -38,6 +38,12 @@ export interface SafetyContext {
 	 * The implementation MUST memoise, because one tool call audits more than once.
 	 */
 	resolveSubject?: () => Promise<string | undefined>;
+	/**
+	 * The MCP request this call answers (#1038): JSON-RPC `requestId` and `mcpSessionId`, written on
+	 * every audit event so a caller whose reply was lost can find what its call did. Supplied by the
+	 * host (`index.ts`, from `call-context.ts`), so this module stays import-free for vendoring.
+	 */
+	correlation?: () => { requestId?: string; mcpSessionId?: string } | undefined;
 }
 
 /** The audit subject: the OAuth grant's, or the one a `token` argument resolves to. Exported for
@@ -199,7 +205,15 @@ async function writeAudit(ctx: SafetyContext, event: Record<string, unknown>): P
 	// then decided whether the field was kept.
 	const recorded = redact(summarize(event)) as Record<string, unknown>;
 	// The identity fields are written LAST so an audited payload cannot overwrite them.
-	const value = JSON.stringify({ ...recorded, id, time: new Date(ms).toISOString(), subject });
+	const corr = ctx.correlation?.();
+	const value = JSON.stringify({
+		...recorded,
+		...(corr?.requestId ? { requestId: corr.requestId } : {}),
+		...(corr?.mcpSessionId ? { mcpSessionId: corr.mcpSessionId } : {}),
+		id,
+		time: new Date(ms).toISOString(),
+		subject,
+	});
 	// Two keys, one value: the owner's time-ordered index and the cross-owner one the admin
 	// sweep reads (#1016). See `audit-ledger.ts` for why the time is inverted.
 	const options = { expirationTtl: AUDIT_TTL_SECONDS, metadata: auditKeyMetadata(recorded) };
@@ -216,7 +230,7 @@ async function writeAudit(ctx: SafetyContext, event: Record<string, unknown>): P
  */
 export async function listAuditEvents(
 	ctx: SafetyContext,
-	{ limit = 50, cursor, tool, receipt }: { limit?: number; cursor?: string; tool?: string; receipt?: string } = {},
+	{ limit = 50, cursor, tool, receipt, requestId, mcpSessionId }: { limit?: number; cursor?: string; tool?: string; receipt?: string; requestId?: string; mcpSessionId?: string } = {},
 ): Promise<AuditPage | null> {
 	if (!ctx.env.OAUTH_KV) return null;
 	const subject = await subjectFor(ctx);
@@ -227,6 +241,8 @@ export async function listAuditEvents(
 		cursor,
 		tool,
 		receipt,
+		requestId,
+		mcpSessionId,
 	});
 }
 
