@@ -56,11 +56,20 @@ existing fields. Receipt and action are separate facts:
   unmatched turn, or a local run), `observation_failure` (the paired `/coding/sessions` + `/health`
   look failed or was malformed — fail closed), `idle_wait` (observed idle, but the final race-safe
   admission refused; retried), or `unknown`.
-- `observations` — the last five paired looks: `{success, sampled_at, source}` only. No session text,
-  process arguments, paths, prompts or tokens are reported.
+- `observations` — the last five paired looks: `{success, sampled_at, source}`. No session text,
+  process arguments, paths, prompts or tokens are reported. A readable `sessions` look also carries
+  `session_states` (CLI 0.4.117): how many retained engines were `active_turns`, `unknown`,
+  `idle_retained` and `stopped`, by the guard's own rule (`sessionStateOf` in
+  `runner-work-observation.ts`), so the counts and the blocker cannot disagree. `active_turns` and
+  `unknown` block an update; idle retained and stopped engines do not. Counts only.
 
 Retained engines that report `alive:true, runState:"idle"` and engines that have exited do not block;
 any other or missing lifecycle state does.
+
+A release check that could not run (npm unreachable, or not startable) is `failed` with its reason
+and retried with backoff (CLI 0.4.117). It used to be `unsupported`, which means "this install can
+never update" and is skipped by the stuck check, so a machine that could not ask npm went quiet.
+`unsupported` is now kept for what is permanent: a source checkout, or nothing to restart the runner.
 
 An `offline` status means the owner policy could not be re-read. The runner drops its authority to
 install the moment a refresh fails, but it keeps a backed-off retry timer (about 1 minute, doubling
@@ -163,15 +172,15 @@ every update or `r` added one idle process (six deep on one machine after two da
 A machine still running an older `pags up` keeps its existing chain until that process is restarted
 once at the machine.
 
-**Self-update cannot run npm on Windows yet.** *Read from the source, not yet reproduced on a
-Windows machine.* Every npm call in the update path runs through `execFile("npm", …)` with no shell:
-the release check (`latestPublishedVersion`, `packages/cli/src/bootstrap/payload.ts`), the global
-install (`installVersion`, `commands/runner/self-update.ts`) and the stub's cache install
-(`npmInstallInto`, `bootstrap/payload.ts`). On Windows `npm` is `npm.cmd`, and a `.cmd` file cannot be
-started without a shell. So the release check comes back empty and the update is refused ("npm could
-not be asked for the latest @proagentstore/cli"), whether it was started by the Auto-update policy or
-by `runner_update`. Until that is fixed, update a Windows machine by hand: `npm i -g
-@proagentstore/cli`, then restart the task.
+**npm on Windows (CLI 0.4.117).** On Windows `npm` is `npm.cmd`, which `execFile` cannot start
+without a shell. Up to 0.4.116 every npm call in the update path failed there — the release check, the
+global install and the stub's cache install — so an ON machine reported `unsupported` with "npm could
+not be asked for the latest @proagentstore/cli" (dell-laptop, 2026-10-12). Every one now goes through
+`npmInvocation` (`packages/cli/src/bootstrap/payload.ts`): npm's own `npm-cli.js`, found beside the
+`npm.cmd` on PATH or beside `node.exe`, run by the runner's Node with no shell; else `npm.cmd` through
+`cmd.exe /d /s /c` with every argument quoted. A Windows machine still on 0.4.116 or older cannot fetch
+this fix itself, and `runner_update` uses the same npm path: update it once at the machine with
+`npm i -g @proagentstore/cli`, then restart the task. After that the policy carries it forward.
 
 Very old runners that cannot report a stable machine ID still need one manual upgrade/restart. They
 remain visible but their settings link is deliberately unavailable rather than attaching a policy to

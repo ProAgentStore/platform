@@ -33,6 +33,43 @@ export function isWorkShape(work: unknown): work is { codingTurns: number; local
 	return count(w.codingTurns) && count(w.localRuns) && Array.isArray(w.detail) && w.detail.every((item) => typeof item === "string");
 }
 
+/**
+ * One retained engine as the guard reads it (#1020). `stopped` (alive:false) and `idle_retained`
+ * (alive:true, runState "idle") cannot be interrupted; an `active_turn` is alive in a named non-idle
+ * state; anything else — a missing or non-boolean `alive`, a missing state, a non-object entry — is
+ * `unknown`. The guard blocks on the last two, so the counts below and the blocker cannot disagree.
+ */
+export type SessionState = "active_turn" | "idle_retained" | "stopped" | "unknown";
+
+export function sessionStateOf(session: unknown): SessionState {
+	if (!session || typeof session !== "object") return "unknown";
+	const s = session as RunnerCodingLifecycle;
+	if (s.alive === false) return "stopped";
+	const state = typeof s.runState === "string" && s.runState ? s.runState : null;
+	if (s.alive !== true || !state) return "unknown";
+	return state === "idle" ? "idle_retained" : "active_turn";
+}
+
+/** Counts only — never a session id, state text, path or prompt. What the `sessions` observation reports. */
+export interface SessionStateCounts {
+	activeTurns: number;
+	idleRetained: number;
+	stopped: number;
+	unknown: number;
+}
+
+export function sessionStateCounts(sessions: unknown[]): SessionStateCounts {
+	const counts: SessionStateCounts = { activeTurns: 0, idleRetained: 0, stopped: 0, unknown: 0 };
+	for (const session of sessions) {
+		const state = sessionStateOf(session);
+		if (state === "active_turn") counts.activeTurns++;
+		else if (state === "idle_retained") counts.idleRetained++;
+		else if (state === "stopped") counts.stopped++;
+		else counts.unknown++;
+	}
+	return counts;
+}
+
 export function observedRunnerWork(observation: RunnerWorkObservation): string[] {
 	const sessions = observation.sessions;
 	const work = observation.work;
@@ -41,10 +78,10 @@ export function observedRunnerWork(observation: RunnerWorkObservation): string[]
 
 	const activeCoding = (sessions as RunnerCodingLifecycle[]).flatMap((session) => {
 		// A definitely stopped process cannot be interrupted. Everything else must prove it is idle.
-		if (session?.alive === false) return [];
+		const kind = sessionStateOf(session);
+		if (kind === "stopped" || kind === "idle_retained") return [];
 		const id = typeof session?.sessionId === "string" && session.sessionId ? session.sessionId : "unidentified-session";
 		const state = typeof session?.runState === "string" && session.runState ? session.runState : "unknown";
-		if (session?.alive === true && state === "idle") return [];
 		return [`coding session ${id} (${state})`];
 	});
 	const unmatchedCodingTurns = Math.max(0, codingTurns - activeCoding.length);
@@ -75,7 +112,14 @@ export function readWorkLook(
 	return {
 		busy,
 		observations: [
-			{ source: "sessions", success: sessionsOk, sampledAt, ...(sessions.status === "fulfilled" && !sessionsOk ? { malformed: true } : {}) },
+			{
+				source: "sessions",
+				success: sessionsOk,
+				sampledAt,
+				...(sessions.status === "fulfilled" && !sessionsOk ? { malformed: true } : {}),
+				// What the readable list held, by lifecycle state — counts only (#1020).
+				...(sessions.status === "fulfilled" && sessionsOk ? { sessionStates: sessionStateCounts(sessions.value.sessions as unknown[]) } : {}),
+			},
 			{ source: "health", success: healthOk, sampledAt, ...(health.status === "fulfilled" && !healthOk ? { malformed: true } : {}) },
 		],
 	};

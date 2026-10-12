@@ -4,6 +4,7 @@ import {
 	machineAutoUpdateIsBusy,
 	machineAutoUpdateStatus,
 	machineBlockerLabel,
+	machineSessionStatesLine,
 	machineCanRunAutomaticUpdates,
 	machineFromResponse,
 	machineLastAttempt,
@@ -91,5 +92,18 @@ describe("machine details from the terminals API", () => {
 		expect(machineObservationOutcome({ success: true, sampled_at: "t", source: "health" })).toBe("ok");
 		expect(machineObservationOutcome({ success: false, sampled_at: "t", source: "sessions" })).toBe("failed");
 		expect(machineObservationOutcome({ success: false, sampled_at: "t", source: "sessions", malformed: true })).toBe("unreadable");
+	});
+});
+
+describe("machineSessionStatesLine (#1020)", () => {
+	it("names what blocks first, and counts idle retained engines apart from it", () => {
+		const o = { success: true, sampled_at: "2026-10-12T00:00:00Z", source: "sessions", session_states: { active_turns: 1, idle_retained: 2, stopped: 0, unknown: 3 } };
+		expect(machineSessionStatesLine(o)).toBe("1 active turn · 3 unknown · 2 idle retained · 0 stopped");
+		expect(machineSessionStatesLine({ ...o, session_states: { active_turns: 0, idle_retained: 1, stopped: 1, unknown: 0 } })).toBe("0 active turns · 0 unknown · 1 idle retained · 1 stopped");
+	});
+
+	it("is null for a look that carried no counts (a health look, a failed one, an older runner)", () => {
+		expect(machineSessionStatesLine({ success: true, sampled_at: "2026-10-12T00:00:00Z", source: "health" })).toBeNull();
+		expect(machineSessionStatesLine({ success: false, sampled_at: "2026-10-12T00:00:00Z", source: "sessions", session_states: null })).toBeNull();
 	});
 });

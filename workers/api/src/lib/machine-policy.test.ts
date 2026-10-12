@@ -119,6 +119,25 @@ describe("machine policy — receipt time is not decision time (#1020)", () => {
 		]);
 	});
 
+	it("carries per-observation session-state counts through storage and the wire — on a readable sessions look only", async () => {
+		await setMachinePolicy(env(), "u1", M, true);
+		at(4_700_000);
+		const counts = { activeTurns: 1, idleRetained: 2, stopped: 3, unknown: 0 };
+		const observations = [
+			{ success: true, sampledAt: 4_690_000, source: "sessions", sessionStates: counts },
+			// Never on a failed look, a health look, or a partial / negative / fractional set.
+			{ success: false, sampledAt: 4_690_001, source: "sessions", sessionStates: counts },
+			{ success: true, sampledAt: 4_690_002, source: "health", sessionStates: counts },
+			{ success: true, sampledAt: 4_690_003, source: "sessions", sessionStates: { activeTurns: 1, idleRetained: 2 } },
+			{ success: true, sampledAt: 4_690_004, source: "sessions", sessionStates: { activeTurns: -1, idleRetained: 0.5, stopped: 0, unknown: 0, sessionId: "csess_x" } },
+		];
+		await reportMachinePolicyStatus(env(), "u1", M, { status: "waiting_for_idle", blockerClass: "active_sessions", observations });
+		const wire = machinePolicyWire(await getMachinePolicy(env(), "u1", M)).auto_update_diagnostics.observations;
+		expect(wire[0]).toEqual({ success: true, sampled_at: iso(4_690_000), source: "sessions", session_states: { active_turns: 1, idle_retained: 2, stopped: 3, unknown: 0 } });
+		expect(wire.slice(1).some((o) => "session_states" in o)).toBe(false);
+		expect(JSON.stringify(wire)).not.toContain("csess_x");
+	});
+
 	it("keeps every existing wire field and adds the diagnostics beside them", async () => {
 		await setMachinePolicy(env(), "u1", M, true);
 		at(5_000_000);

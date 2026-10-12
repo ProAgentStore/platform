@@ -622,3 +622,34 @@ describe("AutomaticUpdateController — verified update cycle and bounded observ
 		expect(unhandled).not.toHaveBeenCalled();
 	});
 });
+
+describe("a release check that could not run is a retried failure, not unsupported (#1020)", () => {
+	it("npm unreachable (dell-laptop: npm.cmd could not be started): failure, backed-off retry, no install", async () => {
+		const h = harness({ facts: async () => ({ ...idleFacts(), latest: null }), plan: planRunnerUpdate });
+		await h.controller.runNow();
+		expect(h.statuses.at(-1)).toMatchObject({ status: "failure", extra: { reason: expect.stringMatching(/npm could not be asked/) } });
+		expect(h.install).not.toHaveBeenCalled();
+		expect(h.timers).toHaveLength(1);
+		const first = h.timers[0].ms;
+		h.timers.shift()?.fn();
+		await vi.waitFor(() => expect(h.facts).toHaveBeenCalledTimes(2));
+		await vi.waitFor(() => expect(h.timers).toHaveLength(1));
+		expect(h.timers[0].ms).toBeGreaterThan(first);
+	});
+
+	it("an install that can never update itself stays unsupported", async () => {
+		const h = harness({ facts: async () => ({ ...idleFacts(), fromSource: true }), plan: planRunnerUpdate });
+		await h.controller.runNow();
+		expect(h.statuses.at(-1)?.status).toBe("unsupported");
+	});
+
+	it("a later readable check recovers to an update", async () => {
+		let latest: string | null = null;
+		const h = harness({ facts: async () => ({ ...idleFacts(), latest }), plan: planRunnerUpdate });
+		await h.controller.runNow();
+		expect(h.statuses.at(-1)?.status).toBe("failure");
+		latest = "0.4.91";
+		h.timers.shift()?.fn();
+		await vi.waitFor(() => expect(h.install).toHaveBeenCalledTimes(1));
+	});
+});

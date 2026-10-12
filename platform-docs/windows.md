@@ -144,13 +144,16 @@ on macOS and Linux: the login session, `machine.json` (the machine's stable ID),
 
 ## Updates
 
-**Update by hand on Windows for now.** *From the source, not yet run on Windows:* every npm call in
-the self-update path (the version check, `npm i -g`, and the stub's install into its cache) runs
-`npm` without a shell. On Windows `npm` is `npm.cmd`, which cannot be started that way. So expect the
-Auto-update policy and a remote `runner_update` to be refused with "npm could not be asked for the
-latest @proagentstore/cli", and the stub never to fetch a newer version by itself.
+**Updates run on Windows from CLI 0.4.117.** Up to 0.4.116 every npm call in the self-update path (the
+version check, `npm i -g`, and the stub's install into its cache) ran `npm` without a shell. On Windows
+`npm` is `npm.cmd`, which cannot be started that way, so the Auto-update policy reported "npm could not
+be asked for the latest @proagentstore/cli" and `runner_update` was refused (seen on dell-laptop,
+2026-10-12). 0.4.117 runs npm's own `npm-cli.js` with Node instead, or `npm.cmd` through `cmd.exe` with
+every argument quoted (see [runner auto-update](https://github.com/ProAgentStore/platform/blob/main/docs/runner-auto-update.md#windows)). *Covered by tests with
+the Windows paths simulated; not yet confirmed by an update on a Windows machine.*
 
-To update:
+A machine on 0.4.116 or older still has the old npm call, so it cannot fetch the fix itself. Update it
+once by hand:
 
 ```powershell
 npm i -g @proagentstore/cli
@@ -159,8 +162,7 @@ Stop-ScheduledTask -TaskName "pags up"; Start-ScheduledTask -TaskName "pags up"
 
 Then check the **Terminals** page: the machine should reconnect on the new version. If a
 `pags up` from before the update is still running and holds the account, `pags up --replace`
-stops it gracefully and takes over. Once
-self-update works on Windows, its restart needs no extra setup there: `pags up` supervises its own
+stops it gracefully and takes over. A self-update's restart needs no extra setup on Windows: `pags up` supervises its own
 runner, so `PAGS_RESTART_COMMAND` is not required. See
 [runner auto-update](https://github.com/ProAgentStore/platform/blob/main/docs/runner-auto-update.md#windows).
 

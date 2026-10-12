@@ -55,6 +55,8 @@ export interface UpdateObservation {
 	sampled_at: string;
 	source: string;
 	malformed?: boolean;
+	/** A readable `sessions` look, by lifecycle state (#1020). `active_turns` and `unknown` block an update. */
+	session_states?: { active_turns: number; idle_retained: number; stopped: number; unknown: number } | null;
 }
 
 /**
@@ -165,6 +167,16 @@ export function machineRetryOverdue(d: AutoUpdateDiagnostics | null): boolean {
 	if (!Number.isFinite(due) || !Number.isFinite(heard)) return false;
 	if (Number.isFinite(decided) && decided >= due) return false;
 	return heard - due > RETRY_OVERDUE_GRACE_MS;
+}
+
+/**
+ * The engines a sessions look saw, in words (#1020): what blocks an update (active turns, unknown) is named
+ * first, and idle retained engines are counted apart from them. Null when the look carried no counts.
+ */
+export function machineSessionStatesLine(o: UpdateObservation): string | null {
+	const c = o.session_states;
+	if (!c) return null;
+	return [`${c.active_turns} active ${c.active_turns === 1 ? "turn" : "turns"}`, `${c.unknown} unknown`, `${c.idle_retained} idle retained`, `${c.stopped} stopped`].join(" · ");
 }
 
 /** One observation's outcome: an unreadable answer is not the same as no answer. */

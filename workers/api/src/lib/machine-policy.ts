@@ -15,6 +15,29 @@ export interface UpdateObservation {
 	source: "sessions" | "health" | "unknown";
 	/** It ANSWERED but in a shape the guard cannot read (#1020): unreadable, which is not the same as failing to answer. */
 	malformed?: true;
+	/** A readable `sessions` look: engines per lifecycle state, by the guard's own rule (#1020). Counts only. */
+	sessionStates?: SessionStateCounts;
+}
+
+/** `active_turn` and `unknown` block an update; `idle_retained` and `stopped` do not. */
+export interface SessionStateCounts {
+	activeTurns: number;
+	idleRetained: number;
+	stopped: number;
+	unknown: number;
+}
+const MAX_SESSIONS_COUNTED = 10_000;
+
+/** Four whole counts, or nothing: a partial or nonsensical set is dropped rather than shown as a fact. */
+function parseSessionStates(raw: unknown): SessionStateCounts | null {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+	const v = raw as Record<string, unknown>;
+	const pick = (camel: string, snake: string) => {
+		const n = v[camel] ?? v[snake];
+		return typeof n === "number" && Number.isInteger(n) && n >= 0 && n <= MAX_SESSIONS_COUNTED ? n : null;
+	};
+	const counts = { activeTurns: pick("activeTurns", "active_turns"), idleRetained: pick("idleRetained", "idle_retained"), stopped: pick("stopped", "stopped"), unknown: pick("unknown", "unknown") };
+	return Object.values(counts).every((n) => n !== null) ? (counts as SessionStateCounts) : null;
 }
 const MAX_OBSERVATIONS = 5;
 
@@ -81,8 +104,8 @@ function epochMs(value: unknown, now: number): number | null {
 	return Math.round(ms);
 }
 
-/** Only the three safe keys of each observation survive — nothing else from the runner is stored. */
-function parseObservations<T extends string | number>(raw: unknown, stamp: (ms: number) => T): Array<{ success: boolean; sampledAt: T; source: UpdateObservation["source"]; malformed?: true }> {
+/** Only the safe keys of each observation survive — nothing else from the runner is stored. */
+function parseObservations<T extends string | number>(raw: unknown, stamp: (ms: number) => T): Array<{ success: boolean; sampledAt: T; source: UpdateObservation["source"]; malformed?: true; sessionStates?: SessionStateCounts }> {
 	if (!Array.isArray(raw)) return [];
 	return raw
 		.flatMap((o) => {
@@ -92,7 +115,9 @@ function parseObservations<T extends string | number>(raw: unknown, stamp: (ms: 
 			if (typeof v.success !== "boolean" || at === null) return [];
 			const source: UpdateObservation["source"] = v.source === "sessions" || v.source === "health" ? v.source : "unknown";
 			// Only a FAILED observation can be unreadable; the flag never rides on a success.
-			return [{ success: v.success, sampledAt: stamp(at), source, ...(v.success === false && v.malformed === true ? { malformed: true as const } : {}) }];
+			// Session counts ride only on a readable sessions look — a failed one has nothing to count.
+			const states = source === "sessions" && v.success === true ? parseSessionStates(v.sessionStates ?? v.session_states) : null;
+			return [{ success: v.success, sampledAt: stamp(at), source, ...(v.success === false && v.malformed === true ? { malformed: true as const } : {}), ...(states ? { sessionStates: states } : {}) }];
 		})
 		.slice(-MAX_OBSERVATIONS);
 }
@@ -114,7 +139,13 @@ export function machinePolicyWire(policy: MachinePolicy) {
 			last_decision_at: policy.lastDecisionAt,
 			next_retry_due_at: policy.nextRetryDueAt,
 			blocker_class: policy.blockerClass,
-			observations: policy.observations.map((o) => ({ success: o.success, sampled_at: o.sampledAt, source: o.source, ...(o.malformed ? { malformed: true } : {}) })),
+			observations: policy.observations.map((o) => ({
+				success: o.success,
+				sampled_at: o.sampledAt,
+				source: o.source,
+				...(o.malformed ? { malformed: true } : {}),
+				...(o.sessionStates ? { session_states: { active_turns: o.sessionStates.activeTurns, idle_retained: o.sessionStates.idleRetained, stopped: o.sessionStates.stopped, unknown: o.sessionStates.unknown } } : {}),
+			})),
 		},
 	};
 }

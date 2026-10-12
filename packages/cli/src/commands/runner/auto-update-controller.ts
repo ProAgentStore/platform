@@ -286,7 +286,10 @@ export class AutomaticUpdateController {
 			return;
 		}
 		if (plan.action === "refused") {
-			this.deps.status("unsupported", { reason: plan.reason });
+			// A release check that could not run (npm unreachable, or unstartable as on Windows before #1020) is a FAILURE,
+			// retried with backoff and visible to the stuck check — not `unsupported`, which says this install can never update.
+			if (plan.retryable) this.failures++;
+			this.deps.status(plan.retryable ? "failure" : "unsupported", { reason: plan.reason });
 			this.schedule();
 			return;
 		}

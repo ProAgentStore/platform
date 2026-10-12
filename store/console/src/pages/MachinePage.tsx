@@ -16,6 +16,7 @@ import {
 	machineLastAttempt,
 	machineLatestVersion,
 	machineObservationOutcome,
+	machineSessionStatesLine,
 	machineRetryOverdue,
 	machineStatusDetail,
 	machineUpdateDiagnostics,
@@ -185,6 +186,7 @@ export default function MachinePage() {
 												<li key={i}>
 													<span className={outcome === "ok" ? "text-success" : "text-warning"}>{outcome === "ok" ? "Read" : outcome === "unreadable" ? "Unreadable" : "Failed"}</span>{" "}
 													{o.source} · {displayTime(o.sampled_at)}
+													{machineSessionStatesLine(o) && <span className="text-muted" data-testid="machine-update-session-states"> — {machineSessionStatesLine(o)}</span>}
 												</li>
 											);
 										})}

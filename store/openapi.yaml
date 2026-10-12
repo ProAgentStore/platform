@@ -433,6 +433,15 @@ components:
               sampled_at: { type: string, format: date-time }
               source: { type: string, enum: [sessions, health, unknown] }
               malformed: { type: boolean, description: "Present (true) only on a failed observation that ANSWERED in a shape the guard cannot read — unreadable, not unanswered." }
+              session_states:
+                type: object
+                description: "Only on a successful `sessions` observation: how many retained engines were in each lifecycle state, by the update guard's own rule. `active_turns` and `unknown` block an update; `idle_retained` and `stopped` do not. Counts only — no session ids, paths or text."
+                required: [active_turns, idle_retained, stopped, unknown]
+                properties:
+                  active_turns: { type: integer, minimum: 0 }
+                  idle_retained: { type: integer, minimum: 0 }
+                  stopped: { type: integer, minimum: 0 }
+                  unknown: { type: integer, minimum: 0 }
     PermissionBlocker:
       type: object
       description: The structured remedy a blocked tool returns (#1009) — never prose to be re-navigated.

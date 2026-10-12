@@ -17,13 +17,12 @@
  * Under the bootstrap stub (#862) the release goes into the stub's payload cache rather than over the
  * global install: the respawn runs `process.argv[1]` — the stub — which picks the newest payload.
  */
-import { execFile, spawn } from "node:child_process";
-import { promisify } from "node:util";
-import { BOOTSTRAP_ENV, CLI_PACKAGE, installPayload, olderThan } from "../../bootstrap/payload.js";
+import { spawn } from "node:child_process";
+import { BOOTSTRAP_ENV, CLI_PACKAGE, installPayload, olderThan, runNpm } from "../../bootstrap/payload.js";
+import type { SessionStateCounts } from "./runner-work-observation.js";
 
 export { CLI_PACKAGE, latestPublishedVersion, olderThan } from "../../bootstrap/payload.js";
 
-const run = promisify(execFile);
 
 /** The control path the cloud sends (`workers/api/src/lib/runner-update.ts` sends the same string). */
 export const RUNNER_UPDATE_PATH = "/pags/runner/update";
@@ -88,11 +87,14 @@ export interface UpdateObservation {
 	sampledAt: number;
 	/** It ANSWERED (HTTP 200) but not in the shape the guard reads — unreadable, which is neither healthy nor absent (#1020). */
 	malformed?: boolean;
+	/** `sessions` only, when its list was readable: how many engines were in each lifecycle state (#1020). Counts only. */
+	sessionStates?: SessionStateCounts;
 }
 
 export type UpdatePlan =
 	| { action: "up-to-date"; current: string }
-	| { action: "refused"; current: string; reason: string }
+	/** `retryable`: nothing about this machine forbids the update — npm could not be asked this time (#1020). */
+	| { action: "refused"; current: string; reason: string; retryable?: true }
 	| { action: "wait"; current: string; latest: string; waitingFor: string[] }
 	| { action: "update"; current: string; latest: string; restarter: Restarter };
 
@@ -152,7 +154,7 @@ export function restartUpArgs(opts: { headless?: boolean; instance?: string; for
 /** What this machine should do about an update request. Pure. */
 export function planRunnerUpdate(f: UpdateFacts): UpdatePlan {
 	if (f.fromSource) return { action: "refused", current: f.current, reason: "This runner runs from a source checkout — update it with `git pull` there, not npm." };
-	if (!f.latest) return { action: "refused", current: f.current, reason: `npm could not be asked for the latest ${CLI_PACKAGE} from this machine.` };
+	if (!f.latest) return { action: "refused", current: f.current, reason: `npm could not be asked for the latest ${CLI_PACKAGE} from this machine.`, retryable: true };
 	if (!olderThan(f.current, f.latest)) return { action: "up-to-date", current: f.current };
 	if (!f.restarter) {
 		return {
@@ -209,7 +211,7 @@ export async function installVersion(version: string): Promise<void> {
 		return;
 	}
 	try {
-		await run("npm", ["i", "-g", `${CLI_PACKAGE}@${version}`], { timeout: 5 * 60_000 });
+		await runNpm(["i", "-g", `${CLI_PACKAGE}@${version}`], { timeout: 5 * 60_000 });
 	} catch (e) {
 		const stderr = String((e as { stderr?: unknown }).stderr ?? "").trim();
 		throw new Error((stderr || (e instanceof Error ? e.message : String(e))).slice(-400));

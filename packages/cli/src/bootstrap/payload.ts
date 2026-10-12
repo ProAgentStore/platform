@@ -11,7 +11,7 @@
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
@@ -82,10 +82,70 @@ export function newestPayload(payloads: Payload[]): Payload | null {
 	return payloads.reduce<Payload | null>((best, p) => (!best || olderThan(best.version, p.version) ? p : best), null);
 }
 
+/** What `execFile` is given to run npm: the file, its arguments, and whether they are already quoted for cmd.exe. */
+export interface NpmInvocation {
+	file: string;
+	args: string[];
+	windowsVerbatimArguments?: true;
+}
+
+export interface NpmDeps {
+	platform?: NodeJS.Platform;
+	env?: NodeJS.ProcessEnv;
+	/** The Node running this process — what runs npm's own script on Windows. */
+	execPath?: string;
+	exists?: (p: string) => boolean;
+}
+
+// cmd.exe metacharacters; a caret makes the next one literal for one parse (cross-spawn's set).
+const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
+
+/** One argument for `cmd.exe /s /c "npm …"`: CRT-quoted, then caret-escaped for cmd and again for npm.cmd's `%*`. */
+export function quoteCmdArg(arg: string): string {
+	const quoted = `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, "$1$1")}"`;
+	return quoted.replace(CMD_META, "^$1").replace(CMD_META, "^$1");
+}
+
+/** Windows env names are case-insensitive; a copied env object is not (`Path`, `ComSpec`). */
+const envVar = (env: NodeJS.ProcessEnv, name: string) => env[Object.keys(env).find((k) => k.toUpperCase() === name) ?? name];
+
+/**
+ * How to run npm here (#1020). Elsewhere `npm` is an executable and runs as itself.
+ *
+ * On Windows `npm` is `npm.cmd`, which `execFile` cannot start without a shell — so every npm call in
+ * the update path failed, the release check came back empty, and an auto-update machine reported
+ * `unsupported` ("npm could not be asked for the latest …", dell-laptop, 2026-10-12). So on win32:
+ *
+ *   1. npm's own `npm-cli.js`, run by this Node with no shell — found beside the `npm.cmd` that PATH
+ *      resolves (what `npm` means in the owner's terminal, an upgraded global npm included), else
+ *      beside node.exe, where the Node installer puts it;
+ *   2. otherwise `npm.cmd` through `cmd.exe /d /s /c`, every argument quoted and caret-escaped
+ *      (#1033: never an unquoted argument through a shell).
+ */
+export function npmInvocation(args: string[], deps: NpmDeps = {}): NpmInvocation {
+	if ((deps.platform ?? process.platform) !== "win32") return { file: "npm", args };
+	const env = deps.env ?? process.env;
+	const exists = deps.exists ?? existsSync;
+	const execPath = deps.execPath ?? process.execPath;
+	const cli = (dir: string) => win32.join(dir, "node_modules", "npm", "bin", "npm-cli.js");
+	const onPath = (envVar(env, "PATH") ?? "").split(";").filter((dir) => dir && exists(win32.join(dir, "npm.cmd")));
+	for (const dir of [...onPath, win32.dirname(execPath)]) {
+		if (exists(cli(dir))) return { file: execPath, args: [cli(dir), ...args] };
+	}
+	const line = ["npm", ...args.map(quoteCmdArg)].join(" ");
+	return { file: envVar(env, "COMSPEC") || "cmd.exe", args: ["/d", "/s", "/c", `"${line}"`], windowsVerbatimArguments: true };
+}
+
+/** `execFile` for npm, the right way for this platform. */
+export function runNpm(args: string[], options: { timeout: number; signal?: AbortSignal }) {
+	const npm = npmInvocation(args);
+	return run(npm.file, npm.args, { ...options, ...(npm.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}) });
+}
+
 /** The newest published CLI version, or null when npm could not be asked. */
 export async function latestPublishedVersion(timeoutMs = 30_000, signal?: AbortSignal): Promise<string | null> {
 	try {
-		const { stdout } = await run("npm", ["view", CLI_PACKAGE, "version"], { timeout: timeoutMs, signal });
+		const { stdout } = await runNpm(["view", CLI_PACKAGE, "version"], { timeout: timeoutMs, signal });
 		return stdout.trim() || null;
 	} catch {
 		return null;
@@ -95,7 +155,7 @@ export async function latestPublishedVersion(timeoutMs = 30_000, signal?: AbortS
 /** Install `version`'s package tree into `dir` with npm. Rejects with npm's own reason. */
 export async function npmInstallInto(dir: string, version: string): Promise<void> {
 	try {
-		await run("npm", ["install", "--prefix", dir, "--omit=dev", "--no-audit", "--no-fund", "--no-save", `${CLI_PACKAGE}@${version}`], { timeout: 5 * 60_000 });
+		await runNpm(["install", "--prefix", dir, "--omit=dev", "--no-audit", "--no-fund", "--no-save", `${CLI_PACKAGE}@${version}`], { timeout: 5 * 60_000 });
 	} catch (e) {
 		const stderr = String((e as { stderr?: unknown }).stderr ?? "").trim();
 		throw new Error((stderr || (e instanceof Error ? e.message : String(e))).slice(-400));
