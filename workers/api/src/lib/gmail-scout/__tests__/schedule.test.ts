@@ -6,7 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realSchemaD1, seedTenant, type RealSchemaD1 } from "../../d1-sqlite.js";
-import { GMAIL_SCOUT_SCAN_INTERVAL_MS } from "../../applications/pipeline-health.js";
+import { GMAIL_SCOUT_SCAN_INTERVAL_MS } from "../config.js";
 import { runDueGmailScoutScans, scanGmailScout } from "../scan.js";
 import type { Env } from "../../../types.js";
 

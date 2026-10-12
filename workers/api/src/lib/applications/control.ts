@@ -40,7 +40,7 @@ import { approvalRuns } from "./approval-runs.js";
 import { pipelineForTargetedTransfer } from "./targeted-transfer-runner.js";
 import { type QueueView as RunQueueView, queueView, queuedLabel } from "./work-queue.js";
 import { getSubmitAuthorization, grantSubmitAuthorization } from "../local-apply/approval-store.js";
-import { type ApplyRun, applicationAudit, getApplyRun, moveApplication } from "../local-apply/store.js";
+import { type ApplyRun, type ApplyRunStatus, applicationAudit, getApplyRun, isTerminalApplyRun, moveApplication } from "../local-apply/store.js";
 import type { Env } from "../../types.js";
 import { runJobLeadTriage } from "../../routes/instances-job-leads.js";
 
@@ -309,8 +309,12 @@ function applicationItem(
 	const env = (app.lead ?? {}) as { leadUrl?: string; lead?: Record<string, unknown> };
 	const l = env.lead ?? {};
 	const actions = withNotInterested(applicationActions(app, pipeline, run, approvalRun, !!policy?.allowed, auth));
+	// #1022 stale review run (live cc90cd13): a settled run always moves its application to its outcome, so
+	// materials_ready + a FINISHED fill run means the card moved past it — history (diagnostic kept), not current.
+	const staleRun = app.status === "materials_ready" && !run && !!fill.runStatus && isTerminalApplyRun(fill.runStatus as ApplyRunStatus);
+	if (staleRun) fill = { ...fill, progress: null, checkpoint: null };
 	const runStatus = run?.status ?? fill.runStatus;
-	const currentRun = app.fillRunId
+	const currentRun = app.fillRunId && !staleRun
 		? { id: app.fillRunId, kind: "fill" as const, status: runStatus ?? app.status, instanceId: pipeline.runners[0] ?? "", mode: run?.mode ?? null }
 		: app.tailoringRunId
 			? { id: app.tailoringRunId, kind: "tailor" as const, status: app.status === "tailoring" ? "running" : app.status, instanceId: app.instanceId, mode: null }

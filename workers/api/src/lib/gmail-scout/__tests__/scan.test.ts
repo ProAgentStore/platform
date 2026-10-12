@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Env } from "../../../types.js";
 import { resolveConnectorAccount } from "../../connector-accounts.js";
-import { candidateFromMessage, gmailScoutQuery, ingestGmailCandidates, readGmailScoutLeadRecords } from "../scan.js";
+import { candidateFromMessage, gmailLeadIntakeRejection, gmailScoutQuery, ingestGmailCandidates, readGmailScoutLeadRecords } from "../scan.js";
 
 describe("Gmail Scout scan", () => {
 	it("fails closed when several Gmail accounts are not pinned", () => {
@@ -116,5 +116,27 @@ describe("concrete-job-only extraction (#1022)", () => {
 		expect(c).not.toBeNull();
 		expect(c?.company).toBeUndefined();
 		expect(c?.location).toBeUndefined();
+	});
+});
+
+describe("stored leads judged by today's intake rules (#1022)", () => {
+	// Shapes of the 25 pre-fix leads seen live (URL parameters replaced with inert values).
+	it("rejects every kind of pre-fix junk, by reason, from what the lead kept", () => {
+		const cases: Array<[Record<string, unknown>, string]> = [
+			[{ title: "20 new jobs for Project manager in All Melbourne VIC", url: "https://au.seek.com/job/95126251?savedSearchID=x" }, "digest"],
+			[{ title: "Solution Designer [Very strong applicant] + 11 new jobs", url: "https://au.seek.com/job/95080412" }, "digest"],
+			[{ title: "Sergey, we found 3 new ethical jobs for you", url: "https://mandrillapp.com/track/click/1/www.ethicaljobs.com.au?p=x" }, "digest"],
+			[{ title: "EthicalJobs.com.au weekly email update - top tips & advice + 516 new jobs on the site", url: "https://www.ethicaljobs.com.au/ethical-jobs-in-melbourne" }, "digest"],
+			[{ title: "Security alert", url: "https://accounts.google.com/AccountChooser?continue=x" }, "security_alert"],
+			[{ title: "New jobs posted from careers.racv.com.au", url: "http://careers.racv.com.au/?eid=1&from=email" }, "no_specific_job_url"],
+			[{ title: "Program/Project Manager at Versent. 1 scrum master job in Melbourne VIC", url: "https://au.indeed.com/jobs?q=scrum+master&l=Melbourne+VIC" }, "no_specific_job_url"],
+			[{ title: "A role", url: undefined }, "no_specific_job_url"],
+		];
+		for (const [data, reason] of cases) expect(gmailLeadIntakeRejection(data)).toBe(reason);
+	});
+
+	it("keeps a concrete posting, and reads the stored sender as well as the subject", () => {
+		expect(gmailLeadIntakeRejection({ title: "Head of IT Engineering at Acme", gmail_subject: "Head of IT Engineering at Acme", url: "https://au.seek.com/job/95135491" })).toBeNull();
+		expect(gmailLeadIntakeRejection({ gmail_subject: "Head of IT Engineering", gmail_from: "SEEK Recommendations <noreply@s.seek.com.au>", url: "https://au.seek.com/job/95135491" })).toBe("digest");
 	});
 });

@@ -274,3 +274,18 @@ describe("#1024: a one-item provider alert, through the same scan", () => {
 		expect(dos.get("scout")?.leads.some((l) => l.data.gmail_message_id === "m-indeed")).toBe(false);
 	});
 });
+
+describe("#1022: pre-fix junk leads are reported, never archived", () => {
+	it("pipeline health counts stored untouched leads today's rules reject, and leaves every lead as it was", async () => {
+		const leads = dos.get("scout")?.leads ?? [];
+		leads.push(
+			{ id: "j1", data: { status: "new", source: "Gmail", title: "20 new jobs for Project manager in All Melbourne VIC", url: "https://au.seek.com/job/1?savedSearchID=x" } },
+			{ id: "j2", data: { status: "new", source: "Gmail", title: "Security alert", url: "https://accounts.google.com/AccountChooser" } },
+			{ id: "j3", data: { status: "archived", source: "Gmail", title: "18 new jobs for Scrum Master", url: "https://au.seek.com/job/2" } },
+		);
+		const before = JSON.stringify(leads);
+		const h = await pipelineHealth(env, "u1", { scouts: ["scout"], tailors: ["tailor"], runners: [] }, []);
+		expect(h.problems.find((p) => p.code === "source_junk_leads")?.message).toMatch(/holds 2 stored leads .*\(1 digest, 1 security alert\)/);
+		expect(JSON.stringify(dos.get("scout")?.leads)).toBe(before);
+	});
+});

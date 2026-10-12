@@ -53,4 +53,19 @@ describe("pipeline health (#1022)", () => {
 	it("a failure OLDER than the last successful scan is history, not a failing source", () => {
 		expect(health([edge()], [gmail({ lastFailureAt: sql(NOW - 3 * 60 * 60_000), lastFailureMessage: "old" })]).ok).toBe(true);
 	});
+
+	it("a source with no mailbox names why it cannot be worked around, and the supported sources", () => {
+		const [p] = health([edge()], [{ instanceId: "scout", runtime: null, gmail: null }]).problems;
+		expect(p.message).toMatch(/not scanned from the cloud \(SEEK and Indeed refuse server requests with HTTP 403\)/);
+		expect(p.message).toMatch(/Gmail mailbox .* job alerts, or run a local browser runtime with `pags up`/);
+	});
+
+	it("reports stored leads today's intake rules reject, by reason, without archiving them", () => {
+		const h = health([edge()], [gmail({ junkLeads: { digest: 12, security_alert: 1, no_specific_job_url: 12 } })]);
+		expect(h.ok).toBe(false);
+		expect(h.problems).toEqual([{ code: "source_junk_leads", instanceId: "scout", message: expect.stringMatching(/holds 25 stored leads that today's intake rules reject \(12 digest, 1 security alert, 12 no specific job url\)\. They are not concrete jobs; archive them rather than apply\./) }]);
+		// A health problem, not an outage: the mailbox itself is still ready.
+		expect(h.sources[0].ready).toBe(true);
+		for (const junkLeads of [{}, { digest: 0 }, undefined]) expect(health([edge()], [gmail({ junkLeads })]).ok).toBe(true);
+	});
 });

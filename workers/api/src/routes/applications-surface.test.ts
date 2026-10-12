@@ -529,6 +529,18 @@ describe("retry, cancel and resume", () => {
 		return { first, version: stuck.stateVersion as number };
 	}
 
+	it("the stuck card does not present the spent run as current: no awaiting_review, no 'nothing to review' (#1022)", async () => {
+		const { first } = await stuckAfterRefusedRetry("sp");
+		const stuck = (await call("GET", "/t1/application-queue/item?application_id=sp")).body.item;
+		// History is kept (fillRunId) but the projection is the card's own state: ready, nothing running.
+		expect(stuck.fillRunId).toBe(first);
+		expect(stuck.execution.currentRun?.id).not.toBe(first);
+		expect(stuck.execution.currentRun?.status).not.toBe("awaiting_review");
+		expect(stuck.execution.progress).toBeNull();
+		expect(stuck.fillProgress).toBeNull();
+		expect(stuck.execution.permittedActions).toContain("request_review");
+	});
+
 	it("Request review on a card a refused retry left at materials_ready starts a NEW run and moves the card (#1022)", async () => {
 		const { first, version } = await stuckAfterRefusedRetry("sr");
 		const review = await act("ap", { action: "request_review", application_id: "sr", expected_status: "materials_ready", expected_version: version });

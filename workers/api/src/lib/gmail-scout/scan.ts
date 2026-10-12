@@ -6,8 +6,7 @@ import { emailPermitted } from "../connectors/gmail.js";
 import { getMessage, listMessages, type GmailMessage } from "../gmail.js";
 import { canonicalJobUrl, jobIdentity, workKeyForLead } from "../job-lead-triage.js";
 import { clipMarked } from "../clip-marked.js";
-import { getGmailScoutConfig, getGmailScoutScanState, resolveGmailScoutAccount } from "./config.js";
-import { GMAIL_SCOUT_SCAN_INTERVAL_MS } from "../applications/pipeline-health.js";
+import { GMAIL_SCOUT_SCAN_INTERVAL_MS, getGmailScoutConfig, getGmailScoutScanState, resolveGmailScoutAccount } from "./config.js";
 import { resolveProviderJobAlert } from "./provider-redirect.js";
 import { completeGmailScoutReceipt, failGmailScoutReceipt, type GmailScoutRejection, type GmailScoutScanTrigger, listGmailScoutReceipts, openGmailScoutReceipt, pruneGmailScoutReceipts } from "./receipts.js";
 
@@ -121,6 +120,20 @@ export function classifyGmailMessage(message: GmailMessage, now = Date.now()): {
 	if (!url) return { rejected: "no_specific_job_url" };
 	if (!workKeyForLead({ url })) return { rejected: "no_work_key" };
 	return { candidate: candidateFor(message, url) };
+}
+
+/**
+ * Would today's intake rules reject this STORED lead? (#1022) Leads stored before the concrete-job
+ * rules — digests, security mail, search and career-site pages — are still in the queue. Judged from
+ * what the lead kept (subject, sender, URL); the mail itself is not read again.
+ */
+export function gmailLeadIntakeRejection(data: Record<string, unknown>): GmailScoutRejection | null {
+	const subject = String(data.gmail_subject ?? data.title ?? "");
+	const from = String(data.gmail_from ?? "");
+	if (SECURITY_ALERT_RE.test(`${subject}\n${from}`)) return "security_alert";
+	if (DIGEST_SUBJECT_RE.test(subject) || DIGEST_SENDER_RE.test(from)) return "digest";
+	const url = typeof data.url === "string" ? canonicalJobUrl(data.url) : null;
+	return url && isSpecificJobUrl(url) ? null : "no_specific_job_url";
 }
 
 /** The lead a message becomes once its posting URL is known — from the mail itself, or resolved (#1024). */

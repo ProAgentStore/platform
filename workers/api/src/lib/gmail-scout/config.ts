@@ -7,6 +7,8 @@ export const GMAIL_SCOUT_TOOLS = ["gmail_search", "gmail_read_message"] as const
 export const GMAIL_SCOUT_CAPABILITY = { connector: "gmail", readOnly: true, tools: GMAIL_SCOUT_TOOLS } as const;
 /** The declared source mode a dedicated, read-only inbox Scout carries. */
 export const GMAIL_SCOUT_SOURCE_MODE = "gmail" as const;
+/** Scheduled scans run this often (see `runDueGmailScoutScans`). Here, not in pipeline health, so health can read the scan module without a cycle. */
+export const GMAIL_SCOUT_SCAN_INTERVAL_MS = 6 * 60 * 60_000;
 /**
  * This source is intentionally not a general inbox picker.  It is the dedicated job-alert
  * mailbox the owner requested, so accepting another connected Gmail account would turn a

@@ -11,12 +11,13 @@
  */
 import type { Env } from "../../types.js";
 import { capabilitiesForInstance } from "../agent-capabilities.js";
-import { getGmailScoutConfig, getGmailScoutScanState } from "../gmail-scout/config.js";
+import { GMAIL_SCOUT_SCAN_INTERVAL_MS, getGmailScoutConfig, getGmailScoutScanState } from "../gmail-scout/config.js";
 import { emailPermitted } from "../connectors/gmail.js";
 import { listGmailScoutReceipts } from "../gmail-scout/receipts.js";
+import { gmailLeadIntakeRejection, readGmailScoutLeadRecords } from "../gmail-scout/scan.js";
 
-/** Scheduled Gmail scans run this often (see `runDueGmailScoutScans`); a source silent for longer is stale. */
-export const GMAIL_SCOUT_SCAN_INTERVAL_MS = 6 * 60 * 60_000;
+export { GMAIL_SCOUT_SCAN_INTERVAL_MS };
+/** A source silent for longer than two scheduled scans is stale. */
 export const SOURCE_STALE_AFTER_MS = 2 * GMAIL_SCOUT_SCAN_INTERVAL_MS;
 
 export type PipelineProblemCode =
@@ -29,7 +30,8 @@ export type PipelineProblemCode =
 	| "source_email_off"
 	| "source_failing"
 	| "source_never_scanned"
-	| "source_stale";
+	| "source_stale"
+	| "source_junk_leads";
 
 export interface PipelineProblem {
 	code: PipelineProblemCode;
@@ -80,7 +82,7 @@ export interface EdgeFact {
 export interface SourceFact {
 	instanceId: string;
 	runtime: string | null;
-	gmail: { enabled: boolean; emailPermitted: boolean; lastScanAt: string | null; lastFailureAt: string | null; lastFailureMessage: string | null; lastReceipt?: LatestReceipt | null } | null;
+	gmail: { enabled: boolean; emailPermitted: boolean; lastScanAt: string | null; lastFailureAt: string | null; lastFailureMessage: string | null; lastReceipt?: LatestReceipt | null; junkLeads?: Partial<Record<string, number>> } | null;
 }
 
 /** SQLite `datetime('now')` text is UTC without a zone; read it as UTC. */
@@ -103,12 +105,19 @@ export function pipelineHealthFrom(input: { pipeline: { scouts: string[]; tailor
 		const lastFailureAt = iso(g?.lastFailureAt ?? null);
 		const failing = !!lastFailureAt && (!lastScanAt || Date.parse(lastFailureAt) >= Date.parse(lastScanAt));
 		const add = (code: PipelineProblemCode, message: string) => problems.push({ code, instanceId: s.instanceId, message });
-		if (kind === "none") add("source_unavailable", `Scout ${s.instanceId} has no mailbox configured and no browser runtime, so it cannot find new leads.`);
+		// No workaround (#1022): there is no cloud job-board scanner, and the job boards refuse server
+		// requests (SEEK and Indeed answered the agent's fetches with HTTP 403). Name the supported sources.
+		if (kind === "none") add("source_unavailable", `Scout ${s.instanceId} has no mailbox configured and no browser runtime, so it cannot find new leads. Job boards are not scanned from the cloud (SEEK and Indeed refuse server requests with HTTP 403): bind a Gmail mailbox that receives job alerts, or run a local browser runtime with \`pags up\`.`);
 		else if (g && !g.enabled) add("source_disabled", `Scout ${s.instanceId}'s Gmail source is disabled.`);
 		else if (g && !g.emailPermitted) add("source_email_off", `Scout ${s.instanceId} cannot read its mailbox: email access is switched off.`);
 		else if (g && failing) add("source_failing", `Scout ${s.instanceId}'s last scan failed: ${g.lastFailureMessage ?? "no reason recorded"}.`);
 		else if (g && !lastScanAt) add("source_never_scanned", `Scout ${s.instanceId} has never scanned its mailbox.`);
 		else if (g && lastScanAt && input.now - Date.parse(lastScanAt) > SOURCE_STALE_AFTER_MS) add("source_stale", `Scout ${s.instanceId} last scanned at ${lastScanAt}, more than ${SOURCE_STALE_AFTER_MS / 3_600_000} hours ago.`);
+		// #1022: leads stored before the concrete-job intake rules are still in the queue offering "apply".
+		// Reported, never archived here — archiving is terminal and stays the owner's decision.
+		const junk = Object.entries(g?.junkLeads ?? {}).filter(([, n]) => (n ?? 0) > 0);
+		const junkTotal = junk.reduce((sum, [, n]) => sum + (n ?? 0), 0);
+		if (junkTotal) add("source_junk_leads", `Scout ${s.instanceId} holds ${junkTotal} stored lead${junkTotal === 1 ? "" : "s"} that today's intake rules reject (${junk.map(([reason, n]) => `${n} ${reason.replace(/_/g, " ")}`).join(", ")}). They are not concrete jobs; archive them rather than apply.`);
 		const ready = kind === "browser" || (!!g && g.enabled && g.emailPermitted && !failing && !!lastScanAt && input.now - Date.parse(lastScanAt) <= SOURCE_STALE_AFTER_MS);
 		return { instanceId: s.instanceId, kind, ready, scheduled: !!g && g.enabled, lastScanAt, lastFailureAt, lastFailureMessage: g?.lastFailureMessage ?? null, lastReceipt: g?.lastReceipt ?? null };
 	});
@@ -123,10 +132,27 @@ export async function pipelineHealth(env: Env, uid: string, pipeline: { scouts: 
 			const r = receipts[0];
 			const lastReceipt: LatestReceipt | null = r ? { id: r.id, trigger: r.trigger, status: r.status, completedAt: r.completedAt, added: r.added, candidates: r.candidates, deduped: r.deduped } : null;
 			const gmail = config
-				? { enabled: config.enabled, emailPermitted: await emailPermitted(env, instanceId).catch(() => false), lastScanAt: state.lastScanAt, lastFailureAt: state.lastFailureAt, lastFailureMessage: state.lastFailureMessage, lastReceipt }
+				? { enabled: config.enabled, emailPermitted: await emailPermitted(env, instanceId).catch(() => false), lastScanAt: state.lastScanAt, lastFailureAt: state.lastFailureAt, lastFailureMessage: state.lastFailureMessage, lastReceipt, junkLeads: await junkLeadsOf(env, instanceId) }
 				: null;
 			return { instanceId, runtime: caps?.runtime ?? null, gmail };
 		}),
 	);
 	return pipelineHealthFrom({ pipeline, edges, sources, now });
+}
+
+/**
+ * Untouched Gmail leads (`new`/`unverified`) that today's intake rules would reject, by reason.
+ * Undefined when the collection cannot be read: unknown is not "none".
+ */
+async function junkLeadsOf(env: Env, instanceId: string): Promise<Partial<Record<string, number>> | undefined> {
+	const records = await readGmailScoutLeadRecords(env, instanceId).catch(() => null);
+	if (!records) return undefined;
+	const out: Partial<Record<string, number>> = {};
+	for (const r of records) {
+		const data = r.data ?? {};
+		if (data.status !== "new" && data.status !== "unverified") continue;
+		const reason = gmailLeadIntakeRejection(data);
+		if (reason) out[reason] = (out[reason] ?? 0) + 1;
+	}
+	return out;
 }
