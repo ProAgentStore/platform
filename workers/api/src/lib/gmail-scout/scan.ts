@@ -23,7 +23,13 @@ import { completeGmailScoutReceipt, failGmailScoutReceipt, type GmailScoutReject
 
 // A recent alert is an intake clue, not vacancy verification.  We deliberately keep the window
 // short and require the Runner's browser preflight before a lead can be treated as live.
-const JOB_ALERT_QUERY = "(subject:(job OR jobs OR role OR opportunity OR alert OR recommendation) OR from:(seek.com linkedin.com indeed.com)) newer_than:2d";
+const JOB_ALERT_FILTER = "(subject:(job OR jobs OR role OR opportunity OR alert OR recommendation) OR from:(seek.com linkedin.com indeed.com))";
+const JOB_ALERT_QUERY = `${JOB_ALERT_FILTER} newer_than:2d`;
+/** How old a message an ordinary scan accepts: an alert is an intake clue, so it must be recent. */
+const SCAN_MAX_AGE_MS = 2 * 24 * 60 * 60_000;
+/** The furthest back an owner may reprocess (#1052), and how many messages one reprocess may read. */
+export const REPROCESS_MAX_AGE_MS = 30 * 24 * 60 * 60_000;
+export const REPROCESS_MAX_MESSAGES = 25;
 const URL_RE = /https?:\/\/[^\s"'<>]+/g;
 export type GmailLeadProvenance = {
 	provider: "gmail";
@@ -64,9 +70,9 @@ function isSpecificJobUrl(url: string): boolean {
 	return hasJobContext && !GENERIC_SEGMENT_RE.test(leaf) && /[a-z0-9]/i.test(leaf);
 }
 
-function recentMessageDate(value: string, now = Date.now()): boolean {
+function recentMessageDate(value: string, now = Date.now(), maxAgeMs = SCAN_MAX_AGE_MS): boolean {
 	const parsed = Date.parse(value);
-	return Number.isFinite(parsed) && parsed <= now + 5 * 60_000 && parsed >= now - 2 * 24 * 60 * 60_000;
+	return Number.isFinite(parsed) && parsed <= now + 5 * 60_000 && parsed >= now - maxAgeMs;
 }
 
 /** Every distinct specific posting in the text, by host + path (tracking parameters do not make a second job). */
@@ -120,9 +126,10 @@ export function candidateFromMessage(message: GmailMessage, now = Date.now()): S
  * The same rule as {@link candidateFromMessage}, but saying WHY a message is not a lead (#1023), so a
  * scan's receipt can count its rejections by category. The reason is a category, never message content.
  */
-export function classifyGmailMessage(message: GmailMessage, now = Date.now()): { candidate: ScoutCandidate } | { rejected: GmailScoutRejection } {
+export function classifyGmailMessage(message: GmailMessage, now = Date.now(), maxAgeMs = SCAN_MAX_AGE_MS): { candidate: ScoutCandidate } | { rejected: GmailScoutRejection } {
 	if (!message.id || !message.subject?.trim() || !message.from?.trim()) return { rejected: "missing_fields" };
-	if (!recentMessageDate(message.date, now)) return { rejected: "stale" };
+	// A reprocess (#1052) widens only this age bound; every rule below holds unchanged.
+	if (!recentMessageDate(message.date, now, maxAgeMs)) return { rejected: "stale" };
 	if (SECURITY_ALERT_RE.test(`${message.subject}\n${message.from}`)) return { rejected: "security_alert" };
 	// Concrete-job-only (#1022): a digest, a summary or a recommendation feed is rejected here, before it
 	// can become a lead — never triaged, never handed to the Tailor with a role nobody can verify.
@@ -242,13 +249,19 @@ export async function ingestGmailCandidates(input: {
 	insertLead: (data: Record<string, unknown>) => Promise<boolean | undefined | { created: boolean; id?: string }>;
 	/** How a provider redirect is resolved (#1024); the global `fetch` in production. */
 	fetchImpl?: typeof fetch;
+	/** Oldest message accepted; an ordinary scan keeps the 2-day bound, a reprocess widens it (#1052). */
+	maxAgeMs?: number;
+	/** Work keys that already have an application (#1052): never materialized again, whatever its state. */
+	appliedWorkKeys?: ReadonlySet<string>;
+	/** Extra fields stamped on every lead this call creates, e.g. how it was materialized. */
+	leadExtras?: Record<string, unknown>;
 }): Promise<{ candidates: number; added: number; deduped: number; rejected: Partial<Record<GmailScoutRejection, number>>; awaiting: AwaitingBrowserLead[] }> {
 	let added = 0, deduped = 0, candidates = 0;
 	const awaiting: AwaitingBrowserLead[] = [];
 	const rejected: Partial<Record<GmailScoutRejection, number>> = {};
 	for (const hit of input.hits) {
 		const message = await input.readMessage(hit.id);
-		let classified: ReturnType<typeof classifyGmailMessage> = classifyGmailMessage(message);
+		let classified: ReturnType<typeof classifyGmailMessage> = classifyGmailMessage(message, Date.now(), input.maxAgeMs);
 		/** Set when the posting resolved but the server could not check its page (#1030). */
 		let serverGap: ServerCheckGap | null = null;
 		// #1024: a one-item provider alert carries only a redirect. Resolve it — after the digest,
@@ -276,7 +289,14 @@ export async function ingestGmailCandidates(input: {
 			rejected.no_work_key = (rejected.no_work_key ?? 0) + 1;
 			continue;
 		}
+		// An application already exists for this job — attempted, uncertain or otherwise. Its lead may be
+		// gone, but a fresh one must never let the same posting be applied for again (#1052, #1013).
+		if (input.appliedWorkKeys?.has(workKey)) {
+			rejected.prior_application = (rejected.prior_application ?? 0) + 1;
+			continue;
+		}
 		const data = {
+			...input.leadExtras,
 			...candidate,
 			work_key: workKey,
 			status: serverGap ? "awaiting_browser_verification" : "unverified",
@@ -331,6 +351,14 @@ export interface ScanGmailScoutOptions {
  * stores leads as `unverified` — and hands NOTHING downstream: a lead reaches the Tailor only when the
  * owner explicitly applies it. Every outcome closes the receipt, including a refusal before any read.
  */
+/** The guards every mailbox read passes first: email permission, then the one pinned account. */
+async function openScoutMailbox(env: Env, instanceId: string, userId: string, pinnedEmail: string | null, factory?: GmailScoutMailboxFactory) {
+	if (!(await emailPermitted(env, instanceId))) throw new Error("Email access is not enabled for this Scout.");
+	const account = await resolveGmailScoutAccount(env, instanceId, userId, pinnedEmail);
+	const mailbox = await (factory ?? mailboxForTest ?? gmailMailbox)(env, { userId, instanceId });
+	return { account, mailbox };
+}
+
 export async function scanGmailScout(env: Env, instanceId: string, userId: string, options: ScanGmailScoutOptions = { trigger: "on_demand", triggeredBy: userId }): Promise<GmailScoutScanResult> {
 	const opened = await openGmailScoutReceipt(env, { instanceId, trigger: options.trigger, triggeredBy: options.trigger === "on_demand" ? (options.triggeredBy ?? userId) : null });
 	if (opened.reused) return { mailbox: null, candidates: 0, added: 0, deduped: 0, lastMessageId: null, rejected: {}, receipt: opened.receipt, reused: true, handoff: "none" };
@@ -344,9 +372,7 @@ export async function scanGmailScout(env: Env, instanceId: string, userId: strin
 	try {
 		// Inside the try (#1022): a mailbox that lost its permission or its connected account is a
 		// FAILING source, and must say so — before, it threw unrecorded and read as `failureCount: 0`.
-		if (!(await emailPermitted(env, instanceId))) throw new Error("Email access is not enabled for this Scout.");
-		const account = await resolveGmailScoutAccount(env, instanceId, userId, config.pinnedEmail);
-		const mailbox = await (options.mailbox ?? mailboxForTest ?? gmailMailbox)(env, { userId, instanceId });
+		const { account, mailbox } = await openScoutMailbox(env, instanceId, userId, config.pinnedEmail, options.mailbox);
 		const state = await getGmailScoutScanState(env, instanceId);
 		const hits = await mailbox.list(gmailScoutQuery(state.lastMessageIdCursor), 25);
 		const existing = await readGmailScoutLeadRecords(env, instanceId);
@@ -356,10 +382,7 @@ export async function scanGmailScout(env: Env, instanceId: string, userId: strin
 			existing,
 			insertLead: (data) => insert(env, instanceId, data),
 		});
-		// #1030: each lead the server could not check is queued for the Scout's browser.
-		for (const a of awaiting) {
-			await enqueueBrowserVerification(env, { instanceId, userId, leadId: a.leadId, workKey: a.workKey, canonicalUrl: a.canonicalUrl, expectedTitle: a.title, expectedCompany: a.company, reason: a.reason });
-		}
+		await queueAwaitingLeads(env, instanceId, userId, awaiting);
 		const cursor = JSON.stringify({ after: new Date().toISOString(), messageId: hits[0]?.id ?? null } satisfies ScanCursor);
 		await env.DB.prepare(`INSERT INTO gmail_scout_scan_state (instance_id,last_scan_at,last_message_id_cursor,candidate_count,dedupe_count,failure_count,last_failure_at,last_failure_message)
 			VALUES (?1,datetime('now'),?2,?3,?4,0,NULL,NULL)
@@ -372,6 +395,92 @@ export async function scanGmailScout(env: Env, instanceId: string, userId: strin
 		await env.DB.prepare(`INSERT INTO gmail_scout_scan_state (instance_id,failure_count,last_failure_at,last_failure_message)
 			VALUES (?1,1,datetime('now'),?2) ON CONFLICT(instance_id) DO UPDATE SET failure_count=failure_count+1,last_failure_at=datetime('now'),last_failure_message=excluded.last_failure_message`).bind(instanceId, message).run();
 		await failGmailScoutReceipt(env, receiptId, message);
+		await pruneGmailScoutReceipts(env, instanceId);
+		throw error;
+	}
+}
+
+/** #1030: each lead the server could not check is queued for the Scout's browser (and its #1049 consent gate). */
+async function queueAwaitingLeads(env: Env, instanceId: string, userId: string, awaiting: readonly AwaitingBrowserLead[]): Promise<void> {
+	for (const a of awaiting) {
+		await enqueueBrowserVerification(env, { instanceId, userId, leadId: a.leadId, workKey: a.workKey, canonicalUrl: a.canonicalUrl, expectedTitle: a.title, expectedCompany: a.company, reason: a.reason });
+	}
+}
+
+/** What to reprocess (#1052): messages the owner picked, OR a bounded date window — never both. */
+export type GmailScoutReprocessInput = { messageIds: string[] } | { after: string; before?: string };
+
+const GMAIL_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** Validate a reprocess request against its bounds; the error is the owner-facing reason. */
+export function parseReprocessInput(body: { messageIds?: unknown; after?: unknown; before?: unknown }, now = Date.now()): { ok: true; input: GmailScoutReprocessInput } | { ok: false; error: string } {
+	const hasIds = body.messageIds !== undefined, hasWindow = body.after !== undefined || body.before !== undefined;
+	if (hasIds === hasWindow) return { ok: false, error: "Give either messageIds or an after/before window, not both and not neither." };
+	if (hasIds) {
+		const ids = body.messageIds;
+		if (!Array.isArray(ids) || ids.length === 0 || ids.length > REPROCESS_MAX_MESSAGES || !ids.every((id) => typeof id === "string" && GMAIL_ID_RE.test(id))) {
+			return { ok: false, error: `messageIds must be 1-${REPROCESS_MAX_MESSAGES} Gmail message ids.` };
+		}
+		return { ok: true, input: { messageIds: [...new Set(ids as string[])] } };
+	}
+	const after = typeof body.after === "string" ? Date.parse(body.after) : Number.NaN;
+	const before = body.before === undefined ? now : typeof body.before === "string" ? Date.parse(body.before) : Number.NaN;
+	if (!Number.isFinite(after) || !Number.isFinite(before)) return { ok: false, error: "after and before must be ISO dates." };
+	if (after >= before) return { ok: false, error: "after must be earlier than before." };
+	if (after < now - REPROCESS_MAX_AGE_MS) return { ok: false, error: `A reprocess window reaches back at most ${REPROCESS_MAX_AGE_MS / 86_400_000} days.` };
+	return { ok: true, input: { after: new Date(after).toISOString(), before: new Date(Math.min(before, now)).toISOString() } };
+}
+
+/** The Gmail search for a reprocess window: the scan's own alert filter, bounded by epoch seconds. */
+export function gmailScoutReprocessQuery(window: { after: string; before?: string }): string {
+	const secs = (iso: string) => Math.floor(Date.parse(iso) / 1000);
+	return `${JOB_ALERT_FILTER} after:${secs(window.after)}${window.before ? ` before:${secs(window.before)}` : ""}`;
+}
+
+/** Work keys this owner already has an application for — of any status, from any Tailor. */
+async function appliedWorkKeys(env: Env, userId: string): Promise<Set<string>> {
+	const { results } = await env.DB.prepare("SELECT DISTINCT work_key FROM job_applications WHERE user_id = ?1 AND work_key IS NOT NULL").bind(userId).all<{ work_key: string }>();
+	return new Set((results ?? []).map((r) => r.work_key));
+}
+
+/**
+ * Reprocess historical job mail (#1052). Once the scan cursor has moved past a message, nothing reads
+ * it again; this reads the messages the owner names, or a window of at most 30 days and 25 messages,
+ * through the SAME intake as a scan — digest, multi-listing, canonical-direct-link and provider (#1050)
+ * rules, message + job dedupe, and the #1030/#1049 browser-verification queue — with only the age bound
+ * widened. It differs from a scan in three ways: it never moves the scan cursor or scan state; it
+ * refuses any job that already has an application (so an attempted or uncertain submission is never
+ * replayed); and each lead records that it was reprocessed, beside its original Gmail provenance.
+ * Leads are stored unverified or awaiting browser verification exactly as a scan stores them, so only
+ * a verified-active lead can reach the Tailor. Shares the scan's single-flight receipt.
+ */
+export async function reprocessGmailScout(env: Env, instanceId: string, userId: string, input: GmailScoutReprocessInput, options: { mailbox?: GmailScoutMailboxFactory } = {}): Promise<GmailScoutScanResult> {
+	const opened = await openGmailScoutReceipt(env, { instanceId, trigger: "reprocess", triggeredBy: userId });
+	if (opened.reused) return { mailbox: null, candidates: 0, added: 0, deduped: 0, lastMessageId: null, rejected: {}, receipt: opened.receipt, reused: true, handoff: "none" };
+	const receiptId = opened.receipt.id;
+	try {
+		const config = await getGmailScoutConfig(env, instanceId);
+		if (!config?.enabled) throw new Error("Gmail Scout is not configured or is disabled.");
+		const { account, mailbox } = await openScoutMailbox(env, instanceId, userId, config.pinnedEmail, options.mailbox);
+		const hits = "messageIds" in input ? input.messageIds.map((id) => ({ id })) : await mailbox.list(gmailScoutReprocessQuery(input), REPROCESS_MAX_MESSAGES);
+		const [existing, applied] = await Promise.all([readGmailScoutLeadRecords(env, instanceId), appliedWorkKeys(env, userId)]);
+		const { candidates, added, deduped, rejected, awaiting } = await ingestGmailCandidates({
+			hits,
+			readMessage: (id) => mailbox.read(id),
+			existing,
+			insertLead: (data) => insert(env, instanceId, data),
+			maxAgeMs: REPROCESS_MAX_AGE_MS,
+			appliedWorkKeys: applied,
+			leadExtras: { materialized_via: { mode: "reprocess", receipt_id: receiptId } },
+		});
+		await queueAwaitingLeads(env, instanceId, userId, awaiting);
+		const lastMessageId = hits[0]?.id ?? null;
+		const receipt = await completeGmailScoutReceipt(env, receiptId, { hits: hits.length, candidates, added, deduped, rejected, lastMessageId, awaitingBrowserVerification: awaiting.length });
+		await pruneGmailScoutReceipts(env, instanceId);
+		return { mailbox: account.label ?? account.accountId, candidates, added, deduped, lastMessageId, rejected, receipt, reused: false, handoff: "none" };
+	} catch (error) {
+		// Recorded on the receipt only: a reprocess is not the source's health, so scan state is untouched.
+		await failGmailScoutReceipt(env, receiptId, error instanceof Error ? clipMarked(error.message, 500, { within: true }) : "Gmail reprocess failed");
 		await pruneGmailScoutReceipts(env, instanceId);
 		throw error;
 	}

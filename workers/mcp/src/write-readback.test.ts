@@ -77,6 +77,12 @@ const CONTROL_ARGS: ReadonlySet<string> = new Set([
 	// compare-and-set (#955): the state the caller READ, checked and never stored
 	"expected_status",
 	"expected_version",
+	// #1052: which historical mail `gmail_scout_reprocess` reads — the owner's selected message ids or
+	// an after/before window. Addressing, never stored as given: what it creates is leads, whose Gmail
+	// provenance reads back through the Scout's job_leads, and the run reads back as a receipt.
+	"message_ids",
+	"after",
+	"before",
 	// addressing: which record this call is about
 	"instance_id",
 	"agent_id",

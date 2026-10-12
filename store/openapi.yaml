@@ -7183,6 +7183,40 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { description: "The Gmail source is disabled or not configured; `{ error, receipt }` with the failed receipt." }
         "502": { description: "The mailbox could not be read (unavailable, or its read token failed); `{ error, receipt }` with the failed receipt." }
+  /v1/instances/{instanceId}/gmail-scout/reprocess:
+    post:
+      summary: Reprocess historical Gmail job alerts
+      description: |
+        Reprocess (#1052) mail the scan cursor has already moved past: EITHER `messageIds` (1-25 Gmail
+        message ids the owner selected) OR an `after` (and optional `before`) ISO window reaching back at
+        most 30 days, at most 25 messages. The same intake as a scan — digests, multi-listing mail and
+        non-canonical links rejected, provider links canonicalised, deduped by Gmail message and job —
+        with each lead keeping its original Gmail provenance plus `materialized_via: reprocess`. It never
+        moves the scan cursor and refuses any job that already has an application (`prior_application`),
+        so an attempted or uncertain application is never replayed. Leads are stored `unverified` or
+        queued for browser verification; nothing is handed to the Tailor or Runner. Writes a durable
+        receipt with trigger `reprocess`.
+      operationId: reprocessGmailScout
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                messageIds: { type: array, items: { type: string }, minItems: 1, maxItems: 25 }
+                after: { type: string, format: date-time }
+                before: { type: string, format: date-time }
+      responses:
+        "200": { description: "The reprocess and its receipt: `{ scan: { mailbox, candidates, added, deduped, lastMessageId, rejected, receipt, reused, handoff } }`", content: { application/json: { schema: { type: object } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: "The Gmail source is disabled or not configured; `{ error, receipt }` with the failed receipt." }
+        "502": { description: "The mailbox could not be read; `{ error, receipt }` with the failed receipt." }
   /v1/instances/{instanceId}/gmail-scout/status:
     get:
       summary: Gmail Job Search Scout scan status

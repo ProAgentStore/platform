@@ -353,6 +353,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	set_instance_connector_account: "write",
 	gmail_scout_config_set: "write",
 	gmail_scout_scan: "write",
+	gmail_scout_reprocess: "write",
 	set_coder_brain: "write",
 	import_instance_drive_file: "write",
 	import_instance_workdrive_file: "write",

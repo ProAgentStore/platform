@@ -86,7 +86,7 @@ export default function GmailScoutSection({ instanceId }: { instanceId: string }
 				<ul className="flex flex-col gap-1 text-xs">
 					{status.receipts.slice(0, 5).map((r) => (
 						<li key={r.id}>
-							{new Date(r.startedAt).toLocaleString()} · {r.trigger === "on_demand" ? "Scan now" : "Scheduled"} ·{" "}
+							{new Date(r.startedAt).toLocaleString()} · {r.trigger === "on_demand" ? "Scan now" : r.trigger === "reprocess" ? "Reprocess" : "Scheduled"} ·{" "}
 							<span className={r.status === "failed" ? "text-danger" : "text-muted"}>{r.status}</span>
 							{r.status === "completed" ? ` · ${r.added ?? 0} added${r.awaitingBrowserVerification ? ` (${r.awaitingBrowserVerification} awaiting browser verification)` : ""}, ${r.deduped ?? 0} duplicate(s)${rejectionSummary(r.rejected) ? `, skipped: ${rejectionSummary(r.rejected)}` : ""}` : ""}
 							{r.status === "failed" && r.errorMessage ? ` · ${r.errorMessage}` : ""}

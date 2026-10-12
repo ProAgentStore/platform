@@ -56,7 +56,7 @@ export interface SourceHealth {
 /** The parts of a scan receipt health reports: who started it, how it ended, and what it found. */
 export interface LatestReceipt {
 	id: string;
-	trigger: "schedule" | "on_demand";
+	trigger: "schedule" | "on_demand" | "reprocess";
 	status: "running" | "completed" | "failed";
 	completedAt: string | null;
 	added: number | null;

@@ -1,7 +1,7 @@
 import type { Context, Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { getGmailScoutConfig, gmailScoutSourceMode, putGmailScoutConfig } from "../lib/gmail-scout/config.js";
-import { gmailScoutStatus, scanGmailScout } from "../lib/gmail-scout/scan.js";
+import { gmailScoutStatus, parseReprocessInput, reprocessGmailScout, scanGmailScout } from "../lib/gmail-scout/scan.js";
 import { listGmailScoutReceipts } from "../lib/gmail-scout/receipts.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
@@ -65,6 +65,24 @@ export function registerGmailScoutRoutes(router: Hono<{ Bindings: Env }>): void 
 			return c.json({ scan: await scanGmailScout(c.env, instanceId, uid, { trigger: "on_demand", triggeredBy: uid }) });
 		} catch (error) {
 			const message = error instanceof Error ? error.message : "Gmail scan failed.";
+			const [receipt] = await listGmailScoutReceipts(c.env, instanceId, 1);
+			return c.json({ error: message, receipt: receipt ?? null }, /not configured or is disabled/.test(message) ? 409 : 502);
+		}
+	});
+	/**
+	 * Reprocess historical job mail (#1052): messages the owner names (`messageIds`), or an
+	 * `after`/`before` window of at most 30 days — at most 25 messages either way. Same intake as a scan,
+	 * the scan cursor untouched, any job that already has an application refused. 400 on a request
+	 * outside those bounds; otherwise the same 409/502 + receipt contract as "Scan now".
+	 */
+	router.post("/:instanceId/gmail-scout/reprocess", async (c) => {
+		const { instanceId, uid } = await owned(c);
+		const parsed = parseReprocessInput(await c.req.json().catch(() => ({})));
+		if (!parsed.ok) throw new HttpError(400, parsed.error);
+		try {
+			return c.json({ scan: await reprocessGmailScout(c.env, instanceId, uid, parsed.input) });
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "Gmail reprocess failed.";
 			const [receipt] = await listGmailScoutReceipts(c.env, instanceId, 1);
 			return c.json({ error: message, receipt: receipt ?? null }, /not configured or is disabled/.test(message) ? 409 : 502);
 		}
