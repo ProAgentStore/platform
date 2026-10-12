@@ -3,15 +3,18 @@
  *
  * Each open issue falls in exactly one category, checked in this order:
  *   1. waiting_on_human — labelled for a person (`needs-human`, `blocked-on-serge`, … — the fleet
- *      snapshot's own `isNeedsHumanLabel`, so the console and this loop agree). Skipped, untouched.
+ *      snapshot's own `isNeedsHumanLabel`, so the console and this loop agree), or carrying a question
+ *      the coder asked the owner (#1025) that is still open — waiting, being decided, or escalated.
+ *      Skipped, untouched.
  *   2. blocked — "depends on #n" / "blocked by #n" where #n is still open. Skipped and noted.
  *   3. needs_detail — missing a stated problem, acceptance criteria, scope, or the files/area
  *      involved. Fixed, testable checks; no model call. The wake posts ONE comment listing what is
  *      missing, and never edits the issue.
  *   4. ready — everything else, queued in priority order.
  *
- * Not covered by these checks, and stated rather than guessed: an owner question asked only in a
- * comment, and epic siblings that must land first without a "depends on" line.
+ * Not covered by these checks, and stated rather than guessed: a question to the owner that someone
+ * other than the coder asked in a comment, and epic siblings that must land first without a "depends
+ * on" line.
  */
 import { isNeedsHumanLabel } from "./fleet-snapshot.js";
 
@@ -58,9 +61,10 @@ export function dependenciesOf(body: string): number[] {
  * Classify one issue. `openIssues` is the repo's open set as read; when that read was incomplete
  * (`openListComplete: false`) a dependency not in it is treated as open — unknown is not "landed".
  */
-export function classifyPoIssue(issue: PoIssue, ctx: { openIssues: ReadonlySet<number>; openListComplete: boolean }): PoClassification {
+export function classifyPoIssue(issue: PoIssue, ctx: { openIssues: ReadonlySet<number>; openListComplete: boolean; openQuestions?: ReadonlySet<number> }): PoClassification {
 	const human = issue.labels.find(isNeedsHumanLabel);
 	if (human) return { category: "waiting_on_human", reason: `Labelled "${human}" — waiting on a person.` };
+	if (ctx.openQuestions?.has(issue.number)) return { category: "waiting_on_human", reason: "The coder asked you a question on this issue that is still open (#1025)." };
 	const waitsOn = dependenciesOf(issue.body).filter((n) => n !== issue.number && (ctx.openIssues.has(n) || !ctx.openListComplete));
 	if (waitsOn.length) return { category: "blocked", reason: `Waits on ${waitsOn.map((n) => `#${n}`).join(", ")}, still open.`, blockedBy: waitsOn };
 	const missing = DETAIL_CHECKS.filter((c) => !c.present(issue.body ?? "")).map((c) => c.label);

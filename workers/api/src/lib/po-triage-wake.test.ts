@@ -120,6 +120,31 @@ describe("a live wake over the four-issue fixture (#1027)", () => {
 	});
 });
 
+describe("an issue the coder already asked the owner about (#1025) waits on him", () => {
+	const question = (state: string) =>
+		d1.exec(`INSERT INTO coder_questions (id, instance_id, user_id, session_id, repo, issue_number, question, state, asked_at, expires_at)
+		         VALUES ('q4', 'coder', 'u1', 's-old', '${REPO}', 4, 'Which error copy?', '${state}', ${Date.now()}, ${Date.now() + 3_600_000})
+		         ON CONFLICT(id) DO UPDATE SET state = excluded.state`);
+
+	it.each(["waiting_human", "brain_deciding", "escalated"])("an open (%s) question leaves the ready issue untouched — not queued, not commented", async (state) => {
+		question(state);
+		const { deps, log } = github();
+		const r = await runPoTriage(env, { instance_id: "coder", user_id: "u1" }, { dryRun: false }, at("2026-10-12T01:17:00Z"), deps);
+		expect(r).toMatchObject({ counts: { queued: 0, waiting: 2 } });
+		expect(queued()).toEqual([]);
+		expect(log.posted).toEqual([3]); // only the vague one
+		const item = (JSON.parse(reports()[0].report).items as Array<{ number: number; category: string; reason: string; action: string }>).find((i) => i.number === 4);
+		expect(item).toMatchObject({ category: "waiting_on_human", action: "none", reason: expect.stringMatching(/asked you a question on this issue that is still open/) });
+	});
+
+	it("once the owner answers, the next wake queues it", async () => {
+		question("answered_human");
+		const { deps } = github();
+		await runPoTriage(env, { instance_id: "coder", user_id: "u1" }, { dryRun: false }, at("2026-10-12T01:17:00Z"), deps);
+		expect(queued().map((q) => q.objective)).toEqual([expect.stringMatching(/^Work issue #4 /)]);
+	});
+});
+
 describe("windows and slots (#1027)", () => {
 	it("two windows firing in the same minute produce one wake", async () => {
 		const { deps, log } = github();

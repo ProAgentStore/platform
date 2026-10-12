@@ -100,3 +100,12 @@ describe("the digest (#1027)", () => {
 		expect(digestWorthSending(counts(), null)).toBe(false);
 	});
 });
+
+describe("an open question to the owner (#1025) holds an issue that is otherwise ready", () => {
+	it("waits on a person, ahead of every other category; other issues are unaffected", () => {
+		const withQuestion = { ...ctx([]), openQuestions: new Set([4]) };
+		expect(classifyPoIssue(issue(4), withQuestion)).toEqual({ category: "waiting_on_human", reason: "The coder asked you a question on this issue that is still open (#1025)." });
+		expect(classifyPoIssue(issue(5), withQuestion).category).toBe("ready");
+		expect(classifyPoIssue(issue(4), ctx([])).category).toBe("ready"); // no question: unchanged
+	});
+});

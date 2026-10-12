@@ -123,6 +123,16 @@ export async function runPoTriage(
 	}
 }
 
+/** Issues in this repo carrying a question the coder asked the owner (#1025) that is still open — they wait on him. */
+async function openQuestionIssues(env: Env, iid: string, uid: string, repo: string): Promise<Set<number>> {
+	const { results } = await env.DB.prepare(
+		"SELECT DISTINCT issue_number AS n FROM coder_questions WHERE instance_id = ?1 AND user_id = ?2 AND repo = ?3 AND issue_number IS NOT NULL AND state IN ('waiting_human', 'brain_deciding', 'escalated')",
+	)
+		.bind(iid, uid, repo)
+		.all<{ n: number }>();
+	return new Set((results ?? []).map((r) => Number(r.n)));
+}
+
 async function triage(env: Env, iid: string, uid: string, dryRun: boolean, slot: string, deps: PoTriageDeps): Promise<PoReport> {
 	const counts: PoCounts = { queued: 0, wouldQueue: 0, alreadyQueued: 0, ready: 0, waiting: 0, blocked: 0, needsDetail: 0, commented: 0 };
 	const report: PoReport = { dryRun, slot, gate: await queueGate(env, iid, uid), repos: [], items: [], counts };
@@ -137,9 +147,10 @@ async function triage(env: Env, iid: string, uid: string, dryRun: boolean, slot:
 		const issues = page.issues.slice(0, MAX_ISSUES_PER_REPO);
 		report.repos.push({ repo: name, read: issues.length, unreadable: page.unreadable, truncated: !page.complete || page.issues.length > issues.length });
 		const open = new Set(page.issues.map((i) => i.number));
+		const openQuestions = await openQuestionIssues(env, iid, uid, name);
 		const ready: Array<{ issue: PoIssue }> = [];
 		for (const issue of issues) {
-			const c = classifyPoIssue(issue, { openIssues: open, openListComplete: page.complete });
+			const c = classifyPoIssue(issue, { openIssues: open, openListComplete: page.complete, openQuestions });
 			const item: PoReportItem = { repo: name, number: issue.number, title: clipMarked(issue.title, 200, { within: true }), category: c.category, reason: c.reason, action: "none" };
 			if (c.category === "waiting_on_human") counts.waiting++;
 			else if (c.category === "blocked") counts.blocked++;
