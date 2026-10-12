@@ -85,4 +85,17 @@ describe("instance_runner_node across a machine's names (#949)", () => {
 		expect(detail).toMatchObject({ connected: false, nodeOnline: false, runnerVersion: "0.4.68" });
 		expect(detail).not.toHaveProperty("aka");
 	});
+
+	it("offers a healthy machine only ANOTHER agent registered on, as online but not attached (#1037)", async () => {
+		const DELL = "0b6f2c1e-6d3a-4f0e-9b7a-2f1c3d4e5a6b";
+		d1.exec(`INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, runner_version, machine_id, status, last_seen_at)
+		         VALUES ('other', 'u1', 'dell-laptop', 'relay://', '0.4.69', '${DELL}', 'online', '2026-10-06 22:08:00')`);
+		live.add("other:node:dell-laptop");
+		const body = await runnerNode("fgs");
+		expect(body.nodes).toContain("dell-laptop");
+		expect(body.nodesDetail.find((n) => n.node === "dell-laptop")).toMatchObject({ connected: false, nodeOnline: true, runnerVersion: "0.4.69" });
+		// The Mac mini is still ONE machine under this agent's spelling — its other agent's name is an alias, not a second tile.
+		expect(body.nodes).not.toContain("Macmini.modem");
+		expect(body.nodes.filter((n) => n === "Sergeys-Mac-mini.local")).toHaveLength(1);
+	});
 });
