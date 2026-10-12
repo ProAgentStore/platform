@@ -166,6 +166,12 @@ jobs:
         # the coordinate so a reader can grep for it rather than trusting the number alone.
         run: node scripts/check-doc-citations.mjs
       - run: pnpm install --frozen-lockfile
+      - name: Install zsh (#1021)
+        # The #1021 incident happened in zsh: it does not split an unquoted `$SRC`, so a
+        # space-joined path list became ONE pathspec. ubuntu-latest has no zsh, so the tests that
+        # reproduce it, and the zsh quoting check, were skipped in CI. Under CI a missing shell
+        # now fails those tests instead of skipping them.
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends zsh
       - name: Typecheck every workspace project (#740)
         # The sweep the repo already had in `package.json` and CI never ran. It covers ten of
         # the eleven workspace projects — including packages/cli, packages/browser-runner,

@@ -22,7 +22,9 @@ import { EXIT, failBefore, pendingJournals, quoteForShell, restoreFromJournal } 
 const _io = helper._io ?? { writeSync: (...a) => writeSyncFs(...a), lstatSync: (...a) => lstatSync(...a) };
 
 const CLI = resolve(import.meta.dirname, "..", "fail-before.mjs");
-const has = (bin) => spawnSync("sh", ["-c", `command -v ${bin}`]).status === 0;
+const installed = (bin) => spawnSync("sh", ["-c", `command -v ${bin}`]).status === 0;
+/** Locally a missing shell skips its test; under CI it must be present, so the test fails instead of silently skipping. */
+const has = (bin) => installed(bin) || !!process.env.CI;
 const repos = [];
 afterEach(() => {
 	for (const d of repos.splice(0)) rmSync(d, { recursive: true, force: true });
@@ -79,6 +81,32 @@ function state(dir) {
 describe("the observed defect, reproduced in a temp repo", () => {
 	/** The compound command from the incident: an unquoted space-separated variable, then an unconditional pop. */
 	const OBSERVED_UNSAFE = 'SRC="a.txt b.txt"; git stash push -q -- $SRC; git stash pop -q';
+
+	/** The repo after the defect ran: the foreign stash was consumed and the owned edits were never saved. */
+	const expectForeignStashConsumed = (before, after) => {
+		expect(before.stash).not.toBeNull();
+		expect(after.stash).toBeNull();
+		expect(after.files["other.txt"]).toBe("other-FOREIGN-STASHED\n");
+		expect(after.files["a.txt"]).toBe(before.files["a.txt"]);
+	};
+
+	it("with no shell at all: ONE space-joined pathspec fails the save, and an unconditional pop takes the foreign stash", () => {
+		// Exactly the argv zsh produced from the unquoted variable, so this runs on every machine.
+		const dir = fixture();
+		const before = state(dir);
+		const save = spawnSync("git", ["stash", "push", "-q", "--", "a.txt b.txt"], { cwd: dir, encoding: "utf8" });
+		expect(save.status).not.toBe(0);
+		expect(state(dir)).toEqual(before); // the failed save created nothing…
+		spawnSync("git", ["stash", "pop", "-q"], { cwd: dir, encoding: "utf8" });
+		expectForeignStashConsumed(before, state(dir)); // …so "pop" meant someone else's work
+	});
+
+	it.skipIf(!has("bash"))("bash, with the variable quoted: the same single pathspec, the same failed save, the same foreign pop", () => {
+		const dir = fixture();
+		const before = state(dir);
+		spawnSync("bash", ["-c", 'SRC="a.txt b.txt"; git stash push -q -- "$SRC"; git stash pop -q'], { cwd: dir, encoding: "utf8" });
+		expectForeignStashConsumed(before, state(dir));
+	});
 
 	it.skipIf(!has("zsh"))("zsh passes the variable as ONE pathspec, the save fails, and the pop consumes the unrelated stash", () => {
 		const dir = fixture();
