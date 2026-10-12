@@ -273,6 +273,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	search_instance_knowledge: "read",
 	secure_input_status: "read",
 	get_console_link: "read",
+	list_instance_permission_requests: "read",
 	local_browser_preflight: "read",
 	gmail_scout_config_get: "read",
 	gmail_scout_status: "read",

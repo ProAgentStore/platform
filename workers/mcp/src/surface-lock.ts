@@ -1129,4 +1129,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.113": "sha256:6543158a69ac22a62d5a63c9c9b4bbe2317e97a5337f3db5c3f5fd2a0404b898",
 	// #1016: mcp_audit_log gains `receipt` — exact correlation by event/run/queue/session id.
 	"0.1.114": "sha256:fd85ec9dac10fa1235776ce8030ce815d85bdfd3ad83a1efe669e0b57cb566e1",
+	// #1009: list_instance_permission_requests — a read-only inspection of an instance's recovery requests.
+	"0.1.115": "sha256:b445f0921d2bea792a85f9225eb4ed1e430c0dc6149ab6fbdd2bcd24e795256d",
 };

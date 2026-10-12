@@ -1,6 +1,6 @@
 /** Durable, owner-scoped recovery requests for a missing per-instance grant (#1009). */
 import type { Env } from "../types.js";
-import type { InstancePermissionRequestStatus, InstancePermissionRequestView } from "../agent-types.js";
+import type { InstancePermissionRequestListItem, InstancePermissionRequestStatus, InstancePermissionRequestView } from "../agent-types.js";
 import { instancePermissionsLink } from "./console-links.js";
 import { stableStringify } from "./stable-json.js";
 
@@ -9,7 +9,7 @@ import type { PermissionBlocker } from "./connectors/types.js";
 export type { PermissionBlocker };
 export interface PermissionRequest {
 	id: string; instanceId: string; userId: string; control: string; connector: string | null; resourceId: string | null; requestedScope: string; currentScope: string | null;
-	operationKind: string; operationFingerprint: string; continuationRef: string; reason: string; status: PermissionRequestStatus; expiresAt: string;
+	operationKind: string; operationFingerprint: string; continuationRef: string; reason: string; status: PermissionRequestStatus; expiresAt: string; createdAt: string;
 }
 export interface CreatePermissionRequest { instanceId: string; userId: string; control: string; connector?: string | null; resourceId?: string | null; requestedScope: string; currentScope?: string | null; operationKind: string; operationFingerprint: string; continuationRef: string; reason: string; expiresAt?: string; }
 const activeSql = "status IN ('pending','approved','claimed')";
@@ -32,7 +32,7 @@ export function permissionResourceId(connector: string, args: Record<string, unk
 }
 const asRequest = (r: Record<string, unknown>): PermissionRequest => ({
 	id: String(r.id), instanceId: String(r.instance_id), userId: String(r.user_id), control: String(r.control), connector: r.connector ? String(r.connector) : null, resourceId: r.resource_id ? String(r.resource_id) : null,
-	requestedScope: String(r.requested_scope), currentScope: r.current_scope ? String(r.current_scope) : null, operationKind: String(r.operation_kind), operationFingerprint: String(r.operation_fingerprint), continuationRef: String(r.continuation_ref), reason: String(r.reason ?? ""), status: String(r.status) as PermissionRequestStatus, expiresAt: String(r.expires_at),
+	requestedScope: String(r.requested_scope), currentScope: r.current_scope ? String(r.current_scope) : null, operationKind: String(r.operation_kind), operationFingerprint: String(r.operation_fingerprint), continuationRef: String(r.continuation_ref), reason: String(r.reason ?? ""), status: String(r.status) as PermissionRequestStatus, expiresAt: String(r.expires_at), createdAt: String(r.created_at ?? ""),
 });
 
 /** Strip owner and continuation internals before a recovery request reaches the console. */
@@ -48,6 +48,11 @@ export function permissionRequestView(request: PermissionRequest): InstancePermi
 		status: request.status,
 		expiresAt: request.expiresAt,
 	};
+}
+/** A list row for an assistant: the verified link always; the blocker only while the request can still be decided or resumed. */
+export function permissionRequestListItem(request: PermissionRequest): InstancePermissionRequestListItem {
+	const open = request.status === "pending" || request.status === "approved" || request.status === "claimed";
+	return { ...permissionRequestView(request), control: request.control, createdAt: request.createdAt, link: instancePermissionsLink(request.instanceId, request.id), blocker: open ? permissionBlocker(request) : null };
 }
 export async function auditPermissionRequest(env: Env, req: Pick<PermissionRequest,"id"|"instanceId"|"userId">, event: string, detail: Record<string, unknown> = {}): Promise<void> {
 	await env.DB.prepare("INSERT INTO instance_permission_request_events (id,request_id,instance_id,user_id,event,detail) VALUES (?1,?2,?3,?4,?5,?6)").bind(crypto.randomUUID(),req.id,req.instanceId,req.userId,event,JSON.stringify(detail)).run();

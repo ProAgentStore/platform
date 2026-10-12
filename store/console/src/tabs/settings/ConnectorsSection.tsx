@@ -6,6 +6,7 @@ import { FileConnectorPanel } from "../../components/FileConnectorPanel";
 import { showsConnector, showsFileConnector, type ConnectorReach, type InstanceConnectorPolicy } from "../../lib/connectorState";
 import type { InstancePermissionRequest, InstancePermissionRequestDecisionResponse, InstancePermissionRequestResponse } from "../../lib/types";
 import Card from "../../components/Card";
+import { permissionCardInstanceLabel } from "../../lib/permissionCard";
 
 interface ConnectorGrant {
 	id: string;
@@ -32,6 +33,8 @@ interface WorkdriveStatus {
 
 interface Props {
 	instanceId: string;
+	/** Named on the permission card the push focuses (#1009). */
+	instanceName?: string;
 	permissionRequestId?: string | null;
 	emailStatus: { connected: boolean; configured: boolean; email?: string | null } | null;
 	emailPermission: boolean | null;
@@ -56,6 +59,7 @@ interface Props {
 
 export default function ConnectorsSection({
 	instanceId,
+	instanceName,
 	permissionRequestId,
 	emailStatus,
 	emailPermission,
@@ -109,7 +113,7 @@ export default function ConnectorsSection({
 			</p>
 			{request && (
 				<div className="mb-3 rounded border p-3 text-sm" style={{ borderColor: "var(--color-warning-line)", background: "var(--color-warning-soft)" }} data-testid="permission-request">
-					<div className="font-semibold">Permission needed for this instance</div>
+					<div className="font-semibold">Permission needed for <span data-testid="permission-request-instance">{permissionCardInstanceLabel(instanceName, instanceId)}</span></div>
 					<p className="text-xs text-muted mt-1">{request.reason}</p>
 					<p className="text-xs text-muted mt-1">Connector: {request.connector ?? "this control"} · Current scope: {request.currentScope ?? "none"} · Requested minimum: {request.requestedScope}</p>
 					<p className="text-xs text-muted mt-1">Resource: {request.resourceId ?? "this instance"} · Operation: {request.operationKind}</p>

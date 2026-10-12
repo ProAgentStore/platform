@@ -45,6 +45,20 @@ describe("instance permission request routes (#1009)", () => {
 		expect(response.body.request).not.toHaveProperty("continuationRef");
 	});
 
+	it("lists each request with its verified link and, while open, its structured blocker — never internals (#1009 inspection)", async () => {
+		const open=await create(); const denied=await create(); await call(denied.id,"deny");
+		const app=new Hono<{ Bindings: Env }>(); const routes=new Hono<{ Bindings: Env }>(); registerPermissionRequestRoutes(routes); app.route("/v1/instances",routes);
+		app.onError((e,c) => e instanceof HttpError ? c.json({error:e.message},e.status as 400) : c.json({error:String(e)},500));
+		const res=await app.request("/v1/instances/i1/permission-requests",{},env()); const body=await res.json() as {requests:Array<Record<string,unknown>>};
+		const byId=Object.fromEntries(body.requests.map((r)=>[r.id,r]));
+		expect(byId[open.id]).toMatchObject({status:"pending",control:"connector_consent",requestedScope:"write",link:expect.stringMatching(new RegExp(`/instances/i1/settings.*${open.id}`)),blocker:{requestId:open.id,controlLink:byId[open.id].link,remedy:expect.stringMatching(/Opening the link grants nothing/)}});
+		expect(byId[denied.id]).toMatchObject({status:"denied",blocker:null,link:expect.stringContaining(denied.id)});
+		for (const r of body.requests) for (const k of ["userId","operationFingerprint","continuationRef","instanceId"]) expect(r).not.toHaveProperty(k);
+		viewer.uid="u2";
+		const foreign=await app.request("/v1/instances/i1/permission-requests",{},env());
+		expect(foreign.status).toBe(404);
+	});
+
 	it("approves one explicit grant, verifies it, and returns exactly one non-replay continuation claim", async () => {
 		const request=await create(); const first=await call(request.id,"approve",{mode:"ask"}); const second=await call(request.id,"approve",{mode:"ask"});
 		expect(first).toMatchObject({status:200,body:{requestId:request.id,status:"claimed",resume:{method:"POST"},verifiedScope:"write",mode:"ask"}});

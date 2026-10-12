@@ -1,7 +1,7 @@
 /** Owner-only permission recovery request API (#1009). */
 import type { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
-import { cancelRequest, denyRequest, getRequest, listRequests, permissionRequestView } from "../lib/instance-permission-requests.js";
+import { cancelRequest, denyRequest, getRequest, listRequests, permissionRequestListItem, permissionRequestView } from "../lib/instance-permission-requests.js";
 import { wipeContinuation } from "../lib/instance-permission-recovery.js";
 import { approveAndResume, resumeBlockedOperation } from "../lib/instance-permission-resume.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
@@ -12,7 +12,7 @@ const isRecord=(value: unknown): value is Record<string,unknown> => !!value && t
 export function registerPermissionRequestRoutes(router: Hono<{ Bindings: Env }>): void {
 	router.get("/:instanceId/permission-requests", async (c) => {
 		const session=await requireUser(c); const instanceId=c.req.param("instanceId"); await requireOwnedInstance(c.env,instanceId,session.uid);
-		return c.json({ requests: (await listRequests(c.env,instanceId,session.uid)).map(permissionRequestView) });
+		return c.json({ requests: (await listRequests(c.env,instanceId,session.uid)).map(permissionRequestListItem) });
 	});
 	router.get("/:instanceId/permission-requests/:requestId", async (c) => {
 		const session=await requireUser(c); const instanceId=c.req.param("instanceId"); await requireOwnedInstance(c.env,instanceId,session.uid);

@@ -65,3 +65,34 @@ describe("get_console_link (#938)", () => {
 		expect(await call({ instance_id: "i1", section: "coding" })).toMatch(/^Error: This instance does not show the Coding tab/);
 	});
 });
+
+describe("list_instance_permission_requests (#1009)", () => {
+	function listTool(answer: { status: number; body: unknown }) {
+		const seen: Array<{ url: string; method: string }> = [];
+		vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+			seen.push({ url: String(input), method: init?.method ?? "GET" });
+			return new Response(JSON.stringify(answer.body), { status: answer.status, headers: { "Content-Type": "application/json" } });
+		});
+		const handlers = new Map<string, Handler>();
+		const env: McpEnv = { API_BASE: "https://api.test" };
+		registerConsoleLinkTools({ tool: (name: string, _d: string, _s: unknown, h: Handler) => handlers.set(name, h) } as never, {
+			env,
+			tokenFor: (p?: string) => p || "session-token",
+			safetyFor: (): SafetyContext => ({ env, subject: "user-1", scopes: ["read"] }),
+			groups: new Set(),
+		});
+		return { seen, call: (args: Record<string, unknown>) => (handlers.get("list_instance_permission_requests") as Handler)(args).then((r) => r.content[0].text) };
+	}
+
+	it("reads the owner's requests with one GET and returns each verified link and blocker as the API gave them", async () => {
+		const body = { requests: [{ id: "pr-1", status: "pending", control: "connector_consent", link: "/console/instances/i1/settings?focus=permissions&permission_request=pr-1", blocker: { requestId: "pr-1", remedy: "…Opening the link grants nothing…" } }] };
+		const { seen, call } = listTool({ status: 200, body });
+		expect(JSON.parse(await call({ instance_id: "i 1" }))).toEqual(body);
+		expect(seen).toEqual([{ url: "https://api.test/v1/instances/i%201/permission-requests", method: "GET" }]);
+	});
+
+	it("reports a refusal as an error, never as an empty list", async () => {
+		const { call } = listTool({ status: 404, body: { error: "Instance not found" } });
+		expect(await call({ instance_id: "theirs" })).toMatch(/^Error: /);
+	});
+});

@@ -43,4 +43,24 @@ export function registerConsoleLinkTools(server: McpServer, ctx: InstanceToolsCt
 			return jsonText(data);
 		},
 	);
+
+	// #1009: the inspection side of permission recovery. A blocked tool result carries its own request,
+	// but an assistant arriving later had no way to discover one — get_console_link needs the id.
+	server.tool(
+		"list_instance_permission_requests",
+		"Read-only. The owner's permission recovery requests for one instance, newest first: each blocked operation that needs the owner to grant a per-instance permission (write consent, or a tool they switched off). Each item has its status (pending, approved, claimed, resumed, denied, cancelled, expired, revoked, stale, uncertain), control, connector, resource, requestedScope (the minimum asked for), currentScope, operationKind, reason, createdAt, expiresAt, link (the verified console path to that exact Permissions & Connections control) and, while it can still be decided or resumed, a structured blocker with its remedy. Hand the owner `link` — opening it grants nothing; only their explicit approval does. Never contains arguments, credentials or a replayable write. To decide a request the owner uses the console.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances. Copy it exactly."),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "list_instance_permission_requests", { instance_id });
+			if (denied) return denied;
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/permission-requests`, sessionToken, {}, env)) as { error?: string };
+			if (data.error) return text(`Error: ${data.error}`);
+			return jsonText(data);
+		},
+	);
 }

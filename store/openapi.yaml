@@ -6871,7 +6871,19 @@ paths:
                 properties:
                   requests:
                     type: array
-                    items: { $ref: "#/components/schemas/PermissionRequest" }
+                    items:
+                      allOf:
+                        - { $ref: "#/components/schemas/PermissionRequest" }
+                        - type: object
+                          required: [control, createdAt, link, blocker]
+                          properties:
+                            control: { type: string, description: "The exact control the request is bound to (for example `write_consent` or `tool_enabled`)." }
+                            createdAt: { type: string }
+                            link: { type: string, description: "The verified same-origin console path to the exact Permissions & Connections control for this request. Opening it grants nothing." }
+                            blocker:
+                              description: "The structured blocker and remedy while the request can still be decided or resumed; null once terminal."
+                              nullable: true
+                              allOf: [{ $ref: "#/components/schemas/PermissionBlocker" }]
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 

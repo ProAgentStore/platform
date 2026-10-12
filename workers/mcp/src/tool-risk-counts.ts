@@ -191,7 +191,7 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// +2 read at #1004: uploaded Tailor source selection and readiness are owner-scoped
 	// inspections. They return provenance/status only, never résumé content.
 	// +2 at #1013: bounded application handoff and reconciliation projections are secret-safe reads.
-	read: 143, // +1 at #1017: coding_loop_lifecycle reads an objective's transition history; it replays nothing.
+	read: 144, // +1 at #1009: list_instance_permission_requests reads the owner's own recovery requests and their verified links; it decides nothing. +1 at #1017: coding_loop_lifecycle reads an objective's transition history; it replays nothing.
 	// +2 write at #825: `pause_instance` / `resume_instance`. `write` rather than `destructive` —
 	// nothing is deleted and nothing is unsubscribed, and classing the OFF switch as destructive
 	// would put RESUME behind a scope the caller may not hold, which is the wrong failure mode for

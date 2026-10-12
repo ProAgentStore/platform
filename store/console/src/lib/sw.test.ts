@@ -157,3 +157,75 @@ describe("the push handler (#897)", () => {
 		expect(tab.messages).toHaveLength(1);
 	});
 });
+
+/**
+ * A permission-request push (#1009), with the exact link `instancePermissionsLink` builds. SIMULATED:
+ * this runs `store/sw.js` itself against a fake worker scope — the installed web app's push path on
+ * iOS (home-screen PWA, 16.4+) and Android Chrome is this same worker. It is not real-device evidence;
+ * a person still has to tap a real push on each device.
+ */
+describe("a permission-request push opens the exact control (#1009, simulated devices)", () => {
+	const PERMISSION = "/console/instances/i1/settings?focus=permissions&permission_request=req-1";
+	const ON_CONSOLE_HOST = "/instances/i1/settings?focus=permissions&permission_request=req-1";
+	const TAG = `permission:${PERMISSION}`;
+
+	it("shows one tray entry per request, carrying the exact control link", async () => {
+		const sw = worker(APEX);
+		await sw.push({ title: "Permission needed: GitHub write", body: "b", url: PERMISSION, tag: TAG });
+		await sw.push({ title: "Permission needed: GitHub write", body: "b", url: "/console/instances/i1/settings?focus=permissions&permission_request=req-2", tag: "permission:/console/instances/i1/settings?focus=permissions&permission_request=req-2" });
+		expect(sw.shown.map((n) => n.options.data.url)).toEqual([PERMISSION, "/console/instances/i1/settings?focus=permissions&permission_request=req-2"]);
+		expect(new Set(sw.shown.map((n) => n.options.tag)).size).toBe(2);
+	});
+
+	it("cold (app closed): opens the exact request on either host, query intact", async () => {
+		for (const [origin, expected] of [[APEX, PERMISSION], [CONSOLE, ON_CONSOLE_HOST]] as const) {
+			const sw = worker(origin);
+			await sw.click(PERMISSION);
+			expect(sw.opened).toEqual([expected]);
+		}
+	});
+
+	it("warm (a console tab open): moves and focuses that tab — no second window — on either host", async () => {
+		for (const [origin, tabUrl, expected] of [[APEX, `${APEX}/console/instances`, PERMISSION], [CONSOLE, `${CONSOLE}/instances`, ON_CONSOLE_HOST]] as const) {
+			const tab = client(tabUrl);
+			const sw = worker(origin, [tab]);
+			await sw.click(PERMISSION);
+			expect(tab.navigated).toEqual([expected]);
+			expect(tab.focused).toBe(true);
+			expect(sw.opened).toEqual([]);
+		}
+	});
+
+	it("a visible console tab gets the push in-app, not a tray banner", async () => {
+		const tab = client(`${CONSOLE}/instances/i1`, "visible");
+		const sw = worker(CONSOLE, [tab]);
+		await sw.push({ title: "Permission needed", body: "b", url: PERMISSION, tag: TAG });
+		expect(sw.shown).toEqual([]);
+		expect(tab.messages).toHaveLength(1);
+	});
+
+	it("signed out: the page the worker opens survives sign-in exactly, on either host", async () => {
+		const { withoutSessionParam } = await import("./auth");
+		for (const [origin, expected] of [[APEX, PERMISSION], [CONSOLE, ON_CONSOLE_HOST]] as const) {
+			const sw = worker(origin);
+			await sw.click(PERMISSION);
+			// The OAuth callback lands on the opened page with `session=` added; sign-in strips only that.
+			expect(withoutSessionParam(`${origin}${sw.opened[0]}&session=JWT`)).toBe(expected);
+		}
+	});
+
+	it("duplicate taps land on the same exact control and never open a second window over an open tab", async () => {
+		const tab = client(`${APEX}/console/instances`);
+		const sw = worker(APEX, [tab]);
+		await sw.click(PERMISSION);
+		await sw.click(PERMISSION);
+		expect(tab.navigated).toEqual([PERMISSION, PERMISSION]);
+		expect(sw.opened).toEqual([]);
+	});
+
+	it("the link carries only opaque ids — no owner, token or credential for a wrong owner to replay", () => {
+		const url = new URL(PERMISSION, APEX);
+		expect([...url.searchParams.keys()].sort()).toEqual(["focus", "permission_request"]);
+		expect(PERMISSION).not.toMatch(/token|session|secret|key|user|owner/i);
+	});
+});

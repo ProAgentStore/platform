@@ -418,6 +418,7 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 
 			<ConnectorsSection
 				instanceId={instanceId}
+				instanceName={instanceName}
 				permissionRequestId={permissionRequest?.requestId}
 				emailStatus={emailStatus}
 				emailPermission={emailPermission}

@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**304 tool registrations.** 277 are always registered; 27 are gated to the console
+**305 tool registrations.** 278 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -324,6 +324,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `get_notification_vocabulary` | What a rule may name: notification types, generic events, delivery channels, severities | — | | |
 | `get_instance_connection_guide` | The pasteable per-instance connection guide: id, agent type, repos, exposed tools with exact field names, worked `call_instance_tool` example | read | | |
 | `get_console_link` | A console URL for an instance, one of its loop runs, a task, a secret request or a tab — `url` for chat, `path` for a push; refuses a tab the instance does not show | read | | |
+| `list_instance_permission_requests` | An instance's permission recovery requests (#1009), newest first: status, control, connector, resource, requested/current scope, operation, the verified `link` to the exact Permissions & Connections control and, while open, the structured blocker. Grants and decides nothing | read | | |
 | `get_application_runner_settings` | An Application Runner's handoff + submission policy: engine, files, allowed sites, auto-submit rules (off by default) (#953) | read | | |
 | `set_application_runner_settings` | Patch that policy; auto-submit refused until a profile, approved roles, an allowed site and a daily cap exist | write | yes | |
 | `list_applications` | The job-application queue across the owner's Scout → Tailor → Runner pipeline: every state, each item's compare-and-set version, artifact handles, submit-policy verdict, pause reason and allowed actions; counts, auto-submit allowance, connection health (#958) | read | | |

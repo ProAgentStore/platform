@@ -246,6 +246,30 @@ export interface InstancePermissionRequestView {
 	expiresAt: string;
 }
 
+/**
+ * One row of `GET /v1/instances/:id/permission-requests` (#1009): the owner-safe view plus what an
+ * assistant needs to hand the owner the exact control — the verified console link and, while the
+ * request is still open, its structured blocker and remedy. No fingerprint, continuation or owner id.
+ */
+export interface InstancePermissionRequestListItem extends InstancePermissionRequestView {
+	control: string;
+	createdAt: string;
+	link: string;
+	/** Structurally `PermissionBlocker` (lib/connectors/types.ts) — restated so this file stays import-free for the console. */
+	blocker: {
+		requestId: string;
+		controlLink: string;
+		control: string;
+		currentScope: string | null;
+		requestedScope: string;
+		reason: string;
+		resource: string | null;
+		operation: string;
+		expiresAt: string;
+		remedy: string;
+	} | null;
+}
+
 /** `GET /v1/instances/:id/permission-requests/:requestId`. */
 export interface InstancePermissionRequestResponse {
 	request: InstancePermissionRequestView;
