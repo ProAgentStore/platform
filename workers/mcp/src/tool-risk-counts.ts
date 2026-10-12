@@ -223,7 +223,7 @@ export const MCP_RISK_COUNTS: Record<McpScope, number> = {
 	// browser on the owner's machine; runtime for the reason `coding_loop_start` is.
 	// +5 runtime at #958: generate_application_materials, start_application_fill, request_application_review,
 	// retry_application, resume_application — each starts or continues a run on the owner's machine.
-	runtime: 38, // +2 at #1013: request the exact Runner's bounded handoff or read-only reconciliation.
+	runtime: 39, // +1 at #1032: runner_restart restarts a machine's runner remotely, like runner_update. +2 at #1013: request the exact Runner's bounded handoff or read-only reconciliation.
 	// +1 read, +8 destructive at #613 (agent-template authoring, write half): builder planning
 	// only computes a proposal; the other eight can delete, overwrite, run a billable template
 	// turn, create an enduring version, or create/scaffold a template. They all require the

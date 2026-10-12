@@ -677,6 +677,26 @@ terminalRoutes.post("/nodes/:node/update", async (c) => {
 });
 
 /**
+ * Restart a machine's `pags` runner on the CLI it already has (#1032) — `runner_restart`. The recovery
+ * for "relay attached, runner not answering": the CLI's relay client answers it, not the local
+ * runtime, so it works while `/health` does not. The same durable, single-flight operation as an
+ * update (one live operation per machine, of either kind), polled the same way. The machine refuses
+ * while work runs or while it cannot show itself idle; `force` restarts anyway, losing that work.
+ */
+terminalRoutes.post("/nodes/:node/restart", async (c) => {
+	const session = await requireUser(c);
+	const target = normalizeRunnerNode(c.req.param("node"));
+	const identity = await c.env.DB.prepare("SELECT machine_id FROM instance_runtime_nodes WHERE user_id = ?1 AND runner_node = ?2 AND machine_id IS NOT NULL LIMIT 1")
+		.bind(session.uid, target).first<{ machine_id: string | null }>().catch(() => null);
+	const machineId = normalizeMachineId(identity?.machine_id);
+	const body = (await c.req.json().catch(() => ({}))) as { dryRun?: unknown; force?: unknown };
+	const force = body.force === true;
+	if (body.dryRun === true || c.req.query("dryRun") === "1") return c.json(await updateRunnerNode(c.env, session.uid, target, { dryRun: true, kind: "restart", force }));
+	const { op, started } = await startRunnerUpdate(c.env, session.uid, target, { machineId, kind: "restart", force });
+	return c.json({ operationId: op.id, kind: op.kind, node: op.node, state: op.state, started, detail: op.detail, poll: `/v1/terminals/nodes/${encodeURIComponent(op.node)}/update`, operation: op });
+});
+
+/**
  * The outcome of the latest update on this machine (#990) — what a timed-out caller polls.
  *
  * The point of the whole change: a lost reply no longer makes the operation unknowable. `state` is

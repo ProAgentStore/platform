@@ -35,7 +35,7 @@ vi.mock("./runner-client.js", () => ({
 			throw new RunnerUnreachableError("Runner relay is connected but not responding");
 		}
 		sent.push({ via: conn.instanceId, path, body });
-		if (path === "/pags/runner/update") {
+		if (path === "/pags/runner/update" || path === "/pags/runner/restart") {
 			const r = reply();
 			if (r instanceof Error) throw r;
 			// The restart: every socket on the machine drops.
@@ -244,3 +244,49 @@ describe("runner_update — does the `pags up` supervisor move too? (#860)", () 
 	});
 });
 
+describe("runner_restart — a restart without an update (#1032)", () => {
+	const restart = (opts: { dryRun?: boolean; force?: boolean } = {}) => updateRunnerNode(env, "u1", "Macmini", { ...deps, kind: "restart", ...opts });
+	beforeEach(() => {
+		comesBack = { [CODER]: 2, [OTHER]: 2, [THIRD]: 2 };
+	});
+
+	it("asks the machine to restart on its own CLI, and checks every agent back in", async () => {
+		reply = () => ({ action: "restarting", current: "0.4.114", latest: "0.4.114", restartedBy: "pags-up" });
+		const out = await restart();
+		expect(out).toMatchObject({ action: "restarted", current: "0.4.114", missing: [] });
+		expect(out.detail).toMatch(/^Macmini restarted on 0\.4\.114; all 3 agent\(s\) it held are attached again\.$/);
+		expect(sent.filter((s) => s.path === "/pags/runner/restart")).toEqual([{ via: expect.any(String), path: "/pags/runner/restart", body: { dryRun: false, force: false } }]);
+		expect(sent.some((s) => s.path === "/pags/runner/update")).toBe(false);
+	});
+
+	it("passes force through, only when asked", async () => {
+		reply = () => ({ action: "restarting", current: "0.4.114", latest: "0.4.114", restartedBy: "pags-up" });
+		await restart({ force: true });
+		expect(sent.find((s) => s.path === "/pags/runner/restart")?.body).toEqual({ dryRun: false, force: true });
+	});
+
+	it("a machine that refuses says why, with what is running", async () => {
+		reply = () => ({ action: "refused", current: "0.4.114", reason: "1 piece(s) of work are running here.", waitingFor: ["coding:s1"] });
+		expect(await restart()).toMatchObject({ action: "refused", detail: "1 piece(s) of work are running here.", waitingFor: ["coding:s1"] });
+	});
+
+	it("a CLI that predates runner_restart is unsupported, and says restart pags up at the machine", async () => {
+		reply = () => new Error("Runner /pags/runner/restart → 404: Unknown runner control");
+		const out = await restart();
+		expect(out.action).toBe("unsupported");
+		expect(out.detail).toMatch(/predates runner_restart.*Restart `pags up` at the machine/);
+	});
+
+	it("a timed-out restart is not re-read for a new version — a restart keeps its version", async () => {
+		reply = () => new Error("Runner /pags/runner/restart → 504: Relay command timed out");
+		const out = await restart();
+		expect(out.action).toBe("failed");
+		expect(out.detail).toMatch(/the restart command timed out/);
+		expect(clock).toBe(0);
+	});
+
+	it("a dry run reports what the machine would do", async () => {
+		reply = () => ({ action: "restart", current: "0.4.114" });
+		expect(await restart({ dryRun: true })).toMatchObject({ action: "would-update", detail: expect.stringMatching(/^Would restart Macmini on 0\.4\.114/) });
+	});
+});

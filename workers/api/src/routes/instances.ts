@@ -88,6 +88,7 @@ export {
 import { freshestVersion, namesOfMachine, normalizeMachineId, pinCandidates, sanitizeMachineNames } from "../lib/machine-identity.js";
 import { parseBoundRunnerNode } from "../lib/runtime-nodes.js";
 import { diagnoseAttachment, heartbeatFresh } from "../lib/runtime-attachment.js";
+import { healthOfError, healthOfResponse, runnerStatusView } from "../lib/runner-health.js";
 import { saveResourceSample } from "../lib/runner-resources.js";
 import { instanceListName, instanceListView, patchInstanceConfig, removeInstanceConfigKey } from "../lib/instance-config.js";
 import { runnerVersionView } from "../lib/runner-features.js";
@@ -1044,8 +1045,11 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 			pinnedNode,
 			liveNodeExcludedByPin,
 		});
+		// #1032: heartbeat/relay/health/eligibility apart; a fresh heartbeat no longer passes a failed probe as online.
+		const view = runnerStatusView({ registered: true, lastSeenAt: runtime.last_seen_at, heartbeatFresh: recentlySeen, relayConnected: relayIsConnected, ...healthOfResponse(healthRes.ok, health) });
 		return c.json({
-			runtime: runtimeResponse({ ...runtime, status: effective, last_seen_at: seenAt }),
+			runtime: runtimeResponse({ ...runtime, status: view.status === "unresponsive" ? view.status : effective, last_seen_at: seenAt }),
+			statusView: view,
 			health,
 			capabilities,
 			relay: {
@@ -1060,7 +1064,8 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 	} catch (error) {
 		// Probe threw (network blip). A recently-seen runner stays online — don't clobber it.
 		if (recentlySeen) {
-			return c.json({ runtime: runtimeResponse({ ...runtime, status: "online" }), transient: true });
+			const statusView = runnerStatusView({ registered: true, lastSeenAt: runtime.last_seen_at, heartbeatFresh: true, relayConnected: Boolean(liveRuntime), ...healthOfError(error) });
+			return c.json({ runtime: runtimeResponse({ ...runtime, status: "online" }), statusView, transient: true });
 		}
 		// Same node scope as the success path (#587): the machine we failed to reach is the one
 		// being marked down, not whichever machine happens to own the shared row.

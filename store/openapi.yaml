@@ -341,6 +341,10 @@ components:
               status: { type: string, enum: [denied, cancelled] }
 
   schemas:
+    RunnerHealthState:
+      type: string
+      description: What a runner `/health` probe found (#880, #1032). `not_attempted` = there was no socket to ask through, or no time left.
+      enum: [ok, timeout, unresponsive, disconnected, failed, not_attempted]
     AutoUpdateStuck:
       type: object
       nullable: true
@@ -3867,6 +3871,25 @@ paths:
                         enum: [attached, never-registered, runner-offline, machine-online-agent-detached, pinned-machine-offline]
                       message: { type: string }
                       remedy: { type: string, nullable: true }
+                  statusView:
+                    type: object
+                    description: |
+                      Four facts apart (#1032): `heartbeat` (is `pags up` reporting in), `relay.attached`
+                      (does the relay hold this agent's socket — transport only), `rpc.health` (did the
+                      runner behind it answer /health) and `eligible` (ok only when both of the last
+                      two hold). `runtime.status` reads `unresponsive`, never `online`, while attached
+                      with a failing health probe.
+                    properties:
+                      status: { type: string, enum: [online, unresponsive, offline, unregistered] }
+                      heartbeat: { type: object, properties: { lastSeenAt: { type: string, nullable: true }, fresh: { type: boolean } } }
+                      relay: { type: object, properties: { attached: { type: boolean } } }
+                      rpc: { type: object, properties: { health: { $ref: "#/components/schemas/RunnerHealthState" }, error: { type: string } } }
+                      eligible:
+                        type: object
+                        properties:
+                          ok: { type: boolean }
+                          reason: { type: string, enum: [ready, unregistered, no_relay, rpc_unhealthy, rpc_unchecked] }
+                          detail: { type: string }
         "502":
           description: Registered runtime could not be reached
           content:
@@ -5905,7 +5928,15 @@ paths:
                 type: object
                 properties:
                   node: { type: string }
-                  attached: { type: boolean, description: "This agent's own socket answers on that machine now." }
+                  attached: { type: boolean, description: "This agent's own socket is live on that machine now — the relay TRANSPORT only (#1032)." }
+                  transport: { type: string, enum: [attached, not_attached], description: "What `attached` is a fact about: the relay socket, not the runner behind it." }
+                  health:
+                    type: object
+                    description: The `/health` probe run through that socket right after a successful attach (#1032). Only `ok` means the agent can work.
+                    properties:
+                      state: { $ref: "#/components/schemas/RunnerHealthState" }
+                      error: { type: string }
+                  remedy: { type: string, description: "The next step when attached but not healthy — runner_restart." }
                   evicted: { type: integer, description: "Stale sockets cleared from the agent's slot." }
                   detail: { type: string, description: "Why it could not attach, and what to do. Absent when attached." }
         "400": { $ref: "#/components/responses/BadRequest" }
@@ -12317,6 +12348,49 @@ paths:
         "404": { description: No machine is registered under that name }
         "409": { description: More than one machine has registered under that name }
 
+  /v1/terminals/nodes/{node}/restart:
+    post:
+      summary: Restart a machine's runner remotely, without an update
+      description: |
+        `runner_restart` (#1032) — the recovery for a relay socket that is attached while the runner
+        behind it does not answer `/health`, which attaching again cannot fix. The machine's relay
+        client answers this command itself, so it reaches a runner whose local runtime is wedged.
+
+        The same DURABLE, single-flight operation as an update (one live operation per machine, of
+        either kind): claimed, handed to the runner-update Workflow, and answered at once. Poll
+        `GET /v1/terminals/nodes/{node}/update`, whose `operation.kind` is `restart`. The machine
+        refuses while work runs there, or when its work check does not answer so it cannot be shown
+        idle; `force: true` restarts anyway and loses any run in progress. A CLI that predates the
+        command answers `unsupported`. `dryRun` asks the machine what it would do, in one hop.
+      operationId: restartRunnerNode
+      tags: [Runtime]
+      parameters:
+        - { name: node, in: path, required: true, schema: { type: string }, description: "Any name the machine answers to." }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                dryRun: { type: boolean }
+                force: { type: boolean, description: "Restart even while work runs or when the machine cannot show itself idle; that work is lost." }
+      responses:
+        "200":
+          description: The claimed (or already-running) operation, or a dry run's answer
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  operationId: { type: string }
+                  kind: { type: string, enum: [restart] }
+                  node: { type: string }
+                  state: { type: string }
+                  started: { type: boolean, description: "False when an update or restart was already in flight on this machine — this call joined it." }
+                  detail: { type: string, nullable: true }
+                  poll: { type: string }
+                  operation: { type: object }
   /v1/terminals/nodes/{node}/update:
     get:
       summary: The outcome of the latest CLI update on a machine
@@ -12356,6 +12430,7 @@ paths:
                     nullable: true
                     properties:
                       id: { type: string }
+                      kind: { type: string, enum: [update, restart], description: "What was asked (#1032): an install and restart, or a restart on the CLI it has." }
                       node: { type: string }
                       state: { type: string }
                       phase: { type: string, enum: [claimed, dispatching, installing, restarting, reattaching] }

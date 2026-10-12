@@ -8,7 +8,7 @@
  * control at all: the only advice was "restart pags up", which the owner cannot do from here.
  */
 import { describe, expect, it } from "vitest";
-import { canReattach, humanDetail, pinOutcome, reattachOutcome } from "./runnerPanel";
+import { canReattach, humanDetail, pinOutcome, reattachOutcome, restartOutcome, runnerReading, statusFacts } from "./runnerPanel";
 
 describe("pinOutcome — every attachment shape PUT …/runner-node answers", () => {
 	it("moved: attached and confirmed", () => {
@@ -85,5 +85,52 @@ describe("canReattach — when the card offers the remote takeover", () => {
 		expect(canReattach("", "not_attached", null)).toBe(false);
 		expect(canReattach("pink-laptop", null, null)).toBe(false);
 		expect(canReattach("pink-laptop", "offline", null)).toBe(false);
+	});
+});
+
+// #1032: `attached` is the connection only. On the live machine an attach answered `attached: true`
+// while the runner behind it timed out every health check, and the card said "Reattached".
+describe("an attach that connects to a runner that does not answer (#1032)", () => {
+	it("is not 'Reattached': it says connection only, and offers Restart instead of another Reattach", () => {
+		const o = reattachOutcome("pink-laptop", { node: "pink-laptop", attached: true, transport: "attached", health: { state: "timeout", error: "…" } });
+		expect(o).toMatchObject({ tone: "warn", offerReattach: false, offerRestart: true });
+		expect(o.text).toMatch(/Connected on pink-laptop \(connection only\), but its runner did not pass the health check \(timeout\)/);
+		const p = pinOutcome("pink-laptop", { attachment: { node: "pink-laptop", attached: true, health: { state: "unresponsive" } } });
+		expect(p).toMatchObject({ tone: "warn", offerRestart: true });
+	});
+
+	it("a healthy attach still reads as before", () => {
+		expect(reattachOutcome("pink-laptop", { node: "pink-laptop", attached: true, evicted: 0, transport: "attached", health: { state: "ok" } }).text).toBe("Reattached on pink-laptop.");
+	});
+});
+
+describe("the runner's four facts (#1032)", () => {
+	const view = {
+		status: "unresponsive" as const,
+		heartbeat: { lastSeenAt: null, fresh: true },
+		relay: { attached: true },
+		rpc: { health: "timeout" },
+		eligible: { ok: false, reason: "rpc_unhealthy", detail: "Attached, but … runner_restart restarts it on the machine." },
+	};
+
+	it("reads attached-but-unhealthy as not online, and says why", () => {
+		const reading = runnerReading({ relay: { connected: true, runnerNode: "pink-laptop" }, statusView: view }, [], "pink-laptop");
+		expect(reading).toMatchObject({ online: false, attachedNotHealthy: true, node: "pink-laptop" });
+		expect(statusFacts(view)).toEqual([
+			{ label: "Heartbeat", value: "reporting", good: true },
+			{ label: "Relay", value: "attached (connection only)", good: true },
+			{ label: "Health", value: "timeout", good: false },
+			{ label: "Can run work", value: "no", good: false },
+		]);
+	});
+
+	it("an older API without statusView reads as before, from the relay", () => {
+		expect(runnerReading({ relay: { connected: true } }, [], "x")).toEqual({ online: true, node: "x", pinnedNodeOnline: false });
+	});
+
+	it("a refused restart offers Force restart; a finished one does not", () => {
+		expect(restartOutcome({ state: "refused", detail: "The local runtime did not answer the work check… Restart with force to restart anyway." })).toMatchObject({ tone: "warn", offerForce: true });
+		expect(restartOutcome({ state: "refused", detail: "x with force y" }).text).toContain("with Force restart");
+		expect(restartOutcome({ state: "restarted", detail: "pink-laptop restarted on 0.4.114" })).toMatchObject({ tone: "ok", offerForce: false });
 	});
 });

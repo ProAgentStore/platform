@@ -2,7 +2,7 @@ import { authedAsyncCall } from "../async-outcome.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authedCall, authRequired, jsonText, text } from "../http.js";
-import { audit, dryRun, requirePermission } from "../safety.js";
+import { audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
 import type { InstanceToolsCtx } from "./shared.js";
 
 /**
@@ -79,7 +79,7 @@ export function registerMachineControlTools(server: McpServer, ctx: InstanceTool
 	// slot, and the machine's connected `pags up` is told to attach this agent and take its slot over.
 	server.tool(
 		"force_runner_attach",
-		"Force a machine's connected `pags up` to (re)attach ONE agent now — the remote equivalent of `pags up --force`, scoped to this instance. Use it when instance_runner_node shows the machine online (`nodeOnline: true`) but this agent not connected, when coding_diagnostics reports an unresponsive runner with a connected relay (a stale agent socket may recover through this path), when a start fails with \"another runner on it may already hold this agent\", or when set_instance_runner_node's `attachment.detail` names this tool. It clears a stale socket from the agent's relay slot (only one that answers no ping — a live one is taken over by the runner, not killed), then asks the machine's runner, over a socket that answers there, to attach this agent with force. Targets the machine the agent is pinned to unless `runner_node` names another; it does NOT change the pin (set_instance_runner_node does). Answers `{node, attached, evicted, detail?}` from the relay's own view; when `attached` is false, `detail` is the specific reason — e.g. every socket on that machine is frozen, or the machine may not run this agent. When the machine has not confirmed within 15s the relay is asked once more: `{node, attached: true}` if the agent's socket is already live there, else `{attached: false, unconfirmed: true, detail}`. An interrupted or slow confirmation answers `{outcome: unknown, confirmation: {reason, httpStatus?}, possibleOutcomes, poll}`; eviction or attachment may already have happened, so poll instance_runner_node before retrying. Needs a `pags up` running on the machine; it cannot start one.",
+		"Force a machine's connected `pags up` to (re)attach ONE agent now — the remote equivalent of `pags up --force`, scoped to this instance. Use it when instance_runner_node shows the machine online (`nodeOnline: true`) but this agent not connected, when coding_diagnostics reports an unresponsive runner with a connected relay (a stale agent socket may recover through this path), when a start fails with \"another runner on it may already hold this agent\", or when set_instance_runner_node's `attachment.detail` names this tool. It clears a stale socket from the agent's relay slot (only one that answers no ping — a live one is taken over by the runner, not killed), then asks the machine's runner, over a socket that answers there, to attach this agent with force. Targets the machine the agent is pinned to unless `runner_node` names another; it does NOT change the pin (set_instance_runner_node does). Answers `{node, attached, transport, health, remedy?, evicted, detail?}`. `attached` and `transport` are the relay TRANSPORT only — this agent's socket is live there (#1032); `health` is the `/health` probe run through that socket right after (`state` ok | timeout | unresponsive | disconnected | failed | not_attempted), and only `health.state: \"ok\"` means the agent can work. Attached with failing health is a wedged runner behind a live socket: attaching again will not fix it, and `remedy` names runner_restart. When `attached` is false, `detail` is the specific reason — e.g. every socket on that machine is frozen, or the machine may not run this agent. When the machine has not confirmed within 15s the relay is asked once more: `{node, attached: true}` if the agent's socket is already live there, else `{attached: false, unconfirmed: true, detail}`. An interrupted or slow confirmation answers `{outcome: unknown, confirmation: {reason, httpStatus?}, possibleOutcomes, poll}`; eviction or attachment may already have happened, so poll instance_runner_node before retrying. Needs a `pags up` running on the machine; it cannot start one.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID or slug"),
@@ -145,6 +145,49 @@ export function registerMachineControlTools(server: McpServer, ctx: InstanceTool
 			// safety net — and its `poll` hint names the tool that reads the durable outcome.
 			const data = (await authedAsyncCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify({}) }, env, { tool: "runner_update", possibleOutcomes: ["running", "scheduled", "restarting", "restarted", "refused", "unsupported", "unreachable", "up_to_date", "failed"], poll: { tool: "runner_update_status", input: { runner_node } } })) as { action?: string; error?: string; outcome?: string; state?: string };
 			if (!data.error) await audit(safetyFor(token), { tool: "runner_update", action: data.outcome === "unknown" ? "unconfirmed" : "completed", input, result: { action: data.action ?? data.state } });
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
+	// ── Restart without an update (#1032) ───────────────────────────────────────
+	//
+	// The recovery for "relay attached, runner not answering": force_runner_attach fixes a stale
+	// socket, not a wedged runtime behind a live one. The machine's relay client answers this itself,
+	// so it reaches a machine whose `/health` does not — the same durable, single-flight operation as
+	// runner_update, polled the same way.
+	server.tool(
+		"runner_restart",
+		"Restart a machine's `pags` runner on the CLI it already has — no install — entirely remotely (#1032). Use it when force_runner_attach answers `transport: \"attached\"` but `health.state` is not `ok`, or when instance_runtime_status / coding_diagnostics show `statusView.relay.attached: true` with `statusView.rpc.health` failing: the relay socket is up but the runner behind it does not answer, and attaching again will not fix that. The machine's relay client answers this command itself, so it reaches a machine whose /health does not. It is guarded like an update: while work runs there it answers `refused` with `waitingFor`, and when the machine cannot show itself idle (its work check did not answer — usually the wedged part itself) it answers `refused` saying so; pass force (with confirm: \"runner_restart\") to restart anyway, which LOSES any run in progress there. A CLI older than this tool answers `unsupported`: restart `pags up` at the machine once. A DURABLE operation, single-flight per machine with runner_update (one of either runs at a time; a second call joins it with `started: false`): answers `{operationId, kind: \"restart\", state, poll}` at once; read the outcome with runner_update_status. After a restart the answer says which agents came back, which were re-attached, and any still `missing`. Pass dry_run to see what the machine would do without restarting it.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			runner_node: z.string().describe("Machine (node) name to restart, from list_runner_nodes or instance_runner_node's `nodes`."),
+			force: z.boolean().optional().describe("Restart even while work runs or when the machine cannot show itself idle. Any run in progress there is lost. Requires confirm."),
+			confirm: z.string().optional().describe('Must be "runner_restart" when force is true.'),
+			dry_run: z.boolean().optional().describe("Report what would be asked of the machine, without contacting it."),
+		},
+		async ({ token, runner_node, force, confirm, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { runner_node, force: force === true };
+			// `runtime`: it restarts a machine's runner, like runner_update.
+			const denied = await requirePermission(safetyFor(token), "runtime", "runner_restart", input);
+			if (denied) return denied;
+			const endpoint = `/v1/terminals/nodes/${encodeURIComponent(runner_node)}/restart`;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "runner_restart", `restart the runner on ${runner_node}`, input, {
+					endpoint,
+					method: "POST",
+					effect: force
+						? `${runner_node} would restart its runner now, even if work is running there (that work is lost), and every agent it holds would be checked back in.`
+						: `${runner_node} would restart its runner if it can show itself idle, and every agent it holds would be checked back in; otherwise it refuses and says why.`,
+				});
+			}
+			if (force) {
+				const unconfirmed = await requireConfirmation(safetyFor(token), "runner_restart", confirm, "runner_restart", input);
+				if (unconfirmed) return unconfirmed;
+			}
+			const data = (await authedAsyncCall(endpoint, sessionToken, { method: "POST", body: JSON.stringify({ force: force === true }) }, env, { tool: "runner_restart", possibleOutcomes: ["running", "restarting", "restarted", "refused", "unsupported", "unreachable", "failed"], poll: { tool: "runner_update_status", input: { runner_node } } })) as { error?: string; outcome?: string; state?: string };
+			if (!data.error) await audit(safetyFor(token), { tool: "runner_restart", action: data.outcome === "unknown" ? "unconfirmed" : "completed", input, result: { state: data.state } });
 			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
 		},
 	);

@@ -23,6 +23,7 @@ import {
 	queueUpdateWorkflow,
 	queuedUpdateWorkflows,
 	reconcileLateUpdateOp,
+	type RunnerOpKind,
 	type RunnerUpdateOp,
 	type RunnerUpdatePhase,
 	UPDATE_STATE_FOR_ACTION,
@@ -36,6 +37,8 @@ import type { Env } from "../types.js";
 
 /** The CLI answers this path itself (`self-update.ts`'s RUNNER_UPDATE_PATH); change both. */
 export const RUNNER_UPDATE_PATH = "/pags/runner/update";
+/** `runner_restart` (#1032) — `self-update.ts`'s RUNNER_RESTART_PATH; change both. */
+export const RUNNER_RESTART_PATH = "/pags/runner/restart";
 /** npm install inside the relay's two-minute command ceiling. */
 const UPDATE_TIMEOUT_MS = 115_000;
 /** How long the restarted runner gets to re-attach every agent on its own before we step in. */
@@ -62,7 +65,7 @@ async function registeredVersion(env: Env, userId: string, names: ReadonlySet<st
 
 /** What the machine answered — `self-update.ts`'s plan, or `restarting`. */
 interface MachineReply {
-	action?: "up-to-date" | "refused" | "wait" | "restarting";
+	action?: "up-to-date" | "refused" | "wait" | "restarting" | "restart";
 	current?: string;
 	latest?: string;
 	reason?: string;
@@ -110,7 +113,8 @@ export interface RunnerUpdateResult {
 
 type UpdateProgress = (phase: Exclude<RunnerUpdatePhase, "claimed" | "queued">, detail: string, versions?: { current?: string; latest?: string }) => Promise<boolean>;
 
-export async function updateRunnerNode(env: Env, userId: string, rawNode: string, opts: RepinDeps & { dryRun?: boolean; onProgress?: UpdateProgress; operationId?: string; deferUntil?: number } = {}): Promise<RunnerUpdateResult> {
+export async function updateRunnerNode(env: Env, userId: string, rawNode: string, opts: RepinDeps & { dryRun?: boolean; onProgress?: UpdateProgress; operationId?: string; deferUntil?: number; kind?: RunnerOpKind; force?: boolean } = {}): Promise<RunnerUpdateResult> {
+	const restart = opts.kind === "restart";
 	const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 	const now = opts.now ?? Date.now;
 	const node = normalizeRunnerNode(rawNode);
@@ -152,18 +156,28 @@ export async function updateRunnerNode(env: Env, userId: string, rawNode: string
 		try {
 			// This is the last durable point before the remote control command.  The machine has
 			// not acknowledged it yet: the label means "install requested", not "npm completed".
-			if ((await opts.onProgress?.("installing", `The install request for ${node} is being dispatched to the runner; machine acknowledgement is pending.`)) === false) {
-				return { node, action: "failed", held, detail: `The update on ${node} was not dispatched because its operation record closed first.` };
+			if ((await opts.onProgress?.("installing", restart ? `The restart request for ${node} is being dispatched to the runner; machine acknowledgement is pending.` : `The install request for ${node} is being dispatched to the runner; machine acknowledgement is pending.`)) === false) {
+				return { node, action: "failed", held, detail: `The ${restart ? "restart" : "update"} on ${node} was not dispatched because its operation record closed first.` };
 			}
-			reply = (await callRunner<MachineReply>(carrier, RUNNER_UPDATE_PATH, {
-				dryRun: opts.dryRun === true,
-				...(opts.operationId ? { operationId: opts.operationId } : {}),
-				...(opts.deferUntil ? { deferUntil: opts.deferUntil } : {}),
-			}, { timeoutMs: UPDATE_TIMEOUT_MS })) ?? {};
+			reply = (await callRunner<MachineReply>(carrier, restart ? RUNNER_RESTART_PATH : RUNNER_UPDATE_PATH, restart
+				? { dryRun: opts.dryRun === true, force: opts.force === true }
+				: {
+						dryRun: opts.dryRun === true,
+						...(opts.operationId ? { operationId: opts.operationId } : {}),
+						...(opts.deferUntil ? { deferUntil: opts.deferUntil } : {}),
+					}, { timeoutMs: UPDATE_TIMEOUT_MS })) ?? {};
 			break;
 		} catch (e) {
 			if (e instanceof RunnerUnreachableError) continue;
 			const message = e instanceof Error ? e.message : String(e);
+			if (/→ 404/.test(message) && restart) {
+				return {
+					node,
+					action: "unsupported",
+					held,
+					detail: `The \`pags\` CLI on ${node} predates runner_restart (#1032), so it cannot be restarted remotely. Restart \`pags up\` at the machine; from CLI 0.4.114 on, runner_restart does it remotely.`,
+				};
+			}
 			if (/→ 404/.test(message)) {
 				return {
 					node,
@@ -176,14 +190,15 @@ export async function updateRunnerNode(env: Env, userId: string, rawNode: string
 				// A timed-out reply is not a failed update: on pink-laptop the install landed and the
 				// machine restarted on the new release while this said `failed` (#1034). Re-read the
 				// version the machine registers before concluding anything.
-				const after = before ? await versionAfterTimeout(before) : null;
+				// A restart keeps its version, so only an update can be settled this way.
+				const after = before && !restart ? await versionAfterTimeout(before) : null;
 				if (after) {
 					reply = { action: "restarting", current: before!, latest: after };
 					landedSilently = true;
 					break;
 				}
 				const reread = before ? ` It still reports ${before} after ${TIMEOUT_RECHECK_MS / 1000}s of re-reading its registered version.` : "";
-				return { node, action: "failed", held, detail: `${node}'s relay is connected but the update command timed out.${reread} The update may still be in flight; poll list_runner_nodes before retrying. If coding_diagnostics still reports an unresponsive runner, try force_runner_attach for an affected instance on this node to recover a stale agent socket, then check coding_diagnostics again. If remote recovery fails, restart \`pags up\` at the machine.` };
+				return { node, action: "failed", held, detail: `${node}'s relay is connected but the ${restart ? "restart" : "update"} command timed out.${reread} The update may still be in flight; poll list_runner_nodes before retrying. If coding_diagnostics still reports an unresponsive runner, try force_runner_attach for an affected instance on this node to recover a stale agent socket, then check coding_diagnostics again. If remote recovery fails, restart \`pags up\` at the machine.` };
 			}
 			return { node, action: "failed", held, detail: `${node} could not update: ${message.replace(/^Runner \/pags\/runner\/update → \d+: /, "").slice(0, 400)}` };
 		}
@@ -194,7 +209,7 @@ export async function updateRunnerNode(env: Env, userId: string, rawNode: string
 
 	const base = { node, held, current: reply.current, latest: reply.latest };
 	if (reply.action === "up-to-date") return { ...base, action: "up-to-date", detail: `${node} already runs ${reply.current}, the latest release.` };
-	if (reply.action === "refused") return { ...base, action: "refused", detail: reply.reason };
+	if (reply.action === "refused") return { ...base, action: "refused", detail: reply.reason, ...(reply.waitingFor?.length ? { waitingFor: reply.waitingFor } : {}) };
 	if (reply.action === "wait") {
 		const validLease = typeof reply.deferredUntil === "number"
 			&& reply.operationId === opts.operationId
@@ -216,6 +231,7 @@ export async function updateRunnerNode(env: Env, userId: string, rawNode: string
 				};
 	}
 	if (reply.action !== "restarting") {
+		if (restart) return { ...base, action: "would-update", detail: `Would restart ${node} on ${reply.current} and re-attach ${held.length} agent(s).` };
 		return { ...base, action: "would-update", detail: `Would update ${reply.current} → ${reply.latest}, restart, and re-attach ${held.length} agent(s).` };
 	}
 
@@ -248,10 +264,11 @@ export async function updateRunnerNode(env: Env, userId: string, rawNode: string
 	// A lost reply says nothing about the supervisor, so no legacy note is guessed for it.
 	const supervisor = reply.restartedBy ? reply.supervisor : landedSilently ? undefined : LEGACY_SUPERVISOR_NOTE;
 	const lost = landedSilently ? `The update command's reply was lost to a relay timeout, but ${node} now registers ${reply.latest} (it ran ${reply.current}). ` : "";
+	const did = restart ? `restarted on ${reply.current}` : `updated ${reply.current} → ${reply.latest} and restarted`;
 	const outcome = lost + (
 		missing.length === 0
-			? `${node} updated ${reply.current} → ${reply.latest} and restarted; all ${held.length} agent(s) it held are attached again.`
-			: `${node} updated ${reply.current} → ${reply.latest} and restarted, but ${missing.length} of ${held.length} agent(s) did not re-attach — see missing; force_runner_attach takes a slot over.`);
+			? `${node} ${did}; all ${held.length} agent(s) it held are attached again.`
+			: `${node} ${did}, but ${missing.length} of ${held.length} agent(s) did not re-attach — see missing; force_runner_attach takes a slot over.`);
 	return {
 		...base,
 		action: "restarted",
@@ -302,6 +319,10 @@ export interface RunnerUpdateWorkflowParams {
 	userId: string;
 	node: string;
 	machineId: string | null;
+	/** Absent on a workflow queued before #1032: an update. */
+	kind?: RunnerOpKind;
+	/** A restart that skips the work look (#1032) — the owner's explicit choice. */
+	force?: boolean;
 }
 
 type StartWorkflow = (params: RunnerUpdateWorkflowParams, id: string) => Promise<unknown>;
@@ -321,7 +342,8 @@ export async function dispatchQueuedRunnerUpdates(env: Env, limit = 20): Promise
 		const id = op.workflowId || runnerUpdateWorkflowId(op.id);
 		if (!op.workflowId) await queueUpdateWorkflow(env, op.userId, op.id, id);
 		try {
-			await workflowStarter(env)({ opId: op.id, userId: op.userId, node: op.node, machineId: op.machineId }, id);
+			// A recovered restart is never re-forced: `force` lived only in the request that lost its create.
+			await workflowStarter(env)({ opId: op.id, userId: op.userId, node: op.node, machineId: op.machineId, ...(op.kind === "restart" ? { kind: "restart" as const } : {}) }, id);
 			created++;
 		} catch {
 			// Leave it queued. The next cron uses the same Workflow id; it never dispatches directly.
@@ -334,10 +356,10 @@ export async function startRunnerUpdate(
 	env: Env,
 	userId: string,
 	rawNode: string,
-	opts: RepinDeps & { dryRun?: boolean; machineId?: string | null; startWorkflow?: StartWorkflow } = {},
+	opts: RepinDeps & { dryRun?: boolean; machineId?: string | null; startWorkflow?: StartWorkflow; kind?: RunnerOpKind; force?: boolean } = {},
 ): Promise<StartRunnerUpdate> {
 	const node = normalizeRunnerNode(rawNode);
-	const { op, claimed } = await claimUpdateOp(env, userId, node, { dryRun: opts.dryRun === true, now: opts.now?.(), machineId: opts.machineId });
+	const { op, claimed } = await claimUpdateOp(env, userId, node, { dryRun: opts.dryRun === true, now: opts.now?.(), machineId: opts.machineId, kind: opts.kind });
 	// Already in flight, or the claim could not be recorded: either way nothing new is started, and
 	// the operation the caller gets back is the one that actually exists.
 	if (!claimed) return { op, started: false };
@@ -346,7 +368,7 @@ export async function startRunnerUpdate(
 	// Workflow id from the durable row; the request itself owns no long-running promise.
 	await queueUpdateWorkflow(env, userId, op.id, workflowId, opts.now?.());
 	try {
-		await (opts.startWorkflow ?? workflowStarter(env))({ opId: op.id, userId, node, machineId: opts.machineId ?? null }, workflowId);
+		await (opts.startWorkflow ?? workflowStarter(env))({ opId: op.id, userId, node, machineId: opts.machineId ?? null, ...(opts.kind === "restart" ? { kind: "restart", force: opts.force === true } : {}) }, workflowId);
 	} catch {
 		// Deliberately remain queued for scheduled recovery; a route error must not turn into an
 		// unrecorded machine update or cause a direct fallback execution.
@@ -395,6 +417,8 @@ export async function executeRunnerUpdateOperation(
 	try {
 		const result = await updateRunnerNode(env, userId, node, {
 			...opts,
+			kind: params.kind,
+			force: params.force,
 			onProgress: checkpoint,
 			operationId: opId,
 			deferUntil: (opts.now?.() ?? Date.now()) + DEFERRED_UPDATE_LEASE_MS,

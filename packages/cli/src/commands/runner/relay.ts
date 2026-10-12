@@ -5,7 +5,7 @@ import { loadMachineIdentity } from "../../machine.js";
 import { writeError, writeLine } from "../../output.js";
 import { apiPathSegment, clean, pagsApiBase, requestPags, requestRunner } from "./http.js";
 import { CLI_VERSION, runsFromSource } from "./process.js";
-import { deferredUpdateLease, deferredUpdateLeaseActive, installVersion, latestPublishedVersion, leaveForRestart, planRunnerUpdate, restarterFrom, RUNNER_UPDATE_PATH, supervisorNote, type DeferredUpdateLease } from "./self-update.js";
+import { deferredUpdateLease, deferredUpdateLeaseActive, installVersion, latestPublishedVersion, leaveForRestart, planRunnerRestart, planRunnerUpdate, restarterFrom, RUNNER_RESTART_PATH, RUNNER_UPDATE_PATH, supervisorNote, type DeferredUpdateLease } from "./self-update.js";
 import { diffMembership, instanceLabel, pendingRegistrations, pinnedAway, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance, type ReattachRequest } from "./membership.js";
 import { formatStatusLine } from "./status-line.js";
 import type { PagsRequestOptions } from "./types.js";
@@ -24,7 +24,7 @@ import { BoundExpired, createInstallBridge, createPolicyChannel, PolicyCell } fr
 export const MEMBERSHIP_SYNC_PATH = "/pags/membership/sync";
 
 /** Every relay command the CLI answers itself rather than forwarding to the local runner. */
-const CLI_CONTROL_PATHS = new Set([MEMBERSHIP_SYNC_PATH, RUNNER_UPDATE_PATH]);
+const CLI_CONTROL_PATHS = new Set([MEMBERSHIP_SYNC_PATH, RUNNER_UPDATE_PATH, RUNNER_RESTART_PATH]);
 
 /**
  * Connect to PAGS via WebSocket relay — no tunnel, no cloudflared.
@@ -127,7 +127,8 @@ export async function connectViaRelay(
 	/** The cloud asking for a membership pass now (#850). A scoped run refuses: it must stay as
 	 *  narrow as the user asked, and saying so is what lets the repin report the real remedy. */
 	/** The facts `runner_update` decides on (#859): versions, how this process runs, which engines are mid-turn. */
-	const updateFacts = async (signal?: AbortSignal) => {
+	/** The local work look both an update and a restart are guarded by (#1020, #1032). */
+	const workLook = async (signal?: AbortSignal) => {
 		const [sessionsResult, healthResult] = await Promise.allSettled([
 			requestRunner<{ sessions?: Array<{ sessionId: string; alive?: boolean; runState?: string }> }>("GET", "/coding/sessions", {
 			url: localUrl,
@@ -138,7 +139,10 @@ export async function connectViaRelay(
 		]);
 		// The guard's reading and each half's outcome, read ONCE (#1020): a local browser/apply run is destroyed by a restart
 		// as surely as a coding turn, so an unavailable or unreadable look fails closed.
-		const { busy, observations } = readWorkLook(sessionsResult, healthResult, Date.now());
+		return readWorkLook(sessionsResult, healthResult, Date.now());
+	};
+	const updateFacts = async (signal?: AbortSignal) => {
+		const { busy, observations } = await workLook(signal);
 		return {
 			observations,
 			current: CLI_VERSION,
@@ -256,8 +260,28 @@ export async function connectViaRelay(
 		return { status: 200, result: { action: "restarting", current: plan.current, latest: plan.latest, restartedBy: plan.restarter, ...(supervisor ? { supervisor } : {}) } };
 	};
 
+	/**
+	 * `runner_restart` (#1032): leave so the supervisor starts this runner again on the CLI it has. It
+	 * never interrupts an install, and is guarded by the same work look as an update — see
+	 * `planRunnerRestart` for why an unanswered look refuses unless forced.
+	 */
+	const answerRestart = async (body?: unknown): Promise<{ status: number; result: unknown }> => {
+		const request = body as { dryRun?: unknown; force?: unknown } | undefined;
+		const dryRun = request?.dryRun === true;
+		const force = request?.force === true;
+		if (bridge.inFlight()) return { status: 409, result: { error: "A runner update is installing or restarting; nothing else restarted." } };
+		const look = force ? null : await boundedWork((signal) => workLook(signal));
+		const plan = planRunnerRestart({ current: CLI_VERSION, restarter: restarterFrom(process.env), busy: force ? [] : (look?.busy ?? null), force });
+		if (dryRun || plan.action === "refused") return { status: 200, result: { ...plan, dryRun } };
+		// Answered before leaving, like an update: the relay sends this reply before timers run.
+		setTimeout(() => leaveForRestart(plan.restarter), 25).unref();
+		const supervisor = supervisorNote(plan.restarter);
+		return { status: 200, result: { action: "restarting", current: plan.current, latest: plan.current, restartedBy: plan.restarter, forced: force, ...(supervisor ? { supervisor } : {}) } };
+	};
+
 	const answerControl = async (path: string, body?: unknown): Promise<{ status: number; result: unknown }> => {
 		if (path === RUNNER_UPDATE_PATH) return answerUpdate(body);
+		if (path === RUNNER_RESTART_PATH) return answerRestart(body);
 		if (path !== MEMBERSHIP_SYNC_PATH) return { status: 404, result: { error: `Unknown runner control ${path}` } };
 		const request = body as ReattachRequest | undefined;
 		const named = typeof request?.attach === "string" ? request.attach : "";

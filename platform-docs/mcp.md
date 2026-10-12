@@ -151,7 +151,7 @@ Confirm before destructive actions.
 
 ## What `initialize` Answers
 
-- `serverInfo.version`: `0.1.119`
+- `serverInfo.version`: `0.1.120`
 
 That is the same value the published MCP-registry manifest (`server.json`) carries, and both
 are read from one constant — `MCP_SERVER_VERSION` in `workers/mcp/src/server-version.ts` —
@@ -258,6 +258,7 @@ Destructive or overwrite-style tools require an exact `confirm` value. By conven
 - `create_agent_version`: `confirm: "create_agent_version"`
 - `rollback_agent_version`: `confirm: "rollback_agent_version"`
 - `execute_agent_builder_plan`: `confirm: "execute_agent_builder_plan"`
+- `runner_restart`: `confirm: "runner_restart"`, and only with `force: true` (#1032)
 - `remove_repo`: `confirm: "remove_all_repos"`, and only when removing **all** indexed repos
 
 ### Tool annotations
@@ -277,7 +278,7 @@ The two published hints are **derived, not hand-maintained per tool**.
 `workers/mcp/src/tool-metadata.ts` classifies every tool `read` / `write` / `runtime` /
 `destructive` in one table, and `annotationsFor()` maps that classification onto the two
 hints. The classification is then derived **back out of the handlers** by `index.test.ts`,
-which drives all 308 tools under two different scope sets and reads the required scope out
+which drives all 309 tools under two different scope sets and reads the required scope out
 of each refusal — so a tool announced read-only that enforces a write gate fails the build
 rather than reaching a host. `conformance.test.ts` asserts the same thing against a real
 `tools/list` response.
@@ -489,7 +490,7 @@ More recipes, with real argument names, are in
 
 ## Tool Surface
 
-The server registers **308 tools**. 281 are always present. The remaining 27 are gated to
+The server registers **309 tools**. 282 are always present. The remaining 27 are gated to
 the console surfaces of the connected user's own subscribed agents, so the surface is
 per-connection:
 
@@ -710,11 +711,20 @@ Try `force_runner_attach` for the affected instance first, targeting its pinned
 machine or an explicit `runner_node` from `instance_runner_node`. This explicit
 recovery probes and clears stale sockets and asks a responding runner belonging
 to the owner on that machine to reattach the agent. It can recover remotely even
-when no socket was evicted; `attached: true` confirms attachment, not a successful
-health check. Run `coding_diagnostics` again to verify health and sessions.
+when no socket was evicted. `attached: true` is the relay TRANSPORT only (#1032):
+the answer also carries `health`, the `/health` probe run through that socket right
+after, and only `health.state: "ok"` means the agent can work.
+`instance_runtime_status` and `coding_diagnostics` report the same four facts apart
+in `statusView`: heartbeat, relay attachment, RPC health and execution eligibility.
 
-If no runner socket on the target machine can answer the recovery command, or
-health still fails after reattachment, restart `pags up` on that machine. A
+Attached with failing health is a wedged runner behind a live socket, which attaching
+again cannot fix. `runner_restart` restarts that machine's runner remotely, on the CLI
+it has. The machine's relay client answers it, so it reaches a runner whose `/health`
+does not. It refuses while work runs, or when the machine cannot show itself idle;
+`force` (with `confirm: "runner_restart"`) restarts anyway and loses that work. Like
+`runner_update` it is durable and single-flight per machine: read it with
+`runner_update_status`. If no runner socket on the target machine can answer, or a CLI
+older than 0.4.114 answers `unsupported`, restart `pags up` on that machine. A
 disconnected relay needs `pags up` started or reconnected; recovery can still be
 remote if another agent's runner on the same machine responds. `runner_update`
 also needs a responding carrier and is not a substitute for stale-slot recovery.

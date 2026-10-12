@@ -124,7 +124,7 @@ describe("an expired confirmation window looks once more before answering (#922)
 	it("a force attach that already landed answers attached, not unconfirmed", async () => {
 		attachedOnMachine.mockResolvedValue(true);
 		const { attachment } = await expire("POST", "/inst/runner-attach");
-		expect(attachment).toEqual({ node: "laptop", attached: true });
+		expect(attachment).toMatchObject({ node: "laptop", attached: true, transport: "attached", health: { state: "not_attempted" } });
 	});
 
 	it("a relay that cannot be read keeps the unconfirmed answer rather than failing the request", async () => {

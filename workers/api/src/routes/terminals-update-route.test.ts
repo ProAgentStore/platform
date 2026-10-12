@@ -33,7 +33,7 @@ vi.mock("../lib/runner-client.js", () => ({
 	evictStaleRunnerSocket: async () => ({ sockets: 0, alive: false, evicted: 0 }),
 	getRunnerConnIgnoringLiveness: async (_e: unknown, id: string, _uid: string, node: string) => ({ instanceId: id, runnerNode: node }),
 	callRunner: async (_conn: unknown, path: string) => {
-		if (path !== "/pags/runner/update") return { attached: [] };
+		if (path !== "/pags/runner/update" && path !== "/pags/runner/restart") return { attached: [] };
 		if (replyDelayMs) await new Promise((r) => setTimeout(r, replyDelayMs));
 		const r = reply();
 		if (r instanceof Error) throw r;
@@ -118,5 +118,36 @@ describe("POST …/nodes/:node/update — a durable Workflow claim (#1008)", () 
 		const list = await call("GET", "/nodes");
 		const node = (list.body.nodes as Array<{ node: string; update?: { state: string } }>).find((n) => n.node === "Macmini.modem");
 		expect(node?.update).toMatchObject({ state: "running", phase: "queued" });
+	});
+});
+
+describe("POST …/nodes/:node/restart — runner_restart, durable and single-flight with updates (#1032)", () => {
+	const RESTART = "/nodes/Macmini.modem/restart";
+
+	it("claims a durable restart operation and hands it to the Workflow with its kind", async () => {
+		const res = await call("POST", RESTART, {});
+		expect(res.body).toMatchObject({ node: "Macmini.modem", kind: "restart", state: "running", started: true });
+		expect(created).toEqual([{ id: `runner-update-${res.body.operationId}`, params: expect.objectContaining({ kind: "restart", force: false }) }]);
+		// Polled where an update is polled, and says what it is.
+		expect((await call("GET", UPDATE)).body.operation).toMatchObject({ id: res.body.operationId, kind: "restart", phase: "queued" });
+	});
+
+	it("is single-flight per machine WITH updates: neither starts while the other runs", async () => {
+		const restart = await call("POST", RESTART, {});
+		const update = await call("POST", UPDATE, {});
+		expect(update.body).toMatchObject({ operationId: restart.body.operationId, started: false });
+		const again = await call("POST", RESTART, { force: true });
+		expect(again.body).toMatchObject({ operationId: restart.body.operationId, started: false });
+		expect(created).toHaveLength(1);
+	});
+
+	it("passes force to the Workflow only when asked", async () => {
+		await call("POST", RESTART, { force: true });
+		expect(created[0]?.params).toMatchObject({ kind: "restart", force: true });
+	});
+
+	it("an update operation still reads as an update", async () => {
+		const res = await call("POST", UPDATE, {});
+		expect((await call("GET", UPDATE)).body.operation).toMatchObject({ id: res.body.operationId, kind: "update" });
 	});
 });

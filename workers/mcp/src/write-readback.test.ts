@@ -300,6 +300,9 @@ const READBACK: Record<string, string | null> = {
 	"force_runner_attach.runner_node": "instance_runner_node",
 	"set_machine_policy.auto_update": "get_machine_policy",
 	"runner_update.runner_node": "list_runner_nodes",
+	"runner_restart.runner_node": "list_runner_nodes",
+	// A per-call choice for that one restart, not state anything keeps.
+	"runner_restart.force": null,
 	// #613: terminal-tab selection is durable instance state, not ephemeral client state. The
 	// matching reader must land with its writer so an MCP-only caller can verify a clear/save.
 	"set_instance_terminal_session.active_terminal_target": "get_instance_terminal_session",

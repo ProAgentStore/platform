@@ -257,8 +257,10 @@ export function pinnedWarning(
 }
 
 export interface RunnerReading {
-	/** Is THIS agent's runner live? */
+	/** Is THIS agent's runner live — and, where the API says so, able to work (#1032)? */
 	online: boolean;
+	/** Relay attached but the runner behind it failed its health check (#1032). Absent on an older API. */
+	attachedNotHealthy?: boolean;
 	/** The machine it is (or would be) running on. */
 	node: string;
 	/** The pinned machine is up for some agent, even if not this one. */
@@ -279,9 +281,12 @@ export function runnerReading(
 	runnerNode: string,
 ): RunnerReading {
 	const relay = (runtimeInfo as { relay?: { connected?: boolean; runnerNode?: string | null } } | null)?.relay;
+	const view = statusViewOf(runtimeInfo);
 	const pinned = detail.find((d) => d.node === runnerNode);
 	return {
-		online: relay?.connected === true || pinned?.connected === true,
+		// An attached socket is transport only (#1032): with a status view, "online" also needs health.
+		online: view ? view.eligible.ok : relay?.connected === true || pinned?.connected === true,
+		...(view ? { attachedNotHealthy: view.relay.attached && !view.eligible.ok } : {}),
 		node: relay?.runnerNode || runnerNode || "",
 		pinnedNodeOnline: pinned?.nodeOnline === true,
 	};
@@ -294,6 +299,30 @@ export function runnerReading(
 // printed "Pinned to X" for every outcome — including a pin that saved but did not attach, and one
 // whose confirmation timed out — so a move that had not happened read as done.
 
+/** The four runner facts `/runtime/status` reports apart (#1032, `lib/runner-health.ts` runnerStatusView). */
+export interface RunnerStatusView {
+	status: "online" | "unresponsive" | "offline" | "unregistered";
+	heartbeat: { lastSeenAt: string | null; fresh: boolean };
+	relay: { attached: boolean };
+	rpc: { health: string; error?: string };
+	eligible: { ok: boolean; reason: string; detail: string };
+}
+
+export function statusViewOf(runtimeInfo: Record<string, unknown> | null): RunnerStatusView | null {
+	const v = (runtimeInfo as { statusView?: RunnerStatusView } | null)?.statusView;
+	return v && typeof v === "object" && v.eligible && v.relay ? v : null;
+}
+
+/** The four facts as the card's lines: label, value, and whether that fact is good. */
+export function statusFacts(view: RunnerStatusView): Array<{ label: string; value: string; good: boolean }> {
+	return [
+		{ label: "Heartbeat", value: view.heartbeat.fresh ? `reporting${view.heartbeat.lastSeenAt ? ` (${agoShort(view.heartbeat.lastSeenAt)})` : ""}` : view.heartbeat.lastSeenAt ? `stale (${agoShort(view.heartbeat.lastSeenAt)})` : "never", good: view.heartbeat.fresh },
+		{ label: "Relay", value: view.relay.attached ? "attached (connection only)" : "not attached", good: view.relay.attached },
+		{ label: "Health", value: view.rpc.health === "ok" ? "answering" : view.rpc.health.replace(/_/g, " "), good: view.rpc.health === "ok" },
+		{ label: "Can run work", value: view.eligible.ok ? "yes" : "no", good: view.eligible.ok },
+	];
+}
+
 /** The attachment either route answers with (`RepinAttachment` / `AgentAttachment`, both optional-heavy). */
 export interface AttachResult {
 	node?: string;
@@ -304,7 +333,14 @@ export interface AttachResult {
 	detail?: string;
 	/** Stale sockets cleared from the agent's slot (runner-attach only). */
 	evicted?: number;
+	/** `attached` is the relay connection only (#1032); `health` is the runner behind it, checked right after. */
+	transport?: "attached" | "not_attached";
+	health?: { state: string; error?: string };
 }
+
+/** Attached, but the runner behind the socket failed the health check run right after (#1032). */
+const unhealthy = (a: AttachResult | null | undefined): string | null =>
+	a?.attached && a.health && a.health.state !== "ok" && a.health.state !== "not_attempted" ? a.health.state.replace(/_/g, " ") : null;
 
 export interface MoveOutcome {
 	/** `ok` = done; `pending` = not confirmed yet, re-check; `warn` = it did not attach. */
@@ -312,6 +348,8 @@ export interface MoveOutcome {
 	text: string;
 	/** Offer "Reattach on <node>" — the remote `pags up --force` for this one agent. */
 	offerReattach: boolean;
+	/** Offer "Restart runner" — attached, but the runner behind the connection is not answering (#1032). */
+	offerRestart?: boolean;
 }
 
 /**
@@ -341,6 +379,8 @@ export function pinOutcome(node: string, resp: Partial<PinResponse> | null | und
 	const a = resp?.attachment;
 	// An older API answered without `attachment`: the pin is saved and that is all it said.
 	if (!a) return { tone: "ok", text: `Pinned to ${node}.`, offerReattach: false };
+	const sick = unhealthy(a);
+	if (sick) return { tone: "warn", text: `Pinned to ${node} and connected there, but its runner did not pass the health check (${sick}). Reattaching won't fix that — restart the runner.`, offerReattach: false, offerRestart: true };
 	if (a.attached && !a.unconfirmed) return { tone: "ok", text: `Moved to ${node} — this agent is attached there now.`, offerReattach: false };
 	if (a.attached) return { tone: "pending", text: `Attached on ${node}. Other machines still let go of it on their own poll — this card re-checks.`, offerReattach: false };
 	if (a.unconfirmed) return { tone: "pending", text: `Pinned to ${node}; not confirmed yet whether it attached — this card re-checks in a few seconds.`, offerReattach: false };
@@ -350,6 +390,8 @@ export function pinOutcome(node: string, resp: Partial<PinResponse> | null | und
 
 /** What `POST /v1/instances/:id/runner-attach` did. */
 export function reattachOutcome(node: string, a: AttachResult | null | undefined): MoveOutcome {
+	const sick = unhealthy(a);
+	if (sick) return { tone: "warn", text: `Connected on ${node} (connection only), but its runner did not pass the health check (${sick}). Reattaching again won't fix that — restart the runner.`, offerReattach: false, offerRestart: true };
 	if (a?.attached) {
 		const cleared = a.evicted ? ` (cleared ${a.evicted} stale connection${a.evicted === 1 ? "" : "s"})` : "";
 		return { tone: "ok", text: `Reattached on ${node}${cleared}.`, offerReattach: false };
@@ -409,6 +451,16 @@ const updateText = (detail: string | null | undefined, fallback: string): string
 		.replace(/\bpoll list_runner_nodes\b/g, "refresh this page")
 		.replace(/\bruic?nner_update_status\b/g, "this page")
 		.replace(/\bcoding_diagnostics\b/g, "the agent's diagnostics") || fallback;
+
+/**
+ * After asking for a restart (#1032). A machine that cannot show itself idle — usually the wedged
+ * runtime itself — refuses; that is the case where a forced restart is the remedy.
+ */
+export function restartOutcome(res: RunnerUpdateResponse): { tone: "ok" | "pending" | "warn"; text: string; offerForce: boolean } {
+	const out = updateOutcome(res);
+	const text = out.text.replace(/\bwith force\b/g, "with Force restart");
+	return { ...out, text, offerForce: (res.state ?? res.action) === "refused" };
+}
 
 /** The line under the card after asking for an update, or while one is in flight (#990). */
 export function updateOutcome(res: RunnerUpdateResponse): { tone: "ok" | "pending" | "warn"; text: string } {

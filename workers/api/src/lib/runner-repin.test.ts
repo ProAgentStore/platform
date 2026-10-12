@@ -20,6 +20,9 @@ const synced: Array<{ via: string; node: string }> = [];
 const hangs = new Set<string>();
 /** The timeout every runner command was sent with, in order. */
 const timeouts: number[] = [];
+/** How the runtime behind an attached socket answers `/health` (#1032). */
+let health: "ok" | "timeout" = "ok";
+const healthProbes: string[] = [];
 
 vi.mock("./runner-client.js", () => ({
 	relayConnected: async (_env: unknown, id: string, node: string) => live.has(`${id}@${node}`) || stale.has(`${id}@${node}`),
@@ -33,6 +36,11 @@ vi.mock("./runner-client.js", () => ({
 	},
 	getRunnerConnIgnoringLiveness: async (_env: unknown, id: string, _uid: string, node: string) => ({ instanceId: id, runnerNode: node, relayName: `${id}:node:${node}` }),
 	callRunner: async (conn: { instanceId: string; runnerNode: string }, path: string, body?: unknown, opts?: { timeoutMs?: number }) => {
+		if (path === "/health") {
+			healthProbes.push(`${conn.instanceId}@${conn.runnerNode}`);
+			if (health === "timeout") throw new Error('Runner /health → 504: {"error":"Relay command timed out"}');
+			return { ok: true };
+		}
 		expect(path).toBe("/pags/membership/sync");
 		timeouts.push(opts?.timeoutMs ?? Number.NaN);
 		if (hangs.has(`${conn.instanceId}@${conn.runnerNode}`)) {
@@ -93,6 +101,8 @@ beforeEach(() => {
 	frozen.clear();
 	hangs.clear();
 	timeouts.length = 0;
+	health = "ok";
+	healthProbes.length = 0;
 	accountRows = rows;
 	bodies.length = 0;
 	synced.length = 0;
@@ -111,7 +121,7 @@ describe("repinning an idle agent to an online machine (#850)", () => {
 	it("attaches it on the new machine through a socket another agent holds there — no pags up", async () => {
 		const out = await repin();
 		expect(synced).toEqual([{ via: OTHER, node: "Macmini" }]);
-		expect(out).toEqual({ node: "Macmini", attached: true, detachedFrom: [], stillAttachedOn: [] });
+		expect(out).toEqual({ node: "Macmini", attached: true, detachedFrom: [], stillAttachedOn: [], health: { state: "ok" } });
 		expect(live.has(`${AGENT}@Macmini`)).toBe(true);
 	});
 
@@ -263,7 +273,7 @@ describe("a repin answers within its budget, whatever the machines do (#853 find
 	});
 
 	it("a quick repin says nothing about a budget", async () => {
-		expect(await repin()).toEqual({ node: "Macmini", attached: true, detachedFrom: [], stillAttachedOn: [] });
+		expect(await repin()).toEqual({ node: "Macmini", attached: true, detachedFrom: [], stillAttachedOn: [], health: { state: "ok" } });
 	});
 });
 
@@ -296,14 +306,33 @@ describe("remote reattach — the platform's `pags up --force` for one agent (#8
 		// The slot answers the optimistic status — "online" — but no ping: a duplicate or frozen runner.
 		stale.add(`${AGENT}@Macmini`);
 		const out = await attachAgentOnNode(env, AGENT, "u1", "Macmini", { force: false, ...deps });
-		expect(out).toEqual({ node: "Macmini", attached: true, evicted: 1 });
+		expect(out).toEqual({ node: "Macmini", attached: true, evicted: 1, transport: "attached", health: { state: "ok" } });
 		expect(synced).toEqual([{ via: OTHER, node: "Macmini" }]);
 	});
 
 	it("a live socket in the slot IS the agent attached — a plain attach touches nothing", async () => {
 		live.add(`${AGENT}@Macmini`);
-		expect(await attachAgentOnNode(env, AGENT, "u1", "Macmini", { force: false, ...deps })).toEqual({ node: "Macmini", attached: true, evicted: 0 });
+		expect(await attachAgentOnNode(env, AGENT, "u1", "Macmini", { force: false, ...deps })).toEqual({ node: "Macmini", attached: true, evicted: 0, transport: "attached", health: { state: "ok" } });
 		expect(synced).toEqual([]);
+	});
+
+	// #1032, the live report: `force_runner_attach` answered `attached: true` on a machine whose
+	// `/health` kept timing out, and the caller read that as recovered.
+	it("an attach that succeeds while the runner's health times out says so: transport attached, health timeout, remedy runner_restart", async () => {
+		live.add(`${AGENT}@Macmini`);
+		health = "timeout";
+		const out = await attachAgentOnNode(env, AGENT, "u1", "Macmini", { force: true, ...deps });
+		expect(out).toMatchObject({ node: "Macmini", attached: true, transport: "attached", health: { state: "timeout", error: expect.stringMatching(/did not answer in time/) } });
+		expect(out.remedy).toMatch(/Attaching again will not fix that: call runner_restart for Macmini/);
+		expect(healthProbes).toEqual([`${AGENT}@Macmini`]); // through THIS agent's own socket
+	});
+
+	it("an attach that did not land is never health-probed, and reads as not attached", async () => {
+		onSync = () => ({ status: 200, reply: { attached: [], target: AGENT, holding: false } });
+		const out = await attachAgentOnNode(env, AGENT, "u1", "Macmini", { force: false, ...deps });
+		expect(out).toMatchObject({ attached: false, transport: "not_attached" });
+		expect(out).not.toHaveProperty("health");
+		expect(healthProbes).toEqual([]);
 	});
 
 	it("force asks the runner to take the slot over even from a socket that answers, and reports it attached", async () => {

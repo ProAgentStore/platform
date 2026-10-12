@@ -21,6 +21,7 @@
  */
 import { aliasNodesFor, type NodeRegistration, stampMs } from "./machine-identity.js";
 import { callRunner, evictStaleRunnerSocket, getRunnerConnIgnoringLiveness, relayConnected, type RunnerConn } from "./runner-client.js";
+import { attachHealthRemedy, classifyHealthProbeFailure, type PostAttachHealth } from "./runner-health.js";
 import { RunnerUnreachableError } from "./runner-unreachable.js";
 import { normalizeRunnerNode } from "./runtime-nodes.js";
 import type { Env } from "../types.js";
@@ -84,6 +85,9 @@ export interface RepinAttachment {
 	detail?: string;
 	/** {@link REPIN_BUDGET_MS} ran out before every step could be confirmed (#853 finding 12). */
 	unconfirmed?: true;
+	/** The runner's health through the new socket (#1032) — `attached` is the transport alone. */
+	health?: PostAttachHealth;
+	remedy?: string;
 }
 
 export interface RepinDeps {
@@ -94,6 +98,15 @@ export interface RepinDeps {
 /** What {@link attachAgentOnNode} achieved on one machine, and — when it did not — the specific reason. */
 export interface AgentAttachment {
 	node: string;
+	/**
+	 * What `attached` is a fact about (#1032): the relay TRANSPORT only — this agent's socket is live
+	 * there. Whether the runner behind it answers is `health`.
+	 */
+	transport: "attached" | "not_attached";
+	/** The `/health` probe run right after a successful attach. Absent when not attached. */
+	health?: PostAttachHealth;
+	/** The next step when attached but not healthy. */
+	remedy?: string;
 	/** This agent's own socket answers on that machine now. */
 	attached: boolean;
 	/** Stale sockets cleared from the agent's slot there so a runner could take it (#856). */
@@ -160,7 +173,42 @@ export interface AgentAttachOptions extends RepinDeps {
 	deadline?: number;
 }
 
+/** How long the post-attach `/health` probe may take (#1032) — a healthy runner answers in well under it. */
+const ATTACH_HEALTH_TIMEOUT_MS = 5_000;
+
+/** Probe `/health` through THIS agent's socket on the machine, under whichever of its names holds it. */
+async function healthAfterAttach(env: Env, instanceId: string, userId: string, names: readonly string[], budgetMs: number): Promise<PostAttachHealth> {
+	if (budgetMs < 1_000) return { state: "not_attempted", error: "No time was left in this request to check the runner's health." };
+	for (const name of names) {
+		if (!(await relayConnected(env, instanceId, name).catch(() => false))) continue;
+		const conn = await getRunnerConnIgnoringLiveness(env, instanceId, userId, name).catch(() => null);
+		if (!conn) continue;
+		try {
+			await callRunner(conn, "/health", undefined, { timeoutMs: Math.min(ATTACH_HEALTH_TIMEOUT_MS, budgetMs) });
+			return { state: "ok" };
+		} catch (e) {
+			const failure = classifyHealthProbeFailure(e);
+			return { state: failure.state, error: failure.error };
+		}
+	}
+	return { state: "not_attempted", error: "The agent's socket was gone again before its health could be checked." };
+}
+
+/**
+ * {@link attachTransport}, then — when the socket is attached — the runner's health through it (#1032).
+ * `attached` stays the transport fact it always was; `health` says whether the agent can work.
+ */
 export async function attachAgentOnNode(env: Env, instanceId: string, userId: string, node: string, opts: AgentAttachOptions): Promise<AgentAttachment> {
+	const now = opts.now ?? Date.now;
+	const rows = opts.rows ?? (await nodeRegistrations(env, userId));
+	const result = await attachTransport(env, instanceId, userId, node, { ...opts, rows });
+	if (!result.attached) return { ...result, transport: "not_attached" };
+	const health = await healthAfterAttach(env, instanceId, userId, [node, ...aliasNodesFor(node, rows)], (opts.deadline ?? Number.POSITIVE_INFINITY) - now());
+	const remedy = attachHealthRemedy(node, health.state);
+	return { ...result, transport: "attached", health, ...(remedy ? { remedy } : {}) };
+}
+
+async function attachTransport(env: Env, instanceId: string, userId: string, node: string, opts: AgentAttachOptions): Promise<Omit<AgentAttachment, "transport" | "health" | "remedy">> {
 	const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 	const now = opts.now ?? Date.now;
 	const rows = opts.rows ?? (await nodeRegistrations(env, userId));
@@ -277,7 +325,8 @@ export async function attachOnRepin(env: Env, instanceId: string, userId: string
 
 	// 1. Attach on the target — without force: a repin moves the agent, it does not take a slot another
 	// runner still answers in. When that is what stands in the way, the detail names the tool that does.
-	const { attached, detail, unconfirmed } = await attachAgentOnNode(env, instanceId, userId, node, { force: false, rows, sleep, now, deadline });
+	const { attached, detail, unconfirmed, health, remedy } = await attachAgentOnNode(env, instanceId, userId, node, { force: false, rows, sleep, now, deadline });
+	const checked = { ...(health ? { health } : {}), ...(remedy ? { remedy } : {}) };
 	let cut = unconfirmed === true;
 
 	// 2. Detach from every other machine that still holds this agent. Its own socket carries the
@@ -302,9 +351,9 @@ export async function attachOnRepin(env: Env, instanceId: string, userId: string
 
 	if (cut) {
 		const released = `${stillAttachedOn.join(", ")} did not confirm letting it go within ${REPIN_BUDGET_MS / 1000}s; each drops it on its own poll, since the pin moved.`;
-		return { node, attached, detachedFrom, stillAttachedOn, unconfirmed: true, detail: attached ? `Attached on ${node}. ${released}` : (detail ?? unconfirmedDetail(node)) };
+		return { node, attached, detachedFrom, stillAttachedOn, unconfirmed: true, detail: attached ? `Attached on ${node}. ${released}` : (detail ?? unconfirmedDetail(node)), ...checked };
 	}
-	return { node, attached, detachedFrom, stillAttachedOn, ...(attached ? {} : { detail }) };
+	return { node, attached, detachedFrom, stillAttachedOn, ...(attached ? {} : { detail }), ...checked };
 }
 
 /**

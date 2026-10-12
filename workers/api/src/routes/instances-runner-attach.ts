@@ -10,6 +10,10 @@
  *
  * `force` defaults to true: this is the explicit takeover. Answers what actually happened, from the
  * relay's view, with the specific reason when it could not attach.
+ *
+ * `attached` is TRANSPORT only (#1032): the relay holds this agent's socket. `health` is the `/health`
+ * probe run through that socket right after, and `remedy` the next step when it failed — an attach
+ * once answered `attached: true` for a runner whose health never came back.
  */
 import type { Hono } from "hono";
 import { withinConfirmationWindow } from "../lib/confirmation-window.js";
@@ -73,7 +77,7 @@ export function registerRunnerAttachRoutes(router: Hono<{ Bindings: Env }>): voi
 		const attachment = await withinConfirmationWindow(
 			attachSettled(attachAgentOnNode(c.env, instanceId, session.uid, node, { force: body.force !== false }), node, (why) => `The attach request on ${node} could not be confirmed (${why}). Call instance_runner_node to check whether this agent is attached before retrying force_runner_attach.`),
 			async () => (await attachedOnMachine(c.env, instanceId, session.uid, node).catch(() => false))
-				? { node, attached: true }
+				? { node, attached: true, transport: "attached" as const, health: { state: "not_attempted" as const, error: "The attach outlived this request's window, so the runner's health was not checked here. Run coding_diagnostics before relying on it." } }
 				: { node, attached: false, unconfirmed: true as const, detail: `The attach request on ${node} has not yet been confirmed. Call instance_runner_node to check whether this agent is attached before retrying force_runner_attach.` },
 			(operation) => c.executionCtx.waitUntil(operation),
 		);

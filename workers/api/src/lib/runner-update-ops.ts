@@ -39,6 +39,9 @@ export type RunnerUpdatePhase = (typeof RUNNER_UPDATE_PHASES)[number];
 
 export const isTerminalUpdateState = (state: string): boolean => state !== "running";
 
+/** `update` installs the latest release and restarts; `restart` restarts on the CLI it has (#1032). */
+export type RunnerOpKind = "update" | "restart";
+
 /** The `action` vocabulary {@link RunnerUpdateResult} speaks, mapped onto the stored state. */
 export const UPDATE_STATE_FOR_ACTION: Readonly<Record<string, RunnerUpdateState>> = {
 	"up-to-date": "up_to_date",
@@ -54,6 +57,8 @@ export const UPDATE_STATE_FOR_ACTION: Readonly<Record<string, RunnerUpdateState>
 
 export interface RunnerUpdateOp {
 	id: string;
+	/** What was asked of the machine (#1032). */
+	kind: RunnerOpKind;
 	node: string;
 	/** Stable physical identity when the caller had one; null for pre-identity runners. */
 	machineId: string | null;
@@ -87,6 +92,7 @@ export interface RunnerUpdateOp {
 
 interface Row {
 	id: string;
+	kind: string | null;
 	node: string;
 	machine_id: string | null;
 	state: string;
@@ -134,6 +140,7 @@ const missingList = (raw: string | null): Array<{ instanceId: string; detail: st
 
 const present = (r: Row): RunnerUpdateOp => ({
 	id: r.id,
+	kind: r.kind === "restart" ? "restart" : "update",
 	node: r.node,
 	state: (RUNNER_UPDATE_STATES as readonly string[]).includes(r.state) ? (r.state as RunnerUpdateState) : "failed",
 	phase: (RUNNER_UPDATE_PHASES as readonly string[]).includes(r.phase) ? (r.phase as RunnerUpdatePhase) : "claimed",
@@ -161,7 +168,7 @@ const present = (r: Row): RunnerUpdateOp => ({
 	endedAt: iso(r.ended_at),
 });
 
-const SELECT = `SELECT id, node, machine_id, state, phase, current_version, latest_version, final_version, detail, reason,
+const SELECT = `SELECT id, kind, node, machine_id, state, phase, current_version, latest_version, final_version, detail, reason,
  held, reattached, missing, waiting_for, restarted_by, supervisor, reconciliation, reconciled_at, execution_owner, workflow_id, workflow_queued_at, deferred_until, dry_run, created_at, updated_at, ended_at
  FROM runner_update_ops`;
 
@@ -211,17 +218,27 @@ export async function claimUpdateOp(
 	env: Pick<Env, "DB">,
 	userId: string,
 	node: string,
-	opts: { dryRun?: boolean; requestedBy?: string; now?: number; id?: string; machineId?: string | null } = {},
+	opts: { dryRun?: boolean; requestedBy?: string; now?: number; id?: string; machineId?: string | null; kind?: RunnerOpKind } = {},
 ): Promise<{ op: RunnerUpdateOp; claimed: boolean }> {
 	const name = normalizeRunnerNode(node);
 	const now = opts.now ?? Date.now();
 	const id = opts.id ?? crypto.randomUUID();
 	const inserted = await env.DB.prepare(
-		`INSERT INTO runner_update_ops (id, user_id, node, machine_id, state, phase, execution_owner, dry_run, requested_by, detail, created_at, updated_at)
-		 VALUES (?1, ?2, ?3, ?4, 'running', 'claimed', 'workflow', ?5, ?6, ?7, ?8, ?8)
+		`INSERT INTO runner_update_ops (id, user_id, node, machine_id, state, phase, execution_owner, dry_run, requested_by, detail, created_at, updated_at, kind)
+		 VALUES (?1, ?2, ?3, ?4, 'running', 'claimed', 'workflow', ?5, ?6, ?7, ?8, ?8, ?9)
 		 ON CONFLICT DO NOTHING`,
 	)
-		.bind(id, userId, name, opts.machineId ?? null, opts.dryRun ? 1 : 0, opts.requestedBy ?? "owner", `Asking ${name} to update its \`pags\` CLI and restart.`, now)
+		.bind(
+			id,
+			userId,
+			name,
+			opts.machineId ?? null,
+			opts.dryRun ? 1 : 0,
+			opts.requestedBy ?? "owner",
+			opts.kind === "restart" ? `Asking ${name} to restart its \`pags\` runner.` : `Asking ${name} to update its \`pags\` CLI and restart.`,
+			now,
+			opts.kind ?? "update",
+		)
 		.run()
 		.then((r) => (r.meta?.changes ?? 0) > 0)
 		.catch(() => false);
@@ -237,6 +254,7 @@ export async function claimUpdateOp(
 	return {
 		op: {
 			id,
+			kind: opts.kind ?? "update",
 			node: name,
 			machineId: opts.machineId ?? null,
 			state: "failed",
@@ -299,6 +317,7 @@ export async function claimWorkflowDispatch(env: Pick<Env, "DB">, userId: string
 
 export interface QueuedUpdateWorkflow {
 	id: string;
+	kind: RunnerOpKind;
 	userId: string;
 	node: string;
 	machineId: string | null;
@@ -308,7 +327,7 @@ export interface QueuedUpdateWorkflow {
 /** Rows which were claimed but whose Workflow create may have been interrupted with the request. */
 export async function queuedUpdateWorkflows(env: Pick<Env, "DB">, limit = 20): Promise<QueuedUpdateWorkflow[]> {
 	const { results } = await env.DB.prepare(
-		`SELECT id, user_id AS userId, node, machine_id AS machineId, workflow_id AS workflowId FROM runner_update_ops
+		`SELECT id, CASE WHEN kind = 'restart' THEN 'restart' ELSE 'update' END AS kind, user_id AS userId, node, machine_id AS machineId, workflow_id AS workflowId FROM runner_update_ops
 		  WHERE state = 'running' AND execution_owner = 'workflow' AND phase IN ('claimed', 'queued')
 		  ORDER BY created_at ASC LIMIT ?1`,
 	)

@@ -27,6 +27,8 @@ const run = promisify(execFile);
 
 /** The control path the cloud sends (`workers/api/src/lib/runner-update.ts` sends the same string). */
 export const RUNNER_UPDATE_PATH = "/pags/runner/update";
+/** `runner_restart` (#1032): restart this runner on the CLI it already has — no install. */
+export const RUNNER_RESTART_PATH = "/pags/runner/restart";
 /** `runner connect` exits with this to ask its `pags up` parent for a respawn from the updated files. */
 export const RUNNER_RESTART_EXIT_CODE = 75;
 /** Set by a `pags up` that respawns on {@link RUNNER_RESTART_EXIT_CODE}: `1` before #860, {@link SUPERVISOR_RESTARTS} since. */
@@ -161,6 +163,43 @@ export function planRunnerUpdate(f: UpdateFacts): UpdatePlan {
 	}
 	if (f.busy.length > 0) return { action: "wait", current: f.current, latest: f.latest, waitingFor: f.busy };
 	return { action: "update", current: f.current, latest: f.latest, restarter: f.restarter };
+}
+
+export type RestartPlan =
+	| { action: "refused"; current: string; reason: string; waitingFor?: string[] }
+	| { action: "restart"; current: string; restarter: Restarter };
+
+/**
+ * What this machine should do about a remote restart (#1032). Pure.
+ *
+ * The recovery for "relay attached, runner not answering": the relay client answers this itself, so
+ * it works when the local runtime behind it is wedged. It is guarded like an update: nothing would
+ * restart it → refused; work running → refused with what is running. A work look that did not
+ * answer (`busy` null, or the fail-closed `runner-work-observation-unavailable`) cannot show the
+ * machine idle — and a wedged runtime is exactly the one that does not answer — so it refuses with
+ * that said, and `force` is the owner's explicit choice to restart anyway, losing any run in flight.
+ */
+export function planRunnerRestart(f: { current: string; restarter: Restarter | null; busy: string[] | null; force: boolean }): RestartPlan {
+	if (!f.restarter) {
+		return {
+			action: "refused",
+			current: f.current,
+			reason: `Nothing would start this runner again after a restart: it was not started by \`pags up\`, and neither ${SERVICE_ENV}=1 nor ${RESTART_COMMAND_ENV} is set. Restart it at the machine.`,
+		};
+	}
+	if (!f.force) {
+		if (f.busy === null || f.busy.includes("runner-work-observation-unavailable")) {
+			return {
+				action: "refused",
+				current: f.current,
+				reason: "The local runtime did not answer the work check, so this machine cannot be shown idle — it may be the part that is wedged. Restart with force to restart anyway; any run in progress on this machine is lost.",
+			};
+		}
+		if (f.busy.length > 0) {
+			return { action: "refused", current: f.current, waitingFor: f.busy, reason: `${f.busy.length} piece(s) of work are running here. Restart when they finish, or with force (that work is lost).` };
+		}
+	}
+	return { action: "restart", current: f.current, restarter: f.restarter };
 }
 
 /** Install `version` — into the stub's cache when bootstrapped (#862), else globally. Rejects with npm's own reason. */

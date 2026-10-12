@@ -100,7 +100,7 @@ export function registerRuntimeTools(server: McpServer, ctx: InstanceToolsCtx): 
 
 	server.tool(
 		"instance_runtime_status",
-		"Check the registered local or managed browser runtime for one of your private instances.",
+		"Check the registered local or managed browser runtime for one of your private instances. `statusView` (#1032) reports four facts apart: `heartbeat` (is `pags up` reporting in), `relay.attached` (does the relay hold this agent's socket — transport only), `rpc.health` (did the runner behind it answer /health) and `eligible` (`ok` only when both of the last two hold, with `reason` and `detail`). `runtime.status` is never `online` while the health probe fails; attached-but-unhealthy reads `unresponsive`, recovered with runner_restart.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Private instance ID or slug from my_instances. Copy it exactly; this is not the public agent_id from list_agents."),

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { isTransientStatus } from "@proagentstore/coder-web";
-import { type AttachResult, canReattach, type Machine, machinesToShow, machineTile, type MoveOutcome, type NodeDetail, type PinResponse, pinnedWarning, pinOutcome, reattachOutcome, runnerReading } from "../lib/runnerPanel";
+import { type AttachResult, canReattach, type Machine, machinesToShow, machineTile, type MoveOutcome, type NodeDetail, type PinResponse, pinnedWarning, pinOutcome, reattachOutcome, restartOutcome, type RunnerUpdateResponse, runnerReading, statusFacts, statusViewOf } from "../lib/runnerPanel";
 import { type CodingDiagnostics, consoleFix, diagnosticsHeadline, orderedIssues } from "../lib/runnerDiagnostics";
 import Button from "./Button";
 import Card from "./Card";
@@ -119,6 +119,27 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 		}
 	};
 
+	// `runner_restart` (#1032): the recovery for a connection that is up while the runner behind it is not.
+	const [restart, setRestart] = useState<ReturnType<typeof restartOutcome> | null>(null);
+	const restartRunner = async (force: boolean) => {
+		const node = runnerNode;
+		if (!node) return;
+		if (force && !window.confirm(`Force-restart the runner on ${node}? Any run in progress there is lost.`)) return;
+		setRestart({ tone: "pending", text: `Asking ${node} to restart its runner…`, offerForce: false });
+		try {
+			let res = await api<RunnerUpdateResponse>(`/v1/terminals/nodes/${encodeURIComponent(node)}/restart`, { method: "POST", body: JSON.stringify({ force }) });
+			// The operation is durable and answers at once; the machine's verdict lands within seconds.
+			for (let i = 0; i < 10 && res.state === "running"; i++) {
+				await new Promise((r) => setTimeout(r, 2_000));
+				res = await api<RunnerUpdateResponse>(`/v1/terminals/nodes/${encodeURIComponent(node)}/update`);
+			}
+			setRestart(restartOutcome(res));
+			await refresh();
+		} catch (e) {
+			setRestart({ tone: "warn", text: e instanceof Error ? e.message : "Failed", offerForce: false });
+		}
+	};
+
 	/** The remote `pags up --force` for this one agent (`force_runner_attach`, #856). */
 	const reattach = async () => {
 		const node = runnerNode;
@@ -182,10 +203,25 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 			<div className="text-sm text-muted leading-relaxed">
 				{runtimeInfo ? (
 					<>
-						Status: <span className={reading.online ? "text-success" : ""}>{reading.online ? "Online" : "Offline"}</span>
+						Status:{" "}
+						<span className={reading.online ? "text-success" : reading.attachedNotHealthy ? "text-warning" : ""}>
+							{reading.online ? "Online" : reading.attachedNotHealthy ? "Connected, runner not answering" : "Offline"}
+						</span>
 						{/* Agent's own socket down while the machine is up for OTHER agents. */}
 						{!reading.online && reading.pinnedNodeOnline && <span className="text-amber-500"> · machine online, agent not attached</span>}
 						{reading.node && <> · Node: {reading.node}</>}
+						{/* Four facts apart (#1032): a connection is not a working runner. */}
+						{statusViewOf(runtimeInfo) && (
+							<div className="mt-1 text-xs text-muted-soft" data-testid="runner-status-facts">
+								{statusFacts(statusViewOf(runtimeInfo)!).map((f, i) => (
+									<span key={f.label}>
+										{i > 0 && " · "}
+										{f.label}: <span className={f.good ? "text-success" : "text-warning"}>{f.value}</span>
+									</span>
+								))}
+								{!statusViewOf(runtimeInfo)!.eligible.ok && <div className="mt-0.5">{statusViewOf(runtimeInfo)!.eligible.detail.replace(/\bforce_runner_attach\b/g, "Reattach").replace(/\brunner_restart\b/g, "Restart runner")}</div>}
+							</div>
+						)}
 						{/* The cause + the one command that fixes it. `pags up` is the WRONG advice when the
 						    machine is already running, which is exactly the confusing case. */}
 						{!reading.online && attachment?.message && (
@@ -294,6 +330,14 @@ export default function RunnerPanel({ instanceId }: RunnerPanelProps) {
 				{canReattach(runnerNode, warning, move) && (
 					<Button size="sm" className="mt-2" onClick={reattach} disabled={move?.tone === "pending"} data-testid="runner-reattach">Reattach on {runnerNode}</Button>
 				)}
+				{/* #1032: connected but not answering — restarting the runner is the fix, not another attach. */}
+				{runnerNode && (reading.attachedNotHealthy || move?.offerRestart) && (
+					<Button size="sm" className="mt-2 ml-2" onClick={() => void restartRunner(false)} disabled={restart?.tone === "pending"} data-testid="runner-restart">Restart runner on {runnerNode}</Button>
+				)}
+				{restart?.offerForce && (
+					<Button size="sm" className="mt-2 ml-2" onClick={() => void restartRunner(true)} data-testid="runner-restart-force">Force restart</Button>
+				)}
+				{restart && <p role="status" data-testid="runner-restart-outcome" className={`text-xs mt-1 ${restart.tone === "warn" ? "text-warning" : restart.tone === "ok" ? "text-success" : "text-muted"}`}>{restart.text}</p>}
 			</div>
 		</Card>
 	);

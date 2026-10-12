@@ -31,3 +31,19 @@ describe("RunnerPanel (#932)", () => {
 		expect(SRC).toContain('data-testid="runner-move-outcome"');
 	});
 });
+
+describe("RunnerPanel — restart, not another attach (#1032)", () => {
+	it("offers Restart runner when connected but not answering, through the durable restart route", () => {
+		expect(SRC).toContain("(reading.attachedNotHealthy || move?.offerRestart)");
+		expect(SRC).toContain("/restart`, { method: \"POST\"");
+		expect(SRC).toContain('data-testid="runner-restart"');
+		// Force loses running work, so it is only offered after a refusal, and asks first.
+		expect(SRC).toContain("restart?.offerForce &&");
+		expect(SRC).toMatch(/window\.confirm\(`Force-restart the runner/);
+	});
+
+	it("shows the four facts apart", () => {
+		expect(SRC).toContain('data-testid="runner-status-facts"');
+		expect(SRC).toContain("statusFacts(statusViewOf(runtimeInfo)!)");
+	});
+});

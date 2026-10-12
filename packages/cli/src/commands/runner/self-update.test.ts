@@ -3,7 +3,7 @@
  * it must refuse because nothing would bring it back.
  */
 import { describe, expect, it, vi } from "vitest";
-import { deferredUpdateLease, deferredUpdateLeaseActive, leaveForRestart, MAX_DEFERRED_UPDATE_LEASE_MS, olderThan, restartUpArgs, planRunnerUpdate, RESTART_COMMAND_ENV, restarterFrom, RUNNER_RESTART_EXIT_CODE, SERVICE_ENV, SUPERVISED_ENV, SUPERVISOR_RESTARTS, supervisorNote, type UpdateFacts } from "./self-update.js";
+import { deferredUpdateLease, deferredUpdateLeaseActive, leaveForRestart, MAX_DEFERRED_UPDATE_LEASE_MS, olderThan, restartUpArgs, planRunnerRestart, planRunnerUpdate, RESTART_COMMAND_ENV, restarterFrom, RUNNER_RESTART_EXIT_CODE, SERVICE_ENV, SUPERVISED_ENV, SUPERVISOR_RESTARTS, supervisorNote, type UpdateFacts } from "./self-update.js";
 
 const facts = (over: Partial<UpdateFacts> = {}): UpdateFacts => ({ current: "0.4.62", latest: "0.4.63", fromSource: false, restarter: "pags-up", busy: [], ...over });
 
@@ -119,5 +119,31 @@ describe("restartUpArgs — the supervisor restarts itself with the SAME flags (
 	it("keeps a scoped run scoped, and every other flag", () => {
 		expect(restartUpArgs({})).toEqual(["up"]);
 		expect(restartUpArgs({ headless: true, force: true, instance: "inst-9" })).toEqual(["up", "--headless", "--force", "--instance", "inst-9"]);
+	});
+});
+
+describe("planRunnerRestart (#1032)", () => {
+	const base = { current: "0.4.114", restarter: "pags-up" as const, busy: [] as string[] | null, force: false };
+
+	it("restarts an idle machine under pags up", () => {
+		expect(planRunnerRestart(base)).toEqual({ action: "restart", current: "0.4.114", restarter: "pags-up" });
+	});
+
+	it("refuses while work runs, naming it — force overrides", () => {
+		expect(planRunnerRestart({ ...base, busy: ["coding:s1"] })).toMatchObject({ action: "refused", waitingFor: ["coding:s1"] });
+		expect(planRunnerRestart({ ...base, busy: ["coding:s1"], force: true }).action).toBe("restart");
+	});
+
+	it("an unanswered work check (the wedged runtime itself) refuses unless forced", () => {
+		for (const busy of [null, ["runner-work-observation-unavailable"]]) {
+			const p = planRunnerRestart({ ...base, busy });
+			expect(p.action).toBe("refused");
+			expect((p as { reason: string }).reason).toMatch(/did not answer the work check.*force/);
+			expect(planRunnerRestart({ ...base, busy, force: true }).action).toBe("restart");
+		}
+	});
+
+	it("never restarts what nothing would start again, even forced", () => {
+		expect(planRunnerRestart({ ...base, restarter: null, force: true }).action).toBe("refused");
 	});
 });

@@ -3,7 +3,7 @@
  * same on every call, and `runnerStatus` must never contradict `runnerOnline`.
  */
 import { describe, expect, it } from "vitest";
-import { classifyHealthProbeFailure, type HealthCheckState, runnerHealthRemedy, runnerLiveStatus } from "./runner-health.js";
+import { attachHealthRemedy, classifyHealthProbeFailure, type HealthCheckState, healthOfResponse, runnerHealthRemedy, runnerLiveStatus, runnerStatusView } from "./runner-health.js";
 import { NO_SOCKET_MARKER, RunnerUnreachableError } from "./runner-unreachable.js";
 
 describe("classifyHealthProbeFailure", () => {
@@ -93,5 +93,36 @@ describe("runnerHealthRemedy (#901)", () => {
 		}
 		expect(runnerHealthRemedy("unregistered", "not_attempted")).toContain("register and connect");
 		expect(runnerHealthRemedy("online", "ok")).toBeNull();
+	});
+});
+
+describe("runnerStatusView — four facts apart (#1032)", () => {
+	const base = { registered: true, lastSeenAt: "2026-10-12 10:00:00", heartbeatFresh: true, relayConnected: true };
+
+	it("relay attached + health timeout + fresh heartbeat: unresponsive, not eligible, remedy runner_restart", () => {
+		const v = runnerStatusView({ ...base, health: "timeout", healthError: "x" });
+		expect(v).toMatchObject({ status: "unresponsive", heartbeat: { fresh: true }, relay: { attached: true }, rpc: { health: "timeout", error: "x" }, eligible: { ok: false, reason: "rpc_unhealthy" } });
+		expect(v.eligible.detail).toMatch(/Attaching again will not fix that: runner_restart/);
+	});
+
+	it("eligible only when attached AND answering", () => {
+		expect(runnerStatusView({ ...base, health: "ok" }).eligible).toMatchObject({ ok: true, reason: "ready" });
+		expect(runnerStatusView({ ...base, health: "not_attempted" }).eligible).toMatchObject({ ok: false, reason: "rpc_unchecked" });
+	});
+
+	it("no socket: a fresh heartbeat points at force_runner_attach, a stale one at the machine", () => {
+		expect(runnerStatusView({ ...base, relayConnected: false, health: "not_attempted" }).eligible).toMatchObject({ reason: "no_relay", detail: expect.stringMatching(/force_runner_attach/) });
+		expect(runnerStatusView({ ...base, heartbeatFresh: false, relayConnected: false, health: "not_attempted" }).eligible.detail).toMatch(/not running or not reaching the platform/);
+		expect(runnerStatusView({ ...base, registered: false, relayConnected: false, health: "not_attempted" })).toMatchObject({ status: "unregistered", eligible: { reason: "unregistered" } });
+	});
+
+	it("reads a /health answer that came back as an HTTP error", () => {
+		expect(healthOfResponse(true, {})).toEqual({ health: "ok" });
+		expect(healthOfResponse(false, { error: "Relay command timed out" })).toMatchObject({ health: "timeout" });
+	});
+
+	it("attachHealthRemedy is silent when healthy and names runner_restart when not", () => {
+		expect(attachHealthRemedy("mac", "ok")).toBeNull();
+		expect(attachHealthRemedy("mac", "unresponsive")).toMatch(/call runner_restart for mac/);
 	});
 });

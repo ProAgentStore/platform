@@ -26,7 +26,8 @@ import { readProviderAccountHealth } from "../lib/provider-account-health.js";
 import { readInstanceRunnerNode, relayNameForInstance } from "../lib/runtime-nodes.js";
 import { activeSessionsOn, resourcesView, runnerIdentityOf } from "../lib/runner-resources.js";
 import { duplicateRunnersOn } from "../lib/runner-duplicates.js";
-import { classifyHealthProbeFailure, type HealthCheckState, runnerHealthRemedy, runnerLiveStatus } from "../lib/runner-health.js";
+import { classifyHealthProbeFailure, type HealthCheckState, runnerHealthRemedy, runnerLiveStatus, runnerStatusView } from "../lib/runner-health.js";
+import { heartbeatFresh } from "../lib/runtime-attachment.js";
 import { latestRunRow, readReauthState, signInBlockFrom } from "../lib/engine-reauth-store.js";
 import { reauthExpiryView } from "../lib/engine-reauth-expiry.js";
 import { getLiveRuntime, getRuntimeNode, updateRuntimeStatus } from "./instances-runtime.js";
@@ -434,6 +435,8 @@ export function registerDiagnosticsRoutes(codingRoutes: Hono<{ Bindings: Env }>)
 
 		runner.reportedStatus = runner.status;
 		runner.status = liveStatus;
+		// #1032: the same four facts `/runtime/status` reports — heartbeat, relay, health, eligibility.
+		runner.statusView = runnerStatusView({ registered: !!runtimeRow, lastSeenAt: (runner.lastSeenAt as string | null) ?? null, heartbeatFresh: heartbeatFresh(runner.lastSeenAt as string | null), relayConnected: relayIsConnected, health: healthCheck, ...(runnerHealth && (runnerHealth as { ok?: unknown }).ok === false ? { healthError: (runnerHealth as { error: string }).error } : {}) });
 		runner.relayConnected = relayIsConnected;
 		runner.healthCheck = healthCheck;
 		runner.reachable = effectivelyReachable;
