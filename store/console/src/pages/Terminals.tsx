@@ -213,7 +213,8 @@ export default function Terminals() {
 									{behindLine(n.runnerBehind) && <span className="text-warning">{behindLine(n.runnerBehind)}</span>}
 									{/* #1034: auto-update is on but not happening — its status alone would read as healthy. */}
 									{n.auto_update_stuck && <span className="text-warning basis-full" data-testid="machine-auto-update-stuck">Auto-update stuck: {n.auto_update_stuck.detail}</span>}
-									{(behindLine(n.runnerBehind) || n.auto_update_stuck) && n.connected && (
+									{/* #1054: a machine whose own npm cannot start is fixed AT the machine — runner_update would fail the same way. */}
+									{(behindLine(n.runnerBehind) || n.auto_update_stuck?.remedy === "runner_update") && n.connected && (
 										<Button size="sm" onClick={() => void updateCli(n)} disabled={updateNote[n.node]?.tone === "pending" || n.update?.state === "running"} data-testid="machine-update">
 											Update CLI
 										</Button>

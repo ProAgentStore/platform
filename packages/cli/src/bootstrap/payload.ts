@@ -142,14 +142,42 @@ export function runNpm(args: string[], options: { timeout: number; signal?: Abor
 	return run(npm.file, npm.args, { ...options, ...(npm.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}) });
 }
 
+/**
+ * The newest published CLI version — or WHY npm could not say (#1054). The reason used to be dropped here, so a
+ * Windows machine whose npm could not even be started reported only "npm could not be asked", with nothing to act on.
+ * npm's own stderr when it ran and failed; the spawn error (ENOENT, EINVAL, a timeout) when it could not run at all.
+ */
+export async function latestPublishedRelease(timeoutMs = 30_000, signal?: AbortSignal, deps: { runNpm?: typeof runNpm } = {}): Promise<{ version: string } | { error: string }> {
+	try {
+		const { stdout } = await (deps.runNpm ?? runNpm)(["view", CLI_PACKAGE, "version"], { timeout: timeoutMs, signal });
+		const version = String(stdout).trim();
+		return version ? { version } : { error: "npm printed no version" };
+	} catch (e) {
+		return { error: npmFailure(e) };
+	}
+}
+
+/** One line saying why an npm call failed: npm's last stderr line, else how it failed to run. Bounded, never multi-line. */
+export function npmFailure(e: unknown): string {
+	const err = e as { stderr?: unknown; code?: unknown; killed?: unknown; signal?: unknown; message?: unknown };
+	const stderr = String(err?.stderr ?? "")
+		.split(/\r?\n/)
+		.map((l) => l.trim())
+		.filter(Boolean);
+	const npmErrors = stderr.filter((l) => /npm (ERR!|error)/i.test(l));
+	const why =
+		npmErrors.slice(0, 2).join(" ") ||
+		stderr.at(-1) ||
+		(err?.killed || err?.signal ? `npm did not answer in time (${String(err.signal ?? "killed")})` : "") ||
+		(typeof err?.code === "string" ? `npm could not be started (${err.code}: ${String(err.message ?? "")})` : "") ||
+		String(err?.message ?? e);
+	return why.replace(/\s+/g, " ").trim().slice(0, 300);
+}
+
 /** The newest published CLI version, or null when npm could not be asked. */
 export async function latestPublishedVersion(timeoutMs = 30_000, signal?: AbortSignal): Promise<string | null> {
-	try {
-		const { stdout } = await runNpm(["view", CLI_PACKAGE, "version"], { timeout: timeoutMs, signal });
-		return stdout.trim() || null;
-	} catch {
-		return null;
-	}
+	const r = await latestPublishedRelease(timeoutMs, signal);
+	return "version" in r ? r.version : null;
 }
 
 /** Install `version`'s package tree into `dir` with npm. Rejects with npm's own reason. */

@@ -21,7 +21,7 @@ import { spawn } from "node:child_process";
 import { BOOTSTRAP_ENV, CLI_PACKAGE, installPayload, olderThan, runNpm } from "../../bootstrap/payload.js";
 import type { SessionStateCounts } from "./runner-work-observation.js";
 
-export { CLI_PACKAGE, latestPublishedVersion, olderThan } from "../../bootstrap/payload.js";
+export { CLI_PACKAGE, latestPublishedRelease, latestPublishedVersion, olderThan } from "../../bootstrap/payload.js";
 
 
 /** The control path the cloud sends (`workers/api/src/lib/runner-update.ts` sends the same string). */
@@ -67,6 +67,8 @@ export interface UpdateFacts {
 	current: string;
 	/** The newest published release, or null when npm could not be asked. */
 	latest: string | null;
+	/** WHY npm could not be asked, when `latest` is null (#1054) — npm's own error, carried into the refusal. */
+	latestError?: string;
 	/** Running from a source checkout (`pnpm dev`), not an npm install. */
 	fromSource: boolean;
 	/** What starts this process again after it exits — null when nothing would. */
@@ -154,7 +156,7 @@ export function restartUpArgs(opts: { headless?: boolean; instance?: string; for
 /** What this machine should do about an update request. Pure. */
 export function planRunnerUpdate(f: UpdateFacts): UpdatePlan {
 	if (f.fromSource) return { action: "refused", current: f.current, reason: "This runner runs from a source checkout — update it with `git pull` there, not npm." };
-	if (!f.latest) return { action: "refused", current: f.current, reason: `npm could not be asked for the latest ${CLI_PACKAGE} from this machine.`, retryable: true };
+	if (!f.latest) return { action: "refused", current: f.current, reason: `npm could not be asked for the latest ${CLI_PACKAGE} from this machine${f.latestError ? `: ${f.latestError}` : "."}`, retryable: true };
 	if (!olderThan(f.current, f.latest)) return { action: "up-to-date", current: f.current };
 	if (!f.restarter) {
 		return {

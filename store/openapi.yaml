@@ -392,16 +392,19 @@ components:
         (`behind_published`), or its own release check last saw a version with newer releases
         published more than 24 hours ago (`stale_latest`). `auto_update_status` stays the runner's own
         record and can still read `waiting_for_idle`; this field says it is not progressing. The
-        remedy is one `runner_update` for that machine. Null when not stuck or when the registry
+        remedy is one `runner_update` for that machine. `cannot_fetch_update` (#1054): a Windows runner on CLI
+        0.4.116 or older whose updater reported npm could not be asked — its npm calls cannot start on Windows,
+        so neither it nor `runner_update` can reach the fix; flagged at once, with `remedy: manual_npm_install`
+        (`npm i -g @proagentstore/cli` at the machine, then restart the "pags up" task). Null when not stuck or when the registry
         could not be read (unknown is never reported as stuck); absent when the policy is off on the
         fleet list.
       required: [reason, behind_since, published_version, releases_behind, remedy, detail]
       properties:
-        reason: { type: string, enum: [behind_published, stale_latest] }
+        reason: { type: string, enum: [behind_published, stale_latest, cannot_fetch_update] }
         behind_since: { type: string, format: date-time, description: Publish time of the first release the machine (or its check) has not caught up with. }
         published_version: { type: string }
         releases_behind: { type: integer }
-        remedy: { type: string, enum: [runner_update] }
+        remedy: { type: string, enum: [runner_update, manual_npm_install] }
         detail: { type: string }
     AutoUpdateDiagnostics:
       type: object
@@ -12492,6 +12495,7 @@ paths:
                         runnerVersion: { type: string }
                         lastSeenAt: { type: string, nullable: true }
                         connected: { type: boolean }
+                        last_error: { type: string, nullable: true, description: "The runner's own reason for its last refusal or failed update (#1054) — the same value get_machine_policy carries." }
                         auto_update_stuck: { $ref: "#/components/schemas/AutoUpdateStuck" }
                         instances:
                           type: array

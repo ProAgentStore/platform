@@ -41,11 +41,12 @@ export interface MachineDetail {
  * `waiting_for_idle`; this overrides it. Absent on an older API, null when not stuck.
  */
 export interface AutoUpdateStuck {
-	reason: "behind_published" | "stale_latest" | string;
+	reason: "behind_published" | "stale_latest" | "cannot_fetch_update" | string;
 	behind_since: string;
 	published_version: string;
 	releases_behind: number;
-	remedy: "runner_update" | string;
+	/** `manual_npm_install` (#1054): only an install at the machine helps — Update CLI is not offered. */
+	remedy: "runner_update" | "manual_npm_install" | string;
 	detail: string;
 }
 

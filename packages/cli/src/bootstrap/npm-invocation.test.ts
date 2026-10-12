@@ -1,12 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { latestPublishedVersion, npmInvocation, quoteCmdArg } from "./payload.js";
+import { latestPublishedRelease, latestPublishedVersion, npmFailure, npmInvocation, quoteCmdArg } from "./payload.js";
 
 /** The real `execFile` call `latestPublishedVersion` makes, captured — nothing is spawned. */
 const calls = vi.hoisted(() => [] as Array<{ file: string; args: string[]; opts: Record<string, unknown> }>);
+/** What the next execFile call fails with, when set (#1054) — the error object execFile itself would hand back. */
+const fail = vi.hoisted(() => ({ next: null as (Error & Record<string, unknown>) | null }));
 vi.mock("node:child_process", () => ({
 	execFile: (file: string, args: string[], opts: Record<string, unknown>, cb: (e: Error | null, out: { stdout: string; stderr: string }) => void) => {
 		calls.push({ file, args, opts });
-		cb(null, { stdout: "0.4.116\n", stderr: "" });
+		const e = fail.next;
+		fail.next = null;
+		if (e) cb(e, { stdout: "", stderr: String(e.stderr ?? "") });
+		else cb(null, { stdout: "0.4.116\n", stderr: "" });
 	},
 }));
 
@@ -77,10 +82,41 @@ describe("latestPublishedVersion on win32 — the production call (#1020)", () =
 		expect(calls[0].args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
 	});
 
+	it("says WHY npm could not be asked — the spawn failure a shell-less npm.cmd produced (#1054)", async () => {
+		Object.defineProperty(process, "platform", { value: "win32" });
+		fail.next = Object.assign(new Error("spawn npm ENOENT"), { code: "ENOENT", errno: -4058, syscall: "spawn npm" });
+		expect(await latestPublishedRelease()).toEqual({ error: "npm could not be started (ENOENT: spawn npm ENOENT)" });
+		expect(await latestPublishedVersion()).toBe("0.4.116"); // the null-or-version form is unchanged for the stub
+	});
+
+	it("carries npm's own error when it ran and failed", async () => {
+		Object.defineProperty(process, "platform", { value: "win32" });
+		fail.next = Object.assign(new Error("Command failed"), { code: 1, stderr: "npm error code ECONNRESET\nnpm error network aborted\nnpm error A complete log of this run can be found in: C:\\Users\\admin\\AppData\\Local\\npm-cache\\_logs\\x.log\n" });
+		expect(await latestPublishedRelease()).toEqual({ error: "npm error code ECONNRESET npm error network aborted" });
+	});
+
 	it("still runs plain `npm` elsewhere", async () => {
 		Object.defineProperty(process, "platform", { value: "linux" });
 		await latestPublishedVersion();
 		expect(calls[0]).toMatchObject({ file: "npm", args: ["view", "@proagentstore/cli", "version"] });
 		expect(calls[0].opts.windowsVerbatimArguments).toBeUndefined();
+	});
+});
+
+describe("npmFailure (#1054) — one bounded line, never a dropped reason", () => {
+	it("names a timeout", () => {
+		expect(npmFailure(Object.assign(new Error("Command failed"), { killed: true, signal: "SIGTERM" }))).toBe("npm did not answer in time (SIGTERM)");
+	});
+	it("falls back to stderr's last line, then the message", () => {
+		expect(npmFailure({ stderr: "warn: proxy\nunexpected token\n" })).toBe("unexpected token");
+		expect(npmFailure(new Error("boom"))).toBe("boom");
+	});
+	it("is single-line and bounded", () => {
+		const out = npmFailure({ stderr: `npm error ${"x".repeat(1000)}\nnpm error two` });
+		expect(out).not.toMatch(/\n/);
+		expect(out.length).toBeLessThanOrEqual(300);
+	});
+	it("an empty answer is its own reason, not a version", async () => {
+		expect(await latestPublishedRelease(1000, undefined, { runNpm: (async () => ({ stdout: "  \n", stderr: "" })) as never })).toEqual({ error: "npm printed no version" });
 	});
 });

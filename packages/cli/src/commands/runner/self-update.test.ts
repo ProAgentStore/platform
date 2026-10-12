@@ -38,6 +38,15 @@ describe("planRunnerUpdate (#859)", () => {
 		expect(planRunnerUpdate(facts({ fromSource: true }))).toMatchObject({ action: "refused", reason: expect.stringMatching(/git pull/) });
 		expect(planRunnerUpdate(facts({ latest: null }))).toMatchObject({ action: "refused", reason: expect.stringMatching(/npm could not be asked/) });
 	});
+
+	it("says WHY npm could not be asked, and keeps it retryable (#1054)", () => {
+		expect(planRunnerUpdate(facts({ latest: null, latestError: "npm could not be started (ENOENT: spawn npm ENOENT)" }))).toEqual({
+			action: "refused",
+			current: "0.4.62",
+			reason: "npm could not be asked for the latest @proagentstore/cli from this machine: npm could not be started (ENOENT: spawn npm ENOENT)",
+			retryable: true,
+		});
+	});
 });
 
 describe("deferred manual update leases (#1008)", () => {

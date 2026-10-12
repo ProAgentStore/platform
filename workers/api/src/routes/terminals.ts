@@ -169,6 +169,8 @@ export interface TerminalNode {
 	/** Last trusted release lookup observed by this runner, null until it has checked. */
 	latest_version?: string | null;
 	auto_update_status?: string;
+	/** The runner's own reason for its last refusal or failure (#1054) — on the row, not only in get_machine_policy. */
+	last_error?: string | null;
 	/** Auto-update ON but not catching up (#1034) — `lib/auto-update-stuck.ts`. Remedy: runner_update. */
 	auto_update_stuck?: AutoUpdateStuck | null;
 }
@@ -520,6 +522,7 @@ terminalRoutes.get("/nodes", async (c) => {
 		n.auto_update_policy = policy.autoUpdate;
 		n.latest_version = policy.latestVersion;
 		n.auto_update_status = policy.status;
+		n.last_error = policy.lastError;
 		policies.set(n, policy);
 	}));
 	// #1034: the registry is asked only when some connected machine has auto-update ON.

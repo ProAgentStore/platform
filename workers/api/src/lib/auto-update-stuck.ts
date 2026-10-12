@@ -25,15 +25,25 @@ export interface AutoUpdateStuck {
 	 * `behind_published`: the machine has run an outdated release for longer than the threshold.
 	 * `stale_latest`: it is behind by less than that, but its own registry check stopped advancing
 	 * long ago, so it will not catch up by itself.
+	 * `cannot_fetch_update` (#1054): a Windows runner on CLI ≤ {@link LAST_SHELLLESS_NPM_CLI} whose npm call cannot
+	 * start, so neither its updater nor `runner_update` can ever reach the release that fixed it.
 	 */
-	reason: "behind_published" | "stale_latest";
+	reason: "behind_published" | "stale_latest" | "cannot_fetch_update";
 	/** Publish time of the first release the machine (or its check) has not caught up with. */
 	behind_since: string;
 	published_version: string;
 	releases_behind: number;
-	remedy: "runner_update";
+	/** `manual_npm_install`: only a one-time install AT the machine helps — runner_update uses the same broken npm call. */
+	remedy: "runner_update" | "manual_npm_install";
 	detail: string;
 }
+
+/**
+ * The last CLI whose npm calls ran `npm` with no shell (#1020): on Windows that is `npm.cmd`, which cannot start that way,
+ * so the release check failed and was reported `unsupported` with this reason. 0.4.117 fixed it — on the machine.
+ */
+export const LAST_SHELLLESS_NPM_CLI = "0.4.116";
+const NPM_REFUSAL = /^npm could not be asked for the latest /;
 
 const RELEASE = /^\d+\.\d+\.\d+$/;
 const isRelease = (v: string | null | undefined): v is string => typeof v === "string" && RELEASE.test(v.trim().replace(/^v/, ""));
@@ -55,11 +65,30 @@ export function assessAutoUpdateStuck(input: {
 	reportedLatest: string | null | undefined;
 	published: PublishedCli | null;
 	now: number;
+	/** The runner's own stored reason (`last_error`) and the machine's OS, from its last heartbeat (#1054). */
+	lastError?: string | null;
+	platform?: string | null;
 }): AutoUpdateStuck | null {
 	const { published, runnerVersion, now } = input;
-	// Off, offline, or a runner that already says it cannot self-update: nothing is being hidden.
-	if (!input.autoUpdate || !input.connected || input.status === "unsupported" || !published) return null;
+	if (!input.autoUpdate || !input.connected || !published) return null;
 	if (!isRelease(runnerVersion) || cliAtLeast(runnerVersion, published.latest)) return null;
+	// `unsupported` is honest about a PERMANENT refusal (a source checkout, nothing to restart the runner), so it hides
+	// nothing. Before 0.4.117 a release check that could not run was ALSO `unsupported` (#1054) — that one is not permanent,
+	// and on Windows it is not fixable remotely either: it is the stuck machine this check exists to show.
+	const npmRefusal = NPM_REFUSAL.test(input.lastError ?? "");
+	if (input.status === "unsupported" && !npmRefusal) return null;
+	if (npmRefusal && input.platform === "win32" && !cliAtLeast(runnerVersion, "0.4.117")) {
+		const since = firstNewerAt(published, runnerVersion) ?? now;
+		const behind = Object.keys(published.published).filter((v) => !cliAtLeast(runnerVersion, v) && cliAtLeast(published.latest, v)).length;
+		return {
+			reason: "cannot_fetch_update",
+			behind_since: new Date(since).toISOString(),
+			published_version: published.latest,
+			releases_behind: behind,
+			remedy: "manual_npm_install",
+			detail: `This Windows machine runs ${runnerVersion}, whose npm calls cannot start on Windows (fixed in 0.4.117), so it cannot fetch ${published.latest} itself and runner_update cannot reach it either. Its updater said: ${input.lastError} Once, at the machine: run \`npm i -g @proagentstore/cli\`, then restart the "pags up" scheduled task (Stop-ScheduledTask -TaskName "pags up"; Start-ScheduledTask -TaskName "pags up"). Auto-update carries it forward from there.`,
+		};
+	}
 
 	const behindAt = firstNewerAt(published, runnerVersion);
 	const checkAt = isRelease(input.reportedLatest) ? firstNewerAt(published, input.reportedLatest) : null;
@@ -120,11 +149,11 @@ export async function publishedCli(now = Date.now()): Promise<PublishedCli | nul
 	return cached.value;
 }
 
-type StuckMachine = { connected: boolean; runnerVersion: string | null | undefined };
+type StuckMachine = { connected: boolean; runnerVersion: string | null | undefined; resources?: { platform?: string | null } | null };
 
 /** One machine's verdict from its live connection fact and stored policy. */
 export function machineAutoUpdateStuck(machine: StuckMachine, policy: MachinePolicy, published: PublishedCli | null): AutoUpdateStuck | null {
-	return assessAutoUpdateStuck({ autoUpdate: policy.autoUpdate, status: policy.status, connected: machine.connected, runnerVersion: machine.runnerVersion, reportedLatest: policy.latestVersion, published, now: Date.now() });
+	return assessAutoUpdateStuck({ autoUpdate: policy.autoUpdate, status: policy.status, connected: machine.connected, runnerVersion: machine.runnerVersion, reportedLatest: policy.latestVersion, published, now: Date.now(), lastError: policy.lastError, platform: machine.resources?.platform ?? null });
 }
 
 /** The registry is asked only when the answer could be "stuck": policy ON and connected. */

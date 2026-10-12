@@ -56,6 +56,23 @@ describe("auto-update stuck on the Terminals routes (#1034)", () => {
 		expect(publishedCli).toHaveBeenCalledTimes(2); // the mocked registry, never the network
 	});
 
+	it("a Windows runner whose npm cannot start: its reason rides the row, and the remedy is at the machine (#1054)", async () => {
+		const D = "machine-dell0001";
+		const res = JSON.stringify({ loadAvg: [0, 0, 0], cpus: 8, memTotalBytes: 8e9, memFreeBytes: 3e9, platform: "win32", sampledAt: Date.now() });
+		d1.exec(`INSERT INTO instance_runtime_nodes (instance_id, user_id, runner_node, endpoint_url, runner_version, machine_id, status, last_seen_at, updated_at, resources)
+		         VALUES ('i1', 'u1', 'dell-laptop', 'relay://', '0.4.112', '${D}', 'online', '2026-10-12 06:00:00', '2026-10-12 06:00:00', '${res}')
+		         ON CONFLICT DO UPDATE SET runner_node = excluded.runner_node, runner_version = excluded.runner_version, machine_id = excluded.machine_id, resources = excluded.resources`);
+		const live = env(["i1:node:dell-laptop"]);
+		await setMachinePolicy(live, "u1", D, true);
+		await reportMachinePolicyStatus(live, "u1", D, { status: "unsupported", error: "npm could not be asked for the latest @proagentstore/cli from this machine." });
+		publishedCli.mockResolvedValue({ latest: "0.4.117", published: { "0.4.112": Date.now() - 2 * DAY, "0.4.113": Date.now() - DAY / 4, "0.4.117": Date.now() - DAY / 8 } });
+
+		const list = (await (await app.request("/v1/terminals/nodes", {}, live)).json()) as { nodes: Array<{ machineId: string; auto_update_status: string; last_error: string | null; auto_update_stuck: Stuck }> };
+		const row = list.nodes.find((n) => n.machineId === D);
+		expect(row).toMatchObject({ auto_update_status: "unsupported", last_error: "npm could not be asked for the latest @proagentstore/cli from this machine." });
+		expect(row?.auto_update_stuck).toMatchObject({ reason: "cannot_fetch_update", remedy: "manual_npm_install", published_version: "0.4.117" });
+	});
+
 	it("turning the policy off clears it in the write's own answer", async () => {
 		await setMachinePolicy(env(), "u1", M, true);
 		const res = await app.request(`/v1/terminals/machines/${M}/policy`, { method: "PUT", body: JSON.stringify({ auto_update: false }), headers: { "content-type": "application/json" } }, env());

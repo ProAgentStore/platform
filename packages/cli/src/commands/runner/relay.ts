@@ -5,7 +5,7 @@ import { loadMachineIdentity } from "../../machine.js";
 import { writeError, writeLine } from "../../output.js";
 import { apiPathSegment, clean, pagsApiBase, requestPags, requestRunner } from "./http.js";
 import { CLI_VERSION, runsFromSource } from "./process.js";
-import { deferredUpdateLease, deferredUpdateLeaseActive, installVersion, latestPublishedVersion, leaveForRestart, planRunnerRestart, planRunnerUpdate, restarterFrom, RUNNER_RESTART_PATH, RUNNER_UPDATE_PATH, supervisorNote, type DeferredUpdateLease } from "./self-update.js";
+import { deferredUpdateLease, deferredUpdateLeaseActive, installVersion, latestPublishedRelease, leaveForRestart, planRunnerRestart, planRunnerUpdate, restarterFrom, RUNNER_RESTART_PATH, RUNNER_UPDATE_PATH, supervisorNote, type DeferredUpdateLease } from "./self-update.js";
 import { diffMembership, instanceLabel, pendingRegistrations, pinnedAway, reattachPlan, registrationStatus, shouldRegisterOnOpen, type DiscoverableInstance, type ReattachRequest } from "./membership.js";
 import { formatStatusLine } from "./status-line.js";
 import type { PagsRequestOptions } from "./types.js";
@@ -143,10 +143,12 @@ export async function connectViaRelay(
 	};
 	const updateFacts = async (signal?: AbortSignal) => {
 		const { busy, observations } = await workLook(signal);
+		const release = await latestPublishedRelease(undefined, signal);
 		return {
 			observations,
 			current: CLI_VERSION,
-			latest: await latestPublishedVersion(undefined, signal),
+			latest: "version" in release ? release.version : null,
+			...("error" in release ? { latestError: release.error } : {}),
 			fromSource: runsFromSource(),
 			restarter: restarterFrom(process.env),
 			// A restart ends browser/application work too. Give these durable names to the same

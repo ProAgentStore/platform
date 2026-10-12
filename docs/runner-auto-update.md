@@ -113,7 +113,8 @@ The platform detects this from outside instead of trusting the status. It reads 
 `auto_update_stuck` on the machine when all of these hold:
 
 - the policy is ON and the machine is connected now;
-- the machine does not already report `unsupported`;
+- the machine does not already report `unsupported` for a permanent reason (a source checkout, nothing to
+  restart the runner) — an `unsupported` whose stored reason is "npm could not be asked" is not hidden (#1054);
 - the machine's CLI is older than the published `latest`; and
 - either the first release it is missing was published more than **24 hours** ago
   (`behind_published`), or its own check last saw a version that has newer releases published
@@ -126,6 +127,15 @@ the Terminals page and the machine page, with **Update CLI** offered on a connec
 stored status is left as the runner reported it; the stuck flag is what says it is not progressing.
 An unreadable registry or runner version is never reported as stuck. Offline machines and machines
 with the policy off are not flagged.
+
+**`cannot_fetch_update` (#1054).** A connected, ON, win32 machine on CLI 0.4.116 or older whose updater's
+stored reason is "npm could not be asked" is flagged at once, not after 24 hours: its npm calls cannot start
+on Windows, so it can never fetch 0.4.117 itself, and `runner_update` runs the same npm call. Its remedy is
+`manual_npm_install` — `npm i -g @proagentstore/cli` at the machine, then restart the "pags up" scheduled
+task — and the Console does not offer **Update CLI** for it. Each `list_runner_nodes` row also carries the
+runner's own `last_error`, so the reason is on the row, not only in `get_machine_policy`. From 0.4.119 that
+reason names npm's actual failure (npm's error lines, a spawn error such as ENOENT, or a timeout) instead of
+only "npm could not be asked", and it stays a retryable `failed`.
 
 The platform does **not** start that update by itself. #1034 lists a server-initiated one-time
 `runner_update` only as optional, and nothing in its discussion asks for it. The investigation in

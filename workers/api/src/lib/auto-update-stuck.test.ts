@@ -80,3 +80,38 @@ describe("parsePublishedCli / fetchPublishedCli", () => {
 		expect(ok).toHaveBeenCalledWith("https://registry.npmjs.org/@proagentstore%2fcli", expect.anything());
 	});
 });
+
+describe("an `unsupported` that is really a Windows npm call that cannot start (#1054)", () => {
+	// dell-laptop, 2026-10-13: 0.4.112 on win32, ON, connected, its updater's stored reason the npm refusal.
+	const releases: PublishedCli = { latest: "0.4.117", published: { "0.4.112": NOW - 2 * DAY, "0.4.113": NOW - 7 * 3_600_000, "0.4.117": NOW - 3_600_000 } };
+	const NPM = "npm could not be asked for the latest @proagentstore/cli from this machine.";
+	const dell = { autoUpdate: true, status: "unsupported", connected: true, runnerVersion: "0.4.112", reportedLatest: null, published: releases, now: NOW, lastError: NPM, platform: "win32" };
+
+	it("is flagged at once — it can never fetch the fix — with the at-the-machine remedy, not runner_update", () => {
+		const stuck = assessAutoUpdateStuck(dell);
+		expect(stuck).toMatchObject({ reason: "cannot_fetch_update", remedy: "manual_npm_install", published_version: "0.4.117", releases_behind: 2, behind_since: new Date(NOW - 7 * 3_600_000).toISOString() });
+		expect(stuck?.detail).toMatch(/npm i -g @proagentstore\/cli[\s\S]*restart the "pags up" scheduled task/);
+		expect(stuck?.detail).toContain(NPM); // the runner's own reason, quoted
+	});
+
+	it("a permanent `unsupported` (source checkout, no restarter) still hides nothing", () => {
+		expect(assessAutoUpdateStuck({ ...dell, lastError: "This runner runs from a source checkout — update it with `git pull` there, not npm." })).toBeNull();
+		expect(assessAutoUpdateStuck({ ...dell, lastError: null })).toBeNull();
+	});
+
+	it("the same reason off Windows is the ordinary rule: stuck only after a day, with runner_update", () => {
+		expect(assessAutoUpdateStuck({ ...dell, platform: "darwin" })).toBeNull(); // 7 hours behind
+		expect(assessAutoUpdateStuck({ ...dell, platform: "darwin", published: { ...releases, published: { ...releases.published, "0.4.113": NOW - 2 * DAY } } })).toMatchObject({ reason: "behind_published", remedy: "runner_update" });
+	});
+
+	it("a Windows runner already on the fixed npm path (0.4.117+) is never told to install by hand", () => {
+		const later: PublishedCli = { latest: "0.4.120", published: { ...releases.published, "0.4.118": NOW - 3_600_000, "0.4.120": NOW - 600_000 } };
+		expect(assessAutoUpdateStuck({ ...dell, runnerVersion: "0.4.117", published: later })).toBeNull();
+	});
+
+	it("off, disconnected or current: nothing to flag", () => {
+		expect(assessAutoUpdateStuck({ ...dell, autoUpdate: false })).toBeNull();
+		expect(assessAutoUpdateStuck({ ...dell, connected: false })).toBeNull();
+		expect(assessAutoUpdateStuck({ ...dell, runnerVersion: "0.4.117" })).toBeNull();
+	});
+});
