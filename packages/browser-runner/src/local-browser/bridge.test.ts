@@ -102,6 +102,17 @@ describe("where it may go", () => {
 		expect(events).toContainEqual({ type: "browser.navigated", url: "https://seek.com.au/jobs", domain: "seek.com.au", detail: { title: "Jobs" } });
 	});
 
+	it("attributes a snapshot to the site the browser is on, after returning to an earlier one (Codex run bc185571)", async () => {
+		const f = fakeBrowser();
+		const { host, events } = fakeHost({ allow: ["seek.com.au", "indeed.com"] });
+		const b = new BrowserBridge(f.tools, host);
+		await b.callTool("browser_navigate", { url: "https://au.seek.com.au/jobs" });
+		await b.callTool("browser_navigate", { url: "https://au.indeed.com/jobs" });
+		await b.callTool("browser_navigate", { url: "https://au.seek.com.au/job/1" });
+		await b.callTool("browser_snapshot");
+		expect(events.filter((e) => e.type === "browser.snapshot")).toEqual([{ type: "browser.snapshot", domain: "au.seek.com.au" }]);
+	});
+
 	it("refuses a denied site, a site off the allow list, and a non-http URL — without navigating", async () => {
 		const f = fakeBrowser();
 		const b = new BrowserBridge(f.tools, fakeHost({ allow: ["seek.com.au"], deny: ["ads.seek.com.au"] }).host);

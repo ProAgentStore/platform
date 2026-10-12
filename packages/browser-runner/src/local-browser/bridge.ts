@@ -203,6 +203,8 @@ export class BrowserBridge {
 	private pages = 0;
 	private lastSnapshot = "";
 	private readonly visited = new Set<string>();
+	/** The host of the page the browser is on now — not the last NEW host: a Set keeps first-insertion order. */
+	private here: string | null = null;
 	readonly findings: LocalBrowserFinding[] = [];
 	readonly sourceFailures: LocalBrowserSourceFailure[] = [];
 	summary: string | null = null;
@@ -251,8 +253,7 @@ export class BrowserBridge {
 	}
 
 	private currentHost(): { domain?: string } {
-		const last = [...this.visited].pop();
-		return last ? { domain: last } : {};
+		return this.here ? { domain: this.here } : {};
 	}
 
 	/** Refuse, on the trace — naming the site and the owner's decision behind it when there is one. */
@@ -366,6 +367,7 @@ export class BrowserBridge {
 		const host = hostOf(state.url);
 		if (!host) return;
 		this.visited.add(host);
+		this.here = host;
 		this.host.emit({ type: "browser.navigated", url: state.url, domain: host, detail: redactDetail({ title: state.title }) });
 	}
 
