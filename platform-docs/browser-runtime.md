@@ -176,3 +176,19 @@ remote view is refused for a task with no live takeover. Takeover requests, appr
 completions are notification events (`takeover_required`, `approval_required`,
 `browser_verification_failed`, `browser_verification_completed`), so the instance's notification
 policy decides which of them push. Their links carry only ids, never a page URL, token or session.
+
+### Verifying Gmail job leads
+
+A Gmail Scout resolves a one-job provider alert to the posting's canonical URL, which carries only
+the posting id. When the server cannot check that page (blocked, or no structured posting), the lead
+is not thrown away. It is stored `awaiting_browser_verification` and checked in the Scout's own
+browser, under the instance's browser verification settings. Only the canonical URL is sent, never
+the personalised alert link. The run reports one typed outcome:
+
+- **active**: the lead becomes `new`, and only then can it be applied for and reach the Tailor.
+- **expired** or **mismatch**: the lead is closed.
+- **temporarily_unverifiable**: retried with backoff; after three attempts the lead is `unverifiable`.
+
+A lead the owner has already moved on is never rewritten by a late outcome. Every attempt is
+recorded; `job_lead_browser_verifications` shows them, and `verify_job_lead_now` checks a waiting
+lead now.

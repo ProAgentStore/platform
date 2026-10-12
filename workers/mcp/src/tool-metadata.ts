@@ -289,6 +289,9 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	browser_takeover_get: "read",
 	browser_takeover_request: "write",
 	browser_takeover_transition: "runtime",
+	// Browser verification of Gmail job leads (#1030): the queue + receipts, and a dispatch now.
+	job_lead_browser_verifications: "read",
+	verify_job_lead_now: "runtime",
 	list_local_browser_runs: "read",
 	set_instance_local_browser_settings: "write",
 	cancel_local_browser_run: "write",

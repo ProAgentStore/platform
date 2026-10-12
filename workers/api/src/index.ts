@@ -67,6 +67,7 @@ import { syncActiveTailorRuns } from "./lib/local-artifact/tailor.js";
 import { syncActiveApplyReconciliations, syncActiveApplyRuns } from "./lib/local-apply/apply.js";
 import { failStaleUpdateOps } from "./lib/runner-update-ops.js";
 import { expireStaleTakeovers } from "./lib/browser-takeovers.js";
+import { runLeadBrowserVerification } from "./lib/job-lead-browser-verification.js";
 import { dispatchQueuedRunnerUpdates } from "./lib/runner-update.js";
 import { syncLeadWritebacks } from "./lib/local-artifact/store.js";
 import { routeRunEvents } from "./lib/run-event-routing.js";
@@ -329,6 +330,8 @@ export default {
 		ctx.waitUntil(failStaleUpdateOps(env).catch((err) => logUnhandled(env, err, { path: "scheduled:runner-update-ops", method: "CRON" })));
 		// #1031: a takeover nobody answered before its expiry becomes `expired`, not open forever.
 		ctx.waitUntil(expireStaleTakeovers(env).catch((err) => logUnhandled(env, err, { path: "scheduled:browser-takeovers", method: "CRON" })));
+		// #1030: settle finished browser verifications of Gmail leads, then dispatch the ones due.
+		ctx.waitUntil(runLeadBrowserVerification(env).catch((err) => logUnhandled(env, err, { path: "scheduled:lead-browser-verification", method: "CRON" })));
 		ctx.waitUntil(dispatchQueuedRunnerUpdates(env).catch((err) => logUnhandled(env, err, { path: "scheduled:runner-update-workflow", method: "CRON" })));
 		// Backstop for the lead writeback (#953): applications that moved in the last 10 minutes.
 		ctx.waitUntil(syncLeadWritebacks(env, Date.now() - 10 * 60_000).catch((err) => logUnhandled(env, err, { path: "scheduled:application-lead-writeback", method: "CRON" })));

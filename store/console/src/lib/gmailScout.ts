@@ -15,6 +15,8 @@ export interface GmailScoutScanReceipt {
 	added: number | null;
 	deduped: number | null;
 	rejected: Partial<Record<GmailScoutRejection, number>>;
+	/** Leads the server could not check, waiting for browser verification (#1030). Absent on an older API. */
+	awaitingBrowserVerification?: number | null;
 	errorMessage: string | null;
 	lastMessageId: string | null;
 	handoff: "none";
@@ -65,4 +67,41 @@ export function scanNowMessage(scan: GmailScoutScanResult): string {
 	if (scan.reused) return "A scan is already running for this Scout — showing that one.";
 	const skipped = rejectionSummary(scan.rejected);
 	return `Scan complete: ${scan.added} lead(s) added as unverified, ${scan.deduped} duplicate(s) skipped${skipped ? `, ${skipped} not a job lead` : ""}. Nothing was sent to the Tailor or Runner.`;
+}
+
+// ── Browser verification of Gmail leads (#1030) — the same rows MCP's job_lead_browser_verifications reads ──
+
+export type LeadVerificationState = "awaiting" | "dispatched" | "active" | "expired" | "mismatch" | "unverifiable" | "superseded";
+
+export interface LeadVerification {
+	leadId: string;
+	canonicalUrl: string;
+	expectedTitle: string | null;
+	expectedCompany: string | null;
+	state: LeadVerificationState;
+	attempts: number;
+	nextAttemptAt: string;
+	lastOutcome: string | null;
+	lastDetail: string | null;
+}
+
+const STATE_WORDS: Record<LeadVerificationState, string> = {
+	awaiting: "waiting for the browser",
+	dispatched: "being checked in the browser",
+	active: "verified active — ready to triage",
+	expired: "expired — closed",
+	mismatch: "a different job — closed",
+	unverifiable: "could not be verified",
+	superseded: "you decided before the check finished",
+};
+
+/** One lead's verification, in words, and whether "Verify now" applies. */
+export function leadVerificationLine(v: LeadVerification): { text: string; tone: "ok" | "warn" | "muted"; canVerifyNow: boolean } {
+	const job = v.expectedTitle ? `${v.expectedTitle}${v.expectedCompany ? ` · ${v.expectedCompany}` : ""}` : "Job lead";
+	const tries = v.attempts ? ` (attempt ${v.attempts})` : "";
+	return {
+		text: `${job}: ${STATE_WORDS[v.state]}${tries}.`,
+		tone: v.state === "active" ? "ok" : v.state === "awaiting" || v.state === "dispatched" ? "warn" : "muted",
+		canVerifyNow: v.state === "awaiting",
+	};
 }

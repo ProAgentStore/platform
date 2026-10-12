@@ -78,8 +78,9 @@ beforeEach(() => {
 				if (url.pathname === "/collections/job_leads/records" && req.method === "GET") return Response.json({ records: s.leads });
 				if (url.pathname === "/collections/job_leads/records" && req.method === "POST") {
 					const { data } = (await req.json()) as { data: Record<string, unknown> };
-					s.leads.push({ id: `lead-${s.leads.length}`, data });
-					return Response.json({ created: true });
+					const id = `lead-${s.leads.length}`;
+					s.leads.push({ id, data });
+					return Response.json({ id, created: true });
 				}
 				return Response.json({});
 			},
@@ -264,14 +265,17 @@ describe("#1024: a one-item provider alert, through the same scan", () => {
 		expect(deliveries()).toBe(0);
 	});
 
-	it("a posting it cannot check is counted by reason on the receipt, and nothing is stored", async () => {
+	// #1030: before, this lead was thrown away as `posting_unverifiable`; now a browser checks it.
+	it("a posting the server cannot check is stored awaiting browser verification, queued, and counted on the receipt", async () => {
 		vi.stubGlobal("fetch", async () => page(403));
 		const { receipt } = await scanGmailScout(env, "scout", "u1", { trigger: "on_demand", mailbox: fakeMailbox(INDEED()).factory });
-		expect(receipt).toMatchObject({ status: "completed", added: 0, rejected: { posting_unverifiable: 1 } });
-		const status = JSON.stringify(await gmailScoutStatus(env, "scout"));
-		expect(status).toContain("posting_unverifiable");
-		for (const leaked of ["SECRET", "indeed.com", "Platform Engineer"]) expect(status).not.toContain(leaked);
-		expect(dos.get("scout")?.leads.some((l) => l.data.gmail_message_id === "m-indeed")).toBe(false);
+		expect(receipt).toMatchObject({ status: "completed", added: 1, rejected: {}, awaitingBrowserVerification: 1 });
+		const lead = dos.get("scout")?.leads.find((l) => l.data.gmail_message_id === "m-indeed");
+		expect(lead?.data).toMatchObject({ status: "awaiting_browser_verification", verification: { state: "awaiting_browser_verification", reason: "server_fetch_refused" } });
+		const queued = await d1.DB.prepare("SELECT lead_id, state, canonical_url, attempts FROM job_lead_browser_verifications WHERE instance_id = 'scout'").all<Record<string, unknown>>();
+		expect(queued.results).toEqual([{ lead_id: lead?.id, state: "awaiting", canonical_url: lead?.data.url, attempts: 0 }]);
+		// Only the canonical posting is kept — no alert token anywhere it was written.
+		expect(JSON.stringify({ lead, queued: queued.results })).not.toMatch(/SECRET/);
 	});
 });
 

@@ -252,6 +252,9 @@ export const BROWSER_RUNTIME_INELIGIBILITY = ["not_attached", "unhealthy", "runn
 /** A durable browser takeover's state (#1031) — a COPY of `TAKEOVER_STATES` in `workers/api/src/lib/browser-takeovers.ts`. */
 export const BROWSER_TAKEOVER_STATES = ["requested", "active", "resumed", "ended", "expired"] as const;
 
+/** A Gmail job lead's browser verification state (#1030) — a COPY of `VerificationState` in `workers/api/src/lib/job-lead-browser-verification.ts`. */
+export const JOB_LEAD_VERIFICATION_STATES = ["awaiting", "dispatched", "active", "expired", "mismatch", "unverifiable", "superseded"] as const;
+
 /**
  * The statuses `clear_finished_tasks` actually sweeps.
  *
@@ -375,6 +378,11 @@ export const BACKED_VOCABULARIES: Record<string, StateVocabulary> = {
 	"browser takeover state": {
 		sources: ["workers/api/src/lib/browser-takeovers.ts"],
 		values: BROWSER_TAKEOVER_STATES,
+	},
+	// #1030. job_lead_browser_verifications publishes each lead's verification state.
+	"job lead verification state": {
+		sources: ["workers/api/src/lib/job-lead-browser-verification.ts"],
+		values: JOB_LEAD_VERIFICATION_STATES,
 	},
 	// #961. `fleet_snapshot` publishes it; the API derives it in one pure function.
 	"fleet status": {

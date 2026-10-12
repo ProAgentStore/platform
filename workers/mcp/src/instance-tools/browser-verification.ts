@@ -187,4 +187,48 @@ export function registerBrowserVerificationTools(server: McpServer, ctx: Instanc
 			return jsonText(data);
 		},
 	);
+
+	// ── Browser verification of Gmail job leads (#1030) ─────────────────────────────────────────
+	server.tool(
+		"job_lead_browser_verifications",
+		"The browser verification of one Scout's Gmail job leads (#1030). A Gmail alert the server resolved to ONE canonical posting but could not check is stored `awaiting_browser_verification` instead of being thrown away; the platform then checks the canonical posting — never the personalised alert link — in the Scout's own browser, reading back one typed outcome: active (the lead becomes `new` and may be applied for — the only way such a lead reaches the Tailor), expired or mismatch (the lead is closed), temporarily_unverifiable (retried with backoff, `unverifiable` after 3 attempts). Answers `leads` — each lead's state (awaiting | dispatched | active | expired | mismatch | unverifiable | superseded), attempts, nextAttemptAt, lastOutcome, lastDetail — and `attempts`, the receipt of every dispatch: its run id and what came back. Whether it runs at all, where, and the fallback with no browser are get_instance_browser_verification. Read-only.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Job Search Scout instance ID from my_instances."),
+			limit: z.coerce.number().int().min(1).max(200).optional(),
+		},
+		async ({ token, instance_id, limit }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "job_lead_browser_verifications", { instance_id });
+			if (denied) return denied;
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/job-leads/browser-verifications${limit ? `?limit=${limit}` : ""}`, sessionToken, {}, env)) as { error?: string };
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
+	server.tool(
+		"verify_job_lead_now",
+		"Check one waiting Gmail job lead in the Scout's browser now, instead of at its next turn (#1030) — the same dispatch the platform makes on its own: a read-only browser run of the canonical posting. Only a lead whose verification is `awaiting` can be started (409 otherwise). With browser verification off, or no browser available, it answers what the setting decides instead of starting a run. Call with dry_run first.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Job Search Scout instance ID from my_instances."),
+			record_id: z.string().describe("Lead record id, from job_lead_browser_verifications (leadId)."),
+			dry_run: z.boolean().optional().describe("Preview without starting a run."),
+		},
+		async ({ token, instance_id, record_id, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, record_id };
+			// `runtime`: it starts a browser run on the owner's machine.
+			const denied = await requirePermission(safetyFor(token), "runtime", "verify_job_lead_now", input);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/job-leads/${encodeURIComponent(record_id)}/browser-verification`;
+			if (dry_run) return dryRun(safetyFor(token), "verify_job_lead_now", "check one waiting job lead in the browser now", input, { endpoint, method: "POST" });
+			const data = (await authedCall(endpoint, sessionToken, { method: "POST" }, env)) as { error?: string };
+			if (data.error) return text(`Error: ${data.error}`);
+			await audit(safetyFor(token), { tool: "verify_job_lead_now", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
 }

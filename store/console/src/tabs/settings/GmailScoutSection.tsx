@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import Button from "../../components/Button";
 import Card from "../../components/Card";
-import { type GmailScoutScanReceipt, type GmailScoutScanResponse, rejectionSummary, scanNowMessage } from "../../lib/gmailScout";
+import { type GmailScoutScanReceipt, type GmailScoutScanResponse, type LeadVerification, leadVerificationLine, rejectionSummary, scanNowMessage } from "../../lib/gmailScout";
 
 const GMAIL_SCOUT_MAILBOX = "serge.pro.job@gmail.com";
 
@@ -23,11 +23,15 @@ export default function GmailScoutSection({ instanceId }: { instanceId: string }
 	const [enabled, setEnabled] = useState(true);
 	const [message, setMessage] = useState("");
 	const [busy, setBusy] = useState(false);
+	// #1030: the leads the server could not check, verified in this Scout's browser.
+	const [verifications, setVerifications] = useState<LeadVerification[]>([]);
 
 	const load = useCallback(async () => {
 		try {
 			const value = await api<Status>(`/v1/instances/${instanceId}/gmail-scout/status`);
 			setStatus(value);
+			const v = await api<{ leads: LeadVerification[] }>(`/v1/instances/${instanceId}/job-leads/browser-verifications?limit=20`).catch(() => ({ leads: [] }));
+			setVerifications(v.leads);
 			setMailbox(value.config?.pinnedEmail ?? GMAIL_SCOUT_MAILBOX);
 			setEnabled(value.config?.enabled ?? true);
 		} catch (error) {
@@ -84,10 +88,37 @@ export default function GmailScoutSection({ instanceId }: { instanceId: string }
 						<li key={r.id}>
 							{new Date(r.startedAt).toLocaleString()} · {r.trigger === "on_demand" ? "Scan now" : "Scheduled"} ·{" "}
 							<span className={r.status === "failed" ? "text-danger" : "text-muted"}>{r.status}</span>
-							{r.status === "completed" ? ` · ${r.added ?? 0} added, ${r.deduped ?? 0} duplicate(s)${rejectionSummary(r.rejected) ? `, skipped: ${rejectionSummary(r.rejected)}` : ""}` : ""}
+							{r.status === "completed" ? ` · ${r.added ?? 0} added${r.awaitingBrowserVerification ? ` (${r.awaitingBrowserVerification} awaiting browser verification)` : ""}, ${r.deduped ?? 0} duplicate(s)${rejectionSummary(r.rejected) ? `, skipped: ${rejectionSummary(r.rejected)}` : ""}` : ""}
 							{r.status === "failed" && r.errorMessage ? ` · ${r.errorMessage}` : ""}
 						</li>
 					))}
+				</ul>
+			</div>
+		) : null}
+		{verifications.length ? (
+			<div className="mt-4" data-testid="gmail-scout-verifications">
+				<h3 className="text-xs text-muted-soft mb-1">Browser verification</h3>
+				<p className="text-xs text-muted mb-1">Leads the server could not check are checked in this Scout's browser — only the posting itself, never your alert link. Only a job found active can be applied for.</p>
+				<ul className="flex flex-col gap-1 text-xs">
+					{verifications.map((v) => {
+						const line = leadVerificationLine(v);
+						return (
+							<li key={v.leadId} className="flex flex-wrap gap-2 items-center">
+								<span className={line.tone === "ok" ? "text-success" : line.tone === "warn" ? "text-warning" : "text-muted"}>{line.text}</span>
+								{v.lastDetail && <span className="text-muted-soft">{v.lastDetail}</span>}
+								{line.canVerifyNow && (
+									<Button size="sm" variant="ghost" disabled={busy} onClick={async () => {
+										try {
+											await api(`/v1/instances/${instanceId}/job-leads/${encodeURIComponent(v.leadId)}/browser-verification`, { method: "POST" });
+										} catch (e) {
+											setMessage(e instanceof Error ? e.message : String(e));
+										}
+										await load();
+									}}>Verify now</Button>
+								)}
+							</li>
+						);
+					})}
 				</ul>
 			</div>
 		) : null}

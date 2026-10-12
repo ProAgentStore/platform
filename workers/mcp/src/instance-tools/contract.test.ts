@@ -477,6 +477,8 @@ const TABLE: Record<string, Row> = {
 	browser_takeover_get: ["browserVerification", "read", null, null, "instance_id,takeover_id,token"],
 	browser_takeover_request: ["browserVerification", "write", null, "envelope", "dry_run,instance_id,reason,subject_id,subject_kind,token"],
 	browser_takeover_transition: ["browserVerification", "runtime", null, "envelope", "device,dry_run,instance_id,state,takeover_id,token"],
+	job_lead_browser_verifications: ["browserVerification", "read", null, null, "instance_id,limit,token"],
+	verify_job_lead_now: ["browserVerification", "runtime", null, "envelope", "dry_run,instance_id,record_id,token"],
 	set_instance_local_browser_settings: ["localBrowser", "write", null, "envelope", "allow_domains,auth_mode,browser_profile,collection,deny_domains,dry_run,engine,instance_id,limits,token,trace_retention_days,workspace_path"],
 	list_local_browser_runs: ["localBrowser", "read", null, null, "after,instance_id,limit,run_id,token"],
 	start_local_browser_run: ["localBrowser", "runtime", null, "envelope", "dry_run,instance_id,objective,request_id,token"],

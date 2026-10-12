@@ -8250,6 +8250,74 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{instanceId}/job-leads/browser-verifications:
+    get:
+      summary: Browser verification of a Scout's Gmail job leads
+      description: |
+        #1030. A Gmail alert the server resolved to ONE canonical posting but could not check is stored
+        `awaiting_browser_verification` and checked in the Scout's own browser: the canonical posting
+        only, never the personalised alert URL. Each lead's state, attempts and last typed outcome
+        (active, expired, mismatch, temporarily_unverifiable), and every attempt's receipt.
+      operationId: listJobLeadBrowserVerifications
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
+      responses:
+        "200":
+          description: Leads and attempts, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  leads:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        leadId: { type: string }
+                        workKey: { type: string, nullable: true }
+                        canonicalUrl: { type: string }
+                        expectedTitle: { type: string, nullable: true }
+                        expectedCompany: { type: string, nullable: true }
+                        state: { type: string, enum: [awaiting, dispatched, active, expired, mismatch, unverifiable, superseded] }
+                        attempts: { type: integer }
+                        nextAttemptAt: { type: string }
+                        awaitingSince: { type: string }
+                        lastOutcome: { type: string, nullable: true, enum: [active, expired, mismatch, temporarily_unverifiable, null] }
+                        lastDetail: { type: string, nullable: true }
+                        updatedAt: { type: string }
+                  attempts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        leadId: { type: string }
+                        attempt: { type: integer }
+                        runId: { type: string, nullable: true }
+                        state: { type: string, enum: [dispatched, completed, no_runtime, refused] }
+                        outcome: { type: string, nullable: true, enum: [active, expired, mismatch, temporarily_unverifiable, null] }
+                        detail: { type: string, nullable: true }
+                        createdAt: { type: string }
+                        completedAt: { type: string, nullable: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/job-leads/{recordId}/browser-verification:
+    post:
+      summary: Verify one waiting Gmail lead in the browser now
+      description: The same dispatch the per-minute cron makes, now. Only a lead whose verification is `awaiting` (409 otherwise); with browser verification off or no browser available, the instance's settings decide instead.
+      operationId: verifyJobLeadNow
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: recordId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: The lead's verification after the dispatch, content: { application/json: { schema: { type: object, properties: { state: { type: string }, lead: { type: object } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Not waiting for verification }
   /v1/instances/{instanceId}/job-leads/{recordId}/triage:
     post:
       summary: Record an explicit Job Search Scout lead decision

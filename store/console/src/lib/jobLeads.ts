@@ -10,6 +10,8 @@ export const JOB_LEAD_TRANSITIONS: Record<string, readonly string[]> = {
 	// Apply requests the Runner's read-only preflight. Tailoring stays blocked until that Runner
 	// proves a live posting and active Apply control; email freshness never does.
 	unverified: ["apply_requested", "skipped", "deferred", "archived", "unverifiable"],
+	// #1030: waiting for the browser to check the posting — never appliable until it finds it active.
+	awaiting_browser_verification: ["new", "archived", "unverifiable", "skipped", "deferred"],
 	new: ["apply_requested", "skipped", "deferred", "archived"],
 	deferred: ["apply_requested", "skipped", "archived"],
 	skipped: ["apply_requested", "archived"],
@@ -21,7 +23,7 @@ export const JOB_LEAD_TRANSITIONS: Record<string, readonly string[]> = {
 };
 
 /** Board columns, in lifecycle order. */
-export const JOB_LEAD_PIPELINE = ["unverified", "new", "deferred", "apply_requested", "tailoring", "blocked", "unverifiable", "skipped", "archived"];
+export const JOB_LEAD_PIPELINE = ["unverified", "awaiting_browser_verification", "new", "deferred", "apply_requested", "tailoring", "blocked", "unverifiable", "skipped", "archived"];
 
 const TARGET: Record<JobLeadAction, string> = { apply: "apply_requested", skip: "skipped", defer: "deferred", archive: "archived" };
 

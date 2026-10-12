@@ -2,6 +2,7 @@
 import type { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
 import { deliverEvent } from "../lib/connections.js";
+import { listLeadVerifications, verifyLeadNow } from "../lib/job-lead-browser-verification.js";
 import { JOB_LEAD_APPLY_EVENT, type JobLeadApplyEvent } from "../lib/job-lead-triage.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
@@ -46,6 +47,23 @@ export async function runJobLeadTriage(env: Env, instanceId: string, uid: string
 }
 
 export function registerJobLeadRoutes(router: Hono<{ Bindings: Env }>): void {
+	/** Browser verification of this Scout's Gmail leads (#1030): each lead's state, and every attempt's receipt. */
+	router.get("/:instanceId/job-leads/browser-verifications", async (c) => {
+		const session = await requireUser(c);
+		const instanceId = c.req.param("instanceId");
+		await requireOwnedInstance(c.env, instanceId, session.uid);
+		return c.json(await listLeadVerifications(c.env, instanceId, session.uid, Number(c.req.query("limit")) || 50));
+	});
+
+	/** Verify a waiting lead now instead of at its next turn — the same dispatch the cron makes. */
+	router.post("/:instanceId/job-leads/:recordId/browser-verification", async (c) => {
+		const session = await requireUser(c);
+		const instanceId = c.req.param("instanceId");
+		await requireOwnedInstance(c.env, instanceId, session.uid);
+		const out = await verifyLeadNow(c.env, instanceId, session.uid, c.req.param("recordId"));
+		return "error" in out ? c.json({ error: out.error }, out.status) : c.json(out);
+	});
+
 	router.post("/:instanceId/job-leads/:recordId/triage", async (c) => {
 		const session = await requireUser(c);
 		const instanceId = c.req.param("instanceId");

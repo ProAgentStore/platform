@@ -56,7 +56,7 @@ async function ingest(message: GmailMessage, fetchImpl: typeof fetch) {
 	const stored: Record<string, unknown>[] = [];
 	const result = await ingestGmailCandidates({ hits: [{ id: message.id }], readMessage: async () => message, existing: [], insertLead: async (data) => {
 		stored.push(data);
-		return true;
+		return { created: true, id: `lead-${stored.length}` };
 	}, fetchImpl });
 	return { result, stored };
 }
@@ -69,7 +69,7 @@ describe("#1024: the live no_specific_job_url case", () => {
 	it("becomes ONE unverified lead at the canonical posting, with no personal parameter anywhere", async () => {
 		const p = live();
 		const { result, stored } = await ingest(alert(), p.fetchImpl);
-		expect(result).toEqual({ candidates: 1, added: 1, deduped: 0, rejected: {} });
+		expect(result).toEqual({ candidates: 1, added: 1, deduped: 0, rejected: {}, awaiting: [] });
 		expect(stored).toHaveLength(1);
 		expect(stored[0]).toMatchObject({ url: CANONICAL, work_key: `url:${CANONICAL}`, title: "Platform Engineer at Acme", source_domain: "au.indeed.com", status: "unverified", verification: { state: "unverified", canonical_job_url: CANONICAL } });
 		expect(stored[0]).not.toHaveProperty("apply_handoff");
@@ -133,10 +133,27 @@ describe("#1024: anything short of exactly one live matching posting is refused,
 		expect(await reason(alert(), provider({ [CANONICAL]: () => new Response(postingPage([expired])) }))).toEqual({ posting_not_live: 1 });
 	});
 
-	it("a blocked page, a page with no posting data, or several postings: posting_unverifiable", async () => {
-		for (const res of [() => new Response("blocked", { status: 403 }), () => new Response("<html>no data</html>"), () => new Response(postingPage([POSTING, { ...POSTING, title: "Data Engineer" }]))]) {
-			expect(await reason(alert(), provider({ [CANONICAL]: res }))).toEqual({ posting_unverifiable: 1 });
+	// #1030: the posting resolved safely, only the SERVER could not check its page — so a browser does.
+	it("a blocked page, a page with no posting data, or several postings: awaiting browser verification, never thrown away", async () => {
+		const cases: Array<[() => Response, string]> = [
+			[() => new Response("blocked", { status: 403 }), "server_fetch_refused"],
+			[() => new Response("<html>no data</html>"), "no_structured_posting"],
+			[() => new Response(postingPage([POSTING, { ...POSTING, title: "Data Engineer" }])), "no_structured_posting"],
+		];
+		for (const [res, why] of cases) {
+			expect(await resolveProviderJobAlert(alert(), provider({ [CANONICAL]: res }).fetchImpl)).toEqual({ awaitingBrowser: { url: CANONICAL, reason: why } });
+			const { result, stored } = await ingest(alert(), provider({ [CANONICAL]: res }).fetchImpl);
+			expect(result.rejected).toEqual({});
+			expect(stored[0]).toMatchObject({ url: CANONICAL, status: "awaiting_browser_verification", verification: { state: "awaiting_browser_verification", reason: why, canonical_job_url: CANONICAL } });
+			expect(result.awaiting).toEqual([expect.objectContaining({ leadId: "lead-1", canonicalUrl: CANONICAL, reason: why })]);
+			// The personalised alert link never reaches the lead or the queue — only the canonical posting.
+			expect(JSON.stringify({ stored, awaiting: result.awaiting })).not.toMatch(/SECRET|tk=/);
 		}
+	});
+
+	it("a network failure on the canonical posting is a browser's job too", async () => {
+		const p = provider({ [CANONICAL]: () => { throw new Error(`fetch failed for ${CANONICAL}`); } });
+		expect(await resolveProviderJobAlert(alert(), p.fetchImpl)).toEqual({ awaitingBrowser: { url: CANONICAL, reason: "server_fetch_failed" } });
 	});
 
 	it("a posting whose title or company the email does not name: posting_mismatch", async () => {

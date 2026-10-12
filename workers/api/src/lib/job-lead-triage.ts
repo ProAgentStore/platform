@@ -55,7 +55,7 @@ export type JobLeadTriageAction = (typeof JOB_LEAD_TRIAGE_ACTIONS)[number];
  * synonymous with `new`: a recent alert is evidence of where we found a lead, never evidence
  * that a vacancy is open.
  */
-export const JOB_LEAD_STATUSES = ["unverified", "new", "apply_requested", "skipped", "deferred", "archived", "tailoring", "blocked", "unverifiable"] as const;
+export const JOB_LEAD_STATUSES = ["unverified", "awaiting_browser_verification", "new", "apply_requested", "skipped", "deferred", "archived", "tailoring", "blocked", "unverifiable"] as const;
 export type JobLeadStatus = (typeof JOB_LEAD_STATUSES)[number];
 
 /** The lifecycle, as data — the one place a transition is allowed. */
@@ -63,6 +63,10 @@ export const JOB_LEAD_TRANSITIONS: Record<JobLeadStatus, readonly JobLeadStatus[
 	// Applying an email lead asks the downstream Runner for its read-only live-page preflight.
 	// That check, not email freshness, decides whether Tailor may generate materials.
 	unverified: ["apply_requested", "skipped", "deferred", "archived", "unverifiable"],
+	// #1030: the server resolved the posting but could not check the page, so a browser must. Only
+	// browser verification moves it on (`planBrowserVerificationOutcome`); an owner may still set it
+	// aside, but never Apply to it — it is not known to be a live job.
+	awaiting_browser_verification: ["new", "archived", "unverifiable", "skipped", "deferred"],
 	new: ["apply_requested", "skipped", "deferred", "archived"],
 	deferred: ["apply_requested", "skipped", "archived"],
 	skipped: ["apply_requested", "archived"],
@@ -108,8 +112,8 @@ export type JobLeadTriageInput = {
 	expectedVersion?: number;
 };
 
-/** One entry of a lead's `lifecycle` audit trail. */
-export type JobLeadLifecycleEntry = { from: JobLeadStatus; to: JobLeadStatus; action: JobLeadTriageAction; version: number; at: string; note?: string };
+/** One entry of a lead's `lifecycle` audit trail. `browser_verification` is #1030's, never a triage action. */
+export type JobLeadLifecycleEntry = { from: JobLeadStatus; to: JobLeadStatus; action: JobLeadTriageAction | "browser_verification"; version: number; at: string; note?: string };
 
 export type JobLeadTriagePlan =
 	| { ok: true; transitioned: boolean; patch: Record<string, unknown> | null; event: JobLeadApplyEvent | null }
@@ -157,6 +161,9 @@ export function planJobLeadTriage(
 	const target = TARGET[input.action];
 	if (input.action === "apply" && current === "unverifiable") {
 		return { ok: false, error: "This lead could not be verified as live. It cannot request materials or submission; defer, skip, or archive it instead." };
+	}
+	if (input.action === "apply" && current === "awaiting_browser_verification") {
+		return { ok: false, error: "This lead is waiting for browser verification. Only a job the browser finds active can be applied for; defer, skip, or archive it meanwhile." };
 	}
 
 	// Already there: a retry of the decision that was made, not a new one. Apply returns its stored
@@ -300,5 +307,72 @@ export function planApplicationWriteback(record: CollectionRecord, w: JobLeadApp
 		application_submitted_at: w.submittedAt ?? null,
 		application_submitted_url: w.submittedUrl ?? null,
 		application_updated_at: w.at,
+	};
+}
+
+// ── Browser verification (#1030) ─────────────────────────────────────────────────────────────
+
+/** What a browser verification of one posting may find. Anything else is read as temporarily_unverifiable. */
+export const BROWSER_VERIFICATION_OUTCOMES = ["active", "expired", "mismatch", "temporarily_unverifiable"] as const;
+export type BrowserVerificationOutcome = (typeof BROWSER_VERIFICATION_OUTCOMES)[number];
+
+export type BrowserVerificationPlan =
+	| { ok: true; transitioned: boolean; to: JobLeadStatus; patch: Record<string, unknown> | null }
+	| { ok: false; stale: true; error: string };
+
+/**
+ * Apply one browser verification outcome to a lead (#1030). Pure; the DO runs it serialized with every
+ * other write to the instance.
+ *
+ *   active                   → `new`, verification.state `live` — a job the owner may now Apply to
+ *   expired                  → `archived` (closed), verification.state `unavailable`
+ *   mismatch                 → `archived` (closed), verification.state `unverifiable`: the page is another job
+ *   temporarily_unverifiable → stays awaiting with the attempt recorded, or `unverifiable` once `exhausted`
+ *
+ * Only a lead STILL awaiting verification is touched. A lead the owner moved on — skipped, archived,
+ * or already in the application flow — is never rewritten: a late verification must not reopen or
+ * close a lead whose submission may be uncertain, which is the no-retry rule (#1013) held from here.
+ */
+export function planBrowserVerificationOutcome(
+	record: CollectionRecord,
+	input: { outcome: BrowserVerificationOutcome; attempt: number; receiptId: string; exhausted: boolean; expectedVersion?: number; detail?: string },
+	deps: { now?: string } = {},
+): BrowserVerificationPlan {
+	const current = jobLeadStatus(record.data);
+	const version = jobLeadVersion(record.data);
+	if (current !== "awaiting_browser_verification") return { ok: true, transitioned: false, to: current, patch: null };
+	if (input.expectedVersion !== undefined && input.expectedVersion !== version) {
+		return { ok: false, stale: true, error: `This lead has changed since the verification started (lifecycle version ${version}, not ${input.expectedVersion}).` };
+	}
+	const now = deps.now ?? new Date().toISOString();
+	const prior = record.data.verification && typeof record.data.verification === "object" && !Array.isArray(record.data.verification) ? (record.data.verification as Record<string, unknown>) : {};
+	const canonical = typeof prior.canonical_job_url === "string" ? prior.canonical_job_url : typeof record.data.url === "string" ? record.data.url : null;
+	const base = { source: "browser_verification", checked_by: "browser_verification", checked_at: now, canonical_job_url: canonical, attempts: input.attempt, receipt_id: input.receiptId, last_outcome: input.outcome };
+	const target: JobLeadStatus | null =
+		input.outcome === "active" ? "new"
+		: input.outcome === "expired" || input.outcome === "mismatch" ? "archived"
+		: input.exhausted ? "unverifiable"
+		: null;
+	const verification =
+		input.outcome === "active" ? { ...base, state: "live", reason: "browser_verified_active" }
+		: input.outcome === "expired" ? { ...base, state: "unavailable", reason: "expired" }
+		: input.outcome === "mismatch" ? { ...base, state: "unverifiable", reason: "mismatch" }
+		: input.exhausted ? { ...base, state: "unverifiable", reason: "temporarily_unverifiable_exhausted" }
+		: { ...prior, ...base, state: "awaiting_browser_verification", reason: "temporarily_unverifiable" };
+	if (!target) return { ok: true, transitioned: false, to: current, patch: { verification } };
+	const nextVersion = version + 1;
+	const history = Array.isArray(record.data.lifecycle) ? record.data.lifecycle : [];
+	const entry: JobLeadLifecycleEntry = { from: current, to: target, action: "browser_verification", version: nextVersion, at: now, note: input.detail?.slice(0, 200) || `browser verification: ${input.outcome}` };
+	return {
+		ok: true,
+		transitioned: true,
+		to: target,
+		patch: {
+			status: target,
+			lifecycle_version: nextVersion,
+			lifecycle: [...history, entry],
+			verification,
+			...(target === "archived" ? { archive_reason: input.outcome === "expired" ? "job_expired" : "job_mismatch", archived_at: now } : {}),
+		},
 	};
 }

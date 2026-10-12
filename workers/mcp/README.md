@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**316 tool registrations.** 289 are always registered; 27 are gated to the console
+**318 tool registrations.** 291 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -368,6 +368,8 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `browser_takeover_get` | One takeover by id | read | | |
 | `browser_takeover_request` | Ask the owner to take over (idempotent per subject) and notify them with a link to it; refused under takeover "never" | write | yes | |
 | `browser_takeover_transition` | Move it: active (opened; refused from a phone when mobile is off), resumed (resumes the run or runner task), ended (declined) | runtime | yes | |
+| `job_lead_browser_verifications` | A Scout's Gmail leads the server could not check, verified in its browser (#1030): each lead's state (awaiting, dispatched, active, expired, mismatch, unverifiable, superseded), attempts and last outcome, plus every attempt's receipt (run id, typed outcome) | read | | |
+| `verify_job_lead_now` | Check one waiting lead in the browser now instead of at its next turn — the same read-only dispatch the platform makes | runtime | yes | |
 | `list_local_browser_runs` | A local browser research agent's runs, or one run with its redacted trace (pages, consent, pauses, findings) | read | | |
 | `start_local_browser_run` | Start a read-only research run: the Codex or Claude Code CLI signed in on the owner's machine researches in a real browser through the runner's policy bridge; idempotent on `request_id` | runtime | yes | |
 | `cancel_local_browser_run` | Stop an active research run; the findings already recorded stay | write | | |

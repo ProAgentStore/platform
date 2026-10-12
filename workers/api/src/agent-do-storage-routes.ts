@@ -24,6 +24,9 @@ import {
 	jobLeadVersion,
 	planApplicationWriteback,
 	planJobLeadTriage,
+	planBrowserVerificationOutcome,
+	BROWSER_VERIFICATION_OUTCOMES,
+	type BrowserVerificationOutcome,
 	type JobLeadTriageAction,
 } from "./lib/job-lead-triage.js";
 import type { CollectionRecord } from "./agent-storage-types.js";
@@ -183,6 +186,31 @@ export async function triageJobLead(
 		: record;
 	if (!updated) return json({ error: "Not found" }, 404);
 	return json({ record: updated, action: body.action, transitioned: plan.transitioned, event: plan.event });
+}
+
+/**
+ * Apply one browser verification outcome to a lead (#1030) — `planBrowserVerificationOutcome`, inside
+ * the DO so it is serialized with triage and every other write. Called only by the API's verification
+ * dispatcher; an ordinary record update can never mark a lead verified.
+ */
+export async function applyJobLeadBrowserVerification(engine: Pick<AgentStorageEngine, "recordGet" | "recordUpdate">, id: string, request: Request): Promise<Response> {
+	const b = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+	const outcome = b?.outcome;
+	if (typeof outcome !== "string" || !(BROWSER_VERIFICATION_OUTCOMES as readonly string[]).includes(outcome)) return json({ error: `outcome must be one of ${BROWSER_VERIFICATION_OUTCOMES.join(", ")}` }, 400);
+	if (typeof b?.attempt !== "number" || typeof b?.receipt_id !== "string") return json({ error: "attempt and receipt_id are required" }, 400);
+	const record = await engine.recordGet(JOB_LEAD_COLLECTION, decodeURIComponent(id));
+	if (!record) return json({ error: "Not found" }, 404);
+	const plan = planBrowserVerificationOutcome(record, {
+		outcome: outcome as BrowserVerificationOutcome,
+		attempt: b.attempt,
+		receiptId: b.receipt_id,
+		exhausted: b.exhausted === true,
+		...(typeof b.expected_version === "number" ? { expectedVersion: b.expected_version } : {}),
+		...(typeof b.detail === "string" ? { detail: b.detail } : {}),
+	});
+	if (!plan.ok) return json({ error: plan.error, stale: true }, 409);
+	const updated = plan.patch ? await engine.recordUpdate(JOB_LEAD_COLLECTION, record.id, plan.patch) : record;
+	return json({ record: updated, transitioned: plan.transitioned, status: plan.to });
 }
 
 /** Every lead in the collection, page by page (the engine caps a page at 200). */

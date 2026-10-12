@@ -7,7 +7,8 @@
  * This resolves such a link server-side and accepts it only when it proves exactly ONE live
  * canonical posting whose title and company both appear in the email. Anything less fails closed
  * with a named reason. It never makes the lead more than `unverified`; that is still the Runner's
- * browser preflight.
+ * browser preflight. When the posting is resolved but the server cannot check its page, the answer is
+ * `awaitingBrowser` (#1030): the lead waits for browser verification instead of being rejected.
  *
  * Personalized parameters (`tk`, `alid`, `qd`, `rd`, …) never leave this module. The posting is
  * fetched by its canonical URL, which carries only the posting id. A tracking link is followed only
@@ -47,7 +48,13 @@ const MAX_PAGE_CHARS = 1_000_000;
 const URL_RE = /https?:\/\/[^\s"'<>]+/g;
 
 export type ProviderAlertRejection = Extract<GmailScoutRejection, "multiple_listings" | "redirect_unresolved" | "posting_not_live" | "posting_unverifiable" | "posting_mismatch">;
-export type ProviderAlertResult = { url: string; company: string } | { rejected: ProviderAlertRejection };
+/**
+ * Why the SERVER could not check a safely resolved posting (#1030). The canonical URL is known and
+ * personal parameters are already gone — only the page check failed — so a browser checks it instead
+ * of the lead being thrown away as `posting_unverifiable`.
+ */
+export type ServerCheckGap = "server_fetch_failed" | "server_fetch_refused" | "page_too_large" | "no_structured_posting";
+export type ProviderAlertResult = { url: string; company: string } | { rejected: ProviderAlertRejection } | { awaitingBrowser: { url: string; reason: ServerCheckGap } };
 type Fetch = typeof fetch;
 
 const providerFor = (host: string) => PROVIDERS.find((p) => p.host.test(host)) ?? null;
@@ -165,17 +172,19 @@ export async function resolveProviderJobAlert(message: GmailMessage, fetchImpl: 
 	try {
 		res = await get(fetchImpl, canonical, signal);
 	} catch {
-		return { rejected: "posting_unverifiable" };
+		return { awaitingBrowser: { url: canonical, reason: "server_fetch_failed" } };
 	}
 	if (res.status === 404 || res.status === 410) return { rejected: "posting_not_live" };
 	// The canonical posting moving elsewhere (Indeed sends an expired job to search) is not the job.
 	if (res.status >= 300 && res.status < 400) return { rejected: "posting_not_live" };
-	if (res.status !== 200) return { rejected: "posting_unverifiable" };
+	if (res.status !== 200) return { awaitingBrowser: { url: canonical, reason: "server_fetch_refused" } };
 	const html = await res.text().catch(() => "");
 	// Refused rather than cut: a truncated page could hide a second posting.
-	if (html.length > MAX_PAGE_CHARS) return { rejected: "posting_unverifiable" };
+	if (html.length > MAX_PAGE_CHARS) return { awaitingBrowser: { url: canonical, reason: "page_too_large" } };
 	const found = jobPostings(html);
-	if (found.length !== 1 || !found[0].title || !found[0].company) return { rejected: "posting_unverifiable" };
+	// No single structured posting: a browser reads the page as a person does. (Several postings on the
+	// canonical page are still refused below by the browser's `mismatch`, never assumed to be this job.)
+	if (found.length !== 1 || !found[0].title || !found[0].company) return { awaitingBrowser: { url: canonical, reason: "no_structured_posting" } };
 	const posting = found[0];
 	if (posting.validThrough && Date.parse(posting.validThrough) < now) return { rejected: "posting_not_live" };
 	if (!agrees(message, posting)) return { rejected: "posting_mismatch" };

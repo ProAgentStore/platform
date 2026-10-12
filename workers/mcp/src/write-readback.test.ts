@@ -273,6 +273,7 @@ const READBACK: Record<string, string | null> = {
 	"browser_takeover_transition.takeover_id": "browser_takeover_get",
 	// The caller's own statement of where it is, checked against the preference and not kept.
 	"browser_takeover_transition.device": null,
+	"verify_job_lead_now.record_id": "job_lead_browser_verifications",
 	"set_instance_local_browser_settings.auth_mode": "get_instance_local_browser_settings",
 	"set_instance_local_browser_settings.workspace_path": "get_instance_local_browser_settings",
 	"set_instance_local_browser_settings.browser_profile": "get_instance_local_browser_settings",

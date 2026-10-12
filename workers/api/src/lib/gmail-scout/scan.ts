@@ -7,7 +7,18 @@ import { getMessage, listMessages, type GmailMessage } from "../gmail.js";
 import { canonicalJobUrl, jobIdentity, workKeyForLead } from "../job-lead-triage.js";
 import { clipMarked } from "../clip-marked.js";
 import { GMAIL_SCOUT_SCAN_INTERVAL_MS, getGmailScoutConfig, getGmailScoutScanState, resolveGmailScoutAccount } from "./config.js";
-import { resolveProviderJobAlert } from "./provider-redirect.js";
+import { enqueueBrowserVerification } from "../job-lead-browser-verification.js";
+import { resolveProviderJobAlert, type ServerCheckGap } from "./provider-redirect.js";
+
+/** A lead stored `awaiting_browser_verification` (#1030), to be queued for the Scout's browser. */
+export interface AwaitingBrowserLead {
+	leadId: string;
+	workKey: string;
+	canonicalUrl: string;
+	title: string | null;
+	company: string | null;
+	reason: ServerCheckGap;
+}
 import { completeGmailScoutReceipt, failGmailScoutReceipt, type GmailScoutRejection, type GmailScoutScanTrigger, listGmailScoutReceipts, openGmailScoutReceipt, pruneGmailScoutReceipts } from "./receipts.js";
 
 // A recent alert is an intake clue, not vacancy verification.  We deliberately keep the window
@@ -179,10 +190,11 @@ export async function readGmailScoutLeadRecords(env: Env, instanceId: string, qu
 	const body = await res.json() as { records?: Array<{ data?: Record<string, unknown> }> };
 	return body.records ?? [];
 }
-async function insert(env: Env, instanceId: string, data: Record<string, unknown>): Promise<boolean> {
+async function insert(env: Env, instanceId: string, data: Record<string, unknown>): Promise<{ created: boolean; id?: string }> {
 	const res = await stub(env, instanceId).fetch(new Request("https://agent/collections/job_leads/records", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ data }) }));
 	if (!res.ok) throw new Error("Could not save a Gmail job lead.");
-	return (await res.json() as { created?: unknown }).created !== false;
+	const body = (await res.json()) as { created?: unknown; id?: unknown };
+	return { created: body.created !== false, ...(typeof body.id === "string" ? { id: body.id } : {}) };
 }
 
 /** The two durable duplicate keys: Gmail message identity and platform-wide job identity. */
@@ -223,21 +235,29 @@ export async function ingestGmailCandidates(input: {
 	hits: readonly { id: string }[];
 	readMessage: (id: string) => Promise<GmailMessage>;
 	existing: { data?: Record<string, unknown> }[];
-	/** `false` means the owning Scout returned an existing unchanged lead (a concurrent duplicate). */
-	insertLead: (data: Record<string, unknown>) => Promise<boolean | undefined>;
+	/** `false` means the owning Scout returned an existing unchanged lead (a concurrent duplicate). The record id, when known, queues a browser verification (#1030). */
+	insertLead: (data: Record<string, unknown>) => Promise<boolean | undefined | { created: boolean; id?: string }>;
 	/** How a provider redirect is resolved (#1024); the global `fetch` in production. */
 	fetchImpl?: typeof fetch;
-}): Promise<{ candidates: number; added: number; deduped: number; rejected: Partial<Record<GmailScoutRejection, number>> }> {
+}): Promise<{ candidates: number; added: number; deduped: number; rejected: Partial<Record<GmailScoutRejection, number>>; awaiting: AwaitingBrowserLead[] }> {
 	let added = 0, deduped = 0, candidates = 0;
+	const awaiting: AwaitingBrowserLead[] = [];
 	const rejected: Partial<Record<GmailScoutRejection, number>> = {};
 	for (const hit of input.hits) {
 		const message = await input.readMessage(hit.id);
 		let classified: ReturnType<typeof classifyGmailMessage> = classifyGmailMessage(message);
+		/** Set when the posting resolved but the server could not check its page (#1030). */
+		let serverGap: ServerCheckGap | null = null;
 		// #1024: a one-item provider alert carries only a redirect. Resolve it — after the digest,
 		// multi-listing and security checks above have already passed — or say exactly why not.
 		if ("rejected" in classified && classified.rejected === "no_specific_job_url") {
 			const resolved = await resolveProviderJobAlert(message, input.fetchImpl);
-			if (resolved) classified = "rejected" in resolved ? resolved : { candidate: candidateFor(message, resolved.url, resolved.company) };
+			if (resolved && "awaitingBrowser" in resolved) {
+				// Resolved to ONE canonical posting, but the page could not be checked here: a browser
+				// checks it instead of the lead being thrown away (#1030). Only the canonical URL is kept.
+				classified = { candidate: candidateFor(message, resolved.awaitingBrowser.url) };
+				serverGap = resolved.awaitingBrowser.reason;
+			} else if (resolved) classified = "rejected" in resolved ? resolved : { candidate: candidateFor(message, resolved.url, resolved.company) };
 		}
 		if ("rejected" in classified) {
 			rejected[classified.rejected] = (rejected[classified.rejected] ?? 0) + 1;
@@ -254,16 +274,22 @@ export async function ingestGmailCandidates(input: {
 		const data = {
 			...candidate,
 			work_key: workKey,
-			status: "unverified",
+			status: serverGap ? "awaiting_browser_verification" : "unverified",
 			lifecycle_version: 0,
-			verification: { state: "unverified", source: "gmail_alert", checked_at: null, canonical_job_url: candidate.url, active_apply_url: null, reason: "email_alert_requires_live_validation", evidence: null },
+			verification: serverGap
+				? { state: "awaiting_browser_verification", source: "gmail_alert", checked_at: null, canonical_job_url: candidate.url, active_apply_url: null, reason: serverGap, evidence: null, attempts: 0 }
+				: { state: "unverified", source: "gmail_alert", checked_at: null, canonical_job_url: candidate.url, active_apply_url: null, reason: "email_alert_requires_live_validation", evidence: null },
 		};
-		const created = await input.insertLead(data);
+		const inserted = await input.insertLead(data);
+		const created = typeof inserted === "object" ? inserted.created : inserted;
 		if (created === false) { deduped++; continue; }
 		input.existing.push({ data });
 		added++;
+		if (serverGap && typeof inserted === "object" && inserted.id) {
+			awaiting.push({ leadId: inserted.id, workKey, canonicalUrl: candidate.url, title: data.title ?? null, company: data.company ?? null, reason: serverGap });
+		}
 	}
-	return { candidates, added, deduped, rejected };
+	return { candidates, added, deduped, rejected, awaiting };
 }
 
 /**
@@ -319,17 +345,21 @@ export async function scanGmailScout(env: Env, instanceId: string, userId: strin
 		const state = await getGmailScoutScanState(env, instanceId);
 		const hits = await mailbox.list(gmailScoutQuery(state.lastMessageIdCursor), 25);
 		const existing = await readGmailScoutLeadRecords(env, instanceId);
-		const { candidates, added, deduped, rejected } = await ingestGmailCandidates({
+		const { candidates, added, deduped, rejected, awaiting } = await ingestGmailCandidates({
 			hits,
 			readMessage: (id) => mailbox.read(id),
 			existing,
 			insertLead: (data) => insert(env, instanceId, data),
 		});
+		// #1030: each lead the server could not check is queued for the Scout's browser.
+		for (const a of awaiting) {
+			await enqueueBrowserVerification(env, { instanceId, userId, leadId: a.leadId, workKey: a.workKey, canonicalUrl: a.canonicalUrl, expectedTitle: a.title, expectedCompany: a.company, reason: a.reason });
+		}
 		const cursor = JSON.stringify({ after: new Date().toISOString(), messageId: hits[0]?.id ?? null } satisfies ScanCursor);
 		await env.DB.prepare(`INSERT INTO gmail_scout_scan_state (instance_id,last_scan_at,last_message_id_cursor,candidate_count,dedupe_count,failure_count,last_failure_at,last_failure_message)
 			VALUES (?1,datetime('now'),?2,?3,?4,0,NULL,NULL)
 			ON CONFLICT(instance_id) DO UPDATE SET last_scan_at=excluded.last_scan_at,last_message_id_cursor=excluded.last_message_id_cursor,candidate_count=excluded.candidate_count,dedupe_count=excluded.dedupe_count,failure_count=0,last_failure_at=NULL,last_failure_message=NULL`).bind(instanceId, cursor, candidates, deduped).run();
-		const receipt = await completeGmailScoutReceipt(env, receiptId, { hits: hits.length, candidates, added, deduped, rejected, lastMessageId: hits[0]?.id ?? null });
+		const receipt = await completeGmailScoutReceipt(env, receiptId, { hits: hits.length, candidates, added, deduped, rejected, lastMessageId: hits[0]?.id ?? null, awaitingBrowserVerification: awaiting.length });
 		await pruneGmailScoutReceipts(env, instanceId);
 		return { mailbox: account.label ?? account.accountId, candidates, added, deduped, lastMessageId: hits[0]?.id ?? null, rejected, receipt, reused: false, handoff: "none" };
 	} catch (error) {
