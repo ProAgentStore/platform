@@ -1,20 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { checkEngine, detectEngineLogin, resolveBinary } from "./engine-check.js";
+import { checkEngine, detectEngineLogin } from "./engine-check.js";
 
 const HOME = "/home/me";
 const onPath = (bins: string[]) => (p: string) => bins.some((b) => p === b);
-
-describe("resolveBinary — the lookup spawn does (#879)", () => {
-	it("finds a bare name on PATH and misses one that is not there", () => {
-		const env = { PATH: "/usr/bin:/opt/codex/bin" };
-		expect(resolveBinary("codex", { env, platform: "linux", isExecutable: onPath(["/opt/codex/bin/codex"]) })).toBe("/opt/codex/bin/codex");
-		expect(resolveBinary("codex", { env, platform: "linux", isExecutable: onPath([]) })).toBeNull();
-	});
-
-	it("takes a path as-is rather than searching PATH for it", () => {
-		expect(resolveBinary("/usr/local/bin/claude", { env: { PATH: "" }, isExecutable: onPath(["/usr/local/bin/claude"]) })).toBe("/usr/local/bin/claude");
-	});
-});
 
 describe("detectEngineLogin — subscription login presence only (#879)", () => {
 	it("codex: auth.json under CODEX_HOME (default ~/.codex) is the login", () => {

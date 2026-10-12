@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { accessSync, constants, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, isAbsolute, join, resolve } from "node:path";
+import { join } from "node:path";
 import { handlerFor, type ClientType } from "./handlers.js";
 import { parseCommand } from "./headless.js";
+import { type EngineSpawn, type EngineSpawnDeps, resolveEngineSpawn } from "./engine-spawn.js";
 
 /**
  * Can this machine run an engine at all — BEFORE a session is launched on it (#879)?
@@ -16,7 +17,8 @@ import { parseCommand } from "./headless.js";
  *
  * Two facts, each three-valued, because a false "missing" would refuse a machine that works:
  *
- *   binary — found on the PATH `pags up` spawns with (the same lookup `spawn` does), or not.
+ *   binary — found on the PATH `pags up` spawns with, by the same resolution the spawn uses
+ *            (`resolveEngineSpawn` — on Windows, an npm shim's real target; #1044), or not.
  *   login  — the engine's own INTERACTIVE subscription login is stored on this machine (`found`),
  *            definitely is not (`missing`), or this build cannot tell (`unknown`). Only a
  *            definite `missing` is ever grounds for refusal.
@@ -33,32 +35,20 @@ export interface EngineCheck {
 	/** The executable the session would spawn (first token of the command). */
 	bin: string;
 	binaryFound: boolean;
-	/** Absolute path it resolved to, when found. */
+	/** Absolute path it resolved to, when found — on Windows, what a shim actually launches. */
 	binaryPath?: string;
+	/** How the spawn will run it, when found (#1044): as itself, through Node, or through `cmd.exe`. */
+	binaryVia?: EngineSpawn["via"];
 	login: "found" | "missing" | "unknown";
 	/** Where the login was looked for — a path or "keychain", never a value. */
 	loginWhere?: string;
 }
 
-export interface EngineCheckDeps {
-	env?: NodeJS.ProcessEnv;
-	platform?: NodeJS.Platform;
+export interface EngineCheckDeps extends EngineSpawnDeps {
 	home?: string;
-	/** Is `p` an existing executable file? */
-	isExecutable?: (p: string) => boolean;
 	exists?: (p: string) => boolean;
 	/** Exit status of `security find-generic-password -s <service>`; null when it could not run. */
 	keychainItemStatus?: (service: string) => number | null;
-}
-
-function defaultIsExecutable(p: string): boolean {
-	try {
-		if (!statSync(p).isFile()) return false;
-		accessSync(p, constants.X_OK);
-		return true;
-	} catch {
-		return false;
-	}
 }
 
 function defaultExists(p: string): boolean {
@@ -74,26 +64,6 @@ function defaultKeychainItemStatus(service: string): number | null {
 	// Existence only: without `-w`/`-g` the secret is never read, so this cannot prompt or leak.
 	const r = spawnSync("security", ["find-generic-password", "-s", service], { stdio: "ignore", timeout: 5_000 });
 	return r.error ? null : r.status;
-}
-
-/** The same resolution `spawn(bin)` does: a path is taken as-is, a bare name is searched on PATH. */
-export function resolveBinary(bin: string, deps: Pick<EngineCheckDeps, "env" | "platform" | "isExecutable"> = {}): string | null {
-	const isExec = deps.isExecutable ?? defaultIsExecutable;
-	if (!bin) return null;
-	if (bin.includes("/") || isAbsolute(bin)) {
-		const p = resolve(bin);
-		return isExec(p) ? p : null;
-	}
-	const env = deps.env ?? process.env;
-	const exts = (deps.platform ?? process.platform) === "win32" ? (env.PATHEXT || ".EXE;.CMD;.BAT").split(";") : [""];
-	for (const dir of (env.PATH || "").split(delimiter)) {
-		if (!dir) continue;
-		for (const ext of exts) {
-			const p = join(dir, bin + ext);
-			if (isExec(p)) return p;
-		}
-	}
-	return null;
 }
 
 /** Does this engine have a stored interactive login on the machine? */
@@ -145,14 +115,14 @@ export function checkEngine(
 	const engine = (["claude", "gemini", "codex", "grok", "generic"].includes(input.clientType ?? "") ? input.clientType : "claude") as ClientType;
 	const parsed = parseCommand(input.command);
 	const bin = parsed.bin || parseCommand(handlerFor(engine).cliCommand).bin || engine;
-	const binaryPath = resolveBinary(bin, deps);
+	const { binaryPath, via } = resolveEngineSpawn(bin, [], deps);
 	const login = input.credentialInjected ? { login: "found" as const, where: "platform" } : detectEngineLogin(engine, deps);
 	return {
 		checked: true,
 		engine,
 		bin,
 		binaryFound: binaryPath !== null,
-		...(binaryPath ? { binaryPath } : {}),
+		...(binaryPath ? { binaryPath, binaryVia: via } : {}),
 		login: login.login,
 		...(login.where ? { loginWhere: login.where } : {}),
 	};

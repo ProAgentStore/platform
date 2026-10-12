@@ -7,6 +7,7 @@ import { appendTurnTail, type EngineTurnReport, turnReportFromExit, turnReportFr
 import { renderToolResult, shortInput, stripAnsi } from "./transcript-lines.js";
 import { authoredTurn, authorTag, type TurnAuthor } from "./turn-author.js";
 import { engineSpawnEnv, mergeEnv } from "./engine-env.js";
+import { resolveEngineSpawn } from "./engine-spawn.js";
 import { type GhGuardReport, ghGuardStatus } from "./gh-guard.js";
 
 import { type ClientType, handlerFor } from "./handlers.js";
@@ -532,10 +533,13 @@ export class HeadlessSession {
 		this.buf = "";
 		const args = this.adapter.buildLaunchArgs(this.cmdArgs, this.claudeSessionId);
 
-		const proc = spawn(this.cmdBin, args, {
+		const env = this.spawnEnv;
+		const launch = resolveEngineSpawn(this.cmdBin, args, { env });
+		const proc = spawn(launch.command, launch.args, {
 			cwd: this.config.workDir,
-			env: this.spawnEnv,
+			env,
 			stdio: ["pipe", "pipe", "pipe"],
+			windowsVerbatimArguments: launch.windowsVerbatimArguments,
 		});
 		this.proc = proc;
 		this.run = "idle";
@@ -678,10 +682,13 @@ export class HeadlessSession {
 		const turnArgs = resumedCodexThreadId
 			? buildCodexResumeArgs(this.cmdArgs, resumedCodexThreadId, text)
 			: this.adapter.buildTurnArgs(this.cmdArgs, text);
-		const proc = spawn(this.cmdBin, turnArgs, {
+		const env = this.spawnEnv;
+		const launch = resolveEngineSpawn(this.cmdBin, turnArgs, { env });
+		const proc = spawn(launch.command, launch.args, {
 			cwd: this.config.workDir,
-			env: this.spawnEnv,
+			env,
 			stdio: ["ignore", "pipe", "pipe"],
+			windowsVerbatimArguments: launch.windowsVerbatimArguments,
 		});
 		// A turn already running is aborted before its replacement starts: `input()` accepts a turn
 		// at any time — a human typing in the console, a takeover, a Loop that stopped waiting —

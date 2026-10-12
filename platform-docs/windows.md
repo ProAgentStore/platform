@@ -114,11 +114,19 @@ Idle)") are covered by the same settings. Allowing the screen to turn off is fin
   as a child process with structured output (`packages/browser-runner/src/coding/headless.ts`), with
   no tmux involved. Install Git for Windows and log the engine in on the machine first.
 
-    *From the source, not yet run on Windows:* the runner starts the engine binary without a shell.
-    Windows does not start a `.cmd` file that way, and that is what `npm i -g` installs for an npm
-    package (`claude.cmd`). Install Claude Code with its native installer instead, which provides
-    `claude.exe`, or set the engine preset's command to the full path of an `.exe`. The engine check
-    on the machine can report an npm-installed `claude.cmd` as found even though starting it fails.
+    An `npm i -g` install works from CLI 0.4.115. npm puts only `.cmd` shims on PATH (`claude.cmd`),
+    which Windows cannot start without a shell. The runner therefore resolves the engine before it
+    starts it (`packages/browser-runner/src/coding/engine-spawn.ts`):
+
+    - A real `.exe` on PATH is used first.
+    - Otherwise the shim's own target is used: Claude Code's native `bin\claude.exe`, or a Node
+      script (codex, gemini) run with the runner's Node.
+    - Any other `.cmd` runs through `cmd.exe` with every argument quoted.
+
+    The engine check reports the same path (`binaryPath`) and how it runs (`binaryVia`). An engine
+    reached only through `cmd.exe` cannot receive a multi-line prompt, because `cmd.exe` stops at
+    the first line break. Older CLIs fail with `spawn claude ENOENT`; put the native installer's
+    `claude.exe` on PATH for those.
 
 ## What does not work
 
