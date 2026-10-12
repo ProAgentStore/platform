@@ -19,12 +19,19 @@ import { advanceCron } from "./cron-schedule.js";
 import { patchInstanceConfig } from "./instance-config.js";
 import { isValidTimeZone } from "./cron-time.js";
 import { brainModel } from "./brain-models.js";
+import { readInstanceBrain } from "./instance-brain.js";
 
 export interface CoderBrainSettings {
 	enabled: boolean;
 	poEnabled: boolean;
-	/** A `BRAIN_MODELS` id. Runs on the owner's own provider key (BYOK), billed like every brain call. */
+	/**
+	 * A `BRAIN_MODELS` id. Runs on the owner's own provider key (BYOK), billed like every brain call.
+	 * Since #1043 this IS the coder's Brain model (the instance's `state.model`) once the owner picked
+	 * one; until then a model stored here before #1043 keeps running, else the default.
+	 */
 	model: string;
+	/** The model is the instance Brain the owner picked (#1043) — not a legacy or default value. */
+	modelChosen: boolean;
 	/** How long a question waits for a person before the brain may decide. */
 	humanTimeoutMinutes: number;
 	/** How long an escalated question waits again before the run is told to finish what it can. */
@@ -36,7 +43,7 @@ export interface CoderBrainSettings {
 }
 
 export const CODER_BRAIN_DEFAULTS = { model: "claude-sonnet-4-6", humanTimeoutMinutes: 30, escalationTimeoutMinutes: 60, maxDecisionsPerRun: 3, confidenceThreshold: 0.8 } as const;
-export const CODER_BRAIN_OFF: CoderBrainSettings = { enabled: false, poEnabled: false, ...CODER_BRAIN_DEFAULTS };
+export const CODER_BRAIN_OFF: CoderBrainSettings = { enabled: false, poEnabled: false, modelChosen: false, ...CODER_BRAIN_DEFAULTS };
 
 /** Each numeric knob's bounds — the writer refuses outside them, the reader clamps a stored stray. */
 const BOUNDS = {
@@ -70,6 +77,7 @@ export function coderBrainFrom(config: unknown): CoderBrainSettings {
 		// The PO layer uses the brain: with the brain off it is off, whatever was stored.
 		poEnabled: enabled && c.poEnabled === true,
 		model: typeof c.model === "string" && brainModel(c.model) ? c.model : CODER_BRAIN_DEFAULTS.model,
+		modelChosen: false,
 		humanTimeoutMinutes: knob("humanTimeoutMinutes"),
 		escalationTimeoutMinutes: knob("escalationTimeoutMinutes"),
 		maxDecisionsPerRun: knob("maxDecisionsPerRun"),
@@ -87,10 +95,13 @@ export function coderBrainPatchProblem(patch: Partial<Record<keyof CoderBrainSet
 	return null;
 }
 
-/** The ONE reader. Null when the instance is not the caller's. */
-export async function readCoderBrain(env: Pick<Env, "DB">, instanceId: string, userId: string): Promise<CoderBrainSettings | null> {
+/** The ONE reader. Null when the instance is not the caller's. The model is the instance's Brain once picked (#1043). */
+export async function readCoderBrain(env: Pick<Env, "DB" | "AGENT">, instanceId: string, userId: string): Promise<CoderBrainSettings | null> {
 	const row = await env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2").bind(instanceId, userId).first<{ config: string | null }>();
-	return row ? coderBrainFrom(row.config) : null;
+	if (!row) return null;
+	const settings = coderBrainFrom(row.config);
+	const brain = await readInstanceBrain(env, instanceId);
+	return brain?.modelChosen ? { ...settings, model: brain.model, modelChosen: true } : settings;
 }
 
 /**
@@ -114,8 +125,12 @@ export async function setCoderBrain(env: Env, instanceId: string, userId: string
 	if (!current) throw new Error("instance not found");
 	const enabled = typeof patch.enabled === "boolean" ? patch.enabled : current.enabled;
 	const poEnabled = enabled && (typeof patch.poEnabled === "boolean" ? patch.poEnabled : current.poEnabled);
-	const settings: CoderBrainSettings = { ...current, ...patch, enabled, poEnabled };
-	if (!(await patchInstanceConfig(env, instanceId, userId, "coderBrain", settings))) throw new Error("instance not found");
+	// The model is the instance's Brain (#1043), written through its own route — never a second copy here.
+	const { model: _patchModel, modelChosen: _patchChosen, ...knobs } = patch;
+	const settings: CoderBrainSettings = { ...current, ...knobs, enabled, poEnabled };
+	const { model, modelChosen, ...stored } = settings;
+	// A pre-#1043 model is kept (it still runs until a Brain is picked); the picked Brain is not copied in.
+	if (!(await patchInstanceConfig(env, instanceId, userId, "coderBrain", modelChosen ? stored : { ...stored, model }))) throw new Error("instance not found");
 	const triggers = await syncPoTriageTriggers(env, instanceId, userId, poEnabled);
 	return { settings, triggers };
 }

@@ -59,3 +59,18 @@ export function templateModelRefusal(model: unknown): string | null {
 export function isWorkersAiModel(id: string): boolean {
 	return id.startsWith("@cf/") || id.startsWith("@hf/");
 }
+
+/** Who bills a brain model, in the owner's words (#1043). */
+export function brainProviderLabel(provider: BrainModel["provider"]): string {
+	return provider === "cloudflare" ? "Cloudflare Workers AI" : "Anthropic";
+}
+
+/**
+ * The active Brain, as every surface shows it (#1043): the model the owner picked, or the default the
+ * advisory surfaces run while nothing is picked. Always says it is advisory — it never edits code.
+ */
+export function activeBrainLabel(state: { model?: unknown; modelChosen?: unknown } | null | undefined): string {
+	const picked = state?.modelChosen === true && typeof state.model === "string" ? brainModel(state.model) : undefined;
+	const m = picked ?? brainModel("claude-sonnet-4-6");
+	return m ? `Brain: ${m.label} (${brainProviderLabel(m.provider)})${picked ? "" : " — default"} · advisory only` : "Brain: unknown · advisory only";
+}

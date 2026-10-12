@@ -16,7 +16,7 @@ export function registerCoderBrainTools(server: McpServer, ctx: InstanceToolsCtx
 			instance_id: z.string(),
 			enabled: z.boolean().optional(),
 			po_enabled: z.boolean().optional(),
-			model: z.string().optional().describe("A brain model id (the brain-model catalogue), e.g. claude-sonnet-4-6."),
+			model: z.string().optional().describe("This coder's Brain model (#1043) — the same setting as the console's Brain card: a brain-model catalogue id, e.g. claude-sonnet-4-6 or @cf/meta/llama-4-scout-17b-16e-instruct (Cloudflare needs stored Cloudflare credentials). Advisory and orchestration only; it never changes the coding engine or how it signs in."),
 			human_timeout_minutes: z.coerce.number().int().min(1).max(1440).optional(),
 			escalation_timeout_minutes: z.coerce.number().int().min(1).max(1440).optional(),
 			max_decisions_per_run: z.coerce.number().int().min(0).max(20).optional(),

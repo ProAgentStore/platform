@@ -4,6 +4,7 @@ import { normalizeToolCalls, parseToolCallsFromText } from "./parse-tool-calls.j
 import { canReadHosted, type HostedRepoRef } from "./hosted-repo.js";
 import type { RunnerConn } from "./runner-client.js";
 import { runUserWorkersAi } from "./user-ai.js";
+import { advisoryBrain } from "./instance-brain.js";
 import type { UsageContext } from "./usage.js";
 import { controllerAiCall } from "./controller-ai-recovery.js";
 import type { Env } from "../types.js";
@@ -178,9 +179,11 @@ export async function copilotSummary(env: Env, userId: string | undefined, args:
  * Every Co-pilot provider call, under the controller recovery policy (#907). A stall on a tool round is
  * retried before any tool runs, so a retry re-asks the question — it never repeats a tool's effect.
  */
-function copilotAi(env: Env, userId: string | undefined, args: { instanceId?: string; sessionId?: string | null }, body: Record<string, unknown>, ctx?: UsageContext): Promise<unknown> {
+async function copilotAi(env: Env, userId: string | undefined, args: { instanceId?: string; sessionId?: string | null }, body: Record<string, unknown>, ctx?: UsageContext): Promise<unknown> {
+	// Reading the terminal is advisory: it runs on this coder's Brain model (#1043), never the engine.
+	const brain = await advisoryBrain(env, args.instanceId);
 	// No account → no stored settings: the documented defaults apply.
 	return controllerAiCall(env, { userId: userId ?? "", instanceId: args.instanceId, traceId: args.sessionId ?? null, surface: "copilot" }, (streamDeadlines) =>
-		runUserWorkersAi(env, userId, "claude-sonnet-4-6", { ...body, streamDeadlines }, ctx),
+		runUserWorkersAi(env, userId, brain.model, { ...body, streamDeadlines }, ctx, { honorModel: brain.modelChosen }),
 	);
 }

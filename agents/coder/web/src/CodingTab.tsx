@@ -916,7 +916,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					/>
 				)}
 				{/* Both shown in BOTH views — the reasons are in the components (#248, #coding-auth). */}
-				<EngineCredentialStrip auth={engineAuth} invocation={engineInvocation} command={openSession?.launchCommand} />
+				<EngineCredentialStrip auth={engineAuth} invocation={engineInvocation} command={openSession?.launchCommand} instanceId={instanceId} />
 				<EngineSigninPrompt prompt={authPrompt} message={signinMsg} onStartSignin={startSignin} />
 				{view === "terminal" && terminalPane}
 				{settingsModal}

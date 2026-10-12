@@ -410,9 +410,19 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 				onSaveSetting={saveSetting}
 			/>
 
-			<BrainModelCard instanceId={instanceId} />
-			{isCoding && <CodingEngineCard instanceId={instanceId} />}
-			{isCoding && <CoderBrainSection instanceId={instanceId} />}
+			{/* #1043: the Brain (advisory, may use an API key) and the Coding engine (the subscription CLI that
+			    writes code, #1042) are two different things, set in two separate sections. */}
+			<section aria-labelledby="settings-brain-heading" data-testid="settings-brain-section">
+				<h2 id="settings-brain-heading" className="text-lg font-semibold mb-2">Brain — advises and orchestrates</h2>
+				<BrainModelCard instanceId={instanceId} />
+				{isCoding && <CoderBrainSection instanceId={instanceId} />}
+			</section>
+			{isCoding && (
+				<section aria-labelledby="settings-coding-heading" data-testid="settings-coding-section" className="border-t border-line pt-4 mt-2">
+					<h2 id="settings-coding-heading" className="text-lg font-semibold mb-2">Coding — edits, tests and deploys</h2>
+					<CodingEngineCard instanceId={instanceId} />
+				</section>
+			)}
 			{isLocalBrowser && <LocalBrowserSection instanceId={instanceId} />}
 			{isLocalBrowser && <BrowserVerificationSection instanceId={instanceId} />}
 			{isGmailScout && <GmailScoutSection instanceId={instanceId} />}

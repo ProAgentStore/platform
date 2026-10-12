@@ -3,6 +3,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { type CoderBrainSettings, PO_TRIAGE_ACTION, coderBrainPatchProblem, readCoderBrain, setCoderBrain } from "../lib/coder-brain.js";
 import { type CoderQuestionState, listCoderQuestions } from "../lib/coder-question-store.js";
+import { brainModelRefusal, writeInstanceBrain } from "../lib/instance-brain.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 
@@ -42,10 +43,17 @@ export function registerCoderBrainRoutes(router: Hono<{ Bindings: Env }>): void 
 		const patch = Object.fromEntries(PATCH_KEYS.filter((k) => b[k] !== undefined).map((k) => [k, b[k]])) as Partial<CoderBrainSettings>;
 		const problem = coderBrainPatchProblem(patch);
 		if (problem) throw new HttpError(400, problem);
+		// `model` is this coder's Brain (#1043): the same check and the same store as the Brain card's
+		// `PUT /state`. It touches no engine preset, sign-in or API-coding confirmation.
+		if (patch.model !== undefined) {
+			const refusal = await brainModelRefusal(c.env, uid, patch.model);
+			if (refusal) throw new HttpError(refusal.status, refusal.error);
+		}
 		if (patch.enabled === true || patch.poEnabled === true) {
 			const caps = await capabilitiesForInstance(c.env, instanceId, uid).catch(() => null);
 			if (caps?.workflow !== "CODING_SESSION") throw new HttpError(409, "The coder brain acts on coding runs, so it needs a coding instance (a Repo Coder).");
 		}
+		if (patch.model !== undefined) await writeInstanceBrain(c.env, instanceId, patch.model);
 		const { triggers } = await setCoderBrain(c.env, instanceId, uid, patch);
 		return c.json({ ...(await view(c.env, instanceId, uid)), changed: triggers });
 	});

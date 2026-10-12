@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import Card from "../../components/Card";
+import { activeBrainLabel } from "../../../../../workers/api/src/lib/brain-models";
 import { type CoderBrainSettings, type CoderBrainView, type CoderQuestionView, type CoderQuestionsResponse, questionSummary, reportSummary } from "../../lib/poTriage";
 
 /**
@@ -46,6 +47,7 @@ export default function CoderBrainSection({ instanceId }: { instanceId: string }
 		<h2 id="coder-brain-heading" className="font-semibold">Coder brain</h2>
 		<p className="text-xs text-muted-soft mt-1">Off by default. Product-owner triage reads this coder's open issues on a schedule: it queues the ready ones, leaves what waits on you, notes what is blocked, and comments once on an issue that needs more detail. It never edits, closes or deletes an issue.</p>
 		<label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={s.enabled} disabled={busy} onChange={(e) => void save({ enabled: e.target.checked })} /> Coder brain on</label>
+		<p className="mt-1 text-xs" data-testid="coder-brain-model">Decides with this coder's Brain model, set above: {activeBrainLabel({ model: s.model, modelChosen: s.modelChosen })}</p>
 		<p className="mt-1 text-xs text-muted-soft">When the coder stops on a question, you are notified and it is posted on the issue. With the brain on, if nobody answers in time the brain may decide — only if the issue settles it, never on owner-only, money, permission, deletion or branch questions — or asks you again. Your answer always wins.</p>
 		<div className="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2">
 			{knob("Wait for you (minutes)", "humanTimeoutMinutes")}

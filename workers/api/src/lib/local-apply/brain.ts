@@ -6,9 +6,8 @@
  * persists exactly one directive, then lets the relay deliver that directive to the local CLI.
  * The model never receives browser snapshots, form values, source files, or CLI prose.
  */
-import type { AgentState } from "../../agent-types.js";
 import type { Env } from "../../types.js";
-import { brainModel } from "../brain-models.js";
+import { readInstanceBrain } from "../instance-brain.js";
 import { runUserWorkersAi } from "../user-ai.js";
 import { type ApplyRun, type ApplyTraceEvent, updateApplyRun } from "./store.js";
 import {
@@ -19,7 +18,6 @@ import {
 	type SupervisorDirectiveKind,
 } from "./supervision.js";
 
-const DEFAULT_BRAIN_MODEL = "claude-sonnet-4-6";
 const DECISION_TOOL = {
 	type: "function",
 	function: {
@@ -35,21 +33,6 @@ const DECISION_TOOL = {
 } as const;
 
 type BrainResponse = { tool_calls?: Array<{ name?: unknown; arguments?: unknown }> };
-
-async function instanceBrain(env: Env, instanceId: string): Promise<{ model: string; modelChosen: boolean } | null> {
-	try {
-		const stub = env.AGENT.get(env.AGENT.idFromName(instanceId));
-		const res = await stub.fetch(new Request("https://agent/state"));
-		if (!res.ok) return null;
-		const state = (await res.json().catch(() => null)) as Partial<AgentState> | null;
-		// An instance normally always has its selected/default brain. A malformed or stale DO state
-		// must fail closed rather than silently run an arbitrary model id.
-		const model = typeof state?.model === "string" && brainModel(state.model) ? state.model : DEFAULT_BRAIN_MODEL;
-		return { model, modelChosen: state?.modelChosen === true };
-	} catch {
-		return null;
-	}
-}
 
 const parsedDirective = (value: unknown): SupervisorDirectiveKind | null =>
 	value === "continue" || value === "request_review" || value === "stop" ? value : null;
@@ -144,7 +127,7 @@ export function constrainBrainDirective(run: ApplyRun, checkpoint: SupervisorChe
  * safe review request: no browser write gets released merely because the cloud brain is absent.
  */
 export async function decideApplicationCheckpoint(env: Env, uid: string, run: ApplyRun, checkpoint: SupervisorCheckpoint): Promise<CheckpointDecision> {
-	const brain = await instanceBrain(env, run.instanceId);
+	const brain = await readInstanceBrain(env, run.instanceId);
 	// No brain configured, or it could not be read: the POLICY still decides. Before #982 this fell
 	// straight to `request_review`, which is how a safe initial checkpoint became a terminal review
 	// state with nothing filled — the model being absent is not a reason to stop safe work.

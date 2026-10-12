@@ -13,6 +13,7 @@ import { logEvent } from "./events.js";
 import { parseLoopDecision, type LoopDecisionResult } from "./loop-decide.js";
 import { controllerAiCall } from "./controller-ai-recovery.js";
 import { runUserWorkersAi } from "./user-ai.js";
+import { advisoryBrain } from "./instance-brain.js";
 import type { Env } from "../types.js";
 import { MAX_CONFIGURABLE_OBJECTIVE_CHARS } from "./loop-limits.js";
 
@@ -149,10 +150,12 @@ export async function runLoopDecide(
 	const user = buildLoopUserContent(input);
 	try {
 		// Under the controller recovery policy (#907): a provider stall is retried, bounded; anything else is not.
+		// The Loop's decisions are orchestration: they run on this coder's Brain model (#1043).
+		const brain = await advisoryBrain(env, instanceId);
 		const res = (await controllerAiCall(env, { userId, instanceId, traceId: input.traceId, surface: "loop" }, (streamDeadlines) => runUserWorkersAi(
 			env,
 			userId,
-			"claude-sonnet-4-6",
+			brain.model,
 			{
 				messages: [
 					{ role: "system", content: system },
@@ -173,6 +176,7 @@ export async function runLoopDecide(
 					{ label: "loop.transcript", value: input.messages.slice(-6).map((m) => m.content) },
 				],
 			},
+			{ honorModel: brain.modelChosen },
 		))) as { response?: string };
 		return parseLoopDecision(res.response || "");
 	} catch (e) {

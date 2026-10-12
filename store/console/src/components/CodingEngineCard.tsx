@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
 import Button from "./Button";
 import Card from "./Card";
+import { ENGINE_CARD_SCOPE } from "../lib/brainChoice";
 import { engineOptionsForCard, CLI_DEFAULT, OTHER_MODEL, choiceBody, chosenEngine, modelOptions, observedLine, type EngineChoice } from "../lib/engineChoice";
 
 /**
@@ -42,7 +43,7 @@ export default function CodingEngineCard({ instanceId }: { instanceId: string })
 	return (
 		<Card className="mb-3 sm:mb-4">
 			<h3 className="text-base font-bold mb-1">Coding engine</h3>
-			<p className="text-sm text-muted mb-3">Which coding CLI this agent runs on your machine, and which model it uses.</p>
+			<p className="text-sm text-muted mb-3">Which coding CLI this agent runs on your machine, and which model it uses. {ENGINE_CARD_SCOPE}</p>
 			{choice && engine && (
 				<div className="space-y-3">
 					<div>

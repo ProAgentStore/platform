@@ -16,6 +16,7 @@ import { isNeedsHumanLabel } from "./fleet-snapshot.js";
 import { controllerAiCall } from "./controller-ai-recovery.js";
 import { extractJsonObject } from "./loop-decide.js";
 import { runUserWorkersAi } from "./user-ai.js";
+import { readInstanceBrain } from "./instance-brain.js";
 
 export interface BrainDecision {
 	decision: string;
@@ -146,6 +147,9 @@ export async function decideCoderQuestion(
 /** The production model call: the owner's own key, the configured brain model. */
 export function byokBrainCall(env: Env, userId: string, instanceId: string, model: string): BrainModelCall {
 	return async (prompt) => {
+		// A model the owner picked as this coder's Brain runs on the provider it names (#1043, #852).
+		const brain = await readInstanceBrain(env, instanceId);
+		const honorModel = brain?.modelChosen === true && brain.model === model;
 		const res = (await controllerAiCall(env, { userId, instanceId, surface: "loop" }, (streamDeadlines) =>
 			runUserWorkersAi(
 				env,
@@ -153,6 +157,7 @@ export function byokBrainCall(env: Env, userId: string, instanceId: string, mode
 				model,
 				{ messages: [{ role: "system", content: prompt.system }, { role: "user", content: prompt.user }], maxTokens: 500, streamDeadlines },
 				{ kind: "chat", instanceId, promptSource: "coder-brain", promptPhase: "decide", promptSections: [{ label: "coder-brain.system", value: prompt.system }, { label: "coder-brain.context", value: prompt.user }] },
+				{ honorModel },
 			),
 		)) as { response?: string };
 		return res.response ?? "";

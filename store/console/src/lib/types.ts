@@ -370,7 +370,7 @@ export interface RuntimeEvent {
  * producer's field is assignable to it.
  */
 export interface InstanceModelState {
-	model?: string;
+	model?: string; modelChosen?: boolean; // #1043: the owner picked it
 }
 
 /**

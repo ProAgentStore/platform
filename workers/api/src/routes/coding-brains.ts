@@ -20,6 +20,7 @@ import type { Context, Hono } from "hono";
 import { HttpError } from "../lib/auth.js";
 import { callRunner, READ_TIMEOUT_MS } from "../lib/runner-client.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
+import { advisoryBrain } from "../lib/instance-brain.js";
 import { ControllerAiStalled, controllerAiCall } from "../lib/controller-ai-recovery.js";
 import { appendTimeline, contextForCopilot, lastTerminal } from "../lib/coding-timeline.js";
 import { terminalSnapshotChanged, terminalSnapshotContent } from "../lib/terminal-snapshot.js";
@@ -294,8 +295,11 @@ export function registerCopilotRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 		// Under the controller recovery policy (#907): a stalled reply is re-asked before anything reaches the
 		// engine, so `drive_claude` is acted on only from a complete answer, and only once. Spent recovery
 		// says so; any other failure keeps the old quiet "(no response)".
+		// The repo agent advises and delegates; the CLI it delegates to is the subscription engine (#1042). Its
+		// own reasoning runs on this coder's Brain model (#1043).
+		const brain = await advisoryBrain(c.env, instanceId);
 		const res = (await controllerAiCall(c.env, { userId: uid, instanceId, traceId: sessionId, surface: "copilot" }, (streamDeadlines) =>
-			runUserWorkersAi(c.env, uid, "claude-sonnet-4-6", {
+			runUserWorkersAi(c.env, uid, brain.model, {
 				messages: [{ role: "system", content: system }, { role: "user", content: userMsg }],
 				...(tools.length ? { tools } : {}),
 				maxTokens: 700,
@@ -313,7 +317,7 @@ export function registerCopilotRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 					{ label: "overseer.terminal", value: terminalTail(pane) },
 					{ label: "overseer.tools", value: tools },
 				],
-			}),
+			}, { honorModel: brain.modelChosen }),
 		).catch((e: unknown) => ({ response: e instanceof ControllerAiStalled ? `The AI provider stalled on ${e.attempts} attempt${e.attempts === 1 ? "" : "s"} over ${Math.round(e.elapsedMs / 1000)}s, so nothing was sent to the coding CLI. Send your message again.` : "" }))) as { response?: string; tool_calls?: Array<{ name: string; arguments?: Record<string, unknown> }> };
 		const call = res.tool_calls?.find((t) => t.name === "drive_claude");
 		const instruction = call && typeof call.arguments?.instruction === "string" ? (call.arguments.instruction as string).trim() : "";

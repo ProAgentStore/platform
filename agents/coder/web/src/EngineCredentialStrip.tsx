@@ -1,5 +1,6 @@
 import { AlertTriangle, Cpu } from "lucide-react";
 import { apiCodingSessionBanner, sessionEngineLine } from "./api-coding";
+import BrainChip from "./BrainChip";
 import { engineAuthBadge, type EngineAuthReport } from "./engine-auth-view";
 import { engineInvocationBadge, type EngineInvocationReport } from "./engine-invocation-mode";
 
@@ -18,7 +19,7 @@ import { engineInvocationBadge, type EngineInvocationReport } from "./engine-inv
  * this takes the two `/capture` reports and nothing else, which is why it could leave CodingTab.
  * Null reports — an older runner — render nothing.
  */
-export default function EngineCredentialStrip({ auth, invocation: invocationReport, command }: { auth: EngineAuthReport | null; invocation: EngineInvocationReport | null; command?: string | null }) {
+export default function EngineCredentialStrip({ auth, invocation: invocationReport, command, instanceId }: { auth: EngineAuthReport | null; invocation: EngineInvocationReport | null; command?: string | null; instanceId?: string }) {
 	const badge = engineAuthBadge(auth);
 	const invocation = engineInvocationBadge(invocationReport);
 	// #1042: engine, model and billing on every session; a persistent banner while it codes on an API key.
@@ -35,6 +36,7 @@ export default function EngineCredentialStrip({ auth, invocation: invocationRepo
 		)}
 		<div className={`mb-2 rounded-lg border px-3 py-2 ${warn ? "border-warning-line bg-warning-soft" : "border-line"}`}>
 			{engineLine && <p className="text-xs font-semibold" data-testid="session-engine-line">{engineLine}</p>}
+			{instanceId && <BrainChip instanceId={instanceId} />}
 			{badge && <div className="flex items-center gap-1.5 text-xs font-bold">
 				<Cpu size={12} className={warn ? "text-warning" : "text-muted"} />
 				<span>{badge.label}</span>

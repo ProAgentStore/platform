@@ -9,9 +9,7 @@ import { listActiveRuns } from "../lib/agent-loop-store.js";
 import { runLiveness, runLivenessUnavailable } from "../lib/instance-run-liveness.js";
 import { resolveGithubAccess } from "../lib/github-app.js";
 import { parseGithubUrl, type RepoAuthContext } from "../lib/repo-ingest.js";
-import { brainModelOptions, isWorkersAiModel, offCatalogueModel } from "../lib/brain-models.js";
-import { TOOL_CAPABLE_MODELS } from "../agent-do-prompt.js";
-import { cloudflareAiCredentialProblem } from "../lib/cloudflare-ai-check.js";
+import { brainModelRefusal } from "../lib/instance-brain.js";
 import type { Env } from "../types.js";
 
 export const storageRoutes = new Hono<{ Bindings: Env }>();
@@ -506,32 +504,6 @@ instanceStorageRoutes.get("/:id/state", async (c) => {
 	);
 	return Response.json({ ...state, runs });
 });
-
-/**
- * Why an instance cannot take `model` as its brain (#852), or null when it can: it must call tools
- * (a brain that cannot confabulates instead), and a Workers AI pick needs Cloudflare credentials —
- * without them the pick could never run, and the chat would quietly stay on the other provider.
- *
- * It must also be IN the brain catalogue (#853 finding 7). Calling tools is not enough: the Anthropic
- * brain always runs claude-sonnet-4-6, so a Haiku or Opus pick was accepted and ran — and billed —
- * Sonnet under another name, and a Workers AI model outside the catalogue never had #851's parity.
- *
- * And a Workers AI pick's credentials must WORK, checked against Cloudflare (#853 finding 8) — 502, not
- * 400, when Cloudflare cannot be asked: the pick is not the owner's fault, and it is still not taken.
- */
-async function brainModelRefusal(env: Env, uid: string, model: unknown): Promise<{ status: 400 | 502; error: string } | null> {
-	const refuse = (error: string) => ({ status: 400 as const, error });
-	const options = brainModelOptions();
-	if (typeof model !== "string" || !model.trim()) return refuse(`A model id is required. Brain models: ${options}.`);
-	if (!TOOL_CAPABLE_MODELS.has(model)) return refuse(`${model} cannot call tools, so it cannot run this agent's brain. Brain models: ${options}.`);
-	const offCatalogue = offCatalogueModel(model);
-	if (offCatalogue) return refuse(offCatalogue);
-	if (!isWorkersAiModel(model)) return null;
-	const cf = await env.DB.prepare("SELECT 1 FROM user_api_keys WHERE user_id = ?1 AND provider = 'cloudflare'").bind(uid).first();
-	if (!cf) return refuse(`${model} runs on Cloudflare Workers AI, and no Cloudflare credentials are stored. Add your Cloudflare account ID and API token in Profile → API Keys, then pick it again.`);
-	// …and the row must hold credentials Cloudflare accepts (#853 finding 8).
-	return cloudflareAiCredentialProblem(env, uid);
-}
 
 instanceStorageRoutes.put("/:id/state", async (c) => {
 	const session = await requireUser(c);

@@ -373,3 +373,19 @@ provider key.
 - **Cloudflare Workers AI** models (Llama 4 Scout, Llama 3.3 70B, Qwen 2.5 Coder 32B) are listed as
   "coming soon" once Cloudflare credentials are stored — there is no coding engine for them yet, so they
   cannot be selected. DeepSeek is not offered.
+
+## The Brain model is separate (#1043)
+
+Each coder also has a **Brain model** (Settings → "Brain — advises and orchestrates", or MCP
+`set_coder_brain`'s `model`): the advisory and orchestration layer, on the owner's own provider key —
+the one place an API key is allowed. It runs the assistant chat and its tools, coder-brain decisions,
+the Co-pilot reading the terminal, the Loop orchestrator, the repo-agent route and the
+job-application supervisor. It does NOT run the Pilot (which drives the engine, on Claude Sonnet), the
+engine itself, or any credential, submission or approval step.
+
+Choices are `lib/brain-models.ts`: Claude Sonnet 4.6 (Anthropic), and Llama 4 Scout, Llama 3.3 70B and
+Qwen 2.5 Coder 32B on Cloudflare Workers AI — offered only with Cloudflare credentials stored. Saving
+confirms provider, model, cost and who is billed. The coding screen shows the active Brain beside the
+engine line. One setting (`lib/instance-brain.ts`, the instance's `state.model` once picked); until
+one is picked the advisory surfaces run Sonnet as before. Nothing on the engine path reads it, so a
+Brain choice cannot change, start or stand in for the coding engine or its sign-in.

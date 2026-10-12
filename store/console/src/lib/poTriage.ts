@@ -36,6 +36,8 @@ export interface CoderBrainSettings {
 	enabled: boolean;
 	poEnabled: boolean;
 	model: string;
+	/** #1043: the model is this coder's Brain (the Brain model card), not a separate setting. */
+	modelChosen?: boolean;
 	humanTimeoutMinutes: number;
 	escalationTimeoutMinutes: number;
 	maxDecisionsPerRun: number;

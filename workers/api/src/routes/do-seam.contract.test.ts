@@ -376,6 +376,10 @@ const FORWARDS: Record<string, string[]> = {
 	// same seam `GET /:id/tools` has always had — recorded here rather than left to look like a
 	// new one, and it is why `find_confirmation_link` can appear in the guide's tool list at all.
 	"instances.ts GET /:instanceId/connection-guide": ["/state"],
+	// #1043: the coder brain's model is the instance Brain, read from its DO state.
+	"instances.ts GET /:instanceId/coder-brain": ["/state"],
+	"instances.ts GET /:instanceId/coder-questions": ["/state"],
+	"instances.ts GET /:instanceId/po-triage/reports": ["/state"],
 	"instances.ts GET /:instanceId/gmail-scout/status": [
 		// A first-run Scout has no job_leads schema yet. The route probes its existence so only
 		// that explicit 404 becomes an empty isolated collection; all other DO errors still fail.
