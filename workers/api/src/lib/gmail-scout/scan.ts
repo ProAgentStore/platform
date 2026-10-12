@@ -24,6 +24,17 @@ export type GmailLeadProvenance = {
 export type ScoutCandidate = { url: string; title: string; company?: string; location?: string; source: string; source_domain?: string; posted_date?: string; gmail_message_id: string; gmail_subject: string; gmail_from: string; gmail_date: string; gmail_provenance: GmailLeadProvenance };
 
 const SECURITY_ALERT_RE = /(?:security|verify|verification|password|sign[ -]?in|login|unusual activity|account alert)/i;
+/**
+ * A digest or summary describes MANY jobs (#1022): its subject is not a job title and its first link is
+ * one listing among several. Live, a SEEK "X [Very strong applicant] + 11 new jobs" recommendation became
+ * a lead titled with that subject and the CSS fragment `info {` as its employer, and the Tailor could only
+ * ask the owner what the role and company were. A concrete posting is one job, named as one job.
+ */
+const DIGEST_SUBJECT_RE = /\+\s*\d+\s+(?:more\s+)?(?:new\s+)?jobs?\b|\b\d+\s+(?:more\s+)?new\s+jobs?\b|\bwe\s+found\s+\d+|\[\s*very strong applicant\s*\]|\bweekly\b.*\bupdate\b|\bsaved\s+search\b|\bjob\s+recommendations\b|\bnew\s+jobs\s+for\s+you\b/i;
+/** The sender's display name says it is a recommendation/digest feed, e.g. `SEEK Recommendations <noreply@s.seek.com.au>`. */
+const DIGEST_SENDER_RE = /^\s*"?[^"<]*\b(?:recommendations?|job\s+alerts?\s+digest|digest)\b[^"<]*"?\s*</i;
+/** Markup, never a name: `info {` is what `.company-info {` leaves after the label is matched. */
+const MARKUP_VALUE_RE = /[{}<>;=]/;
 const ASSET_RE = /\.(?:avif|bmp|css|gif|ico|jpe?g|js|png|svg|webp|woff2?|pdf)(?:$|\?)/i;
 const NAV_SEGMENT_RE = /^(?:account|accounts|auth|help|home|login|logout|preferences|privacy|profile|reset|security|settings|signin|subscribe|unsubscribe)$/i;
 const GENERIC_SEGMENT_RE = /^(?:alert|alerts|career|careers|job|jobs|opportunities|opportunity|position|positions|recommendation|recommendations|role|roles|search)$/i;
@@ -44,6 +55,19 @@ function isSpecificJobUrl(url: string): boolean {
 function recentMessageDate(value: string, now = Date.now()): boolean {
 	const parsed = Date.parse(value);
 	return Number.isFinite(parsed) && parsed <= now + 5 * 60_000 && parsed >= now - 2 * 24 * 60 * 60_000;
+}
+
+/** Every distinct specific posting in the text, by host + path (tracking parameters do not make a second job). */
+function specificJobUrls(text: string): Set<string> {
+	const out = new Set<string>();
+	for (const raw of text.match(URL_RE) ?? []) {
+		const url = canonicalJobUrl(raw.replace(/[).,;\]]+$/, ""));
+		if (url && isSpecificJobUrl(url)) {
+			const u = new URL(url);
+			out.add(`${u.host}${u.pathname}`);
+		}
+	}
+	return out;
 }
 
 /** Extract only a specific posting URL; generic mail/navigation/asset links never become leads. */
@@ -69,13 +93,18 @@ function extractVisibleMetadata(message: GmailMessage): Pick<ScoutCandidate, "co
 	const location =
 		text.match(/(?:location|based\s+in|work\s+location)\s*[:-]\s*([^\n|•]{2,100})/i)?.[1] ??
 		text.match(/\b(?:in|located\s+in)\s+([A-Z][\w .,'’-]{1,80}?)(?=\s+(?:—|\|)|$)/m)?.[1];
-	return { company: metadataLine(company), location: metadataLine(location) };
+	const clean = (v: string | undefined) => (v && !MARKUP_VALUE_RE.test(v) ? metadataLine(v) : undefined);
+	return { company: clean(company), location: clean(location) };
 }
 
 /** Deliberately modest extraction: metadata is visible, body prose is neither stored nor logged. */
 export function candidateFromMessage(message: GmailMessage, now = Date.now()): ScoutCandidate | null {
 	if (!message.id || !message.subject?.trim() || !message.from?.trim() || !recentMessageDate(message.date, now)) return null;
 	if (SECURITY_ALERT_RE.test(`${message.subject}\n${message.from}`)) return null;
+	// Concrete-job-only (#1022): a digest, a summary or a recommendation feed is rejected here, before it
+	// can become a lead — never triaged, never handed to the Tailor with a role nobody can verify.
+	if (DIGEST_SUBJECT_RE.test(message.subject) || DIGEST_SENDER_RE.test(message.from)) return null;
+	if (specificJobUrls(`${message.text}\n${message.snippet}`).size > 1) return null;
 	const url = specificJobUrl(message.text) ?? specificJobUrl(message.snippet);
 	if (!url || !workKeyForLead({ url })) return null;
 	const host = new URL(url).hostname.toLowerCase();

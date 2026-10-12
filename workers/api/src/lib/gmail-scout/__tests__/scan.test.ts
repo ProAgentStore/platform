@@ -76,3 +76,45 @@ describe("Gmail Scout scan", () => {
 		expect(requests).toEqual(["/collections/job_leads"]);
 	});
 });
+
+describe("concrete-job-only extraction (#1022)", () => {
+	// The live payload that became lead 4de48c81 → application f8a8fba6 (inert fixture text, never sent anywhere).
+	const LIVE_DIGEST = {
+		id: "1a124e59da6bcf61", threadId: "t", to: "me@example.com", cc: "", messageId: "", references: "", attachments: [], snippet: "",
+		from: "SEEK Recommendations <noreply@s.seek.com.au>",
+		subject: "Head of IT Engineering, Data & AI [Very strong applicant] + 11 new jobs",
+		date: new Date().toISOString(),
+		text: ".company-info { color: #333; }\nHead of IT Engineering, Data & AI\nSouth Melbourne.\nhttps://au.seek.com/job/95135491?tracking=PAC-JobRecs-anz-1%5D",
+	};
+
+	it("rejects the live SEEK recommendation digest before it can become a lead", () => {
+		expect(candidateFromMessage(LIVE_DIGEST)).toBeNull();
+	});
+
+	it("rejects it on each digest signal alone: the subject, the Recommendations sender, several listings", () => {
+		expect(candidateFromMessage({ ...LIVE_DIGEST, from: "SEEK <noreply@s.seek.com.au>" })).toBeNull(); // subject
+		expect(candidateFromMessage({ ...LIVE_DIGEST, subject: "Head of IT Engineering, Data & AI" })).toBeNull(); // sender
+		const twoJobs = "https://au.seek.com/job/95135491?tracking=a\nhttps://au.seek.com/job/95164755?tracking=b";
+		expect(candidateFromMessage({ ...LIVE_DIGEST, from: "SEEK <noreply@s.seek.com.au>", subject: "Head of IT Engineering", text: twoJobs })).toBeNull();
+		for (const subject of ["20 new jobs for Project manager in All Melbourne VIC", "Sergey, we found 3 new ethical jobs for you", "EthicalJobs.com.au weekly email update - top tips", "Your saved search: Scrum Master", "Your job recommendations"]) {
+			expect(candidateFromMessage({ ...LIVE_DIGEST, from: "Jobs <jobs@example.com>", subject, text: "https://jobs.example.com/job/1" })).toBeNull();
+		}
+	});
+
+	it("one posting linked twice with different tracking is still ONE job, not a digest", () => {
+		const text = "https://au.seek.com/job/95135491?tracking=a\nApply: https://au.seek.com/job/95135491?tracking=b";
+		expect(candidateFromMessage({ ...LIVE_DIGEST, from: "SEEK <noreply@s.seek.com.au>", subject: "Head of IT Engineering at Acme", text })).toMatchObject({ url: expect.stringContaining("au.seek.com/job/95135491") });
+	});
+
+	it("still accepts a genuine single-job alert", () => {
+		const c = candidateFromMessage({ ...LIVE_DIGEST, from: "Acme Careers <careers@acme.example>", subject: "Platform Engineer at Acme", text: "Company: Acme Pty Ltd\nLocation: Melbourne\nhttps://jobs.example.com/job/42" });
+		expect(c).toMatchObject({ url: "https://jobs.example.com/job/42", title: "Platform Engineer at Acme", company: "Acme Pty Ltd", location: "Melbourne" });
+	});
+
+	it("never takes markup as an employer or location", () => {
+		const c = candidateFromMessage({ ...LIVE_DIGEST, from: "Acme Careers <careers@acme.example>", subject: "Platform Engineer", text: ".company-info { color: #333; }\n.location-box { x: 1 }\nhttps://jobs.example.com/job/42" });
+		expect(c).not.toBeNull();
+		expect(c?.company).toBeUndefined();
+		expect(c?.location).toBeUndefined();
+	});
+});
