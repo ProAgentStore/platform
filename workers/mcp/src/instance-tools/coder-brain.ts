@@ -10,7 +10,7 @@ export function registerCoderBrainTools(server: McpServer, ctx: InstanceToolsCtx
 	const auth = (token?: string) => tokenFor(token);
 	server.tool(
 		"set_coder_brain",
-		"Turn a coder instance's brain on or off, and its scheduled product-owner triage (#1027), and set the brain's knobs (#1025). Both switches default OFF and need a coding instance; triage needs the brain on. With the brain on, a question the coder stops on waits `human_timeout_minutes` (default 30) for a person; then the brain may decide — only inside its hard guardrails (never owner-only choices, permissions/tokens/secrets, payments/payouts, deletions or delivery mode) and at or above `confidence_threshold` (default 0.8), at most `max_decisions_per_run` (default 3) per run, with `model` on the owner's own provider key — or escalate; after `escalation_timeout_minutes` (default 60) more, the coder finishes what it can and closes the issue with what is left. A person's answer wins at any point. Turning triage on creates a `run_po_triage` cron trigger if the instance has none — hourly at a minute derived from the instance (never :00), Australia/Melbourne, dry run (reports and digests only, no comments, no queueing). Change its schedule, timezone or `dryRun` with set_instance_trigger, or add more windows with create_instance_trigger (windows firing in the same minute run one wake). Turning the brain or triage off disables every `run_po_triage` trigger; nothing is deleted. Never touches permissions, tokens, secrets, payments or delivery mode. Call with dry_run first.",
+		"Turn a coder instance's brain on or off, and its scheduled product-owner triage (#1027), and set the brain's knobs (#1025). Both switches default OFF and need a coding instance; triage needs the brain on. With the brain on, a question the coder stops on waits `human_timeout_minutes` (default 30) for a person; then the brain may decide — only inside its hard guardrails (never owner-only choices, permissions/tokens/secrets, payments/payouts, deletions or delivery mode) and at or above `confidence_threshold` (default 0.8), at most `max_decisions_per_run` (default 3) per run, with `model` on the owner's own provider key — or escalate; after `escalation_timeout_minutes` (default 60) more, the coder finishes what it can and closes the issue with what is left. A person's answer wins at any point. Turning triage on creates a `run_po_triage` cron trigger if the instance has none — hourly at a minute derived from the instance (never :00), Australia/Melbourne, and live: it comments and queues ready issues. Pass `po_dry_run: true` to create it as a dry run instead (reports and digests only, no comments, no queueing); an existing trigger keeps its own setting. Change its schedule, timezone or `dryRun` with set_instance_trigger, or add more windows with create_instance_trigger (windows firing in the same minute run one wake). Turning the brain or triage off disables every `run_po_triage` trigger; nothing is deleted. Never touches permissions, tokens, secrets, payments or delivery mode. Call with dry_run first.",
 		{
 			token: z.string().optional(),
 			instance_id: z.string(),
@@ -21,20 +21,21 @@ export function registerCoderBrainTools(server: McpServer, ctx: InstanceToolsCtx
 			escalation_timeout_minutes: z.coerce.number().int().min(1).max(1440).optional(),
 			max_decisions_per_run: z.coerce.number().int().min(0).max(20).optional(),
 			confidence_threshold: z.coerce.number().min(0.5).max(1).optional(),
+			po_dry_run: z.boolean().optional().describe("Create the run_po_triage trigger as a dry run (reports only, no queueing). Default false: a newly created trigger queues for real. Only applies when this call creates the trigger."),
 			dry_run: z.boolean().optional(),
 		},
-		async ({ token, instance_id, enabled, po_enabled, model, human_timeout_minutes, escalation_timeout_minutes, max_decisions_per_run, confidence_threshold, dry_run: preview }) => {
+		async ({ token, instance_id, enabled, po_enabled, po_dry_run, model, human_timeout_minutes, escalation_timeout_minutes, max_decisions_per_run, confidence_threshold, dry_run: preview }) => {
 			const session = auth(token);
 			if (!session) return authRequired();
 			const knobs = Object.fromEntries(
 				Object.entries({ model, humanTimeoutMinutes: human_timeout_minutes, escalationTimeoutMinutes: escalation_timeout_minutes, maxDecisionsPerRun: max_decisions_per_run, confidenceThreshold: confidence_threshold }).filter(([, v]) => v !== undefined),
 			);
-			const input = { instance_id, ...(enabled !== undefined ? { enabled } : {}), ...(po_enabled !== undefined ? { po_enabled } : {}), ...knobs };
+			const input = { instance_id, ...(enabled !== undefined ? { enabled } : {}), ...(po_enabled !== undefined ? { po_enabled } : {}), ...(po_dry_run !== undefined ? { po_dry_run } : {}), ...knobs };
 			const denied = await requirePermission(safetyFor(token), "write", "set_coder_brain", input);
 			if (denied) return denied;
 			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/coder-brain`;
 			if (preview) return dryRun(safetyFor(token), "set_coder_brain", "change the coder brain / product-owner triage switch", input, { endpoint, method: "PUT" });
-			const data = (await authedCall(endpoint, session, { method: "PUT", body: JSON.stringify({ ...(enabled !== undefined ? { enabled } : {}), ...(po_enabled !== undefined ? { poEnabled: po_enabled } : {}), ...knobs }) }, env)) as { error?: string };
+			const data = (await authedCall(endpoint, session, { method: "PUT", body: JSON.stringify({ ...(enabled !== undefined ? { enabled } : {}), ...(po_enabled !== undefined ? { poEnabled: po_enabled } : {}), ...(po_dry_run !== undefined ? { poDryRun: po_dry_run } : {}), ...knobs }) }, env)) as { error?: string };
 			if (data.error) return text(`Error: ${data.error}`);
 			await audit(safetyFor(token), { tool: "set_coder_brain", action: "completed", input, result: data });
 			return jsonText(data);

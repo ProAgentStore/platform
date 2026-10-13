@@ -237,7 +237,7 @@ describe("gates: nothing new is queued (#1027)", () => {
 });
 
 describe("the switch (#1025 §1 slice)", () => {
-	it("turning PO triage on creates one default trigger: hourly, never :00, Melbourne, dry run", async () => {
+	it("turning PO triage on creates one default trigger: hourly, never :00, Melbourne, LIVE — no forced dry run (#1061)", async () => {
 		const rows = d1.sqlite.prepare("SELECT schedule, config, enabled, next_run_at FROM agent_triggers WHERE instance_id = 'coder' AND action = ?").all(PO_TRIAGE_ACTION) as Array<{ schedule: string; config: string; enabled: number; next_run_at: string }>;
 		expect(rows).toHaveLength(1);
 		const minute = poTriageDefaultMinute("coder");
@@ -245,10 +245,36 @@ describe("the switch (#1025 §1 slice)", () => {
 		expect(minute).toBeLessThanOrEqual(59);
 		expect(rows[0]).toMatchObject({ schedule: `${minute} * * * *`, enabled: 1 });
 		expect(normalizeSchedule(rows[0].schedule)).toBe(rows[0].schedule);
-		expect(JSON.parse(rows[0].config)).toEqual({ timezone: "Australia/Melbourne", dryRun: true });
+		expect(JSON.parse(rows[0].config)).toEqual({ timezone: "Australia/Melbourne", dryRun: false });
 		expect(rows[0].next_run_at).toBeTruthy();
 		// Spread: not every instance lands on the same minute.
 		expect(new Set(["a", "b", "c", "d", "e", "f"].map(poTriageDefaultMinute)).size).toBeGreaterThan(1);
+	});
+
+	const triageConfigs = () => (d1.sqlite.prepare("SELECT config FROM agent_triggers WHERE instance_id = 'coder' AND action = ?").all(PO_TRIAGE_ACTION) as Array<{ config: string }>).map((r) => JSON.parse(r.config));
+
+	it("the default trigger's wake queues for real: its stored config runs live, not as a dry run (#1061)", async () => {
+		const [config] = triageConfigs();
+		const { deps } = github();
+		expect(await runPoTriage(env, { instance_id: "coder", user_id: "u1" }, config, at("2026-10-12T01:17:00Z"), deps)).toMatchObject({ skipped: false, dryRun: false });
+	});
+
+	it("an explicit dry-run opt-in still creates it as a dry run (#1061)", async () => {
+		d1.exec(`DELETE FROM agent_triggers WHERE action = '${PO_TRIAGE_ACTION}'`);
+		await setCoderBrain(env, "coder", "u1", { enabled: true, poEnabled: true }, { poDryRun: true });
+		expect(triageConfigs()).toEqual([{ timezone: "Australia/Melbourne", dryRun: true }]);
+		const { deps } = github();
+		expect(await runPoTriage(env, { instance_id: "coder", user_id: "u1" }, triageConfigs()[0], at("2026-10-12T01:17:00Z"), deps)).toMatchObject({ skipped: false, dryRun: true });
+	});
+
+	it("an existing trigger keeps its own setting: turning triage off and on again does not flip it either way (#1061)", async () => {
+		d1.exec(`DELETE FROM agent_triggers WHERE action = '${PO_TRIAGE_ACTION}'`);
+		await setCoderBrain(env, "coder", "u1", { enabled: true, poEnabled: true }, { poDryRun: true });
+		await setCoderBrain(env, "coder", "u1", { poEnabled: false });
+		await setCoderBrain(env, "coder", "u1", { poEnabled: true });
+		expect(triageConfigs()).toEqual([{ timezone: "Australia/Melbourne", dryRun: true }]);
+		await setCoderBrain(env, "coder", "u1", { poEnabled: true }, { poDryRun: false });
+		expect(triageConfigs()).toEqual([{ timezone: "Australia/Melbourne", dryRun: true }]);
 	});
 
 	it("turning the brain off disables every run_po_triage trigger; on again re-enables without a second one", async () => {

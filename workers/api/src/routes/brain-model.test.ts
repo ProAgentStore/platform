@@ -191,3 +191,23 @@ describe("DeepSeek is absent (#1043)", () => {
 		expect(await brainModelRefusal(env, "u1", "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b")).toMatchObject({ status: 400 });
 	});
 });
+
+describe("PUT /coder-brain: turning PO triage on creates a LIVE trigger unless a dry run is asked for (#1061)", () => {
+	const triage = () => (d1.sqlite.prepare("SELECT config FROM agent_triggers WHERE instance_id = 'i1' AND action = 'run_po_triage'").all() as Array<{ config: string }>).map((r) => JSON.parse(r.config).dryRun);
+
+	it("by default the created trigger queues for real", async () => {
+		expect((await call("PUT", "/coder-brain", { enabled: true, poEnabled: true }, true)).status).toBe(200);
+		expect(triage()).toEqual([false]);
+	});
+
+	it("poDryRun: true creates it as a dry run", async () => {
+		expect((await call("PUT", "/coder-brain", { enabled: true, poEnabled: true, poDryRun: true }, true)).status).toBe(200);
+		expect(triage()).toEqual([true]);
+	});
+
+	it("a poDryRun that is not a boolean is refused, and nothing is created", async () => {
+		const r = await call("PUT", "/coder-brain", { enabled: true, poEnabled: true, poDryRun: "yes" }, true);
+		expect(r).toMatchObject({ status: 400, body: { error: "poDryRun must be true or false" } });
+		expect(triage()).toEqual([]);
+	});
+});

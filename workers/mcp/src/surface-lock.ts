@@ -1154,4 +1154,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.126": "sha256:49f14b588a9603e60f2dd06bbe65d472aabf6dcb98fb2f1e370d6efd0e1c2164",
 	"0.1.127": "sha256:ead552eb6a4b7abf7f40005e7f44bcdb6c1781428a6ccea41d484e383589ecc4",
 	"0.1.128": "sha256:911e1a902debf28ca70163009faf975ab6bae1e0c75c00a7fb79bb86960898da",
+	// #1061: set_coder_brain gains `po_dry_run` — a created triage trigger is live unless asked.
+	"0.1.129": "sha256:b887e4df07a328540ef6920473a6f069f2b1066656b08fae65c5dd7ca8ffeb32",
 };

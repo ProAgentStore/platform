@@ -494,7 +494,7 @@ const TABLE: Record<string, Row> = {
 	gmail_scout_scan: ["gmailScout", "write", null, "envelope", "dry_run,instance_id,token"],
 	gmail_scout_reprocess: ["gmailScout", "write", null, "envelope", "after,before,dry_run,instance_id,message_ids,token"],
 	po_triage_reports: ["coderBrain", "read", null, null, "instance_id,limit,token"],
-	set_coder_brain: ["coderBrain", "write", null, "envelope", "confidence_threshold,dry_run,enabled,escalation_timeout_minutes,human_timeout_minutes,instance_id,max_decisions_per_run,model,po_enabled,token"],
+	set_coder_brain: ["coderBrain", "write", null, "envelope", "confidence_threshold,dry_run,enabled,escalation_timeout_minutes,human_timeout_minutes,instance_id,max_decisions_per_run,model,po_dry_run,po_enabled,token"],
 	coder_questions: ["coderBrain", "read", null, null, "instance_id,limit,state,token"],
 	run_instance_trigger: ["triggers", "runtime", null, "envelope", "dry_run,payload,token,trigger_id"],
 	// #980: the in-place change the console's scan-schedule controls make — enable/disable, move

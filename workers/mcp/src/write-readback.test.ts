@@ -296,6 +296,8 @@ const READBACK: Record<string, string | null> = {
 	"gmail_scout_config_set.enabled": "gmail_scout_config_get",
 	"set_coder_brain.enabled": "po_triage_reports",
 	"set_coder_brain.po_enabled": "po_triage_reports",
+	// #1061: stored as the created trigger's `config.dryRun`, which po_triage_reports returns per trigger.
+	"set_coder_brain.po_dry_run": "po_triage_reports",
 	"set_coder_brain.model": "coder_questions",
 	"set_coder_brain.human_timeout_minutes": "coder_questions",
 	"set_coder_brain.escalation_timeout_minutes": "coder_questions",

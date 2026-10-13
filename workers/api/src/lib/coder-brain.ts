@@ -116,9 +116,14 @@ export function poTriageDefaultMinute(instanceId: string): number {
 
 /**
  * The ONE writer. Applies the patch, then brings the instance's `run_po_triage` triggers in line:
- * on → enabled (a default hourly one, dry run, created if there is none); off → all disabled.
+ * on → enabled (a default hourly one created if there is none); off → all disabled.
+ *
+ * A trigger it creates queues for real (#1061: the owner turns triage on to have it act, not to take a
+ * second step). `opts.poDryRun: true` creates it as a dry run instead — reports and digests only. It is
+ * stored explicitly either way, because the wake reads a MISSING `dryRun` as a dry run. Only a trigger
+ * this call creates is affected; an existing one keeps its own setting.
  */
-export async function setCoderBrain(env: Env, instanceId: string, userId: string, patch: Partial<CoderBrainSettings>): Promise<{ settings: CoderBrainSettings; triggers: { created: string | null; enabled: number; disabled: number } }> {
+export async function setCoderBrain(env: Env, instanceId: string, userId: string, patch: Partial<CoderBrainSettings>, opts: { poDryRun?: boolean } = {}): Promise<{ settings: CoderBrainSettings; triggers: { created: string | null; enabled: number; disabled: number } }> {
 	const problem = coderBrainPatchProblem(patch);
 	if (problem) throw new Error(problem);
 	const current = await readCoderBrain(env, instanceId, userId);
@@ -131,11 +136,11 @@ export async function setCoderBrain(env: Env, instanceId: string, userId: string
 	const { model, modelChosen, ...stored } = settings;
 	// A pre-#1043 model is kept (it still runs until a Brain is picked); the picked Brain is not copied in.
 	if (!(await patchInstanceConfig(env, instanceId, userId, "coderBrain", modelChosen ? stored : { ...stored, model }))) throw new Error("instance not found");
-	const triggers = await syncPoTriageTriggers(env, instanceId, userId, poEnabled);
+	const triggers = await syncPoTriageTriggers(env, instanceId, userId, poEnabled, opts.poDryRun === true);
 	return { settings, triggers };
 }
 
-async function syncPoTriageTriggers(env: Env, instanceId: string, userId: string, on: boolean): Promise<{ created: string | null; enabled: number; disabled: number }> {
+async function syncPoTriageTriggers(env: Env, instanceId: string, userId: string, on: boolean, dryRun: boolean): Promise<{ created: string | null; enabled: number; disabled: number }> {
 	if (!on) {
 		const res = await env.DB.prepare("UPDATE agent_triggers SET enabled = 0, updated_at = datetime('now') WHERE instance_id = ?1 AND user_id = ?2 AND action = ?3 AND enabled = 1")
 			.bind(instanceId, userId, PO_TRIAGE_ACTION)
@@ -148,7 +153,7 @@ async function syncPoTriageTriggers(env: Env, instanceId: string, userId: string
 		const inst = await env.DB.prepare("SELECT agent_id FROM agent_instances WHERE id = ?1 AND user_id = ?2").bind(instanceId, userId).first<{ agent_id: string }>();
 		if (!inst) throw new Error("instance not found");
 		const schedule = `${poTriageDefaultMinute(instanceId)} * * * *`;
-		const config = { timezone: PO_TRIAGE_DEFAULT_TIMEZONE, dryRun: true };
+		const config = { timezone: PO_TRIAGE_DEFAULT_TIMEZONE, dryRun };
 		const advance = advanceCron(schedule, { now: new Date(), timeZone: config.timezone });
 		created = crypto.randomUUID();
 		await env.DB.prepare(

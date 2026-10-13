@@ -43,6 +43,8 @@ export function registerCoderBrainRoutes(router: Hono<{ Bindings: Env }>): void 
 		const patch = Object.fromEntries(PATCH_KEYS.filter((k) => b[k] !== undefined).map((k) => [k, b[k]])) as Partial<CoderBrainSettings>;
 		const problem = coderBrainPatchProblem(patch);
 		if (problem) throw new HttpError(400, problem);
+		// #1061: a triage trigger this call creates is live unless the caller asks for a dry run.
+		if (b.poDryRun !== undefined && typeof b.poDryRun !== "boolean") throw new HttpError(400, "poDryRun must be true or false");
 		// `model` is this coder's Brain (#1043): the same check and the same store as the Brain card's
 		// `PUT /state`. It touches no engine preset, sign-in or API-coding confirmation.
 		if (patch.model !== undefined) {
@@ -54,7 +56,7 @@ export function registerCoderBrainRoutes(router: Hono<{ Bindings: Env }>): void 
 			if (caps?.workflow !== "CODING_SESSION") throw new HttpError(409, "The coder brain acts on coding runs, so it needs a coding instance (a Repo Coder).");
 		}
 		if (patch.model !== undefined) await writeInstanceBrain(c.env, instanceId, patch.model);
-		const { triggers } = await setCoderBrain(c.env, instanceId, uid, patch);
+		const { triggers } = await setCoderBrain(c.env, instanceId, uid, patch, { poDryRun: b.poDryRun === true });
 		return c.json({ ...(await view(c.env, instanceId, uid)), changed: triggers });
 	});
 

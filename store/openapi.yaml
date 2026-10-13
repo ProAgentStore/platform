@@ -7247,10 +7247,11 @@ paths:
     put:
       summary: Turn the coder brain or its product-owner triage on or off
       description: |
-        The one writer of the coder brain settings (MCP `set_coder_brain`). Body `{ enabled?, poEnabled?, model?,
+        The one writer of the coder brain settings (MCP `set_coder_brain`). Body `{ enabled?, poEnabled?, poDryRun?, model?,
         humanTimeoutMinutes?, escalationTimeoutMinutes?, maxDecisionsPerRun?, confidenceThreshold? }` (#1025, all validated;
         400 otherwise). The brain and triage need a coding instance (409 otherwise); triage needs the brain on. Turning triage on creates a `run_po_triage` cron trigger when the
-        instance has none (hourly at a minute derived from the instance, never :00, Australia/Melbourne, dry run). Turning
+        instance has none (hourly at a minute derived from the instance, never :00, Australia/Melbourne). It queues for real
+        unless `poDryRun: true` asks for a dry run (#1061); an existing trigger keeps its own setting. Turning
         the brain or triage off disables every `run_po_triage` trigger; nothing is deleted.
       operationId: putCoderBrain
       tags: [Instances]
