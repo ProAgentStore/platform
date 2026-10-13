@@ -66,6 +66,15 @@ existing fields. Receipt and action are separate facts:
 Retained engines that report `alive:true, runState:"idle"` and engines that have exited do not block;
 any other or missing lifecycle state does.
 
+**Seen live (2026-10-13 UTC, read-only).** CLI 0.4.122 was published at 2026-10-12T22:13Z. pink-laptop
+(macOS, Auto-update ON) restarted its runner at 23:14:49Z and reported `verified_success` on 0.4.122. No
+`runner_update` had been issued to it since 2026-10-12T09:45Z. `verified_success` is set only when the recorded install target is
+the running version, the runtime is healthy and every original agent has reattached. Its diagnostics show the
+fields above doing their job: heartbeats at 09:21Z, while `last_check_at`/`last_decision_at` stayed at
+05:28:56Z with `blocker_class: null`, a due `next_retry_due_at`, and paired observations reading
+`active_turns: 0`. That is an unattended, guarded cycle on macOS. The Windows path is not confirmed by it
+(see [Windows](#windows)).
+
 A release check that could not run (npm unreachable, or not startable) is `failed` with its reason
 and retried with backoff (CLI 0.4.117). It used to be `unsupported`, which means "this install can
 never update" and is skipped by the stuck check, so a machine that could not ask npm went quiet.
