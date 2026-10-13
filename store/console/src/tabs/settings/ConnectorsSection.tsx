@@ -6,7 +6,7 @@ import { FileConnectorPanel } from "../../components/FileConnectorPanel";
 import { showsConnector, showsFileConnector, type ConnectorReach, type InstanceConnectorPolicy } from "../../lib/connectorState";
 import type { InstancePermissionRequest, InstancePermissionRequestDecisionResponse, InstancePermissionRequestResponse } from "../../lib/types";
 import Card from "../../components/Card";
-import { permissionCardExpiry, permissionCardInstanceLabel } from "../../lib/permissionCard";
+import { permissionCardActions, permissionCardExpiry, permissionCardInstanceLabel } from "../../lib/permissionCard";
 
 interface ConnectorGrant {
 	id: string;
@@ -86,6 +86,7 @@ export default function ConnectorsSection({
 	const [requestMsg, setRequestMsg] = useState("");
 	const [now, setNow] = useState(() => Date.now());
 	const expiry = request ? permissionCardExpiry(request, now) : null;
+	const choices = request ? permissionCardActions(request) : null;
 	// Keep the time left current while a request waits, so it turns expired on screen at its deadline.
 	const waiting = request?.status === "pending" && expiry?.expired === false;
 	useEffect(() => {
@@ -100,7 +101,7 @@ export default function ConnectorsSection({
 	}, [instanceId, permissionRequestId]);
 	const decide = async (decision: "approve" | "deny", mode?: "always" | "ask") => {
 		if (!request) return; setRequestMsg("");
-		try { const d = await api<InstancePermissionRequestDecisionResponse>(`/v1/instances/${instanceId}/permission-requests/${request.id}/${decision}`, { method:"POST", body: JSON.stringify(mode ? { mode } : {}) }); setRequest({ ...request, status:d.status }); setRequestMsg(decision === "approve" ? "Permission verified. The blocked operation may resume once through its verified continuation." : "Permission request denied; nothing was run."); }
+		try { const d = await api<InstancePermissionRequestDecisionResponse>(`/v1/instances/${instanceId}/permission-requests/${request.id}/${decision}`, { method:"POST", body: JSON.stringify(mode ? { mode } : {}) }); setRequest({ ...request, status:d.status }); setRequestMsg(decision === "approve" ? permissionCardActions(request).approved : "Permission request denied; nothing was run."); }
 		catch (e) { setRequestMsg(e instanceof Error ? e.message : "Could not update permission request"); }
 	};
 	const showsEmail = useMemo(() => showsConnector(emailStatus), [emailStatus]);
@@ -127,7 +128,10 @@ export default function ConnectorsSection({
 					<p className="text-xs text-muted mt-1">Connector: {request.connector ?? "this control"} · Current scope: {request.currentScope ?? "none"} · Requested minimum: {request.requestedScope}</p>
 					<p className="text-xs text-muted mt-1">Resource: {request.resourceId ?? "this instance"} · Operation: {request.operationKind}</p>
 					{expiry && <p className={`text-xs mt-1 ${expiry.expired ? "font-semibold" : "text-muted"}`} data-testid={expiry.expired ? "permission-request-expired" : "permission-request-expires"}>{expiry.text}</p>}
-					{request.status === "pending" && !expiry?.expired && <div className="flex gap-2 mt-2"><button type="button" className="btn btn-primary text-xs" onClick={() => void decide("approve", "always")}>Allow write access</button><button type="button" className="btn text-xs" onClick={() => void decide("approve", "ask")}>Ask each time</button><button type="button" className="btn text-xs" onClick={() => void decide("deny")}>Deny</button></div>}
+					{request.status === "pending" && !expiry?.expired && <>
+						{choices?.note && <p className="text-xs mt-1" data-testid="permission-request-note">{choices.note}</p>}
+						<div className="flex gap-2 mt-2">{choices?.actions.map((a) => <button key={a.label} type="button" className={`btn text-xs${a.primary ? " btn-primary" : ""}`} onClick={() => void decide(a.decision, a.mode)}>{a.label}</button>)}</div>
+					</>}
 					{requestMsg && <p className="text-xs mt-2">{requestMsg}</p>}
 				</div>
 			)}

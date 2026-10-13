@@ -256,10 +256,17 @@ describe("a declared tool the owner switched off (tool_enabled)", () => {
 		expect(refused).toMatchObject({ status: 403, body: { blocker: { control: "tool_enabled", requestedScope: "enabled", operation: "github_list_issues" } } });
 		expect(ran).toEqual([]);
 		const id = (refused.body.blocker as { requestId: string }).requestId;
+		// The card reads the request's kind, so it offers "Switch on github_list_issues", not write access (#1059).
+		expect(await req("GET", `/i1/permission-requests/${id}`)).toMatchObject({ status: 200, body: { request: { control: "tool_enabled", operationKind: "github_list_issues" } } });
 		const approved = await req("POST", `/i1/permission-requests/${id}/approve`, {});
 		expect(approved).toMatchObject({ status: 200, body: { status: "resumed" } });
 		expect(ran).toEqual([{ tool: "github_list_issues", repo: "acme/widget" }]);
 		expect(JSON.parse((d1.sqlite.prepare("SELECT config FROM agent_instances WHERE id = 'i1'").get() as { config: string }).config).disabledTools).toEqual([]);
+	});
+
+	it("a connector write request reads as connector_consent, so the card keeps its write-access choices (#1059)", async () => {
+		const b = await block();
+		expect(await req("GET", `/i1/permission-requests/${b.requestId}`)).toMatchObject({ status: 200, body: { request: { control: "connector_consent", connector: "github", requestedScope: "write" } } });
 	});
 
 	it("a tool the creator never declared gets no request — the owner cannot grant it", async () => {

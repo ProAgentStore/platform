@@ -264,6 +264,8 @@ export type InstancePermissionRequestStatus =
 
 export interface InstancePermissionRequestView {
 	id: string;
+	/** Which owner control approval writes: `connector_consent` (a connector's write access) or `tool_enabled` (switch one declared tool back on). */
+	control: string;
 	connector: string | null;
 	resourceId: string | null;
 	requestedScope: string;
@@ -280,7 +282,6 @@ export interface InstancePermissionRequestView {
  * request is still open, its structured blocker and remedy. No fingerprint, continuation or owner id.
  */
 export interface InstancePermissionRequestListItem extends InstancePermissionRequestView {
-	control: string;
 	createdAt: string;
 	link: string;
 	/** Structurally `PermissionBlocker` (lib/connectors/types.ts) — restated so this file stays import-free for the console. */

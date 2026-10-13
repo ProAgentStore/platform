@@ -38,3 +38,35 @@ export function permissionCardExpiry(
 	const left = mins < 1 ? "less than a minute left" : mins < 60 ? `${mins} min left` : `${Math.floor(mins / 60)} h ${mins % 60} min left`;
 	return { expired: false, text: `Expires at ${when} (${left}).` };
 }
+
+export interface PermissionCardAction {
+	label: string;
+	decision: "approve" | "deny";
+	/** The connector write-access mode sent with an approval; only `connector_consent` takes one. */
+	mode?: "always" | "ask";
+	primary?: boolean;
+}
+
+/**
+ * The decisions a permission card offers, by request kind (#1059). A `connector_consent` request grants a
+ * connector WRITE access, always or asked each time. A `tool_enabled` request is something else: approving
+ * it switches that one declared tool back on for the instance, and it stays on (`grantRequested` removes
+ * it from the disabled tools; the mode is not used), then the blocked call runs once. So it gets the
+ * tool's own name and says that, instead of "Allow write access" / "Ask each time", which were untrue.
+ */
+export function permissionCardActions(request: { control?: string; operationKind: string }): { actions: PermissionCardAction[]; note: string | null; approved: string } {
+	const deny: PermissionCardAction = { label: "Deny", decision: "deny" };
+	if (request.control === "tool_enabled") {
+		const tool = request.operationKind;
+		return {
+			actions: [{ label: `Switch on ${tool}`, decision: "approve", primary: true }, deny],
+			note: `Approving switches ${tool} back on for this instance — it stays on until you switch it off under Tools — and runs the blocked call once.`,
+			approved: `${tool} is switched on, and the blocked call may resume once through its verified continuation.`,
+		};
+	}
+	return {
+		actions: [{ label: "Allow write access", decision: "approve", mode: "always", primary: true }, { label: "Ask each time", decision: "approve", mode: "ask" }, deny],
+		note: null,
+		approved: "Permission verified. The blocked operation may resume once through its verified continuation.",
+	};
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { permissionCardExpiry, permissionCardInstanceLabel } from "./permissionCard";
+import { permissionCardActions, permissionCardExpiry, permissionCardInstanceLabel } from "./permissionCard";
 
 describe("the permission card names its instance (#1009)", () => {
 	it("by name, with the id that disambiguates two instances of one agent", () => {
@@ -40,5 +40,27 @@ describe("the permission card says when the request expires (#1058)", () => {
 	it("says nothing about expiry once the owner decided, or with no readable deadline", () => {
 		for (const status of ["approved", "denied", "cancelled", "claimed"]) expect(permissionCardExpiry({ status, expiresAt }, at("2026-10-13T03:00:29Z"), fmt)).toBeNull();
 		expect(permissionCardExpiry({ status: "pending", expiresAt: "" }, at("2026-10-13T03:00:29Z"), fmt)).toBeNull();
+	});
+});
+
+describe("the permission card's decisions match the request kind (#1059)", () => {
+	it("tool_enabled: names the tool and says approving switches it on for good, then runs the blocked call once", () => {
+		const { actions, note, approved } = permissionCardActions({ control: "tool_enabled", operationKind: "gmail_search" });
+		expect(actions).toEqual([{ label: "Switch on gmail_search", decision: "approve", primary: true }, { label: "Deny", decision: "deny" }]);
+		expect(actions.map((a) => a.label).join(" ")).not.toMatch(/write|Ask each time/i);
+		expect(actions.every((a) => a.mode === undefined)).toBe(true); // the server takes no mode for this kind
+		expect(note).toBe("Approving switches gmail_search back on for this instance — it stays on until you switch it off under Tools — and runs the blocked call once.");
+		expect(approved).toMatch(/^gmail_search is switched on/);
+	});
+
+	it("connector_consent: unchanged — write access always, ask each time, or deny", () => {
+		const { actions, note, approved } = permissionCardActions({ control: "connector_consent", operationKind: "github_comment_issue" });
+		expect(actions).toEqual([
+			{ label: "Allow write access", decision: "approve", mode: "always", primary: true },
+			{ label: "Ask each time", decision: "approve", mode: "ask" },
+			{ label: "Deny", decision: "deny" },
+		]);
+		expect(note).toBeNull();
+		expect(approved).toBe("Permission verified. The blocked operation may resume once through its verified continuation.");
 	});
 });

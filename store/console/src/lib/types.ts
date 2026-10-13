@@ -539,6 +539,7 @@ export interface ConnectorConsentsResponse {
 /** Owner-safe permission-recovery detail, from the exact Permissions & Connections control (#1009). */
 export interface InstancePermissionRequest {
 	id: string;
+	control: string;
 	connector: string | null;
 	resourceId: string | null;
 	requestedScope: string;

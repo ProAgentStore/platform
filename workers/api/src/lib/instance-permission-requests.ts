@@ -39,6 +39,7 @@ const asRequest = (r: Record<string, unknown>): PermissionRequest => ({
 export function permissionRequestView(request: PermissionRequest): InstancePermissionRequestView {
 	return {
 		id: request.id,
+		control: request.control,
 		connector: request.connector,
 		resourceId: request.resourceId,
 		requestedScope: request.requestedScope,
@@ -52,7 +53,7 @@ export function permissionRequestView(request: PermissionRequest): InstancePermi
 /** A list row for an assistant: the verified link always; the blocker only while the request can still be decided or resumed. */
 export function permissionRequestListItem(request: PermissionRequest): InstancePermissionRequestListItem {
 	const open = request.status === "pending" || request.status === "approved" || request.status === "claimed";
-	return { ...permissionRequestView(request), control: request.control, createdAt: request.createdAt, link: instancePermissionsLink(request.instanceId, request.id), blocker: open ? permissionBlocker(request) : null };
+	return { ...permissionRequestView(request), createdAt: request.createdAt, link: instancePermissionsLink(request.instanceId, request.id), blocker: open ? permissionBlocker(request) : null };
 }
 export async function auditPermissionRequest(env: Env, req: Pick<PermissionRequest,"id"|"instanceId"|"userId">, event: string, detail: Record<string, unknown> = {}): Promise<void> {
 	await env.DB.prepare("INSERT INTO instance_permission_request_events (id,request_id,instance_id,user_id,event,detail) VALUES (?1,?2,?3,?4,?5,?6)").bind(crypto.randomUUID(),req.id,req.instanceId,req.userId,event,JSON.stringify(detail)).run();
