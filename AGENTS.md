@@ -45,10 +45,11 @@ Do not hand-roll it (#920). Each of these produced a false green:
 
 ## Fail-before comparisons (old source, new tests)
 
-**Status: the hardened `scripts/fail-before.mjs` is delivered under #1021 and awaits independent acceptance.
-Until that acceptance is recorded on #1021, do not use it on an active checkout or for a production comparison.**
-Delivery is not acceptance: the behaviour below is what its isolated tests (`scripts/lib/fail-before.test.mjs`,
-temporary repositories only) show, not a claim that it is safe everywhere.
+**Status: accepted and delivered (#1021, closed).** The stash-free helper and its hardening are `b9fd69a5` …
+`26845f2e`. The Engine git guard is `9ffe10da`. The defect reproductions run deterministically inside coder sessions
+as of `ea398f9e`. Acceptance is the owner's queued objective (run b76eeb30) authorizing closure; no separate
+independent review was performed. The behaviour below is what its isolated tests (`scripts/lib/fail-before.test.mjs`,
+temporary repositories only) show.
 
 What it does, as tested:
 
