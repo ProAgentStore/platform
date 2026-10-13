@@ -6650,7 +6650,7 @@ test.describe("mobile — pausing a teamwork edge (#667)", () => {
  * that was reported and well below what the fix gives (~65px), because the report was a
  * measurement and this is the same measurement.
  */
-test.describe("Settings — the Gmail permission is its own group (#721)", () => {
+test.describe("Permissions — the Gmail permission is its own group (#721; its own tab since #1060)", () => {
 	/** A write tool for `gmail` (draws the write-consent row) and the built-in the flag grants. */
 	const TOOLS = [
 		{ name: "gmail_send", allowed: true, disabled: false, reason: "ok", scope: "write", connector: "gmail", reach: "internet", writeConsent: "required", description: "Send a message from the connected mailbox." },
@@ -6675,7 +6675,7 @@ test.describe("Settings — the Gmail permission is its own group (#721)", () =>
 			connectors: [{ id: "gmail", label: "Gmail", allowed: true, writeMeaning: "Send, archive and mark mail as read as you." }],
 		}));
 
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/permissions");
 		await expect(page.getByText("Agent write access")).toBeVisible();
 		await expect(page.locator("[data-testid=settings-gmail-group]")).toBeVisible();
 	}
@@ -6901,7 +6901,7 @@ test.describe("Repo — connect on Settings, manage on the Repo tab (#727)", () 
  * it under a heading carrying one agent's name is what made disconnecting Gmail from the Coder's
  * settings disconnect it for the Job Application Assistant too.
  */
-test.describe("Settings — which account this agent uses (#736)", () => {
+test.describe("Permissions — which account this agent uses (#736; its own tab since #1060)", () => {
 	const AMBIGUOUS = [{
 		connector: "gmail",
 		label: "Gmail",
@@ -6920,7 +6920,7 @@ test.describe("Settings — which account this agent uses (#736)", () => {
 	async function openSettings(page: Page, opts: { width?: number; rows?: Array<Record<string, unknown>> } = {}) {
 		await page.setViewportSize({ width: opts.width ?? 900, height: 1200 });
 		const mock = await mockSignedInConsole(page, { connectorAccounts: opts.rows ?? AMBIGUOUS });
-		await page.goto("/console/instances/inst-1/settings");
+		await page.goto("/console/instances/inst-1/permissions");
 		return mock;
 	}
 
