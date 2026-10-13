@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { engineSpawnEnv } from "./engine-env.js";
-import { findRealGit, GIT_REFUSED_EXIT, GIT_REFUSED_MARKER, gitGuardEnv, installGitGuard } from "./git-guard.js";
+import { findRealGit, GIT_REFUSED_EXIT, GIT_REFUSED_MARKER, gitGuardEnv, gitGuardRoot, installGitGuard } from "./git-guard.js";
 
 /**
  * #1021, on isolated temporary repositories only — never a live checkout or a real stash. These run
@@ -16,8 +16,14 @@ const root = join(tmp, "guard");
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 // No owner config, hooks, signing or editor can reach these repositories.
+/**
+ * Real, UNGUARDED git: the inherited PATH minus any installed git guard. Inside a coder session the
+ * runner's own guard is first on PATH, so "without the guard" was guarded there and the fail-before
+ * could not reproduce the incident.
+ */
 const BASE_ENV: NodeJS.ProcessEnv = {
 	...process.env,
+	PATH: (process.env.PATH ?? "").split(":").filter((d) => !d.startsWith(gitGuardRoot())).join(":"),
 	GIT_CONFIG_GLOBAL: "/dev/null",
 	GIT_CONFIG_NOSYSTEM: "1",
 	GIT_AUTHOR_NAME: "t",

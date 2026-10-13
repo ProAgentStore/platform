@@ -82,6 +82,15 @@ function state(dir) {
 	};
 }
 
+/**
+ * The defect is git's OWN behaviour, so its reproduction runs unguarded git. Inside a coder session the
+ * runner puts its #1021 git guard first on PATH, which refuses the very `stash pop` these tests must
+ * show consuming the foreign stash — run with the inherited PATH they failed in every guarded session
+ * and only reproduced on a bare machine. Dropping the guard directories makes the reproduction the same
+ * everywhere; the guard itself is tested in packages/browser-runner/src/coding/git-guard.test.ts.
+ */
+const UNGUARDED = { ...process.env, PATH: (process.env.PATH ?? "").split(":").filter((d) => !d.includes("/proagentstore/git-guard/")).join(":") };
+
 describe("the observed defect, reproduced in a temp repo", () => {
 	/** The compound command from the incident: an unquoted space-separated variable, then an unconditional pop. */
 	const OBSERVED_UNSAFE = 'SRC="a.txt b.txt"; git stash push -q -- $SRC; git stash pop -q';
@@ -98,24 +107,24 @@ describe("the observed defect, reproduced in a temp repo", () => {
 		// Exactly the argv zsh produced from the unquoted variable, so this runs on every machine.
 		const dir = fixture();
 		const before = state(dir);
-		const save = spawnSync("git", ["stash", "push", "-q", "--", "a.txt b.txt"], { cwd: dir, encoding: "utf8" });
+		const save = spawnSync("git", ["stash", "push", "-q", "--", "a.txt b.txt"], { cwd: dir, env: UNGUARDED, encoding: "utf8" });
 		expect(save.status).not.toBe(0);
 		expect(state(dir)).toEqual(before); // the failed save created nothing…
-		spawnSync("git", ["stash", "pop", "-q"], { cwd: dir, encoding: "utf8" });
+		spawnSync("git", ["stash", "pop", "-q"], { cwd: dir, env: UNGUARDED, encoding: "utf8" });
 		expectForeignStashConsumed(before, state(dir)); // …so "pop" meant someone else's work
 	});
 
 	it.skipIf(!has("bash"))("bash, with the variable quoted: the same single pathspec, the same failed save, the same foreign pop", () => {
 		const dir = fixture();
 		const before = state(dir);
-		spawnSync("bash", ["-c", 'SRC="a.txt b.txt"; git stash push -q -- "$SRC"; git stash pop -q'], { cwd: dir, encoding: "utf8" });
+		spawnSync("bash", ["-c", 'SRC="a.txt b.txt"; git stash push -q -- "$SRC"; git stash pop -q'], { cwd: dir, env: UNGUARDED, encoding: "utf8" });
 		expectForeignStashConsumed(before, state(dir));
 	});
 
 	it.skipIf(!has("zsh"))("zsh passes the variable as ONE pathspec, the save fails, and the pop consumes the unrelated stash", () => {
 		const dir = fixture();
 		const before = state(dir);
-		spawnSync("zsh", ["-c", OBSERVED_UNSAFE], { cwd: dir, encoding: "utf8" });
+		spawnSync("zsh", ["-c", OBSERVED_UNSAFE], { cwd: dir, env: UNGUARDED, encoding: "utf8" });
 		const after = state(dir);
 		// The foreign stash was popped: its change is in the working tree and the stash entry is gone.
 		expect(after.files["other.txt"]).toBe("other-FOREIGN-STASHED\n");
