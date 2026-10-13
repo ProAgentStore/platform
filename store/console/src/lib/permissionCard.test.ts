@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { permissionCardInstanceLabel } from "./permissionCard";
+import { permissionCardExpiry, permissionCardInstanceLabel } from "./permissionCard";
 
 describe("the permission card names its instance (#1009)", () => {
 	it("by name, with the id that disambiguates two instances of one agent", () => {
@@ -8,5 +8,37 @@ describe("the permission card names its instance (#1009)", () => {
 	it("by id when the name is not known yet — never just 'this instance'", () => {
 		expect(permissionCardInstanceLabel(undefined, "i1")).toBe("i1");
 		expect(permissionCardInstanceLabel("   ", "i1")).toBe("i1");
+	});
+});
+
+describe("the permission card says when the request expires (#1058)", () => {
+	// Request 462b42ce: created 2:00:29 PM, expired 2:30:29 PM Melbourne time (03:30:29 UTC, AEDT).
+	const expiresAt = "2026-10-13T03:30:29.000Z";
+	const fmt = { locale: "en-US", timeZone: "Australia/Melbourne" };
+	const at = (iso: string) => Date.parse(iso);
+
+	it("pending: the expiry in the viewer's local time, with the time remaining", () => {
+		expect(permissionCardExpiry({ status: "pending", expiresAt }, at("2026-10-13T03:00:29Z"), fmt)).toEqual({ expired: false, text: "Expires at 2:30:29 PM (30 min left)." });
+		expect(permissionCardExpiry({ status: "pending", expiresAt }, at("2026-10-13T03:30:00Z"), fmt)).toEqual({ expired: false, text: "Expires at 2:30:29 PM (less than a minute left)." });
+		expect(permissionCardExpiry({ status: "pending", expiresAt: "2026-10-13T05:00:29Z" }, at("2026-10-13T03:00:29Z"), fmt)?.text).toBe("Expires at 4:00:29 PM (2 h 0 min left).");
+	});
+
+	it("the same instant reads in each viewer's own zone", () => {
+		expect(permissionCardExpiry({ status: "pending", expiresAt }, at("2026-10-13T03:00:29Z"), { locale: "en-US", timeZone: "UTC" })?.text).toBe("Expires at 3:30:29 AM (30 min left).");
+	});
+
+	it("expired: says it expired and when — whether marked expired or still pending past its deadline", () => {
+		const expired = { expired: true, text: "Expired at 2:30:29 PM. It can no longer be approved; the agent must ask again." };
+		expect(permissionCardExpiry({ status: "expired", expiresAt }, at("2026-10-13T03:31:00Z"), fmt)).toEqual(expired);
+		expect(permissionCardExpiry({ status: "pending", expiresAt }, at("2026-10-13T03:30:29Z"), fmt)).toEqual(expired);
+	});
+
+	it("names the day when the deadline is not today", () => {
+		expect(permissionCardExpiry({ status: "expired", expiresAt }, at("2026-10-15T00:00:00Z"), fmt)?.text).toMatch(/^Expired at Oct 13, 2:30:29 PM\./);
+	});
+
+	it("says nothing about expiry once the owner decided, or with no readable deadline", () => {
+		for (const status of ["approved", "denied", "cancelled", "claimed"]) expect(permissionCardExpiry({ status, expiresAt }, at("2026-10-13T03:00:29Z"), fmt)).toBeNull();
+		expect(permissionCardExpiry({ status: "pending", expiresAt: "" }, at("2026-10-13T03:00:29Z"), fmt)).toBeNull();
 	});
 });

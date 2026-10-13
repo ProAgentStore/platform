@@ -6,7 +6,7 @@ import { FileConnectorPanel } from "../../components/FileConnectorPanel";
 import { showsConnector, showsFileConnector, type ConnectorReach, type InstanceConnectorPolicy } from "../../lib/connectorState";
 import type { InstancePermissionRequest, InstancePermissionRequestDecisionResponse, InstancePermissionRequestResponse } from "../../lib/types";
 import Card from "../../components/Card";
-import { permissionCardInstanceLabel } from "../../lib/permissionCard";
+import { permissionCardExpiry, permissionCardInstanceLabel } from "../../lib/permissionCard";
 
 interface ConnectorGrant {
 	id: string;
@@ -84,6 +84,15 @@ export default function ConnectorsSection({
 	const focusRef = useRef<HTMLDivElement>(null);
 	const [request, setRequest] = useState<InstancePermissionRequest | null>(null);
 	const [requestMsg, setRequestMsg] = useState("");
+	const [now, setNow] = useState(() => Date.now());
+	const expiry = request ? permissionCardExpiry(request, now) : null;
+	// Keep the time left current while a request waits, so it turns expired on screen at its deadline.
+	const waiting = request?.status === "pending" && expiry?.expired === false;
+	useEffect(() => {
+		if (!waiting) return;
+		const t = setInterval(() => setNow(Date.now()), 15_000);
+		return () => clearInterval(t);
+	}, [waiting]);
 	useEffect(() => {
 		if (!permissionRequestId) return;
 		focusRef.current?.scrollIntoView({ block: "center" }); focusRef.current?.focus();
@@ -117,7 +126,8 @@ export default function ConnectorsSection({
 					<p className="text-xs text-muted mt-1">{request.reason}</p>
 					<p className="text-xs text-muted mt-1">Connector: {request.connector ?? "this control"} · Current scope: {request.currentScope ?? "none"} · Requested minimum: {request.requestedScope}</p>
 					<p className="text-xs text-muted mt-1">Resource: {request.resourceId ?? "this instance"} · Operation: {request.operationKind}</p>
-					{request.status === "pending" && <div className="flex gap-2 mt-2"><button type="button" className="btn btn-primary text-xs" onClick={() => void decide("approve", "always")}>Allow write access</button><button type="button" className="btn text-xs" onClick={() => void decide("approve", "ask")}>Ask each time</button><button type="button" className="btn text-xs" onClick={() => void decide("deny")}>Deny</button></div>}
+					{expiry && <p className={`text-xs mt-1 ${expiry.expired ? "font-semibold" : "text-muted"}`} data-testid={expiry.expired ? "permission-request-expired" : "permission-request-expires"}>{expiry.text}</p>}
+					{request.status === "pending" && !expiry?.expired && <div className="flex gap-2 mt-2"><button type="button" className="btn btn-primary text-xs" onClick={() => void decide("approve", "always")}>Allow write access</button><button type="button" className="btn text-xs" onClick={() => void decide("approve", "ask")}>Ask each time</button><button type="button" className="btn text-xs" onClick={() => void decide("deny")}>Deny</button></div>}
 					{requestMsg && <p className="text-xs mt-2">{requestMsg}</p>}
 				</div>
 			)}
