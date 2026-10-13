@@ -231,7 +231,7 @@ Automated tests cover every branch of the flow with the network and the database
 step they cannot cover is a human at a consent screen, so that is what this script is for. Run it
 once after a deploy that touches the flow.
 
-1. Console → any MCP-capable instance → **Settings → Permissions & Connections → MCP connections**.
+1. Console → any MCP-capable instance → **Permissions → Permissions & Connections → MCP connections**.
    A **ProAgentStore** chip appears under "Suggested". If it does not, `MCP_SELF_URL` is unset on
    that deployment — expected locally, a misconfiguration in production.
 2. Click it. The panel tests the endpoint and should report **Token needed**, with

@@ -123,7 +123,7 @@ async function gmailToken(ctx: RegistryToolCtx): Promise<{ token: string } | { r
 	if (!(await emailPermitted(ctx.env, ctx.instanceId))) {
 		return {
 			refusal: fail(
-				"Email access is not enabled for this agent. The owner turns it on in the console under Settings → Permissions & Connections.",
+				"Email access is not enabled for this agent. The owner turns it on in the console under Permissions → Permissions & Connections.",
 			),
 		};
 	}

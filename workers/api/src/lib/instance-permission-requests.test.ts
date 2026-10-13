@@ -58,6 +58,6 @@ describe("instance permission requests (#1009)", () => {
 		const outcome=await requestOwnerAttention({}, { event:"approval_required", userId:"u1", instanceId:"i1", subject:{kind:"permission-request",instanceId:"i1",requestId:request.id}, about:{kind:"permission-request",id:request.id,state:"pending"}, title:"Permission needed", body:"A tool is blocked", notificationType:"permission" }, {
 			notify: async (...args) => { calls.push(args); }, pushed: async () => "unavailable",
 		});
-		expect(calls).toHaveLength(1); expect(outcome).toMatchObject({recorded:true,push:"unavailable",url:`/console/instances/i1/settings?focus=permissions&permission_request=${request.id}`});
+		expect(calls).toHaveLength(1); expect(outcome).toMatchObject({recorded:true,push:"unavailable",url:`/console/instances/i1/permissions?focus=permissions&permission_request=${request.id}`});
 	});
 });

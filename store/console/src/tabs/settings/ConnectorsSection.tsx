@@ -17,14 +17,14 @@ interface ConnectorGrant {
 	resourceUrl?: string | null;
 }
 
-interface DriveStatus {
+export interface DriveStatus {
 	connected: boolean;
 	configured: boolean;
 	email?: string | null;
 	reach?: ConnectorReach;
 }
 
-interface WorkdriveStatus {
+export interface WorkdriveStatus {
 	connected: boolean;
 	configured: boolean;
 	account?: string | null;

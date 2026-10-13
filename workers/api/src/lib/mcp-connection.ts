@@ -263,7 +263,7 @@ export function summarizeTools(
 export function explainBlocker(blocker: McpToolBlocker, tool: string): string {
 	switch (blocker) {
 		case "tool_disabled":
-			return `This agent cannot run mcp_call_tool, so no MCP tool is callable. Enable it under Settings → Tools.`;
+			return `This agent cannot run mcp_call_tool, so no MCP tool is callable. Enable it under Permissions → Tools.`;
 		case "no_write_consent":
 			return `MCP write access is off for this agent, so nothing on any server is callable. Turn it on under Agent write access.`;
 		case "wildcard_excludes_destructive":

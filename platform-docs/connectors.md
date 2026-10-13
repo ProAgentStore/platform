@@ -172,7 +172,7 @@ on a 401, and names only the remedy the answer supports:
 
 | What the server publishes | What the refusal says |
 |---|---|
-| OAuth metadata with dynamic client registration **and** PKCE S256 | browser sign-in is available — test the address under Settings → Permissions & Connections → MCP connections and click **Connect** (exactly the condition `canAuthorize` gates that button on) |
+| OAuth metadata with dynamic client registration **and** PKCE S256 | browser sign-in is available — test the address under Permissions → Permissions & Connections → MCP connections and click **Connect** (exactly the condition `canAuthorize` gates that button on) |
 | OAuth metadata without both of those | no Connect button is offered for it; paste an access token |
 | no OAuth metadata, and it answered | there is nothing to sign in to and it may be open — retry with `auth:"none"` |
 | nothing — it never answered, or discovery ran out of time | all three remedies, in the order worth trying |
@@ -523,7 +523,7 @@ byte count, but never argument values or result content (#726).
 Sending mail is the most irreversible thing an agent here can do — it leaves under the owner's own
 name, to a real person, and cannot be recalled. So it passes three independent gates:
 
-1. **The owner's email permission** on that agent (Settings → Permissions & Connections). Checked
+1. **The owner's email permission** on that agent (Permissions → Permissions & Connections). Checked
    by *every* Gmail tool at call time, reads included.
 2. **The agent's `capabilities.tools`** allowlist, like any connector tool.
 3. **Per-instance write consent** (#90), which applies because the connector declares

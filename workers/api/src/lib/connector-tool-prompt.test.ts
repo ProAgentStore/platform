@@ -86,7 +86,7 @@ describe("#399 item 2 — the remedy is stated once, by the platform", () => {
 	it("forbids both halves of the reported failure", () => {
 		expect(CONSENT_RULE).toContain("Never decline a granted tool");
 		expect(CONSENT_RULE).toContain("without a line above saying it is not granted");
-		expect(CONSENT_RULE).toContain("Settings → Connections");
+		expect(CONSENT_RULE).toContain("Permissions → Connections");
 	});
 
 	it("tells the agent the labels are ITS current permissions, not a general rule", () => {
@@ -198,7 +198,7 @@ describe("#493 — the tool list is CLOSED, so an absent system cannot be offere
 	});
 
 	it("does not send the owner to Settings for a tool that is not there to be switched on", () => {
-		// It sits next to CONSENT_RULE, which ends by pointing at Settings → Connections. That is
+		// It sits next to CONSENT_RULE, which ends by pointing at Permissions → Connections. That is
 		// right for a LISTED tool whose consent is ungranted and wrong here: a subscriber can
 		// disable a tool but cannot add one, so "ask your owner to connect GitHub" is the same
 		// dead errand as the original by a different route.
@@ -263,7 +263,7 @@ describe("#483 — TERMINAL_CLI_PROTOCOL injected for terminal/tmux agents", () 
 describe("#517 — a REFUSED tool's own remedy may not be swapped for an invented one", () => {
 	// The production incident: a creator's tmux Operator, asked on the agent page to list tmux
 	// sessions, was refused by the capability-constraint gate — whose result ends with the true
-	// remedy, "run this from a subscribed instance" — and answered "go to Settings → Connections in
+	// remedy, "run this from a subscribed instance" — and answered "go to Permissions → Connections in
 	// the console and connect a tmux instance". No console screen links a tmux instance. 5/5 across
 	// two agents and two connectors, including a first turn on an empty conversation.
 	it("names the trigger #493 left open: a tool that IS on the list, was called, and was refused", () => {
@@ -289,7 +289,7 @@ describe("#517 — a REFUSED tool's own remedy may not be swapped for an invente
 	it("scopes the CONSENT remedy to a consent refusal, which is where the invented phrase came from", () => {
 		// Not incidental: on the agent-template surface `listConsents` is handed an agent id and
 		// consent rows are keyed by instance id, so every write tool renders "consent NOT granted"
-		// and CONSENT_RULE — directly above — points at console → Settings → Connections. The
+		// and CONSENT_RULE — directly above — points at console → Permissions → Connections. The
 		// authorised remedy for a case that did not apply was the nearest thing to hand.
 		const tmuxTools: PromptTool[] = [
 			{ name: "tmux_list_sessions", description: "List sessions.", connector: "tmux", scope: "read", jsonSchema: {} },
@@ -297,7 +297,7 @@ describe("#517 — a REFUSED tool's own remedy may not be swapped for an invente
 		];
 		const templateSurface = connectorToolsPrompt(tmuxTools, []);
 		expect(templateSurface).toContain("consent NOT granted");
-		expect(templateSurface).toContain("Settings → Connections");
+		expect(templateSurface).toContain("Permissions → Connections");
 		expect(TOOL_REFUSAL_RELAY).toContain("the remedy for a CONSENT refusal only");
 		expect(TOOL_REFUSAL_RELAY).toContain("not fixed by enabling write access");
 	});
@@ -308,7 +308,7 @@ describe("#517 — a REFUSED tool's own remedy may not be swapped for an invente
 		// worded against the string would forbid the one case where it is right — and would rot the
 		// first time the console renames a tab.
 		expect(TOOL_REFUSAL_RELAY).not.toMatch(/never (mention|say) Settings/i);
-		expect(CONSENT_RULE).toContain("Settings → Connections");
+		expect(CONSENT_RULE).toContain("Permissions → Connections");
 	});
 
 	it("is injected into every CONNECTED TOOLS block, and after the two rules it narrows", () => {

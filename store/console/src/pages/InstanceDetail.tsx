@@ -37,7 +37,7 @@ import SecureInputRequests from "../components/SecureInputRequests";
 import SecureInputBanner from "../components/SecureInputBanner";
 import { useScrapLastTurn } from "../lib/deleteTurn";
 import { isPinnedToBottom, shouldScrollAfterLoad } from "../lib/chatScroll";
-import { resolveInstanceRoute } from "../lib/instanceRoute";
+import { legacyTabRedirect, parseInstanceSplat, resolveInstanceRoute } from "../lib/instanceRoute";
 import { loopCompletionNotice, loopStartFailureNotice, loopStartNotice } from "../lib/loopNotices";
 import { loopStopControl, STOPPING_HINT, type LoopPhase } from "../lib/loopStopState";
 import { chatExportPayload } from "../lib/chatExport";
@@ -141,6 +141,11 @@ function InstancePage() {
 	const setTab = useCallback((t: Tab) => {
 		navigate(`/instances/${id}/${t}`, { replace: true });
 	}, [id, navigate]);
+	// An old Permissions push link (`/settings?focus=permissions&…`, #1060) moves to the Permissions tab, query kept.
+	const legacyTab = legacyTabRedirect(parseInstanceSplat(splat).requestedTab, window.location.search);
+	useEffect(() => {
+		if (legacyTab) navigate(`/instances/${id}/${legacyTab}${window.location.search}`, { replace: true });
+	}, [legacyTab, id, navigate]);
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [hasMore, setHasMore] = useState(false);
 	// The server's opaque cursor for the next OLDER page (#428). Never derived from a message

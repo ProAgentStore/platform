@@ -7,19 +7,16 @@ import SecureInputHistory from "../components/SecureInputHistory";
 import TeamworkSection from "./TeamworkSection";
 import LoopPresetsSection from "./LoopPresetsSection";
 import LoopRunsSection from "./LoopRunsSection";
-import TriggersSection from "./TriggersSection";
+import TriggersSection, { type ConnectorGrant } from "./TriggersSection";
 import { api } from "@proagentstore/sdk/client";
 import { invalidateVoiceConfig } from "@proagentstore/sdk/hooks";
 import type { SettingsField } from "../lib/types";
-import type { ConnectorReach, InstanceConnectorPolicy } from "../lib/connectorState";
 import type { RosterInstance } from "../lib/unsubscribeScope";
 import { MY_INSTANCES_WITH_PAUSED } from "../lib/instancePause";
-import { permissionRequestFocus } from "../lib/permissionRequestFocus";
 
 // Import refactored modules
 import InstanceInfo from "./settings/InstanceInfo";
 import AgentSettingsSection from "./settings/AgentSettingsSection";
-import ConnectorsSection from "./settings/ConnectorsSection";
 import VoiceTranslationSection from "./settings/VoiceTranslationSection";
 import MiscellaneousSection from "./settings/MiscellaneousSection";
 import NotificationPolicySection from "./settings/NotificationPolicySection";
@@ -41,31 +38,7 @@ interface Props {
 	onUnsubscribe: () => void;
 }
 
-interface ConnectorGrant {
-	id: string;
-	provider: "google_drive" | "zoho_workdrive";
-	resourceId: string;
-	resourceName: string;
-	resourceType: string;
-	resourceUrl?: string | null;
-}
-
-interface DriveStatus {
-	connected: boolean;
-	configured: boolean;
-	email?: string | null;
-	reach?: ConnectorReach;
-}
-
-interface WorkdriveStatus {
-	connected: boolean;
-	configured: boolean;
-	account?: string | null;
-	reach?: ConnectorReach;
-}
-
 export default function SettingsTab({ instanceId, instanceName, isApply, isCoding, isRepo, isLocalBrowser, isGmailScout, onUnsubscribe }: Props) {
-	const permissionRequest = permissionRequestFocus(window.location.search);
 	const [maintMsg, setMaintMsg] = useState("");
 	const [resyncMsg, setResyncMsg] = useState("");
 	const [agentFields, setAgentFields] = useState<SettingsField[]>([]);
@@ -84,18 +57,8 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 	const [trWordTap, setTrWordTap] = useState(true);
 	const [trFontSize, setTrFontSize] = useState("medium");
 	const [trLanguages, setTrLanguages] = useState<Array<{ name: string; tag: string }>>([]);
-	const [emailStatus, setEmailStatus] = useState<{ connected: boolean; configured: boolean; email?: string | null } | null>(null);
-	const [emailPermission, setEmailPermission] = useState<boolean | null>(null);
-	const [emailMsg, setEmailMsg] = useState("");
-	const [driveStatus, setDriveStatus] = useState<DriveStatus | null>(null);
-	const [driveMsg, setDriveMsg] = useState("");
-	const [driveGrantRef, setDriveGrantRef] = useState("");
 	const [driveGrants, setDriveGrants] = useState<ConnectorGrant[]>([]);
-	const [workdriveStatus, setWorkdriveStatus] = useState<WorkdriveStatus | null>(null);
-	const [workdriveMsg, setWorkdriveMsg] = useState("");
-	const [workdriveGrantRef, setWorkdriveGrantRef] = useState("");
 	const [workdriveGrants, setWorkdriveGrants] = useState<ConnectorGrant[]>([]);
-	const [connectorPolicy, setConnectorPolicy] = useState<InstanceConnectorPolicy[] | null>(null);
 	const [loadFailures, setLoadFailures] = useState<string[]>([]);
 	const [roster, setRoster] = useState<RosterInstance[] | null>(null);
 	const [instStatus, setInstStatus] = useState<string | null>(null);
@@ -151,46 +114,16 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 				setHasOpenAiKey(false);
 			}
 			try {
-				const s = await api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/email/status");
-				setEmailStatus(s);
-			} catch {
-				failed.push("the email connection");
-			}
-			try {
-				const s = await api<DriveStatus>("/v1/drive/status");
-				setDriveStatus(s);
-			} catch {
-				failed.push("the Drive connection");
-			}
-			try {
 				const d = await api<{ grants?: ConnectorGrant[] }>(`/v1/drive/instances/${instanceId}/grants`);
 				setDriveGrants(d.grants || []);
 			} catch {
 				failed.push("your Drive folders");
 			}
 			try {
-				const s = await api<WorkdriveStatus>("/v1/workdrive/status");
-				setWorkdriveStatus(s);
-			} catch {
-				failed.push("the WorkDrive connection");
-			}
-			try {
 				const d = await api<{ grants?: ConnectorGrant[] }>(`/v1/workdrive/instances/${instanceId}/grants`);
 				setWorkdriveGrants(d.grants || []);
 			} catch {
 				failed.push("your WorkDrive folders");
-			}
-			try {
-				const p = await api<{ connectors?: InstanceConnectorPolicy[] }>(`/v1/instances/${instanceId}/connectors`);
-				setConnectorPolicy(p.connectors || []);
-			} catch {
-				failed.push("connector policy");
-			}
-			try {
-				const st = await api<{ permissions?: { email?: boolean } }>(`/v1/instances/${instanceId}/state`);
-				setEmailPermission(st.permissions?.email === true);
-			} catch {
-				failed.push("agent permissions");
 			}
 			setLoadFailures(failed);
 		})();
@@ -199,16 +132,6 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 	useEffect(() => {
 		loadAll();
 	}, [loadAll]);
-
-	useEffect(() => {
-		const onFocus = () => {
-			api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/email/status").then(setEmailStatus).catch(() => {});
-			api<DriveStatus>("/v1/drive/status").then(setDriveStatus).catch(() => {});
-			api<WorkdriveStatus>("/v1/workdrive/status").then(setWorkdriveStatus).catch(() => {});
-		};
-		window.addEventListener("focus", onFocus);
-		return () => window.removeEventListener("focus", onFocus);
-	}, []);
 
 	const saveSetting = async (id: string, value: string | number | boolean) => {
 		setAgentSettings((s) => ({ ...s, [id]: value }));
@@ -272,79 +195,6 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 			setTrTranslit(d.translation.transliterate === true);
 			setTrWordTap(d.translation.wordTap !== false);
 			setTrFontSize(d.translation.fontSize || "medium");
-		}
-	};
-
-	const refreshDriveReach = () => {
-		api<DriveStatus>("/v1/drive/status").then(setDriveStatus).catch(() => {});
-	};
-
-	const refreshWorkdriveReach = () => {
-		api<WorkdriveStatus>("/v1/workdrive/status").then(setWorkdriveStatus).catch(() => {});
-	};
-
-	const addDriveGrant = async () => {
-		if (!driveGrantRef.trim()) return;
-		try {
-			const d = await api<{ grant: ConnectorGrant }>(`/v1/drive/instances/${instanceId}/grants`, {
-				method: "POST",
-				body: JSON.stringify({ url: driveGrantRef.trim() }),
-			});
-			setDriveGrants((grants) => [d.grant, ...grants.filter((g) => g.id !== d.grant.id && g.resourceId !== d.grant.resourceId)]);
-			setDriveGrantRef("");
-			setDriveMsg(`Granted this agent access to ${d.grant.resourceName}.`);
-			refreshDriveReach();
-		} catch (e) {
-			setDriveMsg(e instanceof Error ? e.message : "Failed to grant Drive folder");
-		}
-	};
-
-	const removeDriveGrant = async (grant: ConnectorGrant) => {
-		try {
-			await api(`/v1/drive/instances/${instanceId}/grants/${grant.id}`, { method: "DELETE" });
-			setDriveGrants((grants) => grants.filter((g) => g.id !== grant.id));
-			setDriveMsg(`Removed access to ${grant.resourceName}.`);
-			refreshDriveReach();
-		} catch (e) {
-			setDriveMsg(e instanceof Error ? e.message : "Failed to remove Drive access");
-		}
-	};
-
-	const addWorkdriveGrant = async () => {
-		if (!workdriveGrantRef.trim()) return;
-		try {
-			const d = await api<{ grant: ConnectorGrant }>(`/v1/workdrive/instances/${instanceId}/grants`, {
-				method: "POST",
-				body: JSON.stringify({ url: workdriveGrantRef.trim() }),
-			});
-			setWorkdriveGrants((grants) => [d.grant, ...grants.filter((g) => g.id !== d.grant.id && g.resourceId !== d.grant.resourceId)]);
-			setWorkdriveGrantRef("");
-			setWorkdriveMsg(`Granted this agent access to ${d.grant.resourceName}.`);
-			refreshWorkdriveReach();
-		} catch (e) {
-			setWorkdriveMsg(e instanceof Error ? e.message : "Failed to grant WorkDrive folder");
-		}
-	};
-
-	const removeWorkdriveGrant = async (grant: ConnectorGrant) => {
-		try {
-			await api(`/v1/workdrive/instances/${instanceId}/grants/${grant.id}`, { method: "DELETE" });
-			setWorkdriveGrants((grants) => grants.filter((g) => g.id !== grant.id));
-			setWorkdriveMsg(`Removed access to ${grant.resourceName}.`);
-			refreshWorkdriveReach();
-		} catch (e) {
-			setWorkdriveMsg(e instanceof Error ? e.message : "Failed to remove WorkDrive access");
-		}
-	};
-
-	const toggleEmailPermission = async (on: boolean) => {
-		setEmailPermission(on);
-		try {
-			await api(`/v1/instances/${instanceId}/state`, { method: "PUT", body: JSON.stringify({ permissions: { email: on } }) });
-			setEmailMsg(on ? "This agent can now reach your Gmail. What it may do with it is the tool list above." : "Gmail access turned off for this agent.");
-		} catch (e) {
-			setEmailPermission(!on);
-			setEmailMsg(e instanceof Error ? e.message : "Failed");
 		}
 	};
 
@@ -429,31 +279,6 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 
 			<RunnerPanel instanceId={instanceId} />
 			<SecureInputHistory instanceId={instanceId} />
-
-			<ConnectorsSection
-				instanceId={instanceId}
-				instanceName={instanceName}
-				permissionRequestId={permissionRequest?.requestId}
-				emailStatus={emailStatus}
-				emailPermission={emailPermission}
-				emailMsg={emailMsg}
-				driveStatus={driveStatus}
-				driveMsg={driveMsg}
-				driveGrantRef={driveGrantRef}
-				driveGrants={driveGrants}
-				workdriveStatus={workdriveStatus}
-				workdriveMsg={workdriveMsg}
-				workdriveGrantRef={workdriveGrantRef}
-				workdriveGrants={workdriveGrants}
-				connectorPolicy={connectorPolicy}
-				onEmailPermissionChange={toggleEmailPermission}
-				onDriveGrantRefChange={setDriveGrantRef}
-				onAddDriveGrant={addDriveGrant}
-				onRemoveDriveGrant={removeDriveGrant}
-				onWorkdriveGrantRefChange={setWorkdriveGrantRef}
-				onAddWorkdriveGrant={addWorkdriveGrant}
-				onRemoveWorkdriveGrant={removeWorkdriveGrant}
-			/>
 
 			<TeamworkSection instanceId={instanceId} />
 			<LoopPresetsSection instanceId={instanceId} />

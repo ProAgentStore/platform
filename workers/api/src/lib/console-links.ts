@@ -207,16 +207,19 @@ export function secureInputNotificationLink(instanceId: string, requestId: strin
 	return `${BASE}${secureInputLink(instanceId, requestId)}`;
 }
 
-/** An instance's Settings tab — where its triggers, runner and connectors are configured. */
+/** An instance's Settings tab — where its triggers, runner and brain are configured. */
 export function instanceSettingsLink(instanceId: string): string {
 	return `${instanceLink(instanceId)}/settings`;
 }
 
-/** The actual Permissions & Connections control, with optional durable request focus (#1009). */
+/**
+ * The Permissions tab's Permissions & Connections control, with optional durable request focus (#1009).
+ * Its own tab since #1060; the console redirects an older `/settings?focus=permissions` link here.
+ */
 export function instancePermissionsLink(instanceId: string, requestId?: string): string {
 	const query = new URLSearchParams({ focus: "permissions" });
 	if (requestId) query.set("permission_request", requestId);
-	return `${instanceSettingsLink(instanceId)}?${query}`;
+	return `${instanceLink(instanceId)}/permissions?${query}`;
 }
 
 /** Alias for callers whose subject is a connector rather than a tool permission. */

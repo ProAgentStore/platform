@@ -17,7 +17,7 @@
  * agent-template surface, where that id is an AGENT id, the read returns nothing and
  * `writeConsentOf` reports "required" for every write tool the agent holds. The tmux Operator's
  * five writes therefore each rendered "[write — consent NOT granted …]", and `CONSENT_RULE`
- * directly above instructs the model to point the owner at console → Settings → Connections. The
+ * directly above instructs the model to point the owner at console → Permissions → Connections. The
  * prompt licensed the remedy; the model used it. The precondition was an artefact of asking a
  * per-instance question on a surface that has no instance.
  *

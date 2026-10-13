@@ -83,7 +83,7 @@ describe("GET /v1/instances/:id/console-link (#938)", () => {
 
 	it("links a verified owner permission request to the exact Permissions & Connections control", async () => {
 		expect((await link("i1", "?permission_request_id=pr_1")).body).toMatchObject({
-			path: "/console/instances/i1/settings?focus=permissions&permission_request=pr_1",
+			path: "/console/instances/i1/permissions?focus=permissions&permission_request=pr_1",
 			lands: "Permissions & Connections, focused on this request",
 		});
 		expect((await link("i1", "?permission_request_id=pr_foreign")).status).toBe(404);

@@ -85,7 +85,7 @@ describe("list_instance_permission_requests (#1009)", () => {
 	}
 
 	it("reads the owner's requests with one GET and returns each verified link and blocker as the API gave them", async () => {
-		const body = { requests: [{ id: "pr-1", status: "pending", control: "connector_consent", link: "/console/instances/i1/settings?focus=permissions&permission_request=pr-1", blocker: { requestId: "pr-1", remedy: "…Opening the link grants nothing…" } }] };
+		const body = { requests: [{ id: "pr-1", status: "pending", control: "connector_consent", link: "/console/instances/i1/permissions?focus=permissions&permission_request=pr-1", blocker: { requestId: "pr-1", remedy: "…Opening the link grants nothing…" } }] };
 		const { seen, call } = listTool({ status: 200, body });
 		expect(JSON.parse(await call({ instance_id: "i 1" }))).toEqual(body);
 		expect(seen).toEqual([{ url: "https://api.test/v1/instances/i%201/permission-requests", method: "GET" }]);

@@ -284,7 +284,7 @@ describe("12. a signed-out tap keeps its destination", () => {
 		// (query kept, `session` stripped) is pinned beside the console's own helper in
 		// store/console/src/lib/notification-click.test.ts — that helper reads `window`.
 		expect(checkConsoleLink(b.controlLink).ok).toBe(true);
-		expect(b.controlLink).toBe(`/console/instances/i1/settings?focus=permissions&permission_request=${b.requestId}`);
+		expect(b.controlLink).toBe(`/console/instances/i1/permissions?focus=permissions&permission_request=${b.requestId}`);
 		expect(permissionRequestFocus(new URL(b.controlLink, "https://x").search)).toEqual({ controlId: "permissions-and-connections", requestId: b.requestId });
 	});
 });

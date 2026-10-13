@@ -297,7 +297,7 @@ stop looking and tell the user which console screen to use.
 | **Credentials vault** (`/v1/instances/:id/credentials`, `/reveal`) — site logins, passwords, PINs, recovery codes | Secrets. No MCP tool references the route at all. | Console → Knowledge → Credentials |
 | **API-key values** | `keys_status` returns provider *names* only; there is no `keys_reveal`, no proxy tool, and no route that returns a stored key | Console → Profile → API keys |
 | **Gmail refresh token** | Never revealable to anything, including the console | — |
-| **Permission writes** on instance state | `get_instance_state` is read-only and no tool writes `permissions`. Note the one carve-out: `set_instance_model` does `PUT /state`, but with `{model}` only | Console → Settings → Permissions & Connections |
+| **Permission writes** on instance state | `get_instance_state` is read-only and no tool writes `permissions`. Note the one carve-out: `set_instance_model` does `PUT /state`, but with `{model}` only | Console → Permissions → Permissions & Connections |
 | **Stripe checkout and customer portal** | Browser redirects — a redirect URL is useless to a headless caller. `billing_status` reads, nothing writes | Console → Profile → Billing |
 | **Binary routes** — voice-audio get/put, R2 multipart upload parts, file byte download (`/files/:fileId`) | MCP results are text; streaming bytes through a text channel is not useful. `list_instance_files` and `delete_instance_file` exist; reading the bytes does not | Console, or the REST API directly |
 | **Uploading a non-text file to an instance** | `upload_instance_file` accepts owner-provided base64 to the existing private Files route; it does not fetch URLs and returns metadata/hashes only | — |

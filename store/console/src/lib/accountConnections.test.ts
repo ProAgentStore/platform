@@ -577,14 +577,14 @@ describe("AccountConnections' sentence is now true (#736 AC6)", () => {
 	 * Preferences page while that tab held nothing. This is the pin: the sentence and the control
 	 * move together or this goes red.
 	 */
-	it("says it, and the Settings tab mounts the control it names", () => {
+	it("says it, and the Permissions tab mounts the control it names (#1060 moved it from Settings)", () => {
 		const prefs = readFileSync(new URL("../components/AccountConnections.tsx", import.meta.url), "utf-8");
-		expect(prefs).toContain("on its own Settings tab");
+		expect(prefs).toContain("on its own Permissions tab");
 
-		// The control lives in the Connectors section since #911; the tab mounts that section.
-		const settings = readFileSync(new URL("../tabs/SettingsTab.tsx", import.meta.url), "utf-8");
-		expect(settings).toContain('import ConnectorsSection from "./settings/ConnectorsSection"');
-		expect(settings).toContain("<ConnectorsSection");
+		// The control lives in the Connectors section since #911; the Permissions tab mounts it since #1060.
+		const permissions = readFileSync(new URL("../tabs/PermissionsTab.tsx", import.meta.url), "utf-8");
+		expect(permissions).toMatch(/import ConnectorsSection[^;]*from "\.\/settings\/ConnectorsSection"/);
+		expect(permissions).toContain("<ConnectorsSection");
 		const section = readFileSync(new URL("../tabs/settings/ConnectorsSection.tsx", import.meta.url), "utf-8");
 		expect(section).toContain('import AgentAccountChoice from "../../components/AgentAccountChoice"');
 		expect(section).toContain("<AgentAccountChoice instanceId={instanceId} />");

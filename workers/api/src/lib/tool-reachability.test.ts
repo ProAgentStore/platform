@@ -60,7 +60,7 @@ const CATALOG_NAMES: ReadonlySet<string> = new Set(TOOL_CATALOG.flatMap((g) => g
 const NOT_IN_CATALOG_BY_DESIGN: Readonly<Record<string, string>> = {
 	find_confirmation_link:
 		"Permission-gated, never declarable: buildAgentToolDefinitions adds it only when the owner has " +
-		"switched on Settings → Permissions & Connections AND connected Gmail. Putting it in the catalog " +
+		"switched on Permissions → Permissions & Connections AND connected Gmail. Putting it in the catalog " +
 		"would let a creator grant a read of the owner's mailbox by declaration.",
 	submit_job_application:
 		"Legacy, superseded by the LLM-driven apply workflow. It is in the APPLY group inside FULL so " +

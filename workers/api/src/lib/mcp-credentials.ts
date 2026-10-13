@@ -399,7 +399,7 @@ export async function adoptLegacyMcpCredential(env: Env, userId: string, endpoin
  */
 export type McpAuthAdvice = "connect" | "token-only" | "open" | "unknown";
 
-const PANEL = "Settings → Permissions & Connections → MCP connections";
+const PANEL = "Permissions → Permissions & Connections → MCP connections";
 
 /**
  * The refusal text, written to be actionable. A "no credential" that doesn't say WHICH server

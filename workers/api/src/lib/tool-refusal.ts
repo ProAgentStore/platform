@@ -34,10 +34,10 @@ export type ToolPolicyReason = "ok" | "not_declared" | "disabled_by_owner" | "ne
  *  same thing about the same tool. */
 export function explainRefusal(name: string, reason: ToolPolicyReason): string {
 	if (reason === "disabled_by_owner") {
-		return `"${name}" is switched off for this agent. Turn it back on in the console (Settings → Tools) to use it.`;
+		return `"${name}" is switched off for this agent. Turn it back on in the console (Permissions → Tools) to use it.`;
 	}
 	if (reason === "needs_permission") {
-		return `"${name}" needs a permission this agent has not been given. Grant it in the console (Settings → Permissions & Connections) to use it.`;
+		return `"${name}" needs a permission this agent has not been given. Grant it in the console (Permissions → Permissions & Connections) to use it.`;
 	}
 	return `"${name}" is not one of this agent's tools. It can only run the tools its agent declares.`;
 }

@@ -60,6 +60,7 @@ export const CONSOLE_SECTIONS: ReadonlyArray<{ id: string; label: string; shown:
 	{ id: "indexing", label: "Index", shown: (c) => c.surfaces.includes("repo") || canUse(c, KB_TOOLS), needs: "the repo surface or knowledge tools" },
 	{ id: "data", label: "Data", shown: (c) => canUse(c, COLLECTION_TOOLS), needs: "collection tools" },
 	{ id: "settings", label: "Settings", shown: () => true },
+	{ id: "permissions", label: "Permissions", shown: () => true },
 ];
 
 /** What the link should open. At most one of these per call — a record page already names its tab. */

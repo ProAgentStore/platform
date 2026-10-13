@@ -363,7 +363,7 @@ export type ToolListingRow = Omit<ToolPolicyEntry, "disabled" | "writeConsent"> 
 export function explainWriteConsent(entry: Pick<ToolPolicyEntry, "name" | "connector" | "writeConsent">): string | null {
 	const conn = entry.connector ?? "this";
 	if (entry.writeConsent === "required") {
-		return `"${entry.name}" will be refused until write access for the ${conn} connector is granted for this agent (console → Settings → Connections).`;
+		return `"${entry.name}" will be refused until write access for the ${conn} connector is granted for this agent (console → Permissions → Connections).`;
 	}
 	if (entry.writeConsent === "per_call") {
 		return conn === "mcp"

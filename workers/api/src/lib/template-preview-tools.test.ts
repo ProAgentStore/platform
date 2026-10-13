@@ -58,7 +58,7 @@ describe("#517 step 3 — a tool refused by decision is not offered on the surfa
 		// This is the whole point of step 3, stated as the thing that becomes IMPOSSIBLE rather than
 		// less likely. `listConsents` is keyed by instance id, so on this surface it returns nothing
 		// and every write tool rendered "consent NOT granted" — after which CONSENT_RULE instructs
-		// the model to point the owner at console → Settings → Connections, which is where the
+		// the model to point the owner at console → Permissions → Connections, which is where the
 		// invented remedy came from. With no connector tools left there is no block, no labels and
 		// no phrase to reach for.
 		const declared = withholdConstrainedConnectorTools(caps(TMUX_OPERATOR)).capabilities;
@@ -69,7 +69,7 @@ describe("#517 step 3 — a tool refused by decision is not offered on the surfa
 		expect(connectorTools).toEqual([]);
 		const block = connectorToolsPrompt(connectorTools, []);
 		expect(block).toBe("");
-		expect(block).not.toContain("Settings → Connections");
+		expect(block).not.toContain("Permissions → Connections");
 		expect(block).not.toContain("consent NOT granted");
 	});
 });

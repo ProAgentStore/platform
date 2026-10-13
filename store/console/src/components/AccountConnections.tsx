@@ -150,7 +150,7 @@ export default function AccountConnections() {
 				Accounts your agents can reach. Connecting and disconnecting happens <b>here</b>, never on
 				an agent — so a change on this page affects every agent that uses that account. You can
 				connect more than one of the same kind; each agent then picks which to use on its own
-				Settings tab, along with which folders it may read.
+				Permissions tab, along with which folders it may read.
 			</p>
 
 			{/* GitHub — an identity link, not a stored token. See the component header. */}
@@ -239,7 +239,7 @@ export default function AccountConnections() {
 								)}
 								{needsPerAgentChoice(entry) && (
 									<p className="text-2xs text-muted-soft mt-1">
-										Each agent must be told which of these to use, on its own Settings tab. Until it is,
+										Each agent must be told which of these to use, on its own Permissions tab. Until it is,
 										that agent will not read or send anything through {entry.label}.
 									</p>
 								)}

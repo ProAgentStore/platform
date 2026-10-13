@@ -51,7 +51,7 @@ describe("instance permission request routes (#1009)", () => {
 		app.onError((e,c) => e instanceof HttpError ? c.json({error:e.message},e.status as 400) : c.json({error:String(e)},500));
 		const res=await app.request("/v1/instances/i1/permission-requests",{},env()); const body=await res.json() as {requests:Array<Record<string,unknown>>};
 		const byId=Object.fromEntries(body.requests.map((r)=>[r.id,r]));
-		expect(byId[open.id]).toMatchObject({status:"pending",control:"connector_consent",requestedScope:"write",link:expect.stringMatching(new RegExp(`/instances/i1/settings.*${open.id}`)),blocker:{requestId:open.id,controlLink:byId[open.id].link,remedy:expect.stringMatching(/Opening the link grants nothing/)}});
+		expect(byId[open.id]).toMatchObject({status:"pending",control:"connector_consent",requestedScope:"write",link:expect.stringMatching(new RegExp(`/instances/i1/permissions\\?focus=permissions.*${open.id}`)),blocker:{requestId:open.id,controlLink:byId[open.id].link,remedy:expect.stringMatching(/Opening the link grants nothing/)}});
 		expect(byId[denied.id]).toMatchObject({status:"denied",blocker:null,link:expect.stringContaining(denied.id)});
 		for (const r of body.requests) for (const k of ["userId","operationFingerprint","continuationRef","instanceId"]) expect(r).not.toHaveProperty(k);
 		viewer.uid="u2";

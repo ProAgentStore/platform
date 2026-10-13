@@ -278,7 +278,7 @@ describe("explainRefusal", () => {
 	it("distinguishes 'never had it' from 'you turned it off' — they need different fixes", () => {
 		expect(explainRefusal("x", "not_declared")).toContain("not one of this agent's tools");
 		expect(explainRefusal("x", "disabled_by_owner")).toContain("switched off");
-		expect(explainRefusal("x", "disabled_by_owner")).toContain("Settings → Tools");
+		expect(explainRefusal("x", "disabled_by_owner")).toContain("Permissions → Tools");
 	});
 
 	// The third fix, and it is a different one again: not "edit the agent" and not "turn it back

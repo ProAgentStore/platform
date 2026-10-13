@@ -75,6 +75,7 @@ export const INSTANCE_TABS = [
 	"indexing",
 	"data",
 	"settings",
+	"permissions",
 ] as const;
 
 /**

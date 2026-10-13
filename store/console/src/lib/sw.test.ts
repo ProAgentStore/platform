@@ -165,15 +165,15 @@ describe("the push handler (#897)", () => {
  * a person still has to tap a real push on each device.
  */
 describe("a permission-request push opens the exact control (#1009, simulated devices)", () => {
-	const PERMISSION = "/console/instances/i1/settings?focus=permissions&permission_request=req-1";
-	const ON_CONSOLE_HOST = "/instances/i1/settings?focus=permissions&permission_request=req-1";
+	const PERMISSION = "/console/instances/i1/permissions?focus=permissions&permission_request=req-1";
+	const ON_CONSOLE_HOST = "/instances/i1/permissions?focus=permissions&permission_request=req-1";
 	const TAG = `permission:${PERMISSION}`;
 
 	it("shows one tray entry per request, carrying the exact control link", async () => {
 		const sw = worker(APEX);
 		await sw.push({ title: "Permission needed: GitHub write", body: "b", url: PERMISSION, tag: TAG });
-		await sw.push({ title: "Permission needed: GitHub write", body: "b", url: "/console/instances/i1/settings?focus=permissions&permission_request=req-2", tag: "permission:/console/instances/i1/settings?focus=permissions&permission_request=req-2" });
-		expect(sw.shown.map((n) => n.options.data.url)).toEqual([PERMISSION, "/console/instances/i1/settings?focus=permissions&permission_request=req-2"]);
+		await sw.push({ title: "Permission needed: GitHub write", body: "b", url: "/console/instances/i1/permissions?focus=permissions&permission_request=req-2", tag: "permission:/console/instances/i1/permissions?focus=permissions&permission_request=req-2" });
+		expect(sw.shown.map((n) => n.options.data.url)).toEqual([PERMISSION, "/console/instances/i1/permissions?focus=permissions&permission_request=req-2"]);
 		expect(new Set(sw.shown.map((n) => n.options.tag)).size).toBe(2);
 	});
 

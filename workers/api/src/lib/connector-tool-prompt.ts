@@ -87,7 +87,7 @@ export const CONSENT_RULE =
 	" returned. Never decline a granted tool on permission grounds, and never tell the owner to enable" +
 	" something without a line above saying it is not granted. When a line DOES say consent is not" +
 	" granted, say exactly that, name the connector it names, and point the owner to the console →" +
-	" Settings → Connections — do not attempt the call and describe what it would have done.";
+	" Permissions → Connections — do not attempt the call and describe what it would have done.";
 
 /**
  * The list is CLOSED (#493).
@@ -122,7 +122,7 @@ export const CONSENT_RULE =
  *
  * ── Why it says not to send the owner to Settings
  *
- * It sits next to a rule that ends by pointing at console → Settings → Connections, which is the
+ * It sits next to a rule that ends by pointing at console → Permissions → Connections, which is the
  * right remedy for a listed tool whose consent is not granted and the wrong one here: a subscriber
  * can DISABLE tools (`config.disabledTools`) but cannot add one — `toolNamesFor` resolves the set
  * from the agent's definition. "Ask your owner to connect GitHub in Settings" is the same wasted
@@ -146,7 +146,7 @@ export const TOOL_LIST_CLOSED =
  * A creator asked their tmux Operator, on the agent page, to list tmux sessions. `tmux_list_sessions`
  * was refused — correctly — by the capability-constraint gate, whose 405-character result ends with
  * the true remedy: "run this from a subscribed instance rather than from a template preview or trial
- * chat." The reply instead said to "go to Settings → Connections in the console and connect a tmux
+ * chat." The reply instead said to "go to Permissions → Connections in the console and connect a tmux
  * instance." No such control exists on any console screen. Reproduced 5/5 across two agents and two
  * connectors, including on a first turn of an empty conversation, so it is what this refusal
  * produces rather than one conversation going astray.
@@ -162,7 +162,7 @@ export const TOOL_LIST_CLOSED =
  * rows are keyed by instance id, so it returns nothing and `writeConsentOf` reports "required" for
  * every write tool the agent holds; the tmux Operator's five write tools therefore each render
  * "consent NOT granted", and `CONSENT_RULE` directly above instructs the model to point the owner at
- * console → Settings → Connections. Asked to explain a refusal of the READ tool, the model reached
+ * console → Permissions → Connections. Asked to explain a refusal of the READ tool, the model reached
  * for the remedy the prompt had already licensed. (Verified: the labels and the instruction; the
  * model's reason for choosing them is inference — no endpoint returns the assembled prompt.)
  *

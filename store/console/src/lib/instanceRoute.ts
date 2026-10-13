@@ -70,3 +70,12 @@ export function resolveInstanceRoute(splat: string | undefined, allowedTabs: Ite
 	const allowed = allowedTabs instanceof Set ? allowedTabs : new Set(allowedTabs);
 	return { tab: allowed.has(requestedTab) ? requestedTab : FALLBACK_TAB, sessionId };
 }
+
+/**
+ * Where an old Permissions link now lives (#1060). Permissions & Connections moved from the Settings
+ * tab to its own; a push already delivered still carries `/settings?focus=permissions&…`, so that
+ * link is redirected (query kept) rather than opening a Settings page without the card it names.
+ */
+export function legacyTabRedirect(requestedTab: string, search: string): string | null {
+	return requestedTab === "settings" && new URLSearchParams(search).get("focus") === "permissions" ? "permissions" : null;
+}

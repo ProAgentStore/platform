@@ -177,5 +177,5 @@ export function mcpConsentDenial(endpoint: string, tool: string): string {
 	const extra = isDestructiveToolName(tool)
 		? ` "${tool}" looks destructive, so it needs its own approval even if you have allowed all tools on this server.`
 		: "";
-	return `Not permitted: this agent has no consent to call "${tool}" on ${endpoint}. Grant it under Settings → Permissions & Connections → MCP servers, then try again.${extra}`;
+	return `Not permitted: this agent has no consent to call "${tool}" on ${endpoint}. Grant it under Permissions → Permissions & Connections → MCP servers, then try again.${extra}`;
 }

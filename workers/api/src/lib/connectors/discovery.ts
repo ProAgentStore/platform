@@ -238,7 +238,7 @@ export function authFailureGuidance(status: number, discovery: DiscoveryResult):
 	if (discovery.dcr && discovery.pkceS256) {
 		// The actionable case, and now the common one: the server will register us itself, so the
 		// remedy is one button rather than hunting for a token the server never issues to humans.
-		parts.push('Connect it under Settings → Permissions & Connections → MCP connections ("Connect" on that server) to authorize ProAgentStore.');
+		parts.push('Connect it under Permissions → Permissions & Connections → MCP connections ("Connect" on that server) to authorize ProAgentStore.');
 	} else if (discovery.dcr) {
 		parts.push("The server registers clients dynamically but does not offer PKCE S256, which ProAgentStore requires before authorizing as a public client.");
 	} else {

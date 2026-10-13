@@ -10,6 +10,7 @@ import IndexingTab from "../tabs/IndexingTab";
 import KnowledgeTab from "../tabs/KnowledgeTab";
 import RepoTab from "../tabs/RepoTab";
 import SettingsTab from "../tabs/SettingsTab";
+import PermissionsTab from "../tabs/PermissionsTab";
 import ResearchTab from "../tabs/ResearchTab";
 import StatsTab from "../tabs/StatsTab";
 import TmuxTab from "../tabs/TmuxTab";
@@ -45,7 +46,8 @@ export type SurfaceId =
 	| "behaviour"
 	| "feedback"
 	| "data"
-	| "settings";
+	| "settings"
+	| "permissions";
 
 /** What the shell hands a surface so it can render its body. */
 export interface SurfaceContext {
@@ -368,6 +370,17 @@ export const SURFACES: SurfaceDef[] = [
 		render: ({ instanceId, instanceName, isApply, isCoding, isRepo, caps, onUnsubscribe }) => (
 			<SettingsTab instanceId={instanceId} instanceName={instanceName} isApply={isApply} isCoding={isCoding} isRepo={isRepo} isLocalBrowser={caps.runtime === "local_browser"} isGmailScout={isGmailScout(caps)} onUnsubscribe={onUnsubscribe} />
 		),
+	},
+	{
+		id: "permissions",
+		label: "Permissions",
+		icon: "🔐",
+		// What the agent may REACH and DO — tool permissions, the permission-request card a push focuses,
+		// and its Gmail / Drive / WorkDrive connections — split out of Settings (#1060). Universal: every
+		// agent has tools an owner can switch off, and every permission push lands here.
+		show: () => true,
+		scroll: true,
+		render: ({ instanceId, instanceName }) => <PermissionsTab instanceId={instanceId} instanceName={instanceName} />,
 	},
 ];
 
