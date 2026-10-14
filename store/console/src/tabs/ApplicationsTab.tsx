@@ -3,7 +3,7 @@ import { replayFrames, SCREENSHOTS_OFF_TEXT } from "../lib/runReplay";
 import { AutoSubmitConfirmDialog, AutoSubmitDangerBanner, ManualReviewBadge } from "../components/AutoSubmitPolicy";
 import { type AutoSubmitAllowance, type AutoSubmitRules, disablePayload, enablePayload, rulesPayload } from "../lib/autoSubmitPolicy";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import Button from "../components/Button";
@@ -11,9 +11,10 @@ import Card from "../components/Card";
 import LoadFailed from "../components/LoadFailed";
 import UploadedTailorSourcesSection from "../components/UploadedTailorSourcesSection";
 import ApplicationHandoffLive from "../components/ApplicationHandoffLive";
-import { QUEUE_STATUS_LABEL, actionBody, actionLabel, confirmText } from "../lib/applications";
+import { QUEUE_STATUS_LABEL, actionBody, actionLabel, canCheckSubmission, checkNeedsOwner, confirmText, reconciliationSentence } from "../lib/applications";
+import { notificationRoute } from "../lib/deepLink";
 import { TONE_CLASS } from "../lib/localBrowser";
-import type { ApplicationActionResponse, ApplicationRunnerSettingsView, ApplicationQueueAction, ApplicationQueueItem, ApplicationQueueStatus, ApplicationQueueView, ApplicationTraceView, ConnectionDeliveryList } from "../lib/types";
+import type { ApplicationActionResponse, ApplicationReconciliationHandoffResponse, ApplicationReconciliationResponse, ApplicationRunnerSettingsView, ApplicationQueueAction, ApplicationQueueItem, ApplicationQueueStatus, ApplicationQueueView, ApplicationTraceView, ConnectionDeliveryList } from "../lib/types";
 import type { PreparedApplicationTransferReceipt } from "../lib/applicationTransfer";
 
 /**
@@ -229,7 +230,7 @@ function Limits({ view, instanceId, onChanged }: { view: ApplicationQueueView; i
 }
 
 function Detail({ instanceId, item, connections, onChanged }: { instanceId: string; item: ApplicationQueueItem; connections: ApplicationQueueView["connections"]; onChanged: () => void }) {
-	const [busy, setBusy] = useState<ApplicationQueueAction | null>(null);
+	const [busy, setBusy] = useState<ApplicationQueueAction | "check" | null>(null);
 	const [msg, setMsg] = useState("");
 	const [answers, setAnswers] = useState<Record<string, string>>({});
 	const [trace, setTrace] = useState<ApplicationTraceView | null>(null);
@@ -258,6 +259,26 @@ function Detail({ instanceId, item, connections, onChanged }: { instanceId: stri
 		} catch (e) {
 			setMsg(e instanceof Error ? e.message : String(e));
 			onChanged();
+		}
+		setBusy(null);
+	};
+	// #1068: the read-only "was it sent?" check for an unconfirmed submit (#1013's reconciliation). It
+	// asks the run's own Runner; when the site needs a sign-in or CAPTCHA first, it opens that bounded
+	// read-only handoff. Nothing here can submit, retry, or clear the uncertainty.
+	const navigate = useNavigate();
+	const checkSubmission = async () => {
+		const runner = item.execution?.currentRun?.kind === "fill" ? item.execution.currentRun.instanceId : instanceId;
+		const base = `/v1/instances/${runner}/application-runs/${encodeURIComponent(item.fillRunId ?? "")}/reconciliation`;
+		setBusy("check");
+		setMsg("");
+		try {
+			const r = await api<ApplicationReconciliationResponse>(base, { method: "POST", body: "{}" });
+			const handoff = checkNeedsOwner(r) ? await api<ApplicationReconciliationHandoffResponse>(`${base}/handoff`, { method: "POST", body: "{}" }) : null;
+			const route = notificationRoute(handoff?.consoleLink);
+			if (route) navigate(route);
+			else setMsg(handoff ? "The site needs you to sign in, but the read-only browser could not be opened. Try again." : reconciliationSentence(r));
+		} catch (e) {
+			setMsg(e instanceof Error ? e.message : String(e));
 		}
 		setBusy(null);
 	};
@@ -378,6 +399,14 @@ function Detail({ instanceId, item, connections, onChanged }: { instanceId: stri
 				</p>
 			)}
 			{item.submitAttempted && !item.submittedAt && <p className="text-sm text-warning mb-2">A final submit was attempted but not confirmed. Check the employer's site before doing anything else.</p>}
+			{canCheckSubmission(item) && (
+				<div className="mb-2">
+					<Button size="sm" variant="primary" disabled={!!busy} onClick={() => void checkSubmission()} data-testid="check-submission">
+						{busy === "check" ? "Checking…" : "Check the employer's site (read-only)"}
+					</Button>
+					<p className="text-xs text-muted mt-1">Your Runner looks at the site's application history without sending anything. If the site asks you to sign in, you do that in a read-only browser here.</p>
+				</div>
+			)}
 
 			{(item.blockReason || pause) && (
 				<div className="mb-2 text-sm">

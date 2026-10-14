@@ -72,7 +72,7 @@ export { submitGateFor } from "./submission-gate.js";
 export { syncActiveApplyReconciliations } from "./reconciliation-sync.js";
 import { listSupervisorCheckpoints, noteSupervisorDirectiveDelivery, receiveSupervisorCheckpoint, sanitizeSupervisorFacts, type SupervisorDirective } from "./supervision.js";
 import { directApplicationCheckpoint } from "./brain.js";
-import { notifyLiveBrowserBlocker } from "./handoff-notification.js";
+import { notifyLiveBrowserBlocker, notifyUncertainSubmit } from "./handoff-notification.js";
 
 /** The event the Runner consumes — #956's readiness event. */
 export const MATERIALS_READY_EVENT = "job.application.materials_ready";
@@ -405,6 +405,8 @@ async function reconcileResultOutcome(env: Env, uid: string, run: ApplyRun, r: L
 	// (`lib/owner-attention.ts`) rather than an apply-specific push: the event is
 	// `approval_required`, and any other agent raises the same one.
 	if (to === "blocked" || to === "awaiting_review") await askForApprovalIfWaiting(env, uid, run).catch(() => undefined);
+	// #1068: an unconfirmed submit is waiting on the owner too — only they can check the site.
+	if (projected && to === "blocked" && r.blockReason === "submit_unconfirmed") await notifyUncertainSubmit(env, uid, run, attentionDeps).catch(() => undefined);
 }
 
 /** Tell the owner only facts the runner result and durable application state establish. */

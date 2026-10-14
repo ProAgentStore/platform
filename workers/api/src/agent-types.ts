@@ -336,3 +336,26 @@ export interface BrowserArtifactListResponse {
 	/** The run started with the owner's screenshot switch OFF (#1064): it has no frames by design. */
 	screenshotsOff: boolean;
 }
+
+/**
+ * `POST /v1/instances/:id/application-runs/:runId/reconciliation` — the owner's read-only "was it sent?"
+ * check for one ended `submit_unconfirmed` attempt (#1013; started from the Console since #1068).
+ * `runner` is what the owner's machine says about the check right now; a recorded result has none.
+ */
+export interface ApplicationReconciliationResponse {
+	reconciliation: {
+		id: string;
+		runId: string;
+		applicationId: string;
+		state: "requested" | "no_submission_proven" | "submission_confirmed" | "ambiguous" | "unavailable" | "rejected";
+		proofKind: string | null;
+	};
+	runner?: { state: "waiting_for_runtime" | "running" | "paused" | "ended"; pauseReason?: "login_required" | "captcha" };
+}
+
+/** `POST …/application-runs/:runId/reconciliation/handoff` — the bounded read-only sign-in/CAPTCHA handoff (#1013). */
+export interface ApplicationReconciliationHandoffResponse {
+	handoff: { id: string; runId: string; applicationId: string; state: "active" | "closed"; expiresAt: string; reason: string | null };
+	/** The Console page for this exact handoff; absent when it could not be opened. */
+	consoleLink?: string;
+}

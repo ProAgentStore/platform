@@ -9,6 +9,7 @@
  * Owner-scoped throughout. Responses carry classes, decisions and artifact handles — never a value
  * typed into a form.
  */
+import type { ApplicationReconciliationHandoffResponse, ApplicationReconciliationResponse } from "../agent-types.js";
 import type { Context, Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { patchInstanceConfig, readInstanceConfigPair } from "../lib/instance-config.js";
@@ -78,7 +79,7 @@ function handoffView(handoff: {
 		applicationId: handoff.applicationId,
 		// `active` is intentionally a projection, not a durable success state.  A closed
 		// view says nothing about whether an employer submission happened.
-		state: (handoff.state === "requested" || handoff.state === "ready") && handoff.expiresAt > now ? "active" : "closed",
+		state: (handoff.state === "requested" || handoff.state === "ready") && handoff.expiresAt > now ? ("active" as const) : ("closed" as const),
 		expiresAt: new Date(handoff.expiresAt).toISOString(),
 		reason: handoff.terminalReason,
 	};
@@ -287,14 +288,14 @@ export function registerApplicationRunnerRoutes(router: Hono<{ Bindings: Env }>)
 		const runtime = await getLiveRuntime(c.env, instanceId, uid).catch(() => null);
 		// The durable request is intentional when the owner's machine is disconnected. It is not a
 		// result, and a later explicit request remains idempotent with the same exact binding.
-		if (!runtime) return c.json({ reconciliation, runner: { state: "waiting_for_runtime" } }, 202);
+		if (!runtime) return c.json({ reconciliation, runner: { state: "waiting_for_runtime" } } satisfies ApplicationReconciliationResponse, 202);
 		const res = await callRuntime(c.env, runtime, LOCAL_APPLY_RECONCILIATION_RUN_PATH, { method: "POST", body: JSON.stringify(envelope) }).catch(() => null);
-		if (!res) return c.json({ reconciliation, runner: { state: "waiting_for_runtime" } }, 202);
+		if (!res) return c.json({ reconciliation, runner: { state: "waiting_for_runtime" } } satisfies ApplicationReconciliationResponse, 202);
 		const status = (await runtimeJson(res)) as LocalApplyReconciliationStatus & { error?: string };
 		if (!res.ok || status.reconciliationId !== reconciliation.id || status.runId !== run.id || status.applicationId !== app.id) {
 			throw new HttpError(409, "The Runner rejected this exact read-only reconciliation binding.");
 		}
-		if (status.state !== "ended" || !status.result) return c.json({ reconciliation, runner: { state: status.state, pauseReason: status.pauseReason } }, 202);
+		if (status.state !== "ended" || !status.result) return c.json({ reconciliation, runner: { state: status.state, pauseReason: status.pauseReason } } satisfies ApplicationReconciliationResponse, 202);
 		const recorded = await recordLocalApplyReconciliationProof(c.env, {
 			reconciliation,
 			app,
@@ -304,7 +305,7 @@ export function registerApplicationRunnerRoutes(router: Hono<{ Bindings: Env }>)
 			proofKind: status.result.proofKind,
 			actor: "runner",
 		}, Date.now());
-		return c.json({ reconciliation: recorded ?? reconciliation, runner: { state: status.state } }, recorded ? 201 : 200);
+		return c.json({ reconciliation: recorded ?? reconciliation, runner: { state: status.state } } satisfies ApplicationReconciliationResponse, recorded ? 201 : 200);
 	});
 
 	/** Open only the separately-authorized, read-only browser when reconciliation paused for login/CAPTCHA. */
@@ -323,10 +324,10 @@ export function registerApplicationRunnerRoutes(router: Hono<{ Bindings: Env }>)
 		const status = res ? (await runtimeJson(res)) as LocalApplyReconciliationStatus : null;
 		if (!res?.ok || status?.state !== "paused") {
 			handoff = (await markLocalApplyReconciliationHandoff(c.env, { continuityId: handoff.continuityId, reconciliationId: reconciliation.id, instanceId, userId: uid, state: "closed", terminalReason: "page_lost" }, now)) ?? handoff;
-			return c.json({ handoff: handoffView(handoff, now) }, 409);
+			return c.json({ handoff: handoffView(handoff, now) } satisfies ApplicationReconciliationHandoffResponse, 409);
 		}
 		handoff = (await markLocalApplyReconciliationHandoff(c.env, { continuityId: handoff.continuityId, reconciliationId: reconciliation.id, instanceId, userId: uid, state: "ready" }, now)) ?? handoff;
-		return c.json({ handoff: handoffView(handoff, now), consoleLink: applicationReconciliationHandoffLink(instanceId, handoff.continuityId) }, 201);
+		return c.json({ handoff: handoffView(handoff, now), consoleLink: applicationReconciliationHandoffLink(instanceId, handoff.continuityId) } satisfies ApplicationReconciliationHandoffResponse, 201);
 	});
 
 	router.get("/:instanceId/application-runs/:runId/reconciliation/handoff", async (c) => {

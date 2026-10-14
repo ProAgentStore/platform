@@ -3,7 +3,7 @@
  * The SERVER decides which actions an item allows (`item.actions`) — this file never re-derives the
  * lifecycle, it only names things and sends the compare-and-set the item was read with.
  */
-import type { ApplicationQueueAction, ApplicationQueueItem, ApplicationQueueStatus } from "./types";
+import type { ApplicationQueueAction, ApplicationQueueItem, ApplicationQueueStatus, ApplicationReconciliationResponse } from "./types";
 
 type Tone = "accent" | "warning" | "success" | "danger" | "muted";
 
@@ -93,4 +93,34 @@ export function actionBody(item: ApplicationQueueItem, action: ApplicationQueueA
 			? { idempotency_key: `${item.status === "materials_ready" ? "approve" : "approve-continue"}:${item.applicationId}:${item.stateVersion ?? 0}` }
 			: {};
 	return { action, expected_status: item.status, ...target, ...idem, ...(extra.answers?.length ? { answers: extra.answers } : {}) };
+}
+
+/**
+ * #1068: the card's read-only "was it sent?" check applies to exactly the attempt #1013 reconciles —
+ * a fill that ENDED with its submit pressed and unconfirmed. It never retries, submits or clears that.
+ */
+export function canCheckSubmission(item: Pick<ApplicationQueueItem, "status" | "blockReason" | "submitAttempted" | "submittedAt" | "fillRunId">): boolean {
+	return item.status === "blocked" && item.blockReason === "submit_unconfirmed" && item.submitAttempted && !item.submittedAt && !!item.fillRunId;
+}
+
+/** Does the check need the owner in the browser (sign-in or CAPTCHA) before it can read the site? */
+export const checkNeedsOwner = (r: ApplicationReconciliationResponse): boolean => r.runner?.state === "paused" && (r.runner.pauseReason === "login_required" || r.runner.pauseReason === "captcha");
+
+/** What one answer from the check means, in the owner's words — never more than the Runner proved. */
+export function reconciliationSentence(r: ApplicationReconciliationResponse): string {
+	switch (r.reconciliation.state) {
+		case "submission_confirmed":
+			return "Checked: the employer's site confirms this application was sent.";
+		case "no_submission_proven":
+			return "Checked: the employer's site shows no submission for this application.";
+		case "ambiguous":
+			return "Checked, but the site's history could not settle it. Look at the employer's site yourself before doing anything else.";
+		case "unavailable":
+			return "The check could not read the site from this Runner's browser. Look at the employer's site yourself.";
+		case "rejected":
+			return "The check was refused for this attempt.";
+	}
+	if (r.runner?.state === "waiting_for_runtime") return "Your Runner's machine is not connected. The check is saved — start `pags up`, then check again.";
+	if (r.runner?.state === "paused") return "The site needs you in the browser before it can be checked.";
+	return "Checking the employer's site (read-only)… Check again in a moment.";
 }

@@ -241,6 +241,65 @@ describe("the owner's browser-screenshot switch (#1064)", () => {
 	});
 });
 
+describe("an unconfirmed submit tells the owner, and offers only the read-only check (#1068)", () => {
+	const notes = async () => (await d1.DB.prepare("SELECT type, title, body, url, kind, instance_id, dedupe_key FROM notifications WHERE user_id = 'u1' ORDER BY created_at").all<Record<string, unknown>>()).results ?? [];
+	/** The live shape of run bfecb6f4: a one-click press, then a sign-in page and no receipt. */
+	async function pressedThenSignIn(id: string) {
+		await enableAutoSubmit();
+		const r = await call("POST", "/ap/application-runs", readyApp(id));
+		const runId = r.body.run.id as string;
+		const gateId = r.body.run.policy.gate.gateId as string;
+		runner("ended", {
+			events: [
+				{ seq: 1, type: "submit.attempted", at: "2026-10-14T06:28:26Z", domain: "jobs.example.com", detail: { class: "submit", gateId } },
+				{ seq: 2, type: "submit.unconfirmed", at: "2026-10-14T06:28:42Z", url: "https://jobs.example.com/login", detail: { gateId, looks: 6, urlChanged: true, titleChanged: true } },
+			],
+			lastSeq: 2,
+			result: RESULT(runId, { outcome: "blocked", mode: "auto_submit", filled: 0, uploaded: [], submitAttempted: true, blockReason: "submit_unconfirmed", questions: ["The application was submitted but the site did not confirm it. Check the employer's site or your email before anything is retried."] }),
+		});
+		await call("GET", `/ap/application-runs/${runId}`);
+		return runId;
+	}
+
+	it("raises ONE decision_required alert for the application — never a retry, and nothing claimed about the send", async () => {
+		await pressedThenSignIn("lead-uc1");
+		expect((await appRow("lead-uc1"))).toMatchObject({ status: "blocked", block_reason: "submit_unconfirmed" });
+		const raised = await notes();
+		expect(raised).toEqual([expect.objectContaining({ type: "apply", kind: "alert", instance_id: "ap", url: "/console/instances/ap/board" })]);
+		expect(String(raised[0].title)).toBe("Check whether it was sent: Staff Engineer at Globex");
+		expect(String(raised[0].body)).toMatch(/will not be retried/);
+		expect(String(raised[0].body)).toMatch(/read-only/);
+		expect(String(raised[0].body)).not.toMatch(/was not sent|nothing was sent|retry it/i);
+		// No retry is offered for an attempted submit — the card still says so after the push.
+		const read = await call("GET", "/ap/application-queue");
+		const item = read.body.items.find((i: { applicationId: string }) => i.applicationId === "lead-uc1");
+		expect(item.actions).not.toContain("retry_fill");
+	});
+
+	it("a replayed settle or a sweep never raises it twice", async () => {
+		const runId = await pressedThenSignIn("lead-uc2");
+		await call("GET", `/ap/application-runs/${runId}`);
+		await syncActiveApplyRuns(env());
+		expect(await notes()).toHaveLength(1);
+	});
+
+	it("is the attempt #1013 can reconcile: the owner's read-only check is accepted for exactly this run", async () => {
+		const runId = await pressedThenSignIn("lead-uc3");
+		// The owner's machine is away: the durable request is still recorded for this exact attempt.
+		getBoundRunnerConn.mockResolvedValue(null);
+		const out = await call("POST", `/ap/application-runs/${runId}/reconciliation`);
+		expect(out.status, JSON.stringify(out.body)).toBe(202);
+		expect(out.body).toMatchObject({ reconciliation: { runId, applicationId: "lead-uc3", state: "requested" }, runner: { state: "waiting_for_runtime" } });
+	});
+
+	it("a run blocked for any OTHER reason raises no such alert", async () => {
+		const r = await call("POST", "/ap/application-runs", readyApp("lead-uc4"));
+		runner("ended", { result: RESULT(r.body.run.id, { outcome: "blocked", filled: 0, uploaded: [], blockReason: "incomplete", questions: ["Stopped."] }) });
+		await call("GET", `/ap/application-runs/${r.body.run.id}`);
+		expect((await notes()).filter((n) => String(n.dedupe_key).includes("decision_required"))).toEqual([]);
+	});
+});
+
 describe("submission is gated", () => {
 	it("is impossible under the default policy: the gate refuses and names why", async () => {
 		const r = await call("POST", "/ap/application-runs", readyApp("lead-4"));

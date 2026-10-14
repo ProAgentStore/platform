@@ -249,6 +249,24 @@ lead closed as unverifiable is `browser_verification_failed`, whether every atte
 eligible browser was available under the `fallback`. An attempt that will be retried sends nothing.
 The push names the job by title and links to Settings, never to the posting.
 
+### Application Runner fills (`runtime: "local_apply"`)
+
+An Application Runner does not use these takeovers. Its `get_instance_browser_verification` reports
+`capability.declared: false`, and that is expected. A fill run escalates to the owner in two ways of its own:
+
+- **The run pauses at a sign-in or CAPTCHA** (#1013). The run's own browser is offered to the owner as a
+  bounded handoff (`blocker_required`: "Sign in to continue an application"). The owner clears the step
+  on their device and resumes the same run.
+- **The submit was pressed and the site did not confirm it** (`submit_unconfirmed`, #1068). For example,
+  a "Quick apply" control, which the Runner treats as a possible one-click send, lands on a sign-in page.
+  - **It is never retried.** A redirect is not proof that nothing was sent (#994, #1013).
+  - **The owner is told** with `decision_required`: "Check whether it was sent".
+  - **The card offers a read-only check.** "Check the employer's site (read-only)" asks the run's own
+    Runner to read the site's history. If the site needs a sign-in or CAPTCHA first, it opens a separate
+    read-only handoff for that.
+  - **The check can only report** confirmed, no submission, ambiguous or unavailable. It cannot fill,
+    submit or clear the uncertainty.
+
 ### Verifying Gmail job leads
 
 A Gmail Scout resolves a one-job provider alert to the posting's canonical URL, which carries only

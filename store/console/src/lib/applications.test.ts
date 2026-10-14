@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { visibleSurfaces } from "./surfaces";
-import { ACTION_LABEL, QUEUE_STATUS_LABEL, actionBody, actionLabel, confirmText } from "./applications";
-import type { ApplicationQueueItem } from "./types";
+import { ACTION_LABEL, QUEUE_STATUS_LABEL, actionBody, actionLabel, canCheckSubmission, checkNeedsOwner, confirmText, reconciliationSentence } from "./applications";
+import type { ApplicationQueueItem, ApplicationReconciliationResponse } from "./types";
 
 const base = { key: "app:a", kind: "application", status: "materials_ready", applicationId: "a", stateVersion: 3, scoutInstanceId: "s", leadId: "l", leadVersion: 1, actions: [] } as unknown as ApplicationQueueItem;
 
@@ -51,5 +51,36 @@ describe("the Applications tab is the Tailor's and the Runner's", () => {
 		expect(ids({ surfaces: [], runtime: "local_apply" })).toContain("applications");
 		expect(ids({ surfaces: [], runtime: "local_browser" })).not.toContain("applications");
 		expect(ids({ surfaces: [] })).not.toContain("applications");
+	});
+});
+
+describe("the read-only 'was it sent?' check (#1068)", () => {
+	const uncertain = { status: "blocked", blockReason: "submit_unconfirmed", submitAttempted: true, submittedAt: null, fillRunId: "run-1" } as const;
+	const answer = (state: ApplicationReconciliationResponse["reconciliation"]["state"], runner?: ApplicationReconciliationResponse["runner"]): ApplicationReconciliationResponse => ({ reconciliation: { id: "r", runId: "run-1", applicationId: "a", state, proofKind: null }, ...(runner ? { runner } : {}) });
+
+	it("is offered for exactly the attempt #1013 reconciles — an ended, unconfirmed submit", () => {
+		expect(canCheckSubmission(uncertain)).toBe(true);
+		expect(canCheckSubmission({ ...uncertain, blockReason: "incomplete" })).toBe(false);
+		expect(canCheckSubmission({ ...uncertain, submitAttempted: false })).toBe(false);
+		expect(canCheckSubmission({ ...uncertain, submittedAt: "2026-10-14T00:00:00Z" })).toBe(false);
+		expect(canCheckSubmission({ ...uncertain, fillRunId: null })).toBe(false);
+		expect(canCheckSubmission({ ...uncertain, status: "failed" } as never)).toBe(false);
+	});
+
+	it("needs the owner only when the Runner paused at a sign-in or CAPTCHA", () => {
+		expect(checkNeedsOwner(answer("requested", { state: "paused", pauseReason: "login_required" }))).toBe(true);
+		expect(checkNeedsOwner(answer("requested", { state: "paused", pauseReason: "captcha" }))).toBe(true);
+		expect(checkNeedsOwner(answer("requested", { state: "running" }))).toBe(false);
+		expect(checkNeedsOwner(answer("requested", { state: "waiting_for_runtime" }))).toBe(false);
+	});
+
+	it("never says more than the Runner proved", () => {
+		expect(reconciliationSentence(answer("submission_confirmed"))).toMatch(/confirms this application was sent/);
+		expect(reconciliationSentence(answer("no_submission_proven"))).toMatch(/shows no submission/);
+		// Uncertain, unavailable or still running: nothing reads as "sent" or "not sent".
+		for (const r of [answer("ambiguous"), answer("unavailable"), answer("rejected"), answer("requested", { state: "running" }), answer("requested", { state: "waiting_for_runtime" })]) {
+			expect(reconciliationSentence(r)).not.toMatch(/was sent|not sent|no submission/i);
+		}
+		expect(reconciliationSentence(answer("requested", { state: "waiting_for_runtime" }))).toMatch(/not connected/);
 	});
 });
