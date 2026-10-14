@@ -116,6 +116,14 @@ type WireTool = {
 async function listPublishedTools(
 	surfaces = ["apply", "repo", "coding"],
 	scopes = ["read", "write", "runtime", "destructive"],
+	/**
+	 * Reconnect shapes (#905). `rosterFailures`: the first N roster reads answer 500, so `init()` is
+	 * refused (#803) and retried until it succeeds — exactly `refusals` times. `pausedOnly`: the
+	 * account's instances are all paused, so the roster lists them only when asked `includePaused`
+	 * (#826). `restarts`: `init()` runs again on the same server afterwards, as `onStart` does on
+	 * every Durable Object start.
+	 */
+	opts: { rosterFailures?: number; refusals?: number; pausedOnly?: boolean; restarts?: number } = {},
 ): Promise<WireTool[]> {
 	const store = new Map<string, string>();
 	const kv = {
@@ -126,12 +134,14 @@ async function listPublishedTools(
 		list: async () => ({ keys: [], list_complete: true, cursor: undefined, cacheStatus: null }),
 	} as unknown as KVNamespace;
 
+	let rosterReads = 0;
 	vi.stubGlobal("fetch", async (input: string | URL | Request) => {
-		const url = typeof input === "string" ? input : input.toString();
-		const body = new URL(url).pathname === "/v1/instances/my/instances"
-			? { instances: surfaces.map((s) => ({ capabilities: { surfaces: [s] } })) }
-			: {};
-		return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+		const url = new URL(typeof input === "string" ? input : input.toString());
+		const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+		if (url.pathname !== "/v1/instances/my/instances") return json({});
+		if (rosterReads++ < (opts.rosterFailures ?? 0)) return json({ error: "boom" }, 500);
+		const listed = opts.pausedOnly && url.searchParams.get("includePaused") !== "1" ? [] : surfaces;
+		return json({ instances: listed.map((s) => ({ status: opts.pausedOnly ? "paused" : "active", capabilities: { surfaces: [s] } })) });
 	});
 
 	// biome-ignore lint/suspicious/noExplicitAny: constructing the mocked-base subclass
@@ -142,7 +152,9 @@ async function listPublishedTools(
 		mcpScopes: scopes,
 		mcpSubject: "user-1",
 	};
+	for (let refused = 0; refused < (opts.refusals ?? 0); refused++) await expect(inst.init()).rejects.toThrow(/retry initialize/);
 	await inst.init();
+	for (let i = 0; i < (opts.restarts ?? 0); i++) await inst.init();
 
 	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 	const client = new Client({ name: "pags-conformance", version: "0.0.0" });
@@ -203,22 +215,43 @@ async function withClient(
 	}
 }
 
+/**
+ * The discovery contract #905 is about, as a client receives it on the platform endpoint:
+ * `mcp_server_info` always (no arguments, read-only), and `coding_engine_reauth` for an account
+ * with a coding surface (`instance_id` + `action`, not read-only), each exactly once.
+ */
+function expectDiscoveryContract(tools: WireTool[]) {
+	const named = (name: string) => tools.filter((tool) => tool.name === name);
+	expect(named("mcp_server_info")).toHaveLength(1);
+	const [info] = named("mcp_server_info");
+	expect(info.inputSchema.properties).toEqual({});
+	expect(info.annotations?.readOnlyHint).toBe(true);
+	expect(named("coding_engine_reauth")).toHaveLength(1);
+	const [reauth] = named("coding_engine_reauth");
+	expect(reauth.inputSchema.required).toEqual(expect.arrayContaining(["instance_id", "action"]));
+	expect((reauth.inputSchema.properties as { action: { enum: string[] } }).action.enum).toEqual(["start", "status", "input", "cancel"]);
+	expect(reauth.annotations?.readOnlyHint).toBe(false);
+}
+
 describe("fresh MCP discovery (#905)", () => {
 	it("publishes diagnostics and engine reauth for a coding account on each fresh connection", async () => {
 		for (let connection = 0; connection < 2; connection++) {
 			// Permission scopes govern invocation, not discovery: reconnecting a coding account
 			// with read-only consent must still describe the runtime action it can request.
-			const tools = await listPublishedTools(["coding"], ["read"]);
-			const info = tools.find((tool) => tool.name === "mcp_server_info");
-			expect(info).toBeDefined();
-			expect(info!.inputSchema.properties).toEqual({});
-			expect(info!.annotations?.readOnlyHint).toBe(true);
-			const reauth = tools.find((tool) => tool.name === "coding_engine_reauth");
-			expect(reauth).toBeDefined();
-			expect(reauth!.inputSchema.required).toContain("instance_id");
-			expect(reauth!.inputSchema.required).toContain("action");
-			expect(reauth!.annotations?.readOnlyHint).toBe(false);
+			expectDiscoveryContract(await listPublishedTools(["coding"], ["read"]));
 		}
+	});
+
+	it("a reconnect whose first initialize was refused (roster 500 ×2) publishes both on the retry, never a truncated surface", async () => {
+		expectDiscoveryContract(await listPublishedTools(["coding"], ["read"], { rosterFailures: 2, refusals: 1 }));
+	});
+
+	it("a reconnect while the account's only coding instance is paused still publishes engine reauth (#826)", async () => {
+		expectDiscoveryContract(await listPublishedTools(["coding"], ["read"], { pausedOnly: true }));
+	});
+
+	it("a Durable Object restart re-running init() keeps both published, once each", async () => {
+		expectDiscoveryContract(await listPublishedTools(["coding"], ["read"], { restarts: 2 }));
 	});
 
 	it("keeps server diagnostics visible without coding subscriptions while preserving the reauth surface gate", async () => {
