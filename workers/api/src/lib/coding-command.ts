@@ -7,11 +7,25 @@ import type { CodingClientType } from "./coding-types.js";
 /** Command wrappers to skip when finding the real engine binary in a launch command. */
 const COMMAND_LAUNCHERS = new Set(["npx", "bunx", "pnpm", "yarn", "npm", "bun", "env", "exec", "dlx", "run", "sudo", "time"]);
 
+/**
+ * `pas mcp-auth exec -- <engine …>` (#1006, PAS #356): the ProAppStore CLI runs the engine with the
+ * owner's remote PAS MCP credential in ITS environment only. A wrapper, so the engine is what follows
+ * `--`. Matched exactly — `pas` followed by anything else is not a launcher and stays the binary.
+ * Mirrored in packages/sdk/src/engine-posture.ts and packages/browser-runner/src/coding/launcher-wrapper.ts.
+ */
+export const PAS_MCP_AUTH_WRAPPER = ["mcp-auth", "exec", "--"] as const;
+export const isPasMcpAuthWrapper = (tokens: readonly string[], i: number): boolean =>
+	(tokens[i]?.split("/").pop() || "").toLowerCase() === "pas" && PAS_MCP_AUTH_WRAPPER.every((t, k) => tokens[i + 1 + k] === t);
+
 export function commandEngineParts(command: string): { bin: string; args: string[] } {
 	const tokens = command.trim().split(/\s+/).filter(Boolean);
 	for (let i = 0; i < tokens.length; i++) {
 		const t = tokens[i];
 		if (!t || t.includes("=") || t.startsWith("-")) continue;
+		if (isPasMcpAuthWrapper(tokens, i)) {
+			i += PAS_MCP_AUTH_WRAPPER.length;
+			continue;
+		}
 		const base = (t.split("/").pop() || "").toLowerCase();
 		if (COMMAND_LAUNCHERS.has(base)) continue;
 		return { bin: base, args: tokens.slice(i + 1) };

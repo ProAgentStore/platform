@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { unwrapLauncher } from "./launcher-wrapper.js";
 import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -113,7 +114,9 @@ export function checkEngine(
 	deps: EngineCheckDeps = {},
 ): EngineCheck {
 	const engine = (["claude", "gemini", "codex", "grok", "generic"].includes(input.clientType ?? "") ? input.clientType : "claude") as ClientType;
-	const parsed = parseCommand(input.command);
+	// The ENGINE is what must be installed — after a `pas mcp-auth exec --` wrapper (#1006), not the wrapper.
+	const command = parseCommand(input.command);
+	const parsed = unwrapLauncher(command.bin, command.args);
 	const bin = parsed.bin || parseCommand(handlerFor(engine).cliCommand).bin || engine;
 	const { binaryPath, via } = resolveEngineSpawn(bin, [], deps);
 	const login = input.credentialInjected ? { login: "found" as const, where: "platform" } : detectEngineLogin(engine, deps);

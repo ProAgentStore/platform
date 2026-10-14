@@ -21,11 +21,18 @@ export function engineBin(command: string): string {
 	return engineParts(command).bin;
 }
 
+/** `pas mcp-auth exec --` (#1006): a wrapper whose engine follows `--`. Mirrors the API's rule exactly. */
+const PAS_MCP_AUTH_WRAPPER = ["mcp-auth", "exec", "--"];
+
 function engineParts(command: string): { bin: string; args: string[] } {
 	const tokens = (command ?? "").trim().split(/\s+/).filter(Boolean);
 	for (let i = 0; i < tokens.length; i++) {
 		const t = tokens[i];
 		if (!t || t.includes("=") || t.startsWith("-")) continue;
+		if ((t.split("/").pop() || "").toLowerCase() === "pas" && PAS_MCP_AUTH_WRAPPER.every((w, k) => tokens[i + 1 + k] === w)) {
+			i += PAS_MCP_AUTH_WRAPPER.length;
+			continue;
+		}
 		const base = (t.split("/").pop() || "").toLowerCase();
 		if (LAUNCHERS.has(base)) continue;
 		return { bin: base, args: tokens.slice(i + 1) };

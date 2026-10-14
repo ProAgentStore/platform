@@ -1,4 +1,5 @@
 import { InputLedger } from "./input-ledger.js";
+import { spawnTarget, unwrapLauncher } from "./launcher-wrapper.js";
 import { type ObjectiveOrigin, runObjectiveBlock } from "./run-objective.js";
 import { type ChildProcess, spawn } from "node:child_process";
 import { classifyCommand, commandFromToolInput, type EngineActRecord, fillTargetFromResult, toolCallOk, toolResultMark } from "./engine-acts.js";
@@ -170,6 +171,8 @@ export class HeadlessSession {
 	private mode: EngineMode;
 	private adapter: EngineAdapter;
 	private readonly cmdBin: string;
+	/** A launcher wrapper spawned in front of the engine (`pas mcp-auth exec --`), or empty. */
+	private readonly cmdPrefix: string[];
 	private readonly cmdArgs: string[];
 	private readonly binName: string;
 	/** Wall-clock of the last stdout/stderr byte — drives the persistent-raw idle heuristic. */
@@ -339,7 +342,10 @@ export class HeadlessSession {
 
 	constructor(readonly config: HeadlessSessionConfig) {
 		this.engineLabel = `${config.clientType}:${config.id}`;
-		const { bin, args } = parseCommand(config.command);
+		// `pas mcp-auth exec -- codex …` (#1006): spawn the wrapper, but drive the engine after `--`.
+		const parsed = parseCommand(config.command);
+		const { prefix, bin, args } = unwrapLauncher(parsed.bin, parsed.args);
+		this.cmdPrefix = prefix;
 		// When no explicit command is configured, fall back to THIS engine's default
 		// command (codex/gemini/grok/…) — not a hard-coded "claude", which would drive a
 		// non-Claude session with the wrong CLI (and mode is already "raw" for it).
@@ -534,7 +540,8 @@ export class HeadlessSession {
 		const args = this.adapter.buildLaunchArgs(this.cmdArgs, this.claudeSessionId);
 
 		const env = this.spawnEnv;
-		const launch = resolveEngineSpawn(this.cmdBin, args, { env });
+		const target = spawnTarget(this.cmdPrefix, this.cmdBin, args);
+		const launch = resolveEngineSpawn(target.command, target.args, { env });
 		const proc = spawn(launch.command, launch.args, {
 			cwd: this.config.workDir,
 			env,
@@ -683,7 +690,8 @@ export class HeadlessSession {
 			? buildCodexResumeArgs(this.cmdArgs, resumedCodexThreadId, text)
 			: this.adapter.buildTurnArgs(this.cmdArgs, text);
 		const env = this.spawnEnv;
-		const launch = resolveEngineSpawn(this.cmdBin, turnArgs, { env });
+		const target = spawnTarget(this.cmdPrefix, this.cmdBin, turnArgs);
+		const launch = resolveEngineSpawn(target.command, target.args, { env });
 		const proc = spawn(launch.command, launch.args, {
 			cwd: this.config.workDir,
 			env,
