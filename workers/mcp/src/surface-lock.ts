@@ -1156,4 +1156,7 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.128": "sha256:911e1a902debf28ca70163009faf975ab6bae1e0c75c00a7fb79bb86960898da",
 	// #1061: set_coder_brain gains `po_dry_run` — a created triage trigger is live unless asked.
 	"0.1.129": "sha256:b887e4df07a328540ef6920473a6f069f2b1066656b08fae65c5dd7ca8ffeb32",
+	// #1057 slice 1: one always-on read tool `native_preflight` (321 → 322, always-on 294 → 295), and
+	// `local_native` joins the `runtime` enum of create_agent / update_agent.
+	"0.1.130": "sha256:ce711149309ec24790a33acf9f4024d9165ca8843addf696dc2039322e0bf819",
 };

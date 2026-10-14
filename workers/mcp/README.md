@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**321 tool registrations.** 294 are always registered; 27 are gated to the console
+**322 tool registrations.** 295 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -448,6 +448,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `runner_update` | Update a machine's `pags` CLI to the latest release and restart it in place — waits for busy engines so no run is cut off, then checks every agent it held is attached again (re-attaching stragglers). `pags up` restarts itself on the new release; a runner under launchd/systemd (`PAGS_SERVICE=1`) or with `PAGS_RESTART_COMMAND` is restarted by that. The first update of a CLI older than 0.4.62 still needs the machine; the update is a durable operation: this answers `{operationId, state}` at once and `runner_update_status` reports the outcome, so a lost or slow confirmation can no longer make it unknowable | runtime | yes | |
 | `runner_restart` | Restart a machine's `pags` runner on the CLI it has, no install (#1032) — the recovery when the relay socket is attached but the runner behind it fails its health check, which attaching again cannot fix. The machine's relay client answers it, so it reaches a runner whose `/health` does not. Refuses while work runs, or when the machine cannot show itself idle; `force` restarts anyway and loses that work. Durable and single-flight with `runner_update`; read the outcome with `runner_update_status`. A CLI too old for it answers `unsupported`. | runtime | yes | `runner_restart` (only with `force`) |
 | `runner_update_status` | The DURABLE outcome of the latest CLI update on one machine (#990) — what to call after `runner_update`, and what to read when its reply was slow, interrupted or answered `outcome: unknown`. `state` is `running` while in flight, then `scheduled`, `restarting`, `restarted`, `up_to_date`, `would_update`, `refused`, `unsupported`, `unreachable` or `failed`, with the versions, the agents held/re-attached/missing, and the machine's own reason | read | | |
+| `native_preflight` | Is the machine running this instance's runner ready for native desktop / Maestro control (#1057)? Permissions, Maestro, devices, stable error codes. Refused with NATIVE_NOT_ENABLED until the owner opts the machine in; drives and installs nothing | read | | |
 | `get_machine_policy` | One stable physical machine's owner-scoped Auto-update policy, versions and lifecycle state; existing machines resolve to OFF when no policy was saved | read | | |
 | `set_machine_policy` | Enable or disable Auto-update for one stable physical machine; policy survives aliases and reconnects, and an idle runner rechecks it before installing | write | yes | |
 | `get_instance_terminal_session` | Saved Tmux-tab terminal target for one instance | read | | |

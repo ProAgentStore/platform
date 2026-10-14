@@ -5993,6 +5993,24 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{instanceId}/native/preflight:
+    get:
+      summary: Is this instance's machine ready for native desktop / Maestro control?
+      description: |
+        Read-only (#1057, slice 1). Asks the instance's live runner to probe its machine: OS, desktop
+        permission state (macOS Screen Recording + Accessibility, Windows UI Automation), Maestro / adb /
+        simctl presence and connected devices. Installs, prompts for and drives nothing. Refused until
+        the owner has opted that machine in (`/v1/terminals/machines/{machineId}/native-optin`).
+      operationId: getInstanceNativePreflight
+      tags: [Instances]
+      parameters:
+        - { name: instanceId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "`{machineId, node, enabled: {desktop, maestro}, preflight}` — preflight.errors carries NATIVE_PERMISSIONS_MISSING / NATIVE_MAESTRO_NOT_INSTALLED / NATIVE_DEVICE_NOT_FOUND / NATIVE_UNSUPPORTED_OS" }
+        "403": { description: "`code: NATIVE_NOT_ENABLED` — the machine is not opted in (or under an outdated disclosure)" }
+        "404": { description: Instance not found }
+        "409": { description: "`code: NATIVE_RUNNER_UNREACHABLE` (no runner) or `NATIVE_RUNNER_UNSUPPORTED` (runner too old / no machine id)" }
+        "503": { description: "`code: NATIVE_RUNNER_UNREACHABLE` — the runner dropped mid-call" }
   /v1/instances/{instanceId}/runner-setup:
     get:
       summary: The setup checklist for a coding agent that runs on your own machine
@@ -12538,6 +12556,44 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { description: No identified machine belongs to the caller }
 
+  /v1/terminals/machines/{machineId}/native-optin:
+    get:
+      summary: Read one machine's native desktop / Maestro control opt-in
+      description: |
+        Native control (#1057) is opt-in per physical machine and per backend, OFF by default. Returns the
+        switches, the disclosure version the owner acknowledged (and whether it is current), and the
+        current account-risk disclosure text to show before enabling.
+      operationId: getTerminalMachineNativeOptIn
+      tags: [Terminals]
+      parameters:
+        - { name: machineId, in: path, required: true, schema: { type: string }, description: Stable physical machine ID. }
+      responses:
+        "200": { description: "`{optIn: {machine_id, native_desktop_enabled, native_maestro_enabled, native_risk_disclosure_version, native_disclosure_current, native_opted_in_at, current_disclosure}}`" }
+        "404": { description: No identified machine is registered under this account }
+    post:
+      summary: Turn native desktop / Maestro control on or off for one machine
+      description: |
+        Owner-only. Enabling either backend requires `acknowledged_disclosure_version` to equal the current
+        account-risk disclosure (e.g. WeChat bans automated accounts); disabling never does. A field left out
+        keeps its value. Slice 1 grants readiness checks only — nothing drives a screen or device yet.
+      operationId: setTerminalMachineNativeOptIn
+      tags: [Terminals]
+      parameters:
+        - { name: machineId, in: path, required: true, schema: { type: string }, description: Stable physical machine ID. }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                desktop: { type: boolean }
+                maestro: { type: boolean }
+                acknowledged_disclosure_version: { type: string, description: Required to enable either backend. }
+      responses:
+        "200": { description: The saved opt-in, same shape as GET }
+        "400": { description: "`code`: NATIVE_DISCLOSURE_REQUIRED, NATIVE_DISCLOSURE_OUTDATED or NATIVE_INVALID_REQUEST; carries `current_disclosure`" }
+        "404": { description: No identified machine is registered under this account }
   /v1/terminals/machines/{machineId}/policy:
     put:
       summary: Set Auto-update for one physical machine

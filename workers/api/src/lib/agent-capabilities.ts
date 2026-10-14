@@ -38,8 +38,11 @@ export type AgentSurface = "apply" | "coding" | "insurance" | "repo" | "tmux";
  * no repository.
  * `local_apply` (#957): the Job Application Runner — a Codex or Claude Code CLI signed in on the
  * owner's machine fills an application in a real browser through the apply bridge's write policy.
+ * `local_native` (#1057): native desktop app control and Maestro phone/emulator automation on the
+ * owner's machine, behind a per-MACHINE owner opt-in (lib/native/policy.ts). Slice 1 is the
+ * read-only machine preflight only; nothing drives a screen or device yet.
  */
-export type AgentRuntimeKind = "browser" | "coding" | "local_browser" | "local_artifact" | "local_apply" | null;
+export type AgentRuntimeKind = "browser" | "coding" | "local_browser" | "local_artifact" | "local_apply" | "local_native" | null;
 
 /** A custom (agent-published) console surface — its UI loads from a bundle URL. */
 export interface CustomSurface {
@@ -391,7 +394,7 @@ const KNOWN_SURFACES = new Set<AgentSurface>(["apply", "coding", "insurance", "r
  *  (unlike customSurfaces, which loads a code bundle and stays on its own guarded path). */
 /** The runtime vocabulary, exported so `agent-workflows.test.ts` can assert that the
  *  `requiresRuntime` values on the workflow table are drawn from exactly this set (#705). */
-export const KNOWN_RUNTIMES = new Set<Exclude<AgentRuntimeKind, null>>(["browser", "coding", "local_browser", "local_artifact", "local_apply"]);
+export const KNOWN_RUNTIMES = new Set<Exclude<AgentRuntimeKind, null>>(["browser", "coding", "local_browser", "local_artifact", "local_apply", "local_native"]);
 // Workflows are NOT listed here: `isAgentWorkflow` asks the catalog that the picker is served
 // from, so the vocabulary a creator is offered and the vocabulary this validator accepts are one
 // list. They were two, and each had drifted the other way (#375).

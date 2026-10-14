@@ -35,6 +35,7 @@ import { codingRoutes } from "./routes/coding.js";
 import { githubRoutes } from "./routes/github.js";
 import { relayRoutes } from "./routes/relay.js";
 import { terminalRoutes } from "./routes/terminals.js";
+import { terminalNativeRoutes } from "./routes/terminals-native.js";
 import { usageRoutes } from "./routes/usage.js";
 import { remoteAuthRoutes } from "./routes/remote-auth.js";
 import { budgetRoutes } from "./routes/budget.js";
@@ -206,6 +207,7 @@ app.route("/v1/mcp", mcpRoutes); // outbound MCP: DCR+PKCE authorize/callback (#
 app.route("/v1/github", githubRoutes); // GitHub App: /status, /install-url, /installations, /callback
 app.route("/v1/relay", relayRoutes); // WebSocket relay: /connect, /status
 app.route("/v1/terminals", terminalRoutes); // platform: /v1/terminals/nodes — all the user's CLIs
+app.route("/v1/terminals", terminalNativeRoutes); // per-machine native-control opt-in (#1057)
 app.route("/v1/usage", usageRoutes); // platform: /v1/usage — token/cost transparency across agents
 app.route("/v1/remote-auth", remoteAuthRoutes); // #1005: PAS remote sign-in requests relayed by the owner's machine (PAGS never calls PAS)
 app.route("/v1/budget", budgetRoutes); // platform: /v1/budget/limits — account daily circuit breakers

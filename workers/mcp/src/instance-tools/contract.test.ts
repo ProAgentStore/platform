@@ -536,6 +536,7 @@ const TABLE: Record<string, Row> = {
 	set_instance_tags: ["recent", "write", null, "envelope", "dry_run,instance_id,tags,token"],
 	force_runner_attach: ["machineControl", "runtime", null, "envelope", "dry_run,instance_id,runner_node,token"],
 	get_machine_policy: ["machineControl", "read", null, null, "machine_id,token"],
+	native_preflight: ["machineControl", "read", null, null, "instance_id,token"],
 	runner_update: ["machineControl", "runtime", null, "envelope", "dry_run,runner_node,token"],
 	runner_restart: ["machineControl", "runtime", null, "envelope", "confirm,dry_run,force,runner_node,token"],
 	runner_update_status: ["machineControl", "read", null, null, "runner_node,token"],

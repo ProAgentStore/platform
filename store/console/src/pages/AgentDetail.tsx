@@ -627,6 +627,7 @@ export default function AgentDetail() {
 										<option value="local_browser">local_browser — Codex / Claude Code researching in the owner's browser</option>
 										<option value="local_artifact">local_artifact — Codex / Claude Code writing application materials from the owner's files</option>
 										<option value="local_apply">local_apply — Codex / Claude Code filling job applications in the owner's browser</option>
+										<option value="local_native">local_native — native desktop apps / Maestro devices on the owner's machine (opt-in per machine)</option>
 									</select>
 								</label>
 								<label className="flex flex-col gap-1 text-xs font-semibold">

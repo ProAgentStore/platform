@@ -5,7 +5,9 @@ export type RunnerCapability =
 	| "file.upload"
 	| "human.approval"
 	| "human.takeover"
-	| "tmux.control";
+	| "tmux.control"
+	// #1057 slice 1: answers /native/preflight (read-only machine probe for the local_native runtime).
+	| "native.preflight";
 
 export type TaskStatus =
 	| "queued"

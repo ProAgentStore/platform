@@ -88,6 +88,7 @@ function executionView(runtime: ReturnType<typeof agentCapabilities>["runtime"],
 	if (runtime === "local_browser") return { kind: "local_cli_browser", engine: run?.engine ?? "configured_per_run", browser: "playwright" };
 	if (runtime === "local_apply") return { kind: "local_cli_apply", engine: run?.engine ?? "configured_per_run", browser: "playwright" };
 	if (runtime === "local_artifact") return { kind: "local_cli_artifact", engine: run?.engine ?? "configured_per_run", browser: null };
+	if (runtime === "local_native") return { kind: "local_native", engine: null, browser: null };
 	if (runtime === "coding") return { kind: "coding_cli", engine: run?.engine ?? "configured_per_run", browser: null };
 	return { kind: "server", engine: null, browser: null };
 }

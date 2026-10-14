@@ -424,6 +424,7 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	force_runner_attach: "runtime",
 	// Reads the owner-scoped automatic-update policy and lifecycle on one stable physical machine (#859).
 	get_machine_policy: "read",
+	native_preflight: "read",
 	// Installs software on a machine and restarts its runner (#859).
 	runner_update: "runtime",
 	// Restarts a machine's runner on the CLI it has — the recovery for a wedged runtime (#1032).

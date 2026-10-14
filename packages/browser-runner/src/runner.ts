@@ -48,6 +48,7 @@ const CAPABILITIES: RunnerCapability[] = [
 	"human.approval",
 	"human.takeover",
 	"tmux.control",
+	"native.preflight",
 ];
 /** How many times a task may attempt an action before handing off to a human. */
 export const MAX_AUTONOMOUS_ATTEMPTS = 3;

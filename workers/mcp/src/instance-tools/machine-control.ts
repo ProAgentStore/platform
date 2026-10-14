@@ -42,6 +42,29 @@ export function registerMachineControlTools(server: McpServer, ctx: InstanceTool
 		},
 	);
 
+	// ── Native desktop / Maestro readiness (#1057, slice 1) ──────────────────────
+	//
+	// READ-ONLY. It asks the instance's live runner what native control could do on its machine —
+	// macOS/Windows permission state, Maestro, connected devices — and changes nothing, installs
+	// nothing, prompts for nothing. It is refused with NATIVE_NOT_ENABLED until the OWNER has opted
+	// that machine in (per machine, after the account-risk disclosure); MCP cannot opt a machine in.
+	server.tool(
+		"native_preflight",
+		"Check whether the machine running this instance's runner is ready for native desktop app control or Maestro phone/emulator automation (#1057). Read-only: reports OS, desktop permission state (macOS Screen Recording + Accessibility, Windows UI Automation), whether Maestro/adb/simctl are present, connected devices, and stable error codes (NATIVE_PERMISSIONS_MISSING, NATIVE_MAESTRO_NOT_INSTALLED, NATIVE_DEVICE_NOT_FOUND). Refused with NATIVE_NOT_ENABLED until the owner opts that machine in; NATIVE_RUNNER_UNSUPPORTED/UNREACHABLE when the runner is too old or gone. Nothing is driven, installed or granted.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID; its live runner's machine is the one checked."),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id };
+			const denied = await requirePermission(safetyFor(token), "read", "native_preflight", input);
+			if (denied) return denied;
+			return jsonText(await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/native/preflight`, sessionToken, {}, env));
+		},
+	);
+
 	server.tool(
 		"set_machine_policy",
 		"Enable or disable Auto-update for one physical machine (#859). The setting is owner-scoped and keyed by stable `machine_id`, so it survives offline periods, runner reconnects, attached-agent changes, and hostname aliases. Existing machines default OFF. Enabling permits an idle runner to check trusted CLI releases and use its safe self-update/restart path; it does not interrupt coding or local application work. Disabling is persisted immediately; a runner rechecks the policy before installation and cancels an update that has not started. Use get_machine_policy to read back the saved policy and lifecycle state.",

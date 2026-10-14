@@ -13,6 +13,7 @@ import { probeGitSshIdentity } from "./coding/repo.js";
 import { checkEngine } from "./coding/engine-check.js";
 import { listGithubOrgs, listGithubRepos, searchGithubRepos, getGithubRepoDetail, getGithubCredentialScope, type GithubBrowseInput, type GithubSearchInput, type GithubRepoDetailInput } from "./coding/github-browse.js";
 import { routeLocalApplyHandoff } from "./local-apply/handoff-routes.js";
+import { runNativePreflight } from "./native/preflight.js";
 import { routeLocalApplyReconciliation } from "./local-apply/reconciliation-routes.js";
 
 export function createRunnerServer(runner: LocalRunner) {
@@ -118,6 +119,12 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 
 	if ((req.method === "GET" || req.method === "POST") && path === "/capabilities") {
 		return json(res, 200, runner.capabilities());
+	}
+
+	// #1057 slice 1: a READ-ONLY probe of what native desktop / Maestro control could do on this
+	// machine. Runs fixed probe commands, installs nothing, prompts for nothing, never throws.
+	if ((req.method === "GET" || req.method === "POST") && path === "/native/preflight") {
+		return json(res, 200, await runNativePreflight());
 	}
 
 	if (req.method === "GET" && path === "/sessions") {

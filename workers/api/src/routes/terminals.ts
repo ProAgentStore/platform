@@ -91,7 +91,7 @@ export interface TerminalInstance {
 	pinnedNode: string | null;
 	/** The runner runtime this agent uses. Runner-less agents
 	 *  (runtime:null — chat/RAG/connector) are excluded from the list entirely. */
-	runtime: "browser" | "coding" | "local_browser" | "local_artifact" | "local_apply";
+	runtime: "browser" | "coding" | "local_browser" | "local_artifact" | "local_apply" | "local_native";
 }
 
 export interface TerminalSession {
@@ -530,7 +530,7 @@ terminalRoutes.get("/nodes", async (c) => {
 });
 
 /** Resolve the stable ID to the exact owner-owned machine, never a mutable hostname. */
-async function machineDetail(env: Env, uid: string, rawMachineId: string) {
+export async function machineDetail(env: Env, uid: string, rawMachineId: string) {
 	const machineId = normalizeMachineId(rawMachineId);
 	if (!machineId) return null;
 	const rows = (await env.DB.prepare(

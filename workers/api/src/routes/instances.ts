@@ -30,6 +30,7 @@ import { registerCoderBrainRoutes } from "./instances-coder-brain.js";
 import { registerInstanceDescriptionRoutes } from "./instances-description.js";
 import { registerRunnerAttachRoutes, registerRunnerPinRoutes } from "./instances-runner-attach.js";
 import { registerRunnerSetupRoutes } from "./instances-runner-setup.js";
+import { registerNativeRoutes } from "./instances-native.js";
 import { registerInstanceLifecycleRoutes } from "./instances-lifecycle.js";
 import { registerKnowledgeRoutes } from "./instances-knowledge.js";
 import { registerTaskRoutes } from "./instances-tasks.js";
@@ -1102,6 +1103,7 @@ registerCoderBrainRoutes(instanceRoutes); // the coder brain switch + product-ow
 registerInstanceDescriptionRoutes(instanceRoutes); // one secret-safe runtime projection for MCP / Console (#1002)
 registerRunnerAttachRoutes(instanceRoutes); // the remote `pags up --force`, for one agent (#856)
 registerRunnerSetupRoutes(instanceRoutes); // the local coding runner setup checklist (#868)
+registerNativeRoutes(instanceRoutes); // the local_native machine preflight (#1057)
 registerBrowseRoutes(instanceRoutes);
 registerTranslationRoutes(instanceRoutes);
 registerFileUploadRoutes(instanceRoutes);
