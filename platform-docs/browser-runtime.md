@@ -38,6 +38,27 @@ Membership is re-evaluated while the runner is up, not fixed at startup. `pags u
 
 The only 409 is same-hostname: a second runner on the same node is rejected unless `--force`. Several *different* machines can each run `pags up` for the same instance concurrently, and routing follows whichever relay socket is actually live.
 
+## Foreground and background (`pags up --background`)
+
+`pags up` is a **foreground** process by default, and stays that way. Its window is where you see what it is doing (`l` shows its log), and closing it, or pressing `q`, stops the runner. Leave it open the way you would a dev server.
+
+`pags up --background` (CLI ≥ 0.4.125, #499) is the **opt-in** alternative. Use it when you want the runner to keep serving your agents with no terminal open. It never becomes the default.
+
+- **What it serves is exactly what a foreground `pags up` here would serve.** The discovery, the "Runs on" pin rule, `--instance`, `--headless` and `--force` all behave the same. It also watches for newly eligible agents unless it was started with `--instance`. `pags status` lists the agents it attached at start.
+- **There is one runner per account per machine, in either mode.** The background runner holds the same single-instance lock as a foreground one. Starting a second one, in either mode, is refused with who holds it. `pags up --replace` takes over from either mode gracefully.
+- **It reports success only once the runner is actually up.** It waits until the detached runner holds the lock and answers its own health check. If the runner stops first, you get the tail of its log and exit code 1.
+
+| Command | What it does |
+| --- | --- |
+| `pags up --background` | Start the runner detached. The terminal can then be closed. |
+| `pags status` | Whether a runner is running here for your account, its pid, uptime, CLI version and launch kind (`background`, terminal, tmux, service). For a background runner it also shows what it serves and its log path. Exit code 0 when running, 1 when not. |
+| `pags logs [-n N] [-f]` | The background runner's log, `~/.config/proagentstore/logs/runner-<hash>.log`. A log over 5 MB is moved to `.1` at the next start. |
+| `pags down` | Stop it. It drains running work first; `--now` stops it immediately. |
+
+**What it does NOT do.** It does not start at login or boot, and it does not restart after a crash. It runs until `pags down`, a crash, logout or a reboot. A runner that drives your real browser profile and spawns coding CLIs with your shell's credentials should come back by itself only if you set that up deliberately. A login item (a per-user LaunchAgent) is a separate step that has not been built yet. A remote update (`runner_update`) does restart it, on the new release, with the same flags.
+
+The console's machine view receives the launch kind with each heartbeat, so a background runner reports itself as `background` rather than as a terminal. Showing that on the Terminals page is a follow-up.
+
 ## Brain vs Hands
 
 The workflow brain runs in ProAgentStore. The hands run locally.

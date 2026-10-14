@@ -13,6 +13,7 @@ import { mcpCommand } from "./commands/mcp.js";
 import { remoteAuthCommand } from "./commands/remote-auth.js";
 import { publishCommand } from "./commands/publish.js";
 import { runnerCommand } from "./commands/runner.js";
+import { logsCommand, statusCommand } from "./commands/status.js";
 import { downCommand, upCommand } from "./commands/up.js";
 import { writeError } from "./output.js";
 
@@ -33,6 +34,8 @@ program.addCommand(logoutCommand);
 program.addCommand(whoamiCommand);
 program.addCommand(upCommand);
 program.addCommand(downCommand);
+program.addCommand(statusCommand);
+program.addCommand(logsCommand);
 program.addCommand(initCommand);
 program.addCommand(checkCommand);
 program.addCommand(publishCommand);

@@ -115,7 +115,7 @@ export function parseResourceSample(raw: unknown): RunnerResourceSample | null {
 			// typed like everything else here; absent from an older CLI, which the detector handles.
 			const rsid = typeof p.rsid === "string" && p.rsid.trim() ? p.rsid.trim().slice(0, 64) : undefined;
 			const pid = finite(p.pid, 2 ** 31);
-			const launch = typeof p.launch === "string" && /^(tty|tmux|service|headless)$/.test(p.launch) ? p.launch : undefined;
+			const launch = typeof p.launch === "string" && /^(tty|tmux|service|headless|background)$/.test(p.launch) ? p.launch : undefined;
 			sample.runner = { startedAt, uptimeSec, starts24h, relayReconnects, ...(rsid ? { rsid } : {}), ...(pid ? { pid } : {}), ...(launch ? { launch } : {}) };
 		}
 	}

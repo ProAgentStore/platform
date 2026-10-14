@@ -73,6 +73,7 @@ export const DUPLICATE_WINDOW_MS = 90_000;
 const launchWhere = (p: DuplicateRunner): string => {
 	if (p.launch === "tmux") return "a tmux session";
 	if (p.launch === "service") return "a background service";
+	if (p.launch === "background") return "the background (`pags up --background`)";
 	if (p.launch === "headless") return "headless";
 	if (p.launch === "tty") return "a terminal";
 	return "";

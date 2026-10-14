@@ -27,6 +27,13 @@ describe("parseResourceSample — the runner is a system boundary", () => {
 	])("rejects %s", (_why, raw) => {
 		expect(parseResourceSample(raw)).toBeNull();
 	});
+
+	it("keeps how the runner was launched — including `pags up --background` (#499) — and drops a kind it does not know", () => {
+		const runner = (launch: string) => ({ startedAt: 1, uptimeSec: 1, starts24h: 1, relayReconnects: 0, launch });
+		expect(parseResourceSample(sample({ runner: runner("background") }))?.runner?.launch).toBe("background");
+		expect(parseResourceSample(sample({ runner: runner("tty") }))?.runner?.launch).toBe("tty");
+		expect(parseResourceSample(sample({ runner: runner("daemon") }))?.runner?.launch).toBeUndefined();
+	});
 });
 
 describe("resourcesView — what list_runner_nodes and coding_diagnostics report", () => {

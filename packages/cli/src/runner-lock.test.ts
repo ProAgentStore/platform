@@ -120,6 +120,14 @@ describe("what a refused `pags up` says", () => {
 		expect(lines).not.toMatch(/pags up --replace/);
 	});
 
+	it("a background runner (#499): names its log and how to stop it, and still offers a graceful --replace", () => {
+		const lock = LOCK({ launch: "background", launchDetail: "/tmp/runner.log" });
+		expect(holderWhere(lock)).toBe("the background (`pags up --background`, log /tmp/runner.log)");
+		const lines = holderMessage(lock, "live").join("\n");
+		expect(lines).toMatch(/pags down +— stop it/);
+		expect(lines).toMatch(/pags up --replace/);
+	});
+
 	it("says so when the holder is not answering, instead of implying it is gone", () => {
 		expect(holderMessage(LOCK(), "unresponsive").join("\n")).toMatch(/NOT answering its health check/);
 		expect(holderMessage(LOCK(), "unknown").join("\n")).toMatch(/could not be read/);
@@ -149,6 +157,8 @@ describe("how the launch is recognised", () => {
 		[{ TMUX: "/tmp/tmux-501/pags,1234,0", TMUX_PANE: "%7" }, true, "tmux", "%7"],
 		[{}, false, "headless", ""],
 		[{ TERM_SESSION_ID: "w0t1p0" }, true, "tty", "w0t1p0"],
+		// #499: detached, so no TTY — but it is the owner's background runner, not "headless".
+		[{ PAGS_BACKGROUND: "1", PAGS_BACKGROUND_LOG: "/home/x/.config/proagentstore/logs/runner-abc.log" }, false, "background", "/home/x/.config/proagentstore/logs/runner-abc.log"],
 	] as const)("%o → %s", (env, isTty, launch, detail) => {
 		expect(detectLaunch(env as NodeJS.ProcessEnv, isTty)).toEqual({ launch, detail });
 	});

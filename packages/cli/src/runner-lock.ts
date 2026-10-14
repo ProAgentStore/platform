@@ -52,7 +52,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 /** Where a runner process was started from — it decides what `--replace` may do to it. */
-export type RunnerLaunch = "tty" | "tmux" | "service" | "headless";
+export type RunnerLaunch = "tty" | "tmux" | "service" | "headless" | "background";
 
 /** The lock's shape. `v` is first so a future version can be recognised and refused politely. */
 export interface RunnerLockFile {
@@ -157,6 +157,7 @@ export const isTakeable = (verdict: HolderVerdict): boolean => verdict === "dead
 export function holderWhere(lock: RunnerLockFile): string {
 	if (lock.launch === "tmux") return `tmux session ${lock.launchDetail || "?"}`;
 	if (lock.launch === "service") return "a background service (launchd/systemd)";
+	if (lock.launch === "background") return `the background (\`pags up --background\`${lock.launchDetail ? `, log ${lock.launchDetail}` : ""})`;
 	if (lock.launch === "headless") return "headless";
 	return lock.launchDetail ? `terminal ${lock.launchDetail}` : "a terminal";
 }
@@ -179,6 +180,7 @@ export function holderMessage(lock: RunnerLockFile, verdict: HolderVerdict): str
 	}
 	lines.push("", "  What you can do:");
 	if (lock.launch === "tmux" && lock.launchDetail) lines.push(`    tmux attach -t ${lock.launchDetail}   — go to the one that is running`);
+	if (lock.launch === "background") lines.push(`    pags down                        — stop it (it has no window to close)`);
 	lines.push(
 		`    pags status                      — what it is doing, and anything else running here`,
 		lock.launch === "service"
@@ -191,6 +193,8 @@ export function holderMessage(lock: RunnerLockFile, verdict: HolderVerdict): str
 /** Where the runner was launched from, which is what `--replace` is allowed to act on. */
 export function detectLaunch(env: NodeJS.ProcessEnv = process.env, isTty = Boolean(process.stdout.isTTY)): { launch: RunnerLaunch; detail: string } {
 	if (env.PAGS_SERVICE === "1") return { launch: "service", detail: env.PAGS_SERVICE_NAME?.trim() || "" };
+	// `pags up --background` (#499): detached, so it has no TTY — but it is not "headless" either.
+	if (env.PAGS_BACKGROUND === "1") return { launch: "background", detail: env.PAGS_BACKGROUND_LOG?.trim() || "" };
 	if (env.TMUX) return { launch: "tmux", detail: env.TMUX_PANE?.trim() || env.TMUX.split(",")[0]?.split("/").pop() || "" };
 	if (!isTty) return { launch: "headless", detail: "" };
 	return { launch: "tty", detail: env.TERM_SESSION_ID?.trim() || env.WINDOWID?.trim() || "" };

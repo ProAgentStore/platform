@@ -90,5 +90,7 @@ describe("detecting a duplicate runner (#896)", () => {
 		// No pid (an older CLI): the runner id stands in, shortened.
 		expect(describeProcess({ key: "k", rsid: "abcdef12-0000", pid: null, launch: null, startedAt: "x", instanceIds: [] })).toBe("runner abcdef12, started x");
 		expect(describeProcess({ key: "k", rsid: null, pid: null, launch: null, startedAt: "x", instanceIds: [] })).toBe("an unidentified runner, started x");
+		// #499: a background runner has no window to go to — the reader is told where it really is.
+		expect(describeProcess({ key: "k", rsid: "abcdef12-0000", pid: 4121, launch: "background", startedAt: "x", instanceIds: [] })).toBe("pid 4121, in the background (`pags up --background`), started x");
 	});
 });

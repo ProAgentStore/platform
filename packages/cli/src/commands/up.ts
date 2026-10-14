@@ -12,6 +12,8 @@ import { processRestartDeps, restartPagsUp } from "./up-restart.js";
 import { restartUpArgs, RUNNER_RESTART_EXIT_CODE, SUPERVISED_ENV, SUPERVISOR_RESTARTS } from "./runner/self-update.js";
 import { holderMessage, inspectHolder, isTakeable, lockPath, readLock, releaseLock } from "../runner-lock.js";
 import { replaceHolder } from "../runner-replace.js";
+import { startInBackground } from "./up-background.js";
+import { BACKGROUND_RESTART_ENV, waitUntilTakeable } from "../background.js";
 
 const API_BASE = "https://api.proagentstore.online";
 const CLI_VERSION = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
@@ -49,7 +51,10 @@ export const upCommand = new Command("up")
 	// one. Folding them together would make one flag mean two unrelated takeovers.
 	.option("--replace", "Stop the `pags up` already running here for this account, then take over")
 	.option("--now", "With --replace: stop it even though work is running on it (that work is lost)")
-	.action(async (opts: { headless?: boolean; instance?: string; force?: boolean; replace?: boolean; now?: boolean }) => {
+	// #499: opt-in, never the default. Same discovery, pins and lock as the foreground runner; the
+	// runner then runs detached and logs to a file. Stop it with `pags down`, see it with `pags status`.
+	.option("--background", "Run the runner in the background, with no terminal open (stop it with `pags down`)")
+	.action(async (opts: { headless?: boolean; instance?: string; force?: boolean; replace?: boolean; now?: boolean; background?: boolean }) => {
 		const session = requireSession();
 
 		const state: TuiState = {
@@ -169,6 +174,9 @@ export const upCommand = new Command("up")
 		// child, which owns the sockets; this checks it FIRST so a second start can refuse with who
 		// holds it rather than killing them. `--replace` asks that holder to stop, gracefully.
 		const lockFile = lockPath(session.user.login);
+		// A background restart after a remote update is started by the old runner as it leaves
+		// (#499): give that one a bounded moment to release the lock before judging it.
+		if (opts.background && process.env[BACKGROUND_RESTART_ENV] === "1") await waitUntilTakeable(() => inspectHolder(lockFile));
 		const held = await inspectHolder(lockFile);
 		if (held.lock && !isTakeable(held.verdict)) {
 			if (!opts.replace) {
@@ -199,6 +207,11 @@ export const upCommand = new Command("up")
 		// (#229). NOT for a scoped run: `--instance X` means exactly that agent, and quietly
 		// fanning back out to the whole account is the bug the restart path already guards.
 		if (!opts.instance) args.push("--watch-instances");
+
+		if (opts.background) {
+			const code = await startInBackground({ session, opts, runnerArgs: args, instances: state.instances, lockFile, watching: !opts.instance });
+			process.exit(code);
+		}
 
 		// Supervised (#859): the child may exit asking for a restart after `runner_update` installed a new
 		// CLI. {@link SUPERVISOR_RESTARTS} tells it this `pags up` restarts ITSELF on the new release (#860).
