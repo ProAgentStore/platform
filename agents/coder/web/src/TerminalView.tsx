@@ -1,7 +1,6 @@
 import { type RefObject } from "react";
 import { Send } from "lucide-react";
-import { renderTerminal } from "./render-terminal";
-import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
+import { TerminalPane } from "@proagentstore/blocks";
 
 /** Raw tmux pane view: a send-to-Engine input + the colorized, auto-scrolling pane. */
 export default function TerminalView({
@@ -57,9 +56,8 @@ export default function TerminalView({
 					{loadingOlder ? "Loading earlier output…" : "↑ Load earlier output"}
 				</button>
 			)}
-			<SafeHtmlView<HTMLPreElement>
-				as="pre"
-				ref={termRef}
+			<TerminalPane
+				paneRef={termRef}
 				className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden bg-[#0b0b0f] text-xs leading-snug p-3 m-0 select-text"
 				style={{ wordBreak: "break-word", whiteSpace: "pre-wrap" }}
 				onScroll={() => {
@@ -68,7 +66,7 @@ export default function TerminalView({
 					const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
 					setTermAutoScroll(atBottom);
 				}}
-				html={renderTerminal(terminalText)}
+				text={terminalText}
 			/>
 			{!termAutoScroll && (
 				<button

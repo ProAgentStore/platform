@@ -13,6 +13,7 @@ import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { CheckCircle2, XCircle, Loader2, Clock, GitBranch, ExternalLink, HelpCircle, ArrowLeft, ChevronRight, Settings2 } from "lucide-react";
 import Button from "./Button";
+import { timeAgo } from "@proagentstore/blocks";
 
 // ── Shared types mirrored from coder-web (no cross-package import) ──────────
 
@@ -60,19 +61,6 @@ function StatusBadge({ state }: { state: BuildState }) {
 		default:
 			return <span className={`${base} bg-line/60 text-muted`}><HelpCircle size={12} /> Unknown</span>;
 	}
-}
-
-function timeAgo(iso?: string): string {
-	if (!iso) return "";
-	const then = Date.parse(iso);
-	if (Number.isNaN(then)) return "";
-	const s = Math.max(0, Math.floor((Date.now() - then) / 1000));
-	if (s < 60) return "just now";
-	const m = Math.floor(s / 60);
-	if (m < 60) return `${m}m ago`;
-	const h = Math.floor(m / 60);
-	if (h < 24) return `${h}h ago`;
-	return `${Math.floor(h / 24)}d ago`;
 }
 
 function RunMeta({ run }: { run: BuildRun }) {

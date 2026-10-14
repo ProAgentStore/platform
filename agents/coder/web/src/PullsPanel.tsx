@@ -11,6 +11,7 @@ import {
 } from "./pulls-view";
 import type { CodingRepo } from "./types";
 import { repoLinkTitle } from "./repo-title";
+import { timeAgo } from "@proagentstore/blocks";
 import {
 	Bot,
 	CheckCircle2,
@@ -86,20 +87,6 @@ function AgentBadge({ pull }: { pull: PullRow }) {
 			<Bot size={11} /> {label}
 		</span>
 	);
-}
-
-/** Short relative timestamp. Same shape as the Builds panel's — one clock across the tab. */
-function timeAgo(iso?: string): string {
-	if (!iso) return "";
-	const then = Date.parse(iso);
-	if (Number.isNaN(then)) return "";
-	const s = Math.max(0, Math.floor((Date.now() - then) / 1000));
-	if (s < 60) return "just now";
-	const m = Math.floor(s / 60);
-	if (m < 60) return `${m}m ago`;
-	const h = Math.floor(m / 60);
-	if (h < 24) return `${h}h ago`;
-	return `${Math.floor(h / 24)}d ago`;
 }
 
 /**

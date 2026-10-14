@@ -10,6 +10,7 @@
 		"typecheck": "pnpm --filter @proagentstore/sdk build && tsc --noEmit"
 	},
 	"dependencies": {
+		"@proagentstore/blocks": "workspace:*",
 		"@proagentstore/coder-web": "workspace:*",
 		"@proagentstore/sdk": "workspace:*",
 		"lucide-react": "^1.21.0",

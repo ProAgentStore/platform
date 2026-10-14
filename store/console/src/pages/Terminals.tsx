@@ -3,8 +3,7 @@ import Page from "../components/Page";
 import Button from "../components/Button";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
-import { renderTerminal, terminalTail } from "@proagentstore/sdk/ui";
-import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
+import { TerminalPane } from "@proagentstore/blocks";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { terminalsBusy } from "../lib/pollBusy";
 import { behindLine, type MachineResources, resourceFacts, staleSample } from "../lib/machineHealth";
@@ -293,11 +292,11 @@ export default function Terminals() {
 											{s.terminalTail && (
 												// Colorized with the SAME renderer the Coder uses (#187) — this pane used to be
 												// a plain uncolorized <pre> purely because the colorizer lived inside one agent's
-												// package. The renderer escapes every byte; see terminal-render.ts.
-												<SafeHtmlView
-													as="pre"
+												// package. The renderer escapes every byte; see terminal-render.ts. Now the shared block (#187).
+												<TerminalPane
 													className="mt-1.5 text-2xs leading-snug bg-black/30 rounded-md px-2 py-1.5 overflow-hidden max-h-16 whitespace-pre-wrap break-words font-mono"
-													html={renderTerminal(terminalTail(s.terminalTail, 400))}
+													text={s.terminalTail}
+													tailChars={400}
 												/>
 											)}
 										</button>

@@ -192,7 +192,10 @@ function sweep(root: string, find = findHandAuthoredControls) {
 // select) rather than introducing a different control idiom on one card type.
 // 43 → 45 at #1062: JOB_APPLY is supported again, so the apply board's Retry (Kanban card and List
 // row) is back as the console caller of `POST /apply`.
-const PINNED = { "store/console": 45, "store/admin": 4, "agents/coder/web": 23 };
+// 45 → 44 (console) and 23 → 22 (coder/web) at #187: the per-message copy button, one copy in
+// each tree, became ONE block in packages/blocks — a move, not a migration to <Button>, so it is
+// counted there (1) rather than disappearing from the sweep.
+const PINNED = { "store/console": 44, "store/admin": 4, "agents/coder/web": 22, "packages/blocks": 1 };
 
 describe.each(TREES)("%s holds its count of buttons that draw their own box", (name, root) => {
 	/**
@@ -237,7 +240,7 @@ describe.each(TREES)("%s holds its count of buttons that draw their own box", (n
 // −1 for #727: the Repo tab's "Add a repository" card moved to the Settings tab, and the panel it
 // became (components/RepoConnectPanel.tsx) is a <Card> — the hand-written `p-5` shape it used to
 // carry is gone rather than relocated, so the ground is recorded here instead of left as headroom.
-const PINNED_CARDS = { "store/console": 33, "store/admin": 3, "agents/coder/web": 9 };
+const PINNED_CARDS = { "store/console": 33, "store/admin": 3, "agents/coder/web": 9, "packages/blocks": 0 };
 
 describe.each(TREES)("%s holds its count of hand-written cards", (name, root) => {
 	it("is exactly at its pin", () => {

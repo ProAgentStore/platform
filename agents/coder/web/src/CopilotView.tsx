@@ -1,12 +1,13 @@
 import { type KeyboardEvent, type RefObject, useState, useEffect, useRef } from "react";
 import { renderMd, formatDateTime, classifyMessage, toolCallSummary, messageKey as sdkMessageKey } from "@proagentstore/sdk/ui";
 import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
+import { CopyButton } from "@proagentstore/blocks";
 import { resolveComposer, resolveVoiceStatus } from "@proagentstore/sdk/hooks";
 import { API, getToken } from "@proagentstore/sdk/client";
 import type { LoopPreset } from "./types";
 import { LOOP_WATCH_BADGE_CLASS } from "./coding-loop-run";
 import BusyHoldNotice from "./BusyHoldNotice";
-import { Trash2, Copy, Check, Repeat, Square, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, Wrench, Settings, Loader2, Pencil, CircleDot, ArrowDown, X } from "lucide-react";
+import { Trash2, Repeat, Square, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, Wrench, Settings, Loader2, Pencil, CircleDot, ArrowDown, X } from "lucide-react";
 import Button from "./Button";
 
 /** Double-tap a message: replay its SAVED voice recording (voice turns), else speak
@@ -36,35 +37,6 @@ type Voice = ReturnType<typeof import("@proagentstore/sdk/hooks").useVoice>;
 type Loop = ReturnType<typeof import("./use-coding-loop").useCodingLoop>;
 type Message = { role: string; content: string; time?: string; audioKey?: string };
 
-/**
- * Per-message copy button — top-right of a bubble, subtle, 16px. Always visible on mobile
- * (no hover there); hover-revealed from `sm` up. Shows a green check for 1.5s after copying.
- */
-function CopyButton({ text }: { text: string }) {
-	const [copied, setCopied] = useState(false);
-	return (
-		<button
-			type="button"
-			onClick={(e) => {
-				e.stopPropagation();
-				navigator.clipboard.writeText(text).then(() => {
-					setCopied(true);
-					setTimeout(() => setCopied(false), 1500);
-				}).catch(() => {});
-			}}
-			onDoubleClick={(e) => e.stopPropagation()}
-			title={copied ? "Copied" : "Copy"}
-			aria-label="Copy message"
-			// `tap-target` closes a live #389 omission: this was a 24×24 box on the surface #389
-			// swept everywhere BUT this package, and the play button in the same header already has
-			// it. It adds 44px of vertical reach via an ::after, so the button's own box — which is
-			// what the #445 overlap is measured against — is unchanged.
-			className="tap-target absolute top-1 right-1.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 p-1 rounded bg-black/40 text-muted hover:text-accent transition-opacity"
-		>
-			{copied ? <Check size={16} className="text-success" /> : <Copy size={16} />}
-		</button>
-	);
-}
 
 /** Co-pilot view: voice + loop controls, the instruction input, and the message thread. */
 export default function CopilotView({
@@ -411,7 +383,7 @@ export default function CopilotView({
 									: "bg-panel border border-line self-start rounded-bl-sm"
 							}`}
 						>
-							<CopyButton text={m.content} />
+							<CopyButton text={m.content} reveal="hover-from-sm" />
 							{m.role === "user" && <div className="text-2xs opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3 pr-12 sm:pr-0"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(instanceId, m, voice.speak); }} onDoubleClick={(e) => e.stopPropagation()} title="Play your recording" className="tap-target min-w-6 inline-flex justify-center opacity-80 hover:opacity-100"><Volume2 size={11} /></button>}</span>{m.time && <span data-msg-stamp className="font-normal opacity-80 text-right">{formatDateTime(m.time)}</span>}</div>}
 							{m.role === "assistant" && <div className="text-2xs text-accent mb-0.5 font-bold flex items-center justify-between gap-3 pr-12 sm:pr-0"><span className="flex items-center gap-1">Co-pilot<button type="button" onClick={(e) => { e.stopPropagation(); playMessage(instanceId, m, voice.speak); }} onDoubleClick={(e) => e.stopPropagation()} title="Play this message" className="tap-target min-w-6 inline-flex justify-center opacity-70 hover:opacity-100"><Volume2 size={11} /></button></span>{m.time && <span data-msg-stamp className="font-normal text-muted text-right">{formatDateTime(m.time)}</span>}</div>}
 							{m.role === "assistant" ? (

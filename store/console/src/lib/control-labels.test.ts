@@ -63,6 +63,13 @@ function sweep(root: string, pick: (source: string) => { line: number; excerpt: 
 	return tsxFiles(root).flatMap((file) => pick(readFileSync(file, "utf8")).map((c) => ({ file, line: c.line, excerpt: c.excerpt })));
 }
 
+/**
+ * How many form controls a sweep must find before its green means anything. The three original
+ * trees hold dozens; `packages/blocks` (#187) is new and holds none yet — its first blocks are a
+ * button and a pane — so it is swept for the day it gains one, and its floor rises then.
+ */
+const MIN_CONTROLS: Record<(typeof TREES)[number][0], number> = { "store/console": 10, "store/admin": 10, "agents/coder/web": 10, "packages/blocks": -1 };
+
 describe.each(TREES)("%s", (name, root) => {
 	/**
 	 * ADR 0002 G1/G2 — the denominator. The three assertions below are emptiness assertions, and
@@ -80,7 +87,7 @@ describe.each(TREES)("%s", (name, root) => {
 		const { denominator, files } = assertMeasurable(name, root);
 		const controls = files.reduce((n, f) => n + findControls(readFileSync(f, "utf8")).length, 0);
 		console.log(`  ↳ ${denominator}, ${controls} named-or-not form controls`);
-		expect(controls, `${name}: ${controls} form controls found — an a11y sweep over no controls is green and means nothing.`).toBeGreaterThan(10);
+		expect(controls, `${name}: ${controls} form controls found — an a11y sweep over no controls is green and means nothing.`).toBeGreaterThan(MIN_CONTROLS[name]);
 	});
 
 	it("has no form control with no name at all", () => {

@@ -41,7 +41,7 @@ import { lineOf, scanTags } from "./jsx-tags.js";
 
 const HERE = resolve(__dirname);
 
-export type TreeName = "store/console" | "store/admin" | "agents/coder/web";
+export type TreeName = "store/console" | "store/admin" | "agents/coder/web" | "packages/blocks";
 
 /**
  * The console tree, the operator portal, and the Coder UI package the console renders inside.
@@ -54,6 +54,9 @@ export const TREES = [
 	["store/console", resolve(HERE, "..")],
 	["store/admin", resolve(HERE, "../../../admin/src")],
 	["agents/coder/web", resolve(HERE, "../../../../agents/coder/web/src")],
+	// The first-party blocks (#187) render inside the console too, and code moved there must not
+	// leave these guards' sight by moving.
+	["packages/blocks", resolve(HERE, "../../../../packages/blocks/src")],
 ] as const satisfies readonly (readonly [TreeName, string])[];
 
 export function tsxFiles(dir: string, out: string[] = []): string[] {
@@ -75,6 +78,7 @@ const FLOORS: Record<TreeName, { files: number; tags: number; measured: string }
 	"store/console": { files: 55, tags: 4000, measured: "69 files / 5473 tags at cfe8ff7" },
 	"store/admin": { files: 20, tags: 1400, measured: "27 files / 1979 tags at cfe8ff7" },
 	"agents/coder/web": { files: 8, tags: 700, measured: "11 files / 967 tags at cfe8ff7" },
+	"packages/blocks": { files: 2, tags: 3, measured: "2 files at #187's first slice (CopyButton, TerminalPane)" },
 };
 
 /**

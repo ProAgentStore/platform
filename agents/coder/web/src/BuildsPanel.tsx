@@ -4,6 +4,7 @@ import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { resolveBuildsView, buildState, anyBuildInFlight, type BuildState } from "./builds-view";
 import { repoTitle } from "./repo-title";
 import { CheckCircle2, XCircle, Loader2, Clock, GitBranch, ExternalLink, HelpCircle, ArrowLeft, ChevronRight } from "lucide-react";
+import { timeAgo } from "@proagentstore/blocks";
 
 /** One GitHub Actions run (from …/coding/builds → CODER-003, or …/deployments for history). */
 interface DeploymentRun {
@@ -40,20 +41,6 @@ function StatusBadge({ state }: { state: BuildState }) {
 		default:
 			return <span className={`${base} bg-line/60 text-muted`}><HelpCircle size={12} /> Unknown</span>;
 	}
-}
-
-/** Short relative timestamp, e.g. "3m ago", "2h ago", "5d ago". */
-function timeAgo(iso?: string): string {
-	if (!iso) return "";
-	const then = Date.parse(iso);
-	if (Number.isNaN(then)) return "";
-	const s = Math.max(0, Math.floor((Date.now() - then) / 1000));
-	if (s < 60) return "just now";
-	const m = Math.floor(s / 60);
-	if (m < 60) return `${m}m ago`;
-	const h = Math.floor(m / 60);
-	if (h < 24) return `${h}h ago`;
-	return `${Math.floor(h / 24)}d ago`;
 }
 
 /** The identity line of a run: branch@sha · workflow #N. Shared by both views. */

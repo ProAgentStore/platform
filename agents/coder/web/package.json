@@ -19,6 +19,7 @@
 		"react-router-dom": ">=7"
 	},
 	"dependencies": {
+		"@proagentstore/blocks": "workspace:*",
 		"@proagentstore/sdk": "workspace:*"
 	},
 	"devDependencies": {

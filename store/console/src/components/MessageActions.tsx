@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy, Flag, MoreVertical, Trash2 } from "lucide-react";
+import { CopyButton } from "@proagentstore/blocks";
 import DeleteTurnButton from "./DeleteTurnButton";
 import { FeedbackButton, FeedbackComposer } from "./FeedbackButton";
 import { deleteTurnPrompt, turnEffectSummary, STOP_RUN_PROMPT } from "../lib/turnEffects";
@@ -61,7 +62,7 @@ export default function MessageActions({
 		<>
 			{/* ≥ sm — unchanged: three hover-revealed icons, `pr-0` on the header. */}
 			<span className="hidden sm:contents">
-				<CopyButton text={message.content} />
+				<CopyButton text={message.content} reveal="hover" />
 				<DeleteTurnButton
 					instanceId={instanceId}
 					message={message}
@@ -86,40 +87,6 @@ export default function MessageActions({
 				/>
 			</span>
 		</>
-	);
-}
-
-/**
- * Per-message copy button — top-right of a bubble, subtle, 16px, hover-revealed. Shows a green
- * check for 1.5s after copying. Lived in InstanceDetail until #514 gave it a sibling worth
- * composing with.
- */
-export function CopyButton({ text }: { text: string }) {
-	const [copied, setCopied] = useState(false);
-	return (
-		<button
-			type="button"
-			data-msg-action="copy"
-			onClick={(e) => {
-				e.stopPropagation();
-				navigator.clipboard
-					.writeText(text)
-					.then(() => {
-						setCopied(true);
-						setTimeout(() => setCopied(false), 1500);
-					})
-					.catch(() => {});
-			}}
-			onDoubleClick={(e) => e.stopPropagation()}
-			title={copied ? "Copied" : "Copy"}
-			aria-label="Copy message"
-			// 24×24 clears WCAG 2.5.8; `tap-target` adds 44px of vertical reach on top, which is
-			// the axis a thumb misses on a scrolling thread (#389). See DeleteTurnButton for why
-			// the expansion is not horizontal.
-			className="tap-target absolute top-1 right-1.5 opacity-0 group-hover:opacity-100 p-1 rounded bg-black/40 text-muted hover:text-accent transition-opacity"
-		>
-			{copied ? <Check size={16} className="text-success" /> : <Copy size={16} />}
-		</button>
 	);
 }
 

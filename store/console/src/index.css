@@ -9,6 +9,8 @@
  * kept working. Explicitly scan the package source so every class it uses ships.
  */
 @source "../../../agents/coder/web/src";
+/* The first-party blocks (#187) — shared by this console and the Coder UI, same reason. */
+@source "../../../packages/blocks/src";
 
 /* ── Design tokens ── */
 @theme {
