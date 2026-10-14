@@ -9179,7 +9179,7 @@ paths:
                 runner_instance_id: { type: string }
                 note: { type: string }
                 defer_until: { type: string }
-                answers: { type: array, items: { type: object, properties: { question: { type: string }, answer: { type: string } } } }
+                answers: { type: array, maxItems: 20, description: "resume: for that run only, never stored. retry_tailoring (#1066): saved to the owner's Profile as reusable custom answers (never into a standard column) and given to this and every later Tailor run as a citable owner_answers source. An empty answer is skipped; an answer over 500 characters is refused with 400.", items: { type: object, properties: { question: { type: string, maxLength: 300 }, answer: { type: string, maxLength: 500 } } } }
       responses:
         "200": { description: "`{ item, result }` — the item as it now stands.", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         "400": { $ref: "#/components/responses/BadRequest" }

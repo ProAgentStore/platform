@@ -20,7 +20,7 @@
 import { mergeEnv } from "../coding/engine-env.js";
 import { resolveEngineAuth } from "../coding/engine-auth.js";
 import { finalText as finalTextFromEngine, missingLogin } from "../local-browser/engine.js";
-import type { LocalArtifactAuthMode, LocalArtifactEngine, LocalArtifactEngineAuth, LocalArtifactLead, LocalArtifactParseAttempt, LocalArtifactSourceRole } from "./contract.js";
+import { OWNER_ANSWERS_ROLE, type LocalArtifactAuthMode, type LocalArtifactEngine, type LocalArtifactEngineAuth, type LocalArtifactLead, type LocalArtifactOwnerAnswer, type LocalArtifactParseAttempt, type LocalArtifactPromptRole } from "./contract.js";
 
 export { missingLogin };
 
@@ -60,11 +60,16 @@ export function buildArtifactEngineSpec(input: { engine: LocalArtifactEngine; au
 }
 
 export interface SourceText {
-	role: LocalArtifactSourceRole;
+	role: LocalArtifactPromptRole;
 	text: string;
 }
 
 /** The brief. The rules are stated, but the checks in `checkDraft` are what enforce them. */
+/** The owner's saved answers as one source text: a question and its answer per pair (#1066). */
+export function ownerAnswersText(answers: readonly LocalArtifactOwnerAnswer[]): string {
+	return answers.map((a) => `Q: ${a.question}\nA: ${a.answer}`).join("\n\n");
+}
+
 export function tailorPrompt(lead: LocalArtifactLead, sources: readonly SourceText[]): string {
 	const l = lead.lead;
 	const job = [
@@ -92,6 +97,9 @@ export function tailorPrompt(lead: LocalArtifactLead, sources: readonly SourceTe
 		'- For EVERY factual claim about the owner in either document, add an entry to "claims" with the claim, the source role it comes from, and a short VERBATIM quote copied exactly from that source.',
 		"- Every year, email address and phone number you write must appear in the sources.",
 		"- Reword and reorder to fit the job; do not add what the sources do not say. Leave out what does not fit.",
+		...(sources.some((x) => x.role === OWNER_ANSWERS_ROLE)
+			? [`- <source role="${OWNER_ANSWERS_ROLE}"> holds the owner's own answers to questions asked on earlier applications. They are the owner's facts and preferences: use them, cite them like any source, and do not ask again a question they already answer.`]
+			: []),
 		'- If something the application needs is missing or uncertain, do not guess: answer {"status":"needs_human","questions":["…"]} instead.',
 		"",
 		"Answer shape when you can do it:",
@@ -197,7 +205,7 @@ export function checkDraft(parsed: ParsedDraft, sources: readonly SourceText[]):
 	for (const raw of claims) {
 		const c = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
 		const quote = typeof c.quote === "string" ? normalize(c.quote) : "";
-		const src = typeof c.source === "string" ? byRole.get(c.source as LocalArtifactSourceRole) : undefined;
+		const src = typeof c.source === "string" ? byRole.get(c.source as LocalArtifactPromptRole) : undefined;
 		if (quote.length >= 3 && src?.includes(quote)) continue;
 		const claim = typeof c.text === "string" ? c.text.trim() : "";
 		flag(`Confirm or correct: “${claim.slice(0, 200) || "(an unnamed claim)"}” — no matching text was found in your ${typeof c.source === "string" ? c.source : "sources"}.`);

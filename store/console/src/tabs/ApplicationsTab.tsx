@@ -250,7 +250,9 @@ function Detail({ instanceId, item, connections, onChanged }: { instanceId: stri
 		setMsg("");
 		try {
 			const given = questions.map((q) => ({ question: q, answer: (answers[q] ?? "").trim() })).filter((a) => a.answer);
-			const out = await api<ApplicationActionResponse>(`/v1/instances/${instanceId}/application-queue/actions`, { method: "POST", body: JSON.stringify(actionBody(item, action, { answers: action === "resume" ? given : undefined })) });
+			// `resume` answers serve that run only; `retry_tailoring` answers are saved to the owner's
+			// Profile and read by every later Tailor run (#1066).
+			const out = await api<ApplicationActionResponse>(`/v1/instances/${instanceId}/application-queue/actions`, { method: "POST", body: JSON.stringify(actionBody(item, action, { answers: action === "resume" || action === "retry_tailoring" ? given : undefined })) });
 			setMsg(`${actionLabel(action, item.status)}: now ${QUEUE_STATUS_LABEL[out.item.status].label}.`);
 			onChanged();
 		} catch (e) {
@@ -384,11 +386,14 @@ function Detail({ instanceId, item, connections, onChanged }: { instanceId: stri
 					{questions.map((q) => (
 						<div key={q} className="mt-1">
 							<p className="text-xs">{q}</p>
-							{item.actions.includes("resume") && (
+							{(item.actions.includes("resume") || item.actions.includes("retry_tailoring")) && (
 								<input aria-label={q} value={answers[q] ?? ""} onChange={(e) => setAnswers({ ...answers, [q]: e.target.value })} className="w-full bg-paper border border-line rounded px-2 py-1 text-sm" placeholder="Your answer (leave empty to skip it)" />
 							)}
 						</div>
 					))}
+					{item.actions.includes("retry_tailoring") && questions.length > 0 && (
+						<p className="text-xs text-muted mt-1">Answers you give with Retry tailoring are saved to your Profile and used by future tailoring, so the same question is not asked again.</p>
+					)}
 				</div>
 			)}
 

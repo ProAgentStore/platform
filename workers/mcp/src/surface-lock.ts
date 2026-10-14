@@ -1159,4 +1159,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	// #1057 slice 1: one always-on read tool `native_preflight` (321 → 322, always-on 294 → 295), and
 	// `local_native` joins the `runtime` enum of create_agent / update_agent.
 	"0.1.130": "sha256:ce711149309ec24790a33acf9f4024d9165ca8843addf696dc2039322e0bf819",
+	// #1066: retry_application gains optional `answers` — retry_tailoring saves them for later Tailor runs.
+	"0.1.131": "sha256:90132172e68c42656e6975d12d85ce9b1d1de0a11a60de21daa8d0f5e8d853dd",
 };

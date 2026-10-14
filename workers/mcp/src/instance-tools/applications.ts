@@ -641,10 +641,13 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 		},
 	);
 
-	const retry = decision("retry_application", ["retry_fill", "retry_tailoring"], "A fresh run of that stage would start, under a new key. If this application holds an unspent approval (#981), that run is the one that spends it and may submit once.", runnerArg);
+	const retry = decision("retry_application", ["retry_fill", "retry_tailoring"], "A fresh run of that stage would start, under a new key. If this application holds an unspent approval (#981), that run is the one that spends it and may submit once.", {
+		...runnerArg,
+		answers: z.array(z.object({ question: z.string(), answer: z.string() })).optional().describe("retry_tailoring only: the owner's answers to the item's blocking questions. Saved to the owner's Profile and used by every later Tailor run (#1066)."),
+	});
 	server.tool(
 		"retry_application",
-		"Retry the stage that stopped. retry_fill: a fill that ended blocked, failed or awaiting_review — refused after any submit attempt, which needs checking on the employer's site instead. This is the path approve_application names when a filled application's browser session has already closed (#981): the fresh run spends the approval that is being held and may submit once, and without an approval it fills and stops for review again. retry_tailoring: tailoring that stopped.",
+		"Retry the stage that stopped. retry_fill: a fill that ended blocked, failed or awaiting_review — refused after any submit attempt, which needs checking on the employer's site instead. This is the path approve_application names when a filled application's browser session has already closed (#981): the fresh run spends the approval that is being held and may submit once, and without an approval it fills and stops for review again. retry_tailoring: tailoring that stopped — pass `answers` to the questions it stopped on; they are saved to the owner's Profile and every later Tailor run reads them, so the question is not asked again (#1066).",
 		retry.shape,
 		retry.handler,
 	);

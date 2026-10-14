@@ -61,7 +61,9 @@ import {
 	updateTailorRun,
 } from "./store.js";
 import { listUploadedTailorSourceSelections, materializeUploadedTailorSources } from "./uploaded-sources.js";
-import type { LocalArtifactUploadedSource } from "./contract.js";
+import { LOCAL_ARTIFACT_CAPS, type LocalArtifactOwnerAnswer, type LocalArtifactUploadedSource } from "./contract.js";
+import { getProfile, profileCustomAnswers, saveReusableAnswer } from "../profile.js";
+import { clipMarked } from "../clip-marked.js";
 
 /** How long past its own time limit a run may go unheard from before PAGS stops waiting. */
 export const LOST_RUNNER_GRACE_MS = 10 * 60_000;
@@ -262,7 +264,7 @@ async function dispatchTailoring(
 		now,
 	});
 	let run = (await getTailorRun(env, instanceId, uid, runId)) as TailorRun;
-	const envelope = tailorTaskEnvelope(run, lead, s, uploadedSources);
+	const envelope = tailorTaskEnvelope(run, lead, s, uploadedSources, await ownerAnswersFor(env, uid));
 	const fail = async (errorCode: string, error: string) => {
 		run = (await updateTailorRun(env, run, { to: "failed", errorCode, error, events: [{ type: "run.ended", at: iso(now), detail: { status: "failed", reason: errorCode } }] }, now)) ?? run;
 		await settleApplication(env, instanceId, uid, applicationId, runId, { to: "blocked", blockReason: errorCode, blockQuestions: [error] }, now);
@@ -294,10 +296,15 @@ async function dispatchTailoring(
  * failed or cancelled, never filled, never submitted. Compare-and-set back into `tailoring` (with an
  * audit row), then a fresh run under a per-attempt key, so a repeated click finds the same run.
  */
-export async function retryTailoring(env: Env, instanceId: string, uid: string, app: JobApplication, now = Date.now()): Promise<{ application: JobApplication; run: TailorRun }> {
+export async function retryTailoring(env: Env, instanceId: string, uid: string, app: JobApplication, now = Date.now(), rawAnswers?: unknown): Promise<{ application: JobApplication; run: TailorRun; savedAnswers: number }> {
 	if (!["blocked", "failed", "cancelled"].includes(app.status) || app.fillRunId || app.submitAttemptedAt) {
 		throw new HttpError(409, `Tailoring can be retried only for an application that stopped while tailoring; this one is ${app.status}${app.fillRunId ? " and has been filled" : ""}.`);
 	}
+	// The owner's answers to this application's questions are saved to their Profile FIRST, so this
+	// retry and every later Tailor run read them (#1066). They are the owner's facts — kept even if
+	// the run below cannot start right now.
+	const answers = parseTailorAnswers(rawAnswers);
+	for (const a of answers) await saveReusableAnswer(env, uid, a.question, a.answer);
 	const parsed = parseLocalArtifactLead(app.lead);
 	if ("error" in parsed) throw new HttpError(409, `The application's lead cannot be read (${parsed.error}); re-approve it from the Scout.`);
 	const pair = await readInstanceConfigPair(env, instanceId, uid);
@@ -315,7 +322,7 @@ export async function retryTailoring(env: Env, instanceId: string, uid: string, 
 	const moved = await moveApplication(env, app, uid, { to: "tailoring", actor: "owner", actorInstanceId: instanceId, reason: "retry_tailoring" }, now);
 	if (!moved) throw new HttpError(409, "The application changed while retrying — reload it.");
 	const run = await dispatchTailoring(env, instanceId, uid, app.id, parsed.lead, settings.settings, `${app.idempotencyKey}:retry:${app.stateVersion + 1}`, "retry", runtime, now, uploadedSources);
-	return { application: (await getApplication(env, instanceId, uid, app.id)) as JobApplication, run };
+	return { application: (await getApplication(env, instanceId, uid, app.id)) as JobApplication, run, savedAnswers: answers.length };
 }
 
 /** End a run's application when its result arrives — exactly once, by compare-and-set. */
@@ -444,7 +451,7 @@ export async function cancelTailoring(env: Env, uid: string, run: TailorRun, now
  * queue (#974), for the reason the Runner's has one: two constructions would be two answers to what
  * this run was asked to do.
  */
-export function tailorTaskEnvelope(run: TailorRun, lead: LocalArtifactTaskEnvelope["lead"], s: ApplicationTailorSettings, uploadedSources?: LocalArtifactUploadedSource[]): LocalArtifactTaskEnvelope {
+export function tailorTaskEnvelope(run: TailorRun, lead: LocalArtifactTaskEnvelope["lead"], s: ApplicationTailorSettings, uploadedSources?: LocalArtifactUploadedSource[], ownerAnswers: readonly LocalArtifactOwnerAnswer[] = []): LocalArtifactTaskEnvelope {
 	return {
 		type: LOCAL_ARTIFACT_TASK_TYPE,
 		runId: run.id,
@@ -455,9 +462,45 @@ export function tailorTaskEnvelope(run: TailorRun, lead: LocalArtifactTaskEnvelo
 		workspace: s.workspace,
 		sources: run.policy.sources,
 		...(uploadedSources ? { uploadedSources } : {}),
+		...(ownerAnswers.length ? { ownerAnswers: [...ownerAnswers] } : {}),
 		lead,
 		policy: { retainDays: s.retainDays, maxMinutes: s.maxMinutes, maxConcurrent: 1 },
 	};
+}
+
+/**
+ * The owner's reusable saved answers, for every Tailor run (#1066): the Profile's custom answers as
+ * {@link profileCustomAnswers} already filters them (no job-specific questions, no essays), minus the
+ * app's own camelCase settings that share the custom JSON (voice keywords and the like) — saved
+ * answers are snake_case keys. Bounded to the contract's caps. Best-effort: a profile that cannot be
+ * read gives no answers, never a failed run.
+ */
+export async function ownerAnswersFor(env: Env, uid: string): Promise<LocalArtifactOwnerAnswer[]> {
+	const profile = await getProfile(env, uid).catch(() => null);
+	if (!profile) return [];
+	const raw = Object.fromEntries(Object.entries(profile).filter(([k]) => /^[a-z0-9_]+$/.test(k)));
+	return Object.entries(profileCustomAnswers(raw))
+		.filter(([q, a]) => q.length <= LOCAL_ARTIFACT_CAPS.questionChars && a.trim().length <= LOCAL_ARTIFACT_CAPS.ownerAnswerChars)
+		.slice(0, LOCAL_ARTIFACT_CAPS.ownerAnswers)
+		.map(([question, answer]) => ({ question, answer: answer.trim() }));
+}
+
+/** Validate answers an owner gives with `retry_tailoring` (#1066). Refuses rather than trims. */
+export function parseTailorAnswers(raw: unknown): Array<{ question: string; answer: string }> {
+	if (raw === undefined || raw === null) return [];
+	if (!Array.isArray(raw)) throw new HttpError(400, "answers must be a list of {question, answer}.");
+	if (raw.length > LOCAL_ARTIFACT_CAPS.questions) throw new HttpError(400, `At most ${LOCAL_ARTIFACT_CAPS.questions} answers.`);
+	const out: Array<{ question: string; answer: string }> = [];
+	for (const item of raw) {
+		const r = (item && typeof item === "object" ? item : {}) as Record<string, unknown>;
+		const question = typeof r.question === "string" ? r.question.trim() : "";
+		const answer = typeof r.answer === "string" ? r.answer.trim() : "";
+		if (!question || question.length > LOCAL_ARTIFACT_CAPS.questionChars) throw new HttpError(400, `Each answer needs its question (1-${LOCAL_ARTIFACT_CAPS.questionChars} characters).`);
+		if (!answer) continue; // an empty answer is "skip this one", as in the console
+		if (answer.length > LOCAL_ARTIFACT_CAPS.ownerAnswerChars) throw new HttpError(400, `An answer may be at most ${LOCAL_ARTIFACT_CAPS.ownerAnswerChars} characters — "${clipMarked(question, 60, { within: true })}" is ${answer.length}.`);
+		out.push({ question, answer });
+	}
+	return out;
 }
 
 /**
@@ -505,7 +548,7 @@ export async function dispatchNextQueuedTailoring(env: Env, instanceId: string, 
 	}
 	let res: Response | null = null;
 	try {
-		res = await callRuntime(env, runtime, LOCAL_ARTIFACT_RUN_PATH, { method: "POST", body: JSON.stringify(tailorTaskEnvelope(run, parsed.lead, settings.settings, uploadedSources)) });
+		res = await callRuntime(env, runtime, LOCAL_ARTIFACT_RUN_PATH, { method: "POST", body: JSON.stringify(tailorTaskEnvelope(run, parsed.lead, settings.settings, uploadedSources, await ownerAnswersFor(env, uid))) });
 	} catch {
 		await noteQueued(env, "local_artifact_runs", run.id, "The runner did not answer; waiting to try again.", now);
 		return "queued";

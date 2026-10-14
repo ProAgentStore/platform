@@ -389,3 +389,46 @@ describe("retention", () => {
 		expect(rt.status({ runId: "run-2" }).events.find((e) => e.type === "retention.swept")?.detail).toEqual({ removed: 1 });
 	});
 });
+
+describe("#1066: the owner's saved answers", () => {
+	const OWNER = [
+		{ question: "Your résumé and profile list different LinkedIn URLs — which one is right?", answer: "The one on my résumé" },
+		{ question: "remote or hybrid", answer: "Remote only" },
+	];
+
+	it("reach the CLI as a citable owner_answers source, explained in the prompt — and a claim citing them passes the check", async () => {
+		const rt = runtime();
+		rt.start(envelope({ ownerAnswers: OWNER }));
+		await settle();
+		const prompt = spawned[0].args[1];
+		expect(prompt).toContain('<source role="owner_answers">');
+		expect(prompt).toContain("Q: remote or hybrid\nA: Remote only");
+		expect(prompt).toMatch(/owner's own answers to questions asked on earlier applications.*do not ask again/);
+		answer(0, { ...GOOD, claims: [...GOOD.claims, { text: "Remote only", source: "owner_answers", quote: "Remote only" }] });
+		await settle();
+		const s = rt.status({ runId: "run-1" });
+		expect(s.result).toMatchObject({ outcome: "completed" });
+		// Recorded by count only: no answer text in the trace, and no file hash or path for a non-file source.
+		const read = s.events.filter((e) => e.type === "source.read").map((e) => e.detail);
+		expect(read).toContainEqual({ role: "owner_answers", count: 2 });
+		expect(JSON.stringify(s.events)).not.toContain("Remote only");
+		expect(s.result?.sourceHashes.map((h) => h.role)).toEqual(["resume", "profile"]);
+	});
+
+	it("without saved answers the prompt is unchanged — no empty block, no extra rule", async () => {
+		const rt = runtime();
+		rt.start(envelope());
+		await settle();
+		expect(spawned[0].args[1]).not.toMatch(/owner_answers/);
+	});
+
+	it.each([
+		["not a list", "x"],
+		["too many", Array.from({ length: 31 }, (_, i) => ({ question: `q${i}`, answer: "a" }))],
+		["an empty answer", [{ question: "q", answer: " " }]],
+		["an over-long answer", [{ question: "q", answer: "x".repeat(501) }]],
+		["a missing question", [{ answer: "a" }]],
+	])("refuses %s at the boundary", (_why, ownerAnswers) => {
+		expect(() => parseArtifactEnvelope(envelope({ ownerAnswers } as Record<string, unknown>))).toThrow(/owner answer|ownerAnswers/);
+	});
+});

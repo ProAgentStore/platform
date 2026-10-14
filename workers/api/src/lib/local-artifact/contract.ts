@@ -43,6 +43,19 @@ export type LocalArtifactSourceRole = "resume" | "profile" | "answers";
 export const LOCAL_ARTIFACT_SOURCE_ROLES: readonly LocalArtifactSourceRole[] = ["resume", "profile", "answers"];
 export const REQUIRED_SOURCE_ROLES: readonly LocalArtifactSourceRole[] = ["resume", "profile"];
 
+/**
+ * The owner's saved answers to earlier blocking questions (#1066), sent by PAGS from the owner's
+ * Profile and given to the CLI as one more citable source under this role. Not a file source: it
+ * never appears in `sources`, `sourceHashes` or a path, and an older runner simply ignores it.
+ */
+export const OWNER_ANSWERS_ROLE = "owner_answers";
+/** A role the CLI may cite a claim from: a source file, or the owner's saved answers. */
+export type LocalArtifactPromptRole = LocalArtifactSourceRole | typeof OWNER_ANSWERS_ROLE;
+export interface LocalArtifactOwnerAnswer {
+	question: string;
+	answer: string;
+}
+
 export interface LocalArtifactSource {
 	role: LocalArtifactSourceRole;
 	/** Relative to the workspace folder. Never absolute, never `..`. */
@@ -97,6 +110,8 @@ export interface LocalArtifactTaskEnvelope {
 	sources: LocalArtifactSource[];
 	/** Present only for the explicit uploaded-source mode; local `sources` remain unchanged. */
 	uploadedSources?: LocalArtifactUploadedSource[];
+	/** The owner's reusable answers to earlier blocking questions (#1066). Omitted when there are none. */
+	ownerAnswers?: LocalArtifactOwnerAnswer[];
 	lead: LocalArtifactLead;
 	policy: LocalArtifactPolicy;
 }
@@ -227,7 +242,7 @@ export interface LocalArtifactStatusResponse {
 	result?: LocalArtifactResultEnvelope;
 }
 
-export const LOCAL_ARTIFACT_CAPS = { questions: 20, questionChars: 300, sources: 6, sourceBytes: 256 * 1024 } as const;
+export const LOCAL_ARTIFACT_CAPS = { questions: 20, questionChars: 300, sources: 6, sourceBytes: 256 * 1024, ownerAnswers: 30, ownerAnswerChars: 500 } as const;
 
 /** An id used as a folder name: no separators, no dots, nothing a path could be built out of. */
 export const PATH_SEGMENT = /^[A-Za-z0-9_-]{1,100}$/;

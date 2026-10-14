@@ -31,6 +31,8 @@ import { resolveWorkspacePath } from "../local-browser/runtime.js";
 import {
 	LOCAL_ARTIFACT_AUTH_MODES,
 	LOCAL_ARTIFACT_CAPS,
+	type LocalArtifactOwnerAnswer,
+	OWNER_ANSWERS_ROLE,
 	LOCAL_ARTIFACT_ENGINES,
 	LOCAL_ARTIFACT_SOURCE_ROLES,
 	LOCAL_ARTIFACT_TASK_TYPE,
@@ -53,7 +55,7 @@ import {
 	isWorkspaceRelative,
 	parseLocalArtifactLead,
 } from "./contract.js";
-import { type SourceText, buildArtifactEngineSpec, checkDraft, finalText, missingLogin, observedArtifactAuth, parseDraft, tailorPrompt } from "./engine.js";
+import { type SourceText, buildArtifactEngineSpec, checkDraft, finalText, missingLogin, observedArtifactAuth, ownerAnswersText, parseDraft, tailorPrompt } from "./engine.js";
 
 export interface LocalArtifactRuntimeDeps {
 	/** The runner's data dir; per-run scratch folders live under `<dataDir>/local-artifact/`. */
@@ -127,6 +129,16 @@ export function parseArtifactEnvelope(raw: unknown): ParsedEnvelope {
 		}
 		if (uploadedSources.length !== 2 || !uploadedSources.some((s) => s.role === "resume") || !uploadedSources.some((s) => s.role === "profile")) throw bad("uploaded sources need one resume and one profile");
 	}
+	// The owner's saved answers to earlier questions (#1066): optional, bounded, plain text only.
+	const ownerAnswers: LocalArtifactOwnerAnswer[] = [];
+	if (o.ownerAnswers !== undefined) {
+		if (!Array.isArray(o.ownerAnswers) || o.ownerAnswers.length > LOCAL_ARTIFACT_CAPS.ownerAnswers) throw bad(`ownerAnswers must be a list of at most ${LOCAL_ARTIFACT_CAPS.ownerAnswers}`);
+		for (const a of o.ownerAnswers) {
+			const r = (a && typeof a === "object" ? a : {}) as Record<string, unknown>;
+			if (typeof r.question !== "string" || !r.question.trim() || r.question.length > LOCAL_ARTIFACT_CAPS.questionChars || typeof r.answer !== "string" || !r.answer.trim() || r.answer.length > LOCAL_ARTIFACT_CAPS.ownerAnswerChars) throw bad("each owner answer needs a question and an answer within their caps");
+			ownerAnswers.push({ question: r.question.trim(), answer: r.answer.trim() });
+		}
+	}
 	const p = (o.policy && typeof o.policy === "object" ? o.policy : {}) as Record<string, unknown>;
 	const retainDays = intIn(p.retainDays, 0, 3650);
 	const maxMinutes = intIn(p.maxMinutes, 1, 60);
@@ -143,6 +155,7 @@ export function parseArtifactEnvelope(raw: unknown): ParsedEnvelope {
 		workspace: o.workspace,
 		sources,
 		...(uploadedSources.length ? { uploadedSources } : {}),
+		...(ownerAnswers.length ? { ownerAnswers } : {}),
 		policy: { retainDays, maxMinutes, maxConcurrent },
 		...("lead" in lead ? { lead: lead.lead } : { lead: null, leadError: lead.error }),
 	};
@@ -264,6 +277,12 @@ export class LocalArtifactRuntime {
 			if (e.uploadedSources?.length ? !e.uploadedSources.some((s) => s.role === role) : !e.sources.some((s) => s.role === role)) missing.push(`No ${role} source is configured. Choose one in the Application Tailor settings.`);
 		}
 		if (missing.length) throw new Pause("missing_source", missing);
+		// The owner's saved answers go in as one more source the CLI may cite (#1066). Not a file, so no
+		// source hash or path; the count alone is recorded, never the text.
+		if (e.ownerAnswers?.length) {
+			texts.push({ role: OWNER_ANSWERS_ROLE, text: ownerAnswersText(e.ownerAnswers) });
+			this.emit(run, { type: "source.read", detail: { role: OWNER_ANSWERS_ROLE, count: e.ownerAnswers.length } });
+		}
 
 		const outRel = `applications/${lead.leadId}/${e.runId}`;
 		const outDir = join(workspace, "applications", lead.leadId, e.runId);

@@ -702,8 +702,10 @@ export async function performApplicationAction(env: Env, uid: string, instanceId
 			return after({ transitioned: true });
 		}
 		case "retry_tailoring": {
-			const out = await retryTailoring(env, app.instanceId, uid, app, now);
-			return after({ runId: out.run.id });
+			// Answers to the item's blocking questions are saved to the owner's Profile and given to
+			// this and every later Tailor run (#1066).
+			const out = await retryTailoring(env, app.instanceId, uid, app, now, input.answers);
+			return after({ runId: out.run.id, ...(out.savedAnswers ? { savedAnswers: out.savedAnswers } : {}) });
 		}
 		case "approve_and_proceed": {
 			// TWO stages, ONE action name — which is what keeps the console and MCP exposing exactly the

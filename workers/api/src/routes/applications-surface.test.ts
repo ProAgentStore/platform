@@ -506,6 +506,57 @@ describe("retry, cancel and resume", () => {
 		expect((await audit("rt")).map((a) => `${a.from_status}→${a.to_status}`)).toEqual(["blocked→tailoring"]);
 	});
 
+	it("#1066: answers given with retry_tailoring are saved to the owner's Profile and reach this and every later Tailor run", async () => {
+		const Q1 = "Your résumé and profile list different LinkedIn URLs — which one is right?";
+		const Q2 = "Remote or hybrid?";
+		const blocked = (id: string, questions: string[]) =>
+			d1.exec(
+				`INSERT INTO job_applications (id, instance_id, user_id, source_instance_id, lead_id, lifecycle_version, idempotency_key, status, lead, block_reason, block_questions, created_at, updated_at) VALUES ('${id}', 't1', 'u1', 'scout', '${id}', 1, 'scout:${id}:1', 'blocked', '{"eventId":"scout:${id}:1","sourceInstanceId":"scout","leadId":"${id}","leadUrl":"https://jobs.example.com/${id}","lifecycleVersion":1,"requestedAt":"2026-10-07T00:00:00Z","lead":{"title":"Engineer"}}', 'missing_information', '${JSON.stringify(questions).replace(/'/g, "''")}', 1, 1)`,
+			);
+		// The Profile already holds app settings (camelCase) and a job-specific essay answer: neither is an owner answer.
+		d1.exec(`INSERT INTO user_profile (user_id, custom) VALUES ('u1', '{"voiceRepeatWordsLegacy":"Repeat that","why_do_you_want_to_work_here":"Globex is great"}')`);
+		blocked("rq1", [Q1, Q2]);
+
+		const item = await call("GET", "/t1/application-queue/item?application_id=rq1");
+		expect(item.body.item.questions).toEqual([Q1, Q2]);
+		expect(item.body.item.actions).toContain("retry_tailoring");
+
+		const r = await act("t1", { action: "retry_tailoring", application_id: "rq1", expected_status: "blocked", answers: [{ question: Q1, answer: "The one on my résumé" }, { question: Q2, answer: "Remote only" }] });
+		expect(r.status).toBe(200);
+		expect(r.body.result).toMatchObject({ savedAnswers: 2 });
+
+		// Saved as CUSTOM answers — never into the canonical LinkedIn column a later form would type.
+		const row = (await d1.DB.prepare("SELECT linkedin, custom FROM user_profile WHERE user_id = 'u1'").first<{ linkedin: string | null; custom: string }>())!;
+		expect(row.linkedin).toBeNull();
+		const custom = JSON.parse(row.custom);
+		expect(Object.values(custom)).toEqual(expect.arrayContaining(["The one on my résumé", "Remote only"]));
+
+		// This retry's envelope carries them, as the Tailor's citable owner_answers source.
+		const first = dispatches("/local-artifact/run")[0].body.ownerAnswers as Array<{ question: string; answer: string }>;
+		expect(first.map((a) => a.answer).sort()).toEqual(["Remote only", "The one on my résumé"]);
+		expect(first.every((a) => !/voice|why do you want/i.test(a.question))).toBe(true);
+
+		// A LATER, different application's run carries them too — without being told again.
+		blocked("rq2", ["Something else entirely"]);
+		await act("t1", { action: "retry_tailoring", application_id: "rq2", expected_status: "blocked" });
+		const later = dispatches("/local-artifact/run")[1].body.ownerAnswers as Array<{ answer: string }>;
+		expect(later.map((a) => a.answer).sort()).toEqual(["Remote only", "The one on my résumé"]);
+	});
+
+	it("#1066: invalid answers are refused before anything is saved or dispatched", async () => {
+		d1.exec(
+			`INSERT INTO job_applications (id, instance_id, user_id, source_instance_id, lead_id, lifecycle_version, idempotency_key, status, lead, block_reason, created_at, updated_at) VALUES ('rq3', 't1', 'u1', 'scout', 'rq3', 1, 'scout:rq3:1', 'blocked', '{"eventId":"scout:rq3:1","sourceInstanceId":"scout","leadId":"rq3","leadUrl":"https://jobs.example.com/rq3","lifecycleVersion":1,"requestedAt":"2026-10-07T00:00:00Z","lead":{"title":"Engineer"}}', 'missing_information', 1, 1)`,
+		);
+		const tooLong = await act("t1", { action: "retry_tailoring", application_id: "rq3", expected_status: "blocked", answers: [{ question: "Q?", answer: "x".repeat(501) }] });
+		expect(tooLong.status).toBe(400);
+		expect(await d1.DB.prepare("SELECT custom FROM user_profile WHERE user_id = 'u1'").first()).toBeNull();
+		expect(dispatches("/local-artifact/run")).toEqual([]);
+		// An empty answer is "skip this one", as in the console — nothing saved, the retry still runs.
+		const skipped = await act("t1", { action: "retry_tailoring", application_id: "rq3", expected_status: "blocked", answers: [{ question: "Q?", answer: "  " }] });
+		expect(skipped.status).toBe(200);
+		expect(dispatches("/local-artifact/run")[0].body.ownerAnswers).toBeUndefined();
+	});
+
 	it("retries a stopped fill — and never after a submit attempt", async () => {
 		readyApp("rf");
 		const started = await call("POST", "/t1/application-queue/actions", { action: "request_review", application_id: "rf", expected_status: "materials_ready" });

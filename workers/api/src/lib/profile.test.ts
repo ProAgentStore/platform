@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getProfile, guessProfileKey, profileCustomAnswers, profileToCandidate, saveAskAndHoldAnswer, setProfileField, upsertProfile } from "./profile.js";
+import { getProfile, guessProfileKey, profileCustomAnswers, profileToCandidate, saveAskAndHoldAnswer, saveReusableAnswer, setProfileField, upsertProfile } from "./profile.js";
 import type { Env } from "../types.js";
 
 /** In-memory D1 mock for the single-row-per-user user_profile upsert. */
@@ -48,6 +48,20 @@ describe("user profile", () => {
 		await upsertProfile(env, "u1", { phone: "123" });
 		expect((await getProfile(env, "u1")).phone).toBe("123");
 		await upsertProfile(env, "u1", { phone: "" });
+		expect((await getProfile(env, "u1")).phone).toBeUndefined();
+	});
+
+	it("#1066 saveReusableAnswer never writes a standard column — even an EMPTY one a question names", async () => {
+		const env = mockEnv();
+		await upsertProfile(env, "u1", { firstName: "Sergey" });
+		// saveAskAndHoldAnswer would map this to `linkedin` and write "The one on my résumé" as the URL.
+		const key = await saveReusableAnswer(env, "u1", "Your résumé and profile list different LinkedIn URLs — which one is right?", "The one on my résumé");
+		const p = await getProfile(env, "u1");
+		expect(p.linkedin).toBeUndefined();
+		expect(p[key]).toBe("The one on my résumé");
+		expect(profileCustomAnswers(p)).toMatchObject({ [key.replace(/_/g, " ")]: "The one on my résumé" });
+		// A question whose key would spell a standard column is moved aside, never into that column.
+		expect(await saveReusableAnswer(env, "u1", "Phone", "Text me first")).toBe("answer_phone");
 		expect((await getProfile(env, "u1")).phone).toBeUndefined();
 	});
 

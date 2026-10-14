@@ -129,6 +129,26 @@ export async function saveAskAndHoldAnswer(env: Env, userId: string, field: stri
 	await upsertProfile(env, userId, { [key]: value });
 }
 
+/**
+ * Save the owner's answer to a pipeline's blocking question as a reusable CUSTOM answer (#1066).
+ *
+ * Unlike {@link saveAskAndHoldAnswer}, this never writes a standard column. A Tailor question is a
+ * clarification ("your résumé and profile list different LinkedIn URLs — which is right?"), and its
+ * answer is often a decision ("the one on my résumé"), not the field's value. Routed through
+ * `guessProfileKey`, that sentence would become the owner's canonical LinkedIn for every later form.
+ * Kept as a custom answer it is read back by {@link profileCustomAnswers} — which still drops
+ * job-specific questions and essay-length answers — and given to later runs as the owner's own words.
+ */
+export async function saveReusableAnswer(env: Env, userId: string, question: string, answer: string): Promise<string> {
+	// The whole question, sanitized — not cut: callers bound it (≤300, `parseTailorAnswers`), and the
+	// key is what a later run reads back as the question.
+	let key = question.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "note";
+	// A key that happens to spell a standard column ("phone") would write that column; never.
+	if (STD_PROFILE_KEYS.has(key)) key = `answer_${key}`;
+	await upsertProfile(env, userId, { [key]: answer });
+	return key;
+}
+
 /** The user's job-search preferences (what they want), for the apply prompt. */
 export function profileToPreferences(p: Profile): { targetRoles?: string; targetLocations?: string; workType?: string; openToRelocation?: string } {
 	return { targetRoles: p.targetRoles, targetLocations: p.targetLocations, workType: p.workType, openToRelocation: p.openToRelocation };
