@@ -781,7 +781,9 @@ export async function runRegistryTool(
 			return { name, content: `Writing via the ${label} connector isn't permitted for this agent. Enable write access for ${label} in the instance's Connections settings, then try again.`, success: false };
 		}
 		// `preApprovedTicketId` is an owner's click, never a consent bypass: revocation still refuses.
-		if (mode === "ask" && !ctx.preApprovedTicketId) {
+		// A tool declaring `approval.everyCall` (#719) is queued even under "Always allow": the owner
+		// decided it has no standing authority, only per-call approvals.
+		if ((mode === "ask" || tool.approval?.everyCall === true) && !ctx.preApprovedTicketId) {
 			// Queueing stays in its own module so a write failure can never fall through to dispatch.
 			// Deferred import keeps this module out of the routes/board graph, as `create_ticket` does.
 			const { queueToolCallForApproval } = await import("./tool-approval-queue.js");

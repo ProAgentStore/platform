@@ -41,6 +41,7 @@ describe("connector registry", () => {
 				"gmail_draft_send",
 				"gmail_archive",
 				"gmail_mark_read",
+				"gmail_create_filter",
 				"gmail_download_attachment",
 			]);
 			// Reading the mailbox mutates nothing; sending and drafting mutate state and say so, which

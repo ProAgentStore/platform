@@ -132,6 +132,7 @@ const INTERNET = new Set<string>([
 	"gmail_draft_send",
 	"gmail_archive", // changes labels in the owner's mailbox — Google's servers
 	"gmail_mark_read",
+	"gmail_create_filter", // #719: writes a filter into the owner's Gmail settings — Google's servers
 ]);
 
 describe("the listing reports what a tool can reach (#584)", () => {

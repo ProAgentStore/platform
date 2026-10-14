@@ -113,11 +113,16 @@ export function queuedCallMessage(input: {
 	connectorLabel: string;
 	ticketId: string;
 	duplicate: boolean;
+	/** The tool needs approval on every call (#719), whatever the consent mode. */
+	everyCall?: boolean;
 }): string {
 	const dup = input.duplicate ? " — this exact call was already queued, so no second card was created" : "";
+	const why = input.everyCall
+		? `${input.toolName} always needs the owner's approval for each call, so it runs only once they approve that card. `
+		: `Write access for ${input.connectorLabel} on this agent is set to "Ask each time", so it runs only once they approve that card. `;
 	return (
 		`Nothing has been sent. ${input.toolName} is waiting for the owner's approval on the board${dup} (ticket ${input.ticketId}). ` +
-		`Write access for ${input.connectorLabel} on this agent is set to "Ask each time", so it runs only once they approve that card. ` +
+		why +
 		"Tell them it is there and what it says. Do not retry the call, and do not report it as done."
 	);
 }

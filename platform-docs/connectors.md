@@ -458,14 +458,15 @@ checked on every Drive route, and an agent that declares no tool allowlist at al
 ## Gmail
 
 Gmail reads the owner's mailbox, and — only if the owner allows it — replies from it and tidies it
-(archive a message, mark it read). The three OAuth scopes are deliberately separate powers, and
-only the first is held by default (#718):
+(archive a message, mark it read), and proposes filters the owner approves one at a time. The four
+OAuth scopes are deliberately separate powers, and only the first is held by default (#718):
 
 | Scope | What it allows | Held |
 |---|---|---|
 | `gmail.readonly` | Search, read a message, download its attachments. | Always — a plain connect is read-only. |
 | `gmail.send` | Send a message. **Send only** — it cannot read, delete or modify. | Only if chosen: **"Send and reply as you"**. |
 | `gmail.modify` | Archive, mark read, relabel. There is no narrower scope for these. | Only if chosen: **"Archive and mark read"**. |
+| `gmail.settings.basic` | Create filters (#719). The scope also covers forwarding settings, which no tool uses. | Only if chosen: **"Create filters (each one approved by you)"**. |
 
 `https://mail.google.com/` is **never** requested. That is the scope permanent deletion needs, so
 nothing an agent does to a message is unrecoverable: `gmail.modify` can move mail to Trash, where
@@ -488,7 +489,7 @@ A missing optional power is not a fault. It is not listed in `missingScopes` and
 "reconnect" note. When an agent tries a tool the account has not been allowed, the tool refuses
 **before** calling Google, and the refusal names the same **"Allow: …"** button.
 
-**Over the API.** `GET /v1/email/google/start?grant=send&grant=modify` (or `grant=send,modify`) adds
+**Over the API.** `GET /v1/email/google/start?grant=send&grant=modify` (or `grant=send,modify`, and `filters`) adds
 optional powers to the read-only baseline. A grant the manifest does not declare is refused with 400.
 `&account=<address>` pre-selects the mailbox at Google. `GET /v1/connectors` reports
 `optionalGrants: [{id, label, held}]` for the connector and for each account.
@@ -504,10 +505,38 @@ optional powers to the read-only baseline. A grant the manifest does not declare
 | `gmail_send` | **write** | Sends a new message to an address you name. |
 | `gmail_archive` | **write** | Removes the `INBOX` label. Reversible — the message stays in All Mail. Needs `gmail.modify`. |
 | `gmail_mark_read` | **write** | Removes the `UNREAD` label. Needs `gmail.modify`. |
+| `gmail_create_filter` | **write, approved per call** | Proposes a filter; never creates one directly (see below). Needs `gmail.settings.basic`. |
 
 There is deliberately **no delete tool**. `gmail.modify` would allow moving mail to Trash;
 archiving is reversible and deleting is a different promise, and an agent acting on mail it has
 just read should not be one prompt injection away from emptying an inbox.
+
+### Filters: approved one at a time (#719, ADR 0007)
+
+A filter is a standing rule for **future** mail, which makes it unlike every other Gmail power here,
+and it is created only with the owner's explicit approval of that one filter. There is no standing
+authority to create filters.
+
+- **Every call becomes an approval card**, even when Gmail write access is set to "Always allow".
+  The card names:
+  - the mailbox;
+  - the exact rule (`from`/`to`/`subject`/`query`/`negated_query`/`has_attachment`);
+  - what it does;
+  - the agent's reason;
+  - that it applies to all future matching mail until you delete it in Gmail → Settings → Filters;
+  - that the permission behind it can also manage forwarding, which nothing here uses.
+
+  Opening the card does nothing. **Approve** creates exactly that filter, once.
+- **The approval is for one mailbox.** If the agent uses a different Gmail account by the time it
+  is approved, nothing is created.
+- **Allowed actions:** skip the inbox, mark read, star, add one of the mailbox's own existing labels.
+- **Refused at the tool boundary, permanently:**
+  - forwarding, of any kind;
+  - trash, delete and spam, including as a label;
+  - a rule with no criteria, which would match all mail.
+
+  These refusals reach the agent and never become a card.
+- There is no tool to list or delete filters yet; manage them in Gmail.
 
 `find_confirmation_link` is separate and stays a built-in: it is granted only by the per-agent
 email permission and is never creator-selectable, so a creator cannot grant a read of the owner's

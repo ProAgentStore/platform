@@ -347,7 +347,11 @@ describe("the declaration", () => {
 		expect(auth.optionalGrants.map((g) => [g.id, g.scopes])).toEqual([
 			["send", ["https://www.googleapis.com/auth/gmail.send"]],
 			["modify", ["https://www.googleapis.com/auth/gmail.modify"]],
+			// #719: filter management — optional, never in the plain connect.
+			["filters", ["https://www.googleapis.com/auth/gmail.settings.basic"]],
 		]);
+		// Forwarding to an UNVERIFIED address needs settings.sharing; it is never requested (#719).
+		for (const s of [...auth.scopes, ...auth.optionalGrants.flatMap((g) => g.scopes)]) expect(s).not.toBe("https://www.googleapis.com/auth/gmail.settings.sharing");
 		// The line that has not moved: permanent deletion needs this, and it is never requested.
 		for (const s of [...auth.scopes, ...auth.optionalGrants.flatMap((g) => g.scopes)]) expect(s).not.toBe("https://mail.google.com/");
 	});
@@ -357,7 +361,7 @@ describe("the declaration", () => {
 		// write:false connector is refused by assertScope before any handler runs.
 		expect(GMAIL_CONNECTOR.scopes).toEqual({ read: true, write: true });
 		const writeTools = GMAIL_CONNECTOR.tools.filter((t) => t.scope === "write").map((t) => t.name);
-		expect(writeTools).toEqual(["gmail_reply", "gmail_send", "gmail_draft_reply", "gmail_draft_send", "gmail_archive", "gmail_mark_read"]);
+		expect(writeTools).toEqual(["gmail_reply", "gmail_send", "gmail_draft_reply", "gmail_draft_send", "gmail_archive", "gmail_mark_read", "gmail_create_filter"]);
 	});
 
 	it("keeps find_confirmation_link OUT of the connector — its grant model is the odd one out", () => {

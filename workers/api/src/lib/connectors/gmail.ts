@@ -318,6 +318,12 @@ async function canSend(env: Env, userId: string, instanceId: string | undefined)
  */
 export const GMAIL_SEND_GRANT = { id: "send", label: "Send and reply as you", scopes: ["https://www.googleapis.com/auth/gmail.send"] };
 export const GMAIL_MODIFY_GRANT = { id: "modify", label: "Archive and mark read", scopes: ["https://www.googleapis.com/auth/gmail.modify"] };
+/**
+ * Filter management (#719) — `gmail.settings.basic`. Optional like the two above, so it is never in
+ * the connect-time bundle. The scope also reaches forwarding settings; no tool uses that, and
+ * `gmail_create_filter` refuses forwarding at its boundary and runs only on a per-call approval.
+ */
+export const GMAIL_FILTER_GRANT = { id: "filters", label: "Create filters (each one approved by you)", scopes: ["https://www.googleapis.com/auth/gmail.settings.basic"] };
 
 const allowAction = (label: string) =>
 	`In the console, open Preferences → Connections and use "Allow: ${label}" on Gmail — what it can already do is kept, nothing is reconnected from scratch.`;
@@ -326,6 +332,75 @@ const RECONNECT_TO_MODIFY =
 	`This Gmail account has not been allowed to change messages, so it cannot archive or mark mail read. ${allowAction(GMAIL_MODIFY_GRANT.label)}`;
 
 const RECONNECT_TO_SEND = `This Gmail account has not been allowed to send. ${allowAction(GMAIL_SEND_GRANT.label)}`;
+
+const RECONNECT_TO_FILTER = `This Gmail account has not been allowed to manage filters. ${allowAction(GMAIL_FILTER_GRANT.label)}`;
+
+/** The mailbox this agent's Gmail calls resolve to (#715) — what a filter card names and is bound to. */
+async function resolveMailbox(env: Env, userId: string, instanceId: string | undefined): Promise<{ ok: true; accountId: string; display: string; grantedScopes: string | null } | { ok: false; error: string }> {
+	const { listConnectorAccounts, pinnedAccountFor, resolveConnectorAccount } = await import("../connector-accounts.js");
+	const resolved = resolveConnectorAccount(await listConnectorAccounts(env, userId, "gmail"), await pinnedAccountFor(env, instanceId, "gmail"), "Gmail");
+	if (!resolved.ok) return { ok: false, error: resolved.message };
+	const a = resolved.account;
+	return { ok: true, accountId: a.accountId, display: a.label?.trim() || a.accountId || "the connected Gmail account", grantedScopes: a.grantedScopes };
+}
+
+/**
+ * When `gmail_create_filter` is QUEUED (#719): validate it, check the mailbox may manage filters,
+ * bind the call to that mailbox, and compose the card the owner reads. An invalid filter is refused
+ * here, so nothing the platform would refuse is ever put in front of the owner to approve.
+ */
+const prepareFilterApproval: NonNullable<ToolDef["approval"]>["prepare"] = async (ctx, args) => {
+	const { parseFilterRequest, filterApprovalCard } = await import("../gmail-filter.js");
+	const parsed = parseFilterRequest(args);
+	if (!parsed.ok) return { ok: false, error: parsed.error };
+	if (!ctx.env || !ctx.userId) return { ok: false, error: "Gmail access requires an authenticated user context." };
+	if (!(await emailPermitted(ctx.env, ctx.instanceId))) {
+		return { ok: false, error: "Email access is not enabled for this agent. The owner turns it on in the console under Permissions → Permissions & Connections." };
+	}
+	const mailbox = await resolveMailbox(ctx.env, ctx.userId, ctx.instanceId);
+	if (!mailbox.ok) return { ok: false, error: mailbox.error };
+	const { scopesAllowFilters } = await import("../gmail.js");
+	if (!scopesAllowFilters(mailbox.grantedScopes)) return { ok: false, error: RECONNECT_TO_FILTER };
+	// The mailbox goes INTO the call: the approved call is checked against what the owner saw.
+	const { mailbox_account: _ignored, ...rest } = args;
+	return { ok: true, args: { ...rest, mailbox_account: mailbox.accountId }, card: filterApprovalCard(parsed.request, mailbox.display) };
+};
+
+/** Runs only from an approved ticket — the registry queues every other call (#719). */
+const createFilterHandler: ToolDef["handler"] = async (ctx, input) => {
+	const { parseFilterRequest, gmailFilterBody, describeCriteria, describeActions } = await import("../gmail-filter.js");
+	const parsed = parseFilterRequest(input);
+	if (!parsed.ok) return fail(parsed.error);
+	const resolved = await gmailToken(ctx);
+	if ("refusal" in resolved) return resolved.refusal;
+	const mailbox = await resolveMailbox(ctx.env, ctx.userId ?? "", ctx.instanceId);
+	if (!mailbox.ok) return fail(mailbox.error);
+	// An approval is for ONE mailbox. If this agent now resolves to a different one (re-pinned,
+	// reconnected), the owner approved something else, so nothing is created.
+	if (typeof input.mailbox_account !== "string" || input.mailbox_account !== mailbox.accountId) {
+		return fail(`This filter was approved for a different Gmail account than the one this agent now uses (${mailbox.display}), so it was not created. Ask for it again.`);
+	}
+	const { scopesAllowFilters, listLabels, createFilter, GmailError } = await import("../gmail.js");
+	if (!scopesAllowFilters(mailbox.grantedScopes)) return fail(RECONNECT_TO_FILTER);
+	try {
+		let labelId: string | null = null;
+		if (parsed.request.label) {
+			const label = (await listLabels(resolved.token)).find((l) => l.type === "user" && l.name === parsed.request.label);
+			if (!label) return fail(`There is no label named "${parsed.request.label}" in ${mailbox.display}. Create it in Gmail first; this tool does not create labels.`);
+			labelId = label.id;
+		}
+		const out = await createFilter(resolved.token, gmailFilterBody(parsed.request, labelId));
+		return ok({
+			filter_id: out.id,
+			mailbox: mailbox.display,
+			matches: describeCriteria(parsed.request.criteria),
+			does: describeActions(parsed.request),
+			note: "Created. It applies to future matching mail until it is deleted in Gmail → Settings → Filters.",
+		});
+	} catch (e) {
+		return fail(e instanceof GmailError ? e.message : `Could not create the filter: ${e instanceof Error ? e.message : String(e)}`);
+	}
+};
 
 /** Pull one instance file's bytes back out as standard base64, for attaching. */
 async function readInstanceFile(
@@ -620,7 +695,7 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 	// connector PERMITS, and an owner deciding is entitled to the whole answer. There is no delete
 	// or trash tool, deliberately (#716), so nothing here says one.
 	writeMeaning:
-		"Send and reply to mail from your own mailbox, as you, to anyone the agent addresses. Sent mail cannot be recalled. It can also save draft replies for you to review before sending, archive messages and mark them read; it cannot delete anything.",
+		"Send and reply to mail from your own mailbox, as you, to anyone the agent addresses. Sent mail cannot be recalled. It can also save draft replies for you to review before sending, archive messages and mark them read, and propose Gmail filters that you approve one at a time (never forwarding); it cannot delete anything.",
 	auth: {
 		type: "oauth2",
 		authUrl: "https://accounts.google.com/o/oauth2/v2/auth",
@@ -635,7 +710,7 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 		// `include_granted_scopes`, and the stored grant is MERGED, so allowing one never drops
 		// another (routes/email.ts). Connections made before this hold whatever they were granted
 		// and lose nothing; missing one of these is an offer, never a "reconnect".
-		optionalGrants: [GMAIL_SEND_GRANT, GMAIL_MODIFY_GRANT],
+		optionalGrants: [GMAIL_SEND_GRANT, GMAIL_MODIFY_GRANT, GMAIL_FILTER_GRANT],
 		clientIdEnv: "GOOGLE_CLIENT_ID",
 		secretEnv: "GOOGLE_CLIENT_SECRET",
 	},
@@ -671,7 +746,7 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 			untrustedOutput: false,
 			scope: "write",
 			description:
-				"Reply to a Gmail message in its own thread, as the owner, optionally attaching files from this agent's file store by id. The recipient is taken from the message being replied to and cannot be overridden — use gmail_send to write to a different address. This really sends: there is no draft step and no undo. To save the reply for the owner to review first, use gmail_draft_reply instead.",
+				"Reply to a Gmail message in its own thread, as the owner, optionally attaching files from this agent's file store by id. The recipient is taken from the message being replied to and cannot be overridden — use gmail_send to write to a different address. This really sends: there is no draft step and no undo. To save the reply for the owner to review first, use gmail_draft_reply.",
 			handler: "gmail_reply",
 			params: {
 				message_id: { type: "string", required: true, description: "The message to reply to, from gmail_search.", maxLength: 100 },
@@ -700,7 +775,7 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 			untrustedOutput: false,
 			scope: "write",
 			description:
-				"Save a reply to a Gmail message as a DRAFT — nothing is sent until the owner opens Gmail and clicks Send. Returns a link to the draft. The recipient is taken from the message being replied to and cannot be overridden. Needs the manage-mail permission (gmail.modify scope) on the connected account. To send immediately without a draft step, use gmail_reply instead.",
+				"Save a reply to a Gmail message as a DRAFT — nothing is sent until the owner clicks Send in Gmail. Returns a link to the draft. The recipient is the original sender and cannot be overridden. Needs the manage-mail permission (gmail.modify). To send without a draft, use gmail_reply.",
 			handler: "gmail_draft_reply",
 			params: {
 				message_id: { type: "string", required: true, description: "The message to reply to, from gmail_search.", maxLength: 100 },
@@ -714,7 +789,7 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 			untrustedOutput: false,
 			scope: "write",
 			description:
-				"Send an existing Gmail draft that the owner has reviewed and approved, by its draft id. The draft is moved out of Drafts and delivered. Needs the send permission (gmail.send scope) on the connected account. Get the draft_id from gmail_draft_reply.",
+				"Send an existing Gmail draft that the owner has reviewed and approved, by its draft id. The draft is moved out of Drafts and delivered. Needs the send permission (gmail.send). Get the draft_id from gmail_draft_reply.",
 			handler: "gmail_draft_send",
 			params: {
 				draft_id: { type: "string", required: true, description: "The draft id returned by gmail_draft_reply.", maxLength: 200 },
@@ -725,7 +800,7 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 			untrustedOutput: false,
 			scope: "write",
 			description:
-				"Archive a Gmail message — remove it from the inbox. It stays in All Mail and can still be found by search, so this is reversible. Needs the manage-mail permission on the connected account.",
+				"Archive a Gmail message — remove it from the inbox. It stays in All Mail and can be found by search — reversible. Needs the manage-mail permission.",
 			handler: "gmail_archive",
 			params: {
 				message_id: { type: "string", required: true, description: "Message id from gmail_search.", maxLength: 100 },
@@ -736,10 +811,29 @@ export const GMAIL_MANIFEST: ConnectorManifest = {
 			untrustedOutput: false,
 			scope: "write",
 			description:
-				"Mark a Gmail message as read. Needs the manage-mail permission on the connected account.",
+				"Mark a Gmail message as read. Needs the manage-mail permission.",
 			handler: "gmail_mark_read",
 			params: {
 				message_id: { type: "string", required: true, description: "Message id from gmail_search.", maxLength: 100 },
+			},
+		},
+		{
+			name: "gmail_create_filter",
+			untrustedOutput: false,
+			scope: "write",
+			description:
+				"Propose a Gmail filter for future mail; each needs the owner's approval. No forwarding, trash, delete or spam.",
+			handler: "gmail_create_filter",
+			params: {
+				from: { type: "string", description: "Sender to match.", maxLength: 300 },
+				to: { type: "string", description: "Match the recipient.", maxLength: 300 },
+				subject: { type: "string", description: "Subject words.", maxLength: 300 },
+				query: { type: "string", description: "Gmail search the message must match.", maxLength: 300 },
+				negated_query: { type: "string", description: "Gmail search the message must NOT match.", maxLength: 300 },
+				has_attachment: { type: "boolean", description: "Only mail with attachments." },
+				actions: { type: "array", required: true, description: "Any of: skip_inbox, mark_read, star, add_label." },
+				label: { type: "string", description: "Existing label name (add_label).", maxLength: 200 },
+				reason: { type: "string", required: true, description: "Shown to the owner.", maxLength: 500 },
 			},
 		},
 		{
@@ -770,6 +864,7 @@ const COMPILED_GMAIL: Connector = compileConnector(GMAIL_MANIFEST, {
 	gmail_draft_send: draftSendHandler,
 	gmail_archive: labelChangeHandler("archive"),
 	gmail_mark_read: labelChangeHandler("mark_read"),
+	gmail_create_filter: createFilterHandler,
 }).connector;
 
 /**
@@ -779,5 +874,7 @@ const COMPILED_GMAIL: Connector = compileConnector(GMAIL_MANIFEST, {
  */
 export const GMAIL_CONNECTOR: Connector = {
 	...COMPILED_GMAIL,
+	// #719: a filter is never created on standing authority — every call is an approval card.
+	tools: COMPILED_GMAIL.tools.map((t) => (t.name === "gmail_create_filter" ? { ...t, approval: { everyCall: true as const, prepare: prepareFilterApproval } } : t)),
 	oauth: COMPILED_GMAIL.oauth && { ...COMPILED_GMAIL.oauth, redirectPath: "/v1/email/google/callback", identity: { label: "userinfo-email", perAccount: true } },
 };

@@ -756,3 +756,43 @@ export function scopesAllowModify(grantedScopes: string | null | undefined): boo
 	if (!grantedScopes) return false;
 	return grantedScopes.split(/\s+/).some((s) => s === GMAIL_MODIFY_SCOPE || s === "https://mail.google.com/");
 }
+
+// ── Filters (#719) ──────────────────────────────────────────────────────────
+//
+// `users.settings.filters.create` needs `gmail.settings.basic`. That scope is an OPTIONAL grant
+// (never in the connect-time bundle), and the only tool that uses it is queued for the owner's
+// approval on every call — see lib/gmail-filter.ts for what a filter may and may not do.
+
+/** Filter management. It also reaches forwarding settings, which no tool here uses (#719). */
+export const GMAIL_SETTINGS_BASIC_SCOPE = "https://www.googleapis.com/auth/gmail.settings.basic";
+
+const GMAIL_FILTER_TIMEOUT_MS = 15_000; // both filter calls are bounded (#438): an approved click must not hang
+/** Does a recorded scope string allow managing filters? Fail-closed, like the two above. */
+export function scopesAllowFilters(grantedScopes: string | null | undefined): boolean {
+	if (!grantedScopes) return false;
+	return grantedScopes.split(/\s+/).some((s) => s === GMAIL_SETTINGS_BASIC_SCOPE);
+}
+
+/** The mailbox's labels — `labels.list`, which `gmail.readonly` already covers. */
+export async function listLabels(accessToken: string): Promise<Array<{ id: string; name: string; type: string }>> {
+	const res = await fetch(`${GMAIL_API}/labels`, { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(GMAIL_FILTER_TIMEOUT_MS) });
+	if (!res.ok) throw new GmailError(`Gmail labels list failed (${res.status}): ${await gmailErrorReason(res)}`);
+	const out = (await res.json()) as { labels?: Array<{ id?: string; name?: string; type?: string }> };
+	return (out.labels ?? []).filter((l) => l.id && l.name).map((l) => ({ id: l.id as string, name: l.name as string, type: l.type ?? "user" }));
+}
+
+/** Create one filter. The body comes from `gmailFilterBody`, which has no forward key. */
+export async function createFilter(
+	accessToken: string,
+	body: { criteria: Record<string, unknown>; action: { addLabelIds: string[]; removeLabelIds: string[] } },
+): Promise<{ id: string }> {
+	const res = await fetch(`${GMAIL_API}/settings/filters`, {
+		method: "POST",
+		headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+		body: JSON.stringify(body),
+		signal: AbortSignal.timeout(GMAIL_FILTER_TIMEOUT_MS),
+	});
+	if (!res.ok) throw new GmailError(`Gmail filter create failed (${res.status}): ${await gmailErrorReason(res)}`);
+	const out = (await res.json()) as { id?: string };
+	return { id: out.id ?? "" };
+}

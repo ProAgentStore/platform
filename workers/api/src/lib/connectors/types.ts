@@ -215,6 +215,20 @@ export interface JsonSchema {
  * (routes/tools), and — later — MCP. `jsonSchema` is the source of truth for the tool's
  * inputs; the runtime passes it through verbatim (no more rebuilding from an ad-hoc map).
  */
+/**
+ * What a per-call-approval tool does when its call is QUEUED (#719). `prepare` validates the call
+ * (an invalid one is refused, never put in front of the owner), fixes the arguments the ticket will
+ * carry — platform-resolved facts such as the target account go IN them, so the approved call is
+ * checked against what the owner saw — and composes the card.
+ */
+export interface ToolApproval {
+	everyCall: true;
+	prepare: (
+		ctx: RegistryToolCtx,
+		args: Record<string, unknown>,
+	) => Promise<{ ok: true; args: Record<string, unknown>; card: { title: string; description: string; reasoning: string } } | { ok: false; error: string }>;
+}
+
 export interface ToolDef {
 	name: string;
 	description: string;
@@ -265,6 +279,17 @@ export interface ToolDef {
 	 * position and the listing reported all nine as `read`.
 	 */
 	scope?: "read" | "write";
+	/**
+	 * Owner approval on EVERY call, whatever the connector's write consent says (#719).
+	 *
+	 * A write consent of "Always allow" is standing authority; for most writes that is the owner's
+	 * call to make. For a few it is not on offer: `gmail_create_filter` creates a standing, silent,
+	 * forward-looking rule on the mailbox strangers write to, so the owner decided it never runs
+	 * without a per-call approval. Such a tool still needs the consent row (no consent → refused as
+	 * before); this only removes "always" as an outcome. Approving goes through the same `call_tool`
+	 * ticket as an ask-mode write (#722), so there is one approval mechanism, not two.
+	 */
+	approval?: ToolApproval;
 	/**
 	 * Can a call to this tool CHANGE something — the external system, the owner's machine, or this
 	 * instance's own stored data?

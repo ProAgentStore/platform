@@ -159,6 +159,7 @@ describe("GET /v1/connectors — an optional grant not given is an offer, not a 
 		expect(gmail.optionalGrants).toEqual([
 			{ id: "send", label: "Send and reply as you", held: false },
 			{ id: "modify", label: "Archive and mark read", held: false },
+			{ id: "filters", label: "Create filters (each one approved by you)", held: false },
 		]);
 		expect(gmail.accounts[0].missingScopes).toEqual([]);
 	});

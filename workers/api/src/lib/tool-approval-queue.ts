@@ -13,7 +13,7 @@ import type { Env } from "../types.js";
 import { getConnector } from "./connectors/registry.js";
 import type { RegistryToolCtx, ToolDef } from "./connectors/types.js";
 import { logEvent } from "./events.js";
-import { approvalFingerprint, buildApprovalCard, queuedCallMessage, TOOL_APPROVAL_TASK_TYPE } from "./tool-approval.js";
+import { type ApprovalCard as ApprovalCardText, approvalFingerprint, buildApprovalCard, queuedCallMessage, TOOL_APPROVAL_TASK_TYPE } from "./tool-approval.js";
 
 /** How many pending approval cards to scan for a duplicate. An owner with more than this many
  *  un-actioned approvals has a bigger problem than a duplicate card, and an unbounded scan on a
@@ -59,16 +59,27 @@ export async function queueToolCallForApproval(
 			success: false,
 		};
 	}
+	// A per-call-approval tool (#719) validates the call and fixes what the ticket carries BEFORE a
+	// card exists: an invalid call is refused to the model, never put in front of the owner.
+	let fixedArgs = args;
+	let card: ApprovalCardText | undefined;
+	if (tool.approval) {
+		const prepared = await tool.approval.prepare({ ...ctx, instanceId }, args).catch((e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) }));
+		if (!prepared.ok) return { content: prepared.error, success: false };
+		fixedArgs = prepared.args;
+		card = prepared.card;
+	}
 	try {
 		const queued = await writeApprovalTicket(env, {
 			instanceId,
 			userId: ctx.userId,
 			tool,
-			args,
+			args: fixedArgs,
+			card,
 			traceId: ctx.traceId ?? null,
 		});
 		return {
-			content: queuedCallMessage({ toolName: tool.name, connectorLabel, ticketId: queued.ticketId, duplicate: queued.duplicate }),
+			content: queuedCallMessage({ toolName: tool.name, connectorLabel, ticketId: queued.ticketId, duplicate: queued.duplicate, everyCall: tool.approval?.everyCall === true }),
 			success: true,
 		};
 	} catch (err) {
@@ -91,7 +102,7 @@ interface QueuedApproval {
  *  a refusal rather than a dispatch. */
 async function writeApprovalTicket(
 	env: Env,
-	opts: { instanceId: string; userId: string; tool: ToolDef; args: Record<string, unknown>; traceId: string | null },
+	opts: { instanceId: string; userId: string; tool: ToolDef; args: Record<string, unknown>; card?: ApprovalCardText; traceId: string | null },
 ): Promise<QueuedApproval> {
 	const { tool } = opts;
 	const connector = tool.connector ? getConnector(tool.connector) : null;
@@ -99,12 +110,14 @@ async function writeApprovalTicket(
 	const existing = await findPendingApproval(env, opts.instanceId, opts.userId, key);
 	if (existing) return { ticketId: existing, duplicate: true };
 
-	const card = buildApprovalCard({
-		toolName: tool.name,
-		connectorLabel: connector?.label ?? tool.connector ?? "this connector",
-		schema: tool.jsonSchema,
-		args: opts.args,
-	});
+	const card =
+		opts.card ??
+		buildApprovalCard({
+			toolName: tool.name,
+			connectorLabel: connector?.label ?? tool.connector ?? "this connector",
+			schema: tool.jsonSchema,
+			args: opts.args,
+		});
 	const now = new Date().toISOString();
 	const task = {
 		id: crypto.randomUUID(),
@@ -129,7 +142,7 @@ async function writeApprovalTicket(
 	await logEvent(env, {
 		source: "tool",
 		event: "tool_call.queued_for_approval",
-		message: `${tool.name} queued for approval (${tool.connector} write access is "ask")`,
+		message: tool.approval?.everyCall ? `${tool.name} queued for approval (it is approved per call, always)` : `${tool.name} queued for approval (${tool.connector} write access is "ask")`,
 		userId: opts.userId,
 		instanceId: opts.instanceId,
 		traceId: opts.traceId,

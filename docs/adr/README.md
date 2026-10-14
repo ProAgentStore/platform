@@ -44,3 +44,4 @@ a violation).
 | [0004](./0004-an-audit-event-points-at-content-it-does-not-copy.md) | An audit event points at content; it does not copy it | Accepted |
 | [0005](./0005-the-platform-owns-the-conversation.md) | The platform owns the conversation | Accepted |
 | [0006](./0006-text-we-did-not-author-is-fenced.md) | Text the platform did not author is fenced before a model reads it | Accepted |
+| [0007](./0007-a-gmail-filter-is-approved-one-at-a-time-and-never-forwards.md) | A Gmail filter is approved one at a time, and never forwards | Accepted |
