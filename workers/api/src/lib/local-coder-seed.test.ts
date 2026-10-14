@@ -163,6 +163,12 @@ describe("migration 0164 — catalog copy (#362)", () => {
 		expect(lintAgentClaims({ description: SEEDED.local.description, capabilities: CAPS })).toEqual([]);
 	});
 
+	it("says the engine account is the subscriber's own and there is no separate price (#871, after 0235)", () => {
+		expect(SEEDED.local.description).toMatch(/Bring your own engine account/);
+		expect(SEEDED.local.description).toMatch(/billed to you by that provider/);
+		expect(SEEDED.local.description).toMatch(/ProAgentStore plan covers the platform; this agent has no separate price/);
+	});
+
 	it("would fail that lint without the runtime — so the check is live, not vacuous", () => {
 		expect(lintAgentClaims({ description: SEEDED.local.description, capabilities: { runtime: null, workflow: null } })).not.toHaveLength(0);
 	});

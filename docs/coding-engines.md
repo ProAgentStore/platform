@@ -348,6 +348,22 @@ This is a property of the path, not a bug awaiting a fix — see the table in
 the admission requirement for a Coder engine precisely so this stays confined to the operator
 family.
 
+## Who pays for what: the platform plan vs your engine account (#871)
+
+Owner decision, 2026-10-14. There are two separate bills, and the platform owns only one of them:
+
+- **Platform access is the ProAgentStore subscription.** The runner, relay, sessions and coding
+  runs are gated by the single platform-wide Pro entitlement (`requirePro` in `lib/billing.ts`:
+  runtime registration, session open and a coding run's start). Coding agents, Local Coder
+  included, have **no price of their own**. There is no per-agent entitlement, and none is
+  planned. While PAGS billing is deferred (`PAYWALL_ENFORCE` unset), the gate does not refuse
+  anyone.
+- **Engine usage is the owner's own engine account.** Claude Code, Codex, Grok or Gemini sign in
+  with the owner's own login or key on the owner's machine (the modes above), so the provider
+  bills the owner directly. The platform never pays for engine turns and cannot see that bill
+  (#348). Its `cost_micros` is a notional figure and `payer` records who is charged, as described
+  above.
+
 ## Subscription CLI by default; API-key coding only by confirmed choice (#1042)
 
 Actual coding runs on a subscription-authenticated local CLI. No shipped preset uses `api-key` (Gemini
