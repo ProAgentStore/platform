@@ -26,6 +26,7 @@
  */
 import { classifyApplyClick } from "./contract.js";
 import { LISTING_EXPIRED_RE, LISTING_UNAVAILABLE_RE } from "./unavailable.js";
+import type { ReplayPoint, ShotRecorder } from "../local-browser/replay.js";
 import {
 	CONFIRMATION_INTERVAL_SECONDS,
 	CONFIRMATION_LOOKS,
@@ -192,7 +193,44 @@ export class ApplyBridge {
 	constructor(
 		private readonly browser: BrowserTools,
 		private readonly host: ApplyBridgeHost,
+		/** Replay frames (#1063), taken by the runner with every form control blurred — never a tool the CLI can call. */
+		private readonly shots?: ShotRecorder,
 	) {}
+
+	/**
+	 * The frame a successful call earns (#1063). A refused call earns none, so a model retrying a refused
+	 * tool cannot fill the run's frame cap.
+	 */
+	private static shotPoint(name: string, submittedNow: boolean): ReplayPoint | null {
+		if (submittedNow) return "submit";
+		const points: Record<string, ReplayPoint> = {
+			browser_navigate: "navigated",
+			browser_navigate_back: "navigated",
+			browser_click: "clicked",
+			browser_snapshot: "snapshot",
+			browser_wait_for: "waited",
+			browser_type: "filled",
+			browser_select_option: "filled",
+			upload_artifact: "uploaded",
+			supervisor_checkpoint: "checkpoint",
+			ready_for_review: "review",
+			request_answer: "paused",
+			report_job_unavailable: "blocked",
+		};
+		return points[name] ?? null;
+	}
+
+	async callTool(name: string, args: Record<string, unknown> = {}): Promise<ToolResult> {
+		const submittedBefore = this.submitAttempted;
+		const res = await this.dispatch(name, args);
+		const point = res.isError ? null : ApplyBridge.shotPoint(name, this.submitAttempted && !submittedBefore);
+		if (point && this.shots) {
+			const seq = await this.shots.capture(this.browser, point);
+			// Metadata only: which frame, and why. The pixels — every form control blurred — stay in the runner.
+			if (seq) this.host.emit({ type: "screenshot.captured", detail: { shot: seq, point } });
+		}
+		return res;
+	}
 
 	private get done(): boolean {
 		return this.reviewReady || this.submitAttempted || this.unavailable !== null;
@@ -237,7 +275,7 @@ export class ApplyBridge {
 		];
 	}
 
-	async callTool(name: string, args: Record<string, unknown> = {}): Promise<ToolResult> {
+	private async dispatch(name: string, args: Record<string, unknown>): Promise<ToolResult> {
 		if (this.done) return text("The application is finished for this run. Stop now.", true);
 		if (name === "ready_for_review") return this.review(typeof args.summary === "string" ? args.summary : "");
 		if (name === "request_answer") return this.requestAnswer(args);

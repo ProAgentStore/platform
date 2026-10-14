@@ -25,6 +25,7 @@ import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RunnerInputError } from "../errors.js";
 import { type BrowserTools, BrowserBridge, domainWithin } from "./bridge.js";
+import { SCOUT_SHOT_CAP, ShotRecorder, type ReplayShotsPage } from "./replay.js";
 import { BRIDGE_ENV } from "./bridge-stdio.js";
 import {
 	LOCAL_BROWSER_AUTH_MODES,
@@ -108,6 +109,8 @@ interface Run {
 	child?: ChildProcess;
 	browser?: RunBrowser;
 	bridge?: BrowserBridge;
+	/** Replay frames (#1063), in memory until the cloud pulls them. */
+	shots: ShotRecorder;
 	consented: Set<string>;
 	deny: Set<string>;
 	profileConsented: boolean;
@@ -248,6 +251,7 @@ export class LocalBrowserRuntime {
 			token: randomBytes(24).toString("hex"),
 			state: "running",
 			events: [],
+			shots: new ShotRecorder(SCOUT_SHOT_CAP, () => this.now()),
 			seq: 0,
 			consented: new Set(envelope.policy.consentedDomains),
 			deny: new Set(envelope.policy.denyDomains),
@@ -282,7 +286,9 @@ export class LocalBrowserRuntime {
 		}
 		if (e.browserProfile === "default") this.emit(run, { type: "policy.decision", ...this.consentRef(run, "*"), detail: { scope: "signed_in_profile", decision: "consented" } });
 		run.browser = await this.deps.browserFor(e.browserProfile, run.dir);
-		run.bridge = new BrowserBridge(run.browser.tools, {
+		run.bridge = new BrowserBridge(
+			run.browser.tools,
+			{
 			emit: (ev) => this.emit(run, ev),
 			pause: (reason, detail) => this.pause(run, reason, detail),
 			consentIdFor: (host) => this.consentRef(run, host).consentId,
@@ -291,7 +297,9 @@ export class LocalBrowserRuntime {
 			allowListOnly: () => e.policy.allowDomains.length > 0,
 			overTime: () => this.activeMs(run) >= e.limits.maxMinutes * 60_000,
 			limits: e.limits,
-		});
+			},
+			run.shots,
+		);
 
 		const bridgeScript = this.deps.bridgeScript ?? fileURLToPath(new URL("./bridge-stdio.js", import.meta.url));
 		const spec = buildEngineSpec({
@@ -415,6 +423,13 @@ export class LocalBrowserRuntime {
 			lastSeq: run.seq,
 			...(run.result ? { result: run.result } : {}),
 		};
+	}
+
+	/** `POST /local-browser/shots {runId, afterSeq}` — the run's replay frames after `afterSeq` (#1063). */
+	shots(raw: unknown): ReplayShotsPage {
+		const o = (raw && typeof raw === "object" ? raw : {}) as { runId?: unknown; afterSeq?: unknown };
+		const run = this.get(String(o.runId ?? ""));
+		return run.shots.page(run.envelope.runId, typeof o.afterSeq === "number" && o.afterSeq > 0 ? o.afterSeq : 0);
 	}
 
 	/** Does this token belong to this run? The bridge forwarder's only credential. */

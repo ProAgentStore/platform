@@ -8,6 +8,7 @@
  * event or a result does to a run.
  */
 import { syncScanCard } from "./scan-board.js";
+import { ingestRunnerShots } from "../browser-artifacts.js";
 import { HttpError } from "../auth.js";
 import { readBrowserVerification } from "../browser-verification.js";
 import type { BrowserTakeover } from "../browser-takeover-types.js";
@@ -21,6 +22,7 @@ import {
 	LOCAL_BROWSER_CANCEL_PATH,
 	LOCAL_BROWSER_PAUSE_REASONS,
 	LOCAL_BROWSER_RESUME_PATH,
+	LOCAL_BROWSER_SHOTS_PATH,
 	LOCAL_BROWSER_STATUS_PATH,
 	type LocalBrowserEvent,
 	type LocalBrowserPauseReason,
@@ -254,6 +256,11 @@ export async function syncLocalBrowserRun(env: Env, instanceId: string, uid: str
 	const events = Array.isArray(body.events) ? body.events : [];
 	const lastSeq = typeof body.lastSeq === "number" && body.lastSeq >= run.runnerSeq ? body.lastSeq : run.runnerSeq;
 	let current = (await ingestRunnerEvents(env, instanceId, uid, run, events, now, { runnerSeq: lastSeq })).run;
+	// Replay frames (#1063), pulled beside the trace and kept as long as it is.
+	await ingestRunnerShots(env, { userId: uid, instanceId, subjectKind: "local_browser_run", subjectId: run.id, retentionDays: run.policy.traceRetentionDays }, async (afterSeq) => {
+		const shots = await callRuntime(env, runtime, LOCAL_BROWSER_SHOTS_PATH, { method: "POST", body: JSON.stringify({ runId: run.id, afterSeq }) });
+		return shots.ok ? runtimeJson(shots) : null;
+	}, now).catch(() => 0);
 
 	// Reconcile with the runner's own state, in case a pause/resume event was capped away.
 	if (body.state === "paused" && current.status === "running") {

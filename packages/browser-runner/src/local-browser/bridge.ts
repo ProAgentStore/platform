@@ -22,11 +22,12 @@
  */
 import type { LocalBrowserEvent, LocalBrowserFinding, LocalBrowserLimits, LocalBrowserPauseReason, LocalBrowserSourceFailure, LocalBrowserSourceFailureReason } from "./contract.js";
 import { LOCAL_BROWSER_SOURCE_FAILURE_REASONS, redactDetail } from "./contract.js";
+import type { ReplayPoint, ShotRecorder } from "./replay.js";
 
 /** The browser the bridge drives — `McpRuntime` in production, a fake in tests. */
 export interface BrowserTools {
 	listTools(): Promise<Array<{ name: string; description?: string; inputSchema: unknown }>>;
-	callTool(name: string, args?: Record<string, unknown>): Promise<{ content?: Array<{ type?: string; text?: string }>; isError?: boolean }>;
+	callTool(name: string, args?: Record<string, unknown>): Promise<{ content?: Array<{ type?: string; text?: string; data?: string; mimeType?: string }>; isError?: boolean }>;
 }
 
 /** What the run gives the bridge: the trace, the pause machinery, and the live consent state. */
@@ -214,7 +215,15 @@ export class BrowserBridge {
 	constructor(
 		private readonly browser: BrowserTools,
 		private readonly host: BridgeHost,
+		/** Replay frames (#1063), taken by the runner at the points below — never a tool the CLI can call. */
+		private readonly shots?: ShotRecorder,
 	) {}
+
+	/** Take a replay frame, best-effort; the trace only records that it exists (seq + capture point). */
+	private async shot(point: ReplayPoint, url?: string): Promise<void> {
+		const seq = await this.shots?.capture(this.browser, point, url ? { url } : {});
+		if (seq) this.host.emit({ type: "screenshot.captured", ...this.currentHost(), detail: { shot: seq, point } });
+	}
 
 	/** What the CLI sees: the read-only browser tools that exist, plus the research tools. */
 	async listTools(): Promise<Array<{ name: string; description?: string; inputSchema: unknown }>> {
@@ -231,6 +240,7 @@ export class BrowserBridge {
 		if (name === "report_source_failure") return this.reportFailure(args);
 		if (name === "finish_research") {
 			this.summary = typeof args.summary === "string" ? args.summary.slice(0, 4000) : "";
+			await this.shot("completed");
 			return text("Recorded. The research is finished; stop now.");
 		}
 		if (WRITE_TOOLS.has(name)) return this.refuse(name, `${name} is not available: this run is research only — no typing, forms, uploads, key presses or scripts.`);
@@ -244,10 +254,15 @@ export class BrowserBridge {
 		if (name === "browser_snapshot") {
 			this.lastSnapshot = textOf(res);
 			this.host.emit({ type: "browser.snapshot", ...this.currentHost() });
+			if (!res.isError) await this.shot("snapshot");
 		}
+		if (name === "browser_wait_for" && !res.isError) await this.shot("waited");
 		if (name === "browser_navigate_back") {
 			const state = await this.inspect();
-			if (state) this.noteNavigation(state);
+			if (state) {
+				this.noteNavigation(state);
+				await this.shot("navigated", state.url);
+			}
 		}
 		return { content: [{ type: "text", text: textOf(res) }], ...(res.isError ? { isError: true } : {}) };
 	}
@@ -307,7 +322,7 @@ export class BrowserBridge {
 			await this.browser.callTool("browser_navigate_back", {}).catch(() => undefined);
 			return this.refuse("browser_navigate", `${host} redirected to ${landedOn}, a site this run has not been allowed on. Open ${landedOn} with browser_navigate to ask the owner, or skip it.`);
 		}
-		return this.landed(textOf(res), state);
+		return this.landed(textOf(res), state, "navigated");
 	}
 
 	private async click(args: Record<string, unknown>): Promise<ToolResult> {
@@ -326,11 +341,11 @@ export class BrowserBridge {
 			await this.browser.callTool("browser_navigate_back", {}).catch(() => undefined);
 			return this.refuse("browser_click", `That link leads to ${host}, a site this run has not been allowed on. Open it with browser_navigate to ask the owner.`);
 		}
-		return this.landed(textOf(res), state);
+		return this.landed(textOf(res), state, "clicked");
 	}
 
 	/** After a page change: count it, trace it, and stop for a person when the page needs one. */
-	private async landed(toolText: string, known?: PageState | null): Promise<ToolResult> {
+	private async landed(toolText: string, known: PageState | null | undefined, point: "navigated" | "clicked"): Promise<ToolResult> {
 		const state = known ?? (await this.inspect());
 		if (!state) return text(toolText);
 		this.pages++;
@@ -339,6 +354,7 @@ export class BrowserBridge {
 		// Pauses, never obstacles (#947): a captcha, a sign-in, a bot check, an access-control page or a paywall is
 		// for a PERSON in the browser on this machine — the run waits, and re-checks once resumed.
 		const blocker: PersonBlocker | null = state.captcha ? "captcha" : state.login ? "login_required" : state.accessBlocked ? "access_blocked" : state.paywall ? "paywall" : null;
+		await this.shot(blocker || state.writeForm ? "blocked" : point, state.url);
 		if (blocker) {
 			const what = BLOCKER_WORDS[blocker];
 			this.host.emit({ type: "browser.blocked", url: state.url, domain: host, detail: { reason: blocker } });

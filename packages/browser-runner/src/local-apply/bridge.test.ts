@@ -6,7 +6,8 @@
 import { describe, expect, it } from "vitest";
 import type { BrowserTools } from "../local-browser/bridge.js";
 import { ApplyBridge, type ApplyBridgeHost, CREDENTIAL_NAME, groundingRefusal } from "./bridge.js";
-import type { LocalApplyEvent, LocalApplyPause } from "./contract.js";
+import { type LocalApplyEvent, type LocalApplyPause, parseLocalApplyEvent } from "./contract.js";
+import { APPLY_SHOT_CAP, MASK_FORM_CONTROLS, ShotRecorder, UNMASK_FORM_CONTROLS } from "../local-browser/replay.js";
 
 interface PageFlags {
 	title?: string;
@@ -548,5 +549,86 @@ describe("upload_artifact — an approved file, once", () => {
 		const { bridge } = await onForm({}, {}, { uploadError: "Error: The tool can only be used when there is related modal state present." });
 		expect((await bridge.callTool("upload_artifact", { kind: "resume" })).content[0].text).toMatch(/Click the field's upload control first/);
 		expect(bridge.uploaded.size).toBe(0);
+	});
+});
+
+describe("replay frames on an application page (#1063)", () => {
+	const IMAGE = "/9j/4AAQSkZJRgABAQ==";
+	/** The fake browser, plus a camera that records whether the page was masked when each frame was taken. */
+	function camera(tools: BrowserTools, mask: "masked" | "unmasked" = "masked") {
+		const state = { on: false, maskedAtShot: [] as boolean[] };
+		const wrapped: BrowserTools = {
+			listTools: tools.listTools,
+			callTool: async (name, args = {}) => {
+				if (name === "browser_evaluate" && args.function === MASK_FORM_CONTROLS) {
+					if (mask === "masked") state.on = true;
+					return { content: [{ text: `### Result\n"${mask}"` }] };
+				}
+				if (name === "browser_evaluate" && args.function === UNMASK_FORM_CONTROLS) {
+					state.on = false;
+					return { content: [{ text: '### Result\n"unmasked"' }] };
+				}
+				if (name === "browser_take_screenshot") {
+					state.maskedAtShot.push(state.on);
+					return { content: [{ type: "image", data: IMAGE, mimeType: "image/jpeg" }] };
+				}
+				return tools.callTool(name, args);
+			},
+		};
+		return { state, tools: wrapped };
+	}
+	async function recordedForm(mask: "masked" | "unmasked" = "masked") {
+		const b = fakeBrowser({ [FORM]: {} });
+		const cam = camera(b.tools, mask);
+		const h = fakeHost();
+		const shots = new ShotRecorder(APPLY_SHOT_CAP);
+		const bridge = new ApplyBridge(cam.tools, h.host, shots);
+		await bridge.callTool("browser_navigate", { url: FORM });
+		await bridge.callTool("browser_snapshot", {});
+		await bridge.callTool("supervisor_checkpoint", { checkpointId: "initial:1", phase: "initial" });
+		return { bridge, shots, cam, ...h };
+	}
+
+	it("frames navigation, reading, the checkpoint, a fill and review — every one taken with the form controls blurred", async () => {
+		const { bridge, shots, cam } = await recordedForm();
+		await bridge.callTool("browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" });
+		await bridge.callTool("ready_for_review", { summary: "Filled the name." });
+		expect(shots.shots.map((s) => s.point)).toEqual(["navigated", "snapshot", "checkpoint", "filled", "review"]);
+		expect(cam.state.maskedAtShot).toEqual([true, true, true, true, true]);
+		expect(cam.state.on).toBe(false);
+	});
+
+	it("privacy: the trace names each frame by seq and point; it never carries the image or a typed value, and survives the cloud's whitelist", async () => {
+		const { bridge, events } = await recordedForm();
+		await bridge.callTool("browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" });
+		const captured = events.filter((e) => e.type === "screenshot.captured");
+		expect(captured.length).toBeGreaterThan(0);
+		for (const e of captured) {
+			expect(Object.keys(e.detail ?? {}).sort()).toEqual(["point", "shot"]);
+			expect(parseLocalApplyEvent({ ...e, seq: 1, at: "2026-10-14T00:00:00Z" })?.detail).toEqual(e.detail);
+		}
+		const trace = JSON.stringify(events);
+		expect(trace).not.toContain(IMAGE);
+		expect(trace).not.toContain("Jane Citizen");
+	});
+
+	it("a refused call earns no frame — a model retrying a refused tool cannot fill the cap", async () => {
+		const { bridge, shots } = await recordedForm();
+		const before = shots.shots.length;
+		expect((await bridge.callTool("browser_type", { target: "e2", text: "jane@guess.com", source_quote: "Email: jane@example.com" })).isError).toBe(true);
+		expect(shots.shots.length).toBe(before);
+	});
+
+	it("fails closed: when the blur cannot be confirmed no frame is taken — and the fill itself still works", async () => {
+		const { bridge, shots, cam } = await recordedForm("unmasked");
+		expect((await bridge.callTool("browser_type", { target: "e1", text: "Jane Citizen", source_quote: "Name: Jane Citizen" })).isError).toBeFalsy();
+		expect(shots.shots).toEqual([]);
+		expect(cam.state.maskedAtShot).toEqual([]);
+	});
+
+	it("the screenshot tool is never offered to the CLI", async () => {
+		const { bridge } = await recordedForm();
+		expect((await bridge.listTools()).map((t) => t.name)).not.toContain("browser_take_screenshot");
+		expect((await bridge.callTool("browser_take_screenshot", {})).isError).toBe(true);
 	});
 });

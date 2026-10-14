@@ -80,6 +80,11 @@ const END = "<!-- END generated: mcp-exclusions -->";
 // ─────────────────────────────────────────────────────────────────────────────
 const EXCLUSIONS = [
 	{
+		label: "Browser-run replay screenshots (#1063)",
+		why: "Binary routes: MCP results are text, and a screenshot of the owner's own pages is evidence for the owner in the console, not something to stream into an agent's transcript.",
+		match: /^GET \/v1\/instances\/\{\}\/browser-artifacts/,
+	},
+	{
 		label: "The credentials vault — site logins, passwords, PINs, recovery codes",
 		why: "Secrets. Console → Knowledge → Credentials.",
 		match: /^[A-Z]+ \/v1\/instances\/\{\}\/credentials/,

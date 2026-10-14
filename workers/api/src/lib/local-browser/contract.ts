@@ -30,6 +30,8 @@ export const LOCAL_BROWSER_RUN_PATH = "/local-browser/run";
 export const LOCAL_BROWSER_CANCEL_PATH = "/local-browser/cancel";
 export const LOCAL_BROWSER_STATUS_PATH = "/local-browser/status";
 export const LOCAL_BROWSER_RESUME_PATH = "/local-browser/resume";
+/** `POST {runId, afterSeq}` — a run's replay screenshots (#1063), pulled like its status. */
+export const LOCAL_BROWSER_SHOTS_PATH = "/local-browser/shots";
 
 export type LocalBrowserEngine = "claude" | "codex";
 export const LOCAL_BROWSER_ENGINES: readonly LocalBrowserEngine[] = ["claude", "codex"];
@@ -119,6 +121,7 @@ export type LocalBrowserEventType =
 	| "finding.parsed"
 	| "run.paused"
 	| "run.resumed"
+	| "screenshot.captured"
 	| "note";
 export const LOCAL_BROWSER_EVENT_TYPES: readonly LocalBrowserEventType[] = [
 	"engine.started",
@@ -132,6 +135,7 @@ export const LOCAL_BROWSER_EVENT_TYPES: readonly LocalBrowserEventType[] = [
 	"finding.parsed",
 	"run.paused",
 	"run.resumed",
+	"screenshot.captured",
 	"note",
 ];
 
@@ -236,6 +240,29 @@ export interface LocalBrowserStatusResponse {
 	lastSeq: number;
 	/** Present once `state` is `ended`. */
 	result?: LocalBrowserResultEnvelope;
+}
+
+/**
+ * One replay screenshot (#1063), as the cloud pulls it from `POST /local-browser/shots` (and
+ * `/local-apply/shots`, which shares the shape). `data` is base64 with no `data:` prefix. The trace
+ * never carries this — only a `screenshot.captured` event with `{shot, point}`.
+ */
+export interface ReplayShot {
+	seq: number;
+	point: "navigated" | "clicked" | "snapshot" | "waited" | "paused" | "blocked" | "filled" | "uploaded" | "checkpoint" | "review" | "submit" | "completed";
+	url?: string;
+	action?: string;
+	mimeType: string;
+	data: string;
+	at: string;
+}
+
+/** `POST /local-browser/shots {runId, afterSeq}` — frames after `afterSeq`, paged by size. */
+export interface ReplayShotsPage {
+	runId: string;
+	shots: ReplayShot[];
+	/** The highest seq returned — the next `afterSeq`. Never past a frame not yet returned. */
+	lastSeq: number;
 }
 
 /** `POST /local-browser/resume` — the owner's current decisions, sent when they unblock a pause. */

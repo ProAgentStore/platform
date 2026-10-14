@@ -14,6 +14,8 @@ import type { BrowserTakeover, BrowserTakeoverListResponse, BrowserTakeoverTrans
 import type { BrowserTakeover as WorkerBrowserTakeover, BrowserTakeoverListResponse as WorkerBrowserTakeoverListResponse, BrowserTakeoverTransitionResponse as WorkerBrowserTakeoverTransitionResponse } from "../../../../workers/api/src/lib/browser-takeover-types";
 import type { LeadVerification as WorkerLeadVerification, LeadVerificationListResponse as WorkerLeadVerificationListResponse } from "../../../../workers/api/src/lib/job-lead-browser-verification-types";
 import type { PreparedApplicationTransferReceipt } from "./applicationTransfer";
+import type { BrowserArtifactListResponse, BrowserArtifactView } from "./runReplay";
+import type { BrowserArtifactListResponse as WorkerBrowserArtifactListResponse, BrowserArtifactView as WorkerBrowserArtifactView } from "../../../../workers/api/src/agent-types";
 
 /**
  * The console's API-response types, checked against the Worker declarations they copy (#617).
@@ -158,6 +160,10 @@ const _leadVerificationListAcceptsTheProducer: LeadVerificationListResponse = {}
 const _remoteAuthViewHasNoInventedFields: Extra<RemoteAuthRequestView, WorkerRemoteAuthRequestView> extends never ? true : never = true;
 const _remoteAuthViewAcceptsTheProducer: RemoteAuthRequestView = {} as WorkerRemoteAuthRequestView;
 const _remoteAuthResponseAcceptsTheProducer: RemoteAuthRequestResponse = {} as WorkerRemoteAuthRequestResponse;
+// #1063: the replay artifact list the shared player reads.
+const _browserArtifactHasNoInventedFields: Extra<BrowserArtifactView, WorkerBrowserArtifactView> extends never ? true : never = true;
+const _browserArtifactAcceptsTheProducer: BrowserArtifactView = {} as WorkerBrowserArtifactView;
+const _browserArtifactListAcceptsTheProducer: BrowserArtifactListResponse = {} as WorkerBrowserArtifactListResponse;
 
 // #988: queue detail uses the named Worker projection instead of rebuilding lifecycle/checkpoint
 // semantics in the browser. This compile-time assignment catches incompatible widening.
@@ -233,7 +239,8 @@ describe("console response types match the Worker declarations they copy (#617)"
 			_leadVerificationHasNoInventedFields,
 			_leadVerificationListHasNoInventedFields,
 			_remoteAuthViewHasNoInventedFields,
-		]).toEqual([true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true]);
+			_browserArtifactHasNoInventedFields,
+		]).toEqual([true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true]);
 		expect(_instanceModelStateAcceptsTheProducer).toEqual({});
 		expect(_accountPreferencesAcceptsTheProducer).toEqual({});
 		expect(_accountPreferencesWriteAcceptsTheProducer).toEqual({});
@@ -244,6 +251,8 @@ describe("console response types match the Worker declarations they copy (#617)"
 		expect(_leadVerificationListAcceptsTheProducer).toEqual({});
 		expect(_remoteAuthViewAcceptsTheProducer).toEqual({});
 		expect(_remoteAuthResponseAcceptsTheProducer).toEqual({});
+		expect(_browserArtifactAcceptsTheProducer).toEqual({});
+		expect(_browserArtifactListAcceptsTheProducer).toEqual({});
 	});
 
 	it("declares every trigger action the Worker's TRIGGER_ACTIONS has, and no more", () => {

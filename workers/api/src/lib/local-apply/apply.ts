@@ -16,6 +16,7 @@
  * once; a submit attempt — confirmed, unconfirmed, or unknowable because the runner was lost
  * mid-run — sets `submit_attempted_at`, and nothing starts another fill after that.
  */
+import { ingestRunnerShots } from "../browser-artifacts.js";
 import { HttpError } from "../auth.js";
 import { capabilitiesForInstance } from "../agent-capabilities.js";
 import { readInstanceConfigPair } from "../instance-config.js";
@@ -29,6 +30,7 @@ import {
 	LOCAL_APPLY_PAUSE_REASONS,
 	LOCAL_APPLY_RESUME_PATH,
 	LOCAL_APPLY_RUN_PATH,
+	LOCAL_APPLY_SHOTS_PATH,
 	LOCAL_APPLY_STATUS_PATH,
 	LOCAL_APPLY_TASK_TYPE,
 	type LocalApplyPause,
@@ -636,6 +638,11 @@ export async function syncApplyRun(env: Env, uid: string, run: ApplyRun, now = D
 	const lastSeq = typeof body.lastSeq === "number" && body.lastSeq >= run.runnerSeq ? body.lastSeq : run.runnerSeq;
 	// A submit attempt is recorded the moment PAGS sees it, before anything else can go wrong.
 	if (events.some((e) => e.type === "submit.attempted")) await markSubmitAttempted(env, run.applicationId, uid, now);
+	// Replay frames (#1063) — every form control blurred by the runner before capture — pulled beside the trace.
+	await ingestRunnerShots(env, { userId: uid, instanceId: run.instanceId, subjectKind: "local_apply_run", subjectId: run.id }, async (afterSeq) => {
+		const shots = await callRuntime(env, runtime, LOCAL_APPLY_SHOTS_PATH, { method: "POST", body: JSON.stringify({ runId: run.id, afterSeq }) });
+		return shots.ok ? runtimeJson(shots) : null;
+	}, now).catch(() => 0);
 
 	const p = body.pause && typeof body.pause === "object" ? (body.pause as Record<string, unknown>) : null;
 	const rawCheckpoint = p?.checkpoint && typeof p.checkpoint === "object" && !Array.isArray(p.checkpoint) ? (p.checkpoint as Record<string, unknown>) : null;

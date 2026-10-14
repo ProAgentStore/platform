@@ -65,6 +65,7 @@ import { runDueDeliveries } from "./lib/connections.js";
 import { runSpendAlerts } from "./lib/spend-alerts.js";
 import { runIssueSync } from "./lib/issue-sync.js";
 import { syncActiveLocalBrowserRuns } from "./lib/local-browser/sync.js";
+import { sweepExpiredBrowserArtifacts } from "./lib/browser-artifacts.js";
 import { syncActiveTailorRuns } from "./lib/local-artifact/tailor.js";
 import { syncActiveApplyReconciliations, syncActiveApplyRuns } from "./lib/local-apply/apply.js";
 import { failStaleUpdateOps } from "./lib/runner-update-ops.js";
@@ -324,6 +325,8 @@ export default {
 		ctx.waitUntil(syncActiveTailorRuns(env).catch((err) => logUnhandled(env, err, { path: "scheduled:application-tailor", method: "CRON" })));
 		// The same pull for Application Runner fills (#957).
 		ctx.waitUntil(syncActiveApplyRuns(env).catch((err) => logUnhandled(env, err, { path: "scheduled:application-runner", method: "CRON" })));
+		// Replay screenshots past their retention (#1063): the R2 object and its row, together.
+		ctx.waitUntil(sweepExpiredBrowserArtifacts(env).catch((err) => logUnhandled(env, err, { path: "scheduled:browser-artifacts", method: "CRON" })));
 		// The Runner owns the ten-minute reconciliation deadline.  Pull the terminal result here so
 		// expiry remains durable when the owner closes Console instead of polling its handoff.
 		ctx.waitUntil(syncActiveApplyReconciliations(env).catch((err) => logUnhandled(env, err, { path: "scheduled:application-reconciliation", method: "CRON" })));

@@ -308,3 +308,29 @@ export interface InstancePermissionRequestResponse {
 export interface InstancePermissionRequestDecisionResponse {
 	status: InstancePermissionRequestStatus;
 }
+
+/**
+ * One stored replay screenshot (#1063), as `GET /v1/instances/:id/browser-artifacts` lists it. Metadata
+ * only — a capture point, a query-free URL, its domain and an action class; the bytes are fetched by `id`
+ * through the owner-checked route, and the R2 key never leaves the server.
+ */
+export interface BrowserArtifactView {
+	id: string;
+	subjectKind: "runtime_task" | "local_browser_run" | "local_apply_run";
+	subjectId: string;
+	seq: number;
+	contentType: string;
+	bytes: number;
+	point: string;
+	url: string | null;
+	domain: string | null;
+	action: string | null;
+	createdAt: string;
+}
+
+/** `GET /v1/instances/:id/browser-artifacts?subject_kind=&subject_id=` (#1063). */
+export interface BrowserArtifactListResponse {
+	subjectKind: BrowserArtifactView["subjectKind"];
+	subjectId: string;
+	artifacts: BrowserArtifactView[];
+}

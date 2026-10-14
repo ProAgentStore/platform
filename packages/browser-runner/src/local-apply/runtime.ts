@@ -35,6 +35,7 @@ import { redactText, secretEnvValues } from "../local-browser/contract.js";
 import { finalText, missingLogin, signInHelp } from "../local-browser/engine.js";
 import { resolveWorkspacePath } from "../local-browser/runtime.js";
 import { ApplyBridge } from "./bridge.js";
+import { APPLY_SHOT_CAP, ShotRecorder, type ReplayShotsPage } from "../local-browser/replay.js";
 import { confirmationSignals } from "./confirmation.js";
 import { listingUnavailableReason } from "./unavailable.js";
 import {
@@ -108,6 +109,8 @@ interface Run {
 	child?: ChildProcess;
 	browser?: RunBrowser;
 	bridge?: ApplyBridge;
+	/** Replay frames (#1063), form controls blurred, in memory until the cloud pulls them. */
+	shots: ShotRecorder;
 	allow: Set<string>;
 	/** Source text, approved materials and the owner's answers — what a value may be grounded in. */
 	grounding: string[];
@@ -338,7 +341,8 @@ export class LocalApplyRuntime {
 					if ("error" in parsed || parsed.result.runId !== envelope.runId) continue;
 					const checked = parsed.result;
 					this.runs.set(envelope.runId, {
-						envelope, dir, token: "", state: "ended", events: raw.events as LocalApplyRunnerEvent[], seq: raw.seq,
+						// Replay frames are memory-only by design (#1063): a run reloaded after a restart has none.
+						envelope, dir, token: "", state: "ended", events: raw.events as LocalApplyRunnerEvent[], seq: raw.seq, shots: new ShotRecorder(0),
 						result: checked, allow: new Set(envelope.policy.allowDomains), grounding: [], secrets: [], activeSince: raw.endedAt,
 						activeMs: 0, waiters: [], output: [], engineAuth: checked.engineAuth, cancelled: false, timedOut: false,
 						checkpoints: new Map(), endedAt: raw.endedAt,
@@ -367,6 +371,7 @@ export class LocalApplyRuntime {
 			token: randomBytes(24).toString("hex"),
 			state: "running",
 			events: [],
+			shots: new ShotRecorder(APPLY_SHOT_CAP, () => this.now()),
 			seq: 0,
 			allow: new Set(envelope.policy.allowDomains),
 			grounding: [],
@@ -445,7 +450,7 @@ export class LocalApplyRuntime {
 			limits: e.limits,
 			mode: e.policy.mode,
 			gateId: e.policy.submitGate?.gateId,
-		});
+		}, run.shots);
 		if (spec.mcpConfig) writeFileSync(spec.mcpConfig.path, spec.mcpConfig.json, { mode: 0o600 });
 
 		const child = this.spawn(spec.command, spec.args, { cwd: join(run.dir, "scratch"), env: spec.env, stdio: ["ignore", "pipe", "pipe"] });
@@ -671,6 +676,13 @@ export class LocalApplyRuntime {
 			else this.end(run, { outcome: "failed", error: "Cancelled by the owner" });
 		}
 		return { runId, state: run.state };
+	}
+
+	/** `POST /local-apply/shots {runId, afterSeq}` — the run's replay frames after `afterSeq` (#1063). */
+	shots(raw: unknown): ReplayShotsPage {
+		const o = (raw && typeof raw === "object" ? raw : {}) as { runId?: unknown; afterSeq?: unknown };
+		const run = this.get(String(o.runId ?? ""));
+		return run.shots.page(run.envelope.runId, typeof o.afterSeq === "number" && o.afterSeq > 0 ? o.afterSeq : 0);
 	}
 
 	status(raw: unknown): LocalApplyStatusResponse {

@@ -1,14 +1,16 @@
 import TakeoverBanner from "../components/TakeoverBanner";
+import RunReplay, { useBrowserArtifacts } from "../components/RunReplay";
+import { type LegacyShot, replayFrames } from "../lib/runReplay";
 import { deviceKind } from "../lib/browserTakeovers";
 import { useState, useEffect, useCallback, useRef, useMemo, useId, type ReactNode } from "react";
 import Button from "../components/Button";
 import Page from "../components/Page";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
-import { api, getToken, API } from "@proagentstore/sdk/client";
+import { api } from "@proagentstore/sdk/client";
 import { usePolling, useTieredPolling } from "@proagentstore/sdk/hooks";
 import { isRunFinished } from "../lib/runStatus";
 import type { RuntimeTask, RuntimeEvent } from "../lib/types";
-import { ArrowLeft, Play, Pause, ChevronLeft, ChevronRight, Trash2 } from "lucide-react";
+import { ArrowLeft, Trash2 } from "lucide-react";
 import Card from "../components/Card";
 
 /**
@@ -55,8 +57,6 @@ function levelClass(type: string): string {
 	if (type === "job.email") return "text-accent";
 	return "text-muted";
 }
-
-interface Shot { seq: number; action: string; name: string; url: string; at?: string; msg: string }
 
 interface TicketTurn { id: string; role: "user" | "agent"; text: string; at: string }
 
@@ -341,9 +341,6 @@ export default function RunDetail() {
 	const askIntent = searchParams.get("ask") === "1";
 	const [task, setTask] = useState<RuntimeTask | null>(null);
 	const [events, setEvents] = useState<RuntimeEvent[]>([]);
-	const [shotUrls, setShotUrls] = useState<Record<number, string>>({});
-	const [idx, setIdx] = useState(0);
-	const [playing, setPlaying] = useState(false);
 	const [inputVal, setInputVal] = useState("");
 	const [takeoverOpen, setTakeoverOpen] = useState(false);
 	const fieldLabelId = useId();
@@ -358,7 +355,6 @@ export default function RunDetail() {
 	// the Board — the same "degrade to a real page" #344 chose for a session id that no longer
 	// resolves. Only a 404 counts; a network blip must keep whatever is on screen.
 	const [gone, setGone] = useState(false);
-	const urlsRef = useRef<Record<number, string>>({});
 
 	const load = useCallback(async () => {
 		try {
@@ -441,46 +437,19 @@ export default function RunDetail() {
 		navigate(-1);
 	};
 
-	const shots: Shot[] = useMemo(() =>
+	// #1063: the task's stored replay frames, by subject; older `agent.shot` events with no artifact id
+	// still play from their original route.
+	const legacyShots: LegacyShot[] = useMemo(() =>
 		events
 			.filter((e) => e.type === "agent.shot" && (e.data as Record<string, unknown>)?.seq != null)
 			.map((e) => {
 				const d = (e.data ?? {}) as Record<string, unknown>;
-				return { seq: Number(d.seq), action: String(d.action ?? ""), name: String(d.name ?? ""), url: String(d.url ?? ""), at: e.createdAt, msg: e.message ?? "" };
-			})
-			.sort((a, b) => a.seq - b.seq),
+				return { seq: Number(d.seq), artifactId: typeof d.artifactId === "string" ? d.artifactId : undefined, msg: e.message || humanEvent({ type: "agent.decision", message: String(d.action ?? "") } as RuntimeEvent), at: e.createdAt };
+			}),
 	[events]);
+	const artifacts = useBrowserArtifacts(instanceId ?? "", "runtime_task", taskId, legacyShots.length);
+	const frames = useMemo(() => replayFrames(instanceId ?? "", artifacts, { taskId: taskId ?? "", shots: legacyShots }), [instanceId, taskId, artifacts, legacyShots]);
 
-	// Fetch each shot blob with auth; browser image elements cannot send a Bearer header.
-	useEffect(() => {
-		let cancelled = false;
-		(async () => {
-			const tok = getToken();
-			for (const s of shots) {
-				if (urlsRef.current[s.seq]) continue;
-				try {
-					const res = await fetch(`${API}/v1/instances/${instanceId}/tasks/${taskId}/shots/${s.seq}`, { headers: { Authorization: `Bearer ${tok}` } });
-					if (!res.ok) continue;
-					const blob = await res.blob();
-					if (cancelled) return;
-					urlsRef.current[s.seq] = URL.createObjectURL(blob);
-					setShotUrls({ ...urlsRef.current });
-				} catch { /* skip */ }
-			}
-		})();
-		return () => { cancelled = true; };
-	}, [shots, instanceId, taskId]);
-
-	useEffect(() => () => { Object.values(urlsRef.current).forEach(URL.revokeObjectURL); }, []);
-	useEffect(() => { if (idx > shots.length - 1) setIdx(Math.max(0, shots.length - 1)); }, [shots.length, idx]);
-
-	useEffect(() => {
-		if (!playing || shots.length === 0) return;
-		const t = setInterval(() => setIdx((i) => { if (i >= shots.length - 1) { setPlaying(false); return i; } return i + 1; }), 1200);
-		return () => clearInterval(t);
-	}, [playing, shots.length]);
-
-	const cur = shots[idx];
 	const status = task?.status ?? "";
 	const url = String(task?.input?.url ?? "");
 
@@ -584,43 +553,7 @@ export default function RunDetail() {
 			<TicketThread instanceId={instanceId} taskId={taskId} autoFocus={askIntent} />
 
 			{/* ── Screenshot replay ─────────────────────────────────────────── */}
-			{shots.length > 0 ? (
-				<Card className="mb-5">
-					<div className="flex items-center gap-3 mb-3">
-						<button type="button" onClick={() => setPlaying((p) => !p)} className="w-9 h-9 flex items-center justify-center rounded-lg bg-accent text-white shrink-0" aria-label={playing ? "Pause" : "Play"}>
-							{playing ? <Pause size={16} /> : <Play size={16} />}
-						</button>
-						<button type="button" onClick={() => { setPlaying(false); setIdx((i) => Math.max(0, i - 1)); }} disabled={idx <= 0} className="w-8 h-8 flex items-center justify-center rounded-lg border border-line text-muted disabled:opacity-30" aria-label="Previous"><ChevronLeft size={16} /></button>
-						<button type="button" onClick={() => { setPlaying(false); setIdx((i) => Math.min(shots.length - 1, i + 1)); }} disabled={idx >= shots.length - 1} className="w-8 h-8 flex items-center justify-center rounded-lg border border-line text-muted disabled:opacity-30" aria-label="Next"><ChevronRight size={16} /></button>
-						{/* The play/prev/next buttons around it are all named; the scrubber — the only
-						    one you can drag to an arbitrary step — was not, and the "3/12" beside it
-						    is a separate node a screen reader does not attach. */}
-						<input type="range" min={0} max={Math.max(0, shots.length - 1)} value={idx} onChange={(e) => { setPlaying(false); setIdx(Number(e.target.value)); }} className="flex-1 min-w-0 accent-accent" aria-label="Step" aria-valuetext={`Step ${idx + 1} of ${shots.length}`} />
-						<span className="text-xs text-muted-soft font-mono shrink-0">{idx + 1}/{shots.length}</span>
-					</div>
-
-					<div className="rounded-lg overflow-hidden border border-line bg-paper flex items-center justify-center min-h-[240px]">
-							{cur && shotUrls[cur.seq] ? (
-								<img src={shotUrls[cur.seq]} alt={`Step ${cur.seq}`} width={1280} height={720} className="w-full max-h-[520px] object-contain" />
-							) : (
-							<span className="text-sm text-muted-soft py-16">Loading screenshot…</span>
-						)}
-					</div>
-
-					{cur && (
-						<div className="flex items-baseline justify-between gap-3 mt-2.5">
-							<div className="text-sm text-ink">
-								<span className="font-semibold">Step {cur.seq}:</span> {cur.msg || humanEvent({ type: "agent.decision", message: cur.action } as RuntimeEvent)}
-							</div>
-							<span className="text-xs text-muted-soft font-mono shrink-0">{fmtStamp(cur.at)}</span>
-						</div>
-					)}
-				</Card>
-			) : (
-				<div className="bg-panel border border-line rounded-xl p-4 mb-5 text-sm text-muted-soft">
-					No screenshots for this run{running ? " yet — they appear as the agent acts." : " (older run, before screenshot capture)."}
-				</div>
-			)}
+			<RunReplay frames={frames} emptyText={`No screenshots for this run${running ? " yet — they appear as the agent acts." : " (older run, before screenshot capture)."}`} />
 
 			{/* ── Full timestamped activity log ─────────────────────────────── */}
 			<Card>

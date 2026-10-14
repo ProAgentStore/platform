@@ -80,11 +80,15 @@ beforeEach(() => {
 });
 afterEach(() => d1.close());
 
+/** In-memory R2 for replay frames (#1063). */
+const stored = new Map<string, Uint8Array>();
+const STORAGE = { put: async (k: string, v: Uint8Array) => void stored.set(k, v), get: async (k: string) => (stored.has(k) ? { body: stored.get(k) } : null), delete: async (k: string) => void stored.delete(k) };
+
 async function call(method: string, path: string, body?: unknown) {
 	const app = new Hono<{ Bindings: Env }>();
 	app.route("/v1/instances", instanceRoutes);
 	app.onError((e, c) => (e instanceof HttpError ? c.json({ error: e.message }, e.status as 400) : c.json({ error: String(e) }, 500)));
-	const res = await app.request(`/v1/instances${path}`, { method, headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, { DB: d1.DB, RELAY: relay, AGENT: agentDO } as unknown as Env);
+	const res = await app.request(`/v1/instances${path}`, { method, headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, { DB: d1.DB, RELAY: relay, AGENT: agentDO, STORAGE } as unknown as Env);
 	// biome-ignore lint/suspicious/noExplicitAny: a JSON response read field by field in assertions.
 	return { status: res.status, body: (await res.json()) as Record<string, any> };
 }
@@ -337,6 +341,26 @@ describe("pulling state from the runner (#944)", () => {
 		expect(sent.filter((x) => x.path === "/local-browser/status").at(-1)?.body).toEqual({ runId: run.id, afterSeq: 0 });
 		await call("GET", `/i1/local-browser/runs/${run.id}`);
 		expect(sent.filter((x) => x.path === "/local-browser/status").at(-1)?.body).toEqual({ runId: run.id, afterSeq: 2 });
+	});
+
+	it("reading a run also pulls its replay frames into owner-scoped storage; the trace only names them (#1063)", async () => {
+		stored.clear();
+		const run = (await call("POST", "/i1/local-browser/runs", { objective: "x" })).body;
+		const frame = btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xe0, 1));
+		runner.paths = {
+			"/local-browser/status": { status: 200, body: { runId: run.id, state: "running", lastSeq: 1, events: [{ seq: 1, type: "screenshot.captured", at, domain: "seek.com.au", detail: { shot: 1, point: "navigated" } }] } },
+			"/local-browser/shots": { status: 200, body: { runId: run.id, shots: [{ seq: 1, point: "navigated", url: "https://seek.com.au/jobs?keywords=private", mimeType: "image/jpeg", data: frame, at }], lastSeq: 1 } },
+		};
+		await call("GET", `/i1/local-browser/runs/${run.id}`);
+		expect(sent.filter((x) => x.path === "/local-browser/shots").map((x) => x.body)).toEqual([{ runId: run.id, afterSeq: 0 }, { runId: run.id, afterSeq: 1 }]);
+		const list = (await call("GET", `/i1/browser-artifacts?subject_kind=local_browser_run&subject_id=${run.id}`)).body;
+		expect(list.artifacts).toEqual([expect.objectContaining({ seq: 1, point: "navigated", url: "https://seek.com.au/jobs", domain: "seek.com.au" })]);
+		expect([...stored.keys()]).toEqual([`browser-artifacts/u1/i1/local_browser_run/${run.id}/00001.jpg`]);
+		// Privacy: the stored trace names the frame and nothing more — no bytes, no query string.
+		const events = JSON.stringify((await call("GET", `/i1/local-browser/runs/${run.id}/events`)).body.events);
+		expect(events).toContain("screenshot.captured");
+		expect(events).not.toContain(frame);
+		expect(events).not.toContain("keywords=private");
 	});
 
 	it("ends the run with the runner's result once the runner says it ended", async () => {

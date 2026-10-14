@@ -149,6 +149,31 @@ Coder also supports multiple connected machines for the same private instance. E
 - An agent declared `readOnly` cannot perform a committing click at all; the refusal is enforced in the workflow, not requested in the prompt.
 - Local files and browser profiles stay local unless the user intentionally uploads or imports content.
 
+## Replay screenshots
+
+Every browser run can be played back afterwards in the console (#1063): a JOB_APPLY or BROWSER_TASK
+workflow task, a Scout's research run, and an Application Runner fill. They share one contract — a
+screenshot is stored evidence addressed by its run (`runtime_task`, `local_browser_run`,
+`local_apply_run`), its bytes are kept in owner-scoped storage, and they are only served through
+`GET /v1/instances/:id/browser-artifacts`, which checks the instance, the frame and the run all belong
+to the caller. They are not exposed over MCP.
+
+- **The runner takes them, never the model.** Frames are captured at fixed points — after a
+  navigation, an accepted click, a page read or wait, a pause or blocker, and at completion; on an
+  application run also after a fill, an upload, a checkpoint, review and a submit. `browser_take_screenshot`
+  stays refused to the CLI.
+- **Form controls are blurred.** Before every frame the runner blurs every input, textarea, select and
+  editable region, and removes the blur straight after. If the blur cannot be confirmed, no frame is
+  taken. This applies to research runs as well as application runs.
+- **The trace stays redacted.** It records only that a frame exists (`screenshot.captured`, with its
+  sequence number and capture point) — never the image, page text, form values or typed values. Stored
+  metadata is the capture point, the page URL without its query or fragment, its domain and an action
+  class.
+- **Bounded.** At most 60 frames per research run and 40 per application run, viewport only, each frame
+  capped in size, held in the runner's memory until the cloud pulls it. Research frames are kept as long
+  as the run's trace (default 30 days); workflow tasks and application runs, 30 days. Screenshots taken
+  before this contract (`runshot/`) are still served as they were.
+
 ## When Not To Use A Browser Runtime
 
 Most server-only agents should use hosted Worker execution or standard instance chat. Do not require `pags up` for agents that only need text processing, API calls, knowledge search, or document drafting.

@@ -22,6 +22,7 @@ import { registerGuideRoutes } from "./instances-guide.js";
 import { registerConsoleLinkRoutes } from "./instances-console-link.js";
 import { registerPermissionRequestRoutes } from "./instances-permission-requests.js";
 import { registerBrowserTakeoverRoutes } from "./instances-browser-takeovers.js";
+import { registerBrowserArtifactRoutes } from "./instances-browser-artifacts.js";
 import { registerBrowserVerificationRoutes } from "./instances-browser-verification.js";
 import { registerLocalBrowserRoutes } from "./instances-local-browser.js";
 import { registerGmailScoutRoutes } from "./instances-gmail-scout.js";
@@ -1095,6 +1096,7 @@ registerPermissionRequestRoutes(instanceRoutes); // durable owner permission rec
 registerLocalBrowserRoutes(instanceRoutes); // local CLI browser research: settings, consent, runs (#945)
 registerBrowserVerificationRoutes(instanceRoutes); // a declared local browser turned on per instance, eligible machines (#1031)
 registerBrowserTakeoverRoutes(instanceRoutes); // durable takeover states before any remote control is shown (#1031)
+registerBrowserArtifactRoutes(instanceRoutes); // replay screenshots of browser runs, owner-only, by subject (#1063)
 registerGmailScoutRoutes(instanceRoutes); // read-only Gmail alert ingestion into this Scout's private leads (#995)
 registerCoderBrainRoutes(instanceRoutes); // the coder brain switch + product-owner triage reports (#1025, #1027)
 registerInstanceDescriptionRoutes(instanceRoutes); // one secret-safe runtime projection for MCP / Console (#1002)

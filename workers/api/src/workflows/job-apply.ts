@@ -12,7 +12,7 @@ import { logError } from "../lib/error-log.js";
 import { logEvent } from "../lib/events.js";
 import { isTransientInfraError } from "../lib/transient-error.js";
 import { browserRunAdvance, browserRunPark, browserRunTick, BROWSER_RUN_ROUNDS, finishBrowserRun, handoffGiveUpAt } from "../lib/browser-run.js";
-import { runShotKey } from "../lib/run-shots.js";
+import { captionUrl, storeWorkflowShot } from "../lib/browser-artifacts.js";
 import { collectJobSecrets, makeSecretRedactor } from "../lib/redact-secrets.js";
 import { notifyUser } from "../routes/push.js";
 import { buildQuery, extractCode, findMatchingMessage, gmailMessageUrl, mintGmailAccessToken, rankConfirmationLinks } from "../lib/gmail.js";
@@ -50,14 +50,6 @@ export interface JobApplyParams {
 
 /** Max minutes to wait for a human to solve a CAPTCHA before giving up. */
 const CAPTCHA_WAIT_POLLS = 180; // 180 × 5s = 15 min
-
-/** Decode a base64 JPEG (no data: prefix) to bytes for an R2 put. */
-function b64ToBytes(b64: string): Uint8Array {
-	const bin = atob(b64);
-	const arr = new Uint8Array(bin.length);
-	for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-	return arr;
-}
 
 /**
  * The remote brain: a durable Cloudflare Workflow that drives the user's local
@@ -293,10 +285,11 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 					// visually. The blob goes to R2 keyed by step; the event carries only the
 					// key + the action (the events feed stays small). Best-effort — a shot
 					// failure must never fail the application step.
-					if (r.screenshot && env.STORAGE) {
-						const key = runShotKey(userId, instanceId, taskId, sn);
-						await env.STORAGE.put(key, b64ToBytes(r.screenshot), { httpMetadata: { contentType: "image/jpeg" } }).catch(() => undefined);
-						await callRunner(conn, "/browser/event", { taskId, type: "agent.shot", message: redact(describeAction(a)), data: { seq: sn, key, action: a.action, name: a.name ?? "", url: r.url ?? "" } }).catch(() => undefined);
+					// One artifact contract for every browser run (#1063): the frame is stored by subject (this task) and
+					// the event carries its id and a query-free URL — never the bytes.
+					if (r.screenshot) {
+						const artifactId = await storeWorkflowShot(env, { userId, instanceId, taskId, seq: sn, screenshotBase64: r.screenshot, action: a.action, url: r.url ?? "" });
+						if (artifactId) await callRunner(conn, "/browser/event", { taskId, type: "agent.shot", message: redact(describeAction(a)), data: { seq: sn, artifactId, action: a.action, name: a.name ?? "", url: captionUrl(r.url).url ?? "" } }).catch(() => undefined);
 					}
 					return { url: r.url ?? "", challenge: r.challenge ?? null, error: undefined as string | undefined, feedback: r.feedback };
 				} catch (e) {

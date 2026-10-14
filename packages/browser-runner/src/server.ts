@@ -236,6 +236,9 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	if (req.method === "POST" && path === "/local-browser/status") {
 		return json(res, 200, runner.localBrowser.status(await readJson(req)));
 	}
+	if (req.method === "POST" && path === "/local-browser/shots") {
+		return json(res, 200, runner.localBrowser.shots(await readJson(req)));
+	}
 	if (req.method === "POST" && path === "/local-browser/resume") {
 		return json(res, 200, runner.localBrowser.resume(await readJson(req)));
 	}
@@ -262,6 +265,9 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	}
 	if (req.method === "POST" && path === "/local-apply/status") {
 		return json(res, 200, runner.localApply.status(await readJson(req)));
+	}
+	if (req.method === "POST" && path === "/local-apply/shots") {
+		return json(res, 200, runner.localApply.shots(await readJson(req)));
 	}
 	const handoff = await routeLocalApplyHandoff(runner.localApply, req.method, path, () => readJson(req));
 	if (handoff) return json(res, 200, handoff);

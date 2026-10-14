@@ -7318,6 +7318,69 @@ paths:
         "200": { $ref: "#/components/responses/OkObject" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/browser-artifacts:
+    get:
+      summary: List a browser run's replay screenshots
+      description: |
+        #1063. The stored replay frames of one browser run, by SUBJECT: `runtime_task` (a JOB_APPLY or
+        BROWSER_TASK workflow task), `local_browser_run` (a Scout's research run) or `local_apply_run` (an
+        Application Runner fill). Metadata only, in capture order — a capture point, a URL without its query
+        or fragment, its domain and an action class; never page text, form values or typed values. Fetch a
+        frame's bytes by `id`. 404 when the run is not the caller's on this instance.
+      operationId: listBrowserArtifacts
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: subject_kind, in: query, required: true, schema: { type: string, enum: [runtime_task, local_browser_run, local_apply_run] } }
+        - { name: subject_id, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The run's frames (`Cache-Control: no-store`)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  subjectKind: { type: string }
+                  subjectId: { type: string }
+                  artifacts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        subjectKind: { type: string, enum: [runtime_task, local_browser_run, local_apply_run] }
+                        subjectId: { type: string }
+                        seq: { type: integer }
+                        contentType: { type: string }
+                        bytes: { type: integer }
+                        point: { type: string, description: "navigated, clicked, snapshot, waited, paused, blocked, filled, uploaded, checkpoint, review, submit, completed or action" }
+                        url: { type: string, nullable: true }
+                        domain: { type: string, nullable: true }
+                        action: { type: string, nullable: true }
+                        createdAt: { type: string, format: date-time }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/browser-artifacts/{artifactId}:
+    get:
+      summary: One replay screenshot
+      description: |
+        #1063. The image bytes, served `no-store` and only to the run's owner: the instance, the artifact
+        row and the run it belongs to are all checked, so another owner's frame is a 404. Application
+        Runner frames were taken with every form control blurred (fail-closed: no blur, no frame).
+      operationId: getBrowserArtifact
+      tags: [Instances]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: artifactId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The screenshot
+          content:
+            image/jpeg: { schema: { type: string, format: binary } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /v1/instances/{instanceId}/browser-takeovers:
     get:
       summary: List an instance's durable browser takeovers

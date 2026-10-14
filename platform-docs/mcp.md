@@ -550,6 +550,7 @@ looking and tells the user which console screen to use instead.
 
 | Not available via MCP | Why | Enforced by |
 |---|---|---|
+| Browser-run replay screenshots (#1063) | Binary routes: MCP results are text, and a screenshot of the owner's own pages is evidence for the owner in the console, not something to stream into an agent's transcript. | `check-mcp-parity.mjs` |
 | The credentials vault — site logins, passwords, PINs, recovery codes | Secrets. Console → Knowledge → Credentials. | `check-mcp-parity.mjs` |
 | API-key **values** | `keys_status` returns provider names only. There is no reveal tool and no route that returns a stored key, and there is no tool that WRITES one either — a key sent through a tool call is a secret in a transcript. Gmail refresh tokens are never revealable at all. | `check-mcp-parity.mjs` |
 | Credentials for an outbound MCP server | Same rule as the vault, on the newer surface: the console stores the bearer or OAuth secret an instance uses to reach someone else's MCP server, and it is never read back or written over MCP. `list_instance_tools` reports whether a connection HAS one. | `check-mcp-parity.mjs` |

@@ -18,7 +18,8 @@ export interface McpRuntimeOptions {
 }
 
 export interface McpToolResult {
-	content: Array<{ type: string; text?: string }>;
+	/** `text` blocks, or an `image` block (base64 `data` + `mimeType`) from `browser_take_screenshot` (#1063). */
+	content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
 	isError?: boolean;
 }
 

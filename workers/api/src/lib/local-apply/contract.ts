@@ -30,6 +30,8 @@
 export const LOCAL_APPLY_TASK_TYPE = "local_browser.apply";
 export const LOCAL_APPLY_RUN_PATH = "/local-apply/run";
 export const LOCAL_APPLY_STATUS_PATH = "/local-apply/status";
+/** `POST {runId, afterSeq}` — a run's replay screenshots (#1063), the shape of `/local-browser/shots`. */
+export const LOCAL_APPLY_SHOTS_PATH = "/local-apply/shots";
 export const LOCAL_APPLY_RESUME_PATH = "/local-apply/resume";
 export const LOCAL_APPLY_CANCEL_PATH = "/local-apply/cancel";
 /** Read-only job-page check used before an email lead may enter material preparation. */
@@ -331,6 +333,7 @@ export type LocalApplyEventType =
 	| "supervisor.directive"
 	| "run.paused"
 	| "run.resumed"
+	| "screenshot.captured"
 	| "note";
 export const LOCAL_APPLY_EVENT_TYPES: readonly LocalApplyEventType[] = [
 	"engine.auth_checked",
@@ -351,6 +354,7 @@ export const LOCAL_APPLY_EVENT_TYPES: readonly LocalApplyEventType[] = [
 	"supervisor.directive",
 	"run.paused",
 	"run.resumed",
+	"screenshot.captured",
 	"note",
 ];
 
@@ -537,7 +541,7 @@ const isHttpUrl = (v: string) => /^https?:\/\/[^\s/]+/i.test(v);
 // from `LOCAL_APPLY_CONFIRMATION_MARKERS`, how many times the page was read, and whether it moved.
 // Each is an id, a count or a boolean — the same whitelist rule as everything else here, so no page
 // text and no typed value can ride along on a `submit.confirmed` / `submit.unconfirmed` event.
-const DETAIL_KEYS = new Set(["engine", "authMode", "engineAuth", "mode", "class", "tool", "decision", "reason", "rule", "role", "kind", "path", "sha256", "bytes", "gateId", "exitCode", "count", "status", "basis", "source", "checkpointId", "directive", "phase", "actions", "filled", "uploaded", "marker", "looks", "urlChanged", "titleChanged"]);
+const DETAIL_KEYS = new Set(["engine", "authMode", "engineAuth", "mode", "class", "tool", "decision", "reason", "rule", "role", "kind", "path", "sha256", "bytes", "gateId", "exitCode", "count", "status", "basis", "source", "checkpointId", "directive", "phase", "actions", "filled", "uploaded", "marker", "looks", "urlChanged", "titleChanged", "shot", "point"]);
 
 /** A validated event, or null. Detail keeps only whitelisted, primitive, bounded values. */
 export function parseLocalApplyEvent(raw: unknown): LocalApplyEvent | null {

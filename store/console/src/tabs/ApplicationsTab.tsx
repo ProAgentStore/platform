@@ -1,6 +1,8 @@
+import RunReplay, { useBrowserArtifacts } from "../components/RunReplay";
+import { replayFrames } from "../lib/runReplay";
 import { AutoSubmitConfirmDialog, AutoSubmitDangerBanner, ManualReviewBadge } from "../components/AutoSubmitPolicy";
 import { type AutoSubmitAllowance, type AutoSubmitRules, disablePayload, enablePayload, rulesPayload } from "../lib/autoSubmitPolicy";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import { usePolling } from "@proagentstore/sdk/hooks";
@@ -237,6 +239,9 @@ function Detail({ instanceId, item, connections, onChanged }: { instanceId: stri
 	// legacy field as a read compatibility fallback for cards written before the projection existed.
 	const progress = item.execution?.progress ?? item.fillProgress;
 	const questions = pause?.question ? [pause.question] : item.questions;
+	// #1063: the fill run's replay — every form control blurred by the runner before each frame was taken.
+	const artifacts = useBrowserArtifacts(instanceId, "local_apply_run", item.fillRunId, item.stateVersion);
+	const frames = useMemo(() => replayFrames(instanceId, artifacts), [instanceId, artifacts]);
 
 	const act = async (action: ApplicationQueueAction) => {
 		const ask = confirmText(action, item.status);
@@ -400,6 +405,12 @@ function Detail({ instanceId, item, connections, onChanged }: { instanceId: stri
 				)}
 			</fieldset>
 			{msg && <p className="text-xs mt-2">{msg}</p>}
+
+			{frames.length > 0 && (
+				<div className="mt-3">
+					<RunReplay frames={frames} emptyText="" />
+				</div>
+			)}
 
 			{trace && (
 				<ol className="mt-3 text-xs flex flex-col gap-0.5" aria-label="Application trace">
