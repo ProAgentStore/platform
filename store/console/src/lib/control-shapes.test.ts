@@ -190,7 +190,9 @@ function sweep(root: string, find = findHandAuthoredControls) {
 // application's permitted actions. It is one button, not two, because the Kanban card and the List
 // row render the same extracted component; it matches the shapes beside it (Approve, the column
 // select) rather than introducing a different control idiom on one card type.
-const PINNED = { "store/console": 43, "store/admin": 4, "agents/coder/web": 23 };
+// 43 → 45 at #1062: JOB_APPLY is supported again, so the apply board's Retry (Kanban card and List
+// row) is back as the console caller of `POST /apply`.
+const PINNED = { "store/console": 45, "store/admin": 4, "agents/coder/web": 23 };
 
 describe.each(TREES)("%s holds its count of buttons that draw their own box", (name, root) => {
 	/**

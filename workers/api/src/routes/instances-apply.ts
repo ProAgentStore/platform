@@ -1,6 +1,5 @@
 import { closeLiveTakeoverFor, transitionTakeover } from "../lib/browser-takeovers.js";
 import { takeoverGate } from "./instances-browser-takeovers.js";
-import { LEGACY_JOB_APPLY_RETIRED_MESSAGE } from "../lib/agent-retirement.js";
 import { markHumanAnswered } from "../lib/coder-question-store.js";
 import { overLimit } from "../lib/write-limits.js";
 import type { Hono } from "hono";
@@ -34,22 +33,6 @@ export class ApplyError extends Error {
 	constructor(message: string, readonly status = 400) {
 		super(message);
 	}
-}
-
-/**
- * The workflow is deliberately retained so existing runs can finish and their task history
- * remains readable. New work must use the owner-controlled local pipeline instead.
- *
- * The wording moved to `lib/agent-retirement.ts` at #979 and is re-exported here, where every
- * existing caller imports it. It is now ONE string shared by the refusals and by the retirement
- * state the console and MCP read — a banner that explains a different thing from the error the
- * same action returns is how a reader learns to trust neither.
- */
-export { LEGACY_JOB_APPLY_RETIRED_MESSAGE } from "../lib/agent-retirement.js";
-
-/** Kept as a predicate so TypeScript continues to typecheck the retained in-flight workflow path. */
-function legacyJobApplyStartsAreRetired(): boolean {
-	return true;
 }
 
 // ── Résumé transfer mechanism ────────────────────────────────────────────────
@@ -93,12 +76,22 @@ export interface StartApplyInput {
 }
 
 /**
- * Former entry point for the LLM-driven JOB_APPLY workflow. The implementation remains
- * below to preserve compatibility with in-flight workflow executions, but every new start
- * is refused before it can create a task, loop run, budget, or workflow.
+ * The single entry point for the LLM-driven JOB_APPLY job application: builds the job from the
+ * structured Profile + credentials vault + Special Instructions, creates the agent-driven runner
+ * task, and starts the JobApplyWorkflow brain. Used by the /apply route, the chat agent's apply tool
+ * and MCP `apply_to_job` (through the route).
+ *
+ * A SUPPORTED browser-work path alongside Scout → Tailor → Runner (#1062; it was wrongly refused as
+ * "retired" from 2026-10-08). Only an instance whose agent declares `workflow: "JOB_APPLY"` can start
+ * one — any other agent has no JobApplyWorkflow to drive — and every start keeps the same guards:
+ * a résumé on file, a live runner, ONE application per instance at a time, a spend pool and a run
+ * row, and candidate values from the owner's Profile.
  */
 export async function startJobApply(env: Env, instanceId: string, userId: string, input: StartApplyInput): Promise<{ workflowId: string; taskId: string }> {
-	if (legacyJobApplyStartsAreRetired()) throw new ApplyError(LEGACY_JOB_APPLY_RETIRED_MESSAGE, 410);
+	const caps = await capabilitiesForInstance(env, instanceId, userId);
+	if (caps?.workflow !== "JOB_APPLY") {
+		throw new ApplyError("This agent does not run the JOB_APPLY job-application workflow. Apply from a Job Application Assistant instance, or use the Scout → Tailor → Runner pipeline.", 409);
+	}
 
 	const url = String(input.url ?? "");
 	if (!/^https?:\/\//.test(url)) throw new ApplyError("url (http/https) required");
@@ -615,10 +608,7 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		return c.json((await runtimeJson(res)) as object, runtimeStatus(res, 200));
 	});
 
-	/**
-	 * Retired JOB_APPLY start path. Kept as a 410 migration response so old console, chat and
-	 * MCP clients receive an actionable direction rather than creating a new legacy task.
-	 */
+	/** Start the LLM-driven JOB_APPLY application (#1062: supported). dryRun fills everything but never submits. */
 	router.post("/:instanceId/apply", async (c) => {
 		const session = await requireUser(c);
 		const instanceId = c.req.param("instanceId");
@@ -639,7 +629,7 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 			void touchInstanceActivity(c.env, instanceId, session.uid);
 			return c.json({ workflowId, taskId, status: "running", url }, 202);
 		} catch (e) {
-			if (e instanceof ApplyError) return c.json({ error: e.message }, e.status === 410 ? 410 : e.status === 502 ? 502 : 400);
+			if (e instanceof ApplyError) return c.json({ error: e.message }, e.status === 409 ? 409 : e.status === 502 ? 502 : 400);
 			throw e;
 		}
 	});

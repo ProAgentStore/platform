@@ -152,11 +152,11 @@ Transport is a **WebSocket relay**: the runner connects outbound to a per-(insta
 - `pags up --instance <id>` — pin to one agent (debug)
 - `pags up --headless` — headless mode
 
-The former `JOB_APPLY` job-application workflow is retired for new starts. Its endpoint, chat tool, and MCP tool return a migration response without creating work; existing tasks and history remain readable. New applications use the Scout → Tailor → Runner pipeline below. The **Coder** agent runs its chosen engine (Claude Code, Codex, Gemini CLI, Grok, or a local command) on the session's assigned runner node; Claude uses a persistent structured session, while other engines run one-shot turns.
+Job applications have two supported browser paths: the `JOB_APPLY` workflow (below) and the Scout → Tailor → Runner pipeline. The **Coder** agent runs its chosen engine (Claude Code, Codex, Gemini CLI, Grok, or a local command) on the session's assigned runner node; Claude uses a persistent structured session, while other engines run one-shot turns.
 
-### Legacy job application agent (retired for new starts)
+### Legacy job application agent (`JOB_APPLY`, supported)
 
-The prior Cloudflare `JobApplyWorkflow` brain and browser-runner task are retained only so existing runs, board cards, traces, résumé metadata, and ATS history can still be read. No endpoint creates another one. For new work, use the owner-controlled Scout → Tailor → Runner pipeline: triage a lead, tailor materials, then ask for review or let the Application Runner fill under its configured submission policy.
+"Legacy" names its age, not its status: the Cloudflare `JobApplyWorkflow` brain driving the `pags up` browser is a supported way to run browser-based job applications, alongside the Scout → Tailor → Runner pipeline (#1062). Start one with `POST /v1/instances/{id}/apply`, the chat `submit_job_application` tool, or MCP `apply_to_job`. Every start needs a Job Application Assistant instance, a live runner and a résumé on file; one application runs per instance at a time, candidate values come only from your Profile, and each run opens a spend pool and a run row you can stop. The pipeline is the other path: triage a lead, tailor materials, then ask for review or let the Application Runner fill under its configured submission policy.
 
 ### Skills and plugins
 
@@ -235,7 +235,7 @@ never built or deployed.
 | `coder-lead` | Coder Lead | `0063` | none — declarative capabilities |
 | `local-repo-chat` | Local Repo Chat | `0066` | none — declarative capabilities |
 | `tmux-operator` | tmux Operator | `0072` | none — declarative capabilities |
-| `job-application-assistant` | Job Application Assistant (retired) | `0185`, `0189` | `agents/job-application-assistant` |
+| `job-application-assistant` | Job Application Assistant (`JOB_APPLY`) | `0185`, `0189`, `0233` | `agents/job-application-assistant` |
 
 **Created through the API/console by the operator** — they exist only as D1 rows, so a fresh
 database will not have them. Treat this as known drift, not a design:

@@ -1,10 +1,10 @@
 /**
  * Migration 0185 turns the Job Application Assistant from an operator-created production row
  * into a first-party catalog seed. Migration 0186 then converges that already-existing
- * production row on the autonomous-submission identity. Migration 0189 then retires the legacy
- * catalog entry without deleting it. These assertions execute the migrations against SQLite:
- * unlike a SQL text check, they prove the historic row and its capability/identity payload remain
- * readable while fresh subscribers can no longer discover it.
+ * production row on the autonomous-submission identity. Migration 0189 drafted the catalogue entry
+ * when JOB_APPLY was (wrongly) retired; 0233 publishes it again, because JOB_APPLY is a supported
+ * browser-work path alongside Scout → Tailor → Runner (#1062). These assertions execute the migrations
+ * against SQLite: unlike a SQL text check, they prove the row and its capability/identity payload.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -33,12 +33,12 @@ function jobAgent(d1: ReturnType<typeof realSchemaD1>): AgentRow {
 }
 
 describe("legacy Job Application Assistant catalog row", () => {
-	it("preserves one active but retired agent on a fresh database", () => {
+	it("is one active, PUBLISHED agent on a fresh database — supported again, not retired (#1062)", () => {
 		const d1 = realSchemaD1();
 		try {
 			const row = jobAgent(d1);
 			expect(row.id).toBe("agent_job_application_assistant");
-			expect(row.visibility).toBe("draft");
+			expect(row.visibility).toBe("published");
 			expect(row.status).toBe("active");
 			expect(row.store_type).toBe("agent");
 			expect(row.category).toBe("productivity");

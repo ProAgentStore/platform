@@ -142,7 +142,7 @@ const COLLECTIONS = ["create_collection", "list_collections", "insert_record", "
  * nobody inherits it.
  */
 const COLLECTIONS_DESTRUCTIVE = ["delete_record"] as const;
-/** Legacy selector-based job submit (superseded by the apply workflow). */
+/** The JOB_APPLY job-application start (a supported browser-work path, #1062). */
 const APPLY = ["submit_job_application"] as const;
 /** Live coding-session awareness: list repos + read/drive the engine's terminal. */
 const CODING = ["list_coding_repos", "read_terminal", "send_to_cli"] as const;
@@ -166,8 +166,8 @@ const FULL: readonly string[] = [
 // safety scanner (#54) can list/reason about what an agent may do — instead of the
 // tool set being implied by a hardcoded per-surface `switch`. Deliberately EXCLUDES
 // the permission-gated `find_confirmation_link` (granted only via user permission,
-// never by declaration) and the legacy `submit_job_application` (superseded by the
-// apply workflow).
+// never by declaration) and `submit_job_application`, which starts the JOB_APPLY workflow and
+// so belongs to the agents that declare it, not to a creator's tool picker.
 
 /** One selectable group in the catalog. `base` is always granted; the rest are opt-in. */
 export interface ToolCatalogGroup {

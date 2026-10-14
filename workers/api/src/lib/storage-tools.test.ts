@@ -234,23 +234,16 @@ describe("storage tools", () => {
 		expect(result.success).toBe(true);
 	});
 
-	it("refuses the retired chat apply tool before it can create a legacy task", async () => {
+	it("submit_job_application needs its runtime context and a url before it can start anything (#1062)", async () => {
+		// The real start (and the Profile-only candidate) is driven over the real schema in
+		// routes/job-apply-start.test.ts; here, the tool's own preconditions.
 		const engine = makeEngine();
 		const fetchMock = vi.fn();
 		vi.stubGlobal("fetch", fetchMock);
-
-		const result = await executeStorageTool(
-			{
-				name: "submit_job_application",
-				input: { url: "https://example.com/jobs/1" },
-			},
-			engine,
-			{ agentId: "instance-1", userId: "user-1" },
-		);
-
-		expect(result.success).toBe(false);
-		expect(result.content).toContain("legacy JOB_APPLY workflow no longer accepts new applications");
-		expect(result.content).toContain("Scout → Tailor → Runner");
+		const noCtx = await executeStorageTool({ name: "submit_job_application", input: { url: "https://example.com/jobs/1" } }, engine, { agentId: "instance-1", userId: "user-1" });
+		expect(noCtx).toMatchObject({ success: false, content: "Runtime context not available" });
+		const noUrl = await executeStorageTool({ name: "submit_job_application", input: {} }, engine, { env: {} as never, agentId: "instance-1", userId: "user-1" });
+		expect(noUrl).toMatchObject({ success: false, content: "url required" });
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 });

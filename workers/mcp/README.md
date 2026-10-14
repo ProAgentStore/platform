@@ -585,7 +585,7 @@ immediately instead of a whole transcript.
 | Tool | Purpose | Scope | Dry | Confirm |
 |---|---|---|---|---|
 | `upload_resume` | Upload/replace the résumé, or re-parse the one on file | write | yes | |
-| `apply_to_job` | Retired legacy start; returns Scout → Tailor → Runner migration guidance | destructive | | |
+| `apply_to_job` | Start a `JOB_APPLY` application (#1062: supported): the agent fills and SUBMITS at the job URL from the Profile and stored résumé; a refused start (no runner, no résumé, one already running) is an `Error:` | destructive | | |
 | `get_profile` | Read the structured candidate Profile + Job Preferences | — | | |
 | `get_apply_tips` | Learned per-ATS tips | — | | |
 | `update_profile` | Update Profile fields (string fields only) — always registered | write | yes | |
@@ -633,7 +633,7 @@ is that a preview here would be *less* informative than something that already e
 | `call_instance_tool` | A generic invoker. What the call does is decided by the connector registry in `workers/api`, which this Worker cannot see. Its preview could only echo your own `tool` and `input` back — a safety check that knows nothing about the side effect it is previewing. | `list_instance_tools` — the registry's own verdict (`allowed`, `scope`, `mutates`, `reach`, `disabled`, `reason`, `tier`, `invocableBy`) plus the input schema, as a read. |
 | `stop_instance_loop` | Fully described by `run_id`; there is nothing else to get wrong. Stopping is also the safe direction — cooperative, the in-flight step settles its own spend. | `check_instance_loop` — the objective, steps taken and stop reason for the run you are about to stop. |
 | `coding_loop_stop` | The same cancel through the same route, under the coding name (#502) — so it inherits the same argument. | `coding_loop_status` — the run's step count, stop reason and budget pool. |
-| `apply_to_job` | Retained only so cached MCP clients get a clear retirement response. It does not proxy to the API or start work. | `triage_application`, `generate_application_materials`, then `request_application_review` or `start_application_fill`. |
+| `apply_to_job` | Its destructive scope is the caller's delegation for an autonomous third-party submission, so it has neither a fill-only branch nor a confirmation string. | `get_profile`, the stored résumé and `agent_trace` — what it will submit from. A fill without submitting is `POST /v1/instances/{id}/apply` with `dryRun: true`. |
 
 All four carry that reasoning in a comment above their registration, and
 `instance-tools/contract.test.ts` lists them, so the set moves only deliberately.

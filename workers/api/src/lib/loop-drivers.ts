@@ -668,11 +668,11 @@ function withProGate(driver: LoopDriver): LoopDriver {
 /**
  * Refuse autonomous work on an agent whose WORKFLOW is retired (#979), at the same one door.
  *
- * The legacy JOB_APPLY agent's own start path already answers 410, but its chat loop did not: the
- * Loop button, `start_instance_loop`, a trigger and a supervisor's `delegate_goal` would all have
- * started a run on an agent whose every apply tool refuses — burning the owner's tokens to arrive
- * at the migration message the refusal could have given for nothing. #979 asks for exactly that:
- * no silent no-op, an explanatory migration message instead.
+ * A retired agent's own start path refuses, but its chat loop would not: the Loop button,
+ * `start_instance_loop`, a trigger and a supervisor's `delegate_goal` would all start a run on an
+ * agent whose work cannot run — burning the owner's tokens to arrive at the migration message the
+ * refusal could have given for nothing. #979 asks for exactly that: no silent no-op, an explanatory
+ * migration message instead. (No workflow is retired today: JOB_APPLY was restored at #1062.)
  *
  * 410 and not 409: this is permanent. A caller that retries a 409 is right to; retrying this is
  * the mistake the status code exists to prevent. Synchronous, because the capabilities the caller

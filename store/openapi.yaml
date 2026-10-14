@@ -6653,16 +6653,16 @@ paths:
 
   /v1/instances/{instanceId}/apply:
     post:
-      summary: Retired legacy job-application start
-      deprecated: true
+      summary: Start a JOB_APPLY job application
       description: |
-        The legacy `JOB_APPLY` workflow no longer accepts new starts. It returns `410` with
-        migration guidance and does not create a task, workflow, budget, or browser action.
-        Existing application tasks and their history remain readable.
+        Starts the `JOB_APPLY` workflow — a supported browser-work path alongside the
+        Scout → Tailor → Runner pipeline (#1062). The brain drives the instance's live runner to fill
+        and submit the application; `dryRun` fills but never submits. Candidate values come from the
+        owner's Profile (`candidate` may override them); a missing value becomes a needs_input pause.
 
-        Use the Scout → Tailor → Runner application pipeline instead: triage a job lead,
-        generate application materials, then request review or start the Application Runner
-        fill under its configured submission policy.
+        Refused, with nothing left behind, when the instance's agent does not run `JOB_APPLY` (409),
+        an application is already running on it (409, enforced atomically), no résumé is on file
+        (400), or no runner is live (503).
       operationId: startApply
       tags: [Apply]
       parameters: [{ $ref: "#/components/parameters/InstanceId" }]
@@ -6680,8 +6680,29 @@ paths:
                 coverNote: { type: string, description: "Also accepted as `cover_note`." }
                 dryRun: { type: boolean, default: false, description: "Fill but never submit. Also accepted as `dry_run`." }
       responses:
-        "410":
-          description: Legacy JOB_APPLY is retired for new starts; use the Scout → Tailor → Runner pipeline
+        "202":
+          description: Started — the workflow and its runner task
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  workflowId: { type: string }
+                  taskId: { type: string }
+                  status: { type: string, enum: [running] }
+                  url: { type: string }
+        "400":
+          description: Missing url or résumé
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: Not a JOB_APPLY agent, or an application already in progress on this instance
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: No runner is connected for this agent (run `pags up`)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

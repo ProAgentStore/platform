@@ -59,13 +59,14 @@ interface BoardItem extends BoardIssueFields, ApplicationRunFields, ScanRunField
 	codingSessionId?: string;
 }
 
-export default function BoardTab({ instanceId }: { instanceId: string }) {
+export default function BoardTab({ instanceId, apply }: { instanceId: string; apply?: boolean }) {
 	const navigate = useNavigate();
 	const [items, setItems] = useState<BoardItem[]>([]);
 	const [serverCols, setServerCols] = useState<BoardColumn[] | null>(null);
 	const [expanded, setExpanded] = useState<string | null>(null);
 	const [truncated, setTruncated] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const [retrying, setRetrying] = useState<Set<string>>(new Set());
 	const [view, setView] = useState<BoardView>("kanban");
 	/** The application action in flight, so its button can say so and cannot be double-sent. */
 	const [busy, setBusy] = useState<string | null>(null);
@@ -229,6 +230,23 @@ export default function BoardTab({ instanceId }: { instanceId: string }) {
 		}
 	};
 
+	// Re-run a job (apply agents): kick off a fresh application for the same URL.
+	// The new run shows up as this job's newest attempt on the next poll.
+	const handleRetry = async (item: BoardItem) => {
+		if (!item.url || retrying.has(item.jobKey)) return; // guard double-fire (single-flight)
+		setRetrying((s) => new Set(s).add(item.jobKey));
+		try {
+			await api(`/v1/instances/${instanceId}/apply`, { method: "POST", body: JSON.stringify({ url: item.url }) });
+			loadBoard();
+		} catch (e) {
+			// startJobApply rejects with a clear message: single-flight (409), no runner,
+			// no résumé/profile — surface it so the user knows what to fix.
+			alert(e instanceof Error ? e.message : String(e));
+		} finally {
+			setRetrying((s) => { const n = new Set(s); n.delete(item.jobKey); return n; });
+		}
+	};
+
 	const handleDeleteItem = async (item: BoardItem) => {
 		try {
 			// Hide the runtime tasks AND clear any durable overlay row (status "").
@@ -283,9 +301,11 @@ export default function BoardTab({ instanceId }: { instanceId: string }) {
 		// opening a ticket and scrolling, so nothing on the board said it existed (#150).
 		onAsk: (taskId: string) => { if (taskId) navigate(`/instances/${instanceId}/tasks/${taskId}?ask=1`); },
 		onMove: (status: string) => setStatus(item, status),
+		onRetry: apply && item.url && ["failed", "blocked"].includes(item.status) ? () => handleRetry(item) : undefined,
 		onApprove: item.status === "needs_approval" ? () => handleApprove(item) : undefined,
 		onApplicationAction: item.application ? (action: string) => handleApplicationAction(item, action) : undefined,
 		applicationBusy: busy,
+		retrying: retrying.has(item.jobKey),
 		onDelete: () => handleDeleteItem(item),
 		onPromote: item.ticketId ? undefined : () => handlePromote(item),
 	});
@@ -439,7 +459,7 @@ function AskButton({ turns, onAsk, className = "" }: { turns: number; onAsk: () 
 	);
 }
 
-function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onOpenSession, onAsk, onMove, onApprove, onApplicationAction, applicationBusy, onDelete, onPromote }: {
+function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onOpenSession, onAsk, onMove, onRetry, onApprove, onApplicationAction, retrying, applicationBusy, onDelete, onPromote }: {
 	item: BoardItem;
 	cols: BoardColumn[];
 	expanded: boolean;
@@ -448,11 +468,13 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onOpenSessio
 	onOpenSession: (sessionId: string) => void;
 	onAsk: (taskId: string) => void;
 	onMove: (status: string) => void;
+	onRetry?: () => void;
 	onApprove?: () => void;
 	/** #978: run one of the application's permitted controls, through the shared action route. */
 	onApplicationAction?: (action: string) => void;
 	/** The application action in flight, if any — the button that sent it says so. */
 	applicationBusy?: string | null;
+	retrying?: boolean;
 	onDelete: () => void;
 	/** Absent when the card already is a ticket (#757). */
 	onPromote?: () => void;
@@ -497,7 +519,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onOpenSessio
 			<ScanRunFace item={item} />
 
 			{/* Wraps: Ask is a fourth control on this row, and a kanban column is narrow enough
-			    that Approve + the column select already crowd it. */}
+			    that Approve + Retry + the column select already filled it. */}
 			<div className="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-line/60">
 				{openable && <AskButton turns={item.threadTurns ?? 0} onAsk={() => onAsk(item.latestTaskId)} />}
 				{onPromote && (
@@ -521,6 +543,17 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onOpenSessio
 					</button>
 				)}
 				{onApplicationAction && <ApplicationRunControls item={item} busy={applicationBusy} onAction={onApplicationAction} />}
+				{onRetry && (
+					<button
+						type="button"
+						disabled={retrying}
+						onClick={(e) => { e.stopPropagation(); onRetry(); }}
+						className="text-2xs px-2 py-1 rounded border border-line text-accent hover:bg-accent-soft font-bold disabled:opacity-40"
+						title="Re-run this application"
+					>
+						{retrying ? "↻ Retrying…" : "↻ Retry"}
+					</button>
+				)}
 				{/* Move to any column (pipeline stages the automation never sets). */}
 				<select
 					value={selectValue}
@@ -565,7 +598,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onOpenSessio
 }
 
 /** A compact one-line row for the List view — same actions as the Kanban card. */
-function ListRow({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove, onApprove, onApplicationAction, applicationBusy, onDelete, onPromote }: {
+function ListRow({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove, onRetry, onApprove, onApplicationAction, retrying, applicationBusy, onDelete, onPromote }: {
 	item: BoardItem;
 	cols: BoardColumn[];
 	expanded: boolean;
@@ -573,11 +606,13 @@ function ListRow({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove
 	onOpen: (taskId: string) => void;
 	onAsk: (taskId: string) => void;
 	onMove: (status: string) => void;
+	onRetry?: () => void;
 	onApprove?: () => void;
 	/** #978: run one of the application's permitted controls, through the shared action route. */
 	onApplicationAction?: (action: string) => void;
 	/** The application action in flight, if any — the button that sent it says so. */
 	applicationBusy?: string | null;
+	retrying?: boolean;
 	onDelete: () => void;
 	/** Absent when the card already is a ticket (#757). */
 	onPromote?: () => void;
@@ -608,6 +643,9 @@ function ListRow({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove
 					<button type="button" onClick={onApprove} className="shrink-0 text-2xs px-2 py-1 rounded border border-success-line text-success hover:bg-success-soft font-bold" title="Approve this task to run">Approve</button>
 				)}
 				{onApplicationAction && <ApplicationRunControls item={item} busy={applicationBusy} onAction={onApplicationAction} compact />}
+				{onRetry && (
+					<button type="button" disabled={retrying} onClick={onRetry} className="shrink-0 text-2xs px-2 py-1 rounded border border-line text-accent hover:bg-accent-soft font-bold disabled:opacity-40" title="Re-run this application">{retrying ? "↻…" : "↻ Retry"}</button>
+				)}
 				<select
 					value={selectValue}
 					onChange={(e) => { const v = e.target.value; onMove(v === "__auto" ? "" : (cols.find((c) => c.id === v)?.statuses?.[0] ?? v)); }}

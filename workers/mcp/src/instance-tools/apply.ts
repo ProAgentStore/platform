@@ -83,7 +83,7 @@ export function registerApplyTools(server: McpServer, ctx: InstanceToolsCtx): vo
 
 	server.tool(
 		"apply_to_job",
-		"Retired legacy JOB_APPLY entry point. It accepts no new applications and directs callers to the Scout → Tailor → Runner application pipeline; existing task history remains available.",
+		"Launch the LLM-driven JOB_APPLY job application for a private apply-agent instance — a supported browser-work path alongside Scout → Tailor → Runner. The PAGS agent drives the user's local browser to fill and SUBMIT the application at the given job URL. The résumé comes from the instance's stored résumé and candidate details from the user's Profile. If the agent needs a value it can't truthfully invent (e.g. work authorization), it pauses with a needs_input ticket for the USER to answer, then continues. Needs a connected runner (pags up); one application runs per instance at a time, and a second is refused (409) until the first finishes or is cancelled. This tool always launches a real submission.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("The apply-agent instance ID (from my_instances)."),
@@ -93,11 +93,13 @@ export function registerApplyTools(server: McpServer, ctx: InstanceToolsCtx): vo
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const toolInput = { instance_id, url };
-			// Keep the old destructive gate for a cached MCP client, then refuse locally. This
-			// must not proxy to /apply: a deployed older API must not revive JOB_APPLY starts.
+			// This tool commits an outward, hard-to-undo action every time it runs.
 			const denied = await requirePermission(safetyFor(token), "destructive", "apply_to_job", toolInput);
 			if (denied) return denied;
-			return text("Error: The legacy JOB_APPLY workflow no longer accepts new applications. Existing application tasks and history remain available. Use the Scout → Tailor → Runner pipeline: triage a job lead, generate application materials, then request review or start the Application Runner fill.");
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/apply`, sessionToken, { method: "POST", body: JSON.stringify({ url }) }, env)) as { error?: string };
+			if (data.error) return text(`Error: ${data.error}`);
+			await audit(safetyFor(token), { tool: "apply_to_job", action: "completed", input: toolInput, result: data });
+			return jsonText(data);
 		},
 	);
 

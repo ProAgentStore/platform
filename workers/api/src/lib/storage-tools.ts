@@ -19,7 +19,6 @@ import { localStamp } from "./agent-clock.js";
 import { RETRIEVAL_EMPTY_MESSAGE, searchKnowledgeFor } from "./retrieval.js";
 import { withTurnReplay } from "./coding-turn-replay.js";
 import type { Env } from "../types.js";
-import { LEGACY_JOB_APPLY_RETIRED_MESSAGE } from "./agent-retirement.js";
 import { dispatchOwnedTurn } from "./coding-dispatch.js";
 import { describeOwner, runnerEngineProbe } from "./coding-ownership.js";
 
@@ -205,12 +204,12 @@ export const STORAGE_TOOLS: ToolDef[] = [
 	},
 	{
 		name: "submit_job_application",
-		description: "Retired legacy JOB_APPLY entry point. It starts no work and returns migration guidance to the Scout → Tailor → Runner application pipeline. Existing application tasks and history remain available.",
+		description: "Submit a job application in a real browser (the JOB_APPLY workflow). Candidate details come ONLY from the owner's saved Profile. It runs in the background, pausing only for a captcha, a stuck widget or a value it cannot truthfully answer. Needs a connected runner (pags up) and a résumé; one application per agent at a time. Call it ONCE per job. Report it started only if THIS tool returns a real task id; on an error, say that exact error and that nothing started. Never invent an id or claim it was submitted. Only AFTER it succeeds, insert_record the application into 'applications'.",
+
+
 		parameters: {
 			url: { type: "string", description: "Job posting URL", required: true },
 			resume_path: { type: "string", description: "Optional. Leave empty — the apply uses the résumé the user uploaded in the console; the runner downloads it." },
-			full_name: { type: "string", description: "Candidate full name (optional — falls back to the saved Profile)" },
-			email: { type: "string", description: "Candidate email (optional — falls back to the saved Profile)" },
 			cover_note: { type: "string", description: "Cover note text for the application form" },
 		},
 	},
@@ -532,9 +531,31 @@ export async function executeStorageTool(
 			}
 
 			case "submit_job_application": {
-				// This name remains recognisable to existing chat histories, but must never create
-				// another JOB_APPLY task. The replacement is the owner-controlled local pipeline.
-				return fail(call.name, LEGACY_JOB_APPLY_RETIRED_MESSAGE);
+				if (!ctx?.env || !ctx.agentId || !ctx.userId) return fail(call.name, "Runtime context not available");
+				const text = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+				const url = text(call.input.url);
+				if (!url) return fail(call.name, "url required");
+				// No candidate values from the model (#1062): startJobApply takes them from the owner's
+				// Profile, and a value the Profile lacks becomes a needs_input ticket, never a guess.
+				try {
+					const { startJobApply } = await import("../routes/instances-apply.js");
+					// ctx.env is the full worker Env at runtime (the tool context types it narrowly).
+					const fullEnv = ctx.env as unknown as Parameters<typeof startJobApply>[0];
+					const { workflowId, taskId } = await startJobApply(fullEnv, ctx.agentId, ctx.userId, {
+						url,
+						resumePath: text(call.input.resume_path) || text(call.input.resumePath),
+						coverNote: text(call.input.cover_note) || text(call.input.coverNote) || undefined,
+						dryRun: false,
+					});
+					return ok(
+						call.name,
+						`Application submission started — the agent is now filling and submitting the browser form (workflow ${workflowId}, task ${taskId}). It pauses only for a captcha, a stuck widget, or a missing value. Do NOT call submit_job_application again for this job, and do NOT claim it is submitted until the workflow reports that outcome.`,
+					);
+				} catch (e) {
+					const msg = e instanceof Error ? e.message : String(e);
+					if (/runner|runtime|registered|offline/i.test(msg)) return fail(call.name, "No browser runner connected. Start the runner with: pags up");
+					return fail(call.name, msg);
+				}
 			}
 
 			case "find_confirmation_link": {

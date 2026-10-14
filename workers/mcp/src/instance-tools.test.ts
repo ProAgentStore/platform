@@ -529,16 +529,24 @@ describe("dry-run mode", () => {
 		expect(h.auditEvents().some((e) => e.action === "dry_run")).toBe(true);
 	});
 
-	it("apply_to_job keeps its cached schema but refuses new legacy JOB_APPLY starts locally", async () => {
+	it("apply_to_job starts the supported JOB_APPLY application through POST /apply, and audits it (#1062)", async () => {
 		const h = setup({ groups: ["apply"] });
 		expect(Object.keys(h.tools.get("apply_to_job")!.schema).sort()).toEqual(["instance_id", "token", "url"]);
-		const res = await h.tools.get("apply_to_job")!.handler({
-			instance_id: "i1",
-			url: "https://jobs.example/apply/1",
-		});
-		expect(res.content[0].text).toContain("legacy JOB_APPLY workflow no longer accepts new applications");
-		expect(res.content[0].text).toContain("Scout → Tailor → Runner");
-		expect(h.fetchStub.calls).toHaveLength(0);
+		h.fetchStub.respond((u, m) => u === "/v1/instances/i1/apply" && m === "POST", { status: 202, body: { workflowId: "wf_1", taskId: "task_1", status: "running", url: "https://jobs.example/apply/1" } });
+		const res = await h.tools.get("apply_to_job")!.handler({ instance_id: "i1", url: "https://jobs.example/apply/1" });
+		expect(JSON.parse(res.content[0].text)).toMatchObject({ workflowId: "wf_1", taskId: "task_1", status: "running" });
+		expect(h.fetchStub.calls).toHaveLength(1);
+		expect(h.fetchStub.calls[0]).toMatchObject({ method: "POST", url: expect.stringMatching(/\/v1\/instances\/i1\/apply$/) });
+		expect(JSON.parse(h.fetchStub.calls[0].body!)).toEqual({ url: "https://jobs.example/apply/1" });
+		expect(h.auditEvents().some((e) => e.tool === "apply_to_job" && e.action === "completed")).toBe(true);
+	});
+
+	it("apply_to_job passes a refused start through as an error — a duplicate is not reported as started (#1062)", async () => {
+		const h = setup({ groups: ["apply"] });
+		h.fetchStub.respond((u, m) => u === "/v1/instances/i1/apply" && m === "POST", { status: 409, body: { error: "An application is already in progress on this agent — finish or cancel it before starting another." } });
+		const res = await h.tools.get("apply_to_job")!.handler({ instance_id: "i1", url: "https://jobs.example/apply/2" });
+		expect(res.content[0].text).toMatch(/^Error: .*already in progress/);
+		expect(h.auditEvents().some((e) => e.tool === "apply_to_job" && e.action === "completed")).toBe(false);
 	});
 
 	it("apply_to_job requires destructive scope for its default real submission", async () => {

@@ -1,36 +1,25 @@
 /**
  * A workflow the platform no longer runs, as DATA every surface reads (#979).
  *
- * ── What was wrong
+ * ── What this is for
  *
- * The legacy Job Application Assistant (`workflow: JOB_APPLY`) was retired on 2026-10-08: its
- * catalogue row was drafted (migration 0189) and every start path answers an actionable 410. But
- * the retirement existed only as a refusal — nothing a surface could READ. So an owner's existing
- * instance kept rendering as an ordinary `active` apply agent, with its tabs, its board and its
- * Loop button, and the only way to discover it was dead was to try to use it. Beside the live
- * Scout → Tailor → Runner pipeline, which is also an "apply agent", that is worse than untidy:
- * two things that look identical, one of which cannot work.
+ * A retirement is a fact about the WORKFLOW, not about the subscription. The instance stays `active`
+ * — accessible, its history readable, its board showing what it did — while the work itself is
+ * permanently unavailable. Modelling it here, on the resolved CAPABILITIES (`agent-capabilities.ts`),
+ * is what lets every surface say so before anything is attempted: the console's badge and banner,
+ * the Loop gate (`loop-drivers.ts`), and MCP's `my_instances`, all reading this one table.
  *
- * ── The shape, and why it is here rather than in a column
+ * ── Membership
  *
- * Retirement is a fact about the WORKFLOW, not about the subscription. The instance stays `active`
- * on purpose — it is accessible, its history is readable, its board still shows what it did — and
- * what is permanently unavailable is the work. Those are two different states and #979's first
- * requirement is that they stop being one: a status column could not express it without making
- * every reader of `status` learn a new value.
- *
- * So it rides on the resolved CAPABILITIES (`agent-capabilities.ts`), which is already the one
- * answer to "what is this agent" that the console renders surfaces from and MCP serves. One table,
- * one resolution, and the console and MCP cannot disagree because they read the same field of the
- * same response.
+ * EMPTY since #1062. `JOB_APPLY` was the first member (2026-10-08, #979), and it was a mistake:
+ * "legacy" never meant retired. The cloud-brain JOB_APPLY workflow is a SUPPORTED browser-work path
+ * alongside Scout → Tailor → Runner, so it is no longer a member and every surface that read this
+ * table follows from that one change. The infrastructure stays for a real future retirement; its
+ * tests run against a fixture member.
  *
  * PURE — no D1, no Env, no fetch. {@link replacementsFrom} takes the owner's instances as the
  * caller already has them.
  */
-
-/** The owner-facing wording. Kept stable across HTTP, chat and MCP: it is the migration answer. */
-export const LEGACY_JOB_APPLY_RETIRED_MESSAGE =
-	"The legacy JOB_APPLY workflow no longer accepts new applications. Existing application tasks and history remain available. Use the Scout → Tailor → Runner pipeline: triage a job lead, generate application materials, then request review or start the Application Runner fill.";
 
 /** One role of a replacement pipeline, named as the owner sees it in their own instance list. */
 export interface ReplacementRole {
@@ -50,7 +39,7 @@ export interface RetirementNotice {
 	status: "retired";
 	/** The badge text itself, so every surface shows the same two words. */
 	label: string;
-	/** ISO date it was retired (migration 0189). */
+	/** ISO date it was retired. */
 	since: string;
 	/** Why, in one sentence an owner reads on the banner. */
 	summary: string;
@@ -62,29 +51,11 @@ export interface RetirementNotice {
 	replacement: { pipeline: string; roles: readonly ReplacementRole[] };
 }
 
-const JOB_APPLY_REPLACEMENT: readonly ReplacementRole[] = [
-	{ role: "scout", runtime: "local_browser", label: "Job Search Scout", does: "finds and triages job leads" },
-	{ role: "tailor", runtime: "local_artifact", label: "Application Tailor", does: "writes the résumé and cover letter for one job" },
-	{ role: "runner", runtime: "local_apply", label: "Application Runner", does: "fills the employer's form on your machine, and submits only what you approve" },
-];
-
 /**
  * The closed table. A member is added by a code review, with its own migration — there is no
  * free-text retirement, because this is the text an owner is shown instead of their agent working.
  */
-export const RETIRED_WORKFLOWS: Readonly<Record<string, RetirementNotice>> = {
-	JOB_APPLY: {
-		workflow: "JOB_APPLY",
-		status: "retired",
-		label: "Retired — disabled",
-		since: "2026-10-08",
-		summary:
-			"This agent's cloud-brain job-application workflow was retired. It is kept for its history: nothing it recorded has been deleted, and nothing it can be asked to do will run.",
-		migration: LEGACY_JOB_APPLY_RETIRED_MESSAGE,
-		preserved: "Its board, tasks, activity, trace, résumé and learned per-ATS tips stay readable. Chat still answers questions about them.",
-		replacement: { pipeline: "Scout → Tailor → Runner", roles: JOB_APPLY_REPLACEMENT },
-	},
-};
+export const RETIRED_WORKFLOWS: Readonly<Record<string, RetirementNotice>> = {};
 
 /** The notice for a workflow, or undefined. The one place anything decides "is this retired". */
 export function retirementFor(workflow: string | null | undefined): RetirementNotice | undefined {

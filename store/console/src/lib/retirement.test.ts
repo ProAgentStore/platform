@@ -11,11 +11,11 @@ import { describe, expect, it } from "vitest";
 import { type InstanceRetirement, isRetired, replacementRoutes, retiredTitle, retirementOf } from "./retirement";
 
 const RETIREMENT: InstanceRetirement = {
-	workflow: "JOB_APPLY",
+	workflow: "BROWSER_TASK",
 	status: "retired",
 	label: "Retired — disabled",
 	since: "2026-10-08",
-	summary: "This agent's cloud-brain job-application workflow was retired.",
+	summary: "This agent's fixture workflow was retired.",
 	migration: "Use the Scout → Tailor → Runner pipeline.",
 	preserved: "Its board, tasks and activity stay readable.",
 	replacement: {

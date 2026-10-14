@@ -1,17 +1,15 @@
-# Job Application Assistant (legacy, retired for new starts)
+# Job Application Assistant (`JOB_APPLY`)
 
-> The `JOB_APPLY` workflow is retired for new starts. `POST /apply`, the chat
-> `submit_job_application` tool, and MCP `apply_to_job` return migration guidance without
-> creating a task. Existing task cards, history, traces, résumé data, and ATS tips remain
-> readable. Start new work through the Scout → Tailor → Runner pipeline: triage a lead, tailor
-> materials, then request review or start the Application Runner fill.
+> A supported browser-work path for job applications, alongside the Scout → Tailor → Runner
+> pipeline (#1062). "Legacy" names its age, not its status: it was wrongly treated as retired
+> from 2026-10-08 to 2026-10-14. Start an application with `POST /v1/instances/{id}/apply`, the
+> chat `submit_job_application` tool, or MCP `apply_to_job`.
 
-A former first-party ProAgentStore catalog agent. Historically, an LLM brain drove a real
-browser to complete and submit an application autonomously, answering only from your structured
-Profile and the résumé you uploaded. That start path is now retired; the implementation remains
-documented here solely to explain existing history and data.
+A first-party ProAgentStore catalog agent. An LLM brain drives a real browser to complete and
+submit an application autonomously, answering only from your structured Profile and the résumé
+you uploaded.
 
-**Historical architecture: remote brain, local hands.**
+**Architecture: remote brain, local hands.**
 
 | Half | Where it runs | What it is |
 |---|---|---|
@@ -25,24 +23,24 @@ minutes. The loop is: snapshot → Claude picks exactly ONE action → act → r
 The runner reaches the cloud over the outbound WebSocket relay (`RelayDO`). There is no
 cloudflared, no tunnel, and nothing inbound to expose.
 
-## Retirement and migration
+## Starting an application
 
-There is no legacy apply start path. The three former entry points are retained only to answer
-with the same migration message; they do not create a `job.apply_agent` task, a workflow, a
-budget, or browser actions. Existing `job.apply_agent` records, workflow traces, board cards,
-uploaded résumé data, and per-ATS tips are not deleted.
+Three entry points, one start (`startJobApply` in `workers/api/src/routes/instances-apply.ts`):
 
-For new work, use the existing owner-controlled pipeline:
+- `POST /v1/instances/{instanceId}/apply` with `{ url, resumePath?, dryRun? }` — `202` with the
+  workflow and task ids. `dryRun: true` fills everything but never clicks submit.
+- Chat `submit_job_application` — the agent starts it; it cannot supply candidate values.
+- MCP `apply_to_job` — needs the `destructive` scope, because it always submits for real.
 
+Every start refuses, with a concrete reason and nothing left behind, when the instance's agent
+does not run `JOB_APPLY` (409), no résumé is on file (400), no runner is live (503), or an application
+is already running on that instance (409 — single-flight, enforced atomically, so a double-click
+or a console/chat race cannot start two). A start that succeeds opens a spend pool and a run row,
+so `stop_work` can end it.
 
-1. Use the Job Search Scout to record and triage the lead (`triage_application` with `apply`).
-2. Run `generate_application_materials` through the Application Tailor.
-3. Use `request_application_review`, or `start_application_fill` when the Application Runner's
-   submission policy allows it.
-
-`POST /v1/instances/{instanceId}/apply` returns `410 Gone`; chat
-`submit_job_application` and MCP `apply_to_job` return the same migration direction. Their
-schemas remain available temporarily for cached clients, but none can begin legacy work.
+The other supported path is the owner-controlled pipeline: triage a lead with the Job Search Scout
+(`triage_application`), `generate_application_materials` through the Application Tailor, then
+`request_application_review` or `start_application_fill` with the Application Runner.
 
 ## Human handoffs
 

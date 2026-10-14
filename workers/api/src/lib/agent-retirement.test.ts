@@ -1,51 +1,37 @@
 /**
- * A retired workflow, as every surface reads it (#979).
+ * A retired workflow, as every surface reads it (#979) — and the table's membership (#1062).
  *
- * The live state: the legacy Job Application Assistant was retired (migration 0189, 410s on every
- * start) and the console still showed an ordinary `active` apply agent — tabs, board, Loop button
- * — beside the live Scout → Tailor → Runner pipeline, which is also an apply agent. The retirement
- * existed only as a refusal, so nothing could SAY it before something was attempted.
+ * JOB_APPLY was the first member (2026-10-08) and was removed on 2026-10-14 (#1062): "legacy" never
+ * meant retired, and it is a supported browser-work path alongside Scout → Tailor → Runner. The
+ * machinery stays for a real future retirement, so it is tested against a FIXTURE notice.
  */
 import { describe, expect, it } from "vitest";
-import { LEGACY_JOB_APPLY_RETIRED_MESSAGE, RETIRED_WORKFLOWS, replacementsFrom, retirementFor, retirementView } from "./agent-retirement.js";
+import { RETIRED_WORKFLOWS, replacementsFrom, retirementFor, retirementView } from "./agent-retirement.js";
+import { FIXTURE_RETIREMENT as NOTICE } from "./agent-retirement.fixture.js";
 import { AGENT_WORKFLOWS } from "./agent-workflows.js";
 
-const NOTICE = RETIRED_WORKFLOWS.JOB_APPLY;
-
 describe("the closed table of retired workflows", () => {
-	it("JOB_APPLY is retired, and says so in two words a badge can carry", () => {
-		expect(retirementFor("JOB_APPLY")).toMatchObject({ workflow: "JOB_APPLY", status: "retired", label: "Retired — disabled", since: "2026-10-08" });
+	it("JOB_APPLY is NOT retired (#1062) — it is a supported browser-work path", () => {
+		expect(retirementFor("JOB_APPLY")).toBeUndefined();
+		expect(Object.hasOwn(RETIRED_WORKFLOWS, "JOB_APPLY")).toBe(false);
 	});
 
-	it("nothing else is — a live workflow must never resolve a retirement", () => {
-		for (const w of AGENT_WORKFLOWS) {
-			if (w.value === "JOB_APPLY") continue;
-			expect(retirementFor(w.value), w.value).toBeUndefined();
-		}
+	it("no workflow the platform runs today resolves a retirement", () => {
+		for (const w of AGENT_WORKFLOWS) expect(retirementFor(w.value), w.value).toBeUndefined();
+		expect(Object.keys(RETIRED_WORKFLOWS)).toEqual([]);
 		expect(retirementFor(null)).toBeUndefined();
 		expect(retirementFor(undefined)).toBeUndefined();
 		expect(retirementFor("")).toBeUndefined();
-		expect(retirementFor("CODING_SESSION")).toBeUndefined();
 	});
 
-	it("carries the SAME migration sentence the start refusals return", () => {
-		// Two strings would mean a banner explaining one thing and the error from the very action it
-		// describes explaining another, which teaches a reader to trust neither.
-		expect(NOTICE.migration).toBe(LEGACY_JOB_APPLY_RETIRED_MESSAGE);
-		expect(NOTICE.migration).toMatch(/Scout → Tailor → Runner/);
-	});
-
-	it("says what is PRESERVED, so disabled is not read as deleted", () => {
+	it("a notice says what is PRESERVED, so disabled is not read as deleted", () => {
 		expect(NOTICE.preserved).toMatch(/board|history|readable/i);
 		expect(NOTICE.summary).toMatch(/nothing it recorded has been deleted/i);
 	});
 
 	it("names the replacement by the RUNTIME each role is recognised by, not by a slug or a name", () => {
-		// A name is a display string an owner can change; the runtime is what the capability
-		// registry resolves, which is how the owner's own instance is found below.
 		expect(NOTICE.replacement.roles.map((r) => r.runtime)).toEqual(["local_browser", "local_artifact", "local_apply"]);
 		expect(NOTICE.replacement.roles.map((r) => r.role)).toEqual(["scout", "tailor", "runner"]);
-		for (const role of NOTICE.replacement.roles) expect(role.does.length, role.role).toBeGreaterThan(10);
 	});
 });
 
@@ -83,8 +69,8 @@ describe("the route out, resolved against the owner's OWN instances", () => {
 	});
 
 	it("never links the retired agent itself, whatever its runtime says", () => {
-		// The legacy agent's runtime is `browser`; no role is defined by it, so it cannot match.
-		const resolved = replacementsFrom(NOTICE, [{ id: "i-legacy", name: "Job Application Assistant", runtime: "browser" }]);
+		// A `browser`-runtime agent defines no role, so it cannot match.
+		const resolved = replacementsFrom(NOTICE, [{ id: "i-retired", name: "Retired agent", runtime: "browser" }]);
 		expect(resolved.every((r) => r.instanceId === null)).toBe(true);
 	});
 
