@@ -448,6 +448,67 @@ describe("pulling state from the runner (#944)", () => {
 	});
 });
 
+describe("the owner's browser-screenshot switch (#1064)", () => {
+	const at = "2026-10-14T01:00:00Z";
+	const frame = btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xe0, 1));
+	const runnerHoldsAFrame = (runId: string) => {
+		runner.paths = {
+			"/local-browser/status": { status: 200, body: { runId, state: "running", lastSeq: 0, events: [] } },
+			"/local-browser/shots": { status: 200, body: { runId, shots: [{ seq: 1, point: "navigated", url: "https://seek.com.au/", mimeType: "image/jpeg", data: frame, at }], lastSeq: 1 } },
+		};
+	};
+
+	it("is ON by default, owner-only, takes exactly {enabled}, and every change is audited", async () => {
+		expect((await call("GET", "/i1/browser-screenshots")).body).toEqual({ enabled: true, explained: expect.stringMatching(/blurred.*only to you.*30 days/) });
+		expect((await call("PUT", "/i1/browser-screenshots", { enabled: "no" })).status).toBe(400);
+		expect((await call("PUT", "/i1/browser-screenshots", { enabled: false, retentionDays: 1 })).body.error).toMatch(/Unknown field\(s\): retentionDays/);
+		expect((await call("GET", "/i1/browser-screenshots")).body.enabled).toBe(true);
+		expect((await call("PUT", "/other/browser-screenshots", { enabled: false })).status).toBe(404);
+		expect((await call("GET", "/other/browser-screenshots")).status).toBe(404);
+
+		expect((await call("PUT", "/i1/browser-screenshots", { enabled: false })).body).toMatchObject({ enabled: false });
+		expect((await call("GET", "/i1/browser-screenshots")).body.enabled).toBe(false);
+		// Stored beside the rest of the instance config, not over it.
+		const row = await d1.DB.prepare("SELECT config FROM agent_instances WHERE id = 'i1'").first<{ config: string }>();
+		expect(JSON.parse(row!.config)).toMatchObject({ runnerNode: "mac", browserScreenshots: { enabled: false } });
+		const audit = d1.sqlite.prepare("SELECT context FROM agent_events WHERE event = 'browser_screenshots.changed' AND instance_id = 'i1'").all() as Array<{ context: string }>;
+		expect(audit.map((a) => JSON.parse(a.context))).toEqual([expect.objectContaining({ enabled: false })]);
+	});
+
+	it("OFF: the run records it, the runner is told, no frame is pulled or stored, and the replay says why", async () => {
+		await call("PUT", "/i1/browser-screenshots", { enabled: false });
+		stored.clear();
+		const run = (await call("POST", "/i1/local-browser/runs", { objective: "x" })).body;
+		expect(sent.find((x) => x.path === "/local-browser/run")?.body).toMatchObject({ policy: { screenshots: false } });
+		const policy = await d1.DB.prepare("SELECT policy FROM local_browser_runs WHERE id = ?1").bind(run.id).first<{ policy: string }>();
+		expect(JSON.parse(policy!.policy)).toMatchObject({ screenshots: false });
+		const requested = (await call("GET", `/i1/local-browser/runs/${run.id}/events`)).body.events[0];
+		expect(requested).toMatchObject({ type: "run.requested", detail: { screenshots: "off", screenshotsOffReason: "owner_setting" } });
+
+		// An older runner that ignores the flag still holds a frame: the cloud never asks for it.
+		runnerHoldsAFrame(run.id);
+		await call("GET", `/i1/local-browser/runs/${run.id}`);
+		expect(sent.some((x) => x.path === "/local-browser/shots")).toBe(false);
+		expect(stored.size).toBe(0);
+		expect((await call("GET", `/i1/browser-artifacts?subject_kind=local_browser_run&subject_id=${run.id}`)).body).toMatchObject({ artifacts: [], screenshotsOff: true });
+	});
+
+	it("is fixed when the run starts: switching it back on mid-run captures nothing for that run, and the next run is on", async () => {
+		await call("PUT", "/i1/browser-screenshots", { enabled: false });
+		const off = (await call("POST", "/i1/local-browser/runs", { objective: "x", requestId: "r-off" })).body;
+		await call("PUT", "/i1/browser-screenshots", { enabled: true });
+		runnerHoldsAFrame(off.id);
+		await call("GET", `/i1/local-browser/runs/${off.id}`);
+		expect(sent.some((x) => x.path === "/local-browser/shots")).toBe(false);
+
+		await call("POST", `/i1/local-browser/runs/${off.id}/cancel`);
+		const on = (await call("POST", "/i1/local-browser/runs", { objective: "y", requestId: "r-on" })).body;
+		expect((sent.filter((x) => x.path === "/local-browser/run").at(-1)?.body as { policy: object }).policy).not.toHaveProperty("screenshots");
+		expect((await call("GET", `/i1/local-browser/runs/${on.id}/events`)).body.events[0].detail).toMatchObject({ screenshots: "on" });
+		expect((await call("GET", `/i1/browser-artifacts?subject_kind=local_browser_run&subject_id=${on.id}`)).body.screenshotsOff).toBe(false);
+	});
+});
+
 describe("the owner is told when a run pauses (#946)", () => {
 	it("sends a local-browser alert linked to the run's page", async () => {
 		const run = (await call("POST", "/i1/local-browser/runs", { objective: "Find TypeScript roles" })).body;

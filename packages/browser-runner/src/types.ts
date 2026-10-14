@@ -112,6 +112,8 @@ export interface TakeoverInput {
  */
 export interface BrowserAction {
 	action: "click" | "type" | "select" | "check" | "upload" | "navigate" | "scroll" | "key" | "wait";
+	/** `false` when the owner turned browser screenshots OFF for this run (#1064): no frame is taken at all. */
+	screenshot?: boolean;
 	/** Stable element reference from the snapshot (e.g. "e42"). Resolved via the
 	 *  aria-ref selector — unambiguous, preferred over role+name when present. */
 	ref?: string;

@@ -88,6 +88,9 @@ export interface LocalBrowserTaskEnvelope {
 		consentedDomains: string[];
 		/** Has the owner consented to the signed-in profile? Only meaningful for `default`. */
 		profileConsented: boolean;
+		/** `false` when the owner turned browser screenshots OFF for this agent (#1064): the runner takes no
+		 *  replay frame for this run. Absent = on. Fixed when the run starts. */
+		screenshots?: false;
 		/**
 		 * The id of each owner decision the lists above came from (#947), keyed by domain — `*` for
 		 * the signed-in-profile decision — so the trace can name the decision that admitted or

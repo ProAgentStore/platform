@@ -40,7 +40,10 @@ const relay = {
 	}),
 };
 const agentDO = { idFromName: (n: string) => n, get: () => ({ fetch: async () => Response.json({ ok: true }, { status: 201 }) }) };
-const env = () => ({ DB: d1.DB, RELAY: relay, AGENT: agentDO }) as unknown as Env;
+/** In-memory R2 for replay frames (#1063/#1064). */
+const stored = new Map<string, Uint8Array>();
+const STORAGE = { put: async (k: string, v: Uint8Array) => void stored.set(k, v), get: async (k: string) => (stored.has(k) ? { body: stored.get(k) } : null), delete: async (k: string) => void stored.delete(k) };
+const env = () => ({ DB: d1.DB, RELAY: relay, AGENT: agentDO, STORAGE }) as unknown as Env;
 
 const SHA_R = "a".repeat(64);
 const SHA_C = "b".repeat(64);
@@ -203,6 +206,38 @@ describe("end to end: approved lead → materials_ready → filled and awaiting 
 		expect(r.status).toBe(503);
 		expect((await appRow("lead-3"))?.status).toBe("materials_ready");
 		expect((await d1.DB.prepare("SELECT COUNT(*) AS n FROM local_apply_runs").first<{ n: number }>())?.n).toBe(0);
+	});
+});
+
+describe("the owner's browser-screenshot switch (#1064)", () => {
+	const frame = btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xe0, 1));
+	const storedRun = (id: string) => d1.DB.prepare("SELECT policy, trace FROM local_apply_runs WHERE id = ?1").bind(id).first<{ policy: string; trace: string }>();
+
+	it("OFF: the fill run records it, the runner is told, and its frames are never pulled", async () => {
+		await call("PUT", "/ap/browser-screenshots", { enabled: false });
+		stored.clear();
+		const runId = (await call("POST", "/ap/application-runs", readyApp("lead-shots-off"))).body.run.id as string;
+		expect(dispatches()[0].body.policy).toMatchObject({ screenshots: false });
+		const row = await storedRun(runId);
+		expect(JSON.parse(row!.policy)).toMatchObject({ screenshots: false });
+		expect(JSON.parse(row!.trace)[0]).toMatchObject({ type: "run.requested", detail: { screenshots: "off", reason: "owner_setting" } });
+		runner("running");
+		answers["/local-apply/shots"] = { status: 200, body: { runId, shots: [{ seq: 1, point: "navigated", url: "https://jobs.example.com/1", mimeType: "image/jpeg", data: frame, at: "2026-10-14T00:00:00Z" }], lastSeq: 1 } };
+		await call("GET", `/ap/application-runs/${runId}`);
+		expect(sent.some((x) => x.path === "/local-apply/shots")).toBe(false);
+		expect(stored.size).toBe(0);
+	});
+
+	it("ON (the default): the same run asks the runner for its frames, as #1063 shipped", async () => {
+		const runId = (await call("POST", "/ap/application-runs", readyApp("lead-shots-on"))).body.run.id as string;
+		expect(dispatches()[0].body.policy).not.toHaveProperty("screenshots");
+		expect(JSON.parse((await storedRun(runId))!.trace)[0].detail).toMatchObject({ screenshots: "on" });
+		runner("running");
+		stored.clear();
+		answers["/local-apply/shots"] = { status: 200, body: { runId, shots: [{ seq: 1, point: "navigated", url: "https://jobs.example.com/1", mimeType: "image/jpeg", data: frame, at: "2026-10-14T00:00:00Z" }], lastSeq: 1 } };
+		await call("GET", `/ap/application-runs/${runId}`);
+		expect(sent.some((x) => x.path === "/local-apply/shots")).toBe(true);
+		expect([...stored.keys()]).toEqual([`browser-artifacts/u1/ap/local_apply_run/${runId}/00001.jpg`]);
 	});
 });
 

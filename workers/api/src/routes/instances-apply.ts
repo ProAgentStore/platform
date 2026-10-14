@@ -1,4 +1,5 @@
 import { closeLiveTakeoverFor, transitionTakeover } from "../lib/browser-takeovers.js";
+import { browserScreenshotsEnabled } from "../lib/browser-screenshots.js";
 import { takeoverGate } from "./instances-browser-takeovers.js";
 import { markHumanAnswered } from "../lib/coder-question-store.js";
 import { overLimit } from "../lib/write-limits.js";
@@ -198,6 +199,9 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 			today: new Date().toISOString().slice(0, 10),
 		};
 
+		// The owner's screenshot switch, fixed into this task as it starts (#1064): recorded on the task's
+		// input (the storage guard and the console read it there) and handed to the workflow.
+		const screenshotsOn = await browserScreenshotsEnabled(env, instanceId, userId);
 		let taskId: string;
 		try {
 			// Give the board card a real title up front (best-effort from the job URL),
@@ -206,7 +210,7 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 			const card = deriveFromUrl(url);
 			({ taskId } = await createBrowserRuntimeTask(env, instanceId, userId, {
 				type: "job.apply_agent",
-				input: { url, resumePath },
+				input: { url, resumePath, ...(screenshotsOn ? {} : { screenshots: false }) },
 				title: card.title || undefined,
 				subtitle: card.subtitle || undefined,
 			}));
@@ -277,7 +281,7 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 				.catch(() => undefined);
 			throw new ApplyError(`Could not start the application: ${e instanceof Error ? e.message : String(e)}`, 500);
 		}
-		const instance = await env.JOB_APPLY.create({ params: { instanceId, userId, taskId, job, budgetId, depth: 0, loopRunId } });
+		const instance = await env.JOB_APPLY.create({ params: { instanceId, userId, taskId, job, budgetId, depth: 0, loopRunId, ...(screenshotsOn ? {} : { screenshots: false as const }) } });
 		return { workflowId: instance.id, taskId };
 	} finally {
 		await dropClaim();

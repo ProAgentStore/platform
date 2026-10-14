@@ -173,6 +173,7 @@ export function parseEnvelope(raw: unknown): LocalBrowserTaskEnvelope {
 			consentedDomains: strList(p.consentedDomains),
 			profileConsented: p.profileConsented === true,
 			consentIds: consentIdMap(p.consentIds),
+			...(p.screenshots === false ? { screenshots: false as const } : {}),
 		},
 		limits,
 		resultSchema: { id: typeof schema.id === "string" ? schema.id : "findings", version: typeof schema.version === "number" ? schema.version : 1 },
@@ -251,7 +252,9 @@ export class LocalBrowserRuntime {
 			token: randomBytes(24).toString("hex"),
 			state: "running",
 			events: [],
-			shots: new ShotRecorder(SCOUT_SHOT_CAP, () => this.now()),
+			// Screenshots off (#1064): a zero-cap recorder, so `/shots` answers with nothing — and the bridge
+			// below is given NO recorder at all, so no frame is ever attempted.
+			shots: new ShotRecorder(envelope.policy.screenshots === false ? 0 : SCOUT_SHOT_CAP, () => this.now()),
 			seq: 0,
 			consented: new Set(envelope.policy.consentedDomains),
 			deny: new Set(envelope.policy.denyDomains),
@@ -298,7 +301,7 @@ export class LocalBrowserRuntime {
 			overTime: () => this.activeMs(run) >= e.limits.maxMinutes * 60_000,
 			limits: e.limits,
 			},
-			run.shots,
+			e.policy.screenshots === false ? undefined : run.shots,
 		);
 
 		const bridgeScript = this.deps.bridgeScript ?? fileURLToPath(new URL("./bridge-stdio.js", import.meta.url));

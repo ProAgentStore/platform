@@ -333,4 +333,6 @@ export interface BrowserArtifactListResponse {
 	subjectKind: BrowserArtifactView["subjectKind"];
 	subjectId: string;
 	artifacts: BrowserArtifactView[];
+	/** The run started with the owner's screenshot switch OFF (#1064): it has no frames by design. */
+	screenshotsOff: boolean;
 }

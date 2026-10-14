@@ -85,6 +85,8 @@ export interface EffectiveLocalBrowserPolicy {
 	traceRetentionDays: number;
 	resultSchema: LocalBrowserResultSchema;
 	collection: CollectionMapping | null;
+	/** Set only on a RUN's policy, when the owner's browser-screenshot switch was off as it started (#1064). */
+	screenshots?: false;
 }
 
 const DOMAIN_RE = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;

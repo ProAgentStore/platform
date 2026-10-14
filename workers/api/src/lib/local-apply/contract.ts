@@ -129,6 +129,9 @@ export interface LocalApplyTaskEnvelope {
 		allowDomains: string[];
 		/** Present only under `auto_submit`: the PAGS policy decision that permits ONE final submit. */
 		submitGate?: { gateId: string };
+		/** `false` when the owner turned browser screenshots OFF for this agent (#1064): the runner takes no
+		 *  replay frame for this run. Absent = on. Fixed when the run starts. */
+		screenshots?: false;
 	};
 	limits: LocalApplyLimits;
 }

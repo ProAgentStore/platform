@@ -16,6 +16,7 @@
  * once; a submit attempt — confirmed, unconfirmed, or unknowable because the runner was lost
  * mid-run — sets `submit_attempted_at`, and nothing starts another fill after that.
  */
+import { SCREENSHOTS_OFF_REASON, browserScreenshotsEnabled } from "../browser-screenshots.js";
 import { ingestRunnerShots } from "../browser-artifacts.js";
 import { HttpError } from "../auth.js";
 import { capabilitiesForInstance } from "../agent-capabilities.js";
@@ -220,7 +221,7 @@ export function applyTaskEnvelope(run: ApplyRun, app: JobApplication, s: Applica
 		workspace: s.workspace,
 		sources: (["profile", "answers"] as const).filter((r) => s.sources[r]).map((role) => ({ role, path: s.sources[role] as string })),
 		artifacts: [app.resumeArtifact, app.coverLetterArtifact].filter((a): a is NonNullable<typeof a> => !!a).map((a) => ({ kind: a.kind, path: a.path, sha256: a.sha256 })),
-		policy: { mode: run.policy.mode, allowDomains: run.policy.allowDomains, ...(run.policy.gate.gateId ? { submitGate: { gateId: run.policy.gate.gateId } } : {}) },
+		policy: { mode: run.policy.mode, allowDomains: run.policy.allowDomains, ...(run.policy.gate.gateId ? { submitGate: { gateId: run.policy.gate.gateId } } : {}), ...(run.policy.screenshots === false ? { screenshots: false as const } : {}) },
 		limits: run.policy.limits,
 	};
 }
@@ -291,6 +292,8 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 		: gate.checks;
 	const gateId = allowed ? crypto.randomUUID() : null;
 	const mode = allowed ? "auto_submit" : "fill_and_review";
+	// The owner's screenshot switch, fixed into this run as it starts (#1064).
+	const screenshotsOn = await browserScreenshotsEnabled(env, instanceId, uid);
 	const policy: ApplyRunPolicy = {
 		engine: s.engine,
 		authMode: s.authMode,
@@ -300,10 +303,11 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 		limits: { maxMinutes: s.maxMinutes, maxPages: s.maxPages, maxActions: s.maxActions },
 		gate: { allowed, gateId, checks },
 		...(opts.oneClickRecoveryId ? { approvalRecoveryId: opts.oneClickRecoveryId } : {}),
+		...(screenshotsOn ? {} : { screenshots: false as const }),
 	};
 	const failing = checks.filter((c) => !c.ok).map((c) => c.check);
 	const trace: ApplyTraceEvent[] = [
-		{ type: "run.requested", at: iso(now), detail: { engine: s.engine, authMode: s.authMode, status: source } },
+		{ type: "run.requested", at: iso(now), detail: { engine: s.engine, authMode: s.authMode, status: source, screenshots: screenshotsOn ? "on" : "off", ...(screenshotsOn ? {} : { reason: SCREENSHOTS_OFF_REASON }) } },
 		{ type: "policy.submit_gate", at: iso(now), detail: { mode, decision: allowed ? "allowed" : "refused", ...(gateId ? { gateId } : { reason: failing.join(",").slice(0, 300) }) } },
 	];
 	if (spentApproval) trace.push({ type: "policy.decision", at: iso(now), detail: { class: "submit", decision: "allowed", basis: "application_approval", authorizationId: spentApproval.id } });
@@ -638,8 +642,9 @@ export async function syncApplyRun(env: Env, uid: string, run: ApplyRun, now = D
 	const lastSeq = typeof body.lastSeq === "number" && body.lastSeq >= run.runnerSeq ? body.lastSeq : run.runnerSeq;
 	// A submit attempt is recorded the moment PAGS sees it, before anything else can go wrong.
 	if (events.some((e) => e.type === "submit.attempted")) await markSubmitAttempted(env, run.applicationId, uid, now);
-	// Replay frames (#1063) — every form control blurred by the runner before capture — pulled beside the trace.
-	await ingestRunnerShots(env, { userId: uid, instanceId: run.instanceId, subjectKind: "local_apply_run", subjectId: run.id }, async (afterSeq) => {
+	// Replay frames (#1063) — every form control blurred by the runner before capture — pulled beside the
+	// trace; never for a run that started with the owner's screenshot switch off (#1064).
+	if (run.policy.screenshots !== false) await ingestRunnerShots(env, { userId: uid, instanceId: run.instanceId, subjectKind: "local_apply_run", subjectId: run.id }, async (afterSeq) => {
 		const shots = await callRuntime(env, runtime, LOCAL_APPLY_SHOTS_PATH, { method: "POST", body: JSON.stringify({ runId: run.id, afterSeq }) });
 		return shots.ok ? runtimeJson(shots) : null;
 	}, now).catch(() => 0);

@@ -12,9 +12,12 @@ import { ChevronLeft, ChevronRight, Pause, Play } from "lucide-react";
 import Card from "./Card";
 import { type BrowserArtifactListResponse, type BrowserArtifactView, type ReplayFrame, type ReplaySubjectKind } from "../lib/runReplay";
 
-/** A subject's stored screenshots; re-read whenever `refreshKey` changes (e.g. the run's event count). */
-export function useBrowserArtifacts(instanceId: string, subjectKind: ReplaySubjectKind, subjectId: string | null | undefined, refreshKey: unknown = 0): BrowserArtifactView[] {
-	const [artifacts, setArtifacts] = useState<BrowserArtifactView[]>([]);
+/**
+ * A subject's stored screenshots, and whether the run started with screenshots OFF (#1064) — then it has
+ * none by design; re-read whenever `refreshKey` changes (e.g. the run's event count).
+ */
+export function useBrowserArtifacts(instanceId: string, subjectKind: ReplaySubjectKind, subjectId: string | null | undefined, refreshKey: unknown = 0): { artifacts: BrowserArtifactView[]; screenshotsOff: boolean } {
+	const [state, setState] = useState<{ artifacts: BrowserArtifactView[]; screenshotsOff: boolean }>({ artifacts: [], screenshotsOff: false });
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `refreshKey` is the re-read trigger (the run's event count), not a value the effect reads.
 	useEffect(() => {
 		if (!subjectId) return;
@@ -22,14 +25,14 @@ export function useBrowserArtifacts(instanceId: string, subjectKind: ReplaySubje
 		// Written out in full: the MCP-parity check reads a console path as a literal.
 		api<BrowserArtifactListResponse>(`/v1/instances/${instanceId}/browser-artifacts?subject_kind=${subjectKind}&subject_id=${encodeURIComponent(subjectId)}`)
 			.then((r) => {
-				if (!cancelled) setArtifacts(r.artifacts ?? []);
+				if (!cancelled) setState({ artifacts: r.artifacts ?? [], screenshotsOff: r.screenshotsOff === true });
 			})
 			.catch(() => undefined);
 		return () => {
 			cancelled = true;
 		};
 	}, [instanceId, subjectKind, subjectId, refreshKey]);
-	return artifacts;
+	return state;
 }
 
 const fmtStamp = (at?: string) => (at ? new Date(at).toLocaleTimeString() : "");

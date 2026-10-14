@@ -1161,4 +1161,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.130": "sha256:ce711149309ec24790a33acf9f4024d9165ca8843addf696dc2039322e0bf819",
 	// #1066: retry_application gains optional `answers` — retry_tailoring saves them for later Tailor runs.
 	"0.1.131": "sha256:90132172e68c42656e6975d12d85ce9b1d1de0a11a60de21daa8d0f5e8d853dd",
+	// #1064: get_browser_screenshots / set_browser_screenshots (322 → 324, always-on 295 → 297).
+	"0.1.132": "sha256:010ac079b39f067e3dbbc9def7a6e18bb71f49f05ecfb2963e08b2ce0f190bf0",
 };

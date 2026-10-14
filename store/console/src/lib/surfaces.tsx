@@ -14,6 +14,7 @@ import PermissionsTab from "../tabs/PermissionsTab";
 import ResearchTab from "../tabs/ResearchTab";
 import StatsTab from "../tabs/StatsTab";
 import TmuxTab from "../tabs/TmuxTab";
+import { takesBrowserScreenshots } from "./browserScreenshots";
 import { deepLinkedBuildsRepo } from "./deepLink";
 import type { RunnerPresence } from "./types";
 
@@ -368,7 +369,7 @@ export const SURFACES: SurfaceDef[] = [
 		show: () => true,
 		scroll: true,
 		render: ({ instanceId, instanceName, isApply, isCoding, isRepo, caps, onUnsubscribe }) => (
-			<SettingsTab instanceId={instanceId} instanceName={instanceName} isApply={isApply} isCoding={isCoding} isRepo={isRepo} isLocalBrowser={caps.runtime === "local_browser"} isGmailScout={isGmailScout(caps)} onUnsubscribe={onUnsubscribe} />
+			<SettingsTab instanceId={instanceId} instanceName={instanceName} isApply={isApply} isCoding={isCoding} isRepo={isRepo} isLocalBrowser={caps.runtime === "local_browser"} isGmailScout={isGmailScout(caps)} takesScreenshots={takesBrowserScreenshots(caps)} onUnsubscribe={onUnsubscribe} />
 		),
 	},
 	{

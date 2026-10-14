@@ -61,7 +61,7 @@ const EXCLUSIONS = [
 			"Coder-agent control plane (~45 routes driving a coding CLI as a child process on the subscriber's own machine — not tmux, which is the separate terminal-operator connector). Documented at summary level only — see the Coding tag in the spec — because the request/response shapes are runner-version coupled and change with the CLI, not with the API contract.",
 	},
 	{
-		match: /^[A-Z]+ \/v1\/instances\/(\{\}\/)?(browse|behaviour)/,
+		match: /^[A-Z]+ \/v1\/instances\/(\{\}\/)?(browse|behaviour)(?:\/|$|-schema$)/,
 		reason:
 			"Console-internal helpers for the Coder browse pane and the behaviour editor (including `GET /v1/instances/behaviour-schema`); shape follows the console, not a published contract.",
 	},

@@ -1,5 +1,5 @@
 import RunReplay, { useBrowserArtifacts } from "../components/RunReplay";
-import { replayFrames } from "../lib/runReplay";
+import { replayFrames, SCREENSHOTS_OFF_TEXT } from "../lib/runReplay";
 import { AutoSubmitConfirmDialog, AutoSubmitDangerBanner, ManualReviewBadge } from "../components/AutoSubmitPolicy";
 import { type AutoSubmitAllowance, type AutoSubmitRules, disablePayload, enablePayload, rulesPayload } from "../lib/autoSubmitPolicy";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -240,7 +240,7 @@ function Detail({ instanceId, item, connections, onChanged }: { instanceId: stri
 	const progress = item.execution?.progress ?? item.fillProgress;
 	const questions = pause?.question ? [pause.question] : item.questions;
 	// #1063: the fill run's replay — every form control blurred by the runner before each frame was taken.
-	const artifacts = useBrowserArtifacts(instanceId, "local_apply_run", item.fillRunId, item.stateVersion);
+	const { artifacts, screenshotsOff } = useBrowserArtifacts(instanceId, "local_apply_run", item.fillRunId, item.stateVersion);
 	const frames = useMemo(() => replayFrames(instanceId, artifacts), [instanceId, artifacts]);
 
 	const act = async (action: ApplicationQueueAction) => {
@@ -411,9 +411,9 @@ function Detail({ instanceId, item, connections, onChanged }: { instanceId: stri
 			</fieldset>
 			{msg && <p className="text-xs mt-2">{msg}</p>}
 
-			{frames.length > 0 && (
+			{(frames.length > 0 || screenshotsOff) && (
 				<div className="mt-3">
-					<RunReplay frames={frames} emptyText="" />
+					<RunReplay frames={frames} emptyText={SCREENSHOTS_OFF_TEXT} />
 				</div>
 			)}
 

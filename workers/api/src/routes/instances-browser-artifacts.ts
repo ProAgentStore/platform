@@ -10,7 +10,7 @@
 import type { Hono } from "hono";
 import type { BrowserArtifactListResponse } from "../agent-types.js";
 import { HttpError, requireUser } from "../lib/auth.js";
-import { isBrowserArtifactSubject, listBrowserArtifacts, readBrowserArtifact, subjectBelongsTo } from "../lib/browser-artifacts.js";
+import { isBrowserArtifactSubject, listBrowserArtifacts, readBrowserArtifact, subjectBelongsTo, subjectScreenshotsOff } from "../lib/browser-artifacts.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 
@@ -24,7 +24,12 @@ export function registerBrowserArtifactRoutes(router: Hono<{ Bindings: Env }>): 
 		if (!isBrowserArtifactSubject(subjectKind)) throw new HttpError(400, "subject_kind must be runtime_task, local_browser_run or local_apply_run");
 		if (!subjectId) throw new HttpError(400, "subject_id required");
 		if (!(await subjectBelongsTo(c.env, session.uid, instanceId, subjectKind, subjectId))) throw new HttpError(404, "Run not found");
-		const body: BrowserArtifactListResponse = { subjectKind, subjectId, artifacts: await listBrowserArtifacts(c.env, session.uid, instanceId, subjectKind, subjectId) };
+		const body: BrowserArtifactListResponse = {
+			subjectKind,
+			subjectId,
+			artifacts: await listBrowserArtifacts(c.env, session.uid, instanceId, subjectKind, subjectId),
+			screenshotsOff: await subjectScreenshotsOff(c.env, session.uid, subjectKind, subjectId),
+		};
 		return c.json(body, 200, { "Cache-Control": "no-store" });
 	});
 

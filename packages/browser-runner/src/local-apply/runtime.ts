@@ -210,7 +210,7 @@ export function parseApplyEnvelope(raw: unknown): LocalApplyTaskEnvelope {
 		workspace: o.workspace,
 		sources,
 		artifacts,
-		policy: { mode: p.mode as LocalApplyTaskEnvelope["policy"]["mode"], allowDomains, ...(p.mode === "auto_submit" && gateId ? { submitGate: { gateId } } : {}) },
+		policy: { mode: p.mode as LocalApplyTaskEnvelope["policy"]["mode"], allowDomains, ...(p.mode === "auto_submit" && gateId ? { submitGate: { gateId } } : {}), ...(p.screenshots === false ? { screenshots: false as const } : {}) },
 		limits,
 	};
 }
@@ -371,7 +371,8 @@ export class LocalApplyRuntime {
 			token: randomBytes(24).toString("hex"),
 			state: "running",
 			events: [],
-			shots: new ShotRecorder(APPLY_SHOT_CAP, () => this.now()),
+			// Screenshots off (#1064): zero cap for `/shots`, and no recorder handed to the bridge below.
+			shots: new ShotRecorder(envelope.policy.screenshots === false ? 0 : APPLY_SHOT_CAP, () => this.now()),
 			seq: 0,
 			allow: new Set(envelope.policy.allowDomains),
 			grounding: [],
@@ -450,7 +451,7 @@ export class LocalApplyRuntime {
 			limits: e.limits,
 			mode: e.policy.mode,
 			gateId: e.policy.submitGate?.gateId,
-		}, run.shots);
+		}, e.policy.screenshots === false ? undefined : run.shots);
 		if (spec.mcpConfig) writeFileSync(spec.mcpConfig.path, spec.mcpConfig.json, { mode: 0o600 });
 
 		const child = this.spawn(spec.command, spec.args, { cwd: join(run.dir, "scratch"), env: spec.env, stdio: ["ignore", "pipe", "pipe"] });

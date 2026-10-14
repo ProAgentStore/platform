@@ -547,6 +547,8 @@ export interface ApplyRunPolicy {
 	gate: { allowed: boolean; gateId: string | null; checks: GateCheck[] };
 	/** Durable #1011 recovery claim, never exposed to the browser envelope. */
 	approvalRecoveryId?: string;
+	/** Present only when the owner's browser-screenshot switch was OFF as this run started (#1064). */
+	screenshots?: false;
 }
 
 export type ApplyTraceEvent = Omit<LocalApplyEvent, "type"> & { type: LocalApplyEvent["type"] | LocalApplyPlatformEventType };

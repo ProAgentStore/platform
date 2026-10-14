@@ -1,5 +1,5 @@
 import RunReplay, { useBrowserArtifacts } from "../../components/RunReplay";
-import { replayFrames } from "../../lib/runReplay";
+import { replayFrames, SCREENSHOTS_OFF_TEXT } from "../../lib/runReplay";
 import TakeoverBanner from "../../components/TakeoverBanner";
 import { telemetryRows } from "../../lib/scanSchedule";
 import { useCallback, useMemo, useEffect, useState } from "react";
@@ -69,7 +69,7 @@ export default function ResearchRunView({ instanceId, runId }: { instanceId: str
 		);
 
 	// #1063: the run's replay frames, re-read as its trace grows. Above the early return: hooks run in the same order on every render.
-	const artifacts = useBrowserArtifacts(instanceId, "local_browser_run", runId, events.length);
+	const { artifacts, screenshotsOff } = useBrowserArtifacts(instanceId, "local_browser_run", runId, events.length);
 	const frames = useMemo(() => replayFrames(instanceId, artifacts), [instanceId, artifacts]);
 
 	if (!run) return error ? <LoadFailed what="this research run" detail={error} onRetry={load} /> : <p className="text-sm text-muted p-2">Loading…</p>;
@@ -154,7 +154,7 @@ export default function ResearchRunView({ instanceId, runId }: { instanceId: str
 				</Card>
 			)}
 
-			{frames.length > 0 && <RunReplay frames={frames} emptyText="" />}
+			{(frames.length > 0 || screenshotsOff) && <RunReplay frames={frames} emptyText={SCREENSHOTS_OFF_TEXT} />}
 
 			{pages.length > 0 && (
 				<Card>

@@ -195,6 +195,25 @@ to the caller. They are not exposed over MCP.
   as the run's trace (default 30 days); workflow tasks and application runs, 30 days. Screenshots taken
   before this contract (`runshot/`) are still served as they were.
 
+### Turning screenshots off
+
+Screenshots are **on** by default. An owner can turn them off for one agent (#1064): **Settings → Browser
+screenshots** in the console, `PUT /v1/instances/:id/browser-screenshots {"enabled": false}`, or the MCP
+tool `set_browser_screenshots`. One switch covers every browser run the agent makes — workflow tasks,
+research runs and Application Runner fills.
+
+- **Fixed when a run starts.** The run records the value it started with, so switching mid-run never
+  changes a run already going. Turning screenshots off deletes nothing already stored; earlier frames
+  expire on their normal retention.
+- **Off means no frame anywhere.** The runner is told not to capture (no recorder, `screenshot: false` on
+  every browser action); the cloud does not pull frames for an off run, even from an older runner that
+  ignored the flag; and the store refuses a frame for any run that recorded off. Each layer holds on its
+  own.
+- **What remains is metadata only.** The run's trace still records every navigation, action, pause and
+  result, and says that screenshots were off and why (`screenshots: "off"`, reason `owner_setting`) —
+  never a frame. The replay shows "Screenshots were off for this run" instead of an empty player.
+- Changing the switch is audited (`browser_screenshots.changed`).
+
 ## When Not To Use A Browser Runtime
 
 Most server-only agents should use hosted Worker execution or standard instance chat. Do not require `pags up` for agents that only need text processing, API calls, knowledge search, or document drafting.

@@ -283,6 +283,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	// Browser verification (#1031): the owner's settings for a declared local browser, and live eligibility.
 	get_instance_browser_verification: "read",
 	set_instance_browser_verification: "write",
+	get_browser_screenshots: "read",
+	set_browser_screenshots: "write",
 	list_eligible_browser_runtimes: "read",
 	// Durable browser takeovers (#1031): read the records, ask for one, and move one — resuming drives the machine.
 	browser_takeover_list: "read",

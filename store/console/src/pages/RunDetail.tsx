@@ -1,6 +1,6 @@
 import TakeoverBanner from "../components/TakeoverBanner";
 import RunReplay, { useBrowserArtifacts } from "../components/RunReplay";
-import { type LegacyShot, replayFrames } from "../lib/runReplay";
+import { type LegacyShot, replayFrames, SCREENSHOTS_OFF_TEXT } from "../lib/runReplay";
 import { deviceKind } from "../lib/browserTakeovers";
 import { useState, useEffect, useCallback, useRef, useMemo, useId, type ReactNode } from "react";
 import Button from "../components/Button";
@@ -447,7 +447,7 @@ export default function RunDetail() {
 				return { seq: Number(d.seq), artifactId: typeof d.artifactId === "string" ? d.artifactId : undefined, msg: e.message || humanEvent({ type: "agent.decision", message: String(d.action ?? "") } as RuntimeEvent), at: e.createdAt };
 			}),
 	[events]);
-	const artifacts = useBrowserArtifacts(instanceId ?? "", "runtime_task", taskId, legacyShots.length);
+	const { artifacts, screenshotsOff } = useBrowserArtifacts(instanceId ?? "", "runtime_task", taskId, legacyShots.length);
 	const frames = useMemo(() => replayFrames(instanceId ?? "", artifacts, { taskId: taskId ?? "", shots: legacyShots }), [instanceId, taskId, artifacts, legacyShots]);
 
 	const status = task?.status ?? "";
@@ -553,7 +553,7 @@ export default function RunDetail() {
 			<TicketThread instanceId={instanceId} taskId={taskId} autoFocus={askIntent} />
 
 			{/* ── Screenshot replay ─────────────────────────────────────────── */}
-			<RunReplay frames={frames} emptyText={`No screenshots for this run${running ? " yet — they appear as the agent acts." : " (older run, before screenshot capture)."}`} />
+			<RunReplay frames={frames} emptyText={screenshotsOff ? SCREENSHOTS_OFF_TEXT : `No screenshots for this run${running ? " yet — they appear as the agent acts." : " (older run, before screenshot capture)."}`} />
 
 			{/* ── Full timestamped activity log ─────────────────────────────── */}
 			<Card>

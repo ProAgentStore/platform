@@ -372,6 +372,12 @@ components:
         waitLimitMinutes: { type: integer, minimum: 1, maximum: 1440 }
         takeover: { type: string, enum: [prompt, never] }
         allowMobile: { type: boolean }
+    BrowserScreenshotsView:
+      type: object
+      required: [enabled, explained]
+      properties:
+        enabled: { type: boolean }
+        explained: { type: string }
     BrowserVerificationView:
       type: object
       properties:
@@ -7361,6 +7367,7 @@ paths:
                 properties:
                   subjectKind: { type: string }
                   subjectId: { type: string }
+                  screenshotsOff: { type: boolean, description: "The run started with the owner's screenshot switch off (#1064) — no frames by design." }
                   artifacts:
                     type: array
                     items:
@@ -7478,6 +7485,51 @@ paths:
                 device: { type: string, enum: [mobile, desktop] }
       responses:
         "200": { description: The takeover after the move, content: { application/json: { schema: { type: object, properties: { takeover: { $ref: "#/components/schemas/BrowserTakeover" }, changed: { type: boolean } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{instanceId}/browser-screenshots:
+    get:
+      summary: The owner's browser-screenshot switch for one instance
+      description: |
+        #1064. ON by default: every browser step this instance takes (workflow tasks, local research,
+        Application Runner fills) is captured as a small replay frame — form fields blurred first,
+        owner-only, deleted after 30 days. OFF means no frame is taken, pulled or stored for runs
+        started while it is off. The value is fixed when a run starts. `explained` is the text shown
+        beside the switch.
+      operationId: getBrowserScreenshots
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: The switch and what it does
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BrowserScreenshotsView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Turn browser screenshots on or off
+      description: Exactly `{enabled}`; any other field is refused. Turning it off deletes nothing already stored — earlier frames expire on their own retention. Audited as `browser_screenshots.changed`.
+      operationId: setBrowserScreenshots
+      tags: [Instances]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              additionalProperties: false
+              properties:
+                enabled: { type: boolean }
+      responses:
+        "200":
+          description: The saved switch
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BrowserScreenshotsView" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }

@@ -1,4 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
+import { SCREENSHOTS_OFF_REASON } from "../lib/browser-screenshots.js";
 import { decideAction, describeAction, dryRunBlockReason, runApplyLoop, type ApplyDecision, type ApplyDeps, type ApplyJob, type ApplyResult, type PageSnapshot } from "../lib/apply-loop.js";
 import { decideWithinBudget } from "../lib/apply-decide-budget.js";
 import { callRunner, getBoundRunnerConn, type RunnerConn } from "../lib/runner-client.js";
@@ -19,6 +20,8 @@ import { buildQuery, extractCode, findMatchingMessage, gmailMessageUrl, mintGmai
 import type { Env } from "../types.js";
 
 export interface JobApplyParams {
+	/** `false` when the owner's browser-screenshot switch was off as this task started (#1064). */
+	screenshots?: false;
 	instanceId: string;
 	userId: string;
 	/** The runner task id this application drives (created by the trigger route). */
@@ -98,6 +101,9 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		const { instanceId, userId, taskId, job } = event.payload;
 		const env = this.env;
 		const loopRunId = event.payload.loopRunId ?? null;
+		// The owner's screenshot switch, fixed when this task started (#1064): the runner is asked for no
+		// frame, none is stored, and the task's trace says why — once, as a durable step.
+		const shotsOff = event.payload.screenshots === false;
 
 		// Resolved fresh (not journaled) so the runner token never lands in state.
 		const conn = await getBoundRunnerConn(env, instanceId, userId);
@@ -167,7 +173,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			}
 		});
 
-		await step.do("open", () => callRunner<{ url: string }>(conn, "/browser/act", { action: "navigate", url: job.url }));
+		await step.do("open", () => callRunner<{ url: string }>(conn, "/browser/act", { action: "navigate", url: job.url, ...(shotsOff ? { screenshot: false } : {}) }));
 
 		// Durable-step wrappers for the tested pure loop. The call order is
 		// deterministic, so the monotonic counter yields stable, replayable step
@@ -181,6 +187,13 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		// rows landed, all but one with an empty control name that no field-name rule could catch.
 		// Redact the shot message here with the same job-derived value redactor.
 		const redact = makeSecretRedactor(collectJobSecrets(job));
+		if (shotsOff) {
+			// #1064 audit: the task's own trace says screenshots are off and why — never anything else.
+			await step.do("screenshots-off-notice", async () => {
+				await callRunner(conn, "/browser/event", { taskId, type: "screenshots.off", message: redact("Screenshots are off for this run (owner setting) — no frames are captured or stored."), data: { reason: SCREENSHOTS_OFF_REASON } }).catch(() => undefined);
+				return true;
+			});
+		}
 		// The page the CURRENT decision was made from — see the snapshot dep below (#627).
 		let lastSnapshot = "";
 		// The policy that travels with every action so the runner can enforce it where the click
@@ -280,14 +293,14 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 					// runner is the only party that can read the ELEMENT (#627). A runner too old
 					// to know the field ignores it, which is exactly the state this leaves the
 					// field in until the CLI is upgraded.
-					const r = await callRunner<{ url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", { ...a, resumePath: job.resumePath, ...(guard ? { guard } : {}) });
+					const r = await callRunner<{ url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", { ...a, resumePath: job.resumePath, ...(guard ? { guard } : {}), ...(shotsOff ? { screenshot: false } : {}) });
 					// Persist a screenshot of the resulting page so the run can be REPLAYED
 					// visually. The blob goes to R2 keyed by step; the event carries only the
 					// key + the action (the events feed stays small). Best-effort — a shot
 					// failure must never fail the application step.
 					// One artifact contract for every browser run (#1063): the frame is stored by subject (this task) and
 					// the event carries its id and a query-free URL — never the bytes.
-					if (r.screenshot) {
+					if (r.screenshot && !shotsOff) {
 						const artifactId = await storeWorkflowShot(env, { userId, instanceId, taskId, seq: sn, screenshotBase64: r.screenshot, action: a.action, url: r.url ?? "" });
 						if (artifactId) await callRunner(conn, "/browser/event", { taskId, type: "agent.shot", message: redact(describeAction(a)), data: { seq: sn, artifactId, action: a.action, name: a.name ?? "", url: captionUrl(r.url).url ?? "" } }).catch(() => undefined);
 					}

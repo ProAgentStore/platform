@@ -1,4 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
+import { SCREENSHOTS_OFF_REASON } from "../lib/browser-screenshots.js";
 import { describeAction, runApplyLoop, type ApplyDecision, type ApplyDeps, type ApplyResult, type PageSnapshot } from "../lib/apply-loop.js";
 import { blockedActionReason, decideBrowserTask, type BrowserTaskJob } from "../lib/browser-task-loop.js";
 import { commitGuardSpec, commitModeFor } from "../lib/commit-guard.js";
@@ -14,6 +15,8 @@ import { notifyUser } from "../routes/push.js";
 import type { Env } from "../types.js";
 
 export interface BrowserTaskParams {
+	/** `false` when the owner's browser-screenshot switch was off as this task started (#1064). */
+	screenshots?: false;
 	instanceId: string;
 	userId: string;
 	/** The runner task id this run drives (created by the trigger route). */
@@ -67,6 +70,9 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 		const { instanceId, userId, taskId, job } = event.payload;
 		const env = this.env;
 		const loopRunId = event.payload.loopRunId ?? null;
+		// The owner's screenshot switch, fixed when this task started (#1064): the runner is asked for no
+		// frame, none is stored, and the task's trace says why — once, as a durable step.
+		const shotsOff = event.payload.screenshots === false;
 
 		const conn = await getBoundRunnerConn(env, instanceId, userId);
 		if (!conn) {
@@ -82,7 +88,7 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 		// answer, never inferred from a version — the published CLI upgrades on the field's
 		// schedule, and 0.4.45 and 0.4.51 were both live when this landed.
 		const opened = (await step.do("open", () =>
-			callRunner<{ url: string; commitGuard?: { supported?: boolean } }>(conn, "/browser/act", { action: "navigate", url: job.url }),
+			callRunner<{ url: string; commitGuard?: { supported?: boolean } }>(conn, "/browser/act", { action: "navigate", url: job.url, ...(shotsOff ? { screenshot: false } : {}) }),
 		)) as { commitGuard?: { supported?: boolean } } | undefined;
 		const runnerEnforces = opened?.commitGuard?.supported === true;
 
@@ -92,6 +98,13 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 		// `emit`. A browse job carries no password today, which is exactly why this is here —
 		// the redactor reads the job's own keys, so the day one is added it is already covered.
 		const redact = makeSecretRedactor(collectJobSecrets(job));
+		if (shotsOff) {
+			// #1064 audit: the task's own trace says screenshots are off and why — never anything else.
+			await step.do("screenshots-off-notice", async () => {
+				await callRunner(conn, "/browser/event", { taskId, type: "screenshots.off", message: redact("Screenshots are off for this run (owner setting) — no frames are captured or stored."), data: { reason: SCREENSHOTS_OFF_REASON } }).catch(() => undefined);
+				return true;
+			});
+		}
 		// The page the CURRENT decision was made from, so the guard can resolve the brain's `ref`
 		// to the element the PAGE describes rather than trusting the name the brain wrote (#627).
 		let lastSnapshot = "";
@@ -122,10 +135,10 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 					return { url: "", challenge: null as string | null, error: blocked };
 				}
 				try {
-					const r = await callRunner<{ url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", guard ? { ...a, guard } : a);
+					const r = await callRunner<{ url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", { ...a, ...(guard ? { guard } : {}), ...(shotsOff ? { screenshot: false } : {}) });
 					// One artifact contract for every browser run (#1063): the frame is stored by subject (this task) and
 					// the event carries its id and a query-free URL — never the bytes.
-					if (r.screenshot) {
+					if (r.screenshot && !shotsOff) {
 						const artifactId = await storeWorkflowShot(env, { userId, instanceId, taskId, seq: sn, screenshotBase64: r.screenshot, action: a.action, url: r.url ?? "" });
 						if (artifactId) await callRunner(conn, "/browser/event", { taskId, type: "agent.shot", message: redact(describeAction(a)), data: { seq: sn, artifactId, action: a.action, name: a.name ?? "", url: captionUrl(r.url).url ?? "" } }).catch(() => undefined);
 					}

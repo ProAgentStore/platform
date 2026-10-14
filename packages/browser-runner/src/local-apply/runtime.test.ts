@@ -11,6 +11,7 @@ import { PassThrough } from "node:stream";
 import type { Page } from "playwright";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BrowserTools } from "../local-browser/bridge.js";
+import { MASK_FORM_CONTROLS } from "../local-browser/replay.js";
 import type { LocalApplyTaskEnvelope } from "./contract.js";
 import { LocalApplyRuntime, parseApplyEnvelope } from "./runtime.js";
 import type { LocalApplyTakeoverAdapter } from "./runtime-handoff.js";
@@ -245,6 +246,43 @@ describe("scoped local-apply handoff (#1013)", () => {
 		child.exit(0);
 		await settle();
 		await expect(second.handoffStatus(secondRequest)).resolves.toMatchObject({ state: "closed", terminalReason: "run_ended" });
+	});
+});
+
+describe("the owner's screenshot switch (#1064)", () => {
+	/** The test browser, made able to take a frame (mask confirmed, image returned); every tool asked is recorded. */
+	async function fill(screenshots?: false) {
+		const called: string[] = [];
+		const tools: BrowserTools = {
+			listTools: browser.listTools,
+			callTool: async (name, args = {}) => {
+				called.push(name);
+				if (name === "browser_evaluate" && args.function === MASK_FORM_CONTROLS) return { content: [{ type: "text", text: '### Result\n"masked"' }] };
+				if (name === "browser_take_screenshot") return { content: [{ type: "image", data: "/9j/4AAQSkZJRgABAQ==", mimeType: "image/jpeg" }] };
+				return browser.callTool(name, args);
+			},
+		};
+		const rt = new LocalApplyRuntime({ dataDir: join(dir, "data"), homeDir: home, selfUrl: () => "http://127.0.0.1:4999", bridgeScript: "/runner/bridge-stdio.js", browserFor: async () => ({ tools, stop: async () => undefined, handoffPage: () => runPage }), takeover, spawn: (() => (child = new FakeChild())) as never });
+		rt.start(envelope({ policy: { mode: "fill_and_review", allowDomains: ["jobs.example.com"], ...(screenshots === false ? { screenshots } : {}) } }));
+		await settle();
+		await call(rt, "browser_navigate", { url: "https://jobs.example.com/apply" });
+		await call(rt, "browser_snapshot");
+		return { rt, called };
+	}
+
+	it("ON (no flag): the fill takes blurred frames, as #1063 shipped", async () => {
+		const { rt, called } = await fill();
+		expect(called).toContain("browser_take_screenshot");
+		expect(rt.shots({ runId: "run-1" }).shots.length).toBeGreaterThan(0);
+	});
+
+	it("OFF: the envelope keeps the flag, no frame is taken, `/shots` is empty and the trace names none", async () => {
+		expect(parseApplyEnvelope({ ...envelope(), policy: { mode: "fill_and_review", allowDomains: ["jobs.example.com"], screenshots: false } })?.policy.screenshots).toBe(false);
+		const { rt, called } = await fill(false);
+		expect(called).toContain("browser_navigate");
+		expect(called).not.toContain("browser_take_screenshot");
+		expect(rt.shots({ runId: "run-1" }).shots).toEqual([]);
+		expect(rt.status({ runId: "run-1" }).events.some((e) => e.type === "screenshot.captured")).toBe(false);
 	});
 });
 

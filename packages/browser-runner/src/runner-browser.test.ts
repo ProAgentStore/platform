@@ -166,6 +166,19 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 		expect((await runner.browserSnapshot()).title).toContain("FILE:");
 	}, 120_000);
 
+	it("the owner's screenshot switch (#1064): `screenshot: false` takes no frame on any action; absent keeps #1063's frame", async () => {
+		const off = await runner.browserAct({ action: "navigate", url: server.jobUrl, screenshot: false });
+		expect(off.screenshot).toBeUndefined();
+		const s = (await runner.browserSnapshot()).snapshot;
+		const typed = await runner.browserAct({ action: "type", ref: ref(s, "textbox", "Full name"), name: "Full name", text: "Ada", screenshot: false });
+		expect(typed.screenshot).toBeUndefined();
+		const clicked = await runner.browserAct({ action: "click", ref: ref(s, "textbox", "Email"), name: "Email", screenshot: false });
+		expect(clicked.screenshot).toBeUndefined();
+		// The control: the same runner, flag absent, still takes the #1063 frame.
+		const on = await runner.browserAct({ action: "navigate", url: server.jobUrl });
+		expect(on.screenshot).toEqual(expect.any(String));
+	}, 120_000);
+
 	it("a failed action (bad ref) throws so the workflow surfaces it to the brain", async () => {
 		await runner.browserAct({ action: "navigate", url: server.jobUrl });
 		await runner.browserSnapshot();

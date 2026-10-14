@@ -1,4 +1,5 @@
 import type { Hono } from "hono";
+import { browserScreenshotsEnabled } from "../lib/browser-screenshots.js";
 import { requireUser } from "../lib/auth.js";
 import { requirePro } from "../lib/billing.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
@@ -152,12 +153,15 @@ export async function startBrowserTask(env: Env, instanceId: string, userId: str
 			specialInstructions: trimmed(instCfg.specialInstructions),
 			today: new Date().toISOString().slice(0, 10),
 		};
+		// The owner's screenshot switch, fixed into this task as it starts (#1064): recorded on the task's
+		// input (the storage guard and the console read it there) and handed to the workflow.
+		const screenshotsOn = await browserScreenshotsEnabled(env, instanceId, userId);
 		let taskId: string;
 		try {
 			const card = deriveFromUrl(startUrl);
 			({ taskId } = await createBrowserRuntimeTask(env, instanceId, userId, {
 				type: "browser.task",
-				input: { url: startUrl, objective: objective.slice(0, 500) },
+				input: { url: startUrl, objective: objective.slice(0, 500), ...(screenshotsOn ? {} : { screenshots: false }) },
 				title: card.title || undefined,
 				subtitle: card.subtitle || undefined,
 			}));
@@ -191,7 +195,7 @@ export async function startBrowserTask(env: Env, instanceId: string, userId: str
 				.catch(() => undefined);
 			throw new BrowseError(`Could not start the browser task: ${e instanceof Error ? e.message : String(e)}`, 500);
 		}
-		const instance = await env.BROWSER_TASK.create({ params: { instanceId, userId, taskId, job, loopRunId } });
+		const instance = await env.BROWSER_TASK.create({ params: { instanceId, userId, taskId, job, loopRunId, ...(screenshotsOn ? {} : { screenshots: false as const }) } });
 		return { workflowId: instance.id, taskId };
 	} finally {
 		await dropClaim();

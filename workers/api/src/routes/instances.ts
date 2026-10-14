@@ -31,6 +31,7 @@ import { registerInstanceDescriptionRoutes } from "./instances-description.js";
 import { registerRunnerAttachRoutes, registerRunnerPinRoutes } from "./instances-runner-attach.js";
 import { registerRunnerSetupRoutes } from "./instances-runner-setup.js";
 import { registerNativeRoutes } from "./instances-native.js";
+import { registerBrowserScreenshotsRoutes } from "./instances-browser-screenshots.js";
 import { registerInstanceLifecycleRoutes } from "./instances-lifecycle.js";
 import { registerKnowledgeRoutes } from "./instances-knowledge.js";
 import { registerTaskRoutes } from "./instances-tasks.js";
@@ -1104,6 +1105,7 @@ registerInstanceDescriptionRoutes(instanceRoutes); // one secret-safe runtime pr
 registerRunnerAttachRoutes(instanceRoutes); // the remote `pags up --force`, for one agent (#856)
 registerRunnerSetupRoutes(instanceRoutes); // the local coding runner setup checklist (#868)
 registerNativeRoutes(instanceRoutes); // the local_native machine preflight (#1057)
+registerBrowserScreenshotsRoutes(instanceRoutes); // the owner's browser-screenshot switch (#1064)
 registerBrowseRoutes(instanceRoutes);
 registerTranslationRoutes(instanceRoutes);
 registerFileUploadRoutes(instanceRoutes);

@@ -256,8 +256,9 @@ export async function syncLocalBrowserRun(env: Env, instanceId: string, uid: str
 	const events = Array.isArray(body.events) ? body.events : [];
 	const lastSeq = typeof body.lastSeq === "number" && body.lastSeq >= run.runnerSeq ? body.lastSeq : run.runnerSeq;
 	let current = (await ingestRunnerEvents(env, instanceId, uid, run, events, now, { runnerSeq: lastSeq })).run;
-	// Replay frames (#1063), pulled beside the trace and kept as long as it is.
-	await ingestRunnerShots(env, { userId: uid, instanceId, subjectKind: "local_browser_run", subjectId: run.id, retentionDays: run.policy.traceRetentionDays }, async (afterSeq) => {
+	// Replay frames (#1063), pulled beside the trace and kept as long as it is — never for a run that
+	// started with the owner's screenshot switch off (#1064), whatever an older runner may still hold.
+	if (run.policy.screenshots !== false) await ingestRunnerShots(env, { userId: uid, instanceId, subjectKind: "local_browser_run", subjectId: run.id, retentionDays: run.policy.traceRetentionDays }, async (afterSeq) => {
 		const shots = await callRuntime(env, runtime, LOCAL_BROWSER_SHOTS_PATH, { method: "POST", body: JSON.stringify({ runId: run.id, afterSeq }) });
 		return shots.ok ? runtimeJson(shots) : null;
 	}, now).catch(() => 0);

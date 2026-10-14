@@ -22,6 +22,7 @@ import MiscellaneousSection from "./settings/MiscellaneousSection";
 import NotificationPolicySection from "./settings/NotificationPolicySection";
 import LocalBrowserSection from "./settings/LocalBrowserSection";
 import BrowserVerificationSection from "./settings/BrowserVerificationSection";
+import BrowserScreenshotsSection from "./settings/BrowserScreenshotsSection";
 import GmailScoutSection from "./settings/GmailScoutSection";
 import CoderBrainSection from "./settings/CoderBrainSection";
 
@@ -35,10 +36,12 @@ interface Props {
 	isLocalBrowser?: boolean;
 	/** Dedicated inbox Scout: its Gmail source is configured here, not through generic mail tools. */
 	isGmailScout?: boolean;
+	/** The agent runs a browser, so the screenshot switch applies (#1064). */
+	takesScreenshots?: boolean;
 	onUnsubscribe: () => void;
 }
 
-export default function SettingsTab({ instanceId, instanceName, isApply, isCoding, isRepo, isLocalBrowser, isGmailScout, onUnsubscribe }: Props) {
+export default function SettingsTab({ instanceId, instanceName, isApply, isCoding, isRepo, isLocalBrowser, isGmailScout, takesScreenshots, onUnsubscribe }: Props) {
 	const [maintMsg, setMaintMsg] = useState("");
 	const [resyncMsg, setResyncMsg] = useState("");
 	const [agentFields, setAgentFields] = useState<SettingsField[]>([]);
@@ -275,6 +278,7 @@ export default function SettingsTab({ instanceId, instanceName, isApply, isCodin
 			)}
 			{isLocalBrowser && <LocalBrowserSection instanceId={instanceId} />}
 			{isLocalBrowser && <BrowserVerificationSection instanceId={instanceId} />}
+			{takesScreenshots && <BrowserScreenshotsSection instanceId={instanceId} />}
 			{isGmailScout && <GmailScoutSection instanceId={instanceId} />}
 
 			<RunnerPanel instanceId={instanceId} />

@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realSchemaD1, type RealSchemaD1 } from "./d1-sqlite.js";
 import type { Env } from "../types.js";
-import { MAX_BROWSER_ARTIFACT_BYTES, artifactMetadata, browserArtifactKey, captionUrl, ingestRunnerShots, listBrowserArtifacts, putBrowserArtifact, storeWorkflowShot, sweepExpiredBrowserArtifacts } from "./browser-artifacts.js";
+import { MAX_BROWSER_ARTIFACT_BYTES, artifactMetadata, browserArtifactKey, captionUrl, ingestRunnerShots, listBrowserArtifacts, putBrowserArtifact, storeWorkflowShot, subjectScreenshotsOff, sweepExpiredBrowserArtifacts } from "./browser-artifacts.js";
 
 class FakeR2 {
 	objects = new Map<string, Uint8Array>();
@@ -89,6 +89,46 @@ describe("putBrowserArtifact", () => {
 		expect(id).toEqual(expect.any(String));
 		expect(rows()[0]).toMatchObject({ id, subject_kind: "runtime_task", subject_id: "task-1", seq: 4, point: "action", action: "click", url: "https://ats.example/apply" });
 		expect(await storeWorkflowShot(env, { userId: "u1", instanceId: "i1", taskId: "task-1", seq: 5, screenshotBase64: "not base64!", action: "click", url: "" })).toBeNull();
+	});
+});
+
+describe("the storage guard — a run started with screenshots OFF never gets a frame stored (#1064)", () => {
+	/** One run of each kind, its own record carrying the switch as it stood when it started. */
+	const seed = (off: boolean) => {
+		const policy = JSON.stringify(off ? { engine: "claude", screenshots: false } : { engine: "claude" });
+		const input = JSON.stringify({ input: off ? { url: "https://ats.example", screenshots: false } : { url: "https://ats.example" } });
+		d1.exec(`INSERT INTO agents (id, owner_id, slug, name) VALUES ('a1', 'u1', 'a1', 'A'); INSERT INTO agent_instances (id, agent_id, user_id) VALUES ('i1', 'a1', 'u1')`);
+		d1.exec(`INSERT INTO local_browser_runs (id, instance_id, user_id, request_id, objective, policy, created_at, updated_at) VALUES ('lb', 'i1', 'u1', 'r1', 'x', '${policy}', 0, 0)`);
+		d1.exec(`INSERT INTO local_apply_runs (id, instance_id, user_id, application_id, request_id, policy, created_at, updated_at) VALUES ('la', 'i1', 'u1', 'app', 'r2', '${policy}', 0, 0)`);
+		d1.exec(`INSERT INTO instance_runtime_tasks (id, instance_id, user_id, type, status, payload, created_at, updated_at) VALUES ('rt', 'i1', 'u1', 'browser.task', 'running', '${input}', 0, 0)`);
+	};
+	const subjects = [["local_browser_run", "lb"], ["local_apply_run", "la"], ["runtime_task", "rt"]] as const;
+
+	it.each(subjects)("%s: refused with `screenshots_off`, nothing in R2 or D1", async (kind, id) => {
+		seed(true);
+		expect(await subjectScreenshotsOff(env, "u1", kind, id)).toBe(true);
+		expect(await put(1, { subjectKind: kind, subjectId: id })).toEqual({ stored: false, reason: "screenshots_off" });
+		expect(r2.objects.size).toBe(0);
+		expect(rows()).toHaveLength(0);
+	});
+
+	it.each(subjects)("%s: a run that started ON (or recorded nothing) stores as before", async (kind, id) => {
+		seed(false);
+		expect(await subjectScreenshotsOff(env, "u1", kind, id)).toBe(false);
+		expect(await put(1, { subjectKind: kind, subjectId: id })).toMatchObject({ stored: true });
+	});
+
+	it("the pull and the workflow writer both stop at the guard, whatever a runner sends", async () => {
+		seed(true);
+		const frame = { seq: 1, point: "navigated", url: "https://au.seek.com/", mimeType: "image/jpeg", data: b64(JPEG), at: "2026-10-14T00:00:00Z" };
+		expect(await ingestRunnerShots(env, { userId: "u1", instanceId: "i1", subjectKind: "local_apply_run", subjectId: "la" }, async (after) => (after === 0 ? { shots: [frame], lastSeq: 1 } : null))).toBe(0);
+		expect(await storeWorkflowShot(env, { userId: "u1", instanceId: "i1", taskId: "rt", seq: 1, screenshotBase64: b64(JPEG), action: "click", url: "" })).toBeNull();
+		expect(r2.objects.size).toBe(0);
+	});
+
+	it("another owner's run of the same id does not count as off for this owner", async () => {
+		seed(true);
+		expect(await subjectScreenshotsOff(env, "u2", "local_browser_run", "lb")).toBe(false);
 	});
 });
 

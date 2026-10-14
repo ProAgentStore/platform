@@ -472,6 +472,8 @@ const TABLE: Record<string, Row> = {
 	get_instance_local_browser_settings: ["localBrowser", "read", null, null, "instance_id,token"],
 	get_instance_browser_verification: ["browserVerification", "read", null, null, "instance_id,token"],
 	set_instance_browser_verification: ["browserVerification", "write", null, "envelope", "allow_mobile,dry_run,enabled,fallback,instance_id,runtime,takeover,token,wait_limit_minutes"],
+	get_browser_screenshots: ["browserVerification", "read", null, null, "instance_id,token"],
+	set_browser_screenshots: ["browserVerification", "write", null, "envelope", "dry_run,enabled,instance_id,token"],
 	list_eligible_browser_runtimes: ["browserVerification", "read", null, null, "instance_id,token"],
 	browser_takeover_list: ["browserVerification", "read", null, null, "instance_id,limit,state,subject_id,subject_kind,token"],
 	browser_takeover_get: ["browserVerification", "read", null, null, "instance_id,takeover_id,token"],

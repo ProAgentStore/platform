@@ -33,10 +33,11 @@ vi.mock("./browser-workflows.js", async (importOriginal) => {
 	return {
 		...actual,
 		// The runner's task, as the real one leaves it: a `job.apply_agent` row that holds the slot.
-		createBrowserRuntimeTask: async (env: Env, instanceId: string, userId: string, req: { type: string }) => {
+		createBrowserRuntimeTask: async (env: Env, instanceId: string, userId: string, req: { type: string; input?: unknown }) => {
 			const taskId = `task_${crypto.randomUUID()}`;
-			await env.DB.prepare("INSERT INTO instance_runtime_tasks (id, instance_id, user_id, type, status, payload, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'running', '{}', datetime('now'), datetime('now'))")
-				.bind(taskId, instanceId, userId, req.type)
+			// The mirror stores the runner's whole task, which echoes the input it was created with.
+			await env.DB.prepare("INSERT INTO instance_runtime_tasks (id, instance_id, user_id, type, status, payload, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'running', ?5, datetime('now'), datetime('now'))")
+				.bind(taskId, instanceId, userId, req.type, JSON.stringify({ input: req.input ?? {} }))
 				.run();
 			return { taskId };
 		},
@@ -48,10 +49,11 @@ const { instanceRoutes } = await import("./instances.js");
 const { executeStorageTool } = await import("../lib/storage-tools.js");
 const { agentCapabilities } = await import("../lib/agent-capabilities.js");
 const { loopDriverFor } = await import("../lib/loop-drivers.js");
+const { subjectScreenshotsOff } = await import("../lib/browser-artifacts.js");
 
 const SECRET = "t1062-secret";
 let d1: RealSchemaD1;
-let created: Array<{ params: { instanceId: string; taskId: string; job: { url: string; dryRun: boolean; candidate: Record<string, unknown> } } }>;
+let created: Array<{ params: { instanceId: string; taskId: string; screenshots?: false; job: { url: string; dryRun: boolean; candidate: Record<string, unknown> } } }>;
 let env: Env;
 
 beforeEach(() => {
@@ -111,6 +113,26 @@ describe("POST /:instanceId/apply starts the supported JOB_APPLY workflow (#1062
 	it("dryRun still fills without submitting — the flag reaches the workflow", async () => {
 		await apply("apply-inst", { url: "https://jobs.example/role/1", resumePath: "/home/ada/cv.pdf", dryRun: true });
 		expect(created[0].params.job.dryRun).toBe(true);
+	});
+});
+
+describe("the owner's browser-screenshot switch reaches the workflow task (#1064)", () => {
+	const put = async (enabled: boolean) => {
+		const token = await signSession("u1", SECRET, { roles: [] });
+		return (await app()).request("/v1/instances/apply-inst/browser-screenshots", { method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ enabled }) }, env);
+	};
+
+	it("ON (the default): the workflow and the task carry no flag", async () => {
+		const r = await apply();
+		expect(created[0].params).not.toHaveProperty("screenshots");
+		expect(await subjectScreenshotsOff(env, "u1", "runtime_task", r.body.taskId)).toBe(false);
+	});
+
+	it("OFF: fixed on the workflow's params AND the task's own record, so the storage guard refuses its frames", async () => {
+		expect((await put(false)).status).toBe(200);
+		const r = await apply();
+		expect(created[0].params.screenshots).toBe(false);
+		expect(await subjectScreenshotsOff(env, "u1", "runtime_task", r.body.taskId)).toBe(true);
 	});
 });
 

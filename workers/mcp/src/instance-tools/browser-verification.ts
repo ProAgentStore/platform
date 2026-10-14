@@ -69,6 +69,48 @@ export function registerBrowserVerificationTools(server: McpServer, ctx: Instanc
 		},
 	);
 
+	// ── The owner's browser-screenshot switch (#1064) ─────────────────────────────────────────
+	server.tool(
+		"get_browser_screenshots",
+		"Is browser screenshot capture on for this instance (#1064)? One switch covers every browser run the instance makes — workflow tasks, local browser research and Application Runner fills. On by default: every browser step is captured as a small screenshot for replay, form fields blurred first, visible only to the owner, deleted after 30 days. Off: no frames are taken, pulled or stored for runs started while it is off. Answers `{enabled, explained}`. Read-only.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances. Copy it exactly."),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "get_browser_screenshots", { instance_id });
+			if (denied) return denied;
+			const data = (await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/browser-screenshots`, sessionToken, {}, env)) as { error?: string };
+			return data.error ? text(`Error: ${data.error}`) : jsonText(data);
+		},
+	);
+
+	server.tool(
+		"set_browser_screenshots",
+		"Turn browser screenshot capture on or off for one instance (#1064). Takes effect for runs that START after it; a run already going keeps the setting it started with. Off means the runner takes no frame and PAGS neither pulls nor stores any for those runs; turning it off does not delete screenshots already stored (they expire on their own). The model never gets a screenshot tool either way. Call with dry_run first.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances. Copy it exactly."),
+			enabled: z.boolean().describe("true = capture replay screenshots (the default); false = capture none."),
+			dry_run: z.boolean().optional().describe("Preview the change without saving it."),
+		},
+		async ({ token, instance_id, enabled, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, enabled };
+			const denied = await requirePermission(safetyFor(token), "write", "set_browser_screenshots", input);
+			if (denied) return denied;
+			const endpoint = `/v1/instances/${encodeURIComponent(instance_id)}/browser-screenshots`;
+			if (dry_run) return dryRun(safetyFor(token), "set_browser_screenshots", `turn browser screenshots ${enabled ? "on" : "off"}`, input, { endpoint, method: "PUT" });
+			const data = (await authedCall(endpoint, sessionToken, { method: "PUT", body: JSON.stringify({ enabled }) }, env)) as { error?: string };
+			if (data.error) return text(`Error: ${data.error}`);
+			await audit(safetyFor(token), { tool: "set_browser_screenshots", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
 	server.tool(
 		"list_eligible_browser_runtimes",
 		"Which of your machines could run this instance's browser verification now (#1031), each with the facts apart: `heartbeat` (is `pags up` reporting in), `attached` (does the relay hold this agent's socket there — transport only), `health` (did the runner behind it answer /health), `runnerVersion`, and `eligible` with `reason` (not_attached | unhealthy | runner_too_old | not_probed) and `detail` naming the fix. `selected` is the machine the instance's `runtime` setting would use; null means the `fallback` applies. Probes each machine live; read-only.",

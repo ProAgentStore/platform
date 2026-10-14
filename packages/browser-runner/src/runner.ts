@@ -1113,7 +1113,7 @@ export class LocalRunner {
 				url: active.url(),
 				title: await active.title().catch(() => ""),
 				challenge: await detectHumanChallenge(active),
-				screenshot: await this.shot(active),
+				screenshot: action.screenshot === false ? undefined : await this.shot(active),
 				commitGuard: { supported: true, mode: guard?.mode },
 			};
 		}
@@ -1146,7 +1146,7 @@ export class LocalRunner {
 				title: await settled.title().catch(() => ""),
 				challenge: await detectHumanChallenge(settled),
 				feedback: dialogMsg ? `a native dialog was accepted: "${dialogMsg}"` : "a native dialog was accepted",
-				screenshot: await this.shot(settled),
+				screenshot: action.screenshot === false ? undefined : await this.shot(settled),
 				commitGuard: { supported: true, mode: guard?.mode },
 			};
 		}
@@ -1178,7 +1178,7 @@ export class LocalRunner {
 			title: await active.title().catch(() => ""),
 			challenge: await detectHumanChallenge(active),
 			feedback: feedback || undefined,
-			screenshot: await this.shot(active),
+			screenshot: action.screenshot === false ? undefined : await this.shot(active),
 			commitGuard: { supported: true, mode: guard?.mode },
 		};
 	}

@@ -321,6 +321,8 @@ const ROUTES = [
 	"POST /:instanceId/runner-attach",
 	"GET /:instanceId/runner-setup",
 	"GET /:instanceId/native/preflight",
+	"GET /:instanceId/browser-screenshots",
+	"PUT /:instanceId/browser-screenshots",
 	"POST /:instanceId/browse",
 	"GET /:instanceId/translation",
 	"PUT /:instanceId/translation",
@@ -549,6 +551,7 @@ const OWNERSHIP: Record<string, string[]> = {
 	"instances-runner-attach.ts": ["PUT /:instanceId/runner-node", "POST /:instanceId/runner-attach"],
 	"instances-runner-setup.ts": ["GET /:instanceId/runner-setup"],
 	"instances-native.ts": ["GET /:instanceId/native/preflight"],
+	"instances-browser-screenshots.ts": ["GET /:instanceId/browser-screenshots", "PUT /:instanceId/browser-screenshots"],
 	"instances-lifecycle.ts": ["POST /:instanceId/pause", "POST /:instanceId/resume"],
 	"instances-job-leads.ts": ["GET /:instanceId/job-leads/browser-verifications", "POST /:instanceId/job-leads/:recordId/browser-verification", "POST /:instanceId/job-leads/manual-url", "POST /:instanceId/job-leads/:recordId/triage"],
 	"instances-gmail-scout.ts": [
@@ -857,6 +860,8 @@ const GATES: Record<string, [number, number]> = {
 	"GET /:instanceId/runner-setup": [401, 404],
 	// Owner-scoped before it reads a runner or the machine's opt-in (#1057).
 	"GET /:instanceId/native/preflight": [401, 404],
+	"GET /:instanceId/browser-screenshots": [401, 404],
+	"PUT /:instanceId/browser-screenshots": [401, 404],
 	"POST /:instanceId/browse": [401, 404],
 	"GET /:instanceId/translation": [401, 404],
 	"PUT /:instanceId/translation": [401, 404],

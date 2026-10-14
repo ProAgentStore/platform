@@ -274,6 +274,7 @@ const READBACK: Record<string, string | null> = {
 	"set_instance_browser_verification.wait_limit_minutes": "get_instance_browser_verification",
 	"set_instance_browser_verification.takeover": "get_instance_browser_verification",
 	"set_instance_browser_verification.allow_mobile": "get_instance_browser_verification",
+	"set_browser_screenshots.enabled": "get_browser_screenshots",
 	"browser_takeover_request.subject_kind": "browser_takeover_list",
 	"browser_takeover_request.subject_id": "browser_takeover_list",
 	"browser_takeover_request.reason": "browser_takeover_list",

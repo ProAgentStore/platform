@@ -7,6 +7,7 @@
  * dispatch to the runner. Two copies of those rules is how a cron run would one day skip a check the
  * button enforces, so the route and the trigger both call this and only map its outcome.
  */
+import { SCREENSHOTS_OFF_REASON, browserScreenshotsEnabled } from "../browser-screenshots.js";
 import { capabilitiesForInstance } from "../agent-capabilities.js";
 import { getLiveRuntime, callRuntime, runtimeJson } from "../../routes/instances-runtime.js";
 import type { Env } from "../../types.js";
@@ -62,8 +63,12 @@ export async function startLocalBrowserRun(
 	const policy = effectiveLocalBrowserPolicy(capability.cap, settings);
 	if ("error" in policy) return { kind: "refused", error: policy.error };
 
+	// The owner's screenshot switch, FIXED into this run's policy as it starts (#1064): the runner, the
+	// frame pull and the artifact store all read it from here, so a mid-run toggle changes nothing.
+	const screenshotsOn = await browserScreenshotsEnabled(env, instanceId, uid);
+	const runPolicy = screenshotsOn ? policy : { ...policy, screenshots: false as const };
 	const now = Date.now();
-	const claim = await claimLocalBrowserRun(env, { id: crypto.randomUUID(), instanceId, userId: uid, requestId: input.requestId, objective: input.objective, policy, now });
+	const claim = await claimLocalBrowserRun(env, { id: crypto.randomUUID(), instanceId, userId: uid, requestId: input.requestId, objective: input.objective, policy: runPolicy, now });
 	if (claim.kind === "existing") return { kind: "existing", run: claim.run };
 	if (claim.kind === "at_capacity") {
 		return { kind: "at_capacity", error: `${claim.active} local browser run(s) already active and this instance allows ${policy.limits.maxConcurrent} at a time. Wait for one to finish, or cancel it.` };
@@ -74,7 +79,7 @@ export async function startLocalBrowserRun(
 			type: "run.requested",
 			at: new Date(now).toISOString(),
 			// Who asked (#962): a run nobody pressed a button for says so on its own trace.
-			detail: { engine: policy.engine, authMode: policy.authMode, browserProfile: policy.browserProfile, maxMinutes: policy.limits.maxMinutes, maxPages: policy.limits.maxPages, source: input.source },
+			detail: { engine: policy.engine, authMode: policy.authMode, browserProfile: policy.browserProfile, maxMinutes: policy.limits.maxMinutes, maxPages: policy.limits.maxPages, source: input.source, screenshots: screenshotsOn ? "on" : "off", ...(screenshotsOn ? {} : { screenshotsOffReason: SCREENSHOTS_OFF_REASON }) },
 		},
 	], now);
 	const dispatched = await dispatch(env, instanceId, uid, run);
@@ -129,6 +134,7 @@ async function dispatch(env: Env, instanceId: string, uid: string, run: LocalBro
 			consentedDomains: navigate.filter((x) => x.decision === "allow").map((x) => x.domain),
 			profileConsented: consent.some((x) => x.scope === "signed_in_profile" && x.decision === "allow"),
 			consentIds: consentIdsOf(consent),
+			...(p.screenshots === false ? { screenshots: false as const } : {}),
 		},
 		limits: p.limits,
 		resultSchema: p.resultSchema,

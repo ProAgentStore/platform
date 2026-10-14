@@ -122,7 +122,24 @@ export interface PutBrowserArtifact {
 	now?: number;
 }
 
-export type PutBrowserArtifactResult = { stored: true; artifact: BrowserArtifactView } | { stored: false; reason: "no_storage" | "bad_seq" | "bad_type" | "empty" | "too_large" | "write_failed" };
+export type PutBrowserArtifactResult = { stored: true; artifact: BrowserArtifactView } | { stored: false; reason: "no_storage" | "bad_seq" | "bad_type" | "empty" | "too_large" | "write_failed" | "screenshots_off" };
+
+/** Where each subject's run recorded the owner's screenshot switch as it started (#1064). */
+const SCREENSHOTS_FLAG: Record<BrowserArtifactSubject, string> = {
+	runtime_task: "SELECT json_extract(payload, '$.input.screenshots') AS flag FROM instance_runtime_tasks WHERE id = ?1 AND user_id = ?2",
+	local_browser_run: "SELECT json_extract(policy, '$.screenshots') AS flag FROM local_browser_runs WHERE id = ?1 AND user_id = ?2",
+	local_apply_run: "SELECT json_extract(policy, '$.screenshots') AS flag FROM local_apply_runs WHERE id = ?1 AND user_id = ?2",
+};
+
+/**
+ * Did this run start with the owner's screenshot switch OFF? The storage half of #1064's three
+ * guards: whatever reaches the store — an older runner, a stray pull, a future caller — a frame for an
+ * off run is never written. Only an explicit `false` on the run's own record counts.
+ */
+export async function subjectScreenshotsOff(env: Pick<Env, "DB">, userId: string, subjectKind: BrowserArtifactSubject, subjectId: string): Promise<boolean> {
+	const row = await env.DB.prepare(SCREENSHOTS_FLAG[subjectKind]).bind(subjectId, userId).first<{ flag: unknown }>().catch(() => null);
+	return row?.flag === 0 || row?.flag === false;
+}
 
 /**
  * Store one screenshot. Idempotent per (subject, seq): a re-sync of the same capture returns the stored
@@ -135,6 +152,7 @@ export async function putBrowserArtifact(env: Pick<Env, "DB" | "STORAGE">, input
 	const contentType = input.contentType ?? "image/jpeg";
 	if (!CONTENT_TYPES.has(contentType)) return { stored: false, reason: "bad_type" };
 	if (!input.bytes.byteLength) return { stored: false, reason: "empty" };
+	if (await subjectScreenshotsOff(env, input.userId, input.subjectKind, input.subjectId)) return { stored: false, reason: "screenshots_off" };
 	if (input.bytes.byteLength > MAX_BROWSER_ARTIFACT_BYTES) return { stored: false, reason: "too_large" };
 	const existing = await env.DB.prepare("SELECT * FROM browser_run_artifacts WHERE subject_kind = ?1 AND subject_id = ?2 AND seq = ?3 AND user_id = ?4")
 		.bind(input.subjectKind, input.subjectId, input.seq, input.userId)
