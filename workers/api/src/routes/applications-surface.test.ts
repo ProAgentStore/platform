@@ -182,10 +182,26 @@ describe("the queue: every state, from any member of the pipeline", () => {
 });
 
 describe("the queue reports pipeline health (#1022)", () => {
+	/** The browser Scout's real source: an enabled run_local_browser schedule, and a scan that completed. */
+	const scheduleAndScan = () => {
+		d1.exec(`INSERT INTO agent_triggers (id, user_id, agent_id, instance_id, name, type, action, enabled, schedule, config, created_at, updated_at)
+			VALUES ('scan-trig', 'u1', 'scout-a', 'scout', 'Daily scan', 'cron', 'run_local_browser', 1, '0 7 * * *', '{}', datetime('now'), datetime('now'))`);
+		d1.exec(`INSERT INTO local_browser_runs (id, instance_id, user_id, request_id, objective, status, policy, created_at, updated_at, ended_at)
+			VALUES ('scan-1', 'scout', 'u1', 'r1', 'find jobs', 'completed', '{}', ${Date.now() - 60_000}, ${Date.now()}, ${Date.now()})`);
+	};
+
+	it("a browser Scout with no schedule and no completed scan is NOT healthy — it says both (#1022, live cb4c349c)", async () => {
+		const res = await call("GET", "/t1/application-queue");
+		expect(res.body.health.ok).toBe(false);
+		expect(res.body.health.problems.map((p: { code: string }) => p.code)).toEqual(["source_not_scheduled", "source_never_scanned"]);
+		expect(res.body.health.sources).toEqual([expect.objectContaining({ instanceId: "scout", kind: "browser", ready: false, scheduled: false, lastScanAt: null })]);
+	});
+
 	it("is ok for an intact pipeline, and names a disabled Tailor → Runner edge instead of dropping the Runner silently", async () => {
+		scheduleAndScan();
 		const healthy = await call("GET", "/t1/application-queue");
 		expect(healthy.body.health).toMatchObject({ ok: true, problems: [] });
-		expect(healthy.body.health.sources).toEqual([expect.objectContaining({ instanceId: "scout", kind: "browser", ready: true })]);
+		expect(healthy.body.health.sources).toEqual([expect.objectContaining({ instanceId: "scout", kind: "browser", ready: true, scheduled: true, lastScanAt: expect.any(String) })]);
 		d1.exec("UPDATE agent_connections SET enabled = 0 WHERE id = 'c-ready'");
 		const broken = await call("GET", "/t1/application-queue");
 		expect(broken.body.pipeline.runners).toEqual([]);
@@ -539,6 +555,15 @@ describe("retry, cancel and resume", () => {
 		expect(stuck.execution.progress).toBeNull();
 		expect(stuck.fillProgress).toBeNull();
 		expect(stuck.execution.permittedActions).toContain("request_review");
+	});
+
+	it("an ARCHIVED card shows no current run — its spent fill run is history, not awaiting_review (#1022, live cc90cd13)", async () => {
+		const { first, version } = await stuckAfterRefusedRetry("sx");
+		expect((await act("ap", { action: "archive", application_id: "sx", expected_status: "materials_ready", expected_version: version })).status).toBe(200);
+		const closed = (await call("GET", "/t1/application-queue/item?application_id=sx")).body.item;
+		expect(closed).toMatchObject({ status: "archived", fillRunId: first });
+		expect(closed.execution.currentRun).toBeNull();
+		expect(closed.execution.permittedActions).toEqual([]);
 	});
 
 	it("Request review on a card a refused retry left at materials_ready starts a NEW run and moves the card (#1022)", async () => {

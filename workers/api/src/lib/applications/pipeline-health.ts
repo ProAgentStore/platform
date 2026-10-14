@@ -30,6 +30,7 @@ export type PipelineProblemCode =
 	| "source_email_off"
 	| "source_failing"
 	| "source_never_scanned"
+	| "source_not_scheduled"
 	| "source_stale"
 	| "source_junk_leads";
 
@@ -83,6 +84,12 @@ export interface SourceFact {
 	instanceId: string;
 	runtime: string | null;
 	gmail: { enabled: boolean; emailPermitted: boolean; lastScanAt: string | null; lastFailureAt: string | null; lastFailureMessage: string | null; lastReceipt?: LatestReceipt | null; junkLeads?: Partial<Record<string, number>> } | null;
+	/**
+	 * A local-browser Scout's real state (#1022): its `run_local_browser` scan schedule and when a scan
+	 * last COMPLETED. Health used to hard-code such a Scout as ready, so one that was never scheduled and
+	 * had never scanned read as healthy.
+	 */
+	browser?: { scheduled: boolean; lastCompletedAt: string | null } | null;
 }
 
 /** SQLite `datetime('now')` text is UTC without a zone; read it as UTC. */
@@ -101,7 +108,8 @@ export function pipelineHealthFrom(input: { pipeline: { scouts: string[]; tailor
 	const sources: SourceHealth[] = input.sources.map((s) => {
 		const g = s.gmail;
 		const kind: SourceHealth["kind"] = g ? "gmail" : s.runtime === "local_browser" ? "browser" : "none";
-		const lastScanAt = iso(g?.lastScanAt ?? null);
+		const b = kind === "browser" ? (s.browser ?? { scheduled: false, lastCompletedAt: null }) : null;
+		const lastScanAt = iso(g?.lastScanAt ?? b?.lastCompletedAt ?? null);
 		const lastFailureAt = iso(g?.lastFailureAt ?? null);
 		const failing = !!lastFailureAt && (!lastScanAt || Date.parse(lastFailureAt) >= Date.parse(lastScanAt));
 		const add = (code: PipelineProblemCode, message: string) => problems.push({ code, instanceId: s.instanceId, message });
@@ -113,13 +121,16 @@ export function pipelineHealthFrom(input: { pipeline: { scouts: string[]; tailor
 		else if (g && failing) add("source_failing", `Scout ${s.instanceId}'s last scan failed: ${g.lastFailureMessage ?? "no reason recorded"}.`);
 		else if (g && !lastScanAt) add("source_never_scanned", `Scout ${s.instanceId} has never scanned its mailbox.`);
 		else if (g && lastScanAt && input.now - Date.parse(lastScanAt) > SOURCE_STALE_AFTER_MS) add("source_stale", `Scout ${s.instanceId} last scanned at ${lastScanAt}, more than ${SOURCE_STALE_AFTER_MS / 3_600_000} hours ago.`);
+		// #1022: a browser Scout scans only when its local runner is told to — by a schedule, or by hand.
+		if (b && !b.scheduled) add("source_not_scheduled", `Scout ${s.instanceId} has no enabled scan schedule, so it searches only when a run is started by hand. Set a cadence (a run_local_browser trigger) to have it search by itself.`);
+		if (b && !lastScanAt) add("source_never_scanned", `Scout ${s.instanceId} has never completed a browser scan.`);
 		// #1022: leads stored before the concrete-job intake rules are still in the queue offering "apply".
 		// Reported, never archived here — archiving is terminal and stays the owner's decision.
 		const junk = Object.entries(g?.junkLeads ?? {}).filter(([, n]) => (n ?? 0) > 0);
 		const junkTotal = junk.reduce((sum, [, n]) => sum + (n ?? 0), 0);
 		if (junkTotal) add("source_junk_leads", `Scout ${s.instanceId} holds ${junkTotal} stored lead${junkTotal === 1 ? "" : "s"} that today's intake rules reject (${junk.map(([reason, n]) => `${n} ${reason.replace(/_/g, " ")}`).join(", ")}). They are not concrete jobs; archive them rather than apply.`);
-		const ready = kind === "browser" || (!!g && g.enabled && g.emailPermitted && !failing && !!lastScanAt && input.now - Date.parse(lastScanAt) <= SOURCE_STALE_AFTER_MS);
-		return { instanceId: s.instanceId, kind, ready, scheduled: !!g && g.enabled, lastScanAt, lastFailureAt, lastFailureMessage: g?.lastFailureMessage ?? null, lastReceipt: g?.lastReceipt ?? null };
+		const ready = (!!b && b.scheduled && !!lastScanAt) || (!!g && g.enabled && g.emailPermitted && !failing && !!lastScanAt && input.now - Date.parse(lastScanAt) <= SOURCE_STALE_AFTER_MS);
+		return { instanceId: s.instanceId, kind, ready, scheduled: b ? b.scheduled : !!g && g.enabled, lastScanAt, lastFailureAt, lastFailureMessage: g?.lastFailureMessage ?? null, lastReceipt: g?.lastReceipt ?? null };
 	});
 	return { ok: problems.length === 0, problems, sources };
 }
@@ -134,7 +145,8 @@ export async function pipelineHealth(env: Env, uid: string, pipeline: { scouts: 
 			const gmail = config
 				? { enabled: config.enabled, emailPermitted: await emailPermitted(env, instanceId).catch(() => false), lastScanAt: state.lastScanAt, lastFailureAt: state.lastFailureAt, lastFailureMessage: state.lastFailureMessage, lastReceipt, junkLeads: await junkLeadsOf(env, instanceId) }
 				: null;
-			return { instanceId, runtime: caps?.runtime ?? null, gmail };
+			const browser = !gmail && caps?.runtime === "local_browser" ? await browserSourceOf(env, instanceId, uid) : null;
+			return { instanceId, runtime: caps?.runtime ?? null, gmail, browser };
 		}),
 	);
 	return pipelineHealthFrom({ pipeline, edges, sources, now });
@@ -155,4 +167,21 @@ async function junkLeadsOf(env: Env, instanceId: string): Promise<Partial<Record
 		if (reason) out[reason] = (out[reason] ?? 0) + 1;
 	}
 	return out;
+}
+
+/** A local-browser Scout's scan schedule and its latest COMPLETED scan (#1022), owner-scoped. */
+async function browserSourceOf(env: Env, instanceId: string, uid: string): Promise<{ scheduled: boolean; lastCompletedAt: string | null }> {
+	// The trigger is `local-browser/schedule.ts`'s SCAN_TRIGGER_ACTION; read here, not through that module,
+	// which imports triggers.ts — an import cycle back through the application queue.
+	const [schedule, last] = await Promise.all([
+		env.DB.prepare("SELECT 1 AS on_ FROM agent_triggers WHERE instance_id = ?1 AND user_id = ?2 AND type = 'cron' AND action = 'run_local_browser' AND enabled = 1 LIMIT 1")
+			.bind(instanceId, uid)
+			.first<{ on_: number }>()
+			.catch(() => null),
+		env.DB.prepare("SELECT MAX(ended_at) AS ended FROM local_browser_runs WHERE instance_id = ?1 AND user_id = ?2 AND status = 'completed'")
+			.bind(instanceId, uid)
+			.first<{ ended: number | null }>()
+			.catch(() => null),
+	]);
+	return { scheduled: !!schedule, lastCompletedAt: last?.ended ? new Date(last.ended).toISOString() : null };
 }

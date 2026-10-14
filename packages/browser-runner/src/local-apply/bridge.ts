@@ -25,6 +25,7 @@
  * The trace carries classes, domains, decisions and artifact handles — never a typed value.
  */
 import { classifyApplyClick } from "./contract.js";
+import { LISTING_EXPIRED_RE, LISTING_UNAVAILABLE_RE } from "./unavailable.js";
 import {
 	CONFIRMATION_INTERVAL_SECONDS,
 	CONFIRMATION_LOOKS,
@@ -107,9 +108,13 @@ const SAFE_KEYS = /^(Tab|Shift\+Tab|Arrow(Up|Down|Left|Right)|Escape|Home|End|Pa
  * The success vocabulary is INTERPOLATED from `confirmation.ts` rather than written out here
  * (#994): a second copy of that regex is how the "sent" family — the exact word SEEK uses — was
  * missing from the detector while being present in nobody's tests, through three live runs.
+ * The listing-gone vocabulary is interpolated from `unavailable.ts` for the same reason (#1022): its
+ * copy here lacked SEEK's "no longer advertised" through three live runs.
  */
-const INSPECT_PAGE = `() => {
+export const INSPECT_PAGE = `() => {
 	const CONFIRMATION_TEXT_SOURCE = ${JSON.stringify(CONFIRMATION_TEXT_RE.source)};
+	const UNAVAILABLE_TEXT_SOURCE = ${JSON.stringify(LISTING_UNAVAILABLE_RE.source)};
+	const EXPIRED_TEXT_SOURCE = ${JSON.stringify(LISTING_EXPIRED_RE.source)};
 	const text = (document.body ? document.body.innerText : "").slice(0, 20000).toLowerCase();
 	const has = (s) => !!document.querySelector(s);
 	return {
@@ -121,9 +126,7 @@ const INSPECT_PAGE = `() => {
 		duplicate: /you('ve| have) already applied|already applied (for|to) this|application (already exists|has already been (submitted|received))|duplicate application/.test(text),
 		antiBot: /unusual traffic|access (is )?denied|request (has been )?blocked|bot detected|checking (if the site connection is secure|your browser)/.test(text),
 		confirmed: new RegExp(CONFIRMATION_TEXT_SOURCE).test(text),
-		unavailable: /(?:this |the )?(?:job|position|posting|role|opportunity).{0,120}(?:has )?(?:expired|closed|been filled|is no longer available|is no longer accepting applications)|(?:expired|closed|no longer available|no longer accepting applications).{0,120}(?:job|position|posting|role|opportunity)/.test(text)
-			? (/expired/.test(text) ? "expired" : "unavailable")
-			: null,
+		unavailable: new RegExp(UNAVAILABLE_TEXT_SOURCE, "i").test(text) ? (new RegExp(EXPIRED_TEXT_SOURCE, "i").test(text) ? "expired" : "unavailable") : null,
 	};
 }`;
 

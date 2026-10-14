@@ -36,6 +36,7 @@ import { finalText, missingLogin, signInHelp } from "../local-browser/engine.js"
 import { resolveWorkspacePath } from "../local-browser/runtime.js";
 import { ApplyBridge } from "./bridge.js";
 import { confirmationSignals } from "./confirmation.js";
+import { listingUnavailableReason } from "./unavailable.js";
 import {
 	type LocalApplySignal,
 	type LocalApplyDiagnosticCause,
@@ -290,9 +291,8 @@ export class LocalApplyRuntime {
 			if (snapshot.isError || /captcha|verify (?:you(?:'| a)re|that you are) human|access denied|unusual traffic|checking (?:if )?your browser/i.test(page)) {
 				return { state: "unverifiable", jobUrl: parsed.toString(), reason: "access_blocked" };
 			}
-			if (/(?:job|position|posting|role|opportunity).{0,120}(?:has )?(?:expired|closed|been filled|is no longer available|is no longer accepting applications)|(?:expired|closed|no longer available|no longer accepting applications).{0,120}(?:job|position|posting|role|opportunity)/i.test(page)) {
-				return { state: "unavailable", jobUrl: parsed.toString(), reason: /expired/i.test(page) ? "expired" : "unavailable" };
-			}
+			const gone = listingUnavailableReason(page);
+			if (gone) return { state: "unavailable", jobUrl: parsed.toString(), reason: gone };
 			// An accessible Apply control is an active path, unlike a generic careers/search URL.
 			if (/(?:button|link)\s+"[^"]{0,80}\bapply(?: now| for| here)?\b|\bapply (?:now|for (?:this )?(?:job|role|position))\b|\bstart application\b/i.test(page)) {
 				return { state: "live", jobUrl: parsed.toString(), applyUrl: parsed.toString(), evidence: "apply_control_present" };

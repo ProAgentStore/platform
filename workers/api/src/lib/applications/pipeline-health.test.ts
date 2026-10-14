@@ -36,8 +36,17 @@ describe("pipeline health (#1022)", () => {
 		expect(h.sources[0]).toMatchObject({ kind: "none", ready: false, scheduled: false });
 	});
 
-	it("a browser Scout is scanned by its runner, not on this schedule", () => {
-		expect(health([edge()], [{ instanceId: "scout", runtime: "local_browser", gmail: null }]).sources[0]).toMatchObject({ kind: "browser", ready: true, scheduled: false });
+	it("a browser Scout is judged by its OWN schedule and scans — never hard-coded ready (#1022, live cb4c349c)", () => {
+		const browser = (scheduled: boolean, lastCompletedAt: string | null) => health([edge()], [{ instanceId: "scout", runtime: "local_browser", gmail: null, browser: { scheduled, lastCompletedAt } }]);
+		const scanned = new Date(NOW - 3_600_000).toISOString();
+		// The live state: research runs by hand, no schedule — it read as `ready: true` with no problem.
+		expect(codes(browser(false, scanned))).toEqual(["source_not_scheduled"]);
+		expect(browser(false, scanned).sources[0]).toMatchObject({ kind: "browser", ready: false, scheduled: false, lastScanAt: scanned });
+		expect(codes(browser(false, null))).toEqual(["source_not_scheduled", "source_never_scanned"]);
+		expect(codes(browser(true, null))).toEqual(["source_never_scanned"]);
+		expect(browser(true, scanned)).toMatchObject({ ok: true, problems: [], sources: [{ kind: "browser", ready: true, scheduled: true, lastScanAt: scanned }] });
+		// No browser facts read at all is the unscheduled, never-scanned case — not a pass.
+		expect(codes(health([edge()], [{ instanceId: "scout", runtime: "local_browser", gmail: null }]))).toEqual(["source_not_scheduled", "source_never_scanned"]);
 	});
 
 	it("distinguishes disabled, permission off, failing, never scanned and stale", () => {

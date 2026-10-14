@@ -314,7 +314,8 @@ function applicationItem(
 	const staleRun = app.status === "materials_ready" && !run && !!fill.runStatus && isTerminalApplyRun(fill.runStatus as ApplyRunStatus);
 	if (staleRun) fill = { ...fill, progress: null, checkpoint: null };
 	const runStatus = run?.status ?? fill.runStatus;
-	const currentRun = app.fillRunId && !staleRun
+	// …and a CLOSED card (archived/cancelled, live cc90cd13) with no open run has none current; its history stays.
+	const currentRun = (app.status === "archived" || app.status === "cancelled") && !run ? null : app.fillRunId && !staleRun
 		? { id: app.fillRunId, kind: "fill" as const, status: runStatus ?? app.status, instanceId: pipeline.runners[0] ?? "", mode: run?.mode ?? null }
 		: app.tailoringRunId
 			? { id: app.tailoringRunId, kind: "tailor" as const, status: app.status === "tailoring" ? "running" : app.status, instanceId: app.instanceId, mode: null }
