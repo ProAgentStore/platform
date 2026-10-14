@@ -389,3 +389,11 @@ confirms provider, model, cost and who is billed. The coding screen shows the ac
 engine line. One setting (`lib/instance-brain.ts`, the instance's `state.model` once picked); until
 one is picked the advisory surfaces run Sonnet as before. Nothing on the engine path reads it, so a
 Brain choice cannot change, start or stand in for the coding engine or its sign-in.
+
+**The coder brain is BYOK only (#1025).** When a coder's question goes unanswered past the human
+timeout, the coder brain decides on the owner's own API key: their Anthropic key, or their own
+Cloudflare account and token. The platform never pays for a brain call, and there is no fallback to
+the platform's Workers AI binding (`byokBrainCall` → `runUserWorkersAi`). If the owner has no key
+configured, the model call fails and the brain declines. The question moves to `escalated`, and the
+owner gets an alert and an issue comment, so a person answers it instead of the brain. This is pinned
+by `lib/coder-brain-byok.test.ts`.
