@@ -72,6 +72,17 @@ export async function approveAndResume(env: Env, req: PermissionRequest, mode: "
 		await wipeContinuation(env, req.id);
 		return { status: 409, body: { error: "Permission request expired", request: { id: req.id, status: "expired" } } };
 	}
+	// A paused or cancelled instance's blocked work is not resumed (see resumeBlockedOperation), so
+	// approving here would write a grant for an operation that can no longer run. Decide that BEFORE
+	// anything is written: the request ends `cancelled`, nothing is granted, and the owner is told why.
+	const instance = await env.DB.prepare("SELECT status FROM agent_instances WHERE id = ?1 AND user_id = ?2").bind(req.instanceId, req.userId).first<{ status: string }>();
+	if (instance?.status !== "active") {
+		const instanceStatus = instance?.status ?? "missing";
+		await cancelRequest(env, req);
+		await wipeContinuation(env, req.id);
+		await auditPermissionRequest(env, req, "request.instance_inactive", { instanceStatus });
+		return { status: 409, body: { error: `This instance is ${instanceStatus}, so nothing was granted and its blocked operation will not run. Resume the instance and repeat the action if you still want it.`, request: { id: req.id, status: "cancelled" }, instanceStatus } };
+	}
 	if (req.control === "connector_consent" && !mode) return { status: 400, body: { error: "Choose the explicit write-access mode: always or ask" } };
 	// Claim the owner's decision before writing anything: a duplicate tap fails here, so it can
 	// neither write a second grant nor start a second resume.

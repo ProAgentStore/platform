@@ -288,3 +288,62 @@ describe("12. a signed-out tap keeps its destination", () => {
 		expect(permissionRequestFocus(new URL(b.controlLink, "https://x").search)).toEqual({ controlId: "permissions-and-connections", requestId: b.requestId });
 	});
 });
+
+describe("14. an instance that is no longer running", () => {
+	it.each(["paused", "cancelled"])("%s: approving grants NOTHING and runs nothing — the request ends cancelled, with a clear reason", async (status) => {
+		const b = await block();
+		d1.exec(`UPDATE agent_instances SET status = '${status}' WHERE id = 'i1'`);
+		const approved = await req("POST", `/i1/permission-requests/${b.requestId}/approve`, { mode: "always" });
+		expect(approved).toMatchObject({ status: 409, body: { request: { id: b.requestId, status: "cancelled" }, instanceStatus: status } });
+		expect(String(approved.body.error)).toMatch(new RegExp(`This instance is ${status}, so nothing was granted`));
+		expect(consent()).toBeUndefined(); // no grant was written on the owner's behalf
+		expect(ran).toEqual([]);
+		expect(row(b.requestId)).toEqual({ status: "cancelled", sealed: null });
+		expect(events(b.requestId).slice(-2)).toEqual(["request.cancelled", "request.instance_inactive"]);
+		// A second tap reads the terminal state rather than trying again.
+		expect((await req("POST", `/i1/permission-requests/${b.requestId}/approve`, { mode: "always" })).status).toBe(409);
+	});
+
+	it("deleted (its agent removed): the stale link is a clean 404, its rows are gone, nothing is granted or run", async () => {
+		const b = await block();
+		const { agentDeleteStatements } = await import("../lib/agent-cascade.js");
+		await env.DB.batch([...agentDeleteStatements(env.DB, "a1", { cascadeSubscribers: true }), env.DB.prepare("DELETE FROM agent_instances WHERE agent_id = 'a1'"), env.DB.prepare("DELETE FROM agents WHERE id = 'a1'")]);
+		expect(d1.sqlite.prepare("SELECT count(*) AS n FROM instance_permission_requests").get()).toEqual({ n: 0 });
+		expect(d1.sqlite.prepare("SELECT count(*) AS n FROM instance_permission_request_events").get()).toEqual({ n: 0 });
+		for (const path of [`/i1/permission-requests/${b.requestId}`, `/i1/permission-requests/${b.requestId}/approve`, `/i1/permission-requests/${b.requestId}/resume`]) {
+			const r = path.endsWith(b.requestId) ? await req("GET", path) : await req("POST", path, { mode: "always" });
+			expect(r).toMatchObject({ status: 404, body: { error: "Instance not found" } });
+		}
+		expect(consent()).toBeUndefined();
+		expect(ran).toEqual([]);
+	});
+});
+
+describe("15. the owner's notification preference is respected", () => {
+	it("a muted push is recorded as muted, never forced through and never retried; the request and its link still work", async () => {
+		h.push.mockResolvedValue("muted");
+		const b = await block();
+		expect(events(b.requestId)).toContain("notification.outcome:muted");
+		// Muted is the owner's choice, not an unreachable device: a repeat of the blocked call does not push again.
+		await blocked();
+		expect(h.push).toHaveBeenCalledTimes(1);
+		// The request is reachable from the in-app list and the tool result, and still needs an explicit approval.
+		const listed = await req("GET", "/i1/permission-requests");
+		expect((listed.body.requests as Array<{ id: string; link: string }>)[0]).toMatchObject({ id: b.requestId, link: b.controlLink });
+		expect(consent()).toBeUndefined();
+		expect(ran).toEqual([]);
+	});
+});
+
+describe("16. the audit trail names, never copies", () => {
+	it("every event across a full approve-and-resume carries only non-secret identifiers", async () => {
+		const b = await block();
+		await req("POST", `/i1/permission-requests/${b.requestId}/approve`, { mode: "always" });
+		const rows = d1.sqlite.prepare("SELECT event, detail FROM instance_permission_request_events WHERE request_id = ?").all(b.requestId) as Array<{ event: string; detail: string }>;
+		// Push outcome, owner decision, verified scope and continuation outcome are separate events.
+		expect(rows.map((r) => r.event)).toEqual(expect.arrayContaining(["notification.outcome", "request.approval_claimed", "grant.verified", "continuation.dispatched"]));
+		const trail = JSON.stringify(rows);
+		for (const secret of [KEK, ARGS.title, ARGS.body, "session", "token"]) expect(trail).not.toContain(secret);
+		for (const r of rows) for (const key of Object.keys(JSON.parse(r.detail))) expect(["outcome", "stored", "scope", "mode", "operation", "instanceStatus"]).toContain(key);
+	});
+});

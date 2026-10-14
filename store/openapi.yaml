@@ -7065,7 +7065,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { description: "The grant was withdrawn or no longer covers the exact operation; carries `blocker`" }
         "404": { $ref: "#/components/responses/NotFound" }
-        "409": { description: "Request terminal, expired or could not be verified; or the resume was refused, went stale, failed or is uncertain (`status` says which)" }
+        "409": { description: "Request terminal, expired or could not be verified; or the instance is paused/cancelled (nothing granted, request cancelled, `instanceStatus` says which); or the resume was refused, went stale, failed or is uncertain (`status` says which)" }
         "503": { description: The resumed operation's outcome is uncertain and will not be retried }
 
   /v1/instances/{instanceId}/permission-requests/{requestId}/resume:
