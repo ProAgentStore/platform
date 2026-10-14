@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**325 tool registrations.** 298 are always registered; 27 are gated to the console
+**326 tool registrations.** 299 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -539,6 +539,7 @@ immediately instead of a whole transcript.
 | `import_instance_workdrive_file` | The same for Zoho WorkDrive — takes `resource_id`, not `file_id` (#613) | write | yes | |
 | `list_instance_connector_grants` | Folders granted to this instance — the grant *is* the permission | — | | |
 | `list_connectors` | Every connector this deployment knows, resolved for your account (configured / connected) | — | | |
+| `sync_github_installations` | Bind the GitHub App installations this account controls but has no binding to yet (e.g. an org installed after the last Connect GitHub), with the exact reason for each it could not bind; `owner` checks one account, `check_only` binds nothing; never names an org you are not part of (#1081) | write | — | ✓ |
 | `list_instance_connectors` | What THIS agent may do with each connector, with the refusal sentence when it may not | — | | |
 | `list_instance_connector_consents` | Stored write-consent modes (`ask` / `always`) for this instance; absence means off | — | | |
 | `set_instance_connector_consent` | Grant or revoke a connector's WRITE consent on one instance | write | yes | |

@@ -1,7 +1,7 @@
 import type { InstanceRetirement } from "./retirement";
 import type { ScanSchedule, ScanTelemetry } from "./scanSchedule";
 import type { ApplicationExecutionProjection } from "../../../../workers/api/src/agent-types";
-export type { ApplicationReconciliationHandoffResponse, ApplicationReconciliationResponse } from "../../../../workers/api/src/agent-types";
+export type { ApplicationReconciliationHandoffResponse, ApplicationReconciliationResponse, GithubInstallationCheckReason, GithubInstallationSyncResponse } from "../../../../workers/api/src/agent-types";
 
 export interface Agent {
 	id: string;

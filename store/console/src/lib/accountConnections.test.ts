@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+	githubLinkOutcome,
+	githubSyncLines,
 	accountConnections,
 	agentAccountChoices,
 	agentAccountNotice,
@@ -664,3 +666,41 @@ describe("optional grants — chosen, stated, and offered without a reconnect (#
 	});
 });
 
+
+describe("GitHub: the link and the sync say what they bound — and why not (#1081)", () => {
+	const q = (s: string) => new URLSearchParams(s);
+
+	it("a link that bound everything reads as success", () => {
+		expect(githubLinkOutcome(q("github_linked=octo&github_bound=2&github_sync=ok"))).toBe("Linked as octo — 2 GitHub accounts or organisations bound.");
+	});
+
+	it("PARTIAL: names the refusal and its remedy — never just 'linked'", () => {
+		const out = githubLinkOutcome(q("github_linked=octo&github_bound=1&github_sync=partial&github_unbound=oauth_app_restricted:1"))!;
+		expect(out).toMatch(/1 GitHub account or organisation bound/);
+		expect(out).toMatch(/1 not bound: that organisation restricts third-party apps/);
+		expect(out).toMatch(/Grant/);
+	});
+
+	it("FAILED: says nothing was bound, and where to go next", () => {
+		expect(githubLinkOutcome(q("github_linked=octo&github_sync=failed"))).toMatch(/could not read the GitHub App's installations, so nothing was bound/);
+	});
+
+	it("not a link return: nothing to say", () => {
+		expect(githubLinkOutcome(q("other=1"))).toBeNull();
+	});
+
+	it("a sync names each org it may, with the step that refused and GitHub's status", () => {
+		const lines = githubSyncLines({
+			githubLogin: "octo", owner: "chessclubs-online", dryRun: false, bound: 0, truncated: false, appCannotReadMembers: false, linkStart: "/v1/auth/github/link/start", unnamed: {},
+			orgs: [{ account: "chessclubs-online", type: "Organization", installationId: 3, result: "not_bound", reason: "app_cannot_read_members", status: 403 }],
+		});
+		expect(lines).toEqual(["chessclubs-online: not bound — the ProAgentStore App may not read that organisation's members — choose Reconnect, which checks with your own GitHub account (GitHub 403)."]);
+	});
+
+	it("counted refusals stay counts — no other tenant's org is ever named", () => {
+		const lines = githubSyncLines({ githubLogin: "octo", owner: null, dryRun: false, bound: 1, truncated: false, appCannotReadMembers: true, linkStart: "", unnamed: { oauth_app_restricted: 2 }, orgs: [{ account: "acme", type: "Organization", installationId: 2, result: "bound" }] });
+		expect(lines[0]).toBe("acme: bound.");
+		expect(lines).toContain("2 other installations not bound: that organisation restricts third-party apps and has not approved ProAgentStore — choose Reconnect and press Grant (or Request) next to it on GitHub's consent screen, or approve ProAgentStore in the organisation's Settings → Third-party access.");
+		expect(lines.join(" ")).toMatch(/name the organisation below/);
+	});
+});

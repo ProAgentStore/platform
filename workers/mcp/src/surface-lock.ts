@@ -1165,4 +1165,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.132": "sha256:010ac079b39f067e3dbbc9def7a6e18bb71f49f05ecfb2963e08b2ce0f190bf0",
 	// #1073: assert_application_not_submitted — the owner's audited assertion that an uncertain submit sent nothing.
 	"0.1.133": "sha256:dc22a33bdc1205cbcbe394516b53c7eb673b2f92210b0f2cc09138109a2b8aad",
+	// #1081: sync_github_installations — bind GitHub App installations added after the last Connect, with a reason for each refusal.
+	"0.1.134": "sha256:9d79398581be82d3d8871446edaf4a305706a734eb93df09a438a862d62697ed",
 };

@@ -1,5 +1,8 @@
 import { decryptKey, encryptKey } from "./crypto.js";
+import type { GithubInstallationCheckReason as InstallationCheckReason, GithubInstallationOutcome as InstallationOutcome } from "../agent-types.js";
 import type { Env } from "../types.js";
+
+export type { InstallationCheckReason, InstallationOutcome };
 
 /**
  * GitHub App integration (the AgentCoder port), Worker-native.
@@ -71,11 +74,41 @@ export interface GhInstallation {
 	account: { login: string; type?: string };
 }
 
+/** How many pages of the App's installations one read follows (#1081) — 100 per page caps it at 5,000. */
+const MAX_INSTALLATION_PAGES = 50;
+
+/**
+ * The next page GitHub names in a `Link` header, or null (#1081). Only an api.github.com URL is
+ * followed, so a header can never send the App JWT anywhere else.
+ */
+export function nextPageUrl(link: string | null | undefined): string | null {
+	const m = link?.match(/<([^>]+)>;\s*rel="next"/);
+	return m?.[1].startsWith("https://api.github.com/") ? m[1] : null;
+}
+
+/**
+ * EVERY page of the App's installations (#1081). GitHub answers 30 per page and names the next one
+ * in `Link`; reading only the first meant that past 30 installations across all users, an org the
+ * App IS installed on read as `not-installed`. The first request is unchanged — later pages come
+ * only from GitHub's own `Link` — and a failing page returns its Response for the caller to classify.
+ */
+async function installationPages(jwt: string): Promise<{ installs: GhInstallation[] } | { failed: Response }> {
+	const installs: GhInstallation[] = [];
+	let url: string | null = "https://api.github.com/app/installations";
+	for (let page = 0; url && page < MAX_INSTALLATION_PAGES; page++) {
+		const res = await fetch(url, { headers: GH_HEADERS(jwt) });
+		if (!res.ok) return { failed: res };
+		installs.push(...((await res.json().catch(() => [])) as GhInstallation[]));
+		url = nextPageUrl(res.headers?.get?.("link"));
+	}
+	return { installs };
+}
+
 export async function listInstallations(env: Env): Promise<GhInstallation[]> {
 	const jwt = await appJwt(env);
-	const res = await fetch("https://api.github.com/app/installations", { headers: GH_HEADERS(jwt) });
-	if (!res.ok) throw new Error(`installations ${res.status}`);
-	return (await res.json()) as GhInstallation[];
+	const out = await installationPages(jwt);
+	if ("failed" in out) throw new Error(`installations ${out.failed.status}`);
+	return out.installs;
 }
 
 /**
@@ -93,14 +126,15 @@ async function installationsOrFault(env: Env): Promise<InstallationsResult> {
 	let res: Response;
 	try {
 		const jwt = await appJwt(env);
-		res = await fetch("https://api.github.com/app/installations", { headers: GH_HEADERS(jwt) });
+		const out = await installationPages(jwt);
+		if (!("failed" in out)) return { ok: true, installs: out.installs };
+		res = out.failed;
 	} catch (e) {
 		// A network fault or an unusable private key. The key case is not transient, but it is also
 		// not something the caller can tell apart here, and "try again" on a broken key costs one
 		// retry — where the reverse mistake (calling a real outage permanent) costs the work.
 		return { ok: false, state: "transient", detail: e instanceof Error ? e.message : String(e) };
 	}
-	if (res.ok) return { ok: true, installs: (await res.json().catch(() => [])) as GhInstallation[] };
 	// 401/403 on the APP JWT is the platform's own credential being refused — no amount of
 	// retrying, and nothing the owner can fix in their settings.
 	if (res.status === 401 || res.status === 403) {
@@ -110,7 +144,7 @@ async function installationsOrFault(env: Env): Promise<InstallationsResult> {
 }
 
 /** Mint a fresh installation access token (valid ~1h). */
-async function mintInstallationToken(
+export async function mintInstallationToken(
 	env: Env,
 	installationId: number,
 	opts?: { repositories?: readonly string[] },
@@ -360,7 +394,8 @@ export function githubAccessDenial(input: {
 				owner,
 				retryable: false,
 				message: `The ProAgentStore GitHub App is installed on "${owner}", but this account is not authorized to use it.`,
-				remedy: `Connect GitHub in Settings so the platform can verify you control "${owner}" (for an organisation, you must be an active member).`,
+				// #1081: name the control that exists, and the tool that says WHICH step refused.
+				remedy: `Sync your GitHub installations so the platform can verify you control "${owner}" (for an organisation, you must be an active member): Preferences → Connections → GitHub → Sync installations (or Connect GitHub / Reconnect), or the MCP tool sync_github_installations with owner "${owner}" — it reports exactly why an organisation was not bound.`,
 			};
 		case "transient":
 			return {
@@ -499,32 +534,71 @@ export async function repoScopedInstallationToken(
 }
 
 /**
- * Does `githubLogin` control this installation's account? A personal (User)
- * install is owned iff the login matches. An Organization install is owned iff
- * the user is an *active* member — checked with a throwaway installation token
- * (server-side, read-only). No login, no match, or an unverifiable org all fail
- * closed. This is the ownership proof that gates binding creation.
+ * Why an installation could not be bound to a user (#1081). Reason codes and GitHub's HTTP status —
+ * never a token, a URL or a response body.
+ *
+ *   not_linked             no GitHub login is linked to this account
+ *   not_owner              a personal installation of a different GitHub user
+ *   not_member             GitHub has no membership for this login (404, or not `active`/`pending`)
+ *   membership_pending     invited to the org, not yet accepted
+ *   oauth_app_restricted   the org restricts third-party OAuth Apps and has not approved ours (403)
+ *   app_cannot_read_members  the App's own token may not read org membership (403 "not accessible by integration")
+ *   access_refused         any other 403
+ *   check_failed           any other status, or GitHub unreachable
+ *   mint_failed            GitHub would not issue an installation token
+ *
+ * (`InstallationCheckReason` itself lives in `agent-types.ts` as `GithubInstallationCheckReason`, so
+ * the console and MCP read the same vocabulary.) An ownership check is either ok, or one of these.
  */
-async function verifyUserOwnsInstallation(env: Env, githubLogin: string | null, inst: GhInstallation): Promise<boolean> {
-	if (!githubLogin) return false;
+export type OwnershipCheck = { ok: true } | { ok: false; reason: InstallationCheckReason; status?: number };
+
+/** Read a membership answer into a verdict. Only `active` passes — exactly what the boolean checks required. */
+async function membershipVerdict(res: Response | null): Promise<OwnershipCheck> {
+	if (!res) return { ok: false, reason: "check_failed" };
+	if (res.ok) {
+		const state = ((await res.json().catch(() => ({}))) as { state?: string }).state;
+		return state === "active" ? { ok: true } : state === "pending" ? { ok: false, reason: "membership_pending", status: res.status } : { ok: false, reason: "not_member", status: res.status };
+	}
+	if (res.status === 404) return { ok: false, reason: "not_member", status: 404 };
+	if (res.status === 403) {
+		// GitHub's own sentence is the only thing that tells these apart; it is read, never stored.
+		const message = String(((await res.json().catch(() => ({}))) as { message?: unknown }).message ?? "");
+		if (/OAuth App access restrictions/i.test(message)) return { ok: false, reason: "oauth_app_restricted", status: 403 };
+		if (/not accessible by integration/i.test(message)) return { ok: false, reason: "app_cannot_read_members", status: 403 };
+		return { ok: false, reason: "access_refused", status: 403 };
+	}
+	return { ok: false, reason: "check_failed", status: res.status };
+}
+
+/**
+ * Does `githubLogin` control this installation's account, and if not, why not (#1081)? A personal
+ * (User) install is owned iff the login matches. An Organization install is owned iff the user is an
+ * *active* member — checked with a throwaway installation token (server-side, read-only). No login,
+ * no match, or an unverifiable org all fail closed. The ownership proof that gates binding creation,
+ * unchanged — it now says which step refused.
+ */
+export async function checkInstallationOwnership(env: Env, githubLogin: string | null, inst: GhInstallation): Promise<OwnershipCheck> {
+	if (!githubLogin) return { ok: false, reason: "not_linked" };
 	const type = (inst.account.type || "User").toLowerCase();
 	if (type !== "organization") {
-		return inst.account.login.toLowerCase() === githubLogin.toLowerCase();
+		return inst.account.login.toLowerCase() === githubLogin.toLowerCase() ? { ok: true } : { ok: false, reason: "not_owner" };
 	}
 	// Org install: verify active membership via a short-lived installation token.
 	try {
 		const minted = await mintInstallationToken(env, inst.id);
-		if (!minted) return false;
+		if (!minted) return { ok: false, reason: "mint_failed" };
 		const res = await fetch(
 			`https://api.github.com/orgs/${encodeURIComponent(inst.account.login)}/memberships/${encodeURIComponent(githubLogin)}`,
 			{ headers: GH_HEADERS(minted.token, "token") },
 		);
-		if (!res.ok) return false;
-		const body = (await res.json()) as { state?: string };
-		return body.state === "active";
+		return membershipVerdict(res);
 	} catch {
-		return false;
+		return { ok: false, reason: "check_failed" };
 	}
+}
+
+async function verifyUserOwnsInstallation(env: Env, githubLogin: string | null, inst: GhInstallation): Promise<boolean> {
+	return (await checkInstallationOwnership(env, githubLogin, inst)).ok;
 }
 
 /**
@@ -561,38 +635,46 @@ export async function authorizeInstallation(
  * what lets a Google-signed-in user light up all their orgs after one `Connect GitHub` — no
  * per-org "approve Members:read" step (which GitHub gates behind sudo-mode). Membership is the
  * user attesting their own orgs, which is a sound authorization basis for minting THEIR tokens.
- * Returns the org/account logins that were bound.
+ *
+ * #1081: it used to return only the logins it bound and drop every failure silently — a refused
+ * membership read, a pending invitation, a failed mint — so a Reconnect that bound nothing for the
+ * org the owner had just installed on still said "linked". It now returns EVERY outcome with its
+ * reason. The proof is unchanged: only an `active` membership (or a personal login match) binds.
  */
 export async function bindMemberOrgInstallations(
 	env: Env,
 	userId: string,
 	githubLogin: string,
 	userAccessToken: string,
-): Promise<string[]> {
-	const installs = await listInstallations(env).catch(() => [] as GhInstallation[]);
+): Promise<{ bound: string[]; outcomes: InstallationOutcome[] }> {
+	const installs = await listInstallations(env);
 	const bound: string[] = [];
+	const outcomes: InstallationOutcome[] = [];
 	for (const inst of installs) {
 		const login = inst.account.login;
-		const isOrg = (inst.account.type || "User").toLowerCase() === "organization";
-		let ok = false;
-		if (!isOrg) {
-			ok = login.toLowerCase() === githubLogin.toLowerCase(); // personal install
+		const type = inst.account.type || "User";
+		const base = { account: login, type, installationId: inst.id };
+		let check: OwnershipCheck;
+		if (type.toLowerCase() !== "organization") {
+			check = login.toLowerCase() === githubLogin.toLowerCase() ? { ok: true } : { ok: false, reason: "not_owner" }; // personal install
 		} else {
-			try {
-				const res = await fetch(
-					`https://api.github.com/user/memberships/orgs/${encodeURIComponent(login)}`,
-					{ headers: GH_HEADERS(userAccessToken) },
-				);
-				if (res.ok) ok = ((await res.json()) as { state?: string }).state === "active";
-			} catch { ok = false; }
+			const res = await fetch(`https://api.github.com/user/memberships/orgs/${encodeURIComponent(login)}`, { headers: GH_HEADERS(userAccessToken) }).catch(() => null);
+			check = await membershipVerdict(res);
 		}
-		if (!ok) continue;
-		const minted = await mintInstallationToken(env, inst.id);
-		if (!minted) continue;
+		if (!check.ok) {
+			outcomes.push({ ...base, result: "not_bound", reason: check.reason, ...(check.status ? { status: check.status } : {}) });
+			continue;
+		}
+		const minted = await mintInstallationToken(env, inst.id).catch(() => null);
+		if (!minted) {
+			outcomes.push({ ...base, result: "not_bound", reason: "mint_failed" });
+			continue;
+		}
 		await cacheInstallationToken(env, userId, inst.id, minted.token, minted.expiresAt, { login, type: inst.account.type });
 		bound.push(login);
+		outcomes.push({ ...base, result: "bound" });
 	}
-	return bound;
+	return { bound, outcomes };
 }
 
 /** The installations this user has a *verified* binding to (from our DB, not the global App list). */

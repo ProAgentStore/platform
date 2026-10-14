@@ -4,6 +4,9 @@ import { signPayload, signSession, verifyPayload, verifySession } from "../lib/s
 import { isAllowedReturnTo } from "../lib/origins.js";
 import { isSuspended, requireUser } from "../lib/auth.js";
 import { bindMemberOrgInstallations } from "../lib/github-app.js";
+import { disclosedOutcomes } from "../lib/github-installation-sync.js";
+import { logEvent } from "../lib/events.js";
+import { clipMarked } from "../lib/clip-marked.js";
 import { logError } from "../lib/error-log.js";
 import { mintMcpAuthCode, exchangeMcpAuthCode } from "../lib/mcp-auth-codes.js";
 import { clearOauthBindCookie, newOauthNonce, oauthBindCookie, oauthBindMatches, readOauthBindCookie, OAUTH_BIND_ERROR } from "../lib/oauth-nonce.js";
@@ -149,11 +152,32 @@ authRoutes.get("/github/callback", async (c) => {
 			.run();
 		// Auto-bind every installed org (+ personal account) this user belongs to, verified
 		// by their read:org token — so all their orgs light up from one Connect, no per-org
-		// Members:read/sudo approval. Best-effort: a failure just leaves them to bind later.
-		const bound = await bindMemberOrgInstallations(c.env, state.linkUid, ghUser.login, tokenData.access_token).catch(() => [] as string[]);
+		// Members:read/sudo approval. The identity link above stands either way.
+		//
+		// #1081: the outcome is now TOLD, not swallowed. It used to `.catch(() => [])` and redirect
+		// with `github_linked` alone, so a Reconnect that bound nothing for the org just installed on
+		// read exactly like one that bound everything. `github_sync` says ok / partial / failed, and
+		// `github_unbound` carries the refusals as reason:count — codes only, never an org another
+		// tenant installed on (`disclosedOutcomes`), never a token or a URL.
+		const bind = await bindMemberOrgInstallations(c.env, state.linkUid, ghUser.login, tokenData.access_token).then(
+			(r) => ({ ok: true as const, ...r }),
+			(e: unknown) => ({ ok: false as const, error: e instanceof Error ? clipMarked(e.message, 160) : "unknown error" }),
+		);
+		const told = bind.ok ? disclosedOutcomes(bind.outcomes) : null;
+		const refusals = told ? [...Object.entries(told.unnamed), ...(told.appCannotReadMembers ? [["app_cannot_read_members", 1] as const] : []), ...told.orgs.filter((o) => o.result === "not_bound").map((o) => [o.reason ?? "check_failed", 1] as const)] : [];
 		const redirect = new URL(state.returnTo);
 		redirect.searchParams.set("github_linked", ghUser.login);
-		if (bound.length) redirect.searchParams.set("github_bound", String(bound.length));
+		if (bind.ok && bind.bound.length) redirect.searchParams.set("github_bound", String(bind.bound.length));
+		redirect.searchParams.set("github_sync", !bind.ok ? "failed" : refusals.length ? "partial" : "ok");
+		if (refusals.length) redirect.searchParams.set("github_unbound", refusals.map(([reason, n]) => `${reason}:${n}`).join(","));
+		await logEvent(c.env, {
+			source: "auth",
+			event: "github.link_bind",
+			level: bind.ok && !refusals.length ? "info" : "warn",
+			message: bind.ok ? `GitHub link bound ${bind.bound.length} installation(s); ${refusals.length} refusal(s)` : "GitHub link could not read the App's installations",
+			userId: state.linkUid,
+			context: bind.ok ? { githubLogin: ghUser.login, orgs: told?.orgs ?? [], unnamed: told?.unnamed ?? {}, appCannotReadMembers: told?.appCannotReadMembers ?? false } : { githubLogin: ghUser.login, error: bind.error },
+		}).catch(() => undefined);
 		return c.redirect(redirect.toString());
 	}
 

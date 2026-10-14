@@ -249,6 +249,67 @@ describe("GET /v1/auth/github/callback (integration)", () => {
 		expect(writes.some((w) => w.sql.includes("linked_github_login"))).toBe(true);
 	});
 
+	// #1081 — the link's binding outcome is TOLD. It used to be swallowed (`.catch(() => [])`), so a
+	// Reconnect that bound nothing for the org just installed on still read as plain success.
+	describe("the link's binding outcome is reported truthfully (#1081)", () => {
+		async function appEnv() {
+			const pair = (await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"])) as CryptoKeyPair;
+			const der = new Uint8Array((await crypto.subtle.exportKey("pkcs8", pair.privateKey)) as ArrayBuffer);
+			let bin = "";
+			for (const b of der) bin += String.fromCharCode(b);
+			return { GITHUB_APP_ID: "1", GITHUB_APP_PRIVATE_KEY: `-----BEGIN PRIVATE KEY-----\n${btoa(bin)}\n-----END PRIVATE KEY-----` } as Partial<Env>;
+		}
+		/** A GitHub that binds acme, refuses chessclubs-online's membership read, and lists another tenant's org. */
+		function routeGithub(opts: { installationsStatus?: number } = {}) {
+			vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+				const u = String(url);
+				const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
+				if (u.includes("/login/oauth/access_token")) return json(200, { access_token: "gho_tok" });
+				if (u === "https://api.github.com/user") return json(200, { id: 4242, login: "octocat", avatar_url: "", name: "" });
+				if (u === "https://api.github.com/app/installations") return opts.installationsStatus ? json(opts.installationsStatus, {}) : json(200, [
+					{ id: 2, account: { login: "acme", type: "Organization" } },
+					{ id: 3, account: { login: "chessclubs-online", type: "Organization" } },
+					{ id: 4, account: { login: "someone-elses-co", type: "Organization" } },
+				]);
+				if (u.endsWith("/user/memberships/orgs/acme")) return json(200, { state: "active" });
+				if (u.endsWith("/user/memberships/orgs/chessclubs-online")) return json(403, { message: "the `chessclubs-online` organization has enabled OAuth App access restrictions" });
+				if (/\/app\/installations\/\d+\/access_tokens$/.test(u)) return json(201, { token: "ghs_x", expires_at: new Date(Date.now() + 3600e3).toISOString() });
+				return json(404, { message: "Not Found" });
+			}));
+		}
+		async function link(env: Env, app: Hono) {
+			const bindNonce = newOauthNonce();
+			const res = await app.request(
+				`/v1/auth/github/callback?code=good&state=${encodeURIComponent(await state({ linkUid: "google:99", bindNonce }))}`,
+				{ headers: { cookie: `pags_oauth_bind_github_link=${bindNonce}` } },
+				env,
+			);
+			return { res, loc: new URL(res.headers.get("location")!) };
+		}
+
+		it("PARTIAL: bound what it could, and says one org refused the membership read — by reason, not by name", async () => {
+			const { app, env } = buildApp({ env: await appEnv() });
+			routeGithub();
+			const { res, loc } = await link(env, app as unknown as Hono);
+			expect(res.status).toBe(302);
+			expect(loc.searchParams.get("github_linked")).toBe("octocat");
+			expect(loc.searchParams.get("github_bound")).toBe("1");
+			expect(loc.searchParams.get("github_sync")).toBe("partial");
+			expect(loc.searchParams.get("github_unbound")).toBe("oauth_app_restricted:1");
+			// No org another tenant installed on, no token, in the URL the browser lands on.
+			expect(loc.toString()).not.toMatch(/chessclubs|someone-elses|gho_|ghs_/);
+		});
+
+		it("FAILED: an unreadable installation list is reported as failed — the identity link still stands", async () => {
+			const { app, env } = buildApp({ env: await appEnv() });
+			routeGithub({ installationsStatus: 502 });
+			const { loc } = await link(env, app as unknown as Hono);
+			expect(loc.searchParams.get("github_linked")).toBe("octocat");
+			expect(loc.searchParams.get("github_sync")).toBe("failed");
+			expect(loc.searchParams.get("github_bound")).toBeNull();
+		});
+	});
+
 	it("REFUSES a link completed by a browser that did not start it — the takeover", async () => {
 		// The attack: A calls /github/link/start with A's own bearer, gets a consent URL whose
 		// state says `linkUid: A`, and sends it to victim V. V clicks (no consent screen if V

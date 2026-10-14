@@ -359,3 +359,50 @@ export interface ApplicationReconciliationHandoffResponse {
 	/** The Console page for this exact handoff; absent when it could not be opened. */
 	consoleLink?: string;
 }
+
+/**
+ * Why a GitHub App installation could not be bound to an account (#1081) — reason codes and GitHub's
+ * HTTP status, never a token, a URL or a response body. The meanings are documented beside
+ * `membershipVerdict` in `lib/github-app.ts`.
+ */
+export type GithubInstallationCheckReason =
+	| "not_linked"
+	| "not_owner"
+	| "not_member"
+	| "membership_pending"
+	| "oauth_app_restricted"
+	| "app_cannot_read_members"
+	| "access_refused"
+	| "check_failed"
+	| "mint_failed";
+
+/** One installation's outcome in a link-time bind or a sync (#1081). Ids, logins and reason codes only. */
+export interface GithubInstallationOutcome {
+	account: string;
+	type: string;
+	installationId: number;
+	result: "bound" | "already_bound" | "would_bind" | "not_bound" | "not_installed";
+	reason?: GithubInstallationCheckReason;
+	/** GitHub's HTTP status for the refused check, when there was one. */
+	status?: number;
+}
+
+/** `POST /v1/github/installations/sync` (#1081) — and the MCP tool `sync_github_installations`. */
+export interface GithubInstallationSyncResponse {
+	/** The GitHub login the checks ran as: `users.linked_github_login`, else the sign-in login. */
+	githubLogin: string | null;
+	owner: string | null;
+	dryRun: boolean;
+	/** Installations this account is part of, or the one it named — never another tenant's. */
+	orgs: GithubInstallationOutcome[];
+	/** Other refusals, counted by reason and never named. */
+	unnamed: Partial<Record<GithubInstallationCheckReason, number>>;
+	/** The App's own token may not read org membership — true for every org at once. */
+	appCannotReadMembers: boolean;
+	/** Newly bound by this call. */
+	bound: number;
+	/** More unbound installations existed than one sync checks. */
+	truncated: boolean;
+	/** Re-link GitHub with your own token (the browser flow) when the App could not verify an org. */
+	linkStart: string;
+}

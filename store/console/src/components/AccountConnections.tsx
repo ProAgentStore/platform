@@ -7,10 +7,13 @@ import {
 	disconnectedMessage,
 	disconnectPromptFor,
 	type ConnectorEntry,
+	githubLinkOutcome,
+	githubSyncLines,
 	grantOffers,
 	needsPerAgentChoice,
 	startPath,
 } from "../lib/accountConnections";
+import type { GithubInstallationSyncResponse } from "../lib/types";
 import type { ConnectorReach } from "../lib/connectorState";
 import Button from "./Button";
 import Card from "./Card";
@@ -38,6 +41,10 @@ export default function AccountConnections() {
 	const [msg, setMsg] = useState("");
 	const [githubLinked, setGithubLinked] = useState<string | null>(null);
 	const [githubMsg, setGithubMsg] = useState("");
+	// #1081: bind App installations added after the last link, and show why any was not bound.
+	const [syncOwner, setSyncOwner] = useState("");
+	const [syncLines, setSyncLines] = useState<string[] | null>(null);
+	const [syncing, setSyncing] = useState(false);
 	// The optional powers ticked for a NEW connection, per connector (#718). Unticked is the default:
 	// a plain connect is read-only, and nothing is asked for that the owner did not choose.
 	const [chosen, setChosen] = useState<Record<string, string[]>>({});
@@ -68,10 +75,9 @@ export default function AccountConnections() {
 		const justLinked = params.get("github_linked");
 		if (!justLinked) return;
 		setGithubLinked(justLinked);
-		const bound = params.get("github_bound");
-		if (bound) setGithubMsg(`Connected as ${justLinked} — ${bound} org${bound === "1" ? "" : "s"} linked. Build status will show for their repos.`);
-		params.delete("github_linked");
-		params.delete("github_bound");
+		// #1081: what the binding DID — including what it could not bind, and why.
+		setGithubMsg(githubLinkOutcome(params) ?? "");
+		for (const k of ["github_linked", "github_bound", "github_sync", "github_unbound"]) params.delete(k);
 		const q = params.toString();
 		window.history.replaceState({}, "", window.location.pathname + (q ? `?${q}` : ""));
 	}, []);
@@ -141,6 +147,19 @@ export default function AccountConnections() {
 		}
 	};
 
+	const syncGithub = async () => {
+		setSyncing(true);
+		setSyncLines(null);
+		try {
+			const owner = syncOwner.trim();
+			const r = await api<GithubInstallationSyncResponse>("/v1/github/installations/sync", { method: "POST", body: JSON.stringify(owner ? { owner } : {}) });
+			setSyncLines(githubSyncLines(r));
+		} catch (e) {
+			setSyncLines([e instanceof Error ? e.message : "Couldn't sync GitHub installations."]);
+		}
+		setSyncing(false);
+	};
+
 	const rows = accountConnections(entries ?? []);
 
 	return (
@@ -182,7 +201,31 @@ export default function AccountConnections() {
 					{githubLinked ? "Reconnect" : "Connect GitHub"}
 				</Button>
 			</div>
-			{githubMsg && <p className="text-xs text-success mb-3 -mt-1">{githubMsg}</p>}
+			{githubMsg && <p className="text-xs mb-3 -mt-1" data-testid="github-link-outcome">{githubMsg}</p>}
+			{/* #1081: an organisation the App was installed on AFTER the last link is never bound by
+			    itself. This binds it with the same proof the install flow uses, and says why not. */}
+			{githubLinked && (
+				<div className="mb-3 -mt-1">
+					<div className="flex flex-wrap gap-2 items-center">
+						<input
+							aria-label="GitHub organisation to check (optional)"
+							value={syncOwner}
+							onChange={(e) => setSyncOwner(e.target.value)}
+							placeholder="organisation (optional)"
+							className="bg-paper border border-line rounded px-2 py-1 text-sm"
+						/>
+						<Button size="sm" onClick={() => void syncGithub()} disabled={syncing} data-testid="github-sync">
+							{syncing ? "Syncing…" : "Sync installations"}
+						</Button>
+					</div>
+					<p className="text-2xs text-muted-soft mt-1">Installed the ProAgentStore App on a new organisation? Sync binds it if you are an active member, and says why if not.</p>
+					{syncLines && (
+						<ul className="text-xs mt-1" data-testid="github-sync-result">
+							{syncLines.map((l) => <li key={l}>{l}</li>)}
+						</ul>
+					)}
+				</div>
+			)}
 
 			{entries === null
 				? <p className="text-xs text-muted">Loading…</p>

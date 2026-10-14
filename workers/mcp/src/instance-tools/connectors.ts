@@ -156,6 +156,38 @@ export function registerConnectorGrantTools(server: McpServer, ctx: InstanceTool
 		},
 	);
 
+	// #1081: the GitHub App installed on an org AFTER the last Connect GitHub is never bound, and nothing
+	// said why. This is the server-side sync (the same proof the install callback accepts) plus the
+	// reason for every org it could not bind — the MCP half of the console's "Sync installations".
+	server.tool(
+		"sync_github_installations",
+		'Bind the ProAgentStore GitHub App installations this account controls but has no binding to yet — e.g. an organisation the App was installed on after the last Connect GitHub — and say exactly why any was not bound. Uses the same proof as installing through the console: a personal account must be your linked GitHub login; an organisation needs an ACTIVE membership, read with the App\'s own token. Pass `owner` (an org or user login) to check one account and get its exact outcome: `bound`, `already_bound`, `would_bind`, `not_installed`, or `not_bound` with a `reason` (`not_member`, `membership_pending`, `app_cannot_read_members`, `oauth_app_restricted`, `access_refused`, `check_failed`, `mint_failed`) and GitHub\'s HTTP status. Without `owner` it syncs every installation; organisations you are not part of are never named — refusals are counted by reason. `check_only` runs every check and binds nothing. When the App cannot verify an organisation, the fix is re-linking GitHub in a browser (`linkStart`). Never weakens a check, never stores a token. Pass dry_run first.',
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			owner: z.string().optional().describe('One GitHub organisation or user login to check and bind, e.g. "chessclubs-online". Omit to sync every installation.'),
+			check_only: z.boolean().optional().describe("Run every check against GitHub and report the outcomes, binding nothing."),
+			dry_run: z.boolean().optional().describe("Describe what would happen without contacting the server."),
+		},
+		async ({ token, owner, check_only, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { owner: owner ?? null, check_only: check_only === true };
+			const denied = await requirePermission(safetyFor(token), "write", "sync_github_installations", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "sync_github_installations", owner ? `check and bind the GitHub App installation on ${owner}` : "check and bind every GitHub App installation this account controls", input, {
+					endpoint: "/v1/github/installations/sync",
+					method: "POST",
+					effect: check_only ? "GitHub would be asked about each installation; nothing would be bound." : "Each installation that passes the same proof as the install callback would be bound to this account; every other one would be reported with its reason.",
+				});
+			}
+			const data = (await authedCall("/v1/github/installations/sync", sessionToken, { method: "POST", body: JSON.stringify({ ...(owner ? { owner } : {}), ...(check_only ? { dry_run: true } : {}) }) }, env)) as { error?: string };
+			if (data.error) return text(`Error: ${data.error}`);
+			await audit(safetyFor(token), { tool: "sync_github_installations", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
 	server.tool(
 		"list_instance_connectors",
 		"What THIS instance may do with each connector — the per-agent verdict, not the account-level connection. An account connects Drive once, but an agent is only offered a connector when it declares one of that connector's tools, so the same connection is available on one agent and refused on another. Each entry carries the refusal sentence when there is one, in the same words the grant routes refuse with. Read this before creating a grant, a sync trigger, or a call_instance_tool that depends on a connector.",

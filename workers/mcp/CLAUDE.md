@@ -114,9 +114,10 @@ src/
 │                     replay and delete that complete them (#613), loops, loop presets
     ├── account.ts        18 tools — whoami, platform_health (#198), billing, usage, keys, email, profile, budget limits,
 │                     notifications, account preferences (#613), creator and subscriber dashboards
-    ├── connectors.ts    13 tools — connector status, folder grants, browsing and importing a
+    ├── connectors.ts    14 tools — connector status, folder grants, browsing and importing a
     │                             granted folder's files, which account an instance uses
-│                     (#736), the catalogue, this agent's verdict, and write consent (#613)
+│                     (#736), the catalogue, this agent's verdict, write consent (#613), and the GitHub App
+│                     installation sync with a reason for every org it could not bind (#1081)
     ├── stats.ts          5 tools — declarative stats cards (creator schema + subscriber override) and source vocabulary
     ├── mcp-connections.ts 6 tools — PAGS as an MCP CLIENT: presets, per-(endpoint,tool) grants,
 │                     the connection test, and the paused-elicitation inbox (#613)
@@ -139,13 +140,13 @@ src/
                           surfaces:["coding"]) + 6 loop tools (3 run + 3 objective queue: list, cancel, lifecycle)
 ```
 
-**325 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
+**326 tool registrations** (`.tool(` in the files above): 21 in `index.ts`, 1 in
 `tools/server-info.ts`, 12 in
 `coding-tools.ts`, 2 in `coding-engine-tools.ts`, 1 in `coding-reauth-tools.ts` and 1 in `coding-retarget-tools.ts` — all sixteen behind the `groups.has("coding")` gate — 14 in
-`storage-tools.ts`, and 272 across `instance-tools/`. 298 are always registered; 27 are
+`storage-tools.ts`, and 273 across `instance-tools/`. 299 are always registered; 27 are
 surface-gated (apply=4, repo=3, coding=20).
 
-These counts add up to the headline: 21 + 1 + 12 + 2 + 1 + 1 + 15 + 272 = 325. They said 88 until #602, which made the paragraph sum to 132 — a total the
+These counts add up to the headline: 21 + 1 + 12 + 2 + 1 + 1 + 15 + 273 = 326. They said 88 until #602, which made the paragraph sum to 132 — a total the
 same sentence contradicted two clauses earlier; and they said 31 + 13 + 93 = 140 under a
 headline of 141 until #696 re-counted them; and said 21 + 12 + 13 + 100 = 146 until #739
 added two always-on settings tools; and said 21 + 12 + 13 + 103 = 149 until #772 added

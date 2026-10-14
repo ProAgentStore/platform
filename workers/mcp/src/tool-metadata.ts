@@ -204,6 +204,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	upload_instance_file: "write",
 	list_instance_knowledge: "read",
 	list_connectors: "read",
+	// #1081: binds GitHub App installations this account controls, through the install callback's own proof.
+	sync_github_installations: "write",
 	list_instance_connectors: "read",
 	list_instance_connector_consents: "read",
 	list_instance_mcp_grants: "read",

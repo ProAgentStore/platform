@@ -7,6 +7,10 @@ import {
 	listInstallationRepos,
 	listUserInstallations,
 } from "../lib/github-app.js";
+import { syncUserInstallations } from "../lib/github-installation-sync.js";
+import type { GithubInstallationSyncResponse } from "../agent-types.js";
+import { logEvent } from "../lib/events.js";
+import { clipMarked } from "../lib/clip-marked.js";
 import type { Env } from "../types.js";
 
 /**
@@ -39,6 +43,29 @@ githubRoutes.get("/installations", async (c) => {
 	// cross-tenant IDOR).
 	const installs = await listUserInstallations(c.env, session.uid);
 	return c.json({ installations: installs });
+});
+
+/**
+ * Bind the App installations this account controls but has no binding to yet (#1081) — e.g. an org
+ * the App was installed on AFTER the last Connect GitHub. Same proof as `/callback`
+ * (`syncUserInstallations`); `owner` checks one account and names its exact outcome; `dry_run`
+ * runs every check and binds nothing. Never names an installation this user is not part of.
+ */
+githubRoutes.post("/installations/sync", async (c) => {
+	if (!githubAppConfigured(c.env)) return c.json({ error: "GitHub App not configured" }, 503);
+	const session = await requireUser(c);
+	const body = (await c.req.json().catch(() => ({}))) as { owner?: unknown; dry_run?: unknown };
+	const owner = typeof body.owner === "string" ? body.owner.trim() : "";
+	if (owner && !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(owner)) return c.json({ error: "owner must be a GitHub account or organisation login" }, 400);
+	let result: Awaited<ReturnType<typeof syncUserInstallations>>;
+	try {
+		result = await syncUserInstallations(c.env, session.uid, { owner: owner || null, dryRun: body.dry_run === true });
+	} catch (e) {
+		return c.json({ error: `GitHub could not be reached to list the App's installations: ${e instanceof Error ? clipMarked(e.message, 120) : "unknown error"}` }, 502);
+	}
+	await logEvent(c.env, { source: "tool", event: "github.installations_sync", level: "info", message: `GitHub installation sync${result.dryRun ? " (dry run)" : ""}: ${result.bound} bound`, userId: session.uid, context: { owner: result.owner, dryRun: result.dryRun, orgs: result.orgs, unnamed: result.unnamed, appCannotReadMembers: result.appCannotReadMembers } }).catch(() => undefined);
+	const body2: GithubInstallationSyncResponse = { ...result, linkStart: "/v1/auth/github/link/start" };
+	return c.json(body2);
 });
 
 /** The repos an installation can access (for importing into a workspace). */

@@ -17,6 +17,7 @@
 // The rule the move establishes is that account scope lives in one place; a console that still
 // knew the connectors by name would be one `if` away from breaking it again.
 
+import type { GithubInstallationCheckReason, GithubInstallationSyncResponse } from "./types";
 import { disconnectPrompt, type ConnectorReach } from "./connectorState";
 
 /** One entry of `GET /v1/connectors`, resolved for the caller. */
@@ -319,4 +320,63 @@ export function disconnectedMessage(entry: ConnectorEntry, revoked?: ConnectorRe
 	const folders = `${revoked.grants} folder grant${revoked.grants === 1 ? "" : "s"}`;
 	const agents = `${revoked.instances} agent${revoked.instances === 1 ? "" : "s"}`;
 	return `${entry.label} disconnected. Revoked ${folders} across ${agents}.`;
+}
+
+/**
+ * #1081 — why GitHub would not bind an installation, in the owner's words, with what to do about it.
+ * One table for both the link redirect and the Sync button, so the two never explain it differently.
+ */
+export const GITHUB_REASON_TEXT: Record<GithubInstallationCheckReason, string> = {
+	not_linked: "no GitHub account is linked to this one — use Connect GitHub first",
+	not_owner: "it is another GitHub user's personal account",
+	not_member: "the linked GitHub account is not an active member of that organisation",
+	membership_pending: "your invitation to that organisation has not been accepted yet — accept it on GitHub, then sync again",
+	oauth_app_restricted: "that organisation restricts third-party apps and has not approved ProAgentStore — choose Reconnect and press Grant (or Request) next to it on GitHub's consent screen, or approve ProAgentStore in the organisation's Settings → Third-party access",
+	app_cannot_read_members: "the ProAgentStore App may not read that organisation's members — choose Reconnect, which checks with your own GitHub account",
+	access_refused: "GitHub refused to show that membership",
+	check_failed: "GitHub did not answer — try again in a moment",
+	mint_failed: "GitHub would not issue an access token for that installation — try again in a moment",
+};
+
+const reasonText = (r: string) => GITHUB_REASON_TEXT[r as GithubInstallationCheckReason] ?? r.replace(/_/g, " ");
+
+/**
+ * What a Connect / Reconnect GitHub redirect actually did (#1081), from its query string. The link
+ * used to come back with `github_linked` alone whatever the binding did, so a Reconnect that bound
+ * nothing for the org just installed on read as plain success. Null when this is not a link return.
+ */
+export function githubLinkOutcome(params: URLSearchParams): string | null {
+	const login = params.get("github_linked");
+	if (!login) return null;
+	const bound = Number(params.get("github_bound") ?? 0);
+	const sync = params.get("github_sync");
+	const boundText = bound ? `${bound} GitHub account${bound === 1 ? "" : "s"} or organisation${bound === 1 ? "" : "s"} bound` : "no installations bound";
+	if (sync === "failed") return `Linked as ${login}, but the platform could not read the GitHub App's installations, so nothing was bound. Try Sync installations below.`;
+	const unbound = (params.get("github_unbound") ?? "")
+		.split(",")
+		.filter(Boolean)
+		.map((pair) => {
+			const [reason, n] = pair.split(":");
+			return `${n ?? "1"} not bound: ${reasonText(reason)}`;
+		});
+	if (unbound.length) return `Linked as ${login} — ${boundText}. ${unbound.join(". ")}.`;
+	return `Linked as ${login} — ${boundText}.`;
+}
+
+/** One line per installation a sync named, then the counted refusals (#1081). */
+export function githubSyncLines(r: GithubInstallationSyncResponse): string[] {
+	const lines = r.orgs.map((o) => {
+		switch (o.result) {
+			case "bound": return `${o.account}: bound.`;
+			case "already_bound": return `${o.account}: already bound.`;
+			case "would_bind": return `${o.account}: would be bound.`;
+			case "not_installed": return `${o.account}: the ProAgentStore App is not installed there.`;
+			default: return `${o.account}: not bound — ${reasonText(o.reason ?? "check_failed")}${o.status ? ` (GitHub ${o.status})` : ""}.`;
+		}
+	});
+	for (const [reason, n] of Object.entries(r.unnamed)) lines.push(`${n} other installation${n === 1 ? "" : "s"} not bound: ${reasonText(reason)}.`);
+	if (r.appCannotReadMembers) lines.push(`The ProAgentStore App may not read some organisations' members — name the organisation below to check it, or choose Reconnect, which checks with your own GitHub account.`);
+	if (r.truncated) lines.push("More installations exist than one sync checks — run it again.");
+	if (!lines.length) lines.push(r.dryRun ? "Nothing to bind." : "Nothing new to bind.");
+	return lines;
 }

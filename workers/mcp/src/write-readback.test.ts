@@ -243,6 +243,10 @@ const READBACK: Record<string, string | null> = {
 	// caller receipt key is intentionally not a general query key.
 	"transfer_prepared_application.resume_sha256": "get_application",
 	"transfer_prepared_application.cover_letter_sha256": "get_application",
+	// #1081: which account to check, and "check without binding" — addressing and a switch. What the call
+	// creates is a GitHub binding, which no MCP tool reads back yet (the connector account listing is #1080).
+	"sync_github_installations.owner": null,
+	"sync_github_installations.check_only": null,
 	"transfer_prepared_application.idempotency_key": null,
 	"triage_application.defer_until": "query_instance_records",
 	"generate_application_materials.action": "application_trace",

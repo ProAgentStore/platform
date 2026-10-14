@@ -15025,6 +15025,59 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "503": { $ref: "#/components/responses/Unavailable" }
 
+  /v1/github/installations/sync:
+    post:
+      summary: Bind App installations this account controls but has no binding to yet
+      description: |
+        #1081. For an org the App was installed on AFTER the last Connect GitHub. Each unbound
+        installation is checked with the same proof the install callback uses — a personal account
+        must be the linked GitHub login; an organisation needs an ACTIVE membership, read with the
+        App's own token — and bound only if it passes. `owner` checks one account and names its exact
+        outcome; `dry_run` runs every check and binds nothing. An installation this account is not
+        part of is never named (refusals are counted by reason), and no token or URL is returned.
+        MCP: `sync_github_installations`.
+      operationId: syncGithubInstallations
+      tags: [Connectors]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                owner: { type: string, description: "One GitHub org or user login to check and bind." }
+                dry_run: { type: boolean, description: "Run every check, bind nothing." }
+      responses:
+        "200":
+          description: Per-installation outcomes
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  githubLogin: { type: string, nullable: true }
+                  owner: { type: string, nullable: true }
+                  dryRun: { type: boolean }
+                  bound: { type: integer }
+                  truncated: { type: boolean }
+                  appCannotReadMembers: { type: boolean }
+                  linkStart: { type: string }
+                  unnamed: { type: object, additionalProperties: { type: integer } }
+                  orgs:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        account: { type: string }
+                        type: { type: string }
+                        installationId: { type: integer }
+                        result: { type: string, enum: [bound, already_bound, would_bind, not_bound, not_installed] }
+                        reason: { type: string, enum: [not_linked, not_owner, not_member, membership_pending, oauth_app_restricted, app_cannot_read_members, access_refused, check_failed, mint_failed] }
+                        status: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "502": { description: "GitHub could not be reached to list the App's installations" }
+        "503": { description: "The GitHub App is not configured on this deployment" }
   /v1/github/installations/{installationId}/repos:
     get:
       summary: Repositories an installation can access
