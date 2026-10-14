@@ -11,7 +11,7 @@ import Card from "../components/Card";
 import LoadFailed from "../components/LoadFailed";
 import UploadedTailorSourcesSection from "../components/UploadedTailorSourcesSection";
 import ApplicationHandoffLive from "../components/ApplicationHandoffLive";
-import { QUEUE_STATUS_LABEL, actionBody, actionLabel, canCheckSubmission, checkNeedsOwner, confirmText, reconciliationSentence } from "../lib/applications";
+import { ASSERT_STATEMENT_PROMPT, QUEUE_STATUS_LABEL, actionBody, actionLabel, canCheckSubmission, checkNeedsOwner, confirmText, reconciliationSentence } from "../lib/applications";
 import { notificationRoute } from "../lib/deepLink";
 import { TONE_CLASS } from "../lib/localBrowser";
 import type { ApplicationActionResponse, ApplicationReconciliationHandoffResponse, ApplicationReconciliationResponse, ApplicationRunnerSettingsView, ApplicationQueueAction, ApplicationQueueItem, ApplicationQueueStatus, ApplicationQueueView, ApplicationTraceView, ConnectionDeliveryList } from "../lib/types";
@@ -245,6 +245,9 @@ function Detail({ instanceId, item, connections, onChanged }: { instanceId: stri
 	const frames = useMemo(() => replayFrames(instanceId, artifacts), [instanceId, artifacts]);
 
 	const act = async (action: ApplicationQueueAction) => {
+		// #1073: an owner assertion carries the owner's own words; no words, no assertion.
+		const statement = action === "assert_not_submitted" ? window.prompt(ASSERT_STATEMENT_PROMPT)?.trim() : undefined;
+		if (action === "assert_not_submitted" && !statement) return;
 		const ask = confirmText(action, item.status);
 		if (ask && !window.confirm(ask)) return;
 		setBusy(action);
@@ -253,7 +256,7 @@ function Detail({ instanceId, item, connections, onChanged }: { instanceId: stri
 			const given = questions.map((q) => ({ question: q, answer: (answers[q] ?? "").trim() })).filter((a) => a.answer);
 			// `resume` answers serve that run only; `retry_tailoring` answers are saved to the owner's
 			// Profile and read by every later Tailor run (#1066).
-			const out = await api<ApplicationActionResponse>(`/v1/instances/${instanceId}/application-queue/actions`, { method: "POST", body: JSON.stringify(actionBody(item, action, { answers: action === "resume" || action === "retry_tailoring" ? given : undefined })) });
+			const out = await api<ApplicationActionResponse>(`/v1/instances/${instanceId}/application-queue/actions`, { method: "POST", body: JSON.stringify(actionBody(item, action, { answers: action === "resume" || action === "retry_tailoring" ? given : undefined, statement })) });
 			setMsg(`${actionLabel(action, item.status)}: now ${QUEUE_STATUS_LABEL[out.item.status].label}.`);
 			onChanged();
 		} catch (e) {

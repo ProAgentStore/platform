@@ -73,6 +73,7 @@ export { syncActiveApplyReconciliations } from "./reconciliation-sync.js";
 import { listSupervisorCheckpoints, noteSupervisorDirectiveDelivery, receiveSupervisorCheckpoint, sanitizeSupervisorFacts, type SupervisorDirective } from "./supervision.js";
 import { directApplicationCheckpoint } from "./brain.js";
 import { notifyLiveBrowserBlocker, notifyUncertainSubmit } from "./handoff-notification.js";
+import { assertionFor, consumeNotSubmittedAssertion, hasUnspentAssertion } from "./owner-assertion.js";
 
 /** The event the Runner consumes — #956's readiness event. */
 export const MATERIALS_READY_EVENT = "job.application.materials_ready";
@@ -247,7 +248,10 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 		const run = app.fillRunId ? await getApplyRun(env, instanceId, uid, app.fillRunId) : null;
 		return { kind: "existing", application: app, run };
 	}
-	if (app.submitAttemptedAt) throw new HttpError(409, "A final submit was already attempted for this application; it will not be filled again automatically.");
+	// #1073: an attempted submit blocks every later fill — unless the owner recorded, for this exact
+	// attempt, that nothing was sent. That assertion allows ONE new fill, spent below.
+	const assertion = app.submitAttemptedAt ? await assertionFor(env, uid, app) : null;
+	if (app.submitAttemptedAt && (!assertion || assertion.consumedAt !== null)) throw new HttpError(409, "A final submit was already attempted for this application; it will not be filled again automatically. If you checked the employer's site and nothing was sent, record that (assert_not_submitted) to allow one retry.");
 
 	const s = await runnerSettingsFor(env, instanceId, uid);
 	const lead = (app.lead ?? {}) as { leadUrl?: string; lead?: { title?: string; company?: string; location?: string; match_rationale?: string } };
@@ -271,6 +275,9 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 	const runId = crypto.randomUUID();
 	const intendedMode = gate.allowed ? "auto_submit" : "fill_and_review";
 
+	// Spent BEFORE the claim below rebinds the fill run: it names the attempt it covers. Of two racing
+	// starts only one can spend it, so one assertion is one fill.
+	if (assertion && !(await consumeNotSubmittedAssertion(env, { app, userId: uid, runId }, now))) throw new HttpError(409, "That assertion was already used by another fill. Record a new one to retry again.");
 	// The application leaves materials_ready exactly once: the move IS the claim.
 	const claimed = await moveApplication(env, app, uid, { to: "filling", actor: "runner", actorInstanceId: instanceId, runId, bindRun: runId, reason: intendedMode }, now);
 	if (!claimed) {
@@ -311,6 +318,7 @@ export async function startApplicationFill(env: Env, instanceId: string, uid: st
 		{ type: "policy.submit_gate", at: iso(now), detail: { mode, decision: allowed ? "allowed" : "refused", ...(gateId ? { gateId } : { reason: failing.join(",").slice(0, 300) }) } },
 	];
 	if (spentApproval) trace.push({ type: "policy.decision", at: iso(now), detail: { class: "submit", decision: "allowed", basis: "application_approval", authorizationId: spentApproval.id } });
+	if (assertion) trace.push({ type: "policy.decision", at: iso(now), detail: { class: "retry", decision: "allowed", basis: "owner_asserted_not_submitted", assertionId: assertion.id } });
 	if (lostApprovalRace) trace.push({ type: "policy.decision", at: iso(now), detail: { class: "submit", decision: "refused", reason: "approval_already_spent" } });
 	// The version that actually executes this run, from the machine's own registration (#977) — an
 	// old runner cannot annotate its result, so the fact has to be taken here.
@@ -786,7 +794,7 @@ export async function retryFill(env: Env, runnerInstanceId: string, uid: string,
 	const oneClick = auth?.kind === "verified_one_click" ? auth : null;
 	const recovering = oneClick?.recoveryId && oneClick.recoveryRunnerInstanceId === runnerInstanceId;
 	if (!app.fillRunId || !["blocked", "failed", "awaiting_review"].includes(app.status) && !(app.status === "materials_ready" && recovering)) throw new HttpError(409, `A fill can be retried only after a fill run stopped; this application is ${app.status}${app.fillRunId ? "" : " and has not been filled"}.`);
-	if (app.submitAttemptedAt) throw new HttpError(409, "A final submit was already attempted for this application; it will not be filled again. Check the employer's site.");
+	if (app.submitAttemptedAt && !(await hasUnspentAssertion(env, uid, app))) throw new HttpError(409, "A final submit was already attempted for this application; it will not be filled again. Check the employer's site, and if nothing was sent, record that (assert_not_submitted) to allow one retry.");
 	const ready = app.readyEvent as { eventId?: unknown } | null;
 	if (!ready || typeof ready.eventId !== "string") throw new HttpError(409, "The application has no materials_ready event to fill from.");
 	let recoveryId: string | undefined = recovering ? oneClick?.recoveryId ?? undefined : undefined;

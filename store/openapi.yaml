@@ -9222,7 +9222,7 @@ paths:
               type: object
               required: [action, expected_status]
               properties:
-                action: { type: string, enum: [apply, skip, defer, archive, generate_materials, retry_tailoring, start_fill, request_review, retry_fill, cancel, resume, mark_not_interested, approve_and_proceed] }
+                action: { type: string, enum: [apply, skip, defer, archive, generate_materials, retry_tailoring, start_fill, request_review, retry_fill, cancel, resume, mark_not_interested, approve_and_proceed, assert_not_submitted] }
                 application_id: { type: string }
                 scout_instance_id: { type: string }
                 record_id: { type: string }
@@ -9231,6 +9231,10 @@ paths:
                 runner_instance_id: { type: string }
                 note: { type: string }
                 defer_until: { type: string }
+                fill_run_id: { type: string, description: "assert_not_submitted (#1073): the application's current fill run — the attempt the owner checked. Any other run is refused (409)." }
+                statement: { type: string, maxLength: 1000, description: "assert_not_submitted: what the owner checked, in their words — kept verbatim on the audit record." }
+                confirm: { type: string, description: "assert_not_submitted: exactly \"I checked the employer site and nothing was submitted\" (400 otherwise)." }
+                surface: { type: string, enum: [console, mcp], description: "Which owner surface acted; recorded on an assertion. Default console." }
                 answers: { type: array, maxItems: 20, description: "resume: for that run only, never stored. retry_tailoring (#1066): saved to the owner's Profile as reusable custom answers (never into a standard column) and given to this and every later Tailor run as a citable owner_answers source. An empty answer is skipped; an answer over 500 characters is refused with 400.", items: { type: object, properties: { question: { type: string, maxLength: 300 }, answer: { type: string, maxLength: 500 } } } }
       responses:
         "200": { description: "`{ item, result }` — the item as it now stands.", content: { application/json: { schema: { type: object, additionalProperties: true } } } }

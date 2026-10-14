@@ -15,7 +15,7 @@ const HANDOFF = "handoff-uc-1";
 
 type Check = { state: string; runner?: { state: string; pauseReason?: string } };
 
-async function mockRunner(page: Page, opts: { blockReason: string; submitAttempted: boolean; check: Check }) {
+async function mockRunner(page: Page, opts: { blockReason: string; submitAttempted: boolean; check: Check; actions?: string[]; bodies?: unknown[] }) {
 	await page.addInitScript((t) => window.localStorage.setItem("pags:session", t), TOKEN);
 	const posts: string[] = [];
 	const at = "2026-10-14T06:29:03Z";
@@ -27,7 +27,7 @@ async function mockRunner(page: Page, opts: { blockReason: string; submitAttempt
 		artifacts: null, profileVersion: null, tailoringRunId: null, fillRunId: RUN, fillRun: { id: RUN, status: "blocked", mode: "auto_submit", pause: null },
 		submittedAt: null, submittedUrl: null, submitAttempted: opts.submitAttempted, submitPolicy: null, fillProgress: null,
 		execution: { currentRun: { id: RUN, kind: "fill", status: "blocked", instanceId: "runner-1", mode: "auto_submit" } },
-		diagnostic: null, queue: null, submitAuthorization: null, updatedAt: at, actions: ["defer", "archive"],
+		diagnostic: null, queue: null, submitAuthorization: null, updatedAt: at, actions: opts.actions ?? ["defer", "archive"],
 	};
 	await page.route(`${API}/**`, async (route) => {
 		const path = new URL(route.request().url()).pathname;
@@ -49,6 +49,10 @@ async function mockRunner(page: Page, opts: { blockReason: string; submitAttempt
 		if (path === `/v1/instances/runner-1/application-reconciliation-handoffs/${HANDOFF}`) return json({ id: HANDOFF, runId: RUN, applicationId: "app-1", state: "active", expiresAt: "2026-10-14T06:39:03Z", reason: null });
 		if (path.endsWith("/reconciliation/handoff/frame")) return json({ frame: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='320' height='480'%3E%3C/svg%3E", width: 320, height: 480 });
 		if (path.includes("/connections/deliveries")) return json({ deliveries: [] });
+		if (path === "/v1/instances/runner-1/application-queue/actions" && method === "POST") {
+			opts.bodies?.push(route.request().postDataJSON());
+			return json({ item: { ...item, actions: ["retry_fill", "defer", "archive"] }, result: { retryAllowed: true } });
+		}
 		return json({});
 	});
 	return posts;
@@ -88,4 +92,31 @@ test("a blocked card that is NOT an unconfirmed submit shows no check (#1068)", 
 	await openCard(page);
 	await expect(page.getByRole("heading", { name: "Director of Engineering APAC" })).toBeVisible();
 	await expect(page.getByTestId("check-submission")).toHaveCount(0);
+});
+
+test("the owner's 'nothing was sent' assertion: their words, the exact declaration, this attempt (#1073)", async ({ page }) => {
+	const bodies: unknown[] = [];
+	await mockRunner(page, { blockReason: "submit_unconfirmed", submitAttempted: true, check: { state: "requested" }, actions: ["assert_not_submitted", "defer", "archive"], bodies });
+	const dialogs: string[] = [];
+	page.on("dialog", async (d) => {
+		dialogs.push(`${d.type()}: ${d.message()}`);
+		if (d.type() === "prompt") await d.accept("SEEK Applied jobs does not list it.");
+		else await d.accept();
+	});
+	await openCard(page);
+	await page.getByRole("group", { name: /^Actions for / }).getByRole("button", { name: "I checked — nothing was sent" }).click();
+	await expect.poll(() => bodies.length).toBe(1);
+	expect(bodies[0]).toEqual({ action: "assert_not_submitted", expected_status: "blocked", application_id: "app-1", expected_version: 22, fill_run_id: RUN, statement: "SEEK Applied jobs does not list it.", confirm: "I checked the employer site and nothing was submitted", surface: "console" });
+	expect(dialogs[0]).toMatch(/^prompt: What did you check/);
+	expect(dialogs[1]).toMatch(/^confirm: "I checked the employer site and nothing was submitted\." This is recorded as YOUR assertion/);
+});
+
+test("dismissing the statement prompt records nothing (#1073)", async ({ page }) => {
+	const bodies: unknown[] = [];
+	await mockRunner(page, { blockReason: "submit_unconfirmed", submitAttempted: true, check: { state: "requested" }, actions: ["assert_not_submitted", "defer", "archive"], bodies });
+	page.on("dialog", (d) => d.dismiss());
+	await openCard(page);
+	await page.getByRole("group", { name: /^Actions for / }).getByRole("button", { name: "I checked — nothing was sent" }).click();
+	await page.waitForTimeout(300);
+	expect(bodies).toEqual([]);
 });

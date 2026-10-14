@@ -233,6 +233,8 @@ const READBACK: Record<string, string | null> = {
 	// represented as `triage_action` in the record, while defer/note retain their names.
 	// #958: the decision is read back as the item's status and the lifecycle audit; the note is the
 	// audit row's reason (application) or the lead's triage_note; defer_until is stored on the lead.
+	"assert_application_not_submitted.statement": "application_trace",
+	"assert_application_not_submitted.fill_run_id": "application_trace",
 	"triage_application.action": "application_trace",
 	"triage_application.note": "application_trace",
 	// #973: the authorization carries the key it was granted under; the card returns it.

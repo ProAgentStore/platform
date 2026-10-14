@@ -84,3 +84,30 @@ describe("the read-only 'was it sent?' check (#1068)", () => {
 		expect(reconciliationSentence(answer("requested", { state: "waiting_for_runtime" }))).toMatch(/not connected/);
 	});
 });
+
+describe("the owner's 'nothing was sent' assertion (#1073)", () => {
+	const uncertain = { ...base, status: "blocked", fillRunId: "run-1", stateVersion: 22 } as unknown as ApplicationQueueItem;
+
+	it("sends the attempt it covers, the owner's words, the exact declaration, and that the console made it", () => {
+		expect(actionBody(uncertain, "assert_not_submitted", { statement: "SEEK Applied jobs does not list it." })).toEqual({
+			action: "assert_not_submitted",
+			expected_status: "blocked",
+			application_id: "a",
+			expected_version: 22,
+			fill_run_id: "run-1",
+			statement: "SEEK Applied jobs does not list it.",
+			confirm: "I checked the employer site and nothing was submitted",
+			surface: "console",
+		});
+	});
+
+	it("asks the owner to confirm the exact declaration, and says it is their assertion, not proof", () => {
+		expect(confirmText("assert_not_submitted", "blocked")).toMatch(/I checked the employer site and nothing was submitted/);
+		expect(confirmText("assert_not_submitted", "blocked")).toMatch(/YOUR assertion — not proof/);
+		expect(actionLabel("assert_not_submitted")).toBe("I checked — nothing was sent");
+	});
+
+	it("other actions carry no assertion fields", () => {
+		expect(actionBody(uncertain, "defer")).not.toHaveProperty("confirm");
+	});
+});

@@ -265,7 +265,15 @@ An Application Runner does not use these takeovers. Its `get_instance_browser_ve
     Runner to read the site's history. If the site needs a sign-in or CAPTCHA first, it opens a separate
     read-only handoff for that.
   - **The check can only report** confirmed, no submission, ambiguous or unavailable. It cannot fill,
-    submit or clear the uncertainty.
+    submit or clear the uncertainty. For SEEK it can currently only answer "ambiguous": the Runner has
+    no verified way to read SEEK's application history.
+  - **The owner can vouch for it** (#1073). After checking the employer's site themselves, the owner
+    records "I checked the employer site and nothing was submitted", with what they checked, using
+    **"I checked — nothing was sent"** on the card or the MCP tool `assert_application_not_submitted`.
+    - It is stored as the **owner's assertion**, never as proof. The reconciliation record is left as
+      it was.
+    - It allows exactly **one** new fill. That fill spends it, and the run's trace names the assertion.
+    - Without one, an attempted submit stays blocked.
 
 ### Verifying Gmail job leads
 

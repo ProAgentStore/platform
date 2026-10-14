@@ -41,6 +41,7 @@ describe("the Applications tools (#958, #953)", () => {
 			"application_runs",
 			"application_trace",
 			"approve_application",
+			"assert_application_not_submitted",
 			"cancel_application",
 			"clear_application_tailor_uploaded_source",
 			"create_application_handoff",
@@ -215,6 +216,23 @@ describe("the Applications tools (#958, #953)", () => {
 		const { seen, call } = tools(["read", "write", "runtime"]);
 		expect(await call("approve_application", { instance_id: "t1", application_id: "a1", expected_status: "materials_ready" })).toMatch(/destructive/);
 		expect(seen).toEqual([]);
+	});
+
+	// #1073 — the owner's assertion that an uncertain submit sent nothing, from an assistant session.
+	it("assert_application_not_submitted posts the console's action body — attempt, words, confirmation, and that MCP made it", async () => {
+		const CONFIRM = "I checked the employer site and nothing was submitted";
+		const { seen, call } = tools(["read", "write"]);
+		await call("assert_application_not_submitted", { instance_id: "ap", application_id: "a1", expected_status: "blocked", expected_version: 22, fill_run_id: "run-1", statement: "SEEK Applied jobs does not list it.", confirm: CONFIRM });
+		expect(seen).toEqual([{ url: ACTIONS.replace("/t1/", "/ap/"), method: "POST", body: { action: "assert_not_submitted", application_id: "a1", expected_status: "blocked", expected_version: 22, fill_run_id: "run-1", statement: "SEEK Applied jobs does not list it.", confirm: CONFIRM, surface: "mcp" } }]);
+	});
+
+	it("asserting forwards the owner's sentence for the API to check; a dry run sends nothing; it needs the write scope", async () => {
+		const { seen, call } = tools(["read", "write"]);
+		expect(await call("assert_application_not_submitted", { instance_id: "ap", application_id: "a1", expected_status: "blocked", fill_run_id: "run-1", statement: "x", confirm: "", dry_run: true })).toMatch(/dryRun/);
+		expect(seen).toEqual([]);
+		const readOnly = tools(["read"]);
+		expect(await readOnly.call("assert_application_not_submitted", { instance_id: "ap", application_id: "a1", expected_status: "blocked", fill_run_id: "run-1", statement: "x", confirm: "I checked the employer site and nothing was submitted" })).toMatch(/write/);
+		expect(readOnly.seen).toEqual([]);
 	});
 
 	it("a dry run touches nothing", async () => {

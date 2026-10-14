@@ -210,3 +210,22 @@ export async function markHumanAnswered(env: Pick<Env, "DB">, instanceId: string
 	const moved = await transitionCoderQuestion(env, open.id, OPEN_QUESTION_STATES, "answered_human", "answered by a person", { answeredBy: "human", resolvedAt: now, ...(decision ? { decision } : {}) }, now);
 	return moved ? open.id : null;
 }
+
+/**
+ * #1074: an answer that arrives AFTER the run stopped waiting. The question is `expired` and its run
+ * is gone, so nothing can be delivered — but the answer is the owner's decision, and dropping it
+ * ("no question is waiting") made them re-send it as a fresh objective. It is recorded on the
+ * question instead (redacted and clipped like any person's answer, since these routes carry values
+ * like a 2FA code), the state stays `expired`, and the history says it came late. Null when this
+ * card has no expired question, or the answer is empty.
+ */
+export async function recordLateAnswer(env: Pick<Env, "DB">, instanceId: string, userId: string, taskId: string, answer: string, now = Date.now()): Promise<CoderQuestion | null> {
+	const decision = answer.trim() ? clipMarked(redactText(answer.trim()), 300, { within: true }) : "";
+	if (!decision) return null;
+	const q = await env.DB.prepare("SELECT id FROM coder_questions WHERE instance_id = ?1 AND user_id = ?2 AND task_id = ?3 AND state = 'expired' ORDER BY asked_at DESC LIMIT 1")
+		.bind(instanceId, userId, taskId)
+		.first<{ id: string }>();
+	if (!q) return null;
+	const recorded = await transitionCoderQuestion(env, q.id, ["expired"], "expired", "answered by a person after the run stopped waiting", { answeredBy: "human", resolvedAt: now, decision }, now);
+	return recorded ? getCoderQuestion(env, q.id) : null;
+}

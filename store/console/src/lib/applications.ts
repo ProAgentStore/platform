@@ -41,7 +41,12 @@ export const ACTION_LABEL: Record<ApplicationQueueAction, string> = {
 	// #973: the owner's decision about THIS job. Named for what it does, and distinct from
 	// `start_fill` — that one reads a standing policy, this one IS the authorization.
 	approve_and_proceed: "Approve & proceed",
+	// #1073: the owner's assertion, worded as one — it unblocks a retry, it proves nothing.
+	assert_not_submitted: "I checked — nothing was sent",
 };
+
+/** The exact declaration an owner assertion is confirmed with (#1073); the API refuses any other. */
+export const NOT_SUBMITTED_CONFIRM = "I checked the employer site and nothing was submitted";
 
 /**
  * The same decision has two names, because by then it is two different acts (#981).
@@ -63,7 +68,12 @@ export const CONFIRM: Partial<Record<ApplicationQueueAction, string>> = {
 	// The authorization is single-use, so the confirmation says what the owner is spending it on.
 	approve_and_proceed: "Approve THIS application and submit it to the employer? The approval covers this one job only, is used once, and does not enable auto-submit for anything else.",
 	cancel: "Stop the running tailoring or fill?",
+	// #1073: the owner reads back the exact declaration they are making, and what it does.
+	assert_not_submitted: `"${NOT_SUBMITTED_CONFIRM}." This is recorded as YOUR assertion — not proof from the site — and allows ONE new fill of this application. If it was in fact sent, a new fill could send it twice.`,
 };
+
+/** What the console asks before an owner assertion: their evidence, kept verbatim on the record. */
+export const ASSERT_STATEMENT_PROMPT = "What did you check on the employer's site? (e.g. \"SEEK Applied jobs does not list it, and no confirmation email arrived\")";
 
 /**
  * The post-fill wording (#981), true in both of the states that reach it (#991).
@@ -80,7 +90,7 @@ export const confirmText = (action: ApplicationQueueAction, status?: string): st
 	action === "approve_and_proceed" && status && status !== "materials_ready" ? APPROVE_CONTINUE_CONFIRM : CONFIRM[action];
 
 /** The request for one action on one item — always with the status and version it was read in. */
-export function actionBody(item: ApplicationQueueItem, action: ApplicationQueueAction, extra: { answers?: Array<{ question: string; answer: string }> } = {}): Record<string, unknown> {
+export function actionBody(item: ApplicationQueueItem, action: ApplicationQueueAction, extra: { answers?: Array<{ question: string; answer: string }>; statement?: string } = {}): Record<string, unknown> {
 	const target = item.applicationId
 		? { application_id: item.applicationId, expected_version: item.stateVersion ?? undefined }
 		: { scout_instance_id: item.scoutInstanceId, record_id: item.leadId, expected_version: item.leadVersion ?? undefined };
@@ -92,7 +102,9 @@ export function actionBody(item: ApplicationQueueItem, action: ApplicationQueueA
 		action === "approve_and_proceed" && item.applicationId
 			? { idempotency_key: `${item.status === "materials_ready" ? "approve" : "approve-continue"}:${item.applicationId}:${item.stateVersion ?? 0}` }
 			: {};
-	return { action, expected_status: item.status, ...target, ...idem, ...(extra.answers?.length ? { answers: extra.answers } : {}) };
+	// #1073: an assertion names the attempt the owner checked, in their words, with the exact declaration.
+	const assertion = action === "assert_not_submitted" ? { fill_run_id: item.fillRunId ?? undefined, statement: extra.statement ?? "", confirm: NOT_SUBMITTED_CONFIRM, surface: "console" } : {};
+	return { action, expected_status: item.status, ...target, ...idem, ...assertion, ...(extra.answers?.length ? { answers: extra.answers } : {}) };
 }
 
 /**

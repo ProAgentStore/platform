@@ -133,6 +133,8 @@ export const INSTANCE_CHILD_TABLES = [
 	// lifecycle audit, keyed to the application's instance and deleted before it (FK).
 	"local_apply_runs",
 	"job_application_events",
+	// #1073 — the owner's not-submitted assertions reference their application (FK): before it.
+	"application_owner_assertions",
 	"job_applications",
 ] as const;
 

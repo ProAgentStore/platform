@@ -16,6 +16,7 @@
 import { type FillProgress, fillProgressOf } from "./fill-progress.js";
 import type { ExecutionCheckpoint } from "./execution-projection.js";
 import type { JobApplication } from "../local-artifact/store.js";
+import { type OwnerAssertion, assertionFor } from "../local-apply/owner-assertion.js";
 import type { Env } from "../../types.js";
 
 /** Why nothing reached the page (#975): the structured cause, the counts that prove it, the signals. */
@@ -35,9 +36,11 @@ export interface FillViews {
 	/** Latest durable, redacted supervisor state. Never exposes raw page/runner payloads. */
 	checkpoint: ExecutionCheckpoint | null;
 	runStatus: string | null;
+	/** #1073: the owner's assertion that this attempt sent nothing, spent or not — the action table reads it. */
+	ownerAssertion: OwnerAssertion | null;
 }
 
-export const NO_FILL_VIEWS: FillViews = { diagnostic: null, progress: null, checkpoint: null, runStatus: null };
+export const NO_FILL_VIEWS: FillViews = { diagnostic: null, progress: null, checkpoint: null, runStatus: null, ownerAssertion: null };
 
 /** A D1 text column that holds an object, or nothing readable. A corrupted row is not an error. */
 function parse(raw: string | null | undefined): Record<string, unknown> | null {
@@ -52,13 +55,14 @@ function parse(raw: string | null | undefined): Record<string, unknown> | null {
 
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 
-export async function readFillViews(env: Pick<Env, "DB">, uid: string, app: Pick<JobApplication, "fillRunId" | "status" | "submitAttemptedAt" | "blockReason">): Promise<FillViews> {
+export async function readFillViews(env: Pick<Env, "DB">, uid: string, app: Pick<JobApplication, "id" | "fillRunId" | "status" | "submitAttemptedAt" | "blockReason">): Promise<FillViews> {
 	if (!app.fillRunId) return NO_FILL_VIEWS;
+	const ownerAssertion = app.submitAttemptedAt ? await assertionFor(env, uid, app).catch(() => null) : null;
 	const row = await env.DB.prepare("SELECT status, pause, result, trace FROM local_apply_runs WHERE id = ?1 AND user_id = ?2")
 		.bind(app.fillRunId, uid)
 		.first<{ status: string; pause: string | null; result: string | null; trace: string | null }>()
 		.catch(() => null);
-	if (!row) return NO_FILL_VIEWS;
+	if (!row) return { ...NO_FILL_VIEWS, ownerAssertion };
 	const result = parse(row.result);
 	const pause = parse(row.pause);
 	// The supervisor store is the authoritative record of what the runner measured at a checkpoint.
@@ -114,7 +118,7 @@ export async function readFillViews(env: Pick<Env, "DB">, uid: string, app: Pick
 		...(checkpoint ? { checkpoint: { checkpointId: checkpoint.id, phase: checkpoint.phase, filled: checkpoint.facts.filled, uploaded: checkpoint.facts.uploaded } } : {}),
 	});
 	const d = result?.diagnostic;
-	if (!d || typeof d !== "object") return { diagnostic: null, progress, checkpoint, runStatus: row.status };
+	if (!d || typeof d !== "object") return { diagnostic: null, progress, checkpoint, runStatus: row.status, ownerAssertion };
 	const f = d as Record<string, unknown>;
 	return {
 		diagnostic: {
@@ -129,5 +133,6 @@ export async function readFillViews(env: Pick<Env, "DB">, uid: string, app: Pick
 		progress,
 		checkpoint,
 		runStatus: row.status,
+		ownerAssertion,
 	};
 }

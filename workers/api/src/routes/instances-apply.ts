@@ -1,7 +1,10 @@
 import { closeLiveTakeoverFor, transitionTakeover } from "../lib/browser-takeovers.js";
 import { browserScreenshotsEnabled } from "../lib/browser-screenshots.js";
 import { takeoverGate } from "./instances-browser-takeovers.js";
-import { markHumanAnswered } from "../lib/coder-question-store.js";
+import { markHumanAnswered, recordLateAnswer } from "../lib/coder-question-store.js";
+import { logEvent } from "../lib/events.js";
+import { postIssueComment } from "../lib/github-issues.js";
+import { clipMarked } from "../lib/clip-marked.js";
 import { overLimit } from "../lib/write-limits.js";
 import type { Hono } from "hono";
 import { decisionRunForCard, resolveCodingPause } from "../lib/coding-answer.js";
@@ -576,6 +579,18 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		}
 		// A coding session's card with no question waiting is not a lost BROWSER session — say what it is.
 		if (body.taskId.startsWith(CODING_CARD_PREFIX)) {
+			// #1074: the run stopped waiting, but the owner's answer is still their decision. Record it on
+			// the expired question and post it under the question on its issue, which the next run on that
+			// issue reads — rather than drop it.
+			const late = await recordLateAnswer(c.env, instanceId, session.uid, body.taskId, String(body.value ?? ""));
+			if (late) {
+				const issue = late.repo && late.issueNumber ? late.issueNumber : null;
+				const posted = issue
+					? await postIssueComment(c.env, session.uid, late.repo as string, issue, `**Answer received after the run stopped waiting.** The question was: ${clipMarked(late.question, 300, { within: true })}\n\n> ${late.decision}\n\nThe run that asked had already stopped, so this was not delivered to it. It is recorded here for the next run on this issue.`).catch(() => false)
+					: false;
+				await logEvent(c.env, { source: "tool", event: "coder_question.answered_late", message: "an answer arrived after the run stopped waiting; recorded, not delivered", userId: session.uid, instanceId, level: "info", context: { questionId: late.id, sessionId: late.sessionId, issue, postedToIssue: posted } }).catch(() => undefined);
+				return c.json({ ok: true, kind: "coding_late", delivered: false, recorded: true, questionId: late.id, postedToIssue: posted ? issue : null, message: `The run had already stopped waiting, so your answer was not delivered to it. It is saved on the question${posted ? ` and posted on issue #${issue}, where the next run on that issue will read it` : ""}.` }, 202);
+			}
 			return c.json({ ok: false, error: "No question is waiting on that coding session — it was already answered, or the run stopped waiting." }, 409);
 		}
 		const runtime = await requireLiveRuntime(c.env, instanceId, session.uid);

@@ -41,12 +41,13 @@ import { pipelineForTargetedTransfer } from "./targeted-transfer-runner.js";
 import { type QueueView as RunQueueView, queueView, queuedLabel } from "./work-queue.js";
 import { getSubmitAuthorization, grantSubmitAuthorization } from "../local-apply/approval-store.js";
 import { type ApplyRun, type ApplyRunStatus, applicationAudit, getApplyRun, isTerminalApplyRun, moveApplication } from "../local-apply/store.js";
+import { type OwnerAssertion, assertNotSubmitted, canAssertNotSubmitted } from "../local-apply/owner-assertion.js";
 import type { Env } from "../../types.js";
 import { runJobLeadTriage } from "../../routes/instances-job-leads.js";
 
 export const QUEUE_STATUSES = ["new", "apply_requested", "tailoring", "materials_ready", "filling", "awaiting_review", "submitted", "blocked", "deferred", "skipped", "archived", "failed"] as const;
 export type QueueStatus = (typeof QUEUE_STATUSES)[number];
-export const APPLICATION_ACTIONS = ["apply", "skip", "defer", "archive", "generate_materials", "retry_tailoring", "start_fill", "request_review", "retry_fill", "cancel", "resume", "mark_not_interested", "approve_and_proceed"] as const;
+export const APPLICATION_ACTIONS = ["apply", "skip", "defer", "archive", "generate_materials", "retry_tailoring", "start_fill", "request_review", "retry_fill", "cancel", "resume", "mark_not_interested", "approve_and_proceed", "assert_not_submitted"] as const;
 export type ApplicationAction = (typeof APPLICATION_ACTIONS)[number];
 
 export interface Pipeline {
@@ -239,9 +240,13 @@ interface OpenRun {
 }
 
 /** The actions an application in this state can take — the lifecycle table, read for the owner. */
-function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRun | null, approvalRun: ApplyRun | null, submitAllowed: boolean, auth: QueueItem["submitAuthorization"] = null): ApplicationAction[] {
+function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRun | null, approvalRun: ApplyRun | null, submitAllowed: boolean, auth: QueueItem["submitAuthorization"] = null, assertion: OwnerAssertion | null = null): ApplicationAction[] {
 	const canFill = pipeline.runners.length > 0;
 	const postFillApprovable = canFill && !auth && !app.submitAttemptedAt && isPostFillApproval(app, approvalRun);
+	// #1073: an attempted submit blocks a new fill unless the owner asserted, for this attempt, that
+	// nothing was sent — and the assertion is offered only while there is none and no run holds it.
+	const attemptBlocks = !!app.submitAttemptedAt && !(assertion && assertion.consumedAt === null);
+	const assertable = canFill && !run && canAssertNotSubmitted(app, assertion) ? (["assert_not_submitted"] as const) : [];
 	switch (app.status) {
 		case "tailoring":
 			return ["cancel"];
@@ -253,8 +258,9 @@ function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRu
 			return [
 				...(canFill && !auth && !app.submitAttemptedAt ? (["approve_and_proceed"] as const) : []),
 				...(auth?.recoveryPending ? (["retry_fill"] as const) : []),
-				...(canFill && submitAllowed ? (["start_fill"] as const) : []),
-				...(canFill ? (["request_review"] as const) : []),
+				...(canFill && submitAllowed && !attemptBlocks ? (["start_fill"] as const) : []),
+				...(canFill && !attemptBlocks ? (["request_review"] as const) : []),
+				...assertable,
 				"defer",
 				"archive",
 			];
@@ -267,7 +273,8 @@ function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRu
 			if (app.fillRunId) {
 				return [
 					...(postFillApprovable ? (["approve_and_proceed"] as const) : []),
-					...(canFill && !app.submitAttemptedAt ? (["retry_fill"] as const) : []),
+					...(canFill && !attemptBlocks ? (["retry_fill"] as const) : []),
+					...assertable,
 					"defer",
 					"archive",
 				];
@@ -287,7 +294,7 @@ function applicationActions(app: JobApplication, pipeline: Pipeline, run: OpenRu
 			// is exactly "no approval means no submit".
 			return [...(postFillApprovable ? (["approve_and_proceed"] as const) : []), ...(canFill && !app.submitAttemptedAt ? (["retry_fill"] as const) : []), "defer", "archive"];
 		case "deferred":
-			return ["apply", "archive"];
+			return ["apply", ...assertable, "archive"];
 		default:
 			return [];
 	}
@@ -308,7 +315,7 @@ function applicationItem(
 ): QueueItem {
 	const env = (app.lead ?? {}) as { leadUrl?: string; lead?: Record<string, unknown> };
 	const l = env.lead ?? {};
-	const actions = withNotInterested(applicationActions(app, pipeline, run, approvalRun, !!policy?.allowed, auth));
+	const actions = withNotInterested(applicationActions(app, pipeline, run, approvalRun, !!policy?.allowed, auth, fill.ownerAssertion));
 	// #1022 stale review run (live cc90cd13): a settled run always moves its application to its outcome, so
 	// materials_ready + a FINISHED fill run means the card moved past it — history (diagnostic kept), not current.
 	const staleRun = app.status === "materials_ready" && !run && !!fill.runStatus && isTerminalApplyRun(fill.runStatus as ApplyRunStatus);
@@ -592,6 +599,13 @@ export interface ActionInput {
 	 * version the owner approved, which makes the same decision idempotent either way.
 	 */
 	idempotencyKey?: string;
+	/** `assert_not_submitted` (#1073): the owner's own words, kept verbatim, and the exact confirmation. */
+	statement?: string;
+	confirm?: string;
+	/** The attempt the owner checked — must be the application's current fill run. */
+	fillRunId?: string;
+	/** Which owner surface made the call — recorded on an assertion. */
+	surface?: "mcp" | "console";
 }
 
 export function parseActionInput(raw: unknown): ActionInput {
@@ -613,6 +627,10 @@ export function parseActionInput(raw: unknown): ActionInput {
 		deferUntil: s("defer_until") ?? s("deferUntil"),
 		answers: Array.isArray(o.answers) ? (o.answers as ActionInput["answers"]) : undefined,
 		idempotencyKey: s("idempotency_key") ?? s("idempotencyKey"),
+		statement: s("statement"),
+		confirm: s("confirm"),
+		fillRunId: s("fill_run_id") ?? s("fillRunId"),
+		surface: o.surface === "mcp" ? "mcp" : "console",
 	};
 }
 
@@ -763,6 +781,10 @@ export async function performApplicationAction(env: Env, uid: string, instanceId
 			if (!event) throw new HttpError(409, "The application has no materials_ready event to fill from.");
 			const out = await startApplicationFill(env, runner, uid, event, "owner", { review: input.action === "request_review" });
 			return after({ outcome: out.kind, runId: out.run?.id ?? null, mode: out.run?.policy.mode ?? null });
+		}
+		case "assert_not_submitted": {
+			const assertion = await assertNotSubmitted(env, { app, userId: uid, instanceId, input }, now);
+			return after({ assertionId: assertion.id, fillRunId: assertion.fillRunId, retryAllowed: true });
 		}
 		case "retry_fill": {
 			const out = await retryFill(env, runner, uid, app);

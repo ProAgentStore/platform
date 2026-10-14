@@ -1163,4 +1163,6 @@ export const SURFACE_LOCK: Record<string, string> = {
 	"0.1.131": "sha256:90132172e68c42656e6975d12d85ce9b1d1de0a11a60de21daa8d0f5e8d853dd",
 	// #1064: get_browser_screenshots / set_browser_screenshots (322 → 324, always-on 295 → 297).
 	"0.1.132": "sha256:010ac079b39f067e3dbbc9def7a6e18bb71f49f05ecfb2963e08b2ce0f190bf0",
+	// #1073: assert_application_not_submitted — the owner's audited assertion that an uncertain submit sent nothing.
+	"0.1.133": "sha256:dc22a33bdc1205cbcbe394516b53c7eb673b2f92210b0f2cc09138109a2b8aad",
 };

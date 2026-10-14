@@ -241,26 +241,133 @@ describe("the owner's browser-screenshot switch (#1064)", () => {
 	});
 });
 
+/** The live shape of run bfecb6f4: a one-click press, then a sign-in page and no receipt. */
+async function pressedThenSignIn(id: string) {
+	await enableAutoSubmit();
+	const r = await call("POST", "/ap/application-runs", readyApp(id));
+	const runId = r.body.run.id as string;
+	const gateId = r.body.run.policy.gate.gateId as string;
+	runner("ended", {
+		events: [
+			{ seq: 1, type: "submit.attempted", at: "2026-10-14T06:28:26Z", domain: "jobs.example.com", detail: { class: "submit", gateId } },
+			{ seq: 2, type: "submit.unconfirmed", at: "2026-10-14T06:28:42Z", url: "https://jobs.example.com/login", detail: { gateId, looks: 6, urlChanged: true, titleChanged: true } },
+		],
+		lastSeq: 2,
+		result: RESULT(runId, { outcome: "blocked", mode: "auto_submit", filled: 0, uploaded: [], submitAttempted: true, blockReason: "submit_unconfirmed", questions: ["The application was submitted but the site did not confirm it. Check the employer's site or your email before anything is retried."] }),
+	});
+	await call("GET", `/ap/application-runs/${runId}`);
+	return runId;
+}
+
+describe("an owner assertion that nothing was sent allows ONE clean retry (#1073)", () => {
+	const CONFIRM = "I checked the employer site and nothing was submitted";
+	const card = async (id: string) => (await call("GET", "/ap/application-queue")).body.items.find((i: { applicationId: string }) => i.applicationId === id);
+	const act = async (id: string, action: string, extra: Record<string, unknown> = {}) => {
+		const c = await card(id);
+		return call("POST", "/t1/application-queue/actions", { action, application_id: id, expected_status: c.status, expected_version: c.stateVersion, ...extra });
+	};
+	const assertion = (id: string) => d1.DB.prepare("SELECT * FROM application_owner_assertions WHERE application_id = ?1").bind(id).first<Record<string, unknown>>();
+	/** The live application carries its materials_ready event (what a retry fills from); `readyApp` does not. */
+	const uncertain = async (id: string) => {
+		const runId = await pressedThenSignIn(id);
+		await d1.DB.prepare("UPDATE job_applications SET ready_event = ?1 WHERE id = ?2").bind(JSON.stringify({ eventId: `t1:${id}:1:materials`, applicationId: id }), id).run();
+		return runId;
+	};
+
+	it("DEFAULT: with no assertion an attempted submit stays blocked — no retry offered, a forced one refused", async () => {
+		await uncertain("lead-oa1");
+		const c = await card("lead-oa1");
+		expect(c.actions).toEqual(expect.arrayContaining(["assert_not_submitted", "defer", "archive"]));
+		expect(c.actions).not.toContain("retry_fill");
+		expect((await act("lead-oa1", "retry_fill")).status).toBe(409);
+		// The outbox path skips the action table entirely — the fill guard itself refuses it.
+		await d1.DB.prepare("UPDATE job_applications SET status = 'materials_ready' WHERE id = 'lead-oa1'").run();
+		const direct = await call("POST", "/ap/application-runs", { eventType: "job.application.materials_ready", eventId: "t1:lead-oa1:retry-direct", applicationId: "lead-oa1", tailorInstanceId: "t1", leadId: "lead-oa1" });
+		expect(direct.status).toBe(409);
+		expect(direct.body.error).toMatch(/already attempted/);
+		expect(dispatches()).toHaveLength(1);
+	});
+
+	it("is refused without the exact confirmation, without a statement, or for a different fill run — and records nothing", async () => {
+		const runId = await uncertain("lead-oa2");
+		expect((await act("lead-oa2", "assert_not_submitted", { fill_run_id: runId, statement: "Checked SEEK Applied jobs" })).status).toBe(400);
+		expect((await act("lead-oa2", "assert_not_submitted", { fill_run_id: runId, confirm: CONFIRM })).status).toBe(400);
+		const wrong = await act("lead-oa2", "assert_not_submitted", { fill_run_id: "some-other-run", statement: "Checked", confirm: CONFIRM });
+		expect(wrong.status).toBe(409);
+		expect(wrong.body.error).toMatch(/current attempt/);
+		expect(await assertion("lead-oa2")).toBeNull();
+	});
+
+	it("an assertion is audited as the OWNER's, unblocks exactly one retry, and the retry spends it", async () => {
+		const runId = await uncertain("lead-oa3");
+		const before = await d1.DB.prepare("SELECT submit_attempted_at FROM job_applications WHERE id = 'lead-oa3'").first<{ submit_attempted_at: number }>();
+		const out = await act("lead-oa3", "assert_not_submitted", { fill_run_id: runId, statement: "SEEK Applied jobs does not list Gentrack.", confirm: CONFIRM, surface: "mcp" });
+		expect(out.status, JSON.stringify(out.body)).toBe(200);
+		// The durable assertion row: the owner's words, the surface, the attempt and the marker it covers.
+		expect(await assertion("lead-oa3")).toMatchObject({ fill_run_id: runId, kind: "not_submitted", statement: "SEEK Applied jobs does not list Gentrack.", actor: "owner_mcp", prior_submit_attempted_at: before!.submit_attempted_at, consumed_at: null });
+		// The lifecycle audit names it as the owner's assertion, not proof.
+		expect((await audit("lead-oa3")).at(-1)).toMatchObject({ from_status: "blocked", to_status: "blocked", actor: "owner", reason: "owner_asserted_not_submitted" });
+		expect((await appRow("lead-oa3"))!.block_questions).toMatch(/your assertion, not proof/);
+		expect(d1.sqlite.prepare("SELECT count(*) AS n FROM agent_events WHERE event = 'application.owner_asserted_not_submitted'").get()).toEqual({ n: 1 });
+		// It is not reconciliation proof: no reconciliation record is written or changed.
+		expect(d1.sqlite.prepare("SELECT count(*) AS n FROM local_apply_reconciliations").get()).toEqual({ n: 0 });
+
+		const c = await card("lead-oa3");
+		expect(c.actions).toContain("retry_fill");
+		expect(c.actions).not.toContain("assert_not_submitted");
+
+		const retried = await act("lead-oa3", "retry_fill");
+		expect(retried.status, JSON.stringify(retried.body)).toBe(200);
+		expect(dispatches()).toHaveLength(2);
+		const newRun = retried.body.result.runId as string;
+		expect(await assertion("lead-oa3")).toMatchObject({ consumed_run_id: newRun, consumed_at: expect.any(Number) });
+		expect((await appRow("lead-oa3"))).toMatchObject({ fill_run_id: newRun, submit_attempted_at: null });
+		// The new run carries which assertion allowed it.
+		const trace = JSON.parse((await d1.DB.prepare("SELECT trace FROM local_apply_runs WHERE id = ?1").bind(newRun).first<{ trace: string }>())!.trace) as Array<{ type: string; detail?: Record<string, unknown> }>;
+		expect(trace).toEqual(expect.arrayContaining([expect.objectContaining({ type: "policy.decision", detail: expect.objectContaining({ basis: "owner_asserted_not_submitted" }) })]));
+	});
+
+	it("ONE assertion is ONE fill: a second uncertain end is blocked again until the owner asserts again", async () => {
+		const first = await uncertain("lead-oa4");
+		await act("lead-oa4", "assert_not_submitted", { fill_run_id: first, statement: "Checked.", confirm: CONFIRM });
+		const second = (await act("lead-oa4", "retry_fill")).body.result.runId as string;
+		const gateId = (await d1.DB.prepare("SELECT policy FROM local_apply_runs WHERE id = ?1").bind(second).first<{ policy: string }>())!.policy;
+		runner("ended", { events: [{ seq: 1, type: "submit.attempted", at: "2026-10-15T00:00:00Z", domain: "jobs.example.com", detail: { class: "submit", gateId: JSON.parse(gateId).gate.gateId } }], lastSeq: 1, result: RESULT(second, { outcome: "blocked", filled: 0, uploaded: [], submitAttempted: true, blockReason: "submit_unconfirmed", questions: ["unconfirmed"] }) });
+		await call("GET", `/ap/application-runs/${second}`);
+		const c = await card("lead-oa4");
+		expect(c.actions).not.toContain("retry_fill");
+		expect(c.actions).toContain("assert_not_submitted");
+		expect((await act("lead-oa4", "retry_fill")).status).toBe(409);
+	});
+
+	it("from DEFERRED (where the live application sits): the assertion brings it back to be filled", async () => {
+		const runId = await uncertain("lead-oa5");
+		await act("lead-oa5", "defer");
+		const deferred = await card("lead-oa5");
+		expect(deferred.actions).toEqual(expect.arrayContaining(["apply", "assert_not_submitted", "archive"]));
+		await act("lead-oa5", "assert_not_submitted", { fill_run_id: runId, statement: "Checked SEEK.", confirm: CONFIRM });
+		expect((await audit("lead-oa5")).at(-1)).toMatchObject({ from_status: "deferred", to_status: "materials_ready", reason: "owner_asserted_not_submitted" });
+		expect((await card("lead-oa5")).actions).toContain("request_review");
+		const reviewed = await act("lead-oa5", "request_review");
+		expect(reviewed.status, JSON.stringify(reviewed.body)).toBe(200);
+		expect(dispatches()).toHaveLength(2);
+	});
+
+	it("materials_ready after an attempt, with no assertion, no longer offers fills that can only fail", async () => {
+		const runId = await uncertain("lead-oa6");
+		await act("lead-oa6", "defer");
+		await act("lead-oa6", "apply");
+		const c = await card("lead-oa6");
+		expect(c.status).toBe("materials_ready");
+		expect(c.actions).not.toContain("start_fill");
+		expect(c.actions).not.toContain("request_review");
+		expect(c.actions).toContain("assert_not_submitted");
+		expect(runId).toBeTruthy();
+	});
+});
+
 describe("an unconfirmed submit tells the owner, and offers only the read-only check (#1068)", () => {
 	const notes = async () => (await d1.DB.prepare("SELECT type, title, body, url, kind, instance_id, dedupe_key FROM notifications WHERE user_id = 'u1' ORDER BY created_at").all<Record<string, unknown>>()).results ?? [];
-	/** The live shape of run bfecb6f4: a one-click press, then a sign-in page and no receipt. */
-	async function pressedThenSignIn(id: string) {
-		await enableAutoSubmit();
-		const r = await call("POST", "/ap/application-runs", readyApp(id));
-		const runId = r.body.run.id as string;
-		const gateId = r.body.run.policy.gate.gateId as string;
-		runner("ended", {
-			events: [
-				{ seq: 1, type: "submit.attempted", at: "2026-10-14T06:28:26Z", domain: "jobs.example.com", detail: { class: "submit", gateId } },
-				{ seq: 2, type: "submit.unconfirmed", at: "2026-10-14T06:28:42Z", url: "https://jobs.example.com/login", detail: { gateId, looks: 6, urlChanged: true, titleChanged: true } },
-			],
-			lastSeq: 2,
-			result: RESULT(runId, { outcome: "blocked", mode: "auto_submit", filled: 0, uploaded: [], submitAttempted: true, blockReason: "submit_unconfirmed", questions: ["The application was submitted but the site did not confirm it. Check the employer's site or your email before anything is retried."] }),
-		});
-		await call("GET", `/ap/application-runs/${runId}`);
-		return runId;
-	}
-
 	it("raises ONE decision_required alert for the application — never a retry, and nothing claimed about the send", async () => {
 		await pressedThenSignIn("lead-uc1");
 		expect((await appRow("lead-uc1"))).toMatchObject({ status: "blocked", block_reason: "submit_unconfirmed" });

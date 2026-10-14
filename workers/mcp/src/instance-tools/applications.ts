@@ -4,6 +4,9 @@ import { authRequired, authedCall, jsonText, text } from "../http.js";
 import { type McpScope, audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
 import type { InstanceToolsCtx } from "./shared.js";
 
+/** The exact sentence an owner assertion is confirmed with (#1073) — a copy of `NOT_SUBMITTED_CONFIRM` in workers/api/src/lib/local-apply/owner-assertion.ts, which this worker cannot import; the API checks it too. */
+const NOT_SUBMITTED_CONFIRM = "I checked the employer site and nothing was submitted";
+
 /**
  * The Applications control surface (#958) — the job-application lifecycle as TYPED tools, so a
  * connected AI discusses the queue and acts through schemas, never through free-text instructions.
@@ -43,6 +46,7 @@ export const APPLICATION_TOOL_SCOPES = {
 	clear_application_tailor_uploaded_source: "write",
 	triage_application: "write",
 	approve_application: "destructive",
+	assert_application_not_submitted: "write",
 	cancel_application: "write",
 	generate_application_materials: "runtime",
 	start_application_fill: "runtime",
@@ -537,6 +541,8 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 			for (const k of ["application_id", "scout_instance_id", "record_id", "expected_status", "expected_version", "runner_instance_id", "note", "defer_until", "answers", "idempotency_key"]) {
 				if (input[k] !== undefined) body[k] = input[k];
 			}
+			// An owner assertion (#1073) carries its attempt, the owner's words, the confirmation and the surface.
+			if (action === "assert_not_submitted") Object.assign(body, { fill_run_id: input.fill_run_id, statement: input.statement, confirm: input.confirm, surface: "mcp" });
 			if (input.dry_run) {
 				return dryRun(safetyFor(token), name, `${action.replace(/_/g, " ")} one job application`, auditInput, {
 					endpoint: `/v1/instances/${instance_id}/application-queue/actions`,
@@ -579,6 +585,28 @@ export function registerApplicationTools(server: McpServer, ctx: Pick<InstanceTo
 		"Approve ONE job application and let it be submitted — the owner's per-application decision (#973, #981), the same command the Applications board's \"Approve & proceed\" / \"Approve & continue\" button sends. It records a durable, single-use authorization bound to this application and the exact state version you pass; the reply carries the authorization, the run and the next action. This is NOT a global auto-submit toggle: it requires no daily cap, consumes none, and authorizes nothing but this one application. It cannot be replayed — for another lead, after the materials are re-tailored, or after the run that holds it. WHAT IT THEN DOES depends on where the application is, and the reply says which happened. `materials_ready`: it dispatches the fill that spends the authorization. `awaiting_review`, an application parked at a supervisor checkpoint (#981), or one `blocked` because its fill reached a control it may not press under fill-and-review — a genuine one-click apply, which the runner refuses and must (#991): the run stopped and nothing was sent, so it continues THAT run — releasing the exact checkpoint it is parked at (`resumable: true`, with `checkpointId`) when the run is still open. When the run has ended its browser session is gone with it, so nothing is resumed and nothing is recreated: the reply is `resumable: false` with a closed-vocabulary `reason` and `recovery: \"retry_fill\"`, and the approval is HELD for that retry (retry_application), which spends it and may submit once. The Runner still has to pass its own submit gate (complete materials, an allow-listed domain, no blocker, nothing else running) and its browser safety checks, so an approval permits a submission rather than forcing one. A `blocked` application that never filled (its TAILORING stopped) is not approvable: there is no form and no final control, so retry_application is the answer there. Accepted only when the item's `actions` include approve_and_proceed. Pass `dry_run` first to see what would happen.",
 		approve.shape,
 		approve.handler,
+	);
+
+	// #1073: the owner's word that an uncertain submit sent nothing. `write`, not `destructive`: it
+	// records a statement and moves the application; the retry that could reach an employer is the
+	// separate `runtime` call, which still passes the Runner's submit gate. The exact sentence is
+	// the deliberateness — forwarded and checked by the API (the console sends the same one), not
+	// by `requireConfirmation`, which this surface keeps for destructive tools by their own names.
+	const assertNotSubmitted = decision(
+		"assert_application_not_submitted",
+		["assert_not_submitted"],
+		"A durable OWNER ASSERTION would be recorded for this exact attempt — your words, the surface, the time — and ONE new fill of this application would be allowed (retry_application, or request_application_review from materials_ready). Nothing is sent, nothing is retried by this call, and the reconciliation record is not changed: this is your assertion, not proof.",
+		{
+			fill_run_id: z.string().describe("The fill run whose submit was attempted and unconfirmed — the application's current `fillRunId`. Copy it exactly; any other run is refused."),
+			statement: z.string().describe("What you checked, in your words (e.g. \"SEEK Applied jobs does not list it, and no confirmation email arrived\"). Kept verbatim on the audit record. Up to 1000 characters."),
+			confirm: z.string().describe(`Must be exactly "${NOT_SUBMITTED_CONFIRM}" — the owner's own declaration; the server refuses anything else and records nothing.`),
+		},
+	);
+	server.tool(
+		"assert_application_not_submitted",
+		`Record the OWNER's assertion that an uncertain submit sent nothing, so the application can be filled once more (#1073). Use it when a fill ended with its submit pressed and unconfirmed (blockReason submit_unconfirmed — e.g. a "Quick apply" press that landed on a sign-in page, with nothing filled) and the owner has checked the employer's site and says nothing was submitted. Accepted only when the item's \`actions\` include assert_not_submitted, and only for its current fill run. It is recorded as an OWNER ASSERTION — never as proof: the reconciliation record is left as it was, and any later double submission is traceable to this record. One assertion allows exactly ONE new fill; it is spent by that run. It does not itself fill, retry or submit anything — call retry_application (blocked) or request_application_review (materials_ready) next. Without an assertion, an attempted submit stays blocked. Pass dry_run first.`,
+		assertNotSubmitted.shape,
+		assertNotSubmitted.handler,
 	);
 
 	const generate = decision("generate_application_materials", ["generate_materials", "retry_tailoring"], "A tailoring run would start on the owner's runner.");

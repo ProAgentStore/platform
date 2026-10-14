@@ -226,6 +226,8 @@ export const TOOL_RISK: Record<string, McpScope> = {
 	get_application: "read",
 	application_trace: "read",
 	approve_application: "destructive",
+	// #1073: an owner assertion — a statement and a lifecycle move; the retry it allows is runtime.
+	assert_application_not_submitted: "write",
 	application_runs: "read",
 	application_run: "read",
 	application_run_supervision: "read",

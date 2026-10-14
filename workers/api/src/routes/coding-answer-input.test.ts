@@ -25,6 +25,15 @@ vi.mock("../lib/runner-client.js", async (importOriginal) => ({
 	getRunnerConn,
 }));
 
+const { posted } = vi.hoisted(() => ({ posted: [] as Array<{ repo: string; issue: number; body: string }> }));
+vi.mock("../lib/github-issues.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/github-issues.js")>()),
+	postIssueComment: async (_env: unknown, _uid: string, repo: string, issue: number, body: string) => {
+		posted.push({ repo, issue, body });
+		return true;
+	},
+}));
+
 const { instanceRoutes } = await import("./instances.js");
 
 const SID = "csess_s1";
@@ -125,3 +134,47 @@ describe("an answer reaches the pause it answers (#960)", () => {
 		expect(sent).toEqual([{ path: "/browser/input", body: { taskId: "apply-task-1", value: "0412 345 678" } }]);
 	});
 });
+
+describe("an answer that arrives after the run stopped waiting is kept, not dropped (#1074)", () => {
+	/** The live shape of run 42f65d22: the question was asked on an issue, and its 15-minute wait ran out. */
+	const expired = (issue: number | null = 1013) =>
+		d1.exec(
+			`INSERT INTO coder_questions (id, instance_id, user_id, session_id, run_id, task_id, repo, issue_number, question, state, asked_at, expires_at)
+			 VALUES ('q1', 'i1', 'u1', '${SID}', 'run1', '${CARD}', ${issue ? "'ProAgentStore/platform'" : "NULL"}, ${issue ?? "NULL"}, 'Allow an owner assertion to stand in for proof?', 'expired', 1, 2)`,
+		);
+	const row = () => d1.sqlite.prepare("SELECT state, answered_by, decision, history FROM coder_questions WHERE id = 'q1'").get() as { state: string; answered_by: string | null; decision: string | null; history: string };
+	beforeEach(() => {
+		posted.length = 0;
+	});
+
+	it("records the answer on the expired question, posts it under the question on its issue, and says it was not delivered", async () => {
+		expired();
+		const r = await answer(CARD, "YES — allow it");
+		expect(r.status).toBe(202);
+		expect(r.body).toMatchObject({ ok: true, kind: "coding_late", delivered: false, recorded: true, questionId: "q1", postedToIssue: 1013 });
+		expect(r.body.message).toMatch(/not delivered.*posted on issue #1013/);
+		expect(row()).toMatchObject({ state: "expired", answered_by: "human", decision: "YES — allow it" });
+		expect(JSON.parse(row().history).at(-1)).toMatchObject({ from: "expired", to: "expired", note: "answered by a person after the run stopped waiting" });
+		expect(posted).toEqual([{ repo: "ProAgentStore/platform", issue: 1013, body: expect.stringContaining("> YES — allow it") }]);
+		expect(posted[0].body).toMatch(/Answer received after the run stopped waiting/);
+		// Nothing reached a runner: the run is gone.
+		expect(sent).toEqual([]);
+		expect(d1.sqlite.prepare("SELECT count(*) AS n FROM agent_events WHERE event = 'coder_question.answered_late'").get()).toEqual({ n: 1 });
+	});
+
+	it("redacts a credential-shaped answer before it is stored or posted", async () => {
+		expired();
+		await answer(CARD, "use key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789");
+		expect(row().decision).not.toMatch(/sk-ant-api03-abcdefghij/);
+		expect(posted[0].body).not.toMatch(/sk-ant-api03-abcdefghij/);
+	});
+
+	it("a question asked on no issue is still recorded; nothing is posted", async () => {
+		expired(null);
+		const r = await answer(CARD, "no");
+		expect(r.status).toBe(202);
+		expect(r.body).toMatchObject({ recorded: true, postedToIssue: null });
+		expect(posted).toEqual([]);
+	});
+});
+

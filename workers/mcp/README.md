@@ -163,7 +163,7 @@ implementation.
 
 ## Tools
 
-**324 tool registrations.** 297 are always registered; 27 are gated to the console
+**325 tool registrations.** 298 are always registered; 27 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -331,6 +331,7 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `get_application` | One application, or one lead with no application yet, as it stands now | read | | |
 | `application_trace` | One application's correlated timeline: lead triage, deliveries, Tailor run, Runner run(s), lifecycle moves — handles and decisions only | read | | |
 | `approve_application` | Approve ONE application and let it be submitted — a single-use, per-application authorization (no daily cap); the board's "Approve & proceed" | destructive | `approve_application` | ✓ |
+| `assert_application_not_submitted` | Record the OWNER's audited assertion that an uncertain submit (`submit_unconfirmed`) sent nothing, for the current fill run — allows exactly ONE new fill; an assertion, never proof (#1073). `confirm` must be the exact sentence, checked by the API | write | — | ✓ |
 | `application_runs` | An Application Runner's fill runs, newest first — which run holds a concurrency slot | read | | |
 | `application_run` | ONE fill run as it stands now (pulls the machine): status, pause, policy + submit-gate verdicts, result, and its runner event trace | read | | |
 | `application_run_supervision` | One fill run's supervisor checkpoints and the immutable directive recorded for each | read | | |

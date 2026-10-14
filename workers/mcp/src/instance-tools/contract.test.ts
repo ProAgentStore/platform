@@ -460,6 +460,7 @@ const TABLE: Record<string, Row> = {
 	get_application_tailor_uploaded_source_readiness: ["applications", "read", null, null, "instance_id,token"],
 	set_application_tailor_uploaded_source: ["applications", "write", null, "envelope", "dry_run,file_id,instance_id,role,token"],
 	clear_application_tailor_uploaded_source: ["applications", "write", null, "envelope", "dry_run,instance_id,role,token"],
+	assert_application_not_submitted: ["applications", "write", null, "envelope", "application_id,confirm,dry_run,expected_status,expected_version,fill_run_id,instance_id,record_id,scout_instance_id,statement,token"],
 	triage_application: ["applications", "write", null, "envelope", "action,application_id,defer_until,dry_run,expected_status,expected_version,instance_id,note,record_id,scout_instance_id,token"],
 	generate_application_materials: ["applications", "runtime", null, "envelope", "action,application_id,dry_run,expected_status,expected_version,instance_id,record_id,scout_instance_id,token"],
 	start_application_fill: ["applications", "runtime", null, "envelope", "application_id,dry_run,expected_status,expected_version,instance_id,record_id,runner_instance_id,scout_instance_id,token"],
