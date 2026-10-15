@@ -53,3 +53,26 @@ export async function attachWorkdir(env: Env, instanceId: string, repoId: string
 		.first<RepoRow>();
 	return row ? toRepo(row) : null;
 }
+
+/**
+ * The OTHER binding on this instance that already uses `path` as its folder, or null (#829, PR835).
+ *
+ * One checkout, one binding: the paired add refuses a folder another binding holds
+ * (`routes/coding-repo-add.ts`), and moving a repo (`PUT /coding/repos/:id`) onto such a folder was
+ * the way round it — leaving session and engine resolution two repos to choose between for one
+ * directory. The repo being moved is never its own conflict: a respelling of its own path (a trailing
+ * `/`) matches itself and is allowed.
+ */
+export async function folderHeldByAnother(env: Env, instanceId: string, repoId: string, path: string): Promise<CodingRepo | null> {
+	const holder = await findRepoByWorkdir(env, instanceId, [path]);
+	return holder && holder.id !== repoId ? holder : null;
+}
+
+/** The 409 body for a move onto a folder another binding holds — names that binding, as the add's refusal does. */
+export function folderTakenRefusal(path: string, holder: CodingRepo): { error: string; existingId: string; existingName: string } {
+	return {
+		error: `\`${path}\` is already the folder of "${holder.name}" on this instance. Remove that binding first (coding_repo_remove), or choose another folder.`,
+		existingId: holder.id,
+		existingName: holder.name,
+	};
+}

@@ -25,6 +25,7 @@ import { logEvent } from "../lib/events.js";
 import { describeFacts } from "../lib/runner-availability.js";
 import { runtimeConnectivity } from "../lib/instance-connectivity.js";
 import { createRepo, deleteRepo, findExistingRepoBinding, getActiveSessionForRepo, getRepo, listRepos, listSessions, updateRepo, updateRepoClone } from "../lib/coding-store.js";
+import { folderHeldByAnother, folderTakenRefusal } from "../lib/coding-repo-folder.js";
 import { checkWorkdirVia, cloneStatusForVerdict, isWorkdirBroken, type WorkdirVerdict } from "../lib/coding-workdir.js";
 import { sanitizeRepoPolicies, type DeclaredRepoPolicies } from "../lib/repo-policies.js";
 import type { CloneStatus, CodingRepo } from "../lib/coding-types.js";
@@ -739,6 +740,7 @@ export function registerRepoRoutes(codingRoutes: Hono<{ Bindings: Env }>) {
 			if (!existing) throw new HttpError(404, "Repo not found");
 			moving = workdirIn !== (existing.workdir ?? "");
 			if (moving) {
+				const taken = await folderHeldByAnother(c.env, instanceId, repoId, workdirIn); if (taken) return c.json(folderTakenRefusal(workdirIn, taken), 409);
 				// A live session's engine has the OLD path as its cwd, and changing the row does not
 				// move the process: the platform would believe path B while the CLI works in path A,
 				// and Claude Code would `--resume` a conversation about different code. Refuse and
