@@ -6,6 +6,7 @@ import {
 	apiPathSegment,
 	buildRuntimeRegistrationBody,
 	clean,
+	pagsApiBase,
 	requestPags,
 	requestRunner,
 } from "./http.js";
@@ -16,9 +17,12 @@ import {
 	waitForLocalRunner,
 } from "./process.js";
 import { connectViaRelay } from "./relay.js";
-import { acquireLock, holderMessage, releaseLock } from "../../runner-lock.js";
+import { acquireLock, configDir, holderMessage, releaseLock } from "../../runner-lock.js";
 import { loadMachineIdentity } from "../../machine.js";
 import { CLI_VERSION } from "./process.js";
+import { crashAccountKey } from "../../crash-reports.js";
+import { crashPaths, deliverCrashReports, OutputTail, recordChildExit } from "../../crash-delivery.js";
+import { loadSession } from "../login.js";
 import { hostname } from "node:os";
 import type {
 	PagsRequestOptions,
@@ -100,6 +104,10 @@ export function createRunnerCommand(): Command {
 			const primary = instanceIds[0];
 			const runnerOpts: RunnerStartOptions = { ...opts, host, port, token: runnerToken };
 			const spec = runnerSpawnSpec(runnerOpts);
+			// Crash reports (#1087): the runtime records its own, stamped with this build and this
+			// account; this process records the runtime's death and delivers both.
+			const crashAccount = lockAccount || loadSession()?.user.login || "";
+			const crashes = crashAccount ? crashPaths(configDir(), crashAccount, opts.dataDir) : null;
 			const runner = spawn(spec.command, spec.args, {
 				cwd: spec.cwd,
 				stdio: ["ignore", "pipe", "pipe"],
@@ -109,20 +117,46 @@ export function createRunnerCommand(): Command {
 				// replace is an authorisation rather than a signal aimed at a name pattern.
 				env: {
 					...process.env,
+					PAGS_RUNNER_BUILD: CLI_VERSION,
+					...(crashAccount ? { PAGS_RUNNER_ACCOUNT: crashAccountKey(crashAccount) } : {}),
 					...(lockHeld ? { PAGS_RUNNER_RSID: lockHeld.rsid, PAGS_RUNNER_CONTROL_NONCE: lockHeld.nonce, PAGS_RUNNER_LAUNCH: lockHeld.launch } : {}),
 				},
 			});
+			// The last lines the runtime printed, for its exit report: bounded, and only ever sent sanitized.
+			const tail = new OutputTail(20);
 			runner.stdout?.on("data", (data) => process.stdout.write(data));
-			runner.stderr?.on("data", (data) => process.stderr.write(data));
+			runner.stderr?.on("data", (data) => {
+				process.stderr.write(data);
+				tail.push(data);
+			});
+			const deliver = async () => {
+				if (!crashes) return;
+				const token = clean(opts.pagsToken) || clean(process.env.PAGS_TOKEN) || clean(loadSession()?.token);
+				if (!token) return;
+				const result = await deliverCrashReports({ apiBase: pagsApiBase(opts.apiBase), token, account: crashAccount, paths: crashes });
+				if (result.delivered) writeLine(`Delivered ${result.delivered} crash report(s) to ProAgentStore.`);
+			};
 			let shuttingDown = false;
-			runner.on("exit", (code) => {
+			runner.on("exit", (code, signal) => {
 				if (shuttingDown) return; // we asked it to stop (SIGINT/SIGTERM below)
 				// The local runner died on its own (crash / OOM / Playwright fault). The relay
 				// WS would otherwise keep this process alive and keep forwarding commands to a
 				// now-dead local HTTP server — every task returns 500 while the agent still shows
 				// "connected". Fail loudly and exit so the user (or a supervisor) restarts.
-				writeError(`Local browser runtime exited unexpectedly${code ? ` (code ${code})` : ""}. Run \`pags up\` again to reconnect.`);
-				process.exit(code ?? 1);
+				//
+				// A SIGNAL is part of the report (#1087): a SIGKILL or OOM kill gives `code === null`,
+				// which used to print nothing at all. And the death is RECORDED — the dying runtime ran no
+				// handler of its own, so this is the only process that can — then delivered if the
+				// platform answers within a few seconds, else on the next start.
+				const how = signal ? `was killed by ${signal}` : `exited unexpectedly${code !== null ? ` (code ${code})` : ""}`;
+				writeError(`Local browser runtime ${how}. Run \`pags up\` again to reconnect.`);
+				if (crashes) recordChildExit({ paths: crashes, account: crashAccount, build: CLI_VERSION, kind: "runner_exit", what: "the local runtime", code, signal, tail: tail.lines() });
+				const finish = () => process.exit(code ?? 1);
+				const deadline = setTimeout(finish, 5_000);
+				void deliver().catch(() => undefined).finally(() => {
+					clearTimeout(deadline);
+					finish();
+				});
 			});
 
 			const shutdown = () => {
@@ -141,6 +175,10 @@ export function createRunnerCommand(): Command {
 				await waitForLocalRunner({ url: localUrl, token: runnerToken, instanceId: primary });
 				writeLine(`Local browser runtime healthy at ${localUrl}`);
 				await connectViaRelay(instanceIds, localUrl, runnerToken, opts, Boolean(opts.force), Boolean(opts.watchInstances));
+				// Connected, so the platform is reachable: send what waited through an offline stretch or a
+				// restart, then keep sending what the runtime survives — every five minutes, not per crash.
+				void deliver().catch(() => undefined);
+				setInterval(() => void deliver().catch(() => undefined), 5 * 60_000).unref();
 				await new Promise<void>((resolvePromise) => { runner.on("exit", () => resolvePromise()); });
 			} catch (error) {
 				shutdown();

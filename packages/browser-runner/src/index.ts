@@ -1,21 +1,12 @@
 #!/usr/bin/env node
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { CrashLog, crashReport, describeError, installCrashHandlers, runtimeCrashIdentity } from "./crash-reports.js";
 import { startRunnerServer } from "./server.js";
 import { reapOnStartup } from "./reaper.js";
 import type { RunnerConfig } from "./types.js";
 import { randomUUID } from "node:crypto";
 
-// Resilience: a stray error in any runtime must NOT take the whole runner down —
-// that drops the tunnel and forces the user to restart `pags up` (and lose their
-// session). Log it and keep serving. Per-component handlers catch most things;
-// this is the last-resort backstop.
-process.on("uncaughtException", (err) => {
-	process.stderr.write(`[runner] uncaught: ${err?.stack || String(err)}\n`);
-});
-process.on("unhandledRejection", (reason) => {
-	process.stderr.write(`[runner] unhandled rejection: ${String(reason)}\n`);
-});
 
 function arg(name: string, fallback?: string): string | undefined {
 	const index = process.argv.indexOf(name);
@@ -75,6 +66,19 @@ Endpoints:
 
 const config = configFromArgs();
 
+// Resilience: a stray error in any runtime must NOT take the whole runner down —
+// that drops the tunnel and forces the user to restart `pags up` (and lose their
+// session). Keep serving. Per-component handlers catch most things; this is the
+// last-resort backstop — and since #1087 it leaves a DURABLE record, which the CLI
+// delivers to the platform (MCP `list_errors`), instead of a stderr line only.
+// Build and account come from `runner connect` (`runtimeCrashIdentity`); the CLI delivers a report
+// only under the account that wrote it.
+const IDENTITY = runtimeCrashIdentity();
+const crashLog = new CrashLog(join(config.dataDir, "crash-reports.json"), IDENTITY);
+installCrashHandlers(crashLog, IDENTITY, (report) => {
+	process.stderr.write(`[runner] ${report.kind === "uncaught_exception" ? "uncaught" : "unhandled rejection"}: ${report.stack || report.message}\n`);
+});
+
 // SECURITY: the runner's endpoints spawn CLIs and drive a browser as the user.
 // Without a token, `authorize()` allows every request, so a tokenless runner must
 // never be reachable off the local machine. Refuse to start if bound to a
@@ -94,9 +98,27 @@ if (!config.token && !LOOPBACK.has(config.host)) {
 // machine to load 253. Nothing in-process can clean those up, so we do it here,
 // before we start competing for the same CPU. Narrow by construction: see the
 // SAFETY block in reaper.ts for why the user's real Chrome can never match.
-reapOnStartup((line) => process.stderr.write(`${line}\n`));
+/** A failure before the runtime serves anything: recorded, said, and the process exits non-zero. */
+function startupFailed(stage: string, error: unknown): never {
+	const report = crashReport({ ...IDENTITY, kind: "startup_failure", instanceId: config.instanceId, ...describeError(error), route: stage });
+	crashLog.record(report);
+	process.stderr.write(`[runner] could not start (${stage}): ${report.message}\n`);
+	process.exit(1);
+}
 
-const started = await startRunnerServer(config);
+try {
+	reapOnStartup((line) => process.stderr.write(`${line}\n`));
+} catch (error) {
+	// The reaper is housekeeping: its failure is recorded, and the runtime still starts.
+	crashLog.record(crashReport({ ...IDENTITY, kind: "startup_failure", ...describeError(error), route: "reap" }));
+}
+
+let started: Awaited<ReturnType<typeof startRunnerServer>>;
+try {
+	started = await startRunnerServer(config);
+} catch (error) {
+	startupFailed("listen", error);
+}
 process.stdout.write(`ProAgentStore browser runtime listening at ${started.url}\n`);
 process.stdout.write(`Data dir: ${config.dataDir}\n`);
 process.stdout.write("Control plane: PAGS; runtime plane: PAGS; brain placement: PAGS; runner role: tool-executor\n");

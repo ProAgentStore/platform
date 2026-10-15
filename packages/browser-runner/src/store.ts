@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { CrashLog, crashReport, readJsonOrQuarantine, runtimeCrashIdentity, writeJsonAtomic } from "./crash-reports.js";
 import { WORKFLOW_DRIVEN_TASKS } from "./task-types.js";
 import type { RunnerEvent, RunnerSession, RunnerTask } from "./types.js";
 
@@ -7,7 +7,15 @@ interface StoreFile {
 	sessions: RunnerSession[];
 	tasks: RunnerTask[];
 	events: RunnerEvent[];
+	/**
+	 * Events dropped off the end of the {@link MAX_EVENTS} buffer, ever (#1087). The buffer is a
+	 * window, not a history; this says how much of the history it no longer holds.
+	 */
+	droppedEvents?: number;
 }
+
+/** Events kept in the local store. Older ones are dropped — and counted in `droppedEvents`. */
+export const MAX_EVENTS = 500;
 
 function emptyStore(): StoreFile {
 	return {
@@ -17,11 +25,28 @@ function emptyStore(): StoreFile {
 	};
 }
 
+/**
+ * The runner's local sessions / tasks / events file.
+ *
+ * Crash-safe since #1087: every write is atomic (temp file + fsync + rename, `crash-reports.ts`), so
+ * a crash mid-write leaves the previous file intact rather than a truncated one; and a file that
+ * does not parse is QUARANTINED (moved to `runner-store.json.corrupt-<time>`) and reported in the
+ * crash log for delivery to the platform — it used to read as an empty store, and the next write
+ * then overwrote the evidence. Limits are those of `writeJsonAtomic`: the write in flight at a hard
+ * kill or power loss is lost, never half-applied.
+ */
 export class RunnerStore {
 	private readonly filePath: string;
+	private readonly crashLog: CrashLog;
 
 	constructor(dataDir: string) {
 		this.filePath = join(dataDir, "runner-store.json");
+		this.crashLog = new CrashLog(join(dataDir, "crash-reports.json"), runtimeCrashIdentity());
+	}
+
+	/** How many events the buffer has dropped, ever. */
+	droppedEventCount(): number {
+		return this.read().droppedEvents ?? 0;
 	}
 
 	listSessions(): RunnerSession[] {
@@ -97,7 +122,10 @@ export class RunnerStore {
 			createdAt: new Date().toISOString(),
 		};
 		data.events.unshift(row);
-		data.events = data.events.slice(0, 500);
+		if (data.events.length > MAX_EVENTS) {
+			data.droppedEvents = (data.droppedEvents ?? 0) + (data.events.length - MAX_EVENTS);
+			data.events.length = MAX_EVENTS;
+		}
 		this.write(data);
 		return row;
 	}
@@ -107,23 +135,26 @@ export class RunnerStore {
 	}
 
 	private read(): StoreFile {
-		if (!existsSync(this.filePath)) return emptyStore();
-		try {
-			const parsed = JSON.parse(readFileSync(this.filePath, "utf-8")) as Partial<StoreFile>;
-			return {
-				sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
-				tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
-				events: Array.isArray(parsed.events) ? parsed.events : [],
-			};
-		} catch {
+		const got = readJsonOrQuarantine<Partial<StoreFile>>(this.filePath);
+		if (got.status === "missing") return emptyStore();
+		if (got.status === "quarantined") {
+			// Evidence, not an empty store: the file is moved aside, the move is reported, and only
+			// then does the runner continue on a fresh store.
+			const message = `runner store was unreadable and was moved to ${got.quarantinedTo}: ${got.error}`;
+			process.stderr.write(`[store] ${message}\n`);
+			this.crashLog.record(crashReport({ ...runtimeCrashIdentity(), kind: "store_corrupt", message }));
 			return emptyStore();
 		}
+		const parsed = got.value;
+		return {
+			sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
+			tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
+			events: Array.isArray(parsed.events) ? parsed.events : [],
+			droppedEvents: Number(parsed.droppedEvents) || 0,
+		};
 	}
 
 	private write(data: StoreFile): void {
-		mkdirSync(dirname(this.filePath), { recursive: true });
-		writeFileSync(this.filePath, `${JSON.stringify(data, null, 2)}\n`, {
-			mode: 0o600,
-		});
+		writeJsonAtomic(this.filePath, data);
 	}
 }

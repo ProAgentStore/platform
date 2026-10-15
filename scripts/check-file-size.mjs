@@ -686,13 +686,13 @@ const PINS = {
 	// +27 at #896: `liveWork()` — what a restart would destroy — and `requestShutdown`, which is
 	// how `--replace` asks instead of killing. The counts exist so a replace can REFUSE while a
 	// Codex turn, a research run or an application fill is live; `pkill` destroyed them silently.
-	"packages/browser-runner/src/runner.ts": 1361, // +3 at #957: the localApply runtime (field, construction sharing the research browserFor, shutdown). +6 at #956: the local-artifact runtime is constructed, advertised and shut down beside local-browser's.
+	"packages/browser-runner/src/runner.ts": 1365, // +4 at #1087: the runtime's crash log, held beside its store (the field, its why, and its construction). +3 at #957: the localApply runtime (field, construction sharing the research browserFor, shutdown). +6 at #956: the local-artifact runtime is constructed, advertised and shut down beside local-browser's.
 	// New at #953: the four-line read-only email-lead preflight route belongs beside the existing
 	// local-apply routes. Splitting a single ordered route registration would add indirection without
 	// reducing its ownership; the page validation itself stays in local-apply/runtime.ts. +3 at
 	// #1013: a separate reconciliation dispatcher keeps an ended uncertain attempt out of the
 	// mutable application runtime; its policy and evidence logic live in reconciliation-runtime.ts.
-	"packages/browser-runner/src/server.ts": 820, // +7 at #1057: the read-only /native/preflight route — its two-line reason and one dispatch; the probe lives in native/preflight.ts. // +6 at #1063: the /local-browser/shots and /local-apply/shots replay pulls, beside each runtime's /status.
+	"packages/browser-runner/src/server.ts": 833, // +13 at #1087: the request boundary records a 5xx as a crash report (the recorder itself lives in request-failure.ts), and `listen` REJECTS on a bind failure instead of emitting an unhandled `error` that left the runtime neither started nor exited. +7 at #1057: the read-only /native/preflight route — its two-line reason and one dispatch; the probe lives in native/preflight.ts. // +6 at #1063: the /local-browser/shots and /local-apply/shots replay pulls, beside each runtime's /status.
 	"packages/browser-runner/src/local-apply/runtime.ts": 810, // +1 at #1064: the screenshots-off note beside the zero-cap recorder. #1063: crossed 800 with the run's replay recorder and its /shots page; the recorder itself is local-browser/replay.ts.
 	// New pin at #946: the local browser capability is validated at the three agent write doors (#945) and served back resolved by both capabilities routes (#946) — four lines over the line; splitting the agents router is its own change.
 	"workers/api/src/routes/agents.ts": 804,

@@ -13831,6 +13831,59 @@ paths:
             application/json:
               schema: { type: object, properties: { ok: { type: boolean }, durable: { type: boolean }, error: { type: string } } }
 
+  /v1/errors/runner-crashes:
+    post:
+      summary: Deliver runner crash reports
+      description: |
+        Crash reports the owner's local runtime and CLI kept on disk (#1087), delivered by the CLI.
+        At least once and idempotent by report `id`: one receipt per (account, id), and only a NEW
+        report becomes an `error_log` row (`source: "runner-crash"`, read with `list_errors`). Filed
+        under the signed-in account; an instance a report names is kept only if that account owns
+        it. At most 50 reports per call. A report that could not be stored is listed in `rejected`
+        and should be sent again.
+      operationId: deliverRunnerCrashes
+      tags: [Errors]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reports]
+              properties:
+                reports:
+                  type: array
+                  maxItems: 50
+                  items:
+                    type: object
+                    required: [id, kind, message]
+                    properties:
+                      id: { type: string }
+                      kind: { type: string, enum: [uncaught_exception, unhandled_rejection, startup_failure, request_failure, runner_exit, connect_exit, store_corrupt] }
+                      message: { type: string }
+                      stack: { type: string }
+                      cause: { type: string }
+                      exitCode: { type: integer, nullable: true }
+                      signal: { type: string, nullable: true }
+                      build: { type: string }
+                      instanceId: { type: string }
+                      sessionId: { type: string }
+                      taskId: { type: string }
+                      route: { type: string }
+                      tail: { type: array, items: { type: string } }
+      responses:
+        "200":
+          description: Which reports are stored (new or already) and which must be sent again.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accepted: { type: array, items: { type: string } }
+                  rejected: { type: array, items: { type: object, properties: { id: { type: string, nullable: true }, reason: { type: string } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /v1/errors/telemetry-health:
     get:
       summary: Telemetry delivery health (admin)

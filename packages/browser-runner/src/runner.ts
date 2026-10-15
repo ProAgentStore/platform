@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { CrashLog, runtimeCrashIdentity } from "./crash-reports.js";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, dirname, join, resolve } from "node:path";
@@ -92,6 +93,8 @@ export class LocalRunner {
 	/** The profile dir Chrome was actually launched into (holds DevToolsActivePort). */
 	private launchedProfileDir: string | null = null;
 	readonly store: RunnerStore;
+	/** This runtime's crash reports (#1087) — delivered to the platform by the CLI that runs it. */
+	readonly crashLog: CrashLog;
 	/** Local tmux coding sessions (the second runtime — AgentCoder port). */
 	readonly coding: CodingRuntime;
 	/** Local CLI browser research (#944): a signed-in Codex / Claude Code CLI researching through the policy bridge. */
@@ -113,6 +116,7 @@ export class LocalRunner {
 	constructor(readonly config: RunnerConfig) {
 		mkdirSync(config.dataDir, { recursive: true });
 		this.store = new RunnerStore(config.dataDir);
+		this.crashLog = new CrashLog(join(config.dataDir, "crash-reports.json"), runtimeCrashIdentity());
 		this.coding = new CodingRuntime(join(config.dataDir, "repos"));
 		const { browserFor, applyBrowserFor } = createRunnerBrowserFactories({ headless: config.headless, defaultTools: () => this.getMcp(), sharedPage: () => this.activePage });
 		this.localBrowser = new LocalBrowserRuntime({ dataDir: config.dataDir, selfUrl: () => this.selfUrl, browserFor });

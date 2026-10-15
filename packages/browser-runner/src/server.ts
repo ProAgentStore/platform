@@ -5,6 +5,7 @@ import {
 } from "node:http";
 import type { AddressInfo } from "node:net";
 import { URL } from "node:url";
+import { recordRequestFailure } from "./request-failure.js";
 import { LocalRunner, RunnerInputError } from "./runner.js";
 import type { CommitGuardSpec } from "./commit-guard.js";
 import type { BrowserAction, CreateTaskRequest, RunnerConfig, TakeoverInput } from "./types.js";
@@ -36,12 +37,17 @@ export function createRunnerServer(runner: LocalRunner) {
 			await route(runner, req, res);
 		} catch (error) {
 			const status = error instanceof RunnerInputError ? error.status : 500;
+			// A request that failed on the runner's side is a crash report (#1087), not just a 500 to
+			// the caller: method, path and correlation ids from the URL and headers — never the body.
+			// A caller's bad input (`RunnerInputError`) is answered, not recorded.
+			if (status >= 500) recordRequestFailure(runner.crashLog, req, error);
 			json(res, status, {
 				error: error instanceof Error ? error.message : String(error),
 			});
 		}
 	});
 }
+
 
 export async function startRunnerServer(config: RunnerConfig): Promise<{
 	runner: LocalRunner;
@@ -50,8 +56,15 @@ export async function startRunnerServer(config: RunnerConfig): Promise<{
 }> {
 	const runner = new LocalRunner(config);
 	const server = createRunnerServer(runner);
-	await new Promise<void>((resolve) => {
-		server.listen(config.port, config.host, resolve);
+	// A bind failure (EADDRINUSE, EACCES) REJECTS (#1087). It used to be an `error` event with no
+	// listener — an uncaught exception that the crash handler swallows, leaving a runtime that never
+	// started and never exited. Now the entrypoint records a `startup_failure` and exits non-zero.
+	await new Promise<void>((resolve, reject) => {
+		server.once("error", reject);
+		server.listen(config.port, config.host, () => {
+			server.off("error", reject);
+			resolve();
+		});
 	});
 	const address = server.address() as AddressInfo;
 	const actualPort = address.port;

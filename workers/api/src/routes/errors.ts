@@ -4,6 +4,8 @@ import { requireUser } from "../lib/auth.js";
 import { ERROR_COLUMNS, ERROR_RECENCY, deriveClientLevel, listErrors, logError, sanitizeBuildId } from "../lib/error-log.js";
 import { summarizeErrors, type RawError } from "../lib/admin-errors.js";
 import { telemetryHealth } from "../lib/telemetry-spool.js";
+import { clipMarked } from "../lib/clip-marked.js";
+import { redactText } from "../lib/redact.js";
 import type { Env } from "../types.js";
 
 export const errorRoutes = new Hono<{ Bindings: Env }>();
@@ -72,6 +74,85 @@ errorRoutes.post("/client", async (c) => {
 	if (written === "persisted") return c.json({ ok: true, durable: true });
 	if (written === "queued") return c.json({ ok: true, durable: false, queued: true }, 202);
 	return c.json({ ok: false, durable: false, error: "the report could not be stored" }, 503);
+});
+
+/** The crash kinds a runner or CLI may report (`packages/browser-runner/src/crash-reports.ts`). */
+const RUNNER_CRASH_KINDS = new Set(["uncaught_exception", "unhandled_rejection", "startup_failure", "request_failure", "runner_exit", "connect_exit", "store_corrupt"]);
+const REPORT_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+/** Reports accepted per call — the CLI sends in batches of this size. */
+export const RUNNER_CRASH_BATCH = 50;
+
+/**
+ * POST /v1/errors/runner-crashes — crash reports from the owner's own runner and CLI (#1087).
+ *
+ * The CLI delivers what the runtime and itself kept on disk, after an offline stretch or a restart
+ * as well as live, so delivery is AT LEAST ONCE. Idempotent by report id: `runner_crash_reports`
+ * (migration 0240) holds one receipt per (user, id), and only a report that is NEW here becomes an
+ * `error_log` row (`source: "runner-crash"`) — read through MCP `list_errors`. A repeat answers
+ * `accepted` again, so the CLI can forget it.
+ *
+ * Filed under the SIGNED-IN user — never an id from the body. An instance the report names is kept
+ * only if that user owns it (`resolveErrorScope`). Message, stack, cause and output tail are masked
+ * and clipped again here: the runner sanitized them, and this does not take its word for it.
+ *
+ * A report that could not be stored anywhere loses its receipt, so the CLI keeps it and re-sends.
+ */
+errorRoutes.post("/runner-crashes", async (c) => {
+	const session = await requireUser(c);
+	const body = (await c.req.json().catch(() => ({}))) as { reports?: unknown };
+	if (!Array.isArray(body.reports)) return c.json({ error: "reports must be an array" }, 400);
+	if (body.reports.length > RUNNER_CRASH_BATCH) return c.json({ error: `at most ${RUNNER_CRASH_BATCH} reports per call` }, 400);
+	const accepted: string[] = [];
+	const rejected: Array<{ id: string | null; reason: string }> = [];
+	const text = (v: unknown, max: number) => (typeof v === "string" && v ? clipMarked(redactText(v), max) : undefined);
+	for (const raw of body.reports as Array<Record<string, unknown>>) {
+		const id = typeof raw?.id === "string" && REPORT_ID.test(raw.id) ? raw.id : null;
+		const kind = typeof raw?.kind === "string" && RUNNER_CRASH_KINDS.has(raw.kind) ? raw.kind : null;
+		if (!id || !kind || typeof raw.message !== "string") {
+			rejected.push({ id, reason: "a report needs an id, a known kind and a message" });
+			continue;
+		}
+		const receipt = await c.env.DB.prepare("INSERT OR IGNORE INTO runner_crash_reports (user_id, report_id) VALUES (?1, ?2)").bind(session.uid, id).run();
+		if ((receipt.meta?.changes ?? 0) === 0) {
+			accepted.push(id); // delivered before — the row already exists
+			continue;
+		}
+		const idOf = (v: unknown) => (typeof v === "string" && REPORT_ID.test(v) ? v : undefined);
+		const written = await logError(c.env, {
+			source: "runner-crash",
+			level: kind === "store_corrupt" ? "warn" : "error",
+			userId: session.uid,
+			message: text(`${kind}: ${raw.message}`, 1000) ?? kind,
+			build: typeof raw.build === "string" ? raw.build : undefined,
+			context: {
+				crashId: id,
+				kind,
+				reporter: raw.source === "cli" ? "cli" : "runtime",
+				at: typeof raw.at === "string" ? raw.at.substring(0, 40) : undefined,
+				exitCode: typeof raw.exitCode === "number" ? raw.exitCode : undefined,
+				signal: typeof raw.signal === "string" ? raw.signal.substring(0, 16) : undefined,
+				route: text(raw.route, 200),
+				instanceId: idOf(raw.instanceId),
+				sessionId: idOf(raw.sessionId),
+				taskId: idOf(raw.taskId),
+				cause: text(raw.cause, 500),
+				stack: text(raw.stack, 2000),
+				tail: Array.isArray(raw.tail) ? raw.tail.slice(-10).map((l) => text(l, 200)) : undefined,
+			},
+		});
+		if (written === "lost") {
+			await c.env.DB.prepare("DELETE FROM runner_crash_reports WHERE user_id = ?1 AND report_id = ?2").bind(session.uid, id).run().catch(() => undefined);
+			rejected.push({ id, reason: "could not be stored — send it again later" });
+			continue;
+		}
+		accepted.push(id);
+	}
+	// Receipts age out with the rows they stand for (30 days, `error_log`'s retention). Opportunistic,
+	// as that table's own prune is: no cron work for a table only this route writes.
+	if (Math.random() < 0.02) {
+		await c.env.DB.prepare("DELETE FROM runner_crash_reports WHERE received_at < datetime('now', '-30 days')").run().catch(() => undefined);
+	}
+	return c.json({ accepted, rejected });
 });
 
 /**

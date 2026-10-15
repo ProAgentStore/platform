@@ -10,7 +10,8 @@ import { clearScreen, printLogo, printStatus, printStep, waitForKey, type TuiSta
 import { parseStatusLine } from "./runner/status-line.js";
 import { processRestartDeps, restartPagsUp } from "./up-restart.js";
 import { restartUpArgs, RUNNER_RESTART_EXIT_CODE, SUPERVISED_ENV, SUPERVISOR_RESTARTS } from "./runner/self-update.js";
-import { holderMessage, inspectHolder, isTakeable, lockPath, readLock, releaseLock } from "../runner-lock.js";
+import { configDir, holderMessage, inspectHolder, isTakeable, lockPath, readLock, releaseLock } from "../runner-lock.js";
+import { crashPaths, deliverCrashReports, recordChildExit } from "../crash-delivery.js";
 import { replaceHolder } from "../runner-replace.js";
 import { startInBackground } from "./up-background.js";
 import { BACKGROUND_RESTART_ENV, waitUntilTakeable } from "../background.js";
@@ -222,6 +223,11 @@ export const upCommand = new Command("up")
 			env: { ...process.env, PAGS_TOKEN: session.token, [SUPERVISED_ENV]: SUPERVISOR_RESTARTS, PAGS_LOCK_ACCOUNT: session.user.login },
 		});
 
+		// The child's recent output, IN MEMORY ONLY and bounded at 200 lines (#1087): it feeds the
+		// status line and the exit message, and dies with this process. It is deliberately not a
+		// transcript — what must survive a crash is the crash REPORT, which the runtime and
+		// `runner connect` write to disk themselves (`crash-reports.ts`), and the exit of this child,
+		// recorded below.
 		const logs: string[] = [];
 		/** Our child's own process id (#896), announced on its first status line. */
 		let childRsid = "";
@@ -305,9 +311,16 @@ export const upCommand = new Command("up")
 		};
 
 		let childDead = false;
+		/** We are stopping the child ourselves (Ctrl-C) — its exit is not a crash. */
+		let stopping = false;
 		child.stdout?.on("data", handleOutput);
 		child.stderr?.on("data", handleOutput);
-		child.on("exit", (code: number | null) => {
+		const crashes = crashPaths(configDir(), session.user.login);
+		const recordConnectExit = (code: number | null, signal: string | null, tail: string[]) => {
+			recordChildExit({ paths: crashes, account: session.user.login, build: CLI_VERSION, kind: "connect_exit", what: "runner connect", code, signal, tail });
+			void deliverCrashReports({ apiBase: API_BASE, token: session.token, account: session.user.login, paths: crashes }).catch(() => undefined);
+		};
+		child.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {
 			// `runner_update` installed a newer CLI and asked to be started again (#859) — not a crash.
 			// The WHOLE `pags up` restarts, not only this child (#860): respawning just the child left
 			// this supervisor on the old code until someone restarted it at the machine. No prompt on the
@@ -317,6 +330,9 @@ export const upCommand = new Command("up")
 				return;
 			}
 			childDead = true;
+			// `runner connect` itself died (a crash of the CLI process, or a signal): record it with its
+			// last lines and deliver it now if the platform answers, else on the next start (#1087).
+			if (code !== 0 && !stopping) recordConnectExit(code, signal ?? null, logs.slice(-20));
 			// A child killed by a SIGNAL exits with `code === null`, and the old test
 			// (`if (code && code !== 0)`) read that as a clean exit (#896 F1). That is how a
 			// five-day-old terminal kept showing "connected" after a newer `pags up` had killed its
@@ -351,6 +367,7 @@ export const upCommand = new Command("up")
 		}
 
 		const shutdown = () => {
+			stopping = true;
 			child.kill();
 			clearScreen();
 			writeLine("  Runner stopped.");
